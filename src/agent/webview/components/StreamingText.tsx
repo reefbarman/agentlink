@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import DOMPurify from "dompurify";
 import { Marked } from "marked";
+import { recordFileLinkClick } from "./fileLinkFeedback";
 import { matchFilePaths } from "./filePathLinks";
 import { renderMarkdownTaskCheckbox } from "./markdownTaskCheckbox";
 
@@ -241,6 +242,7 @@ function linkifyFilePathNodes(
       a.title = `Open ${match.filePath}${match.line !== undefined ? `:${match.line}` : ""}`;
       a.addEventListener("click", (e) => {
         e.preventDefault();
+        recordFileLinkClick(a, match.filePath);
         onOpenFile(match.filePath, match.line);
       });
       parts.push(a);
@@ -296,6 +298,7 @@ function wireFileLinkAnchors(
     link.title = `Open ${parsed.filePath}${parsed.line !== undefined ? `:${parsed.line}` : ""}`;
     link.addEventListener("click", (e) => {
       e.preventDefault();
+      recordFileLinkClick(link, parsed.filePath);
       onOpenFile(parsed.filePath, parsed.line);
     });
   });
@@ -321,6 +324,7 @@ function linkifyFilePathCodeSpans(
     a.title = `Open ${match.filePath}${match.line !== undefined ? `:${match.line}` : ""}`;
     a.addEventListener("click", (e) => {
       e.preventDefault();
+      recordFileLinkClick(a, match.filePath);
       onOpenFile(match.filePath, match.line);
     });
     code.textContent = "";
@@ -357,14 +361,23 @@ export function StreamingText({
   onOpenFile,
 }: StreamingTextProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [revealedLen, setRevealedLen] = useState(streaming ? 0 : text.length);
+  // Streaming text that predates this component's mount (opening a background
+  // transcript mid-stream, remounting a live chat view) was already delivered
+  // once; replaying a large backlog as a typewriter reads as live token
+  // arrival that isn't happening. Mount text at or beyond the initial buffer
+  // renders immediately and only text arriving afterwards animates; smaller
+  // mount text keeps the normal buffer-then-reveal path so a stream observed
+  // from its start still flows.
+  const initialLen =
+    !streaming || text.length >= INITIAL_BUFFER ? text.length : 0;
+  const [revealedLen, setRevealedLen] = useState(initialLen);
   const rafRef = useRef<number>(0);
   const targetLenRef = useRef(text.length);
-  const bufferingRef = useRef(streaming);
+  const bufferingRef = useRef(streaming && initialLen === 0);
   const revealStartedRef = useRef(!streaming);
   // Reveal position advances every frame in this ref; it is committed to state
   // (triggering the markdown reparse) at most every REVEAL_COMMIT_MS.
-  const revealPosRef = useRef(streaming ? 0 : text.length);
+  const revealPosRef = useRef(initialLen);
   const lastCommitTimeRef = useRef(0);
 
   // When not streaming, show everything immediately
@@ -381,15 +394,17 @@ export function StreamingText({
     }
   }, [streaming, text.length, onRevealStart]);
 
-  // Update target length when text grows, end buffering once we have enough
+  // Update target length when text grows, end buffering once we have enough.
+  // The reveal-start callback also fires here on mid-stream mounts, which
+  // skip buffering entirely and must unhide their (already revealed) content.
   useEffect(() => {
     targetLenRef.current = text.length;
     if (bufferingRef.current && text.length >= INITIAL_BUFFER) {
       bufferingRef.current = false;
-      if (!revealStartedRef.current) {
-        revealStartedRef.current = true;
-        onRevealStart?.();
-      }
+    }
+    if (!bufferingRef.current && !revealStartedRef.current) {
+      revealStartedRef.current = true;
+      onRevealStart?.();
     }
   }, [text.length, onRevealStart]);
 

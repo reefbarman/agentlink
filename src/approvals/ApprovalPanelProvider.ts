@@ -25,6 +25,7 @@ import { isMemoryProtectedPath } from "./protectedPaths.js";
 import path from "path";
 import picomatch from "picomatch";
 import { randomUUID } from "crypto";
+import { canonicalNetworkDestinationKey } from "./networkRulePolicy.js";
 import { renderWebviewShell } from "../adapters/vscode/webviewShell.js";
 
 // ── Response types ──────────────────────────────────────────────────────────
@@ -950,6 +951,12 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     }
 
     entry.resolve(response);
+    if (entry.request.kind === "network") {
+      this.resolveMatchingNetworkBatch(
+        entry.request,
+        response as NetworkApprovalResponse,
+      );
+    }
 
     // Record for repeat auto-approve within TTL window.
     // Skip rejections and edited commands (user wanted to review those).
@@ -969,6 +976,74 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       allowRecentPathApprovals: entry.request.kind === "path",
     });
     return true;
+  }
+
+  private resolveMatchingNetworkBatch(
+    approved: InternalRequest,
+    response: NetworkApprovalResponse,
+  ): void {
+    if (approved.kind !== "network" || response.decision === "reject") return;
+
+    this.queue = this.queue.filter((entry) => {
+      if (
+        !this.matchesNetworkApprovalBatch(approved, entry.request, response)
+      ) {
+        return true;
+      }
+      entry.resolve({
+        decision: response.decision,
+      } satisfies NetworkApprovalResponse);
+      return false;
+    });
+    this.updatePendingCount();
+  }
+
+  private matchesNetworkApprovalBatch(
+    approved: InternalRequest,
+    candidate: InternalRequest,
+    response: NetworkApprovalResponse,
+  ): boolean {
+    if (candidate.kind !== "network") return false;
+    const approvedDestination = approved.managedNetwork;
+    const candidateDestination = candidate.managedNetwork;
+    if (!approvedDestination || !candidateDestination) return false;
+    try {
+      if (
+        canonicalNetworkDestinationKey(approvedDestination) !==
+        canonicalNetworkDestinationKey(candidateDestination)
+      ) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+
+    switch (response.decision) {
+      case "allow-global":
+        return true;
+      case "allow-project":
+        return (
+          approved.sourceProject?.projectId !== undefined &&
+          approved.sourceProject.projectId ===
+            candidate.sourceProject?.projectId
+        );
+      case "allow-once":
+        return (
+          approved.sessionId !== undefined &&
+          approved.sessionId === candidate.sessionId &&
+          approvedDestination.terminalId === candidateDestination.terminalId &&
+          approvedDestination.commandId === candidateDestination.commandId &&
+          approvedDestination.address === candidateDestination.address &&
+          approvedDestination.family === candidateDestination.family
+        );
+      case "allow-session":
+        return (
+          approved.sessionId !== undefined &&
+          approved.sessionId === candidate.sessionId
+        );
+      default:
+        return false;
+    }
   }
 
   private isValidDecision(

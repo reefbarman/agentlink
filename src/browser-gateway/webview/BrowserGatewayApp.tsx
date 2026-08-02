@@ -48,6 +48,7 @@ import {
 } from "../../agent/webview/components/ApprovalPanelEmbed";
 import { ChatHeader } from "../../agent/webview/components/ChatHeader";
 import { ChatView } from "../../agent/webview/components/ChatView";
+import { showFileOpenFailure } from "../../agent/webview/components/fileLinkFeedback";
 import { ContextUsageRow } from "../../agent/webview/components/ContextUsageRow";
 import { EnvironmentPanel } from "../../agent/webview/components/EnvironmentPanel";
 import { BackgroundSessionStrip } from "../../agent/webview/components/BackgroundSessionStrip";
@@ -1360,7 +1361,7 @@ export function BrowserGatewayApp({
     setLocalDismissedApprovalId(null);
     setLocalDismissedQuestionId(null);
     setQuestionContextMode(null);
-    setQuestionAttachments({});
+    setQuestionAttachments(null);
     setTranscriptView(null);
     forwardedFollowUpRef.current = "";
     setSelectedTabId(tabId);
@@ -1490,18 +1491,28 @@ export function BrowserGatewayApp({
     },
     [],
   );
-  const [questionContextMode, setQuestionContextMode] =
-    useState<QuestionComposerState | null>(null);
-  const [questionAttachments, setQuestionAttachments] = useState<
-    Record<string, { paths: string[]; media: ComposerMedia[] }>
-  >({});
+  const [questionContextMode, setQuestionContextMode] = useState<{
+    requestId: string;
+    state: QuestionComposerState;
+  } | null>(null);
+  const [questionAttachments, setQuestionAttachments] = useState<{
+    requestId: string;
+    values: Record<string, { paths: string[]; media: ComposerMedia[] }>;
+  } | null>(null);
   const [sendStatus, setSendStatus] = useState<string>("");
   const [detachedDetailRefresh, setDetachedDetailRefresh] = useState<{
     id: number;
     selection: BrowserLogicalTabSelection;
   } | null>(null);
-  const [optimisticQueueInterjections, setOptimisticQueueInterjections] =
-    useState<Set<string>>(() => new Set());
+  const [queueInterjectionOverrides, setQueueInterjectionOverrides] = useState<
+    Map<string, boolean>
+  >(() => new Map());
+  const queueInterjectionRequestGenerationRef = useRef(
+    new Map<string, number>(),
+  );
+  const queueInterjectionRequestChainRef = useRef(
+    new Map<string, Promise<void>>(),
+  );
   const [showFleetRequest, setShowFleetRequest] = useState(0);
   const [modeStatus, setModeStatus] = useState<string>("");
   const [status, setStatus] = useState("Connecting…");
@@ -2150,11 +2161,52 @@ export function BrowserGatewayApp({
     pendingQuestion && pendingQuestion.id !== localDismissedQuestionId
       ? pendingQuestion
       : null;
+  const snapshotQuestionProgress = snapshot?.ui.questionProgress ?? null;
+  const remoteQuestionProgress =
+    snapshotQuestionProgress &&
+    snapshotQuestionProgress.origin !== questionProgressOriginRef.current
+      ? snapshotQuestionProgress
+      : null;
 
   useEffect(() => {
     setQuestionContextMode(null);
-    setQuestionAttachments({});
+    setQuestionAttachments(null);
   }, [visibleQuestion?.id]);
+  const activeQuestionAttachments =
+    questionAttachments && questionAttachments.requestId === visibleQuestion?.id
+      ? questionAttachments.values
+      : {};
+  const activeQuestionStep =
+    remoteQuestionProgress && remoteQuestionProgress.id === visibleQuestion?.id
+      ? remoteQuestionProgress.step
+      : 0;
+  const activeQuestionContextMode = visibleQuestion
+    ? questionContextMode?.requestId === visibleQuestion.id
+      ? questionContextMode.state
+      : {
+          revision: "initial",
+          questionId: visibleQuestion.questions[activeQuestionStep]?.id ?? "",
+          initialText:
+            remoteQuestionProgress?.id === visibleQuestion.id
+              ? (remoteQuestionProgress.notes[
+                  visibleQuestion.questions[activeQuestionStep]?.id ?? ""
+                ] ?? "")
+              : "",
+          focusComposer:
+            visibleQuestion.questions[activeQuestionStep]?.type !== "text" &&
+            visibleQuestion.questions[activeQuestionStep]?.type !==
+              "confirmation",
+          onCommit: () => undefined,
+          canGoBack: false,
+          onBack: () => undefined,
+          primaryLabel: "Submit" as const,
+          primaryDisabled: true,
+          onPrimary: () => undefined,
+          hidePrimaryAction:
+            visibleQuestion.questions[activeQuestionStep]?.type ===
+            "confirmation",
+        }
+    : null;
 
   const visibleApprovalDiff = (() => {
     if (visibleApproval?.kind !== "write") return undefined;
@@ -2200,12 +2252,6 @@ export function BrowserGatewayApp({
     capabilities: askAgentCapabilities,
     modelCatalog: askAgentModelCatalog,
   });
-  const snapshotQuestionProgress = snapshot?.ui.questionProgress ?? null;
-  const remoteQuestionProgress =
-    snapshotQuestionProgress &&
-    snapshotQuestionProgress.origin !== questionProgressOriginRef.current
-      ? snapshotQuestionProgress
-      : null;
 
   useEffect(() => {
     const previousVisibleApprovalId = lastVisibleApprovalIdRef.current;
@@ -4115,7 +4161,7 @@ export function BrowserGatewayApp({
     setLocalDismissedApprovalId(null);
     setLocalDismissedQuestionId(null);
     setQuestionContextMode(null);
-    setQuestionAttachments({});
+    setQuestionAttachments(null);
     setTranscriptView(null);
     forwardedFollowUpRef.current = "";
   };
@@ -5766,12 +5812,18 @@ export function BrowserGatewayApp({
             const body = (await response.json().catch(() => ({}))) as {
               error?: string;
             };
-            setModeStatus(
-              `Could not open ${filePath}: ${body.error ?? response.status}`,
-            );
+            const kind =
+              body.error === "path_unavailable" ? "not_found" : "open_failed";
+            if (!showFileOpenFailure(filePath, kind)) {
+              setModeStatus(
+                `Could not open ${filePath}: ${body.error ?? response.status}`,
+              );
+            }
           })
           .catch(() => {
-            setModeStatus(`Could not open ${filePath}.`);
+            if (!showFileOpenFailure(filePath, "open_failed")) {
+              setModeStatus(`Could not open ${filePath}.`);
+            }
           });
         return;
       }
@@ -6021,88 +6073,149 @@ export function BrowserGatewayApp({
 
       if (
         command === "agentSteerQueuedMessage" ||
-        command === "agentInterjectQueuedMessage"
+        command === "agentInterjectQueuedMessage" ||
+        command === "agentPauseQueuedMessageInterjection"
       ) {
         const sessionId = String(data.sessionId ?? "").trim();
         const queueId = String(data.queueId ?? "").trim();
         if (!sessionId || !queueId) return;
         const isSteer = command === "agentSteerQueuedMessage";
+        const isPause = command === "agentPauseQueuedMessageInterjection";
         const optimisticKey = `${sessionId}:${queueId}`;
-        const clearOptimisticInterjection = () => {
-          if (isSteer) return;
-          setOptimisticQueueInterjections((previous) => {
-            if (!previous.has(optimisticKey)) return previous;
-            const next = new Set(previous);
-            next.delete(optimisticKey);
-            return next;
-          });
-        };
+        const requestGeneration = isSteer
+          ? 0
+          : (queueInterjectionRequestGenerationRef.current.get(optimisticKey) ??
+              0) + 1;
         if (!isSteer) {
-          setOptimisticQueueInterjections((previous) => {
-            const next = new Set(previous);
-            next.add(optimisticKey);
+          queueInterjectionRequestGenerationRef.current.set(
+            optimisticKey,
+            requestGeneration,
+          );
+          setQueueInterjectionOverrides((previous) => {
+            const next = new Map(previous);
+            next.set(optimisticKey, !isPause);
             return next;
           });
         }
         const origin = { ...snapshotOriginRef.current };
-        setSendStatus(isSteer ? "Steering…" : "Interjecting…");
-        void fetch(
-          buildApiPath(isSteer ? "/api/queue/steer" : "/api/queue/interject"),
-          {
-            method: "POST",
-            credentials: "same-origin",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${authToken}`,
-            },
-            body: JSON.stringify({
-              sessionId,
-              projectId: foreground?.project?.projectId,
-              queueId,
-              text: typeof data.text === "string" ? data.text : "",
-              displayText:
-                typeof data.displayText === "string"
-                  ? data.displayText
-                  : undefined,
-              isSlashCommand: data.isSlashCommand === true,
-              slashCommandLabel:
-                typeof data.slashCommandLabel === "string"
-                  ? data.slashCommandLabel
-                  : undefined,
-              attachments: Array.isArray(data.attachments)
-                ? data.attachments
-                : undefined,
-              images: Array.isArray(data.images) ? data.images : undefined,
-              documents: Array.isArray(data.documents)
-                ? data.documents
-                : undefined,
-            }),
-          },
-        )
-          .then(async (response) => {
+        setSendStatus(
+          isSteer ? "Steering…" : isPause ? "Pausing…" : "Interjecting…",
+        );
+        const runRequest = async () => {
+          try {
+            const response = await fetch(
+              buildApiPath(
+                isSteer
+                  ? "/api/queue/steer"
+                  : isPause
+                    ? "/api/queue/pause-interjection"
+                    : "/api/queue/interject",
+              ),
+              {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${authToken}`,
+                },
+                body: JSON.stringify({
+                  sessionId,
+                  projectId: foreground?.project?.projectId,
+                  queueId,
+                  text: typeof data.text === "string" ? data.text : "",
+                  displayText:
+                    typeof data.displayText === "string"
+                      ? data.displayText
+                      : undefined,
+                  isSlashCommand: data.isSlashCommand === true,
+                  slashCommandLabel:
+                    typeof data.slashCommandLabel === "string"
+                      ? data.slashCommandLabel
+                      : undefined,
+                  attachments: Array.isArray(data.attachments)
+                    ? data.attachments
+                    : undefined,
+                  images: Array.isArray(data.images) ? data.images : undefined,
+                  documents: Array.isArray(data.documents)
+                    ? data.documents
+                    : undefined,
+                }),
+              },
+            );
             const body = (await response.json()) as {
               ok?: boolean;
               error?: string;
               snapshot?: GatewaySnapshot;
             };
+            if (
+              !isSteer &&
+              queueInterjectionRequestGenerationRef.current.get(
+                optimisticKey,
+              ) !== requestGeneration
+            ) {
+              return;
+            }
             if (body.ok && body.snapshot) {
               commitSnapshot(body.snapshot, origin.tabId, origin.generation);
             }
-            clearOptimisticInterjection();
+            if (!isSteer) {
+              setQueueInterjectionOverrides((previous) => {
+                if (!previous.has(optimisticKey)) return previous;
+                const next = new Map(previous);
+                next.delete(optimisticKey);
+                return next;
+              });
+            }
             setSendStatus(
               body.ok
                 ? isSteer
                   ? "Steered."
-                  : "Interjection queued."
-                : `${isSteer ? "Steer" : "Interject"} failed: ${body.error ?? response.status}`,
+                  : isPause
+                    ? "Interjection paused."
+                    : "Interjection queued."
+                : `${isSteer ? "Steer" : isPause ? "Pause" : "Interject"} failed: ${body.error ?? response.status}`,
             );
-          })
-          .catch((err) => {
-            clearOptimisticInterjection();
+          } catch (err) {
+            if (
+              !isSteer &&
+              queueInterjectionRequestGenerationRef.current.get(
+                optimisticKey,
+              ) !== requestGeneration
+            ) {
+              return;
+            }
+            if (!isSteer) {
+              setQueueInterjectionOverrides((previous) => {
+                if (!previous.has(optimisticKey)) return previous;
+                const next = new Map(previous);
+                next.delete(optimisticKey);
+                return next;
+              });
+            }
             setSendStatus(
-              `${isSteer ? "Steer" : "Interject"} error: ${String(err)}`,
+              `${isSteer ? "Steer" : isPause ? "Pause" : "Interject"} failed: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
             );
+          }
+        };
+        const previousRequest = isSteer
+          ? undefined
+          : queueInterjectionRequestChainRef.current.get(optimisticKey);
+        const request = previousRequest
+          ? previousRequest.then(runRequest, runRequest)
+          : runRequest();
+        if (!isSteer) {
+          queueInterjectionRequestChainRef.current.set(optimisticKey, request);
+          void request.finally(() => {
+            if (
+              queueInterjectionRequestChainRef.current.get(optimisticKey) ===
+              request
+            ) {
+              queueInterjectionRequestChainRef.current.delete(optimisticKey);
+            }
           });
+        }
         return;
       }
 
@@ -7146,13 +7259,14 @@ export function BrowserGatewayApp({
                   foreground.messageQueue.length > 0 &&
                   !mobileReviewOpen && (
                     <MessageQueuePanel
-                      queue={foreground.messageQueue.map((item) =>
-                        optimisticQueueInterjections.has(
+                      queue={foreground.messageQueue.map((item) => {
+                        const override = queueInterjectionOverrides.get(
                           `${foreground.sessionId}:${item.id}`,
-                        )
-                          ? { ...item, interjectionReady: true }
-                          : item,
-                      )}
+                        );
+                        return override === undefined
+                          ? item
+                          : { ...item, interjectionReady: override };
+                      })}
                       onSteer={(item) => {
                         browserVscodeApi.postMessage({
                           command: "agentSteerQueuedMessage",
@@ -7168,6 +7282,14 @@ export function BrowserGatewayApp({
                         });
                       }}
                       onInterject={(item) => {
+                        if (item.interjectionReady) {
+                          browserVscodeApi.postMessage({
+                            command: "agentPauseQueuedMessageInterjection",
+                            sessionId: foreground.sessionId,
+                            queueId: item.id,
+                          });
+                          return;
+                        }
                         browserVscodeApi.postMessage({
                           command: "agentInterjectQueuedMessage",
                           sessionId: foreground.sessionId,
@@ -7416,108 +7538,7 @@ export function BrowserGatewayApp({
                       }}
                     />
                   )}
-                {visibleQuestion && !mobileReviewOpen && (
-                  <QuestionCard
-                    key={`${snapshotOriginRef.current.tabId}:${visibleQuestion.id}`}
-                    id={visibleQuestion.id}
-                    context={visibleQuestion.context}
-                    questions={visibleQuestion.questions}
-                    backgroundTask={visibleQuestion.backgroundTask}
-                    modes={modes}
-                    onOpenFile={
-                      isAskAgentSelected
-                        ? undefined
-                        : (filePath, line) =>
-                            browserVscodeApi.postMessage({
-                              command: "agentOpenFile",
-                              path: filePath,
-                              line,
-                            })
-                    }
-                    attachmentCounts={Object.fromEntries(
-                      Object.entries(questionAttachments).map(
-                        ([questionId, value]) => [
-                          questionId,
-                          value.paths.length + value.media.length,
-                        ],
-                      ),
-                    )}
-                    integratedComposer
-                    onComposerStateChange={(next) =>
-                      setQuestionContextMode((current) =>
-                        current?.revision === next.revision &&
-                        current.questionId === next.questionId
-                          ? current
-                          : next,
-                      )
-                    }
-                    remoteProgress={
-                      remoteQuestionProgress &&
-                      remoteQuestionProgress.id === visibleQuestion.id
-                        ? {
-                            step: remoteQuestionProgress.step,
-                            answers: remoteQuestionProgress.answers,
-                            notes: remoteQuestionProgress.notes,
-                          }
-                        : null
-                    }
-                    onProgressChange={(progress) => {
-                      browserVscodeApi.postMessage({
-                        command: "agentQuestionProgress",
-                        id: visibleQuestion.id,
-                        step: progress.step,
-                        answers: progress.answers,
-                        notes: progress.notes,
-                        origin: questionProgressOriginRef.current,
-                        originTabId: snapshotOriginRef.current.tabId,
-                      });
-                    }}
-                    onSubmit={(id, answers, notes, currentAttachments) => {
-                      const attachmentsByQuestion = currentAttachments
-                        ? {
-                            ...questionAttachments,
-                            [currentAttachments.questionId]: {
-                              paths: currentAttachments.paths,
-                              media: currentAttachments.media,
-                            },
-                          }
-                        : questionAttachments;
-                      const attachments = Object.fromEntries(
-                        Object.entries(attachmentsByQuestion).flatMap(
-                          ([questionId, value]) => {
-                            const items = [
-                              ...value.paths.map((path) => ({
-                                kind: "file" as const,
-                                name: path.split(/[\\/]/).pop() || path,
-                                path,
-                              })),
-                              ...value.media.map((media) => ({
-                                kind: media.kind,
-                                name: media.name,
-                                mimeType: media.mimeType,
-                                base64: media.base64,
-                              })),
-                            ];
-                            return items.length > 0
-                              ? [[questionId, items]]
-                              : [];
-                          },
-                        ),
-                      );
-                      setLocalDismissedQuestionId(id);
-                      setQuestionContextMode(null);
-                      setQuestionAttachments({});
-                      browserVscodeApi.postMessage({
-                        command: "agentQuestionResponse",
-                        id,
-                        answers,
-                        notes,
-                        attachments,
-                        originTabId: snapshotOriginRef.current.tabId,
-                      });
-                    }}
-                  />
-                )}
+
                 {visibleApproval && (
                   <ApprovalPanelEmbed
                     key={`${snapshotOriginRef.current.tabId}:${visibleApproval.id}`}
@@ -7617,22 +7638,23 @@ export function BrowserGatewayApp({
                   <InputArea
                     onSend={handleSend}
                     contextMode={
-                      questionContextMode
+                      visibleQuestion && activeQuestionContextMode
                         ? ({
-                            key: `${visibleQuestion?.id ?? "question"}:${questionContextMode.questionId}`,
-                            questionId: questionContextMode.questionId,
+                            key: `${visibleQuestion.id}:${activeQuestionContextMode.questionId}`,
+                            questionId: activeQuestionContextMode.questionId,
                             title: "Adding context to agent question",
                             placeholder:
                               "Add details, paste a screenshot, or attach supporting files…",
-                            initialText: questionContextMode.initialText,
-                            focusComposer: questionContextMode.focusComposer,
+                            initialText: activeQuestionContextMode.initialText,
+                            focusComposer:
+                              activeQuestionContextMode.focusComposer,
                             initialAttachments:
-                              questionAttachments[
-                                questionContextMode.questionId
+                              activeQuestionAttachments[
+                                activeQuestionContextMode.questionId
                               ]?.paths,
                             initialMedia:
-                              questionAttachments[
-                                questionContextMode.questionId
+                              activeQuestionAttachments[
+                                activeQuestionContextMode.questionId
                               ]?.media,
                             onSubmit: (
                               text,
@@ -7641,23 +7663,147 @@ export function BrowserGatewayApp({
                               _slashLabel,
                               media,
                             ) => {
-                              questionContextMode.onCommit(text);
+                              activeQuestionContextMode.onCommit(text);
                               setQuestionAttachments((current) => ({
-                                ...current,
-                                [questionContextMode.questionId]: {
-                                  paths,
-                                  media: media ?? [],
+                                requestId: visibleQuestion.id,
+                                values: {
+                                  ...(current?.requestId === visibleQuestion.id
+                                    ? current.values
+                                    : {}),
+                                  [activeQuestionContextMode.questionId]: {
+                                    paths,
+                                    media: media ?? [],
+                                  },
                                 },
                               }));
                             },
                             onCancel: () => setQuestionContextMode(null),
+                            content: (
+                              <QuestionCard
+                                key={`${snapshotOriginRef.current.tabId}:${visibleQuestion.id}:composer`}
+                                id={visibleQuestion.id}
+                                context={visibleQuestion.context}
+                                questions={visibleQuestion.questions}
+                                backgroundTask={visibleQuestion.backgroundTask}
+                                modes={modes}
+                                onOpenFile={
+                                  isAskAgentSelected
+                                    ? undefined
+                                    : (filePath, line) =>
+                                        browserVscodeApi.postMessage({
+                                          command: "agentOpenFile",
+                                          path: filePath,
+                                          line,
+                                        })
+                                }
+                                attachmentCounts={Object.fromEntries(
+                                  Object.entries(activeQuestionAttachments).map(
+                                    ([questionId, value]) => [
+                                      questionId,
+                                      value.paths.length + value.media.length,
+                                    ],
+                                  ),
+                                )}
+                                integratedComposer
+                                onComposerStateChange={(next) =>
+                                  setQuestionContextMode((current) =>
+                                    current?.requestId === visibleQuestion.id &&
+                                    current.state.revision === next.revision &&
+                                    current.state.questionId === next.questionId
+                                      ? current
+                                      : {
+                                          requestId: visibleQuestion.id,
+                                          state: next,
+                                        },
+                                  )
+                                }
+                                remoteProgress={
+                                  remoteQuestionProgress &&
+                                  remoteQuestionProgress.id ===
+                                    visibleQuestion.id
+                                    ? {
+                                        step: remoteQuestionProgress.step,
+                                        answers: remoteQuestionProgress.answers,
+                                        notes: remoteQuestionProgress.notes,
+                                      }
+                                    : null
+                                }
+                                onProgressChange={(progress) => {
+                                  browserVscodeApi.postMessage({
+                                    command: "agentQuestionProgress",
+                                    id: visibleQuestion.id,
+                                    step: progress.step,
+                                    answers: progress.answers,
+                                    notes: progress.notes,
+                                    origin: questionProgressOriginRef.current,
+                                    originTabId:
+                                      snapshotOriginRef.current.tabId,
+                                  });
+                                }}
+                                onSubmit={(
+                                  id,
+                                  answers,
+                                  notes,
+                                  currentAttachments,
+                                ) => {
+                                  const attachmentsByQuestion =
+                                    currentAttachments
+                                      ? {
+                                          ...activeQuestionAttachments,
+                                          [currentAttachments.questionId]: {
+                                            paths: currentAttachments.paths,
+                                            media: currentAttachments.media,
+                                          },
+                                        }
+                                      : activeQuestionAttachments;
+                                  const attachments = Object.fromEntries(
+                                    Object.entries(
+                                      attachmentsByQuestion,
+                                    ).flatMap(([questionId, value]) => {
+                                      const items = [
+                                        ...value.paths.map((path) => ({
+                                          kind: "file" as const,
+                                          name:
+                                            path.split(/[\\/]/).pop() || path,
+                                          path,
+                                        })),
+                                        ...value.media.map((media) => ({
+                                          kind: media.kind,
+                                          name: media.name,
+                                          mimeType: media.mimeType,
+                                          base64: media.base64,
+                                        })),
+                                      ];
+                                      return items.length > 0
+                                        ? [[questionId, items]]
+                                        : [];
+                                    }),
+                                  );
+                                  setLocalDismissedQuestionId(id);
+                                  setQuestionContextMode(null);
+                                  setQuestionAttachments(null);
+                                  browserVscodeApi.postMessage({
+                                    command: "agentQuestionResponse",
+                                    id,
+                                    answers,
+                                    notes,
+                                    attachments,
+                                    originTabId:
+                                      snapshotOriginRef.current.tabId,
+                                  });
+                                }}
+                              />
+                            ),
                             actions: {
-                              canGoBack: questionContextMode.canGoBack,
-                              onBack: questionContextMode.onBack,
-                              primaryLabel: questionContextMode.primaryLabel,
+                              canGoBack: activeQuestionContextMode.canGoBack,
+                              onBack: activeQuestionContextMode.onBack,
+                              primaryLabel:
+                                activeQuestionContextMode.primaryLabel,
                               primaryDisabled:
-                                questionContextMode.primaryDisabled,
-                              onPrimary: questionContextMode.onPrimary,
+                                activeQuestionContextMode.primaryDisabled,
+                              onPrimary: activeQuestionContextMode.onPrimary,
+                              hidePrimaryAction:
+                                activeQuestionContextMode.hidePrimaryAction,
                             },
                           } satisfies ComposerContextMode)
                         : null

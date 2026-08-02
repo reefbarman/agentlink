@@ -1,4 +1,0 @@
-interface:
-  display_name: "Test Extension Development Host"
-  short_description: "Test and debug AgentLink in a real VS Code host"
-  default_prompt: "Use $test-extension-development-host to validate this AgentLink change in an Extension Development Host."

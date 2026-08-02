@@ -462,6 +462,30 @@ describe("InputArea slash popup", () => {
     });
     const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
 
+    expect(container.querySelector(".question-context-composer")).toBeTruthy();
+    const contextHeader = container.querySelector(
+      ".question-context-composer-header",
+    );
+    expect(contextHeader?.textContent).toContain(
+      "Additional context or answer",
+    );
+    expect(contextHeader?.textContent).toContain(
+      "Add supporting details, a screenshot, or answer in your own words",
+    );
+    expect(input.getAttribute("aria-describedby")).toBe(
+      "question-context-composer-help",
+    );
+    const questionNav = container.querySelector(".question-composer-nav");
+    expect(questionNav).toBeTruthy();
+    expect(
+      questionNav!.compareDocumentPosition(contextHeader!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(
+      questionNav!.compareDocumentPosition(input) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
     fireEvent.input(input, { target: { value: "Extra detail" } });
     expect(
       (getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled,
@@ -485,6 +509,52 @@ describe("InputArea slash popup", () => {
     });
     expect(onBack).not.toHaveBeenCalled();
     expect(getByRole("button", { name: "Stop generation" })).toBeTruthy();
+  });
+
+  it("keeps optional context available when the question action is hidden", () => {
+    const onContextSubmit = vi.fn();
+    const { container, getByRole } = renderInputArea([], {
+      streaming: true,
+      contextMode: {
+        key: "question-1:confirmation",
+        title: "Adding context to agent question",
+        placeholder: "Add details…",
+        initialText: "",
+        onSubmit: onContextSubmit,
+        onCancel: vi.fn(),
+        actions: {
+          canGoBack: false,
+          onBack: vi.fn(),
+          primaryLabel: "Submit",
+          primaryDisabled: false,
+          onPrimary: vi.fn(),
+          hidePrimaryAction: true,
+        },
+      },
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    expect(
+      container.querySelector(".question-context-composer-header")?.textContent,
+    ).toContain("Additional context or answer");
+    expect(getByRole("button", { name: "Attach file" })).toBeTruthy();
+    expect(getByRole("button", { name: "Stop generation" })).toBeTruthy();
+    expect(
+      getByRole("button", { name: "Add context (Cmd/Ctrl+Enter)" }),
+    ).toBeTruthy();
+    expect(container.querySelector(".question-composer-nav")).toBeNull();
+
+    fireEvent.input(input, { target: { value: "Only if the backup passes." } });
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+
+    expect(onContextSubmit).toHaveBeenLastCalledWith(
+      "Only if the backup passes.",
+      [],
+      undefined,
+      undefined,
+      undefined,
+    );
+    expect(input.value).toBe("Only if the backup passes.");
   });
 
   it("routes scoped context through its callback and restores the normal draft", async () => {

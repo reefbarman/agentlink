@@ -595,6 +595,126 @@ describe("tool-block file links", () => {
     }
   });
 
+  it("falls back to vscode.open when the file cannot open as text (images, binaries)", async () => {
+    const imageFile = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-open-image-")),
+      "concept.png",
+    );
+    fs.writeFileSync(imageFile, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    try {
+      const { ChatViewProvider } = await import("./ChatViewProvider.js");
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
+      (provider as unknown as { sessionManager: unknown }).sessionManager = {
+        getForegroundSession: () => undefined,
+        getDefaultProjectScope: () => undefined,
+      };
+      mockShowTextDocument.mockRejectedValueOnce(
+        new Error("File seems to be binary and cannot be opened as text"),
+      );
+
+      await (
+        provider as unknown as {
+          handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+        }
+      ).handleWebviewMessage({ command: "agentOpenFile", path: imageFile });
+
+      expect(mockExecuteCommand).toHaveBeenCalledWith(
+        "vscode.open",
+        { fsPath: imageFile },
+        expect.any(Object),
+      );
+    } finally {
+      fs.rmSync(path.dirname(imageFile), { recursive: true, force: true });
+    }
+  });
+
+  it("replies with a not_found result when the clicked path does not exist", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: () => undefined,
+      getDefaultProjectScope: () => undefined,
+    };
+    const connectionPostMessage = vi.fn();
+
+    await (
+      provider as unknown as {
+        handleWebviewMessage(
+          message: Record<string, unknown>,
+          context: Record<string, unknown>,
+        ): Promise<void>;
+      }
+    ).handleWebviewMessage(
+      {
+        command: "agentOpenFile",
+        path: "/definitely/not/a/real/file.png",
+        requestId: "open-req-1",
+      },
+      { connection: { postMessage: connectionPostMessage } },
+    );
+
+    expect(connectionPostMessage).toHaveBeenCalledWith({
+      type: "agentOpenFileResult",
+      requestId: "open-req-1",
+      ok: false,
+      error: "not_found",
+    });
+    expect(mockShowTextDocument).not.toHaveBeenCalled();
+  });
+
+  it("replies with an ok result after opening an existing file", async () => {
+    const openableFile = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-open-ok-")),
+      "notes.md",
+    );
+    fs.writeFileSync(openableFile, "hello", "utf8");
+
+    try {
+      const { ChatViewProvider } = await import("./ChatViewProvider.js");
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
+      (provider as unknown as { sessionManager: unknown }).sessionManager = {
+        getForegroundSession: () => undefined,
+        getDefaultProjectScope: () => undefined,
+      };
+      const connectionPostMessage = vi.fn();
+
+      await (
+        provider as unknown as {
+          handleWebviewMessage(
+            message: Record<string, unknown>,
+            context: Record<string, unknown>,
+          ): Promise<void>;
+        }
+      ).handleWebviewMessage(
+        {
+          command: "agentOpenFile",
+          path: openableFile,
+          requestId: "open-req-2",
+        },
+        { connection: { postMessage: connectionPostMessage } },
+      );
+
+      expect(connectionPostMessage).toHaveBeenCalledWith({
+        type: "agentOpenFileResult",
+        requestId: "open-req-2",
+        ok: true,
+        error: undefined,
+      });
+    } finally {
+      fs.rmSync(path.dirname(openableFile), { recursive: true, force: true });
+    }
+  });
+
   it("does not resolve relative tool-result paths without a project root", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(

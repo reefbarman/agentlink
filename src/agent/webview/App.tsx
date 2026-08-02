@@ -99,6 +99,10 @@ import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBa
 import { isForwardedBuiltinCommand } from "../../shared/builtinCommandForwarding";
 import { randomId } from "../../shared/randomId";
 import {
+  resolveOpenFileRequest,
+  trackOpenFileRequest,
+} from "./components/fileLinkFeedback";
+import {
   toVsCodeSelectionMessage,
   type WriteApprovalSelection,
 } from "../../shared/selectionCommands";
@@ -516,16 +520,18 @@ export function App({
   const [approvalResizing, setApprovalResizing] = useState(false);
   const approvalResizeCleanupRef = useRef<(() => void) | null>(null);
   const forwardedFollowUpRef = useRef("");
-  const [questionContextMode, setQuestionContextMode] =
-    useState<QuestionComposerState | null>(null);
-  const [questionAttachments, setQuestionAttachments] = useState<
-    Record<string, { paths: string[]; media: ComposerMedia[] }>
-  >({});
+  const [questionContextMode, setQuestionContextMode] = useState<{
+    requestId: string;
+    state: QuestionComposerState;
+  } | null>(null);
+  const [questionAttachments, setQuestionAttachments] = useState<{
+    requestId: string;
+    values: Record<string, { paths: string[]; media: ComposerMedia[] }>;
+  } | null>(null);
   useEffect(() => {
     setQuestionContextMode(null);
-    setQuestionAttachments({});
+    setQuestionAttachments(null);
   }, [state.questionRequest?.id]);
-
   const [remoteQuestionProgress, setRemoteQuestionProgress] = useState<{
     id: string;
     step: number;
@@ -536,6 +542,45 @@ export function App({
   const questionProgressOriginRef = useRef<string>(
     `ext-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`,
   );
+  const activeQuestionAttachments =
+    questionAttachments &&
+    questionAttachments.requestId === state.questionRequest?.id
+      ? questionAttachments.values
+      : {};
+  const activeQuestionStep =
+    remoteQuestionProgress &&
+    remoteQuestionProgress.id === state.questionRequest?.id
+      ? remoteQuestionProgress.step
+      : 0;
+  const activeQuestionContextMode = state.questionRequest
+    ? questionContextMode?.requestId === state.questionRequest.id
+      ? questionContextMode.state
+      : {
+          revision: "initial",
+          questionId:
+            state.questionRequest.questions[activeQuestionStep]?.id ?? "",
+          initialText:
+            remoteQuestionProgress?.id === state.questionRequest.id
+              ? (remoteQuestionProgress.notes[
+                  state.questionRequest.questions[activeQuestionStep]?.id ?? ""
+                ] ?? "")
+              : "",
+          focusComposer:
+            state.questionRequest.questions[activeQuestionStep]?.type !==
+              "text" &&
+            state.questionRequest.questions[activeQuestionStep]?.type !==
+              "confirmation",
+          onCommit: () => undefined,
+          canGoBack: false,
+          onBack: () => undefined,
+          primaryLabel: "Submit" as const,
+          primaryDisabled: true,
+          onPrimary: () => undefined,
+          hidePrimaryAction:
+            state.questionRequest.questions[activeQuestionStep]?.type ===
+            "confirmation",
+        }
+    : null;
   const [bgSessions, setBgSessions] = useState<BgSessionInfoProps[]>([]);
   const bgSessionsRef = useRef<BgSessionInfoProps[]>([]);
   bgSessionsRef.current = bgSessions;
@@ -1098,6 +1143,9 @@ export function App({
           }
           break;
         }
+        case "agentOpenFileResult":
+          resolveOpenFileRequest(msg.requestId, msg.ok, msg.error);
+          break;
         case "agentDebugInfo":
           if (msg.sessionId && msg.sessionId !== stateRef.current.sessionId)
             break;
@@ -3088,7 +3136,14 @@ export function App({
 
   const handleOpenFile = useCallback(
     (path: string, line?: number) => {
-      vscodeApi.postMessage({ command: "agentOpenFile", path, line });
+      const requestId = randomId();
+      trackOpenFileRequest(requestId, path);
+      vscodeApi.postMessage({
+        command: "agentOpenFile",
+        path,
+        line,
+        requestId,
+      });
     },
     [vscodeApi],
   );
@@ -3655,17 +3710,26 @@ export function App({
                   });
                 }}
                 onInterject={(item) => {
+                  const ready = !item.interjectionReady;
                   messageQueueRef.current = messageQueueRef.current.map(
                     (queued) =>
                       queued.id === item.id
-                        ? { ...queued, interjectionReady: true }
+                        ? { ...queued, interjectionReady: ready }
                         : queued,
                   );
                   dispatch({
                     type: "MARK_QUEUE_INTERJECTION_READY",
                     id: item.id,
-                    ready: true,
+                    ready,
                   });
+                  if (!ready) {
+                    vscodeApi.postMessage({
+                      command: "agentPauseQueuedMessageInterjection",
+                      sessionId: stateRef.current.sessionId,
+                      queueId: item.id,
+                    });
+                    return;
+                  }
                   vscodeApi.postMessage({
                     command: "agentInterjectQueuedMessage",
                     sessionId: stateRef.current.sessionId,
@@ -3952,111 +4016,7 @@ export function App({
                 />
               )}
               {state.todos.length > 0 && <TodoPanel todos={state.todos} />}
-              {state.questionRequest && (
-                <QuestionCard
-                  id={state.questionRequest.id}
-                  context={state.questionRequest.context}
-                  questions={state.questionRequest.questions}
-                  backgroundTask={state.questionRequest.backgroundTask}
-                  modes={state.modes}
-                  onOpenFile={handleOpenFile}
-                  attachmentCounts={Object.fromEntries(
-                    Object.entries(questionAttachments).map(
-                      ([questionId, value]) => [
-                        questionId,
-                        value.paths.length + value.media.length,
-                      ],
-                    ),
-                  )}
-                  integratedComposer
-                  onComposerStateChange={(next) =>
-                    setQuestionContextMode((current) =>
-                      current?.revision === next.revision &&
-                      current.questionId === next.questionId
-                        ? current
-                        : next,
-                    )
-                  }
-                  remoteProgress={
-                    remoteQuestionProgress &&
-                    remoteQuestionProgress.id === state.questionRequest.id
-                      ? {
-                          step: remoteQuestionProgress.step,
-                          answers: remoteQuestionProgress.answers,
-                          notes: remoteQuestionProgress.notes,
-                        }
-                      : null
-                  }
-                  onProgressChange={(progress) => {
-                    if (!state.questionRequest) return;
-                    vscodeApi.postMessage({
-                      command: "agentQuestionProgress",
-                      id: state.questionRequest.id,
-                      step: progress.step,
-                      answers: progress.answers,
-                      notes: progress.notes,
-                      origin: questionProgressOriginRef.current,
-                    });
-                  }}
-                  onSubmit={(
-                    id: string,
-                    answers: Record<
-                      string,
-                      string | string[] | number | boolean | undefined
-                    >,
-                    notes: Record<string, string>,
-                    currentAttachments,
-                  ) => {
-                    const attachmentsByQuestion = currentAttachments
-                      ? {
-                          ...questionAttachments,
-                          [currentAttachments.questionId]: {
-                            paths: currentAttachments.paths,
-                            media: currentAttachments.media,
-                          },
-                        }
-                      : questionAttachments;
-                    const attachments = Object.fromEntries(
-                      Object.entries(attachmentsByQuestion).flatMap(
-                        ([questionId, value]) => {
-                          const items = [
-                            ...value.paths.map((path) => ({
-                              kind: "file" as const,
-                              name: path.split(/[\\/]/).pop() || path,
-                              path,
-                            })),
-                            ...value.media.map((media) => ({
-                              kind: media.kind,
-                              name: media.name,
-                              mimeType: media.mimeType,
-                              base64: media.base64,
-                            })),
-                          ];
-                          return items.length > 0 ? [[questionId, items]] : [];
-                        },
-                      ),
-                    );
-                    dispatch({
-                      type: "SUBMIT_QUESTION",
-                      id,
-                      answers,
-                      notes,
-                    });
-                    setRemoteQuestionProgress((progress) =>
-                      progress?.id === id ? null : progress,
-                    );
-                    setQuestionContextMode(null);
-                    setQuestionAttachments({});
-                    vscodeApi.postMessage({
-                      command: "agentQuestionResponse",
-                      id,
-                      answers,
-                      notes,
-                      attachments,
-                    });
-                  }}
-                />
-              )}
+
               {(globalApproval ?? state.approvalRequest) && (
                 <ApprovalPanelEmbed
                   request={(globalApproval ?? state.approvalRequest)!}
@@ -4211,21 +4171,23 @@ export function App({
             <InputArea
               onSend={handleSend}
               contextMode={
-                questionContextMode
+                state.questionRequest && activeQuestionContextMode
                   ? ({
-                      key: `${state.questionRequest?.id ?? "question"}:${questionContextMode.questionId}`,
-                      questionId: questionContextMode.questionId,
+                      key: `${state.questionRequest.id}:${activeQuestionContextMode.questionId}`,
+                      questionId: activeQuestionContextMode.questionId,
                       title: "Adding context to agent question",
                       placeholder:
                         "Add details, paste a screenshot, or attach supporting files…",
-                      initialText: questionContextMode.initialText,
-                      focusComposer: questionContextMode.focusComposer,
+                      initialText: activeQuestionContextMode.initialText,
+                      focusComposer: activeQuestionContextMode.focusComposer,
                       initialAttachments:
-                        questionAttachments[questionContextMode.questionId]
-                          ?.paths,
+                        activeQuestionAttachments[
+                          activeQuestionContextMode.questionId
+                        ]?.paths,
                       initialMedia:
-                        questionAttachments[questionContextMode.questionId]
-                          ?.media,
+                        activeQuestionAttachments[
+                          activeQuestionContextMode.questionId
+                        ]?.media,
                       onSubmit: (
                         text,
                         paths,
@@ -4233,22 +4195,140 @@ export function App({
                         _slashLabel,
                         media,
                       ) => {
-                        questionContextMode.onCommit(text);
+                        activeQuestionContextMode.onCommit(text);
                         setQuestionAttachments((current) => ({
-                          ...current,
-                          [questionContextMode.questionId]: {
-                            paths,
-                            media: media ?? [],
+                          requestId: state.questionRequest!.id,
+                          values: {
+                            ...(current?.requestId === state.questionRequest!.id
+                              ? current.values
+                              : {}),
+                            [activeQuestionContextMode.questionId]: {
+                              paths,
+                              media: media ?? [],
+                            },
                           },
                         }));
                       },
                       onCancel: () => setQuestionContextMode(null),
+                      content: (
+                        <QuestionCard
+                          key={`${state.questionRequest.id}:composer`}
+                          id={state.questionRequest.id}
+                          context={state.questionRequest.context}
+                          questions={state.questionRequest.questions}
+                          backgroundTask={state.questionRequest.backgroundTask}
+                          modes={state.modes}
+                          onOpenFile={handleOpenFile}
+                          attachmentCounts={Object.fromEntries(
+                            Object.entries(activeQuestionAttachments).map(
+                              ([questionId, value]) => [
+                                questionId,
+                                value.paths.length + value.media.length,
+                              ],
+                            ),
+                          )}
+                          integratedComposer
+                          onComposerStateChange={(next) =>
+                            setQuestionContextMode((current) =>
+                              current?.requestId ===
+                                state.questionRequest!.id &&
+                              current.state.revision === next.revision &&
+                              current.state.questionId === next.questionId
+                                ? current
+                                : {
+                                    requestId: state.questionRequest!.id,
+                                    state: next,
+                                  },
+                            )
+                          }
+                          remoteProgress={
+                            remoteQuestionProgress &&
+                            remoteQuestionProgress.id ===
+                              state.questionRequest.id
+                              ? {
+                                  step: remoteQuestionProgress.step,
+                                  answers: remoteQuestionProgress.answers,
+                                  notes: remoteQuestionProgress.notes,
+                                }
+                              : null
+                          }
+                          onProgressChange={(progress) => {
+                            vscodeApi.postMessage({
+                              command: "agentQuestionProgress",
+                              id: state.questionRequest!.id,
+                              step: progress.step,
+                              answers: progress.answers,
+                              notes: progress.notes,
+                              origin: questionProgressOriginRef.current,
+                            });
+                          }}
+                          onSubmit={(
+                            id,
+                            answers,
+                            notes,
+                            currentAttachments,
+                          ) => {
+                            const attachmentsByQuestion = currentAttachments
+                              ? {
+                                  ...activeQuestionAttachments,
+                                  [currentAttachments.questionId]: {
+                                    paths: currentAttachments.paths,
+                                    media: currentAttachments.media,
+                                  },
+                                }
+                              : activeQuestionAttachments;
+                            const attachments = Object.fromEntries(
+                              Object.entries(attachmentsByQuestion).flatMap(
+                                ([questionId, value]) => {
+                                  const items = [
+                                    ...value.paths.map((path) => ({
+                                      kind: "file" as const,
+                                      name: path.split(/[\\/]/).pop() || path,
+                                      path,
+                                    })),
+                                    ...value.media.map((media) => ({
+                                      kind: media.kind,
+                                      name: media.name,
+                                      mimeType: media.mimeType,
+                                      base64: media.base64,
+                                    })),
+                                  ];
+                                  return items.length > 0
+                                    ? [[questionId, items]]
+                                    : [];
+                                },
+                              ),
+                            );
+                            dispatch({
+                              type: "SUBMIT_QUESTION",
+                              id,
+                              answers,
+                              notes,
+                            });
+                            setRemoteQuestionProgress((progress) =>
+                              progress?.id === id ? null : progress,
+                            );
+                            setQuestionContextMode(null);
+                            setQuestionAttachments(null);
+                            vscodeApi.postMessage({
+                              command: "agentQuestionResponse",
+                              id,
+                              answers,
+                              notes,
+                              attachments,
+                            });
+                          }}
+                        />
+                      ),
                       actions: {
-                        canGoBack: questionContextMode.canGoBack,
-                        onBack: questionContextMode.onBack,
-                        primaryLabel: questionContextMode.primaryLabel,
-                        primaryDisabled: questionContextMode.primaryDisabled,
-                        onPrimary: questionContextMode.onPrimary,
+                        canGoBack: activeQuestionContextMode.canGoBack,
+                        onBack: activeQuestionContextMode.onBack,
+                        primaryLabel: activeQuestionContextMode.primaryLabel,
+                        primaryDisabled:
+                          activeQuestionContextMode.primaryDisabled,
+                        onPrimary: activeQuestionContextMode.onPrimary,
+                        hidePrimaryAction:
+                          activeQuestionContextMode.hidePrimaryAction,
                       },
                     } satisfies ComposerContextMode)
                   : null

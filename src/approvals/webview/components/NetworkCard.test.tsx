@@ -48,7 +48,7 @@ const request: ApprovalRequest = {
 };
 
 describe("NetworkCard", () => {
-  it("shows retained destination evidence and encrypted-content limits", () => {
+  it("leads with the destination, keeps command context compact, and collapses safeguards", () => {
     render(
       h(NetworkCard, {
         request,
@@ -58,9 +58,18 @@ describe("NetworkCard", () => {
     );
 
     expect(screen.getByText("https://registry.npmjs.org:443")).toBeTruthy();
+    expect(screen.getByText("Network destination paused")).toBeTruthy();
+    expect(screen.getByText("Connection context")).toBeTruthy();
+    expect(screen.getByText("npm view example version")).toBeTruthy();
+    expect(screen.getByText("/workspace")).toBeTruthy();
     expect(screen.getByText("104.16.24.34 (IPv4)")).toBeTruthy();
-    expect(screen.getByText(/104\.16\.25\.34 \(IPv4\)/)).toBeTruthy();
-    expect(screen.getByText(/Redirects and later connections/)).toBeTruthy();
+    expect(
+      screen.getByText(/Allow once resumes only this connection/i),
+    ).toBeTruthy();
+    const technicalDetails = screen
+      .getByText("Connection safeguards and DNS")
+      .closest("details");
+    expect(technicalDetails?.open).toBe(false);
     expect(
       screen.getByText(/request paths, payloads, credentials/),
     ).toBeTruthy();
@@ -86,9 +95,14 @@ describe("NetworkCard", () => {
     });
 
     fireEvent.click(
-      screen.getByRole("button", { name: /Auto Approval Rules/ }),
+      screen.getByRole("button", { name: /Save destination rule/ }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Project" }));
+    expect(
+      screen.getByText(
+        /Allows future connections to https:\/\/registry\.npmjs\.org:443/,
+      ),
+    ).toBeTruthy();
     fireEvent.click(
       screen.getByRole("button", { name: "Save Exact Rule & Allow" }),
     );
@@ -96,5 +110,12 @@ describe("NetworkCard", () => {
       id: "network-approval",
       decision: "allow-project",
     });
+
+    fireEvent.click(screen.getByRole("button", { name: "Global" }));
+    expect(
+      screen.getByText(
+        "Allows future connections to https://registry.npmjs.org:443 from every AgentLink project on this machine. Each connection is resolved and safety-checked again.",
+      ),
+    ).toBeTruthy();
   });
 });

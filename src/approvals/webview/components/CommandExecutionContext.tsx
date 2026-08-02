@@ -24,6 +24,9 @@ export function CommandExecutionContext({
   approvalRulesSupported = false,
 }: CommandExecutionContextProps) {
   const protectedTerminal = security?.route === "sandbox";
+  const managedNetwork = ["proxy-only", "partial"].includes(
+    security?.sandbox?.capabilities.network ?? "",
+  );
   const label = nativeEscalation
     ? "Full terminal access"
     : protectedTerminal
@@ -36,14 +39,18 @@ export function CommandExecutionContext({
         ? "Normal user permissions"
         : "One run · normal user permissions"
       : protectedTerminal
-        ? "Workspace access · private HOME · no network"
+        ? managedNetwork
+          ? "Workspace access · mediated network"
+          : "Workspace access · private HOME · no network"
         : "Normal shell permissions";
   const description = nativeEscalation
     ? approvalRulesSupported
       ? "Runs with your normal user permissions, including host files, credentials, network, and local processes."
       : "This exact command will run once with your normal user permissions. It can access host files, credentials, network services, and local processes that the sandbox normally protects. This approval is not saved and cannot approve future commands."
     : protectedTerminal
-      ? "Runs with workspace access, protected metadata, private HOME and temporary files, and no network access."
+      ? managedNetwork
+        ? "Runs with workspace access, protected metadata, private HOME and temporary files. Public connections pause for exact destination approval; private and local destinations remain blocked."
+        : "Runs with workspace access, protected metadata, private HOME and temporary files, and no network access."
       : "Runs in your normal shell environment with the same permissions as a terminal you open.";
   const icon = nativeEscalation
     ? "codicon-warning"

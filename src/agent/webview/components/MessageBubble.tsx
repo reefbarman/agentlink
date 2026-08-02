@@ -27,6 +27,7 @@ import { ThinkingContent } from "./ThinkingContent";
 import { ToolCallBlock } from "./ToolCallBlock";
 import { getFinalMessageContinueAction } from "../../../shared/finalStatus";
 import { getStreamingActivity } from "./activityPresentation";
+import { recordFileLinkClick } from "./fileLinkFeedback";
 import { normalizeProjectedToolName } from "../../../shared/chatProjection";
 
 const TOOL_GROUP_SETTLE_MS = 350;
@@ -965,6 +966,9 @@ function UserAttachments({
                   onOpenFile
                     ? (e: MouseEvent) => {
                         e.preventDefault();
+                        if (e.currentTarget instanceof HTMLElement) {
+                          recordFileLinkClick(e.currentTarget, filePath);
+                        }
                         onOpenFile(filePath);
                       }
                     : undefined

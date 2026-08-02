@@ -5,6 +5,7 @@ import { ImagePreview } from "./ImagePreview";
 import { InlineDiff } from "./InlineDiff";
 import { JsonHighlight } from "../../../shared/ui/JsonHighlight";
 import { matchFilePaths } from "./filePathLinks";
+import { recordFileLinkClick } from "./fileLinkFeedback";
 
 export type ToolCallData = ContentBlock & { type: "tool_call" };
 
@@ -68,6 +69,9 @@ function FilePathLinkedText({
         onClick={(event: MouseEvent) => {
           event.preventDefault();
           event.stopPropagation();
+          if (event.currentTarget instanceof HTMLElement) {
+            recordFileLinkClick(event.currentTarget, match.filePath);
+          }
           onOpenFile?.(match.filePath, match.line);
         }}
       >
@@ -681,6 +685,9 @@ export function ToolCallBlock({
     (e: MouseEvent, path: string, line?: number) => {
       e.preventDefault();
       e.stopPropagation();
+      if (e.currentTarget instanceof HTMLElement) {
+        recordFileLinkClick(e.currentTarget, path);
+      }
       onOpenFile?.(path, line);
     },
     [onOpenFile],
@@ -693,7 +700,13 @@ export function ToolCallBlock({
     return input ? JSON.stringify(input, null, 2) : toolCall.inputJson;
   }, [expanded, input, toolCall.inputJson]);
 
-  const hasSummary = summaryParts.some(
+  const isCommand = toolCall.name === "execute_command";
+  const command = isCommand ? String(input?.command ?? "").trim() : "";
+  const displayName = isCommand ? "Command" : toolCall.name;
+  const visibleSummaryParts = isCommand
+    ? summaryParts.filter((part) => part.type === "badge")
+    : summaryParts;
+  const hasSummary = visibleSummaryParts.some(
     (p) =>
       p.type === "file" || p.type === "badge" || (p.type === "text" && p.text),
   );
@@ -730,22 +743,42 @@ export function ToolCallBlock({
     setExpanded((current) => !current);
   }, [onRevealToolCallTerminal, revealsRunningTerminal, toolCall.id]);
 
+  const handleToggleClick = useCallback(() => {
+    setExpanded((current) => !current);
+  }, []);
+
+  const handleRowClick = useCallback(
+    (event: MouseEvent) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest(".tool-call-inline-actions")
+      ) {
+        return;
+      }
+      handleHeaderClick();
+    },
+    [handleHeaderClick],
+  );
+
   return (
     <div class={`tool-call-block ${statusClass}`}>
       <div
         class={`tool-call-row${showRunningActions ? " tool-call-row-with-actions" : ""}`}
+        onClick={handleRowClick}
       >
-        <div class="tool-call-header" onClick={handleHeaderClick}>
+        <div class="tool-call-header">
           <button
             class="tool-call-header-toggle"
             type="button"
             onClick={(event: MouseEvent) => {
               event.stopPropagation();
-              handleHeaderClick();
+              handleToggleClick();
             }}
             title={
-              revealsRunningTerminal ? "Show the running terminal" : undefined
+              expanded ? "Hide tool call details" : "Show tool call details"
             }
+            aria-label={isCommand && command ? "Command details" : undefined}
+            aria-expanded={expanded}
           >
             <i
               class={`codicon codicon-chevron-${expanded ? "down" : "right"} tool-call-chevron`}
@@ -753,12 +786,33 @@ export function ToolCallBlock({
             <i class={`codicon tool-call-status-icon ${statusIconClass}`} />
             <span class="tool-call-name">{toolCall.name}</span>
           </button>
+          {isCommand && !complete && (
+            <span class="tool-command-state">Running</span>
+          )}
+          {isCommand && command && (
+            <button
+              class="tool-command-preview"
+              type="button"
+              title={
+                revealsRunningTerminal ? "Show the running terminal" : command
+              }
+              aria-label={
+                revealsRunningTerminal ? "Show the running terminal" : undefined
+              }
+              onClick={(event: MouseEvent) => {
+                event.stopPropagation();
+                handleHeaderClick();
+              }}
+            >
+              {command}
+            </button>
+          )}
           {cmdExitBadge !== null && (
             <span class="tool-exit-badge">exit {cmdExitBadge}</span>
           )}
           {hasSummary && (
             <span class="tool-call-summary">
-              {summaryParts
+              {visibleSummaryParts
                 .filter(
                   (p) => !(p.type === "text" && p.text.startsWith("\x00exit:")),
                 )
@@ -817,13 +871,13 @@ export function ToolCallBlock({
         {showRunningActions && (
           <div
             class="tool-call-inline-actions"
-            aria-label={`Actions for ${toolCall.name}`}
+            aria-label={`Actions for ${displayName}`}
           >
             {canContinueInBackground && onContinueToolCallInBackground && (
               <button
                 type="button"
                 class="tool-call-inline-action"
-                aria-label={`Continue ${toolCall.name} in background`}
+                aria-label={`Continue ${displayName} in background`}
                 title={
                   toolCall.name === "get_background_result"
                     ? "Return control to the agent while the background agent keeps running"
@@ -838,8 +892,8 @@ export function ToolCallBlock({
               <button
                 type="button"
                 class="tool-call-inline-action tool-call-inline-complete"
-                aria-label={`Complete ${toolCall.name}`}
-                title={`Complete ${toolCall.name}`}
+                aria-label={`Complete ${displayName}`}
+                title={`Complete ${displayName}`}
                 onClick={() => onCompleteToolCall(toolCall.id)}
               >
                 <i class="codicon codicon-check" aria-hidden="true" />
@@ -849,8 +903,8 @@ export function ToolCallBlock({
               <button
                 type="button"
                 class="tool-call-inline-action tool-call-inline-cancel"
-                aria-label={`Cancel ${toolCall.name}`}
-                title={`Cancel ${toolCall.name}`}
+                aria-label={`Cancel ${displayName}`}
+                title={`Cancel ${displayName}`}
                 onClick={() => onCancelToolCall(toolCall.id)}
               >
                 <i class="codicon codicon-close" aria-hidden="true" />

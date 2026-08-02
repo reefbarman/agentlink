@@ -174,6 +174,7 @@ export interface ComposerContextMode {
     primaryLabel: string;
     primaryDisabled: boolean;
     onPrimary: (text: string, attachments: QuestionAttachmentDraft) => void;
+    hidePrimaryAction?: boolean;
   };
 }
 
@@ -452,13 +453,15 @@ export function InputArea({
         media: submitMedia ?? [],
       };
       const trimmed = text.trim();
-      contextMode.onSubmit(
-        trimmed,
-        submitAttachments,
-        undefined,
-        undefined,
-        submitMedia,
-      );
+      if (action === "primary" || hasSubmitContent) {
+        contextMode.onSubmit(
+          trimmed,
+          submitAttachments,
+          undefined,
+          undefined,
+          submitMedia,
+        );
+      }
       if (action === "back") {
         contextMode.actions.onBack(trimmed, attachmentDraft);
       } else {
@@ -472,8 +475,43 @@ export function InputArea({
       allowMediaPaste,
       pendingMedia,
       text,
+      hasSubmitContent,
     ],
   );
+
+  const lastSyncedQuestionDraftRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (!contextMode?.actions) {
+      lastSyncedQuestionDraftRef.current = null;
+      return;
+    }
+    const submitAttachments = allowAttachments ? attachments : [];
+    const submitMedia = allowMediaPaste ? pendingMedia : undefined;
+    const signature = JSON.stringify({
+      key: contextMode.key,
+      text,
+      attachments: submitAttachments,
+      media: submitMedia,
+    });
+    if (signature === lastSyncedQuestionDraftRef.current) return;
+    lastSyncedQuestionDraftRef.current = signature;
+    contextMode.onSubmit(
+      text,
+      submitAttachments,
+      undefined,
+      undefined,
+      submitMedia,
+    );
+  }, [
+    contextMode?.key,
+    contextMode?.actions,
+    contextMode?.onSubmit,
+    text,
+    attachments,
+    pendingMedia,
+    allowAttachments,
+    allowMediaPaste,
+  ]);
 
   const matchedExecutableSlashCommand = useMemo(() => {
     if (!matchedSlashCommand) {
@@ -636,12 +674,14 @@ export function InputArea({
         undefined,
         submitMedia,
       );
-      setText("");
-      setAttachments([]);
-      setMediaAttachments([]);
-      clearAttachmentPreviews();
-      if (textareaRef.current) {
-        textareaRef.current.style.height = "auto";
+      if (!contextMode) {
+        setText("");
+        setAttachments([]);
+        setMediaAttachments([]);
+        clearAttachmentPreviews();
+        if (textareaRef.current) {
+          textareaRef.current.style.height = "auto";
+        }
       }
     },
     [
@@ -874,8 +914,16 @@ export function InputArea({
         return;
       }
       if (
+        contextMode?.actions?.hidePrimaryAction &&
+        e.key === "Enter" &&
+        (e.metaKey || e.ctrlKey)
+      ) {
+        e.preventDefault();
+        onComposerEvent?.("submit.key", { key: "Cmd/Ctrl+Enter" });
+        handleSubmit();
+      } else if (
         contextMode?.actions &&
-        contextMode.actions.primaryLabel !== "Reject" &&
+        !contextMode.actions.hidePrimaryAction &&
         !(contextMode.actions.primaryDisabled && !hasSubmitContent) &&
         e.key === "Enter" &&
         (e.metaKey || e.ctrlKey)
@@ -1446,385 +1494,23 @@ export function InputArea({
     return { left: 8, bottom: wrapper.offsetHeight + 4 };
   }, []);
 
-  return (
-    <div class="input-area">
-      {contextMode?.content}
-      <div class="input-toolbar">
-        {contextMode && !contextMode.actions && (
-          <div class="composer-context-mode" role="status">
-            <i class="codicon codicon-comment-discussion" aria-hidden="true" />
-            <span>{contextMode.title}</span>
-          </div>
-        )}
-        {!contextMode && modes.length > 0 && onSwitchMode && (
-          <ModeSelector
-            currentMode={currentMode}
-            modes={modes}
-            onSelect={onSwitchMode}
-          />
-        )}
-        {!contextMode && availableModels.length > 0 && onSelectModel && (
-          <ModelSelector
-            currentModel={currentModel}
-            currentCondenseThreshold={currentCondenseThreshold}
-            models={availableModels}
-            onSelect={onSelectModel}
-            onSetCondenseThreshold={onSetCondenseThreshold}
-            onSignIn={onSignIn}
-          />
-        )}
-        {!contextMode && allowThinkingToggle && (
-          <ReasoningEffortSelector
-            current={reasoningEffort}
-            currentModel={currentModel}
-            models={availableModels}
-            onSelect={onSetReasoningEffort}
-          />
-        )}
-        {!contextMode && onSetAgentWriteApproval && (
-          <WriteApprovalSelector
-            current={agentWriteApproval}
-            onSelect={onSetAgentWriteApproval}
-          />
-        )}
-        {!contextMode && onSetCommandApprovalPolicy && (
-          <ToolbarControlButton
-            active={commandApprovalPolicy === "approve-for-me"}
-            aria-pressed={commandApprovalPolicy === "approve-for-me"}
-            className="approve-for-me-toggle"
-            onClick={() =>
-              onSetCommandApprovalPolicy(
-                commandApprovalPolicy === "approve-for-me"
-                  ? configuredCommandApprovalPolicy
-                  : "approve-for-me",
-              )
-            }
-            title={
-              commandApprovalPolicy === "approve-for-me"
-                ? "Approve for Me is on. Eligible workspace and temporary-file commands go to a separate reviewer. High-confidence, bounded commands may run automatically; guardrail-triggered commands ask you directly with a short reason, while reviewer uncertainty shows the review reason. Uses model quota."
-                : "Let a separate reviewer approve eligible workspace and temporary-file commands. Guardrail-triggered commands ask you directly; reviewer uncertainty includes the review reason. Uses model quota and applies only to this session."
-            }
-            type="button"
-          >
-            <i class="codicon codicon-shield" />
-            <span>
-              {commandApprovalPolicy === "approve-for-me"
-                ? "Approve for Me On"
-                : "Approve for Me"}
-            </span>
-          </ToolbarControlButton>
-        )}
-        {!contextMode && onToggleAutoContinue && (
-          <ToolbarControlButton
-            active={autoContinueEnabled}
-            aria-pressed={autoContinueEnabled}
-            className="auto-continue-toggle"
-            onClick={() => onToggleAutoContinue(!autoContinueEnabled)}
-            title={
-              autoContinueStatus ||
-              (autoContinueEnabled
-                ? "Auto Continue is on. Completed turns will automatically continue until the agent marks the task definitely complete."
-                : "Automatically send Continue after completed turns until the agent marks the task definitely complete.")
-            }
-            type="button"
-          >
-            <i class="codicon codicon-debug-continue" />
-            <span>
-              {autoContinueEnabled ? "Auto Continue On" : "Auto Continue"}
-            </span>
-          </ToolbarControlButton>
-        )}
-        {allowAttachments && (
-          <button
-            class="icon-button"
-            onClick={() =>
-              vscodeApi.postMessage({ command: "agentAttachFile" })
-            }
-            title="Attach file"
-            type="button"
-            disabled={(!contextMode && streaming) || disabled}
-          >
-            <i class="codicon codicon-attach" />
-          </button>
-        )}
-        {onPolishPrompt && (
-          <button
-            class="icon-button polish-button"
-            onClick={() => void handlePolish()}
-            title="Polish prompt — fix spelling and grammar and improve wording (uses model quota)"
-            type="button"
-            disabled={disabled || polishing || !text.trim()}
-            aria-busy={polishing}
-          >
-            <i
-              class={`codicon ${polishing ? "codicon-loading codicon-modifier-spin" : "codicon-sparkle"}`}
-            />
-          </button>
-        )}
-        {onPolishPrompt && canUndoPolish && (
-          <button
-            class="icon-button polish-undo-button"
-            onClick={handleUndoPolish}
-            title="Revert polish — restore what you had typed"
-            type="button"
-          >
-            <i class="codicon codicon-discard" />
-          </button>
-        )}
-        <div class="input-toolbar-spacer" />
-        {contextMode && !contextMode.actions && (
-          <button
-            class="composer-context-cancel"
-            onClick={contextMode.onCancel}
-            title="Cancel other context"
-            type="button"
-          >
-            Cancel
-          </button>
-        )}
-        {!contextMode && allowExportTranscript && hasMessages && (
-          <button
-            class="icon-button"
-            onClick={onExportTranscript}
-            title="Export Transcript"
-            type="button"
-          >
-            <i class="codicon codicon-export" />
-          </button>
-        )}
-      </div>
-      {((allowAttachments && attachments.length > 0) ||
-        (allowMediaPaste && mediaAttachments.length > 0)) && (
-        <div class="attachment-chips">
-          {allowAttachments &&
-            attachments.map((path) => (
-              <AttachmentChip
-                key={path}
-                path={path}
-                previewSrc={attachmentPreviews[path]}
-                onRemove={handleRemoveAttachment}
-              />
-            ))}
-          {allowMediaPaste &&
-            mediaAttachments
-              .filter((m) => m.kind === "image")
-              .map((img) => (
-                <ImageAttachmentChip
-                  key={img.id}
-                  id={img.id}
-                  name={img.name}
-                  dataUrl={img.dataUrl}
-                  onRemove={handleRemoveMedia}
-                />
-              ))}
-          {allowMediaPaste &&
-            mediaAttachments
-              .filter((m) => m.kind === "document")
-              .map((doc) => (
-                <DocumentAttachmentChip
-                  key={doc.id}
-                  id={doc.id}
-                  name={doc.name}
-                  onRemove={handleRemoveMedia}
-                />
-              ))}
-        </div>
-      )}
-      {allowFileMentions && allowAttachments && pickerOpen && (
-        <FilePicker
-          query={pickerQuery}
-          anchor={getPickerAnchor()}
-          onSelect={handleFileSelect}
-          onClose={closePicker}
-          vscodeApi={vscodeApi}
-        />
-      )}
-      {shouldShowSlashPopup && (
-        <SlashCommandPopup
-          ref={slashPopupRef}
-          commands={filteredSlashCommands}
-          selectedIndex={slashSelectedIdx}
-          anchor={getPickerAnchor()}
-          onSelect={handleSlashSelect}
-          onClose={closeSlash}
-          isSubView={slashView !== "main"}
-          subViewTitle={
-            slashView === "mode"
-              ? "Switch Mode"
-              : slashView === "model"
-                ? "Switch Model"
-                : slashView === "mcp-config"
-                  ? "Open MCP Config"
-                  : undefined
-          }
-          onBack={backSlashView}
-        />
-      )}
-      {shouldShowEmojiPopup && (
-        <EmojiPopup
-          suggestions={emojiSuggestions}
-          selectedIndex={emojiSelectedIdx}
-          query={emojiQuery}
-          anchor={getPickerAnchor()}
-          onSelect={handleEmojiSelect}
-          onHover={setEmojiSelectedIdx}
-        />
-      )}
-      {disabled && disabledReason && (
-        <div class="composer-disabled-notice" role="status">
-          <i class="codicon codicon-warning" />
-          <span>{disabledReason}</span>
-        </div>
-      )}
-      {polishError && (
-        <div class="composer-disabled-notice" role="status">
-          <i class="codicon codicon-warning" />
-          <span>Polish failed: {polishError}</span>
-        </div>
-      )}
-      <ComposerBox
-        className={`input-wrapper ${dragOver ? "drag-over" : ""} ${pickerOpen ? "picker-active" : ""} ${matchedExecutableSlashCommand ? "slash-match-active" : ""}`}
-        mainAlign="center"
-        accessory={
-          matchedExecutableSlashCommand && (
-            <div class="slash-match-pill-row">
-              <div
-                class="slash-match-pill"
-                title={matchedExecutableSlashCommand.command.description}
-              >
-                <i
-                  class={`codicon codicon-${matchedExecutableSlashCommand.command.icon ?? (matchedExecutableSlashCommand.command.builtin ? "symbol-event" : matchedExecutableSlashCommand.command.source === "skill" ? "sparkle" : "file")}`}
-                />
-                <span class="slash-match-pill-name">
-                  /
-                  {matchedExecutableSlashCommand.command.displayName ??
-                    matchedExecutableSlashCommand.command.name}
-                </span>
-                <span class="slash-match-pill-desc">
-                  {matchedExecutableSlashCommand.command.description}
-                </span>
-              </div>
-              <button
-                class="slash-match-escape"
-                type="button"
-                title="Wrap in backticks to send this slash command as raw text"
-                onClick={() => {
-                  const escaped = wrapSlashCommandInBackticks(text);
-                  setText(escaped);
-                  closeSlash();
-                  requestAnimationFrame(() => {
-                    if (textareaRef.current) {
-                      textareaRef.current.focus();
-                      textareaRef.current.selectionStart = escaped.length;
-                      textareaRef.current.selectionEnd = escaped.length;
-                    }
-                  });
-                }}
-              >
-                <code>`raw`</code>
-              </button>
-            </div>
-          )
-        }
-      >
-        <textarea
-          ref={textareaRef}
-          class="chat-input"
-          placeholder={
-            disabled
-              ? (disabledReason ?? "Local execution unavailable")
-              : contextMode
-                ? contextMode.placeholder
-                : allowFileMentions && allowAttachments
-                  ? "Message... (/ for commands, @ to attach files, : for emoji)"
-                  : "Message... (/ for commands, : for emoji)"
-          }
-          disabled={disabled}
-          onInput={handleInput}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          rows={1}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-        />
-        <div class="composer-action-buttons">
-          {(!contextMode || contextMode.actions) && streaming && (
-            <button
-              class="send-button stop-button"
-              onClick={onStop}
-              title="Stop generation"
-              type="button"
-            >
-              <i class="codicon codicon-debug-stop" />
-            </button>
-          )}
-          {!contextMode &&
-            streaming &&
-            onInterject &&
-            !matchedExecutableSlashCommand?.command.builtin &&
-            hasSubmitContent && (
-              <button
-                class="send-button interject-button"
-                onClick={() => {
-                  onComposerEvent?.("submit.click", {
-                    disabled: disabled || !hasSubmitContent,
-                    asInterjection: true,
-                  });
-                  handleSubmit(true);
-                }}
-                disabled={disabled || !hasSubmitContent}
-                title="Interject at next break"
-                type="button"
-              >
-                <i class="codicon codicon-reply" />
-              </button>
-            )}
-          {(!contextMode || !contextMode.actions) &&
-            (contextMode || !streaming || hasSubmitContent) && (
-              <button
-                class="send-button"
-                onClick={() => {
-                  onComposerEvent?.("submit.click", {
-                    disabled: disabled || !hasSubmitContent,
-                  });
-                  handleSubmit();
-                }}
-                disabled={disabled || !hasSubmitContent}
-                title={
-                  disabled
-                    ? (disabledReason ?? "Local execution unavailable")
-                    : contextMode
-                      ? submitOnEnter
-                        ? "Add context (Enter)"
-                        : "Add context"
-                      : submitOnEnter
-                        ? "Send message (Enter)"
-                        : "Send message"
-                }
-                type="button"
-              >
-                <i
-                  class={`codicon ${contextMode ? "codicon-check" : "codicon-send"}`}
-                />
-              </button>
-            )}
-        </div>
-      </ComposerBox>
-      {contextMode?.actions && (
-        <div class="question-nav question-composer-nav">
+  const questionNavigation = contextMode?.actions &&
+    (!contextMode.actions.hidePrimaryAction ||
+      contextMode.actions.canGoBack) && (
+      <div class="question-nav question-composer-nav">
+        {contextMode.actions.canGoBack && (
           <button
             class="question-nav-btn"
             type="button"
-            disabled={!contextMode.actions.canGoBack}
             onClick={() => submitQuestionAction("back")}
           >
             Back
           </button>
+        )}
+        {!contextMode.actions.hidePrimaryAction && (
           <button
             class={
-              contextMode.actions.primaryLabel === "Submit" ||
-              contextMode.actions.primaryLabel === "Reject"
+              contextMode.actions.primaryLabel === "Submit"
                 ? "question-submit"
                 : "question-nav-btn question-nav-next"
             }
@@ -1835,8 +1521,407 @@ export function InputArea({
           >
             {contextMode.actions.primaryLabel}
           </button>
+        )}
+      </div>
+    );
+
+  return (
+    <div
+      class={`input-area${contextMode?.actions ? " question-context-composer" : ""}`}
+    >
+      {contextMode?.content}
+      {questionNavigation}
+      {contextMode?.actions && (
+        <div
+          id="question-context-composer-help"
+          class="question-context-composer-header"
+        >
+          <div>
+            <strong>Additional context or answer</strong>
+            <span>
+              Add supporting details, a screenshot, or answer in your own words
+            </span>
+          </div>
         </div>
       )}
+      <>
+        <>
+          <div class="input-toolbar">
+            {contextMode && !contextMode.actions && (
+              <div class="composer-context-mode" role="status">
+                <i
+                  class="codicon codicon-comment-discussion"
+                  aria-hidden="true"
+                />
+                <span>{contextMode.title}</span>
+              </div>
+            )}
+            {!contextMode && modes.length > 0 && onSwitchMode && (
+              <ModeSelector
+                currentMode={currentMode}
+                modes={modes}
+                onSelect={onSwitchMode}
+              />
+            )}
+            {!contextMode && availableModels.length > 0 && onSelectModel && (
+              <ModelSelector
+                currentModel={currentModel}
+                currentCondenseThreshold={currentCondenseThreshold}
+                models={availableModels}
+                onSelect={onSelectModel}
+                onSetCondenseThreshold={onSetCondenseThreshold}
+                onSignIn={onSignIn}
+              />
+            )}
+            {!contextMode && allowThinkingToggle && (
+              <ReasoningEffortSelector
+                current={reasoningEffort}
+                currentModel={currentModel}
+                models={availableModels}
+                onSelect={onSetReasoningEffort}
+              />
+            )}
+            {!contextMode && onSetAgentWriteApproval && (
+              <WriteApprovalSelector
+                current={agentWriteApproval}
+                onSelect={onSetAgentWriteApproval}
+              />
+            )}
+            {!contextMode && onSetCommandApprovalPolicy && (
+              <ToolbarControlButton
+                active={commandApprovalPolicy === "approve-for-me"}
+                aria-pressed={commandApprovalPolicy === "approve-for-me"}
+                className="approve-for-me-toggle"
+                onClick={() =>
+                  onSetCommandApprovalPolicy(
+                    commandApprovalPolicy === "approve-for-me"
+                      ? configuredCommandApprovalPolicy
+                      : "approve-for-me",
+                  )
+                }
+                title={
+                  commandApprovalPolicy === "approve-for-me"
+                    ? "Approve for Me is on. Eligible workspace and temporary-file commands go to a separate reviewer. High-confidence, bounded commands may run automatically; guardrail-triggered commands ask you directly with a short reason, while reviewer uncertainty shows the review reason. Uses model quota."
+                    : "Let a separate reviewer approve eligible workspace and temporary-file commands. Guardrail-triggered commands ask you directly; reviewer uncertainty includes the review reason. Uses model quota and applies only to this session."
+                }
+                type="button"
+              >
+                <i class="codicon codicon-shield" />
+                <span>
+                  {commandApprovalPolicy === "approve-for-me"
+                    ? "Approve for Me On"
+                    : "Approve for Me"}
+                </span>
+              </ToolbarControlButton>
+            )}
+            {!contextMode && onToggleAutoContinue && (
+              <ToolbarControlButton
+                active={autoContinueEnabled}
+                aria-pressed={autoContinueEnabled}
+                className="auto-continue-toggle"
+                onClick={() => onToggleAutoContinue(!autoContinueEnabled)}
+                title={
+                  autoContinueStatus ||
+                  (autoContinueEnabled
+                    ? "Auto Continue is on. Completed turns will automatically continue until the agent marks the task definitely complete."
+                    : "Automatically send Continue after completed turns until the agent marks the task definitely complete.")
+                }
+                type="button"
+              >
+                <i class="codicon codicon-debug-continue" />
+                <span>
+                  {autoContinueEnabled ? "Auto Continue On" : "Auto Continue"}
+                </span>
+              </ToolbarControlButton>
+            )}
+            {allowAttachments && (
+              <button
+                class="icon-button"
+                onClick={() =>
+                  vscodeApi.postMessage({ command: "agentAttachFile" })
+                }
+                title="Attach file"
+                type="button"
+                disabled={(!contextMode && streaming) || disabled}
+              >
+                <i class="codicon codicon-attach" />
+              </button>
+            )}
+            {onPolishPrompt && (
+              <button
+                class="icon-button polish-button"
+                onClick={() => void handlePolish()}
+                title="Polish prompt — fix spelling and grammar and improve wording (uses model quota)"
+                type="button"
+                disabled={disabled || polishing || !text.trim()}
+                aria-busy={polishing}
+              >
+                <i
+                  class={`codicon ${polishing ? "codicon-loading codicon-modifier-spin" : "codicon-sparkle"}`}
+                />
+              </button>
+            )}
+            {onPolishPrompt && canUndoPolish && (
+              <button
+                class="icon-button polish-undo-button"
+                onClick={handleUndoPolish}
+                title="Revert polish — restore what you had typed"
+                type="button"
+              >
+                <i class="codicon codicon-discard" />
+              </button>
+            )}
+            <div class="input-toolbar-spacer" />
+            {contextMode && !contextMode.actions && (
+              <button
+                class="composer-context-cancel"
+                onClick={contextMode.onCancel}
+                title="Cancel other context"
+                type="button"
+              >
+                Cancel
+              </button>
+            )}
+            {!contextMode && allowExportTranscript && hasMessages && (
+              <button
+                class="icon-button"
+                onClick={onExportTranscript}
+                title="Export Transcript"
+                type="button"
+              >
+                <i class="codicon codicon-export" />
+              </button>
+            )}
+          </div>
+          {((allowAttachments && attachments.length > 0) ||
+            (allowMediaPaste && mediaAttachments.length > 0)) && (
+            <div class="attachment-chips">
+              {allowAttachments &&
+                attachments.map((path) => (
+                  <AttachmentChip
+                    key={path}
+                    path={path}
+                    previewSrc={attachmentPreviews[path]}
+                    onRemove={handleRemoveAttachment}
+                  />
+                ))}
+              {allowMediaPaste &&
+                mediaAttachments
+                  .filter((m) => m.kind === "image")
+                  .map((img) => (
+                    <ImageAttachmentChip
+                      key={img.id}
+                      id={img.id}
+                      name={img.name}
+                      dataUrl={img.dataUrl}
+                      onRemove={handleRemoveMedia}
+                    />
+                  ))}
+              {allowMediaPaste &&
+                mediaAttachments
+                  .filter((m) => m.kind === "document")
+                  .map((doc) => (
+                    <DocumentAttachmentChip
+                      key={doc.id}
+                      id={doc.id}
+                      name={doc.name}
+                      onRemove={handleRemoveMedia}
+                    />
+                  ))}
+            </div>
+          )}
+          {allowFileMentions && allowAttachments && pickerOpen && (
+            <FilePicker
+              query={pickerQuery}
+              anchor={getPickerAnchor()}
+              onSelect={handleFileSelect}
+              onClose={closePicker}
+              vscodeApi={vscodeApi}
+            />
+          )}
+          {shouldShowSlashPopup && (
+            <SlashCommandPopup
+              ref={slashPopupRef}
+              commands={filteredSlashCommands}
+              selectedIndex={slashSelectedIdx}
+              anchor={getPickerAnchor()}
+              onSelect={handleSlashSelect}
+              onClose={closeSlash}
+              isSubView={slashView !== "main"}
+              subViewTitle={
+                slashView === "mode"
+                  ? "Switch Mode"
+                  : slashView === "model"
+                    ? "Switch Model"
+                    : slashView === "mcp-config"
+                      ? "Open MCP Config"
+                      : undefined
+              }
+              onBack={backSlashView}
+            />
+          )}
+          {shouldShowEmojiPopup && (
+            <EmojiPopup
+              suggestions={emojiSuggestions}
+              selectedIndex={emojiSelectedIdx}
+              query={emojiQuery}
+              anchor={getPickerAnchor()}
+              onSelect={handleEmojiSelect}
+              onHover={setEmojiSelectedIdx}
+            />
+          )}
+          {disabled && disabledReason && (
+            <div class="composer-disabled-notice" role="status">
+              <i class="codicon codicon-warning" />
+              <span>{disabledReason}</span>
+            </div>
+          )}
+          {polishError && (
+            <div class="composer-disabled-notice" role="status">
+              <i class="codicon codicon-warning" />
+              <span>Polish failed: {polishError}</span>
+            </div>
+          )}
+          <ComposerBox
+            className={`input-wrapper ${dragOver ? "drag-over" : ""} ${pickerOpen ? "picker-active" : ""} ${matchedExecutableSlashCommand ? "slash-match-active" : ""}`}
+            mainAlign="center"
+            accessory={
+              matchedExecutableSlashCommand && (
+                <div class="slash-match-pill-row">
+                  <div
+                    class="slash-match-pill"
+                    title={matchedExecutableSlashCommand.command.description}
+                  >
+                    <i
+                      class={`codicon codicon-${matchedExecutableSlashCommand.command.icon ?? (matchedExecutableSlashCommand.command.builtin ? "symbol-event" : matchedExecutableSlashCommand.command.source === "skill" ? "sparkle" : "file")}`}
+                    />
+                    <span class="slash-match-pill-name">
+                      /
+                      {matchedExecutableSlashCommand.command.displayName ??
+                        matchedExecutableSlashCommand.command.name}
+                    </span>
+                    <span class="slash-match-pill-desc">
+                      {matchedExecutableSlashCommand.command.description}
+                    </span>
+                  </div>
+                  <button
+                    class="slash-match-escape"
+                    type="button"
+                    title="Wrap in backticks to send this slash command as raw text"
+                    onClick={() => {
+                      const escaped = wrapSlashCommandInBackticks(text);
+                      setText(escaped);
+                      closeSlash();
+                      requestAnimationFrame(() => {
+                        if (textareaRef.current) {
+                          textareaRef.current.focus();
+                          textareaRef.current.selectionStart = escaped.length;
+                          textareaRef.current.selectionEnd = escaped.length;
+                        }
+                      });
+                    }}
+                  >
+                    <code>`raw`</code>
+                  </button>
+                </div>
+              )
+            }
+          >
+            <textarea
+              ref={textareaRef}
+              class="chat-input"
+              aria-describedby={
+                contextMode?.actions
+                  ? "question-context-composer-help"
+                  : undefined
+              }
+              placeholder={
+                disabled
+                  ? (disabledReason ?? "Local execution unavailable")
+                  : contextMode
+                    ? contextMode.placeholder
+                    : allowFileMentions && allowAttachments
+                      ? "Message... (/ for commands, @ to attach files, : for emoji)"
+                      : "Message... (/ for commands, : for emoji)"
+              }
+              disabled={disabled}
+              onInput={handleInput}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              rows={1}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+            />
+            <div class="composer-action-buttons">
+              {(!contextMode || contextMode.actions) && streaming && (
+                <button
+                  class="send-button stop-button"
+                  onClick={onStop}
+                  title="Stop generation"
+                  type="button"
+                >
+                  <i class="codicon codicon-debug-stop" />
+                </button>
+              )}
+              {!contextMode &&
+                streaming &&
+                onInterject &&
+                !matchedExecutableSlashCommand?.command.builtin &&
+                hasSubmitContent && (
+                  <button
+                    class="send-button interject-button"
+                    onClick={() => {
+                      onComposerEvent?.("submit.click", {
+                        disabled: disabled || !hasSubmitContent,
+                        asInterjection: true,
+                      });
+                      handleSubmit(true);
+                    }}
+                    disabled={disabled || !hasSubmitContent}
+                    title="Interject at next break"
+                    type="button"
+                  >
+                    <i class="codicon codicon-reply" />
+                  </button>
+                )}
+              {(!contextMode ||
+                !contextMode.actions ||
+                contextMode.actions.hidePrimaryAction) &&
+                (contextMode || !streaming || hasSubmitContent) && (
+                  <button
+                    class="send-button"
+                    onClick={() => {
+                      onComposerEvent?.("submit.click", {
+                        disabled: disabled || !hasSubmitContent,
+                      });
+                      handleSubmit();
+                    }}
+                    disabled={disabled || !hasSubmitContent}
+                    title={
+                      disabled
+                        ? (disabledReason ?? "Local execution unavailable")
+                        : contextMode
+                          ? contextMode.actions?.hidePrimaryAction
+                            ? "Add context (Cmd/Ctrl+Enter)"
+                            : submitOnEnter
+                              ? "Add context (Enter)"
+                              : "Add context"
+                          : submitOnEnter
+                            ? "Send message (Enter)"
+                            : "Send message"
+                    }
+                    type="button"
+                  >
+                    <i
+                      class={`codicon ${contextMode ? "codicon-check" : "codicon-send"}`}
+                    />
+                  </button>
+                )}
+            </div>
+          </ComposerBox>
+        </>
+      </>
     </div>
   );
 }

@@ -25,7 +25,7 @@ import type { ApprovalRequest } from "../../approvals/webview/types";
 import { BROWSER_GATEWAY_ASK_AGENT_OWNER_ID } from "../browserGatewayAskAgentIdentity";
 import type { BgSessionInfo } from "../../shared/types";
 import type { BrowserGatewayChatWorkspaceSummary } from "../dataPlane/protocol";
-import { h } from "preact";
+import { h, type ComponentChildren } from "preact";
 import { within } from "@testing-library/preact";
 
 vi.mock("../../agent/webview/components/InputArea", () => ({
@@ -68,6 +68,7 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
         media?: unknown[],
       ) => void;
       questionId?: string;
+      content?: ComponentChildren;
       actions?: {
         primaryLabel: string;
         onPrimary: (
@@ -82,6 +83,7 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     } | null;
   }) =>
     h("div", { "data-testid": "mock-input-area" }, [
+      contextMode?.content,
       h(
         "button",
         {
@@ -2321,6 +2323,17 @@ describe("BrowserGatewayApp /mcp behavior", () => {
         interjectionReady: true,
       },
     ];
+    const pausedSnapshot = createSnapshot();
+    pausedSnapshot.session.foreground.status = "streaming";
+    pausedSnapshot.session.foreground.streaming = true;
+    pausedSnapshot.session.foreground.messageQueue = [
+      {
+        id: "queue-1",
+        text: "Please steer this",
+        fullText: "Please steer this",
+        source: "browser",
+      },
+    ];
     const drainedSnapshot = createSnapshot();
 
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
@@ -2329,6 +2342,9 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       if (url.includes("/api/ui-state")) return jsonResponse(queuedSnapshot);
       if (url.includes("/api/queue/interject")) {
         return jsonResponse({ ok: true, snapshot: interjectionSnapshot });
+      }
+      if (url.includes("/api/queue/pause-interjection")) {
+        return jsonResponse({ ok: true, snapshot: pausedSnapshot });
       }
       if (url.includes("/api/queue/steer")) {
         return jsonResponse({ ok: true, snapshot: drainedSnapshot });
@@ -2382,6 +2398,16 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       await screen.findByTitle("Ready to interject at next break"),
     ).toBeTruthy();
 
+    fireEvent.click(screen.getByTitle("Ready to interject at next break"));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).includes("/api/queue/pause-interjection"),
+        ),
+      ).toBe(true);
+    });
+    expect(await screen.findByTitle("Interject at next break")).toBeTruthy();
+
     fireEvent.click(screen.getByTitle("Steer now"));
     await waitFor(() => {
       expect(
@@ -2390,6 +2416,113 @@ describe("BrowserGatewayApp /mcp behavior", () => {
         ),
       ).toBe(true);
     });
+  });
+
+  it("serializes a queued interjection pause behind an in-flight interjection", async () => {
+    const queuedSnapshot = createSnapshot();
+    queuedSnapshot.session.foreground.status = "streaming";
+    queuedSnapshot.session.foreground.streaming = true;
+    queuedSnapshot.session.foreground.messageQueue = [
+      {
+        id: "queue-1",
+        text: "Please steer this",
+        fullText: "Please steer this",
+        source: "browser",
+      },
+    ];
+    const interjectionSnapshot = createSnapshot();
+    interjectionSnapshot.session.foreground.status = "streaming";
+    interjectionSnapshot.session.foreground.streaming = true;
+    interjectionSnapshot.session.foreground.messageQueue = [
+      {
+        id: "queue-1",
+        text: "Please steer this",
+        fullText: "Please steer this",
+        source: "browser",
+        interjectionReady: true,
+      },
+    ];
+    const pausedSnapshot = createSnapshot();
+    pausedSnapshot.session.foreground.status = "streaming";
+    pausedSnapshot.session.foreground.streaming = true;
+    pausedSnapshot.session.foreground.messageQueue = [
+      {
+        id: "queue-1",
+        text: "Please steer this",
+        fullText: "Please steer this",
+        source: "browser",
+      },
+    ];
+    let resolveInterjection: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/ui-state")) return jsonResponse(queuedSnapshot);
+      if (url.includes("/api/queue/interject")) {
+        return new Promise<Response>((resolve) => {
+          resolveInterjection = resolve;
+        });
+      }
+      if (url.includes("/api/queue/pause-interjection")) {
+        return jsonResponse({ ok: true, snapshot: pausedSnapshot });
+      }
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands"))
+        return jsonResponse({ commands: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    fireEvent.click(await screen.findByTitle("Interject at next break"));
+    await waitFor(() => expect(resolveInterjection).toBeTypeOf("function"));
+    fireEvent.click(screen.getByTitle("Ready to interject at next break"));
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("/api/queue/pause-interjection"),
+      ),
+    ).toBe(false);
+
+    await act(async () => {
+      resolveInterjection?.(
+        jsonResponse({ ok: true, snapshot: interjectionSnapshot }),
+      );
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).includes("/api/queue/pause-interjection"),
+        ),
+      ).toBe(true);
+    });
+    expect(await screen.findByTitle("Interject at next break")).toBeTruthy();
   });
 
   it("ignores a queue response after the browser selection changes", async () => {
@@ -4707,6 +4840,16 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     await screen.findByText(
       "Should Ask Agent continue with the read-only plan?",
     );
+    const composer = screen.getByTestId("mock-input-area");
+    expect(
+      within(composer).getByText(
+        "Should Ask Agent continue with the read-only plan?",
+      ),
+    ).toBeTruthy();
+    expect(composer.querySelectorAll(".question-card")).toHaveLength(1);
+    expect(
+      screen.getAllByText("Should Ask Agent continue with the read-only plan?"),
+    ).toHaveLength(1);
     expect(screen.getAllByText("Auditing parity").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByText("Yes"));

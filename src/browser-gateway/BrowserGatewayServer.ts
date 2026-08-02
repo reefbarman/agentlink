@@ -433,6 +433,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "POST",
+        rawExact("/api/queue/pause-interjection"),
+        ({ req, res }) => this.handleQueuePauseInterjectionAction(req, res),
+        json("queue pause interjection action failed"),
+      ),
+      route(
+        "POST",
         rawExact("/api/mode"),
         ({ req, res }) => this.handleModeAction(req, res),
         json("mode action failed"),
@@ -1342,6 +1348,45 @@ export class BrowserGatewayServer implements vscode.Disposable {
     this.writeJson(
       res,
       result.ok ? 200 : 409,
+      result.ok ? { ...result, snapshot: this.getSnapshot() } : result,
+    );
+  }
+
+  private async handleQueuePauseInterjectionAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as {
+      sessionId?: unknown;
+      projectId?: unknown;
+      queueId?: unknown;
+    } | null;
+    const sessionId =
+      typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
+    const queueId =
+      typeof body?.queueId === "string" ? body.queueId.trim() : "";
+    if (!sessionId || !queueId) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const projectId = this.resolveRequestedProjectId(body?.projectId, res);
+    if (!projectId || !this.validateSessionProject(sessionId, projectId, res)) {
+      return;
+    }
+
+    const result = this.chatViewProvider.pauseBrowserQueuedMessageInterjection({
+      sessionId,
+      projectId,
+      queueId,
+    });
+    this.writeJson(
+      res,
+      result.ok ? 200 : 404,
       result.ok ? { ...result, snapshot: this.getSnapshot() } : result,
     );
   }

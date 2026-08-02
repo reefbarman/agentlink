@@ -522,6 +522,12 @@ export type ExtensionToWebview =
       files: Array<{ path: string; kind: "file" | "folder" }>;
     }
   | {
+      type: "agentOpenFileResult";
+      requestId: string;
+      ok: boolean;
+      error?: "not_found" | "open_failed";
+    }
+  | {
       type: "agentDetectQuestionResult";
       requestId: string;
       messageId: string;
@@ -5335,7 +5341,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const pos = new vscode.Position(line - 1, 0);
       options.selection = new vscode.Range(pos, pos);
     }
-    await vscode.window.showTextDocument(uri, options);
+    try {
+      await vscode.window.showTextDocument(uri, options);
+    } catch (err) {
+      // Binary files (images, media, custom-editor formats) cannot be opened
+      // as text documents; route them through VS Code's default editor
+      // resolution instead (image preview, notebook editor, hex, ...).
+      this.log(
+        `[open-file] showTextDocument failed for ${absolutePath}, falling back to vscode.open: ${err}`,
+      );
+      await vscode.commands.executeCommand("vscode.open", uri, options);
+    }
   }
 
   /**
@@ -5633,6 +5649,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       documents: input.documents ?? [],
       source: "browser",
     });
+    return { ok: true };
+  }
+
+  public pauseBrowserQueuedMessageInterjection(input: {
+    sessionId: string;
+    projectId: string;
+    queueId: string;
+  }): { ok: boolean; error?: string } {
+    if (!input.sessionId || !input.queueId) {
+      return { ok: false, error: "invalid_request" };
+    }
+    const session = this.sessionManager?.getSession(input.sessionId);
+    if (
+      !session ||
+      session.projectScope.projectId !== input.projectId ||
+      !this.getAvailableBrowserProjectScope(input.projectId)
+    ) {
+      return { ok: false, error: "project_state_mismatch" };
+    }
+    const queued = this.projectedForegroundState.messageQueue.find(
+      (entry) => entry.id === input.queueId,
+    );
+    if (!queued) return { ok: false, error: "queued_message_not_found" };
+    this.pauseQueuedMessageInterjectionFromUi(input.sessionId, input.queueId);
     return { ok: true };
   }
 
@@ -8380,7 +8420,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentOpenFile": {
         const filePath = typeof msg.path === "string" ? msg.path.trim() : "";
         const line = typeof msg.line === "number" ? msg.line : undefined;
-        if (!filePath) break;
+        const requestId =
+          typeof msg.requestId === "string" ? msg.requestId : undefined;
+        const reply = (ok: boolean, error?: "not_found" | "open_failed") => {
+          if (!requestId) return;
+          const message: ExtensionToWebview = {
+            type: "agentOpenFileResult",
+            requestId,
+            ok,
+            error,
+          };
+          if (context?.connection) context.connection.postMessage(message);
+          else this.postMessage(message);
+        };
+        if (!filePath) {
+          reply(false, "not_found");
+          break;
+        }
         const projectRoot =
           sourceSession?.projectScope.rootPath ??
           (sourceSessionId
@@ -8391,8 +8447,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           : projectRoot
             ? path.resolve(projectRoot, filePath)
             : undefined;
-        if (!absolutePath) break;
-        await this.revealPathInEditor(absolutePath, line);
+        if (!absolutePath) {
+          reply(false, "not_found");
+          break;
+        }
+        try {
+          await this.revealPathInEditor(absolutePath, line);
+          reply(true);
+        } catch (err) {
+          this.log(`[open-file] Failed to open ${absolutePath}: ${err}`);
+          const notFound =
+            (err as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+          reply(false, notFound ? "not_found" : "open_failed");
+        }
         break;
       }
 

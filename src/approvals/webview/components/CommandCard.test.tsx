@@ -141,7 +141,7 @@ describe("CommandCard terminal presentation", () => {
     expect(screen.getByText("Save Rules & Run")).toBeTruthy();
   });
 
-  it("shows first-attempt evidence and disables rules for a native recovery", () => {
+  it("shows first-attempt evidence, immutable command text, and rules for a native recovery", () => {
     const approval = request("native", "native-escalation");
     approval.subCommands = [{ command: "npm test" }];
     approval.recoveryAttempt = {
@@ -167,9 +167,13 @@ describe("CommandCard terminal presentation", () => {
       screen.getByText(/The sandbox already launched this command/),
     ).toBeTruthy();
     expect(screen.getByText(/may have side effects true/)).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: /Auto Approval Rules/ }),
+    );
+    expect(screen.getByText("npm test")).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: /Auto Approval Rules/ }),
-    ).toBeNull();
+      document.querySelector<HTMLTextAreaElement>(".terminal-input"),
+    ).toHaveProperty("readOnly", true);
   });
 
   it("defaults fresh rule suggestions to allow without marking them modified", () => {
@@ -289,6 +293,43 @@ describe("CommandCard terminal presentation", () => {
     ).toBeTruthy();
     expect(
       screen.getByText("Workspace access · private HOME · no network"),
+    ).toBeTruthy();
+  });
+
+  it("presents combined listener and mediated-network sandbox access", () => {
+    const approval = request("sandbox");
+    approval.security = {
+      ...approval.security!,
+      sandbox: {
+        attestationId: "attestation-partial",
+        attestationVersion: "sandbox-behavior-v1",
+        policyVersion: "policy-v1",
+        profileId: "workspace-write",
+        backend: "seatbelt",
+        architecture: "arm64",
+        capabilities: {
+          backend: "seatbelt",
+          processTree: true,
+          filesystemRead: "host-visible",
+          filesystemWrite: "strict",
+          network: "partial",
+          privateHome: false,
+          privateTmp: false,
+          hostIpcBlocked: false,
+          resourceLimits: "partial",
+          warnings: [],
+        },
+      },
+    };
+    renderCard(approval);
+
+    expect(
+      screen.getByText("Workspace access · mediated network"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Runs with workspace access, protected metadata, private HOME and temporary files. Public connections pause for exact destination approval; private and local destinations remain blocked.",
+      ),
     ).toBeTruthy();
   });
 

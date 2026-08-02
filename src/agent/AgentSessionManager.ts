@@ -94,6 +94,7 @@ import {
   type ReasoningEffort,
 } from "./providers/types.js";
 import type { Question } from "./webview/types.js";
+import { getConfirmationOptions } from "../shared/questionConfirmation.js";
 import {
   buildAskUserToolResult,
   createGuardianOutsideReadOptions,
@@ -8485,7 +8486,8 @@ export class AgentSessionManager {
       "Act as the coordinator:",
       "1. Answer from the conversation, task plan, delegated ownership, and workspace context you already have whenever that is sufficient.",
       "2. If the answer genuinely requires human judgment or human-only information, call `ask_user` yourself with the necessary self-contained question.",
-      `3. Then call \`respond_to_background_question\` with request_id \`${args.requestId}\` and a complete answers map keyed by the question IDs above. Ordinary assistant text does not unblock the background agent.`,
+      "3. For confirmation questions, respond with exactly one of the two displayed labels: `Yes`/`No` by default, or one of the supplied custom options.",
+      `4. Then call \`respond_to_background_question\` with request_id \`${args.requestId}\` and a complete answers map keyed by the question IDs above. Ordinary assistant text does not unblock the background agent.`,
       "4. After responding, resume any still-active foreground work; otherwise finish this coordination turn.",
       "</background_agent_question>",
     ].join("\n");
@@ -8689,11 +8691,15 @@ export class AgentSessionManager {
             return `invalid_yes_no_answer:${question.id}`;
           }
           break;
-        case "confirmation":
-          if (answer !== "confirmed" && answer !== "rejected") {
+        case "confirmation": {
+          const validAnswer =
+            typeof answer === "string" &&
+            getConfirmationOptions(question.options).includes(answer);
+          if (!validAnswer) {
             return `invalid_confirmation_answer:${question.id}`;
           }
           break;
+        }
         case "multiple_choice":
           if (
             typeof answer !== "string" ||

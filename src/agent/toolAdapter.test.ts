@@ -1158,7 +1158,10 @@ describe("getAgentTools", () => {
       expect(sandboxPermissionsSchema?.description).toContain(
         "managed_network_tls_trust",
       );
-      expect(command.description).toContain("loopback client access");
+      expect(command.description).toContain(
+        "default execution uses the native terminal",
+      );
+      expect(command.description).toContain("public destinations are mediated");
       expect(command.description).toContain("temporary_home=true");
       expect(command.description).toContain("allow_local_binding=true");
       expect(command.description).toContain(
@@ -4298,6 +4301,106 @@ describe("dispatchToolCall", () => {
         "preceding assistant text does not satisfy the context requirement",
       );
       expect(askUserTool?.input_schema.required).toEqual(["questions"]);
+    });
+
+    it("describes direct confirmation choices and rejects malformed labels", async () => {
+      const askUserTool = getAgentTools().find(
+        (tool) => tool.name === "ask_user",
+      );
+      expect(askUserTool?.description).toContain("direct two-button decision");
+
+      const userQuestionProvider = { ask: vi.fn() };
+      const result = await dispatchToolCall(
+        "ask_user",
+        {
+          context: "Need a release decision.",
+          questions: [
+            {
+              id: "release",
+              type: "confirmation",
+              question: "Ship this release?",
+              options: ["Ship it"],
+            },
+          ],
+        },
+        { ...mockCtx, userQuestionProvider },
+      );
+
+      expect(userQuestionProvider.ask).not.toHaveBeenCalled();
+      const content = result.content[0];
+      expect(content.type).toBe("text");
+      expect(JSON.parse(content.type === "text" ? content.text : "")).toEqual({
+        error:
+          'Confirmation question "release" must have exactly two distinct non-empty options when custom button labels are provided',
+      });
+    });
+
+    it.each([
+      ["duplicate labels", ["Ship it", "Ship it"]],
+      ["whitespace-equivalent labels", ["Ship it", " Ship it "]],
+      ["blank label", ["Ship it", " "]],
+      ["non-array labels", "Ship it"],
+    ])("rejects confirmation %s", async (_name, options) => {
+      const userQuestionProvider = { ask: vi.fn() };
+
+      const result = await dispatchToolCall(
+        "ask_user",
+        {
+          context: "Need a release decision.",
+          questions: [
+            {
+              id: "release",
+              type: "confirmation",
+              question: "Ship this release?",
+              options,
+            },
+          ],
+        },
+        { ...mockCtx, userQuestionProvider },
+      );
+
+      expect(userQuestionProvider.ask).not.toHaveBeenCalled();
+      const content = result.content[0];
+      expect(content.type).toBe("text");
+      expect(JSON.parse(content.type === "text" ? content.text : "")).toEqual({
+        error:
+          'Confirmation question "release" must have exactly two distinct non-empty options when custom button labels are provided',
+      });
+    });
+
+    it("normalizes accepted confirmation labels before asking", async () => {
+      const userQuestionProvider = {
+        ask: vi.fn().mockResolvedValue({
+          answers: { release: "Ship it" },
+          notes: {},
+        }),
+      };
+
+      await dispatchToolCall(
+        "ask_user",
+        {
+          context: "Need a release decision.",
+          questions: [
+            {
+              id: "release",
+              type: "confirmation",
+              question: "Ship this release?",
+              options: [" Ship it ", "Keep working"],
+            },
+          ],
+        },
+        { ...mockCtx, userQuestionProvider },
+      );
+
+      expect(userQuestionProvider.ask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          questions: [
+            expect.objectContaining({
+              options: ["Ship it", "Keep working"],
+            }),
+          ],
+        }),
+      );
     });
 
     it("forwards the provider tool-call ID through the production runtime", async () => {

@@ -1318,7 +1318,7 @@ describe("MessageBubble slash-command rendering", () => {
     expect(screen.getByRole("button", { name: /read_file/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /search_files/i })).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: /execute_command/i }),
+      screen.getByRole("button", { name: "execute_command" }),
     ).toBeTruthy();
 
     act(() => {
@@ -1332,7 +1332,7 @@ describe("MessageBubble slash-command rendering", () => {
     expect(screen.queryByRole("button", { name: /read_file/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /search_files/i })).toBeNull();
     expect(
-      screen.getByRole("button", { name: /execute_command/i }),
+      screen.getByRole("button", { name: "execute_command" }),
     ).toBeTruthy();
 
     state = reducer(state, {
@@ -1355,9 +1355,9 @@ describe("MessageBubble slash-command rendering", () => {
       name: /tools explored 1 file, 1 search · ran 1 command/i,
     });
     expect(groupButton.getAttribute("aria-expanded")).toBe("false");
-    expect(
-      screen.queryAllByRole("button", { name: /execute_command/i }),
-    ).toHaveLength(0);
+    expect(screen.queryAllByRole("button", { name: "Command" })).toHaveLength(
+      0,
+    );
 
     fireEvent.click(groupButton);
     expect(groupButton.getAttribute("aria-expanded")).toBe("true");
@@ -1396,19 +1396,17 @@ describe("MessageBubble slash-command rendering", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTitle("Show the running terminal"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show the running terminal" }),
+    );
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Continue execute_command in background",
+        name: "Continue Command in background",
       }),
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Complete execute_command" }),
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Cancel execute_command" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Complete Command" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Command" }));
 
     expect(onRevealTerminal).toHaveBeenCalledWith("tool-running");
     expect(onContinueInBackground).toHaveBeenCalledWith("tool-running");
@@ -1449,7 +1447,7 @@ describe("MessageBubble slash-command rendering", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "Continue execute_command in background",
+        name: "Continue Command in background",
       }),
     ).not.toBeNull();
   });

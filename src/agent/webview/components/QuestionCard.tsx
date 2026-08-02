@@ -2,6 +2,7 @@ import type { ModeInfo, Question } from "../types";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 import { StreamingText } from "./StreamingText";
+import { getConfirmationOptions } from "../../../shared/questionConfirmation";
 
 export interface QuestionProgress {
   step: number;
@@ -31,9 +32,10 @@ export interface QuestionComposerState extends QuestionOtherContext {
   focusComposer: boolean;
   canGoBack: boolean;
   onBack: (text: string, attachments: QuestionAttachmentDraft) => void;
-  primaryLabel: "Next" | "Submit" | "Reject";
+  primaryLabel: "Next" | "Submit";
   primaryDisabled: boolean;
   onPrimary: (text: string, attachments: QuestionAttachmentDraft) => void;
+  hidePrimaryAction?: boolean;
 }
 
 interface QuestionCardProps {
@@ -99,7 +101,7 @@ export function isQuestionAnswered(
     return (typeof answer === "string" && answer.trim() !== "") || hasNote;
   }
   if (question.type === "confirmation") {
-    return answer === "confirmed" || answer === "rejected";
+    return typeof answer === "string" && answer.trim() !== "";
   }
   if (question.type === "multiple_select") {
     return (Array.isArray(answer) && answer.length > 0) || hasNote;
@@ -140,6 +142,7 @@ export function QuestionCard({
     Record<string, string | string[] | number | boolean | undefined>
   >({});
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const notesRef = useRef(notes);
   const lastAppliedRemoteRef = useRef<string | null>(null);
   const lastPublishedRef = useRef<string | null>(null);
   const hasLocalProgressEditRef = useRef(false);
@@ -156,7 +159,8 @@ export function QuestionCard({
     lastPublishedRef.current = serialized;
     setStep(remoteProgress.step);
     setAnswers({ ...remoteProgress.answers });
-    setNotes({ ...remoteProgress.notes });
+    notesRef.current = { ...remoteProgress.notes };
+    setNotes(notesRef.current);
   }, [remoteProgress, step, answers, notes]);
 
   useEffect(() => {
@@ -199,7 +203,8 @@ export function QuestionCard({
   const setNote = useCallback(
     (text: string) => {
       hasLocalProgressEditRef.current = true;
-      setNotes((prev) => ({ ...prev, [q.id]: text }));
+      notesRef.current = { ...notesRef.current, [q.id]: text };
+      setNotes(notesRef.current);
     },
     [q.id],
   );
@@ -222,9 +227,8 @@ export function QuestionCard({
   }, [id, q, answers, notes, isAnswered, onSubmit]);
 
   const handleComposerBack = useCallback(
-    (text: string, _attachments: QuestionAttachmentDraft) => {
+    (_text: string, _attachments: QuestionAttachmentDraft) => {
       hasLocalProgressEditRef.current = true;
-      setNotes((previous) => ({ ...previous, [q.id]: text }));
       setStep((currentStep) => Math.max(0, currentStep - 1));
     },
     [q.id],
@@ -237,22 +241,6 @@ export function QuestionCard({
         attachments.paths.length > 0 ||
         attachments.media.length > 0 ||
         isQuestionAnswered(q, currentAnswer, text);
-
-      if (q.type === "confirmation") {
-        const nextAnswers =
-          currentAnswer === "confirmed"
-            ? answers
-            : { ...answers, [q.id]: "rejected" as const };
-        if (isLast) {
-          onSubmit(id, nextAnswers, nextNotes, attachments);
-        } else {
-          hasLocalProgressEditRef.current = true;
-          setAnswers(nextAnswers);
-          setNotes(nextNotes);
-          setStep((currentStep) => currentStep + 1);
-        }
-        return;
-      }
 
       if (!answered) return;
       const nextAnswers = normalizeQuestionAnswer(q, answers);
@@ -268,56 +256,36 @@ export function QuestionCard({
     [q, currentAnswer, notes, answers, isLast, id, onSubmit],
   );
 
-  const handleConfirmationPrimary = useCallback(() => {
-    if (q.type !== "confirmation") return;
-
-    if (currentAnswer === "confirmed") {
+  const handleConfirmation = useCallback(
+    (answer: string) => {
+      if (q.type !== "confirmation") return;
+      const nextAnswers = { ...answers, [q.id]: answer };
       if (isLast) {
-        onSubmit(id, answers, notes);
+        onSubmit(id, nextAnswers, notesRef.current);
       } else {
         hasLocalProgressEditRef.current = true;
+        setAnswers(nextAnswers);
         setStep((s) => s + 1);
       }
-      return;
-    }
-
-    const nextAnswers = { ...answers, [q.id]: "rejected" as const };
-    if (isLast) {
-      onSubmit(id, nextAnswers, notes);
-    } else {
-      hasLocalProgressEditRef.current = true;
-      setAnswers(nextAnswers);
-      setStep((s) => s + 1);
-    }
-  }, [q.type, q.id, currentAnswer, isLast, id, answers, notes, onSubmit]);
+    },
+    [q.type, q.id, isLast, id, answers, onSubmit],
+  );
 
   useEffect(() => {
     if (!integratedComposer || !onComposerStateChange) return;
-    const primaryLabel =
-      q.type === "confirmation"
-        ? currentAnswer === "confirmed"
-          ? isLast
-            ? "Submit"
-            : "Next"
-          : "Reject"
-        : isLast
-          ? "Submit"
-          : "Next";
+    const primaryLabel = isLast ? "Submit" : "Next";
     onComposerStateChange({
-      revision: JSON.stringify({
-        step,
-        answer: currentAnswer,
-        note: currentNote,
-      }),
+      revision: JSON.stringify({ step, answers, notes }),
       questionId: q.id,
       initialText: currentNote,
-      focusComposer: q.type !== "text",
+      focusComposer: q.type !== "text" && q.type !== "confirmation",
       onCommit: setNote,
       canGoBack: step > 0,
       onBack: handleComposerBack,
       primaryLabel,
-      primaryDisabled: q.type === "confirmation" ? false : !isAnswered(),
+      primaryDisabled: !isAnswered(),
       onPrimary: handleComposerPrimary,
+      hidePrimaryAction: q.type === "confirmation",
     });
   }, [
     integratedComposer,
@@ -325,6 +293,8 @@ export function QuestionCard({
     q,
     currentAnswer,
     currentNote,
+    answers,
+    notes,
     isLast,
     step,
     setNote,
@@ -373,6 +343,7 @@ export function QuestionCard({
           question={q}
           value={currentAnswer}
           onChange={setAnswer}
+          onConfirm={handleConfirmation}
           modes={modes}
         />
 
@@ -423,7 +394,7 @@ export function QuestionCard({
           ))}
       </div>
 
-      {!integratedComposer && (
+      {!integratedComposer && (q.type !== "confirmation" || step > 0) && (
         <div class="question-nav">
           <button
             class="question-nav-btn"
@@ -432,38 +403,24 @@ export function QuestionCard({
           >
             Back
           </button>
-          {q.type === "confirmation" ? (
-            <button
-              class={
-                isLast || currentAnswer !== "confirmed"
-                  ? "question-submit"
-                  : "question-nav-btn question-nav-next"
-              }
-              onClick={handleConfirmationPrimary}
-            >
-              {currentAnswer === "confirmed"
-                ? isLast
-                  ? "Submit"
-                  : "Next"
-                : "Reject"}
-            </button>
-          ) : isLast ? (
-            <button
-              class="question-submit"
-              disabled={!isAnswered()}
-              onClick={handleSubmit}
-            >
-              Submit
-            </button>
-          ) : (
-            <button
-              class="question-nav-btn question-nav-next"
-              disabled={!isAnswered()}
-              onClick={handleNext}
-            >
-              Next
-            </button>
-          )}
+          {q.type !== "confirmation" &&
+            (isLast ? (
+              <button
+                class="question-submit"
+                disabled={!isAnswered()}
+                onClick={handleSubmit}
+              >
+                Submit
+              </button>
+            ) : (
+              <button
+                class="question-nav-btn question-nav-next"
+                disabled={!isAnswered()}
+                onClick={handleNext}
+              >
+                Next
+              </button>
+            ))}
         </div>
       )}
     </div>
@@ -490,6 +447,7 @@ interface QuestionInputProps {
   question: Question;
   value: string | string[] | number | boolean | undefined;
   onChange: (v: string | string[] | number | boolean | undefined) => void;
+  onConfirm: (answer: string) => void;
   modes?: ModeInfo[];
 }
 
@@ -497,9 +455,18 @@ function QuestionInput({
   question,
   value,
   onChange,
+  onConfirm,
   modes,
 }: QuestionInputProps) {
   const { type, options = [], scale_min = 1, scale_max = 5 } = question;
+  const confirmationOptionsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (type !== "confirmation") return;
+    confirmationOptionsRef.current
+      ?.querySelector<HTMLButtonElement>("button")
+      ?.focus();
+  }, [type, question.id]);
 
   if (type === "text") {
     return (
@@ -516,14 +483,17 @@ function QuestionInput({
 
   if (type === "confirmation") {
     return (
-      <button
-        class={`question-option${value === "confirmed" ? " selected" : ""}`}
-        onClick={() =>
-          onChange(value === "confirmed" ? undefined : "confirmed")
-        }
-      >
-        Got it
-      </button>
+      <div ref={confirmationOptionsRef} class="question-options">
+        {getConfirmationOptions(question.options).map((option) => (
+          <button
+            key={option}
+            class={`question-option${value === option ? " selected" : ""}`}
+            onClick={() => onConfirm(option)}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
     );
   }
 

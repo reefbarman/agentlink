@@ -2,7 +2,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render } from "@testing-library/preact";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 
 import { QuestionCard } from "./QuestionCard";
 
@@ -53,6 +53,61 @@ describe("QuestionCard progress publishing", () => {
       step: 0,
       answers: { choice: "B" },
       notes: {},
+    });
+  });
+});
+
+describe("QuestionCard integrated composer", () => {
+  it("updates the composer revision when answers on another step change", async () => {
+    const onComposerStateChange = vi.fn();
+    const { getByRole } = render(
+      <QuestionCard
+        id="request-1"
+        context="Need two decisions."
+        questions={[
+          {
+            id: "first",
+            type: "multiple_choice",
+            question: "First choice?",
+            options: ["A", "B"],
+          },
+          {
+            id: "second",
+            type: "multiple_choice",
+            question: "Second choice?",
+            options: ["C", "D"],
+          },
+        ]}
+        integratedComposer
+        onComposerStateChange={onComposerStateChange}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(getByRole("button", { name: "A" }));
+    await waitFor(() => {
+      expect(onComposerStateChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ questionId: "first" }),
+      );
+    });
+    const firstStepState = onComposerStateChange.mock.lastCall?.[0];
+    firstStepState.onPrimary("", { questionId: "first", paths: [], media: [] });
+
+    await waitFor(() => {
+      expect(onComposerStateChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ questionId: "second" }),
+      );
+    });
+    fireEvent.click(getByRole("button", { name: "C" }));
+    const secondStepState = onComposerStateChange.mock.lastCall?.[0];
+    secondStepState.onBack("", { questionId: "second", paths: [], media: [] });
+
+    await waitFor(() => {
+      const revisitedFirstStepState = onComposerStateChange.mock.lastCall?.[0];
+      expect(revisitedFirstStepState.questionId).toBe("first");
+      expect(revisitedFirstStepState.revision).not.toBe(
+        firstStepState.revision,
+      );
     });
   });
 });

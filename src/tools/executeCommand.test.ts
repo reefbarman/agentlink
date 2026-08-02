@@ -451,6 +451,8 @@ describe("handleExecuteCommand", () => {
         command: "npm test",
         cwd: "/workspace",
         sandboxSessionId: "session-prepared-master",
+        sandboxCapabilityRequest: undefined,
+        onManagedNetworkRequest: undefined,
       }),
       {
         requiredAuthority: "native-agent",
@@ -2291,7 +2293,7 @@ describe("handleExecuteCommand", () => {
     expect(textPayload(result).retry_outcome).toBeUndefined();
   });
 
-  it("requires a human second-execution approval after a structured sandbox denial", async () => {
+  it("requires the human recovery card even when a command rule matches a native retry", async () => {
     const violation = {
       operation: "ipc-connect" as const,
       target: "NuGet-Migrations",
@@ -2425,17 +2427,19 @@ describe("handleExecuteCommand", () => {
       "dotnet build",
       "dotnet build",
       expect.objectContaining({
-        recoveryAttempt: {
+        recoveryAttempt: expect.objectContaining({
           denialOperation: "ipc-connect",
-          denialReason: "Named mutex requires host IPC",
-          firstAttemptRoute: "sandbox",
-          commandSent: true,
           processLaunched: true,
           mayHaveSideEffects: true,
-        },
-        bypassRecentApproval: true,
-        skipApprovalRecording: true,
-        humanOnlyReason: expect.stringContaining("second execution"),
+        }),
+        subCommands: [
+          expect.objectContaining({
+            existingRule: expect.objectContaining({
+              pattern: "dotnet build",
+              scope: "project",
+            }),
+          }),
+        ],
       }),
     );
     expect(sandboxExecute).toHaveBeenCalledOnce();
@@ -3267,7 +3271,7 @@ describe("handleExecuteCommand", () => {
     "git fetch ssh://git@example.com/owner/repo.git",
     "git push git+ssh://example.com/owner/repo.git main",
   ])(
-    "returns HTTPS or reviewed-native guidance for explicit managed Git-over-SSH before preparation: %s",
+    "returns HTTPS or reviewed-native guidance for sandboxed Git-over-SSH before preparation: %s",
     async (command) => {
       const prepareExecution = vi.fn();
       const { handleExecuteCommand } = await import("./executeCommand.js");
@@ -3275,14 +3279,17 @@ describe("handleExecuteCommand", () => {
       const result = await handleExecuteCommand(
         {
           command,
-          sandbox_permissions: "require_managed_network",
+          sandbox_permissions: "use_default",
           reason: "Access the reviewed Git remote.",
         },
         { isCommandApproved: () => true } as never,
         { isRecentlyApproved: () => true } as never,
         "session-managed-network-explicit-ssh",
         undefined,
-        { terminalProvider: { ...terminalProvider, prepareExecution } },
+        {
+          terminalProvider: { ...terminalProvider, prepareExecution },
+          getCommandApprovalPolicy: () => "approve-for-me",
+        },
       );
 
       expect(prepareExecution).not.toHaveBeenCalled();
@@ -3910,7 +3917,7 @@ describe("handleExecuteCommand", () => {
             processTree: true,
             filesystemRead: "host-visible" as const,
             filesystemWrite: "strict" as const,
-            network: "loopback-listener" as const,
+            network: "partial" as const,
             privateHome: false,
             privateTmp: false,
             hostIpcBlocked: false,
@@ -3918,7 +3925,10 @@ describe("handleExecuteCommand", () => {
             warnings: [],
           },
           grant: { grantId: "grant-listener", auditId: "audit-listener-grant" },
-          capabilityRequest: { allowLocalBinding: true },
+          capabilityRequest: {
+            unrestrictedPublicNetwork: true,
+            allowLocalBinding: true,
+          },
         },
       },
       execute,
@@ -3970,8 +3980,11 @@ describe("handleExecuteCommand", () => {
     expect(prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({
         command: "npm test",
-        sandboxCapabilityRequest: { allowLocalBinding: true },
-        onManagedNetworkRequest: undefined,
+        sandboxCapabilityRequest: {
+          unrestrictedPublicNetwork: true,
+          allowLocalBinding: true,
+        },
+        onManagedNetworkRequest: expect.any(Function),
       }),
       expect.objectContaining({
         requiredAuthority: "sandbox",
@@ -3989,14 +4002,17 @@ describe("handleExecuteCommand", () => {
       security: {
         permissionIntent: "additional-permissions",
         sandbox: {
-          capabilities: { network: "loopback-listener" },
-          capabilityRequest: { allowLocalBinding: true },
+          capabilities: { network: "partial" },
+          capabilityRequest: {
+            unrestrictedPublicNetwork: true,
+            allowLocalBinding: true,
+          },
         },
       },
     });
   });
 
-  it("keeps managed public network sandboxed and reviews each live destination", async () => {
+  it("pauses each unseen default sandbox network destination for human approval", async () => {
     const networkRequest = {
       requestId: "network-1",
       sessionId: "session-managed-network",
@@ -4075,13 +4091,8 @@ describe("handleExecuteCommand", () => {
       model: "review-model",
       status: "reviewed" as const,
     }));
-    const networkReview = vi.fn(async () => ({
-      outcome: "allow" as const,
-      risk: "low" as const,
-      userAuthorization: "high" as const,
-      rationale: "Authorized package registry destination",
-      model: "network-review-model",
-      status: "reviewed" as const,
+    const enqueueNetworkApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "allow-once" }),
     }));
     const evaluateNetworkRules = vi.fn(() => ({
       key: "https://registry.npmjs.org:443",
@@ -4091,11 +4102,7 @@ describe("handleExecuteCommand", () => {
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
     const result = await handleExecuteCommand(
-      {
-        command: "npm view vite version",
-        sandbox_permissions: "require_managed_network",
-        reason: "Read public package metadata from the npm registry.",
-      },
+      { command: "npm view vite version", sandbox_permissions: "use_default" },
       {
         evaluateCommandRules: (_sessionId: string, command: string) =>
           evaluateCommandRulePolicy(
@@ -4123,14 +4130,17 @@ describe("handleExecuteCommand", () => {
         })),
         evaluateNetworkRules,
       } as never,
-      { isRecentlyApproved: () => true, enqueueCommandApproval } as never,
+      {
+        isRecentlyApproved: () => true,
+        enqueueCommandApproval,
+        enqueueNetworkApproval,
+      } as never,
       "session-managed-network",
       undefined,
       {
         terminalProvider: { ...terminalProvider, prepareExecution },
         getCommandApprovalPolicy: () => "approve-for-me",
         commandApprovalReviewer: { review },
-        networkApprovalReviewer: { review: networkReview },
         isSessionActive: () => true,
       },
     );
@@ -4143,22 +4153,22 @@ describe("handleExecuteCommand", () => {
       }),
       expect.objectContaining({
         requiredAuthority: "sandbox",
-        permissionIntent: "additional-permissions",
-        approvalRequirement: "explicit-permissions",
+        permissionIntent: "default",
+        approvalRequirement: "policy",
         authorityReason: "explicit-rule",
       }),
     );
-    expect(review).toHaveBeenCalledOnce();
-    expect(networkReview).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
+    expect(enqueueNetworkApproval).toHaveBeenCalledOnce();
     expect(evaluateNetworkRules).toHaveBeenCalledTimes(2);
     expect(enqueueCommandApproval).not.toHaveBeenCalled();
     expect(execute).toHaveBeenCalledWith("allow-once");
     expect(textPayload(result)).toMatchObject({
       exit_code: 0,
-      approval: { by: "model_reviewer" },
+      approval: { by: "master_bypass" },
       security: {
         route: "sandbox",
-        permissionIntent: "additional-permissions",
+        permissionIntent: "default",
         sandbox: {
           capabilities: { network: "proxy-only" },
           grant: { grantId: "grant-1", auditId: "network-audit-1" },
@@ -4409,7 +4419,7 @@ describe("handleExecuteCommand", () => {
         },
         scope,
       );
-      expect(evaluateNetworkRules).toHaveBeenCalledTimes(3);
+      expect(evaluateNetworkRules).toHaveBeenCalledTimes(4);
     },
   );
 
@@ -6111,6 +6121,92 @@ describe("handleExecuteCommand", () => {
       }),
     );
     expect(textPayload(result).approval).toEqual({ by: "human" });
+  });
+
+  it("hands the circuit-tripping Guardian denial to the human card with its evidence", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "accept" }),
+    }));
+    const review = vi.fn(async () => ({
+      outcome: "deny" as const,
+      risk: "high" as const,
+      userAuthorization: "unknown" as const,
+      rationale: "Deletion scope is not confirmed",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
+    const providers = {
+      terminalProvider,
+      getCommandApprovalPolicy: () => "approve-for-me" as const,
+      commandApprovalReviewer: { review },
+      commandReviewTurnCircuit: createCommandReviewTurnCircuit(),
+      retainedCommandReviewDenials: createRetainedCommandReviewDenials(),
+      isSessionActive: () => true,
+    };
+    const approvalManager = {
+      isCommandApproved: () => false,
+      findMatchingCommandRule: () => undefined,
+    } as never;
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    for (const command of ["rm -rf one", "rm -rf two"]) {
+      await handleExecuteCommand(
+        { command },
+        approvalManager,
+        { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+        "session-review-circuit",
+        undefined,
+        providers,
+      );
+    }
+    const result = await handleExecuteCommand(
+      { command: "rm -rf three" },
+      approvalManager,
+      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      "session-review-circuit",
+      undefined,
+      providers,
+    );
+    await handleExecuteCommand(
+      { command: "rm -rf four" },
+      approvalManager,
+      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      "session-review-circuit",
+      undefined,
+      providers,
+    );
+
+    expect(review).toHaveBeenCalledTimes(3);
+    expect(enqueueCommandApproval).toHaveBeenNthCalledWith(
+      3,
+      "rm -rf three",
+      "rm -rf three",
+      expect.objectContaining({
+        commandReview: expect.objectContaining({
+          outcome: "deny",
+          rationale: "Deletion scope is not confirmed",
+        }),
+        humanOnlyReason:
+          "Automatic command review stopped after repeated denials in this turn. Your direct approval is required.",
+        bypassRecentApproval: true,
+      }),
+    );
+    expect(enqueueCommandApproval).toHaveBeenLastCalledWith(
+      "rm -rf four",
+      "rm -rf four",
+      expect.objectContaining({
+        commandReview: undefined,
+        humanOnlyReason:
+          "Automatic command review stopped after repeated denials in this turn. Your direct approval is required.",
+        bypassRecentApproval: true,
+      }),
+    );
+    expect(textPayload(result)).toMatchObject({ approval: { by: "human" } });
   });
 
   it("does not execute when a pending human approval resolves after cancellation", async () => {

@@ -386,6 +386,12 @@ export type ExtensionMessage =
       files: Array<{ path: string; kind: "file" | "folder" }>;
     }
   | {
+      type: "agentOpenFileResult";
+      requestId: string;
+      ok: boolean;
+      error?: "not_found" | "open_failed";
+    }
+  | {
       type: "agentDetectQuestionResult";
       requestId: string;
       messageId: string;

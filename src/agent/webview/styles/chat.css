@@ -1728,6 +1728,29 @@ body.chat-activity-shelf-resizing * {
   text-decoration: underline;
 }
 
+/* Transient failure popup anchored over a clicked file link. */
+.file-link-open-feedback {
+  position: fixed;
+  z-index: 2000;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid
+    var(--vscode-editorHoverWidget-border, rgba(128, 128, 128, 0.35));
+  background: var(--vscode-editorHoverWidget-background, #252526);
+  color: var(--vscode-editorHoverWidget-foreground, #cccccc);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.file-link-open-feedback.visible {
+  opacity: 1;
+}
+
 .markdown-body blockquote {
   border-left: 3px solid var(--vscode-textBlockQuote-border);
   padding-left: 12px;
@@ -2211,6 +2234,39 @@ body.chat-activity-shelf-resizing * {
 
 .tool-call-summary .tool-file-link {
   color: var(--vscode-textLink-foreground);
+}
+
+.tool-command-preview {
+  min-width: 0;
+  overflow: hidden;
+  margin: 0;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 3px;
+  background: color-mix(
+    in srgb,
+    var(--vscode-editor-background) 70%,
+    var(--vscode-input-background, transparent)
+  );
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tool-command-state {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid
+    color-mix(in srgb, var(--vscode-textLink-foreground) 35%, transparent);
+  border-radius: 999px;
+  color: var(--vscode-textLink-foreground);
+  font-size: 10px;
+  font-weight: 600;
 }
 
 .tool-auto-approval-badge {
@@ -3781,6 +3837,11 @@ body.chat-activity-shelf-resizing * {
   cursor: not-allowed;
 }
 
+.question-nav-next,
+.question-submit {
+  margin-left: auto;
+}
+
 .question-nav-next {
   background: color-mix(
     in srgb,
@@ -4113,6 +4174,66 @@ body.chat-activity-shelf-resizing * {
   padding: 8px 12px 12px;
   border-top: 1px solid var(--vscode-panel-border);
   flex-shrink: 0;
+}
+
+.question-context-composer {
+  display: flex;
+  flex-direction: column;
+  border-top-color: var(--vscode-focusBorder);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--vscode-focusBorder) 8%, transparent),
+    transparent 68%
+  );
+}
+
+.question-context-composer > .question-card {
+  order: 0;
+  padding: 2px 0 8px;
+  border-top: 0;
+}
+
+.question-context-composer-header {
+  order: 2;
+  display: flex;
+  margin: 0 0 7px;
+}
+
+.question-context-composer-header > div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.question-context-composer-header strong {
+  color: var(--vscode-textLink-foreground, var(--vscode-focusBorder));
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.question-context-composer-header span {
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.question-context-composer > .input-toolbar {
+  order: 3;
+}
+
+.question-context-composer > .question-composer-nav {
+  order: 1;
+  margin: 0 0 9px;
+  padding-top: 0;
+}
+
+.question-context-composer > .attachment-chips {
+  order: 4;
+}
+
+.question-context-composer > .input-wrapper {
+  order: 5;
 }
 
 .input-toolbar {
@@ -7052,6 +7173,129 @@ body.approval-resizing {
   margin: -4px 0 16px;
   max-height: 240px;
   overflow: auto;
+}
+.approval-panel-embed .network-destination-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 11px 12px;
+  border: 1px solid var(--vscode-focusBorder, var(--vscode-panel-border));
+  border-radius: 6px;
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorInfo-background, #063b49) 30%,
+    transparent
+  );
+}
+.approval-panel-embed .network-destination-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.approval-panel-embed .network-section-label,
+.approval-panel-embed .network-destination-copy span,
+.approval-panel-embed .network-destination-summary code {
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+}
+.approval-panel-embed .network-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.approval-panel-embed .network-destination-copy strong {
+  overflow-wrap: anywhere;
+  font-size: 15px;
+}
+.approval-panel-embed .network-destination-summary code {
+  max-width: 46%;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.approval-panel-embed .network-approval-explainer {
+  margin: 0 0 12px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.approval-panel-embed .network-approval-explainer strong {
+  color: var(--vscode-foreground);
+}
+.approval-panel-embed .network-context {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+.approval-panel-embed .network-context-heading {
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.approval-panel-embed .network-context-row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 8px;
+}
+.approval-panel-embed .network-context-row > .codicon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--vscode-descriptionForeground);
+}
+.approval-panel-embed .network-context-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.approval-panel-embed .network-context-row span:not(.codicon) {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+.approval-panel-embed .network-context-row code {
+  overflow-wrap: anywhere;
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.approval-panel-embed .network-technical-details {
+  margin: 0 0 12px;
+  border-top: 1px solid var(--vscode-panel-border);
+}
+.approval-panel-embed .network-technical-details > summary {
+  padding: 8px 0;
+  color: var(--vscode-descriptionForeground);
+  cursor: pointer;
+  font-size: 12px;
+}
+.approval-panel-embed .network-technical-content {
+  display: grid;
+  gap: 9px;
+  padding: 0 0 10px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.approval-panel-embed .network-technical-content .approval-detail-list {
+  margin: 0;
+}
+.approval-panel-embed .network-technical-content p {
+  margin: 0;
+}
+.approval-panel-embed .network-rule-description {
+  margin: 6px 0 10px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  line-height: 1.4;
 }
 .approval-panel-embed .command-box {
   background: var(

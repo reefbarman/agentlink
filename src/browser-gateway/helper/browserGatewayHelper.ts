@@ -92,6 +92,10 @@ import {
   redactStructuredSecrets,
 } from "../../shared/structuredSecretRedaction.js";
 import {
+  getConfirmationOptions,
+  isConfirmationOptions,
+} from "../../shared/questionConfirmation.js";
+import {
   clearBrowserGatewayHelperDiscovery,
   writeBrowserGatewayHelperDiscovery,
 } from "../browserGatewayHelperDiscovery.js";
@@ -5981,9 +5985,10 @@ export class BrowserGatewayHelper {
 
     if (toolCall.name === "ask_user") {
       const questionRequest = this.buildAskAgentQuestionRequest(toolCall);
-      if (!questionRequest) {
+      if (!questionRequest || "error" in questionRequest) {
         const content = JSON.stringify({
           error:
+            questionRequest?.error ??
             "ask_user requires at least one question and visible context in this tool call through top-level context or questions[].context. Preceding assistant messages are intentionally not used because the question card must remain self-contained.",
         });
         return {
@@ -6462,10 +6467,33 @@ export class BrowserGatewayHelper {
 
   private buildAskAgentQuestionRequest(
     toolCall: BrowserGatewayAskAgentToolCall,
-  ): { id: string; context: string; questions: Question[] } | null {
+  ):
+    | { id: string; context: string; questions: Question[] }
+    | { error: string }
+    | null {
     const rawQuestions = Array.isArray(toolCall.input.questions)
       ? toolCall.input.questions
       : [];
+    for (const [index, raw] of rawQuestions.entries()) {
+      if (!raw || typeof raw !== "object") continue;
+      const candidate = raw as Record<string, unknown>;
+      if (
+        candidate.type !== "confirmation" ||
+        candidate.options === undefined
+      ) {
+        continue;
+      }
+      const options = candidate.options;
+      if (!isConfirmationOptions(options)) {
+        const id =
+          typeof candidate.id === "string" && candidate.id.trim()
+            ? candidate.id.trim()
+            : `question-${index + 1}`;
+        return {
+          error: `Confirmation question "${id}" must have exactly two distinct non-empty options when custom button labels are provided`,
+        };
+      }
+    }
     const questions: Question[] = rawQuestions.flatMap((raw, index) => {
       if (!raw || typeof raw !== "object") return [];
       const candidate = raw as Record<string, unknown>;
@@ -6483,6 +6511,13 @@ export class BrowserGatewayHelper {
       const questionText =
         typeof candidate.question === "string" ? candidate.question.trim() : "";
       if (!questionText) return [];
+      const options =
+        type === "confirmation" && candidate.options !== undefined
+          ? getConfirmationOptions(candidate.options)
+          : Array.isArray(candidate.options)
+            ? candidate.options.map(String)
+            : undefined;
+
       return [
         {
           id:
@@ -6494,9 +6529,7 @@ export class BrowserGatewayHelper {
           ...(typeof candidate.context === "string" && candidate.context.trim()
             ? { context: candidate.context.trim() }
             : {}),
-          ...(Array.isArray(candidate.options)
-            ? { options: candidate.options.map(String) }
-            : {}),
+          ...(options ? { options } : {}),
           ...(typeof candidate.recommended === "string"
             ? { recommended: candidate.recommended }
             : {}),

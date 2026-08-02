@@ -872,41 +872,85 @@ describe("SandboxTerminalCoordinator", () => {
     await expect(result).resolves.toMatchObject({ exit_code: 1 });
   });
 
-  it("aborts pending network review on timeout and rejects the live helper request", async () => {
+  it("pauses the command timeout while a managed network decision is pending", async () => {
     vi.useFakeTimers();
     try {
       const test = harness();
       enableManagedNetworking(test);
-      const onManagedNetworkRequest = vi.fn(
-        (_request, signal: AbortSignal) =>
-          new Promise<"allow-once">((_resolve, reject) => {
-            signal.addEventListener(
-              "abort",
-              () => reject(new Error("review aborted")),
-              { once: true },
-            );
-          }),
-      );
+      const review = deferred<"allow-once" | "reject">();
       const result = test.coordinator.executeCommand({
         owner: undefined,
         command: "curl https://example.com",
         cwd: "/workspace",
         sandboxSessionId: "session-network",
         timeout: 100,
-        onManagedNetworkRequest,
+        onManagedNetworkRequest: () => review.promise,
       });
       await flush();
       const process = test.processes[0];
       process.emit({ type: "network-request", request: managedDestination });
       await flush();
 
-      await vi.advanceTimersByTimeAsync(100);
-      await expect(result).resolves.toMatchObject({ timed_out: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(process.respondToNetworkRequest).not.toHaveBeenCalled();
+
+      review.resolve("allow-once");
       await flush();
       expect(process.respondToNetworkRequest).toHaveBeenCalledWith(
         "network-1",
-        "reject",
+        "allow-once",
       );
+
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(result).resolves.toMatchObject({ timed_out: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the timeout paused until every concurrent network review settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      enableManagedNetworking(test);
+      const firstReview = deferred<"allow-once" | "reject">();
+      const secondReview = deferred<"allow-once" | "reject">();
+      const result = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "curl https://example.com",
+        cwd: "/workspace",
+        sandboxSessionId: "session-network",
+        timeout: 100,
+        onManagedNetworkRequest: (request) =>
+          request.requestId === "network-1"
+            ? firstReview.promise
+            : secondReview.promise,
+      });
+      await flush();
+      const process = test.processes[0];
+      process.emit({ type: "network-request", request: managedDestination });
+      process.emit({
+        type: "network-request",
+        request: { ...managedDestination, requestId: "network-2" },
+      });
+      await flush();
+
+      firstReview.resolve("allow-once");
+      await flush();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(process.respondToNetworkRequest).toHaveBeenCalledWith(
+        "network-1",
+        "allow-once",
+      );
+      expect(process.respondToNetworkRequest).not.toHaveBeenCalledWith(
+        "network-2",
+        expect.anything(),
+      );
+
+      secondReview.resolve("allow-once");
+      await flush();
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(result).resolves.toMatchObject({ timed_out: true });
     } finally {
       vi.useRealTimers();
     }

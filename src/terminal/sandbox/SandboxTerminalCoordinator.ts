@@ -106,6 +106,9 @@ interface ManagedSandboxChannel {
     metadata: SandboxExecutionMetadata;
     finalizer?: () => void;
     networkAbortController: AbortController;
+    networkReviewPendingCount: number;
+    pauseTimeoutForNetworkReview?: () => void;
+    resumeTimeoutAfterNetworkReview?: () => void;
     onManagedNetworkRequest?: TerminalExecuteOptions["onManagedNetworkRequest"];
     networkContext: Pick<
       ManagedNetworkRequest,
@@ -389,6 +392,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       metadata: authorized.metadata,
       finalizer,
       networkAbortController: new AbortController(),
+      networkReviewPendingCount: 0,
       onManagedNetworkRequest: options.onManagedNetworkRequest,
       networkContext: {
         sessionId: sandboxSessionId,
@@ -443,19 +447,71 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     }
 
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let timeoutStartedAt: number | undefined;
+    let timeoutRemaining = options.timeout;
+    let resolveTimeout: ((outcome: "timed_out") => void) | undefined;
+    const startTimeout = () => {
+      if (
+        channel.active?.commandId !== commandId ||
+        timeoutRemaining === undefined ||
+        timer ||
+        channel.active.networkReviewPendingCount > 0
+      ) {
+        return;
+      }
+      if (timeoutRemaining <= 0) {
+        resolveTimeout?.("timed_out");
+        return;
+      }
+      timeoutStartedAt = Date.now();
+      timer = setTimeout(() => {
+        timer = undefined;
+        resolveTimeout?.("timed_out");
+      }, timeoutRemaining);
+      timer.unref();
+    };
+    const pauseTimeoutForNetworkReview = () => {
+      if (
+        !timer ||
+        timeoutStartedAt === undefined ||
+        timeoutRemaining === undefined
+      ) {
+        return;
+      }
+      clearTimeout(timer);
+      timer = undefined;
+      timeoutRemaining = Math.max(
+        0,
+        timeoutRemaining - (Date.now() - timeoutStartedAt),
+      );
+      timeoutStartedAt = undefined;
+    };
+    const resumeTimeoutAfterNetworkReview = () => {
+      startTimeout();
+    };
+    if (channel.active?.commandId === commandId) {
+      channel.active.pauseTimeoutForNetworkReview =
+        pauseTimeoutForNetworkReview;
+      channel.active.resumeTimeoutAfterNetworkReview =
+        resumeTimeoutAfterNetworkReview;
+    }
     const outcome = await Promise.race([
       completion.then(() => "completed" as const),
       detachPromise.then(() => "detached" as const),
       ...(options.timeout !== undefined
         ? [
             new Promise<"timed_out">((resolve) => {
-              timer = setTimeout(() => resolve("timed_out"), options.timeout);
-              timer.unref();
+              resolveTimeout = resolve;
+              startTimeout();
             }),
           ]
         : []),
     ]).finally(() => {
       if (timer) clearTimeout(timer);
+      if (channel.active?.commandId === commandId) {
+        channel.active.pauseTimeoutForNetworkReview = undefined;
+        channel.active.resumeTimeoutAfterNetworkReview = undefined;
+      }
       if (channel.active?.detachForeground === detachForeground) {
         channel.active.detachForeground = undefined;
       }
@@ -1236,6 +1292,10 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       return;
     }
     let decision: "allow-once" | "reject" = "reject";
+    active.networkReviewPendingCount += 1;
+    if (active.networkReviewPendingCount === 1) {
+      active.pauseTimeoutForNetworkReview?.();
+    }
     try {
       if (
         active.networkContext.auditId &&
@@ -1261,6 +1321,14 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       }
     } catch (error) {
       this.log?.(`[sandbox-terminal] Network request review failed: ${error}`);
+    } finally {
+      active.networkReviewPendingCount = Math.max(
+        0,
+        active.networkReviewPendingCount - 1,
+      );
+      if (active.networkReviewPendingCount === 0) {
+        active.resumeTimeoutAfterNetworkReview?.();
+      }
     }
     if (channel.active !== active) return;
     const responded = active.process.respondToNetworkRequest?.(

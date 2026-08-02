@@ -36,6 +36,65 @@ describe("ToolCallBlock", () => {
     expect(screen.getAllByText(/src\/agent\/AgentEngine\.ts/)).toHaveLength(2);
   });
 
+  it("expands a running command from its chevron while preserving terminal reveal", () => {
+    const onRevealToolCallTerminal = vi.fn();
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "running-command",
+          name: "execute_command",
+          inputJson: JSON.stringify({ command: "curl -I https://example.com" }),
+          result: "",
+          complete: false,
+        },
+        onRevealToolCallTerminal,
+      }),
+    );
+
+    const toggle = screen.getByRole("button", { name: "Command details" });
+    const commandPreview = screen.getByRole("button", {
+      name: "Show the running terminal",
+    });
+    expect(toggle).toBeTruthy();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByText("execute_command")).toBeTruthy();
+    expect(screen.getByText("Running")).toBeTruthy();
+
+    fireEvent.click(toggle);
+    expect(screen.getByText("Input")).toBeTruthy();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(onRevealToolCallTerminal).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText("Running"));
+    expect(onRevealToolCallTerminal).toHaveBeenCalledWith("running-command");
+
+    fireEvent.click(commandPreview);
+    expect(onRevealToolCallTerminal).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows command approval and route provenance beside a completed command", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "completed-command",
+          name: "execute_command",
+          inputJson: JSON.stringify({ command: "npm test" }),
+          result: JSON.stringify({
+            exit_code: 0,
+            approval: { by: "human" },
+            security: { route: "sandbox" },
+          }),
+          complete: true,
+        },
+      }),
+    );
+
+    expect(screen.getByText("approved · human · sandbox")).toBeTruthy();
+    expect(screen.getByText("npm test")).toBeTruthy();
+  });
+
   it("renders completed ACP-native tools with generic input and result details", () => {
     render(
       h(ToolCallBlock, {

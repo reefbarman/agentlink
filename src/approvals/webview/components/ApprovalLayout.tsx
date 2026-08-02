@@ -15,6 +15,8 @@ export interface ApprovalLayoutProps {
   children: ComponentChildren;
   /** Rules editor JSX, rendered inside collapsible section */
   rulesContent?: ComponentChildren;
+  /** Optional card-specific label for the rules editor. */
+  rulesLabel?: string;
   /** Whether any rule has been modified from defaults */
   rulesModified: boolean;
   /** Button label when rules are NOT modified */
@@ -83,6 +85,7 @@ export function ApprovalLayout({
   purpose,
   children,
   rulesContent,
+  rulesLabel = "Auto Approval Rules",
   rulesModified,
   primaryLabel,
   primaryWithRulesLabel,
@@ -142,7 +145,7 @@ export function ApprovalLayout({
               <span
                 class={`codicon codicon-chevron-${rulesOpen ? "down" : "right"}`}
               />
-              <span>Auto Approval Rules</span>
+              <span>{rulesLabel}</span>
               {rulesModified && (
                 <span class="rules-modified-indicator">Modified</span>
               )}

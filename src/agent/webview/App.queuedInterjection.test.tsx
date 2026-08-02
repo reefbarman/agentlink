@@ -134,7 +134,7 @@ describe("queued interjection editing and removal", () => {
         ?.classList.contains("active"),
     ).toBe(true);
 
-    fireEvent.click(getByRole("button", { name: "Edit" }));
+    fireEvent.click(getByTitle("Ready to interject at next break"));
     expect(
       findCalls(postMessage, "agentPauseQueuedMessageInterjection"),
     ).toEqual([
@@ -144,6 +144,12 @@ describe("queued interjection editing and removal", () => {
         queueId: "queue-1",
       },
     ]);
+    expect(getByTitle("Interject at next break")).toBeTruthy();
+
+    fireEvent.click(getByRole("button", { name: "Edit" }));
+    expect(
+      findCalls(postMessage, "agentPauseQueuedMessageInterjection"),
+    ).toHaveLength(1);
   });
 
   it("re-registers the interjection with the edited text after an edit", () => {

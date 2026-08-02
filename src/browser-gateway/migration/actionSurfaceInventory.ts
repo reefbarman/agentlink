@@ -174,6 +174,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
   retainedHttp(
     "vscode_gateway",
     "POST",
+    "/api/queue/pause-interjection",
+    "Requires queue command protocol coverage before Stage 5.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
     "/api/mode",
     "Requires a session-settings command before Stage 5.",
   ),

@@ -58,6 +58,10 @@ import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { McpClientHub } from "./McpClientHub.js";
 import type { Question } from "./webview/types.js";
 import { IS_DEV_BUILD } from "../shared/buildFlags.js";
+import {
+  getConfirmationOptions,
+  isConfirmationOptions,
+} from "../shared/questionConfirmation.js";
 import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
 import {
   CALL_MCP_TOOL_DEFINITION,
@@ -386,7 +390,7 @@ const MCP_META_TOOLS: ToolDefinition[] = MCP_META_TOOL_DEFINITIONS;
 const ASK_USER_TOOL: ToolDefinition = {
   name: "ask_user",
   description:
-    "Ask one or more structured questions and wait for responses before continuing. In a foreground session this asks the user. In a native background session the root foreground coordinator answers first and decides whether human escalation is necessary. Prefer `questions[].context`: visible text for that specific question explaining why input is needed, the relevant trade-off/options, and your recommendation. Use top-level `context` only for a brief shared intro that applies to every question. For multi-question asks, split context across the individual questions instead of delivering one large block. Questions must be self-contained and must not rely on hidden thinking or prior messages; preceding assistant text does not satisfy the context requirement. For multiple_choice and multiple_select questions, always include `recommended`. To combine a user choice with a mode change (e.g. 'plan first → architect, just implement → code'), use a `multiple_choice` question with a `modeSwitch` map instead of calling `switch_mode` separately — this avoids a redundant approval. Only one question per call may include `modeSwitch`.",
+    "Ask one or more structured questions and wait for responses before continuing. In a foreground session this asks the user. In a native background session the root foreground coordinator answers first and decides whether human escalation is necessary. Prefer `questions[].context`: visible text for that specific question explaining why input is needed, the relevant trade-off/options, and your recommendation. Use top-level `context` only for a brief shared intro that applies to every question. For multi-question asks, split context across the individual questions instead of delivering one large block. Questions must be self-contained and must not rely on hidden thinking or prior messages; preceding assistant text does not satisfy the context requirement. Use `confirmation` for a direct two-button decision: it submits immediately without a separate acknowledgement or Submit/Cancel control. It defaults to `Yes` and `No`; provide exactly two distinct `options` strings to name its buttons, and the selected label is returned as the answer. For multiple_choice and multiple_select questions, always include `recommended`. To combine a user choice with a mode change (e.g. 'plan first → architect, just implement → code'), use a `multiple_choice` question with a `modeSwitch` map instead of calling `switch_mode` separately — this avoids a redundant approval. Only one question per call may include `modeSwitch`.",
   input_schema: {
     type: "object",
     properties: {
@@ -432,7 +436,7 @@ const ASK_USER_TOOL: ToolDefinition = {
               type: "array",
               items: { type: "string" },
               description:
-                "Answer options (required for multiple_choice and multiple_select)",
+                "Answer options (required for multiple_choice and multiple_select). For confirmation, provide exactly two distinct labels to replace the default Yes/No buttons.",
             },
             recommended: {
               type: "string",
@@ -4095,13 +4099,41 @@ export async function dispatchToolCall(
       const rawQuestions: unknown[] = Array.isArray(params.questions)
         ? params.questions
         : [];
-      const questions: Question[] = rawQuestions.map((question: unknown) => {
+      const invalidConfirmation = rawQuestions.find((question) => {
+        if (!question || typeof question !== "object") return false;
         const q = question as Question;
-        return {
-          ...q,
-          context: typeof q.context === "string" ? q.context.trim() : q.context,
-        };
+        return (
+          q.type === "confirmation" &&
+          q.options !== undefined &&
+          !isConfirmationOptions(q.options)
+        );
+      }) as Question | undefined;
+      const questions: Question[] = rawQuestions.flatMap((question) => {
+        if (!question || typeof question !== "object") return [];
+        const q = question as Question;
+        return [
+          {
+            ...q,
+            context:
+              typeof q.context === "string" ? q.context.trim() : q.context,
+            ...(q.type === "confirmation" && q.options !== undefined
+              ? { options: getConfirmationOptions(q.options) }
+              : {}),
+          },
+        ];
       });
+      if (invalidConfirmation) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error: `Confirmation question "${invalidConfirmation.id}" must have exactly two distinct non-empty options when custom button labels are provided`,
+              }),
+            },
+          ],
+        };
+      }
       const hasQuestionContext = questions.some((q) => q.context?.trim());
       if (!context && !hasQuestionContext) {
         return {

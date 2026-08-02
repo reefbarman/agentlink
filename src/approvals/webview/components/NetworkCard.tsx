@@ -61,11 +61,18 @@ export function NetworkCard({
   }
 
   const destination = `${network.protocol}://${network.host}:${network.port}`;
+  const ruleScopeDescription =
+    scope === "skip"
+      ? "Choose a scope to save an exact destination rule."
+      : scope === "global"
+        ? `Allows future connections to ${destination} from every AgentLink project on this machine. Each connection is resolved and safety-checked again.`
+        : `Allows future connections to ${destination} for this ${SCOPE_LABELS[scope].toLowerCase()}. Each connection is resolved and safety-checked again.`;
   const rulesContent = (
     <div class="rule-row">
       <div class="rule-row-header">
         <code class="rule-row-label">{destination}</code>
       </div>
+      <div class="network-rule-description">{ruleScopeDescription}</div>
       <div class="rule-row-toggles">
         <div class="toggle-group">
           {SCOPES.map((candidate) => (
@@ -92,6 +99,7 @@ export function NetworkCard({
       sourceProject={request.sourceProject}
       purpose="Connect to a public network destination"
       rulesContent={rulesContent}
+      rulesLabel="Save destination rule"
       rulesModified={scope !== "skip"}
       primaryLabel="Allow Once"
       primaryWithRulesLabel="Save Exact Rule & Allow"
@@ -101,34 +109,69 @@ export function NetworkCard({
       followUpRef={followUpRef}
     >
       <div class="card-label">
-        <span class="codicon codicon-globe" /> Network Destination
+        <span class="codicon codicon-globe" /> Network destination paused
       </div>
-      <pre class="command-box">{destination}</pre>
-      <dl class="approval-detail-list">
-        <dt>Command</dt>
-        <dd>{network.command}</dd>
-        <dt>Working directory</dt>
-        <dd>{network.cwd}</dd>
-        <dt>Retained dial address</dt>
-        <dd>{`${network.address} (IPv${network.family})`}</dd>
-        <dt>Validated DNS answers</dt>
-        <dd>
-          {network.dnsAnswers
-            .map((answer) => `${answer.address} (IPv${answer.family})`)
-            .join(", ")}
-        </dd>
-      </dl>
-      <div class="approval-detail-text">
-        This approval permits only this paused connection. Redirects and later
-        connections are reviewed independently. For encrypted HTTPS/TCP traffic,
-        request paths, payloads, credentials, and response redirects are not
-        visible.
-      </div>
-      {request.networkReview && (
-        <div class="approval-detail-text">
-          <strong>Guardian:</strong> {request.networkReview.rationale}
+      <section class="network-destination-summary" aria-label="Destination">
+        <div class="network-destination-copy">
+          <span class="network-section-label">Destination</span>
+          <strong>{network.host}</strong>
+          <span>{`${network.protocol.toUpperCase()} socket · port ${network.port}`}</span>
         </div>
-      )}
+        <code>{destination}</code>
+      </section>
+      <div class="network-approval-explainer">
+        <strong>Allow once resumes only this connection.</strong> Redirects and
+        later connections are reviewed independently.
+      </div>
+      <section class="network-context" aria-label="Connection context">
+        <div class="network-context-heading">Connection context</div>
+        <div class="network-context-row">
+          <span class="codicon codicon-terminal" aria-hidden="true" />
+          <div>
+            <span>Command</span>
+            <code>{network.command}</code>
+          </div>
+        </div>
+        <div class="network-context-row">
+          <span class="codicon codicon-folder" aria-hidden="true" />
+          <div>
+            <span>Working directory</span>
+            <code>{network.cwd}</code>
+          </div>
+        </div>
+        <div class="network-context-row">
+          <span class="codicon codicon-globe" aria-hidden="true" />
+          <div>
+            <span>Resolved peer</span>
+            <code>{`${network.address} (IPv${network.family})`}</code>
+          </div>
+        </div>
+      </section>
+      <details class="network-technical-details">
+        <summary>Connection safeguards and DNS</summary>
+        <div class="network-technical-content">
+          <dl class="approval-detail-list">
+            <dt>Validated DNS answers</dt>
+            <dd>
+              {network.dnsAnswers
+                .map((answer) => `${answer.address} (IPv${answer.family})`)
+                .join(", ")}
+            </dd>
+          </dl>
+          <p>
+            HTTPS/TCP request paths, payloads, credentials, response bodies, and
+            redirect targets are not visible. Future connections re-resolve and
+            remain blocked when they target private, local, metadata, or other
+            unsafe addresses.
+          </p>
+          {request.networkReview && (
+            <p>
+              <strong>Guardian assessment:</strong>{" "}
+              {request.networkReview.rationale}
+            </p>
+          )}
+        </div>
+      </details>
     </ApprovalLayout>
   );
 }

@@ -1274,6 +1274,106 @@ describe("ApprovalPanelProvider network approvals", () => {
     );
   });
 
+  it("resolves queued same-session requests for the exact destination after allow once", async () => {
+    const { provider } = createProvider(projectContext);
+    const shown: Array<{
+      request: ApprovalRequest;
+      respond: (message: DecisionMessage) => boolean;
+    }> = [];
+    provider.onForwardApproval = ({ request: approval }, respond) => {
+      shown.push({ request: approval, respond });
+    };
+
+    const first = provider.enqueueNetworkApproval({ request });
+    const matching = provider.enqueueNetworkApproval({
+      request: { ...request, requestId: "network-2" },
+    });
+    const anotherCommand = provider.enqueueNetworkApproval({
+      request: {
+        ...request,
+        requestId: "network-other-command",
+        commandId: "command-other",
+      },
+    });
+    const otherHost = provider.enqueueNetworkApproval({
+      request: {
+        ...request,
+        requestId: "network-other-host",
+        commandId: "command-other-host",
+        host: "example.com",
+      },
+    });
+    await vi.waitFor(() => expect(shown).toHaveLength(1));
+
+    shown[0].respond({
+      type: "decision",
+      id: first.id,
+      approvalKind: "network",
+      decision: "allow-once",
+    });
+
+    await expect(first.promise).resolves.toEqual({ decision: "allow-once" });
+    await expect(matching.promise).resolves.toEqual({
+      decision: "allow-once",
+    });
+    await vi.waitFor(() => expect(shown).toHaveLength(2));
+    expect(shown[1].request.managedNetwork?.commandId).toBe("command-other");
+    shown[1].respond({
+      type: "decision",
+      id: anotherCommand.id,
+      approvalKind: "network",
+      decision: "reject",
+    });
+    await expect(anotherCommand.promise).resolves.toEqual({
+      decision: "reject",
+    });
+    await vi.waitFor(() => expect(shown).toHaveLength(3));
+    expect(shown[2].request.managedNetwork?.host).toBe("example.com");
+    shown[2].respond({
+      type: "decision",
+      id: otherHost.id,
+      approvalKind: "network",
+      decision: "reject",
+    });
+    await expect(otherHost.promise).resolves.toEqual({ decision: "reject" });
+    provider.dispose();
+  });
+
+  it("resolves queued exact destinations within the selected project rule scope", async () => {
+    const { provider } = createProvider(projectContext);
+    const shown: Array<{
+      request: ApprovalRequest;
+      respond: (message: DecisionMessage) => boolean;
+    }> = [];
+    provider.onForwardApproval = ({ request: approval }, respond) => {
+      shown.push({ request: approval, respond });
+    };
+
+    const first = provider.enqueueNetworkApproval({ request });
+    const matching = provider.enqueueNetworkApproval({
+      request: {
+        ...request,
+        requestId: "network-project-2",
+        commandId: "command-2",
+      },
+    });
+    await vi.waitFor(() => expect(shown).toHaveLength(1));
+
+    shown[0].respond({
+      type: "decision",
+      id: first.id,
+      approvalKind: "network",
+      decision: "allow-project",
+    });
+
+    await expect(first.promise).resolves.toEqual({ decision: "allow-project" });
+    await expect(matching.promise).resolves.toEqual({
+      decision: "allow-project",
+    });
+    expect(shown).toHaveLength(1);
+    provider.dispose();
+  });
+
   it("rejects mismatched kinds and accepts only network decisions", async () => {
     const { provider } = createProvider();
     let pending:

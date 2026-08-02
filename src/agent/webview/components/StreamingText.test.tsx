@@ -10,6 +10,10 @@ import {
 } from "@testing-library/preact";
 
 import { StreamingText } from "./StreamingText";
+import {
+  resetFileLinkFeedbackForTests,
+  showFileOpenFailure,
+} from "./fileLinkFeedback";
 
 const rendererMocks = vi.hoisted(() => ({
   renderMermaid: vi.fn(),
@@ -120,6 +124,37 @@ describe("StreamingText lazy special-block renderers", () => {
         screen.getByText("Failed to render diagram: chunk unavailable"),
       ).toBeTruthy();
     });
+  });
+});
+
+describe("StreamingText mid-stream mounts", () => {
+  it("immediately reveals text that predates mount instead of replaying it", () => {
+    const longText = `${"lorem ipsum ".repeat(150)}END-MARKER`;
+    const onRevealStart = vi.fn();
+    const { container } = render(
+      <StreamingText
+        text={longText}
+        streaming={true}
+        onRevealStart={onRevealStart}
+      />,
+    );
+
+    expect(onRevealStart).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("END-MARKER");
+  });
+
+  it("keeps buffering when mounted near the start of a live stream", () => {
+    const onRevealStart = vi.fn();
+    const { container } = render(
+      <StreamingText
+        text="A short first chunk."
+        streaming={true}
+        onRevealStart={onRevealStart}
+      />,
+    );
+
+    expect(onRevealStart).not.toHaveBeenCalled();
+    expect(container.textContent ?? "").not.toContain("first chunk");
   });
 });
 
@@ -298,5 +333,34 @@ describe("StreamingText file links", () => {
     for (const link of Array.from(links)) {
       expect(link.getAttribute("href") ?? "").not.toContain("javascript:");
     }
+  });
+});
+
+describe("StreamingText file link failure feedback", () => {
+  afterEach(() => {
+    resetFileLinkFeedbackForTests();
+  });
+
+  it("anchors open-failure feedback to the clicked link", () => {
+    const onOpenFile = vi.fn();
+    const { container } = render(
+      <StreamingText
+        text="The bug is in src/agent/webview/App.tsx:42 as expected."
+        streaming={false}
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    const link = container.querySelector(
+      ".file-path-link",
+    ) as HTMLAnchorElement;
+    fireEvent.click(link);
+    expect(onOpenFile).toHaveBeenCalledWith("src/agent/webview/App.tsx", 42);
+
+    expect(showFileOpenFailure("src/agent/webview/App.tsx", "not_found")).toBe(
+      true,
+    );
+    const popup = document.body.querySelector(".file-link-open-feedback");
+    expect(popup?.textContent).toBe("File not found");
   });
 });
