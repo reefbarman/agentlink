@@ -155,12 +155,22 @@ function isNativePreparingProvider(
   );
 }
 
+interface RetirableTerminalProvider {
+  retire(): void;
+}
+
 interface TerminalChannelEventProvider {
   onChannelEvent(
     listener: (update: { snapshot: { status: string } }) => void,
   ): {
     dispose(): void;
   };
+}
+
+function isRetirableTerminalProvider(
+  provider: TerminalProvider,
+): provider is TerminalProvider & RetirableTerminalProvider {
+  return "retire" in provider && typeof provider.retire === "function";
 }
 
 function isTerminalChannelEventProvider(
@@ -1257,6 +1267,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     const provider = this.sandboxProvider;
     this.sandboxProvider = undefined;
     if (!provider) return;
+    if (isRetirableTerminalProvider(provider)) provider.retire();
     this.retiredSandboxProviders.add(provider);
     this.pruneRetiredChannelProviders();
   }
@@ -1265,8 +1276,9 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     const provider = this.nativeAgentProvider;
     this.nativeAgentProvider = undefined;
     if (!provider) return;
-    this.retiredNativeAgentProviders.add(provider);
     this.observeChannelLifecycle(provider);
+    if (isRetirableTerminalProvider(provider)) provider.retire();
+    this.retiredNativeAgentProviders.add(provider);
     this.pruneRetiredChannelProviders();
   }
 

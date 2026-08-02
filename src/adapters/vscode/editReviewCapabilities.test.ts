@@ -112,6 +112,18 @@ vi.mock("vscode", () => {
 vi.mock("../../integrations/DiffViewProvider.js", () => ({
   DiffViewProvider: vi.fn(),
   createFormatOnSaveReport: vi.fn(() => undefined),
+  diagnoseEditApplyFailure: vi.fn(async () => ({
+    apply_failure: {
+      document_dirty: false,
+      document_state: "matches_baseline",
+      disk_state: "changed",
+      concurrent_change: true,
+      retryable: true,
+    },
+    next_steps: [
+      "The file changed on disk after the proposal baseline was captured; re-read it before retrying.",
+    ],
+  })),
   diagnoseEditSaveFailure: vi.fn(
     async (params: { documentDirty: boolean; reviewState: string }) => ({
       save_failure: {
@@ -119,8 +131,10 @@ vi.mock("../../integrations/DiffViewProvider.js", () => ({
         disk_state: "unchanged",
         concurrent_change: false,
         review_state: params.reviewState,
+        dirty_document_state: "unavailable",
         vscode_error_detail: "unavailable",
         retryable: true,
+        retry_target: "editor_save",
       },
       next_steps: [
         "The dirty editor is preserved. Inspect the file/editor state before retrying.",
@@ -259,13 +273,20 @@ describe("createVscodeEditReviewProvider", () => {
     );
     const filePath = path.join(tempDir, "file.ts");
     fs.writeFileSync(filePath, "old", "utf-8");
+    let dirty = false;
     const doc = {
-      getText: vi.fn(() => "old"),
+      getText: vi.fn(() => (dirty ? "new" : "old")),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
       uri: { fsPath: filePath },
-      isDirty: true,
+      get isDirty() {
+        return dirty;
+      },
       save: vi.fn(async () => false),
     };
+    applyEdit.mockImplementationOnce(async () => {
+      dirty = true;
+      return true;
+    });
     openTextDocument.mockResolvedValue(doc);
 
     try {
@@ -300,6 +321,138 @@ describe("createVscodeEditReviewProvider", () => {
       });
       expect(doc.save).toHaveBeenCalledOnce();
       expect(fs.readFileSync(filePath, "utf-8")).toBe("old");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports observed disk drift when VS Code rejects an auto-approved edit", async () => {
+    const tempDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
+    );
+    const filePath = path.join(tempDir, "file.ts");
+    fs.writeFileSync(filePath, "old", "utf-8");
+    const doc = {
+      getText: vi.fn(() => "old"),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { fsPath: filePath },
+      isDirty: false,
+      save: vi.fn(async () => true),
+    };
+    applyEdit.mockResolvedValue(false);
+    openTextDocument.mockResolvedValue(doc);
+
+    try {
+      const provider = createVscodeEditReviewProvider();
+      const result = await provider.reviewAndApply({
+        mode: "auto",
+        absolutePath: filePath,
+        relativePath: "file.ts",
+        content: "new",
+        outsideWorkspace: false,
+        diagnosticDelay: 0,
+        sessionId: "session-1",
+        operation: "modified",
+      });
+
+      expect(result).toMatchObject({
+        error: "File edit failed",
+        path: "file.ts",
+        reason: "apply_edit_failed",
+        apply_failure: {
+          disk_state: "changed",
+          concurrent_change: true,
+        },
+        next_steps: [expect.stringContaining("re-read")],
+      });
+      expect(doc.save).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a dirty editor buffer instead of overwriting it during an auto-approved write", async () => {
+    const tempDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
+    );
+    const filePath = path.join(tempDir, "file.ts");
+    fs.writeFileSync(filePath, "disk baseline", "utf-8");
+    const doc = {
+      getText: vi.fn(() => "unsaved editor content"),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { fsPath: filePath },
+      isDirty: true,
+      save: vi.fn(async () => true),
+    };
+    openTextDocument.mockResolvedValue(doc);
+
+    try {
+      const provider = createVscodeEditReviewProvider();
+      const result = await provider.reviewAndApply({
+        mode: "auto",
+        absolutePath: filePath,
+        relativePath: "file.ts",
+        content: "proposed content",
+        outsideWorkspace: false,
+        diagnosticDelay: 0,
+        sessionId: "session-1",
+        operation: "modified",
+      });
+
+      expect(result).toEqual({
+        error: "File has unsaved editor changes",
+        path: "file.ts",
+        reason: "dirty_document_conflict",
+        document_dirty: true,
+        document_state: "differs_from_baseline",
+        next_steps: [
+          "The editor has unsaved user changes. Save or reconcile them before retrying the file-edit tool call.",
+        ],
+      });
+      expect(applyEdit).not.toHaveBeenCalled();
+      expect(doc.save).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stops interactive review before saving pre-existing editor changes", async () => {
+    const tempDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
+    );
+    const filePath = path.join(tempDir, "file.ts");
+    fs.writeFileSync(filePath, "disk baseline", "utf-8");
+    const doc = {
+      getText: vi.fn(() => "unsaved editor content"),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { fsPath: filePath },
+      isDirty: true,
+      save: vi.fn(async () => false),
+    };
+    openTextDocument.mockResolvedValue(doc);
+
+    try {
+      const provider = createVscodeEditReviewProvider();
+      const result = await provider.reviewAndApply({
+        mode: "interactive",
+        absolutePath: filePath,
+        relativePath: "file.ts",
+        content: "proposed content",
+        outsideWorkspace: false,
+        diagnosticDelay: 0,
+        sessionId: "session-1",
+        operation: "modified",
+      });
+
+      expect(result).toMatchObject({
+        error: "File has unsaved editor changes",
+        path: "file.ts",
+        reason: "dirty_document_conflict",
+        document_dirty: true,
+        document_state: "differs_from_baseline",
+      });
+      expect(doc.save).not.toHaveBeenCalled();
+      expect(DiffViewProvider).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -372,7 +525,7 @@ describe("createVscodeEditReviewProvider", () => {
       getText: vi.fn(() => "old"),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
       uri: { fsPath: filePath },
-      isDirty: true,
+      isDirty: false,
       save: vi.fn(async () => true),
     };
     openTextDocument.mockResolvedValue(doc);

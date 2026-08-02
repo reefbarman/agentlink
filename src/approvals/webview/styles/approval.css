@@ -455,6 +455,17 @@ body {
 .command-context-detail-row strong {
   color: var(--vscode-foreground);
 }
+.command-recovery-warning {
+  margin: -4px 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-editorWarning-border, #cca700);
+  border-radius: 6px;
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-background, #5a4a00) 35%,
+    transparent
+  );
+}
 
 /* ── Terminal-style command box ───────────────────────────────────────── */
 

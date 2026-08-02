@@ -87,7 +87,7 @@ import {
 import { ProviderUsagePanel } from "./components/ProviderUsageBlock";
 import {
   QuestionCard,
-  type QuestionOtherContext,
+  type QuestionComposerState,
 } from "./components/QuestionCard";
 import { SessionHistory } from "./components/SessionHistory";
 import { StreamingStatusBar } from "./components/StreamingStatusBar";
@@ -107,9 +107,10 @@ import {
   addressChatPaneMessage,
   type ChatWebviewBootstrap,
 } from "../chatPaneProtocol";
-import type {
-  ChatTabActionConfirmationRequest,
-  ChatWorkspaceViewSnapshot,
+import {
+  selectedWorkspaceSessionId,
+  type ChatTabActionConfirmationRequest,
+  type ChatWorkspaceViewSnapshot,
 } from "../chatTabProtocol";
 import { InactiveChatProjectionCache } from "./InactiveChatProjectionCache";
 import { ChatProjectionStateCache } from "./ChatProjectionStateCache";
@@ -263,16 +264,6 @@ export {
   shouldDropSessionScopedEvent,
   shouldProjectBackgroundCompletion,
 };
-
-export function selectedWorkspaceSessionId(
-  snapshot: ChatWorkspaceViewSnapshot | null,
-  pinnedTabId?: string,
-): string | null {
-  const selectedTabId = pinnedTabId ?? snapshot?.focusedTabId;
-  return (
-    snapshot?.tabs.find((tab) => tab.tabId === selectedTabId)?.sessionId ?? null
-  );
-}
 
 export function queuedMessagesReadyToDrain(
   queue: MessageQueueItem[],
@@ -526,7 +517,7 @@ export function App({
   const approvalResizeCleanupRef = useRef<(() => void) | null>(null);
   const forwardedFollowUpRef = useRef("");
   const [questionContextMode, setQuestionContextMode] =
-    useState<QuestionOtherContext | null>(null);
+    useState<QuestionComposerState | null>(null);
   const [questionAttachments, setQuestionAttachments] = useState<
     Record<string, { paths: string[]; media: ComposerMedia[] }>
   >({});
@@ -877,6 +868,7 @@ export function App({
           break;
         }
         case "agentRestoreSessionStart":
+          startupRestorePendingRef.current = true;
           dispatch({ type: "SET_RESTORING_SESSION", restoring: true });
           break;
         case "agentRestoreSessionDone":
@@ -2697,8 +2689,6 @@ export function App({
 
   const handleSwitchMode = useCallback(
     (slug: string) => {
-      startupRestorePendingRef.current = false;
-      dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
       if (stateRef.current.sessionId) {
         vscodeApi.postMessage(
           toVsCodeSelectionMessage({ type: "mode", mode: slug }),
@@ -3978,7 +3968,15 @@ export function App({
                       ],
                     ),
                   )}
-                  onEditOtherContext={setQuestionContextMode}
+                  integratedComposer
+                  onComposerStateChange={(next) =>
+                    setQuestionContextMode((current) =>
+                      current?.revision === next.revision &&
+                      current.questionId === next.questionId
+                        ? current
+                        : next,
+                    )
+                  }
                   remoteProgress={
                     remoteQuestionProgress &&
                     remoteQuestionProgress.id === state.questionRequest.id
@@ -4007,9 +4005,19 @@ export function App({
                       string | string[] | number | boolean | undefined
                     >,
                     notes: Record<string, string>,
+                    currentAttachments,
                   ) => {
+                    const attachmentsByQuestion = currentAttachments
+                      ? {
+                          ...questionAttachments,
+                          [currentAttachments.questionId]: {
+                            paths: currentAttachments.paths,
+                            media: currentAttachments.media,
+                          },
+                        }
+                      : questionAttachments;
                     const attachments = Object.fromEntries(
-                      Object.entries(questionAttachments).flatMap(
+                      Object.entries(attachmentsByQuestion).flatMap(
                         ([questionId, value]) => {
                           const items = [
                             ...value.paths.map((path) => ({
@@ -4157,28 +4165,30 @@ export function App({
                   }}
                 />
               )}
-              {state.chatState.interrupted && !state.streaming && (
-                <div class="interrupted-session-banner">
-                  <i class="codicon codicon-debug-restart" />
-                  <div>
-                    <strong>Session interrupted</strong>
-                    <span>
-                      The previous agent turn stopped before it finished. Resume
-                      to let the agent inspect current state and continue
-                      safely.
-                    </span>
+              {state.chatState.interrupted &&
+                !state.streaming &&
+                !state.restoringSession && (
+                  <div class="interrupted-session-banner">
+                    <i class="codicon codicon-debug-restart" />
+                    <div>
+                      <strong>Session interrupted</strong>
+                      <span>
+                        The previous agent turn stopped before it finished.
+                        Resume to let the agent inspect current state and
+                        continue safely.
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      class="interrupted-session-resume"
+                      onClick={handleResumeInterruptedSession}
+                      title="Resume interrupted session"
+                    >
+                      Resume
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    class="interrupted-session-resume"
-                    onClick={handleResumeInterruptedSession}
-                    title="Resume interrupted session"
-                  >
-                    Resume
-                  </button>
-                </div>
-              )}
-              {state.streaming && (
+                )}
+              {state.streaming && !state.questionRequest && (
                 <StreamingStatusBar
                   messages={state.messages}
                   statusOverride={state.statusOverride}
@@ -4204,10 +4214,12 @@ export function App({
                 questionContextMode
                   ? ({
                       key: `${state.questionRequest?.id ?? "question"}:${questionContextMode.questionId}`,
+                      questionId: questionContextMode.questionId,
                       title: "Adding context to agent question",
                       placeholder:
                         "Add details, paste a screenshot, or attach supporting files…",
                       initialText: questionContextMode.initialText,
+                      focusComposer: questionContextMode.focusComposer,
                       initialAttachments:
                         questionAttachments[questionContextMode.questionId]
                           ?.paths,
@@ -4229,9 +4241,15 @@ export function App({
                             media: media ?? [],
                           },
                         }));
-                        setQuestionContextMode(null);
                       },
                       onCancel: () => setQuestionContextMode(null),
+                      actions: {
+                        canGoBack: questionContextMode.canGoBack,
+                        onBack: questionContextMode.onBack,
+                        primaryLabel: questionContextMode.primaryLabel,
+                        primaryDisabled: questionContextMode.primaryDisabled,
+                        onPrimary: questionContextMode.onPrimary,
+                      },
                     } satisfies ComposerContextMode)
                   : null
               }

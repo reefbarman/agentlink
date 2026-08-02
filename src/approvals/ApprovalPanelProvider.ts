@@ -4,6 +4,7 @@ import type {
   ApprovalKind,
   ApprovalProjectContext,
   ApprovalRequest,
+  CommandRecoveryAttempt,
   CommandReviewSummary,
   DecisionMessage,
   InlineCommandFilePreview,
@@ -141,6 +142,7 @@ interface InternalRequest {
   backgroundTask?: string;
   deferApprovalRecording?: boolean;
   bypassRecentApproval?: boolean;
+  skipApprovalRecording?: boolean;
   id: string;
   sessionId?: string;
   sourceProject?: ApprovalProjectContext;
@@ -158,6 +160,7 @@ interface InternalRequest {
   cwd?: string;
   /** Automatic review result shown when the command still needs a human. */
   commandReview?: CommandReviewSummary;
+  recoveryAttempt?: CommandRecoveryAttempt;
   /** Concise guardrail reason shown instead of reviewer output. */
   humanOnlyReason?: string;
   /** Fingerprint of the applicable command rules when this action was reviewed. */
@@ -285,6 +288,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       cwd?: string;
       commandReview?: CommandReviewSummary;
       humanOnlyReason?: string;
+      recoveryAttempt?: CommandRecoveryAttempt;
       commandPolicyFingerprint?: string;
       security?: TerminalExecutionSecuritySummary;
       sessionId?: string;
@@ -293,6 +297,8 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       deferApprovalRecording?: boolean;
       /** Require a new decision instead of consuming the recent-approval cache. */
       bypassRecentApproval?: boolean;
+      /** Do not retain this one-time decision for later commands. */
+      skipApprovalRecording?: boolean;
     },
   ): {
     promise: Promise<CommandApprovalResponse>;
@@ -316,12 +322,14 @@ export class ApprovalPanelProvider implements vscode.Disposable {
         cwd: options?.cwd,
         commandReview: options?.commandReview,
         humanOnlyReason: options?.humanOnlyReason,
+        recoveryAttempt: options?.recoveryAttempt,
         commandPolicyFingerprint: options?.commandPolicyFingerprint,
         security: options?.security,
         sessionId: options?.sessionId,
         signal: options?.signal,
         deferApprovalRecording: options?.deferApprovalRecording,
         bypassRecentApproval: options?.bypassRecentApproval,
+        skipApprovalRecording: options?.skipApprovalRecording,
       },
       (request, response) => {
         pendingRecording = {
@@ -337,6 +345,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
         if (recordingCommitted || !pendingRecording) return;
         recordingCommitted = true;
         if (
+          !pendingRecording.request.skipApprovalRecording &&
           !pendingRecording.response.editedCommand &&
           !pendingRecording.response.coordinatorApproval
         ) {
@@ -801,6 +810,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       cwd: request.cwd,
       commandReview: request.commandReview,
       humanOnlyReason: request.humanOnlyReason,
+      recoveryAttempt: request.recoveryAttempt,
       security: request.security,
       managedNetwork: request.managedNetwork,
       networkReview: request.networkReview,

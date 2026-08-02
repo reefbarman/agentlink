@@ -30,7 +30,9 @@ const mocks = vi.hoisted(() => ({
   listTools: vi.fn(),
   listResources: vi.fn(),
   listPrompts: vi.fn(),
-  callTool: vi.fn<() => Promise<CallToolResult>>(async () => ({ content: [] })),
+  callTool: vi.fn<(...args: unknown[]) => Promise<CallToolResult>>(
+    async () => ({ content: [] }),
+  ),
   close: vi.fn(async () => {}),
 }));
 
@@ -60,8 +62,8 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
     async listPrompts(params?: { cursor?: string }): Promise<unknown> {
       return mocks.listPrompts(params);
     }
-    async callTool(): Promise<unknown> {
-      return mocks.callTool();
+    async callTool(...args: unknown[]): Promise<unknown> {
+      return mocks.callTool(...args);
     }
     setRequestHandler(): void {}
     setNotificationHandler(): void {}
@@ -235,6 +237,146 @@ describe("McpClientHub protocol correctness", () => {
     expect(hub.isToolParallelSafe("fixture", "write")).toBe(true);
     expect(hub.isToolReadOnly("fixture", "write")).toBe(false);
     expect(hub.getReadOnlyToolDefs()).toEqual([]);
+  });
+
+  it("forwards the configured bounded timeout and exact nested arguments", async () => {
+    const input = {
+      import_settings: {
+        textureType: "Default",
+        sRGBTexture: true,
+        nested_values: [false, 0, "", null],
+      },
+    };
+    const expectedArguments = structuredClone(input);
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([{ ...config, timeout: 300_000 }]);
+
+    await hub.callTool("fixture__set_import_settings", input);
+
+    expect(mocks.callTool).toHaveBeenCalledWith(
+      {
+        name: "set_import_settings",
+        arguments: expectedArguments,
+      },
+      undefined,
+      { timeout: 299_000 },
+    );
+  });
+
+  it("uses the SDK-compatible default timeout when no server timeout is configured", async () => {
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([config]);
+
+    await hub.callTool("fixture__read", {});
+
+    expect(mocks.callTool).toHaveBeenCalledWith(
+      { name: "read", arguments: {} },
+      undefined,
+      { timeout: 60_000 },
+    );
+  });
+
+  it("caps oversized raw config timeouts without logging every call", async () => {
+    const hub = new McpClientHub(new FakeMemento());
+    const log = vi.fn();
+    hub.onLog = log;
+    await hub.connect([{ ...config, timeout: 9_999_999 }]);
+
+    await hub.callTool("fixture__read", {});
+    await hub.callTool("fixture__read", {});
+
+    expect(mocks.callTool).toHaveBeenCalledWith(
+      { name: "read", arguments: {} },
+      undefined,
+      { timeout: 299_000 },
+    );
+    expect(log).not.toHaveBeenCalledWith(
+      "[mcp:fixture] configured timeout 9999999ms normalized to 299000ms",
+    );
+  });
+
+  it("returns a structured unknown-completion result when the MCP request times out", async () => {
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([{ ...config, timeout: 300_000 }]);
+    mocks.callTool.mockRejectedValueOnce(
+      new McpError(ErrorCode.RequestTimeout, "Request timed out"),
+    );
+
+    const result = await hub.callTool("fixture__write", {});
+
+    expect(result).toMatchObject({
+      isError: true,
+      error: {
+        kind: "mcp_request_timeout",
+        message: "MCP tool 'write' timed out after 299000ms.",
+      },
+      data: {
+        error: "mcp_request_timeout",
+        server: "fixture",
+        tool: "write",
+        timeoutMs: 299_000,
+        completionState: "unknown",
+        retrySafe: false,
+      },
+    });
+  });
+
+  it("returns a structured cancellation result when the caller aborts", async () => {
+    const controller = new AbortController();
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([config]);
+    controller.abort();
+    mocks.callTool.mockRejectedValueOnce(
+      new McpError(ErrorCode.RequestTimeout, "This call was aborted"),
+    );
+
+    const result = await hub.callTool(
+      "fixture__write",
+      {},
+      {
+        signal: controller.signal,
+      },
+    );
+
+    expect(result).toMatchObject({
+      isError: true,
+      error: {
+        kind: "mcp_request_cancelled",
+        message: "MCP tool 'write' was cancelled.",
+      },
+      data: {
+        error: "mcp_request_cancelled",
+        server: "fixture",
+        tool: "write",
+        completionState: "unknown",
+        retrySafe: false,
+      },
+    });
+  });
+
+  it("returns a structured unknown-completion result when the MCP connection closes", async () => {
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([config]);
+    mocks.callTool.mockRejectedValueOnce(
+      new McpError(ErrorCode.ConnectionClosed, "Connection closed"),
+    );
+
+    const result = await hub.callTool("fixture__write", {});
+
+    expect(result).toMatchObject({
+      isError: true,
+      error: {
+        kind: "mcp_connection_closed",
+        message: "MCP connection closed while calling 'write'.",
+      },
+      data: {
+        error: "mcp_connection_closed",
+        server: "fixture",
+        tool: "write",
+        completionState: "unknown",
+        retrySafe: false,
+      },
+    });
   });
 
   it("validates output schemas from every paginated tool page", async () => {

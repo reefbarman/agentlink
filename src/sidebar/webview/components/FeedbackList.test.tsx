@@ -28,6 +28,41 @@ function feedbackEntry(overrides: Partial<FeedbackEntry> = {}): FeedbackEntry {
 }
 
 describe("FeedbackList", () => {
+  it("filters feedback by selected priority in the all view", () => {
+    render(
+      <FeedbackList
+        entries={[
+          feedbackEntry({
+            id: "p1-feedback-id",
+            triaged: true,
+            priority: "P1",
+            triaged_at: "2026-01-02T00:00:00.000Z",
+          }),
+          feedbackEntry({
+            id: "p2-feedback-id",
+            feedback: "P2 feedback text",
+            triaged: true,
+            priority: "P2",
+            triaged_at: "2026-01-02T00:00:00.000Z",
+          }),
+        ]}
+        postCommand={vi.fn() as PostCommand}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("State"), {
+      target: { value: "all" },
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: "P2" }));
+
+    expect(screen.getByText("Feedback text")).not.toBeNull();
+    expect(screen.queryByText("P2 feedback text")).toBeNull();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "P2" }));
+
+    expect(screen.getByText("P2 feedback text")).not.toBeNull();
+  });
+
   it.each([
     ["untriaged", feedbackEntry()],
     [

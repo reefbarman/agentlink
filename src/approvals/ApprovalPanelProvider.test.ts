@@ -667,6 +667,47 @@ describe("ApprovalPanelProvider project attribution", () => {
     expect(shown).toEqual(["npm test"]);
   });
 
+  it("does not retain a one-time command approval when recording is disabled", async () => {
+    const { provider } = createProvider(projectContext);
+    const shown: string[] = [];
+
+    provider.onForwardApproval = ({ request }, respond) => {
+      shown.push(request.command ?? "");
+      respond({
+        type: "decision",
+        id: request.id,
+        approvalKind: request.kind,
+        decision: "run-once",
+      });
+    };
+
+    const first = provider.enqueueCommandApproval("npm test", "npm test", {
+      sessionId: "session-a",
+      deferApprovalRecording: true,
+      skipApprovalRecording: true,
+    });
+    await expect(first.promise).resolves.toEqual({ decision: "run-once" });
+    first.commitApprovalRecording();
+
+    expect(
+      provider.isRecentlyApproved(
+        "command",
+        "npm test",
+        "project-a",
+        "unspecified",
+        "unspecified",
+        "session-a",
+      ),
+    ).toBe(false);
+
+    await expect(
+      provider.enqueueCommandApproval("npm test", "npm test", {
+        sessionId: "session-a",
+      }).promise,
+    ).resolves.toEqual({ decision: "run-once" });
+    expect(shown).toEqual(["npm test", "npm test"]);
+  });
+
   it("reuses only the exact committed command approval identity during preflight", async () => {
     const { provider, statusBarManager } = createProvider(projectContext);
     const forwarded: ApprovalRequest[] = [];

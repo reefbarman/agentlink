@@ -5,11 +5,13 @@ import * as vscode from "vscode";
 import {
   DiffViewProvider,
   createFormatOnSaveReport,
+  diagnoseEditApplyFailure,
   diagnoseEditSaveFailure,
   snapshotDiagnostics,
 } from "../../integrations/DiffViewProvider.js";
-import type {
-  EditReviewDecision,
+import {
+  normalizeEditorText,
+  type EditReviewDecision,
   EditReviewParams,
   EditReviewProvider,
   EditorRevealParams,
@@ -322,6 +324,27 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
           const doc = await vscode.workspace.openTextDocument(
             params.absolutePath,
           );
+          const documentMatchesBaseline =
+            normalizeEditorText(doc.getText()) ===
+            normalizeEditorText(baselineContent);
+          if (doc.isDirty || !documentMatchesBaseline) {
+            return {
+              error: doc.isDirty
+                ? "File has unsaved editor changes"
+                : "Editor content differs from disk",
+              path: params.relativePath,
+              reason: "dirty_document_conflict",
+              document_dirty: doc.isDirty,
+              document_state: documentMatchesBaseline
+                ? "matches_baseline"
+                : "differs_from_baseline",
+              next_steps: [
+                doc.isDirty
+                  ? "The editor has unsaved user changes. Save or reconcile them before retrying the file-edit tool call."
+                  : "The editor content differs from the disk baseline. Reload or reconcile the editor before retrying the file-edit tool call.",
+              ],
+            };
+          }
           await vscode.window.showTextDocument(
             doc,
             withPrimaryEditorColumn({
@@ -346,10 +369,16 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                 error: "File edit failed",
                 path: params.relativePath,
                 reason: "apply_edit_failed",
+                ...(await diagnoseEditApplyFailure({
+                  absolutePath: params.absolutePath,
+                  baselineContent,
+                  document: doc,
+                })),
               };
             }
           }
           if (doc.isDirty) {
+            const saveAttemptContent = doc.getText();
             const saved = await doc.save();
             if (!saved) {
               return {
@@ -360,6 +389,8 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                   absolutePath: params.absolutePath,
                   baselineContent,
                   documentDirty: doc.isDirty,
+                  saveAttemptContent,
+                  currentDocumentContent: doc.getText(),
                   reviewState: "dirty_document_preserved",
                 })),
               };
@@ -411,6 +442,31 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
         };
 
         let baseline = await readBaseline();
+        const existingDocument = baseline.exists
+          ? await vscode.workspace.openTextDocument(params.absolutePath)
+          : undefined;
+        const documentMatchesBaseline =
+          !existingDocument ||
+          normalizeEditorText(existingDocument.getText()) ===
+            normalizeEditorText(baseline.content);
+        if (existingDocument?.isDirty || !documentMatchesBaseline) {
+          return {
+            error: existingDocument?.isDirty
+              ? "File has unsaved editor changes"
+              : "Editor content differs from disk",
+            path: params.relativePath,
+            reason: "dirty_document_conflict",
+            document_dirty: existingDocument?.isDirty ?? false,
+            document_state: documentMatchesBaseline
+              ? "matches_baseline"
+              : "differs_from_baseline",
+            next_steps: [
+              existingDocument?.isDirty
+                ? "The editor has unsaved user changes. Save or reconcile them before retrying the file-edit tool call."
+                : "The editor content differs from the disk baseline. Reload or reconcile the editor before retrying the file-edit tool call.",
+            ],
+          };
+        }
         let prepared = await prepare(baseline.content);
         if (prepared.status === "abort") return prepared.result;
         let content = prepared.content;
@@ -435,13 +491,11 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
               baselineContent: baseline.content,
               proposedContent: content,
             };
-            const existingDocument = baseline.exists
-              ? await vscode.workspace.openTextDocument(params.absolutePath)
-              : undefined;
             const documentMatchesBaseline =
               !existingDocument ||
               (!existingDocument.isDirty &&
-                existingDocument.getText() === baseline.content);
+                normalizeEditorText(existingDocument.getText()) ===
+                  normalizeEditorText(baseline.content));
             if (
               documentMatchesBaseline &&
               authorization.consume(currentProposal)
@@ -484,21 +538,31 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                     error: "File edit failed",
                     path: params.relativePath,
                     reason: "apply_edit_failed",
+                    ...(await diagnoseEditApplyFailure({
+                      absolutePath: params.absolutePath,
+                      baselineContent: baseline.content,
+                      document: doc,
+                    })),
                   };
                 }
               }
-              if (doc.isDirty && !(await doc.save())) {
-                return {
-                  error: "File save failed",
-                  path: params.relativePath,
-                  reason: "save_failed",
-                  ...(await diagnoseEditSaveFailure({
-                    absolutePath: params.absolutePath,
-                    baselineContent: baseline.content,
-                    documentDirty: doc.isDirty,
-                    reviewState: "dirty_document_preserved",
-                  })),
-                };
+              if (doc.isDirty) {
+                const saveAttemptContent = doc.getText();
+                if (!(await doc.save())) {
+                  return {
+                    error: "File save failed",
+                    path: params.relativePath,
+                    reason: "save_failed",
+                    ...(await diagnoseEditSaveFailure({
+                      absolutePath: params.absolutePath,
+                      baselineContent: baseline.content,
+                      documentDirty: doc.isDirty,
+                      saveAttemptContent,
+                      currentDocumentContent: doc.getText(),
+                      reviewState: "dirty_document_preserved",
+                    })),
+                  };
+                }
               }
               const finalContent = await fs.readFile(
                 params.absolutePath,

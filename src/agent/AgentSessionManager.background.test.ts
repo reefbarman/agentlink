@@ -1,5 +1,13 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  actionApprovalActionKey,
+  actionApprovalPolicyKey,
+} from "../approvals/actionApprovalReview.js";
 import { AgentSessionManager } from "./AgentSessionManager.js";
 import { ProviderRegistry } from "./providers/index.js";
 import {
@@ -2107,6 +2115,259 @@ describe("AgentSessionManager background agents", () => {
       }),
       spawned.sessionId,
     );
+  });
+
+  it("resolves ACP read permissions against the path-access policy", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      defaultAgent: "acp:claude",
+      acpAgents: [
+        {
+          id: "claude",
+          label: "Claude Code",
+          command: "claude-agent-acp",
+          readonlyOnly: false,
+        },
+      ],
+    });
+    const permissionOutcomes: unknown[] = [];
+    const options = [
+      { optionId: "allow", name: "Allow", kind: "allow_once" },
+      { optionId: "reject", name: "Reject", kind: "reject_once" },
+    ];
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        for (const toolCall of [
+          {
+            toolCallId: "tc-read-workspace",
+            kind: "read",
+            title: "Read workspace file",
+            rawInput: { file_path: "src/main.ts" },
+          },
+          {
+            toolCallId: "tc-read-trusted",
+            kind: "read",
+            title: "Read trusted file",
+            rawInput: { file_path: "/trusted/notes.md" },
+          },
+          {
+            toolCallId: "tc-read-outside",
+            kind: "read",
+            title: "Read outside file",
+            rawInput: { file_path: "/outside/secret.env" },
+          },
+          {
+            toolCallId: "tc-read-opaque",
+            kind: "read",
+            title: "Read something",
+            rawInput: { query: "no path here" },
+          },
+        ]) {
+          permissionOutcomes.push(
+            await request.onRequestPermission({ toolCall, options }),
+          );
+        }
+      }),
+    };
+    const enqueuePathApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "allow-once" }),
+      id: "path-1",
+    }));
+    const approvalManager = {
+      bindSessionProject: vi.fn(),
+      touchSession: vi.fn(),
+      isPathTrusted: vi.fn((_sessionId: string, target: string) =>
+        target.startsWith("/trusted/"),
+      ),
+    };
+    const onApprovalRequest = vi.fn(async () => "allow");
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    const parent = await mgr.createSession("code");
+    mgr.setToolContext({
+      ...toolCtx,
+      approvalManager: approvalManager as any,
+      approvalPanel: { enqueuePathApproval } as any,
+      onApprovalRequest,
+      inheritSessionApprovalState: vi.fn(),
+    });
+
+    const spawned = await mgr.spawnBackground(
+      {
+        task: "external read",
+        message: "read these",
+        provider: "acp:claude",
+      },
+      parent.id,
+    );
+    await mgr.waitForBackground(spawned.sessionId);
+
+    expect(permissionOutcomes).toEqual([
+      // Workspace-relative target: allowed without any prompt.
+      { outcome: { outcome: "selected", optionId: "allow" } },
+      // Outside target covered by a path trust rule: allowed without prompt.
+      { outcome: { outcome: "selected", optionId: "allow" } },
+      // Untrusted outside target: resolved through the path-access card.
+      { outcome: { outcome: "selected", optionId: "allow" } },
+      // No determinable target: falls back to the generic external-tool card.
+      { outcome: { outcome: "selected", optionId: "allow" } },
+    ]);
+    expect(approvalManager.isPathTrusted).toHaveBeenCalledWith(
+      spawned.sessionId,
+      "/trusted/notes.md",
+    );
+    expect(enqueuePathApproval).toHaveBeenCalledTimes(1);
+    expect(enqueuePathApproval).toHaveBeenCalledWith(
+      "/outside/secret.env",
+      spawned.sessionId,
+      undefined,
+      "invalid-action",
+    );
+    expect(onApprovalRequest).toHaveBeenCalledTimes(1);
+    expect(onApprovalRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "mcp",
+        toolOrigin: "acp",
+        mcpServerName: "Claude Code",
+        mcpToolName: "Read something",
+        backgroundTask: "external read",
+      }),
+      spawned.sessionId,
+    );
+    const audit = mgr.getSession(spawned.sessionId)?.fleetMetadata?.policyAudit;
+    expect(audit).toEqual([
+      expect.objectContaining({
+        decision: "allowed",
+        operation: "acp:read",
+        reason: expect.stringContaining("/outside/secret.env"),
+      }),
+    ]);
+  });
+
+  it("lets the guardian auto-approve untrusted outside ACP reads", async () => {
+    const outsideRoot = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-acp-read-")),
+    );
+    const outsideFile = path.join(outsideRoot, "reference.md");
+    fs.writeFileSync(outsideFile, "reference notes\n");
+    try {
+      configHost.getBackgroundAgentSettings.mockReturnValue({
+        defaultAgent: "acp:claude",
+        acpAgents: [
+          { id: "claude", command: "claude-agent-acp", readonlyOnly: false },
+        ],
+      });
+      const permissionOutcomes: unknown[] = [];
+      const acpBackgroundRunner = {
+        run: vi.fn(async (request: any) => {
+          permissionOutcomes.push(
+            await request.onRequestPermission({
+              toolCall: {
+                toolCallId: "tc-read-outside",
+                kind: "read",
+                title: "Read reference notes",
+                rawInput: { file_path: outsideFile },
+              },
+              options: [
+                { optionId: "allow", name: "Allow", kind: "allow_once" },
+                { optionId: "reject", name: "Reject", kind: "reject_once" },
+              ],
+            }),
+          );
+        }),
+      };
+      const enqueuePathApproval = vi.fn();
+      const approvalPolicy = {
+        commandApprovalPolicy: "approve-for-me" as const,
+        approvalPolicy: "on-request" as const,
+        approvalReviewer: "auto-review" as const,
+        executionPreset: "workspace-write" as const,
+      };
+      const actionApprovalReviewer = {
+        review: vi.fn(async (input: any) => ({
+          disposition: "reviewed" as const,
+          binding: {
+            sessionId: input.sessionId,
+            policyKey: actionApprovalPolicyKey(input.policy),
+            actionKey: actionApprovalActionKey(input)!,
+            kind: input.kind,
+          },
+          result: {
+            outcome: "allow" as const,
+            risk: "low" as const,
+            userAuthorization: "high" as const,
+            rationale: "Documentation read",
+            status: "reviewed" as const,
+            model: "guardian-model",
+          },
+        })),
+      };
+      const mgr = new AgentSessionManager(
+        config,
+        "/tmp",
+        undefined,
+        false,
+        undefined,
+        undefined,
+        { maxConcurrent: 3 },
+        { host: { config: configHost, acpBackgroundRunner } },
+      );
+      const parent = await mgr.createSession("code");
+      mgr.setToolContext({
+        ...toolCtx,
+        approvalManager: {
+          bindSessionProject: vi.fn(),
+          touchSession: vi.fn(),
+          isPathTrusted: vi.fn(() => false),
+        } as any,
+        approvalPanel: { enqueuePathApproval } as any,
+        actionApprovalReviewer: actionApprovalReviewer as any,
+        getCommandApprovalMode: vi.fn(() => approvalPolicy),
+        isSessionActive: vi.fn(() => true),
+        onApprovalRequest: vi.fn(),
+        inheritSessionApprovalState: vi.fn(),
+      });
+
+      const spawned = await mgr.spawnBackground(
+        {
+          task: "external research",
+          message: "read the reference",
+          provider: "acp:claude",
+        },
+        parent.id,
+      );
+      await mgr.waitForBackground(spawned.sessionId);
+
+      expect(permissionOutcomes).toEqual([
+        { outcome: { outcome: "selected", optionId: "allow" } },
+      ]);
+      expect(actionApprovalReviewer.review).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "outside-read",
+          requestingTool: "acp_read",
+          operation: expect.objectContaining({ kind: "read-file" }),
+        }),
+      );
+      expect(enqueuePathApproval).not.toHaveBeenCalled();
+      const audit = mgr.getSession(spawned.sessionId)?.fleetMetadata
+        ?.policyAudit;
+      expect(audit).toEqual([
+        expect.objectContaining({
+          decision: "allowed",
+          operation: "acp:read",
+          reason: expect.stringContaining("guardian"),
+        }),
+      ]);
+    } finally {
+      fs.rmSync(outsideRoot, { recursive: true, force: true });
+    }
   });
 
   it("lets read-only ACP run alongside a writable ACP lease", async () => {

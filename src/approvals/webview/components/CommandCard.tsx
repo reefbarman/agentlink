@@ -97,6 +97,7 @@ export function CommandCard({
   onSuggestRegex,
 }: CommandCardProps) {
   const originalCommand = request.command ?? "";
+  const recoveryAttempt = request.recoveryAttempt;
   const [command, setCommand] = useState(originalCommand);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -256,7 +257,7 @@ export function CommandCard({
   }, []);
 
   const rulesJsx =
-    subCommands.length > 0 ? (
+    !recoveryAttempt && subCommands.length > 0 ? (
       <>
         {subCommands.map((entry, i) => {
           const state = suggestStates[i] ?? { status: "idle" };
@@ -370,8 +371,8 @@ export function CommandCard({
       targetPath={request.targetPath}
       purpose="Run a terminal command"
       rulesContent={rulesJsx}
-      rulesModified={rulesModified}
-      primaryLabel="Run"
+      rulesModified={recoveryAttempt ? false : rulesModified}
+      primaryLabel={recoveryAttempt ? "Run Again" : "Run"}
       primaryWithRulesLabel="Save Rules & Run"
       onAccept={handleRun}
       onSaveAndAccept={handleSaveAndRun}
@@ -435,15 +436,20 @@ export function CommandCard({
         </div>
       </div>
 
-      {(security || reason || commandReview || humanOnlyReason) && (
+      {(security ||
+        reason ||
+        commandReview ||
+        humanOnlyReason ||
+        recoveryAttempt) && (
         <CommandExecutionContext
           security={security}
           reason={reason}
           review={commandReview}
           humanOnlyReason={humanOnlyReason}
+          recoveryAttempt={recoveryAttempt}
           edited={isEdited}
           nativeEscalation={nativeEscalation}
-          approvalRulesSupported={nativeEscalation}
+          approvalRulesSupported={nativeEscalation && !recoveryAttempt}
         />
       )}
     </ApprovalLayout>

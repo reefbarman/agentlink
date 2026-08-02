@@ -501,6 +501,141 @@ describe("SandboxTerminalCoordinator", () => {
     ).toBe("/workspace/subdir");
   });
 
+  it("admits unnamed foreground callers in FIFO order after capacity is released", async () => {
+    const test = harness();
+    const running = Array.from({ length: 4 }, (_, index) =>
+      test.coordinator.executeCommand({
+        owner: undefined,
+        command: `printf ${index}`,
+        cwd: `/workspace/${index}`,
+        sandboxSessionId: "agent-session",
+      }),
+    );
+    await flush();
+    expect(test.processes).toHaveLength(4);
+
+    const fifth = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf fifth",
+      cwd: "/workspace/fifth",
+      sandboxSessionId: "agent-session",
+    });
+    const sixth = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf sixth",
+      cwd: "/workspace/sixth",
+      sandboxSessionId: "agent-session",
+    });
+    await flush();
+    expect(test.processes).toHaveLength(4);
+
+    await finish(test.processes[0], "first\r\n");
+    await vi.waitFor(() => expect(test.processes).toHaveLength(5));
+    expect(test.processes[4]?.identity.channelId).toBe("sandbox-5");
+    await finish(test.processes[1], "second\r\n");
+    await vi.waitFor(() => expect(test.processes).toHaveLength(6));
+    expect(test.processes[5]?.identity.channelId).toBe("sandbox-6");
+
+    await Promise.all([
+      finish(test.processes[2], "third\r\n"),
+      finish(test.processes[3], "fourth\r\n"),
+      finish(test.processes[4], "fifth\r\n"),
+      finish(test.processes[5], "sixth\r\n"),
+    ]);
+    await expect(Promise.all([...running, fifth, sixth])).resolves.toHaveLength(
+      6,
+    );
+  });
+
+  it("cancels an unnamed foreground admission without launching a process", async () => {
+    const test = harness();
+    const running = Array.from({ length: 4 }, (_, index) =>
+      test.coordinator.executeCommand({
+        owner: undefined,
+        command: `printf ${index}`,
+        cwd: `/workspace/${index}`,
+        sandboxSessionId: "agent-session",
+      }),
+    );
+    await flush();
+    const controller = new AbortController();
+    const cancelled = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf cancelled",
+      cwd: "/workspace/cancelled",
+      sandboxSessionId: "agent-session",
+      admissionSignal: controller.signal,
+    });
+    await flush();
+    controller.abort();
+    await expect(cancelled).rejects.toThrow("Terminal admission was cancelled");
+    expect(test.processes).toHaveLength(4);
+
+    await finish(test.processes[0], "first\r\n");
+    await Promise.all(
+      test.processes.slice(1).map((process) => finish(process)),
+    );
+    await Promise.all(running);
+  });
+
+  it("fails foreground admission immediately when every implicit blocker is backgrounded", async () => {
+    const test = harness();
+    await Promise.all(
+      Array.from({ length: 4 }, (_, index) =>
+        test.coordinator.executeCommand({
+          owner: undefined,
+          command: `printf ${index}`,
+          cwd: `/workspace/${index}`,
+          sandboxSessionId: "agent-session",
+          background: true,
+        }),
+      ),
+    );
+
+    await expect(
+      test.coordinator.executeCommand({
+        owner: undefined,
+        command: "printf exhausted",
+        cwd: "/workspace/exhausted",
+        sandboxSessionId: "agent-session",
+      }),
+    ).rejects.toThrow("Sandbox terminal pool exhausted");
+  });
+
+  it("reports unconsumed prepared reservations as busy", async () => {
+    const test = harness();
+    const prepared = await test.coordinator.prepareConfinementExecution(
+      {
+        owner: undefined,
+        command: "pwd",
+        cwd: "/workspace",
+        sandboxSessionId: "agent-session",
+      },
+      {
+        auditId: "audit-reserved",
+        route: "sandbox",
+        confinement: "verified-baseline",
+        routeReason: "verified-local-macos",
+        executionSurface: "verified-sandbox",
+        requiredAuthority: "sandbox",
+        permissionIntent: "default",
+        approvalRequirement: "policy",
+        authorityReason: "approval-policy",
+        approvalPolicySnapshot: "on-request",
+        approvalReviewerSnapshot: "auto-review",
+        executionPresetSnapshot: "workspace-write",
+        commandApprovalPolicySnapshot: "approve-for-me",
+        executionPolicy: "sandbox-baseline-v2",
+        preparedAt: 100,
+      },
+    );
+
+    expect(test.coordinator.listTerminals({ owner: undefined })).toEqual([
+      expect.objectContaining({ busy: true }),
+    ]);
+    prepared.dispose();
+  });
+
   it("bounds implicit channels and reclaims the oldest idle channel", async () => {
     const test = harness();
     const running = Array.from({ length: 4 }, (_, index) =>

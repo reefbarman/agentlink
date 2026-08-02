@@ -61,7 +61,7 @@ import {
 import { MessageQueuePanel } from "../../agent/webview/components/MessageQueuePanel";
 import {
   QuestionCard,
-  type QuestionOtherContext,
+  type QuestionComposerState,
 } from "../../agent/webview/components/QuestionCard";
 import { SessionHistory } from "../../agent/webview/components/SessionHistory";
 import { StreamingStatusBar } from "../../agent/webview/components/StreamingStatusBar";
@@ -1491,7 +1491,7 @@ export function BrowserGatewayApp({
     [],
   );
   const [questionContextMode, setQuestionContextMode] =
-    useState<QuestionOtherContext | null>(null);
+    useState<QuestionComposerState | null>(null);
   const [questionAttachments, setQuestionAttachments] = useState<
     Record<string, { paths: string[]; media: ComposerMedia[] }>
   >({});
@@ -7442,7 +7442,15 @@ export function BrowserGatewayApp({
                         ],
                       ),
                     )}
-                    onEditOtherContext={setQuestionContextMode}
+                    integratedComposer
+                    onComposerStateChange={(next) =>
+                      setQuestionContextMode((current) =>
+                        current?.revision === next.revision &&
+                        current.questionId === next.questionId
+                          ? current
+                          : next,
+                      )
+                    }
                     remoteProgress={
                       remoteQuestionProgress &&
                       remoteQuestionProgress.id === visibleQuestion.id
@@ -7464,9 +7472,18 @@ export function BrowserGatewayApp({
                         originTabId: snapshotOriginRef.current.tabId,
                       });
                     }}
-                    onSubmit={(id, answers, notes) => {
+                    onSubmit={(id, answers, notes, currentAttachments) => {
+                      const attachmentsByQuestion = currentAttachments
+                        ? {
+                            ...questionAttachments,
+                            [currentAttachments.questionId]: {
+                              paths: currentAttachments.paths,
+                              media: currentAttachments.media,
+                            },
+                          }
+                        : questionAttachments;
                       const attachments = Object.fromEntries(
-                        Object.entries(questionAttachments).flatMap(
+                        Object.entries(attachmentsByQuestion).flatMap(
                           ([questionId, value]) => {
                             const items = [
                               ...value.paths.map((path) => ({
@@ -7560,7 +7577,7 @@ export function BrowserGatewayApp({
                       </button>
                     </div>
                   )}
-                {streaming && !mobileReviewOpen ? (
+                {streaming && !visibleQuestion && !mobileReviewOpen ? (
                   <StreamingStatusBar
                     messages={messages}
                     statusOverride={statusOverride}
@@ -7603,10 +7620,12 @@ export function BrowserGatewayApp({
                       questionContextMode
                         ? ({
                             key: `${visibleQuestion?.id ?? "question"}:${questionContextMode.questionId}`,
+                            questionId: questionContextMode.questionId,
                             title: "Adding context to agent question",
                             placeholder:
                               "Add details, paste a screenshot, or attach supporting files…",
                             initialText: questionContextMode.initialText,
+                            focusComposer: questionContextMode.focusComposer,
                             initialAttachments:
                               questionAttachments[
                                 questionContextMode.questionId
@@ -7630,9 +7649,16 @@ export function BrowserGatewayApp({
                                   media: media ?? [],
                                 },
                               }));
-                              setQuestionContextMode(null);
                             },
                             onCancel: () => setQuestionContextMode(null),
+                            actions: {
+                              canGoBack: questionContextMode.canGoBack,
+                              onBack: questionContextMode.onBack,
+                              primaryLabel: questionContextMode.primaryLabel,
+                              primaryDisabled:
+                                questionContextMode.primaryDisabled,
+                              onPrimary: questionContextMode.onPrimary,
+                            },
                           } satisfies ComposerContextMode)
                         : null
                     }

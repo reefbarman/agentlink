@@ -40,12 +40,14 @@ import {
 } from "./useSlashCommandPopup";
 
 import type { CommandApprovalPolicy } from "../../../approvals/commandApprovalPolicy";
+import type { ComponentChildren } from "preact";
 import { ComposerBox } from "../../../shared/ui/ComposerBox";
 import { EmojiPopup } from "./EmojiPopup";
 import { FilePicker } from "./FilePicker";
 import type { Injection } from "../App";
 import { ModeSelector } from "./ModeSelector";
 import { ModelSelector } from "./ModelSelector";
+import type { QuestionAttachmentDraft } from "./QuestionCard";
 import { ReasoningEffortSelector } from "./ReasoningEffortSelector";
 import { SlashCommandPopup } from "./SlashCommandPopup";
 import { ToolbarControlButton } from "../../../shared/ui/ToolbarSelector";
@@ -156,6 +158,7 @@ export type ComposerSubmitHandler = (
 
 export interface ComposerContextMode {
   key: string;
+  questionId?: string;
   title: string;
   placeholder: string;
   initialText: string;
@@ -163,6 +166,15 @@ export interface ComposerContextMode {
   initialMedia?: ComposerMedia[];
   onSubmit: ComposerSubmitHandler;
   onCancel: () => void;
+  focusComposer?: boolean;
+  content?: ComponentChildren;
+  actions?: {
+    canGoBack: boolean;
+    onBack: (text: string, attachments: QuestionAttachmentDraft) => void;
+    primaryLabel: string;
+    primaryDisabled: boolean;
+    onPrimary: (text: string, attachments: QuestionAttachmentDraft) => void;
+  };
 }
 
 interface InputAreaProps {
@@ -428,6 +440,41 @@ export function InputArea({
     });
     return result;
   }, [mediaAttachments]);
+  const submitQuestionAction = useCallback(
+    (action: "back" | "primary") => {
+      if (!contextMode?.actions) return;
+      const submitAttachments = allowAttachments ? attachments : [];
+      const submitMedia = allowMediaPaste ? pendingMedia : undefined;
+      const attachmentDraft: QuestionAttachmentDraft = {
+        questionId:
+          contextMode.questionId ?? contextMode.key.split(":").at(-1) ?? "",
+        paths: submitAttachments,
+        media: submitMedia ?? [],
+      };
+      const trimmed = text.trim();
+      contextMode.onSubmit(
+        trimmed,
+        submitAttachments,
+        undefined,
+        undefined,
+        submitMedia,
+      );
+      if (action === "back") {
+        contextMode.actions.onBack(trimmed, attachmentDraft);
+      } else {
+        contextMode.actions.onPrimary(trimmed, attachmentDraft);
+      }
+    },
+    [
+      contextMode,
+      allowAttachments,
+      attachments,
+      allowMediaPaste,
+      pendingMedia,
+      text,
+    ],
+  );
+
   const matchedExecutableSlashCommand = useMemo(() => {
     if (!matchedSlashCommand) {
       return null;
@@ -499,9 +546,11 @@ export function InputArea({
       closeSlash();
       closePicker();
       closeEmoji();
-      requestAnimationFrame(() => {
-        focusAndAutosizeTextarea(textareaRef.current);
-      });
+      if (contextMode?.focusComposer !== false) {
+        requestAnimationFrame(() => {
+          focusAndAutosizeTextarea(textareaRef.current);
+        });
+      }
     } else {
       const normalDraft = normalDraftRef.current;
       if (normalDraft) {
@@ -824,7 +873,22 @@ export function InputArea({
       ) {
         return;
       }
-      if (submitOnEnter && e.key === "Enter" && !e.shiftKey) {
+      if (
+        contextMode?.actions &&
+        contextMode.actions.primaryLabel !== "Reject" &&
+        !(contextMode.actions.primaryDisabled && !hasSubmitContent) &&
+        e.key === "Enter" &&
+        (e.metaKey || e.ctrlKey)
+      ) {
+        e.preventDefault();
+        onComposerEvent?.("submit.key", { key: "Cmd/Ctrl+Enter" });
+        submitQuestionAction("primary");
+      } else if (
+        !contextMode?.actions &&
+        submitOnEnter &&
+        e.key === "Enter" &&
+        !e.shiftKey
+      ) {
         e.preventDefault();
         onComposerEvent?.("submit.key", { key: "Enter" });
         handleSubmit();
@@ -833,6 +897,9 @@ export function InputArea({
     [
       handleSubmit,
       submitOnEnter,
+      contextMode,
+      submitQuestionAction,
+      hasSubmitContent,
       pickerOpen,
       filteredSlashCommands,
       slashSelectedIdx,
@@ -1381,8 +1448,9 @@ export function InputArea({
 
   return (
     <div class="input-area">
+      {contextMode?.content}
       <div class="input-toolbar">
-        {contextMode && (
+        {contextMode && !contextMode.actions && (
           <div class="composer-context-mode" role="status">
             <i class="codicon codicon-comment-discussion" aria-hidden="true" />
             <span>{contextMode.title}</span>
@@ -1504,7 +1572,7 @@ export function InputArea({
           </button>
         )}
         <div class="input-toolbar-spacer" />
-        {contextMode && (
+        {contextMode && !contextMode.actions && (
           <button
             class="composer-context-cancel"
             onClick={contextMode.onCancel}
@@ -1681,7 +1749,7 @@ export function InputArea({
           onDrop={handleDrop}
         />
         <div class="composer-action-buttons">
-          {!contextMode && streaming && (
+          {(!contextMode || contextMode.actions) && streaming && (
             <button
               class="send-button stop-button"
               onClick={onStop}
@@ -1712,36 +1780,63 @@ export function InputArea({
                 <i class="codicon codicon-reply" />
               </button>
             )}
-          {(contextMode || !streaming || hasSubmitContent) && (
-            <button
-              class="send-button"
-              onClick={() => {
-                onComposerEvent?.("submit.click", {
-                  disabled: disabled || !hasSubmitContent,
-                });
-                handleSubmit();
-              }}
-              disabled={disabled || !hasSubmitContent}
-              title={
-                disabled
-                  ? (disabledReason ?? "Local execution unavailable")
-                  : contextMode
-                    ? submitOnEnter
-                      ? "Add context (Enter)"
-                      : "Add context"
-                    : submitOnEnter
-                      ? "Send message (Enter)"
-                      : "Send message"
-              }
-              type="button"
-            >
-              <i
-                class={`codicon ${contextMode ? "codicon-check" : "codicon-send"}`}
-              />
-            </button>
-          )}
+          {(!contextMode || !contextMode.actions) &&
+            (contextMode || !streaming || hasSubmitContent) && (
+              <button
+                class="send-button"
+                onClick={() => {
+                  onComposerEvent?.("submit.click", {
+                    disabled: disabled || !hasSubmitContent,
+                  });
+                  handleSubmit();
+                }}
+                disabled={disabled || !hasSubmitContent}
+                title={
+                  disabled
+                    ? (disabledReason ?? "Local execution unavailable")
+                    : contextMode
+                      ? submitOnEnter
+                        ? "Add context (Enter)"
+                        : "Add context"
+                      : submitOnEnter
+                        ? "Send message (Enter)"
+                        : "Send message"
+                }
+                type="button"
+              >
+                <i
+                  class={`codicon ${contextMode ? "codicon-check" : "codicon-send"}`}
+                />
+              </button>
+            )}
         </div>
       </ComposerBox>
+      {contextMode?.actions && (
+        <div class="question-nav question-composer-nav">
+          <button
+            class="question-nav-btn"
+            type="button"
+            disabled={!contextMode.actions.canGoBack}
+            onClick={() => submitQuestionAction("back")}
+          >
+            Back
+          </button>
+          <button
+            class={
+              contextMode.actions.primaryLabel === "Submit" ||
+              contextMode.actions.primaryLabel === "Reject"
+                ? "question-submit"
+                : "question-nav-btn question-nav-next"
+            }
+            type="button"
+            disabled={contextMode.actions.primaryDisabled && !hasSubmitContent}
+            onClick={() => submitQuestionAction("primary")}
+            title="Continue (Cmd/Ctrl+Enter)"
+          >
+            {contextMode.actions.primaryLabel}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

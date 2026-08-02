@@ -9,10 +9,31 @@ export interface QuestionProgress {
   notes: Record<string, string>;
 }
 
+export interface QuestionAttachmentDraft {
+  questionId: string;
+  paths: string[];
+  media: Array<{
+    name: string;
+    mimeType: string;
+    base64: string;
+    kind: "image" | "document";
+  }>;
+}
+
 export interface QuestionOtherContext {
   questionId: string;
   initialText: string;
   onCommit: (text: string) => void;
+}
+
+export interface QuestionComposerState extends QuestionOtherContext {
+  revision: string;
+  focusComposer: boolean;
+  canGoBack: boolean;
+  onBack: (text: string, attachments: QuestionAttachmentDraft) => void;
+  primaryLabel: "Next" | "Submit" | "Reject";
+  primaryDisabled: boolean;
+  onPrimary: (text: string, attachments: QuestionAttachmentDraft) => void;
 }
 
 interface QuestionCardProps {
@@ -23,8 +44,12 @@ interface QuestionCardProps {
     id: string,
     answers: Record<string, string | string[] | number | boolean | undefined>,
     notes: Record<string, string>,
+    currentAttachments?: QuestionAttachmentDraft,
   ) => void;
   onEditOtherContext?: (context: QuestionOtherContext) => void;
+  /** Moves supplemental context and navigation into the replacement composer. */
+  integratedComposer?: boolean;
+  onComposerStateChange?: (state: QuestionComposerState) => void;
   attachmentCounts?: Record<string, number>;
   /** Remote-originated progress snapshot. Applied when its serialized shape differs from local. */
   remoteProgress?: QuestionProgress | null;
@@ -105,6 +130,8 @@ export function QuestionCard({
   backgroundTask,
   modes,
   onEditOtherContext,
+  integratedComposer = false,
+  onComposerStateChange,
   attachmentCounts = {},
   onOpenFile,
 }: QuestionCardProps) {
@@ -194,6 +221,53 @@ export function QuestionCard({
     onSubmit(id, normalizeQuestionAnswer(q, answers), notes);
   }, [id, q, answers, notes, isAnswered, onSubmit]);
 
+  const handleComposerBack = useCallback(
+    (text: string, _attachments: QuestionAttachmentDraft) => {
+      hasLocalProgressEditRef.current = true;
+      setNotes((previous) => ({ ...previous, [q.id]: text }));
+      setStep((currentStep) => Math.max(0, currentStep - 1));
+    },
+    [q.id],
+  );
+
+  const handleComposerPrimary = useCallback(
+    (text: string, attachments: QuestionAttachmentDraft) => {
+      const nextNotes = { ...notes, [q.id]: text };
+      const answered =
+        attachments.paths.length > 0 ||
+        attachments.media.length > 0 ||
+        isQuestionAnswered(q, currentAnswer, text);
+
+      if (q.type === "confirmation") {
+        const nextAnswers =
+          currentAnswer === "confirmed"
+            ? answers
+            : { ...answers, [q.id]: "rejected" as const };
+        if (isLast) {
+          onSubmit(id, nextAnswers, nextNotes, attachments);
+        } else {
+          hasLocalProgressEditRef.current = true;
+          setAnswers(nextAnswers);
+          setNotes(nextNotes);
+          setStep((currentStep) => currentStep + 1);
+        }
+        return;
+      }
+
+      if (!answered) return;
+      const nextAnswers = normalizeQuestionAnswer(q, answers);
+      if (isLast) {
+        onSubmit(id, nextAnswers, nextNotes, attachments);
+      } else {
+        hasLocalProgressEditRef.current = true;
+        setAnswers(nextAnswers);
+        setNotes(nextNotes);
+        setStep((currentStep) => currentStep + 1);
+      }
+    },
+    [q, currentAnswer, notes, answers, isLast, id, onSubmit],
+  );
+
   const handleConfirmationPrimary = useCallback(() => {
     if (q.type !== "confirmation") return;
 
@@ -216,6 +290,48 @@ export function QuestionCard({
       setStep((s) => s + 1);
     }
   }, [q.type, q.id, currentAnswer, isLast, id, answers, notes, onSubmit]);
+
+  useEffect(() => {
+    if (!integratedComposer || !onComposerStateChange) return;
+    const primaryLabel =
+      q.type === "confirmation"
+        ? currentAnswer === "confirmed"
+          ? isLast
+            ? "Submit"
+            : "Next"
+          : "Reject"
+        : isLast
+          ? "Submit"
+          : "Next";
+    onComposerStateChange({
+      revision: JSON.stringify({
+        step,
+        answer: currentAnswer,
+        note: currentNote,
+      }),
+      questionId: q.id,
+      initialText: currentNote,
+      focusComposer: q.type !== "text",
+      onCommit: setNote,
+      canGoBack: step > 0,
+      onBack: handleComposerBack,
+      primaryLabel,
+      primaryDisabled: q.type === "confirmation" ? false : !isAnswered(),
+      onPrimary: handleComposerPrimary,
+    });
+  }, [
+    integratedComposer,
+    onComposerStateChange,
+    q,
+    currentAnswer,
+    currentNote,
+    isLast,
+    step,
+    setNote,
+    handleComposerBack,
+    isAnswered,
+    handleComposerPrimary,
+  ]);
 
   return (
     <div class="question-card">
@@ -260,93 +376,96 @@ export function QuestionCard({
           modes={modes}
         />
 
-        {onEditOtherContext ? (
-          <div class="question-other-context">
-            <button
-              type="button"
-              class={`question-other-action${currentNote.trim() || attachmentCount > 0 ? " has-context" : ""}`}
-              onClick={() =>
-                onEditOtherContext({
-                  questionId: q.id,
-                  initialText: currentNote,
-                  onCommit: setNote,
-                })
-              }
-            >
-              <i class="codicon codicon-attach" aria-hidden="true" />
-              <span>
-                {currentNote.trim() || attachmentCount > 0
-                  ? "Edit other context"
-                  : "Other / attach context…"}
-              </span>
-              {attachmentCount > 0 && (
-                <span class="question-other-count">
-                  {attachmentCount}{" "}
-                  {attachmentCount === 1 ? "attachment" : "attachments"}
+        {!integratedComposer &&
+          (onEditOtherContext ? (
+            <div class="question-other-context">
+              <button
+                type="button"
+                class={`question-other-action${currentNote.trim() || attachmentCount > 0 ? " has-context" : ""}`}
+                onClick={() =>
+                  onEditOtherContext({
+                    questionId: q.id,
+                    initialText: currentNote,
+                    onCommit: setNote,
+                  })
+                }
+              >
+                <i class="codicon codicon-attach" aria-hidden="true" />
+                <span>
+                  {currentNote.trim() || attachmentCount > 0
+                    ? "Edit other context"
+                    : "Other / attach context…"}
                 </span>
-              )}
-            </button>
-            {currentNote.trim() && (
-              <div class="question-other-preview">
-                <div class="question-other-preview-label">Other context</div>
-                <div class="question-other-preview-text">
-                  {currentNote.trim()}
+                {attachmentCount > 0 && (
+                  <span class="question-other-count">
+                    {attachmentCount}{" "}
+                    {attachmentCount === 1 ? "attachment" : "attachments"}
+                  </span>
+                )}
+              </button>
+              {currentNote.trim() && (
+                <div class="question-other-preview">
+                  <div class="question-other-preview-label">Other context</div>
+                  <div class="question-other-preview-text">
+                    {currentNote.trim()}
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          <textarea
-            class="question-other-input"
-            placeholder="Other / add context (optional)"
-            value={currentNote}
-            onInput={(e) => setNote((e.target as HTMLTextAreaElement).value)}
-            rows={2}
-          />
-        )}
+              )}
+            </div>
+          ) : (
+            <textarea
+              class="question-other-input"
+              placeholder="Other / add context (optional)"
+              value={currentNote}
+              onInput={(e) => setNote((e.target as HTMLTextAreaElement).value)}
+              rows={2}
+            />
+          ))}
       </div>
 
-      <div class="question-nav">
-        <button
-          class="question-nav-btn"
-          onClick={handleBack}
-          disabled={step === 0}
-        >
-          Back
-        </button>
-        {q.type === "confirmation" ? (
+      {!integratedComposer && (
+        <div class="question-nav">
           <button
-            class={
-              isLast || currentAnswer !== "confirmed"
-                ? "question-submit"
-                : "question-nav-btn question-nav-next"
-            }
-            onClick={handleConfirmationPrimary}
+            class="question-nav-btn"
+            onClick={handleBack}
+            disabled={step === 0}
           >
-            {currentAnswer === "confirmed"
-              ? isLast
-                ? "Submit"
-                : "Next"
-              : "Reject"}
+            Back
           </button>
-        ) : isLast ? (
-          <button
-            class="question-submit"
-            disabled={!isAnswered()}
-            onClick={handleSubmit}
-          >
-            Submit
-          </button>
-        ) : (
-          <button
-            class="question-nav-btn question-nav-next"
-            disabled={!isAnswered()}
-            onClick={handleNext}
-          >
-            Next
-          </button>
-        )}
-      </div>
+          {q.type === "confirmation" ? (
+            <button
+              class={
+                isLast || currentAnswer !== "confirmed"
+                  ? "question-submit"
+                  : "question-nav-btn question-nav-next"
+              }
+              onClick={handleConfirmationPrimary}
+            >
+              {currentAnswer === "confirmed"
+                ? isLast
+                  ? "Submit"
+                  : "Next"
+                : "Reject"}
+            </button>
+          ) : isLast ? (
+            <button
+              class="question-submit"
+              disabled={!isAnswered()}
+              onClick={handleSubmit}
+            >
+              Submit
+            </button>
+          ) : (
+            <button
+              class="question-nav-btn question-nav-next"
+              disabled={!isAnswered()}
+              onClick={handleNext}
+            >
+              Next
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

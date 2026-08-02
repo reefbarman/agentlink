@@ -1,8 +1,8 @@
 import type { CommandRule, CommandRuleDecision } from "./commandRuleTypes.js";
 import type { RuleScope, ScopedRules } from "./ruleTypes.js";
+import { expandSubCommands, splitCompoundCommand } from "./commandSplitter.js";
 
 import { scanShellLexTokens } from "../util/shellLex.js";
-import { splitCompoundCommand } from "./commandSplitter.js";
 
 export type EffectiveCommandRuleDecision = CommandRuleDecision | "unmatched";
 
@@ -250,12 +250,50 @@ export function evaluateCommandRulePolicy(
   rulesByScope: ScopedRules<CommandRule>,
   fullCommand: string,
 ): CommandRulePolicyEvaluation {
-  // Only top-level, safely recognized shell boundaries are segmented. Quoted or
-  // wrapped scripts remain opaque command text and require an explicit match.
-  const commands = splitCompoundCommand(fullCommand);
-  const segments = (commands.length > 0 ? commands : [fullCommand.trim()]).map(
-    (command) => evaluateCommandSegmentRules(rulesByScope, command),
-  );
+  // Preserve rules for the complete shell segment, then add known wrappers so
+  // card-created inner rules can authorize the same invocation. Prompt and
+  // Forbidden matches on the complete segment retain precedence.
+  const originalSegments = splitCompoundCommand(fullCommand);
+  const sourceSegments =
+    originalSegments.length > 0 ? originalSegments : [fullCommand.trim()];
+  const segments = sourceSegments.flatMap((source) => {
+    const original = evaluateCommandSegmentRules(rulesByScope, source);
+    const expanded = expandSubCommands([source]).filter(
+      (command) => command.trim() !== source.trim(),
+    );
+    const expandedSegments = expanded.map((command) =>
+      evaluateCommandSegmentRules(rulesByScope, command),
+    );
+    const strongestExpanded =
+      expandedSegments.reduce<EffectiveCommandRuleDecision>(
+        (strongest, segment) =>
+          DECISION_PRIORITY[segment.decision] > DECISION_PRIORITY[strongest]
+            ? segment.decision
+            : strongest,
+        "unmatched",
+      );
+    const decision =
+      DECISION_PRIORITY[original.decision] >=
+      DECISION_PRIORITY[strongestExpanded]
+        ? original.decision
+        : strongestExpanded;
+    // Wrapper expansion can surface restrictions on nested commands, but it
+    // does not prove that the wrapper's own arguments are safe. Only a rule
+    // matching the complete shell segment can skip the approval card.
+    const explicitlyAllowed =
+      decision === "allow" && original.decision === "allow";
+    return [
+      {
+        command: source,
+        decision,
+        matches: [
+          ...original.matches,
+          ...expandedSegments.flatMap((segment) => segment.matches),
+        ],
+        explicitlyAllowed,
+      },
+    ];
+  });
 
   let decision: EffectiveCommandRuleDecision = "unmatched";
   for (const segment of segments) {

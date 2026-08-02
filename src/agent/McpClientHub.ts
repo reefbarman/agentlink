@@ -24,6 +24,7 @@ import { isMcpToolName, parseMcpToolName } from "./mcpToolNames.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { McpServerConfig } from "./mcpConfig.js";
 import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import { resolveMcpRequestTimeout } from "../shared/mcpTimeout.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -144,6 +145,58 @@ function isCallToolResult(value: unknown): value is CallToolResult {
     value !== null &&
     "content" in value &&
     Array.isArray(value.content)
+  );
+}
+
+function unknownCompletionResult(
+  error: string,
+  server: string,
+  tool: string,
+  message: string,
+  timeoutMs?: number,
+): ToolResult {
+  const detail = {
+    error,
+    server,
+    tool,
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    completionState: "unknown",
+    retrySafe: false,
+    guidance:
+      "The MCP operation may have reached the server. Check server-provided status before retrying a potentially mutating call.",
+  };
+  return {
+    data: detail,
+    content: [{ type: "text", text: JSON.stringify(detail) }],
+    isError: true,
+    error: { kind: error, message },
+  };
+}
+
+function describeMcpTransportFailure(
+  error: unknown,
+  serverName: string,
+  toolName: string,
+  timeout: number,
+): ToolResult | undefined {
+  if (!(error instanceof McpError)) return undefined;
+
+  const kind =
+    error.code === ErrorCode.RequestTimeout
+      ? "mcp_request_timeout"
+      : error.code === ErrorCode.ConnectionClosed
+        ? "mcp_connection_closed"
+        : undefined;
+  if (!kind) return undefined;
+
+  return unknownCompletionResult(
+    kind,
+    serverName,
+    toolName,
+    kind === "mcp_request_timeout"
+      ? `MCP tool '${toolName}' timed out after ${timeout}ms.`
+      : `MCP connection closed while calling '${toolName}'.`,
+    kind === "mcp_request_timeout" ? timeout : undefined,
   );
 }
 
@@ -1482,6 +1535,7 @@ export class McpClientHub {
       };
     }
 
+    const timeout = resolveMcpRequestTimeout(server.config.timeout);
     try {
       const result = await this.withInteractiveAuthForUse(serverName, () =>
         server.client.callTool(
@@ -1490,7 +1544,7 @@ export class McpClientHub {
             arguments: input,
           },
           undefined,
-          options,
+          { ...options, timeout },
         ),
       );
       if (!isCallToolResult(result)) {
@@ -1555,6 +1609,21 @@ export class McpClientHub {
         this.log(`[mcp:${serverName}] ${message}`),
       );
     } catch (err) {
+      if (options?.signal?.aborted) {
+        return unknownCompletionResult(
+          "mcp_request_cancelled",
+          serverName,
+          toolName,
+          `MCP tool '${toolName}' was cancelled.`,
+        );
+      }
+      const transportFailure = describeMcpTransportFailure(
+        err,
+        serverName,
+        toolName,
+        timeout,
+      );
+      if (transportFailure) return transportFailure;
       const outputSchemaError = describeOutputSchemaError(err, toolName);
       if (outputSchemaError) {
         return {

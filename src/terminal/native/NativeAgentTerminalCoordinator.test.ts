@@ -190,7 +190,7 @@ describe("NativeAgentTerminalCoordinator", () => {
     expect(test.prepareShell).not.toHaveBeenCalled();
     expect(test.runtime.prepareChannel).not.toHaveBeenCalled();
     expect(test.coordinator.listTerminals({ owner: undefined })).toEqual([
-      { id: "native-agent-1", name: "AgentLink", busy: false },
+      { id: "native-agent-1", name: "AgentLink", busy: true },
     ]);
 
     const completion = prepared.execute();
@@ -296,8 +296,8 @@ describe("NativeAgentTerminalCoordinator", () => {
     );
 
     expect(test.coordinator.listTerminals({ owner: undefined })).toEqual([
-      { id: "native-agent-1", name: "AgentLink", busy: false },
-      { id: "native-agent-2", name: "AgentLink", busy: false },
+      { id: "native-agent-1", name: "AgentLink", busy: true },
+      { id: "native-agent-2", name: "AgentLink", busy: true },
     ]);
 
     const first = firstPrepared.execute();
@@ -344,6 +344,65 @@ describe("NativeAgentTerminalCoordinator", () => {
     await expect(second).resolves.toMatchObject({
       terminal_id: "native-agent-2",
     });
+  });
+
+  it("admits queued foreground commands one at a time", async () => {
+    const test = harness();
+    const running = Array.from({ length: 4 }, (_, index) =>
+      test.coordinator.executeCommand({
+        owner: undefined,
+        command: `printf ${index}`,
+        cwd: `/workspace/${index}`,
+      }),
+    );
+    await flush();
+    expect(test.processes).toHaveLength(4);
+
+    const fifth = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf fifth",
+      cwd: "/workspace/fifth",
+    });
+    const sixth = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf sixth",
+      cwd: "/workspace/sixth",
+    });
+    await flush();
+    expect(test.processes).toHaveLength(4);
+
+    await finish(test.processes[0], "zero\r\n");
+    await vi.waitFor(() => expect(test.processes).toHaveLength(5));
+    expect(test.processes.map((process) => process.identity.channelId)).toEqual(
+      [
+        "native-agent-1",
+        "native-agent-2",
+        "native-agent-3",
+        "native-agent-4",
+        "native-agent-5",
+      ],
+    );
+
+    await finish(test.processes[4], "fifth\r\n");
+    await vi.waitFor(() => expect(test.processes).toHaveLength(6));
+    expect(test.processes.map((process) => process.identity.channelId)).toEqual(
+      [
+        "native-agent-1",
+        "native-agent-2",
+        "native-agent-3",
+        "native-agent-4",
+        "native-agent-5",
+        "native-agent-6",
+      ],
+    );
+
+    await Promise.all([
+      ...test.processes.slice(1, 4).map((process) => finish(process)),
+      finish(test.processes[5], "sixth\r\n"),
+    ]);
+    await expect(Promise.all([...running, fifth, sixth])).resolves.toHaveLength(
+      6,
+    );
   });
 
   it("bounds implicit channels and reclaims the oldest idle channel", async () => {

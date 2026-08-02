@@ -17,6 +17,7 @@ import path from "node:path";
 function provider(label: string) {
   const instance: ConfinementPreparingTerminalProvider & {
     dispose: ReturnType<typeof vi.fn>;
+    retire?: ReturnType<typeof vi.fn>;
   } = {
     executeCommand: vi.fn(async (options) => ({
       exit_code: 0,
@@ -1335,6 +1336,35 @@ describe("AgentTerminalProviderRouter", () => {
 
     test.router.dispose();
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("retires queued sandbox admission on refresh without reviving the provider", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    let rejectQueued!: (error: Error) => void;
+    const queued = new Promise<never>((_resolve, reject) => {
+      rejectQueued = reject;
+    });
+    test.sandbox.retire = vi.fn(() =>
+      rejectQueued(new Error("Terminal provider was retired")),
+    );
+    vi.mocked(test.sandbox.prepareConfinementExecution).mockImplementationOnce(
+      () => queued,
+    );
+
+    const pending = test.router.prepareExecution(
+      { owner: undefined, command: "pwd", cwd: "/workspace" },
+      sandboxRoute,
+    );
+    await vi.waitFor(() =>
+      expect(test.sandbox.prepareConfinementExecution).toHaveBeenCalledOnce(),
+    );
+    test.router.refresh();
+
+    await expect(pending).rejects.toThrow("Terminal provider was retired");
+    expect(test.sandbox.retire).toHaveBeenCalledOnce();
+    expect(test.sandbox.dispose).toHaveBeenCalledOnce();
+    expect(test.createSandboxProvider).toHaveBeenCalledOnce();
   });
 
   it("disposes an empty retired sandbox and creates a new generation", async () => {

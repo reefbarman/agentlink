@@ -28,11 +28,18 @@ interface McpCardProps {
 
 export function McpCard({ request, submit, followUpRef }: McpCardProps) {
   const choices = request.mcpChoices ?? [];
+  const isAgentTool = request.toolOrigin === "acp";
   const titleMatch = request.command?.match(
     /Allow MCP tool "([^"]+)" from "([^"]+)"/,
   );
-  const toolName = request.mcpToolName ?? titleMatch?.[1] ?? "MCP tool";
-  const serverName = request.mcpServerName ?? titleMatch?.[2] ?? "MCP server";
+  const toolName =
+    request.mcpToolName ??
+    titleMatch?.[1] ??
+    (isAgentTool ? "tool" : "MCP tool");
+  const serverName =
+    request.mcpServerName ??
+    titleMatch?.[2] ??
+    (isAgentTool ? "External agent" : "MCP server");
   const allowOnce =
     choices.find((choice) => choice.isPrimary)?.value ?? "allow-once";
   const deny = choices.find((choice) => choice.isDanger)?.value ?? "deny";
@@ -124,8 +131,12 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
       queueTotal={request.queueTotal}
       sourceProject={request.sourceProject}
       targetProject={request.targetProject}
-      purpose="Use an external MCP tool"
-      rulesContent={rulesJsx}
+      purpose={
+        isAgentTool
+          ? "Let an external agent use one of its tools"
+          : "Use an external MCP tool"
+      }
+      rulesContent={isAgentTool ? undefined : rulesJsx}
       rulesModified={rulesModified}
       primaryLabel="Allow Once"
       primaryWithRulesLabel="Save Rule & Allow"
@@ -135,7 +146,8 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
       followUpRef={followUpRef}
     >
       <div class="card-label">
-        <span class="codicon codicon-server" /> MCP Tool
+        <span class="codicon codicon-server" />{" "}
+        {isAgentTool ? "External Agent Tool" : "MCP Tool"}
       </div>
       <pre class="command-box">{`${serverName} / ${toolName}`}</pre>
       {request.mcpDetail && (

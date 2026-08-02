@@ -141,6 +141,37 @@ describe("CommandCard terminal presentation", () => {
     expect(screen.getByText("Save Rules & Run")).toBeTruthy();
   });
 
+  it("shows first-attempt evidence and disables rules for a native recovery", () => {
+    const approval = request("native", "native-escalation");
+    approval.subCommands = [{ command: "npm test" }];
+    approval.recoveryAttempt = {
+      denialOperation: "ipc-connect",
+      denialReason: "Sandbox denied host IPC",
+      firstAttemptRoute: "sandbox",
+      commandSent: true,
+      processLaunched: true,
+      mayHaveSideEffects: true,
+    };
+    renderCard(approval);
+
+    expect(
+      screen.getByText("Second execution after sandbox denial"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "The sandbox already launched this command. A second run may repeat side effects.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Run Again" })).toBeTruthy();
+    expect(
+      screen.getByText(/The sandbox already launched this command/),
+    ).toBeTruthy();
+    expect(screen.getByText(/may have side effects true/)).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /Auto Approval Rules/ }),
+    ).toBeNull();
+  });
+
   it("defaults fresh rule suggestions to allow without marking them modified", () => {
     const approval = request("sandbox");
     approval.subCommands = [{ command: "npm test" }];
@@ -198,7 +229,9 @@ describe("CommandCard terminal presentation", () => {
       "active",
     );
     expect(screen.getByText(/without another approval card/)).toBeTruthy();
-    expect(screen.getByText(/requested execution route/)).toBeTruthy();
+    expect(
+      screen.getByText(/route, capabilities, environment values/),
+    ).toBeTruthy();
   });
 
   it("upgrades a legacy rule to allow when editing another field", () => {

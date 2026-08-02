@@ -97,15 +97,15 @@ export function unwrapCommand(cmd: string): string | null {
 /**
  * Expand sub-commands by decomposing wrapper commands.
  * `["cd /foo", "xargs rm -rf"]` → `["cd /foo", "xargs", "rm -rf"]`
- * `["sudo -u root npm install"]` → `["sudo", "npm install"]`
+ * `["sudo env FOO=bar npm install"]` → `["sudo", "env", "npm install"]`
  */
 export function expandSubCommands(subCommands: string[]): string[] {
   const expanded: string[] = [];
   for (const sub of subCommands) {
-    const inner = unwrapCommand(sub);
+    const inner = unwrapOnce(sub.trim());
     if (inner) {
       expanded.push(firstToken(sub.trim())); // just the wrapper name
-      expanded.push(inner);
+      expanded.push(...expandSubCommands([inner]));
     } else {
       expanded.push(sub);
     }

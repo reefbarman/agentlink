@@ -28,6 +28,12 @@ export interface InlineApprovalRequest {
   mcpServerName?: string;
   mcpToolName?: string;
   /**
+   * Origin of a kind:"mcp" external-tool card. "acp" marks a tool call
+   * relayed from an external agent (Agent Client Protocol) rather than an
+   * MCP server, so approval surfaces label it as an agent tool.
+   */
+  toolOrigin?: "mcp" | "acp";
+  /**
    * Optional id for approvals that need rich decision payloads
    * (e.g. rejectionReason/followUp), not just a selected choice value.
    */

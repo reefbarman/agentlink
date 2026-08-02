@@ -85,7 +85,7 @@ export function FeedbackList({ entries, postCommand }: Props) {
       if (triageFilter === "triaged" && !entry.triaged) return false;
       if (triageFilter === "untriaged" && entry.triaged) return false;
       if (
-        triageFilter === "triaged" &&
+        triageFilter !== "untriaged" &&
         priorities.length < PRIORITIES.length &&
         (!entry.priority || !priorities.includes(entry.priority))
       ) {
@@ -293,7 +293,7 @@ export function FeedbackList({ entries, postCommand }: Props) {
             </div>
             <fieldset
               class="feedback-priority-filter"
-              disabled={triageFilter !== "triaged"}
+              disabled={triageFilter === "untriaged"}
             >
               <legend>Priority</legend>
               {PRIORITIES.map((priority) => (

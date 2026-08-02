@@ -368,6 +368,8 @@ export interface RetrievalOptimizeOutcome {
   recordsCompacted: number;
   /** Optional best-effort physical storage metric when the backend can measure it. */
   bytesReclaimed?: number;
+  /** Rows from superseded source generations removed by the deferred-GC sweep. */
+  staleRecordsRemoved?: number;
 }
 
 export interface RetrievalMigrationOutcome {

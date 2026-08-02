@@ -76,4 +76,34 @@ describe("McpCard", () => {
       followUp: undefined,
     });
   });
+
+  it("renders agent-tool copy without MCP rules for ACP-origin requests", () => {
+    render(
+      h(McpCard, {
+        request: {
+          kind: "mcp",
+          id: "acp-approval",
+          command: "Fetch release notes",
+          toolOrigin: "acp",
+          mcpServerName: "Claude Code",
+          mcpToolName: "Fetch release notes",
+          mcpDetail: JSON.stringify({ toolKind: "fetch" }, null, 2),
+          mcpChoices: [
+            { label: "Allow once", value: "allow", isPrimary: true },
+            { label: "Reject", value: "reject", isDanger: true },
+          ],
+        },
+        submit: vi.fn(),
+        followUpRef: { current: "" },
+      }),
+    );
+
+    expect(screen.getByText("External Agent Tool")).toBeTruthy();
+    expect(screen.getByText("Claude Code / Fetch release notes")).toBeTruthy();
+    expect(screen.queryByText(/MCP Tool/)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Auto Approval Rules/ }),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Allow Once" })).toBeTruthy();
+  });
 });

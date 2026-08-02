@@ -10,6 +10,8 @@ import type {
 
 import {
   DEFAULT_DIAGNOSTIC_DELAY_MS,
+  normalizeEditorText,
+  type EditApplyFailureRecovery,
   type EditSaveFailureRecovery,
 } from "../core/capabilities/editReview.js";
 import { DIFF_VIEW_URI_SCHEME } from "./diffViewContentProvider.js";
@@ -151,6 +153,7 @@ export interface FormatOnSaveReport {
   format_on_save_edits_omitted?: "size_cap";
   eol_changed?: boolean;
   hint?: string;
+  warnings?: string[];
 }
 
 export interface DiffResult {
@@ -167,14 +170,70 @@ export interface DiffResult {
   finalContent?: string;
   reason?: string;
   follow_up?: string;
+  warnings?: string[];
+  apply_failure?: EditApplyFailureRecovery;
   save_failure?: EditSaveFailureRecovery;
   next_steps?: string[];
+}
+
+export async function diagnoseEditApplyFailure(params: {
+  absolutePath: string;
+  baselineContent: string;
+  document?: Pick<vscode.TextDocument, "getText" | "isDirty">;
+}): Promise<{
+  apply_failure: EditApplyFailureRecovery;
+  next_steps: string[];
+}> {
+  let diskState: EditApplyFailureRecovery["disk_state"];
+  try {
+    const diskContent = await fs.readFile(params.absolutePath, "utf-8");
+    diskState =
+      diskContent === params.baselineContent ? "unchanged" : "changed";
+  } catch (error) {
+    const code =
+      typeof error === "object" &&
+      error !== null &&
+      typeof (error as { code?: unknown }).code === "string"
+        ? (error as { code: string }).code
+        : undefined;
+    diskState = code === "ENOENT" ? "missing" : "unreadable";
+  }
+  const concurrentChange =
+    diskState === "changed"
+      ? true
+      : diskState === "unchanged"
+        ? false
+        : "unknown";
+  const documentState = !params.document
+    ? "unavailable"
+    : normalizeEditorText(params.document.getText()) ===
+        normalizeEditorText(params.baselineContent)
+      ? "matches_baseline"
+      : "differs_from_baseline";
+  return {
+    apply_failure: {
+      document_dirty: params.document?.isDirty ?? "unavailable",
+      document_state: documentState,
+      disk_state: diskState,
+      concurrent_change: concurrentChange,
+      retryable: true,
+    },
+    next_steps: [
+      concurrentChange === true
+        ? "The file changed on disk after the proposal baseline was captured; re-read it before retrying."
+        : documentState === "differs_from_baseline"
+          ? "The editor content differs from the proposal baseline. Inspect and reconcile it before retrying."
+          : "VS Code rejected the editor apply without exposing a detailed error. Inspect the file/editor state before retrying.",
+    ],
+  };
 }
 
 export async function diagnoseEditSaveFailure(params: {
   absolutePath: string;
   baselineContent: string;
   documentDirty: boolean;
+  saveAttemptContent?: string;
+  currentDocumentContent?: string;
   reviewState: EditSaveFailureRecovery["review_state"];
 }): Promise<{
   save_failure: EditSaveFailureRecovery;
@@ -202,20 +261,33 @@ export async function diagnoseEditSaveFailure(params: {
       : diskState === "unchanged"
         ? false
         : "unknown";
+  const dirtyDocumentState =
+    params.saveAttemptContent === undefined ||
+    params.currentDocumentContent === undefined
+      ? "unavailable"
+      : params.saveAttemptContent === params.currentDocumentContent
+        ? "matches_save_attempt"
+        : "changed_after_save_attempt";
   return {
     save_failure: {
       document_dirty: params.documentDirty,
       disk_state: diskState,
       concurrent_change: concurrentChange,
       review_state: params.reviewState,
+      dirty_document_state: dirtyDocumentState,
       vscode_error_detail: "unavailable",
       retryable: true,
+      retry_target: "editor_save",
       ...(diskErrorCode ? { disk_error_code: diskErrorCode } : {}),
     },
     next_steps: [
-      params.reviewState === "diff_snapshot_preserved"
-        ? "The review snapshot and dirty editor are preserved. Inspect the file/editor state, then retry the edit after resolving any save participant, permission, or disk issue."
-        : "The dirty editor is preserved. Inspect the file/editor state, then retry after resolving any save participant, permission, or disk issue.",
+      dirtyDocumentState === "matches_save_attempt"
+        ? "The exact content submitted to the failed save remains in the dirty editor. Do not submit another file-edit tool call; resolve the save issue and retry the editor save."
+        : dirtyDocumentState === "changed_after_save_attempt"
+          ? "The dirty editor changed during the failed save. Inspect and reconcile its current content before saving or composing another edit."
+          : params.reviewState === "diff_snapshot_preserved"
+            ? "The review snapshot and dirty editor are preserved. Inspect the file/editor state before retrying the editor save."
+            : "The dirty editor is preserved. Inspect the file/editor state before retrying the editor save.",
       concurrentChange === true
         ? "The file changed on disk after the edit baseline was captured; re-read it before composing another diff."
         : concurrentChange === false
@@ -262,6 +334,19 @@ export function createUserEditsPatch(
   );
 }
 
+function isUnitySerializationPath(relPath: string): boolean {
+  return [
+    ".meta",
+    ".asset",
+    ".unity",
+    ".mat",
+    ".prefab",
+    ".anim",
+    ".controller",
+    ".physicMaterial",
+  ].includes(path.extname(relPath).toLowerCase());
+}
+
 export function createFormatOnSaveReport(
   relPath: string,
   expectedContent: string,
@@ -281,6 +366,11 @@ export function createFormatOnSaveReport(
   }
 
   const report: FormatOnSaveReport = { format_on_save: true };
+  if (isUnitySerializationPath(relPath)) {
+    report.warnings = [
+      "Format-on-save changed a Unity serialization file. Re-read and inspect the full change because a generic YAML formatter can create non-Unity serialization churn.",
+    ];
+  }
   if (eolChanged) {
     report.eol_changed = true;
   }
@@ -357,8 +447,8 @@ export class DiffViewProvider {
         (doc) =>
           doc.uri.scheme === "file" && doc.uri.fsPath === this.absolutePath,
       );
-      if (existingDoc?.isDirty) {
-        await existingDoc.save();
+      if (existingDoc?.isDirty && !(await existingDoc.save())) {
+        throw new Error("Unable to save existing editor changes before review");
       }
     }
 
@@ -433,7 +523,13 @@ export class DiffViewProvider {
     const edit = new vscode.WorkspaceEdit();
     const fullRange = new vscode.Range(0, 0, document.lineCount, 0);
     edit.replace(document.uri, fullRange, newContent);
-    await vscode.workspace.applyEdit(edit);
+    if (!(await vscode.workspace.applyEdit(edit))) {
+      diffSnapshotHub.remove(this.requestId);
+      if (this.editType === "create") {
+        await this.cleanupCreatedFile();
+      }
+      throw new Error("Unable to apply proposed editor changes");
+    }
 
     // Scroll to the first change
     const firstChangeLine = findFirstChangeLine(
@@ -669,6 +765,8 @@ export class DiffViewProvider {
             absolutePath: this.absolutePath!,
             baselineContent: this.originalContent ?? "",
             documentDirty: document.isDirty,
+            saveAttemptContent: editedContent,
+            currentDocumentContent: document.getText(),
             reviewState: "diff_snapshot_preserved",
           })),
         };
@@ -756,8 +854,26 @@ export class DiffViewProvider {
       const edit = new vscode.WorkspaceEdit();
       const fullRange = new vscode.Range(0, 0, doc.lineCount, 0);
       edit.replace(doc.uri, fullRange, diskContent);
-      await vscode.workspace.applyEdit(edit);
-      await doc.save();
+      if (!(await vscode.workspace.applyEdit(edit))) {
+        return {
+          status: "rejected",
+          path: this.relPath,
+          reason: "revert_apply_failed",
+          next_steps: [
+            "The proposed editor changes were preserved because rollback could not be applied. Inspect the dirty editor before retrying or saving.",
+          ],
+        };
+      }
+      if (!(await doc.save())) {
+        return {
+          status: "rejected",
+          path: this.relPath,
+          reason: "revert_save_failed",
+          next_steps: [
+            "The rollback is present in the dirty editor but could not be saved. Inspect the editor and resolve the save issue before retrying.",
+          ],
+        };
+      }
     }
 
     // Close diff views — document is clean now, no save prompt
@@ -775,20 +891,7 @@ export class DiffViewProvider {
         );
       }
     } else if (this.editType === "create") {
-      // Delete the file we created
-      try {
-        await fs.unlink(this.absolutePath);
-      } catch {
-        // ignore
-      }
-      // Remove created directories in reverse order
-      for (const dir of this.createdDirs.reverse()) {
-        try {
-          await fs.rmdir(dir);
-        } catch {
-          break; // Directory not empty or doesn't exist
-        }
-      }
+      await this.cleanupCreatedFile();
     }
 
     diffSnapshotHub.remove(this.requestId);
@@ -798,6 +901,22 @@ export class DiffViewProvider {
       path: this.relPath,
       ...(reason && { reason }),
     };
+  }
+
+  private async cleanupCreatedFile(): Promise<void> {
+    if (!this.absolutePath) return;
+    try {
+      await fs.unlink(this.absolutePath);
+    } catch {
+      // ignore
+    }
+    for (const dir of this.createdDirs.reverse()) {
+      try {
+        await fs.rmdir(dir);
+      } catch {
+        break;
+      }
+    }
   }
 
   private async waitForDiagnostics(): Promise<string | undefined> {

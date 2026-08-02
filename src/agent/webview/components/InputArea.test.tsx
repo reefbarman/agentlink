@@ -438,6 +438,55 @@ describe("InputArea slash popup", () => {
     });
   });
 
+  it("routes question composer context through its footer and keyboard shortcut", async () => {
+    const onContextSubmit = vi.fn();
+    const onPrimary = vi.fn();
+    const onBack = vi.fn();
+    const { container, getByRole } = renderInputArea([], {
+      streaming: true,
+      contextMode: {
+        key: "question-1:choice",
+        title: "Adding context to agent question",
+        placeholder: "Add details…",
+        initialText: "",
+        onSubmit: onContextSubmit,
+        onCancel: vi.fn(),
+        actions: {
+          canGoBack: false,
+          onBack,
+          primaryLabel: "Next",
+          primaryDisabled: true,
+          onPrimary,
+        },
+      },
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    fireEvent.input(input, { target: { value: "Extra detail" } });
+    expect(
+      (getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onPrimary).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+    expect(onContextSubmit).toHaveBeenCalledWith(
+      "Extra detail",
+      [],
+      undefined,
+      undefined,
+      undefined,
+    );
+    expect(onPrimary).toHaveBeenCalledWith("Extra detail", {
+      questionId: "choice",
+      paths: [],
+      media: [],
+    });
+    expect(onBack).not.toHaveBeenCalled();
+    expect(getByRole("button", { name: "Stop generation" })).toBeTruthy();
+  });
+
   it("routes scoped context through its callback and restores the normal draft", async () => {
     const onSend = vi.fn();
     const onContextSubmit = vi.fn();

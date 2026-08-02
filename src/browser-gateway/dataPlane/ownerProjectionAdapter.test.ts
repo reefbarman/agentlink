@@ -390,6 +390,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
         id: "approval-1",
         kind: "command",
         command: "npm test",
+        toolOrigin: "acp",
         subCommands: [
           {
             command: "npm test",
@@ -410,6 +411,14 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
           model: "review-model",
         },
         humanOnlyReason: "Native execution requires human approval.",
+        recoveryAttempt: {
+          denialOperation: "ipc-connect",
+          denialReason: "Sandbox denied host IPC",
+          firstAttemptRoute: "sandbox",
+          commandSent: true,
+          processLaunched: true,
+          mayHaveSideEffects: true,
+        },
         security: {
           auditId: "audit-sandbox-1",
           route: "sandbox",

@@ -139,6 +139,13 @@ function outsideReadBindingMatches(
   );
 }
 
+export interface OutsideWorkspaceAccessResult {
+  approved: boolean;
+  reason?: string;
+  /** Which tier resolved the request: guardian auto-review or the user card. */
+  via: "guardian" | "user";
+}
+
 /**
  * Gate for outside-workspace path access.
  * Shows a WebView-based approval panel where the user can allow/reject
@@ -151,9 +158,9 @@ export async function approveOutsideWorkspaceAccess(
   sessionId: string,
   signal?: AbortSignal,
   guardian?: GuardianOutsideReadOptions,
-): Promise<{ approved: boolean; reason?: string }> {
+): Promise<OutsideWorkspaceAccessResult> {
   const review = await reviewOutsideRead(filePath, sessionId, guardian, signal);
-  if (review.approved) return { approved: true };
+  if (review.approved) return { approved: true, via: "guardian" };
 
   const { promise } = approvalPanel.enqueuePathApproval(
     filePath,
@@ -183,7 +190,7 @@ export async function approveOutsideWorkspaceAccess(
   }
 
   if (response.decision === "reject") {
-    return { approved: false, reason: response.rejectionReason };
+    return { approved: false, reason: response.rejectionReason, via: "user" };
   }
 
   if (
@@ -206,9 +213,10 @@ export async function approveOutsideWorkspaceAccess(
       return {
         approved: false,
         reason: `Could not save the ${scope} outside-path approval. Access was not authorized; check the approval config path and try again.`,
+        via: "user",
       };
     }
   }
 
-  return { approved: true };
+  return { approved: true, via: "user" };
 }

@@ -64,6 +64,7 @@ import { ChatTabController, type ChatTab } from "./agent/ChatTabController.js";
 import { ChatTabPanelHost } from "./agent/ChatTabPanelHost.js";
 import { createChatWorkspaceViewSnapshot } from "./agent/chatTabProtocol.js";
 import { createForegroundChatTabSync } from "./agent/chatTabForegroundSync.js";
+import { restoreChatTabStartup } from "./agent/chatTabStartupRestore.js";
 import { TabTerminalProviderRegistry } from "./agent/TabTerminalProviderRegistry.js";
 import { WorkspaceMutationCoordinator } from "./agent/WorkspaceMutationCoordinator.js";
 import { ProjectCustomizationRegistry } from "./agent/ProjectCustomizationRegistry.js";
@@ -1667,18 +1668,15 @@ export async function activate(
     bindFocusedSession: (sessionId) =>
       chatTabController.bindFocusedSession(sessionId),
   });
+  let chatTabStartupRestoreSettled = false;
   context.subscriptions.push(
     agentSessionManager.onDidChangeSessions(() => {
+      if (!chatTabStartupRestoreSettled) return;
       void syncForegroundChatTab().catch((error) => {
         log(`[chat-tabs] Failed to bind foreground session: ${String(error)}`);
       });
     }),
   );
-  void syncForegroundChatTab().catch((error) => {
-    log(
-      `[chat-tabs] Failed to bind initial foreground session: ${String(error)}`,
-    );
-  });
 
   browserGatewayService = new BrowserGatewayService(
     chatViewProvider.getUiEventHub(),
@@ -2556,56 +2554,52 @@ export async function activate(
     chatViewProvider.setSidebarWriteApproval(mode, sessionIds),
   );
 
-  void (async () => {
-    await chatTabControllerInitialization;
-    const restoredRootSessionIds = new Set<string>();
-    for (const tab of chatTabController.getLayout().tabs) {
-      if (!tab.sessionId) continue;
-      const session = await agentSessionManager.hydratePersistedSession(
-        tab.sessionId,
-      );
-      if (session) {
-        restoredRootSessionIds.add(session.id);
-        continue;
-      }
-      if (tab.placement === "popped") {
-        await chatTabController.setPlacement(tab.id, "popped", "docked");
-      }
-      await chatTabController.replaceSession(tab.id, tab.sessionId, null);
-    }
-    await agentSessionManager.restorePersistedBackgroundSessions(
-      restoredRootSessionIds,
-    );
+  const chatTabStartupRestore = chatTabControllerInitialization
+    .then(() =>
+      restoreChatTabStartup({
+        getLayout: () => chatTabController.getLayout(),
+        getFocusedTab: () => chatTabController.getFocusedTab(),
+        getForegroundSession: () => agentSessionManager.getForegroundSession(),
+        getSession: (sessionId) => agentSessionManager.getSession(sessionId),
+        getTabForSession: (sessionId) =>
+          chatTabController.getTabForSession(sessionId),
+        hydratePersistedSession: (sessionId) =>
+          agentSessionManager.hydratePersistedSession(sessionId),
+        restoreLastSession: () => agentSessionManager.restoreLastSession(),
+        restorePersistedBackgroundSessions: (rootSessionIds) =>
+          agentSessionManager.restorePersistedBackgroundSessions(
+            rootSessionIds,
+          ),
+        switchTo: (sessionId) => agentSessionManager.switchTo(sessionId),
+        createTab: (sessionId) => chatTabController.createTab(sessionId),
+        focusTab: (tabId) => chatTabController.focusTab(tabId),
+        setPlacement: (tabId, expectedPlacement, placement) =>
+          chatTabController.setPlacement(tabId, expectedPlacement, placement),
+        replaceSession: (tabId, expectedSessionId, sessionId) =>
+          chatTabController.replaceSession(tabId, expectedSessionId, sessionId),
+      }),
+    )
+    .catch((error) => {
+      log(`[chat-tabs] Failed to restore tab sessions: ${String(error)}`);
+      throw error;
+    })
+    .finally(() => {
+      chatTabStartupRestoreSettled = true;
+      void syncForegroundChatTab().catch((error) => {
+        log(`[chat-tabs] Failed to bind restored foreground: ${String(error)}`);
+      });
+    });
+  chatViewProvider.setChatTabStartupRestore(chatTabStartupRestore);
 
-    let foregroundTab = chatTabController.getFocusedTab();
-    if (
-      !foregroundTab.sessionId ||
-      !agentSessionManager.getSession(foregroundTab.sessionId)
-    ) {
-      const fallback = chatTabController
-        .getLayout()
-        .tabs.find(
-          (tab) =>
-            tab.placement === "docked" &&
-            tab.sessionId !== null &&
-            agentSessionManager.getSession(tab.sessionId) !== undefined,
-        );
-      if (fallback) {
-        await chatTabController.focusTab(fallback.id);
-        foregroundTab = fallback;
-      }
-    }
-    if (foregroundTab.sessionId) {
-      agentSessionManager.switchTo(foregroundTab.sessionId);
-    }
-
-    await chatViewProviderInitialization;
-    chatTabPanelHost?.markRuntimeReady();
-    await chatTabPanelHost?.restoreMissingPanels();
-  })().catch((error) => {
-    log(`[chat-tabs] Failed to restore tab panels: ${String(error)}`);
-    chatTabPanelHost?.markRuntimeReady();
-  });
+  void Promise.all([chatTabStartupRestore, chatViewProviderInitialization])
+    .then(async () => {
+      chatTabPanelHost?.markRuntimeReady();
+      await chatTabPanelHost?.restoreMissingPanels();
+    })
+    .catch((error) => {
+      log(`[chat-tabs] Failed to restore tab panels: ${String(error)}`);
+      chatTabPanelHost?.markRuntimeReady();
+    });
 
   void consumeWorktreeStartupIntent(context, chatViewProvider, log);
 

@@ -249,6 +249,14 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("/my/project");
   });
 
+  it("instructs agents to use exact sandbox recovery guidance before workarounds", async () => {
+    const result = await buildSystemPrompt("code", tmpDir);
+
+    expect(result).toContain("When `execute_command` returns `retry_guidance`");
+    expect(result).toContain("before trying command variants or workarounds");
+    expect(result).toContain("do not retry after `rejected_by_user`");
+  });
+
   it("treats web content as untrusted evidence rather than instructions", async () => {
     const result = await buildSystemPrompt("code", tmpDir);
     expect(result).toContain(

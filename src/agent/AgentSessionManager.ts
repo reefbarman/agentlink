@@ -96,6 +96,7 @@ import {
 import type { Question } from "./webview/types.js";
 import {
   buildAskUserToolResult,
+  createGuardianOutsideReadOptions,
   getAgentTools,
   type BackgroundQuestionAnswerRequest,
   type BackgroundQuestionAnswerResult,
@@ -103,6 +104,7 @@ import {
   type BgStatusResult,
   type QuestionResponse,
 } from "./toolAdapter.js";
+import { approveOutsideWorkspaceAccess } from "../tools/pathAccessUI.js";
 import { getToolCapabilityMetadata } from "../core/tools/toolCapabilities.js";
 import { createNativeToolDisclosureSnapshot } from "../core/tools/nativeToolDisclosure.js";
 import type { SessionStore, SessionSummary } from "./SessionStore.js";
@@ -2528,6 +2530,168 @@ export class AgentSessionManager {
     );
   }
 
+  /**
+   * Extracts the filesystem targets of a read/search ACP permission request.
+   * Prefers structured `locations`; falls back to conventional rawInput path
+   * keys. Returns undefined when no target can be determined, in which case
+   * the request must fall through to a user prompt.
+   */
+  private extractAcpReadTargets(
+    request: RequestPermissionRequest,
+    projectRoot: string,
+  ): string[] | undefined {
+    const targets: string[] = [];
+    const push = (value: unknown) => {
+      if (typeof value !== "string" || !value.trim()) return;
+      const trimmed = value.trim();
+      targets.push(
+        canonicalizePath(
+          nodePath.isAbsolute(trimmed)
+            ? trimmed
+            : nodePath.resolve(projectRoot, trimmed),
+        ),
+      );
+    };
+    for (const location of request.toolCall.locations ?? []) {
+      push(location.path);
+    }
+    if (targets.length === 0) {
+      const input = request.toolCall.rawInput;
+      if (input && typeof input === "object" && !Array.isArray(input)) {
+        const raw = input as Record<string, unknown>;
+        push(raw.file_path ?? raw.path ?? raw.abs_path ?? raw.filePath);
+      }
+    }
+    return targets.length > 0 ? targets : undefined;
+  }
+
+  /**
+   * Resolves a read/search ACP permission request against the same path-access
+   * policy the built-in read tools use: workspace paths are allowed, trusted
+   * outside paths are allowed, and untrusted outside paths go through the
+   * outside-read gate (guardian auto-review, then the path-access card).
+   * Returns undefined when the request has no determinable target and must
+   * fall through to the generic prompt.
+   */
+  private async resolveAcpReadPermission(args: {
+    session: AgentSession;
+    task: string;
+    readonlyOnly: boolean;
+    requestContext: Readonly<ToolDispatchContext> | undefined;
+    request: RequestPermissionRequest;
+  }): Promise<RequestPermissionResponse | undefined> {
+    const sessionId = args.session.id;
+    const toolKind = args.request.toolCall.kind;
+    const options = args.request.options;
+    const allowOptionId = options.find(
+      (option) => option.kind === "allow_once",
+    )?.optionId;
+    const rejectOptionId = options.find((option) =>
+      option.kind.startsWith("reject"),
+    )?.optionId;
+    if (!allowOptionId) return undefined;
+
+    const requestContext = args.requestContext;
+    const projectRoot = args.session.requireProjectRoot();
+    const targets = this.extractAcpReadTargets(args.request, projectRoot);
+    if (!targets) return undefined;
+
+    const workspaceRoots = (
+      requestContext?.workspaceProjectRoots?.length
+        ? [...requestContext.workspaceProjectRoots]
+        : [projectRoot]
+    ).map((root) => canonicalizePath(root));
+    const outside = targets.filter(
+      (target) =>
+        !workspaceRoots.some((root) => isPathWithinRoot(target, root)),
+    );
+    const untrusted = requestContext
+      ? outside.filter(
+          (target) =>
+            !requestContext.approvalManager.isPathTrusted(sessionId, target),
+        )
+      : outside;
+
+    const recordOutcome = (
+      outcome: "ok" | "rejected" | "cancelled",
+      tier: "static" | "user_rule" | "guardian" | "user",
+    ) => {
+      this.recordAcpPermissionTelemetry({
+        requestContext,
+        readonlyOnly: args.readonlyOnly,
+        toolKind,
+        outcome,
+        tier,
+      });
+    };
+
+    if (untrusted.length === 0) {
+      recordOutcome("ok", outside.length > 0 ? "user_rule" : "static");
+      return { outcome: { outcome: "selected", optionId: allowOptionId } };
+    }
+
+    // Untrusted outside-workspace target — reuse the built-in outside-read
+    // gate so guardian review, coordinator preflight, the path-access card,
+    // and saved trust rules behave exactly like built-in agent reads.
+    if (!requestContext?.approvalPanel) return undefined;
+
+    this.noteBackgroundProgress(sessionId, "awaiting_approval");
+    const guardian = createGuardianOutsideReadOptions(
+      requestContext,
+      sessionId,
+      `acp_${String(toolKind ?? "read")}`,
+      toolKind === "search"
+        ? { kind: "list", recursive: true, includeIgnored: false }
+        : {
+            kind: "read-file",
+            includeSymbols: false,
+            autoFollowSuggestion: false,
+          },
+    );
+    let approvedVia: "guardian" | "user" = "guardian";
+    for (const target of untrusted) {
+      const access = await approveOutsideWorkspaceAccess(
+        target,
+        requestContext.approvalManager,
+        requestContext.approvalPanel,
+        sessionId,
+        args.session.abortSignal,
+        guardian,
+      );
+      if (this.bgCancelled.has(sessionId)) {
+        recordOutcome("cancelled", access.via);
+        return { outcome: { outcome: "cancelled" } };
+      }
+      if (!access.approved) {
+        this.appendPolicyAudit(args.session, {
+          decision: "denied",
+          operation: `acp:${String(toolKind ?? "read")}`,
+          reason:
+            `${access.via}: outside-workspace read denied: ${target}`.slice(
+              0,
+              240,
+            ),
+        });
+        recordOutcome("rejected", access.via);
+        return rejectOptionId
+          ? { outcome: { outcome: "selected", optionId: rejectOptionId } }
+          : { outcome: { outcome: "cancelled" } };
+      }
+      if (access.via === "user") approvedVia = "user";
+      this.appendPolicyAudit(args.session, {
+        decision: "allowed",
+        operation: `acp:${String(toolKind ?? "read")}`,
+        reason:
+          `${access.via}: outside-workspace read allowed: ${target}`.slice(
+            0,
+            240,
+          ),
+      });
+    }
+    recordOutcome("ok", approvedVia);
+    return { outcome: { outcome: "selected", optionId: allowOptionId } };
+  }
+
   private getReadonlyAcpCommandOption(args: {
     session: AgentSession;
     requestContext: Readonly<ToolDispatchContext> | undefined;
@@ -2985,6 +3149,8 @@ export class AgentSessionManager {
     mutationLeaseHolder: WorkspaceMutationLeaseHolder | undefined;
     requestContext: Readonly<ToolDispatchContext> | undefined;
     request: RequestPermissionRequest;
+    /** Display label of the ACP agent raising the request. */
+    agentLabel?: string;
   }): Promise<RequestPermissionResponse> {
     const sessionId = args.session.id;
     const toolKind = args.request.toolCall.kind;
@@ -2997,6 +3163,11 @@ export class AgentSessionManager {
 
     const options = args.request.options;
     if (options.length === 0) return { outcome: { outcome: "cancelled" } };
+
+    if (toolKind === "read" || toolKind === "search") {
+      const readResolution = await this.resolveAcpReadPermission(args);
+      if (readResolution) return readResolution;
+    }
 
     const prepareMutation = async (optionId: string) => {
       const option = options.find(
@@ -3106,12 +3277,22 @@ export class AgentSessionManager {
 
     const cardCommand =
       toolKind === "execute" ? this.extractAcpCommand(args.request) : undefined;
+    const approvalKind = this.acpToolKindToApprovalKind(toolKind);
     const selected = await args.requestContext?.onApprovalRequest?.(
       {
-        kind: this.acpToolKindToApprovalKind(toolKind),
+        kind: approvalKind,
         title:
           args.request.toolCall.title?.trim() ||
           "ACP background agent requests permission",
+        ...(approvalKind === "mcp"
+          ? {
+              toolOrigin: "acp" as const,
+              mcpServerName: args.agentLabel ?? "External agent",
+              mcpToolName:
+                args.request.toolCall.title?.trim() ||
+                String(toolKind ?? "tool"),
+            }
+          : {}),
         ...(cardCommand
           ? {
               commandText: cardCommand,
@@ -8906,6 +9087,7 @@ export class AgentSessionManager {
                 mutationLeaseHolder,
                 requestContext: acpRequestContext,
                 request: permissionRequest,
+                agentLabel: backendRoute.agent.label,
               }),
           });
           if (!this.bgCancelled.has(session.id)) {

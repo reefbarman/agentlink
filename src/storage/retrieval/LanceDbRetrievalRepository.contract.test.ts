@@ -11,7 +11,12 @@ import type {
   RetrievalPublicationRequest,
   RetrievalSourceFreshness,
 } from "../../core/retrieval/contracts.js";
+import { connect, makeArrowTable } from "@lancedb/lancedb";
 import { describe, expect, it } from "vitest";
+import {
+  retrievalChunkSchema,
+  retrievalRelationSchema,
+} from "./lanceDbSchemas.js";
 
 import { LanceDbRetrievalRepository } from "./LanceDbRetrievalRepository.js";
 import { describeRetrievalRepositoryContract } from "../../test/retrievalRepositoryContract.js";
@@ -783,6 +788,110 @@ describe("LanceDbRetrievalRepository persistence", () => {
       await expect(repository.health()).rejects.toThrow(
         "retrieval_store_closed",
       );
+    });
+  });
+
+  it("does not sweep generations while an activation may still be in flight", async () => {
+    await withStore(async (root) => {
+      const seeded = repository(root);
+      const request = publication("sweep", "revision-sweep");
+      await seeded.migrate(fingerprint);
+      await seeded.preparePublication(request);
+      await seeded.commitPublication(request.publicationId);
+      await seeded.close();
+
+      // These rows can be newly copied by an activation that has not yet
+      // advanced its source pointer, so optimize must leave them untouched.
+      const connection = await connect(root, { readConsistencyInterval: 0 });
+      const chunks = await connection.openTable("retrieval_chunks");
+      const staleChunk = {
+        ...request.chunks[0]!,
+        id: "chunk:stale",
+        generation: "generation:stale",
+      };
+      await chunks.add(
+        makeArrowTable(
+          [
+            {
+              chunk_id: staleChunk.id,
+              source_id: request.source.id,
+              revision_id: request.source.revision.id,
+              generation: "generation:stale",
+              search_text: staleChunk.content,
+              embedding: [0, 1, 0],
+              payload_json: JSON.stringify(staleChunk),
+            },
+            {
+              chunk_id: "chunk:ghost",
+              source_id: "source:ghost",
+              revision_id: "revision-ghost",
+              generation: "generation:ghost",
+              search_text: "ghost",
+              embedding: [0, 0, 1],
+              payload_json: JSON.stringify({
+                ...staleChunk,
+                id: "chunk:ghost",
+                sourceId: "source:ghost",
+              }),
+            },
+          ],
+          { schema: retrievalChunkSchema(3) },
+        ),
+      );
+      const relations = await connection.openTable("retrieval_relations");
+      await relations.add(
+        makeArrowTable(
+          [
+            {
+              relation_id: "relation:stale",
+              source_id: request.source.id,
+              revision_id: request.source.revision.id,
+              generation: "generation:stale",
+              payload_json: JSON.stringify({
+                ...request.relations[0]!,
+                id: "relation:stale",
+                generation: "generation:stale",
+              }),
+            },
+          ],
+          { schema: retrievalRelationSchema() },
+        ),
+      );
+      chunks.close();
+      relations.close();
+      connection.close();
+
+      const swept = repository(root);
+      try {
+        await swept.migrate(fingerprint);
+        const optimized = await swept.optimize();
+        expect(optimized.staleRecordsRemoved).toBeUndefined();
+
+        const verify = await connect(root, { readConsistencyInterval: 0 });
+        const verifyChunks = await verify.openTable("retrieval_chunks");
+        const verifyRelations = await verify.openTable("retrieval_relations");
+        const chunkRows = (await verifyChunks.query().toArray()).map(
+          (row: { toJSON(): unknown }) => row.toJSON(),
+        ) as Array<{ chunk_id: string }>;
+        const relationRows = (await verifyRelations.query().toArray()).map(
+          (row: { toJSON(): unknown }) => row.toJSON(),
+        ) as Array<{ relation_id: string }>;
+        expect(chunkRows.map((row) => row.chunk_id)).toEqual(
+          expect.arrayContaining([
+            "chunk:revision-sweep",
+            "chunk:stale",
+            "chunk:ghost",
+          ]),
+        );
+        expect(relationRows.map((row) => row.relation_id)).toEqual(
+          expect.arrayContaining(["relation:revision-sweep", "relation:stale"]),
+        );
+        verifyChunks.close();
+        verifyRelations.close();
+        verify.close();
+      } finally {
+        await swept.close();
+      }
     });
   });
 

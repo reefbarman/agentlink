@@ -118,6 +118,87 @@ describe("commandRulePolicy", () => {
     expect(evaluation.allSegmentsExplicitlyAllowed).toBe(true);
   });
 
+  it("requires a matching rule for complete wrapper commands", () => {
+    const evaluation = evaluateCommandRulePolicy(
+      rules({
+        project: [
+          { pattern: "timeout", mode: "exact", decision: "allow" },
+          { pattern: "npm test", mode: "exact", decision: "allow" },
+        ],
+      }),
+      "timeout 60 npm test",
+    );
+
+    expect(evaluation.segments.map((segment) => segment.command)).toEqual([
+      "timeout 60 npm test",
+    ]);
+    expect(evaluation.decision).toBe("allow");
+    expect(evaluation.allSegmentsExplicitlyAllowed).toBe(false);
+  });
+
+  it("does not grant wrapper arguments through separately allowed inner commands", () => {
+    const evaluation = evaluateCommandRulePolicy(
+      rules({
+        project: [
+          { pattern: "env", mode: "exact", decision: "allow" },
+          { pattern: "npm test", mode: "exact", decision: "allow" },
+        ],
+      }),
+      "env LD_PRELOAD=/tmp/untrusted.dylib npm test",
+    );
+
+    expect(evaluation.decision).toBe("allow");
+    expect(evaluation.allSegmentsExplicitlyAllowed).toBe(false);
+  });
+
+  it("preserves Prompt and Forbidden rules for complete wrapper commands", () => {
+    const evaluation = evaluateCommandRulePolicy(
+      rules({
+        project: [
+          {
+            pattern: "sudo npm publish",
+            mode: "exact",
+            decision: "forbidden",
+          },
+          { pattern: "sudo", mode: "exact", decision: "allow" },
+          { pattern: "npm publish", mode: "exact", decision: "allow" },
+        ],
+      }),
+      "sudo npm publish",
+    );
+
+    expect(evaluation.decision).toBe("forbidden");
+    expect(evaluation.allSegmentsExplicitlyAllowed).toBe(false);
+  });
+
+  it("requires every wrapper-expanded command to be allowed", () => {
+    const evaluation = evaluateCommandRulePolicy(
+      rules({
+        project: [{ pattern: "npm test", mode: "exact", decision: "allow" }],
+      }),
+      "timeout 60 npm test",
+    );
+
+    expect(evaluation.decision).toBe("allow");
+    expect(evaluation.allSegmentsExplicitlyAllowed).toBe(false);
+  });
+
+  it("preserves Forbidden rules for intermediate nested wrappers", () => {
+    const evaluation = evaluateCommandRulePolicy(
+      rules({
+        project: [
+          { pattern: "sudo", mode: "exact", decision: "allow" },
+          { pattern: "env", mode: "exact", decision: "forbidden" },
+          { pattern: "npm test", mode: "exact", decision: "allow" },
+        ],
+      }),
+      "sudo env FOO=1 npm test",
+    );
+
+    expect(evaluation.decision).toBe("forbidden");
+    expect(evaluation.allSegmentsExplicitlyAllowed).toBe(false);
+  });
+
   it("matches argv prefixes instead of string prefixes", () => {
     const rule: CommandRule = {
       pattern: "npm test",

@@ -6309,9 +6309,13 @@ describe("ChatViewProvider session state sync", () => {
     ).toEqual(["first", "second", "third"]);
   });
 
-  it("hydrates the foreground transcript when the VS Code webview reconnects", async () => {
+  it("waits for startup restore and hydrates the foreground transcript on tab divergence", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
+    let finishStartupRestore!: () => void;
+    const startupRestore = new Promise<void>((resolve) => {
+      finishStartupRestore = resolve;
+    });
     const provider = new ChatViewProvider(
       { fsPath: "/tmp/ext" } as never,
       { get: vi.fn(), update: vi.fn() } as never,
@@ -6337,6 +6341,9 @@ describe("ChatViewProvider session state sync", () => {
     };
     const manager = {
       getForegroundSession: vi.fn(() => foreground),
+      getSession: vi.fn((sessionId: string) =>
+        sessionId === foreground.id ? foreground : undefined,
+      ),
       getConfig: vi.fn(() => ({
         model: "claude-sonnet-4-6",
         autoCondenseThreshold: 0.8,
@@ -6349,8 +6356,32 @@ describe("ChatViewProvider session state sync", () => {
       onSessionsChanged: undefined,
     };
     provider.setSessionManager(manager as never);
+    provider.setChatTabStartupRestore(startupRestore);
+    const workspaceSnapshot = {
+      controllerEpoch: "controller-startup",
+      focusedTabId: "tab-selected",
+      tabs: [
+        {
+          tabId: "tab-selected",
+          displayNumber: 1,
+          label: "T1",
+          sessionId: "session-selected",
+          placement: "docked",
+          title: foreground.title,
+          status: "completed",
+          busy: false,
+        },
+      ],
+    } as const;
+    (
+      provider as unknown as {
+        getChatWorkspaceViewSnapshot: () => typeof workspaceSnapshot;
+      }
+    ).getChatWorkspaceViewSnapshot = () => workspaceSnapshot;
 
-    const receiveListeners: Array<(msg: Record<string, unknown>) => void> = [];
+    const receiveListeners: Array<
+      (msg: Record<string, unknown>) => void | Promise<void>
+    > = [];
     (provider as unknown as { view: unknown }).view = {
       webview: {
         postMessage: mockPostMessage.mockResolvedValue(true),
@@ -6373,24 +6404,52 @@ describe("ChatViewProvider session state sync", () => {
     );
     receiveListeners[0]?.({ command: "webviewReady" });
     await Promise.resolve();
-
     expect(
       mockPostMessage.mock.calls.some(
-        ([message]) =>
-          message.type === "agentSessionLoaded" &&
-          message.sessionId === "session-1" &&
-          Array.isArray(message.messages) &&
-          message.messages.some(
-            (msg: { role?: string; content?: unknown }) =>
-              msg.role === "assistant" &&
-              Array.isArray(msg.content) &&
-              msg.content.some(
-                (block: { type?: string; text?: string }) =>
-                  block.type === "text" && block.text === "missed response",
-              ),
-          ),
+        ([message]) => message.type === "agentSessionLoaded",
       ),
-    ).toBe(true);
+    ).toBe(false);
+
+    finishStartupRestore();
+    await vi.waitFor(() =>
+      expect(
+        mockPostMessage.mock.calls.some(
+          ([message]) =>
+            message.type === "agentSessionLoaded" &&
+            message.sessionId === "session-1" &&
+            Array.isArray(message.messages) &&
+            message.messages.some(
+              (msg: { role?: string; content?: unknown }) =>
+                msg.role === "assistant" &&
+                Array.isArray(msg.content) &&
+                msg.content.some(
+                  (block: { type?: string; text?: string }) =>
+                    block.type === "text" && block.text === "missed response",
+                ),
+            ),
+        ),
+      ).toBe(true),
+    );
+
+    const published = mockPostMessage.mock.calls.map(([message]) => message);
+    const workspaceIndex = published.findIndex(
+      (message) =>
+        message.type === "chatWorkspaceUpdate" &&
+        message.snapshot === workspaceSnapshot,
+    );
+    const hydrationIndex = published.findIndex(
+      (message) => message.type === "agentSessionLoaded",
+    );
+    const restoreDoneIndex = published.findIndex(
+      (message) => message.type === "agentRestoreSessionDone",
+    );
+    expect(workspaceIndex).toBeGreaterThanOrEqual(0);
+    expect(hydrationIndex).toBeGreaterThan(workspaceIndex);
+    expect(restoreDoneIndex).toBeGreaterThan(hydrationIndex);
+    expect(published[hydrationIndex]).toMatchObject({
+      sessionId: foreground.id,
+      restored: true,
+    });
   });
 
   it("projects Ask mode before a session exists when no folder is open", async () => {

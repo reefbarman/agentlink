@@ -335,6 +335,8 @@ export interface TerminalExecuteOptions {
   split_from?: string;
   background?: boolean;
   timeout?: number;
+  /** Cancels terminal admission before command launch. */
+  admissionSignal?: AbortSignal;
   env?: Record<string, string>;
   /** Use a fresh writable per-command HOME. Requires sandbox execution. */
   temporaryHome?: true;

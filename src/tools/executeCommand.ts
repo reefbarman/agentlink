@@ -20,6 +20,7 @@ import type {
 } from "../core/capabilities/terminal.js";
 
 import type { SandboxViolation } from "../core/sandboxPolicy.js";
+import { TerminalAdmissionCancelledError } from "../terminal/terminalAdmissionQueue.js";
 import {
   SandboxPreparationDriftError,
   TerminalTargetRecoveryError,
@@ -57,6 +58,7 @@ import {
 } from "../approvals/commandApprovalReview.js";
 import { collectCommandReviewEvidence } from "../approvals/commandReviewEvidence.js";
 import type {
+  CommandRecoveryAttempt,
   CommandReviewSummary,
   NetworkReviewSummary,
   SubCommandEntry,
@@ -1148,16 +1150,9 @@ export async function handleExecuteCommand(
         "Command execution is forbidden by an applicable command policy rule.",
       );
     }
-    const initialRulePolicyFingerprint =
+    let expectedRulePolicyFingerprint =
       commandRulePolicyFingerprint(initialRulePolicy);
     const explicitRuleAuthority =
-      !managedNetwork &&
-      !additionalPermissions &&
-      !params.files?.length &&
-      !params.env &&
-      !temporaryHome &&
-      !params.force &&
-      !params.force_reason &&
       initialRulePolicy.allSegmentsExplicitlyAllowed;
     const routeContext = routeContextFor(
       approvalMode,
@@ -1400,6 +1395,7 @@ export async function handleExecuteCommand(
         split_from: params.split_from,
         background: params.background,
         timeout: params.timeout ? params.timeout * 1000 : undefined,
+        admissionSignal: providers.toolAbortSignal,
         env: params.env,
         temporaryHome: temporaryHome || undefined,
         sandboxSessionId: sessionId,
@@ -1477,6 +1473,14 @@ export async function handleExecuteCommand(
         const releaseGate = await approvalGate.acquire();
         try {
           const subCommands = splitCompoundCommand(params.command);
+          const gatedRulePolicy = commandRulePolicyFor(
+            approvalManager,
+            sessionId,
+            params.command,
+            cwd,
+          );
+          expectedRulePolicyFingerprint =
+            commandRulePolicyFingerprint(gatedRulePolicy);
           const approvalResult = await approveSubCommands(
             subCommands,
             params.command,
@@ -1491,17 +1495,11 @@ export async function handleExecuteCommand(
               inlineFiles,
               requireHumanApproval: inlineFiles !== undefined,
               requireFreshReview: managedNetwork || additionalPermissions,
-              rulePolicy: initialRulePolicy,
-              commandPolicyFingerprint: initialRulePolicyFingerprint,
+              rulePolicy: gatedRulePolicy,
+              commandPolicyFingerprint:
+                commandRulePolicyFingerprint(gatedRulePolicy),
               explicitNativeEscalation: nativeEscalation,
-              ruleFastPathAllowed:
-                !inlineFiles &&
-                !managedNetwork &&
-                !additionalPermissions &&
-                !params.env &&
-                !temporaryHome &&
-                !params.force &&
-                !params.force_reason,
+              ruleFastPathAllowed: true,
               hasEnvOverrides:
                 temporaryHome ||
                 Boolean(params.env && Object.keys(params.env).length > 0),
@@ -1585,6 +1583,19 @@ export async function handleExecuteCommand(
               params.command,
             );
             if (editedValidation) return editedValidation;
+            if (
+              commandRulePolicyFor(
+                approvalManager,
+                sessionId,
+                commandToRun,
+                cwd,
+              ).decision === "forbidden"
+            ) {
+              return rejectedCommandResult(
+                commandToRun,
+                "Edited command execution is forbidden by an applicable command policy rule.",
+              );
+            }
             const editedGitRetry =
               preparedExecution.security.route === "sandbox"
                 ? await protectedGitMetadataRetryResult({
@@ -1645,6 +1656,51 @@ export async function handleExecuteCommand(
             );
           }
           autoApprovedByTier = approvalResult.autoApprovedByTier;
+          if (hasPolicyDrift(providers, sessionId, routeContext)) {
+            const driftedPreparation = preparedExecution;
+            preparedExecution = undefined;
+            driftedPreparation.dispose();
+            recordExecutionAudit(
+              providers.terminalProvider,
+              "preparation_revoked",
+              driftedPreparation.security,
+              { failure: "policy_drift", resultStatus: "policy_drift" },
+            );
+            return policyDriftResult(commandToRun, driftedPreparation.security);
+          }
+          const preCommitRulePolicy = commandRulePolicyFor(
+            approvalManager,
+            sessionId,
+            commandEditedByUser ? commandToRun : params.command,
+            cwd,
+          );
+          if (
+            preCommitRulePolicy.decision === "forbidden" ||
+            (!commandEditedByUser &&
+              commandRulePolicyFingerprint(preCommitRulePolicy) !==
+                expectedRulePolicyFingerprint)
+          ) {
+            const driftedPreparation = preparedExecution;
+            preparedExecution = undefined;
+            driftedPreparation.dispose();
+            recordExecutionAudit(
+              providers.terminalProvider,
+              "preparation_revoked",
+              driftedPreparation.security,
+              { failure: "policy_drift", resultStatus: "rule_policy_drift" },
+            );
+            return policyDriftResult(commandToRun, driftedPreparation.security);
+          }
+          approvalResult.commitMutations?.();
+          commitApprovalMutations = undefined;
+          expectedRulePolicyFingerprint = commandRulePolicyFingerprint(
+            commandRulePolicyFor(
+              approvalManager,
+              sessionId,
+              commandEditedByUser ? commandToRun : params.command,
+              cwd,
+            ),
+          );
         } finally {
           releaseGate();
         }
@@ -1659,7 +1715,7 @@ export async function handleExecuteCommand(
       if (
         !commandEditedByUser &&
         commandRulePolicyFingerprint(currentRulePolicy) !==
-          initialRulePolicyFingerprint
+          expectedRulePolicyFingerprint
       ) {
         const driftedPreparation = preparedExecution;
         preparedExecution = undefined;
@@ -1794,10 +1850,17 @@ export async function handleExecuteCommand(
           result.execution_attempts = [firstAttempt];
           result.retry_safe = firstAttempt.retry_safe;
         } else {
+          const retryRulePolicy = commandRulePolicyFor(
+            approvalManager,
+            sessionId,
+            commandToRun,
+            cwd,
+          );
           const retryRouteContext = routeContextFor(
             approvalModeFor(providers, sessionId),
             "native-escalation",
             providers.commandExecutionPolicy,
+            false,
           );
           const retryReason = `The sandbox denied ${capabilityDenial.operation}${
             capabilityDenial.target ? ` for ${capabilityDenial.target}` : ""
@@ -1866,7 +1929,22 @@ export async function handleExecuteCommand(
                 workspaceRoots,
                 {
                   displayCommand: commandToRun,
+                  requireHumanApproval: true,
                   requireFreshReview: true,
+                  ruleFastPathAllowed: false,
+                  allowRuleChanges: false,
+                  skipAutomaticReviewer: true,
+                  recoveryAttempt: {
+                    denialOperation: capabilityDenial.operation,
+                    denialReason: capabilityDenial.reason,
+                    firstAttemptRoute: firstAttempt.route,
+                    commandSent: firstAttempt.command_sent,
+                    processLaunched: firstAttempt.process_launched,
+                    mayHaveSideEffects: firstAttempt.may_have_side_effects,
+                  },
+                  rulePolicy: retryRulePolicy,
+                  commandPolicyFingerprint:
+                    commandRulePolicyFingerprint(retryRulePolicy),
                   hasEnvOverrides:
                     temporaryHome ||
                     Boolean(params.env && Object.keys(params.env).length > 0),
@@ -2202,6 +2280,9 @@ export async function handleExecuteCommand(
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (err instanceof TerminalAdmissionCancelledError) {
+      return cancelledCommandResult(params.command);
+    }
     if (err instanceof SandboxPreparationDriftError) {
       const retryGuidance: ExecuteCommandRetryGuidance = {
         code: err.code,
@@ -2424,8 +2505,11 @@ async function approveSubCommands(
     commandPolicyFingerprint?: string;
     explicitNativeEscalation?: boolean;
     ruleFastPathAllowed?: boolean;
+    allowRuleChanges?: boolean;
+    skipAutomaticReviewer?: boolean;
     hasEnvOverrides?: boolean;
     forceRequested?: boolean;
+    recoveryAttempt?: CommandRecoveryAttempt;
     routeContext: TerminalExecutionRouteContext;
     providers?: ExecuteCommandProviders;
     security?: TerminalExecutionSecuritySummary;
@@ -2472,13 +2556,11 @@ async function approveSubCommands(
   const allApproved =
     options?.ruleFastPathAllowed !== false &&
     rulePolicy.decision !== "prompt" &&
-    rulePolicy.allSegmentsApprovedByRule;
-  if (
     !options?.requireHumanApproval &&
     !options?.requireFreshReview &&
     !retainedDenial &&
-    allApproved
-  ) {
+    rulePolicy.allSegmentsExplicitlyAllowed;
+  if (allApproved) {
     return { approved: true, approval: { by: "explicit_rule" } };
   }
 
@@ -2536,7 +2618,9 @@ async function approveSubCommands(
   const hasEnvOverrides = Boolean(options?.hasEnvOverrides);
   const forceRequested = Boolean(options?.forceRequested);
   let commandReview: CommandReviewSummary | undefined;
-  let humanOnlyReason: string | undefined;
+  let humanOnlyReason: string | undefined = options?.recoveryAttempt
+    ? "This is a one-time second execution after a sandbox denial and requires your direct approval."
+    : undefined;
   if (circuitInterrupted) {
     return { approved: false, reviewCircuitInterrupted: true };
   }
@@ -2571,6 +2655,7 @@ async function approveSubCommands(
   if (
     rulePolicy.decision !== "prompt" &&
     policy === "approve-for-me" &&
+    !options?.skipAutomaticReviewer &&
     reviewProviders?.commandApprovalReviewer
   ) {
     const eligibility = getCommandAutoApprovalEligibility({
@@ -2713,6 +2798,7 @@ async function approveSubCommands(
         cwd,
         commandReview,
         humanOnlyReason,
+        recoveryAttempt: options?.recoveryAttempt,
         commandPolicyFingerprint,
         security: options?.security,
         sessionId,
@@ -2724,6 +2810,7 @@ async function approveSubCommands(
           Boolean(options?.inlineFiles?.length) ||
           options?.hasEnvOverrides ||
           options?.forceRequested,
+        skipApprovalRecording: Boolean(options?.recoveryAttempt),
       },
     );
   const response = await promise;
@@ -2759,7 +2846,9 @@ async function approveSubCommands(
     if (mutationsCommitted) return;
     mutationsCommitted = true;
     commitApprovalRecording();
-    for (const rule of response.rules ?? []) {
+    for (const rule of options?.allowRuleChanges === false
+      ? []
+      : (response.rules ?? [])) {
       if (rule.mode === "skip" || rule.scope === "skip" || !rule.pattern)
         continue;
       const saved = approvalManager.addCommandRule(

@@ -20,7 +20,7 @@ function commandRuleAuthorityLabel(rule: CommandRule): string {
 
 function commandRuleAuthorityTitle(rule: CommandRule): string {
   if (rule.decision === undefined || rule.decision === "allow") {
-    return "Runs matching commands without another approval card while preserving the requested execution route and permissions.";
+    return "Runs matching commands without another approval card. Allow covers the requested route, capabilities, environment values, and inline payloads; validation and Forbidden rules still apply.";
   }
   return `${rule.decision} command rule`;
 }

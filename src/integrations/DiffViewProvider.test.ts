@@ -7,6 +7,7 @@ import {
   DiffViewProvider,
   createFormatOnSaveReport,
   createUserEditsPatch,
+  diagnoseEditApplyFailure,
   diagnoseEditSaveFailure,
   interactiveDiffEditorOptions,
   interactiveFallbackEditorOptions,
@@ -97,6 +98,33 @@ describe("createFormatOnSaveReport", () => {
       format_on_save: true,
       eol_changed: true,
     });
+  });
+
+  it.each(["Assets/Example.meta", "Assets/Example.prefab"])(
+    "warns when format-on-save changes a Unity serialization file (%s)",
+    (relPath) => {
+      const report = createFormatOnSaveReport(
+        relPath,
+        "guid: abc",
+        "guid: abc\nlabels: []",
+      );
+
+      expect(report).toMatchObject({
+        format_on_save: true,
+        warnings: [expect.stringContaining("Unity serialization")],
+      });
+    },
+  );
+
+  it("does not add a Unity warning for ordinary YAML files", () => {
+    const report = createFormatOnSaveReport(
+      "config/example.yaml",
+      "value:one",
+      "value: one",
+    );
+
+    expect(report).toMatchObject({ format_on_save: true });
+    expect(report?.warnings).toBeUndefined();
   });
 });
 
@@ -240,11 +268,37 @@ describe("diagnoseEditSaveFailure", () => {
         disk_state: "unchanged",
         concurrent_change: false,
         review_state: "diff_snapshot_preserved",
+        dirty_document_state: "unavailable",
         vscode_error_detail: "unavailable",
         retryable: true,
+        retry_target: "editor_save",
       },
       next_steps: [
         expect.stringContaining("review snapshot"),
+        expect.stringContaining("pre-edit disk baseline"),
+      ],
+    });
+  });
+
+  it("reports whether the dirty editor changed during a failed save", async () => {
+    const filePath = await makeFile("old");
+
+    await expect(
+      diagnoseEditSaveFailure({
+        absolutePath: filePath,
+        baselineContent: "old",
+        documentDirty: true,
+        saveAttemptContent: "proposed content",
+        currentDocumentContent: "save participant mutation",
+        reviewState: "dirty_document_preserved",
+      }),
+    ).resolves.toMatchObject({
+      save_failure: {
+        dirty_document_state: "changed_after_save_attempt",
+        retry_target: "editor_save",
+      },
+      next_steps: [
+        expect.stringContaining("changed during the failed save"),
         expect.stringContaining("pre-edit disk baseline"),
       ],
     });
@@ -290,6 +344,145 @@ describe("diagnoseEditSaveFailure", () => {
         disk_error_code: "ENOENT",
       },
     });
+  });
+});
+
+describe("diagnoseEditApplyFailure", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
+    tempDirs.length = 0;
+  });
+
+  async function makeFile(content: string): Promise<string> {
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-apply-failure-"),
+    );
+    tempDirs.push(dir);
+    const filePath = path.join(dir, "file.ts");
+    await fs.writeFile(filePath, content, "utf-8");
+    return filePath;
+  }
+
+  it("reports an unchanged disk and matching document baseline", async () => {
+    const filePath = await makeFile("baseline");
+
+    await expect(
+      diagnoseEditApplyFailure({
+        absolutePath: filePath,
+        baselineContent: "baseline",
+        document: { getText: () => "baseline", isDirty: false },
+      }),
+    ).resolves.toEqual({
+      apply_failure: {
+        document_dirty: false,
+        document_state: "matches_baseline",
+        disk_state: "unchanged",
+        concurrent_change: false,
+        retryable: true,
+      },
+      next_steps: [expect.stringContaining("rejected the editor apply")],
+    });
+  });
+
+  it("treats BOM and EOL-normalized editor content as matching the baseline", async () => {
+    const filePath = await makeFile("\uFEFFbaseline\r\n");
+
+    await expect(
+      diagnoseEditApplyFailure({
+        absolutePath: filePath,
+        baselineContent: "\uFEFFbaseline\r\n",
+        document: { getText: () => "baseline\n", isDirty: false },
+      }),
+    ).resolves.toMatchObject({
+      apply_failure: {
+        document_dirty: false,
+        document_state: "matches_baseline",
+        disk_state: "unchanged",
+        concurrent_change: false,
+      },
+    });
+  });
+
+  it("reports concurrent disk drift and a divergent dirty document", async () => {
+    const filePath = await makeFile("changed elsewhere");
+
+    await expect(
+      diagnoseEditApplyFailure({
+        absolutePath: filePath,
+        baselineContent: "baseline",
+        document: { getText: () => "unsaved editor content", isDirty: true },
+      }),
+    ).resolves.toEqual({
+      apply_failure: {
+        document_dirty: true,
+        document_state: "differs_from_baseline",
+        disk_state: "changed",
+        concurrent_change: true,
+        retryable: true,
+      },
+      next_steps: [expect.stringContaining("changed on disk")],
+    });
+  });
+
+  it("reports a missing file without guessing document state", async () => {
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-apply-failure-"),
+    );
+    tempDirs.push(dir);
+
+    await expect(
+      diagnoseEditApplyFailure({
+        absolutePath: path.join(dir, "missing.ts"),
+        baselineContent: "baseline",
+      }),
+    ).resolves.toEqual({
+      apply_failure: {
+        document_dirty: "unavailable",
+        document_state: "unavailable",
+        disk_state: "missing",
+        concurrent_change: "unknown",
+        retryable: true,
+      },
+      next_steps: [expect.stringContaining("rejected the editor apply")],
+    });
+  });
+});
+
+describe("DiffViewProvider rollback", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    (vscode.workspace.textDocuments as unknown[]).length = 0;
+  });
+
+  it("does not save the proposed buffer when rollback application fails", async () => {
+    const save = vi.fn(async () => true);
+    const document = {
+      uri: { scheme: "file", fsPath: "/workspace/file.ts" },
+      isDirty: true,
+      lineCount: 1,
+      save,
+    };
+    (vscode.workspace.textDocuments as unknown[]).push(document);
+    vi.spyOn(vscode.workspace, "applyEdit").mockResolvedValue(false);
+    const provider = new DiffViewProvider(0, "failed-revert");
+    Object.assign(provider, {
+      absolutePath: "/workspace/file.ts",
+      relPath: "file.ts",
+      originalContent: "original",
+      editType: "modify",
+    });
+
+    await expect(provider.revertChanges("Rejected")).resolves.toEqual({
+      status: "rejected",
+      path: "file.ts",
+      reason: "revert_apply_failed",
+      next_steps: [expect.stringContaining("preserved")],
+    });
+    expect(save).not.toHaveBeenCalled();
   });
 });
 

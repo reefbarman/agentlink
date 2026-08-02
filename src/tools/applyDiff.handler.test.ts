@@ -185,8 +185,10 @@ describe("handleApplyDiff", () => {
           disk_state: "changed" as const,
           concurrent_change: true,
           review_state: "diff_snapshot_preserved" as const,
+          dirty_document_state: "matches_save_attempt" as const,
           vscode_error_detail: "unavailable" as const,
           retryable: true as const,
+          retry_target: "editor_save" as const,
         },
         next_steps: ["Re-read the changed file before retrying."],
         finalContent: "must-not-leak",
@@ -219,8 +221,10 @@ describe("handleApplyDiff", () => {
         disk_state: "changed",
         concurrent_change: true,
         review_state: "diff_snapshot_preserved",
+        dirty_document_state: "matches_save_attempt",
         vscode_error_detail: "unavailable",
         retryable: true,
+        retry_target: "editor_save",
       },
       next_steps: ["Re-read the changed file before retrying."],
     });
@@ -710,6 +714,124 @@ describe("handleApplyDiff", () => {
     expect(fs.readFileSync(filePath, "utf-8")).toBe("old");
   });
 
+  it("returns copy-ready recovery options for atomic ambiguous matches", async () => {
+    const filePath = path.join(workspaceDir, "src", "atomic-ambiguous.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const originalContent = "target one\ntarget two";
+    fs.writeFileSync(filePath, originalContent, "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(),
+    };
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      {
+        path: "src/atomic-ambiguous.ts",
+        diff: searchReplaceDiff("target", "replacement"),
+        atomic: true,
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error: "Atomic apply_diff validation failed",
+      atomic: true,
+      no_changes_applied: true,
+      pre_edit_content_hash: createHash("sha256")
+        .update(originalContent)
+        .digest("hex"),
+      failed_block_details: [
+        {
+          index: 0,
+          reason: "ambiguous_exact",
+          candidate_locations: [
+            expect.objectContaining({
+              block_option: { index: 0, occurrence: 1 },
+            }),
+            expect.objectContaining({
+              block_option: { index: 0, occurrence: 2 },
+            }),
+          ],
+          retry_options: {
+            occurrence_examples: [
+              { index: 0, occurrence: 1 },
+              { index: 0, occurrence: 2 },
+            ],
+            replace_all_example: { index: 0, replace_all: true },
+          },
+        },
+      ],
+      next_steps: [
+        expect.stringContaining("expanding SEARCH"),
+        expect.stringContaining("block order"),
+        expect.stringContaining("whitespace- or escape-normalized"),
+      ],
+    });
+    expect(editReviewProvider.reviewAndApply).not.toHaveBeenCalled();
+    expect(fs.readFileSync(filePath, "utf-8")).toBe(originalContent);
+  });
+
+  it("suppresses atomic ambiguity locations after an earlier in-memory block changed them", async () => {
+    const filePath = path.join(
+      workspaceDir,
+      "src",
+      "atomic-stale-locations.ts",
+    );
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "intro\ntarget one\ntarget two", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(),
+    };
+    const diff = [
+      searchReplaceDiff("intro", "intro\ninserted"),
+      searchReplaceDiff("target", "replacement"),
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/atomic-stale-locations.ts", diff, atomic: true },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+    const payload = toolJson(result);
+    const [failedDetail] = payload.failed_block_details as Array<
+      Record<string, unknown>
+    >;
+
+    expect(payload).toMatchObject({
+      atomic: true,
+      no_changes_applied: true,
+      next_steps: expect.arrayContaining([
+        expect.stringContaining("expanding SEARCH"),
+      ]),
+    });
+    expect(failedDetail).toMatchObject({
+      index: 1,
+      reason: "ambiguous_exact",
+      exact_occurrences: 2,
+    });
+    expect(failedDetail).not.toHaveProperty("candidate_locations");
+    expect(failedDetail).not.toHaveProperty("retry_options");
+    expect(fs.readFileSync(filePath, "utf-8")).toBe(
+      "intro\ntarget one\ntarget two",
+    );
+  });
+
   it("marks atomic marker-corruption rejection as no-write", async () => {
     const filePath = path.join(workspaceDir, "src", "atomic-marker.ts");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -867,6 +989,110 @@ describe("handleApplyDiff", () => {
         expect.objectContaining({ index: 1, status: "failed" }),
       ],
     });
+  });
+
+  it("omits stale ambiguity selectors from accepted partial results", async () => {
+    const filePath = path.join(workspaceDir, "src", "partial-ambiguous.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "target one\ntarget two", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async (params) => ({
+        status: "accepted" as const,
+        path: "src/partial-ambiguous.ts",
+        operation: "modified" as const,
+        finalContent: params.content,
+      })),
+    };
+    const diff = [
+      searchReplaceDiff("target", "replacement"),
+      searchReplaceDiff("target one\ntarget two", "updated"),
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/partial-ambiguous.ts", diff },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+    const payload = toolJson(result);
+    const [failedDetail] = payload.failed_block_details as Array<
+      Record<string, unknown>
+    >;
+    const [failedBlockResult] = payload.block_results as Array<
+      Record<string, unknown>
+    >;
+
+    expect(payload).toMatchObject({
+      status: "accepted",
+      partial: true,
+      failed_blocks: [0],
+    });
+    expect(failedDetail).toMatchObject({
+      index: 0,
+      status: "failed",
+      reason: "ambiguous_exact",
+      exact_occurrences: 2,
+    });
+    expect(failedDetail).not.toHaveProperty("candidate_locations");
+    expect(failedDetail).not.toHaveProperty("retry_options");
+    expect(failedBlockResult).not.toHaveProperty("candidate_locations");
+    expect(failedBlockResult).not.toHaveProperty("retry_options");
+  });
+
+  it("preserves current candidate locations without selectors after an unrelated partial edit", async () => {
+    const filePath = path.join(workspaceDir, "src", "partial-locations.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "target one\ntarget two\nfooter", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async (params) => ({
+        status: "accepted" as const,
+        path: "src/partial-locations.ts",
+        operation: "modified" as const,
+        finalContent: params.content,
+      })),
+    };
+    const diff = [
+      searchReplaceDiff("target", "replacement"),
+      searchReplaceDiff("footer", "updated footer"),
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/partial-locations.ts", diff },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+    const payload = toolJson(result);
+    const [failedDetail] = payload.failed_block_details as Array<
+      Record<string, unknown>
+    >;
+
+    expect(failedDetail).toMatchObject({
+      candidate_locations: [
+        expect.objectContaining({ start_line: 1, end_line: 1 }),
+        expect.objectContaining({ start_line: 2, end_line: 2 }),
+      ],
+    });
+    for (const candidate of failedDetail.candidate_locations as Array<
+      Record<string, unknown>
+    >) {
+      expect(candidate).not.toHaveProperty("block_option");
+    }
+    expect(failedDetail).not.toHaveProperty("retry_options");
   });
 
   it("adds partial block metadata to accepted provider results", async () => {

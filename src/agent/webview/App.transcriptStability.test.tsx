@@ -76,6 +76,7 @@ function sessionLoaded(
     assistantText?: string;
     transcriptRevision?: number;
     origin?: "focus";
+    restored?: boolean;
     streaming?: boolean;
     inFlight?: Array<Record<string, unknown>>;
   } = {},
@@ -102,6 +103,7 @@ function sessionLoaded(
     lastInputTokens: 0,
     lastOutputTokens: 0,
     origin: opts.origin,
+    restored: opts.restored,
     streaming: opts.streaming,
     inFlight: opts.inFlight,
   };
@@ -365,6 +367,70 @@ describe("transcript stability across hydrations", () => {
     await waitFor(() => {
       expect(
         transcriptOccurrences(container, "InFlightPartialQrsMoreLiveText"),
+      ).toBe(1);
+    });
+  });
+
+  it("hides interrupted controls until restored transcript hydration completes", async () => {
+    const vscodeApi = createVsCodeApi();
+    const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver({ type: "agentRestoreSessionStart" });
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: "session-1",
+        interrupted: true,
+        streaming: false,
+      },
+    });
+
+    expect(container.querySelector(".interrupted-session-banner")).toBeNull();
+
+    deliver(
+      sessionLoaded("session-1", {
+        restored: true,
+        transcriptRevision: 2,
+        userText: "HydratedBeforeResumeControls",
+      }),
+    );
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: "session-1",
+        interrupted: true,
+        streaming: false,
+      },
+    });
+    deliver({ type: "agentRestoreSessionDone" });
+
+    await waitFor(() => {
+      expect(
+        transcriptOccurrences(container, "HydratedBeforeResumeControls"),
+      ).toBe(1);
+      expect(
+        container.querySelector(".interrupted-session-banner"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("re-arms restored hydration acceptance for a reconnected webview", async () => {
+    const vscodeApi = createVsCodeApi();
+    const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver({ type: "agentRestoreSessionDone" });
+    deliver({ type: "agentRestoreSessionStart" });
+    deliver(
+      sessionLoaded("session-1", {
+        restored: true,
+        transcriptRevision: 3,
+        userText: "RestoredAfterReconnectXyz",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        transcriptOccurrences(container, "RestoredAfterReconnectXyz"),
       ).toBe(1);
     });
   });

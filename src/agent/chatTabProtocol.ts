@@ -34,6 +34,16 @@ export interface ChatWorkspaceViewSnapshot {
   tabs: ChatTabViewSummary[];
 }
 
+export function selectedWorkspaceSessionId(
+  snapshot: ChatWorkspaceViewSnapshot | null,
+  pinnedTabId?: string,
+): string | null {
+  const selectedTabId = pinnedTabId ?? snapshot?.focusedTabId;
+  return (
+    snapshot?.tabs.find((tab) => tab.tabId === selectedTabId)?.sessionId ?? null
+  );
+}
+
 export type ChatTabActionRejectionReason =
   | "invalid_address"
   | "stale_controller"

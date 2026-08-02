@@ -1,4 +1,5 @@
-import type { CommandReviewSummary } from "../types.js";
+import type { CommandRecoveryAttempt, CommandReviewSummary } from "../types.js";
+
 import type { TerminalExecutionSecuritySummary } from "../../../core/capabilities/terminal.js";
 
 interface CommandExecutionContextProps {
@@ -6,6 +7,7 @@ interface CommandExecutionContextProps {
   reason?: string;
   review?: CommandReviewSummary;
   humanOnlyReason?: string;
+  recoveryAttempt?: CommandRecoveryAttempt;
   edited?: boolean;
   nativeEscalation?: boolean;
   approvalRulesSupported?: boolean;
@@ -16,6 +18,7 @@ export function CommandExecutionContext({
   reason,
   review,
   humanOnlyReason,
+  recoveryAttempt,
   edited = false,
   nativeEscalation = false,
   approvalRulesSupported = false,
@@ -26,13 +29,15 @@ export function CommandExecutionContext({
     : protectedTerminal
       ? "Protected Terminal"
       : "AgentLink Terminal";
-  const shortDescription = nativeEscalation
-    ? approvalRulesSupported
-      ? "Normal user permissions"
-      : "One run · normal user permissions"
-    : protectedTerminal
-      ? "Workspace access · private HOME · no network"
-      : "Normal shell permissions";
+  const shortDescription = recoveryAttempt
+    ? "Second execution · may repeat side effects"
+    : nativeEscalation
+      ? approvalRulesSupported
+        ? "Normal user permissions"
+        : "One run · normal user permissions"
+      : protectedTerminal
+        ? "Workspace access · private HOME · no network"
+        : "Normal shell permissions";
   const description = nativeEscalation
     ? approvalRulesSupported
       ? "Runs with your normal user permissions, including host files, credentials, network, and local processes."
@@ -50,7 +55,9 @@ export function CommandExecutionContext({
       ? `${review.risk} risk`
       : review.status.replace("_", " ")
     : undefined;
-  const showHandoffContext = Boolean(review || humanOnlyReason);
+  const showHandoffContext = Boolean(
+    review || humanOnlyReason || recoveryAttempt,
+  );
   const reviewerLabel =
     security?.approvalReviewerSnapshot === "auto-review"
       ? "Auto reviewer"
@@ -108,6 +115,19 @@ export function CommandExecutionContext({
         </div>
       </details>
 
+      {recoveryAttempt && (
+        <div class="command-context-detail-row command-recovery-warning">
+          <span aria-hidden="true" class="codicon codicon-warning" />
+          <div>
+            <strong>Second execution after sandbox denial</strong>
+            <div>
+              The sandbox already launched this command. A second run may repeat
+              side effects.
+            </div>
+          </div>
+        </div>
+      )}
+
       {showHandoffContext && (
         <details class="command-context command-handoff-context">
           <summary class="command-context-summary">
@@ -137,6 +157,25 @@ export function CommandExecutionContext({
                       : ` · ${review.status.replace("_", " ")}`}
                   </strong>
                   <div>{review.rationale}</div>
+                </div>
+              </div>
+            )}
+            {recoveryAttempt && (
+              <div class="command-context-detail-row">
+                <span aria-hidden="true" class="codicon codicon-warning" />
+                <div>
+                  <strong>Sandbox denial details</strong>
+                  <div>
+                    Denied {recoveryAttempt.denialOperation}:{" "}
+                    {recoveryAttempt.denialReason}
+                  </div>
+                  <div>
+                    First attempt: {recoveryAttempt.firstAttemptRoute} · command
+                    sent {String(recoveryAttempt.commandSent)} · process
+                    launched {String(recoveryAttempt.processLaunched)} · may
+                    have side effects{" "}
+                    {String(recoveryAttempt.mayHaveSideEffects)}.
+                  </div>
                 </div>
               </div>
             )}

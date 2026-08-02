@@ -6983,7 +6983,21 @@ describe("BrowserGatewayHelper proxy routing", () => {
                 description: "Search the web.",
                 input_schema: {
                   type: "object",
-                  properties: { query: { type: "string" } },
+                  properties: {
+                    query: { type: "string" },
+                    import_settings: {
+                      type: "object",
+                      properties: {
+                        sRGBTexture: { type: "boolean" },
+                        nested_values: {
+                          type: "array",
+                          items: {
+                            type: ["boolean", "number", "string", "null"],
+                          },
+                        },
+                      },
+                    },
+                  },
                   required: ["query"],
                 },
               },
@@ -7105,7 +7119,13 @@ describe("BrowserGatewayHelper proxy routing", () => {
           {
             id: "direct-search-1",
             name: "searxng__search",
-            input: { query: "AgentLink" },
+            input: {
+              query: "AgentLink",
+              import_settings: {
+                sRGBTexture: true,
+                nested_values: [false, 0, "", null],
+              },
+            },
           },
         ],
       };
@@ -7170,7 +7190,13 @@ describe("BrowserGatewayHelper proxy routing", () => {
           url: "/internal/ask-agent/mcp-tool",
           body: expect.objectContaining({
             name: "searxng__search",
-            input: { query: "AgentLink" },
+            input: {
+              query: "AgentLink",
+              import_settings: {
+                sRGBTexture: true,
+                nested_values: [false, 0, "", null],
+              },
+            },
           }),
         }),
       ]),

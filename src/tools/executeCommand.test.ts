@@ -1772,7 +1772,7 @@ describe("handleExecuteCommand", () => {
         authorityReason: "explicit-rule",
       }),
     );
-    expect(evaluateCommandRules).toHaveBeenCalledTimes(2);
+    expect(evaluateCommandRules).toHaveBeenCalled();
     expect(review).not.toHaveBeenCalled();
     expect(enqueueCommandApproval).not.toHaveBeenCalled();
     expect(textPayload(result)).toMatchObject({
@@ -1841,7 +1841,7 @@ describe("handleExecuteCommand", () => {
           authorityReason: "explicit-rule",
         }),
       );
-      expect(evaluateCommandRules).toHaveBeenCalledTimes(2);
+      expect(evaluateCommandRules).toHaveBeenCalled();
       expect(review).not.toHaveBeenCalled();
       expect(enqueueCommandApproval).not.toHaveBeenCalled();
       expect(textPayload(result)).toMatchObject({
@@ -1906,7 +1906,7 @@ describe("handleExecuteCommand", () => {
     },
   );
 
-  it("does not let a command-only allow rule grant native authority to env overrides", async () => {
+  it("lets a command allow rule authorize environment overrides without another card", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
         key === "masterBypass" ? false : fallback,
@@ -1950,12 +1950,13 @@ describe("handleExecuteCommand", () => {
       expect.objectContaining({ env: { CUSTOM_BUILD_MODE: "1" } }),
       expect.objectContaining({
         requiredAuthority: "sandbox",
-        authorityReason: "approval-policy",
+        authorityReason: "explicit-rule",
       }),
     );
-    expect(enqueueCommandApproval).toHaveBeenCalledOnce();
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
     expect(textPayload(result)).toMatchObject({
-      security: { route: "sandbox" },
+      approval: { by: "explicit_rule" },
+      security: { route: "sandbox", authorityReason: "explicit-rule" },
     });
   });
 
@@ -2290,7 +2291,7 @@ describe("handleExecuteCommand", () => {
     expect(textPayload(result).retry_outcome).toBeUndefined();
   });
 
-  it("makes one freshly reviewed native retry for a structured sandbox denial", async () => {
+  it("requires a human second-execution approval after a structured sandbox denial", async () => {
     const violation = {
       operation: "ipc-connect" as const,
       target: "NuGet-Migrations",
@@ -2367,12 +2368,26 @@ describe("handleExecuteCommand", () => {
       model: "review-model",
       status: "reviewed" as const,
     }));
-    const enqueueCommandApproval = vi.fn();
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "run-once" as const }),
+      commitApprovalRecording: vi.fn(),
+    }));
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
     const result = await handleExecuteCommand(
       { command: "dotnet build" },
       {
+        evaluateCommandRules: (_sessionId: string, command: string) =>
+          evaluateCommandRulePolicy(
+            {
+              session: [],
+              project: [
+                { pattern: "dotnet build", mode: "exact", decision: "allow" },
+              ],
+              global: [],
+            },
+            command,
+          ),
         isCommandApproved: () => true,
         findMatchingCommandRule: vi.fn(() => ({
           rule: { pattern: "dotnet build", mode: "exact" },
@@ -2403,20 +2418,26 @@ describe("handleExecuteCommand", () => {
       approvalRequirement: "explicit-escalation",
       approvalReviewerSnapshot: "auto-review",
       executionPresetSnapshot: "workspace-write",
+      authorityReason: "explicit-escalation",
     });
-    expect(review).toHaveBeenCalledOnce();
-    expect(review).toHaveBeenCalledWith(
+    expect(review).not.toHaveBeenCalled();
+    expect(enqueueCommandApproval).toHaveBeenCalledWith(
+      "dotnet build",
+      "dotnet build",
       expect.objectContaining({
-        command: "dotnet build",
-        cwd: "/workspace",
-        reason: expect.stringContaining("Named mutex requires host IPC"),
-        security: expect.objectContaining({
-          route: "native",
-          permissionIntent: "native-escalation",
-        }),
+        recoveryAttempt: {
+          denialOperation: "ipc-connect",
+          denialReason: "Named mutex requires host IPC",
+          firstAttemptRoute: "sandbox",
+          commandSent: true,
+          processLaunched: true,
+          mayHaveSideEffects: true,
+        },
+        bypassRecentApproval: true,
+        skipApprovalRecording: true,
+        humanOnlyReason: expect.stringContaining("second execution"),
       }),
     );
-    expect(enqueueCommandApproval).not.toHaveBeenCalled();
     expect(sandboxExecute).toHaveBeenCalledOnce();
     expect(nativeExecute).toHaveBeenCalledOnce();
 
@@ -2425,7 +2446,7 @@ describe("handleExecuteCommand", () => {
       exit_code: 0,
       output: "native build passed",
       terminal_id: "native-retry-1",
-      approval: { by: "model_reviewer" },
+      approval: { by: "human" },
       capability_denial: violation,
       retry_outcome: "completed",
       retry_safe: false,
@@ -2853,8 +2874,17 @@ describe("handleExecuteCommand", () => {
 
     const result = await handleExecuteCommand(
       { command: "dotnet build" },
-      { isCommandApproved: () => true } as never,
-      { isRecentlyApproved: () => true } as never,
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      {
+        isRecentlyApproved: () => true,
+        enqueueCommandApproval: vi.fn(() => ({
+          promise: Promise.resolve({ decision: "run-once" as const }),
+          commitApprovalRecording: vi.fn(),
+        })),
+      } as never,
       "session-terminal-retry",
       undefined,
       {
@@ -2865,7 +2895,7 @@ describe("handleExecuteCommand", () => {
     );
 
     expect(prepareExecution).toHaveBeenCalledTimes(2);
-    expect(review).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
     expect(textPayload(result)).toMatchObject({
       exit_code: 1,
       output: "native build failed",
@@ -2877,7 +2907,7 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("falls back to the normal human card when fresh native retry review denies", async () => {
+  it("opens the normal human card directly for a native retry", async () => {
     const violation = {
       operation: "file-read" as const,
       target: "/private/host-sdk",
@@ -2954,7 +2984,7 @@ describe("handleExecuteCommand", () => {
     const result = await handleExecuteCommand(
       { command: "dotnet build" },
       {
-        isCommandApproved: () => true,
+        isCommandApproved: () => false,
         findMatchingCommandRule: vi.fn(),
       } as never,
       { isRecentlyApproved: () => true, enqueueCommandApproval } as never,
@@ -2967,14 +2997,14 @@ describe("handleExecuteCommand", () => {
       },
     );
 
-    expect(review).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
     expect(enqueueCommandApproval).toHaveBeenCalledWith(
       "dotnet build",
       "dotnet build",
       expect.objectContaining({
-        commandReview: expect.objectContaining({
-          outcome: "deny",
-          rationale: "The host SDK read needs human confirmation",
+        recoveryAttempt: expect.objectContaining({
+          denialOperation: "file-read",
+          denialReason: "Sandbox denied host SDK metadata",
         }),
         security: expect.objectContaining({ route: "native" }),
       }),
@@ -3947,28 +3977,15 @@ describe("handleExecuteCommand", () => {
         requiredAuthority: "sandbox",
         permissionIntent: "additional-permissions",
         approvalRequirement: "explicit-permissions",
-        authorityReason: "additional-permissions",
+        authorityReason: "explicit-rule",
       }),
     );
-    expect(review).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "npm test",
-        reason: "Start the test listener.",
-        security: expect.objectContaining({
-          sandbox: expect.objectContaining({
-            capabilities: expect.objectContaining({
-              network: "loopback-listener",
-            }),
-            capabilityRequest: { allowLocalBinding: true },
-          }),
-        }),
-      }),
-    );
+    expect(review).toHaveBeenCalledOnce();
     expect(enqueueCommandApproval).not.toHaveBeenCalled();
     expect(execute).toHaveBeenCalledOnce();
     expect(textPayload(result)).toMatchObject({
       exit_code: 0,
-      approval: { by: "model_reviewer", outcome: "allow" },
+      approval: { by: "model_reviewer" },
       security: {
         permissionIntent: "additional-permissions",
         sandbox: {
@@ -4080,6 +4097,21 @@ describe("handleExecuteCommand", () => {
         reason: "Read public package metadata from the npm registry.",
       },
       {
+        evaluateCommandRules: (_sessionId: string, command: string) =>
+          evaluateCommandRulePolicy(
+            {
+              session: [],
+              project: [
+                {
+                  pattern: "npm view vite version",
+                  mode: "exact",
+                  decision: "allow",
+                },
+              ],
+              global: [],
+            },
+            command,
+          ),
         isCommandApproved: () => true,
         findMatchingCommandRule: vi.fn(() => ({
           rule: {
@@ -4113,39 +4145,17 @@ describe("handleExecuteCommand", () => {
         requiredAuthority: "sandbox",
         permissionIntent: "additional-permissions",
         approvalRequirement: "explicit-permissions",
-        authorityReason: "additional-permissions",
+        authorityReason: "explicit-rule",
       }),
     );
-    expect(review).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "npm view vite version",
-        reason: "Read public package metadata from the npm registry.",
-        security: expect.objectContaining({
-          route: "sandbox",
-          permissionIntent: "additional-permissions",
-          sandbox: expect.objectContaining({
-            capabilities: expect.objectContaining({ network: "proxy-only" }),
-            grant: { grantId: "grant-1", auditId: "network-audit-1" },
-          }),
-        }),
-      }),
-    );
-    expect(networkReview).toHaveBeenCalledWith(
-      expect.objectContaining({
-        request: networkRequest,
-        signal: expect.any(AbortSignal),
-      }),
-    );
+    expect(review).toHaveBeenCalledOnce();
+    expect(networkReview).toHaveBeenCalledOnce();
     expect(evaluateNetworkRules).toHaveBeenCalledTimes(2);
     expect(enqueueCommandApproval).not.toHaveBeenCalled();
     expect(execute).toHaveBeenCalledWith("allow-once");
     expect(textPayload(result)).toMatchObject({
       exit_code: 0,
-      approval: {
-        by: "model_reviewer",
-        outcome: "allow",
-        rationale: "Routine package registry lookup",
-      },
+      approval: { by: "model_reviewer" },
       security: {
         route: "sandbox",
         permissionIntent: "additional-permissions",
@@ -4155,6 +4165,115 @@ describe("handleExecuteCommand", () => {
         },
       },
     });
+  });
+
+  it("does not let a command allow rule override an explicit managed-network prompt", async () => {
+    const request = {
+      requestId: "network-prompt-1",
+      sessionId: "session-network-prompt",
+      auditId: "audit-network-prompt",
+      terminalId: "sandbox-network-prompt",
+      commandId: "command-network-prompt",
+      generation: 1,
+      command: "npm view vite version",
+      cwd: "/workspace",
+      reason: "Read public package metadata",
+      host: "registry.npmjs.org",
+      protocol: "https" as const,
+      port: 443,
+      address: "104.16.24.34",
+      family: 4 as const,
+      dnsAnswers: [{ address: "104.16.24.34", family: 4 as const }],
+      destinationClass: "public" as const,
+    };
+    const enqueueNetworkApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "allow-once" }),
+    }));
+    const prepareExecution = vi.fn(async (options, routeContext) => ({
+      security: {
+        auditId: "audit-network-prompt",
+        route: "sandbox" as const,
+        executionSurface: "verified-sandbox" as const,
+        confinement: "verified-baseline" as const,
+        routeReason: "verified-local-macos" as const,
+        ...routeContext,
+        executionPolicy: "sandbox-baseline-v2" as const,
+        preparedAt: 100,
+      },
+      execute: async () => {
+        expect(
+          await options.onManagedNetworkRequest(
+            request,
+            new AbortController().signal,
+          ),
+        ).toBe("allow-once");
+        return {
+          exit_code: 0,
+          output: "7.0.0",
+          output_captured: true,
+          terminal_id: "sandbox-network-prompt",
+          command_sent: true,
+          process_launched: true,
+          execution_mode: "sandbox_pty" as const,
+        };
+      },
+      dispose: vi.fn(),
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    await handleExecuteCommand(
+      {
+        command: "npm view vite version",
+        sandbox_permissions: "require_managed_network",
+        reason: "Read public package metadata from the npm registry.",
+      },
+      {
+        evaluateCommandRules: (_sessionId: string, command: string) =>
+          evaluateCommandRulePolicy(
+            {
+              session: [],
+              project: [
+                {
+                  pattern: "npm view vite version",
+                  mode: "exact",
+                  decision: "allow",
+                },
+              ],
+              global: [],
+            },
+            command,
+          ),
+        isCommandApproved: () => true,
+        evaluateNetworkRules: () => ({
+          key: "https://registry.npmjs.org:443",
+          decision: "prompt" as const,
+          matches: [],
+        }),
+      } as never,
+      {
+        isRecentlyApproved: () => true,
+        enqueueCommandApproval: vi.fn(),
+        enqueueNetworkApproval,
+      } as never,
+      "session-network-prompt",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: {
+          review: async () => ({
+            outcome: "allow" as const,
+            risk: "low" as const,
+            userAuthorization: "high" as const,
+            rationale: "The exact command is authorized.",
+            model: "review-model",
+            status: "reviewed" as const,
+          }),
+        },
+      },
+    );
+
+    expect(enqueueNetworkApproval).toHaveBeenCalledOnce();
   });
 
   it.each(["session", "project", "global"] as const)(
@@ -4256,15 +4375,8 @@ describe("handleExecuteCommand", () => {
           reason: "Read public package metadata from the npm registry.",
         },
         {
-          isCommandApproved: () => true,
-          findMatchingCommandRule: vi.fn(() => ({
-            rule: {
-              pattern: "npm view vite version",
-              mode: "exact",
-              decision: "allow",
-            },
-            scope: "project",
-          })),
+          isCommandApproved: () => false,
+          findMatchingCommandRule: vi.fn(),
           evaluateNetworkRules,
           addNetworkRule,
         } as never,
@@ -4471,7 +4583,7 @@ describe("handleExecuteCommand", () => {
         reason: "Read public package metadata from the npm registry.",
       },
       {
-        isCommandApproved: () => true,
+        isCommandApproved: () => false,
         findMatchingCommandRule: vi.fn(),
         evaluateNetworkRules: vi.fn(() => ({
           key: "https://registry.npmjs.org:443",
@@ -4940,8 +5052,12 @@ describe("handleExecuteCommand", () => {
         files: [{ name: "body", content: "hello" }],
       },
       {
-        isCommandApproved: () => false,
-        findMatchingCommandRule: () => undefined,
+        isCommandApproved: () => true,
+        findMatchingCommandRule: () =>
+          ({
+            rule: { pattern: "git", mode: "prefix" },
+            scope: "session",
+          }) as never,
       } as never,
       {
         isRecentlyApproved: () => true,
@@ -6416,6 +6532,74 @@ describe("handleExecuteCommand", () => {
       "session-human-policy-drift",
       undefined,
       { terminalProvider, getCommandApprovalPolicy },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      status: "retry_required",
+      security_failure: "policy_drift",
+      command_sent: false,
+    });
+    expect(commitApprovalRecording).not.toHaveBeenCalled();
+    expect(addCommandRule).not.toHaveBeenCalled();
+    expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("does not commit approval mutations when a command rule becomes Forbidden", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const addCommandRule = vi.fn();
+    const commitApprovalRecording = vi.fn();
+    let rules: Parameters<typeof evaluateCommandRulePolicy>[0] = {
+      session: [],
+      project: [],
+      global: [],
+    };
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm install package" },
+      {
+        evaluateCommandRules: (_sessionId: string, command: string) =>
+          evaluateCommandRulePolicy(rules, command),
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+        addCommandRule,
+      } as never,
+      {
+        isRecentlyApproved: () => false,
+        enqueueCommandApproval: () => {
+          rules = {
+            session: [
+              {
+                pattern: "npm install package",
+                mode: "exact",
+                decision: "forbidden",
+              },
+            ],
+            project: [],
+            global: [],
+          };
+          return {
+            promise: Promise.resolve({
+              decision: "run-once",
+              rules: [
+                {
+                  pattern: "npm install",
+                  mode: "prefix",
+                  scope: "session",
+                },
+              ],
+            }),
+            commitApprovalRecording,
+          };
+        },
+      } as never,
+      "session-rule-policy-drift",
+      undefined,
+      { terminalProvider },
     );
 
     expect(textPayload(result)).toMatchObject({

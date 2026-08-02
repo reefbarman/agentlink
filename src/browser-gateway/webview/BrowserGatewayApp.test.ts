@@ -41,6 +41,7 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     onStop,
     slashCommands,
     submitOnEnter,
+    contextMode,
   }: {
     allowThinkingToggle?: boolean;
     availableModels?: Array<{ id: string; displayName?: string }>;
@@ -58,6 +59,27 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     onStop?: () => void;
     slashCommands?: Array<{ name: string }>;
     submitOnEnter?: boolean;
+    contextMode?: {
+      onSubmit: (
+        text: string,
+        attachments: string[],
+        displayText?: string,
+        slashCommandLabel?: string,
+        media?: unknown[],
+      ) => void;
+      questionId?: string;
+      actions?: {
+        primaryLabel: string;
+        onPrimary: (
+          text: string,
+          attachments: {
+            questionId: string;
+            paths: string[];
+            media: unknown[];
+          },
+        ) => void;
+      };
+    } | null;
   }) =>
     h("div", { "data-testid": "mock-input-area" }, [
       h(
@@ -114,6 +136,24 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
         },
         "Trigger send",
       ),
+      contextMode?.actions
+        ? h(
+            "button",
+            {
+              type: "button",
+              "data-testid": "trigger-question-primary",
+              onClick: () => {
+                contextMode.onSubmit("", []);
+                contextMode.actions!.onPrimary("", {
+                  questionId: contextMode.questionId ?? "",
+                  paths: [],
+                  media: [],
+                });
+              },
+            },
+            contextMode.actions.primaryLabel,
+          )
+        : null,
       h(
         "button",
         {

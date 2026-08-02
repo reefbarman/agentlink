@@ -2302,9 +2302,11 @@ export function createAgentToolRuntime(
         if (request.context.interactionPolicy === "deny") {
           const enforceReadPathPolicy = () =>
             enforceNonInteractiveReadPathPolicy(
+              request.name,
               request.input,
               request.context.sessionId,
               ctx.approvalManager,
+              request.context.getAdvertisedSkills,
             );
           const denied = operationRoots
             ? withWorkspaceRoots(operationRoots, enforceReadPathPolicy)
@@ -2460,10 +2462,41 @@ export function createAgentToolRuntime(
   };
 }
 
+function pathsMatch(left: string, right: string): boolean {
+  return process.platform === "win32"
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
+}
+
+function isAdvertisedSkillRead(
+  toolName: string,
+  absolutePath: string,
+  getAdvertisedSkills?: AgentToolExecutionRequest["context"]["getAdvertisedSkills"],
+): boolean {
+  if (toolName !== "load_skill" && toolName !== "read_file") return false;
+
+  return (getAdvertisedSkills?.() ?? []).some((skill) => {
+    const skillPath = canonicalizePath(skill.skillPath);
+    const realSkillPath = canonicalizePath(skill.realSkillPath);
+    if (toolName === "load_skill") {
+      return (
+        pathsMatch(absolutePath, skillPath) ||
+        pathsMatch(absolutePath, realSkillPath)
+      );
+    }
+    return (
+      isPathWithinRoot(absolutePath, path.dirname(skillPath)) ||
+      isPathWithinRoot(absolutePath, path.dirname(realSkillPath))
+    );
+  });
+}
+
 function enforceNonInteractiveReadPathPolicy(
+  toolName: string,
   input: Record<string, unknown>,
   sessionId: string,
   approvalManager: ApprovalManager,
+  getAdvertisedSkills?: AgentToolExecutionRequest["context"]["getAdvertisedSkills"],
 ): ToolResult | undefined {
   const inputPath = input.path;
   if (typeof inputPath !== "string" || inputPath.trim() === "")
@@ -2473,6 +2506,7 @@ function enforceNonInteractiveReadPathPolicy(
   if (
     inWorkspace ||
     isAgentlinkTmpArtifact(absolutePath) ||
+    isAdvertisedSkillRead(toolName, absolutePath, getAdvertisedSkills) ||
     approvalManager.isPathTrusted(sessionId, absolutePath)
   ) {
     return undefined;
@@ -2763,7 +2797,7 @@ export function createGuardianOutsideWritePreparer(
   });
 }
 
-function createGuardianOutsideReadOptions(
+export function createGuardianOutsideReadOptions(
   ctx: ToolDispatchContext,
   sessionId: string,
   requestingTool: string,

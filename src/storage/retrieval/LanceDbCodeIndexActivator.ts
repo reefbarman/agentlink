@@ -150,6 +150,11 @@ export class LanceDbCodeIndexActivator {
           );
       }
 
+      // Superseded generations must be removed only after the source pointer
+      // flips, and also on replay: a crash between the flip and this delete
+      // leaves stale rows that the generation-equality branch above skips.
+      await deleteSupersededGenerations(active, manifest);
+
       await staged.manifests.update({
         where: sqlAnd(
           sqlEquals("publication_id", publicationId),
@@ -367,6 +372,18 @@ function activeSourceMatchesManifest(
   );
 }
 
+async function deleteSupersededGenerations(
+  active: ActiveTables,
+  manifest: ManifestRow,
+): Promise<void> {
+  const superseded = sqlAnd(
+    sqlEquals("source_id", manifest.source_id),
+    sqlNotEquals("generation", manifest.generation),
+  );
+  await active.chunks.delete(superseded);
+  await active.relations.delete(superseded);
+}
+
 async function cleanupStagedPayload(
   staged: CodeIndexStagedTables,
   publicationId: string,
@@ -505,6 +522,10 @@ function batchPredicate(publicationId: string, batchIndex: number): string {
 
 function sqlEquals(field: string, value: string): string {
   return `${field} = ${sqlString(value)}`;
+}
+
+function sqlNotEquals(field: string, value: string): string {
+  return `${field} != ${sqlString(value)}`;
 }
 
 function sqlAnd(...conditions: string[]): string {

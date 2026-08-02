@@ -1,6 +1,7 @@
 import type {
   ApprovalProjectContext,
   ApprovalRequest,
+  CommandRecoveryAttempt,
   CommandReviewSummary,
   InlineCommandFilePreview,
   SubCommandEntry,
@@ -132,10 +133,19 @@ function approvalRequest(value: unknown): ApprovalRequest {
   copyOptional(result, "cwd", source.cwd, stringValue);
   copyOptional(result, "commandReview", source.commandReview, commandReview);
   copyOptional(result, "humanOnlyReason", source.humanOnlyReason, stringValue);
+  copyOptional(
+    result,
+    "recoveryAttempt",
+    source.recoveryAttempt,
+    recoveryAttempt,
+  );
   copyOptional(result, "security", source.security, terminalSecurity);
   copyOptional(result, "mcpDetail", source.mcpDetail, stringValue);
   copyOptional(result, "mcpServerName", source.mcpServerName, stringValue);
   copyOptional(result, "mcpToolName", source.mcpToolName, stringValue);
+  copyOptional(result, "toolOrigin", source.toolOrigin, (item) =>
+    enumValue(item, ["mcp", "acp"] as const),
+  );
   copyOptional(result, "mcpChoices", source.mcpChoices, (item) =>
     arrayValue(item, mcpChoice),
   );
@@ -220,6 +230,21 @@ function affectedFile(value: unknown): { path: string; changes: number } {
   return {
     path: stringValue(source.path),
     changes: finiteNumberValue(source.changes),
+  };
+}
+
+function recoveryAttempt(value: unknown): CommandRecoveryAttempt {
+  const source = recordValue(value);
+  return {
+    denialOperation: stringValue(source.denialOperation),
+    denialReason: stringValue(source.denialReason),
+    firstAttemptRoute: enumValue(source.firstAttemptRoute, [
+      "sandbox",
+      "native",
+    ] as const),
+    commandSent: booleanOrUnknown(source.commandSent),
+    processLaunched: booleanOrUnknown(source.processLaunched),
+    mayHaveSideEffects: booleanOrUnknown(source.mayHaveSideEffects),
   };
 }
 
@@ -585,6 +610,10 @@ function stringValue(value: unknown): string {
     throw new Error("invalid_browser_gateway_interaction_payload");
   }
   return value;
+}
+
+function booleanOrUnknown(value: unknown): boolean | "unknown" {
+  return value === "unknown" ? value : booleanValue(value);
 }
 
 function booleanValue(value: unknown): boolean {

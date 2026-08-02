@@ -38,6 +38,7 @@ interface TrackedSpan {
 }
 
 interface MatchCandidate extends TrackedSpan {
+  occurrence: number;
   startLine: number;
   endLine: number;
   snippet: string;
@@ -779,9 +780,10 @@ function describeMatchCandidates(
   return {
     locations: sorted
       .slice(0, MAX_AMBIGUOUS_CANDIDATES)
-      .map(({ start, end }) => ({
+      .map(({ start, end }, index) => ({
         start,
         end,
+        occurrence: index + 1,
         ...offsetRangeToLines(content, start, end),
         snippet: snippetAtOffset(content, start),
         valid: true,
@@ -816,7 +818,13 @@ function previewSearch(text: string): string {
 
 function describeBlockResult(
   result: BlockApplyResult,
+  options: {
+    includeCandidateLocations?: boolean;
+    includeRecoveryOptions?: boolean;
+  } = {},
 ): Record<string, unknown> {
+  const includeCandidateLocations = options.includeCandidateLocations ?? true;
+  const includeRecoveryOptions = options.includeRecoveryOptions ?? true;
   if (result.status === "applied") {
     const ranges = result.postEditSpans
       .flatMap((span) =>
@@ -851,17 +859,49 @@ function describeBlockResult(
     ...(result.availableOccurrences !== undefined
       ? { available_occurrences: result.availableOccurrences }
       : {}),
-    ...(result.candidateLocations?.length
+    ...(includeCandidateLocations && result.candidateLocations?.length
       ? {
           candidate_locations: result.candidateLocations.map((candidate) => ({
             start_line: candidate.startLine,
             end_line: candidate.endLine,
             snippet: candidate.snippet,
+            ...(includeRecoveryOptions && {
+              block_option: {
+                index: result.index,
+                occurrence: candidate.occurrence,
+              },
+            }),
           })),
         }
       : {}),
-    ...(result.candidateLocationsOmitted
+    ...(includeCandidateLocations && result.candidateLocationsOmitted
       ? { candidate_locations_omitted: result.candidateLocationsOmitted }
+      : {}),
+    ...(includeCandidateLocations &&
+    includeRecoveryOptions &&
+    result.candidateLocations?.length &&
+    (result.reason === "ambiguous_exact" ||
+      result.reason === "ambiguous_flexible" ||
+      result.reason === "ambiguous_escape" ||
+      result.reason === "occurrence_out_of_range")
+      ? {
+          retry_options: {
+            occurrence_examples: result.candidateLocations.map((candidate) => ({
+              index: result.index,
+              occurrence: candidate.occurrence,
+            })),
+            ...(result.reason === "ambiguous_exact"
+              ? {
+                  replace_all_example: {
+                    index: result.index,
+                    replace_all: true,
+                  },
+                  replace_all_safety:
+                    "Use only when every exact occurrence should be replaced.",
+                }
+              : {}),
+          },
+        }
       : {}),
   };
 }
@@ -899,6 +939,7 @@ function buildFailedBlocksPayload(
   blocks: SearchReplaceBlock[],
   blockResults: BlockApplyResult[],
   error = "All search/replace blocks failed",
+  preEditContent?: string,
 ): EditReviewResult {
   const failedDetails = blockResults.map((result) =>
     describeBlockResult(result),
@@ -907,11 +948,29 @@ function buildFailedBlocksPayload(
     formatFailedBlockMessage(result, blocks),
   );
 
+  const hasRecoveryOptions = blockResults.some(
+    (result) =>
+      result.status === "failed" &&
+      (result.reason === "ambiguous_exact" ||
+        result.reason === "ambiguous_flexible" ||
+        result.reason === "ambiguous_escape" ||
+        result.reason === "occurrence_out_of_range"),
+  );
   return {
     error,
     failed_blocks: failedSearches,
     failed_block_details: failedDetails,
     path: paramsPath,
+    ...(preEditContent !== undefined && {
+      pre_edit_content_hash: contentHash(preEditContent),
+    }),
+    ...(hasRecoveryOptions && {
+      next_steps: [
+        "Prefer expanding SEARCH content with stable surrounding context until it is unique. Re-read the file before retrying if it may have changed since this validation.",
+        "Occurrence options are evaluated in block order after earlier successful blocks; options for multiple ambiguous blocks may not be independent.",
+        "For whitespace- or escape-normalized candidates, preserve the selected location's indentation and escaping in replacement text.",
+      ],
+    }),
   };
 }
 
@@ -921,12 +980,29 @@ function buildAtomicFailurePayload(
   blockResults: BlockApplyResult[],
   malformedBlocks: number,
   error: string,
+  preEditContent?: string,
 ): EditReviewResult {
   const failedResults = blockResults.filter(
     (result) => result.status === "failed",
   );
+  const hasAppliedBlocks = blockResults.some(
+    (result) => result.status === "applied",
+  );
+  const failedDetails = failedResults.map((result) =>
+    describeBlockResult(result, {
+      includeCandidateLocations: !hasAppliedBlocks,
+      includeRecoveryOptions: !hasAppliedBlocks,
+    }),
+  );
   return {
-    ...buildFailedBlocksPayload(paramsPath, blocks, failedResults, error),
+    ...buildFailedBlocksPayload(
+      paramsPath,
+      blocks,
+      failedResults,
+      error,
+      preEditContent,
+    ),
+    failed_block_details: failedDetails,
     atomic: true,
     no_changes_applied: true,
     ...(malformedBlocks > 0 ? { malformed_blocks: malformedBlocks } : {}),
@@ -1092,6 +1168,7 @@ export async function handleApplyDiff(
                 blockResults,
                 malformedBlocks,
                 "Atomic apply_diff validation failed",
+                originalContent,
               ),
             ),
           },
@@ -1132,7 +1209,13 @@ export async function handleApplyDiff(
           {
             type: "text",
             text: JSON.stringify(
-              buildFailedBlocksPayload(params.path, blocks, blockResults),
+              buildFailedBlocksPayload(
+                params.path,
+                blocks,
+                blockResults,
+                undefined,
+                originalContent,
+              ),
             ),
           },
         ],
@@ -1234,6 +1317,7 @@ export async function handleApplyDiff(
               lockedBlockResults,
               malformedBlocks,
               "Atomic apply_diff validation failed after re-reading the file under lock",
+              lockedOriginalContent,
             ),
           };
         }
@@ -1245,6 +1329,7 @@ export async function handleApplyDiff(
               blocks,
               lockedBlockResults,
               "All search/replace blocks failed after re-reading the file under lock",
+              lockedOriginalContent,
             ),
           };
         }
@@ -1302,7 +1387,12 @@ export async function handleApplyDiff(
         responseObj.failed_blocks = lockedFailedBlocks;
         responseObj.failed_block_details = lockedBlockResults
           .filter((blockResult) => blockResult.status === "failed")
-          .map((blockResult) => describeBlockResult(blockResult));
+          .map((blockResult) =>
+            describeBlockResult(blockResult, {
+              includeCandidateLocations: rangesDescribeAcceptedContent,
+              includeRecoveryOptions: false,
+            }),
+          );
       }
       if (malformedBlocks > 0) responseObj.malformed_blocks = malformedBlocks;
     }
@@ -1328,6 +1418,10 @@ export async function handleApplyDiff(
                 })),
               }
             : blockResult,
+          {
+            includeCandidateLocations: rangesDescribeAcceptedContent,
+            includeRecoveryOptions: false,
+          },
         ),
       );
     }

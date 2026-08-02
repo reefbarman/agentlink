@@ -27,6 +27,8 @@ import type { ToolResult } from "../shared/types.js";
 import type { MemoryToolProvider } from "../core/capabilities/memory.js";
 import { getWorkspaceRoots, resolveAndValidatePath } from "../util/paths.js";
 import { handleLoadRule } from "../tools/loadRule.js";
+import { handleLoadSkill } from "../tools/loadSkill.js";
+import { handleReadFile } from "../tools/readFile.js";
 import { handleGetContext } from "../tools/context/getContext.js";
 import { handleGetCallHierarchy } from "../tools/getCallHierarchy.js";
 import { handleGetModuleNeighbors } from "../tools/getModuleNeighbors.js";
@@ -108,6 +110,11 @@ vi.mock("../tools/listFiles.js", () => ({
 vi.mock("../tools/loadRule.js", () => ({
   handleLoadRule: vi.fn().mockResolvedValue({
     content: [{ type: "text", text: JSON.stringify({ rule_name: "rule" }) }],
+  }),
+}));
+vi.mock("../tools/loadSkill.js", () => ({
+  handleLoadSkill: vi.fn().mockResolvedValue({
+    content: [{ type: "text", text: JSON.stringify({ skill_name: "helper" }) }],
   }),
 }));
 vi.mock("../tools/searchFiles.js", () => ({
@@ -3034,6 +3041,161 @@ describe("dispatchToolCall", () => {
     });
   });
 
+  it("allows non-interactive loading of an exact advertised skill path outside the workspace", async () => {
+    const skillPath = "/outside/skills/helper/SKILL.md";
+    const advertisedSkills = [
+      {
+        id: "global:agentlink:helper",
+        name: "helper",
+        revision: "a".repeat(64),
+        skillPath,
+        realSkillPath: skillPath,
+      },
+    ];
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      approvalManager: {
+        isPathTrusted: vi.fn(() => false),
+      } as any,
+    });
+    vi.mocked(handleLoadSkill).mockClear();
+
+    const result = await runtime.executeTool({
+      name: "load_skill",
+      input: { path: skillPath },
+      context: {
+        sessionId: "background-session",
+        interactionPolicy: "deny",
+        getAdvertisedSkills: () => advertisedSkills,
+      },
+    });
+
+    expect(result).toMatchObject({
+      content: [
+        { type: "text", text: JSON.stringify({ skill_name: "helper" }) },
+      ],
+    });
+    expect(handleLoadSkill).toHaveBeenCalledWith(
+      { path: skillPath },
+      expect.anything(),
+      expect.anything(),
+      "background-session",
+      advertisedSkills,
+      expect.anything(),
+    );
+    expect(mockOnApprovalRequest).not.toHaveBeenCalled();
+  });
+
+  it("allows non-interactive reads of resources associated with an advertised skill", async () => {
+    const skillPath = "/outside/skills/helper/SKILL.md";
+    const resourcePath = "/outside/skills/helper/references/guide.md";
+    const advertisedSkills = [
+      {
+        id: "global:agentlink:helper",
+        name: "helper",
+        revision: "a".repeat(64),
+        skillPath,
+        realSkillPath: skillPath,
+      },
+    ];
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      approvalManager: {
+        isPathTrusted: vi.fn(() => false),
+      } as any,
+    });
+    vi.mocked(handleReadFile).mockClear();
+
+    await runtime.executeTool({
+      name: "read_file",
+      input: { path: resourcePath },
+      context: {
+        sessionId: "background-session",
+        interactionPolicy: "deny",
+        getAdvertisedSkills: () => advertisedSkills,
+      },
+    });
+
+    expect(handleReadFile).toHaveBeenCalledWith(
+      { path: resourcePath },
+      expect.anything(),
+      expect.anything(),
+      "background-session",
+      advertisedSkills,
+      expect.anything(),
+      undefined,
+      undefined,
+      expect.anything(),
+    );
+  });
+
+  it("denies non-interactive loading of an unadvertised outside-workspace skill", async () => {
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      approvalManager: {
+        isPathTrusted: vi.fn(() => false),
+      } as any,
+    });
+    vi.mocked(handleLoadSkill).mockClear();
+
+    const result = await runtime.executeTool({
+      name: "load_skill",
+      input: { path: "/outside/skills/other/SKILL.md" },
+      context: {
+        sessionId: "background-session",
+        interactionPolicy: "deny",
+        getAdvertisedSkills: () => [],
+      },
+    });
+
+    expect(result).toMatchObject({
+      isError: true,
+      data: {
+        status: "rejected",
+        reason: "interaction_denied",
+      },
+    });
+    expect(handleLoadSkill).not.toHaveBeenCalled();
+  });
+
+  it("does not exempt other tools for an advertised outside-workspace skill path", async () => {
+    const skillPath = "/outside/skills/helper/SKILL.md";
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      approvalManager: {
+        isPathTrusted: vi.fn(() => false),
+      } as any,
+    });
+    vi.mocked(handleGetContext).mockClear();
+
+    const result = await runtime.executeTool({
+      name: "get_context",
+      input: { path: skillPath },
+      context: {
+        sessionId: "background-session",
+        interactionPolicy: "deny",
+        getAdvertisedSkills: () => [
+          {
+            id: "global:agentlink:helper",
+            name: "helper",
+            revision: "a".repeat(64),
+            skillPath,
+            realSkillPath: skillPath,
+          },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({
+      isError: true,
+      data: {
+        status: "rejected",
+        reason: "interaction_denied",
+      },
+    });
+    expect(handleGetContext).not.toHaveBeenCalled();
+  });
+
   it("denies untrusted nested read paths without invoking the handler", async () => {
     const runtime = createAgentToolRuntime({
       ...mockCtx,
@@ -3461,7 +3623,6 @@ describe("dispatchToolCall", () => {
   });
 
   it("dispatches read_file to handleReadFile", async () => {
-    const { handleReadFile } = await import("../tools/readFile.js");
     const advertisedSkills = [
       {
         id: "global:agentlink:helper",
@@ -5392,6 +5553,47 @@ describe("dispatchToolCall", () => {
     expect(mcpHub.getToolDefs).not.toHaveBeenCalled();
     expect(mcpHub.getServerConfig).not.toHaveBeenCalled();
     expect(mcpHub.callTool).not.toHaveBeenCalled();
+  });
+
+  it("preserves nested MCP arguments through call_mcp_tool dispatch", async () => {
+    const input = {
+      import_settings: {
+        textureType: "Default",
+        sRGBTexture: true,
+        nested_values: [false, 0, "", null],
+      },
+    };
+    const mcpToolInvocationProvider = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "unityMCP__manage_texture",
+          description: "Manage a texture",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+      getServerConfig: vi.fn().mockReturnValue({ toolPolicy: "allow" }),
+      callTool: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+
+    await dispatchToolCall(
+      "call_mcp_tool",
+      { server: "unityMCP", tool: "manage_texture", input },
+      {
+        ...mockCtx,
+        approvalManager: {
+          isMcpApproved: vi.fn().mockReturnValue(false),
+        } as any,
+        mcpToolInvocationProvider,
+      },
+    );
+
+    expect(mcpToolInvocationProvider.callTool).toHaveBeenCalledWith({
+      toolName: "unityMCP__manage_texture",
+      input,
+      signal: undefined,
+    });
   });
 
   it("holds one current MCP generation across call_mcp_tool lookup, approval, and execution", async () => {

@@ -95,7 +95,7 @@ describe("LanceDbCodeIndexActivator", () => {
     await fs.rm(directory, { recursive: true, force: true });
   });
 
-  it("promotes the source pointer last and retains obsolete generations for deferred GC", async () => {
+  it("promotes the source pointer last and removes superseded generations", async () => {
     await seedOldGeneration();
     await stageCompletePublication();
 
@@ -131,30 +131,18 @@ describe("LanceDbCodeIndexActivator", () => {
         deleted: false,
       }),
     ]);
-    expect(await jsonRows(activeChunks)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          chunk_id: "chunk:1",
-          generation: "generation:1",
-        }),
-        expect.objectContaining({
-          chunk_id: "chunk:2",
-          generation: "generation:2",
-        }),
-      ]),
-    );
-    expect(await jsonRows(activeRelations)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          relation_id: "relation:1",
-          generation: "generation:1",
-        }),
-        expect.objectContaining({
-          relation_id: "relation:2",
-          generation: "generation:2",
-        }),
-      ]),
-    );
+    expect(await jsonRows(activeChunks)).toEqual([
+      expect.objectContaining({
+        chunk_id: "chunk:2",
+        generation: "generation:2",
+      }),
+    ]);
+    expect(await jsonRows(activeRelations)).toEqual([
+      expect.objectContaining({
+        relation_id: "relation:2",
+        generation: "generation:2",
+      }),
+    ]);
     expect(await jsonRows(manifests)).toEqual([
       expect.objectContaining({
         publication_id: "publication:2",
@@ -175,6 +163,66 @@ describe("LanceDbCodeIndexActivator", () => {
       table.close();
     }
     connection.close();
+  });
+
+  it("removes stale generations on replay after a crash between pointer flip and delete", async () => {
+    await seedOldGeneration();
+    await stageCompletePublication();
+    // Simulate the crash window: the source pointer already references the
+    // manifest generation, but generation:1 rows were never deleted and the
+    // manifest is still "staged".
+    const connection = await connect(storeRoot, { readConsistencyInterval: 0 });
+    const sources = await connection.openTable(RETRIEVAL_TABLES.sources);
+    await sources.update({
+      where: `source_id = '${source.id}'`,
+      values: {
+        generation: "generation:2",
+        revision_id: source.revision.id,
+        payload_json: JSON.stringify(source),
+      },
+    });
+    sources.close();
+    connection.close();
+    const seeded = await connect(storeRoot, { readConsistencyInterval: 0 });
+    const seededChunks = await seeded.openTable(RETRIEVAL_TABLES.chunks);
+    await seededChunks.add(
+      makeArrowTable(
+        chunks.map((chunk) => ({
+          chunk_id: chunk.id,
+          source_id: chunk.sourceId,
+          revision_id: chunk.revisionId,
+          generation: chunk.generation,
+          search_text: chunk.content,
+          embedding: chunk.embedding,
+          payload_json: JSON.stringify(chunk),
+        })),
+        { schema: retrievalChunkSchema(dimensions) },
+      ),
+    );
+    seededChunks.close();
+    seeded.close();
+
+    await expect(activator.activate("publication:2")).resolves.toMatchObject({
+      status: "activated",
+    });
+
+    const verify = await connect(storeRoot, { readConsistencyInterval: 0 });
+    const activeChunks = await verify.openTable(RETRIEVAL_TABLES.chunks);
+    const activeRelations = await verify.openTable(RETRIEVAL_TABLES.relations);
+    expect(await jsonRows(activeChunks)).toEqual([
+      expect.objectContaining({
+        chunk_id: "chunk:2",
+        generation: "generation:2",
+      }),
+    ]);
+    expect(
+      (await jsonRows(activeRelations)).filter(
+        (row) => (row as { generation: string }).generation === "generation:1",
+      ),
+    ).toEqual([]);
+    activeChunks.close();
+    activeRelations.close();
+    verify.close();
   });
 
   it("replays an activation receipt and finalizes it after checkpoint", async () => {

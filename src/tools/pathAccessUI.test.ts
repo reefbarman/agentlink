@@ -86,7 +86,7 @@ describe("approveOutsideWorkspaceAccess Guardian review", () => {
       },
     );
 
-    expect(result).toEqual({ approved: true });
+    expect(result).toEqual({ approved: true, via: "guardian" });
     expect(review).toHaveBeenCalledOnce();
     expect(enqueuePathApproval).not.toHaveBeenCalled();
     expect(addPathRule).not.toHaveBeenCalled();
@@ -124,7 +124,7 @@ describe("approveOutsideWorkspaceAccess Guardian review", () => {
       },
     );
 
-    expect(result).toEqual({ approved: true });
+    expect(result).toEqual({ approved: true, via: "user" });
     expect(enqueuePathApproval).toHaveBeenCalledWith(
       filePath,
       "session-1",
@@ -160,6 +160,7 @@ describe("approveOutsideWorkspaceAccess Guardian review", () => {
       reason: expect.stringContaining(
         "Could not save the project outside-path approval",
       ),
+      via: "user",
     });
   });
 });

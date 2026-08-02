@@ -2,6 +2,10 @@ import type { OnApprovalRequest, ToolResult } from "../../shared/types.js";
 
 export const DEFAULT_DIAGNOSTIC_DELAY_MS = 1_500;
 
+export function normalizeEditorText(content: string): string {
+  return content.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
+}
+
 export interface EditorRevealParams {
   absolutePath: string;
   line?: number;
@@ -43,13 +47,26 @@ export interface OneShotWriteAuthorization {
   consume(current: PreparedWriteProposalInput): boolean;
 }
 
+export interface EditApplyFailureRecovery {
+  document_dirty: boolean | "unavailable";
+  document_state: "matches_baseline" | "differs_from_baseline" | "unavailable";
+  disk_state: "unchanged" | "changed" | "missing" | "unreadable";
+  concurrent_change: boolean | "unknown";
+  retryable: true;
+}
+
 export interface EditSaveFailureRecovery {
   document_dirty: boolean;
   disk_state: "unchanged" | "changed" | "missing" | "unreadable";
   concurrent_change: boolean | "unknown";
   review_state: "diff_snapshot_preserved" | "dirty_document_preserved";
+  dirty_document_state:
+    | "matches_save_attempt"
+    | "changed_after_save_attempt"
+    | "unavailable";
   vscode_error_detail: "unavailable";
   retryable: true;
+  retry_target: "editor_save";
   disk_error_code?: string;
 }
 
@@ -111,6 +128,9 @@ export interface EditReviewResult {
   reason?: string;
   follow_up?: string;
   error?: string;
+  document_dirty?: boolean;
+  document_state?: "matches_baseline" | "differs_from_baseline" | "unavailable";
+  apply_failure?: EditApplyFailureRecovery;
   save_failure?: EditSaveFailureRecovery;
   next_steps?: string[];
   warnings?: string[];

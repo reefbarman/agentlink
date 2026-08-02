@@ -195,8 +195,8 @@ export function RuleRow({
         {!isSkipped && value.decision === "allow" && (
           <div class="rule-row-authority-note">
             {broadNativePrefix
-              ? "Broad prefix: this rule allows any matching command. Narrow the prefix unless you intend to trust the entire command family."
-              : "Matching commands run without another approval card. The requested execution route and permissions are preserved."}
+              ? "Broad prefix: this rule allows any matching command across its requested route, capabilities, environment values, and inline payloads. Narrow the prefix unless you intend to trust the entire command family."
+              : "Matching commands run without another approval card. This Allow rule covers the requested route, capabilities, environment values, and inline payloads; validation and Forbidden rules still apply."}
           </div>
         )}
         <div class="rule-row-option-line">

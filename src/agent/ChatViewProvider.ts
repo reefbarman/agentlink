@@ -46,6 +46,7 @@ import type { ChatTabPanelHost } from "./ChatTabPanelHost.js";
 import {
   createChatWorkspaceViewSnapshot,
   parseChatTabActionAddress,
+  selectedWorkspaceSessionId,
   type ChatTabActionConfirmationRequest,
   type ChatTabActionFailure,
   type ChatTabActionRejection,
@@ -1153,6 +1154,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private outputChannel: vscode.OutputChannel;
   private webviewReady = false;
   private pendingMessages: ExtensionToWebview[] = [];
+  private chatTabStartupRestore: Promise<unknown> = Promise.resolve();
   private readonly projectCustomizationRegistry: ProjectCustomizationRegistry;
   private readonly projectMcpHubRegistry: ProjectMcpHubRegistry;
   private initialProjectScope: SessionProjectScope | undefined;
@@ -3226,6 +3228,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       detail?: string;
       mcpServerName?: string;
       mcpToolName?: string;
+      toolOrigin?: "mcp" | "acp";
       choices: Array<{
         label: string;
         value: string;
@@ -3300,6 +3303,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       detail?: string;
       mcpServerName?: string;
       mcpToolName?: string;
+      toolOrigin?: "mcp" | "acp";
       backgroundTask?: string;
       choices: Array<{
         label: string;
@@ -3453,6 +3457,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           mcpDetail: request.detail,
           mcpServerName: request.mcpServerName,
           mcpToolName: request.mcpToolName,
+          toolOrigin: request.toolOrigin,
           mcpChoices: request.choices,
         };
       case "mode-switch":
@@ -6397,6 +6402,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.outputChannel.appendLine(`[${timestamp}] ${message}`);
   }
 
+  setChatTabStartupRestore(restore: Promise<unknown>): void {
+    this.chatTabStartupRestore = restore;
+  }
+
   setChatTabController(controller: ChatTabController): void {
     this.chatTabControllerListener?.dispose();
     this.chatTabController = controller;
@@ -6636,6 +6645,91 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       type: "chatWorkspaceUpdate",
       snapshot,
     });
+  }
+
+  private async reconcileForegroundChatTab(): Promise<void> {
+    const foreground = this.sessionManager?.getForegroundSession();
+    const controller = this.chatTabController;
+    if (!foreground || !controller) return;
+    const existing = controller.getTabForSession(foreground.id);
+    if (existing) {
+      if (existing.placement === "popped") {
+        await controller.setPlacement(existing.id, "popped", "docked");
+      }
+      await controller.focusTab(existing.id);
+      return;
+    }
+    await controller.createTab(foreground.id);
+  }
+
+  private async hydrateReadyWebview(): Promise<void> {
+    this.updateBrowserGatewayThemeState(() => {
+      this.webviewReady = true;
+    });
+    this.startHostHeartbeat();
+    const initialSnapshot = this.getChatWorkspaceViewSnapshot();
+    if (initialSnapshot) {
+      this.postMessage({
+        type: "chatWorkspaceUpdate",
+        snapshot: initialSnapshot,
+      });
+    }
+    void this.sendModesUpdate();
+    void this.sendModelsUpdate();
+    void this.sendSlashCommands();
+    this.sendSessionList();
+    this.flushPendingWebviewMessages();
+    this.postMessage({ type: "agentRestoreSessionStart" });
+
+    try {
+      await this.chatTabStartupRestore;
+    } catch (error) {
+      this.log(
+        `[session-restore] Startup tab restore failed: ${String(error)}`,
+      );
+    }
+
+    try {
+      await this.reconcileForegroundChatTab();
+      this.sendSessionList();
+      const snapshot = this.getChatWorkspaceViewSnapshot();
+      if (snapshot) {
+        this.postMessage({ type: "chatWorkspaceUpdate", snapshot });
+        const selectedSessionId = selectedWorkspaceSessionId(snapshot);
+        const foreground = this.sessionManager?.getForegroundSession();
+        if (selectedSessionId && foreground?.id === selectedSessionId) {
+          const selected = this.sessionManager?.getSession(selectedSessionId);
+          if (selected) {
+            this.postSessionLoaded(selected, {
+              restored: true,
+              checkpoints: this.getSessionCheckpoints(selected.id),
+            });
+          }
+        } else if (selectedSessionId || foreground) {
+          this.log(
+            `[session-restore] Selected tab and foreground session diverged (selected=${selectedSessionId ?? "none"}, foreground=${foreground?.id ?? "none"})`,
+          );
+          if (foreground) {
+            this.postSessionLoaded(foreground, {
+              restored: true,
+              checkpoints: this.getSessionCheckpoints(foreground.id),
+            });
+          }
+        }
+      } else {
+        const foreground = this.sessionManager?.getForegroundSession();
+        if (foreground) {
+          this.postSessionLoaded(foreground, {
+            restored: true,
+            checkpoints: this.getSessionCheckpoints(foreground.id),
+          });
+        }
+      }
+      this.sendInitialState();
+      void this.sendDebugInfo();
+    } finally {
+      this.postMessage({ type: "agentRestoreSessionDone" });
+    }
   }
 
   private rejectChatTabAction(
@@ -6938,50 +7032,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
 
       case "webviewReady":
-        this.updateBrowserGatewayThemeState(() => {
-          this.webviewReady = true;
-        });
-        this.startHostHeartbeat();
-        void this.sendModesUpdate();
-        void this.sendModelsUpdate();
-        void this.sendSlashCommands();
-        this.sendSessionList();
-        this.sendChatWorkspaceUpdate();
-        // Flush any messages queued before the webview was ready. Use the same
-        // guarded send path as live messages so a reload/crash during replay does
-        // not silently drop transcript events.
-        this.flushPendingWebviewMessages();
-        // Restore last session if there is no foreground session yet
-        if (!this.sessionManager?.getForegroundSession()) {
-          this.postMessage({ type: "agentRestoreSessionStart" });
-          this.sessionManager
-            ?.restoreLastSession()
-            .then((session) => {
-              if (session) {
-                this.postSessionLoaded(session, {
-                  restored: true,
-                  checkpoints: this.getSessionCheckpoints(session.id),
-                });
-              }
-              this.postMessage({ type: "agentRestoreSessionDone" });
-              this.sendInitialState();
-              void this.sendDebugInfo();
-            })
-            .catch(() => {
-              this.postMessage({ type: "agentRestoreSessionDone" });
-              this.sendInitialState();
-              void this.sendDebugInfo();
-            });
-        } else {
-          const fg = this.sessionManager.getForegroundSession();
-          if (fg) {
-            this.postSessionLoaded(fg, {
-              checkpoints: this.getSessionCheckpoints(fg.id),
-            });
-          }
-          this.sendInitialState();
-          void this.sendDebugInfo();
-        }
+        await this.hydrateReadyWebview();
         break;
 
       case "chatTabFocus":

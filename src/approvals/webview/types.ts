@@ -53,6 +53,15 @@ export interface CommandReviewSummary {
   model: string;
 }
 
+export interface CommandRecoveryAttempt {
+  denialOperation: string;
+  denialReason: string;
+  firstAttemptRoute: "sandbox" | "native";
+  commandSent: boolean | "unknown";
+  processLaunched: boolean | "unknown";
+  mayHaveSideEffects: boolean | "unknown";
+}
+
 export type MemoryTier = "instructions" | "skill" | "command" | "memory";
 export type MemoryScope = "global" | "project";
 export type MemoryOperation = "add" | "update" | "remove";
@@ -125,6 +134,8 @@ export interface ApprovalRequest {
   commandReview?: CommandReviewSummary;
   /** For commands: concise non-reviewer reason automatic approval was skipped. */
   humanOnlyReason?: string;
+  /** For commands: the sandbox already launched this command before this approval. */
+  recoveryAttempt?: CommandRecoveryAttempt;
   /** Host-owned token-free route/confinement evidence for this exact command. */
   security?: TerminalExecutionSecuritySummary;
   /** For managed network: exact live destination and owning command evidence. */
@@ -137,6 +148,12 @@ export interface ApprovalRequest {
   mcpServerName?: string;
   /** For MCP: structured bare tool name. */
   mcpToolName?: string;
+  /**
+   * For kind "mcp": origin of the external tool call. "acp" marks a request
+   * relayed from an external agent (Agent Client Protocol), not an MCP
+   * server, so the card renders agent-tool copy instead of MCP copy.
+   */
+  toolOrigin?: "mcp" | "acp";
   /** For MCP: approval choices */
   mcpChoices?: Array<{
     label: string;

@@ -210,6 +210,24 @@ describe("validateMcpServerConfig", () => {
     expect(errorCodes(result)).toContain(code);
   });
 
+  it("accepts positive finite timeout values for compatibility", () => {
+    expect(
+      validateMcpServerConfig("minimum", { command: "mcp", timeout: 1 }),
+    ).toMatchObject({
+      valid: true,
+      draft: { timeout: 1 },
+    });
+    expect(
+      validateMcpServerConfig("long-running", {
+        command: "mcp",
+        timeout: 900_000,
+      }),
+    ).toMatchObject({
+      valid: true,
+      draft: { timeout: 900_000 },
+    });
+  });
+
   it("warns for unknown fields without copying them", () => {
     const result = validateMcpServerConfig("foreign", {
       command: "mcp",
