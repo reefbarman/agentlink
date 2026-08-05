@@ -364,38 +364,43 @@ describe("App chat workspace integration", () => {
     expect(screen.queryByText("src/only-t2.ts")).toBeNull();
   });
 
-  it("keeps background approvals globally visible and clears them across tab switches", async () => {
+  it("keeps background approvals in their owning tab", async () => {
     const vscodeApi = createVsCodeApi();
     render(<App vscodeApi={vscodeApi} />);
-    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
-    deliver(sessionLoaded("session-1", "transcript for A"));
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "transcript for B"));
 
     deliver({
       type: "showApproval",
+      sessionId: "session-1",
       request: {
         kind: "write",
         id: "approval-bg",
-        filePath: "src/background-global.ts",
+        filePath: "src/background-owned.ts",
         writeOperation: "modify",
         backgroundTask: "Detached review",
       },
     });
 
-    expect(screen.getByText("src/background-global.ts")).toBeTruthy();
+    expect(screen.queryByText("src/background-owned.ts")).toBeNull();
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+    expect(screen.getByText("src/background-owned.ts")).toBeTruthy();
     expect(screen.getByText("Detached review")).toBeTruthy();
 
     deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
     deliver(sessionLoaded("session-2", "transcript for B"));
-    expect(screen.getByText("src/background-global.ts")).toBeTruthy();
-
-    deliver({ type: "idle", id: "approval-bg" });
-    await waitFor(() => {
-      expect(screen.queryByText("src/background-global.ts")).toBeNull();
-    });
+    expect(screen.queryByText("src/background-owned.ts")).toBeNull();
 
     deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
     deliver(sessionLoaded("session-1", "transcript for A"));
-    expect(screen.queryByText("src/background-global.ts")).toBeNull();
+    expect(screen.getByText("src/background-owned.ts")).toBeTruthy();
+
+    deliver({ type: "idle", sessionId: "session-1", id: "approval-bg" });
+    await waitFor(() => {
+      expect(screen.queryByText("src/background-owned.ts")).toBeNull();
+    });
   });
 
   it("keeps coordinator-less background questions globally visible", () => {

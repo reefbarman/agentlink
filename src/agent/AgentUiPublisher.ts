@@ -40,8 +40,16 @@ export interface SessionUiEvent {
 }
 
 export interface AgentUiPublisher {
-  publishApproval(sessionId: string, request: ApprovalRequest): void;
-  publishApprovalIdle(sessionId: string, id: string): void;
+  publishApproval(
+    sessionId: string,
+    request: ApprovalRequest,
+    options?: { globallyVisible?: boolean },
+  ): void;
+  publishApprovalIdle(
+    sessionId: string,
+    id: string,
+    options?: { globallyVisible?: boolean },
+  ): void;
   publishQuestionRequest(
     sessionId: string,
     id: string,
@@ -81,12 +89,26 @@ export interface ReadableAgentUiEventHub {
 export class FanoutAgentUiPublisher implements AgentUiPublisher {
   constructor(private readonly publishers: readonly AgentUiPublisher[]) {}
 
-  publishApproval(sessionId: string, request: ApprovalRequest): void {
-    this.publish((publisher) => publisher.publishApproval(sessionId, request));
+  publishApproval(
+    sessionId: string,
+    request: ApprovalRequest,
+    options?: { globallyVisible?: boolean },
+  ): void {
+    this.publish((publisher) => {
+      if (options) publisher.publishApproval(sessionId, request, options);
+      else publisher.publishApproval(sessionId, request);
+    });
   }
 
-  publishApprovalIdle(sessionId: string, id: string): void {
-    this.publish((publisher) => publisher.publishApprovalIdle(sessionId, id));
+  publishApprovalIdle(
+    sessionId: string,
+    id: string,
+    options?: { globallyVisible?: boolean },
+  ): void {
+    this.publish((publisher) => {
+      if (options) publisher.publishApprovalIdle(sessionId, id, options);
+      else publisher.publishApprovalIdle(sessionId, id);
+    });
   }
 
   publishQuestionRequest(
@@ -173,8 +195,12 @@ export class WebviewAgentUiPublisher implements AgentUiPublisher {
     private readonly publishMessage: (message: WebviewAgentUiMessage) => void,
   ) {}
 
-  publishApproval(sessionId: string, request: ApprovalRequest): void {
-    if (request.backgroundTask) this.globalApprovalIds.add(request.id);
+  publishApproval(
+    sessionId: string,
+    request: ApprovalRequest,
+    options?: { globallyVisible?: boolean },
+  ): void {
+    if (options?.globallyVisible) this.globalApprovalIds.add(request.id);
     else this.globalApprovalIds.delete(request.id);
     this.publishMessage({
       type: "showApproval",
@@ -183,10 +209,16 @@ export class WebviewAgentUiPublisher implements AgentUiPublisher {
     });
   }
 
-  publishApprovalIdle(sessionId: string, id: string): void {
+  publishApprovalIdle(
+    sessionId: string,
+    id: string,
+    options?: { globallyVisible?: boolean },
+  ): void {
+    const globallyVisible =
+      options?.globallyVisible ?? this.globalApprovalIds.has(id);
     this.publishMessage({
       type: "idle",
-      ...this.approvalSessionAddress(sessionId, id),
+      ...(globallyVisible ? {} : { sessionId }),
       id,
     });
     this.globalApprovalIds.delete(id);

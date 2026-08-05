@@ -7620,6 +7620,151 @@ describe("ChatViewProvider session state sync", () => {
     });
   });
 
+  it("presents attached background approvals in their root chat session", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => undefined),
+      getSession: vi.fn((sessionId: string) => {
+        if (sessionId === "background-session") {
+          return {
+            background: true,
+            fleetMetadata: { rootSessionId: "root-session" },
+          };
+        }
+        if (sessionId === "root-session") {
+          return { id: "root-session", background: false };
+        }
+        return undefined;
+      }),
+      getWorkspaceProjects: vi.fn(() => []),
+      onSessionsChanged: vi.fn(() => ({ dispose: vi.fn() })),
+    } as never);
+    const uiPublisher = (
+      provider as unknown as {
+        uiPublisher: {
+          publishApproval: (sessionId: string, request: unknown) => void;
+          publishApprovalIdle: (sessionId: string, id: string) => void;
+        };
+      }
+    ).uiPublisher;
+    const publishApprovalSpy = vi.spyOn(uiPublisher, "publishApproval");
+    const publishApprovalIdleSpy = vi.spyOn(uiPublisher, "publishApprovalIdle");
+
+    const approval = provider.requestApproval(
+      {
+        id: "background-write",
+        kind: "write",
+        title: "Modify `src/output.ts`?",
+        backgroundTask: "Edit implementation",
+        choices: [
+          { label: "Accept", value: "accept", isPrimary: true },
+          { label: "Reject", value: "reject", isDanger: true },
+        ],
+      },
+      "background-session",
+    );
+
+    expect(publishApprovalSpy).toHaveBeenCalledWith(
+      "root-session",
+      expect.objectContaining({ id: "background-write" }),
+    );
+
+    provider.submitBrowserApprovalDecision({
+      id: "background-write",
+      approvalKind: "write",
+      decision: "accept",
+    });
+    await expect(approval).resolves.toMatchObject({ decision: "accept" });
+    expect(publishApprovalIdleSpy).toHaveBeenCalledWith(
+      "root-session",
+      "background-write",
+    );
+  });
+
+  it("falls back to a global card when an attached background root has no chat tab", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => undefined),
+      getSession: vi.fn((sessionId: string) => {
+        if (sessionId === "background-session") {
+          return {
+            background: true,
+            fleetMetadata: { rootSessionId: "root-session" },
+          };
+        }
+        if (sessionId === "root-session") {
+          return { id: "root-session", background: false };
+        }
+        return undefined;
+      }),
+      getWorkspaceProjects: vi.fn(() => []),
+      onSessionsChanged: vi.fn(() => ({ dispose: vi.fn() })),
+    } as never);
+    (
+      provider as unknown as {
+        chatTabController: { getTabForSession(sessionId: string): undefined };
+      }
+    ).chatTabController = { getTabForSession: vi.fn(() => undefined) };
+    const uiPublisher = (
+      provider as unknown as {
+        uiPublisher: {
+          publishApproval: (
+            sessionId: string,
+            request: unknown,
+            options: unknown,
+          ) => void;
+          publishApprovalIdle: (
+            sessionId: string,
+            id: string,
+            options: unknown,
+          ) => void;
+        };
+      }
+    ).uiPublisher;
+    const publishApprovalSpy = vi.spyOn(uiPublisher, "publishApproval");
+    const publishApprovalIdleSpy = vi.spyOn(uiPublisher, "publishApprovalIdle");
+
+    const approval = provider.requestApproval(
+      {
+        id: "background-detached-write",
+        kind: "write",
+        title: "Modify `src/output.ts`?",
+        backgroundTask: "Edit implementation",
+        choices: [
+          { label: "Accept", value: "accept", isPrimary: true },
+          { label: "Reject", value: "reject", isDanger: true },
+        ],
+      },
+      "background-session",
+    );
+
+    expect(publishApprovalSpy).toHaveBeenCalledWith(
+      "background-session",
+      expect.objectContaining({ id: "background-detached-write" }),
+      { sessionId: "background-session", globallyVisible: true },
+    );
+
+    provider.submitBrowserApprovalDecision({
+      id: "background-detached-write",
+      approvalKind: "write",
+      decision: "accept",
+    });
+    await expect(approval).resolves.toMatchObject({ decision: "accept" });
+    expect(publishApprovalIdleSpy).toHaveBeenCalledWith(
+      "background-session",
+      "background-detached-write",
+      { sessionId: "background-session", globallyVisible: true },
+    );
+  });
+
   it("keeps a forwarded native command approval pending until the owner accepts it", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(

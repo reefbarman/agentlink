@@ -139,7 +139,7 @@ describe("WebviewAgentUiPublisher", () => {
     });
   });
 
-  it("keeps background fallback approvals globally visible", () => {
+  it("session-addresses background approvals", () => {
     const publishMessage = vi.fn();
     const publisher = new WebviewAgentUiPublisher(publishMessage);
 
@@ -156,6 +156,7 @@ describe("WebviewAgentUiPublisher", () => {
       [
         {
           type: "showApproval",
+          sessionId: "session-bg",
           request: {
             kind: "write",
             id: "approval-bg",
@@ -165,7 +166,35 @@ describe("WebviewAgentUiPublisher", () => {
           },
         },
       ],
-      [{ type: "idle", id: "approval-bg" }],
+      [{ type: "idle", sessionId: "session-bg", id: "approval-bg" }],
+    ]);
+  });
+
+  it("keeps explicitly detached approvals globally visible", () => {
+    const publishMessage = vi.fn();
+    const publisher = new WebviewAgentUiPublisher(publishMessage);
+
+    publisher.publishApproval(
+      "session-bg",
+      {
+        kind: "write",
+        id: "approval-detached",
+        filePath: "src/background.ts",
+        writeOperation: "modify",
+        backgroundTask: "Detached review",
+      },
+      { globallyVisible: true },
+    );
+    publisher.publishApprovalIdle("session-bg", "approval-detached");
+
+    expect(publishMessage.mock.calls).toEqual([
+      [
+        {
+          type: "showApproval",
+          request: expect.objectContaining({ id: "approval-detached" }),
+        },
+      ],
+      [{ type: "idle", id: "approval-detached" }],
     ]);
   });
 

@@ -1243,6 +1243,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   >();
   private activeApprovalRequests = new Map<string, ApprovalRequest>();
   private approvalSessionById = new Map<string, string>();
+  private approvalPresentationById = new Map<
+    string,
+    { sessionId: string; globallyVisible: boolean }
+  >();
   private activeApprovalOrder: string[] = [];
   private visibleApprovalId: string | null = null;
   private pendingQuestions = new Map<
@@ -1481,6 +1485,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.pendingForwardedApprovals.clear();
     this.activeApprovalRequests.clear();
     this.approvalSessionById.clear();
+    this.approvalPresentationById.clear();
     this.activeApprovalOrder = [];
     this.visibleApprovalId = null;
 
@@ -3023,23 +3028,64 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this.activeApprovalRequests.set(request.id, request);
     this.approvalSessionById.set(request.id, sessionId);
+    const presentation = this.getApprovalPresentation(sessionId, request);
+    this.approvalPresentationById.set(request.id, presentation);
     this.visibleApprovalId = request.id;
-    this.uiPublisher.publishApproval(sessionId, request);
+    if (presentation.globallyVisible) {
+      this.uiPublisher.publishApproval(
+        presentation.sessionId,
+        request,
+        presentation,
+      );
+    } else {
+      this.uiPublisher.publishApproval(presentation.sessionId, request);
+    }
   }
 
   private clearApprovalRequest(sessionId: string, id: string): void {
     if (this.approvalSessionById.get(id) !== sessionId) return;
+    const presentation = this.approvalPresentationById.get(id);
     const wasVisible = this.visibleApprovalId === id;
     this.activeApprovalRequests.delete(id);
     this.approvalSessionById.delete(id);
+    this.approvalPresentationById.delete(id);
     this.activeApprovalOrder = this.activeApprovalOrder.filter(
       (approvalId) => approvalId !== id,
     );
-    this.uiPublisher.publishApprovalIdle(sessionId, id);
+    if (presentation?.globallyVisible) {
+      this.uiPublisher.publishApprovalIdle(
+        presentation.sessionId,
+        id,
+        presentation,
+      );
+    } else {
+      this.uiPublisher.publishApprovalIdle(
+        presentation?.sessionId ?? sessionId,
+        id,
+      );
+    }
     if (wasVisible) {
       this.visibleApprovalId = null;
       this.publishVisibleApproval();
     }
+  }
+
+  private getApprovalPresentation(
+    sessionId: string,
+    request: ApprovalRequest,
+  ): { sessionId: string; globallyVisible: boolean } {
+    if (!request.backgroundTask) return { sessionId, globallyVisible: false };
+    const backgroundSession = this.sessionManager?.getSession(sessionId);
+    const rootSessionId = backgroundSession?.fleetMetadata?.rootSessionId;
+    const rootSession = rootSessionId
+      ? this.sessionManager?.getSession(rootSessionId)
+      : undefined;
+    return rootSession &&
+      !rootSession.background &&
+      (!this.chatTabController ||
+        this.chatTabController.getTabForSession(rootSession.id))
+      ? { sessionId: rootSession.id, globallyVisible: false }
+      : { sessionId, globallyVisible: true };
   }
 
   private publishVisibleApproval(): void {
@@ -3048,8 +3094,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const request = this.activeApprovalRequests.get(id);
       const sessionId = this.approvalSessionById.get(id);
       if (!request || !sessionId) continue;
+      const presentation = this.getApprovalPresentation(sessionId, request);
+      this.approvalPresentationById.set(id, presentation);
       this.visibleApprovalId = id;
-      this.uiPublisher.publishApproval(sessionId, request);
+      if (presentation.globallyVisible) {
+        this.uiPublisher.publishApproval(
+          presentation.sessionId,
+          request,
+          presentation,
+        );
+      } else {
+        this.uiPublisher.publishApproval(presentation.sessionId, request);
+      }
       return;
     }
 
@@ -6489,6 +6545,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.refreshChatTabHostCoordinator();
     this.chatTabControllerListener = controller.onDidChangeWorkspace(() => {
       this.sendChatWorkspaceUpdate();
+      const visibleRequest = this.visibleApprovalId
+        ? this.activeApprovalRequests.get(this.visibleApprovalId)
+        : undefined;
+      if (visibleRequest?.backgroundTask) this.publishVisibleApproval();
     });
     this.sendChatWorkspaceUpdate();
   }
