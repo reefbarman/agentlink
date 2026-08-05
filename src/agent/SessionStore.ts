@@ -133,6 +133,11 @@ export interface SessionStoreOptions {
    * workspace). Omit to preserve the legacy single-folder history layout.
    */
   historyNamespace?: string;
+  /**
+   * Exact resolved session-history directory. This is used by v2 workspace
+   * lineages and must not be combined with historyNamespace.
+   */
+  historyDirectory?: string;
   /** Activation-time primary project used only to migrate pre-scope sessions. */
   legacyProjectScope?: SessionProjectScope;
   log?: (message: string) => void;
@@ -142,6 +147,7 @@ const SCHEMA_VERSION = 1;
 const SESSIONS_FILE = "sessions.json";
 const AGENTLINK_GITIGNORE_ENTRIES = [
   "history/",
+  "workspaces/",
   "transcripts/",
   "debug/",
   "checkpoints/",
@@ -223,12 +229,19 @@ export class SessionStore implements SessionPersistenceProvider {
   ) {
     this.identity = identity;
     this.atomicFileOps = atomicFileOps;
+    if (options.historyDirectory && options.historyNamespace) {
+      throw new Error(
+        "SessionStore historyDirectory and historyNamespace cannot be combined",
+      );
+    }
     this.legacyProjectScope = options.legacyProjectScope;
     this.log = options.log;
     const historyRoot = path.join(workspaceDir, ".agentlink", "history");
-    this.historyDir = options.historyNamespace
-      ? path.join(historyRoot, options.historyNamespace)
-      : historyRoot;
+    this.historyDir = options.historyDirectory
+      ? path.resolve(options.historyDirectory)
+      : options.historyNamespace
+        ? path.join(historyRoot, options.historyNamespace)
+        : historyRoot;
     this.sessionsFile = path.join(this.historyDir, SESSIONS_FILE);
     this.ensureGitignore(path.join(workspaceDir, ".agentlink"));
     this.loadIndex();
@@ -237,6 +250,13 @@ export class SessionStore implements SessionPersistenceProvider {
   // ---------------------------------------------------------------------------
   // Index management
   // ---------------------------------------------------------------------------
+
+  /** Wait until every already-queued session and index write has settled. */
+  async flush(): Promise<void> {
+    await Promise.all(this.sessionWriteQueues.values());
+    await this.indexWriteChain;
+    if (this.pendingIndexFlush) await this.pendingIndexFlush.promise;
+  }
 
   private loadIndex(): void {
     try {

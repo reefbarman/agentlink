@@ -179,6 +179,41 @@ describe("InputArea slash popup", () => {
     expect(input.value).toBe("");
   });
 
+  it("executes /workspace immediately without sending prompt text", () => {
+    const onExecuteBuiltinCommand = vi.fn();
+    const onSend = vi.fn();
+    const { container } = renderInputArea(
+      [
+        {
+          name: "workspace",
+          description: "Show workspace history",
+          source: "builtin",
+          builtin: true,
+        },
+      ],
+      { onExecuteBuiltinCommand, onSend },
+    );
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    input.value = "/";
+    input.selectionStart = 1;
+    input.selectionEnd = 1;
+    fireEvent.input(input);
+
+    input.value = "/work";
+    input.selectionStart = input.value.length;
+    input.selectionEnd = input.value.length;
+    fireEvent.input(input);
+    const option =
+      container.querySelector<HTMLButtonElement>(".slash-cmd-option");
+    expect(option).toBeTruthy();
+    fireEvent.click(option!);
+
+    expect(onExecuteBuiltinCommand).toHaveBeenCalledWith("workspace", "");
+    expect(onSend).not.toHaveBeenCalled();
+    expect(input.value).toBe("");
+  });
+
   it("shows skill commands without the skill prefix and sends their body", () => {
     const onSend = vi.fn();
     const slashCommands: SlashCommandInfo[] = [

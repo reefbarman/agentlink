@@ -15,6 +15,7 @@ const FORWARDED_BUILTIN_COMMANDS: Record<
     "usage",
     "condense",
     "context-doctor",
+    "workspace",
     "checkpoint",
     "revert",
   ]),

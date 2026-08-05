@@ -145,6 +145,12 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     builtin: true,
   },
   {
+    name: "workspace",
+    description: "Show the active AgentLink workspace history location",
+    source: "builtin",
+    builtin: true,
+  },
+  {
     name: "memory",
     description: "Inspect and manage autonomous low-authority memory",
     source: "builtin",

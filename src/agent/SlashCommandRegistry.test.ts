@@ -82,6 +82,24 @@ describe("SlashCommandRegistry", () => {
     });
   });
 
+  it("exposes /workspace as a VS Code-only history diagnostic", async () => {
+    const registry = new SlashCommandRegistry(tmpDir, "code");
+    await registry.reload();
+
+    expect(
+      registry.getAll().find((cmd) => cmd.name === "workspace"),
+    ).toMatchObject({
+      description: "Show the active AgentLink workspace history location",
+      source: "builtin",
+      builtin: true,
+    });
+    expect(
+      (await loadAskAgentSlashCommands("ask")).some(
+        (command) => command.name === "workspace",
+      ),
+    ).toBe(false);
+  });
+
   it("exposes /memory as a built-in panel command in both catalogs", async () => {
     const registry = new SlashCommandRegistry(tmpDir, "code");
     await registry.reload();

@@ -1028,6 +1028,7 @@ export class AgentSessionManager {
     this.persistence = this.host.persistence;
     this.activityTraceRecorder = this.host.createActivityTraceRecorder({
       workspaceDir: cwd,
+      ...(opts?.historyDirectory ? { historyDir: opts.historyDirectory } : {}),
     });
     this.fleetScheduler = new FleetScheduler({
       maxConcurrent: this.bgDefaults.maxConcurrent,
@@ -4747,6 +4748,28 @@ export class AgentSessionManager {
       if (this.isEmptyForegroundSession(session)) continue;
       this.saveSession(id);
     }
+  }
+
+  async flushForWorkspaceTransition(): Promise<
+    { ok: true } | { ok: false; activeSessionIds: string[] }
+  > {
+    const activeSessionIds = Array.from(this.sessions.values())
+      .filter(
+        (session) =>
+          this.activeInteractiveEngines.has(session.id) ||
+          session.status === "queued" ||
+          session.status === "streaming" ||
+          session.status === "tool_executing" ||
+          session.status === "awaiting_approval",
+      )
+      .map((session) => session.id);
+    if (activeSessionIds.length > 0) return { ok: false, activeSessionIds };
+
+    this.saveAllSessions();
+    await Promise.all(this.sessionSaveQueues.values());
+    await this.persistence?.flush();
+    await this.flushActivityTrace();
+    return { ok: true };
   }
 
   private isEmptyForegroundSession(session: AgentSession): boolean {

@@ -58,6 +58,7 @@ import {
   type SessionApprovalPolicyTransitionResult,
 } from "./sessionApprovalPolicy.js";
 import type { SessionSummary } from "./SessionStore.js";
+import type { WorkspaceHistoryLocationDiagnostic } from "./workspaceSessionIdentity.js";
 import type {
   PendingQuestionRecoveryState,
   RevertRecoveryState,
@@ -1158,6 +1159,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     | undefined;
   private outputChannel: vscode.OutputChannel;
+  private workspaceHistoryDiagnostic:
+    | (() => WorkspaceHistoryLocationDiagnostic)
+    | undefined;
   private webviewReady = false;
   private pendingMessages: ExtensionToWebview[] = [];
   private chatTabStartupRestore: Promise<unknown> = Promise.resolve();
@@ -6442,6 +6446,39 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.outputChannel.appendLine(`[${timestamp}] ${message}`);
   }
 
+  setWorkspaceHistoryDiagnostic(
+    getDiagnostic: () => WorkspaceHistoryLocationDiagnostic,
+  ): void {
+    this.workspaceHistoryDiagnostic = getDiagnostic;
+  }
+
+  showWorkspaceHistory(): void {
+    const diagnostic = this.workspaceHistoryDiagnostic?.();
+    if (!diagnostic) {
+      void vscode.window.showInformationMessage(
+        "AgentLink workspace history is not available yet.",
+      );
+      return;
+    }
+    const lines = [
+      "AgentLink Workspace History",
+      `Status: ${diagnostic.status}`,
+      `Location: ${diagnostic.directory ?? "Unavailable"}`,
+      `Storage: ${diagnostic.label}`,
+      `Workspace identity: ${diagnostic.workspaceIdentity}`,
+      ...(diagnostic.stateAnchor
+        ? [`State anchor: ${diagnostic.stateAnchor.rootPath}`]
+        : []),
+      ...(diagnostic.conflictingLegacyRoots
+        ? [
+            `Conflicting legacy roots: ${diagnostic.conflictingLegacyRoots.join(", ")}`,
+          ]
+        : []),
+    ];
+    this.outputChannel.appendLine(lines.join("\n"));
+    this.outputChannel.show(true);
+  }
+
   setChatTabStartupRestore(restore: Promise<unknown>): void {
     this.chatTabStartupRestore = restore;
   }
@@ -8267,6 +8304,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             sourceSession.id,
             checkpoint.id,
           );
+        } else if (name === "workspace") {
+          this.showWorkspaceHistory();
         } else if (name === "skills") {
           const selection = this.getCustomizationSelection(sourceSession);
           const skills = selection

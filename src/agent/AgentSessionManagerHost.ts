@@ -184,6 +184,8 @@ export interface AgentSessionManagerOptions {
   executionUnavailableReason?: string;
   /** Activation-time primary project used only for pre-scope session records. */
   legacyProjectScope?: import("../core/workspaceProjects.js").SessionProjectScope;
+  /** Exact history directory shared by session persistence and activity traces. */
+  historyDirectory?: string;
   /** Resolves the tab-owned terminal provider for a session and its attached fleet root. */
   terminalProviderForSession?: (
     sessionId: string,

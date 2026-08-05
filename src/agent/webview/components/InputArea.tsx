@@ -710,6 +710,7 @@ export function InputArea({
     "new",
     "condense",
     "context-doctor",
+    "workspace",
     "checkpoint",
     "revert",
     "help",

@@ -237,6 +237,12 @@ describe("rerankResults", () => {
         "TerminalManager debug transcript",
       ),
       makeResult(
+        "lineage-artifact",
+        0.98,
+        ".agentlink/workspaces/ws-identity/l-imported/session/messages.json",
+        "TerminalManager migrated transcript",
+      ),
+      makeResult(
         "source",
         0.6,
         "src/integrations/TerminalManager.ts",

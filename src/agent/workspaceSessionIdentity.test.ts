@@ -4,6 +4,7 @@ import * as path from "path";
 
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  describeWorkspaceHistoryLocation,
   normalizeWorkspaceUri,
   resolveWorkspaceSessionLocation,
 } from "./workspaceSessionIdentity.js";
@@ -53,7 +54,14 @@ describe("resolveWorkspaceSessionLocation", () => {
       legacyPrimaryRootPath: "/workspace/app",
     });
     expect(result.historyNamespace).toBeUndefined();
+    expect(result.historyDirectory).toBe("/workspace/app/.agentlink/history");
     expect(result.workspaceIdentity).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.workspaceFolderUris).toEqual(["file:///workspace/app"]);
+    expect(describeWorkspaceHistoryLocation(result)).toMatchObject({
+      status: "ready",
+      directory: "/workspace/app/.agentlink/history",
+      label: "Legacy single-folder history",
+    });
   });
 
   it("uses an explicit unavailable state without a workspace folder", () => {
@@ -68,6 +76,10 @@ describe("resolveWorkspaceSessionLocation", () => {
       cwd: "/fallback",
     });
     expect(result.stateAnchor).toBeUndefined();
+    expect(describeWorkspaceHistoryLocation(result)).toMatchObject({
+      status: "unavailable",
+      label: "Unavailable: no supported file-backed workspace location",
+    });
   });
 
   it("namespaces multi-root workspaces by the stable folder set and anchors deterministically", () => {
@@ -100,11 +112,105 @@ describe("resolveWorkspaceSessionLocation", () => {
     expect(first.legacyPrimaryRootPath).toBe("/workspace/z-api");
     expect(first.stateAnchorSource).toBe("deterministic");
     expect(first.historyNamespace).toMatch(/^workspace-[a-f0-9]{16}$/);
+    expect(first.historyDirectory).toBe(
+      `/workspace/a-web/.agentlink/history/${first.historyNamespace}`,
+    );
     expect(reordered.workspaceIdentity).toBe(first.workspaceIdentity);
     expect(reordered.historyNamespace).toBe(first.historyNamespace);
     expect(reordered.stateAnchor).toEqual(first.stateAnchor);
     expect(changed.workspaceIdentity).not.toBe(first.workspaceIdentity);
     expect(changed.historyNamespace).not.toBe(first.historyNamespace);
+    expect(first.workspaceFolderUris).toEqual([
+      "file:///workspace/a-web",
+      "file:///workspace/z-api",
+    ]);
+  });
+
+  it("selects a valid v2 lineage over a legacy history location", () => {
+    const root = tempDir("agentlink-v2-workspace");
+    const workspaceIdentity = resolveWorkspaceSessionLocation({
+      workspaceFolders: [folder(root)],
+      workspaceFile: undefined,
+      fallbackCwd: "/fallback",
+    }).workspaceIdentity;
+    const lineage = "l-imported";
+    const lineageDirectory = path.join(
+      root,
+      ".agentlink",
+      "workspaces",
+      `ws-${workspaceIdentity.slice(0, 16)}`,
+      lineage,
+    );
+    fs.mkdirSync(lineageDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(path.dirname(lineageDirectory), "workspace.json"),
+      JSON.stringify({
+        version: 1,
+        workspaceIdentity,
+        activeLineage: lineage,
+      }),
+      "utf-8",
+    );
+
+    const result = resolveWorkspaceSessionLocation({
+      workspaceFolders: [folder(root)],
+      workspaceFile: undefined,
+      fallbackCwd: "/fallback",
+    });
+
+    expect(result).toMatchObject({
+      status: "ready",
+      historyStorageKind: "lineage_v2",
+      historyLineage: lineage,
+      historyDirectory: lineageDirectory,
+    });
+    expect(describeWorkspaceHistoryLocation(result).label).toBe(
+      `History lineage: ${lineage}`,
+    );
+  });
+
+  it("finds a v2 lineage under a non-deterministic multi-root anchor", () => {
+    const firstRoot = tempDir("agentlink-v2-first");
+    const secondRoot = tempDir("agentlink-v2-second");
+    const initial = resolveWorkspaceSessionLocation({
+      workspaceFolders: [folder(firstRoot), folder(secondRoot)],
+      workspaceFile: undefined,
+      fallbackCwd: "/fallback",
+      historyNamespaceExists: () => false,
+    });
+    const lineage = "l-imported";
+    const lineageDirectory = path.join(
+      secondRoot,
+      ".agentlink",
+      "workspaces",
+      `ws-${initial.workspaceIdentity.slice(0, 16)}`,
+      lineage,
+    );
+    fs.mkdirSync(lineageDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(path.dirname(lineageDirectory), "workspace.json"),
+      JSON.stringify({
+        version: 1,
+        workspaceIdentity: initial.workspaceIdentity,
+        activeLineage: lineage,
+      }),
+      "utf-8",
+    );
+
+    const result = resolveWorkspaceSessionLocation({
+      workspaceFolders: [folder(firstRoot), folder(secondRoot)],
+      workspaceFile: undefined,
+      fallbackCwd: "/fallback",
+      historyNamespaceExists: () => false,
+    });
+
+    expect(result).toMatchObject({
+      status: "ready",
+      historyStorageKind: "lineage_v2",
+      historyDirectory: lineageDirectory,
+      stateAnchor: { rootPath: secondRoot },
+      stateAnchorSource: "legacy_discovered",
+    });
   });
 
   it("continues using exactly one discovered legacy namespace", () => {
@@ -129,6 +235,9 @@ describe("resolveWorkspaceSessionLocation", () => {
       stateAnchorSource: "legacy_discovered",
       legacyPrimaryRootPath: firstRoot,
     });
+    expect(result.historyDirectory).toBe(
+      path.join(secondRoot, ".agentlink", "history", result.historyNamespace!),
+    );
   });
 
   it("reports a recoverable conflict when multiple legacy namespaces exist", () => {
@@ -147,6 +256,11 @@ describe("resolveWorkspaceSessionLocation", () => {
       [firstRoot, secondRoot].sort(),
     );
     expect(result.stateAnchorSource).toBe("deterministic");
+    expect(describeWorkspaceHistoryLocation(result)).toMatchObject({
+      status: "legacy_conflict",
+      label: "Unavailable: multiple legacy history locations conflict",
+      conflictingLegacyRoots: [firstRoot, secondRoot].sort(),
+    });
   });
 
   it("includes the workspace file in multi-root namespace identity", () => {

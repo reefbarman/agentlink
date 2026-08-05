@@ -130,6 +130,9 @@ describe("extension package contributions", () => {
     expect(commands.get("agentlink.clearSessionApprovals")).toBe(
       "AgentLink: Clear Built-In Agent Session Approvals",
     );
+    expect(commands.get("agentlink.showWorkspaceHistory")).toBe(
+      "AgentLink: Show Workspace History",
+    );
   });
 
   it("defaults every built-in chat mode to flagship GPT-5.6 Sol", () => {

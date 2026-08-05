@@ -47,6 +47,7 @@ const mockShowOpenDialog = vi.fn();
 const mockOutputChannel = {
   appendLine: vi.fn(),
   info: vi.fn(),
+  show: vi.fn(),
   dispose: vi.fn(),
 };
 const mockConfigUpdate = vi.fn();
@@ -1973,6 +1974,33 @@ describe("ChatViewProvider session state sync", () => {
       type: "agentSlashCommandsUpdate",
       commands: [{ name: "project-a-current" }],
     });
+    provider.dispose();
+  });
+
+  it("shows workspace history from the immediate slash command", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const outputChannel = (
+      provider as unknown as { outputChannel: typeof mockOutputChannel }
+    ).outputChannel;
+    outputChannel.appendLine.mockClear();
+    outputChannel.show.mockClear();
+    provider.setWorkspaceHistoryDiagnostic(() => ({
+      status: "ready",
+      workspaceIdentity: "workspace-id",
+      directory: "/workspace/.agentlink/history",
+      label: "Legacy single-folder history",
+    }));
+
+    provider.showWorkspaceHistory();
+
+    expect(outputChannel.appendLine).toHaveBeenCalledWith(
+      expect.stringContaining("Location: /workspace/.agentlink/history"),
+    );
+    expect(outputChannel.show).toHaveBeenCalledWith(true);
     provider.dispose();
   });
 

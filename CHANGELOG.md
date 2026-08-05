@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added local workspace-history continuity: when folders are added, AgentLink can branch-copy prior chat history into the expanded workspace shape and preserve the source. Automatic migration does not run for reverse folder-removal transitions or into a destination that already has history; those cases remain explicit recovery work. Migration now shows flush, inspection, copy, publication, and reload progress. Added `/workspace` and **AgentLink: Show Workspace History** for exact history-location diagnostics and recovery.
 - Added project-level `.agentlink/AGENTS.md` instructions, preferred over the existing `.agentlink/CLAUDE.md` fallback, and documented `AGENTS.local.md` for uncommitted personal project guidance.
 - Added default-on hybrid web access for the built-in VS Code agent and Browser Ask Agent. `auto` selects one supported provider-hosted backend or an explicitly configured SearXNG MCP binding before each request; strict `provider`, `mcp`, and `disabled` strategies are also available.
 - Added durable hosted search/fetch activity and safe `http`/`https` citations across live transcripts, restore, retry/fallback, export, browser reconnect, and background-agent views. Provider-private replay stays out of public browser state, logs, and exports.

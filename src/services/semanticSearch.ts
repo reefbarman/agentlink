@@ -308,6 +308,7 @@ function isExcludedSemanticResultPath(filePath: string): boolean {
     : `/${normalized}`;
   return (
     withLeadingSlash.includes("/.agentlink/history/") ||
+    withLeadingSlash.includes("/.agentlink/workspaces/") ||
     withLeadingSlash.includes("/.agentlink/debug/") ||
     withLeadingSlash.includes("/.agentlink/transcripts/") ||
     withLeadingSlash.includes("/.agentlink/checkpoints/")

@@ -76,6 +76,8 @@ export interface ActivityTraceSummary {
 
 export interface ActivityTraceRecorderOptions {
   workspaceDir: string;
+  /** Exact session-history directory; defaults to the legacy workspace path. */
+  historyDir?: string;
   now?: () => number;
   maxEventsPerSession?: number;
   maxSummaryChars?: number;
@@ -137,7 +139,9 @@ export class ActivityTraceRecorder {
   private flushChain: Promise<void> = Promise.resolve();
 
   constructor(options: ActivityTraceRecorderOptions) {
-    this.historyDir = path.join(options.workspaceDir, ".agentlink", "history");
+    this.historyDir =
+      options.historyDir ??
+      path.join(options.workspaceDir, ".agentlink", "history");
     this.now = options.now ?? Date.now;
     this.maxEventsPerSession =
       options.maxEventsPerSession ?? DEFAULT_MAX_EVENTS_PER_SESSION;

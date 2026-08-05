@@ -29,10 +29,11 @@ Switch with `/mode <slug>` or the mode selector. Default mode: `agentlink.defaul
 
 ## Built-in slash commands
 
-`/new`, `/mode`, `/model`, `/condense`, `/context-doctor`, `/environment`, `/checkpoint`, `/revert`, `/help`, `/fleet`, `/remember`, `/memory`, `/skills`, `/mcp`, `/mcp-config`, `/mcp-refresh`, `/btw`, `/worktree`, `/pair`, `/usage`. Custom commands and detected skills appear in the same picker (see `references/customization.md`).
+`/new`, `/mode`, `/model`, `/condense`, `/context-doctor`, `/environment`, `/workspace`, `/checkpoint`, `/revert`, `/help`, `/fleet`, `/remember`, `/memory`, `/skills`, `/mcp`, `/mcp-config`, `/mcp-refresh`, `/btw`, `/worktree`, `/pair`, `/usage`. Custom commands and detected skills appear in the same picker (see `references/customization.md`).
 
 - `/context-doctor` — append a read-only workspace-session report covering prompt/tool/context-ledger allocations, retained and repeated tool results, condensation evidence, and explicit unavailable diagnostics. It makes no model request, and the report is excluded from future provider and condensation context. Available in VS Code chat and the browser remote, but not projectless Browser Ask Agent.
 - `/environment` — open the current workspace session's runtime environment, loaded instructions, and system prompt in the Chat Activity Shelf without a model request. Available in VS Code chat and browser workspace tabs, but not projectless Browser Ask Agent.
+- `/workspace` — show the exact active AgentLink history directory, workspace identity, and legacy namespace or v2 lineage in the VS Code output channel. It is a diagnostics/recovery command, not a VS Code workspace switcher, and is unavailable in the browser remote because migration remains VS Code-only.
 - `/memory` — open the local autonomous-memory manager without a model request. Inspect/filter records, provenance, revisions, and audit history; forget/restore, undo, clear a confirmed scope, or import/export versioned archives. VS Code supports global and current-project scopes; projectless Browser Ask Agent supports global scope only.
 - `/btw <question>` — quick side question in a forked read-only session; answer can be promoted into the main transcript. VS Code-only.
 - `/worktree [task] [--branch <name>]` — set up isolated work without interrupting the current turn; missing details are gathered in a small text session, followed by inline **Create & start** / **Create & prefill** actions in the Activity Shelf. VS Code-only.
@@ -47,7 +48,7 @@ Switch with `/mode <slug>` or the mode selector. Default mode: `agentlink.defaul
 - Browser Ask Agent applies the same mechanism to a stricter helper-owned projectless catalog. It can defer only already-authorized global-memory and display-safe image tools; it cannot discover or invoke file writes, shell commands, VS Code editor/language state, semantic code search, repo maps, or background/fleet orchestration.
 - **Auto-condense** compresses the conversation when the context window fills (`agentlink.autoCondense`, per-model thresholds in `agentlink.modelCondenseThresholds`) and deterministically reattaches the current structured TODO list with its completed, in-progress, and pending states. Resume guidance tells the agent to reconcile stale status against the checkpoint/workspace rather than repeat already-completed work; `/condense` triggers it manually, while `/context-doctor` inspects the latest completed allocation without changing it.
 - **Checkpoints** (`/checkpoint`, `/revert`) snapshot the workspace into AgentLink's own shadow git repo under `.agentlink/checkpoints/` — separate from the project's real git history.
-- Sessions persist and restore across VS Code reloads.
+- Sessions persist and restore across VS Code reloads. For local workspace folder additions, AgentLink can offer to branch-copy the prior history into a new active lineage, start fresh, or defer. Source history stays unchanged. Automatic migration never runs for a reverse folder-removal transition or into a destination that already has history; those cases need an explicit recovery flow rather than selecting a branch automatically. The visible migration notification waits for active sessions to become idle, then reports inspection/copy/publication/reload stages rather than retargeting a running runtime in place.
 
 ## Autonomous memory
 

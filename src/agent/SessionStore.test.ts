@@ -211,6 +211,55 @@ describe("SessionStore", () => {
     ).toBe(true);
   });
 
+  it("uses an explicit lineage history directory while maintaining the anchor gitignore", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const lineageDirectory = path.join(
+      tmpDir,
+      ".agentlink",
+      "workspaces",
+      "ws-identity",
+      "l-imported",
+    );
+    const store = new SessionStore(tmpDir, undefined, undefined, {
+      historyDirectory: lineageDirectory,
+    });
+
+    await expect(
+      store.saveSession({
+        session: createRecord({
+          summary: createSummary({ id: "lineage", title: "Lineage" }),
+        }),
+        expectedRevision: null,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ ok: true }));
+
+    expect(
+      new SessionStore(tmpDir, undefined, undefined, {
+        historyDirectory: lineageDirectory,
+      })
+        .list()
+        .map((summary) => summary.id),
+    ).toEqual(["lineage"]);
+    expect(fs.existsSync(path.join(lineageDirectory, "sessions.json"))).toBe(
+      true,
+    );
+    expect(
+      fs.readFileSync(path.join(tmpDir, ".agentlink", ".gitignore"), "utf-8"),
+    ).toContain("workspaces/");
+  });
+
+  it("rejects conflicting explicit and namespaced history locations", () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+
+    expect(
+      () =>
+        new SessionStore(tmpDir!, undefined, undefined, {
+          historyNamespace: "workspace-abc123",
+          historyDirectory: path.join(tmpDir!, "lineage"),
+        }),
+    ).toThrow("cannot be combined");
+  });
+
   it("excludes background sessions from list() but keeps them addressable by id", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
     const store = new SessionStore(tmpDir);

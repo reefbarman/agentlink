@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.18.16",
+  "version": "1.18.18",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -216,6 +216,10 @@
       {
         "command": "agentlink.dockChatTab",
         "title": "AgentLink: Dock Chat Tab"
+      },
+      {
+        "command": "agentlink.showWorkspaceHistory",
+        "title": "AgentLink: Show Workspace History"
       }
     ],
     "menus": {

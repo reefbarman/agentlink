@@ -32,6 +32,10 @@ export interface WorkspaceSessionLocation {
   status: WorkspaceSessionLocationStatus;
   /** Stable identity derived from the sorted full workspace-folder URI set. */
   workspaceIdentity: string;
+  /** Normalized sorted folder URIs used to derive workspaceIdentity. */
+  workspaceFolderUris: string[];
+  /** Normalized workspace file URI used to derive workspaceIdentity, if present. */
+  workspaceFileUri?: string;
   /**
    * Deprecated compatibility cwd. New session execution must use project scope;
    * workspace-level persistence uses stateAnchor instead.
@@ -39,6 +43,10 @@ export interface WorkspaceSessionLocation {
   cwd: string;
   /** Undefined means use the legacy single-folder `.agentlink/history` layout. */
   historyNamespace?: string;
+  /** Exact current history directory derived from the selected state anchor. */
+  historyDirectory?: string;
+  historyStorageKind?: "legacy" | "lineage_v2";
+  historyLineage?: string;
   stateAnchor?: WorkspaceSessionStateAnchor;
   stateAnchorSource?: "single_folder" | "legacy_discovered" | "deterministic";
   /** Activation-time first file-backed folder used only for old session migration. */
@@ -51,6 +59,20 @@ export interface WorkspaceSessionLocationOptions {
   workspaceFile: WorkspaceSessionIdentityFile | undefined;
   fallbackCwd: string;
   historyNamespaceExists?: (rootPath: string, namespace: string) => boolean;
+  resolveV2HistoryDirectory?: (
+    rootPath: string,
+    workspaceIdentity: string,
+  ) => { directory: string; lineage: string } | undefined;
+}
+
+export interface WorkspaceHistoryLocationDiagnostic {
+  status: WorkspaceSessionLocationStatus;
+  workspaceIdentity: string;
+  directory?: string;
+  label: string;
+  stateAnchor?: WorkspaceSessionStateAnchor;
+  stateAnchorSource?: WorkspaceSessionLocation["stateAnchorSource"];
+  conflictingLegacyRoots?: string[];
 }
 
 export function resolveWorkspaceSessionLocation(
@@ -74,6 +96,10 @@ export function resolveWorkspaceSessionLocation(
     return {
       status: "unavailable",
       workspaceIdentity,
+      workspaceFolderUris: normalizedFolderUris,
+      ...(normalizedWorkspaceFileUri
+        ? { workspaceFileUri: normalizedWorkspaceFileUri }
+        : {}),
       cwd: options.fallbackCwd,
     };
   }
@@ -84,17 +110,37 @@ export function resolveWorkspaceSessionLocation(
       return {
         status: "unavailable",
         workspaceIdentity,
+        workspaceFolderUris: normalizedFolderUris,
+        ...(normalizedWorkspaceFileUri
+          ? { workspaceFileUri: normalizedWorkspaceFileUri }
+          : {}),
         cwd: options.fallbackCwd,
       };
     }
+    const v2 = resolveV2HistoryDirectory(
+      options,
+      folder.uri.fsPath,
+      workspaceIdentity,
+    );
     return {
       status: "ready",
       workspaceIdentity,
+      workspaceFolderUris: normalizedFolderUris,
+      ...(normalizedWorkspaceFileUri
+        ? { workspaceFileUri: normalizedWorkspaceFileUri }
+        : {}),
       cwd: folder.uri.fsPath,
       stateAnchor: {
         uri: normalizeWorkspaceUri(folder.uri),
         rootPath: folder.uri.fsPath,
       },
+      historyDirectory: v2?.directory ?? historyDirectory(folder.uri.fsPath),
+      ...(v2
+        ? {
+            historyStorageKind: "lineage_v2" as const,
+            historyLineage: v2.lineage,
+          }
+        : { historyStorageKind: "legacy" as const }),
       stateAnchorSource: "single_folder",
       legacyPrimaryRootPath,
     };
@@ -104,6 +150,10 @@ export function resolveWorkspaceSessionLocation(
     return {
       status: "unavailable",
       workspaceIdentity,
+      workspaceFolderUris: normalizedFolderUris,
+      ...(normalizedWorkspaceFileUri
+        ? { workspaceFileUri: normalizedWorkspaceFileUri }
+        : {}),
       cwd: options.fallbackCwd,
     };
   }
@@ -124,10 +174,48 @@ export function resolveWorkspaceSessionLocation(
     rootPath: deterministicFolder.uri.fsPath,
   };
 
+  const v2Anchor = fileFolders
+    .map((folder) => ({
+      anchor: {
+        uri: normalizeWorkspaceUri(folder.uri),
+        rootPath: folder.uri.fsPath,
+      },
+      history: resolveV2HistoryDirectory(
+        options,
+        folder.uri.fsPath,
+        workspaceIdentity,
+      ),
+    }))
+    .find((candidate) => candidate.history);
+  if (v2Anchor?.history) {
+    return {
+      status: "ready",
+      workspaceIdentity,
+      workspaceFolderUris: normalizedFolderUris,
+      ...(normalizedWorkspaceFileUri
+        ? { workspaceFileUri: normalizedWorkspaceFileUri }
+        : {}),
+      cwd: v2Anchor.anchor.rootPath,
+      historyDirectory: v2Anchor.history.directory,
+      historyStorageKind: "lineage_v2",
+      historyLineage: v2Anchor.history.lineage,
+      stateAnchor: v2Anchor.anchor,
+      stateAnchorSource:
+        v2Anchor.anchor.rootPath === deterministicAnchor.rootPath
+          ? "deterministic"
+          : "legacy_discovered",
+      legacyPrimaryRootPath,
+    };
+  }
+
   if (legacyRoots.length > 1) {
     return {
       status: "legacy_conflict",
       workspaceIdentity,
+      workspaceFolderUris: normalizedFolderUris,
+      ...(normalizedWorkspaceFileUri
+        ? { workspaceFileUri: normalizedWorkspaceFileUri }
+        : {}),
       cwd: deterministicAnchor.rootPath,
       historyNamespace,
       stateAnchor: deterministicAnchor,
@@ -146,8 +234,14 @@ export function resolveWorkspaceSessionLocation(
     return {
       status: "ready",
       workspaceIdentity,
+      workspaceFolderUris: normalizedFolderUris,
+      ...(normalizedWorkspaceFileUri
+        ? { workspaceFileUri: normalizedWorkspaceFileUri }
+        : {}),
       cwd: legacyRootPath,
       historyNamespace,
+      historyDirectory: historyDirectory(legacyRootPath, historyNamespace),
+      historyStorageKind: "legacy",
       stateAnchor: {
         uri: normalizeWorkspaceUri(legacyFolder.uri),
         rootPath: legacyRootPath,
@@ -160,11 +254,61 @@ export function resolveWorkspaceSessionLocation(
   return {
     status: "ready",
     workspaceIdentity,
+    workspaceFolderUris: normalizedFolderUris,
+    ...(normalizedWorkspaceFileUri
+      ? { workspaceFileUri: normalizedWorkspaceFileUri }
+      : {}),
     cwd: deterministicAnchor.rootPath,
     historyNamespace,
+    historyDirectory: historyDirectory(
+      deterministicAnchor.rootPath,
+      historyNamespace,
+    ),
+    historyStorageKind: "legacy",
     stateAnchor: deterministicAnchor,
     stateAnchorSource: "deterministic",
     legacyPrimaryRootPath,
+  };
+}
+
+/**
+ * Produces a concise, user-facing description of the currently selected
+ * file-backed history location without inspecting or mutating disk state.
+ */
+export function describeWorkspaceHistoryLocation(
+  location: WorkspaceSessionLocation,
+): WorkspaceHistoryLocationDiagnostic {
+  if (location.status !== "ready" || !location.historyDirectory) {
+    return {
+      status: location.status,
+      workspaceIdentity: location.workspaceIdentity,
+      label:
+        location.status === "legacy_conflict"
+          ? "Unavailable: multiple legacy history locations conflict"
+          : "Unavailable: no supported file-backed workspace location",
+      ...(location.stateAnchor ? { stateAnchor: location.stateAnchor } : {}),
+      ...(location.stateAnchorSource
+        ? { stateAnchorSource: location.stateAnchorSource }
+        : {}),
+      ...(location.conflictingLegacyRoots
+        ? { conflictingLegacyRoots: location.conflictingLegacyRoots }
+        : {}),
+    };
+  }
+  return {
+    status: location.status,
+    workspaceIdentity: location.workspaceIdentity,
+    directory: location.historyDirectory,
+    label:
+      location.historyStorageKind === "lineage_v2"
+        ? `History lineage: ${location.historyLineage}`
+        : location.historyNamespace
+          ? `Legacy namespace: ${location.historyNamespace}`
+          : "Legacy single-folder history",
+    ...(location.stateAnchor ? { stateAnchor: location.stateAnchor } : {}),
+    ...(location.stateAnchorSource
+      ? { stateAnchorSource: location.stateAnchorSource }
+      : {}),
   };
 }
 
@@ -236,6 +380,59 @@ function normalizeUriPath(value: string): string {
 
 function isFileUri(uri: WorkspaceSessionIdentityUri): boolean {
   return (uri.scheme ?? "file").toLowerCase() === "file";
+}
+
+function resolveV2HistoryDirectory(
+  options: WorkspaceSessionLocationOptions,
+  rootPath: string,
+  workspaceIdentity: string,
+): { directory: string; lineage: string } | undefined {
+  return (
+    options.resolveV2HistoryDirectory?.(rootPath, workspaceIdentity) ??
+    defaultResolveV2HistoryDirectory(rootPath, workspaceIdentity)
+  );
+}
+
+function defaultResolveV2HistoryDirectory(
+  rootPath: string,
+  workspaceIdentity: string,
+): { directory: string; lineage: string } | undefined {
+  const workspaceRoot = path.join(
+    rootPath,
+    ".agentlink",
+    "workspaces",
+    `ws-${workspaceIdentity.slice(0, 16)}`,
+  );
+  try {
+    const raw = fs.readFileSync(
+      path.join(workspaceRoot, "workspace.json"),
+      "utf-8",
+    );
+    const parsed = JSON.parse(raw) as {
+      version?: unknown;
+      workspaceIdentity?: unknown;
+      activeLineage?: unknown;
+    };
+    if (
+      parsed.version !== 1 ||
+      parsed.workspaceIdentity !== workspaceIdentity ||
+      typeof parsed.activeLineage !== "string" ||
+      !/^l-[a-z\d]+$/i.test(parsed.activeLineage)
+    ) {
+      return undefined;
+    }
+    const directory = path.join(workspaceRoot, parsed.activeLineage);
+    return fs.statSync(directory).isDirectory()
+      ? { directory, lineage: parsed.activeLineage }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function historyDirectory(rootPath: string, namespace?: string): string {
+  const historyRoot = path.join(rootPath, ".agentlink", "history");
+  return namespace ? path.join(historyRoot, namespace) : historyRoot;
 }
 
 function defaultHistoryNamespaceExists(

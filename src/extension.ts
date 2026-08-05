@@ -129,7 +129,18 @@ import {
   agentLinkFetch,
   installAgentLinkHttpDispatcher,
 } from "./util/httpDispatcher.js";
-import { resolveWorkspaceSessionLocation } from "./agent/workspaceSessionIdentity.js";
+import {
+  describeWorkspaceHistoryLocation,
+  resolveWorkspaceSessionLocation,
+  type WorkspaceSessionLocation,
+} from "./agent/workspaceSessionIdentity.js";
+import { WorkspaceContinuityCatalog } from "./agent/workspaceContinuityCatalog.js";
+import {
+  classifyWorkspaceHistoryTransition,
+  hasPersistedWorkspaceHistory,
+  migrateWorkspaceHistory,
+  type WorkspaceHistoryShape,
+} from "./agent/workspaceHistoryMigration.js";
 import { createSessionProjectScope } from "./core/workspaceProjects.js";
 import {
   createWorkspaceProjectCatalog,
@@ -217,6 +228,44 @@ const SEMANTIC_SETUP_PROMPT_DISMISSED_KEY =
 function log(message: string): void {
   const timestamp = new Date().toISOString();
   outputChannel.appendLine(`[${timestamp}] ${message}`);
+}
+
+function workspaceHistoryShape(location: {
+  workspaceIdentity: string;
+  workspaceFolderUris: readonly string[];
+  workspaceFileUri?: string;
+}): WorkspaceHistoryShape {
+  return {
+    workspaceIdentity: location.workspaceIdentity,
+    workspaceFolderUris: location.workspaceFolderUris,
+    ...(location.workspaceFileUri
+      ? { workspaceFileUri: location.workspaceFileUri }
+      : {}),
+  };
+}
+
+function hasIndependentPersistedHistory(
+  destination: WorkspaceSessionLocation,
+  sourceHistoryDirectory: string,
+): boolean {
+  return Boolean(
+    destination.historyDirectory &&
+    path.resolve(destination.historyDirectory) !==
+      path.resolve(sourceHistoryDirectory) &&
+    hasPersistedWorkspaceHistory(
+      destination.historyDirectory,
+      destination.historyStorageKind,
+    ),
+  );
+}
+
+function isRealDirectory(directory: string): boolean {
+  try {
+    const stat = fs.lstatSync(directory);
+    return stat.isDirectory() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 function getConfig<T>(key: string): T {
@@ -793,6 +842,21 @@ export async function activate(
     workspaceFile: vscode.workspace.workspaceFile,
     fallbackCwd: process.cwd(),
   });
+  const workspaceContinuityCatalog = new WorkspaceContinuityCatalog(
+    context.globalStorageUri.fsPath,
+  );
+  if (
+    workspaceSessionLocation.status === "ready" &&
+    workspaceSessionLocation.historyDirectory &&
+    workspaceSessionLocation.stateAnchor
+  ) {
+    workspaceContinuityCatalog.remember({
+      ...workspaceHistoryShape(workspaceSessionLocation),
+      historyDirectory: workspaceSessionLocation.historyDirectory,
+      anchorRootPath: workspaceSessionLocation.stateAnchor.rootPath,
+      updatedAt: Date.now(),
+    });
+  }
   agentTerminalProvider = new AgentTerminalProviderRouter({
     isEnabled: () =>
       vscode.workspace
@@ -1148,7 +1212,7 @@ export async function activate(
           undefined,
           undefined,
           {
-            historyNamespace: workspaceSessionLocation.historyNamespace,
+            historyDirectory: workspaceSessionLocation.historyDirectory,
             legacyProjectScope,
             log,
           },
@@ -1237,6 +1301,9 @@ export async function activate(
   );
   chatViewProvider.setPendingInteractionAlertProvider((message, command) =>
     statusBarManager.showAlert(message, command),
+  );
+  chatViewProvider.setWorkspaceHistoryDiagnostic(() =>
+    describeWorkspaceHistoryLocation(workspaceSessionLocation),
   );
   chatViewProvider.setChatTabController(chatTabController);
   chatTabPanelHost = new ChatTabPanelHost({
@@ -1635,6 +1702,7 @@ export async function activate(
     {
       projectCatalog,
       legacyProjectScope,
+      historyDirectory: workspaceSessionLocation.historyDirectory,
       projectCustomizationRegistry,
       host: {
         workspaceMutationCoordinator: new WorkspaceMutationCoordinator(
@@ -1662,6 +1730,129 @@ export async function activate(
       },
     },
   );
+  let workspaceMigrationPromptInFlight = false;
+  const offerWorkspaceHistoryMigration = async (
+    source: WorkspaceHistoryShape & {
+      historyDirectory: string;
+      anchorRootPath: string;
+    },
+    destination: WorkspaceSessionLocation,
+  ): Promise<void> => {
+    if (
+      workspaceMigrationPromptInFlight ||
+      destination.status !== "ready" ||
+      !destination.stateAnchor ||
+      source.workspaceIdentity === destination.workspaceIdentity ||
+      !isRealDirectory(source.historyDirectory) ||
+      classifyWorkspaceHistoryTransition(
+        workspaceHistoryShape(source),
+        workspaceHistoryShape(destination),
+      ) !== "source_subset_of_destination" ||
+      hasIndependentPersistedHistory(destination, source.historyDirectory)
+    ) {
+      return;
+    }
+    const destinationAnchorRootPath = destination.stateAnchor.rootPath;
+    const destinationShape = workspaceHistoryShape(destination);
+    const transitionKey = `workspaceHistory.decision.${source.workspaceIdentity}.${destination.workspaceIdentity}`;
+    if (context.globalState.get<boolean>(transitionKey, false)) return;
+
+    workspaceMigrationPromptInFlight = true;
+    try {
+      const choice = await vscode.window.showWarningMessage(
+        "AgentLink found history for a related workspace shape. Migrate it into an independent branch for this workspace?",
+        { modal: true },
+        "Migrate history",
+        "Start new workspace",
+        "Not now",
+      );
+      if (choice === "Not now" || !choice) return;
+
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "AgentLink: Migrating workspace history",
+          cancellable: false,
+        },
+        async (progress) => {
+          progress.report({ message: "Waiting for session history to flush…" });
+          const drained =
+            await agentSessionManager.flushForWorkspaceTransition();
+          if (!drained.ok) {
+            void vscode.window.showWarningMessage(
+              "AgentLink cannot change workspace history while sessions are active. Finish or stop those sessions, then reload the window to try again.",
+            );
+            return;
+          }
+          if (choice === "Start new workspace") {
+            await context.globalState.update(transitionKey, true);
+            progress.report({
+              message: "Reloading with a new workspace history…",
+            });
+            await vscode.commands.executeCommand(
+              "workbench.action.reloadWindow",
+            );
+            return;
+          }
+          await migrateWorkspaceHistory({
+            source: workspaceHistoryShape(source),
+            destination: destinationShape,
+            sourceHistoryDirectory: source.historyDirectory,
+            destinationAnchorRootPath,
+            destinationLegacyHistoryDirectory:
+              destination.historyStorageKind === "legacy"
+                ? destination.historyDirectory
+                : undefined,
+            onProgress: (message) => progress.report({ message }),
+          });
+          await context.globalState.update(transitionKey, true);
+          progress.report({ message: "Reloading with migrated history…" });
+          await vscode.commands.executeCommand("workbench.action.reloadWindow");
+        },
+      );
+    } catch (error) {
+      log(`[history] Workspace migration failed: ${String(error)}`);
+      void vscode.window.showErrorMessage(
+        "AgentLink could not migrate workspace history. The original history was left unchanged; see the AgentLink output for details.",
+      );
+    } finally {
+      workspaceMigrationPromptInFlight = false;
+    }
+  };
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      const destination = resolveWorkspaceSessionLocation({
+        workspaceFolders: vscode.workspace.workspaceFolders,
+        workspaceFile: vscode.workspace.workspaceFile,
+        fallbackCwd: process.cwd(),
+      });
+      if (
+        workspaceSessionLocation.status !== "ready" ||
+        !workspaceSessionLocation.historyDirectory ||
+        !workspaceSessionLocation.stateAnchor
+      ) {
+        return;
+      }
+      void offerWorkspaceHistoryMigration(
+        {
+          ...workspaceHistoryShape(workspaceSessionLocation),
+          historyDirectory: workspaceSessionLocation.historyDirectory,
+          anchorRootPath: workspaceSessionLocation.stateAnchor.rootPath,
+        },
+        destination,
+      );
+    }),
+  );
+  const startupMigrationCandidate = workspaceContinuityCatalog
+    .findExpansionCandidates(workspaceHistoryShape(workspaceSessionLocation))
+    .sort((left, right) => right.updatedAt - left.updatedAt)[0];
+  if (startupMigrationCandidate) {
+    void offerWorkspaceHistoryMigration(
+      startupMigrationCandidate,
+      workspaceSessionLocation,
+    );
+  }
+
   const syncForegroundChatTab = createForegroundChatTabSync({
     getForegroundSessionId: () =>
       agentSessionManager.getForegroundSession()?.id,
@@ -2721,6 +2912,9 @@ export async function activate(
 
   // Commands
   context.subscriptions.push(
+    vscode.commands.registerCommand("agentlink.showWorkspaceHistory", () => {
+      chatViewProvider.showWorkspaceHistory();
+    }),
     vscode.commands.registerCommand("agentlink.popChatTab", async () => {
       const tab = chatTabController.getFocusedTab();
       if (await chatTabPanelHost?.popOut(tab.id)) return;
