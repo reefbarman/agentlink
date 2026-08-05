@@ -7621,6 +7621,16 @@ export class AgentSessionManager {
     }
   }
 
+  private fleetMetadataMatchesRoots(
+    fleet: PersistedFleetMetadata | undefined,
+    rootSessionIds: ReadonlySet<string>,
+  ): boolean {
+    return Boolean(
+      (fleet?.rootSessionId && rootSessionIds.has(fleet.rootSessionId)) ||
+      (fleet?.parentSessionId && rootSessionIds.has(fleet.parentSessionId)),
+    );
+  }
+
   /** Restore durable background records belonging to selected foreground/tab roots. */
   async restorePersistedBackgroundSessions(
     rootSessionId?: string | ReadonlySet<string>,
@@ -7638,17 +7648,27 @@ export class AgentSessionManager {
       .listAll()
       .filter((candidate) => candidate.background)) {
       if (this.sessions.has(summary.id)) continue;
+      if (
+        rootSessionIds &&
+        typeof this.persistence.loadMetadata === "function"
+      ) {
+        // Filter on metadata.json before readSession: readSession parses the
+        // full messages.json synchronously, and workspaces can hold hundreds
+        // of MB of non-matching background transcripts.
+        const metadata = this.persistence.loadMetadata(summary.id);
+        if (
+          !metadata ||
+          !this.fleetMetadataMatchesRoots(metadata.fleet, rootSessionIds)
+        ) {
+          continue;
+        }
+      }
       const readResult = await this.persistence.readSession(summary.id);
       if (!readResult.ok) continue;
       const { messages, metadata } = readResult.value;
       if (
         rootSessionIds &&
-        !(
-          (metadata.fleet?.rootSessionId &&
-            rootSessionIds.has(metadata.fleet.rootSessionId)) ||
-          (metadata.fleet?.parentSessionId &&
-            rootSessionIds.has(metadata.fleet.parentSessionId))
-        )
+        !this.fleetMetadataMatchesRoots(metadata.fleet, rootSessionIds)
       ) {
         continue;
       }

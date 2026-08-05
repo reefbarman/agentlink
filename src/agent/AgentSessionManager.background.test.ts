@@ -6416,6 +6416,74 @@ describe("AgentSessionManager background agents", () => {
     ]);
   });
 
+  it("filters background restores from metadata without reading non-matching transcripts", async () => {
+    const now = Date.now();
+    const summaries = ["matching-bg", "other-root-bg", "no-fleet-bg"].map(
+      (id) => ({
+        schemaVersion: 1,
+        id,
+        mode: "agent",
+        model: "gpt-5.4-pro",
+        title: id,
+        messageCount: 1,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        createdAt: now,
+        lastActiveAt: now,
+        background: true,
+      }),
+    );
+    const metadataFor = (id: string) => ({
+      mode: "agent",
+      model: "gpt-5.4-pro",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      fleet:
+        id === "no-fleet-bg"
+          ? undefined
+          : {
+              schemaVersion: 1,
+              placement: "background",
+              task: id,
+              rootSessionId:
+                id === "matching-bg" ? "foreground-1" : "foreground-other",
+              parentSessionId:
+                id === "matching-bg" ? "foreground-1" : "foreground-other",
+              depth: 1,
+              lifecycle: "completed",
+            },
+    });
+    const store = {
+      list: vi.fn(() => []),
+      listAll: vi.fn(() => summaries),
+      loadMetadata: vi.fn((id: string) => metadataFor(id)),
+      readSession: vi.fn(async (id: string) => ({
+        ok: true,
+        revision: "1",
+        value: {
+          summary: summaries.find((candidate) => candidate.id === id)!,
+          messages: [],
+          metadata: metadataFor(id),
+        },
+      })),
+    } as any;
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+
+    const restored =
+      await mgr.restorePersistedBackgroundSessions("foreground-1");
+
+    expect(restored.map((session) => session.id)).toEqual(["matching-bg"]);
+    expect(store.loadMetadata).toHaveBeenCalledTimes(3);
+    expect(store.readSession).toHaveBeenCalledTimes(1);
+    expect(store.readSession).toHaveBeenCalledWith("matching-bg");
+  });
+
   it("derives result state for legacy terminal fleet records", () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     const session = {
