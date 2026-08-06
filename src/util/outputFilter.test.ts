@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
+
 import { filterOutput } from "./outputFilter.js";
 
 const lines = (n: number) =>
@@ -56,6 +57,59 @@ describe("filterOutput", () => {
     expect(result.linesShown).toBe(5);
   });
 
+  it("bounds selected output by bytes after applying line limits", () => {
+    const line = "x".repeat(70 * 1024);
+    const result = filterOutput(`first\n${line}\nlast`, { output_head: 3 });
+
+    expect(Buffer.byteLength(result.filtered, "utf8")).toBeLessThanOrEqual(
+      64 * 1024,
+    );
+    expect(result.filtered).toBe("first");
+    expect(result.linesShown).toBe(1);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("retains a bounded suffix when output_tail is selected", () => {
+    const line = "x".repeat(70 * 1024);
+    const result = filterOutput(`first\n${line}\nlast`, { output_tail: 3 });
+
+    expect(result.filtered).toBe("last");
+    expect(result.linesShown).toBe(1);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("keeps the suffix of an oversized tail line", () => {
+    const line = `${"x".repeat(70 * 1024)}tail`;
+    const result = filterOutput(line, { output_tail: 1 });
+
+    expect(result.filtered.endsWith("tail")).toBe(true);
+    expect(Buffer.byteLength(result.filtered, "utf8")).toBeLessThanOrEqual(
+      64 * 1024,
+    );
+    expect(result.truncated).toBe(true);
+  });
+
+  it("keeps output_head precedence when output_tail is also provided", () => {
+    const first = `head${"x".repeat(70 * 1024)}`;
+    const result = filterOutput(`${first}\nsecond\nthird`, {
+      output_head: 2,
+      output_tail: 1,
+    });
+
+    expect(result.filtered.startsWith("head")).toBe(true);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("truncates at UTF-8 code point boundaries", () => {
+    const result = filterOutput("🙂".repeat(20 * 1024), { output_head: 1 });
+
+    expect(Buffer.byteLength(result.filtered, "utf8")).toBeLessThanOrEqual(
+      64 * 1024,
+    );
+    expect(result.filtered.endsWith("🙂")).toBe(true);
+    expect(result.truncated).toBe(true);
+  });
+
   // ── output_tail ─────────────────────────────────────────────────────
 
   it("output_tail returns last N lines", () => {
@@ -85,6 +139,16 @@ describe("filterOutput", () => {
     const result = filterOutput(input, { output_offset: 0 });
     // offset is 0 but hasExplicitFilter is true → no default cap
     expect(result.linesShown).toBe(500);
+  });
+
+  it("keeps the first bounded output after an offset", () => {
+    const oversized = "x".repeat(70 * 1024);
+    const result = filterOutput(`skip\nfirst\n${oversized}\nlast`, {
+      output_offset: 1,
+    });
+
+    expect(result.filtered).toBe("first");
+    expect(result.truncated).toBe(true);
   });
 
   it("output_offset beyond total returns empty", () => {
@@ -161,6 +225,19 @@ describe("filterOutput", () => {
     const input = "a1\na2\na3\nb1\na4";
     const result = filterOutput(input, { output_grep: "^a", output_head: 2 });
     expect(result.filtered).toBe("a1\na2");
+  });
+
+  it("bounds oversized grep matches after filtering", () => {
+    const line = `match ${"x".repeat(70 * 1024)}`;
+    const result = filterOutput(`before\n${line}\nafter`, {
+      output_grep: "match",
+    });
+
+    expect(Buffer.byteLength(result.filtered, "utf8")).toBeLessThanOrEqual(
+      64 * 1024,
+    );
+    expect(result.filtered.startsWith("match ")).toBe(true);
+    expect(result.truncated).toBe(true);
   });
 
   it("grep + offset + tail", () => {

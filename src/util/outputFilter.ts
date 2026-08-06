@@ -3,6 +3,7 @@ import * as os from "os";
 import * as path from "path";
 
 const DEFAULT_OUTPUT_LINES = 200;
+const MAX_FILTERED_OUTPUT_BYTES = 64 * 1024;
 const MAX_TEMP_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
 
 export interface FilterOptions {
@@ -17,6 +18,7 @@ export interface FilterResult {
   filtered: string;
   totalLines: number;
   linesShown: number;
+  truncated: boolean;
 }
 
 /**
@@ -64,13 +66,85 @@ export function filterOutput(
     lines = lines.slice(-DEFAULT_OUTPUT_LINES);
   }
 
-  // Preserve trailing newline if the original output had one
   const trailingNewline = fullOutput.endsWith("\n") ? "\n" : "";
+  const byteBounded = boundOutputBytes(
+    lines,
+    options,
+    MAX_FILTERED_OUTPUT_BYTES - Buffer.byteLength(trailingNewline, "utf8"),
+  );
+
+  // Preserve trailing newline if the original output had one
+  const retainedTrailingNewline =
+    byteBounded.lines.length > 0 ? trailingNewline : "";
   return {
-    filtered: lines.join("\n") + trailingNewline,
+    filtered: byteBounded.lines.join("\n") + retainedTrailingNewline,
     totalLines,
-    linesShown: lines.length,
+    linesShown: byteBounded.lines.length,
+    truncated: byteBounded.truncated,
   };
+}
+
+function boundOutputBytes(
+  lines: string[],
+  options: FilterOptions,
+  maxBytes: number,
+): { lines: string[]; truncated: boolean } {
+  const keepTail =
+    options.output_head === undefined &&
+    (options.output_tail !== undefined ||
+      (options.output_grep === undefined &&
+        options.output_offset === undefined));
+  const selected = keepTail ? [...lines].reverse() : lines;
+  const bounded: string[] = [];
+  let bytes = 0;
+
+  for (const line of selected) {
+    const separatorBytes = bounded.length > 0 ? 1 : 0;
+    const lineBytes = Buffer.byteLength(line, "utf8");
+    if (bytes + separatorBytes + lineBytes <= maxBytes) {
+      bounded.push(line);
+      bytes += separatorBytes + lineBytes;
+      continue;
+    }
+
+    if (bounded.length === 0) {
+      bounded.push(
+        keepTail
+          ? truncateUtf8Tail(line, maxBytes)
+          : truncateUtf8(line, maxBytes),
+      );
+    }
+    return {
+      lines: keepTail ? bounded.reverse() : bounded,
+      truncated: true,
+    };
+  }
+
+  return { lines: keepTail ? bounded.reverse() : bounded, truncated: false };
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  let result = "";
+  let bytes = 0;
+  for (const codePoint of value) {
+    const codePointBytes = Buffer.byteLength(codePoint, "utf8");
+    if (bytes + codePointBytes > maxBytes) break;
+    result += codePoint;
+    bytes += codePointBytes;
+  }
+  return result;
+}
+
+function truncateUtf8Tail(value: string, maxBytes: number): string {
+  let result = "";
+  let bytes = 0;
+  for (const codePoint of [...value].reverse()) {
+    const codePointBytes = Buffer.byteLength(codePoint, "utf8");
+    if (bytes + codePointBytes > maxBytes) break;
+    result = codePoint + result;
+    bytes += codePointBytes;
+  }
+  return result;
 }
 
 /**

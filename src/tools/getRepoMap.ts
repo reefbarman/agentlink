@@ -1,6 +1,9 @@
 import * as path from "path";
 
-import type { StructuralGraphProvider } from "../core/capabilities/readSearch.js";
+import type {
+  StructuralGraphProvider,
+  StructuralScopeStatus,
+} from "../core/capabilities/readSearch.js";
 import type {
   StructuralFileEntry,
   StructuralGraphCache,
@@ -55,6 +58,8 @@ const MAX_EXTERNAL_IMPORTS_PER_FILE = 6;
 const MAX_EXPORTS_PER_FILE = 8;
 const MAX_SYMBOLS_PER_FILE = 10;
 
+type RepoMapScopeStatus = StructuralScopeStatus | "empty" | "unavailable";
+
 export async function handleGetRepoMap(
   params: GetRepoMapParams,
   structuralGraphProvider: StructuralGraphProvider | undefined,
@@ -97,6 +102,7 @@ export async function handleGetRepoMap(
     }
 
     let scopeRelPath: string | undefined;
+    let scopeAbsolutePath: string | undefined;
     if (params.path) {
       const { absolutePath, inWorkspace } = structuralGraphProvider.resolvePath(
         params.path,
@@ -113,6 +119,7 @@ export async function handleGetRepoMap(
       );
       if (identity) {
         scopeRelPath = identity.portableRelativePath;
+        scopeAbsolutePath = identity.absolutePath;
       } else if (
         canonicalizePath(workspaceRoot) !== canonicalizePath(absolutePath)
       ) {
@@ -125,6 +132,17 @@ export async function handleGetRepoMap(
     const { graph, indexName, structuralStorePath, graphExists } =
       await structuralGraphProvider.loadGraph(workspaceRoot);
 
+    const entries = filterEntriesByScope(graph, scopeRelPath);
+    const scopeStatus: RepoMapScopeStatus = !graphExists
+      ? "unavailable"
+      : scopeAbsolutePath
+        ? structuralGraphProvider.getScopeStatus(
+            scopeAbsolutePath,
+            entries.length,
+          )
+        : entries.length > 0
+          ? "indexed"
+          : "empty";
     const payload = buildRepoMapPayload({
       graph,
       workspaceRoot,
@@ -132,6 +150,8 @@ export async function handleGetRepoMap(
       structuralStorePath,
       graphExists,
       scopeRelPath,
+      scopeStatus,
+      entries,
       maxChars,
       maxFiles,
       includeExternal: params.include_external !== false,
@@ -150,6 +170,8 @@ export function buildRepoMapPayload(args: {
   structuralStorePath?: string;
   graphExists?: boolean;
   scopeRelPath?: string;
+  scopeStatus?: RepoMapScopeStatus;
+  entries?: StructuralFileEntry[];
   maxChars?: number;
   maxFiles?: number;
   includeExternal?: boolean;
@@ -169,7 +191,8 @@ export function buildRepoMapPayload(args: {
   const includeExternal = args.includeExternal !== false;
   const scopeRelPath = normalizeOptionalRelPath(args.scopeRelPath);
   const graphExists = args.graphExists !== false;
-  const entries = filterEntriesByScope(args.graph, scopeRelPath);
+  const entries =
+    args.entries ?? filterEntriesByScope(args.graph, scopeRelPath);
   const incomingCounts = buildIncomingCounts(args.graph);
   const directoryCandidates = buildDirectorySummaries(entries);
   const externalCandidates = includeExternal
@@ -194,6 +217,7 @@ export function buildRepoMapPayload(args: {
       structuralStorePath: args.structuralStorePath,
       graphExists,
       scopeRelPath,
+      scopeStatus: args.scopeStatus,
       maxChars,
       maxFiles,
       entries,
@@ -215,6 +239,7 @@ export function buildRepoMapPayload(args: {
       structuralStorePath: args.structuralStorePath,
       graphExists,
       scopeRelPath,
+      scopeStatus: args.scopeStatus,
       maxChars,
       maxFiles,
       entries,
@@ -242,6 +267,7 @@ export function buildRepoMapPayload(args: {
       structuralStorePath: args.structuralStorePath,
       graphExists,
       scopeRelPath,
+      scopeStatus: args.scopeStatus,
       maxChars,
       maxFiles,
       entries,
@@ -270,6 +296,7 @@ export function buildRepoMapPayload(args: {
       structuralStorePath: args.structuralStorePath,
       graphExists,
       scopeRelPath,
+      scopeStatus: args.scopeStatus,
       maxChars,
       maxFiles,
       entries,
@@ -298,6 +325,7 @@ function makePayload(args: {
   structuralStorePath?: string;
   graphExists: boolean;
   scopeRelPath?: string;
+  scopeStatus?: RepoMapScopeStatus;
   maxChars: number;
   maxFiles: number;
   entries: StructuralFileEntry[];
@@ -322,6 +350,7 @@ function makePayload(args: {
     args.graphExists,
     args.entries.length,
     args.scopeRelPath,
+    args.scopeStatus,
   );
 
   return {
@@ -342,6 +371,13 @@ function makePayload(args: {
     },
     scope: {
       path: args.scopeRelPath ?? ".",
+      status:
+        args.scopeStatus ??
+        (args.graphExists
+          ? args.entries.length > 0
+            ? "indexed"
+            : "empty"
+          : "unavailable"),
       matched_files: args.entries.length,
     },
     totals: buildTotals(args.entries),
@@ -540,14 +576,19 @@ function buildNote(
   graphExists: boolean,
   matchedFiles: number,
   scopeRelPath: string | undefined,
+  scopeStatus?: string,
 ): string | undefined {
   if (!graphExists) {
     return "Structural index is unavailable. Build or refresh the codebase index before relying on the repo map.";
   }
   if (matchedFiles === 0) {
-    return scopeRelPath
-      ? "No indexed files matched the requested scope. The path may be unindexed, ignored, unsupported, or awaiting the next index refresh."
-      : "Structural index is available but contains no indexed files.";
+    if (!scopeRelPath) {
+      return "Structural index is available but contains no indexed files.";
+    }
+    if (scopeStatus === "missing") {
+      return "The requested scope does not exist in the workspace.";
+    }
+    return "No indexed files matched the requested scope. The path may be unindexed, ignored, unsupported, or awaiting the next index refresh.";
   }
   return undefined;
 }

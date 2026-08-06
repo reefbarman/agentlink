@@ -165,6 +165,7 @@ const SAFE_GIT_SUBCOMMANDS = new Set([
   "diff",
   "grep",
   "log",
+  "ls-files",
   "remote",
   "rev-parse",
   "show",
@@ -946,7 +947,8 @@ function classifyReadPathGuard(
   ctx: CommandTierContext,
 ): CommandTierResult | null {
   if (!READ_COMMANDS.has(command)) return null;
-  for (const arg of args) {
+  const pathArgs = command === "rg" ? getRipgrepPathArgs(args) : args;
+  for (const arg of pathArgs) {
     if (!arg || arg.startsWith("-")) continue;
     const resolved = resolvePathLike(arg, ctx.cwd);
     if (isSecretPath(resolved)) {
@@ -961,6 +963,20 @@ function classifyReadPathGuard(
     }
   }
   return null;
+}
+
+function getRipgrepPathArgs(args: string[]): string[] {
+  const positionalArgs: string[] = [];
+  let optionsEnded = false;
+  for (const arg of args) {
+    if (arg === "--") {
+      optionsEnded = true;
+      continue;
+    }
+    if (!optionsEnded && arg.startsWith("-")) continue;
+    positionalArgs.push(arg);
+  }
+  return positionalArgs.slice(1);
 }
 
 function classifyMutationPathGuard(

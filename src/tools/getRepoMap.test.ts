@@ -40,6 +40,9 @@ function makeProvider(
         graphExists: true,
       };
     },
+    getScopeStatus(_absolutePath, matchedFiles) {
+      return matchedFiles > 0 ? "indexed" : "unindexed";
+    },
     getTargetFreshness() {
       return { status: "unknown" };
     },
@@ -193,6 +196,22 @@ describe("handleGetRepoMap", () => {
     }
   });
 
+  it("labels an existing scope with no graph entries as unindexed", async () => {
+    const result = await handleGetRepoMap(
+      { path: "src/unindexed", max_chars: 20_000 },
+      makeProvider(),
+    );
+
+    expect(parseTextResult(result)).toMatchObject({
+      scope: {
+        path: "src/unindexed",
+        status: "unindexed",
+        matched_files: 0,
+      },
+      note: expect.stringContaining("No indexed files"),
+    });
+  });
+
   it("builds a repo map from an injected structural graph provider", async () => {
     const result = await handleGetRepoMap(
       { path: "src/core", max_chars: 20_000 },
@@ -209,7 +228,7 @@ describe("handleGetRepoMap", () => {
         index_name: "al-test",
         structural_store_path: "/cache/al-test.structural.json",
       },
-      scope: { path: "src/core", matched_files: 2 },
+      scope: { path: "src/core", status: "indexed", matched_files: 2 },
       totals: { files: 2, imports: 1, internal_imports: 1 },
     });
   });
@@ -240,7 +259,7 @@ describe("buildRepoMapPayload", () => {
           cache_version: 1,
         },
       },
-      scope: { path: ".", matched_files: 4 },
+      scope: { path: ".", status: "indexed", matched_files: 4 },
       totals: {
         files: 4,
         imports: 5,
@@ -330,7 +349,7 @@ describe("buildRepoMapPayload", () => {
 
     expect(payload).toMatchObject({
       freshness: { graph: { status: "missing" } },
-      scope: { path: "src/missing", matched_files: 0 },
+      scope: { path: "src/missing", status: "unavailable", matched_files: 0 },
       totals: { files: 0 },
     });
     expect(payload.note).toContain("Structural index is unavailable");

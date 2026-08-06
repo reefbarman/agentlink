@@ -2305,13 +2305,14 @@ export async function handleExecuteCommand(
           output_grep: params.output_grep,
           output_grep_context: params.output_grep_context,
         };
-        const { filtered, totalLines, linesShown } = filterOutput(
+        const { filtered, totalLines, linesShown, truncated } = filterOutput(
           fullOutput,
           filterOptions,
         );
 
         result.total_lines = totalLines;
         result.lines_shown = linesShown;
+        result.output_truncated = truncated;
         result.total_lines_scope =
           result.output_finalized === false || result.output_complete === false
             ? "retained"
@@ -2322,7 +2323,7 @@ export async function handleExecuteCommand(
             "Terminal output is still running or was closed before finalization. Filtering applies to retained output so far; no final output file is available.";
         } else if (result.output_complete === false) {
           result.output_warning = `⚠️ Terminal output exceeded the bounded capture limit. ${result.output_dropped_bytes === undefined ? "Some output" : formatBytes(result.output_dropped_bytes)} was not retained; filtering applies only to the retained tail and no full-output file is available.`;
-        } else if (linesShown < totalLines) {
+        } else if (truncated || linesShown < totalLines) {
           const outputFile = saveOutputTempFile(fullOutput);
           if (outputFile) {
             result.output_file = outputFile;

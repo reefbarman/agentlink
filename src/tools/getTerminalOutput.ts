@@ -201,7 +201,7 @@ export async function handleGetTerminalOutput(
       output_grep: params.output_grep,
       output_grep_context: params.output_grep_context,
     };
-    const { filtered, totalLines, linesShown } = filterOutput(
+    const { filtered, totalLines, linesShown, truncated } = filterOutput(
       output,
       filterOptions,
     );
@@ -209,6 +209,7 @@ export async function handleGetTerminalOutput(
     result.output = filtered;
     result.total_lines = totalLines;
     result.lines_shown = linesShown;
+    result.output_truncated = truncated;
     result.total_lines_scope = outputComplete ? "complete" : "retained";
 
     if (!outputFinalized) {
@@ -218,7 +219,7 @@ export async function handleGetTerminalOutput(
       const droppedBytes =
         retainedOutput?.dropped_bytes ?? state.output_dropped_bytes;
       result.output_warning = `⚠️ Terminal output exceeded the bounded capture limit. ${droppedBytes === undefined ? "Some output" : formatBytes(droppedBytes)} was not retained; filtering applies only to the retained tail and no full-output file is available.`;
-    } else if (linesShown < totalLines) {
+    } else if (truncated || linesShown < totalLines) {
       const outputFile = saveOutputTempFile(output);
       if (outputFile) {
         result.output_file = outputFile;

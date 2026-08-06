@@ -209,6 +209,7 @@ export interface TerminalCommandResult {
   terminal_name?: string;
   output_file?: string;
   output_warning?: string;
+  output_truncated?: boolean;
   output_complete?: boolean;
   output_finalized?: boolean;
   output_total_bytes?: number;

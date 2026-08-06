@@ -217,6 +217,16 @@ export function createVscodeStructuralGraphProvider(
       return resolveAndValidatePath(inputPath);
     },
     getWorkspaceRootForPath: getOwningWorkspaceRoot,
+    getScopeStatus(absolutePath, matchedFiles) {
+      if (matchedFiles > 0) return "indexed";
+      try {
+        return fs.statSync(absolutePath).isDirectory()
+          ? "unindexed"
+          : "unindexed_file";
+      } catch {
+        return "missing";
+      }
+    },
     async loadGraph(workspaceRoot) {
       const indexName = getCodeWorkspaceScopeId(workspaceRoot);
       const structuralCachePath = getCodeRetrievalStoreRoot(

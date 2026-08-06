@@ -102,6 +102,12 @@ export interface AdvertisedArtifactProvider {
   readTextFile(filePath: string): Promise<string>;
 }
 
+export type StructuralScopeStatus =
+  | "indexed"
+  | "unindexed"
+  | "unindexed_file"
+  | "missing";
+
 export interface StructuralGraphSnapshot {
   graph: StructuralGraphCache;
   workspaceRoot: string;
@@ -115,6 +121,10 @@ export interface StructuralGraphProvider {
   resolvePath(inputPath: string): ResolvedWorkspacePath;
   getWorkspaceRootForPath(absolutePath: string): string | undefined;
   loadGraph(workspaceRoot: string): Promise<StructuralGraphSnapshot>;
+  getScopeStatus(
+    absolutePath: string,
+    matchedFiles: number,
+  ): StructuralScopeStatus;
   getTargetFreshness(
     absolutePath: string,
     target: StructuralFileEntry | undefined,

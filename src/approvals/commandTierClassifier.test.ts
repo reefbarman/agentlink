@@ -27,6 +27,7 @@ function tier(command: string, override: Partial<CommandTierContext> = {}) {
 describe("command tier classifier", () => {
   it("classifies read-only commands as safe", () => {
     expect(tier("git status --short")).toBe("safe");
+    expect(tier("git ls-files 'src/**'")).toBe("safe");
     expect(tier("rg needle src")).toBe("safe");
     expect(tier("strings -a fixtures/app.bin")).toBe("safe");
     expect(tier("node --version")).toBe("safe");
@@ -131,6 +132,7 @@ describe("command tier classifier", () => {
     "git log --no-ext-diff --no-textconv -n 5",
     "git blame --no-textconv -L 1,5 src/a.ts",
     "git grep token -- src",
+    "git ls-files 'src/**'",
     "git status --short",
     "git --no-pager log --no-ext-diff --no-textconv -n 5",
   ])("accepts correctly scoped git inspection: %s", (command) => {
@@ -226,10 +228,28 @@ describe("command tier classifier", () => {
     });
   });
 
-  it("allows quoted glob characters that the shell will not expand", () => {
+  it("allows quoted ripgrep regex patterns without treating them as paths", () => {
     expect(
       isCommandEligibleForReadOnlyExecution("rg --no-config '*' src", ctx),
     ).toEqual({ eligible: true });
+    expect(
+      isCommandEligibleForReadOnlyExecution(
+        "npm ls --all --parseable | rg --no-config '/(toml|smol-toml)(@|/|$)'",
+        ctx,
+      ),
+    ).toEqual({ eligible: true });
+  });
+
+  it("continues to reject ripgrep paths outside the workspace", () => {
+    expect(
+      isCommandEligibleForReadOnlyExecution(
+        "rg --no-config '/(toml|smol-toml)(@|/|$)' /tmp/outside",
+        ctx,
+      ),
+    ).toEqual({
+      eligible: false,
+      reason: expect.stringContaining("read target outside workspace"),
+    });
   });
 
   it("uses the highest tier across compound commands", () => {

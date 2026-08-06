@@ -201,9 +201,29 @@ describe("createVscodeStructuralGraphProvider", () => {
       resolveWorkspaceRoot: expect.any(Function),
       resolvePath: expect.any(Function),
       getWorkspaceRootForPath: expect.any(Function),
+      getScopeStatus: expect.any(Function),
       loadGraph: expect.any(Function),
       getTargetFreshness: expect.any(Function),
     });
+  });
+
+  it("classifies missing and unindexed scopes from the filesystem", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "graph-scope-"));
+    directories.push(directory);
+    const unindexedDirectory = path.join(directory, "src", "unindexed");
+    const unindexedFile = path.join(directory, "src", "unindexed.ts");
+    fs.mkdirSync(unindexedDirectory, { recursive: true });
+    fs.writeFileSync(unindexedFile, "export {};", "utf8");
+    const provider = createVscodeStructuralGraphProvider({
+      fsPath: "/global-storage",
+    } as never)!;
+
+    expect(provider.getScopeStatus(unindexedDirectory, 0)).toBe("unindexed");
+    expect(provider.getScopeStatus(unindexedFile, 0)).toBe("unindexed_file");
+    expect(provider.getScopeStatus(path.join(directory, "missing"), 0)).toBe(
+      "missing",
+    );
+    expect(provider.getScopeStatus(unindexedDirectory, 1)).toBe("indexed");
   });
 
   it("reports a missing unified retrieval store without creating one", async () => {

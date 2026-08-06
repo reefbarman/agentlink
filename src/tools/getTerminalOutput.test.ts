@@ -184,6 +184,57 @@ describe("handleGetTerminalOutput", () => {
     expect(payload.output_warning).toContain("Full output saved");
   });
 
+  it("saves complete output when byte bounding truncates a single displayed line", async () => {
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      is_running: false,
+      state: "completed",
+      exit_code: 0,
+      output: "x".repeat(70 * 1024),
+      output_captured: true,
+    });
+
+    const result = await handleGetTerminalOutput(
+      { terminal_id: "term_42", output_head: 1 },
+      { terminalProvider },
+    );
+    const payload = textPayload(result);
+
+    expect(Buffer.byteLength(payload.output, "utf8")).toBeLessThanOrEqual(
+      64 * 1024,
+    );
+    expect(payload.output_truncated).toBe(true);
+    expect(payload.output_file).toEqual(expect.any(String));
+    expect(payload.output_warning).toContain("Full output saved");
+  });
+
+  it("reports byte truncation while retained output is still incomplete", async () => {
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      is_running: true,
+      state: "running",
+      exit_code: null,
+      output: "x".repeat(70 * 1024),
+      output_captured: true,
+    });
+    terminalProvider.getRetainedOutput = vi.fn(() => ({
+      output: "x".repeat(70 * 1024),
+      complete: false,
+      finalized: false,
+      total_bytes: 70 * 1024,
+      retained_bytes: 70 * 1024,
+      dropped_bytes: 0,
+    }));
+
+    const result = await handleGetTerminalOutput(
+      { terminal_id: "term_42", output_tail: 1 },
+      { terminalProvider },
+    );
+    const payload = textPayload(result);
+
+    expect(payload.output_truncated).toBe(true);
+    expect(payload.output_file).toBeUndefined();
+    expect(payload.output_warning).toContain("still running");
+  });
+
   it("does not publish a final output file while the command is still running", async () => {
     vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
       is_running: true,
