@@ -796,7 +796,7 @@ export async function handleReadFile(
     ]);
 
     const structuredRedaction = isStructuredConfigPath(filePath)
-      ? redactStructuredSecrets(raw)
+      ? redactStructuredSecrets(filePath, raw)
       : undefined;
     const visibleRaw = structuredRedaction?.content ?? raw;
     const allLines = visibleRaw.split("\n");

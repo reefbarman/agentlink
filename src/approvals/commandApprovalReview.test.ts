@@ -17,6 +17,7 @@ import {
   createCommandReviewTurnCircuit,
   createRetainedCommandReviewDenials,
   getCommandAutoApprovalEligibility,
+  isRoutineApproveForMeCommand,
   parseCommandApprovalReviewResponse,
 } from "./commandApprovalReview.js";
 import { describe, expect, it, vi } from "vitest";
@@ -160,6 +161,49 @@ describe("command reviewer automatic approval eligibility", () => {
       eligible: false,
       reason: "No command to review",
     });
+  });
+});
+
+describe("routine approve-for-me command classification", () => {
+  const routine = (command: string) =>
+    isRoutineApproveForMeCommand(classifyCommand(command, context));
+
+  it.each([
+    "npm test",
+    "npm test && npm run lint",
+    "cargo check",
+    "git add -A",
+    'git commit -m "update"',
+    'git add src/index.ts && git commit -m "fix"',
+    "git status",
+    "mkdir -p src/generated",
+    "mv src/a.ts src/b.ts",
+    "touch src/new.ts",
+    "node --version",
+  ])(
+    "treats routine dev workflow as reviewable without Guardian: %s",
+    (command) => {
+      expect(routine(command)).toBe(true);
+    },
+  );
+
+  it.each([
+    "npm install",
+    "npm run deploy",
+    "git push origin main",
+    "git fetch",
+    "git pull",
+    "git checkout main",
+    "git clean -fd",
+    "curl https://example.com",
+    "rm -rf generated",
+    "sudo make install",
+    "./unknown-script",
+    "custom-tool input.bin",
+    "cp src/a.ts ../outside/a.ts",
+    "npm test && curl https://example.com",
+  ])("keeps Guardian review for non-routine commands: %s", (command) => {
+    expect(routine(command)).toBe(false);
   });
 });
 

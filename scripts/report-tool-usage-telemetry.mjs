@@ -81,6 +81,20 @@ export function main(argv = process.argv.slice(2)) {
     Number.isFinite(args.top) && args.top > 0 ? args.top : DEFAULT_TOP;
   const knownTools = loadKnownTools();
   const knownParameters = loadKnownToolParameters();
+
+  if (args.compare) {
+    const [left, right] = [args.compare.left, args.compare.right].map(
+      (versions) =>
+        readTelemetry(inputPath, knownTools, knownParameters, {
+          since: args.since,
+          until: args.until,
+          versions,
+        }),
+    );
+    printComparison(left, right, args.compare, inputPath, top);
+    return;
+  }
+
   const report = readTelemetry(inputPath, knownTools, knownParameters, {
     since: args.since,
     until: args.until,
@@ -122,6 +136,7 @@ export function parseArgs(argv, now = new Date()) {
     since: undefined,
     until: undefined,
     versions: [],
+    compare: undefined,
     feedbackInput: undefined,
     help: false,
   };
@@ -146,6 +161,8 @@ export function parseArgs(argv, now = new Date()) {
       args.until = parseIsoDate(requireValue(argv, ++i, arg), arg, true);
     } else if (arg === "--version") {
       args.versions.push(requireValue(argv, ++i, arg));
+    } else if (arg === "--compare") {
+      args.compare = parseCompare(requireValue(argv, ++i, arg));
     } else if (arg === "--feedback-input") {
       args.feedbackInput = requireValue(argv, ++i, arg);
     } else {
@@ -158,6 +175,24 @@ export function parseArgs(argv, now = new Date()) {
   }
 
   return args;
+}
+
+export function parseCompare(value) {
+  const separatorIndex = value.indexOf("..");
+  const left = separatorIndex >= 0 ? value.slice(0, separatorIndex) : "";
+  const right = separatorIndex >= 0 ? value.slice(separatorIndex + 2) : "";
+  const parseSide = (side) =>
+    side
+      .split(",")
+      .map((version) => version.trim())
+      .filter(Boolean);
+  const parsed = { left: parseSide(left), right: parseSide(right) };
+  if (parsed.left.length === 0 || parsed.right.length === 0) {
+    throw new Error(
+      "--compare requires <versionsA>..<versionsB> (comma-separated extension versions on each side)",
+    );
+  }
+  return parsed;
 }
 
 function parseSince(value, now) {
@@ -1079,6 +1114,150 @@ function printSummary(report, inputPath, top) {
   }
 }
 
+const COMPARISON_SIGNAL_TOOLS = [
+  "spawn_background_agent",
+  "get_background_result",
+  "get_fleet_workflow_result",
+  "execute_command",
+  "ask_user",
+];
+
+export function buildComparisonRows(left, right) {
+  const toolNames = new Set([
+    ...Object.keys(left.tools),
+    ...Object.keys(right.tools),
+  ]);
+  const rows = [];
+  for (const toolName of toolNames) {
+    const a = left.tools[toolName];
+    const b = right.tools[toolName];
+    const aCalls = a?.calls ?? 0;
+    const bCalls = b?.calls ?? 0;
+    if (aCalls === 0 && bCalls === 0) continue;
+    rows.push({
+      tool: toolName,
+      aCalls,
+      bCalls,
+      aShare: left.totalCalls > 0 ? aCalls / left.totalCalls : 0,
+      bShare: right.totalCalls > 0 ? bCalls / right.totalCalls : 0,
+      aAvgMs: a ? avgDuration(a) : 0,
+      bAvgMs: b ? avgDuration(b) : 0,
+      aErrors: a?.outcomes.error ?? 0,
+      bErrors: b?.outcomes.error ?? 0,
+    });
+  }
+  return rows.sort(
+    (a, b) =>
+      b.aCalls + b.bCalls - (a.aCalls + a.bCalls) ||
+      a.tool.localeCompare(b.tool),
+  );
+}
+
+function formatDelta(a, b) {
+  if (a === 0) return b === 0 ? "0%" : "new";
+  const delta = ((b - a) / a) * 100;
+  return `${delta >= 0 ? "+" : ""}${formatNumber(delta)}%`;
+}
+
+function printComparison(left, right, compare, inputPath, top) {
+  const leftLabel = compare.left.join(",");
+  const rightLabel = compare.right.join(",");
+  console.log("Tool Usage Comparison");
+  console.log("=====================");
+  console.log(`Input: ${inputPath}`);
+  console.log(
+    `A: ${leftLabel} (${left.flushes} flushes, ${left.totalCalls} calls, ${left.periodStart ?? "n/a"} -> ${left.periodEnd ?? "n/a"})`,
+  );
+  console.log(
+    `B: ${rightLabel} (${right.flushes} flushes, ${right.totalCalls} calls, ${right.periodStart ?? "n/a"} -> ${right.periodEnd ?? "n/a"})`,
+  );
+  if (left.flushes === 0 || right.flushes === 0) {
+    console.log("");
+    console.log(
+      "One side matched no telemetry records; check the versions passed to --compare.",
+    );
+    return;
+  }
+
+  console.log("");
+  console.log("Key signals (per 1k calls normalizes for usage volume)");
+  const signalRows = [];
+  for (const toolName of COMPARISON_SIGNAL_TOOLS) {
+    const a = left.tools[toolName];
+    const b = right.tools[toolName];
+    if (!a?.calls && !b?.calls) continue;
+    const perThousand = (tool, report) =>
+      tool && report.totalCalls > 0
+        ? (tool.calls / report.totalCalls) * 1000
+        : 0;
+    signalRows.push([
+      toolName,
+      `${a?.calls ?? 0} -> ${b?.calls ?? 0}`,
+      `${formatNumber(perThousand(a, left))} -> ${formatNumber(perThousand(b, right))}`,
+      `${formatNumber(a ? avgDuration(a) : 0)} -> ${formatNumber(b ? avgDuration(b) : 0)}`,
+      formatDelta(a ? avgDuration(a) : 0, b ? avgDuration(b) : 0),
+      `${formatNumber((a?.totalDurationMs ?? 0) / 60_000)} -> ${formatNumber((b?.totalDurationMs ?? 0) / 60_000)}`,
+    ]);
+  }
+  printTable(
+    ["tool", "calls", "per_1k_calls", "avg_ms", "avg_ms_Δ", "total_min"],
+    signalRows,
+  );
+
+  const approvalCategories = new Set();
+  for (const report of [left, right]) {
+    for (const key of Object.keys(
+      report.tools.execute_command?.categoricalMetrics ?? {},
+    )) {
+      if (key.startsWith("approval_by:")) approvalCategories.add(key);
+    }
+  }
+  if (approvalCategories.size > 0) {
+    console.log("");
+    console.log("execute_command approval paths");
+    printTable(
+      ["approval_by", "A", "B"],
+      [...approvalCategories]
+        .sort()
+        .map((category) => [
+          category.slice("approval_by:".length),
+          left.tools.execute_command?.categoricalMetrics[category] ?? 0,
+          right.tools.execute_command?.categoricalMetrics[category] ?? 0,
+        ]),
+    );
+  }
+
+  const rows = buildComparisonRows(left, right).slice(0, top);
+  if (rows.length > 0) {
+    console.log("");
+    console.log(`Per-tool comparison (top ${rows.length} by combined calls)`);
+    printTable(
+      [
+        "tool",
+        "A_calls",
+        "B_calls",
+        "calls_Δ",
+        "A_avg_ms",
+        "B_avg_ms",
+        "avg_Δ",
+        "A_err",
+        "B_err",
+      ],
+      rows.map((row) => [
+        row.tool,
+        row.aCalls,
+        row.bCalls,
+        formatDelta(row.aCalls, row.bCalls),
+        formatNumber(row.aAvgMs),
+        formatNumber(row.bAvgMs),
+        formatDelta(row.aAvgMs, row.bAvgMs),
+        row.aErrors,
+        row.bErrors,
+      ]),
+    );
+  }
+}
+
 function buildMetricRows(tools) {
   const rows = [];
   for (const tool of Object.values(tools)) {
@@ -1279,6 +1458,11 @@ Options:
   --since <date|age> Include records flushed at/after an ISO date or age (Nd/Nh/Nm)
   --until <date>     Include records flushed at/before an ISO date
   --version <value>  Include an extension version; repeat for multiple versions
+  --compare <versionsA>..<versionsB>
+                     Compare two extension version sets side by side
+                     (comma-separated versions on each side, e.g.
+                     --compare 1.18.19,1.18.20..1.18.21). Combines with
+                     --since/--until; skips the standard report output
   --feedback-input <path>
                      Feedback JSONL path (counts only; text is never reported)
                      default: ${DEFAULT_FEEDBACK_INPUT}

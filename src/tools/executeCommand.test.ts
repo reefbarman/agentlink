@@ -2016,6 +2016,134 @@ describe("handleExecuteCommand", () => {
     });
   });
 
+  it("auto-approves routine repo-local git writes in approve-for-me without the Guardian reviewer", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const review = vi.fn();
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "reject" }),
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: 'git add -A && git commit -m "update"' },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      { enqueueCommandApproval } as never,
+      "session-routine-git",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+        isSessionActive: () => true,
+      },
+    );
+
+    expect(review).not.toHaveBeenCalled();
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      approval: { by: "routine_tier", tier: "sensitive" },
+    });
+  });
+
+  it("keeps Guardian review for non-routine commands in approve-for-me", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const review = vi.fn(async () => ({
+      outcome: "allow" as const,
+      risk: "low" as const,
+      userAuthorization: "high" as const,
+      rationale: "Requested dependency install",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "reject" }),
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm install left-pad" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      { enqueueCommandApproval } as never,
+      "session-non-routine-install",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+        isSessionActive: () => true,
+      },
+    );
+
+    expect(review).toHaveBeenCalledOnce();
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      approval: { by: "model_reviewer", outcome: "allow" },
+    });
+  });
+
+  it("does not fast-path routine commands with a retained Guardian denial", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const review = vi.fn(async () => ({
+      outcome: "allow" as const,
+      risk: "low" as const,
+      userAuthorization: "high" as const,
+      rationale: "Safe on re-review",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "reject" }),
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: 'git commit -m "retry"' },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      { enqueueCommandApproval } as never,
+      "session-routine-retained-denial",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+        retainedCommandReviewDenials: {
+          has: () => true,
+          retain: vi.fn(),
+          clear: vi.fn(),
+          clearSession: vi.fn(),
+          list: () => [],
+        },
+        isSessionActive: () => true,
+      },
+    );
+
+    expect(review).toHaveBeenCalledOnce();
+    expect(textPayload(result)).toMatchObject({
+      approval: { by: "model_reviewer", outcome: "allow" },
+    });
+  });
+
   it("does not let safe-tier approval override an explicit prompt rule", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
@@ -6027,7 +6155,7 @@ describe("handleExecuteCommand", () => {
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
     const result = await handleExecuteCommand(
-      { command: "mkdir generated", reason: "Create generated output folder" },
+      { command: "git fetch origin", reason: "Fetch the latest remote refs" },
       {
         isCommandApproved: () => false,
         findMatchingCommandRule: () => undefined,
@@ -6050,8 +6178,8 @@ describe("handleExecuteCommand", () => {
     expect(review).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "session-review",
-        command: "mkdir generated",
-        reason: "Create generated output folder",
+        command: "git fetch origin",
+        reason: "Fetch the latest remote refs",
         userObjective: "Generate project output",
       }),
     );
@@ -6090,7 +6218,7 @@ describe("handleExecuteCommand", () => {
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
     const result = await handleExecuteCommand(
-      { command: "mkdir generated" },
+      { command: "git fetch origin" },
       {
         isCommandApproved: () => false,
         findMatchingCommandRule: () => undefined,
@@ -6109,8 +6237,8 @@ describe("handleExecuteCommand", () => {
     expect(review).toHaveBeenCalledTimes(1);
     expect(enqueueCommandApproval).toHaveBeenCalledTimes(1);
     expect(enqueueCommandApproval).toHaveBeenCalledWith(
-      "mkdir generated",
-      "mkdir generated",
+      "git fetch origin",
+      "git fetch origin",
       expect.objectContaining({
         commandReview: expect.objectContaining({
           outcome: "deny",
@@ -6224,7 +6352,7 @@ describe("handleExecuteCommand", () => {
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
     const execution = handleExecuteCommand(
-      { command: "mkdir generated" },
+      { command: "git fetch origin" },
       {
         isCommandApproved: () => false,
         findMatchingCommandRule: () => undefined,
@@ -6258,7 +6386,7 @@ describe("handleExecuteCommand", () => {
 
     await expect(execution.then(textPayload)).resolves.toMatchObject({
       status: "cancelled",
-      command: "mkdir generated",
+      command: "git fetch origin",
       reason: "Command approval was cancelled before execution",
       security: {
         route: "sandbox",
@@ -6552,7 +6680,7 @@ describe("handleExecuteCommand", () => {
       const { handleExecuteCommand } = await import("./executeCommand.js");
 
       const result = await handleExecuteCommand(
-        { command: "mkdir generated" },
+        { command: "git fetch origin" },
         {
           isCommandApproved: () => false,
           findMatchingCommandRule: () => undefined,
@@ -6775,7 +6903,7 @@ describe("handleExecuteCommand", () => {
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
     const result = await handleExecuteCommand(
-      { command: "mkdir generated" },
+      { command: "git fetch origin" },
       {
         isCommandApproved: () => false,
         findMatchingCommandRule: () => undefined,

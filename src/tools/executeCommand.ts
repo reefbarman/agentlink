@@ -51,6 +51,7 @@ import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.j
 import {
   commandReviewActionKey,
   getCommandAutoApprovalEligibility,
+  isRoutineApproveForMeCommand,
   type CommandReviewContextEntry,
   type CommandApprovalReviewer,
   type CommandReviewTurnCircuit,
@@ -96,6 +97,7 @@ type CommandApprovalAudit =
   | { by: "recent_approval" }
   | { by: "coordinator" }
   | { by: "sandbox_verification" }
+  | { by: "routine_tier"; tier: CommandTier }
   | { by: "tier"; tier: CommandTier; threshold: "safe" | "sensitive" }
   | {
       by: "model_reviewer";
@@ -2711,6 +2713,32 @@ async function approveSubCommands(
       approved: true,
       approval: { by: "tier", tier: tierInfo.tier, threshold },
       autoApprovedByTier: { tier: tierInfo.tier, threshold },
+    };
+  }
+
+  // In approve-for-me mode, routine development commands (recognized reads,
+  // build/test/lint toolchain runs, workspace-bounded file operations, and
+  // repo-local git writes) auto-approve deterministically instead of paying a
+  // blocking Guardian model round-trip. Network effects, unrecognized
+  // commands, escalations, and retained denials keep the full review below.
+  const routineApproveForMeApproved =
+    policy === "approve-for-me" &&
+    rulePolicy.decision !== "prompt" &&
+    !options?.requireHumanApproval &&
+    !retainedDenial &&
+    !options?.requireFreshReview &&
+    !options?.inlineFiles?.length &&
+    !options?.hasEnvOverrides &&
+    !options?.forceRequested &&
+    !options?.recoveryAttempt &&
+    !circuitInterrupted &&
+    options?.routeContext.permissionIntent === "default" &&
+    workspaceRoots.some((root) => isCommandPathInsideWorkspace(cwd, [root])) &&
+    isRoutineApproveForMeCommand(tierInfo);
+  if (routineApproveForMeApproved) {
+    return {
+      approved: true,
+      approval: { by: "routine_tier", tier: tierInfo.tier },
     };
   }
 

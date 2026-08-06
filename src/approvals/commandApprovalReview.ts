@@ -1,11 +1,14 @@
-import type { ClassifiedCommand } from "./commandTierClassifier.js";
+import type {
+  ClassifiedCommand,
+  CommandRiskCode,
+} from "./commandTierClassifier.js";
 import type { CommandReviewEvidence } from "./commandReviewEvidence.js";
 import type { InlineCommandFilePreview } from "../util/commandInlineFiles.js";
 import type { MessageParam } from "../agent/providers/types.js";
 import type { ModelProvider } from "../agent/providers/types.js";
 import type { TerminalExecutionSecuritySummary } from "../core/capabilities/terminal.js";
 
-export const DEFAULT_COMMAND_REVIEW_TIMEOUT_MS = 90_000;
+export const DEFAULT_COMMAND_REVIEW_TIMEOUT_MS = 20_000;
 export const MAX_COMMAND_REVIEW_ATTEMPTS = 3;
 const MAX_REASON_LENGTH = 500;
 const MAX_CONTEXT_ENTRIES = 12;
@@ -204,6 +207,35 @@ export interface CommandApprovalReviewerFactoryOptions {
     | undefined
     | Promise<CommandApprovalReviewerContext | undefined>;
   timeoutMs?: number;
+}
+
+/**
+ * Risk codes that approve-for-me mode treats as routine development workflow:
+ * recognized read/inspect commands, version checks, project toolchain runs
+ * (build/test/lint/format), workspace-bounded file operations, and repo-local
+ * git writes. Network effects, unrecognized executables or operations, and
+ * destructive or privileged commands are deliberately excluded and keep the
+ * full Guardian model review.
+ */
+export const ROUTINE_APPROVE_FOR_ME_RISK_CODES: ReadonlySet<CommandRiskCode> =
+  new Set([
+    "read_only",
+    "version_check",
+    "project_toolchain",
+    "workspace_mutation",
+    "git_mutation",
+  ]);
+
+export function isRoutineApproveForMeCommand(
+  classified: ClassifiedCommand,
+): boolean {
+  return (
+    classified.tier !== "dangerous" &&
+    classified.perSubCommand.length > 0 &&
+    classified.perSubCommand.every(({ result }) =>
+      ROUTINE_APPROVE_FOR_ME_RISK_CODES.has(result.code),
+    )
+  );
 }
 
 export function getCommandAutoApprovalEligibility(

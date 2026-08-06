@@ -2,6 +2,7 @@ import {
   CURRENT_SANDBOX_POLICY_VERSION,
   serializeSandboxLaunchBinding,
   type ApprovedSandboxCapabilityGrant,
+  type SandboxCapabilityRequest,
   type SandboxLaunchBindingInput,
   validateCheckpointBSandboxCapabilityRequest,
   validateSandboxCapabilityGrant,
@@ -145,6 +146,18 @@ describe("Checkpoint B sandbox capabilities", () => {
         "networkDomains",
         "privateNetworkTargets",
       ],
+    });
+  });
+
+  it("rejects removed or unknown fields from untyped capability requests", () => {
+    const legacyRequest = {
+      allowGitMetadataWrite: false,
+    } as SandboxCapabilityRequest & { allowGitMetadataWrite: boolean };
+
+    expect(validateCheckpointBSandboxCapabilityRequest(legacyRequest)).toEqual({
+      ok: false,
+      reason: "unsupported_capability",
+      fields: ["allowGitMetadataWrite"],
     });
   });
 });

@@ -109,7 +109,7 @@ describe("createCodeRetrievalHealthProvider", () => {
     expect(repositoryClose).toHaveBeenCalledTimes(2);
   });
 
-  it("reports a missing project store without discarding existing counts", async () => {
+  it("reports a missing project store as degraded without claiming global capability readiness", async () => {
     const indexedRoot = path.join(tempRoot, "indexed");
     const missingRoot = path.join(tempRoot, "missing");
     fs.mkdirSync(indexedRoot);
@@ -131,7 +131,7 @@ describe("createCodeRetrievalHealthProvider", () => {
     }).health();
 
     expect(snapshot).toMatchObject({
-      status: "unavailable",
+      status: "degraded",
       lexical: "unavailable",
       scalar: "unavailable",
       structural: "unavailable",
@@ -143,6 +143,31 @@ describe("createCodeRetrievalHealthProvider", () => {
     });
     expect(repositoryRoots).toEqual([indexedStore]);
     expect(repositoryClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports unavailable when every project store is missing", async () => {
+    const firstRoot = path.join(tempRoot, "first");
+    const secondRoot = path.join(tempRoot, "second");
+    fs.mkdirSync(firstRoot);
+    fs.mkdirSync(secondRoot);
+
+    const snapshot = await createCodeRetrievalHealthProvider({
+      globalStoragePath,
+      enabled: true,
+      getWorkspaceRoots: () => [firstRoot, secondRoot],
+    }).health();
+
+    expect(snapshot).toMatchObject({
+      status: "unavailable",
+      lexical: "unavailable",
+      scalar: "unavailable",
+      vector: "not_configured",
+      structural: "unavailable",
+      reason: "missing_index",
+      sourceCount: 0,
+      chunkCount: 0,
+    });
+    expect(repositoryRoots).toEqual([]);
   });
 
   it("reports no workspace without opening a repository", async () => {

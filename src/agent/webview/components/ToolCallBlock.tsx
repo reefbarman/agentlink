@@ -502,6 +502,11 @@ export function getCommandApprovalBadge(
           text: `auto · verification${routeSuffix}`,
           title: `Auto-approved as a recognized project verification command in the verified baseline sandbox${securityTitle}`,
         };
+      case "routine_tier":
+        return {
+          text: `auto · routine${routeSuffix}`,
+          title: `Auto-approved as a routine development command (recognized read, build/test, workspace file, or repo-local git operation)${securityTitle}`,
+        };
       case "tier":
         return typeof record.tier === "string"
           ? {

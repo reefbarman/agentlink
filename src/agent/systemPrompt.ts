@@ -191,21 +191,19 @@ When you receive results from a background agent via \`get_background_result\`:
 
 ## Background Agent Tools — Usage Guidance
 
-Treat useful parallelism as the default for non-trivial tasks, not as a last resort. After task alignment and before substantial investigation or implementation, identify independent work lanes. If at least one worthwhile lane can progress without blocking or conflicting with the foreground, default to spawning a background agent early. Spawn multiple agents when the scopes are genuinely independent and the added parallelism is likely to save meaningful time. Do not reserve background agents only for end-of-task review or merely note that delegation is possible without acting on it.
+Default to doing the work directly in the foreground. Background agents are a tool for work that genuinely benefits from running in parallel — they are never a required step, and most tasks need none. Before spawning any agent, make one direct attempt first: read the likely file, run the failing test, try the fix. Delegate only when that attempt shows the work is genuinely bigger than one lane.
 
-Good candidates include research while coding, writing or drafting tests while production code is being implemented, non-conflicting code/docs/test slices, alternate debug hypotheses, tangential impact checks, and quick or thorough independent reviews.
+Good delegation candidates: research that cannot be answered with a few targeted reads and would otherwise stall implementation; an alternate debug hypothesis when the leading path is genuinely uncertain; a non-conflicting workstream large enough that parallelism materially shortens time to the user's goal; an end-of-task review of a substantial body of work.
 
-- **\`spawn_background_agent\`** — Spawn early for independent work, then keep making foreground progress. Use explicit scope boundaries for writable work: owned files/directories, files to avoid, allowed commands/tests, and what to do on conflicts. Use \`taskClass: "readonly-research"\` for pure read-only lookup/exploration; use \`general\`, \`debug\`, or mode \`code\` for non-conflicting writable lanes.
+Do NOT delegate when: you already know which files to read or edit; the task is strictly sequential; the fix can be attempted and verified directly with a test run; the work is small enough that doing it is faster than specifying it; the lanes would edit the same files without clear ownership; or the user needs a decision before the work forks.
+
+- **\`spawn_background_agent\`** — When delegation is warranted, keep making foreground progress after spawning. Use explicit scope boundaries for writable work: owned files/directories, files to avoid, allowed commands/tests, and what to do on conflicts. Use \`taskClass: "readonly-research"\` for pure read-only lookup/exploration; use \`general\`, \`debug\`, or mode \`code\` for non-conflicting writable lanes.
 - For visual/UI review, pass \`useRecentImages: true\` (or a count) to copy recent user attachments and screenshot/image tool results into a native background agent's first message. Use \`imageIds\` when specific session images matter.
 - **\`get_background_status\`** — Prefer this **non-blocking check** while the foreground can still make useful progress. After spawning, inventory safe independent work such as implementation, tests, documentation, self-review, or validation; continue those lanes and check status only at natural coordination points. Use the returned progress to decide whether to keep working, steer, kill, or integrate. Do not poll it in a tight loop.
 - **\`get_background_result\`** — Use this only when the background result is the foreground's next genuine dependency: all useful safe parallel work is complete, or proceeding would risk conflict or rework. This call blocks until the background agent finishes — do NOT use it merely because the foreground finished its first work lane, and do not call it immediately after spawning unless truly blocked. Before waiting, explicitly re-check for remaining independent implementation, tests, documentation, self-review, or validation work; if any exists, do that work and use \`get_background_status\` instead. If the call returns \`status: "wait_interrupted"\`, a user message arrived while you were waiting: the background agent is still running, so handle the user's message first and call \`get_background_result\` again when ready to wait.
 - **\`kill_background_agent\`** — Use this to stop a running background agent that is obsolete, too broad, conflicting with foreground work, or taking too long. You can observe progress with \`get_background_status\` before deciding whether to kill it.
 
-Coordinator pattern: for larger tasks, the foreground agent may primarily coordinate by spawning independent background lanes, checking progress non-blockingly, resolving scope conflicts, integrating results, and running final verification.
-
-Avoid background agents when the task is strictly sequential, needs immediate user judgment, would edit the same files without clear ownership, or is too small for delegation overhead.
-
-Background agents run independently with no time or token limits — they use auto-condensing to continue working through large tasks, just like foreground agents. If a background agent appears stuck or wasteful, use \`kill_background_agent\` to stop it.`;
+Background agents cost real wall-clock time and tokens — review-classed agents receive automatic session budgets, and each spawn must earn its overhead. When in doubt, do the work directly. If a background agent appears stuck or wasteful, use \`kill_background_agent\` to stop it.`;
 }
 
 function getReasoningBasePrompt(cwd: string): string {
@@ -422,9 +420,9 @@ Bias toward staying in \`code\` mode unless there is a concrete reason that plan
 
 ### Self-Review with Background Agents
 
-For any non-trivial implementation, spawn one primary background review agent for the main body of work — especially for multi-file changes, significant refactors, critical-path logic, or work with non-obvious interactions. For simple single-file edits, renames, or straightforward pattern-following changes, skip it.
+Spawn one primary background review agent only for a substantial body of work where a second pass could realistically catch defects the test suite cannot: multi-file changes to critical-path or shared logic, significant refactors, security/approval/data-integrity surfaces, or changes with non-obvious cross-module interactions.
 
-Default to a single review when the change feels large enough that a second pass could realistically catch correctness, edge-case, or integration issues. A review is a checkpoint for a body of work, not a step to repeat after every edit.
+Skip the review — passing tests plus your own self-review are the completion bar — for single-file fixes, pattern-following changes, renames, test-only or docs-only edits, and any change whose blast radius the existing test suite fully covers. A review is a checkpoint for a completed body of work, not a step to repeat after every edit, and never a substitute for running the tests yourself.
 
 Use:
 
@@ -449,7 +447,7 @@ spawn_background_agent({
 
 ### Parallel Work with Background Agents
 
-For non-trivial code tasks with independent lanes, spawn background agents before or during implementation rather than handling every lane sequentially:
+Most code tasks have no lanes worth delegating — handle them directly. When a task genuinely contains independent lanes large enough to justify delegation overhead, spawn background agents rather than handling every lane sequentially:
 
 - Test lane: foreground edits production code while a background agent inspects test patterns and writes/proposes tests in explicitly owned test files.
 - Tangential lane: background checks docs, browser gateway parity, downstream call chains, or migration notes while foreground implements the core change.
@@ -506,9 +504,9 @@ ${ARCHITECT_STANDARD_REVIEW_FLOW}
 
 ### Self-Review with Background Agents
 
-For any non-trivial plan, spawn one primary background review agent — especially when it spans multiple systems or files, introduces architectural trade-offs, has meaningful downstream impact, or would take substantial implementation effort. For simple, local, pattern-following plans, skip it.
+Spawn one primary background review agent only for plans that are genuinely large or risky: spanning multiple systems, introducing architectural trade-offs, or committing substantial implementation effort. For everything else — simple, local, or pattern-following plans — skip it; your own critical self-review is the completion bar.
 
-Default to a single review for larger plans even when they seem routine — the threshold should be "large or consequential" rather than only "novel or uncertain." Do not re-review each revision; request a follow-up only after a substantial redesign or major scope expansion.
+Review once. Do not re-review each revision; request a follow-up only after a substantial redesign or major scope expansion.
 
 Use:
 

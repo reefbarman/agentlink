@@ -766,7 +766,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "spawn_background_agent",
     description:
-      "Spawn a background agent to work in parallel with the current session. Use proactively for independent research, non-conflicting code/test/docs work, alternate debug hypotheses, tangential checks, and quick or thorough reviews. Returns immediately with a sessionId so the foreground can keep working or coordinate other lanes; call get_background_status for non-blocking progress and get_background_result only when you need the final output.",
+      "Spawn a background agent for work that genuinely benefits from running in parallel: research that cannot be answered with a few targeted reads, a non-conflicting workstream large enough to shorten time to the goal, an alternate debug hypothesis, or an end-of-task review of a substantial body of work. Prefer doing small or sequential work directly instead of delegating it. Returns immediately with a sessionId so the foreground can keep working; call get_background_status for non-blocking progress and get_background_result only when you need the final output.",
     input_schema: {
       type: "object",
       properties: {
@@ -1475,6 +1475,37 @@ export function getToolUsageOutcomeFromResult(
   }
   if (structuredError) return "error";
   return "ok";
+}
+
+/**
+ * Approval-path and route dimensions for execute_command usage telemetry, so
+ * the aggregate report can show how often commands were auto-approved
+ * deterministically (tier/routine/sandbox verification), by the Guardian model
+ * reviewer, or by a human, and which execution route served them.
+ */
+export function getExecuteCommandUsageMetrics(
+  result: ToolResult,
+): ToolUsageMetrics {
+  const text = result.content.find((item) => item.type === "text")?.text;
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text) as {
+      approval?: { by?: unknown };
+      security?: { route?: unknown };
+      timed_out?: unknown;
+    };
+    const metrics: ToolUsageMetrics = {};
+    if (typeof parsed.approval?.by === "string") {
+      metrics.approval_by = parsed.approval.by;
+    }
+    if (typeof parsed.security?.route === "string") {
+      metrics.route = parsed.security.route;
+    }
+    if (parsed.timed_out === true) metrics.timed_out = true;
+    return metrics;
+  } catch {
+    return {};
+  }
 }
 
 const SEMANTIC_SEARCH_UNAVAILABLE_MESSAGE =
@@ -2373,6 +2404,10 @@ export function createAgentToolRuntime(
           ? await withWorkspaceRoots(operationRoots, execute)
           : await execute();
         const composeTrace = result.uiMeta?.composeTrace;
+        const executeCommandMetrics =
+          request.name === "execute_command"
+            ? getExecuteCommandUsageMetrics(result)
+            : undefined;
         ctx.toolUsageTelemetry?.record({
           toolName: request.name,
           params:
@@ -2405,7 +2440,9 @@ export function createAgentToolRuntime(
                   cancelled: composeTrace.status === "cancelled",
                 },
               }
-            : {}),
+            : executeCommandMetrics && Object.keys(executeCommandMetrics).length
+              ? { metrics: executeCommandMetrics }
+              : {}),
         });
         return result;
       } catch (err) {

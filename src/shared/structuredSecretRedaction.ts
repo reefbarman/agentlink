@@ -1,3 +1,5 @@
+import { parse as parseToml } from "@iarna/toml";
+
 const REDACTED_VALUE = "[REDACTED]";
 const EXACT_SECRET_KEYS = new Set([
   "apikey",
@@ -28,11 +30,13 @@ interface ValueSpan {
   key: string;
 }
 
+type StructuredConfigFormat = "jsonc" | "toml";
+
 export interface StructuredSecretRedactionResult {
   content: string;
   redactionCount: number;
   redactedKeys: string[];
-  status?: "withheld_invalid_jsonc";
+  status?: "withheld_invalid_jsonc" | "withheld_invalid_toml";
 }
 
 export function getStructuredSecretRedactionMetadata(
@@ -70,27 +74,59 @@ const CONFIG_BASENAMES = new Set([
   "settings.json",
 ]);
 
-export function isStructuredConfigPath(filePath: string): boolean {
+function isMiseConfigPath(segments: string[], basename: string): boolean {
+  if (/^\.?mise(?:\.[^.]+)*(?:\.local)?\.toml$/.test(basename)) {
+    return true;
+  }
+  return (
+    (segments.some(
+      (segment, index) =>
+        segment === ".config" && segments[index + 1] === "mise",
+    ) ||
+      segments.includes(".mise") ||
+      segments.includes("mise")) &&
+    basename === "config.toml"
+  );
+}
+
+export function getStructuredConfigFormat(
+  filePath: string,
+): StructuredConfigFormat | undefined {
   const normalized = filePath.replace(/\\/g, "/").toLowerCase();
   const segments = normalized.split("/").filter(Boolean);
   const basename = segments.at(-1) ?? "";
+  if (basename.endsWith(".toml")) {
+    if (isMiseConfigPath(segments, basename)) return "toml";
+    if (
+      segments.some((segment) => CONFIG_DIRECTORY_SEGMENTS.has(segment)) &&
+      (basename === "config.toml" || basename === "settings.toml")
+    ) {
+      return "toml";
+    }
+    return undefined;
+  }
+
   const extension = basename.endsWith(".jsonc")
     ? ".jsonc"
     : basename.endsWith(".json")
       ? ".json"
       : "";
-  if (!extension) return false;
+  if (!extension) return undefined;
   if (segments.some((segment) => CONFIG_DIRECTORY_SEGMENTS.has(segment))) {
-    return true;
+    return "jsonc";
   }
-  if (CONFIG_BASENAMES.has(basename)) return true;
+  if (CONFIG_BASENAMES.has(basename)) return "jsonc";
   const stem = basename.slice(0, -extension.length);
-  return (
-    stem === "settings" ||
+  return stem === "settings" ||
     stem === "config" ||
     stem.endsWith(".settings") ||
     stem.endsWith(".config")
-  );
+    ? "jsonc"
+    : undefined;
+}
+
+export function isStructuredConfigPath(filePath: string): boolean {
+  return getStructuredConfigFormat(filePath) !== undefined;
 }
 
 export function isHighConfidenceSecretKey(key: string): boolean {
@@ -263,47 +299,330 @@ class JsoncSecretScanner {
 function replacementPreservingLines(
   original: string,
   value = REDACTED_VALUE,
+  continuation = " ",
 ): string {
   const placeholder = JSON.stringify(value);
   let insertedPlaceholder = false;
   const replacement = original.replace(/[^\r\n]+/g, () => {
-    if (insertedPlaceholder) return " ";
+    if (insertedPlaceholder) return continuation;
     insertedPlaceholder = true;
     return placeholder;
   });
   return insertedPlaceholder ? replacement : placeholder + original;
 }
 
+function isTomlSecretKey(key: string): boolean {
+  if (isHighConfidenceSecretKey(key)) return true;
+  return (
+    /^[A-Z][A-Z0-9_]*_TOKENS?$/.test(key) && !/^(?:MAX|NUM)_TOKENS?$/.test(key)
+  );
+}
+
+class TomlSecretScanner {
+  private index = 0;
+  private tablePath: string[] = [];
+  readonly spans: ValueSpan[] = [];
+
+  constructor(private readonly text: string) {}
+
+  scan(): ValueSpan[] {
+    while (this.index < this.text.length) {
+      this.skipTrivia();
+      if (this.index >= this.text.length) break;
+      if (this.text[this.index] === "[") this.parseTableHeader();
+      else this.parseKeyValue(this.tablePath, true);
+    }
+    return this.spans;
+  }
+
+  private invalid(): never {
+    throw new Error(`Unable to locate TOML value at offset ${this.index}`);
+  }
+
+  private skipTrivia(): void {
+    while (this.index < this.text.length) {
+      const char = this.text[this.index];
+      if (char === " " || char === "\t" || char === "\r" || char === "\n") {
+        this.index += 1;
+      } else if (char === "#") {
+        this.skipComment();
+      } else {
+        return;
+      }
+    }
+  }
+
+  private skipInlineTrivia(): void {
+    while (this.text[this.index] === " " || this.text[this.index] === "\t") {
+      this.index += 1;
+    }
+  }
+
+  private skipComment(): void {
+    while (
+      this.index < this.text.length &&
+      this.text[this.index] !== "\n" &&
+      this.text[this.index] !== "\r"
+    ) {
+      this.index += 1;
+    }
+  }
+
+  private consumeLineEnding(): void {
+    if (this.text[this.index] === "\r") this.index += 1;
+    if (this.text[this.index] === "\n") this.index += 1;
+  }
+
+  private parseTableHeader(): void {
+    this.index += 1;
+    const isArray = this.text[this.index] === "[";
+    if (isArray) this.index += 1;
+    const tablePath = this.parseKeyPath();
+    this.skipInlineTrivia();
+    if (this.text[this.index] !== "]") this.invalid();
+    this.index += 1;
+    if (isArray) {
+      if (this.text[this.index] !== "]") this.invalid();
+      this.index += 1;
+    }
+    this.skipInlineTrivia();
+    if (this.text[this.index] === "#") this.skipComment();
+    if (
+      this.index < this.text.length &&
+      this.text[this.index] !== "\r" &&
+      this.text[this.index] !== "\n"
+    ) {
+      this.invalid();
+    }
+    this.consumeLineEnding();
+    this.tablePath = tablePath;
+  }
+
+  private parseKeyValue(
+    parentPath: readonly string[],
+    collectSecrets: boolean,
+  ): void {
+    const keyPath = this.parseKeyPath();
+    const key = keyPath.at(-1) as string;
+    const fullPath = [...parentPath, ...keyPath];
+    const sensitive = collectSecrets && fullPath.some(isTomlSecretKey);
+    this.skipInlineTrivia();
+    if (this.text[this.index] !== "=") this.invalid();
+    this.index += 1;
+    this.skipInlineTrivia();
+    const start = this.index;
+    this.parseValue(fullPath, collectSecrets && !sensitive);
+    const end = this.index;
+    if (sensitive) this.spans.push({ start, end, key });
+    this.skipInlineTrivia();
+    if (this.text[this.index] === "#") this.skipComment();
+    if (
+      this.index < this.text.length &&
+      this.text[this.index] !== "\r" &&
+      this.text[this.index] !== "\n"
+    ) {
+      this.invalid();
+    }
+    this.consumeLineEnding();
+  }
+
+  private parseKeyPath(): string[] {
+    const keys: string[] = [];
+    while (true) {
+      this.skipInlineTrivia();
+      keys.push(this.parseKeyPart());
+      this.skipInlineTrivia();
+      if (this.text[this.index] !== ".") return keys;
+      this.index += 1;
+    }
+  }
+
+  private parseKeyPart(): string {
+    const quote = this.text[this.index];
+    if (quote === "'" || quote === '"') {
+      const start = this.index++;
+      let escaped = false;
+      while (this.index < this.text.length) {
+        const char = this.text[this.index++];
+        if (escaped) escaped = false;
+        else if (char === "\\" && quote === '"') escaped = true;
+        else if (char === quote) {
+          const raw = this.text.slice(start, this.index);
+          return quote === '"' ? (JSON.parse(raw) as string) : raw.slice(1, -1);
+        }
+      }
+      return this.invalid();
+    }
+    const match = this.text.slice(this.index).match(/^[A-Za-z0-9_-]+/);
+    if (!match) return this.invalid();
+    this.index += match[0].length;
+    return match[0];
+  }
+
+  private parseValue(
+    parentPath: readonly string[],
+    collectSecrets: boolean,
+  ): void {
+    const char = this.text[this.index];
+    if (char === "'" || char === '"') return this.parseString(char);
+    if (char === "[") return this.parseArray(parentPath, collectSecrets);
+    if (char === "{") return this.parseInlineTable(parentPath, collectSecrets);
+    while (this.index < this.text.length) {
+      const current = this.text[this.index];
+      if (["#", "\r", "\n", ",", "]", "}"].includes(current)) return;
+      this.index += 1;
+    }
+  }
+
+  private parseString(quote: "'" | '"'): void {
+    const multiline = this.text.startsWith(quote.repeat(3), this.index);
+    const delimiter = multiline ? quote.repeat(3) : quote;
+    this.index += delimiter.length;
+    while (this.index < this.text.length) {
+      if (this.text.startsWith(delimiter, this.index)) {
+        this.index += delimiter.length;
+        if (multiline) while (this.text[this.index] === quote) this.index += 1;
+        return;
+      }
+      if (this.text[this.index] === "\\" && quote === '"') this.index += 2;
+      else this.index += 1;
+    }
+    this.invalid();
+  }
+
+  private parseArray(
+    parentPath: readonly string[],
+    collectSecrets: boolean,
+  ): void {
+    this.index += 1;
+    while (true) {
+      this.skipTrivia();
+      if (this.text[this.index] === "]") {
+        this.index += 1;
+        return;
+      }
+      this.parseValue(parentPath, collectSecrets);
+      this.skipTrivia();
+      if (this.text[this.index] === ",") this.index += 1;
+      else if (this.text[this.index] === "]") {
+        this.index += 1;
+        return;
+      } else this.invalid();
+    }
+  }
+
+  private parseInlineTable(
+    parentPath: readonly string[],
+    collectSecrets: boolean,
+  ): void {
+    this.index += 1;
+    while (true) {
+      this.skipInlineTrivia();
+      if (this.text[this.index] === "}") {
+        this.index += 1;
+        return;
+      }
+      const keyPath = this.parseKeyPath();
+      const key = keyPath.at(-1) as string;
+      const fullPath = [...parentPath, ...keyPath];
+      const sensitive = collectSecrets && fullPath.some(isTomlSecretKey);
+      this.skipInlineTrivia();
+      if (this.text[this.index] !== "=") this.invalid();
+      this.index += 1;
+      this.skipInlineTrivia();
+      const start = this.index;
+      this.parseValue(fullPath, collectSecrets && !sensitive);
+      const end = this.index;
+      if (sensitive) this.spans.push({ start, end, key });
+      this.skipInlineTrivia();
+      if (this.text[this.index] === ",") this.index += 1;
+      else if (this.text[this.index] === "}") {
+        this.index += 1;
+        return;
+      } else this.invalid();
+    }
+  }
+}
+
+function parseTomlForValidation(content: string): void {
+  parseToml(content.replace(/\r\n?|\n/g, "\n"));
+}
+
+function scanTomlSecretSpans(content: string): ValueSpan[] {
+  parseTomlForValidation(content);
+  return new TomlSecretScanner(content).scan();
+}
+
+function commentPreservingLines(original: string, message: string): string {
+  let insertedMessage = false;
+  const replacement = original.replace(/[^\r\n]+/g, () => {
+    if (insertedMessage) return "#";
+    insertedMessage = true;
+    return `# ${message}`;
+  });
+  return insertedMessage ? replacement : `# ${message}${original}`;
+}
+
+function invalidContentResult(
+  content: string,
+  format: StructuredConfigFormat,
+): StructuredSecretRedactionResult {
+  const label = format === "toml" ? "TOML" : "JSON/JSONC";
+  const withheld = `[CONTENT WITHHELD: invalid ${label}]`;
+  return {
+    content:
+      format === "toml"
+        ? commentPreservingLines(content, withheld)
+        : replacementPreservingLines(content, withheld),
+    redactionCount: 0,
+    redactedKeys: [],
+    status:
+      format === "toml" ? "withheld_invalid_toml" : "withheld_invalid_jsonc",
+  };
+}
+
 export function redactStructuredSecrets(
+  filePath: string,
   content: string,
 ): StructuredSecretRedactionResult {
+  const format = getStructuredConfigFormat(filePath);
+  if (!format) return { content, redactionCount: 0, redactedKeys: [] };
+
   let spans: ValueSpan[];
   try {
-    spans = new JsoncSecretScanner(content)
-      .scan()
-      .sort((left, right) => right.start - left.start);
+    spans =
+      format === "toml"
+        ? scanTomlSecretSpans(content)
+        : new JsoncSecretScanner(content).scan();
   } catch {
-    return {
-      content: replacementPreservingLines(
-        content,
-        "[CONTENT WITHHELD: invalid JSON/JSONC]",
-      ),
-      redactionCount: 0,
-      redactedKeys: [],
-      status: "withheld_invalid_jsonc",
-    };
+    return invalidContentResult(content, format);
   }
   if (spans.length === 0) {
     return { content, redactionCount: 0, redactedKeys: [] };
   }
 
   let redacted = content;
-  for (const span of spans) {
+  for (const span of [...spans].sort(
+    (left, right) => right.start - left.start,
+  )) {
     redacted =
       redacted.slice(0, span.start) +
-      replacementPreservingLines(redacted.slice(span.start, span.end)) +
+      replacementPreservingLines(
+        redacted.slice(span.start, span.end),
+        REDACTED_VALUE,
+        format === "toml" ? "#" : " ",
+      ) +
       redacted.slice(span.end);
   }
+
+  if (format === "toml") {
+    try {
+      parseTomlForValidation(redacted);
+    } catch {
+      return invalidContentResult(content, format);
+    }
+  }
+
   return {
     content: redacted,
     redactionCount: spans.length,

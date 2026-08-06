@@ -187,6 +187,12 @@ import {
 } from "./backgroundDisplayStatus.js";
 import { BackgroundSummaryScheduler } from "./BackgroundSummaryScheduler.js";
 import { captureReviewScope } from "./reviewScopeSnapshot.js";
+import { type SessionOutcomeTelemetry } from "../telemetry/SessionOutcomeTelemetry.js";
+import {
+  applyTurnOutcomeEvent,
+  createTurnOutcomeStats,
+  type TurnOutcomeStats,
+} from "./turnOutcomeStats.js";
 import {
   formatFleetResultEnvelope,
   parseFleetResultEnvelope,
@@ -817,6 +823,10 @@ export class AgentSessionManager {
       apiTurns: number;
       startedAt: number;
       lastProgressAt: number;
+      /** When the spawn was accepted, before queue admission. */
+      enqueuedAt: number;
+      /** Bytes of the immutable review scope captured at spawn, if any. */
+      reviewScopeBytes?: number;
       phase: BackgroundAgentRuntimePhase;
       phaseStartedAt?: number;
       requestStartedAt?: number;
@@ -834,6 +844,14 @@ export class AgentSessionManager {
    * concurrency slot so the awaited work can be scheduled.
    */
   private bgResultWaitHolds = new Map<string, number>();
+  /** Cumulative ms waiters spent blocked on each background session's result. */
+  private bgResultWaitMs = new Map<string, number>();
+  /** Task-duration tracking per foreground session, cleared on terminal status. */
+  private sessionTaskTracking = new Map<
+    string,
+    { startedAt: number; turns: number }
+  >();
+  private sessionOutcomeTelemetry?: SessionOutcomeTelemetry;
 
   private fleetVisibilityExpiryTimer?: ReturnType<
     AgentSessionManagerHost["timers"]["setTimeout"]
@@ -1709,6 +1727,123 @@ export class AgentSessionManager {
     // This is a window-level capability source only. Active requests capture a
     // project-bound snapshot and must not be mutated when the source changes.
     this.toolCtx = ctx;
+  }
+
+  setSessionOutcomeTelemetry(
+    telemetry: SessionOutcomeTelemetry | undefined,
+  ): void {
+    this.sessionOutcomeTelemetry = telemetry;
+  }
+
+  /** Emit a turn_completed outcome event. Never throws into the send loop. */
+  private recordTurnOutcome(
+    session: AgentSession,
+    stats: TurnOutcomeStats,
+    autoContinues: number,
+  ): void {
+    try {
+      this.sessionOutcomeTelemetry?.record({
+        type: "turn_completed",
+        sessionId: session.id,
+        background: session.background === true,
+        mode: session.mode,
+        model: session.model,
+        turnDurationMs: Date.now() - stats.startedAt,
+        streamingMs: stats.streamingMs,
+        toolMs: stats.toolMs,
+        backgroundWaitMs: stats.backgroundWaitMs,
+        userWaitMs: stats.userWaitMs,
+        toolCalls: stats.toolCalls,
+        apiTurns: stats.apiTurns,
+        spawns: stats.spawns,
+        reviewSpawns: stats.reviewSpawns,
+        ...(stats.spawns > 0
+          ? { spawnedBeforeFirstAction: stats.spawnedBeforeFirstAction }
+          : {}),
+        autoContinues,
+        inputTokens: stats.inputTokens,
+        outputTokens: stats.outputTokens,
+      });
+    } catch (err) {
+      this.log?.(`[session-outcome] turn record failed: ${String(err)}`);
+    }
+  }
+
+  /** Emit a task_completed event when set_task_status reports a status. */
+  private recordTaskOutcome(session: AgentSession, input: unknown): void {
+    try {
+      const status = (input as { status?: unknown } | undefined)?.status;
+      if (typeof status !== "string" || !status.trim()) return;
+      const tracking = this.sessionTaskTracking.get(session.id);
+      this.sessionOutcomeTelemetry?.record({
+        type: "task_completed",
+        sessionId: session.id,
+        background: session.background === true,
+        mode: session.mode,
+        status,
+        taskDurationMs: tracking ? Date.now() - tracking.startedAt : undefined,
+        turns: tracking?.turns,
+      });
+      if (status === "completed" || status === "cancelled") {
+        this.sessionTaskTracking.delete(session.id);
+      }
+    } catch (err) {
+      this.log?.(`[session-outcome] task record failed: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Emit a background_lifecycle event once a background session is terminal.
+   * Call after result waiters have been resolved so parent-blocked time is
+   * fully accumulated.
+   */
+  private recordBackgroundLifecycle(session: AgentSession): void {
+    try {
+      if (!this.sessionOutcomeTelemetry) return;
+      const meta = this.bgMeta.get(session.id);
+      const fleet = session.fleetMetadata;
+      const structured = fleet?.structuredResult;
+      const review =
+        structured?.type === "review_findings" ? structured : undefined;
+      const reviewFindings: Record<string, number> = {};
+      for (const finding of review?.findings ?? []) {
+        reviewFindings[finding.severity] =
+          (reviewFindings[finding.severity] ?? 0) + 1;
+      }
+      this.sessionOutcomeTelemetry.record({
+        type: "background_lifecycle",
+        sessionId: session.id,
+        parentSessionId: this.bgParents.get(session.id)?.sessionId,
+        taskClass: meta?.taskClass ?? fleet?.taskClass,
+        mode: meta?.resolvedMode,
+        model: meta?.resolvedModel,
+        queuedMs: meta
+          ? Math.max(0, meta.startedAt - meta.enqueuedAt)
+          : undefined,
+        runMs: meta ? Math.max(0, Date.now() - meta.startedAt) : undefined,
+        terminal: fleet?.resultState ?? meta?.phase ?? "unknown",
+        terminalReason: fleet?.terminalReason,
+        ...(this.bgCancelled.has(session.id) ? { killed: true } : {}),
+        parentBlockedMs: this.bgResultWaitMs.get(session.id),
+        budgetToolCalls: fleet?.budget?.maxToolCalls,
+        budgetApiTurns: fleet?.budget?.maxApiTurns,
+        budgetElapsedMs: fleet?.budget?.maxElapsedMs,
+        usedToolCalls: fleet?.budgetUsage?.toolCalls ?? meta?.toolCalls,
+        usedApiTurns: fleet?.budgetUsage?.apiTurns ?? meta?.apiTurns,
+        ...(review
+          ? {
+              reviewFindings,
+              reviewEmptyDiff: review.emptyDiff === true,
+            }
+          : {}),
+        reviewScopeBytes: meta?.reviewScopeBytes,
+      });
+      this.bgResultWaitMs.delete(session.id);
+    } catch (err) {
+      this.log?.(
+        `[session-outcome] background lifecycle record failed: ${String(err)}`,
+      );
+    }
   }
 
   private getBackgroundAgentSettings(scope?: Readonly<SessionProjectScope>) {
@@ -5773,6 +5908,14 @@ export class AgentSessionManager {
           let modeSwitchResumeCount = 0;
           let lastTodos: TodoItem[] = [];
 
+          const turnStats = createTurnOutcomeStats();
+          const taskTracking = this.sessionTaskTracking.get(session.id) ?? {
+            startedAt: Date.now(),
+            turns: 0,
+          };
+          taskTracking.turns += 1;
+          this.sessionTaskTracking.set(session.id, taskTracking);
+
           let resolveRunSettled!: () => void;
           const runSettled = new Promise<void>((resolve) => {
             resolveRunSettled = resolve;
@@ -5805,6 +5948,13 @@ export class AgentSessionManager {
                   session.abortGeneration !== runAbortGeneration
                 ) {
                   break;
+                }
+                applyTurnOutcomeEvent(turnStats, event);
+                if (
+                  event.type === "tool_result" &&
+                  event.toolName === "set_task_status"
+                ) {
+                  this.recordTaskOutcome(session, event.input);
                 }
                 if (event.type === "todo_update") {
                   lastTodos = event.todos;
@@ -5962,6 +6112,11 @@ export class AgentSessionManager {
             if (this.sessionRunSettled.get(session.id) === runSettled) {
               this.sessionRunSettled.delete(session.id);
             }
+            this.recordTurnOutcome(
+              session,
+              turnStats,
+              autoContinueCount + modeSwitchResumeCount,
+            );
             resolveRunSettled();
             this.notifySessionsChanged();
           }
@@ -7745,6 +7900,7 @@ export class AgentSessionManager {
               : session.createdAt,
           lastProgressAt:
             fleet.completedAt ?? session.lastActiveAt ?? session.createdAt,
+          enqueuedAt: session.createdAt,
           phase: this.bgCancelled.has(session.id)
             ? "cancelled"
             : session.status === "error"
@@ -8909,17 +9065,21 @@ export class AgentSessionManager {
     }
     this.ensureChildBudgetAdmission(parent, request);
     this.ensureSharedWorkspaceScopeAvailable(request);
-    const executionMessage = request.reviewScope
-      ? `${message}\n\n${await captureReviewScope(
-          executionRoot,
-          request.reviewScope,
-          {
-            workspaceRoots: this.getWorkspaceFolders().map(
-              (folder) => folder.path,
-            ),
-          },
-        )}`
-      : message;
+    let reviewScopeBytes: number | undefined;
+    let executionMessage = message;
+    if (request.reviewScope) {
+      const reviewScopeSnapshot = await captureReviewScope(
+        executionRoot,
+        request.reviewScope,
+        {
+          workspaceRoots: this.getWorkspaceFolders().map(
+            (folder) => folder.path,
+          ),
+        },
+      );
+      reviewScopeBytes = Buffer.byteLength(reviewScopeSnapshot);
+      executionMessage = `${message}\n\n${reviewScopeSnapshot}`;
+    }
 
     const fg = this.getForegroundSession();
     parentSessionId = parent?.id;
@@ -9007,6 +9167,8 @@ export class AgentSessionManager {
         apiTurns: 0,
         startedAt: Date.now(),
         lastProgressAt: Date.now(),
+        enqueuedAt: Date.now(),
+        reviewScopeBytes,
         phase: "queued",
         phaseStartedAt: Date.now(),
       });
@@ -9282,6 +9444,7 @@ export class AgentSessionManager {
               resolve(resolution.resultText);
             }
             this.bgResultWaiters.delete(session.id);
+            this.recordBackgroundLifecycle(session);
             this.notifySessionsChanged();
             this.host.timers.setTimeout(
               () => {
@@ -9397,6 +9560,8 @@ export class AgentSessionManager {
       apiTurns: 0,
       startedAt: Date.now(),
       lastProgressAt: Date.now(),
+      enqueuedAt: Date.now(),
+      reviewScopeBytes,
       phase: "queued",
       phaseStartedAt: Date.now(),
     });
@@ -9669,6 +9834,7 @@ export class AgentSessionManager {
         resolve(resolution.resultText);
       }
       this.bgResultWaiters.delete(session.id);
+      this.recordBackgroundLifecycle(session);
       this.notifySessionsChanged();
       // Cleanup stored result after 5 minutes to prevent unbounded memory growth
       this.host.timers.setTimeout(
@@ -10915,6 +11081,7 @@ export class AgentSessionManager {
       );
     }
 
+    const waitStartedAt = Date.now();
     return new Promise((resolve) => {
       let settled = false;
       let unsubscribeInterrupt: (() => void) | undefined;
@@ -10922,6 +11089,11 @@ export class AgentSessionManager {
         if (settled) return;
         settled = true;
         unsubscribeInterrupt?.();
+        this.bgResultWaitMs.set(
+          sessionId,
+          (this.bgResultWaitMs.get(sessionId) ?? 0) +
+            Math.max(0, Date.now() - waitStartedAt),
+        );
         resolve(result);
       };
 

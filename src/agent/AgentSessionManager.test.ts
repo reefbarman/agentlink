@@ -2004,6 +2004,152 @@ describe("AgentSessionManager host injection", () => {
     });
   });
 
+  it("emits session-outcome turn and task events through the production send loop", async () => {
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: "test",
+      displayName: "Test",
+      condenseModel: "model-a",
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => ({
+        supportsThinking: false,
+        supportsCaching: false,
+        supportsImages: false,
+        supportsToolUse: true,
+        contextWindow: 200_000,
+        maxOutputTokens: 8_192,
+      })),
+      listModels: vi.fn(() => [
+        {
+          id: "model-a",
+          displayName: "model-a",
+          provider: "test",
+          capabilities: {
+            supportsThinking: false,
+            supportsCaching: false,
+            supportsImages: false,
+            supportsToolUse: true,
+            contextWindow: 200_000,
+            maxOutputTokens: 8_192,
+          },
+        },
+      ]),
+      stream: vi.fn(),
+      complete: vi.fn(),
+    } as any);
+    const engine = {
+      setToolRuntime: vi.fn(),
+      run: vi.fn(async function* () {
+        yield {
+          type: "api_request",
+          requestId: "r1",
+          model: "model-a",
+          reasoningEffort: "none",
+          inputTokens: 100,
+          uncachedInputTokens: 80,
+          outputTokens: 40,
+          cacheReadTokens: 0,
+          cacheCreationTokens: 0,
+          durationMs: 1_000,
+          timeToFirstToken: 10,
+        };
+        yield {
+          type: "tool_result",
+          toolCallId: "t1",
+          toolName: "read_file",
+          result: [],
+          durationMs: 200,
+          input: { path: "a.ts" },
+        };
+        yield {
+          type: "tool_result",
+          toolCallId: "t2",
+          toolName: "spawn_background_agent",
+          result: [],
+          durationMs: 50,
+          input: { taskClass: "review_code" },
+        };
+        yield {
+          type: "tool_result",
+          toolCallId: "t3",
+          toolName: "get_background_result",
+          result: [],
+          durationMs: 5_000,
+          input: { sessionId: "bg" },
+        };
+        yield {
+          type: "tool_result",
+          toolCallId: "t4",
+          toolName: "set_task_status",
+          result: [],
+          durationMs: 5,
+          input: { status: "completed", summary: "done" },
+        };
+        yield {
+          type: "done",
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalCacheCreationTokens: 0,
+        };
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      { ...makeConfig(), model: "model-a" },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          providers,
+          createEngine: vi.fn(() => engine as never),
+          config: {
+            resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
+            getCondenseThresholdForModel: () => 0.9,
+            getBgSummaryMode: () => "heuristic",
+            getBackgroundAgentSettings: () => ({}),
+          },
+        },
+      },
+    );
+    const record = vi.fn();
+    mgr.setSessionOutcomeTelemetry({ record } as never);
+    const session = await mgr.createSession("code");
+
+    await mgr.sendMessage(session.id, "start", session.mode);
+
+    const events = record.mock.calls.map(([event]) => event);
+    const task = events.find((event) => event.type === "task_completed");
+    expect(task).toMatchObject({
+      sessionId: session.id,
+      status: "completed",
+      turns: 1,
+    });
+    expect(task.taskDurationMs).toBeGreaterThanOrEqual(0);
+    const turn = events.find((event) => event.type === "turn_completed");
+    expect(turn).toMatchObject({
+      sessionId: session.id,
+      background: false,
+      streamingMs: 1_000,
+      apiTurns: 1,
+      inputTokens: 80,
+      outputTokens: 40,
+      toolCalls: 4,
+      toolMs: 255,
+      backgroundWaitMs: 5_000,
+      userWaitMs: 0,
+      spawns: 1,
+      reviewSpawns: 1,
+      // read_file ran before the spawn, so this was not delegation-first.
+      spawnedBeforeFirstAction: false,
+      autoContinues: 0,
+    });
+    expect(turn.turnDurationMs).toBeGreaterThanOrEqual(0);
+  });
+
   it("rolls back model identity when prompt reconciliation fails", async () => {
     const mgr = new AgentSessionManager(makeConfig(), "/tmp");
     const session = await mgr.createSession("code");

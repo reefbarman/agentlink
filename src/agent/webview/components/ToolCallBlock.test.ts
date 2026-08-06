@@ -582,6 +582,27 @@ describe("getCommandApprovalBadge", () => {
     });
   });
 
+  it("identifies routine dev command auto-approval", () => {
+    expect(
+      getCommandApprovalBadge({
+        approval: { by: "routine_tier", tier: "sensitive" },
+        security: {
+          route: "sandbox",
+          confinement: "verified-baseline",
+          sandbox: {
+            profileId: "workspace-write",
+            attestationVersion: "sandbox-behavior-v3",
+          },
+        },
+      }),
+    ).toEqual({
+      text: "auto · routine · sandbox",
+      title: expect.stringContaining(
+        "Auto-approved as a routine development command",
+      ),
+    });
+  });
+
   it("identifies unsandboxed native approvals and their route reason", () => {
     expect(
       getCommandApprovalBadge({

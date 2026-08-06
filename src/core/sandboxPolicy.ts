@@ -112,7 +112,16 @@ export function validateCheckpointBSandboxCapabilityRequest(
     return { ok: true, publicNetwork: false, localBinding: false };
   }
 
+  const knownFields = new Set([
+    "readPaths",
+    "writePaths",
+    "networkDomains",
+    "unrestrictedPublicNetwork",
+    "privateNetworkTargets",
+    "allowLocalBinding",
+  ]);
   const unsupported = [
+    ...Object.keys(request).filter((field) => !knownFields.has(field)),
     request.readPaths !== undefined && "readPaths",
     request.writePaths !== undefined && "writePaths",
     request.networkDomains !== undefined && "networkDomains",

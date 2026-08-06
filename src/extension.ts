@@ -155,6 +155,10 @@ import {
   createContextUsageTelemetry,
   type ContextUsageTelemetry,
 } from "./telemetry/ContextUsageTelemetry.js";
+import {
+  createSessionOutcomeTelemetry,
+  type SessionOutcomeTelemetry,
+} from "./telemetry/SessionOutcomeTelemetry.js";
 import { createVscodeTerminalProvider } from "./adapters/vscode/terminalCapabilities.js";
 import { AgentTerminalViewProvider } from "./terminal/AgentTerminalViewProvider.js";
 import { createDeferredNodePtyLoader } from "./terminal/deferredNodePtyLoader.js";
@@ -212,6 +216,7 @@ let browserGatewayHelperDiscovery:
   | null = null;
 let toolUsageTelemetry: ToolUsageTelemetry | null = null;
 let contextUsageTelemetry: ContextUsageTelemetry | null = null;
+let sessionOutcomeTelemetry: SessionOutcomeTelemetry | null = null;
 
 let browserGatewayHelperLeaseClient: BrowserGatewayHelperLeaseClient | null =
   null;
@@ -739,6 +744,11 @@ export async function activate(
     log,
   });
   context.subscriptions.push(contextUsageTelemetry);
+  sessionOutcomeTelemetry = createSessionOutcomeTelemetry({
+    extensionVersion: extVersion,
+    log,
+  });
+  context.subscriptions.push(sessionOutcomeTelemetry);
 
   // Event-loop stall watchdog: reports extension-host lockups the moment the
   // loop unblocks, with the flight-recorder ops that were running at the time
@@ -2624,6 +2634,10 @@ export async function activate(
     resolveContext: resolveApprovalReviewerContext,
   });
 
+  agentSessionManager.setSessionOutcomeTelemetry(
+    sessionOutcomeTelemetry ?? undefined,
+  );
+
   // Wire up window-level capabilities. MCP is captured from the session project registry.
   agentSessionManager.setToolContext({
     approvalManager,
@@ -3163,4 +3177,6 @@ export async function deactivate(): Promise<void> {
   skillCatalogShutdownPromise = null;
   contextUsageTelemetry?.dispose();
   contextUsageTelemetry = null;
+  sessionOutcomeTelemetry?.dispose();
+  sessionOutcomeTelemetry = null;
 }

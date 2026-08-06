@@ -83,7 +83,7 @@ export async function handleGetContext(
       deriveRange: (contentBytes) => {
         const raw = Buffer.from(contentBytes).toString("utf-8");
         structuredRedaction = isStructuredConfigPath(absolutePath)
-          ? redactStructuredSecrets(raw)
+          ? redactStructuredSecrets(absolutePath, raw)
           : undefined;
         diskLines = (structuredRedaction?.content ?? raw).split("\n");
         totalLines = diskLines.length;

@@ -432,6 +432,46 @@ describe("handleGetContext", () => {
     );
   });
 
+  it("redacts mise TOML secrets while hashing the original disk bytes", async () => {
+    const workspace = makeTempWorkspace();
+    const filePath = path.join(workspace, "mise.local.toml");
+    const content = [
+      "[env]",
+      'GITHUB_TOKEN = "github-secret"',
+      'NPM_TOKEN = "npm-secret"',
+      'ANTHROPIC_API_KEY = "anthropic-secret"',
+      'AWS_SECRET_ACCESS_KEY = "aws-secret"',
+      'SAFE_VALUE = "visible"',
+      "",
+    ].join("\n");
+    fs.writeFileSync(filePath, content);
+
+    const { handleGetContext } = await import("./getContext.js");
+    const result = await handleGetContext(
+      { path: "mise.local.toml" },
+      "session-toml-redaction",
+      makeProviders(filePath, "mise.local.toml", content, undefined),
+    );
+
+    const payload = JSON.parse(getText(result));
+    expect(payload.content).toContain('SAFE_VALUE = "visible"');
+    for (const secret of [
+      "github-secret",
+      "npm-secret",
+      "anthropic-secret",
+      "aws-secret",
+    ]) {
+      expect(payload.content).not.toContain(secret);
+    }
+    expect(payload.redaction).toEqual({
+      type: "structured_secret_values",
+      count: 4,
+    });
+    expect(payload.working_set.content_hash).toBe(
+      createHash("sha256").update(content).digest("hex"),
+    );
+  });
+
   it("groups VS Code document symbols in the context enrichment helper", async () => {
     const workspace = makeTempWorkspace();
     const filePath = path.join(workspace, "example.ts");

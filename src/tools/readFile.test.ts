@@ -351,6 +351,61 @@ describe("read_file structured secret redaction", () => {
     expect(payload.content).not.toContain("malformed-secret");
   });
 
+  it("redacts eligible mise TOML secrets", async () => {
+    const workspaceRoot = await makeWorkspace();
+    const filePath = path.join(workspaceRoot, "mise.local.toml");
+    await fs.writeFile(
+      filePath,
+      '[env]\nGITHUB_TOKEN = "github-secret"\nNPM_TOKEN = "npm-secret"\nSAFE_VALUE = "visible"\n',
+    );
+
+    const result = await handleReadFile(
+      { path: filePath, include_symbols: false },
+      approvalManager,
+      approvalPanel,
+      "redaction-session",
+      [],
+      enrichmentProvider,
+    );
+    const item = result.content[0];
+    const payload = JSON.parse(item!.type === "text" ? item!.text : "{}");
+
+    expect(payload.redaction).toEqual({
+      type: "structured_secret_values",
+      count: 2,
+    });
+    expect(payload.content).toContain('SAFE_VALUE = "visible"');
+    expect(payload.content).not.toContain("github-secret");
+    expect(payload.content).not.toContain("npm-secret");
+  });
+
+  it("withholds malformed eligible TOML", async () => {
+    const workspaceRoot = await makeWorkspace();
+    const filePath = path.join(workspaceRoot, "mise.local.toml");
+    await fs.writeFile(
+      filePath,
+      '[env]\nGITHUB_TOKEN = "toml-secret"\nbroken = [',
+    );
+
+    const result = await handleReadFile(
+      { path: filePath, include_symbols: false },
+      approvalManager,
+      approvalPanel,
+      "redaction-session",
+      [],
+      enrichmentProvider,
+    );
+    const item = result.content[0];
+    const payload = JSON.parse(item!.type === "text" ? item!.text : "{}");
+
+    expect(payload.redaction).toEqual({
+      type: "structured_secret_values",
+      status: "withheld_invalid_toml",
+    });
+    expect(payload.content).toContain("CONTENT WITHHELD");
+    expect(payload.content).not.toContain("toml-secret");
+  });
+
   it("does not redact secret-like text in source files", async () => {
     const workspaceRoot = await makeWorkspace();
     const filePath = path.join(workspaceRoot, "fixture.ts");

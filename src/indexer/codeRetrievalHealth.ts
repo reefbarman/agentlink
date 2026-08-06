@@ -57,15 +57,22 @@ function aggregateHealth(
   snapshots: RetrievalHealthSnapshot[],
 ): RetrievalHealthSnapshot {
   const reasons = unique(snapshots.flatMap((snapshot) => snapshot.reasons));
-  const status = snapshots.some((snapshot) => snapshot.status === "unavailable")
-    ? "unavailable"
-    : snapshots.some((snapshot) => snapshot.status === "degraded")
-      ? "degraded"
-      : snapshots.every((snapshot) => snapshot.status === "disabled")
-        ? "disabled"
-        : snapshots.some((snapshot) => snapshot.status === "disabled")
-          ? "degraded"
-          : "ready";
+  const hasUsableStore = snapshots.some(
+    (snapshot) => snapshot.status === "ready" || snapshot.status === "degraded",
+  );
+  const status = snapshots.every((snapshot) => snapshot.status === "disabled")
+    ? "disabled"
+    : !hasUsableStore &&
+        snapshots.some((snapshot) => snapshot.status === "unavailable")
+      ? "unavailable"
+      : snapshots.some(
+            (snapshot) =>
+              snapshot.status === "unavailable" ||
+              snapshot.status === "degraded" ||
+              snapshot.status === "disabled",
+          )
+        ? "degraded"
+        : "ready";
   const reason =
     snapshots.find((snapshot) => snapshot.reason !== undefined)?.reason ??
     reasons[0];

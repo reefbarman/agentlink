@@ -6142,7 +6142,7 @@ export class BrowserGatewayHelper {
     }
     const raw = await fs.readFile(resolved.path, "utf-8");
     const structuredRedaction = isStructuredConfigPath(resolved.path)
-      ? redactStructuredSecrets(raw)
+      ? redactStructuredSecrets(resolved.path, raw)
       : undefined;
     const visibleRaw = structuredRedaction?.content ?? raw;
     const offset = Math.max(

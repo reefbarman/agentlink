@@ -5,14 +5,24 @@ import {
   redactStructuredSecrets,
 } from "./structuredSecretRedaction.js";
 
+import { parse as parseToml } from "@iarna/toml";
+
 describe("structured secret redaction", () => {
-  it("gates only JSON/JSONC paths with config semantics", () => {
+  it("gates eligible JSON/JSONC and local TOML configuration paths", () => {
     for (const filePath of [
       "/workspace/.vscode/settings.json",
       "/workspace/.agentlink/mcp.json",
       "/workspace/.claude/settings.jsonc",
       "/workspace/app.config.json",
       "/workspace/cline_mcp_settings.json",
+      "/workspace/mise.toml",
+      "/workspace/mise.local.toml",
+      "/workspace/mise.development.local.toml",
+      "/workspace/.config/mise/config.toml",
+      "/workspace/.mise/config.toml",
+      "/workspace/mise/config.toml",
+      "/workspace/mise.production.toml",
+      "/workspace/.mise.development.local.toml",
     ]) {
       expect(isStructuredConfigPath(filePath), filePath).toBe(true);
     }
@@ -21,6 +31,9 @@ describe("structured secret redaction", () => {
       "/workspace/tsconfig.json",
       "/workspace/fixtures/data.json",
       "/workspace/src/settings.ts",
+      "/workspace/Cargo.toml",
+      "/workspace/pyproject.toml",
+      "/workspace/config.toml",
     ]) {
       expect(isStructuredConfigPath(filePath), filePath).toBe(false);
     }
@@ -76,7 +89,7 @@ describe("structured secret redaction", () => {
   ],
 }`;
 
-    const result = redactStructuredSecrets(input);
+    const result = redactStructuredSecrets("/workspace/settings.jsonc", input);
 
     expect(result.redactionCount).toBe(4);
     expect(result.redactedKeys).toEqual([
@@ -108,7 +121,7 @@ describe("structured secret redaction", () => {
   "safe": true
 }`;
 
-    const result = redactStructuredSecrets(input);
+    const result = redactStructuredSecrets("/workspace/settings.jsonc", input);
 
     expect(result.redactionCount).toBe(2);
     expect(result.content).toContain('"safe": true');
@@ -130,7 +143,7 @@ describe("structured secret redaction", () => {
       )
       .replace('"apiKey"', '"api\\u004bey"');
 
-    const result = redactStructuredSecrets(input);
+    const result = redactStructuredSecrets("/workspace/settings.jsonc", input);
 
     expect(result.status).toBeUndefined();
     expect(result.redactionCount).toBe(3);
@@ -146,7 +159,7 @@ describe("structured secret redaction", () => {
   it("preserves CRLF, LF, and bare CR sequences in redacted spans", () => {
     const input =
       '{\r\n  "tokens": [\r    "first",\n    "second"\r\n  ],\r\n  "safe": true\r\n}';
-    const result = redactStructuredSecrets(input);
+    const result = redactStructuredSecrets("/workspace/settings.jsonc", input);
 
     expect(result.content.match(/\r\n|\r|\n/g)).toEqual(
       input.match(/\r\n|\r|\n/g),
@@ -163,11 +176,121 @@ describe("structured secret redaction", () => {
       publicKey: "public material",
     });
 
-    expect(redactStructuredSecrets(input)).toEqual({
+    expect(redactStructuredSecrets("/workspace/settings.jsonc", input)).toEqual(
+      {
+        content: input,
+        redactionCount: 0,
+        redactedKeys: [],
+      },
+    );
+  });
+
+  it("redacts eligible mise TOML secrets while preserving valid TOML and line count", () => {
+    const input = [
+      "# Local development credentials",
+      "[env]",
+      'GITHUB_TOKEN = "github-secret"',
+      'NPM_TOKEN = "npm-secret"',
+      'ANTHROPIC_API_KEY = "anthropic-secret"',
+      'AWS_SECRET_ACCESS_KEY = "aws-secret"',
+      'SAFE_VALUE = "visible"',
+      'MULTILINE_TOKEN = """first secret',
+      'second secret"""',
+      'inline = { safe = "visible", token = "inline-secret" }',
+      "",
+    ].join("\n");
+
+    const result = redactStructuredSecrets("/workspace/mise.local.toml", input);
+
+    expect(result.status).toBeUndefined();
+    expect(result.redactionCount).toBe(6);
+    expect(result.redactedKeys).toEqual([
+      "ANTHROPIC_API_KEY",
+      "AWS_SECRET_ACCESS_KEY",
+      "GITHUB_TOKEN",
+      "MULTILINE_TOKEN",
+      "NPM_TOKEN",
+      "token",
+    ]);
+    for (const secret of [
+      "github-secret",
+      "npm-secret",
+      "anthropic-secret",
+      "aws-secret",
+      "first secret",
+      "second secret",
+      "inline-secret",
+    ]) {
+      expect(result.content).not.toContain(secret);
+    }
+    expect(result.content).toContain('SAFE_VALUE = "visible"');
+    expect(result.content).toContain('safe = "visible"');
+    expect(result.content.match(/\r\n|\r|\n/g)).toEqual(
+      input.match(/\r\n|\r|\n/g),
+    );
+    expect(() => parseToml(result.content)).not.toThrow();
+  });
+
+  it("redacts TOML table and dotted-key ancestors while handling comments and CRLF", () => {
+    const input = [
+      "[secrets] # don't skip the following secret",
+      'value = "nested-secret"',
+      "[env] # it's safe to keep comments",
+      'GITHUB_TOKEN = "github-secret"',
+      'credentials.token = "dotted-secret"',
+      "MAX_TOKENS = 4096",
+      'inline = { num_tokens = 128, token = "inline-secret" }',
+      "",
+    ].join("\r\n");
+
+    const result = redactStructuredSecrets("/workspace/mise.local.toml", input);
+
+    expect(result.status).toBeUndefined();
+    expect(result.redactionCount).toBe(4);
+    for (const secret of [
+      "nested-secret",
+      "github-secret",
+      "dotted-secret",
+      "inline-secret",
+    ]) {
+      expect(result.content).not.toContain(secret);
+    }
+    expect(result.content).toContain("MAX_TOKENS = 4096");
+    expect(result.content).toContain("num_tokens = 128");
+    expect(result.content.match(/\r\n|\r|\n/g)).toEqual(
+      input.match(/\r\n|\r|\n/g),
+    );
+    expect(() =>
+      parseToml(result.content.replace(/\r\n?|\n/g, "\n")),
+    ).not.toThrow();
+  });
+
+  it("does not process ineligible TOML", () => {
+    const input = 'GITHUB_TOKEN = "not-a-config-secret"\n';
+
+    expect(redactStructuredSecrets("/workspace/Cargo.toml", input)).toEqual({
       content: input,
       redactionCount: 0,
       redactedKeys: [],
     });
+  });
+
+  it("withholds malformed eligible TOML without returning raw content", () => {
+    const input = '[env]\nGITHUB_TOKEN = "toml-secret"\nbroken = [\n';
+
+    const result = redactStructuredSecrets("/workspace/mise.local.toml", input);
+
+    expect(result).toMatchObject({
+      redactionCount: 0,
+      redactedKeys: [],
+      status: "withheld_invalid_toml",
+    });
+    expect(result.content).toContain("CONTENT WITHHELD");
+    expect(result.content).not.toContain("toml-secret");
+    expect(() => parseToml(result.content)).not.toThrow();
+    expect(result.content.match(/\r\n|\r|\n/g)).toEqual(
+      input.match(/\r\n|\r|\n/g),
+    );
   });
 
   it("withholds malformed eligible JSONC while preserving line count", () => {
@@ -177,7 +300,10 @@ describe("structured secret redaction", () => {
       '{\n  "apiKey": "hidden\n}',
       '{\n  "apiKey": "hidden"\n} trailing',
     ]) {
-      const result = redactStructuredSecrets(input);
+      const result = redactStructuredSecrets(
+        "/workspace/settings.jsonc",
+        input,
+      );
 
       expect(result).toMatchObject({
         redactionCount: 0,

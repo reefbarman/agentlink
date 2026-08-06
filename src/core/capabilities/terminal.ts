@@ -231,6 +231,7 @@ export interface TerminalCommandResult {
     | { by: "recent_approval" }
     | { by: "coordinator" }
     | { by: "sandbox_verification" }
+    | { by: "routine_tier"; tier: "safe" | "sensitive" | "dangerous" }
     | {
         by: "tier";
         tier: "safe" | "sensitive" | "dangerous";

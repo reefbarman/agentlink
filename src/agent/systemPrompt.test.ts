@@ -318,10 +318,13 @@ describe("buildSystemPrompt", () => {
     const result = await buildSystemPrompt("code", tmpDir);
     expect(result).toContain("Code mode");
     expect(result).toContain(
-      "For any non-trivial implementation, spawn one primary background review agent",
+      "Spawn one primary background review agent only for a substantial body of work",
     );
     expect(result).toContain(
-      "A review is a checkpoint for a body of work, not a step to repeat after every edit",
+      "passing tests plus your own self-review are the completion bar",
+    );
+    expect(result).toContain(
+      "A review is a checkpoint for a completed body of work, not a step to repeat after every edit",
     );
     expect(result).toContain("actively self-review the same change set");
     expect(result).toContain(
@@ -332,21 +335,21 @@ describe("buildSystemPrompt", () => {
     );
   });
 
-  it("defaults to early background delegation for parallelizable work", async () => {
+  it("defaults to direct foreground work with delegation as the exception", async () => {
     const result = await buildSystemPrompt("code", tmpDir);
     expect(result).toContain(
-      "Treat useful parallelism as the default for non-trivial tasks, not as a last resort",
+      "Default to doing the work directly in the foreground",
     );
     expect(result).toContain(
-      "before substantial investigation or implementation, identify independent work lanes",
-    );
-    expect(result).toContain("default to spawning a background agent early");
-    expect(result).toContain(
-      "spawn background agents before or during implementation rather than handling every lane sequentially",
+      "Before spawning any agent, make one direct attempt first",
     );
     expect(result).toContain(
-      "Avoid background agents when the task is strictly sequential",
+      "Do NOT delegate when: you already know which files to read or edit",
     );
+    expect(result).toContain(
+      "Most code tasks have no lanes worth delegating — handle them directly",
+    );
+    expect(result).toContain("each spawn must earn its overhead");
     expect(result).toContain(
       "After spawning, inventory safe independent work such as implementation, tests, documentation, self-review, or validation",
     );
@@ -400,9 +403,11 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("Review & Iteration");
     expect(result).toContain("switch_mode");
     expect(result).toContain(
-      "For any non-trivial plan, spawn one primary background review agent",
+      "Spawn one primary background review agent only for plans that are genuinely large or risky",
     );
-    expect(result).toContain('threshold should be "large or consequential"');
+    expect(result).toContain(
+      "your own critical self-review is the completion bar",
+    );
     expect(result).toContain("Do not re-review each revision");
     expect(result).toContain(
       "Do not automatically review the review-driven revisions",
