@@ -388,18 +388,143 @@ describe("handleGetTerminalOutput", () => {
     });
   });
 
-  it("interrupts the terminal when kill is requested", async () => {
+  it("returns early when a user message interrupts a terminal-output wait", async () => {
     vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
-      is_running: false,
-      state: "completed",
-      exit_code: 130,
-      output: "stopped",
+      is_running: true,
+      state: "running",
+      exit_code: null,
+      output: "still compiling",
       output_captured: true,
     });
+    const waitForPendingInterjection = vi.fn().mockResolvedValue(true);
 
     const result = await handleGetTerminalOutput(
-      { terminal_id: "term_42", kill: true },
-      { terminalProvider },
+      { terminal_id: "term_42", wait_seconds: 30 },
+      { terminalProvider, waitForPendingInterjection },
+    );
+
+    expect(waitForPendingInterjection).toHaveBeenCalledWith(250);
+    expect(terminalProvider.interruptTerminal).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      terminal_id: "term_42",
+      is_running: true,
+      output: "still compiling",
+      status: "wait_interrupted",
+      reason: "user_message_pending",
+      retrySafe: true,
+      message: expect.stringContaining("was not interrupted"),
+    });
+  });
+
+  it("reports completion when the terminal exits during an interrupted wait", async () => {
+    vi.mocked(terminalProvider.getBackgroundState)
+      .mockReturnValueOnce({
+        is_running: true,
+        state: "running",
+        exit_code: null,
+        output: "compiling",
+        output_captured: true,
+      })
+      .mockReturnValueOnce({
+        is_running: true,
+        state: "running",
+        exit_code: null,
+        output: "compiling",
+        output_captured: true,
+      })
+      .mockReturnValueOnce({
+        is_running: false,
+        state: "completed",
+        exit_code: 0,
+        output: "complete",
+        output_captured: true,
+      });
+
+    const result = await handleGetTerminalOutput(
+      { terminal_id: "term_42", wait_seconds: 30 },
+      {
+        terminalProvider,
+        waitForPendingInterjection: vi.fn().mockResolvedValue(true),
+      },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      is_running: false,
+      state: "completed",
+      exit_code: 0,
+      output: "complete",
+    });
+    expect(textPayload(result).status).toBeUndefined();
+  });
+
+  it("continues polling when no interjection is pending", async () => {
+    vi.mocked(terminalProvider.getBackgroundState)
+      .mockReturnValueOnce({
+        is_running: true,
+        state: "running",
+        exit_code: null,
+        output: "compiling",
+        output_captured: true,
+      })
+      .mockReturnValueOnce({
+        is_running: true,
+        state: "running",
+        exit_code: null,
+        output: "compiling",
+        output_captured: true,
+      })
+      .mockReturnValue({
+        is_running: false,
+        state: "completed",
+        exit_code: 0,
+        output: "complete",
+        output_captured: true,
+      });
+    const waitForPendingInterjection = vi.fn().mockResolvedValue(false);
+
+    const result = await handleGetTerminalOutput(
+      { terminal_id: "term_42", wait_seconds: 0.001 },
+      { terminalProvider, waitForPendingInterjection },
+    );
+
+    expect(waitForPendingInterjection).toHaveBeenCalledWith(expect.any(Number));
+    expect(textPayload(result)).toMatchObject({
+      is_running: false,
+      output: "complete",
+    });
+    expect(textPayload(result).status).toBeUndefined();
+  });
+
+  it("interrupts the terminal when kill is requested", async () => {
+    vi.mocked(terminalProvider.getBackgroundState)
+      .mockReturnValueOnce({
+        is_running: true,
+        state: "running",
+        exit_code: null,
+        output: "stopping",
+        output_captured: true,
+      })
+      .mockReturnValueOnce({
+        is_running: true,
+        state: "running",
+        exit_code: null,
+        output: "stopping",
+        output_captured: true,
+      })
+      .mockReturnValue({
+        is_running: false,
+        state: "completed",
+        exit_code: 130,
+        output: "stopped",
+        output_captured: true,
+      });
+
+    const result = await handleGetTerminalOutput(
+      { terminal_id: "term_42", wait_seconds: 30, kill: true },
+      {
+        terminalProvider,
+        waitForPendingInterjection: vi.fn().mockResolvedValue(true),
+      },
     );
 
     expect(terminalProvider.interruptTerminal).toHaveBeenCalledWith({
@@ -410,5 +535,6 @@ describe("handleGetTerminalOutput", () => {
       killed: true,
       output: "stopped",
     });
+    expect(textPayload(result).status).toBeUndefined();
   });
 });

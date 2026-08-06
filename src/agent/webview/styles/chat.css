@@ -4740,7 +4740,8 @@ body.chat-activity-shelf-resizing * {
 
 .composer-action-buttons {
   position: sticky;
-  bottom: 4px;
+  top: calc(50% - 14px);
+  bottom: calc(50% - 14px);
   float: right;
   display: inline-flex;
   gap: 4px;

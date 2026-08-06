@@ -1848,6 +1848,8 @@ export interface ToolDispatchContext {
   sessionId: string;
   /** Whether this request belongs to an in-process background session. */
   isBackgroundSession?: boolean;
+  /** Waits briefly for a user interjection without consuming it. */
+  waitForPendingInterjection?: (timeoutMs: number) => Promise<boolean>;
   /** Immutable project identity captured for this request's tool runtime. */
   projectScope?: Readonly<
     import("../core/workspaceProjects.js").SessionProjectScope
@@ -3735,6 +3737,7 @@ export async function dispatchToolCall(
     case "get_terminal_output":
       return handleGetTerminalOutput(params, {
         terminalProvider: ctx.terminalProvider,
+        waitForPendingInterjection: ctx.waitForPendingInterjection,
       });
     case "close_terminals":
       return handleCloseTerminals(params, {

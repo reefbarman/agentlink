@@ -1509,6 +1509,29 @@ export class AgentSession {
     return () => this._pendingInterjectionQueuedListeners.delete(listener);
   }
 
+  /** Wait briefly for a queued user message without consuming it. */
+  waitForPendingInterjection(timeoutMs: number): Promise<boolean> {
+    if (this.hasPendingInterjections) return Promise.resolve(true);
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let unsubscribe = () => {};
+      const settle = (pending: boolean) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        unsubscribe();
+        resolve(pending);
+      };
+      unsubscribe = this.onPendingInterjectionQueued(() => settle(true));
+      timer = setTimeout(() => settle(false), timeoutMs);
+
+      // Close the race between the initial check and listener registration.
+      if (this.hasPendingInterjections) settle(true);
+    });
+  }
+
   updatePendingInterjection(
     queueId: string,
     updates: {

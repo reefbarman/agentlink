@@ -82,6 +82,9 @@ const mocks = vi.hoisted(() => {
           interjectionListeners.add(listener);
           return () => interjectionListeners.delete(listener);
         }),
+        waitForPendingInterjection: vi.fn(
+          async () => pendingInterjectionCount > 0,
+        ),
         restoreFromStore: vi.fn((data: any) => {
           mockSession.id = data.id;
           mockSession.title = data.title;
@@ -806,6 +809,23 @@ describe("AgentSessionManager background agents", () => {
       (status) => status.done,
     );
     expect(mgr.getBackgroundStatus(parent.sessionId).done).toBe(true);
+  });
+
+  it("forwards session interjection waits through the captured tool context", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    const context = (
+      mgr as unknown as {
+        captureSessionToolContext: (
+          session: unknown,
+        ) => ToolDispatchContext | undefined;
+      }
+    ).captureSessionToolContext(foreground);
+
+    await context?.waitForPendingInterjection?.(250);
+
+    expect(foreground.waitForPendingInterjection).toHaveBeenCalledWith(250);
   });
 
   it("returns wait_interrupted when a user message arrives while blocked on get_background_result", async () => {

@@ -1605,6 +1605,8 @@ export class AgentSessionManager {
         sessionId: session.id,
         mode: session.mode,
         isBackgroundSession: session.background,
+        waitForPendingInterjection: (timeoutMs: number) =>
+          session.waitForPendingInterjection(timeoutMs),
         projectScope: session.projectScope,
         projectRoot,
         workspaceProjectRoots: this.projectCatalog

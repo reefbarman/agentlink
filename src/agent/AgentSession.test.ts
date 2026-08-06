@@ -1739,6 +1739,25 @@ describe("AgentSession", () => {
       session.setPendingInterjection("second", "q2");
       expect(seen).toEqual([1, 2]);
     });
+
+    it("waits for an interjection without consuming it", async () => {
+      const session = await makeSession();
+      const waiting = session.waitForPendingInterjection(1_000);
+
+      session.setPendingInterjection("handle this first", "q1");
+
+      await expect(waiting).resolves.toBe(true);
+      expect(session.consumePendingInterjection()?.text).toBe(
+        "handle this first",
+      );
+    });
+
+    it("times out when no interjection arrives", async () => {
+      const session = await makeSession();
+
+      await expect(session.waitForPendingInterjection(1)).resolves.toBe(false);
+      expect(session.hasPendingInterjections).toBe(false);
+    });
   });
 
   describe("queued UI messages", () => {

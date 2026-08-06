@@ -4120,7 +4120,10 @@ describe("dispatchToolCall", () => {
     );
     expect(handleGetTerminalOutput).toHaveBeenLastCalledWith(
       { terminal_id: "missing" },
-      { terminalProvider: undefined },
+      {
+        terminalProvider: undefined,
+        waitForPendingInterjection: undefined,
+      },
     );
     expect(handleCloseTerminals).toHaveBeenLastCalledWith(
       {},
@@ -4128,17 +4131,21 @@ describe("dispatchToolCall", () => {
     );
   });
 
-  it("dispatches get_terminal_output with a terminal provider", async () => {
+  it("dispatches get_terminal_output with terminal and interjection providers", async () => {
     const { handleGetTerminalOutput } =
       await import("../tools/getTerminalOutput.js");
+    const waitForPendingInterjection = vi.fn();
     await dispatchToolCall(
       "get_terminal_output",
       { terminal_id: "t1" },
-      mockCtx,
+      { ...mockCtx, waitForPendingInterjection },
     );
     expect(handleGetTerminalOutput).toHaveBeenCalledWith(
       { terminal_id: "t1" },
-      { terminalProvider: mockCtx.terminalProvider },
+      {
+        terminalProvider: mockCtx.terminalProvider,
+        waitForPendingInterjection,
+      },
     );
   });
 

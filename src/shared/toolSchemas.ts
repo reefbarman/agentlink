@@ -1060,7 +1060,7 @@ export const getTerminalOutputSchema = {
     .number()
     .optional()
     .describe(
-      "Wait up to N seconds for new output to appear before returning. Useful when a background command was just started and you want to avoid a double-call. Polls every 250ms and returns early when new output arrives or the command finishes.",
+      "Wait up to N seconds before returning. Useful when a background command was just started and you want to avoid a double-call. Polls every 250ms and returns early when the command finishes or a user message interrupts the wait. The terminal command keeps running when interrupted unless kill is true.",
     ),
   kill: z
     .boolean()

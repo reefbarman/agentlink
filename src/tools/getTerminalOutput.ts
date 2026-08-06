@@ -12,6 +12,8 @@ function formatBytes(bytes: number): string {
 
 export interface GetTerminalOutputProviders {
   terminalProvider?: TerminalProvider;
+  /** Resolves when a user message arrives while the tool is polling. */
+  waitForPendingInterjection?: (timeoutMs: number) => Promise<boolean>;
 }
 
 function unavailableTerminalOutputResult(params: {
@@ -50,15 +52,16 @@ export async function handleGetTerminalOutput(
   const terminalProvider = providers.terminalProvider;
   const log = terminalProvider.log;
   const startTime = Date.now();
+  let waitInterrupted = false;
 
   log?.(
     `[get_terminal_output] ENTER terminal_id=${params.terminal_id} wait_seconds=${params.wait_seconds ?? "none"}`,
   );
 
-  // If wait_seconds is specified, poll until the command finishes or the wait
-  // time expires.  We intentionally do NOT break on "new output" — for
-  // continuously-producing commands that would exit after ~250ms, making
-  // wait_seconds effectively useless.
+  // If wait_seconds is specified, poll until the command finishes, a user
+  // message arrives, or the wait time expires. We intentionally do NOT break
+  // on new output — for continuously-producing commands that would exit after
+  // ~250ms, making wait_seconds effectively useless.
   if (params.wait_seconds && params.wait_seconds > 0) {
     const deadline = Date.now() + params.wait_seconds * 1000;
     const initialState = terminalProvider.getBackgroundState({
@@ -80,10 +83,23 @@ export async function handleGetTerminalOutput(
       // Stop waiting only when the command has finished
       if (!current.is_running) break;
 
-      await sleep(Math.min(250, deadline - Date.now()));
+      const pollDelay = Math.min(250, deadline - Date.now());
+      const waitStartedAt = Date.now();
+      const pendingInterjection = providers.waitForPendingInterjection
+        ? await providers.waitForPendingInterjection(pollDelay)
+        : false;
+      if (!pendingInterjection) {
+        await sleep(Math.max(0, pollDelay - (Date.now() - waitStartedAt)));
+      }
+      if (pendingInterjection) {
+        waitInterrupted = true;
+        break;
+      }
     }
 
-    log?.(`[get_terminal_output] POLL_END elapsed=${Date.now() - startTime}ms`);
+    log?.(
+      `[get_terminal_output] POLL_END elapsed=${Date.now() - startTime}ms interrupted=${waitInterrupted}`,
+    );
   }
 
   // Kill the running process if requested
@@ -180,6 +196,15 @@ export async function handleGetTerminalOutput(
       ? { interactive_prompt: { ...state.interactive_prompt } }
       : {}),
     ...(params.kill && { killed: true }),
+    ...(waitInterrupted &&
+      state.is_running &&
+      !params.kill && {
+        status: "wait_interrupted",
+        reason: "user_message_pending",
+        retrySafe: true,
+        message:
+          "Waiting stopped because a user message is pending for your session. The terminal command was not interrupted and may still be running. Handle the user's message first, then call get_terminal_output again when ready to wait.",
+      }),
   };
 
   if (state.is_running && state.output_captured) {

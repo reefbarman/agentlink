@@ -567,16 +567,16 @@
     {
       "mode": "code",
       "toolCount": 63,
-      "chars": 80224,
-      "estimatedTokens": 20056,
-      "sha256": "78bcd1fd1cb5399e872437879dd0809159f0e9247379f84c26de56599e132129"
+      "chars": 80288,
+      "estimatedTokens": 20072,
+      "sha256": "ef2cb4ee688f8cca540f1545f658643f893f3d2b8b4f6c2413d32de459b0a3f5"
     },
     {
       "mode": "architect",
       "toolCount": 58,
-      "chars": 74021,
-      "estimatedTokens": 18506,
-      "sha256": "25b0c13c7d241e7eaad9d589cd81bcae4fd1319c5e6a156f155e064fa3d1da98"
+      "chars": 74085,
+      "estimatedTokens": 18522,
+      "sha256": "d5b247f0543d5d1550532f77cf44b8778a53cc154396ad767f2f76ce677fd88b"
     },
     {
       "mode": "ask",
@@ -588,9 +588,9 @@
     {
       "mode": "debug",
       "toolCount": 57,
-      "chars": 71769,
-      "estimatedTokens": 17943,
-      "sha256": "4cfe9f651da0c7b3ad0d1144e94d142e7bf46a62c796cb65b5b1d20c8c47bbbd"
+      "chars": 71833,
+      "estimatedTokens": 17959,
+      "sha256": "09ee6bc442fa6617a35bb918b2c5fbfe75ff253e13a0cb7c8b6fdf3520573aae"
     },
     {
       "mode": "review",
@@ -605,17 +605,17 @@
       "mode": "code",
       "toolCount": 35,
       "deferredToolCount": 28,
-      "chars": 53104,
-      "estimatedTokens": 13276,
-      "sha256": "d39eefc467ed4abd7d41300b609cade0998f1ab540359f5b425a0014f14c1d07"
+      "chars": 53168,
+      "estimatedTokens": 13292,
+      "sha256": "e0d31e5075a408d28dc94cafc1a2270c167e44c75a13ca26b287d76b57edca4e"
     },
     {
       "mode": "architect",
       "toolCount": 34,
       "deferredToolCount": 24,
-      "chars": 51902,
-      "estimatedTokens": 12976,
-      "sha256": "8ba158882f0036f08bb81e3dcfa44b9e30771636bdb72f9a005576bf1e47bd7b"
+      "chars": 51966,
+      "estimatedTokens": 12992,
+      "sha256": "a96252999917a442b138665e5d2b5b63050036cbbe5585bef891e1b1cb5b48e1"
     },
     {
       "mode": "ask",
@@ -629,9 +629,9 @@
       "mode": "debug",
       "toolCount": 32,
       "deferredToolCount": 25,
-      "chars": 49109,
-      "estimatedTokens": 12278,
-      "sha256": "a1a67e8cc6a328805456d520164b70b3c43f252a6e04ab8a935139748b6fcc69"
+      "chars": 49173,
+      "estimatedTokens": 12294,
+      "sha256": "c2ef3d67974b52f05ccde3afddf30b1564a123512498de9cf1c0f60b955f08db"
     },
     {
       "mode": "review",
