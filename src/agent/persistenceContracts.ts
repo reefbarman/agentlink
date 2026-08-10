@@ -14,6 +14,7 @@ import type { BackgroundResultState } from "../core/capabilities/background.js";
 import type { Checkpoint } from "./CheckpointManager.js";
 import type { CoreModelToolResultBlock } from "../core/modelRuntime.js";
 import type { FleetResultEnvelope } from "./FleetWorkflows.js";
+import type { PersistedSessionLineage } from "./sessionHandoff.js";
 import type { Question } from "./webview/types.js";
 import type { ReasoningEffort } from "./providers/types.js";
 import type { SessionProjectScope } from "../core/workspaceProjects.js";
@@ -272,6 +273,8 @@ export interface PersistedSessionMetadata {
   revertPending?: RevertRecoveryState;
   runState?: PersistedSessionRunState;
   fleet?: PersistedFleetMetadata;
+  /** Optional forward-compatible fresh-session handoff relationship. */
+  lineage?: PersistedSessionLineage;
 }
 
 export interface PersistedSessionRecord {

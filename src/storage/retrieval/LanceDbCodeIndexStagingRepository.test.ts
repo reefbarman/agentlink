@@ -99,6 +99,79 @@ describe("LanceDbCodeIndexStagingRepository", () => {
     await fs.rm(directory, { recursive: true, force: true });
   });
 
+  it("stages a complete publication atomically and replays idempotently", async () => {
+    const manifest = createManifest();
+    const bundle = {
+      manifest,
+      chunkBatches: [
+        {
+          publicationId: manifest.publicationId,
+          batchIndex: 0,
+          expectedIdDigest: manifest.expectedChunkDigest,
+          expectedContentDigest: createRetrievalRecordContentDigest(chunks),
+          chunks,
+        },
+      ],
+      relationBatches: [
+        {
+          publicationId: manifest.publicationId,
+          batchIndex: 0,
+          expectedIdDigest: manifest.expectedRelationDigest,
+          expectedContentDigest: createRetrievalRecordContentDigest(relations),
+          relations,
+        },
+      ],
+    };
+
+    await repository.stagePublication(bundle);
+    await expect(
+      repository.inspectStagedPublication(manifest.publicationId),
+    ).resolves.toMatchObject({ state: "staged" });
+
+    // Replaying the same bundle after completion is a no-op, not an error.
+    await repository.stagePublication(bundle);
+    await expect(
+      repository.inspectStagedPublication(manifest.publicationId),
+    ).resolves.toMatchObject({ state: "staged" });
+
+    const connection = await connect(storeRoot, { readConsistencyInterval: 0 });
+    const chunkTable = await connection.openTable(
+      STAGED_RETRIEVAL_TABLES.chunks,
+    );
+    const relationTable = await connection.openTable(
+      STAGED_RETRIEVAL_TABLES.relations,
+    );
+    const batchTable = await connection.openTable(
+      STAGED_RETRIEVAL_TABLES.batches,
+    );
+    expect(await chunkTable.countRows()).toBe(chunks.length);
+    expect(await relationTable.countRows()).toBe(relations.length);
+    expect(await batchTable.countRows()).toBe(2);
+    chunkTable.close();
+    relationTable.close();
+    batchTable.close();
+    connection.close();
+  });
+
+  it("rejects an atomic publication with tampered batch digests", async () => {
+    const manifest = createManifest({ expectedRelationCount: 0 });
+    await expect(
+      repository.stagePublication({
+        manifest,
+        chunkBatches: [
+          {
+            publicationId: manifest.publicationId,
+            batchIndex: 0,
+            expectedIdDigest: manifest.expectedChunkDigest,
+            expectedContentDigest: "tampered",
+            chunks,
+          },
+        ],
+        relationBatches: [],
+      }),
+    ).rejects.toThrow("Staged chunk batch digest mismatch");
+  });
+
   it("begins a compact inspectable publication and rejects duplicates", async () => {
     const manifest = createManifest();
 

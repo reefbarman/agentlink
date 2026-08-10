@@ -165,6 +165,41 @@ describe("LanceDbCodeIndexActivator", () => {
     connection.close();
   });
 
+  it("defers superseded cleanup to a combined batch pass when requested", async () => {
+    await seedOldGeneration();
+    await stageCompletePublication();
+
+    await expect(
+      activator.activate("publication:2", {
+        freshGeneration: true,
+        deferSupersededCleanup: true,
+      }),
+    ).resolves.toMatchObject({ status: "activated" });
+
+    const connection = await connect(storeRoot, { readConsistencyInterval: 0 });
+    const activeChunks = await connection.openTable(RETRIEVAL_TABLES.chunks);
+    // The superseded generation:1 row survives activation…
+    expect(await activeChunks.countRows("generation = 'generation:1'")).toBe(1);
+    activeChunks.close();
+    connection.close();
+
+    // …until the batched cleanup removes it in one combined pass.
+    await activator.cleanupSupersededGenerations([
+      { sourceId: source.id, generation: "generation:2" },
+    ]);
+    const verify = await connect(storeRoot, { readConsistencyInterval: 0 });
+    const verifyChunks = await verify.openTable(RETRIEVAL_TABLES.chunks);
+    const verifyRelations = await verify.openTable(RETRIEVAL_TABLES.relations);
+    expect(await verifyChunks.countRows("generation = 'generation:1'")).toBe(0);
+    expect(await verifyRelations.countRows("generation = 'generation:1'")).toBe(
+      0,
+    );
+    expect(await verifyChunks.countRows("generation = 'generation:2'")).toBe(1);
+    verifyChunks.close();
+    verifyRelations.close();
+    verify.close();
+  });
+
   it("removes stale generations on replay after a crash between pointer flip and delete", async () => {
     await seedOldGeneration();
     await stageCompletePublication();
@@ -261,15 +296,34 @@ describe("LanceDbCodeIndexActivator", () => {
     );
   });
 
-  it("revalidates staged content immediately before activation", async () => {
-    await stageCompletePublication();
+  // Staged rows are verified once, when the manifest transitions to "staged";
+  // activation trusts that receipt (rows are immutable under the writer fence)
+  // instead of re-reading every row. An activation that still has to complete
+  // the publication runs the full verification through the fallback path.
+  it("verifies staged content when activating an incomplete publication", async () => {
+    const manifest = createManifest();
+    await staging.beginStagedPublication(manifest);
+    await staging.appendStagedChunkBatch({
+      publicationId: manifest.publicationId,
+      batchIndex: 0,
+      expectedIdDigest: manifest.expectedChunkDigest,
+      expectedContentDigest: createRetrievalRecordContentDigest(chunks),
+      chunks,
+    });
+    await staging.appendStagedRelationBatch({
+      publicationId: manifest.publicationId,
+      batchIndex: 0,
+      expectedIdDigest: manifest.expectedRelationDigest,
+      expectedContentDigest: createRetrievalRecordContentDigest(relations),
+      relations,
+    });
     const connection = await connect(storeRoot, { readConsistencyInterval: 0 });
     const stagedChunks = await connection.openTable(
       STAGED_RETRIEVAL_TABLES.chunks,
     );
     await stagedChunks.update({
       where: "publication_id = 'publication:2' AND chunk_id = 'chunk:2'",
-      values: { search_text: "tampered after completion" },
+      values: { search_text: "tampered before completion" },
     });
     stagedChunks.close();
     connection.close();

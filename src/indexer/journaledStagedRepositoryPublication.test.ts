@@ -34,7 +34,7 @@ describe("journaled staged repository publication", () => {
 
   afterEach(() => fs.rmSync(directory, { recursive: true, force: true }));
 
-  it("stages bounded batches and checkpoints each operation independently", async () => {
+  it("stages bounded batches and flushes the committed prefix when activation fails", async () => {
     const first = prepared("one", 205);
     const second = prepared("two", 1);
     const { port, events } = createPort();
@@ -71,6 +71,53 @@ describe("journaled staged repository publication", () => {
     expect(events).toContain("finalize-after-journal:publication:one");
   });
 
+  it("checkpoints the cache and rewrites the journal once per batch", async () => {
+    const first = prepared("one", 3);
+    const second = prepared("two", 2);
+    const { port, events } = createPort();
+    const { store, vectors, structurals } = createStore();
+    const batchWrites = { vectors: 0, structurals: 0 };
+    store.checkpointVectors = (entries) => {
+      batchWrites.vectors += 1;
+      for (const [file, entry] of entries) {
+        if (entry) vectors[file] = structuredClone(entry);
+        else delete vectors[file];
+      }
+    };
+    store.checkpointStructurals = (entries) => {
+      batchWrites.structurals += 1;
+      for (const [file, entry] of entries) {
+        if (entry) structurals[file] = structuredClone(entry);
+        else delete structurals[file];
+      }
+    };
+
+    await expect(
+      executeJournaledStagedRepositoryPublications({
+        journalPath,
+        publications: [first, second],
+        store,
+        port,
+        fenceToken: "7",
+        isCancelled: () => false,
+      }),
+    ).resolves.toMatchObject({
+      committedFiles: 2,
+      recordsUpserted: 5,
+      pending: false,
+      cancelled: false,
+    });
+
+    expect(batchWrites).toEqual({ vectors: 2, structurals: 1 });
+    expect(vectors[first.file]?.visibility).toBe("current");
+    expect(vectors[second.file]?.visibility).toBe("current");
+    expect(loadFileIndexJournal(journalPath)).toMatchObject({
+      journal: { operations: [] },
+    });
+    expect(events).toContain("finalize-after-journal:publication:one");
+    expect(events).toContain("finalize-after-journal:publication:two");
+  });
+
   it("recovers an activated receipt with matching pending cache", async () => {
     const item = prepared("one", 1);
     const { store, vectors, structurals } = createStore();
@@ -86,6 +133,7 @@ describe("journaled staged repository publication", () => {
     };
     writeFileIndexJournal(journalPath, journal(item));
     const { port } = createPort({ "publication:one": "activated" });
+    const progress: Array<[number, number]> = [];
 
     await expect(
       recoverJournaledStagedRepositoryPublications({
@@ -93,8 +141,13 @@ describe("journaled staged repository publication", () => {
         store,
         port,
         isCancelled: () => false,
+        onProgress: (completed, total) => progress.push([completed, total]),
       }),
     ).resolves.toMatchObject({ committedFiles: 1, pending: false });
+    expect(progress).toEqual([
+      [0, 1],
+      [1, 1],
+    ]);
     expect(vectors[item.file]?.visibility).toBe("current");
     expect(loadFileIndexJournal(journalPath)).toMatchObject({
       journal: { operations: [] },
@@ -187,18 +240,15 @@ describe("journaled staged repository publication", () => {
         const state = states.get(id);
         return state ? inspection(id, state) : null;
       },
-      async beginStagedPublication(manifest) {
-        states.set(manifest.publicationId, "staging");
-        events.push(`begin:${manifest.publicationId}`);
-      },
-      async appendStagedChunkBatch(batch) {
-        events.push(
-          `chunks:${batch.publicationId}:${batch.batchIndex}:${batch.chunks.length}`,
-        );
-      },
-      async appendStagedRelationBatch() {},
-      async completeStagedPublication(id) {
-        states.set(id, "staged");
+      async stagePublication(bundle) {
+        states.set(bundle.manifest.publicationId, "staging");
+        events.push(`begin:${bundle.manifest.publicationId}`);
+        for (const batch of bundle.chunkBatches) {
+          events.push(
+            `chunks:${batch.publicationId}:${batch.batchIndex}:${batch.chunks.length}`,
+          );
+        }
+        states.set(bundle.manifest.publicationId, "staged");
       },
       async adoptStagedPublication(id) {
         events.push(`adopt:${id}`);
@@ -211,19 +261,26 @@ describe("journaled staged repository publication", () => {
         states.set(id, "activated");
         events.push(`activate:${id}`);
       },
-      async finalizeActivation(id) {
-        const journal = loadFileIndexJournal(journalPath);
-        const operationStillPresent =
-          journal.status === "valid" &&
-          journal.journal.operations.some(
-            (operation) => operation.operationId === id,
-          );
+      async cleanupSupersededGenerations(entries) {
         events.push(
-          operationStillPresent
-            ? `finalize-before-journal:${id}`
-            : `finalize-after-journal:${id}`,
+          `cleanup-superseded:${entries.map((entry) => entry.sourceId).join(",")}`,
         );
-        states.delete(id);
+      },
+      async finalizeActivations(ids) {
+        const journal = loadFileIndexJournal(journalPath);
+        for (const id of ids) {
+          const operationStillPresent =
+            journal.status === "valid" &&
+            journal.journal.operations.some(
+              (operation) => operation.operationId === id,
+            );
+          events.push(
+            operationStillPresent
+              ? `finalize-before-journal:${id}`
+              : `finalize-after-journal:${id}`,
+          );
+          states.delete(id);
+        }
       },
     };
     return { port, events };

@@ -283,6 +283,32 @@ describe("ChatView message windowing", () => {
     expect(transcript.scrollTop).toBe(600);
   });
 
+  it("renders supplied setup content for an empty foreground chat", () => {
+    render(
+      h(ChatView, {
+        messages: [],
+        streaming: false,
+        sessionId: null,
+        emptyState: <div>Set up AgentLink</div>,
+      }),
+    );
+
+    expect(screen.getByText("Set up AgentLink")).toBeTruthy();
+    expect(screen.queryByText("Ask anything to get started")).toBeNull();
+  });
+
+  it("keeps the generic empty state for transcript callers", () => {
+    render(
+      h(ChatView, {
+        messages: [],
+        streaming: false,
+        sessionId: null,
+      }),
+    );
+
+    expect(screen.getByText("Ask anything to get started")).toBeTruthy();
+  });
+
   it("observes transcript growth when an initially empty chat receives messages", () => {
     const { rerender } = render(
       h(ChatView, {

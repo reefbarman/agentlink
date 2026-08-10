@@ -1,7 +1,10 @@
 import * as fs from "fs";
 import * as path from "path";
 
-import type { WorkspaceHistoryShape } from "./workspaceHistoryMigration.js";
+import {
+  hasCompatibleWorkspaceFileUri,
+  type WorkspaceHistoryShape,
+} from "./workspaceHistoryMigration.js";
 
 const CATALOG_VERSION = 1;
 const CATALOG_FILE = "workspace-history-catalog.json";
@@ -50,7 +53,7 @@ export class WorkspaceContinuityCatalog {
     return this.list().filter(
       (entry) =>
         entry.workspaceIdentity !== destination.workspaceIdentity &&
-        entry.workspaceFileUri === destination.workspaceFileUri &&
+        hasCompatibleWorkspaceFileUri(entry, destination) &&
         isStrictSubset(
           entry.workspaceFolderUris,
           destination.workspaceFolderUris,

@@ -875,7 +875,9 @@ describe("indexer worker fixture", () => {
     async () => {
       const firstFixture = await createFixture();
       const workspace = createWorkspace();
-      const files = Array.from({ length: 15 }, (_, index) =>
+      // Two publication batches (25 + 5 at FILE_BATCH_SIZE = 25) so the build
+      // can be interrupted after the first batch commits durably.
+      const files = Array.from({ length: 30 }, (_, index) =>
         writeSource(
           workspace.root,
           `src/resume-${index}.sql`,
@@ -888,7 +890,7 @@ describe("indexer worker fixture", () => {
         "progress",
         (message) =>
           message.phase === "upserting" &&
-          message.current === 5 &&
+          message.current === 25 &&
           message.total === files.length,
       );
       await stopChild(firstFixture.child);
@@ -896,7 +898,7 @@ describe("indexer worker fixture", () => {
       const durableFilesBeforeResume = Object.keys(
         requireCache(workspace).files,
       ).length;
-      expect(durableFilesBeforeResume).toBeGreaterThanOrEqual(5);
+      expect(durableFilesBeforeResume).toBeGreaterThanOrEqual(25);
       expect(durableFilesBeforeResume).toBeLessThan(files.length);
       const remainingFiles = files.length - durableFilesBeforeResume;
       const resumedFixture = await createFixture();
@@ -913,7 +915,7 @@ describe("indexer worker fixture", () => {
       expect(resumedProgress).toMatchObject({
         current: durableFilesBeforeResume,
         total: files.length,
-        detail: `${durableFilesBeforeResume} already current; ${remainingFiles} remaining in ${Math.ceil(remainingFiles / 5)} batches`,
+        detail: `${durableFilesBeforeResume} already current; ${remainingFiles} remaining in ${Math.ceil(remainingFiles / 25)} batches`,
       });
       expect(stats).toMatchObject({
         filesIndexed: remainingFiles,
@@ -949,13 +951,19 @@ describe("indexer worker fixture", () => {
         totalFilesInIndex: 51,
         errors: [],
       });
+      // 51 files at FILE_BATCH_SIZE = 25 → 3 publication batches; caches are
+      // checkpointed per batch (pending + current vector writes, one
+      // structural write) plus one metadata checkpoint.
+      const batchCount = Math.ceil(files.length / 25);
       expect(stats.metrics?.operations["retrieval.deleteIndex"]).toBe(1);
-      expect(stats.metrics?.operations["retrieval.upsertRecords"]).toBe(11);
+      expect(stats.metrics?.operations["retrieval.upsertRecords"]).toBe(
+        batchCount,
+      );
       expect(stats.metrics?.operations["cache.writeRetrieval"]).toBe(
-        2 * files.length + 1,
+        2 * batchCount + 1,
       );
       expect(stats.metrics?.operations["cache.writeStructural"]).toBe(
-        files.length + 1,
+        batchCount + 1,
       );
       expect(stats.metrics?.maxActiveReads).toBeLessThanOrEqual(10);
       expect(stats.metrics?.maxRetainedContentBytes).toBeGreaterThan(0);
@@ -991,7 +999,7 @@ describe("indexer worker fixture", () => {
         recordsUpserted: 1_500,
         errors: [],
       });
-      expect(stats.metrics?.operations["retrieval.upsertRecords"]).toBe(2);
+      expect(stats.metrics?.operations["retrieval.upsertRecords"]).toBe(1);
       expect(stats.metrics?.maxRetainedContentBytes).toBeGreaterThan(1_000_000);
       expect(stats.metrics?.maxHeapUsedBytes).toBeLessThan(512 * 1024 * 1024);
     },

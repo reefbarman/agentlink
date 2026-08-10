@@ -151,6 +151,8 @@ export interface FormatOnSaveReport {
   format_on_save: true;
   format_on_save_edits?: string;
   format_on_save_edits_omitted?: "size_cap";
+  /** The save completed, but formatting restored the original pre-edit content. */
+  format_on_save_reverted_proposal?: true;
   eol_changed?: boolean;
   hint?: string;
   warnings?: string[];
@@ -164,6 +166,7 @@ export interface DiffResult {
   format_on_save?: boolean;
   format_on_save_edits?: string;
   format_on_save_edits_omitted?: "size_cap";
+  format_on_save_reverted_proposal?: true;
   eol_changed?: boolean;
   hint?: string;
   new_diagnostics?: string;
@@ -351,6 +354,7 @@ export function createFormatOnSaveReport(
   relPath: string,
   expectedContent: string,
   finalContent: string,
+  originalContent?: string,
 ): FormatOnSaveReport | undefined {
   const expectedEol = detectEol(expectedContent);
   const finalEol = detectEol(finalContent);
@@ -366,9 +370,14 @@ export function createFormatOnSaveReport(
   }
 
   const report: FormatOnSaveReport = { format_on_save: true };
+  if (originalContent !== undefined && finalContent === originalContent) {
+    report.format_on_save_reverted_proposal = true;
+    report.hint =
+      "Format-on-save restored the pre-edit file content. The proposed edit is not durable; re-read the file before composing another diff.";
+  }
   if (isUnitySerializationPath(relPath)) {
     report.warnings = [
-      "Format-on-save changed a Unity serialization file. Re-read and inspect the full change because a generic YAML formatter can create non-Unity serialization churn.",
+      "Format-on-save changed a Unity serialization file. Re-read and inspect the full change because a generic YAML formatter can create invalid Unity serialization, not just formatting churn.",
     ];
   }
   if (eolChanged) {
@@ -389,8 +398,10 @@ export function createFormatOnSaveReport(
       report.format_on_save_edits = patch;
     } else {
       report.format_on_save_edits_omitted = "size_cap";
-      report.hint =
-        "Format-on-save changed the file substantially; re-read the file before composing further diffs.";
+      if (!report.format_on_save_reverted_proposal) {
+        report.hint =
+          "Format-on-save changed the file substantially; re-read the file before composing further diffs.";
+      }
     }
   }
 
@@ -809,6 +820,7 @@ export class DiffViewProvider {
       this.relPath,
       editedContent,
       finalContent,
+      this.originalContent,
     );
 
     const result: DiffResult = {

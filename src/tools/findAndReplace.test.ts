@@ -119,6 +119,89 @@ describe("handleFindAndReplace", () => {
     });
   });
 
+  it("uses VS Code's default ignore behavior for glob searches", async () => {
+    mockWorkspace.findFiles.mockResolvedValue([]);
+    const { handleFindAndReplace } = await import("./findAndReplace.js");
+
+    await handleFindAndReplace(
+      { glob: "**/*.meta", find: "old", replace: "new" },
+      { isPathTrusted: vi.fn(() => true) } as never,
+      {} as never,
+      "session-1",
+      {} as never,
+    );
+
+    expect(mockWorkspace.findFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ base: workspaceDir, pattern: "**/*.meta" }),
+      undefined,
+      500,
+    );
+  });
+
+  it("matches regex line anchors on every line", async () => {
+    const filePath = path.join(workspaceDir, "src", "example.meta");
+    mockWorkspace.openTextDocument.mockResolvedValue(
+      createDocument(filePath, "first  \nsecond\t\n"),
+    );
+    const provider: MultiFileEditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ status: "applied" }),
+          },
+        ],
+      })),
+    };
+    const { handleFindAndReplace } = await import("./findAndReplace.js");
+
+    await handleFindAndReplace(
+      { path: "src/example.meta", find: "[\\t ]+$", replace: "", regex: true },
+      { isPathTrusted: vi.fn(() => true) } as never,
+      {} as never,
+      "session-1",
+      {} as never,
+      undefined,
+      { multiFileEditReviewProvider: provider },
+    );
+
+    expect(provider.reviewAndApply).toHaveBeenCalledWith(
+      expect.objectContaining({ totalMatches: 2 }),
+    );
+  });
+
+  it("terminates after zero-width multiline anchor matches", async () => {
+    const filePath = path.join(workspaceDir, "src", "example.meta");
+    mockWorkspace.openTextDocument.mockResolvedValue(
+      createDocument(filePath, "first\nsecond\n"),
+    );
+    const provider: MultiFileEditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ status: "applied" }),
+          },
+        ],
+      })),
+    };
+    const { handleFindAndReplace } = await import("./findAndReplace.js");
+
+    await handleFindAndReplace(
+      { path: "src/example.meta", find: "^", replace: "", regex: true },
+      { isPathTrusted: vi.fn(() => true) } as never,
+      {} as never,
+      "session-1",
+      {} as never,
+      undefined,
+      { multiFileEditReviewProvider: provider },
+    );
+
+    expect(provider.reviewAndApply).toHaveBeenCalledWith(
+      expect.objectContaining({ totalMatches: 3 }),
+    );
+  });
+
   it("delegates computed matches and replacement offsets to the multi-file provider", async () => {
     const filePath = path.join(workspaceDir, "src", "example.ts");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });

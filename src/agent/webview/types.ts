@@ -206,6 +206,16 @@ export interface WorktreeSetupState {
 /** Messages from extension to webview */
 export type ExtensionMessage =
   | { type: "stateUpdate"; state: ChatState }
+  | {
+      type: "agentHandoffDraft";
+      draft: import("../sessionHandoff.js").SessionHandoffDraft;
+    }
+  | {
+      type: "agentHandoffResult";
+      ok: boolean;
+      successorSessionId?: string;
+      error?: string;
+    }
   | { type: "hostHeartbeat"; at: number }
   | { type: "chatWorkspaceUpdate"; snapshot: ChatWorkspaceViewSnapshot }
   | {
@@ -1062,6 +1072,12 @@ export interface ChatMessage {
   slashCommandLabel?: string;
   /** Set when the user message originated from a remote browser client */
   origin?: "vscode" | "browser";
+  /** Compact presentation metadata for a linked fresh-session handoff turn. */
+  handoff?: {
+    sourceSessionId: string;
+    sourceTitle: string;
+    handoffId: string;
+  };
   /** Display-only previews for pasted or dropped media attached to a user turn. */
   displayMedia?: {
     images: Array<{ name: string; mimeType: string; src: string }>;

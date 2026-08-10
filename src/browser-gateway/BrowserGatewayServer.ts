@@ -421,6 +421,24 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "POST",
+        rawExact("/api/session/handoff/prepare"),
+        ({ req, res }) => this.handleSessionHandoffPrepareAction(req, res),
+        json("session handoff preparation failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/session/handoff/confirm"),
+        ({ req, res }) => this.handleSessionHandoffConfirmAction(req, res),
+        json("session handoff confirmation failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/session/handoff/cancel"),
+        ({ req, res }) => this.handleSessionHandoffCancelAction(req, res),
+        json("session handoff cancellation failed"),
+      ),
+      route(
+        "POST",
         rawExact("/api/queue/steer"),
         ({ req, res }) => this.handleQueueSteerAction(req, res),
         json("queue steer action failed"),
@@ -1162,6 +1180,76 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ...(body.interject === true ? { interject: true } : {}),
     });
     this.writeJson(res, result.ok ? 200 : 400, result);
+  }
+
+  private async handleSessionHandoffPrepareAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const body = (await readJsonBody(req)) as { sessionId?: unknown } | null;
+    const sessionId =
+      typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
+    if (!sessionId) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const projectId = this.resolveRequestedProjectId(undefined, res);
+    if (!projectId || !this.validateSessionProject(sessionId, projectId, res)) {
+      return;
+    }
+    const result =
+      await this.chatViewProvider.prepareBrowserSessionHandoff(sessionId);
+    this.writeJson(res, result.ok ? 200 : 409, result);
+  }
+
+  private async handleSessionHandoffConfirmAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const body = (await readJsonBody(req)) as {
+      draftId?: unknown;
+      markdown?: unknown;
+    } | null;
+    const draftId =
+      typeof body?.draftId === "string" ? body.draftId.trim() : "";
+    const markdown =
+      typeof body?.markdown === "string" ? body.markdown.trim() : "";
+    if (!draftId || !markdown) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const result = await this.chatViewProvider.confirmBrowserSessionHandoff(
+      draftId,
+      markdown,
+    );
+    this.writeJson(res, result.ok ? 200 : 409, result);
+  }
+
+  private async handleSessionHandoffCancelAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const body = (await readJsonBody(req)) as { draftId?: unknown } | null;
+    const draftId =
+      typeof body?.draftId === "string" ? body.draftId.trim() : "";
+    if (!draftId) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    this.chatViewProvider.cancelBrowserSessionHandoff(draftId);
+    this.writeJson(res, 200, { ok: true });
   }
 
   private normalizeQueueMessageActionBody(

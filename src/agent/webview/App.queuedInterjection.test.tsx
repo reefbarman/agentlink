@@ -43,10 +43,25 @@ function createVsCodeApi() {
   };
 }
 
+function deliverAuthenticatedModels(): void {
+  deliver({
+    type: "agentModelsUpdate",
+    models: [
+      {
+        id: "claude-sonnet-4-6",
+        displayName: "Claude Sonnet",
+        provider: "anthropic",
+        authenticated: true,
+      },
+    ],
+  });
+}
+
 function setupInterjectedMessage(
   postMessage: ReturnType<typeof vi.fn>,
   container: Element,
 ): string {
+  deliverAuthenticatedModels();
   deliver({
     type: "stateUpdate",
     state: {

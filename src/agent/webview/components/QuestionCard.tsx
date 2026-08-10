@@ -70,6 +70,10 @@ function getModeDisplayName(slug: string, modes?: ModeInfo[]): string {
   return m ? m.name : slug;
 }
 
+function isRecommendedOption(question: Question, option: string): boolean {
+  return question.recommended?.trim() === option.trim();
+}
+
 function serializeProgress(progress: QuestionProgress): string {
   const orderedAnswers = Object.keys(progress.answers)
     .sort()
@@ -492,7 +496,7 @@ function QuestionInput({
             onClick={() => onConfirm(option)}
           >
             {option}
-            {question.recommended === option && (
+            {isRecommendedOption(question, option) && (
               <span class="question-recommended-badge">Recommended</span>
             )}
           </button>
@@ -514,7 +518,7 @@ function QuestionInput({
               onClick={() => onChange(sel ? undefined : val)}
             >
               {label}
-              {question.recommended === label && (
+              {isRecommendedOption(question, label) && (
                 <span class="question-recommended-badge">Recommended</span>
               )}
             </button>
@@ -536,14 +540,14 @@ function QuestionInput({
           {nums.map((n) => (
             <button
               key={n}
-              class={`question-option scale-option${value === n ? " selected" : ""}${question.recommended === String(n) ? " recommended" : ""}`}
+              class={`question-option scale-option${value === n ? " selected" : ""}${isRecommendedOption(question, String(n)) ? " recommended" : ""}`}
               onClick={() => onChange(value === n ? undefined : n)}
             >
               {n}
             </button>
           ))}
         </div>
-        {nums.some((n) => question.recommended === String(n)) && (
+        {nums.some((n) => isRecommendedOption(question, String(n))) && (
           <div class="scale-recommendation">
             <span class="question-recommended-badge">
               Recommended: {question.recommended}
@@ -603,7 +607,7 @@ function QuestionInput({
               />
             )}
             {opt}
-            {question.recommended === opt && (
+            {isRecommendedOption(question, opt) && (
               <span class="question-recommended-badge">Recommended</span>
             )}
             {targetMode && (

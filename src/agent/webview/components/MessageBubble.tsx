@@ -27,8 +27,8 @@ import { ThinkingContent } from "./ThinkingContent";
 import { ToolCallBlock } from "./ToolCallBlock";
 import { getFinalMessageContinueAction } from "../../../shared/finalStatus";
 import { getStreamingActivity } from "./activityPresentation";
-import { recordFileLinkClick } from "./fileLinkFeedback";
 import { normalizeProjectedToolName } from "../../../shared/chatProjection";
+import { recordFileLinkClick } from "./fileLinkFeedback";
 
 const TOOL_GROUP_SETTLE_MS = 350;
 
@@ -359,6 +359,12 @@ export function MessageBubble({
     return (
       <div class="message user-message">
         <div class="message-content user-content">
+          {message.handoff && (
+            <div class="user-message-handoff">
+              <i class="codicon codicon-arrow-right" />
+              Continued from {message.handoff.sourceTitle}
+            </div>
+          )}
           {showAttachmentRow && (
             <UserAttachments
               files={files}

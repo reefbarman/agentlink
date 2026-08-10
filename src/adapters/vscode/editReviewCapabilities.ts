@@ -411,6 +411,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
             params.relativePath,
             content,
             finalContent,
+            baselineContent,
           );
           if (formatOnSaveReport) {
             Object.assign(response, formatOnSaveReport);
@@ -572,6 +573,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                 params.relativePath,
                 content,
                 finalContent,
+                baseline.content,
               );
               const newDiagnostics = await snap.collectNewErrors(
                 params.diagnosticDelay,

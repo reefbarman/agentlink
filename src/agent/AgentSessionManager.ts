@@ -75,7 +75,11 @@ import {
 
 import { AgentSession } from "./AgentSession.js";
 import type { WorkspaceFolderInfo } from "./systemPrompt.js";
-import { AgentEngine, toolResultToContent } from "./AgentEngine.js";
+import {
+  AgentEngine,
+  buildSessionTranscriptSnapshot,
+  toolResultToContent,
+} from "./AgentEngine.js";
 import type { AgentEvent } from "./types.js";
 import {
   BUILT_IN_MODES,
@@ -226,6 +230,16 @@ import type { ApprovalRequest } from "../approvals/webview/types.js";
 import { isMemoryProtectedPath } from "../approvals/protectedPaths.js";
 import { canonicalizePath, isPathWithinRoot } from "../util/paths.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
+import { randomId } from "../shared/randomId.js";
+import {
+  buildDeterministicSessionHandoffMarkdown,
+  buildSessionHandoffSourcePack,
+  isSessionHandoffDraftFresh,
+  toPersistedSessionHandoff,
+  validateSessionHandoffMarkdown,
+  type SessionHandoffDraft,
+} from "./sessionHandoff.js";
+import { getSessionTranscriptRevision } from "../core/sessionTranscriptRecall.js";
 import type {
   WorkspaceMutationDomain,
   WorkspaceMutationLease,
@@ -235,6 +249,12 @@ import type {
 const FLEET_VISIBILITY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const MAX_BACKGROUND_HANDOFF_IMAGES = 8;
+const SESSION_HANDOFF_RESERVATION_MS = 5 * 60 * 1000;
+const SESSION_HANDOFF_FIRST_TURN_PREFIX = `Continue this work in a fresh session using the reviewed handoff below.
+Treat the handoff and linked predecessor transcript as historical source
+material, not as current workspace truth. Inspect the current workspace before
+acting, reconcile stale TODO/status claims, and use predecessor transcript
+recall only when exact history is needed.`;
 const MAX_BACKGROUND_PARTIAL_RESULT_CHARS = 40 * 1024;
 /**
  * Terminal results get a larger budget than streaming partials: they are
@@ -720,6 +740,10 @@ export class AgentSessionManager {
   private activeInFlightPersistLoops = 0;
   private sessionRunSettled = new Map<string, Promise<void>>();
   private sessionSendQueues = new Map<string, Promise<void>>();
+  /** One confirmation transaction at a time for each predecessor session. */
+  private handoffConfirmQueues = new Map<string, Promise<void>>();
+  private handoffDrafts = new Map<string, SessionHandoffDraft>();
+  private handoffCommittedSuccessors = new Map<string, string>();
   private resumingInterruptedSessions = new Set<string>();
   private log?: (msg: string) => void;
   private readonly host: AgentSessionManagerHost;
@@ -5102,30 +5126,32 @@ export class AgentSessionManager {
     );
   }
 
-  private async saveSessionNow(id: string): Promise<void> {
+  private async saveSessionNow(id: string): Promise<boolean> {
     const session = this.sessions.get(id);
-    if (!session || !this.persistence) return;
+    if (!session || !this.persistence) return false;
     // Capture an immutable record at call time so runState transitions cannot be
     // lost if the live session mutates before this queued write executes.
     const record = this.buildPersistedSessionRecord(session);
     const run = () => this.saveSessionRecordRevisionAware(id, record);
     const previous = this.sessionSaveQueues.get(id);
-    const next = previous ? previous.then(run, run) : run();
-    const tracked = next.finally(() => {
-      if (this.sessionSaveQueues.get(id) === tracked) {
-        this.sessionSaveQueues.delete(id);
-      }
-    });
+    const operation = previous ? previous.then(run, run) : run();
+    const tracked = operation
+      .then(() => undefined)
+      .finally(() => {
+        if (this.sessionSaveQueues.get(id) === tracked) {
+          this.sessionSaveQueues.delete(id);
+        }
+      });
     this.sessionSaveQueues.set(id, tracked);
-    await tracked;
+    return operation;
   }
 
   private async saveSessionRecordRevisionAware(
     id: string,
     record: PersistedSessionRecord,
     durability: PersistDurability = "durable",
-  ): Promise<void> {
-    if (!this.persistence) return;
+  ): Promise<boolean> {
+    if (!this.persistence) return false;
 
     const expectedRevision = this.sessionRevisions.get(id) ?? null;
     const persistStartedAt = Date.now();
@@ -5144,7 +5170,7 @@ export class AgentSessionManager {
       this.log?.(
         `[session] persistence save failed for ${id}: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return;
+      return false;
     } finally {
       flightOp.end();
       this.sessionPersistDurationsMs.set(id, Date.now() - persistStartedAt);
@@ -5153,7 +5179,7 @@ export class AgentSessionManager {
     if (result.ok) {
       this.sessionRevisions.set(id, result.revision);
       this.notifySessionChangeListeners();
-      return;
+      return true;
     }
 
     if (result.reason === "conflict") {
@@ -5161,12 +5187,13 @@ export class AgentSessionManager {
       this.log?.(
         `[session] persistence conflict for ${id}: expected=${expectedRevision ?? "<create>"} current=${result.currentRevision}`,
       );
-      return;
+      return false;
     }
 
     this.log?.(
       `[session] persistence save failed for ${id}: ${result.reason}${"message" in result ? `: ${result.message}` : ""}`,
     );
+    return false;
   }
 
   /**
@@ -5341,8 +5368,575 @@ export class AgentSessionManager {
               projectId: session.projectScope.projectId,
             }
           : undefined,
+        lineage: session.lineage ? structuredClone(session.lineage) : undefined,
       },
     };
+  }
+
+  /**
+   * Build an editable, ephemeral handoff draft from the currently selected
+   * foreground session. Preparing never creates a successor or changes history.
+   */
+  async prepareSessionHandoff(
+    sourceSessionId?: string,
+  ): Promise<
+    | { ok: true; draft: SessionHandoffDraft }
+    | { ok: false; code: string; message: string }
+  > {
+    const source = sourceSessionId
+      ? this.sessions.get(sourceSessionId)
+      : this.getForegroundSession();
+    const sourceError = this.getHandoffSourceError(source);
+    if (sourceError || !source) {
+      return (
+        sourceError ?? {
+          ok: false,
+          code: "foreground_session_required",
+          message:
+            "Continue in a fresh session is available from the active workspace chat.",
+        }
+      );
+    }
+    if (!this.persistence) {
+      return {
+        ok: false,
+        code: "persistence_unavailable",
+        message: "Fresh-session handoff requires session history storage.",
+      };
+    }
+
+    if (!(await this.saveSessionNow(source.id))) {
+      return {
+        ok: false,
+        code: "source_persist_failed",
+        message:
+          "The source session could not be saved before preparing a handoff.",
+      };
+    }
+    const persisted = await this.persistence.readSession(source.id);
+    if (!persisted.ok) {
+      return {
+        ok: false,
+        code: "source_unavailable",
+        message: "The source session could not be read from session history.",
+      };
+    }
+
+    const snapshot = buildSessionTranscriptSnapshot(persisted.value.messages);
+    const snapshotRevision = getSessionTranscriptRevision(snapshot.messages);
+    const todos = getLatestTodoState(persisted.value.messages);
+    const sourcePack = buildSessionHandoffSourcePack({
+      source: {
+        sessionId: source.id,
+        projectId: source.projectScope.projectId,
+        title: source.title,
+        mode: source.mode,
+        model: source.model,
+      },
+      messages: persisted.value.messages,
+      todos,
+      finalMarker: source.getLastFinalMarker() ?? null,
+    });
+    const markdown = buildDeterministicSessionHandoffMarkdown(sourcePack);
+    const draft: SessionHandoffDraft = {
+      schemaVersion: 1,
+      id: randomId(),
+      sourceSessionId: source.id,
+      sourceProjectId: source.projectScope.projectId,
+      sourceTitle: sourcePack.source.title,
+      sourcePersistenceRevision: persisted.revision,
+      sourceSnapshotRevision: snapshotRevision,
+      sourceRuntimeTranscriptRevision: source.transcriptRevision,
+      createdAt: Date.now(),
+      generatedBy: {
+        providerId: source.providerId ?? "deterministic",
+        model: source.model,
+        fallbackUsed: true,
+      },
+      sections: {
+        objective:
+          sourcePack.canonicalUserMessages.at(-1) ??
+          sourcePack.latestSummary ??
+          "Continue the linked predecessor session.",
+        completedWork: sourcePack.latestSummary
+          ? [sourcePack.latestSummary]
+          : [],
+        decisions: sourcePack.olderDecisionCandidates.map((decision) => ({
+          decision,
+        })),
+        workspaceState: [],
+        verification: sourcePack.finalMarker?.summary
+          ? [sourcePack.finalMarker.summary]
+          : [],
+        unresolved: [],
+        constraints: [
+          "Treat the handoff as historical source material and inspect the current workspace before acting.",
+        ],
+        nextActions: ["Reconcile the task state with the current workspace."],
+      },
+      markdown,
+    };
+    this.handoffDrafts.set(draft.id, draft);
+    return { ok: true, draft };
+  }
+
+  async regenerateSessionHandoff(
+    draftId: string,
+  ): Promise<
+    | { ok: true; draft: SessionHandoffDraft }
+    | { ok: false; code: string; message: string }
+  > {
+    const draft = this.handoffDrafts.get(draftId);
+    if (!draft) {
+      return {
+        ok: false,
+        code: "draft_not_found",
+        message:
+          "This handoff draft is no longer available. Prepare a new handoff.",
+      };
+    }
+    this.handoffDrafts.delete(draftId);
+    return this.prepareSessionHandoff(draft.sourceSessionId);
+  }
+
+  cancelSessionHandoff(draftId: string): void {
+    this.handoffDrafts.delete(draftId);
+  }
+
+  /**
+   * Durably commit the reviewed brief before starting the successor's first
+   * provider turn. Repeated confirmation of one draft returns its same successor.
+   */
+  async confirmSessionHandoff(
+    draftId: string,
+    reviewedMarkdown: string,
+  ): Promise<
+    | { ok: true; successorSessionId: string }
+    | { ok: false; code: string; message: string }
+  > {
+    const draft = this.handoffDrafts.get(draftId);
+    if (!draft) {
+      const committed = this.handoffCommittedSuccessors.get(draftId);
+      return committed
+        ? { ok: true, successorSessionId: committed }
+        : {
+            ok: false,
+            code: "draft_not_found",
+            message:
+              "This handoff draft is no longer available. Prepare a new handoff.",
+          };
+    }
+    return this.withHandoffConfirmQueue(draft.sourceSessionId, async () => {
+      const committed = this.handoffCommittedSuccessors.get(draftId);
+      if (committed) return { ok: true, successorSessionId: committed };
+      const validation = validateSessionHandoffMarkdown(reviewedMarkdown);
+      if (!validation.ok) {
+        return {
+          ok: false,
+          code: validation.code,
+          message: validation.message,
+        };
+      }
+      const source = this.sessions.get(draft.sourceSessionId);
+      const sourceError = this.getHandoffSourceError(source);
+      if (sourceError || !source) {
+        return (
+          sourceError ?? {
+            ok: false,
+            code: "foreground_session_required",
+            message:
+              "Continue in a fresh session is available from the active workspace chat.",
+          }
+        );
+      }
+      if (!this.persistence) {
+        return {
+          ok: false,
+          code: "persistence_unavailable",
+          message: "Fresh-session handoff requires session history storage.",
+        };
+      }
+
+      if (!(await this.saveSessionNow(source.id))) {
+        return {
+          ok: false,
+          code: "source_persist_failed",
+          message:
+            "The source session could not be saved before continuing the handoff.",
+        };
+      }
+      const sourceRead = await this.persistence.readSession(source.id);
+      if (!sourceRead.ok) {
+        return {
+          ok: false,
+          code: "source_unavailable",
+          message: "The source session could not be read from session history.",
+        };
+      }
+      const snapshot = buildSessionTranscriptSnapshot(
+        sourceRead.value.messages,
+      );
+      if (
+        !isSessionHandoffDraftFresh(draft, {
+          runtimeTranscriptRevision: source.transcriptRevision,
+          snapshotRevision: getSessionTranscriptRevision(snapshot.messages),
+        })
+      ) {
+        this.handoffDrafts.delete(draftId);
+        return {
+          ok: false,
+          code: "stale_draft",
+          message:
+            "The source session changed. Regenerate the handoff before continuing.",
+        };
+      }
+
+      const existingSuccessor =
+        sourceRead.value.metadata.lineage?.handoffSuccessor;
+      if (
+        existingSuccessor?.state === "committed" ||
+        (existingSuccessor?.state === "reserved" &&
+          ((existingSuccessor.reservationExpiresAt ?? 0) > Date.now() ||
+            (await this.isHandoffSuccessorCommitted(
+              existingSuccessor.sessionId,
+              draft.sourceSessionId,
+              existingSuccessor.handoffId,
+              source.projectScope.projectId,
+            ))))
+      ) {
+        return {
+          ok: false,
+          code: "handoff_in_progress",
+          message:
+            "This session already has a fresh-session handoff in progress.",
+        };
+      }
+
+      const successorId = randomId();
+      const successorTitle = `Continue: ${draft.sourceTitle}`;
+      const reservation = {
+        sessionId: successorId,
+        projectId: source.projectScope.projectId,
+        handoffId: draft.id,
+        titleAtCreation: successorTitle,
+        state: "reserved" as const,
+        createdAt: Date.now(),
+        reservationExpiresAt: Date.now() + SESSION_HANDOFF_RESERVATION_MS,
+      };
+      const reservedSourceRecord = structuredClone(sourceRead.value);
+      reservedSourceRecord.metadata.lineage = {
+        schemaVersion: 1,
+        ...sourceRead.value.metadata.lineage,
+        handoffSuccessor: reservation,
+      };
+      const reserveResult = await this.persistence.saveSession({
+        session: reservedSourceRecord,
+        expectedRevision: sourceRead.revision,
+      });
+      if (!reserveResult.ok) {
+        return {
+          ok: false,
+          code: "handoff_in_progress",
+          message:
+            "Another handoff changed the source session. Prepare a new handoff.",
+        };
+      }
+      this.sessionRevisions.set(source.id, reserveResult.revision);
+      source.lineage = reservedSourceRecord.metadata.lineage;
+
+      let successor: AgentSession | undefined;
+      try {
+        successor = await this.createSession(source.mode, {
+          foreground: false,
+          projectId: source.projectScope.projectId,
+        });
+        // createSession registers its generated id. Re-key before the first
+        // durable write so this transaction never leaves an empty successor.
+        const generatedId = successor.id;
+        this.sessions.delete(generatedId);
+        this.removeSkillCatalogFallback(successor);
+        successor.id = successorId;
+        this.sessions.set(successor.id, successor);
+        this.updateSkillCatalogFallback(successor);
+        successor.title = successorTitle;
+        await successor.updateModelSelection(source.model, source.providerId, {
+          devMode: this.devMode,
+          workspaceFolders: this.getWorkspaceFolders(),
+        });
+        successor.autoCondenseThreshold = source.autoCondenseThreshold;
+        this.applyReasoningEffortToSession(successor, source.reasoningEffort);
+        successor.lineage = {
+          schemaVersion: 1,
+          handoffSource: toPersistedSessionHandoff(draft, validation.markdown),
+        };
+        successor.addUserMessage(
+          this.buildSessionHandoffFirstTurn(
+            draft.sourceSessionId,
+            validation.markdown,
+          ),
+          {
+            handoff: {
+              schemaVersion: 1,
+              sourceSessionId: draft.sourceSessionId,
+              sourceTitle: draft.sourceTitle,
+              handoffId: draft.id,
+            },
+          },
+        );
+        const successorRecord = this.buildPersistedSessionRecord(successor);
+        const successorSave = await this.persistence.saveSession({
+          session: successorRecord,
+          expectedRevision: null,
+        });
+        if (!successorSave.ok) {
+          throw new Error("The successor session could not be saved.");
+        }
+        this.sessionRevisions.set(successor.id, successorSave.revision);
+
+        const committedSourceRecord = structuredClone(reservedSourceRecord);
+        committedSourceRecord.metadata.lineage = {
+          ...reservedSourceRecord.metadata.lineage!,
+          handoffSuccessor: { ...reservation, state: "committed" },
+        };
+        const commitResult = await this.persistence.saveSession({
+          session: committedSourceRecord,
+          expectedRevision: reserveResult.revision,
+        });
+        if (commitResult.ok) {
+          this.sessionRevisions.set(source.id, commitResult.revision);
+          source.lineage = committedSourceRecord.metadata.lineage;
+        } else {
+          // The successor's durable lineage and ordinary first turn are already
+          // the commit record. Keep the matching reservation for later repair.
+          this.log?.(
+            `[handoff] successor ${successor.id} committed but source promotion is pending`,
+          );
+        }
+
+        this.handoffCommittedSuccessors.set(draft.id, successor.id);
+        this.handoffDrafts.delete(draft.id);
+        this.foregroundId = successor.id;
+        this.updateConfig({
+          model: successor.model,
+          autoCondenseThreshold: successor.autoCondenseThreshold,
+        });
+        this.notifySessionsChanged();
+        const successorForTurn = successor;
+        void this.sendMessage(successorForTurn.id, "", successorForTurn.mode, {
+          skipUserMessage: true,
+          getHandoffSourceTranscript: () =>
+            this.getHandoffSourceTranscript(successorForTurn),
+        }).catch((error: unknown) => {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "The fresh session could not start its first turn.";
+          this.log?.(
+            `[handoff] successor ${successorForTurn.id} failed to start: ${message}`,
+          );
+          successorForTurn.appendRuntimeError({
+            message,
+            retryable: true,
+            code: "handoff_start_failed",
+          });
+          void this.saveSessionNow(successorForTurn.id);
+          this.recordAndEmitEvent(successorForTurn.id, {
+            type: "error",
+            error: message,
+            retryable: true,
+            code: "handoff_start_failed",
+          });
+        });
+        return { ok: true, successorSessionId: successor.id };
+      } catch (error) {
+        if (successor) {
+          this.sessions.delete(successor.id);
+          this.removeSkillCatalogFallback(successor);
+          this.sessionRevisions.delete(successor.id);
+        }
+        await this.clearHandoffReservation(
+          source,
+          reservation,
+          reserveResult.revision,
+        );
+        return {
+          ok: false,
+          code: "successor_save_failed",
+          message:
+            error instanceof Error
+              ? error.message
+              : "The successor session could not be created.",
+        };
+      }
+    });
+  }
+
+  /**
+   * Resolve only the direct predecessor recorded on a successor's durable
+   * lineage. This intentionally ignores model-supplied IDs and never restores
+   * or selects the predecessor as the foreground session.
+   */
+  private async isHandoffSuccessorCommitted(
+    successorId: string,
+    sourceSessionId: string,
+    handoffId: string,
+    projectId: string,
+  ): Promise<boolean> {
+    if (!this.persistence) return false;
+    const successor = await this.persistence.readSession(successorId);
+    if (!successor.ok) return false;
+    const source = successor.value.metadata.lineage?.handoffSource;
+    return (
+      !successor.value.summary.background &&
+      source?.sourceSessionId === sourceSessionId &&
+      source.handoffId === handoffId &&
+      source.sourceProjectId === projectId
+    );
+  }
+
+  private async getHandoffSourceTranscript(successor: AgentSession): Promise<
+    | {
+        snapshot: ReturnType<typeof buildSessionTranscriptSnapshot>;
+        sourceSessionId: string;
+        sourceSessionTitle: string;
+      }
+    | { error: "handoff_source_unavailable" | "handoff_source_too_large" }
+  > {
+    const handoffSource = successor.lineage?.handoffSource;
+    if (!handoffSource || !this.persistence) {
+      return { error: "handoff_source_unavailable" };
+    }
+    if (handoffSource.sourceProjectId !== successor.projectScope.projectId) {
+      return { error: "handoff_source_unavailable" };
+    }
+
+    const loaded = this.sessions.get(handoffSource.sourceSessionId);
+    if (loaded) {
+      if (
+        loaded.background ||
+        loaded.projectScope.projectId !== successor.projectScope.projectId
+      ) {
+        return { error: "handoff_source_unavailable" };
+      }
+      return {
+        snapshot: buildSessionTranscriptSnapshot(loaded.getAllMessages()),
+        sourceSessionId: handoffSource.sourceSessionId,
+        sourceSessionTitle: handoffSource.sourceTitle,
+      };
+    }
+
+    const persisted = await this.persistence.readSession(
+      handoffSource.sourceSessionId,
+    );
+    if (!persisted.ok) return { error: "handoff_source_unavailable" };
+    const projectId =
+      persisted.value.metadata.projectScope?.projectId ??
+      persisted.value.summary.projectScope?.projectId;
+    if (
+      persisted.value.summary.background ||
+      projectId !== successor.projectScope.projectId
+    ) {
+      return { error: "handoff_source_unavailable" };
+    }
+    return {
+      snapshot: buildSessionTranscriptSnapshot(persisted.value.messages),
+      sourceSessionId: handoffSource.sourceSessionId,
+      sourceSessionTitle: handoffSource.sourceTitle,
+    };
+  }
+
+  private getHandoffSourceError(
+    source: AgentSession | undefined,
+  ): { ok: false; code: string; message: string } | undefined {
+    if (!source || source.background || this.foregroundId !== source.id) {
+      return {
+        ok: false,
+        code: "foreground_session_required",
+        message:
+          "Continue in a fresh session is available from the active workspace chat.",
+      };
+    }
+    if (isProjectlessSessionScope(source.projectScope)) {
+      return {
+        ok: false,
+        code: "workspace_session_required",
+        message: "Continue in a fresh session requires a workspace session.",
+      };
+    }
+    if (
+      source.status !== "idle" ||
+      source.runState ||
+      source.hasPendingInterjections ||
+      source.hasQueuedUiMessages
+    ) {
+      return {
+        ok: false,
+        code: "session_busy",
+        message:
+          "Wait for the current session activity to finish before preparing a handoff.",
+      };
+    }
+    return undefined;
+  }
+
+  private buildSessionHandoffFirstTurn(
+    sourceSessionId: string,
+    markdown: string,
+  ): string {
+    return `${SESSION_HANDOFF_FIRST_TURN_PREFIX}\n\n<session-handoff source-session-id=${JSON.stringify(sourceSessionId)}>\n${markdown}\n</session-handoff>`;
+  }
+
+  private async clearHandoffReservation(
+    source: AgentSession,
+    reservation: { handoffId: string },
+    expectedRevision: PersistenceRevision,
+  ): Promise<void> {
+    if (!this.persistence) return;
+    const sourceRead = await this.persistence.readSession(source.id);
+    if (
+      !sourceRead.ok ||
+      sourceRead.revision !== expectedRevision ||
+      sourceRead.value.metadata.lineage?.handoffSuccessor?.handoffId !==
+        reservation.handoffId
+    ) {
+      return;
+    }
+    const record = structuredClone(sourceRead.value);
+    const { handoffSuccessor: _reservation, ...lineage } =
+      record.metadata.lineage!;
+    record.metadata.lineage =
+      Object.keys(lineage).length > 1 ? lineage : undefined;
+    const result = await this.persistence.saveSession({
+      session: record,
+      expectedRevision,
+    });
+    if (result.ok) {
+      this.sessionRevisions.set(source.id, result.revision);
+      source.lineage = record.metadata.lineage;
+    }
+  }
+
+  private async withHandoffConfirmQueue<T>(
+    sourceSessionId: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const previous =
+      this.handoffConfirmQueues.get(sourceSessionId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.catch(() => undefined).then(() => current);
+    this.handoffConfirmQueues.set(sourceSessionId, queued);
+    await previous.catch(() => undefined);
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.handoffConfirmQueues.get(sourceSessionId) === queued) {
+        this.handoffConfirmQueues.delete(sourceSessionId);
+      }
+    }
   }
 
   getForegroundSession(): AgentSession | undefined {
@@ -5785,6 +6379,13 @@ export class AgentSessionManager {
       origin?: "vscode" | "browser";
       images?: Array<{ name: string; mimeType: string; base64: string }>;
       documents?: Array<{ name: string; mimeType: string; base64: string }>;
+      /**
+       * A caller has already appended and durably saved the first ordinary user
+       * turn. Continue through normal execution without adding a duplicate.
+       */
+      skipUserMessage?: boolean;
+      /** Resolves the direct predecessor transcript for a handoff successor. */
+      getHandoffSourceTranscript?: import("../core/tools/types.js").AgentToolExecutionContext["getHandoffSourceTranscript"];
       additionalMessages?: Array<{
         text: string;
         displayText?: string;
@@ -5893,15 +6494,19 @@ export class AgentSessionManager {
             )
             .map((message) => message.content);
           const messagesToAdd = [
-            {
-              text,
-              displayText: opts?.displayText,
-              isSlashCommand: opts?.isSlashCommand,
-              slashCommandLabel: opts?.slashCommandLabel,
-              origin: opts?.origin,
-              images: opts?.images,
-              documents: opts?.documents,
-            },
+            ...(opts?.skipUserMessage
+              ? []
+              : [
+                  {
+                    text,
+                    displayText: opts?.displayText,
+                    isSlashCommand: opts?.isSlashCommand,
+                    slashCommandLabel: opts?.slashCommandLabel,
+                    origin: opts?.origin,
+                    images: opts?.images,
+                    documents: opts?.documents,
+                  },
+                ]),
             ...(opts?.additionalMessages ?? []),
           ].filter(
             (message) =>
@@ -5909,7 +6514,7 @@ export class AgentSessionManager {
               (message.images?.length ?? 0) > 0 ||
               (message.documents?.length ?? 0) > 0,
           );
-          if (messagesToAdd.length === 0) return;
+          if (messagesToAdd.length === 0 && !opts?.skipUserMessage) return;
 
           const previousMessageCount = session.messageCount;
           for (const [messageIndex, message] of messagesToAdd.entries()) {
@@ -6014,6 +6619,9 @@ export class AgentSessionManager {
 
               for await (const event of engine.run(session, {
                 automaticMemoryContext,
+                getHandoffSourceTranscript:
+                  opts?.getHandoffSourceTranscript ??
+                  (() => this.getHandoffSourceTranscript(session)),
                 webAccessPolicy: preparedTurn.policy,
                 mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
                 mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
@@ -7762,6 +8370,7 @@ export class AgentSessionManager {
       loadedSkills: metadata.loadedSkills ?? [],
       activeSkillState: metadata.activeSkillState,
       runState: interruptedRunRecovery.runState,
+      lineage: metadata.lineage,
       messages: interruptedRunRecovery.messages,
       modeInstructionAnchors: readResult.value.modeInstructionAnchors,
     });
@@ -7932,6 +8541,7 @@ export class AgentSessionManager {
         activeSkillState: metadata.activeSkillState,
         messages,
         fleetMetadata: metadata.fleet,
+        lineage: metadata.lineage,
       });
       this.restoreContextLedger(session, metadata);
 

@@ -569,6 +569,34 @@ describe("handleGetContext", () => {
     expect(getContextGitStatus(filePath)).toBe("modified");
   });
 
+  it("reports unmerged Git entries before staged or working-tree state", async () => {
+    const workspace = makeTempWorkspace();
+    const filePath = path.join(workspace, "src", "example.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "example");
+    vscodeMock.getExtension.mockReturnValue({
+      isActive: true,
+      exports: {
+        getAPI: () => ({
+          repositories: [
+            {
+              rootUri: { fsPath: workspace },
+              state: {
+                mergeChanges: [{ uri: { fsPath: filePath } }],
+                indexChanges: [{ uri: { fsPath: filePath } }],
+                workingTreeChanges: [{ uri: { fsPath: filePath } }],
+                untrackedChanges: [],
+              },
+            },
+          ],
+        }),
+      },
+    });
+
+    const { getContextGitStatus } = await import("./getContext.js");
+    expect(getContextGitStatus(filePath)).toBe("unmerged");
+  });
+
   it("summarizes diagnostics in the context enrichment helper", async () => {
     const workspace = makeTempWorkspace();
     const filePath = path.join(workspace, "example.ts");

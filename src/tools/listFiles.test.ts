@@ -72,9 +72,10 @@ describe("handleListFiles", () => {
     });
     statMock.mockResolvedValue({ isDirectory: () => true });
     getRipgrepBinPathMock.mockResolvedValue("rg");
-    execRipgrepFilesMock.mockResolvedValue([
-      path.join("/workspace/docs", "ignored", "manual.pdf"),
-    ]);
+    execRipgrepFilesMock.mockResolvedValue({
+      files: [path.join("/workspace/docs", "ignored", "manual.pdf")],
+      warnings: [],
+    });
   });
 
   it("returns stable shallow listing output", async () => {
@@ -212,6 +213,35 @@ describe("handleListFiles", () => {
         deleted_sources: ["src/deleted.ts"],
         unverified_sources: [],
       },
+    });
+  });
+
+  it("returns partial recursive results with a loop warning", async () => {
+    execRipgrepFilesMock.mockResolvedValue({
+      files: [path.join("/workspace/docs", "NOTICE")],
+      warnings: ["rg: symlink: File system loop (os error 62)"],
+    });
+    const { handleListFiles } = await import("./listFiles.js");
+
+    const result = await handleListFiles(
+      {
+        path: "docs",
+        recursive: true,
+        pattern: "NOTICE*",
+        include_ignored: true,
+      },
+      approvalManager,
+      approvalPanel,
+      sessionId,
+    );
+
+    expect(JSON.parse(textResult(result))).toMatchObject({
+      entries: "NOTICE",
+      count: 1,
+      warnings: [
+        "Skipped filesystem symlink loops while listing files.",
+        "rg: symlink: File system loop (os error 62)",
+      ],
     });
   });
 

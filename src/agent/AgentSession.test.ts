@@ -793,6 +793,31 @@ describe("AgentSession", () => {
       });
     });
 
+    it("persists fresh-session handoff metadata on an ordinary user turn", async () => {
+      const session = await makeSession();
+      session.addUserMessage("continue the handoff", {
+        handoff: {
+          schemaVersion: 1,
+          sourceSessionId: "source-session",
+          sourceTitle: "Source work",
+          handoffId: "handoff-1",
+        },
+      });
+
+      expect(session.getMessages()[0]).toEqual({
+        role: "user",
+        content: "continue the handoff",
+        uiHint: {
+          handoff: {
+            schemaVersion: 1,
+            sourceSessionId: "source-session",
+            sourceTitle: "Source work",
+            handoffId: "handoff-1",
+          },
+        },
+      });
+    });
+
     it("appendAssistantTurn appends an assistant message", async () => {
       const session = await makeSession();
       const blocks: ContentBlock[] = [{ type: "text", text: "response" }];

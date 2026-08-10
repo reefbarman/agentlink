@@ -60,7 +60,11 @@ export const sendFeedbackSchema = {
     ),
   feedback: z
     .string()
-    .describe("Description of the issue, suggestion, or missing feature"),
+    .trim()
+    .min(1, "feedback must not be empty")
+    .describe(
+      "Concrete, actionable AgentLink issue. Report problems, unexpected behavior, or missing capability; do not submit routine success, praise, or third-party MCP-server defects.",
+    ),
   tool_params: z
     .string()
     .optional()
@@ -454,6 +458,12 @@ export const searchSessionHistorySchema = {
     .describe(
       "Optionally restrict matches to messages associated with this tool name.",
     ),
+  scope: z
+    .enum(["current", "handoff_source"])
+    .optional()
+    .describe(
+      "Transcript scope: current (default) or the host-linked direct predecessor.",
+    ),
 };
 
 export const diagnoseActivitySchema = {
@@ -497,6 +507,17 @@ export const readSessionExcerptSchema = {
     .string()
     .min(1)
     .describe("Snapshot revision returned by search_session_history."),
+  scope: z
+    .enum(["current", "handoff_source"])
+    .optional()
+    .describe("Transcript scope returned by search_session_history."),
+  source_session_id: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Required for handoff_source and must equal the source_session_id returned by search_session_history.",
+    ),
 };
 
 export const getDiagnosticsSchema = {

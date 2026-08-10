@@ -13,6 +13,22 @@ export async function handleSendFeedback(
   sessionId: string,
   projectId?: string,
 ): Promise<ToolResult> {
+  const feedback = params.feedback.trim();
+  if (!feedback) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "rejected",
+            error:
+              "feedback must describe a concrete, actionable AgentLink issue and cannot be empty or whitespace-only",
+          }),
+        },
+      ],
+    };
+  }
+
   try {
     const ext = vscode.extensions.getExtension("agentlink.agentlink");
     const version =
@@ -21,7 +37,7 @@ export async function handleSendFeedback(
     const recorded = appendFeedback({
       timestamp: new Date().toISOString(),
       tool_name: params.tool_name,
-      feedback: params.feedback,
+      feedback,
       session_id: sessionId,
       // Keep the legacy storage key, but scoped records carry only opaque project identity.
       workspace: projectId,

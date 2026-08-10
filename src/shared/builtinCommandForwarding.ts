@@ -14,6 +14,7 @@ const FORWARDED_BUILTIN_COMMANDS: Record<
     "pair",
     "usage",
     "condense",
+    "handoff",
     "context-doctor",
     "workspace",
     "checkpoint",
@@ -21,6 +22,7 @@ const FORWARDED_BUILTIN_COMMANDS: Record<
   ]),
   browser: new Set([
     "condense",
+    "handoff",
     "context-doctor",
     "checkpoint",
     "revert",

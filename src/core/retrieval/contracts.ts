@@ -122,6 +122,12 @@ export interface RetrievalStagedRelationBatch {
   relations: RetrievalRelationRecord[];
 }
 
+export interface RetrievalStagedPublicationBundle {
+  manifest: RetrievalStagedPublicationManifest;
+  chunkBatches: RetrievalStagedChunkBatch[];
+  relationBatches: RetrievalStagedRelationBatch[];
+}
+
 export interface RetrievalStagedPublicationInspection {
   publicationId: string;
   sourceId: string;
@@ -137,6 +143,12 @@ export interface RetrievalStagedPublicationInspection {
 }
 
 export interface StagedRetrievalPublicationRepository {
+  /**
+   * Stages a complete publication — manifest, every batch, and completion
+   * verification — inside a single fenced store session, so per-publication
+   * costs (lock, lease heartbeat, connection, table opens) are paid once.
+   */
+  stagePublication(bundle: RetrievalStagedPublicationBundle): Promise<void>;
   beginStagedPublication(
     manifest: RetrievalStagedPublicationManifest,
   ): Promise<RetrievalPublicationPreparation>;

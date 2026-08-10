@@ -169,6 +169,25 @@ export interface AgentToolExecutionContext {
   onCompleteTodos?: () => unknown[];
   getSessionImages?: () => SessionImageReference[];
   getSessionTranscript?: () => SessionTranscriptSnapshot;
+  /**
+   * Optional host-owned direct-predecessor transcript resolver. It never accepts
+   * arbitrary session IDs from the model; scope selects only the linked source.
+   */
+  getHandoffSourceTranscript?: () =>
+    | Promise<
+        | {
+            snapshot: SessionTranscriptSnapshot;
+            sourceSessionId: string;
+            sourceSessionTitle: string;
+          }
+        | { error: "handoff_source_unavailable" | "handoff_source_too_large" }
+      >
+    | {
+        snapshot: SessionTranscriptSnapshot;
+        sourceSessionId: string;
+        sourceSessionTitle: string;
+      }
+    | { error: "handoff_source_unavailable" | "handoff_source_too_large" };
   pendingQuestionRecovery?: PendingQuestionRecoveryContext;
   /** Run-scoped private artifact retention for oversized exact tool results. */
   retainToolResultArtifact?: ToolResultArtifactWriter;

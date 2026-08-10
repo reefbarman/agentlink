@@ -58,6 +58,7 @@ import { ChatSessionPane, ChatWorkspace } from "./components/ChatWorkspace";
 import { ChatView } from "./components/ChatView";
 import { ContextUsageRow } from "./components/ContextUsageRow";
 import { EnvironmentPanel } from "./components/EnvironmentPanel";
+import { ModelSetupCard } from "./components/ModelSetupCard";
 import { ElicitationModal } from "./components/ElicitationModal";
 import {
   InputArea,
@@ -65,6 +66,8 @@ import {
   type ComposerMedia,
 } from "./components/InputArea";
 import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
+import { SessionHandoffPanel } from "../../shared/ui/SessionHandoffPanel";
+import type { SessionHandoffDraft } from "../sessionHandoff";
 
 import { MemoryPanel } from "../../shared/ui/MemoryPanel";
 import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
@@ -97,6 +100,7 @@ import { UrlElicitationModal } from "./components/UrlElicitationModal";
 import { detectQuestionFromAssistantText } from "./questionDetection";
 import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBaselineMetrics";
 import { isForwardedBuiltinCommand } from "../../shared/builtinCommandForwarding";
+import { deriveModelSetupState } from "../../shared/modelSetup";
 import { randomId } from "../../shared/randomId";
 import {
   resolveOpenFileRequest,
@@ -341,6 +345,10 @@ export function App({
     useState<ChatWorkspaceViewSnapshot | null>(null);
   const workspaceSnapshotRef = useRef<ChatWorkspaceViewSnapshot | null>(null);
   const [hostConnectionStale, setHostConnectionStale] = useState(false);
+  const [handoffDraft, setHandoffDraft] = useState<SessionHandoffDraft | null>(
+    null,
+  );
+  const [handoffError, setHandoffError] = useState<string | null>(null);
   const lastHostHeartbeatRef = useRef(Date.now());
   const inactiveProjectionCacheRef = useRef(new InactiveChatProjectionCache());
   const projectionStateCacheRef = useRef(new ChatProjectionStateCache());
@@ -379,6 +387,10 @@ export function App({
   );
   const stateRef = useRef(state.chatState);
   stateRef.current = state.chatState;
+  const modelSetupState = useMemo(
+    () => deriveModelSetupState(state.chatState.model, state.availableModels),
+    [state.chatState.model, state.availableModels],
+  );
   const pendingSessionSelectionsRef = useRef<{
     tabId: string | null;
     mode?: string;
@@ -1178,6 +1190,20 @@ export function App({
           break;
         case "agentSlashCommandsUpdate":
           dispatch({ type: "SET_SLASH_COMMANDS", commands: msg.commands });
+          break;
+        case "agentHandoffDraft":
+          setHandoffDraft(msg.draft);
+          setHandoffError(null);
+          break;
+        case "agentHandoffResult":
+          if (msg.ok) {
+            setHandoffDraft(null);
+            setHandoffError(null);
+          } else {
+            setHandoffError(
+              msg.error ?? "The fresh session could not be started.",
+            );
+          }
           break;
         case "agentProviderUsage": {
           setEnvironmentPanelOpen(false);
@@ -2329,9 +2355,8 @@ export function App({
           pendingSessionSelectionsRef.current.reasoningEffort === undefined
             ? undefined
             : pendingSessionSelectionsRef.current.reasoningEffort !== "none",
-        ...(pendingSessionSelectionsRef.current.model
-          ? { model: pendingSessionSelectionsRef.current.model }
-          : {}),
+        model:
+          pendingSessionSelectionsRef.current.model ?? stateRef.current.model,
         ...(pendingSessionSelectionsRef.current.agentWriteApproval
           ? {
               agentWriteApproval:
@@ -2768,6 +2793,40 @@ export function App({
         command: "agentSetCondenseThreshold",
         threshold,
       });
+    },
+    [vscodeApi],
+  );
+
+  const handleSetupAction = useCallback(
+    (
+      action:
+        | "codex"
+        | "openai-api-key"
+        | "anthropic-api-key"
+        | "configure-provider",
+    ) => {
+      switch (action) {
+        case "codex":
+          vscodeApi.postMessage({
+            command: "agentCodexSignIn",
+            method: "oauth",
+          });
+          break;
+        case "openai-api-key":
+          vscodeApi.postMessage({
+            command: "agentCodexSignIn",
+            method: "apiKey",
+          });
+          break;
+        case "anthropic-api-key":
+          vscodeApi.postMessage({ command: "agentAnthropicSignIn" });
+          break;
+        case "configure-provider":
+          vscodeApi.postMessage({
+            command: "agentConfigureOpenAiCompatibleModel",
+          });
+          break;
+      }
     },
     [vscodeApi],
   );
@@ -3676,6 +3735,17 @@ export function App({
               streamingMetrics={streamingBaselineMetrics}
               streamingMetricsSurface="vscode-webview"
               streamingMetricsScope={state.chatState.sessionId ?? "foreground"}
+              emptyState={
+                <ModelSetupCard
+                  setupState={modelSetupState}
+                  hasWorkspace={(state.chatState.projects?.length ?? 0) > 0}
+                  surface="vscode"
+                  onSetupAction={handleSetupAction}
+                  onOpenFolder={() =>
+                    vscodeApi.postMessage({ command: "agentOpenFolder" })
+                  }
+                />
+              }
             />
             <ChatActivityShelf
               revealKey={
@@ -3831,6 +3901,27 @@ export function App({
                   });
                 }}
               />
+              {handoffDraft && (
+                <SessionHandoffPanel
+                  draft={handoffDraft}
+                  error={handoffError}
+                  onCancel={() => {
+                    vscodeApi.postMessage({
+                      command: "agentHandoffCancel",
+                      draftId: handoffDraft.id,
+                    });
+                    setHandoffDraft(null);
+                    setHandoffError(null);
+                  }}
+                  onConfirm={(markdown) =>
+                    vscodeApi.postMessage({
+                      command: "agentHandoffConfirm",
+                      draftId: handoffDraft.id,
+                      markdown,
+                    })
+                  }
+                />
+              )}
               <ContextUsageRow
                 inputTokens={state.lastInputTokens}
                 outputTokens={state.lastOutputTokens}
@@ -4405,6 +4496,15 @@ export function App({
                 state.chatState.project?.availability === "unavailable"
                   ? `Project unavailable: ${state.chatState.project.displayName}`
                   : undefined
+              }
+              sendBlockedReason={
+                modelSetupState.kind === "checking"
+                  ? "Checking model setup before AgentLink can send a message."
+                  : modelSetupState.kind === "credentials_required"
+                    ? `Set up ${modelSetupState.model.providerDisplayName ?? modelSetupState.model.provider} before sending a message.`
+                    : modelSetupState.kind === "model_unavailable"
+                      ? "Choose an available model before sending a message."
+                      : undefined
               }
             />
           </div>

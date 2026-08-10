@@ -289,6 +289,7 @@ interface GitChange {
 
 interface GitRepository {
   state: {
+    mergeChanges?: GitChange[];
     indexChanges: GitChange[];
     workingTreeChanges: GitChange[];
     untrackedChanges?: GitChange[];
@@ -314,9 +315,13 @@ export function getContextGitStatus(filePath: string): string | undefined {
 
     const api = gitExtension.exports.getAPI(1);
     const normalizedFilePath = normalizeGitPath(filePath);
+    const normalizedLexicalFilePath = normalizeGitPathLexically(filePath);
     const repo = api.repositories
       .filter((candidate) =>
-        isPathInGitRepository(normalizedFilePath, candidate.rootUri.fsPath),
+        isPathInGitRepository(
+          normalizedLexicalFilePath,
+          candidate.rootUri.fsPath,
+        ),
       )
       .sort(
         (left, right) =>
@@ -326,9 +331,16 @@ export function getContextGitStatus(filePath: string): string | undefined {
     if (!repo) return undefined;
 
     const hasChange = (changes: GitChange[] | undefined): boolean =>
-      changes?.some(
-        (change) => normalizeGitPath(change.uri.fsPath) === normalizedFilePath,
-      ) ?? false;
+      changes?.some((change) => {
+        const changePath = normalizeGitPathLexically(change.uri.fsPath);
+        return (
+          changePath === normalizedLexicalFilePath ||
+          changePath === normalizedFilePath
+        );
+      }) ?? false;
+    // A conflicted entry can also appear in staged or working-tree lists, so
+    // surface it first instead of masking the state that requires resolution.
+    if (hasChange(repo.state.mergeChanges)) return "unmerged";
     if (hasChange(repo.state.indexChanges)) return "staged";
     if (hasChange(repo.state.workingTreeChanges)) return "modified";
     if (hasChange(repo.state.untrackedChanges)) return "untracked";
@@ -339,12 +351,16 @@ export function getContextGitStatus(filePath: string): string | undefined {
 }
 
 function normalizeGitPath(filePath: string): string {
-  const normalized = path.normalize(canonicalizePath(filePath));
+  return normalizeGitPathLexically(canonicalizePath(filePath));
+}
+
+function normalizeGitPathLexically(filePath: string): string {
+  const normalized = path.normalize(path.resolve(filePath));
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 function isPathInGitRepository(filePath: string, repoRoot: string): boolean {
-  const relative = path.relative(normalizeGitPath(repoRoot), filePath);
+  const relative = path.relative(normalizeGitPathLexically(repoRoot), filePath);
   return (
     relative === "" ||
     (!relative.startsWith(`..${path.sep}`) &&

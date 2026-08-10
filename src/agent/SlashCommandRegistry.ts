@@ -133,6 +133,13 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     builtin: true,
   },
   {
+    name: "handoff",
+    description:
+      "Continue this work in a fresh session with a reviewed handoff",
+    source: "builtin",
+    builtin: true,
+  },
+  {
     name: "context-doctor",
     description: "Show a read-only context allocation and retention report",
     source: "builtin",

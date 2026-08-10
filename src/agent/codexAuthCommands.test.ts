@@ -98,6 +98,15 @@ describe("registerCodexAuthCommands", () => {
     );
   });
 
+  it("starts OAuth directly for the onboarding action", async () => {
+    const dependencies = register();
+
+    await invoke("agentlink.codexSignIn", "oauthOnly");
+
+    expect(vscode.window.showQuickPick).not.toHaveBeenCalled();
+    expect(dependencies.completeOAuthSignIn).toHaveBeenCalledOnce();
+  });
+
   it("preserves OAuth sign-in success messaging", async () => {
     const dependencies = register();
     vi.mocked(vscode.window.showQuickPick).mockResolvedValue({

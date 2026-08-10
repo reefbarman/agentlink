@@ -4,6 +4,14 @@ import * as path from "path";
 
 import type { AgentMessage, SessionInfo } from "./types.js";
 import type {
+  PersistedSessionLineage,
+  SessionLineageSummary,
+} from "./sessionHandoff.js";
+import {
+  normalizePersistedSessionLineage,
+  projectSessionLineageSummary,
+} from "./sessionHandoff.js";
+import type {
   CheckpointState,
   PersistDurability,
   PersistResult,
@@ -59,6 +67,8 @@ export interface SessionSummary {
   background?: boolean;
   /** Derived history projection; persisted metadata remains authoritative. */
   projectScope?: SessionProjectScope;
+  /** Lightweight handoff links for history rendering without transcript loads. */
+  lineage?: SessionLineageSummary;
 }
 
 interface MessagesFile {
@@ -99,6 +109,7 @@ interface MetadataFile {
   revertPending?: RevertRecoveryState;
   runState?: PersistedSessionRunState;
   fleet?: PersistedFleetMetadata;
+  lineage?: PersistedSessionLineage;
 }
 
 // Narrow async seam for testing atomic JSON writes without mocking Node's ESM
@@ -453,9 +464,9 @@ export class SessionStore implements SessionPersistenceProvider {
     if (!metadataResult.ok) return metadataResult;
 
     const metadata = this.metadataFileToRecord(metadataResult.value, summary);
-    const normalizedSummary = this.withAuthoritativeProjectScope(
-      summary,
-      metadata.projectScope,
+    const normalizedSummary = this.withSessionLineageSummary(
+      this.withAuthoritativeProjectScope(summary, metadata.projectScope),
+      metadata.lineage,
     );
     if (
       !this.projectScopesEqual(
@@ -682,23 +693,27 @@ export class SessionStore implements SessionPersistenceProvider {
     getActiveSkillState?(): PersistedActiveSkillState | undefined;
     getAllMessages(): AgentMessage[];
     checkpoints?: Checkpoint[];
+    lineage?: PersistedSessionLineage;
   }): void {
     const messages = session.getAllMessages();
     const record: PersistedSessionRecord = {
-      summary: {
-        schemaVersion: SCHEMA_VERSION,
-        id: session.id,
-        mode: session.mode,
-        model: session.model,
-        title: session.title,
-        messageCount: messages.length,
-        totalInputTokens: session.totalInputTokens,
-        totalOutputTokens: session.totalOutputTokens,
-        createdAt: session.createdAt,
-        lastActiveAt: session.lastActiveAt,
-        background: session.background,
-        projectScope: session.projectScope,
-      },
+      summary: this.withSessionLineageSummary(
+        {
+          schemaVersion: SCHEMA_VERSION,
+          id: session.id,
+          mode: session.mode,
+          model: session.model,
+          title: session.title,
+          messageCount: messages.length,
+          totalInputTokens: session.totalInputTokens,
+          totalOutputTokens: session.totalOutputTokens,
+          createdAt: session.createdAt,
+          lastActiveAt: session.lastActiveAt,
+          background: session.background,
+          projectScope: session.projectScope,
+        },
+        normalizePersistedSessionLineage(session.lineage),
+      ),
       messages,
       metadata: {
         projectScope: session.projectScope,
@@ -723,6 +738,7 @@ export class SessionStore implements SessionPersistenceProvider {
         checkpointState: session.checkpoints
           ? { baseCommit: null, checkpoints: session.checkpoints }
           : undefined,
+        lineage: normalizePersistedSessionLineage(session.lineage),
       },
     };
     void this.enqueueSessionWrite(session.id, async () => {
@@ -911,9 +927,9 @@ export class SessionStore implements SessionPersistenceProvider {
       record.summary.projectScope,
     );
     const metadata = { ...record.metadata, projectScope };
-    const summary = this.withAuthoritativeProjectScope(
-      record.summary,
-      projectScope,
+    const summary = this.withSessionLineageSummary(
+      this.withAuthoritativeProjectScope(record.summary, projectScope),
+      metadata.lineage,
     );
 
     // Persist messages before metadata so a durable metadata revision never
@@ -1075,6 +1091,18 @@ export class SessionStore implements SessionPersistenceProvider {
     return serialized;
   }
 
+  private withSessionLineageSummary(
+    summary: SessionSummary,
+    lineage: PersistedSessionLineage | undefined,
+  ): SessionSummary {
+    const projected = projectSessionLineageSummary(lineage);
+    const { lineage: _previousLineage, ...withoutPreviousLineage } = summary;
+    return {
+      ...withoutPreviousLineage,
+      ...(projected ? { lineage: projected } : {}),
+    };
+  }
+
   private metadataFileToRecord(
     file: MetadataFile,
     summary?: SessionSummary,
@@ -1111,6 +1139,7 @@ export class SessionStore implements SessionPersistenceProvider {
       revertPending: file.revertPending,
       runState: file.runState,
       fleet: file.fleet,
+      lineage: normalizePersistedSessionLineage(file.lineage),
     };
   }
 
@@ -1123,6 +1152,7 @@ export class SessionStore implements SessionPersistenceProvider {
     // Keep writing legacy `checkpoints` during the compatibility window so older
     // sync readers continue to see checkpoint metadata.
     const checkpoints = metadata.checkpointState?.checkpoints;
+    const lineage = normalizePersistedSessionLineage(metadata.lineage);
     return {
       schemaVersion: SCHEMA_VERSION,
       revision,
@@ -1154,6 +1184,7 @@ export class SessionStore implements SessionPersistenceProvider {
       revertPending: metadata.revertPending,
       runState: metadata.runState,
       fleet: metadata.fleet,
+      lineage,
     };
   }
 

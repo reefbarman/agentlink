@@ -1068,6 +1068,9 @@ describe("getAgentTools", () => {
       const sendFeedback = tools.find((tool) => tool.name === "send_feedback");
       const toolNameSchema = sendFeedback?.input_schema.properties
         ?.tool_name as { description?: string } | undefined;
+      const feedbackSchema = sendFeedback?.input_schema.properties?.feedback as
+        | { description?: string; minLength?: number }
+        | undefined;
       const getFeedback = tools.find((tool) => tool.name === "get_feedback");
       const triageFeedback = tools.find(
         (tool) => tool.name === "triage_feedback",
@@ -1081,6 +1084,11 @@ describe("getAgentTools", () => {
       expect(sendFeedback?.description).toContain(
         "Never submit feedback about a specific MCP server or its native server__tool",
       );
+      expect(feedbackSchema).toMatchObject({ minLength: 1 });
+      expect(feedbackSchema?.description).toContain(
+        "actionable AgentLink issue",
+      );
+      expect(feedbackSchema?.description).toContain("routine success, praise");
       expect(toolNameSchema?.description).toContain(
         "use the native AgentLink MCP tool actually involved",
       );
@@ -3001,14 +3009,104 @@ describe("dispatchToolCall", () => {
     });
   });
 
+  it("limits handoff transcript recall to the host-linked predecessor", async () => {
+    const predecessor = {
+      messages: [
+        {
+          sourceIndex: 0,
+          role: "user" as const,
+          sourceKind: "source" as const,
+          condensed: false,
+          content: "The predecessor chose the teal design.",
+        },
+      ],
+    };
+    const successor = {
+      messages: [
+        {
+          sourceIndex: 0,
+          role: "user" as const,
+          sourceKind: "source" as const,
+          condensed: false,
+          content: "The successor has a different current task.",
+        },
+      ],
+    };
+    const getHandoffSourceTranscript = vi.fn(async () => ({
+      snapshot: predecessor,
+      sourceSessionId: "predecessor-session",
+      sourceSessionTitle: "Original design work",
+    }));
+
+    const search = await dispatchToolCall(
+      "search_session_history",
+      { query: "teal", scope: "handoff_source" },
+      {
+        ...mockCtx,
+        getSessionTranscript: () => successor,
+        getHandoffSourceTranscript,
+      },
+    );
+    const payload = parseRecallPayload(search);
+    expect(getHandoffSourceTranscript).toHaveBeenCalledOnce();
+    expect(payload).toMatchObject({
+      ok: true,
+      scope: "handoff_source",
+      source_session_id: "predecessor-session",
+      source_session_title: "Original design work",
+      total_matches: 1,
+    });
+    expect(payload.hits[0].excerpt).toContain("predecessor chose");
+
+    const rejected = await dispatchToolCall(
+      "read_session_excerpt",
+      {
+        scope: "handoff_source",
+        source_session_id: "arbitrary-session",
+        start_message_index: 0,
+        end_message_index: 0,
+        snapshot_message_count: payload.snapshot_message_count,
+        snapshot_revision: payload.snapshot_revision,
+      },
+      {
+        ...mockCtx,
+        getSessionTranscript: () => successor,
+        getHandoffSourceTranscript,
+      },
+    );
+    expect(parseRecallPayload(rejected)).toMatchObject({
+      ok: false,
+      error: { code: "handoff_source_unavailable" },
+    });
+  });
+
+  it("returns stable unavailable errors for missing or oversized handoff sources", async () => {
+    for (const error of [
+      "handoff_source_unavailable",
+      "handoff_source_too_large",
+    ] as const) {
+      const result = await dispatchToolCall(
+        "search_session_history",
+        { query: "anything", scope: "handoff_source" },
+        {
+          ...mockCtx,
+          getHandoffSourceTranscript: () => ({ error }),
+        },
+      );
+      expect(parseRecallPayload(result)).toMatchObject({
+        ok: false,
+        error: { code: error },
+      });
+    }
+  });
+
   it("returns explicit unavailable behavior without a session transcript provider", async () => {
     const result = await dispatchToolCall(
       "search_session_history",
       { query: "anything" },
       mockCtx,
     );
-    const text = result.content.find((entry) => entry.type === "text")?.text;
-    expect(JSON.parse(text ?? "{}")).toMatchObject({
+    expect(parseRecallPayload(result)).toMatchObject({
       ok: false,
       error: { code: "session_transcript_unavailable" },
     });

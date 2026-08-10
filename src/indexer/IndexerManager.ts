@@ -258,7 +258,10 @@ export class IndexerManager implements vscode.Disposable {
             {
               currentOffset: completedDiscoveredFiles,
               total: totalFiles,
-              detailPrefix: `workspace ${completedRoots + 1}/${workspaceRoots.length}: ${label}`,
+              detailPrefix:
+                workspaceRoots.length > 1
+                  ? `${label} (${completedRoots + 1}/${workspaceRoots.length})`
+                  : undefined,
             },
           );
 
@@ -614,7 +617,7 @@ export class IndexerManager implements vscode.Disposable {
     });
   }
 
-  private runWorkerJob(
+  private async runWorkerJob(
     message: ExtensionToWorkerMessage,
     progress?: {
       currentOffset?: number;
@@ -632,9 +635,15 @@ export class IndexerManager implements vscode.Disposable {
       throw new Error("Indexer worker job already in progress");
     }
     if (this.terminatingWorker) {
-      throw new Error(
-        "Indexer worker is still terminating after a timed-out job",
-      );
+      // A timed-out worker is being torn down. Wait for it to exit (bounded
+      // by the SIGKILL grace period) instead of failing every remaining
+      // workspace folder in this indexing pass.
+      await this.waitForWorkerTermination(WORKER_TERMINATION_GRACE_MS + 2_000);
+      if (this.terminatingWorker) {
+        throw new Error(
+          "Indexer worker is still terminating after a timed-out job",
+        );
+      }
     }
     if (this.isWorkerCircuitOpen()) {
       throw new Error(
@@ -691,6 +700,23 @@ export class IndexerManager implements vscode.Disposable {
         }
         reject(error);
       });
+    });
+  }
+
+  private waitForWorkerTermination(timeoutMs: number): Promise<void> {
+    const worker = this.terminatingWorker;
+    if (!worker || worker.exitCode !== null || worker.signalCode !== null) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        worker.off("exit", finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, timeoutMs);
+      timer.unref();
+      worker.once("exit", finish);
     });
   }
 

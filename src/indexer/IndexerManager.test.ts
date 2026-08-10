@@ -492,7 +492,7 @@ describe("IndexerManager incremental ownership", () => {
     expect(fork).toHaveBeenCalledTimes(5);
 
     // The breaker refuses to fork a sixth crash-looping worker.
-    expect(() => internals.runWorkerJob(message)).toThrow(
+    await expect(internals.runWorkerJob(message)).rejects.toThrow(
       /crash-loop breaker is open/,
     );
     expect(fork).toHaveBeenCalledTimes(5);

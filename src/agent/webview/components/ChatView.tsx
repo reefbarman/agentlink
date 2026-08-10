@@ -13,6 +13,7 @@ import {
 
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import type { ChatMessage } from "../types";
+import type { ComponentChildren } from "preact";
 import type { DetectedQuestion } from "../questionDetection";
 import { TranscriptMessageList } from "./TranscriptMessageList";
 import { useAutoScroll } from "./useAutoScroll";
@@ -62,6 +63,8 @@ interface ChatViewProps {
     "vscode-webview" | "browser-webview"
   >;
   streamingMetricsScope?: string;
+  /** Optional product-specific content for an empty foreground chat. */
+  emptyState?: ComponentChildren;
 }
 
 export function ChatView({
@@ -95,6 +98,7 @@ export function ChatView({
   streamingMetrics,
   streamingMetricsSurface,
   streamingMetricsScope,
+  emptyState,
 }: ChatViewProps) {
   const hasMessages = messages.length > 0;
   const {
@@ -209,10 +213,12 @@ export function ChatView({
   if (!hasMessages) {
     return (
       <div class="chat-messages empty">
-        <div class="empty-state">
-          <i class="codicon codicon-comment-discussion empty-icon" />
-          <p>Ask anything to get started</p>
-        </div>
+        {emptyState ?? (
+          <div class="empty-state">
+            <i class="codicon codicon-comment-discussion empty-icon" />
+            <p>Ask anything to get started</p>
+          </div>
+        )}
       </div>
     );
   }

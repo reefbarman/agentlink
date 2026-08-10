@@ -144,6 +144,48 @@ describe("App chat workspace integration", () => {
     ]);
   });
 
+  it("keeps the model catalog after closing a restored tab", async () => {
+    const vscodeApi = createVsCodeApi();
+    const { container } = render(<App vscodeApi={vscodeApi} />);
+    const initialSnapshot = createSnapshot("tab-1");
+    deliver({ type: "chatWorkspaceUpdate", snapshot: initialSnapshot });
+    deliver({
+      type: "agentModelsUpdate",
+      models: [
+        {
+          id: "claude-opus-5",
+          displayName: "Claude Opus",
+          provider: "anthropic",
+          authenticated: true,
+          reasoningEfforts: ["none", "low", "high"],
+        },
+      ],
+    });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+
+    const afterClose = createSnapshot("tab-2");
+    afterClose.tabs = [afterClose.tabs[1]!];
+    deliver({ type: "chatWorkspaceUpdate", snapshot: afterClose });
+    deliver({
+      ...sessionLoaded("session-2", "transcript for B"),
+      origin: "focus",
+    });
+
+    const composer = container.querySelector(
+      ".chat-input",
+    ) as HTMLTextAreaElement;
+    fireEvent.input(composer, { target: { value: "continue the session" } });
+    fireEvent.click(screen.getByTitle("Send message (Enter)"));
+
+    expect(screen.queryByText("Checking model setup")).toBeNull();
+    expect(postedCommands(vscodeApi.postMessage, "agentSend")).toEqual([
+      expect.objectContaining({
+        text: "continue the session",
+        sessionId: "session-2",
+      }),
+    ]);
+  });
+
   it("keeps composer selections made before the first message", async () => {
     const vscodeApi = createVsCodeApi();
     const snapshot = createSnapshot("tab-1");

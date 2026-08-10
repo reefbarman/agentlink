@@ -81,7 +81,7 @@ flowchart LR
 - **Context Doctor** — `/context-doctor` appends a read-only report for the current workspace session: prompt-profile and section measurements, tool-schema cost, the latest completed request ledger, retained/repeated tool results, condensation evidence, and explicit “not yet instrumented” gaps. It makes no model request or approval request, and its diagnostic transcript entry is excluded from future provider and condensation context. Available in VS Code chat and the browser remote for workspace sessions; projectless Browser Ask Agent is intentionally unsupported.
 - **Autonomous memory manager** — when `agentlink.memory.mode` is `autonomous`, `/memory` opens a local inspection panel without making a model request. Search and filter typed records, inspect provenance/revisions/audit history, forget or restore records, undo auditable changes, clear a confirmed scope, and import/export versioned JSON archives. VS Code exposes global and current-project scopes; projectless Browser Ask Agent exposes global scope only. `/remember` remains the model-assisted workflow for identifying durable candidates.
 - **Polish prompt** — a sparkle button in the composer toolbar rewrites your draft with the current provider's fast model before sending: it fixes spelling, grammar, and punctuation and tightens wording while preserving meaning, tone, code, file paths, `@`-mentions, and any leading slash command. The polished text replaces the draft in place (nothing is sent), a revert button restores exactly what you had typed, and a draft edited while the request was in flight is never overwritten. Available in both the VS Code chat and the browser remote; uses model quota.
-- **Model picker + auth-aware UX** — model selection is built into the chat UI and can prompt for Anthropic or OpenAI/Codex auth as needed. For Anthropic, model metadata (available models, context window, output tokens, reasoning-effort options) is refreshed from the Anthropic API and merged over built-in defaults; the refresh is lazy (never on activation) and falls back to built-in static metadata when offline. Toggle with `agentlink.anthropic.dynamicModelCapabilities` (default on).
+- **Model picker + auth-aware UX** — model selection is built into the chat UI and can prompt for Anthropic or OpenAI/Codex auth as needed. An empty chat reports the selected model's live setup state: it offers a direct ChatGPT/Codex sign-in first, with OpenAI API-key, Anthropic API-key, and OpenAI-compatible alternatives. A provider-bound send is held while the selected model is checking, unauthenticated, or unavailable, preserving the draft and attachments; local controls such as `/new`, `/mode`, `/model`, `/environment`, `/memory`, and `/fleet` remain available. “Credentials configured” means ready to try, not that AgentLink has verified connectivity, quota, or billing. The browser remote shows the same readiness but directs credential setup to its owning VS Code window. For Anthropic, model metadata (available models, context window, output tokens, reasoning-effort options) is refreshed from the Anthropic API and merged over built-in defaults; the refresh is lazy (never on activation) and falls back to built-in static metadata when offline. Toggle with `agentlink.anthropic.dynamicModelCapabilities` (default on).
 
 ### Remote control and MCP integrations
 
@@ -153,12 +153,13 @@ A failure after a sandbox provider has been selected remains fail-closed; AgentL
 
 1. Install the extension (see [Installation](#installation))
 2. Open the **AgentLink** activity bar icon and select the **Agent** view
-3. Pick a model if prompted and configure auth if needed:
-   - **AgentLink: Sign In to OpenAI/Codex** for ChatGPT/Codex OAuth or OpenAI API-key-backed models
-   - **AgentLink: Set OpenAI API Key** for direct OpenAI API key setup
-   - **AgentLink: Set Anthropic API Key** for Anthropic models
+3. Follow the empty-chat setup card for the selected model:
+   - **Continue with ChatGPT/Codex** starts the recommended ChatGPT/Codex OAuth path directly.
+   - **Use OpenAI API key** and **Use Anthropic API key** open the corresponding secure VS Code credential prompts.
+   - **Configure another provider** opens the guided OpenAI-compatible model setup.
+   - You can still type a draft while setup is required. AgentLink preserves it and sends it once the selected model is ready.
    - To temporarily remove a provider from model selection and automatic routing without clearing credentials, add its ID to `agentlink.disabledProviders` (for example `["anthropic"]`; built-in IDs are `anthropic` and `codex`)
-4. Start chatting in the sidebar
+4. Start chatting in the sidebar. Credentials being configured means the model is ready to try; a first request can still report provider-side connectivity, quota, billing, or revoked-key errors.
 5. Switch modes as needed (`code`, `architect`, `ask`, `debug`, `review`)
 6. Approve edits and commands inline when the agent requests them
 
@@ -2003,6 +2004,7 @@ The browser surface supports:
 - `@` project-file mentions and external-file attach (routed through VS Code's file picker)
 - media paste and drag-drop (images/PDFs)
 - the composer polish-prompt button (runs on the VS Code instance's provider)
+- selected-model setup/ready status; setup actions stay in the owning VS Code window because the browser never receives credential mutation paths
 
 The Review pane is intentionally diff-only: it shows pending file changes from write tools in a read-only Monaco diff viewer and does not duplicate approval or question cards from the chat pane. Pending diffs are selected from a VS Code-like file-tab strip, and the editor uses captured VS Code CSS theme variables for tab/editor/diff chrome plus Monaco language tokenization for syntax highlighting. Exact custom theme token colors are best-effort today because the gateway receives CSS variables, not the full resolved VS Code TextMate token color rules.
 
@@ -2138,12 +2140,14 @@ Development builds expose local tools for collecting and managing feedback about
 
 Submits feedback about an AgentLink-owned tool. In development builds, `send_feedback` is always advertised directly to every VS Code-backed built-in agent session, including background agents using restrictive tool profiles or skill allowlists; it never requires `find_native_tools` discovery. Feedback-management tools such as `get_feedback` remain eligible for deferred discovery.
 
-| Parameter             | Type    | Description                                             |
-| --------------------- | ------- | ------------------------------------------------------- |
-| `tool_name`           | string  | Exact AgentLink tool name the feedback concerns         |
-| `feedback`            | string  | Issue, suggestion, or missing capability                |
-| `tool_params`         | string? | Optional serialized parameters that help reproduce it   |
-| `tool_result_summary` | string? | Optional summary of the observed or unexpected behavior |
+| Parameter             | Type    | Description                                                 |
+| --------------------- | ------- | ----------------------------------------------------------- |
+| `tool_name`           | string  | Exact AgentLink tool name the feedback concerns             |
+| `feedback`            | string  | Non-empty, actionable AgentLink issue or missing capability |
+| `tool_params`         | string? | Optional serialized parameters that help reproduce it       |
+| `tool_result_summary` | string? | Optional summary of the observed or unexpected behavior     |
+
+Use this only for concrete problems, unexpected behavior, or missing capabilities. Routine success, praise, general commentary, and empty or whitespace-only reports are rejected.
 
 The response identifies the recorded entry by stable `id` and immutable `global_index`.
 

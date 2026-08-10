@@ -214,6 +214,41 @@ function makeChatViewProviderStub() {
     submitBrowserSend: vi.fn<() => Promise<{ ok: boolean; queued?: boolean }>>(
       async () => ({ ok: true }),
     ),
+    prepareBrowserSessionHandoff: vi.fn(async () => ({
+      ok: true,
+      draft: {
+        schemaVersion: 1,
+        id: "handoff-1",
+        sourceSessionId: "session-1",
+        sourceProjectId: "project-a",
+        sourceTitle: "Current session",
+        sourcePersistenceRevision: "revision-1",
+        sourceSnapshotRevision: "snapshot-1",
+        sourceRuntimeTranscriptRevision: 1,
+        createdAt: 1,
+        generatedBy: {
+          providerId: "deterministic",
+          model: "test",
+          fallbackUsed: true,
+        },
+        sections: {
+          objective: "Continue the work.",
+          completedWork: [],
+          decisions: [],
+          workspaceState: [],
+          verification: [],
+          unresolved: [],
+          constraints: [],
+          nextActions: [],
+        },
+        markdown: "# Session handoff",
+      },
+    })),
+    confirmBrowserSessionHandoff: vi.fn(async () => ({
+      ok: true,
+      successorSessionId: "session-successor",
+    })),
+    cancelBrowserSessionHandoff: vi.fn(),
     submitBrowserModeSwitch: vi.fn(async (mode: string) => ({
       approved: true,
       mode,
@@ -1995,6 +2030,67 @@ describe("BrowserGatewayServer", () => {
         sessionId: "session-1",
         interject: true,
       }),
+    );
+
+    const preparedHandoff = await fetch(
+      `${baseUrl}/api/session/handoff/prepare`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({ sessionId: "session-1" }),
+      },
+    );
+    expect(preparedHandoff.status).toBe(200);
+    expect(await preparedHandoff.json()).toMatchObject({
+      ok: true,
+      draft: { id: "handoff-1" },
+    });
+    expect(chatViewProvider.prepareBrowserSessionHandoff).toHaveBeenCalledWith(
+      "session-1",
+    );
+
+    const confirmedHandoff = await fetch(
+      `${baseUrl}/api/session/handoff/confirm`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({
+          draftId: "handoff-1",
+          markdown: "# Reviewed handoff",
+        }),
+      },
+    );
+    expect(confirmedHandoff.status).toBe(200);
+    expect(await confirmedHandoff.json()).toEqual({
+      ok: true,
+      successorSessionId: "session-successor",
+    });
+    expect(chatViewProvider.confirmBrowserSessionHandoff).toHaveBeenCalledWith(
+      "handoff-1",
+      "# Reviewed handoff",
+    );
+
+    const cancelledHandoff = await fetch(
+      `${baseUrl}/api/session/handoff/cancel`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({ draftId: "handoff-1" }),
+      },
+    );
+    expect(cancelledHandoff.status).toBe(200);
+    expect(await cancelledHandoff.json()).toEqual({ ok: true });
+    expect(chatViewProvider.cancelBrowserSessionHandoff).toHaveBeenCalledWith(
+      "handoff-1",
     );
 
     const authorizedMode = await fetch(`${baseUrl}/api/mode`, {

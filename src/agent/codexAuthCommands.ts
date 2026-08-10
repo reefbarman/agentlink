@@ -27,6 +27,8 @@ interface CodexAuthManager {
   clearAll(): Promise<unknown>;
 }
 
+export type CodexSignInPreferredChoice = "oauthOnly" | "apiKeyOnly";
+
 export interface CodexAuthCommandDependencies {
   authManager: CodexAuthManager;
   completeOAuthSignIn(options?: {
@@ -74,32 +76,34 @@ export function registerCodexAuthCommands({
   return [
     vscode.commands.registerCommand(
       "agentlink.codexSignIn",
-      async (preferredChoice?: "apiKeyOnly") => {
+      async (preferredChoice?: CodexSignInPreferredChoice) => {
         const choice =
-          preferredChoice === "apiKeyOnly"
-            ? { value: "apiKey" }
-            : await vscode.window.showQuickPick(
-                [
+          preferredChoice === "oauthOnly"
+            ? { value: "oauth" }
+            : preferredChoice === "apiKeyOnly"
+              ? { value: "apiKey" }
+              : await vscode.window.showQuickPick(
+                  [
+                    {
+                      label: "Sign in with ChatGPT/Codex",
+                      description:
+                        "Use your ChatGPT/Codex OAuth sessions for model chat",
+                      value: "oauth",
+                    },
+                    {
+                      label: "Use OpenAI API key",
+                      description:
+                        "Use an OpenAI API key for models and embeddings",
+                      value: "apiKey",
+                    },
+                  ],
                   {
-                    label: "Sign in with ChatGPT/Codex",
-                    description:
-                      "Use your ChatGPT/Codex OAuth sessions for model chat",
-                    value: "oauth",
+                    title: "OpenAI/Codex Authentication",
+                    placeHolder:
+                      "Choose model auth. Embeddings always use an API key. OAuth is preferred for model chat when both are configured.",
+                    ignoreFocusOut: true,
                   },
-                  {
-                    label: "Use OpenAI API key",
-                    description:
-                      "Use an OpenAI API key for models and embeddings",
-                    value: "apiKey",
-                  },
-                ],
-                {
-                  title: "OpenAI/Codex Authentication",
-                  placeHolder:
-                    "Choose model auth. Embeddings always use an API key. OAuth is preferred for model chat when both are configured.",
-                  ignoreFocusOut: true,
-                },
-              );
+                );
         if (!choice) return;
 
         if (choice.value === "apiKey") {

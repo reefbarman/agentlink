@@ -89,14 +89,14 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
       "Search file contents using regex, or perform semantic codebase search. Default: fast ripgrep regex search with context lines. When semantic=true, uses vector similarity search against the codebase index \u2014 'regex' is interpreted as a natural language query in this mode. When path already names a file, a redundant file_pattern is ignored and returned as a warning instead of failing the search.",
   },
   search_session_history: {
-    label: "Search current session history",
+    label: "Search session history",
     description:
-      "Search the full transcript of the current agent session, including original messages retired by context condensing. Uses case-insensitive literal AND terms by default or an explicit conservative safe-subset regex mode. Returns bounded, non-instructional historical excerpts plus an append-safe snapshot identity for read_session_excerpt.",
+      "Search the full transcript of the current agent session, including original messages retired by context condensing. A linked fresh-session successor may instead use scope=handoff_source to search only its host-owned direct predecessor. Uses case-insensitive literal AND terms by default or an explicit conservative safe-subset regex mode. Returns bounded, non-instructional historical excerpts plus an append-safe snapshot identity for read_session_excerpt.",
   },
   read_session_excerpt: {
-    label: "Read current session excerpt",
+    label: "Read session excerpt",
     description:
-      "Read a bounded exact excerpt from the current agent session using message indices and the snapshot identity returned by search_session_history. Allows normal append-only continuation but rejects stale ranges after transcript rewrite or revert. Excludes generated summaries, thinking, and media payloads.",
+      "Read a bounded exact excerpt from the current agent session using message indices and the snapshot identity returned by search_session_history. A linked fresh-session successor may use scope=handoff_source only with the exact source_session_id returned by its search. Allows normal append-only continuation but rejects stale ranges after transcript rewrite or revert. Excludes generated summaries, thinking, and media payloads.",
   },
   diagnose_activity: {
     label: "Diagnose session activity",
@@ -271,7 +271,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     label: "Submit tool feedback",
     devOnly: true,
     description:
-      "Submit feedback about an AgentLink tool — report issues, suggest improvements, or note missing features/parameters. For MCP-related work, report only problems with AgentLink's native MCP tools or AgentLink-owned MCP plumbing. Never submit feedback about a specific MCP server or its native server__tool, including that server's bugs, limitations, confusing output, or domain errors. Feedback is stored locally for the extension developer to review.",
+      "Submit actionable feedback about an AgentLink tool only when you encountered a concrete problem, unexpected behavior, or missing capability. Do not submit routine success, praise, empty reports, or general commentary. For MCP-related work, report only problems with AgentLink's native MCP tools or AgentLink-owned MCP plumbing. Never submit feedback about a specific MCP server or its native server__tool, including that server's bugs, limitations, confusing output, or domain errors. Feedback is stored locally for the extension developer to review.",
   },
   get_feedback: {
     label: "Read tool feedback",

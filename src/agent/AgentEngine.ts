@@ -1109,6 +1109,8 @@ export class AgentEngine {
        * would otherwise keep alive forever.
        */
       providerNoProgressTimeoutMs?: number;
+      /** Resolves the linked predecessor transcript for an eligible handoff successor. */
+      getHandoffSourceTranscript?: import("../core/tools/types.js").AgentToolExecutionContext["getHandoffSourceTranscript"];
     },
   ): AsyncGenerator<AgentEvent> {
     const ac = session.createAbortController();
@@ -2446,6 +2448,7 @@ export class AgentEngine {
           },
           getSessionTranscript: () =>
             buildSessionTranscriptSnapshot(session.getAllMessages()),
+          getHandoffSourceTranscript: opts?.getHandoffSourceTranscript,
           // Number image_N ids over the model-visible history (post-condense,
           // no diagnostic-only messages): the model counts the images it can
           // see, so numbering the raw transcript makes ids silently drift onto

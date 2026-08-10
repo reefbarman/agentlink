@@ -88,6 +88,22 @@ interface LineageReceipt {
 }
 
 /**
+ * A folder workspace becomes an untitled workspace when VS Code adds another
+ * folder. Treat that promotion as the same workspace lineage, while requiring
+ * an exact workspace-file URI match for every other transition.
+ */
+export function hasCompatibleWorkspaceFileUri(
+  source: WorkspaceHistoryShape,
+  destination: WorkspaceHistoryShape,
+): boolean {
+  return (
+    source.workspaceFileUri === destination.workspaceFileUri ||
+    (source.workspaceFileUri === undefined &&
+      destination.workspaceFileUri?.startsWith("untitled:") === true)
+  );
+}
+
+/**
  * A transition is eligible for automatic migration only when the folder sets
  * differ by strict containment. Equal and partially-overlapping sets require
  * explicit recovery because there is no safe source to infer.
@@ -96,7 +112,7 @@ export function classifyWorkspaceHistoryTransition(
   source: WorkspaceHistoryShape,
   destination: WorkspaceHistoryShape,
 ): WorkspaceHistoryTransition {
-  if (source.workspaceFileUri !== destination.workspaceFileUri) {
+  if (!hasCompatibleWorkspaceFileUri(source, destination)) {
     return "unrelated";
   }
   const sourceFolders = new Set(source.workspaceFolderUris);

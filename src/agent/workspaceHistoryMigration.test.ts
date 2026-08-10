@@ -56,6 +56,21 @@ describe("classifyWorkspaceHistoryTransition", () => {
       ),
     ).toBe("unrelated");
     expect(
+      classifyWorkspaceHistoryTransition(single, {
+        ...expanded,
+        workspaceFileUri: "untitled:workspace-configuration",
+      }),
+    ).toBe("source_subset_of_destination");
+    expect(
+      classifyWorkspaceHistoryTransition(
+        { ...single, workspaceFileUri: "file:///workspace/app.code-workspace" },
+        {
+          ...expanded,
+          workspaceFileUri: "untitled:workspace-configuration",
+        },
+      ),
+    ).toBe("unrelated");
+    expect(
       classifyWorkspaceHistoryTransition(
         single,
         shape("other", ["file:///workspace/docs"]),

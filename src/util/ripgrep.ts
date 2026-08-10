@@ -1,7 +1,7 @@
 import * as childProcess from "child_process";
-import * as readline from "readline";
-import * as path from "path";
 import * as fs from "fs/promises";
+import * as path from "path";
+import * as readline from "readline";
 import * as vscode from "vscode";
 
 const isWindows = process.platform.startsWith("win");
@@ -205,11 +205,16 @@ export async function execRipgrepSearch(
 /**
  * Execute ripgrep in --files mode, collecting up to `limit` file paths.
  */
+export interface RipgrepFilesResult {
+  files: string[];
+  warnings: string[];
+}
+
 export async function execRipgrepFiles(
   rgPath: string,
   args: string[],
   limit: number,
-): Promise<string[]> {
+): Promise<RipgrepFilesResult> {
   return new Promise((resolve, reject) => {
     const rgProcess = childProcess.spawn(rgPath, args);
     const rl = readline.createInterface({
@@ -234,10 +239,18 @@ export async function execRipgrepFiles(
     });
 
     rl.on("close", () => {
-      if (errorOutput && files.length === 0) {
-        reject(new Error(`ripgrep error: ${errorOutput}`));
+      const warnings = errorOutput
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => /file system loop/i.test(line));
+      const nonLoopErrors = errorOutput
+        .split(/\r?\n/)
+        .filter((line) => line.trim() && !/file system loop/i.test(line))
+        .join("\n");
+      if (nonLoopErrors && files.length === 0) {
+        reject(new Error(`ripgrep error: ${nonLoopErrors}`));
       } else {
-        resolve(files);
+        resolve({ files, warnings });
       }
     });
 

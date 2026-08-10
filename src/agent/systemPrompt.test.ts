@@ -1350,6 +1350,12 @@ describe("buildSystemPrompt", () => {
       "You are AgentLink, a software engineering agent operating in a VS Code workspace.",
     );
     expect(result).toContain("Bias for action:");
+    expect(result).toContain(
+      "Work visibly: your thinking is invisible to the user",
+    );
+    expect(result).toContain(
+      "never let more than a few minutes of work or roughly 5 substantive tool calls pass silently",
+    );
     expect(result).not.toContain("### Task Alignment");
   });
 

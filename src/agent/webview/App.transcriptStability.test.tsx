@@ -29,6 +29,20 @@ function deliver(message: unknown): void {
   fireEvent(window, new MessageEvent("message", { data: message }));
 }
 
+function deliverAuthenticatedModels(): void {
+  deliver({
+    type: "agentModelsUpdate",
+    models: [
+      {
+        id: "claude-opus-5",
+        displayName: "Claude Opus",
+        provider: "anthropic",
+        authenticated: true,
+      },
+    ],
+  });
+}
+
 function agentDone(sessionId: string, transcriptRevision: number) {
   return {
     type: "agentDone",
@@ -128,6 +142,7 @@ describe("transcript stability across hydrations", () => {
       busy: false,
     };
     const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliverAuthenticatedModels();
     deliver({ type: "chatWorkspaceUpdate", snapshot });
     deliver({
       type: "stateUpdate",
@@ -194,7 +209,12 @@ describe("transcript stability across hydrations", () => {
     const snapshot = createSnapshot("tab-1", "epoch-1");
     snapshot.tabs[0] = { ...snapshot.tabs[0]!, sessionId: null };
     const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliverAuthenticatedModels();
     deliver({ type: "chatWorkspaceUpdate", snapshot });
+    deliver({
+      type: "stateUpdate",
+      state: { sessionId: null, mode: "code", model: "claude-opus-5" },
+    });
 
     const composer = container.querySelector(
       ".chat-input",
@@ -220,7 +240,12 @@ describe("transcript stability across hydrations", () => {
     snapshot.tabs[0] = { ...snapshot.tabs[0]!, sessionId: null };
     snapshot.tabs[1] = { ...snapshot.tabs[1]!, sessionId: null };
     const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliverAuthenticatedModels();
     deliver({ type: "chatWorkspaceUpdate", snapshot });
+    deliver({
+      type: "stateUpdate",
+      state: { sessionId: null, mode: "code", model: "claude-opus-5" },
+    });
 
     const composer = container.querySelector(
       ".chat-input",

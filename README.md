@@ -46,13 +46,14 @@ See the [getting started guide](resources/builtin-skills/documentation/reference
 
 1. **Reload VS Code**, then open the folder you want to work in. Without a folder, AgentLink remains available as a deliberately limited Ask-only chat with no workspace, terminal, MCP, or approval tools.
 2. Open the **AgentLink** activity-bar icon and choose the **Agent** view.
-3. Run **AgentLink: Sign In to OpenAI/Codex** from the Command Palette. This is the recommended first provider path; Anthropic, OpenAI API keys, and OpenAI-compatible connections are also supported.
-4. Let AgentLink build or refresh your local codebase index. Local lexical retrieval works without credentials; vector/hybrid ranking requires an explicit embedding-consent setting, even if credentials already exist. See [codebase indexing](resources/builtin-skills/documentation/references/complete-reference.md#semantic-codebase-search-setup) for controls.
-5. Give the agent a bounded first task, such as:
+3. The empty chat explains whether the selected model is ready. On a fresh install, click **Continue with ChatGPT/Codex** to start the recommended sign-in path directly. You can instead choose an OpenAI or Anthropic API key, or configure an OpenAI-compatible provider.
+4. AgentLink keeps any draft you type while setup is incomplete and enables sending as soon as credentials are configured. It does not verify provider connectivity until the first request, so normal provider errors such as quota or revoked credentials still appear if applicable.
+5. Let AgentLink build or refresh your local codebase index. Local lexical retrieval works without credentials; vector/hybrid ranking requires an explicit embedding-consent setting, even if credentials already exist. See [codebase indexing](resources/builtin-skills/documentation/references/complete-reference.md#semantic-codebase-search-setup) for controls.
+6. Give the agent a bounded first task, such as:
 
    > Read this project, explain the main module boundaries, and identify the safest place to add a new `<feature>`.
 
-6. Review proposed edits in the diff view and approve commands or other boundaries when AgentLink asks. Use `/checkpoint` before risky work and `/revert` if you need to undo it.
+7. Review proposed edits in the diff view and approve commands or other boundaries when AgentLink asks. Use `/checkpoint` before risky work and `/revert` if you need to undo it.
 
 ## Highlights
 

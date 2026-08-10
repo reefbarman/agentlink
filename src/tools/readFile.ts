@@ -9,6 +9,7 @@ import type {
   ReadFileParams,
 } from "../core/capabilities/readSearch.js";
 import {
+  canonicalizePath,
   resolveAndValidatePath,
   isBinaryFile,
   tryGetFirstWorkspaceRoot,
@@ -184,6 +185,7 @@ interface GitChange {
 }
 interface GitRepository {
   state: {
+    mergeChanges?: GitChange[];
     indexChanges: GitChange[];
     workingTreeChanges: GitChange[];
     untrackedChanges?: GitChange[];
@@ -203,38 +205,60 @@ export function getGitStatus(filePath: string): string | undefined {
       vscode.extensions.getExtension<GitExtension>("vscode.git");
     if (!gitExtension?.isActive) return undefined;
 
-    const api = gitExtension.exports.getAPI(1);
+    const normalizedFilePath = normalizeGitPath(filePath);
+    const normalizedLexicalFilePath = normalizeGitPathLexically(filePath);
+    const repo = gitExtension.exports
+      .getAPI(1)
+      .repositories.filter((candidate) =>
+        isPathInGitRepository(
+          normalizedLexicalFilePath,
+          candidate.rootUri.fsPath,
+        ),
+      )
+      .sort(
+        (left, right) =>
+          normalizeGitPath(right.rootUri.fsPath).length -
+          normalizeGitPath(left.rootUri.fsPath).length,
+      )[0];
+    if (!repo) return undefined;
 
-    // Find the repo that contains this file
-    for (const repo of api.repositories) {
-      const repoRoot = repo.rootUri.fsPath;
-      if (!filePath.startsWith(repoRoot)) continue;
-
-      // Check staged (index) changes
-      if (repo.state.indexChanges.some((c) => c.uri.fsPath === filePath)) {
-        return "staged";
-      }
-
-      // Check working tree changes (modified)
-      if (
-        repo.state.workingTreeChanges.some((c) => c.uri.fsPath === filePath)
-      ) {
-        return "modified";
-      }
-
-      // Check untracked
-      if (repo.state.untrackedChanges?.some((c) => c.uri.fsPath === filePath)) {
-        return "untracked";
-      }
-
-      // File is in a repo but not changed
-      return "clean";
-    }
-
-    return undefined; // Not in any git repo
+    const hasChange = (changes: GitChange[] | undefined): boolean =>
+      changes?.some((change) => {
+        const changePath = normalizeGitPathLexically(change.uri.fsPath);
+        return (
+          changePath === normalizedLexicalFilePath ||
+          changePath === normalizedFilePath
+        );
+      }) ?? false;
+    // A conflicted entry can also appear in staged or working-tree lists, so
+    // surface it first instead of masking the state that requires resolution.
+    if (hasChange(repo.state.mergeChanges)) return "unmerged";
+    if (hasChange(repo.state.indexChanges)) return "staged";
+    if (hasChange(repo.state.workingTreeChanges)) return "modified";
+    if (hasChange(repo.state.untrackedChanges)) return "untracked";
+    return "clean";
   } catch {
     return undefined;
   }
+}
+
+function normalizeGitPath(filePath: string): string {
+  return normalizeGitPathLexically(canonicalizePath(filePath));
+}
+
+function normalizeGitPathLexically(filePath: string): string {
+  const normalized = path.normalize(path.resolve(filePath));
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function isPathInGitRepository(filePath: string, repoRoot: string): boolean {
+  const relative = path.relative(normalizeGitPathLexically(repoRoot), filePath);
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) &&
+      relative !== ".." &&
+      !path.isAbsolute(relative))
+  );
 }
 
 // --- Diagnostics summary ---

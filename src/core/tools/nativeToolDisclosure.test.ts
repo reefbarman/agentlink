@@ -177,6 +177,7 @@ describe("native tool disclosure snapshots", () => {
         (tool) => tool.name,
       ),
     ).toEqual(["get_call_hierarchy"]);
+
     expect(
       discoverNativeTools(snapshot, { query: "durable revise" }).tools.map(
         (tool) => tool.name,

@@ -975,6 +975,12 @@ export function agentMessagesToChatMessages(
           condensing?: boolean;
         };
         surfaceChange?: ChatMessage["surfaceChange"];
+        handoff?: {
+          schemaVersion?: number;
+          sourceSessionId?: string;
+          sourceTitle?: string;
+          handoffId?: string;
+        };
         finalMarker?: FinalMessageMarker;
       };
       runtimeError?: {
@@ -1022,6 +1028,18 @@ export function agentMessagesToChatMessages(
             hint?.slashCommandLabel ??
             (hint?.isSlashCommand ? hint.displayText : undefined),
           origin: hint?.origin,
+          ...(m.uiHint?.handoff?.schemaVersion === 1 &&
+          m.uiHint.handoff.sourceSessionId &&
+          m.uiHint.handoff.sourceTitle &&
+          m.uiHint.handoff.handoffId
+            ? {
+                handoff: {
+                  sourceSessionId: m.uiHint.handoff.sourceSessionId,
+                  sourceTitle: m.uiHint.handoff.sourceTitle,
+                  handoffId: m.uiHint.handoff.handoffId,
+                },
+              }
+            : {}),
           displayMedia: mediaToDisplayMedia(m.media),
         });
       }

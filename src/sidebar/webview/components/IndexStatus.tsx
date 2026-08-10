@@ -45,10 +45,12 @@ export function IndexStatus({ state, postCommand }: Props) {
     : isIndexing
       ? status?.phase
         ? hasCounts
-          ? `${capitalize(status.phase)} ${status.current}/${status.total}`
-          : `${capitalize(status.phase)}${status.detail ? ` — ${status.detail}` : ""}`
+          ? `${capitalize(status.phase)} ${formatCount(status.current!)} / ${formatCount(status.total!)}`
+          : capitalize(status.phase)
         : "Discovering files..."
       : completedText;
+  const detailText =
+    isIndexing && status?.detail ? stripDiagnostics(status.detail) : null;
 
   const readinessReason = status?.readinessReason;
   const showRemediation = isError && Boolean(readinessReason);
@@ -65,6 +67,8 @@ export function IndexStatus({ state, postCommand }: Props) {
           <span class={dotClass} />
           <span class="status-text">{statusText}</span>
         </div>
+
+        {detailText && <div class="status-detail">{detailText}</div>}
 
         {progress !== null && (
           <div class="progress-bar">
@@ -279,4 +283,13 @@ function ReadinessActions({
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function formatCount(value: number): string {
+  return value.toLocaleString("en-US");
+}
+
+/** Drops worker diagnostics suffixes (heap/rss) that belong in logs, not UI. */
+function stripDiagnostics(detail: string): string {
+  return detail.replace(/\s*\(heap=[^)]*\)\s*$/, "");
 }

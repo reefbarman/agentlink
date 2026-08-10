@@ -138,10 +138,13 @@ const MAX_BATCH_TOKENS = 50_000;
 
 /**
  * Number of files to process through the full pipeline (chunk → embed → upsert)
- * per batch. Each file may be 1MB and publication temporarily holds source text,
- * chunks, embeddings, JSON, and Arrow buffers, so keep this deliberately small.
+ * per batch. Larger batches amortize the per-batch cache/journal checkpoints
+ * and fill embedding requests (so EMBEDDING_CONCURRENCY is actually reached),
+ * but each file may be 1MB and publication temporarily holds source text,
+ * chunks, embeddings, JSON, and Arrow buffers, so the batch stays bounded to
+ * keep peak memory within the worker's 1GB heap cap.
  */
-const FILE_BATCH_SIZE = 5;
+const FILE_BATCH_SIZE = 25;
 const TREE_SITTER_STARTUP_TIMEOUT_MS = 15_000;
 const STARTUP_HEARTBEAT_INTERVAL_MS = 5_000;
 
@@ -226,22 +229,19 @@ function createStagedPublicationPort(
   return {
     fenceToken: lease.fenceToken,
     runFenced: (operation) => withCodeIndexWriterFence(lease, operation),
-    beginStagedPublication: (manifest) =>
-      staging.beginStagedPublication(manifest),
-    appendStagedChunkBatch: (batch) => staging.appendStagedChunkBatch(batch),
-    appendStagedRelationBatch: (batch) =>
-      staging.appendStagedRelationBatch(batch),
-    completeStagedPublication: (publicationId) =>
-      staging.completeStagedPublication(publicationId),
+    stagePublication: (bundle) => staging.stagePublication(bundle),
     adoptStagedPublication: (publicationId) =>
       staging.adoptStagedPublication(publicationId),
     inspectStagedPublication: (publicationId) =>
       staging.inspectStagedPublication(publicationId),
     abortStagedPublication: (publicationId) =>
       staging.abortStagedPublication(publicationId),
-    activate: (publicationId) => activator.activate(publicationId),
-    finalizeActivation: (publicationId) =>
-      activator.finalizeActivation(publicationId),
+    activate: (publicationId, options) =>
+      activator.activate(publicationId, options),
+    cleanupSupersededGenerations: (entries) =>
+      activator.cleanupSupersededGenerations(entries),
+    finalizeActivations: (publicationIds) =>
+      activator.finalizeActivations(publicationIds),
     optimizeStagedStore: () => staging.optimizeStagedTables(),
   };
 }
@@ -352,6 +352,37 @@ function sendError(message: string, fatal: boolean): void {
  */
 const RETRIEVAL_OPTIMIZE_INTERVAL_MS = 30 * 60 * 1_000;
 let lastRetrievalOptimizeAt = 0;
+
+/**
+ * Heals a degraded store before per-file work begins. Runs the same throttled
+ * optimize as refreshRetrievalIndexes, but at job start: on a store bloated
+ * with unpruned versions every subsequent scan and commit is slow, and waiting
+ * for the end-of-job optimize means a long job — or one that keeps getting
+ * interrupted — never heals the store at all.
+ */
+async function optimizeRetrievalStoreIfDue(
+  repository: LanceDbRetrievalRepository,
+  stagedPort: StagedRepositoryPublicationPort,
+  totalFiles: number,
+): Promise<void> {
+  if (Date.now() - lastRetrievalOptimizeAt < RETRIEVAL_OPTIMIZE_INTERVAL_MS) {
+    return;
+  }
+  lastRetrievalOptimizeAt = Date.now();
+  const report = () =>
+    sendStartupProgress(totalFiles, "optimizing retrieval store");
+  report();
+  const heartbeat = setInterval(report, 30_000);
+  heartbeat.unref();
+  try {
+    await repository.optimize();
+    await stagedPort.optimizeStagedStore();
+  } catch (error) {
+    console.error(`Retrieval store optimization failed: ${error}`);
+  } finally {
+    clearInterval(heartbeat);
+  }
+}
 
 async function refreshRetrievalIndexes(
   repository: LanceDbRetrievalRepository,
@@ -804,6 +835,7 @@ async function recoverChangedFileReplacements(args: {
   structuralCache: StructuralGraphCache;
   stagedPublicationPort: StagedRepositoryPublicationPort;
   checkpoints: CacheCheckpointCoordinator;
+  onProgress?: (completed: number, total: number) => void;
 }): Promise<{
   cancelled: boolean;
   pending: boolean;
@@ -830,6 +862,7 @@ async function recoverChangedFileReplacements(args: {
     store: createFileReplacementStore(args),
     port: args.stagedPublicationPort,
     isCancelled: () => aborted,
+    onProgress: args.onProgress,
   });
   return {
     cancelled: recovered.cancelled,
@@ -1032,6 +1065,14 @@ interface BatchConfig {
   granularity: ChunkGranularity;
   checkpoints: CacheCheckpointCoordinator;
   useTreeSitter: boolean;
+  /**
+   * Liveness signal emitted during long intra-batch phases (embedding,
+   * publication) so the host's job watchdog sees IPC traffic even when a
+   * large batch takes a while to commit. `completedInBatch` carries per-file
+   * publication progress inside the current batch so the visible progress bar
+   * advances between batch commits.
+   */
+  onActivity?: (detail: string, completedInBatch?: number) => void;
 }
 
 interface BatchResult {
@@ -1123,6 +1164,7 @@ async function processFileBatch(
     config.embeddingBearerToken,
     config.workspaceRoot,
     errors,
+    (done, total) => config.onActivity?.(`embedded ${done}/${total} chunks`),
   );
 
   if (aborted) {
@@ -1213,6 +1255,11 @@ async function processFileBatch(
           port: config.stagedPublicationPort,
           fenceToken: config.writerFenceToken,
           isCancelled: () => aborted,
+          onFileActivated: (activatedCount) =>
+            config.onActivity?.(
+              `published ${activatedCount}/${publications.length} files`,
+              activatedCount,
+            ),
         });
       filesIndexed += publicationResult.committedFiles;
       recordsUpserted += publicationResult.recordsUpserted;
@@ -1398,6 +1445,11 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
     }
     const retrievalIndexesRequireRefresh =
       (await repository.lexicalReadiness()).status !== "ready";
+    await optimizeRetrievalStoreIfDue(
+      repository,
+      writer.port,
+      msg.files.length,
+    );
     const checkpointCoordinator = createCacheCheckpointCoordinator({
       cachePath: msg.cachePath,
       structuralCachePath,
@@ -1434,6 +1486,11 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
           structuralCache,
           stagedPublicationPort: writer.port,
           checkpoints,
+          onProgress: (completed, total) =>
+            sendStartupProgress(
+              msg.files.length,
+              `recovering interrupted file publications (${completed}/${total})`,
+            ),
         });
     recordsDeleted += replacementRecovery.recordsDeleted;
     if (replacementRecovery.pending || replacementRecovery.cancelled) {
@@ -1667,6 +1724,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       msg.files.length,
       `${alreadyCurrentFiles} already current; ${totalFiles} remaining in ${totalBatches} batches`,
     );
+    let publishedSoFar = 0;
     const result = await processFilePaths(
       toIndexPaths,
       {
@@ -1679,16 +1737,25 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         granularity: msg.granularity,
         checkpoints,
         useTreeSitter,
+        onActivity: (detail, completedInBatch = 0) =>
+          sendProgress(
+            "upserting",
+            alreadyCurrentFiles + publishedSoFar + completedInBatch,
+            msg.files.length,
+            detail,
+          ),
       },
       cache,
       structuralCache,
-      (committedFiles, batchNumber, totalBatches) =>
+      (committedFiles, batchNumber, totalBatches) => {
+        publishedSoFar = committedFiles;
         sendProgress(
           "upserting",
           alreadyCurrentFiles + committedFiles,
           msg.files.length,
           `committed batch ${batchNumber + 1}/${totalBatches}; ${alreadyCurrentFiles} already current`,
-        ),
+        );
+      },
     );
     filesIndexed += result.filesIndexed;
     chunksCreated += result.chunksCreated;
@@ -1830,6 +1897,7 @@ async function handleIncrementalUpdate(
     }
     const retrievalIndexesRequireRefresh =
       (await repository.lexicalReadiness()).status !== "ready";
+    await optimizeRetrievalStoreIfDue(repository, writer.port, totalChanges);
     const checkpointCoordinator = createCacheCheckpointCoordinator({
       cachePath: msg.cachePath,
       structuralCachePath,
@@ -1843,6 +1911,11 @@ async function handleIncrementalUpdate(
       structuralCache,
       stagedPublicationPort: writer.port,
       checkpoints,
+      onProgress: (completed, total) =>
+        sendStartupProgress(
+          totalChanges,
+          `recovering interrupted file publications (${completed}/${total})`,
+        ),
     });
     recordsDeleted += replacementRecovery.recordsDeleted;
     if (replacementRecovery.pending || replacementRecovery.cancelled) {
@@ -1975,6 +2048,13 @@ async function handleIncrementalUpdate(
           granularity: msg.granularity,
           checkpoints,
           useTreeSitter,
+          onActivity: (detail, completedInBatch = 0) =>
+            sendProgress(
+              "upserting",
+              completedInBatch,
+              toIndexPaths.length,
+              detail,
+            ),
         },
         cache,
         structuralCache,

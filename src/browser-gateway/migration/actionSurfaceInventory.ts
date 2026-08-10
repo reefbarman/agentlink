@@ -295,6 +295,24 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
   retainedHttp(
     "vscode_gateway",
     "POST",
+    "/api/session/handoff/prepare",
+    "Prepares a reviewable, editable fresh-session continuity brief.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
+    "/api/session/handoff/confirm",
+    "Validates the reviewed continuity brief and starts the successor session.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
+    "/api/session/handoff/cancel",
+    "Discards an unconfirmed fresh-session handoff draft.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
     "/api/debug/refresh",
     "Debug data is forbidden from relay state and remains HTTP.",
   ),

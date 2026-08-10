@@ -53,6 +53,16 @@ describe("WorkspaceContinuityCatalog", () => {
     ).toEqual([expect.objectContaining({ workspaceIdentity: "single" })]);
     expect(
       reopened.findExpansionCandidates({
+        workspaceIdentity: "untitled-expanded",
+        workspaceFileUri: "untitled:workspace-configuration",
+        workspaceFolderUris: [
+          "file:///workspace/app",
+          "file:///workspace/docs",
+        ],
+      }),
+    ).toEqual([expect.objectContaining({ workspaceIdentity: "single" })]);
+    expect(
+      reopened.findExpansionCandidates({
         workspaceIdentity: "single-again",
         workspaceFolderUris: ["file:///workspace/app"],
       }),

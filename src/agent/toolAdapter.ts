@@ -1946,6 +1946,8 @@ export interface ToolDispatchContext {
   getSessionImages?: () => SessionImageReference[];
   /** Returns an immutable projection of the executing session's full transcript. */
   getSessionTranscript?: AgentToolExecutionRequest["context"]["getSessionTranscript"];
+  /** Resolves only the host-owned direct predecessor of this handoff successor. */
+  getHandoffSourceTranscript?: AgentToolExecutionRequest["context"]["getHandoffSourceTranscript"];
   /** Returns bounded, redacted operation evidence for the executing session. */
   sessionActivityDiagnosticsProvider?: import("../core/sessionActivityDiagnostics.js").SessionActivityDiagnosticsProvider;
   /** Returns the set of skills explicitly advertised to the current session. */
@@ -2399,6 +2401,8 @@ export function createAgentToolRuntime(
                     | undefined,
                   getSessionImages: request.context.getSessionImages,
                   getSessionTranscript: request.context.getSessionTranscript,
+                  getHandoffSourceTranscript:
+                    request.context.getHandoffSourceTranscript,
                   pendingQuestionRecovery:
                     request.context.pendingQuestionRecovery,
                 });
@@ -3538,9 +3542,17 @@ export async function dispatchToolCall(
         },
       );
     case "search_session_history":
-      return handleSearchSessionHistory(params, ctx.getSessionTranscript);
+      return handleSearchSessionHistory(
+        params,
+        ctx.getSessionTranscript,
+        ctx.getHandoffSourceTranscript,
+      );
     case "read_session_excerpt":
-      return handleReadSessionExcerpt(params, ctx.getSessionTranscript);
+      return handleReadSessionExcerpt(
+        params,
+        ctx.getSessionTranscript,
+        ctx.getHandoffSourceTranscript,
+      );
     case "diagnose_activity":
       return handleDiagnoseActivity(
         params,

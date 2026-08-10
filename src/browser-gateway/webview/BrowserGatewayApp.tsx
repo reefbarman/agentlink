@@ -52,6 +52,7 @@ import { showFileOpenFailure } from "../../agent/webview/components/fileLinkFeed
 import { ContextUsageRow } from "../../agent/webview/components/ContextUsageRow";
 import { EnvironmentPanel } from "../../agent/webview/components/EnvironmentPanel";
 import { BackgroundSessionStrip } from "../../agent/webview/components/BackgroundSessionStrip";
+import { ModelSetupCard } from "../../agent/webview/components/ModelSetupCard";
 import { BrowserDiffViewer } from "./components/BrowserDiffViewer";
 import { LazyMcpManagerPanel } from "./components/LazyMcpManagerPanel";
 import {
@@ -84,6 +85,7 @@ import {
   turnMadeProgress,
 } from "../../shared/autoContinueProgress";
 import { isForwardedBuiltinCommand } from "../../shared/builtinCommandForwarding";
+import { deriveModelSetupState } from "../../shared/modelSetup";
 import { randomId } from "../../shared/randomId";
 import {
   isWriteApprovalSelection,
@@ -103,6 +105,8 @@ import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBa
 
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
 import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
+import { SessionHandoffPanel } from "../../shared/ui/SessionHandoffPanel";
+import type { SessionHandoffDraft } from "../../agent/sessionHandoff";
 import { ContextHealthPanel } from "../../shared/ui/ContextHealthPanel";
 import { MemoryPanel } from "../../shared/ui/MemoryPanel";
 import { McpElicitationFormControls } from "../../shared/ui/McpElicitationFormControls";
@@ -1500,6 +1504,10 @@ export function BrowserGatewayApp({
     values: Record<string, { paths: string[]; media: ComposerMedia[] }>;
   } | null>(null);
   const [sendStatus, setSendStatus] = useState<string>("");
+  const [handoffDraft, setHandoffDraft] = useState<SessionHandoffDraft | null>(
+    null,
+  );
+  const [handoffError, setHandoffError] = useState<string | null>(null);
   const [detachedDetailRefresh, setDetachedDetailRefresh] = useState<{
     id: number;
     selection: BrowserLogicalTabSelection;
@@ -3939,6 +3947,7 @@ export function BrowserGatewayApp({
             ? undefined
             : snapshot?.session.foreground?.project?.projectId,
           mode: activeForeground.mode,
+          model: activeForeground.model,
           reasoningEffort: effectiveReasoningEffort,
           thinkingEnabled: effectiveReasoningEffort !== "none",
           attachments,
@@ -5496,6 +5505,89 @@ export function BrowserGatewayApp({
     }
   };
 
+  const prepareSessionHandoff = (): void => {
+    if (!foreground) {
+      setModeStatus("No active session is loaded.");
+      return;
+    }
+    setHandoffError(null);
+    setModeStatus("Preparing fresh-session handoff…");
+    void fetch(buildApiPath("/api/session/handoff/prepare"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ sessionId: foreground.sessionId }),
+    })
+      .then(async (response) => {
+        const body = (await response.json().catch(() => ({}))) as {
+          ok?: boolean;
+          draft?: SessionHandoffDraft;
+          error?: string;
+        };
+        if (response.ok && body.ok && body.draft) {
+          setHandoffDraft(body.draft);
+          setModeStatus("");
+          return;
+        }
+        setHandoffError(
+          body.error ?? "The fresh-session handoff could not be prepared.",
+        );
+      })
+      .catch((error) => {
+        setHandoffError(`Fresh-session handoff error: ${String(error)}`);
+      });
+  };
+
+  const confirmSessionHandoff = (markdown: string): void => {
+    if (!handoffDraft) return;
+    setHandoffError(null);
+    void fetch(buildApiPath("/api/session/handoff/confirm"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ draftId: handoffDraft.id, markdown }),
+    })
+      .then(async (response) => {
+        const body = (await response.json().catch(() => ({}))) as {
+          ok?: boolean;
+          successorSessionId?: string;
+          error?: string;
+        };
+        if (!response.ok || !body.ok || !body.successorSessionId) {
+          setHandoffError(
+            body.error ?? "The fresh session could not be started.",
+          );
+          return;
+        }
+        setHandoffDraft(null);
+        setHandoffError(null);
+        setModeStatus("Fresh session started.");
+      })
+      .catch((error) => {
+        setHandoffError(`Fresh-session handoff error: ${String(error)}`);
+      });
+  };
+
+  const cancelSessionHandoff = (): void => {
+    if (!handoffDraft) return;
+    const draftId = handoffDraft.id;
+    setHandoffDraft(null);
+    setHandoffError(null);
+    setModeStatus("");
+    void fetch(buildApiPath("/api/session/handoff/cancel"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ draftId }),
+    });
+  };
+
   const handleExecuteBuiltinCommand = (name: string, args: string): void => {
     switch (name) {
       case "new": {
@@ -5514,6 +5606,9 @@ export function BrowserGatewayApp({
       }
       case "fleet":
         setShowFleetRequest((request) => request + 1);
+        return;
+      case "handoff":
+        if (!isAskAgentSelected) prepareSessionHandoff();
         return;
       case "environment":
         setEnvironmentPanelOpen(true);
@@ -5724,6 +5819,19 @@ export function BrowserGatewayApp({
             } satisfies WebviewModelInfo,
           ]
         : [];
+
+  const modelSetupState = useMemo(
+    () => deriveModelSetupState(foreground?.model, models),
+    [foreground?.model, models],
+  );
+  const browserSendBlockedReason =
+    !isAskAgentSelected && modelSetupState.kind === "checking"
+      ? "Checking model setup before AgentLink can send a message."
+      : !isAskAgentSelected && modelSetupState.kind === "credentials_required"
+        ? `Finish setup in the AgentLink VS Code window before sending with ${modelSetupState.model.providerDisplayName ?? modelSetupState.model.provider}.`
+        : !isAskAgentSelected && modelSetupState.kind === "model_unavailable"
+          ? "Choose an available model in the AgentLink VS Code window before sending a message."
+          : undefined;
 
   const browserVscodeApi = {
     postMessage: (msg: unknown) => {
@@ -7175,6 +7283,17 @@ export function BrowserGatewayApp({
                     }
                     sessionId={foreground?.sessionId ?? null}
                     originalPrompt={foreground?.originalPrompt}
+                    emptyState={
+                      !isAskAgentSelected ? (
+                        <ModelSetupCard
+                          setupState={modelSetupState}
+                          hasWorkspace={
+                            (snapshot?.session.projects?.length ?? 0) > 0
+                          }
+                          surface="browser"
+                        />
+                      ) : undefined
+                    }
                     detectedQuestion={foreground?.detectedQuestion ?? null}
                     onDetectedQuestionAnswer={(payload) => {
                       void handleSend(payload, []);
@@ -7254,6 +7373,14 @@ export function BrowserGatewayApp({
                   environmentPanelOpen ? 320 : 0,
                 )}
               >
+                {!isAskAgentSelected && handoffDraft && !mobileReviewOpen && (
+                  <SessionHandoffPanel
+                    draft={handoffDraft}
+                    error={handoffError}
+                    onCancel={cancelSessionHandoff}
+                    onConfirm={confirmSessionHandoff}
+                  />
+                )}
                 {!isAskAgentSelected &&
                   foreground &&
                   foreground.messageQueue.length > 0 &&
@@ -7892,18 +8019,15 @@ export function BrowserGatewayApp({
                     allowFileMentions={!isAskAgentSelected}
                     disabled={
                       !isAskAgentSelected &&
-                      ((snapshot?.session.projects?.length ?? 0) === 0 ||
-                        foreground?.project?.availability === "unavailable")
+                      foreground?.project?.availability === "unavailable"
                     }
                     disabledReason={
                       !isAskAgentSelected &&
-                      (snapshot?.session.projects?.length ?? 0) === 0
-                        ? "Open a folder to enable local execution."
-                        : !isAskAgentSelected &&
-                            foreground?.project?.availability === "unavailable"
-                          ? `Project unavailable: ${foreground.project.displayName}`
-                          : undefined
+                      foreground?.project?.availability === "unavailable"
+                        ? `Project unavailable: ${foreground.project.displayName}`
+                        : undefined
                     }
+                    sendBlockedReason={browserSendBlockedReason}
                   />
                 </div>
               )}

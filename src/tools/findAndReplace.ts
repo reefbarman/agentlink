@@ -75,7 +75,7 @@ export async function handleFindAndReplace(
     let pattern: RegExp;
     if (params.regex) {
       try {
-        pattern = new RegExp(findStr, "g");
+        pattern = new RegExp(findStr, "gm");
       } catch (e) {
         return errorResult(
           `Invalid regex: ${e instanceof Error ? e.message : e}`,
@@ -131,13 +131,11 @@ export async function handleFindAndReplace(
 
       fileUris = [vscode.Uri.file(absolutePath)];
     } else if (params.glob) {
-      // Use VS Code's file finder with the glob pattern
+      // Leave the exclude pattern undefined so VS Code applies its configured
+      // workspace search exclusions. Supplying a narrow exclude here overrides
+      // those defaults and can unexpectedly propose edits to excluded caches.
       const relGlob = new vscode.RelativePattern(workspaceRoot, params.glob);
-      fileUris = await vscode.workspace.findFiles(
-        relGlob,
-        "**/node_modules/**",
-        500,
-      );
+      fileUris = await vscode.workspace.findFiles(relGlob, undefined, 500);
       if (fileUris.length === 0) {
         return errorResult(`No files matched glob pattern: ${params.glob}`);
       }
@@ -222,6 +220,10 @@ export async function handleFindAndReplace(
         });
 
         matchIdx++;
+
+        // RegExp.prototype.exec does not advance lastIndex after an empty global
+        // match. Advance explicitly so anchor/lookaround patterns cannot loop.
+        if (regexMatch[0].length === 0) pattern.lastIndex++;
       }
 
       if (replacements.length > 0) {

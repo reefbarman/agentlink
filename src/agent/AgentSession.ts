@@ -44,6 +44,7 @@ import type {
   PersistedFleetMetadata,
   PersistedSessionRunState,
 } from "./persistenceContracts.js";
+import type { PersistedSessionLineage } from "./sessionHandoff.js";
 import {
   buildModeInstructionBlock,
   buildPromptArtifacts,
@@ -149,6 +150,8 @@ export class AgentSession {
   /** Durable marker for a foreground run that may need recovery after reload. */
   runState: PersistedSessionRunState | undefined;
   fleetMetadata: PersistedFleetMetadata | undefined;
+  /** Durable fresh-session relationship metadata; no runtime authority is inherited. */
+  lineage: PersistedSessionLineage | undefined;
 
   /** Cumulative uncached input tokens across the session.
    * This is intentionally uncached-only for cost/usage accounting; use lastInputTokens
@@ -775,6 +778,7 @@ export class AgentSession {
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
       origin?: "vscode" | "browser";
+      handoff?: NonNullable<NonNullable<AgentMessage["uiHint"]>["handoff"]>;
       images?: Array<{ name: string; mimeType: string; base64: string }>;
       documents?: Array<{ name: string; mimeType: string; base64: string }>;
     },
@@ -796,17 +800,28 @@ export class AgentSession {
       (opts.displayText ||
         opts.isSlashCommand ||
         opts.slashCommandLabel ||
-        opts.origin)
+        opts.origin ||
+        opts.handoff)
         ? {
             uiHint: {
-              userMessage: {
-                ...(opts.displayText ? { displayText: opts.displayText } : {}),
-                ...(opts.isSlashCommand ? { isSlashCommand: true } : {}),
-                ...(opts.slashCommandLabel
-                  ? { slashCommandLabel: opts.slashCommandLabel }
-                  : {}),
-                ...(opts.origin ? { origin: opts.origin } : {}),
-              },
+              ...(opts.displayText ||
+              opts.isSlashCommand ||
+              opts.slashCommandLabel ||
+              opts.origin
+                ? {
+                    userMessage: {
+                      ...(opts.displayText
+                        ? { displayText: opts.displayText }
+                        : {}),
+                      ...(opts.isSlashCommand ? { isSlashCommand: true } : {}),
+                      ...(opts.slashCommandLabel
+                        ? { slashCommandLabel: opts.slashCommandLabel }
+                        : {}),
+                      ...(opts.origin ? { origin: opts.origin } : {}),
+                    },
+                  }
+                : {}),
+              ...(opts.handoff ? { handoff: opts.handoff } : {}),
             },
           }
         : {}),
@@ -1145,6 +1160,7 @@ export class AgentSession {
     activeSkillState?: PersistedActiveSkillState;
     runState?: PersistedSessionRunState;
     fleetMetadata?: PersistedFleetMetadata;
+    lineage?: PersistedSessionLineage;
     messages: AgentMessage[];
     modeInstructionAnchors?: ModeInstructionAnchor[];
   }): void {
@@ -1163,6 +1179,7 @@ export class AgentSession {
     // session resumable without pretending the old in-memory run still exists.
     this.runState = data.runState;
     this.fleetMetadata = data.fleetMetadata;
+    this.lineage = data.lineage;
     this.messagesRevision++;
     this.messages = data.messages;
     if (data.modeInstructionAnchors?.length) {

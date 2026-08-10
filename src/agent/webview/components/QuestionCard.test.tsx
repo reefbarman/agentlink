@@ -259,6 +259,27 @@ describe("QuestionCard recommendation badges", () => {
       unmount();
     }
   });
+
+  it("matches trimmed recommendation labels to normalized confirmation options", () => {
+    const { container } = render(
+      <QuestionCard
+        id="request-confirmation"
+        context="Choose an option."
+        questions={[
+          {
+            id: "confirmation",
+            type: "confirmation",
+            question: "Ship this release?",
+            options: [" Ship it ", "Keep working"],
+            recommended: " Ship it ",
+          },
+        ]}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    expectRecommendationBadge(container, "Ship it");
+  });
 });
 
 describe("QuestionCard other context", () => {

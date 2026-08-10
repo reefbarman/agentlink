@@ -367,6 +367,61 @@ describe("SessionStore", () => {
     );
   });
 
+  it("round-trips normalized lineage through metadata and the lightweight index", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    const lineage = {
+      schemaVersion: 1 as const,
+      handoffSource: {
+        schemaVersion: 1 as const,
+        handoffId: "handoff-1",
+        sourceSessionId: "source-session",
+        sourceProjectId: "project-api",
+        sourceTitle: "Source session",
+        sourcePersistenceRevision: "3",
+        sourceSnapshotRevision: "snapshot-1",
+        createdAt: 1,
+        reviewedMarkdown: "# Reviewed\nContinue safely.",
+      },
+    };
+
+    await expect(
+      store.saveSession({
+        session: createRecord({ metadata: { lineage } }),
+        expectedRevision: null,
+      }),
+    ).resolves.toEqual({ ok: true, revision: "1" });
+
+    const reloaded = new SessionStore(tmpDir);
+    const result = await reloaded.readSession("session-1");
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        value: expect.objectContaining({
+          metadata: expect.objectContaining({ lineage }),
+          summary: expect.objectContaining({
+            lineage: {
+              source: {
+                sessionId: "source-session",
+                projectId: "project-api",
+                handoffId: "handoff-1",
+                titleAtCreation: "Source session",
+              },
+            },
+          }),
+        }),
+      }),
+    );
+    expect(reloaded.list()[0]?.lineage).toEqual({
+      source: {
+        sessionId: "source-session",
+        projectId: "project-api",
+        handoffId: "handoff-1",
+        titleAtCreation: "Source session",
+      },
+    });
+  });
+
   it("round-trips optional prompt-profile and completed-context evidence", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
     const store = new SessionStore(tmpDir);

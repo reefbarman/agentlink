@@ -32,6 +32,36 @@ describe("handleSendFeedback", () => {
     });
   });
 
+  it("rejects empty or whitespace-only feedback without recording it", async () => {
+    for (const feedback of ["", " \n\t "]) {
+      const result = await handleSendFeedback(
+        { tool_name: "read_file", feedback },
+        "session-empty",
+      );
+
+      expect(result.content[0]).toMatchObject({
+        type: "text",
+        text: JSON.stringify({
+          status: "rejected",
+          error:
+            "feedback must describe a concrete, actionable AgentLink issue and cannot be empty or whitespace-only",
+        }),
+      });
+    }
+    expect(mocks.appendFeedback).not.toHaveBeenCalled();
+  });
+
+  it("trims recorded feedback without changing its content", async () => {
+    await handleSendFeedback(
+      { tool_name: "read_file", feedback: "  Unexpected result  " },
+      "session-trimmed",
+    );
+
+    expect(mocks.appendFeedback).toHaveBeenCalledWith(
+      expect.objectContaining({ feedback: "Unexpected result" }),
+    );
+  });
+
   it("attributes feedback with only the supplied opaque project ID", async () => {
     const result = await handleSendFeedback(
       {

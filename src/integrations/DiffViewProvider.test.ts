@@ -69,6 +69,37 @@ describe("createFormatOnSaveReport", () => {
     expect(report?.format_on_save_edits).toContain("+const value = { a: 1 };");
   });
 
+  it("reports when format-on-save restores the pre-edit content", () => {
+    const report = createFormatOnSaveReport(
+      "src/example.ts",
+      "const changed = true;\n",
+      "const unchanged = true;\n",
+      "const unchanged = true;\n",
+    );
+
+    expect(report).toMatchObject({
+      format_on_save: true,
+      format_on_save_reverted_proposal: true,
+    });
+    expect(report?.hint).toContain("not durable");
+  });
+
+  it("preserves the rollback warning when its format patch is capped", () => {
+    const original = `${"unchanged\n".repeat(1_000)}`;
+    const report = createFormatOnSaveReport(
+      "src/large.ts",
+      `${"changed\n".repeat(1_000)}`,
+      original,
+      original,
+    );
+
+    expect(report).toMatchObject({
+      format_on_save_reverted_proposal: true,
+      format_on_save_edits_omitted: "size_cap",
+    });
+    expect(report?.hint).toContain("not durable");
+  });
+
   it("omits oversized format patches with a structured fallback", () => {
     const expected = Array.from({ length: 300 }, (_, i) => `x${i}=1`).join(
       "\n",

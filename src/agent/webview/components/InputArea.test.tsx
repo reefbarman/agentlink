@@ -76,6 +76,82 @@ describe("InputArea project availability", () => {
   });
 });
 
+describe("InputArea model setup gate", () => {
+  it("preserves a normal draft when provider setup blocks Enter or clicking Send", () => {
+    const onSend = vi.fn();
+    const { container, getByRole } = renderInputArea([], {
+      onSend,
+      sendBlockedReason: "Set up ChatGPT/Codex before sending a message.",
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    input.value = "Keep this draft";
+    fireEvent.input(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(
+      getByRole("button", {
+        name: "Set up ChatGPT/Codex before sending a message.",
+      }),
+    );
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(input.value).toBe("Keep this draft");
+    expect(input.disabled).toBe(false);
+  });
+
+  it("still executes local built-in commands while provider setup is required", () => {
+    const onExecuteBuiltinCommand = vi.fn();
+    const { container } = renderInputArea(
+      [
+        {
+          name: "new",
+          description: "Start a new chat",
+          source: "builtin",
+          builtin: true,
+        },
+      ],
+      {
+        onExecuteBuiltinCommand,
+        sendBlockedReason: "Set up a model before sending a message.",
+      },
+    );
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    input.value = "/new";
+    fireEvent.input(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onExecuteBuiltinCommand).toHaveBeenCalledWith("new", "");
+  });
+
+  it("keeps provider-backed slash commands in the draft until setup is complete", () => {
+    const onSend = vi.fn();
+    const { container } = renderInputArea(
+      [
+        {
+          name: "smoke",
+          description: "Use a provider-backed command",
+          source: "project",
+          builtin: false,
+          body: "Run the smoke test",
+        },
+      ],
+      {
+        onSend,
+        sendBlockedReason: "Set up a model before sending a message.",
+      },
+    );
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    input.value = "/smoke";
+    fireEvent.input(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(input.value).toBe("/smoke");
+  });
+});
+
 describe("InputArea interjections", () => {
   it("submits the current message as an interjection while streaming", () => {
     const onSend = vi.fn();
@@ -546,8 +622,9 @@ describe("InputArea slash popup", () => {
     expect(getByRole("button", { name: "Stop generation" })).toBeTruthy();
   });
 
-  it("keeps optional context available when the question action is hidden", () => {
+  it("submits context-only confirmation answers from the composer tick", () => {
     const onContextSubmit = vi.fn();
+    const onPrimary = vi.fn();
     const { container, getByRole } = renderInputArea([], {
       streaming: true,
       contextMode: {
@@ -562,7 +639,7 @@ describe("InputArea slash popup", () => {
           onBack: vi.fn(),
           primaryLabel: "Submit",
           primaryDisabled: false,
-          onPrimary: vi.fn(),
+          onPrimary,
           hidePrimaryAction: true,
         },
       },
@@ -589,6 +666,11 @@ describe("InputArea slash popup", () => {
       undefined,
       undefined,
     );
+    expect(onPrimary).toHaveBeenCalledWith("Only if the backup passes.", {
+      questionId: "confirmation",
+      paths: [],
+      media: [],
+    });
     expect(input.value).toBe("Only if the backup passes.");
   });
 

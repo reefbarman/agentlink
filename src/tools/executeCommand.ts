@@ -344,6 +344,8 @@ type ExecuteCommandRetryGuidance = {
   code:
     | "sandbox_cwd_outside_workspace"
     | "sandbox_missing_capabilities"
+    | "sandbox_host_integration"
+    | "sandbox_node_oom"
     | "sandbox_preparation_changed"
     | "managed_network_ssh_git_transport"
     | "managed_network_tls_trust";
@@ -384,6 +386,24 @@ const HOME_WRITE_DENIAL_PATTERNS = [
   /(?:\bEPERM\b|operation not permitted|permission denied|read-only file system).*\b(?:create|mkdir|rename|truncate|unlink|write|writing)\b/i,
   /\b(?:create|mkdir|rename|truncate|unlink|write|writing)\b.*(?:\bEPERM\b|operation not permitted|permission denied|read-only file system)/i,
 ];
+
+const PROCESS_INSPECTION_DENIAL_PATTERNS = [
+  /(?:\/usr)?\/bin\/ps:?(?:\s+)?(?:operation not permitted|permission denied)/i,
+  /(?:operation not permitted|permission denied).*\b(?:\/usr)?\/bin\/ps\b/i,
+];
+
+const CONTAINER_RUNTIME_DENIAL_PATTERNS = [
+  /(?:permission denied|operation not permitted).*(?:docker\.sock|colima)/i,
+  /(?:docker\.sock|colima).*(?:permission denied|operation not permitted)/i,
+];
+
+const NODE_OOM_PATTERNS = [
+  /fatal error:.*(?:heap out of memory|allocation failed)/i,
+  /javascript heap out of memory/i,
+  /reached heap limit/i,
+];
+
+const NODE_RUNNER_COMMANDS = new Set(["node", "npm", "npx", "pnpm", "yarn"]);
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} bytes`;
@@ -673,6 +693,109 @@ function attachSandboxCapabilityRetryGuidance(input: {
   Object.assign(result, {
     retry_guidance: guidance,
     missing_sandbox_capabilities: missingCapabilities,
+  });
+}
+
+function attachSandboxNodeOomRetryGuidance(input: {
+  result: TerminalCommandResult;
+  command: string;
+  output: string;
+  replayable: boolean;
+}): void {
+  const { result, command, output, replayable } = input;
+  const tokens = singleCommandTokens(command);
+  if (
+    hasRetryGuidance(result) ||
+    !replayable ||
+    !tokens ||
+    !NODE_RUNNER_COMMANDS.has(tokens[0] ?? "") ||
+    result.security?.route !== "sandbox" ||
+    result.security.confinement !== "verified-baseline" ||
+    result.security.permissionIntent !== "default" ||
+    result.exit_code === 0 ||
+    result.exit_code === null ||
+    result.backgrounded ||
+    result.is_running ||
+    result.timed_out ||
+    result.output_complete === false ||
+    result.output_finalized === false ||
+    !NODE_OOM_PATTERNS.some((pattern) => pattern.test(output))
+  ) {
+    return;
+  }
+
+  Object.assign(result, {
+    retry_guidance: {
+      code: "sandbox_node_oom",
+      message:
+        "Node exhausted its JavaScript heap. Retry the same command with a bounded larger heap only when the task needs it; AgentLink will not retry automatically.",
+      automatic_retry: false,
+      options: [
+        {
+          action: "retry_with_larger_node_heap",
+          same_command: true,
+          env: { NODE_OPTIONS: "--max-old-space-size=6144" },
+        },
+      ],
+    } satisfies ExecuteCommandRetryGuidance,
+  });
+}
+
+function attachSandboxHostIntegrationRetryGuidance(input: {
+  result: TerminalCommandResult;
+  command: string;
+  output: string;
+  replayable: boolean;
+}): void {
+  const { result, command, output, replayable } = input;
+  if (
+    hasRetryGuidance(result) ||
+    !replayable ||
+    result.security?.route !== "sandbox" ||
+    result.security.confinement !== "verified-baseline" ||
+    result.security.permissionIntent !== "default" ||
+    result.exit_code === 0 ||
+    result.exit_code === null ||
+    result.backgrounded ||
+    result.is_running ||
+    result.timed_out ||
+    result.output_complete === false ||
+    result.output_finalized === false
+  ) {
+    return;
+  }
+
+  const tokens = singleCommandTokens(command);
+  const isPsInspection =
+    tokens?.[0] === "ps" &&
+    PROCESS_INSPECTION_DENIAL_PATTERNS.some((pattern) => pattern.test(output));
+  const isContainerRuntimeCommand =
+    (tokens?.[0] === "docker" || tokens?.[0] === "colima") &&
+    CONTAINER_RUNTIME_DENIAL_PATTERNS.some((pattern) => pattern.test(output));
+  if (!isPsInspection && !isContainerRuntimeCommand) return;
+
+  const capability = isPsInspection
+    ? "host_process_inspection"
+    : "container_runtime_socket";
+  Object.assign(result, {
+    retry_guidance: {
+      code: "sandbox_host_integration",
+      message: `The sandbox denied ${capability.replaceAll("_", " ")}. This workflow cannot be granted narrowly; use the exact reviewed native retry only when host access is necessary. AgentLink will not retry or weaken the sandbox automatically.`,
+      automatic_retry: false,
+      options: [
+        {
+          action: "reviewed_native_retry",
+          same_command: true,
+          sandbox_permissions: "require_escalated",
+          reason_required: true,
+          reviewed_native_execution: true,
+        },
+      ],
+      prohibited_workarounds: [
+        "weaken_container_socket_permissions",
+        "disable_sandboxing_without_review",
+      ],
+    } satisfies ExecuteCommandRetryGuidance,
   });
 }
 
@@ -1849,6 +1972,18 @@ export async function handleExecuteCommand(
             approvalMode.commandApprovalPolicy === "approve-for-me",
           workspaceRoots,
         });
+        attachSandboxNodeOomRetryGuidance({
+          result,
+          command: commandToRun,
+          output: result.output,
+          replayable: replayableWithNarrowSandboxCapabilities,
+        });
+        attachSandboxHostIntegrationRetryGuidance({
+          result,
+          command: commandToRun,
+          output: result.output,
+          replayable: replayableWithNarrowSandboxCapabilities,
+        });
       }
 
       const capabilityDenial = sandboxCapabilityDenial(result);
@@ -2294,6 +2429,18 @@ export async function handleExecuteCommand(
           allowTemporaryHome:
             approvalMode.commandApprovalPolicy === "approve-for-me",
           workspaceRoots,
+        });
+        attachSandboxNodeOomRetryGuidance({
+          result,
+          command: commandToRun,
+          output: result.output,
+          replayable: replayableWithNarrowSandboxCapabilities,
+        });
+        attachSandboxHostIntegrationRetryGuidance({
+          result,
+          command: commandToRun,
+          output: result.output,
+          replayable: replayableWithNarrowSandboxCapabilities,
         });
       }
       if (result.output_captured && result.output) {

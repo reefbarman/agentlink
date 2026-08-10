@@ -8,6 +8,35 @@ import { describe, expect, it } from "vitest";
 import type { AppState } from "./chatProjection.js";
 import type { ChatMessage } from "../agent/webview/types.js";
 
+describe("fresh-session handoff chat projection", () => {
+  it("projects a valid handoff hint while retaining the ordinary user content", () => {
+    const messages = agentMessagesToChatMessages([
+      {
+        role: "user",
+        content: "Continue this work in a fresh session.",
+        uiHint: {
+          handoff: {
+            schemaVersion: 1,
+            sourceSessionId: "source-session",
+            sourceTitle: "Source task",
+            handoffId: "handoff-1",
+          },
+        },
+      },
+    ]);
+
+    expect(messages[0]).toMatchObject({
+      role: "user",
+      content: "Continue this work in a fresh session.",
+      handoff: {
+        sourceSessionId: "source-session",
+        sourceTitle: "Source task",
+        handoffId: "handoff-1",
+      },
+    });
+  });
+});
+
 describe("initial chat projection", () => {
   it("does not claim a model before host state is hydrated", () => {
     expect(initialState.chatState.model).toBe("");

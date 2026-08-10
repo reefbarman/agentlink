@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added first-run model setup directly to empty chats. AgentLink now shows selected-model readiness, starts ChatGPT/Codex OAuth directly from the recommended setup action, keeps API-key and OpenAI-compatible alternatives visible, and preserves drafts/attachments while provider-bound sends are unavailable. Browser workspace chats mirror readiness but direct setup to the owning VS Code window, preserving the host-owned credential boundary.
 - Added local workspace-history continuity: when folders are added, AgentLink can branch-copy prior chat history into the expanded workspace shape and preserve the source. Automatic migration does not run for reverse folder-removal transitions or into a destination that already has history; those cases remain explicit recovery work. Migration now shows flush, inspection, copy, publication, and reload progress. Added `/workspace` and **AgentLink: Show Workspace History** for exact history-location diagnostics and recovery.
 - Added `agentlink.semanticEmbeddingsEnabled`, an explicit opt-in for OpenAI embeddings. Local lexical and structural codebase retrieval is enabled by default and remains on-device; configured credentials alone never send indexed source chunks or search queries to OpenAI.
 - Added project-level `.agentlink/AGENTS.md` instructions, preferred over the existing `.agentlink/CLAUDE.md` fallback, and documented `AGENTS.local.md` for uncommitted personal project guidance.

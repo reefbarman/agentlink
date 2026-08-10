@@ -141,6 +141,14 @@ const DOCUMENT_EXTENSION_MIME_TYPES: Record<string, string> = {
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
 const MAX_DOC_BYTES = 10 * 1024 * 1024; // 10 MB (conservative for v1)
 const ATTACHMENT_KEY_SEPARATOR = "\u001f";
+const LOCAL_BUILTIN_COMMANDS = new Set([
+  "new",
+  "mode",
+  "model",
+  "environment",
+  "memory",
+  "fleet",
+]);
 
 function getDocumentMimeType(file: File): string | null {
   if (ACCEPTED_DOC_TYPES.has(file.type)) return file.type;
@@ -221,6 +229,8 @@ interface InputAreaProps {
   allowExportTranscript?: boolean;
   disabled?: boolean;
   disabledReason?: string;
+  /** Prevents provider-bound submits while preserving the editable draft. */
+  sendBlockedReason?: string;
   submitOnEnter?: boolean;
   contextMode?: ComposerContextMode | null;
   onComposerEvent?: (
@@ -269,6 +279,7 @@ export function InputArea({
   allowExportTranscript = true,
   disabled = false,
   disabledReason,
+  sendBlockedReason,
   submitOnEnter = true,
   contextMode = null,
   onComposerEvent,
@@ -532,6 +543,11 @@ export function InputArea({
     allowAttachments,
     allowMediaPaste,
   ]);
+  const matchedLocalBuiltin =
+    matchedExecutableSlashCommand?.command.builtin === true &&
+    LOCAL_BUILTIN_COMMANDS.has(matchedExecutableSlashCommand.command.name);
+  const providerSendBlocked =
+    Boolean(sendBlockedReason) && !matchedLocalBuiltin;
   const {
     open: slashOpen,
     start: slashStart,
@@ -617,8 +633,19 @@ export function InputArea({
         onComposerEvent?.("submit.ignored", { reason: "disabled" });
         return;
       }
+      if (providerSendBlocked) {
+        onComposerEvent?.("submit.ignored", { reason: "provider_setup" });
+        return;
+      }
       if (!hasSubmitContent) {
         onComposerEvent?.("submit.ignored", { reason: "empty" });
+        return;
+      }
+
+      if (contextMode?.actions) {
+        // The composer tick is still available for direct-confirmation cards.
+        // It must complete the card action, not merely save the draft context.
+        submitQuestionAction("primary");
         return;
       }
 
@@ -700,8 +727,10 @@ export function InputArea({
       onComposerEvent,
       streaming,
       disabled,
+      providerSendBlocked,
       contextMode,
       clearAttachmentPreviews,
+      submitQuestionAction,
     ],
   );
 
@@ -765,6 +794,17 @@ export function InputArea({
       // Everything else closes the popup first
       closeSlash();
 
+      if (
+        providerSendBlocked &&
+        !(cmd.builtin && LOCAL_BUILTIN_COMMANDS.has(cmd.name))
+      ) {
+        setText(selectionState.replacementText);
+        requestAnimationFrame(() => {
+          focusAndAutosizeTextarea(textareaRef.current);
+        });
+        return;
+      }
+
       if (cmd.builtin) {
         if (
           ZERO_ARG_BUILTINS.has(cmd.name) &&
@@ -816,6 +856,7 @@ export function InputArea({
       allowMediaPaste,
       attachments.length,
       mediaAttachments.length,
+      providerSendBlocked,
     ],
   );
 
@@ -1777,6 +1818,12 @@ export function InputArea({
               <span>{disabledReason}</span>
             </div>
           )}
+          {!disabled && sendBlockedReason && (
+            <div class="composer-disabled-notice" role="status">
+              <i class="codicon codicon-key" />
+              <span>{sendBlockedReason}</span>
+            </div>
+          )}
           {polishError && (
             <div class="composer-disabled-notice" role="status">
               <i class="codicon codicon-warning" />
@@ -1874,13 +1921,20 @@ export function InputArea({
                     class="send-button interject-button"
                     onClick={() => {
                       onComposerEvent?.("submit.click", {
-                        disabled: disabled || !hasSubmitContent,
+                        disabled:
+                          disabled || providerSendBlocked || !hasSubmitContent,
                         asInterjection: true,
                       });
                       handleSubmit(true);
                     }}
-                    disabled={disabled || !hasSubmitContent}
-                    title="Interject at next break"
+                    disabled={
+                      disabled || providerSendBlocked || !hasSubmitContent
+                    }
+                    title={
+                      providerSendBlocked
+                        ? sendBlockedReason
+                        : "Interject at next break"
+                    }
                     type="button"
                   >
                     <i class="codicon codicon-reply" />
@@ -1894,23 +1948,28 @@ export function InputArea({
                     class="send-button"
                     onClick={() => {
                       onComposerEvent?.("submit.click", {
-                        disabled: disabled || !hasSubmitContent,
+                        disabled:
+                          disabled || providerSendBlocked || !hasSubmitContent,
                       });
                       handleSubmit();
                     }}
-                    disabled={disabled || !hasSubmitContent}
+                    disabled={
+                      disabled || providerSendBlocked || !hasSubmitContent
+                    }
                     title={
                       disabled
                         ? (disabledReason ?? "Local execution unavailable")
-                        : contextMode
-                          ? contextMode.actions?.hidePrimaryAction
-                            ? "Add context (Cmd/Ctrl+Enter)"
+                        : providerSendBlocked
+                          ? sendBlockedReason
+                          : contextMode
+                            ? contextMode.actions?.hidePrimaryAction
+                              ? "Add context (Cmd/Ctrl+Enter)"
+                              : submitOnEnter
+                                ? "Add context (Enter)"
+                                : "Add context"
                             : submitOnEnter
-                              ? "Add context (Enter)"
-                              : "Add context"
-                          : submitOnEnter
-                            ? "Send message (Enter)"
-                            : "Send message"
+                              ? "Send message (Enter)"
+                              : "Send message"
                     }
                     type="button"
                   >

@@ -8743,6 +8743,14 @@ describe("chat tab host routing", () => {
       submitSessionSetModel,
       setSessionWriteApproval,
       setSessionCommandApprovalPolicy,
+      getBrowserModels: vi.fn(async () => [
+        {
+          id: "model-selected-before-send",
+          displayName: "Selected model",
+          provider: "test-provider",
+          authenticated: true,
+        },
+      ]),
     });
 
     await (
@@ -9315,10 +9323,14 @@ describe("chat tab host routing", () => {
       provider as unknown as {
         sendChatWorkspaceUpdate(): void;
         sendInitialState(): void;
+        sendModelsUpdate(): Promise<void>;
       }
     ).sendChatWorkspaceUpdate = vi.fn();
     (provider as unknown as { sendInitialState(): void }).sendInitialState =
       vi.fn();
+    (
+      provider as unknown as { sendModelsUpdate(): Promise<void> }
+    ).sendModelsUpdate = vi.fn(async () => {});
 
     await handle({
       command: "chatTabClose",
@@ -9328,6 +9340,10 @@ describe("chat tab host routing", () => {
     });
 
     expect(panelHost.releaseTab).toHaveBeenCalledWith("tab-1");
+    expect(
+      (provider as unknown as { sendModelsUpdate(): Promise<void> })
+        .sendModelsUpdate,
+    ).toHaveBeenCalledOnce();
   });
 
   it("forwards confirmed history replacement and exact reorder identity", async () => {

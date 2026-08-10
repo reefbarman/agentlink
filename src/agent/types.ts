@@ -85,6 +85,16 @@ export type AgentMessage = MessageParam & {
       };
       mode?: { previousMode: string; mode: string };
     };
+    /**
+     * Display metadata for the ordinary first user turn of a fresh-session
+     * handoff. The complete turn remains normal provider history.
+     */
+    handoff?: {
+      schemaVersion: 1;
+      sourceSessionId: string;
+      sourceTitle: string;
+      handoffId: string;
+    };
     finalMarker?: FinalMessageMarker;
   };
 };

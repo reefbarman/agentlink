@@ -564,6 +564,16 @@ export type ExtensionToWebview =
         body?: string;
       }>;
     }
+  | {
+      type: "agentHandoffDraft";
+      draft: import("./sessionHandoff.js").SessionHandoffDraft;
+    }
+  | {
+      type: "agentHandoffResult";
+      ok: boolean;
+      successorSessionId?: string;
+      error?: string;
+    }
   | { type: "agentModelsUpdate"; models: WebviewModelInfo[] }
   | { type: "agentModeSwitchRequest"; mode: string; reason?: string }
   | { type: "agentFormElicitationRequest"; request: McpFormElicitationRequest }
@@ -3967,6 +3977,40 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return { ok: true };
   }
 
+  public async prepareBrowserSessionHandoff(
+    sessionId?: string,
+  ): Promise<
+    | { ok: true; draft: import("./sessionHandoff.js").SessionHandoffDraft }
+    | { ok: false; error: string }
+  > {
+    const selected =
+      sessionId ?? this.sessionManager?.getForegroundSession()?.id;
+    const result = await this.sessionManager?.prepareSessionHandoff(selected);
+    return result?.ok
+      ? result
+      : { ok: false, error: result?.message ?? "No active session is loaded." };
+  }
+
+  public async confirmBrowserSessionHandoff(
+    draftId: string,
+    markdown: string,
+  ): Promise<{ ok: boolean; successorSessionId?: string; error?: string }> {
+    const result = await this.sessionManager?.confirmSessionHandoff(
+      draftId,
+      markdown,
+    );
+    return result?.ok
+      ? result
+      : {
+          ok: false,
+          error: result?.message ?? "The fresh session could not be started.",
+        };
+  }
+
+  public cancelBrowserSessionHandoff(draftId: string): void {
+    this.sessionManager?.cancelSessionHandoff(draftId);
+  }
+
   public async submitBrowserSend(input: {
     text: string;
     id?: string;
@@ -3982,6 +4026,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     slashCommandLabel?: string;
     isSlashCommand?: boolean;
     interject?: boolean;
+    model?: string;
   }): Promise<{
     ok: boolean;
     queued?: boolean;
@@ -4053,6 +4098,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         effectiveSession.projectScope.projectId !== input.projectId)
     ) {
       return { ok: false, error: "project_state_mismatch" };
+    }
+    const requestedModel = input.model ?? effectiveSession.model;
+    const selectedModel = (await this.getBrowserModels()).find(
+      (model) => model.id === requestedModel,
+    );
+    if (input.model && !selectedModel?.authenticated) {
+      return {
+        ok: false,
+        error: selectedModel
+          ? `Set up ${selectedModel.providerDisplayName ?? selectedModel.provider} before sending a message.`
+          : "Choose an available model before sending a message.",
+      };
+    }
+    if (!input.model && selectedModel && !selectedModel.authenticated) {
+      return {
+        ok: false,
+        error: `Set up ${selectedModel.providerDisplayName ?? selectedModel.provider} before sending a message.`,
+      };
     }
     const projectless = isProjectlessSessionScope(
       effectiveSession.projectScope,
@@ -7037,6 +7100,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
     }
     this.sendInitialState();
+    // The model catalog is shared across tabs, but a tab action can switch the
+    // active projection while the initial asynchronous catalog hydration is
+    // still in flight. Re-send it after every successful handoff so the newly
+    // selected tab cannot remain indefinitely in its "checking" state.
+    await this.sendModelsUpdate();
     if (selectedSession) {
       await this.sendModesUpdate();
       await this.sendSlashCommands();
@@ -7214,6 +7282,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const thinkingEnabled = reasoningEffort
           ? reasoningEffort !== "none"
           : msg.thinkingEnabled !== false;
+        const requestedModel =
+          typeof msg.model === "string" && msg.model ? msg.model : undefined;
+        const selectedModel = requestedModel
+          ? (await this.getBrowserModels()).find(
+              (model) => model.id === requestedModel,
+            )
+          : undefined;
+        if (requestedModel && !selectedModel?.authenticated) {
+          void vscode.window.showErrorMessage(
+            selectedModel
+              ? `Set up ${selectedModel.providerDisplayName ?? selectedModel.provider} before sending a message.`
+              : "Choose an available model before sending a message.",
+          );
+          return;
+        }
         const rawMessages = Array.isArray(msg.messages)
           ? (msg.messages as Array<Record<string, unknown>>)
           : [
@@ -8292,6 +8375,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "agentHandoffConfirm": {
+        const draftId = typeof msg.draftId === "string" ? msg.draftId : "";
+        const markdown = typeof msg.markdown === "string" ? msg.markdown : "";
+        if (!draftId || !markdown) break;
+        const result = await this.sessionManager.confirmSessionHandoff(
+          draftId,
+          markdown,
+        );
+        const response = result.ok
+          ? {
+              type: "agentHandoffResult" as const,
+              ok: true,
+              successorSessionId: result.successorSessionId,
+            }
+          : {
+              type: "agentHandoffResult" as const,
+              ok: false,
+              error: result.message,
+            };
+        if (context?.connection) context.connection.postMessage(response);
+        else this.postMessage(response);
+        break;
+      }
+
+      case "agentHandoffCancel": {
+        const draftId = typeof msg.draftId === "string" ? msg.draftId : "";
+        if (draftId) this.sessionManager.cancelSessionHandoff(draftId);
+        break;
+      }
+
       case "agentSlashCommand": {
         const name = msg.name as string;
         if (name === "condense") {
@@ -8309,6 +8422,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             totalCacheCreationTokens: sourceSession.totalCacheCreationTokens,
           });
           this.drainBrowserQueuedMessage(sourceSession.id);
+        } else if (name === "handoff") {
+          const result = await this.sessionManager.prepareSessionHandoff(
+            sourceSession?.id,
+          );
+          if (!result.ok) {
+            const message = {
+              type: "agentHandoffResult",
+              ok: false,
+              error: result.message,
+            } as const;
+            if (context?.connection) context.connection.postMessage(message);
+            else this.postMessage(message);
+            break;
+          }
+          const message = {
+            type: "agentHandoffDraft",
+            draft: result.draft,
+          } as const;
+          if (context?.connection) context.connection.postMessage(message);
+          else this.postMessage(message);
         } else if (name === "context-doctor") {
           const result = this.runContextDoctor(sourceSession?.id);
           if (!result.ok) {
@@ -8906,14 +9039,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentCodexSignIn": {
-        // Trigger unified OpenAI/Codex sign-in from the webview model picker.
-        vscode.commands.executeCommand("agentlink.codexSignIn");
+        const method =
+          msg.method === "oauth" || msg.method === "apiKey"
+            ? msg.method
+            : undefined;
+        try {
+          await vscode.commands.executeCommand(
+            "agentlink.codexSignIn",
+            method === "oauth"
+              ? "oauthOnly"
+              : method === "apiKey"
+                ? "apiKeyOnly"
+                : undefined,
+          );
+        } finally {
+          this.refreshModels();
+        }
         break;
       }
 
       case "agentAnthropicSignIn": {
-        // Trigger Anthropic API key entry from the webview model picker
-        vscode.commands.executeCommand("agentlink.setAnthropicApiKey");
+        try {
+          await vscode.commands.executeCommand("agentlink.setAnthropicApiKey");
+        } finally {
+          this.refreshModels();
+        }
         break;
       }
 
@@ -8922,11 +9072,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           typeof msg.provider === "string" ? msg.provider.trim() : "";
         const authKey = this.openAiCompatibleAuthKeyResolver?.(providerId);
         if (authKey) {
-          vscode.commands.executeCommand(
-            "agentlink.setOpenAiCompatibleApiKey",
-            authKey,
-          );
+          try {
+            await vscode.commands.executeCommand(
+              "agentlink.setOpenAiCompatibleApiKey",
+              authKey,
+            );
+          } finally {
+            this.refreshModels();
+          }
         }
+        break;
+      }
+
+      case "agentConfigureOpenAiCompatibleModel": {
+        try {
+          await vscode.commands.executeCommand(
+            "agentlink.configureOpenAiCompatibleModel",
+          );
+        } finally {
+          this.refreshModels();
+        }
+        break;
+      }
+
+      case "agentOpenFolder": {
+        await vscode.commands.executeCommand("vscode.openFolder");
         break;
       }
 
@@ -11395,6 +11565,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Force a dynamic refresh (bypass TTL) — e.g. provider auth state changed.
     this.maybeRefreshAnthropicModels({ force: true });
     void this.sendModelsUpdate();
+    this.notifyBrowserModelsChanged?.();
   }
 
   public setSidebarWriteApproval(

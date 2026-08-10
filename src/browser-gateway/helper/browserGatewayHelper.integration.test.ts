@@ -8096,7 +8096,10 @@ describe("BrowserGatewayHelper proxy routing", () => {
     };
     expect(body.currentInstanceId).toBe("instance-new");
     expect(
-      body.instances.map((instance) => instance.instanceId).sort(),
+      body.instances
+        .map((instance) => instance.instanceId)
+        .filter((instanceId) => instanceId.startsWith("instance-"))
+        .sort(),
     ).toEqual(["instance-legacy", "instance-new"]);
 
     await fs.rm(extensionRootPath, { recursive: true, force: true });

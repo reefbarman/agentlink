@@ -138,6 +138,7 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
         },
         "Trigger send",
       ),
+
       contextMode?.actions
         ? h(
             "button",

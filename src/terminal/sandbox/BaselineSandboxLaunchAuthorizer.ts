@@ -346,7 +346,22 @@ async function createPrivateDirectories(
     cleanup() {
       if (cleaned) return;
       cleaned = true;
-      rmSync(root, { recursive: true, force: true });
+      try {
+        // A child process can finish creating cache files just as finalization
+        // starts. Node retries ENOTEMPTY/EBUSY with bounded backoff here, and a
+        // residual cleanup failure must not replace the completed command's
+        // result with an unrelated finalizer error.
+        rmSync(root, {
+          recursive: true,
+          force: true,
+          maxRetries: 4,
+          retryDelay: 50,
+        });
+      } catch {
+        // Cleanup is best-effort after the bounded retries above. The root is
+        // private to this launch and can be removed by normal temporary-file
+        // reclamation without changing the command's launch outcome.
+      }
     },
   };
 }

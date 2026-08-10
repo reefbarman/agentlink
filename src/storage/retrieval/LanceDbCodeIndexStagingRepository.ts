@@ -5,6 +5,7 @@ import type { Schema } from "apache-arrow";
 import type {
   RetrievalPublicationPreparation,
   RetrievalStagedChunkBatch,
+  RetrievalStagedPublicationBundle,
   RetrievalStagedPublicationInspection,
   RetrievalStagedPublicationManifest,
   RetrievalStagedRelationBatch,
@@ -98,6 +99,81 @@ export class LanceDbCodeIndexStagingRepository implements StagedRetrievalPublica
     private readonly dimensions: number,
   ) {}
 
+  async stagePublication(
+    bundle: RetrievalStagedPublicationBundle,
+  ): Promise<void> {
+    const manifest = bundle.manifest;
+    validateManifest(manifest, this.lease);
+    for (const batch of bundle.chunkBatches) {
+      validateBatch(
+        batch.publicationId,
+        batch.batchIndex,
+        batch.chunks,
+        "chunk",
+      );
+    }
+    for (const batch of bundle.relationBatches) {
+      validateBatch(
+        batch.publicationId,
+        batch.batchIndex,
+        batch.relations,
+        "relation",
+      );
+    }
+    await this.withTables(async (tables) => {
+      const existingRows = await readProjectedRows<StagedManifestRow>(
+        tables.manifests,
+        sqlEquals("publication_id", manifest.publicationId),
+        COMPACT_MANIFEST_COLUMNS,
+      );
+      const existing = existingRows[0];
+      let fresh = false;
+      let stagedManifest: StagedManifestRow;
+      let source: RetrievalStagedPublicationManifest["source"];
+      if (existing) {
+        assertManifestFence(existing, this.lease);
+        // A completed or activated manifest means this bundle already staged
+        // fully on a previous attempt; replay is a no-op.
+        if (existing.state !== "staging") return;
+        stagedManifest = await requireManifest(tables, manifest.publicationId);
+        source = parseSource(stagedManifest);
+      } else {
+        stagedManifest = manifestRow(manifest);
+        await addRows(
+          tables.manifests,
+          [stagedManifest],
+          stagedRetrievalManifestSchema(),
+        );
+        // validateManifest already proved manifest.source matches
+        // sourcePayloadDigest, so the fresh path skips the read-back parse.
+        source = manifest.source;
+        fresh = true;
+      }
+      for (const batch of bundle.chunkBatches) {
+        await this.appendChunkBatchToTables(
+          tables,
+          batch,
+          stagedManifest,
+          source,
+          fresh,
+        );
+      }
+      for (const batch of bundle.relationBatches) {
+        await this.appendRelationBatchToTables(
+          tables,
+          batch,
+          stagedManifest,
+          fresh,
+        );
+      }
+      await completeStagedPublicationInTables(
+        tables,
+        manifest.publicationId,
+        this.lease,
+      );
+    });
+  }
+
   async beginStagedPublication(
     manifest: RetrievalStagedPublicationManifest,
   ): Promise<RetrievalPublicationPreparation> {
@@ -136,40 +212,64 @@ export class LanceDbCodeIndexStagingRepository implements StagedRetrievalPublica
         throw new Error("Cannot append to a completed staged publication");
       }
       const source = parseSource(manifest);
-      for (const chunk of batch.chunks) {
-        if (
-          chunk.sourceId !== manifest.source_id ||
-          chunk.revisionId !== manifest.revision_id ||
-          chunk.generation !== manifest.generation
-        ) {
-          throw new Error("Staged chunk ownership does not match its manifest");
-        }
-      }
-      const idDigest = createRetrievalRecordIdDigest(
-        batch.chunks.map((chunk) => chunk.id),
+      await this.appendChunkBatchToTables(
+        tables,
+        batch,
+        manifest,
+        source,
+        false,
       );
-      const contentDigest = createRetrievalRecordContentDigest(batch.chunks);
+    });
+  }
+
+  /**
+   * Appends one chunk batch inside an already-open store session. `fresh`
+   * marks a publication whose manifest was created in this same session, so
+   * replay-only work (committed-batch probes, cumulative-bound scans, and
+   * delete-before-add sweeps that can never match) is skipped.
+   */
+  private async appendChunkBatchToTables(
+    tables: CodeIndexStagedTables,
+    batch: RetrievalStagedChunkBatch,
+    manifest: StagedManifestRow,
+    source: RetrievalStagedPublicationManifest["source"],
+    fresh: boolean,
+  ): Promise<void> {
+    for (const chunk of batch.chunks) {
       if (
-        idDigest !== batch.expectedIdDigest ||
-        contentDigest !== batch.expectedContentDigest
+        chunk.sourceId !== manifest.source_id ||
+        chunk.revisionId !== manifest.revision_id ||
+        chunk.generation !== manifest.generation
       ) {
-        throw new Error("Staged chunk batch digest mismatch");
+        throw new Error("Staged chunk ownership does not match its manifest");
       }
-      const rows = batch.chunks.map((chunk) => ({
-        publication_id: batch.publicationId,
-        batch_index: batch.batchIndex,
-        chunk_id: chunk.id,
-        source_id: chunk.sourceId,
-        revision_id: chunk.revisionId,
-        generation: chunk.generation,
-        search_text: buildRetrievalChunkSearchText({
-          chunk,
-          source,
-          relations: [],
-        }),
-        embedding: chunk.embedding,
-        payload_json: JSON.stringify(chunk),
-      }));
+    }
+    const idDigest = createRetrievalRecordIdDigest(
+      batch.chunks.map((chunk) => chunk.id),
+    );
+    const contentDigest = createRetrievalRecordContentDigest(batch.chunks);
+    if (
+      idDigest !== batch.expectedIdDigest ||
+      contentDigest !== batch.expectedContentDigest
+    ) {
+      throw new Error("Staged chunk batch digest mismatch");
+    }
+    const rows = batch.chunks.map((chunk) => ({
+      publication_id: batch.publicationId,
+      batch_index: batch.batchIndex,
+      chunk_id: chunk.id,
+      source_id: chunk.sourceId,
+      revision_id: chunk.revisionId,
+      generation: chunk.generation,
+      search_text: buildRetrievalChunkSearchText({
+        chunk,
+        source,
+        relations: [],
+      }),
+      embedding: chunk.embedding,
+      payload_json: JSON.stringify(chunk),
+    }));
+    if (!fresh) {
       if (
         await isMatchingCommittedBatch(
           tables,
@@ -201,29 +301,29 @@ export class LanceDbCodeIndexStagingRepository implements StagedRetrievalPublica
       );
       const predicate = batchPredicate(batch.publicationId, batch.batchIndex);
       await tables.chunks.delete(predicate);
-      await addRows(
-        tables.chunks,
-        rows,
-        stagedRetrievalChunkSchema(this.dimensions),
-      );
       await tables.batches.delete(
         ledgerPredicate(batch.publicationId, "chunk", batch.batchIndex),
       );
-      await addRows(
-        tables.batches,
-        [
-          batchLedger(
-            batch.publicationId,
-            "chunk",
-            batch.batchIndex,
-            batch.chunks.length,
-            idDigest,
-            contentDigest,
-          ),
-        ],
-        stagedRetrievalBatchSchema(),
-      );
-    });
+    }
+    await addRows(
+      tables.chunks,
+      rows,
+      stagedRetrievalChunkSchema(this.dimensions),
+    );
+    await addRows(
+      tables.batches,
+      [
+        batchLedger(
+          batch.publicationId,
+          "chunk",
+          batch.batchIndex,
+          batch.chunks.length,
+          idDigest,
+          contentDigest,
+        ),
+      ],
+      stagedRetrievalBatchSchema(),
+    );
   }
 
   async appendStagedRelationBatch(
@@ -245,36 +345,47 @@ export class LanceDbCodeIndexStagingRepository implements StagedRetrievalPublica
       if (manifest.state !== "staging") {
         throw new Error("Cannot append to a completed staged publication");
       }
-      for (const relation of batch.relations) {
-        if (
-          relation.sourceId !== manifest.source_id ||
-          relation.revisionId !== manifest.revision_id ||
-          relation.generation !== manifest.generation
-        ) {
-          throw new Error(
-            "Staged relation ownership does not match its manifest",
-          );
-        }
-      }
-      const idDigest = createRetrievalRecordIdDigest(
-        batch.relations.map((relation) => relation.id),
-      );
-      const contentDigest = createRetrievalRecordContentDigest(batch.relations);
+      await this.appendRelationBatchToTables(tables, batch, manifest, false);
+    });
+  }
+
+  private async appendRelationBatchToTables(
+    tables: CodeIndexStagedTables,
+    batch: RetrievalStagedRelationBatch,
+    manifest: StagedManifestRow,
+    fresh: boolean,
+  ): Promise<void> {
+    for (const relation of batch.relations) {
       if (
-        idDigest !== batch.expectedIdDigest ||
-        contentDigest !== batch.expectedContentDigest
+        relation.sourceId !== manifest.source_id ||
+        relation.revisionId !== manifest.revision_id ||
+        relation.generation !== manifest.generation
       ) {
-        throw new Error("Staged relation batch digest mismatch");
+        throw new Error(
+          "Staged relation ownership does not match its manifest",
+        );
       }
-      const rows = batch.relations.map((relation) => ({
-        publication_id: batch.publicationId,
-        batch_index: batch.batchIndex,
-        relation_id: relation.id,
-        source_id: relation.sourceId,
-        revision_id: relation.revisionId,
-        generation: relation.generation,
-        payload_json: JSON.stringify(relation),
-      }));
+    }
+    const idDigest = createRetrievalRecordIdDigest(
+      batch.relations.map((relation) => relation.id),
+    );
+    const contentDigest = createRetrievalRecordContentDigest(batch.relations);
+    if (
+      idDigest !== batch.expectedIdDigest ||
+      contentDigest !== batch.expectedContentDigest
+    ) {
+      throw new Error("Staged relation batch digest mismatch");
+    }
+    const rows = batch.relations.map((relation) => ({
+      publication_id: batch.publicationId,
+      batch_index: batch.batchIndex,
+      relation_id: relation.id,
+      source_id: relation.sourceId,
+      revision_id: relation.revisionId,
+      generation: relation.generation,
+      payload_json: JSON.stringify(relation),
+    }));
+    if (!fresh) {
       if (
         await isMatchingCommittedBatch(
           tables,
@@ -305,78 +416,34 @@ export class LanceDbCodeIndexStagingRepository implements StagedRetrievalPublica
       );
       const predicate = batchPredicate(batch.publicationId, batch.batchIndex);
       await tables.relations.delete(predicate);
-      await addRows(tables.relations, rows, stagedRetrievalRelationSchema());
       await tables.batches.delete(
         ledgerPredicate(batch.publicationId, "relation", batch.batchIndex),
       );
-      await addRows(
-        tables.batches,
-        [
-          batchLedger(
-            batch.publicationId,
-            "relation",
-            batch.batchIndex,
-            batch.relations.length,
-            idDigest,
-            contentDigest,
-          ),
-        ],
-        stagedRetrievalBatchSchema(),
-      );
-    });
+    }
+    await addRows(tables.relations, rows, stagedRetrievalRelationSchema());
+    await addRows(
+      tables.batches,
+      [
+        batchLedger(
+          batch.publicationId,
+          "relation",
+          batch.batchIndex,
+          batch.relations.length,
+          idDigest,
+          contentDigest,
+        ),
+      ],
+      stagedRetrievalBatchSchema(),
+    );
   }
 
   async completeStagedPublication(publicationId: string): Promise<void> {
     await this.withTables(async (tables) => {
-      const manifest = await requireManifest(tables, publicationId);
-      assertManifestFence(manifest, this.lease);
-      if (manifest.state === "activated") return;
-      const ledgers = await readRows<StagedBatchRow>(
-        tables.batches,
-        sqlEquals("publication_id", publicationId),
+      await completeStagedPublicationInTables(
+        tables,
+        publicationId,
+        this.lease,
       );
-      assertUniqueLedgers(ledgers);
-      const source = parseSource(manifest);
-      const sourceVerification: StagedSourceVerification = {
-        id: source.id,
-        revision: source.revision,
-        generation: manifest.generation,
-        document: source,
-      };
-      await verifyStagedRows({
-        table: tables.chunks,
-        publicationId,
-        rowKind: "chunk",
-        idColumn: "chunk_id",
-        ledgers,
-        expectedCount: manifest.expected_chunk_count,
-        expectedDigest: manifest.expected_chunk_digest,
-        source: sourceVerification,
-      });
-      await verifyStagedRows({
-        table: tables.relations,
-        publicationId,
-        rowKind: "relation",
-        idColumn: "relation_id",
-        ledgers,
-        expectedCount: manifest.expected_relation_count,
-        expectedDigest: manifest.expected_relation_digest,
-        source: sourceVerification,
-      });
-      if (manifest.state === "staging") {
-        await tables.manifests.update({
-          where: sqlAnd(
-            sqlEquals("publication_id", publicationId),
-            sqlEquals("state", "staging"),
-            sqlEquals("fence_token", this.lease.fenceToken),
-          ),
-          values: { state: "staged" },
-        });
-      }
-      const completed = await requireManifest(tables, publicationId, false);
-      if (completed.state !== "staged") {
-        throw new Error("Staged publication completion transition failed");
-      }
     });
   }
 
@@ -591,6 +658,66 @@ function batchLedger(
     expected_id_digest: expectedIdDigest,
     expected_content_digest: expectedContentDigest,
   };
+}
+
+/**
+ * Verifies every staged batch and transitions the manifest to "staged". A
+ * manifest that already reads "staged" (or "activated") was verified when it
+ * completed the first time and is immutable under the writer fence, so replays
+ * return without re-reading the staged rows.
+ */
+async function completeStagedPublicationInTables(
+  tables: CodeIndexStagedTables,
+  publicationId: string,
+  lease: CodeIndexWriterLease,
+): Promise<void> {
+  const manifest = await requireManifest(tables, publicationId);
+  assertManifestFence(manifest, lease);
+  if (manifest.state !== "staging") return;
+  const ledgers = await readRows<StagedBatchRow>(
+    tables.batches,
+    sqlEquals("publication_id", publicationId),
+  );
+  assertUniqueLedgers(ledgers);
+  const source = parseSource(manifest);
+  const sourceVerification: StagedSourceVerification = {
+    id: source.id,
+    revision: source.revision,
+    generation: manifest.generation,
+    document: source,
+  };
+  await verifyStagedRows({
+    table: tables.chunks,
+    publicationId,
+    rowKind: "chunk",
+    idColumn: "chunk_id",
+    ledgers,
+    expectedCount: manifest.expected_chunk_count,
+    expectedDigest: manifest.expected_chunk_digest,
+    source: sourceVerification,
+  });
+  await verifyStagedRows({
+    table: tables.relations,
+    publicationId,
+    rowKind: "relation",
+    idColumn: "relation_id",
+    ledgers,
+    expectedCount: manifest.expected_relation_count,
+    expectedDigest: manifest.expected_relation_digest,
+    source: sourceVerification,
+  });
+  await tables.manifests.update({
+    where: sqlAnd(
+      sqlEquals("publication_id", publicationId),
+      sqlEquals("state", "staging"),
+      sqlEquals("fence_token", lease.fenceToken),
+    ),
+    values: { state: "staged" },
+  });
+  const completed = await requireManifest(tables, publicationId, false);
+  if (completed.state !== "staged") {
+    throw new Error("Staged publication completion transition failed");
+  }
 }
 
 async function isMatchingCommittedBatch(

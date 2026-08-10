@@ -1,5 +1,5 @@
 import * as fs from "fs";
-import * as os from "os";
+import * as os from "node:os";
 
 import {
   SandboxPreparationDriftError,
@@ -13,6 +13,11 @@ import {
 
 import { AgentTerminalProviderRouter } from "../terminal/sandbox/AgentTerminalProviderRouter.js";
 import { evaluateCommandRulePolicy } from "../approvals/commandRulePolicy.js";
+
+vi.mock("node:os", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:os")>();
+  return { ...original, homedir: () => "/Users/test" };
+});
 
 const {
   getWorkspaceRoots,
@@ -3632,6 +3637,7 @@ describe("handleExecuteCommand", () => {
       name: "loopback listener denial",
       output: "Error: listen EPERM: operation not permitted 127.0.0.1:47200",
       missing: ["network.allow_local_binding"],
+      action: "retry_with_missing_sandbox_capabilities",
       option: {
         sandbox_permissions: "with_additional_permissions",
         additional_permissions: { network: { allow_local_binding: true } },
@@ -3642,12 +3648,14 @@ describe("handleExecuteCommand", () => {
       name: "host HOME write denial",
       output: `npm error Log files were not written due to an error writing to the directory: ${os.homedir()}/.npm/_logs`,
       missing: ["temporary_home"],
+      action: "retry_with_missing_sandbox_capabilities",
       option: { temporary_home: true },
     },
     {
       name: "combined listener and host HOME denial",
       output: `Error: listen EPERM: operation not permitted ::1\nnpm error failed to write '${os.homedir()}/.agentlink/state.json'`,
       missing: ["temporary_home", "network.allow_local_binding"],
+      action: "retry_with_missing_sandbox_capabilities",
       option: {
         temporary_home: true,
         sandbox_permissions: "with_additional_permissions",
@@ -3655,9 +3663,52 @@ describe("handleExecuteCommand", () => {
         reason_required: true,
       },
     },
+    {
+      name: "Node heap exhaustion",
+      command: "npx vitest run src/tools/executeCommand.test.ts",
+      output:
+        "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory",
+      action: "retry_with_larger_node_heap",
+      code: "sandbox_node_oom",
+      option: {
+        env: { NODE_OPTIONS: "--max-old-space-size=6144" },
+      },
+    },
+    {
+      name: "host process inspection denial",
+      command: "ps aux",
+      output: "/bin/ps: operation not permitted",
+      action: "reviewed_native_retry",
+      code: "sandbox_host_integration",
+      option: {
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    },
+    {
+      name: "container runtime socket denial",
+      command: "docker compose down",
+      output:
+        "permission denied while trying to connect to the Docker daemon socket at unix:///Users/test/.colima/default/docker.sock",
+      action: "reviewed_native_retry",
+      code: "sandbox_host_integration",
+      option: {
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    },
   ])(
     "attaches narrow sandbox retry guidance for $name",
-    async ({ output, missing, option }) => {
+    async ({
+      command = "npm test",
+      output,
+      missing,
+      action,
+      code = "sandbox_missing_capabilities",
+      option,
+    }) => {
       const execute = vi.fn(async () => ({
         exit_code: 1,
         output,
@@ -3686,7 +3737,7 @@ describe("handleExecuteCommand", () => {
       const { handleExecuteCommand } = await import("./executeCommand.js");
 
       const result = await handleExecuteCommand(
-        { command: "npm test" },
+        { command },
         { isCommandApproved: () => true } as never,
         { isRecentlyApproved: () => true } as never,
         "session-missing-sandbox-capability",
@@ -3700,13 +3751,13 @@ describe("handleExecuteCommand", () => {
       expect(textPayload(result)).toMatchObject({
         exit_code: 1,
         output,
-        missing_sandbox_capabilities: missing,
+        ...(missing ? { missing_sandbox_capabilities: missing } : {}),
         retry_guidance: {
-          code: "sandbox_missing_capabilities",
+          code,
           automatic_retry: false,
           options: [
             {
-              action: "retry_with_missing_sandbox_capabilities",
+              action,
               same_command: true,
               ...option,
             },

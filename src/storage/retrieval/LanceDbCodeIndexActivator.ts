@@ -63,6 +63,24 @@ export interface CodeIndexActivationOutcome {
   status: "activated" | "already_activated";
 }
 
+export interface CodeIndexActivationOptions {
+  /**
+   * The caller minted this publication's generation in the current process,
+   * so no rows can exist for it in the active tables. Skips the replay-guard
+   * delete and count verification, which otherwise cost full-table predicate
+   * scans per activation on large stores.
+   */
+  freshGeneration?: boolean;
+  /**
+   * Skip the per-activation superseded-generation delete; the caller batches
+   * it across activations via cleanupSupersededGenerations. Safe because
+   * superseded rows are a space concern, not a correctness one (queries
+   * filter by the active source generation), and the optimize() sweep removes
+   * any rows left behind by a crash.
+   */
+  deferSupersededCleanup?: boolean;
+}
+
 const MANIFEST_COLUMNS = [
   "publication_id",
   "source_id",
@@ -76,6 +94,7 @@ const MANIFEST_COLUMNS = [
   "source_payload_json",
 ];
 const NATIVE_INDEXES_DIRTY_KEY = "native_indexes_dirty";
+const SUPERSEDED_CLEANUP_BATCH = 200;
 
 export class LanceDbCodeIndexActivator {
   constructor(
@@ -83,8 +102,18 @@ export class LanceDbCodeIndexActivator {
     private readonly dimensions: number,
   ) {}
 
-  async activate(publicationId: string): Promise<CodeIndexActivationOutcome> {
+  async activate(
+    publicationId: string,
+    options: CodeIndexActivationOptions = {},
+  ): Promise<CodeIndexActivationOutcome> {
     if (!publicationId) throw new Error("Staged publication ID is required");
+    // Fast path: a manifest that is already "staged" under the current fence
+    // was verified at completion time and activates inside one fenced store
+    // session. Only stale-fence or still-staging manifests need the staging
+    // repository's adopt/complete round trips first.
+    const attempt = await this.tryActivate(publicationId, options);
+    if (attempt !== "needs_preparation") return attempt;
+
     const stagingRepository = new LanceDbCodeIndexStagingRepository(
       this.lease,
       this.dimensions,
@@ -98,18 +127,61 @@ export class LanceDbCodeIndexActivator {
       }
       await stagingRepository.completeStagedPublication(publicationId);
     }
+    const retried = await this.tryActivate(publicationId, options);
+    if (retried === "needs_preparation") {
+      throw new Error("Staged publication is not complete");
+    }
+    return retried;
+  }
 
+  /**
+   * Removes superseded-generation rows for a set of activated sources with a
+   * single combined predicate per table, so a publication batch pays one
+   * delete scan instead of one per file.
+   */
+  async cleanupSupersededGenerations(
+    entries: Array<{ sourceId: string; generation: string }>,
+  ): Promise<void> {
+    if (entries.length === 0) return;
+    await this.withTables(async (_staged, active) => {
+      for (
+        let offset = 0;
+        offset < entries.length;
+        offset += SUPERSEDED_CLEANUP_BATCH
+      ) {
+        const predicate = entries
+          .slice(offset, offset + SUPERSEDED_CLEANUP_BATCH)
+          .map((entry) =>
+            sqlAnd(
+              sqlEquals("source_id", entry.sourceId),
+              sqlNotEquals("generation", entry.generation),
+            ),
+          )
+          .map((condition) => `(${condition})`)
+          .join(" OR ");
+        await active.chunks.delete(predicate);
+        await active.relations.delete(predicate);
+      }
+    });
+  }
+
+  private async tryActivate(
+    publicationId: string,
+    options: CodeIndexActivationOptions,
+  ): Promise<CodeIndexActivationOutcome | "needs_preparation"> {
     return this.withTables(async (staged, active) => {
       const manifest = await requireManifest(staged.manifests, publicationId);
-      if (manifest.state === "staging") {
-        throw new Error("Staged publication is not complete");
-      }
       if (manifest.state === "activated") {
         await adoptActivatedReceipt(staged, active, manifest, this.lease);
         await cleanupStagedPayload(staged, publicationId);
         return outcome(manifest, "already_activated");
       }
-      assertFence(manifest, this.lease);
+      if (
+        manifest.state === "staging" ||
+        manifest.fence_token !== this.lease.fenceToken
+      ) {
+        return "needs_preparation";
+      }
 
       const source = parseSource(manifest);
       const current = await readCurrentSource(active.sources, source.id);
@@ -133,7 +205,13 @@ export class LanceDbCodeIndexActivator {
       }
 
       if (current?.generation !== manifest.generation) {
-        await copyTargetGeneration(staged, active, manifest, this.dimensions);
+        await copyTargetGeneration(
+          staged,
+          active,
+          manifest,
+          this.dimensions,
+          options.freshGeneration === true,
+        );
         await markNativeIndexesDirty(active.metadata);
         await active.sources
           .mergeInsert(["source_id"])
@@ -153,7 +231,12 @@ export class LanceDbCodeIndexActivator {
       // Superseded generations must be removed only after the source pointer
       // flips, and also on replay: a crash between the flip and this delete
       // leaves stale rows that the generation-equality branch above skips.
-      await deleteSupersededGenerations(active, manifest);
+      // Callers that activate in batches defer this to a combined
+      // cleanupSupersededGenerations pass instead of paying a predicate scan
+      // per file; the optimize() sweep covers rows a crash leaves behind.
+      if (!options.deferSupersededCleanup) {
+        await deleteSupersededGenerations(active, manifest);
+      }
 
       await staged.manifests.update({
         where: sqlAnd(
@@ -173,20 +256,37 @@ export class LanceDbCodeIndexActivator {
   }
 
   async finalizeActivation(publicationId: string): Promise<void> {
+    await this.finalizeActivations([publicationId]);
+  }
+
+  /**
+   * Finalizes a set of activated publications in one fenced store session,
+   * with combined predicates so the batch pays a constant number of table
+   * commits instead of one commit set per publication.
+   */
+  async finalizeActivations(publicationIds: string[]): Promise<void> {
+    if (publicationIds.length === 0) return;
     await this.withTables(async (staged) => {
-      const rows = await readProjectedRows<ManifestRow>(
+      const present = await readProjectedRows<ManifestRow>(
         staged.manifests,
-        sqlEquals("publication_id", publicationId),
+        sqlIn("publication_id", publicationIds),
         MANIFEST_COLUMNS,
       );
-      const manifest = rows[0];
-      if (!manifest) return;
-      assertFence(manifest, this.lease);
-      if (manifest.state !== "activated") {
-        throw new Error("Cannot finalize an unactivated staged publication");
+      if (present.length === 0) return;
+      for (const manifest of present) {
+        assertFence(manifest, this.lease);
+        if (manifest.state !== "activated") {
+          throw new Error("Cannot finalize an unactivated staged publication");
+        }
       }
-      await cleanupStagedPayload(staged, publicationId);
-      await staged.manifests.delete(sqlEquals("publication_id", publicationId));
+      const predicate = sqlIn(
+        "publication_id",
+        present.map((manifest) => manifest.publication_id),
+      );
+      await staged.chunks.delete(predicate);
+      await staged.relations.delete(predicate);
+      await staged.batches.delete(predicate);
+      await staged.manifests.delete(predicate);
     });
   }
 
@@ -220,13 +320,24 @@ async function copyTargetGeneration(
   active: ActiveTables,
   manifest: ManifestRow,
   dimensions: number,
+  freshGeneration: boolean,
 ): Promise<void> {
   const target = sourceGenerationPredicate(
     manifest.source_id,
     manifest.generation,
   );
-  await active.chunks.delete(target);
-  await active.relations.delete(target);
+  // The replay guards only matter after a crash-and-replay mid-copy: they
+  // remove half-copied rows and verify the copied counts. A freshly minted
+  // generation cannot have rows in the active tables, so the guards — each a
+  // full predicate scan of the active tables — are skipped on the hot path.
+  if (!freshGeneration) {
+    const [staleChunks, staleRelations] = await Promise.all([
+      active.chunks.countRows(target),
+      active.relations.countRows(target),
+    ]);
+    if (staleChunks > 0) await active.chunks.delete(target);
+    if (staleRelations > 0) await active.relations.delete(target);
+  }
 
   const ledgers = await readProjectedRows<BatchRow>(
     staged.batches,
@@ -269,6 +380,11 @@ async function copyTargetGeneration(
     );
   }
 
+  // Copied batches were count- and digest-verified at staging time and each
+  // append commits atomically, so the fresh-generation path trusts the copy;
+  // the count verification exists to catch replayed copies overlapping stale
+  // rows, which the guard above already handled.
+  if (freshGeneration) return;
   const [chunkCount, relationCount] = await Promise.all([
     active.chunks.countRows(target),
     active.relations.countRows(target),
@@ -376,6 +492,8 @@ async function deleteSupersededGenerations(
   active: ActiveTables,
   manifest: ManifestRow,
 ): Promise<void> {
+  // Deleted unconditionally: for a re-indexed file the superseded rows almost
+  // always exist, so a count-first probe would just add a second table scan.
   const superseded = sqlAnd(
     sqlEquals("source_id", manifest.source_id),
     sqlNotEquals("generation", manifest.generation),
@@ -395,6 +513,12 @@ async function cleanupStagedPayload(
 }
 
 async function markNativeIndexesDirty(table: Table): Promise<void> {
+  const current = await readProjectedRows<{ value_json: string }>(
+    table,
+    sqlEquals("key", NATIVE_INDEXES_DIRTY_KEY),
+    ["value_json"],
+  );
+  if (current[0]?.value_json === JSON.stringify(true)) return;
   await table
     .mergeInsert(["key"])
     .whenMatchedUpdateAll()
@@ -526,6 +650,10 @@ function sqlEquals(field: string, value: string): string {
 
 function sqlNotEquals(field: string, value: string): string {
   return `${field} != ${sqlString(value)}`;
+}
+
+function sqlIn(field: string, values: string[]): string {
+  return `${field} IN (${values.map(sqlString).join(", ")})`;
 }
 
 function sqlAnd(...conditions: string[]): string {
