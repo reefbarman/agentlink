@@ -134,7 +134,10 @@ import {
   DEFAULT_BACKGROUND_MAX_CONCURRENT,
 } from "./background/backgroundConcurrency.js";
 import { resolveBackgroundBackendRoute } from "./background/backgroundBackendRouter.js";
-import { resolveBackgroundRoute } from "./backgroundModelRouter.js";
+import {
+  isForegroundOnlyModel,
+  resolveBackgroundRoute,
+} from "./backgroundModelRouter.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 import {
   partitionMcpToolsForDisclosure,
@@ -1852,6 +1855,84 @@ export class AgentSessionManager {
     return normalizeBackgroundAgentSettings(
       this.host.config.getBackgroundAgentSettings(scope),
     );
+  }
+
+  /**
+   * Validate a model pinned by agentlink.background.reviewTarget before it is
+   * applied as an implicit review model. A deliberately pinned reviewer must
+   * fail loudly instead of silently falling back to automatic routing.
+   */
+  private async resolveConfiguredReviewModel(modelId: string): Promise<string> {
+    const setting = "agentlink.background.reviewTarget";
+    const resolution = this.host.providers.resolveAvailableModel(modelId);
+    if (!resolution) {
+      throw new Error(
+        `${setting} references model "${modelId}", which is not registered. Use a configured AgentLink model ID.`,
+      );
+    }
+    const resolved = resolution.model;
+    if (resolution.migratedFrom) {
+      this.log?.(
+        `[bg-route] migrated ${setting} model "${modelId}" to "${resolved}"`,
+      );
+    }
+    if (isForegroundOnlyModel(resolved)) {
+      throw new Error(
+        `${setting} references model "${resolved}", which is foreground-only and cannot run background reviews.`,
+      );
+    }
+    const modelInfo = this.host.providers
+      .listAllModels()
+      .find((model) => model.id === resolved);
+    if (!modelInfo) {
+      throw new Error(
+        `${setting} references model "${resolved}", which is not available for background agents.`,
+      );
+    }
+    if (!modelInfo.capabilities.supportsToolUse) {
+      throw new Error(
+        `${setting} references model "${resolved}", which does not support tool use. Reviews require a tool-capable model.`,
+      );
+    }
+    const authStatus = await this.host.providers.getAuthStatus();
+    if (!authStatus[modelInfo.provider]) {
+      throw new Error(
+        `${setting} references model "${resolved}", whose provider "${modelInfo.provider}" is not authenticated.`,
+      );
+    }
+    if (this.getCoolingBackgroundProviders().includes(modelInfo.provider)) {
+      throw new Error(
+        `${setting} references model "${resolved}", whose provider "${modelInfo.provider}" recently failed a background run and is cooling down.`,
+      );
+    }
+    return resolved;
+  }
+
+  /**
+   * Validate an effort pinned by agentlink.background.reviewTarget against the
+   * model the review will actually run on. A pinned effort that the model
+   * cannot honor fails loudly instead of being silently clamped.
+   */
+  private resolveConfiguredReviewEffort(
+    modelId: string,
+    effort: ReasoningEffort,
+  ): ReasoningEffort {
+    const setting = "agentlink.background.reviewTarget";
+    const capabilities = this.host.providers
+      .listAllModels()
+      .find((model) => model.id === modelId)?.capabilities;
+    if (!capabilities?.supportsThinking && effort !== "none") {
+      throw new Error(
+        `${setting} pins effort "${effort}", but model "${modelId}" does not declare thinking support.`,
+      );
+    }
+    const supported = capabilities?.reasoningEfforts;
+    if (supported?.length && !supported.includes(effort)) {
+      throw new Error(
+        `${setting} pins effort "${effort}", which model "${modelId}" does not support. Supported: ${supported.join(", ")}.`,
+      );
+    }
+    return effort;
   }
 
   private cloneMcpToolDefinitions(
@@ -9473,14 +9554,37 @@ export class AgentSessionManager {
 
     const foregroundMode = parent?.mode ?? fg?.mode ?? "code";
 
-    const route = await resolveBackgroundRoute(this.host.providers, request, {
-      mode: foregroundMode,
-      model: foregroundModel,
-      unavailableProviders: this.getCoolingBackgroundProviders(),
-    });
-    const backendFallbackReason = backendRoute.fallback
-      ? `configured ACP agent ${backendRoute.fallback.reference} was unavailable; ${route.routingReason}`
-      : route.routingReason;
+    const configuredReviewModel = backendRoute.configuredReviewModel
+      ? await this.resolveConfiguredReviewModel(
+          backendRoute.configuredReviewModel,
+        )
+      : undefined;
+
+    const route = await resolveBackgroundRoute(
+      this.host.providers,
+      configuredReviewModel
+        ? { ...request, model: configuredReviewModel }
+        : request,
+      {
+        mode: foregroundMode,
+        model: foregroundModel,
+        unavailableProviders: this.getCoolingBackgroundProviders(),
+      },
+    );
+    const configuredReviewEffort = backendRoute.configuredReviewEffort
+      ? this.resolveConfiguredReviewEffort(
+          route.resolvedModel,
+          backendRoute.configuredReviewEffort,
+        )
+      : undefined;
+    const configuredReviewDetail = configuredReviewEffort
+      ? `${configuredReviewModel ?? route.resolvedModel}, effort=${configuredReviewEffort}`
+      : configuredReviewModel;
+    const backendFallbackReason = configuredReviewDetail
+      ? `configured review model target (${configuredReviewDetail})`
+      : backendRoute.fallback
+        ? `configured ACP agent ${backendRoute.fallback.reference} was unavailable; ${route.routingReason}`
+        : route.routingReason;
     const backendFallbackUsed =
       Boolean(backendRoute.fallback) || route.fallbackUsed;
     const isReviewTask = route.taskClass.startsWith("review_");
@@ -9534,6 +9638,9 @@ export class AgentSessionManager {
 
     if (route.thinkingBudget === 0) {
       session.reasoningEffort = "none";
+    }
+    if (configuredReviewEffort) {
+      this.applyReasoningEffortToSession(session, configuredReviewEffort);
     }
 
     session.title = task.slice(0, 80);

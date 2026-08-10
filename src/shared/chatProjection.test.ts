@@ -537,6 +537,8 @@ describe("tool lifecycle projection", () => {
         name: "Read: src/index.ts",
         complete: true,
         result: "contents",
+        durationMs: 12,
+        startedAt: expect.any(Number),
       }),
     );
   });

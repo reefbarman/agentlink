@@ -2,6 +2,7 @@
 
 import {
   ToolCallBlock,
+  fmtDuration,
   formatToolFileDisplayPath,
   getCommandApprovalBadge,
   getToolCallVisualState,
@@ -351,6 +352,30 @@ describe("ToolCallBlock", () => {
     ).toBeNull();
   });
 
+  it("shows timestamps in expanded completed tool details", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "timed-command",
+          name: "execute_command",
+          inputJson: JSON.stringify({ command: "npm test" }),
+          result: JSON.stringify({ exit_code: 0 }),
+          complete: true,
+          durationMs: 90_000,
+          startedAt: 1_700_000_000_000,
+        },
+      }),
+    );
+
+    expect(screen.queryByText("Timing")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Command details" }));
+
+    expect(screen.getByText("Timing")).toBeTruthy();
+    expect(screen.getByText(/Started/)).toBeTruthy();
+    expect(screen.getByText(/Completed/)).toBeTruthy();
+  });
+
   it("marks the collapsed header with an image badge when the result contains images", () => {
     render(
       h(ToolCallBlock, {
@@ -486,6 +511,16 @@ describe("ToolCallBlock", () => {
     expect(
       screen.queryByRole("button", { name: "Allow for this chat session" }),
     ).toBeNull();
+  });
+});
+
+describe("fmtDuration", () => {
+  it("uses seconds for sub-minute durations and rounded minutes and hours thereafter", () => {
+    expect(fmtDuration(999)).toBe("999ms");
+    expect(fmtDuration(12_345)).toBe("12.3s");
+    expect(fmtDuration(60_000)).toBe("1m");
+    expect(fmtDuration(1_244_500)).toBe("21m");
+    expect(fmtDuration(5_400_000)).toBe("1.5h");
   });
 });
 

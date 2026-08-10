@@ -5,10 +5,14 @@ import type {
 import {
   NATIVE_BACKGROUND_AGENT,
   isAcpBackgroundAgentReference,
+  isModelBackgroundTargetReference,
+  parseBackgroundReviewTarget,
   resolveAcpBackgroundAgent,
 } from "./acpAgentConfig.js";
 
+import type { CoreReasoningEffort } from "../../core/modelCatalog.js";
 import type { SpawnBackgroundRequest } from "../backgroundTypes.js";
+import { isReviewTaskClass } from "./reviewTaskClass.js";
 
 export type BackgroundBackendRoute =
   | {
@@ -17,6 +21,15 @@ export type BackgroundBackendRoute =
         reason: "unavailable_reference";
         reference: string;
       };
+      /**
+       * Local model ID pinned by agentlink.background.reviewTarget. The spawn
+       * path resolves and validates it before applying it as an implicit model
+       * override, so a settings-pinned reviewer stays distinguishable from a
+       * caller-supplied explicit model.
+       */
+      configuredReviewModel?: string;
+      /** Reasoning effort pinned alongside the configured review target. */
+      configuredReviewEffort?: CoreReasoningEffort;
     }
   | {
       backend: "acp";
@@ -47,6 +60,11 @@ export function resolveBackgroundBackendRoute(
       reason: "explicit_provider",
     };
   }
+  if (isModelBackgroundTargetReference(requestedProvider)) {
+    throw new Error(
+      `Background provider "${requestedProvider}" is not a provider reference. Use provider for a provider ID or acp:<agent-id>, and model for a specific model.`,
+    );
+  }
 
   // Any explicit native provider or model is authoritative and bypasses
   // configured ACP preferences, including the review-only preference.
@@ -54,48 +72,57 @@ export function resolveBackgroundBackendRoute(
     return { backend: "native" };
   }
 
-  const taskClass = request.taskClass?.trim().toLowerCase();
-  if (
-    taskClass?.startsWith("review_") &&
-    isAcpBackgroundAgentReference(settings.reviewAgent) &&
-    context.unavailableReferences?.has(settings.reviewAgent)
-  ) {
-    return {
-      backend: "native",
-      fallback: {
-        reason: "unavailable_reference",
-        reference: settings.reviewAgent,
-      },
-    };
-  }
-  if (
-    taskClass?.startsWith("review_") &&
-    isAcpBackgroundAgentReference(settings.reviewAgent)
-  ) {
-    const reviewAgent = resolveAcpBackgroundAgent(
+  if (isReviewTaskClass(request.taskClass)) {
+    const target = parseBackgroundReviewTarget(
       settings,
-      settings.reviewAgent,
+      context.foregroundProvider,
     );
-    if (!reviewAgent.provider) {
+    if (target.kind === "invalid") {
       throw new Error(
-        `ACP review agent "${reviewAgent.id}" requires a provider so adversarial routing can avoid same-provider reviews.`,
+        target.reason
+          ? `Invalid agentlink.background.reviewTarget entry "${target.value}". ${target.reason}`
+          : `Unsupported agentlink.background.reviewTarget "${target.value}". Use "native:auto", "acp:<agent-id>", or "model:<model-id>".`,
       );
     }
-    // Preserve adversarial review routing. A provider-tagged ACP reviewer only
-    // replaces the opposite-provider lane; same-provider foreground work falls
-    // through to AgentLink's native cross-provider model router.
-    if (
-      reviewAgent.provider &&
-      context.foregroundProvider?.toLowerCase() === reviewAgent.provider
-    ) {
-      return { backend: "native" };
+    if (target.kind === "model") {
+      return {
+        backend: "native",
+        configuredReviewModel: target.modelId,
+        ...(target.effort ? { configuredReviewEffort: target.effort } : {}),
+      };
     }
-    return {
-      backend: "acp",
-      reference: settings.reviewAgent,
-      agent: reviewAgent,
-      reason: "review_agent",
-    };
+    if (target.kind === "native" && target.effort) {
+      return { backend: "native", configuredReviewEffort: target.effort };
+    }
+    if (target.kind === "acp") {
+      if (context.unavailableReferences?.has(target.reference)) {
+        return {
+          backend: "native",
+          fallback: {
+            reason: "unavailable_reference",
+            reference: target.reference,
+          },
+        };
+      }
+      const reviewAgent = resolveAcpBackgroundAgent(settings, target.reference);
+      if (!reviewAgent.provider) {
+        throw new Error(
+          `ACP review agent "${reviewAgent.id}" requires a provider so adversarial routing can avoid same-provider reviews.`,
+        );
+      }
+      // Preserve adversarial review routing. A provider-tagged ACP reviewer only
+      // replaces the opposite-provider lane; same-provider foreground work falls
+      // through to AgentLink's native cross-provider model router.
+      if (context.foregroundProvider?.toLowerCase() === reviewAgent.provider) {
+        return { backend: "native" };
+      }
+      return {
+        backend: "acp",
+        reference: target.reference,
+        agent: reviewAgent,
+        reason: "review_agent",
+      };
+    }
   }
 
   if (settings.defaultAgent === NATIVE_BACKGROUND_AGENT) {

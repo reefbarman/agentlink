@@ -78,6 +78,12 @@ export interface ModelProvider {
   getCapabilities(model: string): ModelCapabilities;
 
   /**
+   * Optional model-vendor behavior used for system prompt selection. This stays
+   * separate from the provider ID, which owns routing, authentication, and transport.
+   */
+  getModelFamily?(model: string): "anthropic" | "openai" | undefined;
+
+  /**
    * Resolve capabilities for the authenticated transport that will own the next
    * request. Providers whose capabilities do not vary by auth may omit this.
    */

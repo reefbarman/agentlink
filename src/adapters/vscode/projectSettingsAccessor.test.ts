@@ -110,7 +110,10 @@ describe("ProjectSettingsAccessor", () => {
     };
     const properties = manifest.contributes.configuration.properties;
 
-    expect(classifications).toHaveLength(54);
+    expect(classifications).toHaveLength(56);
+    expect(PROJECT_SCOPED_AGENTLINK_SETTINGS).toContain(
+      "semanticEmbeddingsEnabled",
+    );
     expect(PROJECT_SCOPED_AGENTLINK_SETTINGS).toContain("modelPromptProfiles");
     expect(PROJECT_SCOPED_AGENTLINK_SETTINGS).toContain("skills.disabledIds");
     expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain("disabledProviders");
@@ -120,6 +123,9 @@ describe("ProjectSettingsAccessor", () => {
     );
     expect(MACHINE_SCOPED_AGENTLINK_SETTINGS).toContain(
       "openaiCompatible.connections",
+    );
+    expect(MACHINE_SCOPED_AGENTLINK_SETTINGS).toContain(
+      "background.reviewTarget",
     );
     expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain(
       "provider.maxConcurrentRequests",

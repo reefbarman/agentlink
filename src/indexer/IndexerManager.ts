@@ -137,11 +137,9 @@ export class IndexerManager implements vscode.Disposable {
       const config = vscode.workspace.getConfiguration("agentlink");
       const semanticEnabled = config.get<boolean>(
         "semanticSearchEnabled",
-        false,
+        true,
       );
       const workspaceRoots = this.getWorkspaceRoots();
-
-      const embeddingBearerToken = await this.getEmbeddingBearerToken();
 
       if (!semanticEnabled) {
         const readinessReason = this.classifyPreflightReadinessReason({
@@ -239,6 +237,8 @@ export class IndexerManager implements vscode.Disposable {
         });
 
         try {
+          const embeddingBearerToken =
+            await this.getEmbeddingBearerToken(workspaceRoot);
           const stats = await this.runWorkerJob(
             {
               type: "start",
@@ -821,11 +821,11 @@ export class IndexerManager implements vscode.Disposable {
     if (!worker) return;
 
     try {
-      const auth = await openAiCodexAuthManager.resolveEmbeddingAuth();
+      const bearerToken = await this.getEmbeddingBearerToken(msg.workspaceRoot);
       worker.send({
         type: "embeddingAuthRefreshResponse",
         requestId: msg.requestId,
-        bearerToken: auth?.bearerToken || "",
+        bearerToken: bearerToken || "",
       });
     } catch (error) {
       this.log(
@@ -981,8 +981,6 @@ export class IndexerManager implements vscode.Disposable {
       filteringComplete = true;
       if (filteredChanges.length === 0) return;
 
-      const embeddingBearerToken = await this.getEmbeddingBearerToken();
-
       const totalAdded = filteredChanges.reduce(
         (sum, changes) => sum + changes.added.length,
         0,
@@ -1029,6 +1027,8 @@ export class IndexerManager implements vscode.Disposable {
       for (const { workspaceRoot, added, removed } of filteredChanges) {
         const indexName = getCodeIndexCacheKey(workspaceRoot);
         const cachePath = this.getCachePath(indexName);
+        const embeddingBearerToken =
+          await this.getEmbeddingBearerToken(workspaceRoot);
         const stats = await this.runWorkerJob({
           type: "incrementalUpdate",
           added,
@@ -1150,7 +1150,16 @@ export class IndexerManager implements vscode.Disposable {
     );
   }
 
-  private async getEmbeddingBearerToken(): Promise<string | undefined> {
+  private async getEmbeddingBearerToken(
+    workspaceRoot: string,
+  ): Promise<string | undefined> {
+    const config = vscode.workspace.getConfiguration(
+      "agentlink",
+      vscode.Uri.file(workspaceRoot),
+    );
+    if (!config.get<boolean>("semanticEmbeddingsEnabled", false)) {
+      return undefined;
+    }
     const auth = await openAiCodexAuthManager.resolveEmbeddingAuth();
     return auth?.bearerToken || undefined;
   }

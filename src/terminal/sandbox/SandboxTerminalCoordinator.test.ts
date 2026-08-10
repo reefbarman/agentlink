@@ -578,7 +578,7 @@ describe("SandboxTerminalCoordinator", () => {
     await Promise.all(running);
   });
 
-  it("fails foreground admission immediately when every implicit blocker is backgrounded", async () => {
+  it("keeps foreground capacity available while background commands occupy terminals", async () => {
     const test = harness();
     await Promise.all(
       Array.from({ length: 4 }, (_, index) =>
@@ -592,14 +592,54 @@ describe("SandboxTerminalCoordinator", () => {
       ),
     );
 
-    await expect(
-      test.coordinator.executeCommand({
+    const foreground = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf foreground",
+      cwd: "/workspace/foreground",
+      sandboxSessionId: "agent-session",
+    });
+    await flush();
+    await vi.waitFor(() => expect(test.processes).toHaveLength(5));
+    await finish(test.processes[4], "foreground\r\n");
+    await expect(foreground).resolves.toMatchObject({
+      terminal_id: "sandbox-5",
+      output: "foreground",
+    });
+  });
+
+  it("caps detached background commands and reports the blocking terminals", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      await Promise.all(
+        Array.from({ length: 8 }, (_, index) =>
+          test.coordinator.executeCommand({
+            owner: undefined,
+            command: `sleep ${index}`,
+            cwd: `/workspace/${index}`,
+            sandboxSessionId: "agent-session",
+            background: true,
+          }),
+        ),
+      );
+      expect(test.processes).toHaveLength(8);
+
+      const ninth = test.coordinator.executeCommand({
         owner: undefined,
-        command: "printf exhausted",
-        cwd: "/workspace/exhausted",
+        command: "sleep 9",
+        cwd: "/workspace/9",
         sandboxSessionId: "agent-session",
-      }),
-    ).rejects.toThrow("Sandbox terminal pool exhausted");
+        background: true,
+      });
+      const outcome = expect(ninth).rejects.toThrow(
+        /background terminal limit reached \(8 background commands running\): sandbox-1 \(running `sleep 0`\)/,
+      );
+      await vi.advanceTimersByTimeAsync(31_000);
+      await outcome;
+      expect(test.processes).toHaveLength(8);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reports unconsumed prepared reservations as busy", async () => {
@@ -644,33 +684,24 @@ describe("SandboxTerminalCoordinator", () => {
         command: `printf ${index}`,
         cwd: `/workspace/${index}`,
         sandboxSessionId: "agent-session",
-        background: true,
       }),
     );
     await flush();
+    for (const process of test.processes) await finish(process);
     await Promise.all(running);
-
-    await expect(
-      test.coordinator.executeCommand({
-        owner: undefined,
-        command: "printf exhausted",
-        cwd: "/workspace/exhausted",
-        sandboxSessionId: "agent-session",
-      }),
-    ).rejects.toThrow("Sandbox terminal pool exhausted");
     expect(test.coordinator.listTerminals({ owner: undefined })).toHaveLength(
       4,
     );
 
-    await finish(test.processes[0], "zero\r\n");
     const replacement = test.coordinator.executeCommand({
       owner: undefined,
       command: "printf replacement",
       cwd: "/workspace/replacement",
       sandboxSessionId: "agent-session",
-      background: true,
     });
     await flush();
+    await vi.waitFor(() => expect(test.processes).toHaveLength(5));
+    await finish(test.processes[4], "replacement\r\n");
     await expect(replacement).resolves.toMatchObject({
       terminal_id: "sandbox-5",
     });

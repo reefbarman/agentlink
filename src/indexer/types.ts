@@ -133,6 +133,7 @@ export interface ReadyMessage {
 export interface EmbeddingAuthRefreshRequestMessage {
   type: "embeddingAuthRefreshRequest";
   requestId: string;
+  workspaceRoot: string;
 }
 
 export type WorkerToExtensionMessage =

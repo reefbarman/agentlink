@@ -296,6 +296,49 @@ describe("IndexerManager incremental ownership", () => {
     manager.dispose();
   });
 
+  it("resolves embedding consent separately for each workspace folder", async () => {
+    const { manager, internals } = createManager();
+    const secondRoot = path.resolve("/workspace/second");
+    const first = file("src/first.ts");
+    const second = path.join(secondRoot, "src/second.ts");
+    (
+      vscode.workspace as unknown as { workspaceFolders: unknown[] }
+    ).workspaceFolders = [
+      { uri: vscode.Uri.file(workspaceRoot), name: "project", index: 0 },
+      { uri: vscode.Uri.file(secondRoot), name: "second", index: 1 },
+    ];
+    vi.spyOn(vscode.workspace, "getConfiguration").mockImplementation(
+      ((_section: string, resource?: unknown) =>
+        ({
+          get: <T>(_key: string, defaultValue?: T) =>
+            (resource as { fsPath?: string } | undefined)?.fsPath === secondRoot
+              ? (true as T)
+              : defaultValue,
+        }) as vscode.WorkspaceConfiguration) as typeof vscode.workspace.getConfiguration,
+    );
+
+    manager.handleFileCreate(vscode.Uri.file(first));
+    manager.handleFileCreate(vscode.Uri.file(second));
+    await internals.flushIncrementalUpdate();
+
+    expect(resolveEmbeddingAuth).toHaveBeenCalledTimes(1);
+    expect(internals.runWorkerJob).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        workspaceRoot,
+        embeddingBearerToken: undefined,
+      }),
+    );
+    expect(internals.runWorkerJob).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        workspaceRoot: secondRoot,
+        embeddingBearerToken: "embedding-token",
+      }),
+    );
+    manager.dispose();
+  });
+
   it.each([
     ["worker rejection", "reject"],
     ["returned errors", "errors"],

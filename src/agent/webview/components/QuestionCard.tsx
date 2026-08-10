@@ -237,10 +237,11 @@ export function QuestionCard({
   const handleComposerPrimary = useCallback(
     (text: string, attachments: QuestionAttachmentDraft) => {
       const nextNotes = { ...notes, [q.id]: text };
-      const answered =
+      const hasContext =
+        text.trim() !== "" ||
         attachments.paths.length > 0 ||
-        attachments.media.length > 0 ||
-        isQuestionAnswered(q, currentAnswer, text);
+        attachments.media.length > 0;
+      const answered = hasContext || isQuestionAnswered(q, currentAnswer, text);
 
       if (!answered) return;
       const nextAnswers = normalizeQuestionAnswer(q, answers);
@@ -491,6 +492,9 @@ function QuestionInput({
             onClick={() => onConfirm(option)}
           >
             {option}
+            {question.recommended === option && (
+              <span class="question-recommended-badge">Recommended</span>
+            )}
           </button>
         ))}
       </div>
@@ -510,6 +514,9 @@ function QuestionInput({
               onClick={() => onChange(sel ? undefined : val)}
             >
               {label}
+              {question.recommended === label && (
+                <span class="question-recommended-badge">Recommended</span>
+              )}
             </button>
           );
         })}
@@ -529,13 +536,20 @@ function QuestionInput({
           {nums.map((n) => (
             <button
               key={n}
-              class={`question-option scale-option${value === n ? " selected" : ""}`}
+              class={`question-option scale-option${value === n ? " selected" : ""}${question.recommended === String(n) ? " recommended" : ""}`}
               onClick={() => onChange(value === n ? undefined : n)}
             >
               {n}
             </button>
           ))}
         </div>
+        {nums.some((n) => question.recommended === String(n)) && (
+          <div class="scale-recommendation">
+            <span class="question-recommended-badge">
+              Recommended: {question.recommended}
+            </span>
+          </div>
+        )}
         {hasLabels && (
           <div class="scale-labels-row">
             <span class="scale-label scale-label-min">

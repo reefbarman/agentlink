@@ -54,6 +54,7 @@ export async function* streamOpenAiCompatibleCompletion(
   const body = buildOpenAiCompatibleChatRequest({
     providerId: args.profile.providerId,
     profile: args.profile.profile,
+    reasoningEffortMode: args.profile.reasoningEffortMode,
     model,
     systemPrompt: args.request.systemPrompt,
     messages: args.request.messages,

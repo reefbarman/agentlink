@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.18.24",
+  "version": "1.18.32",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -501,8 +501,14 @@
         "agentlink.semanticSearchEnabled": {
           "scope": "resource",
           "type": "boolean",
+          "default": true,
+          "description": "Enable embedded local codebase retrieval. Lexical and structural retrieval stay on this machine and work without credentials."
+        },
+        "agentlink.semanticEmbeddingsEnabled": {
+          "scope": "resource",
+          "type": "boolean",
           "default": false,
-          "description": "Enable embedded local codebase retrieval. Lexical search works without embedding credentials; OpenAI embedding auth adds vector and hybrid ranking."
+          "description": "Explicitly allow OpenAI embeddings for vector and hybrid codebase retrieval. When enabled, indexed source chunks and search queries are sent to OpenAI. Existing API keys alone do not enable this."
         },
         "agentlink.openaiCompatible.connections": {
           "scope": "machine",
@@ -542,6 +548,16 @@
                   "openrouter"
                 ],
                 "description": "Compatibility profile. generic sends only portable fields; openrouter enables verified OpenRouter extensions."
+              },
+              "reasoningEffortMode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "reasoning_effort",
+                  "reasoning.effort",
+                  "output_config.effort"
+                ],
+                "description": "Wire field used for a selected reasoning effort. Defaults to none for generic connections and reasoning.effort for OpenRouter."
               },
               "authKey": {
                 "type": "string",
@@ -649,6 +665,14 @@
                     "supportsImages": {
                       "type": "boolean",
                       "default": false
+                    },
+                    "modelFamily": {
+                      "type": "string",
+                      "enum": [
+                        "anthropic",
+                        "openai"
+                      ],
+                      "description": "Optional vendor family used only to select prompt behavior when this model is served through an OpenAI-compatible connection. It does not change transport, authentication, or the upstream model ID."
                     }
                   }
                 }
@@ -724,7 +748,41 @@
           "type": "string",
           "default": "native:auto",
           "pattern": "^(native:auto|acp:[A-Za-z0-9_.-]+)$",
-          "description": "Backend preference for adversarial review task classes (review_*). Use native:auto for AgentLink's built-in cross-provider review routing, or acp:<id> to use a provider-tagged ACP agent only when it differs from the foreground provider. An explicit model or provider on the spawn request takes precedence."
+          "description": "Legacy backend preference for adversarial review task classes (review_*). Use native:auto for AgentLink's built-in cross-provider review routing, or acp:<id> to use a provider-tagged ACP agent only when it differs from the foreground provider. Ignored when agentlink.background.reviewTarget is set. An explicit model or provider on the spawn request takes precedence."
+        },
+        "agentlink.background.reviewTarget": {
+          "scope": "machine",
+          "type": "object",
+          "default": {},
+          "description": "Backend for review task classes (review_*), overriding agentlink.background.reviewAgent when set. Keys are foreground provider IDs (for example codex or openai-compatible:<connection-id>) plus an optional default entry; an unmapped foreground provider uses default, otherwise the legacy reviewAgent. Machine-scoped so a workspace cannot redirect review code and diffs to a locally configured endpoint. An explicit model or provider on the spawn request still takes precedence.",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "target"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "target": {
+                "type": "string",
+                "pattern": "^native:auto$|^acp:[A-Za-z0-9_.-]+$|^model:.+$",
+                "patternErrorMessage": "Use \"native:auto\", \"acp:<agent-id>\", or \"model:<model-id>\".",
+                "description": "native:auto for built-in cross-provider review routing, acp:<id> for a configured ACP agent, or model:<model-id> for one registered AgentLink model (its local model ID, not the upstream wire ID). A model target is deterministic and is used even when it shares the foreground provider; it must be registered, authenticated, and tool-capable or the spawn fails."
+              },
+              "effort": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "description": "Reasoning effort for this review. Validated against the resolved model's declared thinking support and reasoningEfforts. Not allowed with an acp: target, which controls its own effort."
+              }
+            }
+          }
         },
         "agentlink.background.acpAgents": {
           "scope": "resource",
@@ -1037,8 +1095,10 @@
     }
   },
   "scripts": {
-    "build": "node esbuild.mjs",
-    "watch": "node esbuild.mjs --watch",
+    "build": "node scripts/generate-documentation-package-contract.mjs && node esbuild.mjs",
+    "watch": "node scripts/generate-documentation-package-contract.mjs && node esbuild.mjs --watch",
+    "docs:generate": "node scripts/generate-documentation-package-contract.mjs",
+    "docs:check": "node scripts/generate-documentation-package-contract.mjs --check",
     "package": "node scripts/package-vsix.mjs",
     "package:retrieval-runtime": "node scripts/package-retrieval-runtime.mjs",
     "package:sandbox-runtime": "node scripts/package-sandbox-runtime.mjs",
@@ -1052,7 +1112,7 @@
     "telemetry:sessions": "node scripts/report-session-outcomes.mjs",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
-    "lint": "bash -c 'e=0; oxfmt --check || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
+    "lint": "bash -c 'e=0; npm run docs:check || e=1; oxfmt --check || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
     "test": "vitest run && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-session-outcomes.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/verify-retrieval-package.test.mjs",
     "test:watch": "vitest",
     "test:browser-gateway-security-gate": "node scripts/run-browser-gateway-security-gate.mjs",

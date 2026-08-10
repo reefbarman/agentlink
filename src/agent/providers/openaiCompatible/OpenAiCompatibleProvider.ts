@@ -80,6 +80,10 @@ export class OpenAiCompatibleProvider implements ModelProvider {
     return { ...configured.capabilities };
   }
 
+  getModelFamily(model: string): "anthropic" | "openai" | undefined {
+    return this.modelsById.get(model)?.modelFamily;
+  }
+
   listModels(): ModelInfo[] {
     return this.connection.models.map((model) => ({
       id: model.id,

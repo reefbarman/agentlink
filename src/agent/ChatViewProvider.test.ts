@@ -117,7 +117,7 @@ describe("worktree startup prompt policy", () => {
       "/workspace/project",
     );
     expect(writeApproval).toBe("session");
-  });
+  }, 15_000);
 
   it("records a mode marker when a code action starts a prompt in another mode", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");

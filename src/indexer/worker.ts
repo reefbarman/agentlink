@@ -400,11 +400,13 @@ async function closeRetrievalRepository(
   }
 }
 
-async function requestEmbeddingAuthRefresh(): Promise<string> {
+async function requestEmbeddingAuthRefresh(
+  workspaceRoot: string,
+): Promise<string> {
   const requestId = randomUUID();
   return new Promise<string>((resolve, reject) => {
     pendingEmbeddingAuthRefreshRequests.set(requestId, { resolve, reject });
-    send({ type: "embeddingAuthRefreshRequest", requestId });
+    send({ type: "embeddingAuthRefreshRequest", requestId, workspaceRoot });
     const timeout = setTimeout(() => {
       pendingEmbeddingAuthRefreshRequests.delete(requestId);
       reject(new Error("Timed out waiting for refreshed embedding auth token"));
@@ -1119,6 +1121,7 @@ async function processFileBatch(
   const embeddings = await batchEmbed(
     allChunks.map((c) => c.chunk.embeddingContent ?? c.chunk.content),
     config.embeddingBearerToken,
+    config.workspaceRoot,
     errors,
   );
 
@@ -2097,6 +2100,7 @@ function createEmbeddingFetchLimiter(
 async function batchEmbed(
   texts: string[],
   bearerToken: string | undefined,
+  workspaceRoot: string,
   errors: string[],
   onProgress?: (done: number, total: number) => void,
 ): Promise<(number[] | null)[]> {
@@ -2132,6 +2136,7 @@ async function batchEmbed(
         const vectors = await embedBatchWithRetry(
           batch,
           bearerToken,
+          workspaceRoot,
           embeddingFetch,
         );
         for (let index = 0; index < vectors.length; index++) {
@@ -2160,6 +2165,7 @@ async function batchEmbed(
 async function embedBatchWithRetry(
   texts: string[],
   bearerToken: string,
+  workspaceRoot: string,
   fetchImpl: typeof fetch,
   retries = MAX_RETRIES,
 ): Promise<number[][]> {
@@ -2170,7 +2176,7 @@ async function embedBatchWithRetry(
       status === 408 || status === 429 || (status >= 500 && status < 600),
     retryDelayMs: (attempt, random, retryAfterMs) =>
       Math.min(retryAfterMs ?? 1000 * 2 ** attempt + random * 500, 30_000),
-    refreshBearerToken: requestEmbeddingAuthRefresh,
+    refreshBearerToken: () => requestEmbeddingAuthRefresh(workspaceRoot),
     bisectOnBadRequest: true,
     sortByIndex: true,
     fetch: fetchImpl,

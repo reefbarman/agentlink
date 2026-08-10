@@ -112,6 +112,15 @@ async function collectRuntimePackages(repoRoot, nativePackage) {
   return packages;
 }
 
+function isNonRuntimeArtifact(source) {
+  return (
+    source.endsWith(".map") ||
+    source.endsWith(".d.ts") ||
+    source.endsWith(".d.cts") ||
+    source.endsWith(".d.mts")
+  );
+}
+
 async function findFiles(root, suffix) {
   const matches = [];
   const visit = async (directory) => {
@@ -144,6 +153,7 @@ export async function stageRetrievalRuntime({
       force: true,
       preserveTimestamps: true,
       filter: (source) =>
+        !isNonRuntimeArtifact(source) &&
         !path
           .relative(entry.packageRoot, source)
           .split(path.sep)

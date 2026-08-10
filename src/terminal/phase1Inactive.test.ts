@@ -243,18 +243,16 @@ describe("Phase 1 gated activation boundary", () => {
     expect(extensionSource).not.toContain('require("node-pty")');
   });
 
-  it("builds and packages every terminal webview output", () => {
+  it("builds and packages the terminal webview runtime assets", () => {
     expect(esbuildSource).toContain(
       'entryPoints: ["src/terminal/webview/index.tsx"]',
     );
     expect(esbuildSource).toContain('entryNames: "terminal"');
-    for (const output of [
-      "dist/terminal.js",
-      "dist/terminal.js.map",
-      "dist/terminal.css",
-      "dist/terminal.css.map",
-    ]) {
+    for (const output of ["dist/terminal.js", "dist/terminal.css"]) {
       expect(vscodeIgnoreSource).toContain(`!${output}`);
+    }
+    for (const sourceMap of ["dist/terminal.js.map", "dist/terminal.css.map"]) {
+      expect(vscodeIgnoreSource).not.toContain(`!${sourceMap}`);
     }
   });
 

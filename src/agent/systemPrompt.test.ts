@@ -178,37 +178,44 @@ describe("conversation mode placement", () => {
 
 describe("buildSystemPrompt", () => {
   it("recomputes supplied prompt-profile evidence under current trusted policy", async () => {
-    const forgedReasoningEvidence = {
+    const forgedLunaEvidence = {
+      profile: "reasoning" as const,
+      source: "exact-model-override" as const,
+      policyRevision: "prompt-profile-policy-v1" as const,
+      providerId: "codex",
+      modelId: "gpt-5.6-luna",
+    };
+
+    const rejected = await buildPromptArtifacts("code", tmpDir, {
+      providerId: "codex",
+      model: "gpt-5.6-luna",
+      promptProfile: forgedLunaEvidence,
+    });
+    expect(rejected.promptProfile).toMatchObject({
+      profile: "compatibility",
+      source: "compatibility-default",
+      providerId: "codex",
+      modelId: "gpt-5.6-luna",
+    });
+    expect(rejected.promptProfile).not.toBe(forgedLunaEvidence);
+    expect(rejected.systemPrompt).toContain(
+      "You are AgentLink, a highly skilled software engineer",
+    );
+
+    const overrideEvidence = {
       profile: "reasoning" as const,
       source: "exact-model-override" as const,
       policyRevision: "prompt-profile-policy-v1" as const,
       providerId: "codex",
       modelId: "gpt-5.6-sol",
     };
-
-    const rejected = await buildPromptArtifacts("code", tmpDir, {
-      providerId: "codex",
-      model: "gpt-5.6-sol",
-      promptProfile: forgedReasoningEvidence,
-    });
-    expect(rejected.promptProfile).toMatchObject({
-      profile: "compatibility",
-      source: "compatibility-default",
-      providerId: "codex",
-      modelId: "gpt-5.6-sol",
-    });
-    expect(rejected.promptProfile).not.toBe(forgedReasoningEvidence);
-    expect(rejected.systemPrompt).toContain(
-      "You are AgentLink, a highly skilled software engineer",
-    );
-
     const accepted = await buildPromptArtifacts("code", tmpDir, {
       providerId: "codex",
       model: "gpt-5.6-sol",
-      promptProfile: forgedReasoningEvidence,
+      promptProfile: overrideEvidence,
       promptProfileOverrides: { "gpt-5.6-sol": "reasoning" },
     });
-    expect(accepted.promptProfile).toBe(forgedReasoningEvidence);
+    expect(accepted.promptProfile).toBe(overrideEvidence);
     expect(accepted.systemPrompt).toContain(
       "You are AgentLink, a software engineering agent operating in a VS Code workspace.",
     );
@@ -247,6 +254,28 @@ describe("buildSystemPrompt", () => {
   it("includes the cwd in the base prompt", async () => {
     const result = await buildSystemPrompt("code", "/my/project");
     expect(result).toContain("/my/project");
+  });
+
+  it("distills bias for action over verification machinery", async () => {
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain("## Bias for Action");
+    expect(result).toContain(
+      "Build the feature first. A working slice the user can try beats a plan, harness, or proof that it would work.",
+    );
+    expect(result).toContain("Do not build new verification machinery");
+    expect(result).toContain(
+      "investments charged against time-to-working-result",
+    );
+    expect(result).toContain(
+      "Scope the list to the user's ask. Do not add speculative hardening, extra test suites, or verification machinery",
+    );
+    expect(result).toContain(
+      "Skipping heavyweight validation on a low-risk change is a correct outcome to report plainly, not a gap to engineer around.",
+    );
+    expect(result).toContain("### Testing & Validation");
+    expect(result).toContain(
+      "Do not stand up new verification machinery — browser-automation runs, synthetic data harnesses, smoke-test scripts, exhaustive edge-case suites — to prove a routine change.",
+    );
   });
 
   it("instructs agents to use exact sandbox recovery guidance before workarounds", async () => {
@@ -1302,7 +1331,7 @@ describe("buildSystemPrompt", () => {
   it("gives anthropic models high-level code tool guidance", async () => {
     const result = await buildSystemPrompt("code", tmpDir, {
       providerId: "anthropic",
-      model: "claude-opus-4-8",
+      model: "claude-haiku-4-5-20251001",
     });
     expect(result).toContain("Tool selection");
     expect(result).toContain("highest-level code intelligence tool");
@@ -1310,6 +1339,30 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("prefer `get_context` over `read_file`");
     expect(result).toContain("`codebase_search` first for unknown locations");
     expect(result).toContain("`search_files` for exact matches only");
+  });
+
+  it("serves the compact reasoning profile to evaluated frontier models", async () => {
+    const result = await buildSystemPrompt("code", tmpDir, {
+      providerId: "anthropic",
+      model: "claude-opus-4-8",
+    });
+    expect(result).toContain(
+      "You are AgentLink, a software engineering agent operating in a VS Code workspace.",
+    );
+    expect(result).toContain("Bias for action:");
+    expect(result).not.toContain("### Task Alignment");
+  });
+
+  it("uses configured model family for prompt behavior without changing transport", async () => {
+    const result = await buildSystemPrompt("code", tmpDir, {
+      providerId: "openai-compatible:meridian",
+      modelFamily: "anthropic",
+      model: "meridian-claude",
+    });
+
+    expect(result).toContain("Tool selection");
+    expect(result).toContain("highest-level code intelligence tool");
+    expect(result).not.toContain("Bias for action");
   });
 
   it("prefers get_context directly when a file path is already known", async () => {

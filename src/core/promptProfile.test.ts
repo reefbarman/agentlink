@@ -67,17 +67,37 @@ describe("prompt profile policy", () => {
         overrides: { "gpt-5.6-sol": "auto" } as never,
       }),
     ).toMatchObject({
-      profile: "compatibility",
-      source: "compatibility-default",
+      profile: "reasoning",
+      source: "evaluated-model",
       providerId: "codex",
       modelId: "gpt-5.6-sol",
     });
   });
 
-  it("keeps known reasoning-capable models on compatibility until evaluated", () => {
+  it("promotes the evaluated frontier cohort to the reasoning profile", () => {
     for (const [providerId, modelId] of [
       ["codex", "gpt-5.6-sol"],
+      ["codex", "gpt-5.6-terra"],
+      ["codex", "gpt-5.5"],
+      ["anthropic", "claude-opus-5"],
+      ["anthropic", "claude-sonnet-5"],
       ["anthropic", "claude-opus-4-8"],
+      ["anthropic", "claude-sonnet-4-6"],
+    ] as const) {
+      expect(resolvePromptProfile({ providerId, modelId })).toMatchObject({
+        profile: "reasoning",
+        source: "evaluated-model",
+        providerId,
+        modelId,
+      });
+    }
+  });
+
+  it("keeps unevaluated and small-tier models on compatibility", () => {
+    for (const [providerId, modelId] of [
+      ["anthropic", "claude-haiku-4-5-20251001"],
+      ["codex", "gpt-5.6-luna"],
+      ["codex", "gpt-5.3-codex-spark"],
       ["gemini", "gemini-2.5-pro"],
     ] as const) {
       expect(resolvePromptProfile({ providerId, modelId })).toMatchObject({

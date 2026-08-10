@@ -412,31 +412,23 @@ describe("NativeAgentTerminalCoordinator", () => {
         owner: undefined,
         command: `printf ${index}`,
         cwd: `/workspace/${index}`,
-        background: true,
       }),
     );
     await flush();
+    for (const process of test.processes) await finish(process);
     await Promise.all(running);
-
-    await expect(
-      test.coordinator.executeCommand({
-        owner: undefined,
-        command: "printf exhausted",
-        cwd: "/workspace/exhausted",
-      }),
-    ).rejects.toThrow("Native Agent terminal pool exhausted");
     expect(test.coordinator.listTerminals({ owner: undefined })).toHaveLength(
       4,
     );
 
-    await finish(test.processes[0], "zero\r\n");
     const replacement = test.coordinator.executeCommand({
       owner: undefined,
       command: "printf replacement",
       cwd: "/workspace/replacement",
-      background: true,
     });
     await flush();
+    await vi.waitFor(() => expect(test.processes).toHaveLength(5));
+    await finish(test.processes[4], "replacement\r\n");
     await expect(replacement).resolves.toMatchObject({
       terminal_id: "native-agent-5",
     });
@@ -444,6 +436,125 @@ describe("NativeAgentTerminalCoordinator", () => {
     expect(test.coordinator.listTerminals({ owner: undefined })).toHaveLength(
       4,
     );
+  });
+
+  it("keeps foreground capacity available while background commands occupy terminals", async () => {
+    const test = harness();
+    await Promise.all(
+      Array.from({ length: 4 }, (_, index) =>
+        test.coordinator.executeCommand({
+          owner: undefined,
+          command: `sleep ${index}`,
+          cwd: `/workspace/${index}`,
+          background: true,
+        }),
+      ),
+    );
+    expect(test.processes).toHaveLength(4);
+
+    const foreground = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf foreground",
+      cwd: "/workspace/foreground",
+    });
+    await flush();
+    await vi.waitFor(() => expect(test.processes).toHaveLength(5));
+    await finish(test.processes[4], "foreground\r\n");
+    await expect(foreground).resolves.toMatchObject({
+      terminal_id: "native-agent-5",
+      output: "foreground",
+    });
+    expect(test.coordinator.listTerminals({ owner: undefined })).toHaveLength(
+      5,
+    );
+  });
+
+  it("frees pool capacity when foreground commands time out", async () => {
+    const test = harness();
+    const timedOut = Array.from({ length: 4 }, (_, index) =>
+      test.coordinator.executeCommand({
+        owner: undefined,
+        command: `sleep ${index}`,
+        cwd: `/workspace/${index}`,
+        timeout: 1,
+      }),
+    );
+    await flush();
+    const results = await Promise.all(timedOut);
+    expect(results.every((result) => result.timed_out)).toBe(true);
+
+    const foreground = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf foreground",
+      cwd: "/workspace/foreground",
+    });
+    await flush();
+    await vi.waitFor(() => expect(test.processes).toHaveLength(5));
+    await finish(test.processes[4], "foreground\r\n");
+    await expect(foreground).resolves.toMatchObject({
+      terminal_id: "native-agent-5",
+    });
+  });
+
+  it("returns detached channels to the pool when their background command finishes", async () => {
+    const test = harness();
+    await Promise.all(
+      Array.from({ length: 2 }, (_, index) =>
+        test.coordinator.executeCommand({
+          owner: undefined,
+          command: `sleep ${index}`,
+          cwd: "/workspace",
+          background: true,
+        }),
+      ),
+    );
+    await finish(test.processes[0], "done\r\n");
+
+    const reused = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf reused",
+      cwd: "/workspace",
+    });
+    await flush();
+    expect(test.processes).toHaveLength(3);
+    expect(test.processes[2]?.identity.channelId).toBe("native-agent-1");
+    await finish(test.processes[2], "reused\r\n");
+    await expect(reused).resolves.toMatchObject({
+      terminal_id: "native-agent-1",
+      output: "reused",
+    });
+  });
+
+  it("names the busy terminals and commands when foreground admission times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const running = Array.from({ length: 4 }, (_, index) =>
+        test.coordinator.executeCommand({
+          owner: undefined,
+          command: `sleep ${index}`,
+          cwd: `/workspace/${index}`,
+        }),
+      );
+      await flush();
+      expect(test.processes).toHaveLength(4);
+
+      const blocked = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "printf blocked",
+        cwd: "/workspace/blocked",
+      });
+      const outcome = expect(blocked).rejects.toThrow(
+        /Native Agent terminal pool exhausted by native-agent-1 \(running `sleep 0`\)/,
+      );
+      await vi.advanceTimersByTimeAsync(31_000);
+      await outcome;
+
+      for (const process of test.processes) await finish(process);
+      await Promise.all(running);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("preserves an explicit terminal name instead of the AgentLink default", async () => {

@@ -4,7 +4,9 @@ import {
 } from "../../../core/modelCatalog.js";
 import type { CoreModelCapabilities } from "../../../core/modelRuntime.js";
 import type {
+  OpenAiCompatibleModelFamily,
   OpenAiCompatibleProfileKind,
+  OpenAiCompatibleReasoningEffortMode,
   OpenAiCompatibleRuntimeProfile,
 } from "../../../core/model/providers/openaiCompatible/types.js";
 
@@ -70,6 +72,7 @@ export interface OpenAiCompatibleConnectionDto {
   displayName: string;
   baseUrl: string;
   profile: OpenAiCompatibleProfileKind;
+  reasoningEffortMode?: OpenAiCompatibleReasoningEffortMode;
   authKey?: string;
   timeoutMs?: number;
   headers?: Record<string, string>;
@@ -90,12 +93,14 @@ export interface OpenAiCompatibleModelDto {
   reasoningEfforts?: CoreReasoningEffort[];
   defaultReasoningEffort?: CoreReasoningEffort;
   supportsImages?: boolean;
+  modelFamily?: OpenAiCompatibleModelFamily;
 }
 
 export interface NormalizedOpenAiCompatibleModel {
   id: string;
   model: string;
   displayName: string;
+  modelFamily?: OpenAiCompatibleModelFamily;
   capabilities: CoreModelCapabilities;
 }
 
@@ -105,6 +110,7 @@ export interface NormalizedOpenAiCompatibleConnection {
   displayName: string;
   baseUrl: string;
   profile: OpenAiCompatibleProfileKind;
+  reasoningEffortMode: OpenAiCompatibleReasoningEffortMode;
   authKey?: string;
   timeoutMs: number;
   headers?: Readonly<Record<string, string>>;
@@ -201,6 +207,7 @@ export function toOpenAiCompatibleRuntimeProfile(
     providerId: connection.providerId,
     baseUrl: connection.baseUrl,
     profile: connection.profile,
+    reasoningEffortMode: connection.reasoningEffortMode,
     ...(headers ? { headers } : {}),
     timeoutMs: connection.timeoutMs,
     authRequired: connection.authKey !== undefined,
@@ -210,6 +217,7 @@ export function toOpenAiCompatibleRuntimeProfile(
         {
           id: model.id,
           model: model.model,
+          ...(model.modelFamily ? { modelFamily: model.modelFamily } : {}),
           capabilities: model.capabilities,
         },
       ]),
@@ -257,6 +265,12 @@ function parseConnection(
   );
   const baseUrl = parseBaseUrl(raw.baseUrl, `${path}.baseUrl`, context);
   const profile = parseProfile(raw.profile, `${path}.profile`, context);
+  const reasoningEffortMode = parseReasoningEffortMode(
+    raw.reasoningEffortMode,
+    `${path}.reasoningEffortMode`,
+    profile,
+    context,
+  );
   const authKey = readOptionalString(
     raw.authKey,
     `${path}.authKey`,
@@ -306,7 +320,7 @@ function parseConnection(
       const model = parseModel(
         raw.models[index],
         `${path}.models[${index}]`,
-        profile,
+        reasoningEffortMode,
         context,
       );
       if (model) {
@@ -350,7 +364,8 @@ function parseConnection(
     id === undefined ||
     displayName === undefined ||
     baseUrl === undefined ||
-    profile === undefined
+    profile === undefined ||
+    reasoningEffortMode === undefined
   ) {
     return undefined;
   }
@@ -361,6 +376,7 @@ function parseConnection(
     displayName,
     baseUrl: normalizeBaseUrl(baseUrl),
     profile,
+    reasoningEffortMode,
     ...(authKey === undefined ? {} : { authKey }),
     timeoutMs: timeoutMs ?? DEFAULT_TIMEOUT_MS,
     ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
@@ -378,7 +394,7 @@ function parseConnection(
 function parseModel(
   raw: unknown,
   path: string,
-  profile: OpenAiCompatibleProfileKind | undefined,
+  reasoningEffortMode: OpenAiCompatibleReasoningEffortMode | undefined,
   context: ParseContext,
 ): NormalizedOpenAiCompatibleModel | undefined {
   const issueCount = context.issues.length;
@@ -456,6 +472,11 @@ function parseModel(
     `${path}.supportsImages`,
     context,
   );
+  const modelFamily = parseModelFamily(
+    raw.modelFamily,
+    `${path}.modelFamily`,
+    context,
+  );
   const reasoningEfforts = parseReasoningEfforts(
     raw.reasoningEfforts,
     `${path}.reasoningEfforts`,
@@ -505,18 +526,19 @@ function parseModel(
       );
     }
   }
-  if (profile === "generic" && reasoningEfforts !== undefined) {
+
+  if (reasoningEffortMode === "none" && reasoningEfforts !== undefined) {
     issue(
       context,
       `${path}.reasoningEfforts`,
-      "The generic profile does not support reasoning effort controls.",
+      "reasoningEfforts requires a connection reasoningEffortMode other than none.",
     );
   }
-  if (profile === "generic" && defaultReasoningEffort !== undefined) {
+  if (reasoningEffortMode === "none" && defaultReasoningEffort !== undefined) {
     issue(
       context,
       `${path}.defaultReasoningEffort`,
-      "The generic profile does not support a default reasoning effort.",
+      "defaultReasoningEffort requires a connection reasoningEffortMode other than none.",
     );
   }
   if (
@@ -547,6 +569,7 @@ function parseModel(
     id,
     model,
     displayName,
+    ...(modelFamily === undefined ? {} : { modelFamily }),
     capabilities: {
       supportsThinking: supportsThinking ?? false,
       supportsCaching: false,
@@ -616,6 +639,42 @@ function parseProfile(
     return value;
   }
   issue(context, path, 'Expected profile "generic" or "openrouter".');
+  return undefined;
+}
+
+function parseReasoningEffortMode(
+  value: unknown,
+  path: string,
+  profile: OpenAiCompatibleProfileKind | undefined,
+  context: ParseContext,
+): OpenAiCompatibleReasoningEffortMode | undefined {
+  if (value === undefined) {
+    return profile === "openrouter" ? "reasoning.effort" : "none";
+  }
+  if (
+    value === "none" ||
+    value === "reasoning_effort" ||
+    value === "reasoning.effort" ||
+    value === "output_config.effort"
+  ) {
+    return value;
+  }
+  issue(
+    context,
+    path,
+    'Expected "none", "reasoning_effort", "reasoning.effort", or "output_config.effort".',
+  );
+  return undefined;
+}
+
+function parseModelFamily(
+  value: unknown,
+  path: string,
+  context: ParseContext,
+): OpenAiCompatibleModelFamily | undefined {
+  if (value === undefined) return undefined;
+  if (value === "anthropic" || value === "openai") return value;
+  issue(context, path, 'Expected "anthropic" or "openai".');
   return undefined;
 }
 

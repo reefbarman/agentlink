@@ -59,6 +59,13 @@ function isRetryableEmbeddingStatus(status: number): boolean {
 function isSemanticSearchEnabled(workspacePath?: string): boolean {
   return semanticConfiguration(workspacePath).get<boolean>(
     "semanticSearchEnabled",
+    true,
+  );
+}
+
+function isSemanticEmbeddingsEnabled(workspacePath?: string): boolean {
+  return semanticConfiguration(workspacePath).get<boolean>(
+    "semanticEmbeddingsEnabled",
     false,
   );
 }
@@ -912,7 +919,9 @@ export async function semanticFileQuery(
   const normalizedPath = normalizeSemanticResultPath(relFilePath);
 
   try {
-    const auth = await getEmbeddingAuth();
+    const auth = isSemanticEmbeddingsEnabled(resolvedWorkspacePath)
+      ? await getEmbeddingAuth()
+      : null;
     const queryVector = auth
       ? await generateEmbedding(expandQuery(query), auth).catch(() => undefined)
       : undefined;
@@ -1008,7 +1017,9 @@ export async function semanticFileList(
   }
 
   try {
-    const auth = await getEmbeddingAuth();
+    const auth = isSemanticEmbeddingsEnabled(dirPath)
+      ? await getEmbeddingAuth()
+      : null;
     const queryVector = auth
       ? await generateEmbedding(expandQuery(query), auth).catch(() => undefined)
       : undefined;
@@ -1120,7 +1131,9 @@ export async function semanticSearch(
   }
 
   try {
-    const auth = await getEmbeddingAuth();
+    const auth = isSemanticEmbeddingsEnabled(dirPath)
+      ? await getEmbeddingAuth()
+      : null;
     const queryVector = auth
       ? await generateEmbedding(expandQuery(query), auth).catch(() => undefined)
       : undefined;

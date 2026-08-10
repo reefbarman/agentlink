@@ -8,11 +8,22 @@ import type { CoreReasoningEffort } from "../../../modelCatalog.js";
 
 export type OpenAiCompatibleProfileKind = "generic" | "openrouter";
 
+/** Model-vendor behavior used for prompt selection, independent of API transport. */
+export type OpenAiCompatibleModelFamily = "anthropic" | "openai";
+
+export type OpenAiCompatibleReasoningEffortMode =
+  | "none"
+  | "reasoning_effort"
+  | "reasoning.effort"
+  | "output_config.effort";
+
 export interface OpenAiCompatibleRuntimeModel {
   /** Stable AgentLink model ID. */
   id: string;
   /** Opaque model ID sent to the upstream API. */
   model: string;
+  /** Optional vendor-family behavior for prompts; never sent to the upstream API. */
+  modelFamily?: OpenAiCompatibleModelFamily;
   capabilities: CoreModelCapabilities;
 }
 
@@ -20,6 +31,7 @@ export interface OpenAiCompatibleRuntimeProfile {
   providerId: string;
   baseUrl: string;
   profile: OpenAiCompatibleProfileKind;
+  reasoningEffortMode: OpenAiCompatibleReasoningEffortMode;
   headers?: Readonly<Record<string, string>>;
   timeoutMs: number;
   authRequired: boolean;
@@ -90,7 +102,9 @@ export interface OpenAiCompatibleChatRequest {
   stream: true;
   tools?: OpenAiCompatibleWireTool[];
   tool_choice?: "auto";
+  reasoning_effort?: CoreReasoningEffort;
   reasoning?: { effort: CoreReasoningEffort };
+  output_config?: { effort: CoreReasoningEffort };
   parallel_tool_calls?: true;
   temperature?: number;
 }

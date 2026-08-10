@@ -84,6 +84,7 @@ describe("normalizeOpenAiCompatibleConnections", () => {
         displayName: "OpenRouter",
         baseUrl: "https://openrouter.ai/api/v1",
         profile: "openrouter",
+        reasoningEffortMode: "reasoning.effort",
         authKey: "shared-key",
         timeoutMs: 42_000,
         headers: { "HTTP-Referer": "https://example.invalid/agentlink" },
@@ -100,6 +101,7 @@ describe("normalizeOpenAiCompatibleConnections", () => {
             reasoningEfforts: ["low", "medium", "high"],
             defaultReasoningEffort: "medium",
             supportsImages: true,
+            modelFamily: "anthropic",
           }),
           model({
             id: "deepseek",
@@ -134,6 +136,7 @@ describe("normalizeOpenAiCompatibleConnections", () => {
       providerId: "openai-compatible:openrouter",
       baseUrl: "https://openrouter.ai/api/v1",
       profile: "openrouter",
+      reasoningEffortMode: "reasoning.effort",
       headers: {
         "HTTP-Referer": "https://example.invalid/agentlink",
         "X-OpenRouter-Title": "AgentLink",
@@ -145,6 +148,7 @@ describe("normalizeOpenAiCompatibleConnections", () => {
         kimi: {
           id: "kimi",
           model: "moonshotai/kimi",
+          modelFamily: "anthropic",
           capabilities: {
             supportsThinking: true,
             supportsCaching: false,
@@ -165,6 +169,64 @@ describe("normalizeOpenAiCompatibleConnections", () => {
       },
     });
     expect(result.connections[1].authKey).toBe("shared-key");
+  });
+
+  it("allows generic connections to declare a bounded reasoning effort mapping", () => {
+    const result = normalizeOpenAiCompatibleConnections([
+      connection({
+        reasoningEffortMode: "reasoning_effort",
+        models: [
+          model({
+            supportsThinking: true,
+            reasoningEfforts: ["low", "high"],
+            defaultReasoningEffort: "high",
+          }),
+        ],
+      }),
+    ]);
+
+    expect(result.issues).toEqual([]);
+    expect(result.connections[0]?.runtimeProfile.reasoningEffortMode).toBe(
+      "reasoning_effort",
+    );
+  });
+
+  it("defaults generic connections to no effort field and OpenRouter to nested effort", () => {
+    const result = normalizeOpenAiCompatibleConnections([
+      connection(),
+      connection({
+        id: "openrouter",
+        profile: "openrouter",
+        models: [model({ id: "openrouter-model" })],
+      }),
+    ]);
+
+    expect(result.issues).toEqual([]);
+    expect(result.connections.map((item) => item.reasoningEffortMode)).toEqual([
+      "none",
+      "reasoning.effort",
+    ]);
+  });
+
+  it("rejects unknown reasoning effort modes", () => {
+    expect(
+      issuePaths([connection({ reasoningEffortMode: "anything" })]),
+    ).toContain("$[0].reasoningEffortMode");
+  });
+
+  it("accepts per-model prompt family metadata and rejects unknown values", () => {
+    const valid = normalizeOpenAiCompatibleConnections([
+      connection({ models: [model({ modelFamily: "openai" })] }),
+    ]);
+
+    expect(valid.issues).toEqual([]);
+    expect(valid.connections[0]?.models[0]?.modelFamily).toBe("openai");
+    expect(
+      valid.connections[0]?.runtimeProfile.models["local-model"]?.modelFamily,
+    ).toBe("openai");
+    expect(
+      issuePaths([connection({ models: [model({ modelFamily: "other" })] })]),
+    ).toContain("$[0].models[0].modelFamily");
   });
 
   it("accepts a no-auth loopback connection and applies defaults", () => {
@@ -302,7 +364,7 @@ describe("normalizeOpenAiCompatibleConnections", () => {
     );
   });
 
-  it("validates capability combinations and profile-specific reasoning", () => {
+  it("validates capability combinations and reasoning defaults", () => {
     const disabledPaths = issuePaths([
       connection({
         profile: "openrouter",
@@ -330,7 +392,7 @@ describe("normalizeOpenAiCompatibleConnections", () => {
           model({
             supportsThinking: true,
             reasoningEfforts: ["low", "medium"],
-            defaultReasoningEffort: "high",
+            defaultReasoningEffort: "low",
           }),
         ],
       }),

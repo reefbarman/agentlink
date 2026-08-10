@@ -148,6 +148,18 @@ describe("extension package contributions", () => {
     });
   });
 
+  it("defaults codebase retrieval to local-only indexing", () => {
+    const settings = extensionPackage.contributes?.configuration?.properties as
+      | Record<string, ConfigurationProperty>
+      | undefined;
+
+    expect(settings?.["agentlink.semanticSearchEnabled"]?.default).toBe(true);
+    expect(settings?.["agentlink.autoIndex"]?.default).toBe(true);
+    expect(settings?.["agentlink.semanticEmbeddingsEnabled"]?.default).toBe(
+      false,
+    );
+  });
+
   it("retains browser gateway and MCP client package contracts", () => {
     const commands = new Set(
       extensionPackage.contributes?.commands?.map(({ command }) => command),

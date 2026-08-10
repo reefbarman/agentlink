@@ -29,6 +29,7 @@ function profile(
     providerId: "openai-compatible:test",
     baseUrl: "https://example.test/v1/",
     profile: "generic",
+    reasoningEffortMode: "none",
     timeoutMs: 1_000,
     authRequired: true,
     headers: { "X-Custom": "value" },
@@ -132,7 +133,10 @@ describe("streamOpenAiCompatibleCompletion", () => {
 
     const events = await collectEvents(
       streamOpenAiCompatibleCompletion({
-        profile: profile({ profile: "openrouter" }),
+        profile: profile({
+          profile: "openrouter",
+          reasoningEffortMode: "reasoning.effort",
+        }),
         apiKey: "secret",
         request: streamRequest({
           reasoningEffort: "high",

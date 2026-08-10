@@ -29,6 +29,7 @@ function connection(
     displayName: "Test Connection",
     baseUrl: "https://example.invalid/v1",
     profile: "generic",
+    reasoningEffortMode: "none",
     authKey: "test-key",
     timeoutMs: 10_000,
     allowInsecureHttp: false,
@@ -37,6 +38,7 @@ function connection(
       providerId: "openai-compatible:test",
       baseUrl: "https://example.invalid/v1",
       profile: "generic",
+      reasoningEffortMode: "none",
       timeoutMs: 10_000,
       authRequired: true,
       models: {
@@ -78,6 +80,25 @@ describe("OpenAiCompatibleProvider", () => {
     ]);
     expect(provider.getAuxiliaryModel("local-model")).toBe("local-model");
     expect(provider.getCapabilities("local-model").contextWindow).toBe(32_768);
+  });
+
+  it("exposes configured model family without changing provider identity", () => {
+    const configured = connection({
+      models: [
+        {
+          ...connection().models[0]!,
+          modelFamily: "anthropic",
+        },
+      ],
+    });
+    const provider = new OpenAiCompatibleProvider({
+      connection: configured,
+      secrets: { get: vi.fn().mockResolvedValue("secret") },
+    });
+
+    expect(provider.id).toBe("openai-compatible:test");
+    expect(provider.getModelFamily("local-model")).toBe("anthropic");
+    expect(provider.getModelFamily("unknown")).toBeUndefined();
   });
 
   it("resolves the current secret for every request and sends the wire model", async () => {

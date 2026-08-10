@@ -24,6 +24,10 @@ const REQUIRED_PATHS = [
   "dist/node_modules/@lancedb/lancedb/package.json",
   "dist/node_modules/apache-arrow/package.json",
   "resources/builtin-skills/documentation/SKILL.md",
+  "resources/builtin-skills/documentation/README.md",
+  "resources/builtin-skills/documentation/references/complete-reference.md",
+  "resources/builtin-skills/documentation/references/package-contract.md",
+  "resources/builtin-skills/documentation/references/release-notes.md",
 ];
 
 function normalizePackagePath(value) {

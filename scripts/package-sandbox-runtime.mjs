@@ -89,7 +89,27 @@ export const SANDBOX_RUNTIME_STAGE_PATHS = [
   ...PACKAGE_ENTRIES.map((entry) => entry.destination),
 ];
 
+function isNonRuntimeArtifact(fileName) {
+  return (
+    fileName.endsWith(".map") ||
+    fileName.endsWith(".d.ts") ||
+    fileName.endsWith(".d.cts") ||
+    fileName.endsWith(".d.mts")
+  );
+}
+
+async function pruneNonRuntimeArtifacts(directory) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) await pruneNonRuntimeArtifacts(entryPath);
+    else if (entry.isFile() && isNonRuntimeArtifact(entry.name)) {
+      await rm(entryPath);
+    }
+  }
+}
+
 async function pruneNonRuntimeFiles(destinationRoot) {
+  await pruneNonRuntimeArtifacts(destinationRoot);
   await rm(
     path.join(
       destinationRoot,

@@ -22,10 +22,23 @@ interface EvaluatedPromptModel {
   modelId: string;
 }
 
-// Automatic reasoning selection stays empty until a provider/model cohort passes
-// the committed task-success and safety evaluations. Transport reasoning support
-// alone is not evidence that a compact prompt is safe.
-const EVALUATED_REASONING_PROMPT_MODELS: readonly EvaluatedPromptModel[] = [];
+// Frontier cohort promoted to the compact reasoning profile (2026-08): these
+// models self-manage process reliably and do not need the verbose
+// compatibility scaffolding, which measurably slowed time-to-first-value.
+// Behavioral impact is tracked with `npm run telemetry:sessions` and
+// `npm run telemetry:tools -- --compare` across the rollout versions.
+// Transport reasoning support alone is still not evidence that a compact
+// prompt is safe — keep small/cheap tiers (Haiku, Luna, Spark) on
+// compatibility until they earn promotion.
+const EVALUATED_REASONING_PROMPT_MODELS: readonly EvaluatedPromptModel[] = [
+  { providerId: "anthropic", modelId: "claude-opus-5" },
+  { providerId: "anthropic", modelId: "claude-sonnet-5" },
+  { providerId: "anthropic", modelId: "claude-opus-4-8" },
+  { providerId: "anthropic", modelId: "claude-sonnet-4-6" },
+  { providerId: "codex", modelId: "gpt-5.6-sol" },
+  { providerId: "codex", modelId: "gpt-5.6-terra" },
+  { providerId: "codex", modelId: "gpt-5.5" },
+];
 
 export function isPromptProfile(value: unknown): value is PromptProfile {
   return (

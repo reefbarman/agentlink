@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => {
         fallbackUsed: false,
       }),
     ),
+    isForegroundOnlyModel: vi.fn((_modelId: string) => false),
     createSession: vi.fn(async (opts: any): Promise<any> => {
       seq += 1;
       let pendingModeResume: {
@@ -177,6 +178,8 @@ vi.mock("./backgroundModelRouter.js", () => ({
     request: unknown,
     foreground: unknown,
   ) => mocks.resolveBackgroundRoute(registry, request, foreground),
+  isForegroundOnlyModel: (modelId: string) =>
+    mocks.isForegroundOnlyModel(modelId),
 }));
 
 vi.mock("./AgentEngine.js", () => ({
@@ -205,6 +208,56 @@ async function waitFor<T>(
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   return read();
+}
+
+function reviewCaps(supportsToolUse: boolean, supportsThinking = true) {
+  return {
+    supportsThinking,
+    supportsCaching: true,
+    supportsImages: true,
+    supportsToolUse,
+    contextWindow: 200_000,
+    maxOutputTokens: 8192,
+    ...(supportsThinking
+      ? { reasoningEfforts: ["none", "low", "medium", "high", "max"] }
+      : {}),
+  };
+}
+
+function makeReviewProvider(
+  id: string,
+  models: Array<{
+    id: string;
+    supportsToolUse?: boolean;
+    supportsThinking?: boolean;
+  }>,
+  authenticated = true,
+): any {
+  return {
+    id,
+    displayName: id,
+    condenseModel: models[0]?.id ?? `${id}-condense`,
+    async isAuthenticated() {
+      return authenticated;
+    },
+    getCapabilities: () => reviewCaps(true),
+    listModels: () =>
+      models.map((model) => ({
+        id: model.id,
+        displayName: model.id,
+        provider: id,
+        capabilities: reviewCaps(
+          model.supportsToolUse ?? true,
+          model.supportsThinking ?? true,
+        ),
+      })),
+    async *stream() {
+      yield { type: "done" };
+    },
+    async complete() {
+      return { text: "ok" };
+    },
+  };
 }
 
 describe("AgentSessionManager background agents", () => {
@@ -1770,6 +1823,148 @@ describe("AgentSessionManager background agents", () => {
     });
     expect(acpBackgroundRunner.run).toHaveBeenCalledOnce();
     expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
+  });
+
+  it("forwards a provider-mapped review model target to native background routing", async () => {
+    const providers = new ProviderRegistry();
+    providers.register(makeReviewProvider("codex", [{ id: "gpt-5.6-sol" }]));
+    providers.register(
+      makeReviewProvider("openai-compatible:custom-claude", [
+        { id: "custom-claude-opus-4-8" },
+      ]),
+    );
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      reviewAgent: "acp:claude",
+      reviewTarget: {
+        codex: { target: "model:custom-claude-opus-4-8", effort: "max" },
+      },
+      acpAgents: [
+        { id: "claude", provider: "anthropic", command: "claude-agent-acp" },
+      ],
+    });
+
+    const mgr = new AgentSessionManager(
+      { ...config, model: "gpt-5.6-sol" },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, providers } },
+    );
+    const parent = await mgr.createSession("code");
+    parent.providerId = "codex";
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground(
+      { task: "review", message: "review this", taskClass: "review_code" },
+      parent.id,
+    );
+
+    // The terminal native consumer must receive the configured model exactly,
+    // and the reason must stay distinguishable from a caller-supplied model.
+    expect(mocks.resolveBackgroundRoute).toHaveBeenCalledWith(
+      providers,
+      expect.objectContaining({ model: "custom-claude-opus-4-8" }),
+      expect.anything(),
+    );
+    expect(spawned).toMatchObject({
+      resolvedModel: "custom-claude-opus-4-8",
+      reasoningEffort: "max",
+      routingReason:
+        "configured review model target (custom-claude-opus-4-8, effort=max)",
+    });
+  });
+
+  it("fails a review spawn when the configured effort is unsupported", async () => {
+    const providers = new ProviderRegistry();
+    providers.register(
+      makeReviewProvider("codex", [
+        { id: "gpt-5.6-sol" },
+        { id: "no-thinking", supportsThinking: false },
+      ]),
+    );
+    const mgr = new AgentSessionManager(
+      { ...config, model: "gpt-5.6-sol" },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, providers } },
+    );
+    mgr.setToolContext(toolCtx);
+
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      reviewTarget: {
+        default: { target: "model:no-thinking", effort: "high" },
+      },
+    });
+    await expect(
+      mgr.spawnBackground({
+        task: "review",
+        message: "review this",
+        taskClass: "review_code",
+      }),
+    ).rejects.toThrow(/does not declare thinking support/);
+
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      reviewTarget: {
+        default: { target: "model:gpt-5.6-sol", effort: "minimal" },
+      },
+    });
+    await expect(
+      mgr.spawnBackground({
+        task: "review",
+        message: "review this",
+        taskClass: "review_code",
+      }),
+    ).rejects.toThrow(/does not support/);
+  });
+
+  it("fails a review spawn when the configured review model is unusable", async () => {
+    const providers = new ProviderRegistry();
+    providers.register(
+      makeReviewProvider("codex", [
+        { id: "gpt-5.6-sol" },
+        { id: "chat-only", supportsToolUse: false },
+      ]),
+    );
+    const mgr = new AgentSessionManager(
+      { ...config, model: "gpt-5.6-sol" },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, providers } },
+    );
+    mgr.setToolContext(toolCtx);
+
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      reviewTarget: { default: { target: "model:missing-model" } },
+    });
+    await expect(
+      mgr.spawnBackground({
+        task: "review",
+        message: "review this",
+        taskClass: "review_code",
+      }),
+    ).rejects.toThrow(/is not registered/);
+
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      reviewTarget: { default: { target: "model:chat-only" } },
+    });
+    await expect(
+      mgr.spawnBackground({
+        task: "review",
+        message: "review this",
+        taskClass: "review_code",
+      }),
+    ).rejects.toThrow(/does not support tool use/);
   });
 
   it("preserves ACP message and tool images for the caller", async () => {

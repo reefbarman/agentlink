@@ -276,6 +276,7 @@ export function createDefaultAgentSessionManagerHost(args: {
         return {
           defaultAgent: config.get<unknown>("background.defaultAgent"),
           reviewAgent: config.get<unknown>("background.reviewAgent"),
+          reviewTarget: config.get<unknown>("background.reviewTarget"),
           acpAgents: config.get<unknown>("background.acpAgents"),
         };
       },

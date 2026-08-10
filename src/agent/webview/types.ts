@@ -963,6 +963,7 @@ export type ContentBlock =
       }>;
       complete: boolean;
       durationMs?: number;
+      startedAt?: number;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
       composeTrace?: ComposeTrace;
     }

@@ -6,6 +6,18 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 
 import { QuestionCard } from "./QuestionCard";
 
+function expectRecommendationBadge(
+  container: Element,
+  option: string,
+  expectedLabel = "Recommended",
+): void {
+  const badge = container.querySelector(".question-recommended-badge");
+  expect(badge?.textContent).toBe(expectedLabel);
+  expect(badge?.parentElement?.textContent).toBe(
+    expectedLabel === "Recommended" ? `${option}Recommended` : expectedLabel,
+  );
+}
+
 afterEach(() => {
   cleanup();
 });
@@ -58,6 +70,42 @@ describe("QuestionCard progress publishing", () => {
 });
 
 describe("QuestionCard integrated composer", () => {
+  it("submits additional context without a confirmation choice", () => {
+    const onSubmit = vi.fn();
+    const onComposerStateChange = vi.fn();
+    render(
+      <QuestionCard
+        id="request-1"
+        context="Need a decision."
+        questions={[
+          {
+            id: "merge",
+            type: "confirmation",
+            question: "Merge the pull request?",
+            options: ["Merge", "Keep open"],
+          },
+        ]}
+        integratedComposer
+        onComposerStateChange={onComposerStateChange}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    const composerState = onComposerStateChange.mock.lastCall?.[0];
+    composerState.onPrimary("The script should not be committed.", {
+      questionId: "merge",
+      paths: [],
+      media: [],
+    });
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      "request-1",
+      {},
+      { merge: "The script should not be committed." },
+      { questionId: "merge", paths: [], media: [] },
+    );
+  });
+
   it("updates the composer revision when answers on another step change", async () => {
     const onComposerStateChange = vi.fn();
     const { getByRole } = render(
@@ -142,6 +190,74 @@ describe("QuestionCard file links", () => {
       "src/agent/webview/App.tsx",
       undefined,
     );
+  });
+});
+
+describe("QuestionCard recommendation badges", () => {
+  it("renders a badge for every option-based question type", () => {
+    const onSubmit = vi.fn();
+    const cases = [
+      {
+        id: "yes-no",
+        type: "yes_no" as const,
+        question: "Continue?",
+        recommended: "Yes",
+      },
+      {
+        id: "confirmation",
+        type: "confirmation" as const,
+        question: "Ship this release?",
+        options: ["Ship it", "Keep working"],
+        recommended: "Ship it",
+      },
+      {
+        id: "scale",
+        type: "scale" as const,
+        question: "How confident are you?",
+        scale_min: 1,
+        scale_max: 5,
+        recommended: "4",
+      },
+      {
+        id: "choice",
+        type: "multiple_choice" as const,
+        question: "Which option?",
+        options: ["A", "B"],
+        recommended: "A",
+      },
+      {
+        id: "select",
+        type: "multiple_select" as const,
+        question: "Which options?",
+        options: ["A", "B"],
+        recommended: "A",
+      },
+    ];
+
+    for (const question of cases) {
+      const { container, unmount } = render(
+        <QuestionCard
+          id={`request-${question.id}`}
+          context="Choose an option."
+          questions={[question]}
+          onSubmit={onSubmit}
+        />,
+      );
+
+      expectRecommendationBadge(
+        container,
+        question.recommended,
+        question.type === "scale"
+          ? `Recommended: ${question.recommended}`
+          : undefined,
+      );
+      if (question.type === "scale") {
+        expect(
+          container.querySelector(".scale-option.recommended")?.textContent,
+        ).toBe(question.recommended);
+      }
+      unmount();
+    }
   });
 });
 

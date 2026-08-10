@@ -1353,6 +1353,9 @@ function projectBlock(
         ...(block.durationMs !== undefined
           ? { durationMs: safeInteger(block.durationMs) }
           : {}),
+        ...(block.startedAt !== undefined
+          ? { startedAt: safeInteger(block.startedAt) }
+          : {}),
       };
     case "skill_load":
       return {

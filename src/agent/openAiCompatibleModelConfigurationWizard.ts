@@ -1,7 +1,10 @@
 import * as vscode from "vscode";
 
 import type { CoreReasoningEffort } from "../core/modelCatalog.js";
-import type { OpenAiCompatibleProfileKind } from "../core/model/providers/openaiCompatible/types.js";
+import type {
+  OpenAiCompatibleProfileKind,
+  OpenAiCompatibleReasoningEffortMode,
+} from "../core/model/providers/openaiCompatible/types.js";
 import {
   OpenAiCompatibleCredentialService,
   normalizeOpenAiCompatibleApiKeyName,
@@ -53,6 +56,10 @@ interface CapabilityPick extends vscode.QuickPickItem {
 
 interface ReasoningPick extends vscode.QuickPickItem {
   effort: CoreReasoningEffort;
+}
+
+interface ReasoningEffortModePick extends vscode.QuickPickItem {
+  reasoningEffortMode: OpenAiCompatibleReasoningEffortMode;
 }
 
 interface SelectedCredential {
@@ -121,6 +128,8 @@ export async function configureOpenAiCompatibleModel(
   if (!service) return;
   const baseUrl = await chooseBaseUrl(service.profile);
   if (!baseUrl) return;
+  const reasoningEffortMode = await chooseReasoningEffortMode(service.profile);
+  if (!reasoningEffortMode) return;
   const validatedBaseUrl = validateOpenAiCompatibleBaseUrl(baseUrl);
   if (!validatedBaseUrl.baseUrl) {
     void vscode.window.showErrorMessage(
@@ -189,12 +198,13 @@ export async function configureOpenAiCompatibleModel(
   while (true) {
     const review = await reviewModelDraft(draft, {
       profile: service.profile,
+      reasoningEffortMode,
       baseUrl: validatedBaseUrl.baseUrl,
       apiKeyName: credential.apiKeyName,
     });
     if (!review) return;
     if (review === "edit") {
-      const edited = await editModelDraft(draft, service.profile);
+      const edited = await editModelDraft(draft, reasoningEffortMode);
       if (!edited) return;
       draft = edited;
       continue;
@@ -206,6 +216,7 @@ export async function configureOpenAiCompatibleModel(
     dependencies,
     initial,
     service,
+    reasoningEffortMode,
     baseUrl: validatedBaseUrl.baseUrl,
     allowInsecureHttp,
     credential,
@@ -266,6 +277,44 @@ async function chooseBaseUrl(
         : (result.issues[0]?.message ?? "Invalid URL.");
     },
   });
+}
+
+async function chooseReasoningEffortMode(
+  profile: OpenAiCompatibleProfileKind,
+): Promise<OpenAiCompatibleReasoningEffortMode | undefined> {
+  if (profile === "openrouter") return "reasoning.effort";
+  const selected = await vscode.window.showQuickPick<ReasoningEffortModePick>(
+    [
+      {
+        label: "No effort field",
+        description:
+          "Show returned thinking but do not request a thinking level",
+        reasoningEffortMode: "none",
+      },
+      {
+        label: "reasoning_effort",
+        description: "OpenAI-compatible proxies such as Meridian",
+        reasoningEffortMode: "reasoning_effort",
+      },
+      {
+        label: "reasoning.effort",
+        description: "Nested effort object used by some OpenAI-compatible APIs",
+        reasoningEffortMode: "reasoning.effort",
+      },
+      {
+        label: "output_config.effort",
+        description:
+          "Anthropic-style effort alias used by some compatible proxies",
+        reasoningEffortMode: "output_config.effort",
+      },
+    ],
+    {
+      title: "Reasoning effort request field",
+      placeHolder: "Choose the field supported by this API",
+      ignoreFocusOut: true,
+    },
+  );
+  return selected?.reasoningEffortMode;
 }
 
 async function chooseCredential(
@@ -469,6 +518,7 @@ async function reviewModelDraft(
   draft: ModelDraft,
   connection: {
     profile: OpenAiCompatibleProfileKind;
+    reasoningEffortMode: OpenAiCompatibleReasoningEffortMode;
     baseUrl: string;
     apiKeyName?: string;
   },
@@ -507,6 +557,7 @@ function formatDraftSummary(
   draft: ModelDraft,
   connection: {
     profile: OpenAiCompatibleProfileKind;
+    reasoningEffortMode: OpenAiCompatibleReasoningEffortMode;
     baseUrl: string;
     apiKeyName?: string;
   },
@@ -528,7 +579,7 @@ function formatDraftSummary(
 
 async function editModelDraft(
   draft: ModelDraft,
-  profile: OpenAiCompatibleProfileKind,
+  reasoningEffortMode: OpenAiCompatibleReasoningEffortMode,
 ): Promise<ModelDraft | undefined> {
   const contextWindow = await askPositiveInteger(
     "Context window",
@@ -549,7 +600,7 @@ async function editModelDraft(
       capability: "tools",
       picked: draft.supportsToolUse,
     },
-    ...(profile === "openrouter"
+    ...(reasoningEffortMode !== "none"
       ? [
           {
             label: "Reasoning",
@@ -661,6 +712,7 @@ async function commitWizardConfiguration(args: {
   dependencies: OpenAiCompatibleModelConfigurationWizardDependencies;
   initial: unknown;
   service: ServicePick;
+  reasoningEffortMode: OpenAiCompatibleReasoningEffortMode;
   baseUrl: string;
   allowInsecureHttp: boolean;
   credential: SelectedCredential;
@@ -779,6 +831,7 @@ async function commitWizardConfiguration(args: {
 function buildConnection(
   args: {
     service: ServicePick;
+    reasoningEffortMode: OpenAiCompatibleReasoningEffortMode;
     baseUrl: string;
     allowInsecureHttp: boolean;
     credential: SelectedCredential;
@@ -803,6 +856,7 @@ function buildConnection(
         : args.draft.displayName,
     baseUrl: args.baseUrl,
     profile: args.service.profile,
+    reasoningEffortMode: args.reasoningEffortMode,
     ...(args.credential.apiKeyName
       ? { authKey: args.credential.apiKeyName }
       : {}),

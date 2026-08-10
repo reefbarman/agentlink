@@ -6,6 +6,7 @@ import type {
 import type {
   OpenAiCompatibleChatRequest,
   OpenAiCompatibleProfileKind,
+  OpenAiCompatibleReasoningEffortMode,
   OpenAiCompatibleRuntimeModel,
   OpenAiCompatibleWireContentPart,
   OpenAiCompatibleWireMessage,
@@ -25,6 +26,7 @@ export class OpenAiCompatibleCapabilityError extends Error {
 export function buildOpenAiCompatibleChatRequest(args: {
   providerId: string;
   profile: OpenAiCompatibleProfileKind;
+  reasoningEffortMode: OpenAiCompatibleReasoningEffortMode;
   model: OpenAiCompatibleRuntimeModel;
   systemPrompt: string;
   messages: readonly CoreModelMessage[];
@@ -49,9 +51,11 @@ export function buildOpenAiCompatibleChatRequest(args: {
     max_tokens: args.maxTokens,
     stream: true,
     ...(tools ? { tools, tool_choice: "auto" } : {}),
-    ...(args.profile === "openrouter" && args.reasoningEffort
-      ? { reasoning: { effort: args.reasoningEffort } }
-      : {}),
+    ...reasoningEffortRequest(
+      args.reasoningEffortMode,
+      args.reasoningEffort,
+      args.model.capabilities.supportsThinking,
+    ),
     ...(args.profile === "openrouter" && tools
       ? { parallel_tool_calls: true }
       : {}),
@@ -59,6 +63,22 @@ export function buildOpenAiCompatibleChatRequest(args: {
       ? { temperature: args.temperature }
       : {}),
   };
+}
+
+function reasoningEffortRequest(
+  mode: OpenAiCompatibleReasoningEffortMode,
+  effort: CoreReasoningEffort | undefined,
+  supportsThinking: boolean,
+): Pick<
+  OpenAiCompatibleChatRequest,
+  "reasoning_effort" | "reasoning" | "output_config"
+> {
+  if (!effort || effort === "none" || !supportsThinking || mode === "none") {
+    return {};
+  }
+  if (mode === "reasoning_effort") return { reasoning_effort: effort };
+  if (mode === "reasoning.effort") return { reasoning: { effort } };
+  return { output_config: { effort } };
 }
 
 export function translateOpenAiCompatibleMessages(args: {

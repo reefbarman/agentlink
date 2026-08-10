@@ -256,6 +256,7 @@ describe("OpenAI-compatible model configuration wizard", () => {
     });
     quickPickBy(
       itemWith("profile", "generic"),
+      itemWith("reasoningEffortMode", "none"),
       itemWith("action", "none"),
       itemWith("action", "save"),
     );
@@ -272,6 +273,7 @@ describe("OpenAI-compatible model configuration wizard", () => {
         id: "custom-loaded-model",
         baseUrl: "http://127.0.0.1:1234/v1",
         profile: "generic",
+        reasoningEffortMode: "none",
         models: [
           expect.objectContaining({
             model: "loaded-model",

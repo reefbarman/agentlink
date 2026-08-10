@@ -24,12 +24,12 @@
 
 ## Built-in Documentation Skill
 
-[resources/builtin-skills/documentation/](resources/builtin-skills/documentation/) is a bundled skill that lets the built-in agent answer questions about AgentLink's own capabilities and configuration. It deliberately stays a **routing layer**: the SKILL.md and its `references/` files hold distilled summaries and point to the shipped `README.md` and `package.json` (`contributes.configuration`) as the authoritative detail, so README-level edits do not need mirroring. Keep it accurate:
+[resources/builtin-skills/documentation/](resources/builtin-skills/documentation/) is the self-contained bundled product documentation used by the built-in documentation skill. At runtime the skill must answer only from this directory and must not inspect the extension root, source code, local settings, or build output to fill a documentation gap. Keep it accurate:
 
-- Update it **in the same piece of work** whenever something it distills changes: modes, built-in slash commands, settings added/renamed/regrouped (`references/settings.md`), MCP config behavior or file precedence (`references/mcp.md`), customization conventions — instruction files, custom modes/commands, skills, memory (`references/customization.md`), or major user-facing features and surfaces (`references/capabilities.md`).
-- Detail-level changes already covered by the README (a tool gaining a parameter, reworded setting descriptions) need no skill edit — the skill routes readers to those files.
+- Update the owning topic reference **in the same piece of work** whenever user-facing behavior changes: modes, slash commands, settings, MCP configuration, customization, browser surfaces, or major capabilities. Keep `SKILL.md`'s strict source boundary and topic routing accurate.
+- `references/package-contract.md` is generated from `package.json`, and `references/release-notes.md` is generated from `CHANGELOG.md`. Do not edit either manually: run `npm run docs:generate`; `npm run build` and `npm run watch` regenerate them, and `npm run docs:check` detects drift during lint.
 - Keep frontmatter single-line (AgentLink's simple `key: value` parser) and the `description` trigger-rich, per the bundled `skill-writing` skill.
-- No registration or packaging steps: bundled skills under `resources/builtin-skills/` are auto-discovered by `src/agent/skillLoader.ts` and shipped via the `!resources/**` line in `.vscodeignore`.
+- Bundled skills under `resources/builtin-skills/` are auto-discovered by `src/agent/skillLoader.ts` and shipped via the `!resources/**` line in `.vscodeignore`. `scripts/verify-retrieval-package.mjs` verifies that the documentation index and generated references are present in release inventories.
 
 ## Formatting
 

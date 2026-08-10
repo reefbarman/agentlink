@@ -1975,6 +1975,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
               inputJson,
               result: "",
               complete: false,
+              startedAt: Date.now(),
               ...(action.toolName === "compose"
                 ? {
                     composeTrace: {
@@ -2107,6 +2108,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
             result: action.result,
             complete: true,
             durationMs: action.durationMs,
+            startedAt: Date.now() - action.durationMs,
           });
           if (items.length > 0) {
             cloned.last.blocks.push({
@@ -2143,6 +2145,9 @@ export function reducer(state: AppState, action: AppAction): AppState {
               : {}),
             complete: true,
             durationMs: action.durationMs,
+            ...(b.type === "tool_call"
+              ? { startedAt: b.startedAt ?? Date.now() - action.durationMs }
+              : {}),
             ...(b.type === "tool_call"
               ? {
                   mcpApprovalPromotion: action.mcpApprovalPromotion,

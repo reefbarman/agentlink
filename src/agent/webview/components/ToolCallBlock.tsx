@@ -87,9 +87,24 @@ function FilePathLinkedText({
   return <>{parts}</>;
 }
 
-/** Format duration as human-readable string. */
+/** Format duration as a compact, human-readable string. */
 export function fmtDuration(ms: number): string {
-  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+  if (ms < 1_000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1_000).toFixed(1)}s`;
+
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+
+  const hours = Math.round((minutes / 60) * 10) / 10;
+  return `${hours}h`;
+}
+
+export function fmtToolTimestamp(timestamp: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(timestamp);
 }
 
 /** Number of viewable images in a completed tool call's result. */
@@ -921,6 +936,21 @@ export function ToolCallBlock({
 
       {expanded && (
         <div class="tool-call-details">
+          {toolCall.startedAt != null && (
+            <div class="tool-call-section">
+              <div class="tool-call-section-label">Timing</div>
+              <div class="tool-call-meta">
+                Started {fmtToolTimestamp(toolCall.startedAt)}
+                {complete && toolCall.durationMs != null && (
+                  <>
+                    <br />
+                    Completed{" "}
+                    {fmtToolTimestamp(toolCall.startedAt + toolCall.durationMs)}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
           <InlineDiff toolName={toolCall.name} input={input} />
           {formattedInput && (
             <div class="tool-call-section">

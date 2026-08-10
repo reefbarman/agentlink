@@ -9,6 +9,7 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
   "masterBypass",
   "diagnosticDelay",
   "semanticSearchEnabled",
+  "semanticEmbeddingsEnabled",
   "bgSummary.mode",
   "background.defaultAgent",
   "background.reviewAgent",
@@ -40,6 +41,7 @@ export const MACHINE_SCOPED_AGENTLINK_SETTINGS = [
   "terminal.nodePath",
   "terminal.environmentPolicy",
   "openaiCompatible.connections",
+  "background.reviewTarget",
 ] as const;
 
 export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [

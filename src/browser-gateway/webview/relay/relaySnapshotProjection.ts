@@ -431,6 +431,9 @@ function projectBlock(
           ...(block.durationMs !== undefined
             ? { durationMs: block.durationMs }
             : {}),
+          ...(block.startedAt !== undefined
+            ? { startedAt: block.startedAt }
+            : {}),
         },
       ];
     case "skill_load":

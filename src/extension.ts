@@ -3060,7 +3060,7 @@ export async function activate(
   // --- Codebase indexer ---
   const semanticEnabled = vscode.workspace
     .getConfiguration("agentlink")
-    .get<boolean>("semanticSearchEnabled", false);
+    .get<boolean>("semanticSearchEnabled", true);
   chatViewProvider.setContextHealthListener((health) =>
     sidebarProvider.updateContextHealth(health),
   );

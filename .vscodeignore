@@ -9,12 +9,9 @@
 #    (missing workers => diff editor renders but never computes => no highlighting).
 **/*
 !dist/extension.js
-!dist/extension.js.map
 !dist/compose-runtime.mjs
-!dist/compose-runtime.mjs.map
 !dist/indexer-worker.js
 !dist/browser-gateway-helper.js
-!dist/browser-gateway-helper.js.map
 !dist/wasm/**
 !dist/sidebar.js
 !dist/sidebar.css
@@ -32,19 +29,12 @@
 !dist/browser-gateway-chunks/
 !dist/browser-gateway-chunks/*.js
 !dist/terminal.js
-!dist/terminal.js.map
 !dist/terminal.css
-!dist/terminal.css.map
 !dist/monaco-editor.worker.js
-!dist/monaco-editor.worker.js.map
 !dist/monaco-json.worker.js
-!dist/monaco-json.worker.js.map
 !dist/monaco-css.worker.js
-!dist/monaco-css.worker.js.map
 !dist/monaco-html.worker.js
-!dist/monaco-html.worker.js.map
 !dist/monaco-ts.worker.js
-!dist/monaco-ts.worker.js.map
 !dist/codicon.css
 !dist/codicon.ttf
 !dist/node_modules/**

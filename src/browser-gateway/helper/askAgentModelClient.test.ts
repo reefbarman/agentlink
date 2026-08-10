@@ -989,6 +989,7 @@ describe("BrowserGatewayAskAgentModelClient", () => {
         providerId: "openai-compatible:openrouter",
         baseUrl: "https://openrouter.ai/api/v1",
         profile: "openrouter",
+        reasoningEffortMode: "reasoning.effort",
         headers: { "HTTP-Referer": "https://example.invalid/agentlink" },
         timeoutMs: 30_000,
         authRequired: true,
@@ -1086,6 +1087,7 @@ describe("BrowserGatewayAskAgentModelClient", () => {
         providerId: "openai-compatible:local",
         baseUrl: "http://127.0.0.1:1234/v1",
         profile: "generic",
+        reasoningEffortMode: "none",
         timeoutMs: 30_000,
         authRequired: false,
         models: {

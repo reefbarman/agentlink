@@ -43,15 +43,18 @@ test("stages runtime dependencies and Darwin node-pty prebuilds without source o
       );
     }
 
-    assert.equal(
-      await exists(
-        path.join(
-          destinationRoot,
-          "node_modules/@anthropic-ai/sandbox-runtime/node_modules/zod/src",
-        ),
-      ),
-      false,
-    );
+    for (const nonRuntimePath of [
+      "node_modules/@anthropic-ai/sandbox-runtime/node_modules/zod/src",
+      "node_modules/@anthropic-ai/sandbox-runtime/dist/index.js.map",
+      "node_modules/@anthropic-ai/sandbox-runtime/dist/index.d.ts",
+      "node_modules/@anthropic-ai/sandbox-runtime/node_modules/zod/index.d.cts",
+    ]) {
+      assert.equal(
+        await exists(path.join(destinationRoot, nonRuntimePath)),
+        false,
+        nonRuntimePath,
+      );
+    }
     const nodePtyLibEntries = await readdir(
       path.join(destinationRoot, "node_modules/node-pty/lib"),
     );

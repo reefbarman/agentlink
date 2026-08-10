@@ -510,15 +510,15 @@ describe("tool usage telemetry project attribution", () => {
   it("discovers multiple exact deferred tool names through the runtime bridge", async () => {
     const runtime = createAgentToolRuntime(mockCtx);
     const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
-      getAgentTools().find((tool) => tool.name === "codebase_search")!,
-      getAgentTools().find((tool) => tool.name === "get_repo_map")!,
+      getAgentTools().find((tool) => tool.name === "get_call_hierarchy")!,
+      getAgentTools().find((tool) => tool.name === "get_type_hierarchy")!,
       getAgentTools().find((tool) => tool.name === "manage_memory")!,
     ]);
 
     const result = await runtime.executeTool({
       name: "find_native_tools",
       input: {
-        query: "codebase_search get_repo_map",
+        query: "get_call_hierarchy get_type_hierarchy",
         include_schemas: true,
         schema_limit: 2,
       },
@@ -534,11 +534,11 @@ describe("tool usage telemetry project attribution", () => {
       total: 2,
       tools: [
         {
-          name: "codebase_search",
+          name: "get_call_hierarchy",
           input_schema: expect.objectContaining({ type: "object" }),
         },
         {
-          name: "get_repo_map",
+          name: "get_type_hierarchy",
           input_schema: expect.objectContaining({ type: "object" }),
         },
       ],

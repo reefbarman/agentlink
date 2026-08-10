@@ -499,7 +499,39 @@ describe("semantic retrieval service", () => {
     expect(closeRetrievalRepository).toHaveBeenCalledTimes(1);
   });
 
-  it("uses hybrid retrieval when an embedding is available", async () => {
+  it("keeps semantic search local when embeddings are disabled despite available credentials", async () => {
+    resolveEmbeddingAuth.mockResolvedValue({
+      method: "oauth",
+      bearerToken: "oauth-token",
+      canRefresh: true,
+    });
+    const hit = candidate({
+      file: "src/local.ts",
+      indexedContent: "export function localSearch() {}",
+    });
+    readFileMock.mockResolvedValue(hit.liveContent);
+    retrievalQuery.mockResolvedValue(queryResult([hit]));
+
+    await semanticSearch("/workspace", "local search", 5, undefined, {
+      retrievalStoreRoot,
+    });
+
+    expect(resolveEmbeddingAuth).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(retrievalQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "lexical" }),
+    );
+  });
+
+  it("uses hybrid retrieval when embeddings are explicitly enabled", async () => {
+    const getConfigurationMock = vscode.workspace
+      .getConfiguration as ReturnType<typeof vi.fn>;
+    const originalImpl = getConfigurationMock.getMockImplementation();
+    getConfigurationMock.mockImplementation(() => ({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "semanticEmbeddingsEnabled" ? true : fallback,
+      ),
+    }));
     resolveEmbeddingAuth.mockResolvedValue({
       method: "oauth",
       bearerToken: "oauth-token",
@@ -516,19 +548,23 @@ describe("semantic retrieval service", () => {
     readFileMock.mockResolvedValue(hit.liveContent);
     retrievalQuery.mockResolvedValue(queryResult([hit], "hybrid"));
 
-    await semanticSearch("/workspace", "hybrid search", 5, undefined, {
-      retrievalStoreRoot,
-    });
+    try {
+      await semanticSearch("/workspace", "hybrid search", 5, undefined, {
+        retrievalStoreRoot,
+      });
 
-    expect(retrievalQuery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        embedding: [0.1, 0.2],
-        mode: "hybrid",
-      }),
-    );
-    expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
-      Authorization: "Bearer oauth-token",
-    });
+      expect(retrievalQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          embedding: [0.1, 0.2],
+          mode: "hybrid",
+        }),
+      );
+      expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
+        Authorization: "Bearer oauth-token",
+      });
+    } finally {
+      if (originalImpl) getConfigurationMock.mockImplementation(originalImpl);
+    }
   });
 
   it("uses a stable source id for exact-file semantic lookup", async () => {

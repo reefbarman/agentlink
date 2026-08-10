@@ -252,6 +252,7 @@ export type BrowserGatewayTranscriptBlock =
       name: string;
       complete: boolean;
       durationMs?: number;
+      startedAt?: number;
     }
   | {
       type: "skill_load";
@@ -2389,8 +2390,10 @@ function parseTranscriptBlock(
         "name",
         "complete",
         "durationMs",
+        "startedAt",
       ]);
       const durationMs = optionalNonNegativeInteger(object, "durationMs", path);
+      const startedAt = optionalNonNegativeInteger(object, "startedAt", path);
       return {
         type: "tool_call",
         blockId: nonEmptyString(object.blockId, `${path}.blockId`, 256),
@@ -2402,6 +2405,7 @@ function parseTranscriptBlock(
         name: nonEmptyString(object.name, `${path}.name`, 1_000),
         complete: booleanValue(object.complete, `${path}.complete`),
         ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(startedAt !== undefined ? { startedAt } : {}),
       };
     }
     case "skill_load": {

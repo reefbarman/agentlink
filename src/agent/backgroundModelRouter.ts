@@ -5,6 +5,10 @@ import type {
   ProviderStrategy,
   SpawnBackgroundRequest,
 } from "./backgroundTypes.js";
+import {
+  BASE_REVIEW_TASK_CLASS,
+  isReviewTaskClass,
+} from "./background/reviewTaskClass.js";
 
 import { CODEX_DEFAULT_MODEL } from "../core/model/providers/codex/models.js";
 import type { ModelInfo } from "./providers/types.js";
@@ -17,7 +21,7 @@ const ANTHROPIC_BACKGROUND_DEFAULT_MODELS = [
 ];
 const FOREGROUND_ONLY_MODEL_PATTERNS = [/^claude-fable-5(?:-|$)/i];
 
-function isForegroundOnlyModel(modelId: string): boolean {
+export function isForegroundOnlyModel(modelId: string): boolean {
   return FOREGROUND_ONLY_MODEL_PATTERNS.some((pattern) =>
     pattern.test(modelId),
   );
@@ -80,9 +84,13 @@ function getTaskRule(taskClass?: string): {
     "general"
   ).trim();
   const fromConfig = routingConfig.taskClasses[normalized];
+  // A custom review_* class must keep review policy instead of silently
+  // inheriting the general rule (which reviews with the foreground model).
   const resolvedClass = fromConfig
     ? normalized
-    : (routingConfig.defaults.taskClass ?? "general");
+    : isReviewTaskClass(normalized)
+      ? BASE_REVIEW_TASK_CLASS
+      : (routingConfig.defaults.taskClass ?? "general");
   return {
     taskClass: resolvedClass,
     rule: {
@@ -103,8 +111,7 @@ function pickMode(
 function inferReviewTier(
   request: SpawnBackgroundRequest,
 ): ModelTier | undefined {
-  const taskClass = request.taskClass?.trim().toLowerCase();
-  if (!taskClass?.startsWith("review_")) return undefined;
+  if (!isReviewTaskClass(request.taskClass)) return undefined;
 
   const text = `${request.task}\n${request.message}`.toLowerCase();
   const deepSignals = [
@@ -129,7 +136,7 @@ function getDefaultReviewBudget(
   taskClass: string,
   tier: ModelTier,
 ): AgentBudget | undefined {
-  if (!taskClass.startsWith("review_")) return undefined;
+  if (!isReviewTaskClass(taskClass)) return undefined;
   return { ...REVIEW_BUDGETS[tier] };
 }
 

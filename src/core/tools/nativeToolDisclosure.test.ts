@@ -58,6 +58,23 @@ describe("native tool disclosure snapshots", () => {
     expect(snapshot.dormantToolNames).toEqual(["show_notification"]);
   });
 
+  it("keeps primary indexed retrieval tools inline", () => {
+    const snapshot = createNativeToolDisclosureSnapshot([
+      definition("codebase_search"),
+      definition("get_repo_map"),
+      definition("get_module_neighbors"),
+      definition("search_files"),
+    ]);
+
+    expect(snapshot.inlineTools.map((tool) => tool.name)).toEqual([
+      "codebase_search",
+      "get_repo_map",
+      "get_module_neighbors",
+      "search_files",
+    ]);
+    expect(snapshot.deferredTools).toEqual([]);
+  });
+
   it("advertises the exact deferred catalog through the discovery bridge", () => {
     const snapshot = createNativeToolDisclosureSnapshot([
       definition("find_native_tools", "Discover deferred native tools"),
@@ -169,9 +186,9 @@ describe("native tool disclosure snapshots", () => {
 
   it("resolves punctuated explicit tool names and includes conceptual matches", () => {
     const snapshot = createNativeToolDisclosureSnapshot([
-      definition("codebase_search", "Semantic codebase search"),
-      definition("get_repo_map", "Repository module map"),
-      definition("get_module_neighbors", "Inspect neighboring modules"),
+      definition("get_call_hierarchy", "Inspect semantic call relationships"),
+      definition("get_type_hierarchy", "Inspect type hierarchy"),
+      definition("get_references", "Find symbol references"),
       definition("open_file", "Open a file in the editor"),
       definition("get_diagnostics", "Show diagnostics and errors"),
       definition("manage_memory", "Create durable memory"),
@@ -179,9 +196,9 @@ describe("native tool disclosure snapshots", () => {
 
     expect(
       discoverNativeTools(snapshot, {
-        query: "`codebase_search`, get_repo_map.",
+        query: "`get_call_hierarchy`, get_type_hierarchy.",
       }).tools.map((tool) => tool.name),
-    ).toEqual(["codebase_search", "get_repo_map"]);
+    ).toEqual(["get_call_hierarchy", "get_type_hierarchy"]);
     expect(
       discoverNativeTools(snapshot, {
         query: "open_file and show diagnostics for src/x.ts",
@@ -189,20 +206,23 @@ describe("native tool disclosure snapshots", () => {
     ).toEqual(["open_file", "get_diagnostics"]);
     expect(
       discoverNativeTools(snapshot, {
-        query: "codebase_search get_repo_map get_module_neighbors open_file",
+        query: "get_call_hierarchy get_type_hierarchy get_references open_file",
       }).tools.map((tool) => tool.name),
     ).toEqual([
-      "codebase_search",
-      "get_repo_map",
-      "get_module_neighbors",
+      "get_call_hierarchy",
+      "get_type_hierarchy",
+      "get_references",
       "open_file",
     ]);
   });
 
   it("uses ranked OR matching when no explicit tool name is present", () => {
     const snapshot = createNativeToolDisclosureSnapshot([
-      definition("get_repo_map", "Repository module skeleton and imports"),
-      definition("codebase_search", "Semantic code search by meaning"),
+      definition(
+        "get_type_hierarchy",
+        "Repository module skeleton and imports",
+      ),
+      definition("get_call_hierarchy", "Semantic code search by meaning"),
       definition("manage_memory", "Create durable memory"),
     ]);
 
@@ -210,13 +230,15 @@ describe("native tool disclosure snapshots", () => {
       discoverNativeTools(snapshot, {
         query: "semantic repository map",
       }).tools.map((tool) => tool.name),
-    ).toEqual(["get_repo_map", "codebase_search"]);
+    ).toEqual(["get_type_hierarchy", "get_call_hierarchy"]);
 
     const firstPage = discoverNativeTools(snapshot, {
       query: "semantic repository map",
       limit: 1,
     });
-    expect(firstPage.tools.map((tool) => tool.name)).toEqual(["get_repo_map"]);
+    expect(firstPage.tools.map((tool) => tool.name)).toEqual([
+      "get_type_hierarchy",
+    ]);
     expect(firstPage).toMatchObject({ total: 2, offset: 0, nextOffset: 1 });
     expect(
       discoverNativeTools(snapshot, {
@@ -225,7 +247,7 @@ describe("native tool disclosure snapshots", () => {
         offset: firstPage.nextOffset,
       }),
     ).toMatchObject({
-      tools: [expect.objectContaining({ name: "codebase_search" })],
+      tools: [expect.objectContaining({ name: "get_call_hierarchy" })],
       total: 2,
       offset: 1,
     });
@@ -233,7 +255,7 @@ describe("native tool disclosure snapshots", () => {
 
   it("falls back to the authorized catalog when no useful query terms remain", () => {
     const snapshot = createNativeToolDisclosureSnapshot([
-      definition("get_repo_map", "Repository module map"),
+      definition("get_call_hierarchy", "Call graph"),
       definition("manage_memory", "Create durable memory"),
     ]);
 
@@ -241,25 +263,25 @@ describe("native tool disclosure snapshots", () => {
       discoverNativeTools(snapshot, { query: "native tools" }).tools.map(
         (tool) => tool.name,
       ),
-    ).toEqual(["get_repo_map", "manage_memory"]);
+    ).toEqual(["get_call_hierarchy", "manage_memory"]);
     expect(
       discoverNativeTools(snapshot, { query: "ui" }).tools.map(
         (tool) => tool.name,
       ),
-    ).toEqual(["get_repo_map", "manage_memory"]);
+    ).toEqual(["get_call_hierarchy", "manage_memory"]);
   });
 
   it("prefers a direct partial-name match over conceptual ranking", () => {
     const snapshot = createNativeToolDisclosureSnapshot([
-      definition("get_repo_map", "Repository module map"),
-      definition("codebase_search", "Search repo content"),
+      definition("get_call_hierarchy", "Call graph"),
+      definition("get_type_hierarchy", "Inspect type relationships"),
     ]);
 
     expect(
-      discoverNativeTools(snapshot, { query: "repo map" }).tools.map(
+      discoverNativeTools(snapshot, { query: "call hierarchy" }).tools.map(
         (tool) => tool.name,
       ),
-    ).toEqual(["get_repo_map"]);
+    ).toEqual(["get_call_hierarchy"]);
   });
 
   it("omits schemas by default and returns only frozen captured schemas on request", () => {

@@ -1,39 +1,41 @@
 ---
 name: documentation
-description: Answer questions about AgentLink itself — what it can do, its tools, modes, models, settings, MCP server setup, slash commands, skills, approvals, browser remote access, and troubleshooting. Use whenever the user asks how AgentLink works, what a feature or setting does, how to configure or connect something (MCP, models, semantic search, web access), or why an AgentLink behavior is happening.
+description: Answer questions about AgentLink's VS Code extension, including installation, onboarding, Codex/OpenAI/Anthropic setup, settings, tools, MCP, approvals, browser remote, codebase indexing, skills, modes, troubleshooting, and contributing. Use when users ask how AgentLink works, what a feature or setting does, how to configure it, or why an AgentLink behavior occurs.
 ---
 
 # AgentLink Documentation
 
-Use this skill to answer questions about AgentLink — the extension you are running inside — and to help the user configure it.
+Use this skill to answer questions about AgentLink from the bundled product documentation in this skill directory.
 
-## Authoritative sources
+## Strict source boundary
 
-This SKILL.md lives at `<extension-root>/resources/builtin-skills/documentation/SKILL.md`. Derive `<extension-root>` from this file's own path (three directories up) and read these shipped files with `read_file` when you need detail beyond this skill:
+The files under this skill directory are the complete runtime documentation source:
 
-| File                            | Authoritative for                                                                                                                                             |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `<extension-root>/README.md`    | Full user documentation: features, installation, per-tool reference, MCP, web access, semantic search, approvals, browser remote, troubleshooting             |
-| `<extension-root>/package.json` | The exact list of settings (`contributes.configuration`), commands, and views. Always verify setting names, defaults, and enum values here — never guess them |
-| `<extension-root>/CHANGELOG.md` | What changed in which release                                                                                                                                 |
+- `README.md` is the human-facing documentation index.
+- `references/*.md` contain the detailed product reference.
 
-The README is large. Do not read it whole — jump to the relevant section with `search_files` on the extension root or a targeted `read_file` range.
+When this skill is active, **do not read files outside this directory** to answer AgentLink product questions. In particular, do not inspect the extension installation's root `README.md`, `package.json`, `CHANGELOG.md`, TypeScript/source files, build output, user settings, or other local files to fill a documentation gap. Those reads can look like unexplained access to the user's extension installation.
+
+If the relevant bundled reference does not document a detail, say: **“The bundled AgentLink documentation does not cover that detail.”** Do not guess and do not explore the extension installation for an answer.
 
 ## Topic routing
 
-Start with the matching reference file in this skill's `references/` directory, then drill into the README/package.json for specifics:
+Load the smallest relevant reference page directly:
 
-- **"What can AgentLink do?" / modes / models / slash commands / background agents / checkpoints / browser remote / terminal / autonomous memory / context management / semantic retrieval** → `references/capabilities.md`
-- **Settings ("how do I change/enable X?")** → `references/settings.md`, then confirm the setting in `package.json`
-- **MCP servers (connect, configure, debug)** → `references/mcp.md`
-- **Custom modes, custom slash commands, skills, rules, AGENTS.md/CLAUDE.md instruction files, `/memory`, `/remember`, and reviewed durable configuration** → `references/customization.md`
-- **A specific built-in tool's parameters or behavior, or diagnosing why an operation happened** → README `## Tools` section (`diagnose_activity` for structured current-session evidence)
-- **Installation / upgrading / platform issues / troubleshooting** → README sections of the same name
+| User question                                                                                                                                                                                                       | Load                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| What AgentLink is, modes, chat surfaces, context, memory, editor entry points, or images                                                                                                                            | `references/capabilities.md`, then `references/complete-reference.md` if it needs detailed behavior |
+| Install, update, first run, Codex sign-in, providers, models, codebase indexing, approvals, browser remote, web access, tools, terminals, background agents, ACP, worktrees, fleet, troubleshooting, or development | `references/complete-reference.md`                                                                  |
+| Settings, exact default, scope, allowed values, or setting name                                                                                                                                                     | `references/package-contract.md`, then `references/complete-reference.md` for behavior              |
+| MCP setup, precedence, server format, MCP tools/resources/prompts                                                                                                                                                   | `references/mcp.md`, then `references/complete-reference.md` if needed                              |
+| Instructions, rules, custom modes/commands, skills, autonomous memory                                                                                                                                               | `references/customization.md`, then `references/complete-reference.md` if needed                    |
+| Exact contributed command, command-palette title, view, package version, engine requirement, or extension metadata                                                                                                  | `references/package-contract.md`                                                                    |
+| Release history or upgrade notes                                                                                                                                                                                    | `references/release-notes.md`                                                                       |
 
 ## Answering checklist
 
-1. Prefer the shipped files above over recall. Setting names, defaults, and command lists must come from `package.json` or the README, not memory.
-2. When telling the user to change a setting, give the exact `agentlink.*` key and where to set it (VS Code Settings UI or `settings.json`).
-3. Distinguish surfaces: the VS Code chat is the full experience; the browser remote is intentionally read-only for diffs and has no shell/write paths. `/btw` and `/worktree` are VS Code-only.
-4. If a question is about behavior you can demonstrate (e.g. "what does /skills show?"), it is fine to just do it.
-5. If the docs genuinely do not cover something, say so rather than inventing behavior.
+1. Load the owning bundled reference before answering a detailed question.
+2. For exact extension metadata, command, view, setting, default, scope, enum, or pattern, load `references/package-contract.md`. For behavior and workflows, load the owning topic page. Do not infer values from source code.
+3. Distinguish the VS Code experience from the browser remote. The browser is read-only for diffs and has no shell or write path.
+4. For indexing, distinguish default local lexical/structural retrieval from explicitly enabled OpenAI embeddings, which may send source chunks and queries to OpenAI.
+5. If the documentation does not cover the requested detail, state the gap plainly instead of reading outside this skill directory.

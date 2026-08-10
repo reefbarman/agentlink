@@ -45,8 +45,10 @@ const DEFAULT_DIMENSIONS: TerminalDimensions = { columns: 80, rows: 24 };
 const DEFAULT_RECENTLY_CLOSED_LIMIT = 20;
 const DEFAULT_AGENTLINK_TITLE = "AgentLink";
 const MAX_IMPLICIT_CHANNELS_PER_OWNER = 4;
+const MAX_DETACHED_IMPLICIT_CHANNELS_PER_OWNER = 8;
 const MAX_IMPLICIT_ADMISSION_WAITERS_PER_OWNER = 16;
 const IMPLICIT_ADMISSION_TIMEOUT_MS = 30_000;
+const EXHAUSTED_COMMAND_LABEL_LIMIT = 60;
 
 export interface NativeAgentTerminalChannelEvent {
   event: SandboxTerminalSessionEvent;
@@ -86,6 +88,8 @@ interface ManagedNativeChannel {
     finalizer?: () => void;
     detachForeground?: () => void;
     background: boolean;
+    /** Implicit channel released from the foreground pool while this command runs. */
+    detachedFromPool: boolean;
   };
 }
 
@@ -122,6 +126,27 @@ function environmentKey(
       left.localeCompare(right),
     ),
   );
+}
+
+function describeBlockingChannels(
+  channels: Array<{ session: SandboxTerminalSession }>,
+): string {
+  if (channels.length === 0) return "concurrent commands";
+  return channels
+    .map(({ session }) => {
+      const snapshot = session.snapshot();
+      const running =
+        snapshot.status === "launching" || snapshot.status === "running";
+      const command = snapshot.commands.at(-1)?.command;
+      if (!running || !command) return snapshot.channelId;
+      const singleLine = command.replace(/\s+/g, " ").trim();
+      const label =
+        singleLine.length > EXHAUSTED_COMMAND_LABEL_LIMIT
+          ? `${singleLine.slice(0, EXHAUSTED_COMMAND_LABEL_LIMIT - 3)}...`
+          : singleLine;
+      return `${snapshot.channelId} (running \`${label}\`)`;
+    })
+    .join(", ");
 }
 
 export class NativeAgentTerminalCoordinator implements NativePreparingTerminalProvider {
@@ -554,6 +579,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       finalizer,
       detachForeground: options.background ? undefined : detachForeground,
       background: options.background === true,
+      detachedFromPool: false,
     };
     try {
       channel.session.startCommand({
@@ -581,6 +607,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     );
 
     if (options.background) {
+      this.detachImplicitFromPool(channel);
       options.onCommandFinalizationDeferred?.();
       void completion.catch((error) =>
         this.log?.(
@@ -611,6 +638,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
 
     if (outcome === "detached" && channel.active?.commandId === commandId) {
       channel.active.background = true;
+      this.detachImplicitFromPool(channel);
       options.onCommandFinalizationDeferred?.();
       void completion.catch((error) =>
         this.log?.(
@@ -625,6 +653,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     if (outcome === "timed_out") {
       if (channel.active?.commandId === commandId) {
         channel.active.background = true;
+        this.detachImplicitFromPool(channel);
       }
       options.onCommandFinalizationDeferred?.();
       void completion.catch((error) =>
@@ -719,33 +748,39 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       const channel = this.tryResolveImplicitChannel(options);
       if (channel) return channel;
     }
-    if (!this.canWaitForImplicitChannel(options)) {
-      throw this.implicitPoolExhaustedError(options.owner);
-    }
+    return this.waitForImplicitAdmission(options, reservation, key);
+  }
+
+  private async waitForImplicitAdmission(
+    options: TerminalExecuteOptions,
+    reservation: symbol | undefined,
+    key: string,
+  ): Promise<ManagedNativeChannel> {
     this.log?.(
       "[native-agent-terminal] Waiting for implicit terminal admission",
     );
-    return this.admissions
-      .wait({
+    for (;;) {
+      const ticket = await this.admissions.wait({
         key,
         canAdmit: () => this.canResolveImplicitChannel(options),
-        timeoutError: () => this.implicitPoolExhaustedError(options.owner),
+        timeoutError: () => this.implicitPoolExhaustedError(options),
         signal: options.admissionSignal,
         timeoutMs: IMPLICIT_ADMISSION_TIMEOUT_MS,
         maxWaiters: MAX_IMPLICIT_ADMISSION_WAITERS_PER_OWNER,
-      })
-      .then((ticket) => {
-        try {
-          const channel = this.tryResolveImplicitChannel(options);
-          if (!channel) throw this.implicitPoolExhaustedError(options.owner);
+      });
+      try {
+        const channel = this.tryResolveImplicitChannel(options);
+        if (channel) {
           if (reservation) {
             this.reservations.set(channel.session.channelId, reservation);
           }
-          return channel;
-        } finally {
           ticket.consume();
+          return channel;
         }
-      });
+      } finally {
+        ticket.release();
+      }
+    }
   }
 
   private implicitChannels(owner: TerminalExecutionOwner | undefined) {
@@ -755,12 +790,44 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     );
   }
 
+  private pooledImplicitChannels(owner: TerminalExecutionOwner | undefined) {
+    return this.implicitChannels(owner).filter(
+      (channel) => channel.active?.detachedFromPool !== true,
+    );
+  }
+
+  private detachedImplicitChannels(owner: TerminalExecutionOwner | undefined) {
+    return this.implicitChannels(owner).filter(
+      (channel) => channel.active?.detachedFromPool === true,
+    );
+  }
+
+  private detachImplicitFromPool(channel: ManagedNativeChannel): void {
+    if (!channel.implicit || !channel.active) return;
+    if (channel.active.detachedFromPool) return;
+    if (
+      this.detachedImplicitChannels(channel.owner).length >=
+      MAX_DETACHED_IMPLICIT_CHANNELS_PER_OWNER
+    ) {
+      return;
+    }
+    channel.active.detachedFromPool = true;
+    this.notifyAdmission(channel.owner);
+  }
+
   private tryResolveImplicitChannel(
     options: TerminalExecuteOptions,
   ): ManagedNativeChannel | undefined {
+    if (
+      options.background &&
+      this.detachedImplicitChannels(options.owner).length >=
+        MAX_DETACHED_IMPLICIT_CHANNELS_PER_OWNER
+    ) {
+      return undefined;
+    }
     const envKey = environmentKey(options.env);
-    const implicitChannels = this.implicitChannels(options.owner);
-    const idle = implicitChannels.find(({ session, envKey: current }) => {
+    const pooledChannels = this.pooledImplicitChannels(options.owner);
+    const idle = pooledChannels.find(({ session, envKey: current }) => {
       const snapshot = session.snapshot();
       return (
         snapshot.status === "idle" &&
@@ -770,7 +837,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       );
     });
     if (idle) return this.reuseChannel(idle, options.owner);
-    if (implicitChannels.length < MAX_IMPLICIT_CHANNELS_PER_OWNER) {
+    if (pooledChannels.length < MAX_IMPLICIT_CHANNELS_PER_OWNER) {
       return this.createChannel(
         options.terminal_creation_name ?? DEFAULT_AGENTLINK_TITLE,
         options.cwd,
@@ -778,7 +845,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
         true,
       );
     }
-    const reclaimable = implicitChannels
+    const reclaimable = pooledChannels
       .filter(({ session }) => {
         const snapshot = session.snapshot();
         return (
@@ -798,10 +865,17 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
   }
 
   private canResolveImplicitChannel(options: TerminalExecuteOptions): boolean {
-    const implicitChannels = this.implicitChannels(options.owner);
+    if (
+      options.background &&
+      this.detachedImplicitChannels(options.owner).length >=
+        MAX_DETACHED_IMPLICIT_CHANNELS_PER_OWNER
+    ) {
+      return false;
+    }
+    const pooledChannels = this.pooledImplicitChannels(options.owner);
     return (
-      implicitChannels.length < MAX_IMPLICIT_CHANNELS_PER_OWNER ||
-      implicitChannels.some(({ session }) => {
+      pooledChannels.length < MAX_IMPLICIT_CHANNELS_PER_OWNER ||
+      pooledChannels.some(({ session }) => {
         const snapshot = session.snapshot();
         return (
           snapshot.status === "idle" &&
@@ -811,24 +885,26 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     );
   }
 
-  private canWaitForImplicitChannel(options: TerminalExecuteOptions): boolean {
-    if (options.background) return false;
-    const implicitChannels = this.implicitChannels(options.owner);
-    return implicitChannels.some(
-      (channel) =>
-        this.reservations.has(channel.session.snapshot().channelId) ||
-        channel.active?.background === false,
-    );
-  }
-
-  private implicitPoolExhaustedError(
-    owner: TerminalExecutionOwner | undefined,
-  ): Error {
-    const blockingIds = this.implicitChannels(owner).map(
-      ({ session }) => session.snapshot().channelId,
-    );
+  private implicitPoolExhaustedError(options: TerminalExecuteOptions): Error {
+    if (options.background) {
+      const detached = this.detachedImplicitChannels(options.owner);
+      if (detached.length >= MAX_DETACHED_IMPLICIT_CHANNELS_PER_OWNER) {
+        return new Error(
+          `Native Agent background terminal limit reached (${detached.length} background commands running): ${describeBlockingChannels(detached)}. Wait for one to finish or kill it with its terminal_id.`,
+        );
+      }
+    }
+    const pooledChannels = this.pooledImplicitChannels(options.owner);
+    const blocking = pooledChannels.filter((channel) => {
+      const snapshot = channel.session.snapshot();
+      return (
+        snapshot.status === "launching" ||
+        snapshot.status === "running" ||
+        this.reservations.has(snapshot.channelId)
+      );
+    });
     return new Error(
-      `Native Agent terminal pool exhausted by ${blockingIds.join(", ")}. Wait for a command to finish or use get_terminal_output/kill with its terminal_id.`,
+      `Native Agent terminal pool exhausted by ${describeBlockingChannels(blocking.length > 0 ? blocking : pooledChannels)}. Wait for a command to finish or use get_terminal_output/kill with its terminal_id.`,
     );
   }
 
@@ -961,6 +1037,32 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     channel.active = undefined;
     channel.lastUsedAt = this.now();
     this.notifyAdmission(channel.owner);
+    if (channel.implicit) this.trimIdleImplicitChannels(channel.owner);
+  }
+
+  /**
+   * Channels detached from the pool for background commands rejoin it as idle
+   * once they finish; reclaim the oldest idle channels so the pool settles
+   * back to its cap instead of accumulating idle shells.
+   */
+  private trimIdleImplicitChannels(
+    owner: TerminalExecutionOwner | undefined,
+  ): void {
+    for (;;) {
+      const pooledChannels = this.pooledImplicitChannels(owner);
+      if (pooledChannels.length <= MAX_IMPLICIT_CHANNELS_PER_OWNER) return;
+      const oldestIdle = pooledChannels
+        .filter(({ session }) => {
+          const snapshot = session.snapshot();
+          return (
+            snapshot.status === "idle" &&
+            !this.reservations.has(snapshot.channelId)
+          );
+        })
+        .sort((left, right) => left.lastUsedAt - right.lastUsedAt)[0];
+      if (!oldestIdle) return;
+      this.reclaimImplicitChannel(oldestIdle);
+    }
   }
 
   private notifyAdmission(owner: TerminalExecutionOwner | undefined): void {

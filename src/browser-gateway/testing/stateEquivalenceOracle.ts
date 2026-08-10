@@ -179,6 +179,7 @@ export type BrowserGatewayNormalizedTranscriptBlock =
       readonly name: string;
       readonly complete: boolean;
       readonly durationMs?: number;
+      readonly startedAt?: number;
     }
   | {
       readonly type: "skill_load";
@@ -656,6 +657,9 @@ function normalizeLegacyBlock(
         complete: block.complete,
         ...(block.durationMs !== undefined
           ? { durationMs: block.durationMs }
+          : {}),
+        ...(block.startedAt !== undefined
+          ? { startedAt: block.startedAt }
           : {}),
       };
     case "skill_load":

@@ -268,7 +268,7 @@ export const ASK_AGENT_SAFE_PROJECTLESS_TOOLS: CoreModelToolDefinition[] = [
   {
     name: "ask_user",
     description:
-      "Ask the user one or more structured questions and pause the Ask Agent turn until the browser user responds. Include visible context in this tool call through top-level context or questions[].context; preceding assistant messages do not satisfy the requirement because the question card must remain self-contained. Use confirmation for a direct two-button decision that submits immediately; it defaults to Yes/No, or accepts exactly two distinct options as custom button labels. Ask Agent is projectless/read-only, so mode switching and workspace actions are unavailable.",
+      'Ask the user one or more structured questions and pause the Ask Agent turn until the browser user responds. Include visible context in this tool call through top-level context or questions[].context; preceding assistant messages do not satisfy the requirement because the question card must remain self-contained. Use `recommended` whenever you recommend a choice: it must exactly match the option label (use `Yes` or `No` for `yes_no`, or the numeric value as a string for `scale`) and renders a recommendation badge. Do not write "(recommended)" into an option label. Use confirmation for a direct two-button decision that submits immediately; it defaults to Yes/No, or accepts exactly two distinct options as custom button labels. Ask Agent is projectless/read-only, so mode switching and workspace actions are unavailable.',
     input_schema: {
       type: "object",
       properties: {
@@ -293,7 +293,11 @@ export const ASK_AGENT_SAFE_PROJECTLESS_TOOLS: CoreModelToolDefinition[] = [
               question: { type: "string" },
               context: { type: "string" },
               options: { type: "array", items: { type: "string" } },
-              recommended: { type: "string" },
+              recommended: {
+                type: "string",
+                description:
+                  "Recommended option value. Match an option label exactly (use Yes or No for yes_no), or use the numeric value as a string for scale; renders a recommendation badge.",
+              },
               allowBlank: { type: "boolean" },
               scale_min: { type: "number" },
               scale_max: { type: "number" },

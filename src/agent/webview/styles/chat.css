@@ -1618,13 +1618,13 @@ body.chat-activity-shelf-resizing * {
 
 .markdown-body pre.copyable-code-block {
   position: relative;
-  padding-right: 36px;
+  padding-bottom: 36px;
 }
 
 .code-block-copy-button {
   position: absolute;
-  top: 4px;
   right: 4px;
+  bottom: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3666,6 +3666,18 @@ body.chat-activity-shelf-resizing * {
   border-radius: 6px;
   font-size: 11px;
   font-weight: 500;
+}
+
+.scale-option.recommended {
+  border-color: #4ec9b0;
+}
+
+.scale-recommendation {
+  display: flex;
+}
+
+.scale-recommendation .question-recommended-badge {
+  margin-left: 0;
 }
 
 .scale-labels-row {

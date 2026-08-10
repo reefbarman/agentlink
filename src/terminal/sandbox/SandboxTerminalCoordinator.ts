@@ -53,8 +53,10 @@ const DEFAULT_DIMENSIONS: TerminalDimensions = { columns: 80, rows: 24 };
 const DEFAULT_RECENTLY_CLOSED_LIMIT = 20;
 const DEFAULT_SANDBOX_TITLE = "Agent command";
 const MAX_IMPLICIT_CHANNELS_PER_OWNER = 4;
+const MAX_DETACHED_IMPLICIT_CHANNELS_PER_OWNER = 8;
 const MAX_IMPLICIT_ADMISSION_WAITERS_PER_OWNER = 16;
 const IMPLICIT_ADMISSION_TIMEOUT_MS = 30_000;
+const EXHAUSTED_COMMAND_LABEL_LIMIT = 60;
 export const SANDBOX_INTERACTIVE_PROMPT_GRACE_MS = 1_500;
 
 export interface AuthorizedSandboxLaunch {
@@ -122,6 +124,8 @@ interface ManagedSandboxChannel {
     };
     detachForeground?: () => void;
     background: boolean;
+    /** Implicit channel released from the foreground pool while this command runs. */
+    detachedFromPool: boolean;
   };
   latestMetadata?: SandboxExecutionMetadata;
   latestTermination?: {
@@ -147,6 +151,27 @@ function finalizedOnce(
   };
 }
 
+function describeBlockingChannels(
+  channels: Array<{ session: SandboxTerminalSession }>,
+): string {
+  if (channels.length === 0) return "concurrent commands";
+  return channels
+    .map(({ session }) => {
+      const snapshot = session.snapshot();
+      const running =
+        snapshot.status === "launching" || snapshot.status === "running";
+      const command = snapshot.commands.at(-1)?.command;
+      if (!running || !command) return snapshot.channelId;
+      const singleLine = command.replace(/\s+/g, " ").trim();
+      const label =
+        singleLine.length > EXHAUSTED_COMMAND_LABEL_LIMIT
+          ? `${singleLine.slice(0, EXHAUSTED_COMMAND_LABEL_LIMIT - 3)}...`
+          : singleLine;
+      return `${snapshot.channelId} (running \`${label}\`)`;
+    })
+    .join(", ");
+}
+
 export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalProvider {
   private readonly runtime: SandboxRuntimeProvider;
   private readonly authorizer: SandboxLaunchAuthorizer;
@@ -170,7 +195,6 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
   >();
   private readonly disposeListeners = new Set<() => void>();
   private readonly channelReservations = new Map<string, symbol>();
-  private readonly reservationBackground = new Map<symbol, boolean>();
   private readonly admissions = new TerminalAdmissionQueue();
   private readonly admissionWaiters = new Map<string, number>();
   private nextChannelNumber = 1;
@@ -409,6 +433,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         : { outputTail: "" },
       detachForeground: options.background ? undefined : detachForeground,
       background: options.background === true,
+      detachedFromPool: false,
     };
     channel.latestMetadata = authorized.metadata;
     channel.latestTermination = undefined;
@@ -439,6 +464,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     );
 
     if (options.background) {
+      this.detachImplicitFromPool(channel);
       options.onCommandFinalizationDeferred?.();
       void completion.catch((error) =>
         this.log?.(`[sandbox-terminal] Background command failed: ${error}`),
@@ -520,6 +546,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     if (outcome === "detached" && channel.active?.commandId === commandId) {
       this.disableInteractivePromptWatchdog(channel.active);
       channel.active.background = true;
+      this.detachImplicitFromPool(channel);
       options.onCommandFinalizationDeferred?.();
       void completion.catch((error) =>
         this.log?.(`[sandbox-terminal] Background command failed: ${error}`),
@@ -531,7 +558,10 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
 
     if (outcome === "timed_out") {
       this.disableInteractivePromptWatchdog(channel.active);
-      if (channel.active) channel.active.background = true;
+      if (channel.active?.commandId === commandId) {
+        channel.active.background = true;
+        this.detachImplicitFromPool(channel);
+      }
       channel.active?.networkAbortController.abort();
       options.onCommandFinalizationDeferred?.();
       void completion.catch((error) =>
@@ -606,7 +636,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       throw new Error(`Sandbox terminal ${before.channelId} is busy`);
     }
     if (reservation && !this.channelReservations.has(before.channelId)) {
-      this.reserveChannel(channel, reservation, options);
+      this.reserveChannel(channel, reservation);
     }
     const commandId = this.createCommandId();
     if (!commandId || commandId.includes("\0")) {
@@ -850,7 +880,6 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     }
     this.channels.clear();
     this.channelReservations.clear();
-    this.reservationBackground.clear();
     this.admissions.retire();
     this.admissionWaiters.clear();
     this.channelListeners.clear();
@@ -911,13 +940,9 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     reservation: symbol | undefined,
   ): ManagedSandboxChannel | Promise<ManagedSandboxChannel> {
     const key = ownerScopeKey(options.owner);
-    const queueEligible = options.background !== true;
     if (!this.admissions.hasPending(key)) {
       const channel = this.tryResolveImplicitChannel(options);
-      if (channel) return this.reserveChannel(channel, reservation, options);
-    }
-    if (!queueEligible || !this.hasForegroundImplicitBlocker(options)) {
-      throw this.implicitPoolExhausted(options);
+      if (channel) return this.reserveChannel(channel, reservation);
     }
     if (
       (this.admissionWaiters.get(key) ?? 0) >=
@@ -935,7 +960,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     key: string,
   ): Promise<ManagedSandboxChannel> {
     this.admissionWaiters.set(key, (this.admissionWaiters.get(key) ?? 0) + 1);
-    this.log?.(`[sandbox-terminal] Queued foreground admission for ${key}`);
+    this.log?.(`[sandbox-terminal] Queued implicit admission for ${key}`);
     try {
       for (;;) {
         const ticket = await this.admissions.wait({
@@ -949,10 +974,10 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         try {
           const channel = this.tryResolveImplicitChannel(options);
           if (channel) {
-            this.reserveChannel(channel, reservation, options);
+            this.reserveChannel(channel, reservation);
             ticket.consume();
             this.log?.(
-              `[sandbox-terminal] Admitted foreground execution for ${key}`,
+              `[sandbox-terminal] Admitted implicit execution for ${key}`,
             );
             return channel;
           }
@@ -970,11 +995,9 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
   private reserveChannel(
     channel: ManagedSandboxChannel,
     reservation: symbol | undefined,
-    options: TerminalExecuteOptions,
   ): ManagedSandboxChannel {
     if (reservation) {
       this.channelReservations.set(channel.session.channelId, reservation);
-      this.reservationBackground.set(reservation, options.background === true);
     }
     return channel;
   }
@@ -982,21 +1005,26 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
   private tryResolveImplicitChannel(
     options: TerminalExecuteOptions,
   ): ManagedSandboxChannel | undefined {
+    if (
+      options.background &&
+      this.detachedImplicitChannels(options.owner).length >=
+        MAX_DETACHED_IMPLICIT_CHANNELS_PER_OWNER
+    ) {
+      return undefined;
+    }
     const envKey = this.environmentKey(options);
-    const implicitChannels = this.implicitChannels(options.owner);
-    const idleDefault = implicitChannels.find(
-      ({ session, envKey: current }) => {
-        const snapshot = session.snapshot();
-        return (
-          snapshot.status === "idle" &&
-          !this.channelReservations.has(snapshot.channelId) &&
-          snapshot.cwd === options.cwd &&
-          current === envKey
-        );
-      },
-    );
+    const pooledChannels = this.pooledImplicitChannels(options.owner);
+    const idleDefault = pooledChannels.find(({ session, envKey: current }) => {
+      const snapshot = session.snapshot();
+      return (
+        snapshot.status === "idle" &&
+        !this.channelReservations.has(snapshot.channelId) &&
+        snapshot.cwd === options.cwd &&
+        current === envKey
+      );
+    });
     if (idleDefault) return this.reuseChannel(idleDefault, options.owner);
-    if (implicitChannels.length < MAX_IMPLICIT_CHANNELS_PER_OWNER) {
+    if (pooledChannels.length < MAX_IMPLICIT_CHANNELS_PER_OWNER) {
       return this.createChannel(
         options.terminal_creation_name ?? DEFAULT_SANDBOX_TITLE,
         options.cwd,
@@ -1005,7 +1033,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         envKey,
       );
     }
-    const reclaimable = implicitChannels
+    const reclaimable = pooledChannels
       .filter(({ session }) => {
         const snapshot = session.snapshot();
         return (
@@ -1026,33 +1054,21 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
   }
 
   private canAdmitImplicit(options: TerminalExecuteOptions): boolean {
-    const implicitChannels = this.implicitChannels(options.owner);
-    if (implicitChannels.length < MAX_IMPLICIT_CHANNELS_PER_OWNER) return true;
-    return implicitChannels.some(({ session }) => {
+    if (
+      options.background &&
+      this.detachedImplicitChannels(options.owner).length >=
+        MAX_DETACHED_IMPLICIT_CHANNELS_PER_OWNER
+    ) {
+      return false;
+    }
+    const pooledChannels = this.pooledImplicitChannels(options.owner);
+    if (pooledChannels.length < MAX_IMPLICIT_CHANNELS_PER_OWNER) return true;
+    return pooledChannels.some(({ session }) => {
       const snapshot = session.snapshot();
       return (
         snapshot.status === "idle" &&
         !this.channelReservations.has(snapshot.channelId)
       );
-    });
-  }
-
-  private hasForegroundImplicitBlocker(
-    options: TerminalExecuteOptions,
-  ): boolean {
-    return this.implicitChannels(options.owner).some((channel) => {
-      const snapshot = channel.session.snapshot();
-      if (
-        snapshot.status !== "launching" &&
-        snapshot.status !== "running" &&
-        !this.channelReservations.has(snapshot.channelId)
-      ) {
-        return false;
-      }
-      const reservation = this.channelReservations.get(snapshot.channelId);
-      return reservation
-        ? this.reservationBackground.get(reservation) !== true
-        : channel.active?.background !== true;
     });
   }
 
@@ -1065,6 +1081,35 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     );
   }
 
+  private pooledImplicitChannels(
+    owner: TerminalExecutionOwner | undefined,
+  ): ManagedSandboxChannel[] {
+    return this.implicitChannels(owner).filter(
+      (channel) => channel.active?.detachedFromPool !== true,
+    );
+  }
+
+  private detachedImplicitChannels(
+    owner: TerminalExecutionOwner | undefined,
+  ): ManagedSandboxChannel[] {
+    return this.implicitChannels(owner).filter(
+      (channel) => channel.active?.detachedFromPool === true,
+    );
+  }
+
+  private detachImplicitFromPool(channel: ManagedSandboxChannel): void {
+    if (!channel.implicit || !channel.active) return;
+    if (channel.active.detachedFromPool) return;
+    if (
+      this.detachedImplicitChannels(channel.owner).length >=
+      MAX_DETACHED_IMPLICIT_CHANNELS_PER_OWNER
+    ) {
+      return;
+    }
+    channel.active.detachedFromPool = true;
+    this.notifyAdmission(channel.owner);
+  }
+
   private environmentKey(options: TerminalExecuteOptions): string {
     return JSON.stringify(
       Object.entries(options.env ?? {}).sort(([left], [right]) =>
@@ -1074,11 +1119,25 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
   }
 
   private implicitPoolExhausted(options: TerminalExecuteOptions): Error {
-    const blockingIds = this.implicitChannels(options.owner).map(
-      ({ session }) => session.snapshot().channelId,
-    );
+    if (options.background) {
+      const detached = this.detachedImplicitChannels(options.owner);
+      if (detached.length >= MAX_DETACHED_IMPLICIT_CHANNELS_PER_OWNER) {
+        return new Error(
+          `Sandbox background terminal limit reached (${detached.length} background commands running): ${describeBlockingChannels(detached)}. Wait for one to finish or kill it with its terminal_id.`,
+        );
+      }
+    }
+    const pooledChannels = this.pooledImplicitChannels(options.owner);
+    const blocking = pooledChannels.filter((channel) => {
+      const snapshot = channel.session.snapshot();
+      return (
+        snapshot.status === "launching" ||
+        snapshot.status === "running" ||
+        this.channelReservations.has(snapshot.channelId)
+      );
+    });
     return new Error(
-      `Sandbox terminal pool exhausted by ${blockingIds.join(", ")}. Wait for a command to finish or use get_terminal_output/kill with its terminal_id.`,
+      `Sandbox terminal pool exhausted by ${describeBlockingChannels(blocking.length > 0 ? blocking : pooledChannels)}. Wait for a command to finish or use get_terminal_output/kill with its terminal_id.`,
     );
   }
 
@@ -1352,13 +1411,38 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     channel.active = undefined;
     channel.lastUsedAt = this.now();
     this.notifyAdmission(channel.owner);
+    if (channel.implicit) this.trimIdleImplicitChannels(channel.owner);
+  }
+
+  /**
+   * Channels detached from the pool for background commands rejoin it as idle
+   * once they finish; reclaim the oldest idle channels so the pool settles
+   * back to its cap instead of accumulating idle shells.
+   */
+  private trimIdleImplicitChannels(
+    owner: TerminalExecutionOwner | undefined,
+  ): void {
+    for (;;) {
+      const pooledChannels = this.pooledImplicitChannels(owner);
+      if (pooledChannels.length <= MAX_IMPLICIT_CHANNELS_PER_OWNER) return;
+      const oldestIdle = pooledChannels
+        .filter(({ session }) => {
+          const snapshot = session.snapshot();
+          return (
+            snapshot.status === "idle" &&
+            !this.channelReservations.has(snapshot.channelId)
+          );
+        })
+        .sort((left, right) => left.lastUsedAt - right.lastUsedAt)[0];
+      if (!oldestIdle) return;
+      this.reclaimImplicitChannel(oldestIdle);
+    }
   }
 
   private clearReservation(channelId: string, expected?: symbol): void {
     const reservation = this.channelReservations.get(channelId);
     if (!reservation || (expected && reservation !== expected)) return;
     this.channelReservations.delete(channelId);
-    this.reservationBackground.delete(reservation);
     const channel = this.channels.get(channelId);
     this.notifyAdmission(channel?.owner);
   }

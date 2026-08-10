@@ -93,6 +93,10 @@ test("stages the recursive runtime closure and exactly one selected addon", asyn
       },
       {
         "Arrow.node.js": "module.exports = {};\n",
+        "Arrow.node.js.map": "source map",
+        "Arrow.node.d.ts": "declare const Arrow: unknown;",
+        "Arrow.node.d.cts": "declare const Arrow: unknown;",
+        "Arrow.node.d.mts": "declare const Arrow: unknown;",
         "node_modules/@types/node/package.json": JSON.stringify({
           name: "@types/node",
           version: "1.0.0",
@@ -155,15 +159,20 @@ test("stages the recursive runtime closure and exactly one selected addon", asyn
       readFile(path.join(destinationRoot, "@types/node/package.json")),
       { code: "ENOENT" },
     );
-    await assert.rejects(
-      readFile(
-        path.join(
-          destinationRoot,
-          "apache-arrow/node_modules/@types/node/package.json",
-        ),
-      ),
-      { code: "ENOENT" },
-    );
+    for (const nonRuntimePath of [
+      "@types/node/package.json",
+      "apache-arrow/node_modules/@types/node/package.json",
+      "apache-arrow/Arrow.node.js.map",
+      "apache-arrow/Arrow.node.d.ts",
+      "apache-arrow/Arrow.node.d.cts",
+      "apache-arrow/Arrow.node.d.mts",
+    ]) {
+      await assert.rejects(
+        readFile(path.join(destinationRoot, nonRuntimePath)),
+        { code: "ENOENT" },
+        nonRuntimePath,
+      );
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -38,6 +38,7 @@ describe("buildOpenAiCompatibleChatRequest", () => {
     const request = buildOpenAiCompatibleChatRequest({
       providerId: "openai-compatible:generic",
       profile: "generic",
+      reasoningEffortMode: "none",
       model: model(),
       systemPrompt: "system",
       messages: [{ role: "user", content: "hello" }],
@@ -88,6 +89,7 @@ describe("buildOpenAiCompatibleChatRequest", () => {
     const request = buildOpenAiCompatibleChatRequest({
       providerId: "openai-compatible:openrouter",
       profile: "openrouter",
+      reasoningEffortMode: "reasoning.effort",
       model: model(),
       systemPrompt: "system",
       messages: [],
@@ -109,10 +111,51 @@ describe("buildOpenAiCompatibleChatRequest", () => {
     });
   });
 
+  it.each([
+    ["reasoning_effort", { reasoning_effort: "high" }],
+    ["reasoning.effort", { reasoning: { effort: "high" } }],
+    ["output_config.effort", { output_config: { effort: "high" } }],
+  ] as const)("maps effort using %s", (reasoningEffortMode, expected) => {
+    const request = buildOpenAiCompatibleChatRequest({
+      providerId: "openai-compatible:configured",
+      profile: "generic",
+      reasoningEffortMode,
+      model: model(),
+      systemPrompt: "system",
+      messages: [],
+      maxTokens: 100,
+      reasoningEffort: "high",
+    });
+
+    expect(request).toMatchObject(expected);
+  });
+
+  it.each([
+    ["none", model(), "none is selected"],
+    ["high", model({ supportsThinking: false }), "thinking is unsupported"],
+  ] as const)(
+    "does not send an effort field when %s because %s",
+    (reasoningEffort, runtimeModel, _reason) => {
+      const request = buildOpenAiCompatibleChatRequest({
+        providerId: "openai-compatible:configured",
+        profile: "generic",
+        reasoningEffortMode: "reasoning_effort",
+        model: runtimeModel,
+        systemPrompt: "system",
+        messages: [],
+        maxTokens: 100,
+        reasoningEffort,
+      });
+
+      expect(request).not.toHaveProperty("reasoning_effort");
+    },
+  );
+
   it("does not send tools for chat-only models", () => {
     const request = buildOpenAiCompatibleChatRequest({
       providerId: "openai-compatible:chat",
       profile: "openrouter",
+      reasoningEffortMode: "reasoning.effort",
       model: model({ supportsToolUse: false }),
       systemPrompt: "system",
       messages: [],

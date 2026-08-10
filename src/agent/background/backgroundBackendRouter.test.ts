@@ -218,4 +218,217 @@ describe("resolveBackgroundBackendRoute", () => {
       resolveBackgroundBackendRoute(settings, { provider: "acp:missing" }),
     ).toThrow(/Unknown ACP background agent/);
   });
+
+  it("pins review tasks to a configured review model target", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewAgent: "acp:claude",
+      reviewTarget: {
+        default: { target: "model:custom-claude-opus-4-8", effort: "max" },
+      },
+      acpAgents: [
+        { id: "claude", provider: "anthropic", command: "claude-agent-acp" },
+      ],
+    });
+
+    // Deterministic even when the foreground shares the model's provider.
+    expect(
+      resolveBackgroundBackendRoute(
+        settings,
+        { taskClass: "review_code" },
+        { foregroundProvider: "anthropic" },
+      ),
+    ).toEqual({
+      backend: "native",
+      configuredReviewModel: "custom-claude-opus-4-8",
+      configuredReviewEffort: "max",
+    });
+  });
+
+  it("applies a configured review model target to custom review task classes", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewTarget: { default: { target: "model:custom-claude-opus-4-8" } },
+    });
+
+    expect(
+      resolveBackgroundBackendRoute(settings, { taskClass: "review_security" }),
+    ).toEqual({
+      backend: "native",
+      configuredReviewModel: "custom-claude-opus-4-8",
+    });
+  });
+
+  it("does not apply a review model target to non-review tasks", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewTarget: { default: { target: "model:custom-claude-opus-4-8" } },
+    });
+
+    expect(
+      resolveBackgroundBackendRoute(settings, { taskClass: "general" }),
+    ).toEqual({ backend: "native" });
+  });
+
+  it("lets an explicit request model override a configured review model target", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewTarget: { default: { target: "model:custom-claude-opus-4-8" } },
+    });
+
+    expect(
+      resolveBackgroundBackendRoute(settings, {
+        model: "gpt-5.6-sol",
+        taskClass: "review_code",
+      }),
+    ).toEqual({ backend: "native" });
+  });
+
+  it("uses a native review target instead of the legacy ACP review agent", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewAgent: "acp:claude",
+      reviewTarget: { default: { target: "native:auto" } },
+      acpAgents: [
+        { id: "claude", provider: "anthropic", command: "claude-agent-acp" },
+      ],
+    });
+
+    expect(
+      resolveBackgroundBackendRoute(
+        settings,
+        { taskClass: "review_code" },
+        { foregroundProvider: "codex" },
+      ),
+    ).toEqual({ backend: "native" });
+  });
+
+  it("carries an effort pinned alongside automatic review routing", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewTarget: { default: { target: "native:auto", effort: "high" } },
+    });
+
+    expect(
+      resolveBackgroundBackendRoute(settings, { taskClass: "review_code" }),
+    ).toEqual({ backend: "native", configuredReviewEffort: "high" });
+  });
+
+  it("routes an ACP review target with the legacy same-provider fall-through", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewTarget: { default: { target: "acp:claude" } },
+      acpAgents: [
+        { id: "claude", provider: "anthropic", command: "claude-agent-acp" },
+      ],
+    });
+
+    expect(
+      resolveBackgroundBackendRoute(
+        settings,
+        { taskClass: "review_code" },
+        { foregroundProvider: "codex" },
+      ),
+    ).toMatchObject({
+      backend: "acp",
+      reference: "acp:claude",
+      reason: "review_agent",
+    });
+    expect(
+      resolveBackgroundBackendRoute(
+        settings,
+        { taskClass: "review_code" },
+        { foregroundProvider: "anthropic" },
+      ),
+    ).toEqual({ backend: "native" });
+  });
+
+  it("throws for a malformed review target only on review tasks", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewTarget: { default: { target: "anthropic" } },
+    });
+
+    expect(
+      resolveBackgroundBackendRoute(settings, { taskClass: "general" }),
+    ).toEqual({ backend: "native" });
+    expect(() =>
+      resolveBackgroundBackendRoute(settings, { taskClass: "review_code" }),
+    ).toThrow(/Unsupported agentlink.background.reviewTarget/);
+  });
+
+  it("throws for an effort pinned alongside an ACP review target", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewTarget: { default: { target: "acp:claude", effort: "high" } },
+      acpAgents: [
+        { id: "claude", provider: "anthropic", command: "claude-agent-acp" },
+      ],
+    });
+
+    expect(() =>
+      resolveBackgroundBackendRoute(settings, { taskClass: "review_code" }),
+    ).toThrow(/control their own reasoning effort/);
+  });
+
+  it("selects a review target based on the foreground provider", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewTarget: {
+        codex: { target: "model:custom-claude-opus-4-8", effort: "max" },
+        "openai-compatible:custom-claude": { target: "model:gpt-5.6-sol" },
+      },
+    });
+
+    expect(
+      resolveBackgroundBackendRoute(
+        settings,
+        { taskClass: "review_code" },
+        { foregroundProvider: "codex" },
+      ),
+    ).toEqual({
+      backend: "native",
+      configuredReviewModel: "custom-claude-opus-4-8",
+      configuredReviewEffort: "max",
+    });
+    expect(
+      resolveBackgroundBackendRoute(
+        settings,
+        { taskClass: "review_code" },
+        { foregroundProvider: "openai-compatible:custom-claude" },
+      ),
+    ).toEqual({ backend: "native", configuredReviewModel: "gpt-5.6-sol" });
+    // Unmapped foreground providers keep automatic cross-provider review.
+    expect(
+      resolveBackgroundBackendRoute(
+        settings,
+        { taskClass: "review_code" },
+        { foregroundProvider: "anthropic" },
+      ),
+    ).toEqual({ backend: "native" });
+  });
+
+  it("routes an unmapped foreground provider through the provider-map default", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewTarget: {
+        codex: { target: "model:custom-claude-opus-4-8" },
+        default: { target: "acp:claude" },
+      },
+      acpAgents: [
+        { id: "claude", provider: "anthropic", command: "claude-agent-acp" },
+      ],
+    });
+
+    expect(
+      resolveBackgroundBackendRoute(
+        settings,
+        { taskClass: "review_code" },
+        { foregroundProvider: "openai-compatible:custom-claude" },
+      ),
+    ).toMatchObject({
+      backend: "acp",
+      reference: "acp:claude",
+      reason: "review_agent",
+    });
+  });
+
+  it("rejects a model reference supplied as a provider", () => {
+    const settings = normalizeBackgroundAgentSettings({});
+
+    expect(() =>
+      resolveBackgroundBackendRoute(settings, {
+        provider: "model:custom-claude-opus-4-8",
+      }),
+    ).toThrow(/is not a provider reference/);
+  });
 });

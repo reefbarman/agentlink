@@ -563,9 +563,11 @@ export class AgentSession {
     const previousUpdate = this.pendingModelSelectionUpdate;
     const update = previousUpdate.then(async () => {
       const providerChanged = providerId !== this.providerId;
+      const modelChanged = model !== this.model;
       const workspaceFolders = opts?.workspaceFolders ?? this.workspaceFolders;
       const artifacts =
-        providerChanged && this.projectAvailability === "available"
+        (providerChanged || modelChanged) &&
+        this.projectAvailability === "available"
           ? await buildPromptArtifacts(this.mode, this.requireProjectRoot(), {
               devMode: opts?.devMode,
               activeFilePath: this.activeFilePath,

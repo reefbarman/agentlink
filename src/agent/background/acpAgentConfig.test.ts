@@ -3,6 +3,7 @@ import {
   NATIVE_BACKGROUND_AGENT,
   normalizeBackgroundAgentSettings,
   parseAcpBackgroundAgentId,
+  parseBackgroundReviewTarget,
   redactAcpBackgroundAgentConfig,
   resolveAcpBackgroundAgent,
 } from "./acpAgentConfig.js";
@@ -14,7 +15,9 @@ describe("ACP background agent config", () => {
 
     expect(settings.defaultAgent).toBe(NATIVE_BACKGROUND_AGENT);
     expect(settings.reviewAgent).toBe(NATIVE_BACKGROUND_AGENT);
+    expect(settings.reviewTarget).toEqual({});
     expect(settings.acpAgents).toEqual([]);
+    expect(parseBackgroundReviewTarget(settings)).toEqual({ kind: "native" });
   });
 
   it("normalizes configured ACP agents", () => {
@@ -38,6 +41,7 @@ describe("ACP background agent config", () => {
     expect(settings).toEqual({
       defaultAgent: "acp:claude",
       reviewAgent: "acp:claude",
+      reviewTarget: {},
       acpAgents: [
         {
           id: "claude",
@@ -79,6 +83,168 @@ describe("ACP background agent config", () => {
     expect(() =>
       normalizeBackgroundAgentSettings({ reviewAgent: "anthropic" }),
     ).toThrow(/Unsupported background review agent/);
+  });
+
+  it("falls back to the legacy review agent when no review target is set", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewAgent: "acp:claude",
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+
+    expect(parseBackgroundReviewTarget(settings)).toEqual({
+      kind: "acp",
+      reference: "acp:claude",
+    });
+  });
+
+  it("prefers an explicit review target over the legacy review agent", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewAgent: "acp:claude",
+      reviewTarget: {
+        default: { target: " model:custom-claude-opus-4-8 ", effort: " max " },
+      },
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+
+    expect(settings.reviewTarget).toEqual({
+      default: { target: "model:custom-claude-opus-4-8", effort: "max" },
+    });
+    expect(parseBackgroundReviewTarget(settings)).toEqual({
+      kind: "model",
+      modelId: "custom-claude-opus-4-8",
+      effort: "max",
+    });
+  });
+
+  it("supports native and ACP review targets", () => {
+    expect(
+      parseBackgroundReviewTarget(
+        normalizeBackgroundAgentSettings({
+          reviewAgent: "acp:claude",
+          reviewTarget: { default: { target: "native:auto", effort: "high" } },
+          acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+        }),
+      ),
+    ).toEqual({ kind: "native", effort: "high" });
+
+    expect(
+      parseBackgroundReviewTarget(
+        normalizeBackgroundAgentSettings({
+          reviewTarget: { default: { target: "acp:claude" } },
+          acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+        }),
+      ),
+    ).toEqual({ kind: "acp", reference: "acp:claude" });
+  });
+
+  it("reports malformed review targets without failing normalization", () => {
+    for (const target of ["anthropic", "model:", "acp:"]) {
+      const settings = normalizeBackgroundAgentSettings({
+        reviewTarget: { default: { target } },
+      });
+      expect(parseBackgroundReviewTarget(settings)).toEqual({
+        kind: "invalid",
+        value: target,
+      });
+    }
+  });
+
+  it("rejects an unsupported effort value", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewTarget: {
+        default: { target: "model:custom-claude-opus-4-8", effort: "turbo" },
+      },
+    });
+
+    expect(parseBackgroundReviewTarget(settings)).toMatchObject({
+      kind: "invalid",
+      reason: expect.stringContaining("turbo"),
+    });
+  });
+
+  it("rejects an effort pinned alongside an ACP target", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewTarget: { default: { target: "acp:claude", effort: "high" } },
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+
+    expect(parseBackgroundReviewTarget(settings)).toMatchObject({
+      kind: "invalid",
+      reason: expect.stringContaining("control their own reasoning effort"),
+    });
+  });
+
+  it("selects a review target by foreground provider", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewTarget: {
+        Codex: { target: "model:custom-claude-opus-4-8", effort: "max" },
+        "openai-compatible:custom-claude": { target: "model:gpt-5.6-sol" },
+        default: { target: "acp:claude" },
+      },
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+
+    expect(parseBackgroundReviewTarget(settings, "codex")).toEqual({
+      kind: "model",
+      modelId: "custom-claude-opus-4-8",
+      effort: "max",
+    });
+    expect(
+      parseBackgroundReviewTarget(settings, "openai-compatible:custom-claude"),
+    ).toEqual({ kind: "model", modelId: "gpt-5.6-sol" });
+    expect(parseBackgroundReviewTarget(settings, "anthropic")).toEqual({
+      kind: "acp",
+      reference: "acp:claude",
+    });
+  });
+
+  it("falls back to the legacy review agent when no entry matches", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewAgent: "acp:claude",
+      reviewTarget: {
+        codex: { target: "model:custom-claude-opus-4-8" },
+      },
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+
+    expect(parseBackgroundReviewTarget(settings, "anthropic")).toEqual({
+      kind: "acp",
+      reference: "acp:claude",
+    });
+    expect(parseBackgroundReviewTarget(settings)).toEqual({
+      kind: "acp",
+      reference: "acp:claude",
+    });
+  });
+
+  it("rejects malformed provider-map entries", () => {
+    expect(() =>
+      normalizeBackgroundAgentSettings({
+        reviewTarget: { codex: "model:custom-claude-opus-4-8" } as unknown,
+      }),
+    ).toThrow(/reviewTarget.codex must be an object with a target/);
+
+    expect(() =>
+      normalizeBackgroundAgentSettings({
+        reviewTarget: { codex: { target: "  " } } as unknown,
+      }),
+    ).toThrow(/reviewTarget.codex.target must be a non-empty string/);
+
+    expect(() =>
+      normalizeBackgroundAgentSettings({
+        reviewTarget: {
+          codex: { target: "native:auto", effort: 3 },
+        } as unknown,
+      }),
+    ).toThrow(/reviewTarget.codex.effort must be a string/);
+  });
+
+  it("rejects model targets for the default agent", () => {
+    expect(() =>
+      normalizeBackgroundAgentSettings({
+        defaultAgent: "model:custom-claude-opus-4-8",
+      }),
+    ).toThrow(/Unsupported background default agent/);
   });
 
   it("rejects duplicate ACP agent ids", () => {
