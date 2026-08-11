@@ -721,7 +721,11 @@ export function ToolCallBlock({
   }, [expanded, input, toolCall.inputJson]);
 
   const isCommand = toolCall.name === "execute_command";
+  const isRunningCommand = isCommand && !complete;
   const command = isCommand ? String(input?.command ?? "").trim() : "";
+  const commandReason = isRunningCommand
+    ? String(input?.reason ?? "").trim()
+    : "";
   const displayName = isCommand ? "Command" : toolCall.name;
   const visibleSummaryParts = isCommand
     ? summaryParts.filter((part) => part.type === "badge")
@@ -781,7 +785,9 @@ export function ToolCallBlock({
   );
 
   return (
-    <div class={`tool-call-block ${statusClass}`}>
+    <div
+      class={`tool-call-block ${statusClass}${isRunningCommand ? " tool-running-command" : ""}`}
+    >
       <div
         class={`tool-call-row${showRunningActions ? " tool-call-row-with-actions" : ""}`}
         onClick={handleRowClick}
@@ -933,6 +939,13 @@ export function ToolCallBlock({
           </div>
         )}
       </div>
+
+      {commandReason && (
+        <div class="tool-running-command-reason">
+          <span class="tool-running-command-reason-label">Reason</span>
+          <span>{commandReason}</span>
+        </div>
+      )}
 
       {expanded && (
         <div class="tool-call-details">

@@ -1183,12 +1183,28 @@ export function App({
           setInjection({ type: "context", context: msg.context });
           break;
         case "agentModesUpdate":
+          // Workspace/tab messages can immediately restore a different session
+          // projection before this reducer update has rendered. Keep the
+          // imperative projection source in lockstep so the restored tab retains
+          // the shared setup data received during startup.
+          fullStateRef.current = {
+            ...fullStateRef.current,
+            modes: msg.modes,
+          };
           dispatch({ type: "SET_MODES", modes: msg.modes });
           break;
         case "agentModelsUpdate":
+          fullStateRef.current = {
+            ...fullStateRef.current,
+            availableModels: msg.models,
+          };
           dispatch({ type: "SET_MODELS", models: msg.models });
           break;
         case "agentSlashCommandsUpdate":
+          fullStateRef.current = {
+            ...fullStateRef.current,
+            slashCommands: msg.commands,
+          };
           dispatch({ type: "SET_SLASH_COMMANDS", commands: msg.commands });
           break;
         case "agentHandoffDraft":

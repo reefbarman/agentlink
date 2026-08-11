@@ -6631,6 +6631,55 @@ describe("AgentSessionManager background agents", () => {
     ]);
   });
 
+  it("serves persisted tail snapshots only for sessions that are not live in memory", async () => {
+    const tailSnapshot = {
+      sessionId: "tail-session",
+      totalMessages: 4,
+      messageIndexOffset: 2,
+      userTurnOffset: 1,
+      hasMoreBefore: true,
+      title: "Tail session",
+      mode: "agent",
+      model: "gpt-5.4-pro",
+      todos: [],
+      messages: [
+        { role: "user", content: "tail question" },
+        { role: "assistant", content: "tail answer" },
+      ],
+    };
+    const store = {
+      list: vi.fn(() => []),
+      readSessionTailSnapshot: vi.fn(async () => tailSnapshot),
+    } as any;
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+
+    await expect(mgr.readPersistedSessionTail("tail-session")).resolves.toEqual(
+      tailSnapshot,
+    );
+    expect(store.readSessionTailSnapshot).toHaveBeenCalledWith("tail-session");
+
+    // Live sessions are authoritative — no provisional snapshot for them.
+    (mgr as unknown as { sessions: Map<string, unknown> }).sessions.set(
+      "live-session",
+      {},
+    );
+    await expect(
+      mgr.readPersistedSessionTail("live-session"),
+    ).resolves.toBeNull();
+
+    // Partial store doubles without tail-snapshot support are tolerated.
+    const bare = new AgentSessionManager(config, "/tmp", undefined, false, {
+      list: vi.fn(() => []),
+    } as any);
+    await expect(bare.readPersistedSessionTail("any")).resolves.toBeNull();
+  });
+
   it("filters background restores from metadata without reading non-matching transcripts", async () => {
     const now = Date.now();
     const summaries = ["matching-bg", "other-root-bg", "no-fleet-bg"].map(

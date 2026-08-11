@@ -1942,3 +1942,205 @@ describe("SessionStore", () => {
     expect(reopened.loadMessages(grown.summary.id)).toEqual(grown.messages);
   });
 });
+
+describe("SessionStore tail snapshots", () => {
+  let tmpDir: string | null = null;
+
+  afterEach(() => {
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      tmpDir = null;
+    }
+  });
+
+  function conversation(turns: number): AgentMessage[] {
+    const messages: AgentMessage[] = [];
+    for (let turn = 0; turn < turns; turn++) {
+      messages.push({ role: "user", content: `prompt ${turn}` });
+      messages.push({ role: "assistant", content: `reply ${turn}` });
+    }
+    return messages;
+  }
+
+  function sessionDirFor(root: string, sessionId: string): string {
+    return path.join(root, ".agentlink", "history", sessionId);
+  }
+
+  it("writes a tail snapshot beside messages.json and round-trips the last turns", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    const messages = conversation(12);
+    const record = createRecord({
+      summary: createSummary({
+        id: "tail-roundtrip",
+        title: "Long session",
+        messageCount: messages.length,
+      }),
+      messages,
+      transcriptRevision: 7,
+      metadata: { lastInputTokens: 4321 },
+    });
+
+    const saved = await store.saveSession({
+      session: record,
+      expectedRevision: null,
+    });
+    expect(saved.ok).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(
+          sessionDirFor(tmpDir, "tail-roundtrip"),
+          "messages.tail.json",
+        ),
+      ),
+    ).toBe(true);
+
+    const snapshot = await store.readSessionTailSnapshot("tail-roundtrip");
+    expect(snapshot).not.toBeNull();
+    // 12 user turns, tail keeps the last 8 → chunk starts at turn 4 (index 8).
+    expect(snapshot!.totalMessages).toBe(24);
+    expect(snapshot!.messageIndexOffset).toBe(8);
+    expect(snapshot!.userTurnOffset).toBe(4);
+    expect(snapshot!.hasMoreBefore).toBe(true);
+    expect(snapshot!.messages).toEqual(messages.slice(8));
+    expect(snapshot!.firstUserMessage).toEqual({
+      role: "user",
+      content: "prompt 0",
+    });
+    expect(snapshot!.transcriptRevision).toBe(7);
+    expect(snapshot!.title).toBe("Long session");
+    expect(snapshot!.mode).toBe(record.metadata.mode);
+    expect(snapshot!.model).toBe(record.metadata.model);
+    expect(snapshot!.lastInputTokens).toBe(4321);
+    expect(snapshot!.todos).toEqual([]);
+  });
+
+  it("captures the latest todo state even when it predates the tail window", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    const todos = [
+      {
+        id: "1",
+        content: "Ship it",
+        activeForm: "Shipping it",
+        status: "pending",
+      },
+    ];
+    const messages: AgentMessage[] = [
+      { role: "user", content: "start" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "todo-1",
+            name: "todo_write",
+            input: { todos },
+          },
+        ],
+      } as unknown as AgentMessage,
+      ...conversation(10),
+    ];
+    await store.saveSession({
+      session: createRecord({
+        summary: createSummary({ id: "tail-todos" }),
+        messages,
+        transcriptRevision: 1,
+      }),
+      expectedRevision: null,
+    });
+
+    const snapshot = await store.readSessionTailSnapshot("tail-todos");
+    expect(snapshot).not.toBeNull();
+    // The todo_write call sits before the 8-turn tail, but the snapshot's todo
+    // state is computed from the full transcript at write time.
+    expect(snapshot!.hasMoreBefore).toBe(true);
+    expect(snapshot!.todos).toEqual(todos);
+  });
+
+  it("keeps oversized payloads externalized in the tail file and rehydrates them on read", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    const bigImage = "iVBORw0K".repeat(64_000); // 512k chars, above the threshold
+    const messages: AgentMessage[] = [
+      { role: "user", content: "hello" },
+      {
+        role: "user",
+        content: [
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: bigImage },
+          },
+        ],
+      } as unknown as AgentMessage,
+      { role: "assistant", content: "nice image" },
+    ];
+    await store.saveSession({
+      session: createRecord({
+        summary: createSummary({ id: "tail-attachments" }),
+        messages,
+        transcriptRevision: 1,
+      }),
+      expectedRevision: null,
+    });
+
+    const rawTail = fs.readFileSync(
+      path.join(
+        sessionDirFor(tmpDir, "tail-attachments"),
+        "messages.tail.json",
+      ),
+      "utf-8",
+    );
+    expect(rawTail).not.toContain(bigImage);
+    expect(rawTail).toContain("agentlink-external-payload:v1:");
+
+    const snapshot = await store.readSessionTailSnapshot("tail-attachments");
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.messages).toEqual(messages);
+  });
+
+  it("returns null when the snapshot is missing, stale, or corrupt", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    await store.saveSession({
+      session: createRecord({
+        summary: createSummary({ id: "tail-invalid" }),
+        messages: conversation(3),
+        transcriptRevision: 1,
+      }),
+      expectedRevision: null,
+    });
+    const sessionDir = sessionDirFor(tmpDir, "tail-invalid");
+    const tailPath = path.join(sessionDir, "messages.tail.json");
+
+    // Unknown session.
+    await expect(store.readSessionTailSnapshot("nope")).resolves.toBeNull();
+
+    // Stale: messages.json newer than the tail snapshot (e.g. a crash between
+    // the transcript write and the tail write, or a writer without tail
+    // support).
+    const future = new Date(Date.now() + 60_000);
+    fs.utimesSync(path.join(sessionDir, "messages.json"), future, future);
+    await expect(
+      store.readSessionTailSnapshot("tail-invalid"),
+    ).resolves.toBeNull();
+
+    // Corrupt: invalid JSON (restore the mtime ordering first).
+    const farFuture = new Date(Date.now() + 120_000);
+    fs.writeFileSync(tailPath, "{not json", "utf-8");
+    fs.utimesSync(tailPath, farFuture, farFuture);
+    await expect(
+      store.readSessionTailSnapshot("tail-invalid"),
+    ).resolves.toBeNull();
+
+    // Missing.
+    fs.rmSync(tailPath);
+    await expect(
+      store.readSessionTailSnapshot("tail-invalid"),
+    ).resolves.toBeNull();
+
+    // The full read path is unaffected throughout.
+    const read = await store.readSession("tail-invalid");
+    expect(read.ok).toBe(true);
+  });
+});

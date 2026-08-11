@@ -473,7 +473,7 @@ describe("MessageBubble slash-command rendering", () => {
     });
   });
 
-  it("copies a standalone fenced code response without its Markdown fences", async () => {
+  it("uses only the block-level control for a standalone fenced code response", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -495,12 +495,14 @@ describe("MessageBubble slash-command rendering", () => {
     const { container } = render(
       <MessageBubble message={message} streaming={false} />,
     );
-    const messageCopyButton = container.querySelector(
-      '.assistant-content > .copy-button[title="Copy code block"]',
-    ) as HTMLButtonElement;
-    expect(messageCopyButton).toBeTruthy();
+    expect(
+      container.querySelector(".assistant-content > .copy-button"),
+    ).toBeNull();
 
-    fireEvent.click(messageCopyButton);
+    const codeCopyButton = screen.getByRole("button", {
+      name: "Copy code block",
+    });
+    fireEvent.click(codeCopyButton);
 
     await vi.waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("const fence = '```';");

@@ -112,7 +112,11 @@ import {
 import { approveOutsideWorkspaceAccess } from "../tools/pathAccessUI.js";
 import { getToolCapabilityMetadata } from "../core/tools/toolCapabilities.js";
 import { createNativeToolDisclosureSnapshot } from "../core/tools/nativeToolDisclosure.js";
-import type { SessionStore, SessionSummary } from "./SessionStore.js";
+import type {
+  SessionStore,
+  SessionSummary,
+  SessionTailSnapshot,
+} from "./SessionStore.js";
 import type {
   BackgroundCompletionResult,
   BgSessionInfo,
@@ -8199,6 +8203,31 @@ export class AgentSessionManager {
       this.sessionRevertPending.set(sessionId, attributedRecovery);
     }
     return attributedRecovery;
+  }
+
+  /**
+   * Fast read of a persisted session's transcript tail for provisional
+   * restore hydration. Returns null when the session is already live in
+   * memory (the live transcript is authoritative) or when no usable tail
+   * snapshot exists — callers fall back to waiting for the full restore.
+   */
+  async readPersistedSessionTail(
+    sessionId: string,
+  ): Promise<SessionTailSnapshot | null> {
+    const persistence = this.persistence;
+    // typeof guard tolerates partial test doubles of SessionStore.
+    if (
+      !persistence ||
+      typeof persistence.readSessionTailSnapshot !== "function"
+    ) {
+      return null;
+    }
+    if (this.sessions.has(sessionId)) return null;
+    try {
+      return await persistence.readSessionTailSnapshot(sessionId);
+    } catch {
+      return null;
+    }
   }
 
   /**

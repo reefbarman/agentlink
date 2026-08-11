@@ -44,6 +44,12 @@ import {
   SESSION_PROJECT_SCOPE_SCHEMA_VERSION,
   type SessionProjectScope,
 } from "../core/workspaceProjects.js";
+import {
+  findFirstUserMessage,
+  getTailChunkByUserTurns,
+  RESTORE_TAIL_TURNS,
+} from "./transcriptChunks.js";
+import { getLatestTodoState, type TodoItem } from "./todoTool.js";
 
 /**
  * Persisted session index entry — lightweight metadata kept in sessions.json.
@@ -73,6 +79,68 @@ export interface SessionSummary {
 
 interface MessagesFile {
   schemaVersion: number;
+  messages: AgentMessage[];
+}
+
+/**
+ * Derived fast-restore snapshot persisted beside messages.json. Carries the
+ * transcript tail plus everything a provisional restore hydration needs, so
+ * reload can paint the recent conversation without parsing the (potentially
+ * multi-MB) full transcript first. Message payloads stay externalized on disk
+ * (attachment markers), mirroring messages.json.
+ */
+interface SessionTailSnapshotFile {
+  schemaVersion: number;
+  totalMessages: number;
+  /** Absolute index of `messages[0]` in the full persisted transcript. */
+  messageIndexOffset: number;
+  /** Number of user turns before the first message in the tail. */
+  userTurnOffset: number;
+  hasMoreBefore: boolean;
+  transcriptRevision?: number;
+  title: string;
+  mode: string;
+  model: string;
+  lastInputTokens?: number;
+  todos: TodoItem[];
+  /** First visible user turn (for originalPrompt), usually outside the tail. */
+  firstUserMessage?: AgentMessage;
+  messages: AgentMessage[];
+}
+
+function isValidTailSnapshotFile(
+  value: unknown,
+): value is SessionTailSnapshotFile {
+  if (typeof value !== "object" || value === null) return false;
+  const file = value as Partial<SessionTailSnapshotFile>;
+  return (
+    file.schemaVersion === SCHEMA_VERSION &&
+    typeof file.totalMessages === "number" &&
+    typeof file.messageIndexOffset === "number" &&
+    typeof file.userTurnOffset === "number" &&
+    typeof file.hasMoreBefore === "boolean" &&
+    typeof file.title === "string" &&
+    typeof file.mode === "string" &&
+    typeof file.model === "string" &&
+    Array.isArray(file.todos) &&
+    Array.isArray(file.messages)
+  );
+}
+
+/** Rehydrated tail snapshot returned to restore callers. */
+export interface SessionTailSnapshot {
+  sessionId: string;
+  totalMessages: number;
+  messageIndexOffset: number;
+  userTurnOffset: number;
+  hasMoreBefore: boolean;
+  transcriptRevision?: number;
+  title: string;
+  mode: string;
+  model: string;
+  lastInputTokens?: number;
+  todos: TodoItem[];
+  firstUserMessage?: AgentMessage;
   messages: AgentMessage[];
 }
 
@@ -156,6 +224,7 @@ export interface SessionStoreOptions {
 
 const SCHEMA_VERSION = 1;
 const SESSIONS_FILE = "sessions.json";
+const TAIL_SNAPSHOT_FILE = "messages.tail.json";
 const AGENTLINK_GITIGNORE_ENTRIES = [
   "history/",
   "workspaces/",
@@ -457,7 +526,7 @@ export class SessionStore implements SessionPersistenceProvider {
     const summary = this.index.get(sessionId);
     if (!summary) return { ok: false, reason: "not_found" };
 
-    const messagesResult = this.readMessagesFile(sessionId);
+    const messagesResult = await this.readMessagesFileAsync(sessionId);
     if (!messagesResult.ok) return messagesResult;
 
     const metadataResult = this.readMetadataFile(sessionId);
@@ -856,17 +925,55 @@ export class SessionStore implements SessionPersistenceProvider {
     }
   }
 
-  private readMessagesFile(
+  /**
+   * Async transcript read for the restore path: the file I/O yields the
+   * extension-host event loop, so only the (unavoidable) JSON.parse of the
+   * transcript runs synchronously — and that parse is flight-recorded.
+   */
+  private async readMessagesFileAsync(
     sessionId: string,
-  ): ClassifiedJsonRead<MessagesFile> {
-    return this.readJsonFile(
-      path.join(this.historyDir, sessionId, "messages.json"),
-      (value): value is MessagesFile =>
-        typeof value === "object" &&
-        value !== null &&
-        Array.isArray((value as MessagesFile).messages),
-      `Invalid messages file for session ${sessionId}`,
-    );
+  ): Promise<ClassifiedJsonRead<MessagesFile>> {
+    const file = path.join(this.historyDir, sessionId, "messages.json");
+    let raw: string;
+    try {
+      raw = await fs.promises.readFile(file, "utf-8");
+    } catch (error) {
+      if (this.isNotFoundError(error)) {
+        return { ok: false, reason: "not_found" };
+      }
+      return {
+        ok: false,
+        reason: "io_error",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+    try {
+      const startedAt = Date.now();
+      const parsed: unknown = JSON.parse(raw);
+      hostFlightRecorder.noteSync(
+        "transcript-parse",
+        `${sessionId} ${raw.length}B`,
+        startedAt,
+      );
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        !Array.isArray((parsed as MessagesFile).messages)
+      ) {
+        return {
+          ok: false,
+          reason: "corrupt",
+          message: `Invalid messages file for session ${sessionId}`,
+        };
+      }
+      return { ok: true, value: parsed as MessagesFile };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: "corrupt",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   private readMetadataFile(
@@ -985,6 +1092,17 @@ export class SessionStore implements SessionPersistenceProvider {
           this.serializeMessages(getExternalized().messages, summary.id),
         durability,
       );
+      // Refresh the derived fast-restore tail after messages.json so a valid
+      // snapshot is never newer than the transcript it summarizes; a crash
+      // between the two writes leaves an older tail that the mtime staleness
+      // check rejects on read.
+      await this.writeSessionTailSnapshot(
+        sessionDir,
+        summary,
+        metadata,
+        record,
+        getExternalized().messages,
+      );
       // Record whichever change tracker the record supports and drop the
       // other, so alternating counter/digest saves can never stale-skip.
       if (transcriptRevision !== undefined) {
@@ -1049,6 +1167,102 @@ export class SessionStore implements SessionPersistenceProvider {
         await this.writeSerializedFileAtomic(payloadPath, value, "durable");
       }
       known.add(hash);
+    }
+  }
+
+  /**
+   * Best-effort write of the derived fast-restore tail. Failures are logged
+   * and swallowed: the snapshot is a cache, and a save must not fail because
+   * its accelerator could not be written. A stale leftover from an earlier
+   * save is rejected on read by the mtime staleness check.
+   */
+  private async writeSessionTailSnapshot(
+    sessionDir: string,
+    summary: SessionSummary,
+    metadata: PersistedSessionMetadata,
+    record: PersistedSessionRecord,
+    externalizedMessages: AgentMessage[],
+  ): Promise<void> {
+    try {
+      const tail = getTailChunkByUserTurns(
+        externalizedMessages,
+        RESTORE_TAIL_TURNS,
+      );
+      const tailFile: SessionTailSnapshotFile = {
+        schemaVersion: SCHEMA_VERSION,
+        totalMessages: externalizedMessages.length,
+        messageIndexOffset: externalizedMessages.length - tail.chunk.length,
+        userTurnOffset: tail.userTurnOffset,
+        hasMoreBefore: tail.hasMoreBefore,
+        transcriptRevision: record.transcriptRevision,
+        title: summary.title,
+        mode: metadata.mode,
+        model: metadata.model,
+        lastInputTokens: metadata.lastInputTokens,
+        todos: getLatestTodoState(record.messages),
+        firstUserMessage: findFirstUserMessage(externalizedMessages),
+        messages: tail.chunk,
+      };
+      // Checkpoint durability: readers validate against messages.json and
+      // fall back to the full transcript read, so the tail never needs to
+      // survive power loss on its own.
+      await this.writeSerializedFileAtomic(
+        path.join(sessionDir, TAIL_SNAPSHOT_FILE),
+        `${JSON.stringify(tailFile)}\n`,
+        "checkpoint",
+      );
+    } catch (error) {
+      this.log?.(
+        `Failed to write tail snapshot for ${summary.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Fast-restore read of the persisted transcript tail. Returns null when no
+   * usable snapshot exists (missing, corrupt, schema mismatch, or older than
+   * messages.json) — callers fall back to the full `readSession`.
+   */
+  async readSessionTailSnapshot(
+    sessionId: string,
+  ): Promise<SessionTailSnapshot | null> {
+    if (!this.index.has(sessionId)) return null;
+    const sessionDir = path.join(this.historyDir, sessionId);
+    const tailPath = path.join(sessionDir, TAIL_SNAPSHOT_FILE);
+    const messagesPath = path.join(sessionDir, "messages.json");
+    try {
+      const [tailStat, messagesStat] = await Promise.all([
+        fs.promises.stat(tailPath),
+        fs.promises.stat(messagesPath),
+      ]);
+      // The tail is written after messages.json within the same queued save,
+      // so an older tail means a newer transcript landed without one (crash
+      // mid-save, snapshot write failure, or a writer without tail support).
+      if (tailStat.mtimeMs < messagesStat.mtimeMs) return null;
+      const raw = await fs.promises.readFile(tailPath, "utf-8");
+      const parsed: unknown = JSON.parse(raw);
+      if (!isValidTailSnapshotFile(parsed)) return null;
+      return {
+        sessionId,
+        totalMessages: parsed.totalMessages,
+        messageIndexOffset: parsed.messageIndexOffset,
+        userTurnOffset: parsed.userTurnOffset,
+        hasMoreBefore: parsed.hasMoreBefore,
+        transcriptRevision: parsed.transcriptRevision,
+        title: parsed.title,
+        mode: parsed.mode,
+        model: parsed.model,
+        lastInputTokens: parsed.lastInputTokens,
+        todos: parsed.todos,
+        firstUserMessage: parsed.firstUserMessage
+          ? this.rehydrateMessages(sessionId, [parsed.firstUserMessage])[0]
+          : undefined,
+        messages: this.rehydrateMessages(sessionId, parsed.messages),
+      };
+    } catch {
+      return null;
     }
   }
 

@@ -45,7 +45,10 @@ describe("ToolCallBlock", () => {
           type: "tool_call",
           id: "running-command",
           name: "execute_command",
-          inputJson: JSON.stringify({ command: "curl -I https://example.com" }),
+          inputJson: JSON.stringify({
+            command: "curl -I https://example.com",
+            reason: "Check the target endpoint before changing the client.",
+          }),
           result: "",
           complete: false,
         },
@@ -61,6 +64,11 @@ describe("ToolCallBlock", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(screen.getByText("execute_command")).toBeTruthy();
     expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.getByText("Reason")).toBeTruthy();
+    expect(
+      screen.getByText("Check the target endpoint before changing the client."),
+    ).toBeTruthy();
+    expect(document.querySelector(".tool-running-command")).toBeTruthy();
 
     fireEvent.click(toggle);
     expect(screen.getByText("Input")).toBeTruthy();
@@ -81,7 +89,10 @@ describe("ToolCallBlock", () => {
           type: "tool_call",
           id: "completed-command",
           name: "execute_command",
-          inputJson: JSON.stringify({ command: "npm test" }),
+          inputJson: JSON.stringify({
+            command: "npm test",
+            reason: "Verify the implementation before finishing.",
+          }),
           result: JSON.stringify({
             exit_code: 0,
             approval: { by: "human" },
@@ -94,6 +105,10 @@ describe("ToolCallBlock", () => {
 
     expect(screen.getByText("approved · human · sandbox")).toBeTruthy();
     expect(screen.getByText("npm test")).toBeTruthy();
+    expect(
+      screen.queryByText("Verify the implementation before finishing."),
+    ).toBeNull();
+    expect(document.querySelector(".tool-running-command")).toBeNull();
   });
 
   it("renders completed ACP-native tools with generic input and result details", () => {

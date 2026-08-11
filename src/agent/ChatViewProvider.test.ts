@@ -9428,3 +9428,204 @@ describe("special block pop-out panel", () => {
     expect(JSON.parse(dataMatch![1]!)).toEqual({ kind: "mermaid", source });
   });
 });
+
+describe("provisional restore tail hydration", () => {
+  it("paints the persisted tail before the startup restore resolves, then applies the complete hydration", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const posted: Array<Record<string, unknown>> = [];
+    (provider as unknown as { view: unknown }).view = {
+      webview: {
+        postMessage: vi.fn(async (message: Record<string, unknown>) => {
+          posted.push(message);
+          return true;
+        }),
+      },
+    };
+
+    const fullMessages = [
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: "first reply" },
+      { role: "user", content: "tail question" },
+      { role: "assistant", content: "tail answer" },
+    ];
+    const tailSnapshot = {
+      sessionId: "restored-1",
+      totalMessages: 4,
+      messageIndexOffset: 2,
+      userTurnOffset: 1,
+      hasMoreBefore: true,
+      transcriptRevision: 5,
+      title: "Restored session",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      lastInputTokens: 111,
+      todos: [],
+      firstUserMessage: fullMessages[0],
+      messages: fullMessages.slice(2),
+    };
+    const session = {
+      id: "restored-1",
+      title: "Restored session",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "idle",
+      transcriptRevision: 5,
+      lastInputTokens: 111,
+      inFlightAssistantBlocks: [],
+      runState: undefined,
+      getAllMessages: () => fullMessages,
+    };
+    let liveSession: typeof session | null = null;
+    const readPersistedSessionTail = vi.fn(async () => tailSnapshot);
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => liveSession),
+      getSession: vi.fn((id: string) =>
+        id === "restored-1" ? (liveSession ?? undefined) : undefined,
+      ),
+      readPersistedSessionTail,
+      getBackgroundCompletionsForParent: vi.fn(() => []),
+    } as never);
+
+    // Persisted tab layout is available before any session is hydrated.
+    vi.spyOn(
+      provider as unknown as { getChatWorkspaceViewSnapshot: () => unknown },
+      "getChatWorkspaceViewSnapshot",
+    ).mockReturnValue({
+      controllerEpoch: 1,
+      focusedTabId: "tab-1",
+      tabs: [{ tabId: "tab-1", sessionId: "restored-1" }],
+    });
+    for (const stub of [
+      "sendModesUpdate",
+      "sendModelsUpdate",
+      "sendSlashCommands",
+      "sendSessionList",
+      "sendInitialState",
+      "sendDebugInfo",
+      "startHostHeartbeat",
+    ]) {
+      vi.spyOn(
+        provider as unknown as Record<string, () => unknown>,
+        stub,
+      ).mockImplementation(() => undefined);
+    }
+
+    let resolveRestore!: () => void;
+    const restorePromise = new Promise<void>((resolve) => {
+      resolveRestore = () => {
+        liveSession = session;
+        resolve();
+      };
+    });
+    provider.setChatTabStartupRestore(restorePromise);
+
+    const hydrate = (
+      provider as unknown as { hydrateReadyWebview: () => Promise<void> }
+    ).hydrateReadyWebview();
+
+    // The provisional tail arrives while the full restore is still pending.
+    await vi.waitFor(() => {
+      expect(
+        posted.some((message) => message.type === "agentSessionLoaded"),
+      ).toBe(true);
+    });
+    expect(liveSession).toBeNull();
+    const provisional = posted.find(
+      (message) => message.type === "agentSessionLoaded",
+    )!;
+    expect(provisional).toMatchObject({
+      sessionId: "restored-1",
+      restored: true,
+      title: "Restored session",
+      originalPrompt: "first prompt",
+      messages: fullMessages.slice(2),
+      messageIndexOffset: 2,
+      userTurnOffset: 1,
+      hasMoreBefore: true,
+      transcriptRevision: 5,
+      lastInputTokens: 111,
+      streaming: false,
+    });
+    expect(readPersistedSessionTail).toHaveBeenCalledWith("restored-1");
+    expect(
+      posted.findIndex(
+        (message) => message.type === "agentRestoreSessionStart",
+      ),
+    ).toBeLessThan(posted.indexOf(provisional));
+    expect(
+      posted.some((message) => message.type === "agentRestoreSessionDone"),
+    ).toBe(false);
+
+    resolveRestore();
+    await hydrate;
+
+    const loads = posted.filter(
+      (message) => message.type === "agentSessionLoaded",
+    );
+    expect(loads).toHaveLength(2);
+    // The complete hydration supersedes the provisional tail: full transcript
+    // window, same deterministic index base semantics.
+    expect(loads[1]).toMatchObject({
+      sessionId: "restored-1",
+      restored: true,
+      originalPrompt: "first prompt",
+      messages: fullMessages,
+      messageIndexOffset: 0,
+      hasMoreBefore: false,
+    });
+    expect(
+      posted.findIndex((message) => message.type === "agentRestoreSessionDone"),
+    ).toBeGreaterThan(posted.indexOf(loads[1]!));
+    provider.dispose();
+  });
+
+  it("skips the provisional paint when the startup restore already settled or the session is live", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const posted: Array<Record<string, unknown>> = [];
+    (provider as unknown as { view: unknown; webviewReady: boolean }).view = {
+      webview: {
+        postMessage: vi.fn(async (message: Record<string, unknown>) => {
+          posted.push(message);
+          return true;
+        }),
+      },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+    const readPersistedSessionTail = vi.fn(async () => null);
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => ({ id: "live-1" })),
+      getSession: vi.fn(() => ({ id: "live-1" })),
+      readPersistedSessionTail,
+    } as never);
+
+    // Settled restore (the constructor default): nothing to paint provisionally.
+    await (
+      provider as unknown as {
+        postProvisionalRestoredTail: () => Promise<void>;
+      }
+    ).postProvisionalRestoredTail();
+    expect(readPersistedSessionTail).not.toHaveBeenCalled();
+
+    // Pending restore but the session is already live in memory: the live
+    // transcript is authoritative.
+    provider.setChatTabStartupRestore(new Promise(() => {}));
+    await (
+      provider as unknown as {
+        postProvisionalRestoredTail: () => Promise<void>;
+      }
+    ).postProvisionalRestoredTail();
+    expect(readPersistedSessionTail).not.toHaveBeenCalled();
+    expect(
+      posted.some((message) => message.type === "agentSessionLoaded"),
+    ).toBe(false);
+    provider.dispose();
+  });
+});

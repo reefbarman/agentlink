@@ -1054,8 +1054,6 @@ export interface ChatState {
 
 type ContextBudget = NonNullable<ChatState["contextBudget"]>;
 
-const RESTORE_TAIL_TURNS = 8;
-const RESTORE_BACKFILL_BATCH_TURNS = 12;
 // Non-session UI work still needs a stable ownership bucket for targeted clears.
 // Persisted session IDs are UUIDs, so this sentinel cannot collide with one.
 const AMBIENT_AGENT_SESSION_ID = "agent";
@@ -1074,81 +1072,15 @@ function stripMediaForTransport(
   });
 }
 
-export function getTailChunkByUserTurns(
-  messages: import("./types.js").AgentMessage[],
-  tailTurns: number,
-): {
-  chunk: import("./types.js").AgentMessage[];
-  userTurnOffset: number;
-  hasMoreBefore: boolean;
-} {
-  if (messages.length === 0) {
-    return { chunk: [], userTurnOffset: 0, hasMoreBefore: false };
-  }
+import {
+  getPreviousChunkByUserTurns,
+  getTailChunkByUserTurns,
+  projectFirstUserPrompt,
+  RESTORE_BACKFILL_BATCH_TURNS,
+  RESTORE_TAIL_TURNS,
+} from "./transcriptChunks.js";
 
-  if (tailTurns <= 0) {
-    return {
-      chunk: [...messages],
-      userTurnOffset: 0,
-      hasMoreBefore: false,
-    };
-  }
-
-  const userMessageIndexes: number[] = [];
-  for (let index = 0; index < messages.length; index++) {
-    const message = messages[index];
-    if (message.role === "user" && typeof message.content === "string") {
-      userMessageIndexes.push(index);
-    }
-  }
-
-  const startTurn = Math.max(0, userMessageIndexes.length - tailTurns);
-  const startIndex = startTurn === 0 ? 0 : userMessageIndexes[startTurn];
-  const chunk = messages.slice(startIndex);
-  return {
-    chunk,
-    userTurnOffset: startTurn,
-    hasMoreBefore: startIndex > 0,
-  };
-}
-
-export function getPreviousChunkByUserTurns(
-  messages: import("./types.js").AgentMessage[],
-  beforeUserTurnOffset: number,
-  batchTurns: number,
-): {
-  messages: import("./types.js").AgentMessage[];
-  userTurnOffset: number;
-  /** Absolute index of the first returned message in the full transcript. */
-  messageIndexOffset: number;
-  hasMoreBefore: boolean;
-} {
-  const userMessageIndexes: number[] = [];
-  for (let index = 0; index < messages.length; index++) {
-    const message = messages[index];
-    if (message.role === "user" && typeof message.content === "string") {
-      userMessageIndexes.push(index);
-    }
-  }
-
-  const endTurn = Math.max(
-    0,
-    Math.min(beforeUserTurnOffset, userMessageIndexes.length),
-  );
-  const startTurn = Math.max(0, endTurn - Math.max(1, batchTurns));
-  const startIndex = startTurn === 0 ? 0 : userMessageIndexes[startTurn];
-  const endIndex =
-    endTurn < userMessageIndexes.length
-      ? userMessageIndexes[endTurn]
-      : messages.length;
-
-  return {
-    messages: messages.slice(startIndex, endIndex),
-    userTurnOffset: startTurn,
-    messageIndexOffset: startIndex,
-    hasMoreBefore: startTurn > 0,
-  };
-}
+export { getPreviousChunkByUserTurns, getTailChunkByUserTurns };
 
 export type BrowserGatewaySurfaceChangeKind = "background" | "mcp" | "theme";
 
@@ -1175,6 +1107,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private webviewReady = false;
   private pendingMessages: ExtensionToWebview[] = [];
   private chatTabStartupRestore: Promise<unknown> = Promise.resolve();
+  /**
+   * True once the current startup restore promise has settled. Gates the
+   * provisional tail hydration: once the full restore is done, the complete
+   * hydration path is authoritative and a provisional paint is stale noise.
+   */
+  private chatTabStartupRestoreSettled = true;
   private readonly projectCustomizationRegistry: ProjectCustomizationRegistry;
   private readonly projectMcpHubRegistry: ProjectMcpHubRegistry;
   private initialProjectScope: SessionProjectScope | undefined;
@@ -6600,6 +6538,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   setChatTabStartupRestore(restore: Promise<unknown>): void {
     this.chatTabStartupRestore = restore;
+    this.chatTabStartupRestoreSettled = false;
+    const markSettled = () => {
+      if (this.chatTabStartupRestore === restore) {
+        this.chatTabStartupRestoreSettled = true;
+      }
+    };
+    void restore.then(markSettled, markSettled);
   }
 
   setChatTabController(controller: ChatTabController): void {
@@ -6880,6 +6825,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.sendSessionList();
     this.flushPendingWebviewMessages();
     this.postMessage({ type: "agentRestoreSessionStart" });
+    try {
+      // Provisional fast paint: show the selected session's persisted tail
+      // before the full transcript parse finishes. The complete hydration
+      // below supersedes it (deterministic t<idx> ids keep the re-apply
+      // visually stable).
+      await this.postProvisionalRestoredTail();
+    } catch (error) {
+      this.log(
+        `[session-restore] Provisional tail hydration failed: ${String(error)}`,
+      );
+    }
 
     try {
       await this.chatTabStartupRestore;
@@ -6930,6 +6886,53 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } finally {
       this.postMessage({ type: "agentRestoreSessionDone" });
     }
+  }
+
+  /**
+   * Paint the selected tab's persisted transcript tail while the full startup
+   * restore is still parsing transcripts. Best-effort: bails whenever the
+   * session is already live, the restore has finished, or no valid tail
+   * snapshot exists — in all of those cases the normal hydration path serves
+   * the webview, just later.
+   */
+  private async postProvisionalRestoredTail(): Promise<void> {
+    if (this.chatTabStartupRestoreSettled) return;
+    const manager = this.sessionManager;
+    if (!manager || typeof manager.readPersistedSessionTail !== "function") {
+      return;
+    }
+    const snapshot = this.getChatWorkspaceViewSnapshot();
+    const candidateId = snapshot
+      ? selectedWorkspaceSessionId(snapshot)
+      : manager.getForegroundSession()?.id;
+    if (!candidateId || manager.getSession(candidateId)) return;
+    const tail = await manager.readPersistedSessionTail(candidateId);
+    if (!tail || tail.messages.length === 0) return;
+    // The restore may have raced ahead while the tail was read; its complete
+    // hydration is authoritative, so drop the provisional one.
+    if (this.chatTabStartupRestoreSettled || manager.getSession(candidateId)) {
+      return;
+    }
+    this.postMessage({
+      type: "agentSessionLoaded",
+      sessionId: candidateId,
+      transcriptRevision: tail.transcriptRevision,
+      title: tail.title,
+      originalPrompt: projectFirstUserPrompt(
+        tail.firstUserMessage ? [tail.firstUserMessage] : [],
+      ),
+      mode: tail.mode,
+      model: tail.model,
+      messages: tail.messages,
+      messageIndexOffset: tail.messageIndexOffset,
+      todos: tail.todos,
+      lastInputTokens: tail.lastInputTokens ?? 0,
+      lastOutputTokens: 0,
+      restored: true,
+      userTurnOffset: tail.userTurnOffset,
+      hasMoreBefore: tail.hasMoreBefore,
+      streaming: false,
+    });
   }
 
   private rejectChatTabAction(
@@ -12047,7 +12050,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // supersedes it, and only genuinely newer deltas follow.
     this.deltaBufferFlusher.flushNow();
     const all = session.getAllMessages();
-    const projectedAll = agentMessagesToChatMessages(all as unknown[]);
     const tail = getTailChunkByUserTurns(
       all,
       opts?.tailTurns ?? RESTORE_TAIL_TURNS,
@@ -12067,8 +12069,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       sessionId: session.id,
       transcriptRevision: session.transcriptRevision,
       title: session.title,
-      originalPrompt: projectedAll.find((message) => message.role === "user")
-        ?.content,
+      // Project only the first user turn — projecting the whole transcript
+      // here dominated restore hydration on multi-MB sessions.
+      originalPrompt: projectFirstUserPrompt(all),
       mode: session.mode,
       model: session.model,
       messages: tail.chunk,

@@ -1075,7 +1075,9 @@ function TextBlock({
         onOpenFile={onOpenFile}
         onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
       />
-      {showCopy && <CopyButton text={text} />}
+      {showCopy && extractStandaloneFencedCode(text) === null && (
+        <CopyButton text={text} />
+      )}
     </div>
   );
 }

@@ -11,6 +11,7 @@ import {
 
 import { App } from "./App.js";
 import type { ChatWorkspaceViewSnapshot } from "../chatTabProtocol.js";
+import { act } from "preact/test-utils";
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
@@ -184,6 +185,61 @@ describe("App chat workspace integration", () => {
         sessionId: "session-2",
       }),
     ]);
+  });
+
+  it("retains model setup while a reloaded tab handoff is batched", () => {
+    const vscodeApi = createVsCodeApi();
+    const { container } = render(<App vscodeApi={vscodeApi} />);
+    const initialSnapshot = createSnapshot("tab-1");
+    deliver({ type: "chatWorkspaceUpdate", snapshot: initialSnapshot });
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: "session-1",
+        mode: "code",
+        model: "claude-opus-5",
+        streaming: false,
+        reasoningEffort: "high",
+        thinkingEnabled: true,
+      },
+    });
+
+    const afterClose = createSnapshot("tab-2");
+    afterClose.tabs = [afterClose.tabs[1]!];
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            type: "agentModelsUpdate",
+            models: [
+              {
+                id: "claude-opus-5",
+                displayName: "Claude Opus",
+                provider: "anthropic",
+                authenticated: true,
+                reasoningEfforts: ["none", "low", "high"],
+              },
+            ],
+          },
+        }),
+      );
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: "chatWorkspaceUpdate", snapshot: afterClose },
+        }),
+      );
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            ...sessionLoaded("session-2", "transcript for B"),
+            origin: "focus",
+          },
+        }),
+      );
+    });
+
+    expect(screen.queryByText("Checking model setup")).toBeNull();
+    expect(container.querySelector(".chat-input")).not.toBeNull();
   });
 
   it("keeps composer selections made before the first message", async () => {
