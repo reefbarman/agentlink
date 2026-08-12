@@ -1,4 +1,5 @@
 import type { ComponentChildren } from "preact";
+import { forwardRef } from "preact/compat";
 
 interface ComposerBoxProps {
   children: ComponentChildren;
@@ -7,20 +8,20 @@ interface ComposerBoxProps {
   mainAlign?: "center" | "end";
 }
 
-export function ComposerBox({
-  children,
-  className,
-  accessory,
-  mainAlign = "center",
-}: ComposerBoxProps) {
-  return (
-    <div class={`composer-box${className ? ` ${className}` : ""}`}>
-      {accessory != null && (
-        <div class="composer-box-accessory">{accessory}</div>
-      )}
-      <div class={`composer-box-main composer-box-main-${mainAlign}`}>
-        {children}
+export const ComposerBox = forwardRef<HTMLDivElement, ComposerBoxProps>(
+  function ComposerBox(
+    { children, className, accessory, mainAlign = "center" },
+    ref,
+  ) {
+    return (
+      <div ref={ref} class={`composer-box${className ? ` ${className}` : ""}`}>
+        {accessory != null && (
+          <div class="composer-box-accessory">{accessory}</div>
+        )}
+        <div class={`composer-box-main composer-box-main-${mainAlign}`}>
+          {children}
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  },
+);

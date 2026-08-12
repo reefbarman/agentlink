@@ -820,6 +820,13 @@ export type AppAction =
        * subsequent deltas get dropped and the text visibly re-streams.
        */
       streaming?: boolean;
+      /**
+       * Whether the loaded session has an interrupted run to resume. Carried
+       * on the hydration so restore paints (including provisional tail
+       * hydrations) can surface the resume controls without waiting for a
+       * post-restore state update.
+       */
+      interrupted?: boolean;
     }
   | {
       type: "PREPEND_SESSION_CHUNK";
@@ -3483,7 +3490,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           mode: action.mode,
           model: action.model,
           streaming,
-          interrupted: false,
+          interrupted: !streaming && (action.interrupted ?? false),
         },
       };
     }

@@ -711,6 +711,8 @@ export type ExtensionToWebview =
       inFlight?: import("../shared/types.js").InFlightAssistantBlock[];
       /** Whether the session's turn is still running at snapshot time. */
       streaming?: boolean;
+      /** Whether the session has an interrupted run to resume (persisted runState). */
+      interrupted?: boolean;
       /**
        * "focus" marks a hydration triggered by tab/pane focus, where the
        * webview may serve the session from its own caches. All other loads
@@ -6932,6 +6934,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       userTurnOffset: tail.userTurnOffset,
       hasMoreBefore: tail.hasMoreBefore,
       streaming: false,
+      interrupted:
+        tail.runStatePhase !== undefined &&
+        tail.runStatePhase !== "awaiting_question",
     });
   }
 
@@ -9726,6 +9731,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           hasMoreBefore: extMsg.hasMoreBefore,
           inFlight: extMsg.inFlight,
           streaming: extMsg.streaming,
+          interrupted: extMsg.interrupted,
         });
         break;
       }
@@ -12087,6 +12093,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       hasMoreBefore: tail.hasMoreBefore,
       inFlight: inFlight.length > 0 ? inFlight : undefined,
       streaming,
+      // Same formula as the stateUpdate path, carried on the hydration so the
+      // resume controls can appear as soon as the transcript does.
+      interrupted:
+        Boolean(session.runState) &&
+        session.runState?.phase !== "awaiting_question" &&
+        !streaming,
       origin: opts?.origin,
     };
   }

@@ -555,6 +555,8 @@ export function InputArea({
     selectedIndex: slashSelectedIdx,
     popupRef: slashPopupRef,
     filteredCommands: filteredSlashCommands,
+    query: slashQuery,
+    setSelectedIndex: setSlashSelectedIdx,
     visible: shouldShowSlashPopup,
     close: closeSlash,
     openAt: openSlashAt,
@@ -909,6 +911,16 @@ export function InputArea({
           selectPreviousSlash(filteredSlashCommands.length);
           return;
         }
+        if (e.key === "Home" && filteredSlashCommands.length > 0) {
+          e.preventDefault();
+          setSlashSelectedIdx(0);
+          return;
+        }
+        if (e.key === "End" && filteredSlashCommands.length > 0) {
+          e.preventDefault();
+          setSlashSelectedIdx(filteredSlashCommands.length - 1);
+          return;
+        }
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
           const cmd = filteredSlashCommands[slashSelectedIdx];
@@ -998,6 +1010,7 @@ export function InputArea({
       backSlashView,
       selectNextSlash,
       selectPreviousSlash,
+      setSlashSelectedIdx,
       shouldShowSlashPopup,
       shouldShowEmojiPopup,
       emojiSuggestions,
@@ -1529,7 +1542,6 @@ export function InputArea({
     });
   }, [attachments, vscodeApi]);
 
-  // Compute picker anchor position relative to input wrapper
   const getPickerAnchor = useCallback(() => {
     const wrapper = inputWrapperRef.current;
     if (!wrapper) return { left: 0, bottom: 0 };
@@ -1781,27 +1793,7 @@ export function InputArea({
               vscodeApi={vscodeApi}
             />
           )}
-          {shouldShowSlashPopup && (
-            <SlashCommandPopup
-              ref={slashPopupRef}
-              commands={filteredSlashCommands}
-              selectedIndex={slashSelectedIdx}
-              anchor={getPickerAnchor()}
-              onSelect={handleSlashSelect}
-              onClose={closeSlash}
-              isSubView={slashView !== "main"}
-              subViewTitle={
-                slashView === "mode"
-                  ? "Switch Mode"
-                  : slashView === "model"
-                    ? "Switch Model"
-                    : slashView === "mcp-config"
-                      ? "Open MCP Config"
-                      : undefined
-              }
-              onBack={backSlashView}
-            />
-          )}
+
           {shouldShowEmojiPopup && (
             <EmojiPopup
               suggestions={emojiSuggestions}
@@ -1831,48 +1823,75 @@ export function InputArea({
             </div>
           )}
           <ComposerBox
-            className={`input-wrapper ${dragOver ? "drag-over" : ""} ${pickerOpen ? "picker-active" : ""} ${matchedExecutableSlashCommand ? "slash-match-active" : ""}`}
+            ref={inputWrapperRef}
+            className={`input-wrapper ${dragOver ? "drag-over" : ""} ${pickerOpen ? "picker-active" : ""} ${shouldShowSlashPopup ? "slash-popup-open" : ""} ${matchedExecutableSlashCommand ? "slash-match-active" : ""}`}
             mainAlign="center"
             accessory={
-              matchedExecutableSlashCommand && (
-                <div class="slash-match-pill-row">
-                  <div
-                    class="slash-match-pill"
-                    title={matchedExecutableSlashCommand.command.description}
-                  >
-                    <i
-                      class={`codicon codicon-${matchedExecutableSlashCommand.command.icon ?? (matchedExecutableSlashCommand.command.builtin ? "symbol-event" : matchedExecutableSlashCommand.command.source === "skill" ? "sparkle" : "file")}`}
-                    />
-                    <span class="slash-match-pill-name">
-                      /
-                      {matchedExecutableSlashCommand.command.displayName ??
-                        matchedExecutableSlashCommand.command.name}
-                    </span>
-                    <span class="slash-match-pill-desc">
-                      {matchedExecutableSlashCommand.command.description}
-                    </span>
+              <>
+                {shouldShowSlashPopup && (
+                  <SlashCommandPopup
+                    ref={slashPopupRef}
+                    commands={filteredSlashCommands}
+                    selectedIndex={slashSelectedIdx}
+                    query={slashQuery}
+                    anchor={{ left: 0, bottom: 0 }}
+                    attachedToInput
+                    onSelect={handleSlashSelect}
+                    onHover={setSlashSelectedIdx}
+                    onClose={closeSlash}
+                    isSubView={slashView !== "main"}
+                    subViewTitle={
+                      slashView === "mode"
+                        ? "Switch Mode"
+                        : slashView === "model"
+                          ? "Switch Model"
+                          : slashView === "mcp-config"
+                            ? "Open MCP Config"
+                            : undefined
+                    }
+                    onBack={backSlashView}
+                  />
+                )}
+                {matchedExecutableSlashCommand && (
+                  <div class="slash-match-pill-row">
+                    <div
+                      class="slash-match-pill"
+                      title={matchedExecutableSlashCommand.command.description}
+                    >
+                      <i
+                        class={`codicon codicon-${matchedExecutableSlashCommand.command.icon ?? (matchedExecutableSlashCommand.command.builtin ? "symbol-event" : matchedExecutableSlashCommand.command.source === "skill" ? "sparkle" : "file")}`}
+                      />
+                      <span class="slash-match-pill-name">
+                        /
+                        {matchedExecutableSlashCommand.command.displayName ??
+                          matchedExecutableSlashCommand.command.name}
+                      </span>
+                      <span class="slash-match-pill-desc">
+                        {matchedExecutableSlashCommand.command.description}
+                      </span>
+                    </div>
+                    <button
+                      class="slash-match-escape"
+                      type="button"
+                      title="Wrap in backticks to send this slash command as raw text"
+                      onClick={() => {
+                        const escaped = wrapSlashCommandInBackticks(text);
+                        setText(escaped);
+                        closeSlash();
+                        requestAnimationFrame(() => {
+                          if (textareaRef.current) {
+                            textareaRef.current.focus();
+                            textareaRef.current.selectionStart = escaped.length;
+                            textareaRef.current.selectionEnd = escaped.length;
+                          }
+                        });
+                      }}
+                    >
+                      <code>`raw`</code>
+                    </button>
                   </div>
-                  <button
-                    class="slash-match-escape"
-                    type="button"
-                    title="Wrap in backticks to send this slash command as raw text"
-                    onClick={() => {
-                      const escaped = wrapSlashCommandInBackticks(text);
-                      setText(escaped);
-                      closeSlash();
-                      requestAnimationFrame(() => {
-                        if (textareaRef.current) {
-                          textareaRef.current.focus();
-                          textareaRef.current.selectionStart = escaped.length;
-                          textareaRef.current.selectionEnd = escaped.length;
-                        }
-                      });
-                    }}
-                  >
-                    <code>`raw`</code>
-                  </button>
-                </div>
-              )
+                )}
+              </>
             }
           >
             <textarea
@@ -1881,6 +1900,17 @@ export function InputArea({
               aria-describedby={
                 contextMode?.actions
                   ? "question-context-composer-help"
+                  : undefined
+              }
+              role={shouldShowSlashPopup ? "combobox" : undefined}
+              aria-autocomplete={shouldShowSlashPopup ? "list" : undefined}
+              aria-expanded={shouldShowSlashPopup}
+              aria-controls={
+                shouldShowSlashPopup ? "slash-command-picker" : undefined
+              }
+              aria-activedescendant={
+                shouldShowSlashPopup && filteredSlashCommands.length > 0
+                  ? `slash-command-picker-option-${slashSelectedIdx}`
                   : undefined
               }
               placeholder={

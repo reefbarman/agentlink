@@ -524,6 +524,8 @@ export type ExtensionMessage =
       inFlight?: import("../../shared/types.js").InFlightAssistantBlock[];
       /** Whether the session's turn is still running at snapshot time. */
       streaming?: boolean;
+      /** Whether the session has an interrupted run to resume (persisted runState). */
+      interrupted?: boolean;
       /**
        * "focus" marks a hydration triggered by tab/pane focus, where the
        * webview may serve the session from its own caches. All other loads

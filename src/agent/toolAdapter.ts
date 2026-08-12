@@ -2327,17 +2327,21 @@ export function createAgentToolRuntime(
         ) {
           await ctx.prepareWorkspaceMutation?.();
         }
-        const operationRoots = mutationTarget
+        const preferredOperationRoot =
+          mutationTarget?.projectRoot ?? ctx.projectRoot;
+        const workspaceRoots =
+          ctx.workspaceProjectRoots ??
+          (ctx.projectRoot ? [ctx.projectRoot] : undefined);
+        const operationRoots = preferredOperationRoot
           ? [
-              mutationTarget.projectRoot,
-              ...(ctx.workspaceProjectRoots ?? []).filter(
+              preferredOperationRoot,
+              ...(workspaceRoots ?? []).filter(
                 (root) =>
                   canonicalizePath(root) !==
-                  canonicalizePath(mutationTarget.projectRoot),
+                  canonicalizePath(preferredOperationRoot),
               ),
             ]
-          : (ctx.workspaceProjectRoots ??
-            (ctx.projectRoot ? [ctx.projectRoot] : undefined));
+          : workspaceRoots;
         if (request.context.interactionPolicy === "deny") {
           const enforceReadPathPolicy = () =>
             enforceNonInteractiveReadPathPolicy(

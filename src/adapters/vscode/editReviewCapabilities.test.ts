@@ -371,6 +371,101 @@ describe("createVscodeEditReviewProvider", () => {
     }
   });
 
+  it("applies an auto-approved edit when a clean editor document is stale", async () => {
+    const tempDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
+    );
+    const filePath = path.join(tempDir, "file.ts");
+    fs.writeFileSync(filePath, "disk baseline", "utf-8");
+    let documentContent = "stale clean editor content";
+    let dirty = false;
+    const doc = {
+      getText: vi.fn(() => documentContent),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { fsPath: filePath },
+      get isDirty() {
+        return dirty;
+      },
+      save: vi.fn(async () => {
+        fs.writeFileSync(filePath, documentContent, "utf-8");
+        dirty = false;
+        return true;
+      }),
+    };
+    applyEdit.mockImplementationOnce(async () => {
+      documentContent = "proposed content";
+      dirty = true;
+      return true;
+    });
+    openTextDocument.mockResolvedValue(doc);
+
+    try {
+      const provider = createVscodeEditReviewProvider();
+      const result = await provider.reviewAndApply({
+        mode: "auto",
+        absolutePath: filePath,
+        relativePath: "file.ts",
+        content: "proposed content",
+        outsideWorkspace: false,
+        diagnosticDelay: 0,
+        sessionId: "session-1",
+        operation: "modified",
+      });
+
+      expect(result).toMatchObject({
+        status: "accepted",
+        path: "file.ts",
+        finalContent: "proposed content",
+      });
+      expect(applyEdit).toHaveBeenCalledOnce();
+      expect(doc.save).toHaveBeenCalledOnce();
+      expect(fs.readFileSync(filePath, "utf-8")).toBe("proposed content");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists proposed content when a clean stale editor already contains it", async () => {
+    const tempDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
+    );
+    const filePath = path.join(tempDir, "file.ts");
+    fs.writeFileSync(filePath, "disk baseline", "utf-8");
+    const doc = {
+      getText: vi.fn(() => "proposed content"),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { fsPath: filePath },
+      isDirty: false,
+      save: vi.fn(async () => true),
+    };
+    openTextDocument.mockResolvedValue(doc);
+
+    try {
+      const provider = createVscodeEditReviewProvider();
+      const result = await provider.reviewAndApply({
+        mode: "auto",
+        absolutePath: filePath,
+        relativePath: "file.ts",
+        content: "proposed content",
+        outsideWorkspace: false,
+        diagnosticDelay: 0,
+        sessionId: "session-1",
+        operation: "modified",
+      });
+
+      expect(result).toMatchObject({
+        status: "accepted",
+        path: "file.ts",
+        finalContent: "proposed content",
+      });
+      expect(applyEdit).not.toHaveBeenCalled();
+      expect(doc.save).not.toHaveBeenCalled();
+      expect(fs.readFileSync(filePath, "utf-8")).toBe("proposed content");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("preserves a dirty editor buffer instead of overwriting it during an auto-approved write", async () => {
     const tempDir = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),

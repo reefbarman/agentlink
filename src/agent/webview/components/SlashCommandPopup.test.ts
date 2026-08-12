@@ -41,8 +41,10 @@ describe("SlashCommandPopup", () => {
       h(SlashCommandPopup, {
         commands,
         selectedIndex: 0,
+        query: "",
         anchor: { bottom: 0, left: 0 },
         onSelect,
+        onHover: vi.fn(),
         onClose: vi.fn(),
       }),
     );
@@ -61,10 +63,42 @@ describe("SlashCommandPopup", () => {
       container.querySelectorAll(".slash-cmd-right"),
     ).map((label) => label.textContent);
     expect(rightLabels).toEqual(["Skill"]);
+    expect(container.querySelector('[role="listbox"]')).toBeTruthy();
+    expect(
+      container.querySelector('[role="option"][aria-selected="true"]'),
+    ).toBeTruthy();
 
     container
       .querySelectorAll<HTMLButtonElement>(".slash-cmd-option")[2]
       ?.click();
     expect(onSelect).toHaveBeenCalledWith(commands[0]);
+  });
+
+  it("keeps sub-picker labels human-readable", () => {
+    const { getByText, queryByText } = render(
+      h(SlashCommandPopup, {
+        commands: [
+          {
+            name: "__mode:code",
+            description: "Code",
+            source: "builtin",
+            builtin: true,
+            icon: "code",
+            isCurrent: true,
+          },
+        ],
+        selectedIndex: 0,
+        query: "",
+        anchor: { bottom: 0, left: 0 },
+        onSelect: vi.fn(),
+        onHover: vi.fn(),
+        onClose: vi.fn(),
+        isSubView: true,
+        subViewTitle: "Switch Mode",
+      }),
+    );
+
+    expect(getByText("Code")).toBeTruthy();
+    expect(queryByText("/__mode:code")).toBeNull();
   });
 });

@@ -103,6 +103,8 @@ interface SessionTailSnapshotFile {
   model: string;
   lastInputTokens?: number;
   todos: TodoItem[];
+  /** Persisted run phase, so a provisional restore can surface interrupted-run controls. */
+  runStatePhase?: PersistedSessionRunState["phase"];
   /** First visible user turn (for originalPrompt), usually outside the tail. */
   firstUserMessage?: AgentMessage;
   messages: AgentMessage[];
@@ -140,6 +142,7 @@ export interface SessionTailSnapshot {
   model: string;
   lastInputTokens?: number;
   todos: TodoItem[];
+  runStatePhase?: PersistedSessionRunState["phase"];
   firstUserMessage?: AgentMessage;
   messages: AgentMessage[];
 }
@@ -1200,6 +1203,7 @@ export class SessionStore implements SessionPersistenceProvider {
         model: metadata.model,
         lastInputTokens: metadata.lastInputTokens,
         todos: getLatestTodoState(record.messages),
+        runStatePhase: metadata.runState?.phase,
         firstUserMessage: findFirstUserMessage(externalizedMessages),
         messages: tail.chunk,
       };
@@ -1256,6 +1260,7 @@ export class SessionStore implements SessionPersistenceProvider {
         model: parsed.model,
         lastInputTokens: parsed.lastInputTokens,
         todos: parsed.todos,
+        runStatePhase: parsed.runStatePhase,
         firstUserMessage: parsed.firstUserMessage
           ? this.rehydrateMessages(sessionId, [parsed.firstUserMessage])[0]
           : undefined,

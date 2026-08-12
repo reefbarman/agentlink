@@ -26,6 +26,12 @@ const commands: SlashCommandInfo[] = [
     source: "builtin",
     builtin: true,
   },
+  {
+    name: "refresh",
+    description: "Refresh everything",
+    source: "builtin",
+    builtin: true,
+  },
 ];
 
 function Harness({ matchedName }: { matchedName?: string }) {
@@ -61,6 +67,9 @@ function Harness({ matchedName }: { matchedName?: string }) {
       </output>
       <button onClick={() => popup.openAt(4)}>open</button>
       <button onClick={() => popup.updateFromInput("say /mc", 7)}>query</button>
+      <button onClick={() => popup.updateFromInput("say /re", 7)}>
+        substring
+      </button>
       <button onClick={() => popup.updateFromInput("say /mcp args", 13)}>
         args
       </button>
@@ -109,7 +118,7 @@ describe("useSlashCommandPopup", () => {
       start: 4,
       selectedIndex: 0,
       visible: true,
-      commands: ["mode", "mcp", "mcp-refresh"],
+      commands: ["mode", "mcp", "mcp-refresh", "refresh"],
     });
 
     fireEvent.click(getByText("next"));
@@ -125,6 +134,15 @@ describe("useSlashCommandPopup", () => {
     });
     fireEvent.click(getByText("backtrack"));
     expect(state(container)).toMatchObject({ open: false, start: -1 });
+  });
+
+  it("ranks exact and prefix matches ahead of substring matches", () => {
+    const { container, getByText } = render(<Harness />);
+
+    fireEvent.click(getByText("open"));
+    fireEvent.click(getByText("substring"));
+
+    expect(state(container).commands).toEqual(["refresh", "mcp-refresh"]);
   });
 
   it("builds subviews, navigates back, and wraps selection", () => {

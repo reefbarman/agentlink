@@ -8,6 +8,7 @@ import {
 } from "preact/hooks";
 
 import type { RefObject } from "preact";
+import { orderSlashCommandsForPicker } from "./slashCommandOrdering";
 
 export type SlashCommandView = "main" | "mode" | "model" | "mcp-config";
 
@@ -26,6 +27,19 @@ export function withSlashCommandDisplayName(
 ): SlashCommandInfo {
   if (command.source !== "skill" || command.displayName) return command;
   return { ...command, displayName: command.name.replace(/^skill:/, "") };
+}
+
+function slashCommandMatchRank(
+  command: SlashCommandInfo,
+  query: string,
+): number {
+  const name = command.name.toLowerCase();
+  const displayName = (command.displayName ?? command.name).toLowerCase();
+
+  if (name === query || displayName === query) return 0;
+  if (name.startsWith(query) || displayName.startsWith(query)) return 1;
+  if (name.includes(query) || displayName.includes(query)) return 2;
+  return -1;
 }
 
 export function useSlashCommandPopup({
@@ -101,12 +115,14 @@ export function useSlashCommandPopup({
       currentModel;
     const normalizedQuery = query.toLowerCase();
     return displayCommands
-      .filter(
-        (command) =>
-          command.name.toLowerCase().startsWith(normalizedQuery) ||
-          command.displayName?.toLowerCase().startsWith(normalizedQuery),
-      )
-      .map((command) => {
+      .map((command, index) => ({
+        command,
+        index,
+        rank: slashCommandMatchRank(command, normalizedQuery),
+      }))
+      .filter(({ rank }) => rank >= 0)
+      .sort((left, right) => left.rank - right.rank || left.index - right.index)
+      .map(({ command }) => {
         if (command.name === "mode")
           return {
             ...command,
@@ -143,7 +159,12 @@ export function useSlashCommandPopup({
     displayCommands,
   ]);
 
-  const hasPrefixAlternatives = useMemo(() => {
+  const orderedCommands = useMemo(
+    () => orderSlashCommandsForPicker(filteredCommands),
+    [filteredCommands],
+  );
+
+  const hasSearchAlternatives = useMemo(() => {
     if (!matchedCommand || view !== "main") return false;
     const exactName = matchedCommand.name.toLowerCase();
     const exactDisplayName = (
@@ -155,16 +176,12 @@ export function useSlashCommandPopup({
       return (
         name !== exactName &&
         displayName !== exactDisplayName &&
-        (name.startsWith(exactDisplayName) ||
-          displayName.startsWith(exactDisplayName))
+        slashCommandMatchRank(command, exactDisplayName) >= 0
       );
     });
   }, [matchedCommand, view, displayCommands]);
 
-  const visible =
-    open &&
-    filteredCommands.length > 0 &&
-    (!matchedCommand || hasPrefixAlternatives);
+  const visible = open && (!matchedCommand || hasSearchAlternatives);
 
   const close = useCallback(() => {
     setOpen(false);
@@ -207,9 +224,11 @@ export function useSlashCommandPopup({
     setSelectedIndex(0);
   }, []);
   const selectNext = useCallback((count: number) => {
+    if (count === 0) return;
     setSelectedIndex((index) => (index + 1) % count);
   }, []);
   const selectPrevious = useCallback((count: number) => {
+    if (count === 0) return;
     setSelectedIndex((index) => (index <= 0 ? count - 1 : index - 1));
   }, []);
 
@@ -242,7 +261,9 @@ export function useSlashCommandPopup({
     selectedIndex,
     popupRef,
     displayCommands,
-    filteredCommands,
+    filteredCommands: orderedCommands,
+    query,
+    setSelectedIndex,
     visible,
     close,
     openAt,

@@ -1299,19 +1299,17 @@ describe("buildSystemPrompt", () => {
     });
     expect(result).toContain("Provider-Specific Behavior");
     expect(result).toContain("Visible progress and rationale");
-    expect(result).toContain("interactive, collaborative partner");
+    expect(result).toContain("Default to silence between messages");
     expect(result).toContain("do not rely on hidden thinking");
+    expect(result).toContain("Narrate at the start of each unit of work");
     expect(result).toContain(
-      "After at most 2-3 consecutive substantive tool calls",
-    );
-    expect(result).toContain(
-      "do not bundle investigation, implementation, and validation into one silent tool-only sequence",
+      "do not post an update after each tool call or small batch",
     );
     expect(result).toContain(
       "Keep routine capability plumbing internal, including deferred-tool discovery, query reformulation, retries, and fallback attempts",
     );
     expect(result).toContain(
-      "Routine capability-plumbing calls do not count toward this budget and should remain silent",
+      "Routine capability-plumbing calls never require narration",
     );
   });
 
@@ -1350,11 +1348,9 @@ describe("buildSystemPrompt", () => {
       "You are AgentLink, a software engineering agent operating in a VS Code workspace.",
     );
     expect(result).toContain("Bias for action:");
+    expect(result).toContain("the default between messages is silence");
     expect(result).toContain(
-      "Work visibly: your thinking is invisible to the user",
-    );
-    expect(result).toContain(
-      "never let more than a few minutes of work or roughly 5 substantive tool calls pass silently",
+      "do not report after each tool call or small batch",
     );
     expect(result).not.toContain("### Task Alignment");
   });

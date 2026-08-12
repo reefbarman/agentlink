@@ -324,24 +324,19 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
           const doc = await vscode.workspace.openTextDocument(
             params.absolutePath,
           );
-          const documentMatchesBaseline =
-            normalizeEditorText(doc.getText()) ===
-            normalizeEditorText(baselineContent);
-          if (doc.isDirty || !documentMatchesBaseline) {
+          if (doc.isDirty) {
             return {
-              error: doc.isDirty
-                ? "File has unsaved editor changes"
-                : "Editor content differs from disk",
+              error: "File has unsaved editor changes",
               path: params.relativePath,
               reason: "dirty_document_conflict",
-              document_dirty: doc.isDirty,
-              document_state: documentMatchesBaseline
-                ? "matches_baseline"
-                : "differs_from_baseline",
+              document_dirty: true,
+              document_state:
+                normalizeEditorText(doc.getText()) ===
+                normalizeEditorText(baselineContent)
+                  ? "matches_baseline"
+                  : "differs_from_baseline",
               next_steps: [
-                doc.isDirty
-                  ? "The editor has unsaved user changes. Save or reconcile them before retrying the file-edit tool call."
-                  : "The editor content differs from the disk baseline. Reload or reconcile the editor before retrying the file-edit tool call.",
+                "The editor has unsaved user changes. Save or reconcile them before retrying the file-edit tool call.",
               ],
             };
           }
@@ -376,6 +371,11 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                 })),
               };
             }
+          } else if (baselineContent !== content) {
+            // A clean VS Code document can briefly retain stale text after an
+            // external disk change. If it already equals the proposal, there
+            // is no editor change to save, so make the approved content durable.
+            await fs.writeFile(params.absolutePath, content, "utf-8");
           }
           if (doc.isDirty) {
             const saveAttemptContent = doc.getText();
@@ -446,25 +446,19 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
         const existingDocument = baseline.exists
           ? await vscode.workspace.openTextDocument(params.absolutePath)
           : undefined;
-        const documentMatchesBaseline =
-          !existingDocument ||
-          normalizeEditorText(existingDocument.getText()) ===
-            normalizeEditorText(baseline.content);
-        if (existingDocument?.isDirty || !documentMatchesBaseline) {
+        if (existingDocument?.isDirty) {
           return {
-            error: existingDocument?.isDirty
-              ? "File has unsaved editor changes"
-              : "Editor content differs from disk",
+            error: "File has unsaved editor changes",
             path: params.relativePath,
             reason: "dirty_document_conflict",
-            document_dirty: existingDocument?.isDirty ?? false,
-            document_state: documentMatchesBaseline
-              ? "matches_baseline"
-              : "differs_from_baseline",
+            document_dirty: true,
+            document_state:
+              normalizeEditorText(existingDocument.getText()) ===
+              normalizeEditorText(baseline.content)
+                ? "matches_baseline"
+                : "differs_from_baseline",
             next_steps: [
-              existingDocument?.isDirty
-                ? "The editor has unsaved user changes. Save or reconcile them before retrying the file-edit tool call."
-                : "The editor content differs from the disk baseline. Reload or reconcile the editor before retrying the file-edit tool call.",
+              "The editor has unsaved user changes. Save or reconcile them before retrying the file-edit tool call.",
             ],
           };
         }
@@ -492,13 +486,8 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
               baselineContent: baseline.content,
               proposedContent: content,
             };
-            const documentMatchesBaseline =
-              !existingDocument ||
-              (!existingDocument.isDirty &&
-                normalizeEditorText(existingDocument.getText()) ===
-                  normalizeEditorText(baseline.content));
             if (
-              documentMatchesBaseline &&
+              !existingDocument?.isDirty &&
               authorization.consume(currentProposal)
             ) {
               const snap = snapshotDiagnostics(params.absolutePath);
@@ -546,6 +535,8 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                     })),
                   };
                 }
+              } else if (baseline.content !== content) {
+                await fs.writeFile(params.absolutePath, content, "utf-8");
               }
               if (doc.isDirty) {
                 const saveAttemptContent = doc.getText();

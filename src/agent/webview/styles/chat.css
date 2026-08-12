@@ -5593,30 +5593,86 @@ body.chat-activity-shelf-resizing * {
 .slash-cmd-popup {
   position: absolute;
   z-index: 100;
-  width: calc(100% - 16px);
-  max-height: 220px;
-  overflow-y: auto;
+  width: calc(100% - 24px);
+  max-height: min(320px, calc(100vh - 160px));
+  overflow: hidden;
   background: var(--vscode-editorWidget-background);
   border: 1px solid
     var(--vscode-editorWidget-border, var(--vscode-panel-border));
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  padding: 4px 0;
+  border-radius: 8px 8px 0 0;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+}
+
+.slash-cmd-popup-attached {
+  bottom: 100% !important;
+  left: -1px !important;
+  width: calc(100% + 2px);
+  border-color: var(--vscode-input-border, var(--vscode-panel-border));
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.24);
+}
+
+.input-wrapper.slash-popup-open {
+  overflow: visible;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.slash-cmd-header,
+.slash-cmd-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+}
+
+.slash-cmd-header {
+  border-bottom: 1px solid
+    var(--vscode-editorWidget-border, var(--vscode-panel-border));
+}
+
+.slash-cmd-header-title {
+  color: var(--vscode-foreground);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.slash-cmd-header-meta {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slash-cmd-footer {
+  justify-content: flex-end;
+  border-top: 1px solid
+    var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  opacity: 0.78;
+  white-space: nowrap;
 }
 
 .slash-cmd-list {
   display: flex;
   flex-direction: column;
+  max-height: 244px;
+  overflow-y: auto;
+  padding: 3px 0;
 }
 
 .slash-cmd-option {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   width: 100%;
+  min-height: 34px;
   padding: 5px 10px;
   background: none;
   border: none;
+  border-left: 2px solid transparent;
   color: var(--vscode-foreground);
   cursor: pointer;
   font-family: inherit;
@@ -5628,11 +5684,18 @@ body.chat-activity-shelf-resizing * {
 
 .slash-cmd-option.selected {
   background: var(--vscode-list-activeSelectionBackground);
+  border-left-color: #4ec9b0;
   color: var(--vscode-list-activeSelectionForeground);
 }
 
 .slash-cmd-option:hover:not(.selected) {
   background: var(--vscode-list-hoverBackground);
+}
+
+.slash-cmd-option:focus-visible,
+.slash-cmd-back:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
 }
 
 .slash-cmd-icon {
@@ -5645,9 +5708,19 @@ body.chat-activity-shelf-resizing * {
   color: inherit;
 }
 
+.slash-cmd-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
 .slash-cmd-name {
-  font-weight: 500;
-  flex-shrink: 0;
+  font-family: var(--vscode-editor-font-family, inherit);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .slash-cmd-desc {
@@ -5655,7 +5728,6 @@ body.chat-activity-shelf-resizing * {
   font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-left: 2px;
 }
 
 .slash-cmd-option.selected .slash-cmd-desc {
@@ -5685,7 +5757,7 @@ body.chat-activity-shelf-resizing * {
 }
 
 .slash-cmd-section {
-  padding: 4px 10px 2px;
+  padding: 7px 10px 3px;
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
@@ -5715,6 +5787,22 @@ body.chat-activity-shelf-resizing * {
 .slash-cmd-back:hover {
   background: var(--vscode-list-hoverBackground);
   color: var(--vscode-foreground);
+}
+
+.slash-cmd-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  padding: 10px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+}
+
+.slash-cmd-empty strong {
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-editor-font-family, inherit);
+  font-weight: 600;
 }
 
 .file-picker {

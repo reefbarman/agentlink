@@ -2860,6 +2860,50 @@ describe("dispatchToolCall", () => {
     });
   });
 
+  it("keeps relative read and apply_diff paths pinned to the selected project", async () => {
+    const { handleReadFile } = await import("../tools/readFile.js");
+    const { handleApplyDiff } = await import("../tools/applyDiff.js");
+    const resolvedPaths: string[] = [];
+    vi.mocked(handleReadFile).mockImplementationOnce(async (params) => {
+      resolvedPaths.push(resolveAndValidatePath(params.path).absolutePath);
+      return { content: [{ type: "text", text: "read" }] };
+    });
+    vi.mocked(handleApplyDiff).mockImplementationOnce(async (params) => {
+      resolvedPaths.push(resolveAndValidatePath(params.path).absolutePath);
+      return { content: [{ type: "text", text: "patched" }] };
+    });
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      projectRoot: "/workspace/project-b",
+      workspaceProjectRoots: ["/workspace/project-a", "/workspace/project-b"],
+    });
+
+    await runtime.executeTool({
+      name: "read_file",
+      input: { path: "src/index.ts" },
+      context: { sessionId: "session-b", mode: "code" },
+    });
+    await runtime.executeTool({
+      name: "apply_diff",
+      input: {
+        path: "src/index.ts",
+        diff: [
+          `${"<".repeat(7)} SEARCH`,
+          "old",
+          `${"=".repeat(7)} DIVIDER ${"=".repeat(7)}`,
+          "new",
+          `${">".repeat(7)} REPLACE`,
+        ].join("\n"),
+      },
+      context: { sessionId: "session-b", mode: "code" },
+    });
+
+    expect(resolvedPaths).toEqual([
+      "/workspace/project-b/src/index.ts",
+      "/workspace/project-b/src/index.ts",
+    ]);
+  });
+
   it("dispatches sibling-root mutations with workspace-wide checkpoint preparation", async () => {
     const { handleWriteFile } = await import("../tools/writeFile.js");
     const { handleGenerateImage } = await import("../tools/generateImage.js");

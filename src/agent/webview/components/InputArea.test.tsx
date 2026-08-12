@@ -220,6 +220,96 @@ describe("InputArea slash popup", () => {
     expect(container.querySelectorAll(".slash-cmd-option").length).toBe(3);
   });
 
+  it("attaches the picker directly above the input wrapper", () => {
+    const { container } = renderInputArea([
+      {
+        name: "help",
+        description: "Show help",
+        source: "builtin",
+        builtin: true,
+      },
+    ]);
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    input.value = "/";
+    input.selectionStart = 1;
+    input.selectionEnd = 1;
+    fireEvent.input(input);
+
+    const inputWrapper = container.querySelector(".input-wrapper");
+    const popup = container.querySelector(".slash-cmd-popup");
+    expect(inputWrapper?.contains(popup)).toBe(true);
+    expect(popup?.classList.contains("slash-cmd-popup-attached")).toBe(true);
+  });
+
+  it("selects the visibly highlighted command when navigating mixed sources", () => {
+    const onExecuteBuiltinCommand = vi.fn();
+    const onSend = vi.fn();
+    const { container } = renderInputArea(
+      [
+        {
+          name: "help",
+          description: "Show help",
+          source: "builtin",
+          builtin: true,
+        },
+        {
+          name: "review",
+          description: "Review changes",
+          source: "project",
+          builtin: false,
+          body: "Review the current changes",
+        },
+      ],
+      { onExecuteBuiltinCommand, onSend },
+    );
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    input.value = "/";
+    input.selectionStart = 1;
+    input.selectionEnd = 1;
+    fireEvent.input(input);
+
+    const options =
+      container.querySelectorAll<HTMLButtonElement>(".slash-cmd-option");
+    expect(options[0]?.textContent).toContain("/review");
+    expect(options[1]?.textContent).toContain("/help");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(options[1]?.classList.contains("selected")).toBe(true);
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onExecuteBuiltinCommand).toHaveBeenCalledWith("help", "");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("shows an empty state instead of silently closing for an unmatched query", () => {
+    const { container } = renderInputArea([
+      {
+        name: "help",
+        description: "Show help",
+        source: "builtin",
+        builtin: true,
+      },
+    ]);
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    input.value = "/";
+    input.selectionStart = 1;
+    input.selectionEnd = 1;
+    fireEvent.input(input);
+
+    input.value = "/missing";
+    input.selectionStart = input.value.length;
+    input.selectionEnd = input.value.length;
+    fireEvent.input(input);
+
+    expect(container.querySelector(".slash-cmd-popup")).toBeTruthy();
+    expect(container.querySelector(".slash-cmd-empty")?.textContent).toContain(
+      "/missing",
+    );
+  });
+
   it("executes context-doctor immediately without sending prompt text", () => {
     const onExecuteBuiltinCommand = vi.fn();
     const onSend = vi.fn();
