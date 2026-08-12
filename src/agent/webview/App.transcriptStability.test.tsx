@@ -93,6 +93,7 @@ function sessionLoaded(
     restored?: boolean;
     streaming?: boolean;
     inFlight?: Array<Record<string, unknown>>;
+    interrupted?: boolean;
   } = {},
 ) {
   const messages: Array<Record<string, unknown>> = [
@@ -120,6 +121,7 @@ function sessionLoaded(
     restored: opts.restored,
     streaming: opts.streaming,
     inFlight: opts.inFlight,
+    interrupted: opts.interrupted,
   };
 }
 
@@ -437,6 +439,44 @@ describe("transcript stability across hydrations", () => {
         container.querySelector(".interrupted-session-banner"),
       ).toBeTruthy();
     });
+  });
+
+  it("shows interrupted controls as soon as a hydration carrying interrupted state lands, before restore completes", async () => {
+    const vscodeApi = createVsCodeApi();
+    const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver({ type: "agentRestoreSessionStart" });
+
+    // A provisional tail hydration carries the persisted interrupted flag.
+    deliver(
+      sessionLoaded("session-1", {
+        restored: true,
+        transcriptRevision: 2,
+        userText: "ProvisionalTailPaint",
+        interrupted: true,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(transcriptOccurrences(container, "ProvisionalTailPaint")).toBe(1);
+      expect(
+        container.querySelector(".interrupted-session-banner"),
+      ).toBeTruthy();
+    });
+
+    // Restore is still pending — resume must be clickable already.
+    const resume = container.querySelector<HTMLButtonElement>(
+      ".interrupted-session-resume",
+    );
+    expect(resume).toBeTruthy();
+    fireEvent.click(resume!);
+    expect(vscodeApi.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "agentResumeSession",
+        sessionId: "session-1",
+      }),
+    );
+    deliver({ type: "agentRestoreSessionDone" });
   });
 
   it("re-arms restored hydration acceptance for a reconnected webview", async () => {

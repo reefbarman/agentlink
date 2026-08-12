@@ -1652,6 +1652,33 @@ describe("transcript stability invariants", () => {
     expect(second.map((m) => m.id)).toEqual(first.map((m) => m.id));
   });
 
+  it("carries hydration-sourced interrupted state on LOAD_SESSION and resets it by default", () => {
+    const message = {
+      id: "t0",
+      role: "user" as const,
+      content: "prompt",
+      timestamp: 1,
+      blocks: [],
+    };
+    const interrupted = reducer(initialState, {
+      ...baseLoad,
+      messages: [message],
+      interrupted: true,
+    });
+    expect(interrupted.chatState.interrupted).toBe(true);
+
+    // A later hydration without the flag (or a streaming one) clears it.
+    const cleared = reducer(interrupted, { ...baseLoad, messages: [message] });
+    expect(cleared.chatState.interrupted).toBe(false);
+    const streaming = reducer(interrupted, {
+      ...baseLoad,
+      messages: [message],
+      interrupted: true,
+      streaming: true,
+    });
+    expect(streaming.chatState.interrupted).toBe(false);
+  });
+
   it("renders the in-flight live tail on LOAD_SESSION and preserves streaming", () => {
     const loaded = reducer(initialState, {
       ...baseLoad,

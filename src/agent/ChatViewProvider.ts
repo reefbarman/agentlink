@@ -7717,12 +7717,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentResumeSession": {
         const sessionId = msg.sessionId as string;
         if (sessionId) {
-          void this.sessionManager
-            ?.resumeInterruptedSession(sessionId)
-            .catch((err) => {
-              this.log(`[error] resume failed: ${err}`);
-              this.sendInitialState();
-            });
+          void (async () => {
+            // The resume banner can appear from a provisional tail hydration
+            // while the startup restore is still parsing transcripts. Wait
+            // for the session to be live before resuming through it.
+            if (!this.sessionManager?.getSession(sessionId)) {
+              try {
+                await this.chatTabStartupRestore;
+              } catch {
+                // Restore failures are logged by the startup path.
+              }
+              if (!this.sessionManager?.getSession(sessionId)) {
+                await this.sessionManager?.hydratePersistedSession?.(sessionId);
+              }
+            }
+            const resumed =
+              await this.sessionManager?.resumeInterruptedSession(sessionId);
+            if (!resumed) this.sendInitialState();
+          })().catch((err) => {
+            this.log(`[error] resume failed: ${err}`);
+            this.sendInitialState();
+          });
         }
         break;
       }

@@ -9464,6 +9464,7 @@ describe("provisional restore tail hydration", () => {
       model: "claude-sonnet-4-6",
       lastInputTokens: 111,
       todos: [],
+      runStatePhase: "running",
       firstUserMessage: fullMessages[0],
       messages: fullMessages.slice(2),
     };
@@ -9549,6 +9550,9 @@ describe("provisional restore tail hydration", () => {
       transcriptRevision: 5,
       lastInputTokens: 111,
       streaming: false,
+      // The persisted run state marks an interrupted run, so the resume
+      // controls can appear with the provisional paint.
+      interrupted: true,
     });
     expect(readPersistedSessionTail).toHaveBeenCalledWith("restored-1");
     expect(
@@ -9576,6 +9580,9 @@ describe("provisional restore tail hydration", () => {
       messages: fullMessages,
       messageIndexOffset: 0,
       hasMoreBefore: false,
+      // The live session has no runState, so the complete hydration clears
+      // the provisional interrupted flag.
+      interrupted: false,
     });
     expect(
       posted.findIndex((message) => message.type === "agentRestoreSessionDone"),
@@ -9626,6 +9633,58 @@ describe("provisional restore tail hydration", () => {
     expect(
       posted.some((message) => message.type === "agentSessionLoaded"),
     ).toBe(false);
+    provider.dispose();
+  });
+
+  it("defers a resume request until the startup restore has made the session live", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    let liveSession: { id: string } | null = null;
+    const resumeInterruptedSession = vi.fn(async () => true);
+    const hydratePersistedSession = vi.fn(async () => {
+      liveSession = { id: "restored-1" };
+      return liveSession;
+    });
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => liveSession),
+      getSession: vi.fn((id: string) =>
+        id === "restored-1" ? (liveSession ?? undefined) : undefined,
+      ),
+      resumeInterruptedSession,
+      hydratePersistedSession,
+    } as never);
+
+    let resolveRestore!: () => void;
+    provider.setChatTabStartupRestore(
+      new Promise<void>((resolve) => {
+        resolveRestore = resolve;
+      }),
+    );
+
+    const handleWebviewMessage = (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage.bind(provider);
+    await handleWebviewMessage({
+      command: "agentResumeSession",
+      sessionId: "restored-1",
+    });
+
+    // The resume click arrived while the restore was still running: it must
+    // wait for the session instead of silently failing on a not-yet-live id.
+    expect(resumeInterruptedSession).not.toHaveBeenCalled();
+
+    resolveRestore();
+    await vi.waitFor(() => {
+      expect(resumeInterruptedSession).toHaveBeenCalledWith("restored-1");
+    });
+    // The restore had not made the session live, so the handler hydrated it
+    // on demand before resuming.
+    expect(hydratePersistedSession).toHaveBeenCalledWith("restored-1");
     provider.dispose();
   });
 });

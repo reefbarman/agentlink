@@ -1978,7 +1978,10 @@ describe("SessionStore tail snapshots", () => {
       }),
       messages,
       transcriptRevision: 7,
-      metadata: { lastInputTokens: 4321 },
+      metadata: {
+        lastInputTokens: 4321,
+        runState: { phase: "running", startedAt: 5 },
+      },
     });
 
     const saved = await store.saveSession({
@@ -2013,6 +2016,7 @@ describe("SessionStore tail snapshots", () => {
     expect(snapshot!.model).toBe(record.metadata.model);
     expect(snapshot!.lastInputTokens).toBe(4321);
     expect(snapshot!.todos).toEqual([]);
+    expect(snapshot!.runStatePhase).toBe("running");
   });
 
   it("captures the latest todo state even when it predates the tail window", async () => {

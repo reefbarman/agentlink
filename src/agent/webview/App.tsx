@@ -895,24 +895,34 @@ export function App({
             pinnedTabId,
           );
           if (snapshot && msg.state.sessionId !== selectedSessionId) break;
-          streamingRef.current = Boolean(msg.state.streaming);
-          if (msg.state.sessionId) {
+          // Interrupted-run controls stay hidden until the session's
+          // transcript hydration has landed: the banner would float above an
+          // empty transcript and resume needs the hydrated session anyway.
+          const incomingState =
+            msg.state.interrupted &&
+            startupRestorePendingRef.current &&
+            (!msg.state.sessionId ||
+              !hydratedSessionsRef.current.has(msg.state.sessionId))
+              ? { ...msg.state, interrupted: false }
+              : msg.state;
+          streamingRef.current = Boolean(incomingState.streaming);
+          if (incomingState.sessionId) {
             pendingSessionSelectionsRef.current = { tabId: null };
-            dispatch({ type: "SET_STATE", state: msg.state });
+            dispatch({ type: "SET_STATE", state: incomingState });
             break;
           }
           const tabId = pinnedTabId ?? snapshot?.focusedTabId ?? null;
           const pending = pendingSessionSelectionsRef.current;
           if (pending.tabId !== tabId) {
             pendingSessionSelectionsRef.current = { tabId };
-            dispatch({ type: "SET_STATE", state: msg.state });
+            dispatch({ type: "SET_STATE", state: incomingState });
             break;
           }
           const { tabId: _tabId, reasoningEffort, ...selections } = pending;
           dispatch({
             type: "SET_STATE",
             state: {
-              ...msg.state,
+              ...incomingState,
               ...selections,
               ...(reasoningEffort
                 ? {
@@ -1598,6 +1608,7 @@ export function App({
             hasMoreBefore: msg.hasMoreBefore,
             inFlight: msg.inFlight,
             streaming: msg.streaming,
+            interrupted: msg.interrupted,
           });
           streamingRef.current = Boolean(msg.streaming);
           // Keep the synchronous mirrors coherent before the render commits,
@@ -4232,29 +4243,27 @@ export function App({
                   }}
                 />
               )}
-              {state.chatState.interrupted &&
-                !state.streaming &&
-                !state.restoringSession && (
-                  <div class="interrupted-session-banner">
-                    <i class="codicon codicon-debug-restart" />
-                    <div>
-                      <strong>Session interrupted</strong>
-                      <span>
-                        The previous agent turn stopped before it finished.
-                        Resume to let the agent inspect current state and
-                        continue safely.
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      class="interrupted-session-resume"
-                      onClick={handleResumeInterruptedSession}
-                      title="Resume interrupted session"
-                    >
-                      Resume
-                    </button>
+              {state.chatState.interrupted && !state.streaming && (
+                <div class="interrupted-session-banner">
+                  <i class="codicon codicon-debug-restart" />
+                  <div>
+                    <strong>Session interrupted</strong>
+                    <span>
+                      The previous agent turn stopped before it finished. Resume
+                      to let the agent inspect current state and continue
+                      safely.
+                    </span>
                   </div>
-                )}
+                  <button
+                    type="button"
+                    class="interrupted-session-resume"
+                    onClick={handleResumeInterruptedSession}
+                    title="Resume interrupted session"
+                  >
+                    Resume
+                  </button>
+                </div>
+              )}
               {state.streaming && !state.questionRequest && (
                 <StreamingStatusBar
                   messages={state.messages}
