@@ -1440,65 +1440,124 @@ export async function activate(
       getConfiguredThresholdWithCapabilities(resolvedStartupModel),
   };
 
-  const publishBrowserGatewayModelCatalog = async (): Promise<void> => {
-    const discovery = browserGatewayHelperDiscovery;
-    const client = browserGatewayHelperModelAuthLeaseClient;
-    if (!discovery?.helperGenerationId || !client) return;
-    try {
-      const models = (await chatViewProvider.getBrowserModels()).map(
-        (model): CoreModelCatalogEntry => ({
-          id: model.id,
-          displayName: model.displayName,
-          providerId: model.provider,
-          contextWindow: model.contextWindow,
-          maxInputTokens: model.maxInputTokens,
-          maxOutputTokens: model.maxOutputTokens,
-          reasoningEfforts: model.reasoningEfforts,
-          defaultReasoningEffort: model.defaultReasoningEffort,
-          providerDisplayName: model.providerDisplayName,
-          supportsToolUse: model.supportsToolUse,
-          supportsImages: model.supportsImages,
-          authenticated: model.authenticated,
-          condenseThreshold: model.condenseThreshold,
-        }),
-      );
-      const activeScope =
-        agentSessionManager.getForegroundSession()?.projectScope ??
-        agentSessionManager.getDefaultProjectScope();
-      const profileConfiguration = vscode.workspace.getConfiguration(
-        "agentlink",
-        activeScope
-          ? vscode.Uri.parse(activeScope.workspaceFolderUri)
-          : undefined,
-      );
-      const promptProfileOverrides = normalizePromptProfileOverrides(
-        profileConfiguration.get<unknown>("modelPromptProfiles"),
-      );
-      const promptProfileResolutions = Object.fromEntries(
-        models.map((model) => [
-          model.id,
-          resolvePromptProfile({
-            providerId: normalizeBrowserGatewayModelCredentialProviderId(
-              model.providerId,
-            ),
-            modelId: model.id,
-            overrides: promptProfileOverrides,
+  let browserGatewayModelCatalogPublishedGenerationId: string | undefined;
+  let browserGatewayModelCatalogPublicationTail = Promise.resolve();
+  const performBrowserGatewayModelCatalogPublication =
+    async (): Promise<boolean> => {
+      const discovery = browserGatewayHelperDiscovery;
+      const client = browserGatewayHelperModelAuthLeaseClient;
+      if (!discovery?.helperGenerationId || !client) return false;
+      try {
+        const models = (await chatViewProvider.getBrowserModels()).map(
+          (model): CoreModelCatalogEntry => ({
+            id: model.id,
+            displayName: model.displayName,
+            providerId: model.provider,
+            contextWindow: model.contextWindow,
+            maxInputTokens: model.maxInputTokens,
+            maxOutputTokens: model.maxOutputTokens,
+            reasoningEfforts: model.reasoningEfforts,
+            defaultReasoningEffort: model.defaultReasoningEffort,
+            providerDisplayName: model.providerDisplayName,
+            supportsToolUse: model.supportsToolUse,
+            supportsImages: model.supportsImages,
+            authenticated: model.authenticated,
+            condenseThreshold: model.condenseThreshold,
           }),
-        ]),
-      );
-      const result = await client.publishModelCatalog({
-        helperGenerationId: discovery.helperGenerationId,
-        models,
-        openAiCompatibleRuntimeProfiles:
-          openAiCompatibleProviderManager.getRuntimeProfiles(),
-        promptProfileResolutions,
-      });
-      log(
-        `[browser-gateway-helper] published model catalog to helper modelCount=${result.modelCount}`,
-      );
-    } catch (err) {
-      log(`[browser-gateway-helper] model catalog publish failed: ${err}`);
-    }
+        );
+        const activeScope =
+          agentSessionManager.getForegroundSession()?.projectScope ??
+          agentSessionManager.getDefaultProjectScope();
+        const profileConfiguration = vscode.workspace.getConfiguration(
+          "agentlink",
+          activeScope
+            ? vscode.Uri.parse(activeScope.workspaceFolderUri)
+            : undefined,
+        );
+        const promptProfileOverrides = normalizePromptProfileOverrides(
+          profileConfiguration.get<unknown>("modelPromptProfiles"),
+        );
+        const promptProfileResolutions = Object.fromEntries(
+          models.map((model) => [
+            model.id,
+            resolvePromptProfile({
+              providerId: normalizeBrowserGatewayModelCredentialProviderId(
+                model.providerId,
+              ),
+              modelId: model.id,
+              overrides: promptProfileOverrides,
+            }),
+          ]),
+        );
+        const advertisedModelIdsByProvider = new Map<string, Set<string>>();
+        for (const model of models) {
+          const modelIds = advertisedModelIdsByProvider.get(model.providerId);
+          if (modelIds) modelIds.add(model.id);
+          else
+            advertisedModelIdsByProvider.set(
+              model.providerId,
+              new Set([model.id]),
+            );
+        }
+        const openAiCompatibleRuntimeProfiles = Object.fromEntries(
+          Object.entries(
+            openAiCompatibleProviderManager.getRuntimeProfiles(),
+          ).flatMap(([providerId, profile]) => {
+            const advertisedModelIds =
+              advertisedModelIdsByProvider.get(providerId);
+            if (!advertisedModelIds) return [];
+            return [
+              [
+                providerId,
+                {
+                  ...profile,
+                  models: Object.fromEntries(
+                    Object.entries(profile.models).filter(([modelId]) =>
+                      advertisedModelIds.has(modelId),
+                    ),
+                  ),
+                },
+              ],
+            ];
+          }),
+        );
+        const result = await client.publishModelCatalog({
+          helperGenerationId: discovery.helperGenerationId,
+          models,
+          openAiCompatibleRuntimeProfiles,
+          promptProfileResolutions,
+        });
+        const publishedToCurrentGeneration =
+          browserGatewayHelperDiscovery?.helperGenerationId ===
+          discovery.helperGenerationId;
+        if (publishedToCurrentGeneration) {
+          browserGatewayModelCatalogPublishedGenerationId =
+            discovery.helperGenerationId;
+        }
+        log(
+          `[browser-gateway-helper] published model catalog to helper modelCount=${result.modelCount}`,
+        );
+        return publishedToCurrentGeneration;
+      } catch (err) {
+        if (
+          browserGatewayHelperDiscovery?.helperGenerationId ===
+          discovery.helperGenerationId
+        ) {
+          browserGatewayModelCatalogPublishedGenerationId = undefined;
+        }
+        log(`[browser-gateway-helper] model catalog publish failed: ${err}`);
+        return false;
+      }
+    };
+  const publishBrowserGatewayModelCatalog = (): Promise<boolean> => {
+    const publication = browserGatewayModelCatalogPublicationTail.then(() =>
+      performBrowserGatewayModelCatalogPublication(),
+    );
+    browserGatewayModelCatalogPublicationTail = publication.then(
+      () => undefined,
+      () => undefined,
+    );
+    return publication;
   };
 
   const getPublishableBrowserGatewayModelCredentialProviderIds =
@@ -2332,6 +2391,9 @@ export async function activate(
             helperUrl: result.discovery.url,
             clientSharedSecret: result.discovery.clientSharedSecret,
             grantedByOwnerId: helperCoreOwner.ownerId,
+            getGrantedByOwnerId: () =>
+              browserGatewayHelperLeaseClient?.getEffectiveOwnerId() ??
+              helperCoreOwner.ownerId,
             grantedByOwnerGenerationId: helperCoreOwner.ownerGenerationId,
             resolveModelAuth: async (request) => {
               // Legacy lease callers omitted providerId when Codex was the only
@@ -2389,8 +2451,10 @@ export async function activate(
       chatViewProvider.setBrowserGatewayModelAuthProvider(
         browserGatewayHelperModelAuthLeaseClient,
       );
-      void publishBrowserGatewayModelCatalog();
-      void grantBrowserGatewayModelCredentials();
+      if (!(await publishBrowserGatewayModelCatalog())) {
+        throw new Error("browser_gateway_model_catalog_publish_failed");
+      }
+      await grantBrowserGatewayModelCredentials();
 
       return result.discovery.url;
     })()
@@ -2438,6 +2502,13 @@ export async function activate(
       await ensureBrowserGatewayBridgeReady();
       if (!(await isCurrentBrowserGatewayHelperHealthy())) {
         await ensureBrowserGatewayHelperReady();
+      }
+      if (
+        browserGatewayModelCatalogPublishedGenerationId !==
+          browserGatewayHelperDiscovery?.helperGenerationId &&
+        !(await publishBrowserGatewayModelCatalog())
+      ) {
+        throw new Error("browser_gateway_model_catalog_publish_failed");
       }
       await grantBrowserGatewayModelCredentials();
       await ensureBrowserGatewayOwnerRuntime();
@@ -3043,7 +3114,9 @@ export async function activate(
       secrets: context.secrets,
       setAnthropicApiKey: setStoredAnthropicApiKey,
       refreshModels: () => chatViewProvider.refreshModels(),
-      publishBrowserModelCatalog: publishBrowserGatewayModelCatalog,
+      publishBrowserModelCatalog: async () => {
+        await publishBrowserGatewayModelCatalog();
+      },
       grantBrowserModelCredentials: grantBrowserGatewayModelCredentials,
     }),
     ...registerCodexAuthCommands({

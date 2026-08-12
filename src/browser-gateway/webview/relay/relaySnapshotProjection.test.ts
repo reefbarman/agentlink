@@ -29,6 +29,12 @@ function message(
     content: { kind: "inline", text: `message-${revision}` },
     blocks: [
       {
+        type: "thinking",
+        blockId: `${messageId}-thinking`,
+        text: { kind: "inline", text: "" },
+        complete: true,
+      },
+      {
         type: "text",
         blockId: `${messageId}-text`,
         text: { kind: "inline", text: `text-${revision}` },
@@ -232,6 +238,16 @@ describe("RelaySnapshotProjector", () => {
       commandApprovalPolicy: "approve-for-me",
       configuredCommandApprovalPolicy: "sensitive",
     });
+    expect(snapshot.session.foreground?.projectedMessages[0]?.blocks).toEqual(
+      expect.arrayContaining([
+        {
+          type: "thinking",
+          id: "message-1-thinking",
+          text: "",
+          complete: true,
+        },
+      ]),
+    );
     expect(snapshot.ui).toMatchObject({
       approval: null,
       question: null,
@@ -630,6 +646,12 @@ describe("RelaySnapshotProjector", () => {
       .foreground!.projectedMessages[0]!;
 
     expect(projected.blocks).toEqual([
+      {
+        type: "thinking",
+        id: "message-1-thinking",
+        text: "",
+        complete: true,
+      },
       { type: "text", text: "text-1" },
       {
         type: "tool_call",

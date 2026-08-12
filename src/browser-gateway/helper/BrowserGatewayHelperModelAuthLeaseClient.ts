@@ -31,6 +31,7 @@ export interface BrowserGatewayHelperModelAuthLeaseClientOptions {
   helperUrl: string;
   clientSharedSecret: string;
   grantedByOwnerId: string;
+  getGrantedByOwnerId?: () => string;
   grantedByOwnerGenerationId: string;
   resolveModelAuth: (request?: {
     providerId?: string;
@@ -61,6 +62,12 @@ export class BrowserGatewayHelperModelAuthLeaseClient implements CoreModelAuthPr
     this.options.clientSharedSecret = secret;
   }
 
+  private getGrantedByOwnerId(): string {
+    return (
+      this.options.getGrantedByOwnerId?.() ?? this.options.grantedByOwnerId
+    );
+  }
+
   async requestLease(request: {
     ownerId: string;
     ownerGenerationId: string;
@@ -73,7 +80,7 @@ export class BrowserGatewayHelperModelAuthLeaseClient implements CoreModelAuthPr
     const body: BrowserGatewayModelAuthLeaseRequest = {
       providerId: auth.providerId,
       method: auth.method,
-      grantedByOwnerId: this.options.grantedByOwnerId,
+      grantedByOwnerId: this.getGrantedByOwnerId(),
       grantedToOwnerId: request.ownerId,
       grantedToOwnerGenerationId: request.ownerGenerationId,
       modelScopes: request.modelScopes,
@@ -101,7 +108,7 @@ export class BrowserGatewayHelperModelAuthLeaseClient implements CoreModelAuthPr
       providerId: auth.providerId,
       method: auth.method,
       bearerToken: auth.bearerToken,
-      grantedByOwnerId: this.options.grantedByOwnerId,
+      grantedByOwnerId: this.getGrantedByOwnerId(),
       grantedByOwnerGenerationId: this.options.grantedByOwnerGenerationId,
       modelScopes: request.modelScopes,
       helperGenerationId: request.helperGenerationId,
@@ -125,7 +132,7 @@ export class BrowserGatewayHelperModelAuthLeaseClient implements CoreModelAuthPr
     promptProfileResolutions?: BrowserGatewayPromptProfileResolutions;
   }): Promise<BrowserGatewayModelCatalogPublishResponse> {
     const body: BrowserGatewayModelCatalogPublishRequest = {
-      publishedByOwnerId: this.options.grantedByOwnerId,
+      publishedByOwnerId: this.getGrantedByOwnerId(),
       publishedByOwnerGenerationId: this.options.grantedByOwnerGenerationId,
       helperGenerationId: request.helperGenerationId,
       models: request.models,
@@ -140,7 +147,7 @@ export class BrowserGatewayHelperModelAuthLeaseClient implements CoreModelAuthPr
 
   async clearCredential(providerId?: string): Promise<boolean> {
     const body: BrowserGatewayModelCredentialClearRequest = {
-      grantedByOwnerId: this.options.grantedByOwnerId,
+      grantedByOwnerId: this.getGrantedByOwnerId(),
       grantedByOwnerGenerationId: this.options.grantedByOwnerGenerationId,
       ...(providerId ? { providerId } : {}),
     };

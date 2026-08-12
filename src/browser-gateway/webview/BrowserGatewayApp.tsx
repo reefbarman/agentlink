@@ -1429,17 +1429,53 @@ export function BrowserGatewayApp({
       sourceEventPaint?: RelaySourceEventPaintMarker,
     ): boolean => {
       const cached = snapshotCacheRef.current.get(tabId);
+      const selectedLogicalTab = selectedLogicalTabRef.current;
+      const incomingWorkspace = next.session.chatWorkspace;
+      const cachedWorkspace = cached?.snapshot.session.chatWorkspace;
+      const retainedSelectedTab =
+        tabId !== BROWSER_GATEWAY_ASK_AGENT_TAB_ID &&
+        selectedLogicalTab?.instanceId === tabId &&
+        incomingWorkspace &&
+        cachedWorkspace &&
+        incomingWorkspace.controllerEpoch ===
+          selectedLogicalTab.controllerEpoch &&
+        cachedWorkspace.controllerEpoch ===
+          selectedLogicalTab.controllerEpoch &&
+        !incomingWorkspace.tabs.some(
+          (tab) =>
+            tab.tabId === selectedLogicalTab.tabId &&
+            tab.sessionId === selectedLogicalTab.sessionId,
+        ) &&
+        !incomingWorkspace.tabs.some(
+          (tab) => tab.tabId === selectedLogicalTab.tabId,
+        )
+          ? cachedWorkspace.tabs.find(
+              (tab) =>
+                tab.tabId === selectedLogicalTab.tabId &&
+                tab.sessionId === selectedLogicalTab.sessionId,
+            )
+          : undefined;
       const normalizedNext =
-        next.session.chatWorkspace == null &&
-        cached?.snapshot.session.chatWorkspace
+        next.session.chatWorkspace == null && cachedWorkspace
           ? {
               ...next,
               session: {
                 ...next.session,
-                chatWorkspace: cached.snapshot.session.chatWorkspace,
+                chatWorkspace: cachedWorkspace,
               },
             }
-          : next;
+          : retainedSelectedTab && incomingWorkspace
+            ? {
+                ...next,
+                session: {
+                  ...next.session,
+                  chatWorkspace: {
+                    ...incomingWorkspace,
+                    tabs: [...incomingWorkspace.tabs, retainedSelectedTab],
+                  },
+                },
+              }
+            : next;
       if (!cached || generation >= cached.generation) {
         snapshotCacheRef.current.set(tabId, {
           generation,
@@ -1503,7 +1539,17 @@ export function BrowserGatewayApp({
     requestId: string;
     values: Record<string, { paths: string[]; media: ComposerMedia[] }>;
   } | null>(null);
+  const [localQuestionProgress, setLocalQuestionProgress] = useState<{
+    id: string;
+    step: number;
+    answers: Record<string, string | string[] | number | boolean | undefined>;
+    notes: Record<string, string>;
+  } | null>(null);
   const [sendStatus, setSendStatus] = useState<string>("");
+  const optimisticUserMessageIdsRef = useRef(new Set<string>());
+  const [optimisticUserMessages, setOptimisticUserMessages] = useState<
+    Array<{ sessionId: string; message: ChatMessage }>
+  >([]);
   const [handoffDraft, setHandoffDraft] = useState<SessionHandoffDraft | null>(
     null,
   );
@@ -2034,16 +2080,46 @@ export function BrowserGatewayApp({
   const foreground = snapshot?.session.foreground ?? null;
   const foregroundProjectedMessages = foreground?.projectedMessages;
   const messages = useMemo<ChatMessage[]>(() => {
+    const confirmedMessages = foregroundProjectedMessages ?? [];
+    const confirmedIds = new Set(
+      confirmedMessages.map((message) => message.id),
+    );
+    const pendingMessages = optimisticUserMessages
+      .filter(
+        ({ sessionId, message }) =>
+          sessionId === foreground?.sessionId &&
+          !confirmedIds.has(message.id) &&
+          optimisticUserMessageIdsRef.current.has(message.id),
+      )
+      .map(({ message }) => message);
     return projectFinalMarkerAutoContinueState(
-      foregroundProjectedMessages ?? [],
+      [...confirmedMessages, ...pendingMessages],
       hiddenFinalContinueMessageIds,
       autoContinueStopReasons,
     );
   }, [
     autoContinueStopReasons,
+    foreground?.sessionId,
     foregroundProjectedMessages,
     hiddenFinalContinueMessageIds,
+    optimisticUserMessages,
   ]);
+
+  useEffect(() => {
+    const confirmedIds = new Set(
+      (foregroundProjectedMessages ?? []).map((message) => message.id),
+    );
+    if (confirmedIds.size === 0) return;
+    for (const messageId of confirmedIds) {
+      optimisticUserMessageIdsRef.current.delete(messageId);
+    }
+    setOptimisticUserMessages((current) => {
+      const next = current.filter(
+        ({ message }) => !confirmedIds.has(message.id),
+      );
+      return next.length === current.length ? current : next;
+    });
+  }, [foregroundProjectedMessages]);
 
   const reasoningEffort: ReasoningEffort = foreground
     ? (foreground.reasoningEffort ??
@@ -2170,16 +2246,34 @@ export function BrowserGatewayApp({
       ? pendingQuestion
       : null;
   const snapshotQuestionProgress = snapshot?.ui.questionProgress ?? null;
+  const localProgressForVisibleQuestion =
+    localQuestionProgress?.id === visibleQuestion?.id
+      ? localQuestionProgress
+      : null;
+  // The gateway republishes browser-originated progress. Keep the browser's
+  // local copy until another surface makes a newer update, so a snapshot-driven
+  // card recreation cannot reset it to the first question.
   const remoteQuestionProgress =
     snapshotQuestionProgress &&
-    snapshotQuestionProgress.origin !== questionProgressOriginRef.current
+    (snapshotQuestionProgress.origin !== questionProgressOriginRef.current ||
+      !localProgressForVisibleQuestion)
       ? snapshotQuestionProgress
-      : null;
+      : localProgressForVisibleQuestion;
 
   useEffect(() => {
     setQuestionContextMode(null);
     setQuestionAttachments(null);
+    setLocalQuestionProgress(null);
   }, [visibleQuestion?.id]);
+  useEffect(() => {
+    if (
+      snapshotQuestionProgress &&
+      snapshotQuestionProgress.id === visibleQuestion?.id &&
+      snapshotQuestionProgress.origin !== questionProgressOriginRef.current
+    ) {
+      setLocalQuestionProgress(null);
+    }
+  }, [snapshotQuestionProgress, visibleQuestion?.id]);
   const activeQuestionAttachments =
     questionAttachments && questionAttachments.requestId === visibleQuestion?.id
       ? questionAttachments.values
@@ -3748,6 +3842,12 @@ export function BrowserGatewayApp({
         : null;
 
     const userMessageId = randomId();
+    const removeOptimisticUserMessage = () => {
+      optimisticUserMessageIdsRef.current.delete(userMessageId);
+      setOptimisticUserMessages((current) =>
+        current.filter(({ message }) => message.id !== userMessageId),
+      );
+    };
     if (origin === "autoContinue") {
       pendingAutoContinueUserMessageIdRef.current = userMessageId;
     } else {
@@ -3861,6 +3961,39 @@ export function BrowserGatewayApp({
       }
 
       const actionOrigin = { ...snapshotOriginRef.current };
+      const optimisticUserMessage: ChatMessage = {
+        id: userMessageId,
+        role: "user",
+        content: displayWithMedia,
+        timestamp: Date.now(),
+        blocks: [{ type: "text", text: displayWithMedia }],
+        isSlashCommand: Boolean(slashCommandLabel),
+        slashCommandLabel,
+        origin: "browser",
+        ...(images.length > 0 || documents.length > 0
+          ? {
+              displayMedia: {
+                images: images.map((image) => ({
+                  name: image.name,
+                  mimeType: image.mimeType,
+                  src: `data:${image.mimeType};base64,${image.base64}`,
+                })),
+                documents: documents.map((document) => ({
+                  name: document.name,
+                  mimeType: document.mimeType,
+                })),
+              },
+            }
+          : {}),
+      };
+      optimisticUserMessageIdsRef.current.add(userMessageId);
+      setOptimisticUserMessages((current) => [
+        ...current,
+        {
+          sessionId: activeForeground.sessionId,
+          message: optimisticUserMessage,
+        },
+      ]);
       setSendStatus("Sending…");
       logAskAgentBrowserEvent("send.start", {
         askAgentSelected: isAskAgentSelected,
@@ -3912,10 +4045,11 @@ export function BrowserGatewayApp({
                   ? "Sent"
                   : `Send ${relay.operation.state}: ${relay.operation.message ?? "unknown status"}`,
             );
-            return (
+            const sent =
               relay.operation.state === "accepted" ||
-              relay.operation.state === "completed"
-            );
+              relay.operation.state === "completed";
+            if (!sent) removeOptimisticUserMessage();
+            return sent;
           }
         } finally {
           if (detachedSendTarget && !retainPendingRelaySend) {
@@ -3974,6 +4108,7 @@ export function BrowserGatewayApp({
           actionOrigin.generation,
         );
       }
+      if (!body.ok) removeOptimisticUserMessage();
       if (body.ok && detachedSendTarget) {
         refreshDetachedSelection(detachedSendTarget);
       }
@@ -4006,6 +4141,7 @@ export function BrowserGatewayApp({
         sessionId: activeForeground.sessionId,
         error: String(err),
       });
+      removeOptimisticUserMessage();
       setSendStatus(`Send error: ${String(err)}`);
       return false;
     }
@@ -7856,6 +7992,10 @@ export function BrowserGatewayApp({
                                     : null
                                 }
                                 onProgressChange={(progress) => {
+                                  setLocalQuestionProgress({
+                                    id: visibleQuestion.id,
+                                    ...progress,
+                                  });
                                   browserVscodeApi.postMessage({
                                     command: "agentQuestionProgress",
                                     id: visibleQuestion.id,
@@ -7909,6 +8049,7 @@ export function BrowserGatewayApp({
                                   setLocalDismissedQuestionId(id);
                                   setQuestionContextMode(null);
                                   setQuestionAttachments(null);
+                                  setLocalQuestionProgress(null);
                                   browserVscodeApi.postMessage({
                                     command: "agentQuestionResponse",
                                     id,

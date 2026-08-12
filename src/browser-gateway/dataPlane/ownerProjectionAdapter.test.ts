@@ -656,6 +656,12 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
         content: { kind: "inline", text: "" },
         blocks: [
           {
+            type: "thinking",
+            blockId: "thinking-1",
+            text: { kind: "inline", text: "" },
+            complete: true,
+          },
+          {
             type: "tool_call",
             blockId: "tool-1",
             toolCallId: "tool-1",

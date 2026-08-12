@@ -1336,7 +1336,16 @@ function projectBlock(
 ): BrowserGatewayTranscriptBlock | null {
   switch (block.type) {
     case "thinking":
-      return null;
+      // Reasoning text remains private to the owner surface, but its visible
+      // activity marker must survive a relay checkpoint. Otherwise switching
+      // browser tabs replaces the live transcript with one that silently loses
+      // completed and in-flight Thinking blocks.
+      return {
+        type: "thinking",
+        blockId: bounded(block.id, 256),
+        text: context.detail("", `${messageId}:block:${index}:thinking`),
+        complete: block.complete,
+      };
     case "text":
       return {
         type: "text",

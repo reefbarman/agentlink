@@ -224,6 +224,49 @@ describe("BrowserGatewayHelperModelAuthLeaseClient", () => {
     });
   });
 
+  it("uses the latest effective owner when publishing a model catalog", async () => {
+    let capturedBody = "";
+    let effectiveOwnerId = "vscode-owner";
+    globalThis.fetch = vi.fn(async (_input, init) => {
+      capturedBody = String(init?.body ?? "");
+      return new Response(
+        JSON.stringify({ ok: true, publishedAt: 1, modelCount: 1 }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }) as typeof fetch;
+    const client = new BrowserGatewayHelperModelAuthLeaseClient({
+      helperUrl: "http://127.0.0.1:47137",
+      clientSharedSecret: "secret",
+      grantedByOwnerId: "vscode-owner",
+      getGrantedByOwnerId: () => effectiveOwnerId,
+      grantedByOwnerGenerationId: "vscode-generation-1",
+      resolveModelAuth: vi.fn(async () => null),
+    });
+
+    effectiveOwnerId = "vscode-owner~generation-1";
+    await client.publishModelCatalog({
+      helperGenerationId: "helper-generation-1",
+      models: [
+        {
+          id: "gpt-5.6-luna",
+          displayName: "GPT-5.6 Luna",
+          providerId: "openai-codex",
+          contextWindow: 481_000,
+          authenticated: true,
+        },
+      ],
+    });
+
+    expect(JSON.parse(capturedBody)).toMatchObject({
+      publishedByOwnerId: "vscode-owner~generation-1",
+      publishedByOwnerGenerationId: "vscode-generation-1",
+      helperGenerationId: "helper-generation-1",
+    });
+  });
+
   it("clears provider-specific helper-cached credentials over the internal endpoint", async () => {
     let capturedBody = "";
     globalThis.fetch = vi.fn(async (_input, init) => {

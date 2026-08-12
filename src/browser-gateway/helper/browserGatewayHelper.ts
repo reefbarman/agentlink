@@ -7903,8 +7903,17 @@ export class BrowserGatewayHelper {
           displayName: model.displayName.trim(),
           providerId: model.providerId.trim(),
         })),
-        openAiCompatibleRuntimeProfiles:
-          body.openAiCompatibleRuntimeProfiles ?? {},
+        openAiCompatibleRuntimeProfiles: Object.fromEntries(
+          Object.entries(body.openAiCompatibleRuntimeProfiles ?? {}).map(
+            ([providerId, profile]) => [
+              providerId,
+              {
+                ...profile,
+                reasoningEffortMode: profile.reasoningEffortMode ?? "none",
+              },
+            ],
+          ),
+        ),
         promptProfileResolutions: body.promptProfileResolutions ?? {},
       };
       this.modelCatalogSnapshots.set(
@@ -8072,6 +8081,7 @@ export class BrowserGatewayHelper {
       "providerId",
       "baseUrl",
       "profile",
+      "reasoningEffortMode",
       "headers",
       "timeoutMs",
       "authRequired",
@@ -8097,6 +8107,11 @@ export class BrowserGatewayHelper {
       typeof profile.providerId !== "string" ||
       !profile.providerId.startsWith("openai-compatible:") ||
       (profile.profile !== "generic" && profile.profile !== "openrouter") ||
+      (profile.reasoningEffortMode !== undefined &&
+        profile.reasoningEffortMode !== "none" &&
+        profile.reasoningEffortMode !== "reasoning_effort" &&
+        profile.reasoningEffortMode !== "reasoning.effort" &&
+        profile.reasoningEffortMode !== "output_config.effort") ||
       typeof profile.timeoutMs !== "number" ||
       !Number.isFinite(profile.timeoutMs) ||
       profile.timeoutMs < 1_000 ||
@@ -8139,12 +8154,16 @@ export class BrowserGatewayHelper {
         typeof model !== "object" ||
         Array.isArray(model) ||
         Object.keys(model).some(
-          (key) => !["id", "model", "capabilities"].includes(key),
+          (key) =>
+            !["id", "model", "modelFamily", "capabilities"].includes(key),
         ) ||
         model.id !== modelId ||
         typeof model.model !== "string" ||
         !model.model.trim() ||
         model.model.length > 1_024 ||
+        (model.modelFamily !== undefined &&
+          model.modelFamily !== "anthropic" &&
+          model.modelFamily !== "openai") ||
         !model.capabilities ||
         typeof model.capabilities !== "object"
       ) {

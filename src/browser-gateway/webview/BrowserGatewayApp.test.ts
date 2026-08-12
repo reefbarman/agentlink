@@ -940,6 +940,38 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(screen.queryByText("Environment")).toBeNull();
   });
 
+  it("renders a sent browser user message before the send request completes", async () => {
+    let resolveSend: ((response: Response) => void) | undefined;
+    const fallbackFetch = globalThis.fetch;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes("/api/ask-agent/send")) {
+          return new Promise<Response>((resolve) => {
+            resolveSend = resolve;
+          });
+        }
+        return fallbackFetch(input, init);
+      },
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await screen.findByText("Ask Agent");
+    fireEvent.click(await screen.findByTestId("trigger-send"));
+
+    expect(await screen.findByText("Ship it")).toBeTruthy();
+    expect(resolveSend).toBeTypeOf("function");
+    await act(async () => resolveSend?.(jsonResponse({ ok: true })));
+  });
+
   it("keeps an interrupted workspace session visible when resume is rejected", async () => {
     const interruptedSnapshot = createSnapshot();
     interruptedSnapshot.session.foreground.interrupted = true;
@@ -3185,6 +3217,81 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
   });
 
+  it("retains a selected pending-input tab when its summary is temporarily omitted", async () => {
+    const snapshot = createGroupedSnapshot();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "awaiting_approval", label: "Input" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/ask-agent/session")) {
+        return jsonResponse(createAskAgentSessionResponse());
+      }
+      if (url.includes("/api/ui-state")) return jsonResponse(snapshot);
+      if (url.includes("/api/session-detail")) {
+        return directSessionDetailResponse(
+          snapshot,
+          "Pending question transcript",
+        );
+      }
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/slash-commands")) {
+        return jsonResponse({ commands: [] });
+      }
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        dataPlaneMode: "off",
+      }),
+    );
+
+    await selectWorkspaceTab();
+    const pendingTab = await screen.findByRole("tab", {
+      name: /T2.*Detached chat.*Input/,
+    });
+    fireEvent.click(pendingTab);
+    await screen.findByText("Pending question transcript");
+    expect(pendingTab.getAttribute("aria-selected")).toBe("true");
+
+    const incompleteSnapshot = structuredClone(snapshot);
+    incompleteSnapshot.session.chatWorkspace!.tabs =
+      incompleteSnapshot.session.chatWorkspace!.tabs.filter(
+        (tab) => tab.tabId !== "tab-2",
+      );
+    await act(async () => {
+      MockEventSource.instances.at(-1)?.emit("snapshot", incompleteSnapshot);
+    });
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("tab", { name: /T2.*Detached chat.*Input/ })
+          .getAttribute("aria-selected"),
+      ).toBe("true");
+    });
+  });
+
   it("preserves a detached tab across a temporary workspace-less snapshot", async () => {
     const groupedSnapshot = createGroupedSnapshot();
     const fallbackFetch = globalThis.fetch;
@@ -4782,6 +4889,11 @@ describe("BrowserGatewayApp /mcp behavior", () => {
           question: "Should Ask Agent continue with the read-only plan?",
           recommended: "Yes",
         },
+        {
+          id: "scope",
+          type: "yes_no",
+          question: "Should Ask Agent use the focused read-only scope?",
+        },
       ],
     };
     askSnapshot.session.foreground.questionRequest = askSnapshot.ui.question;
@@ -4838,30 +4950,38 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
-    await screen.findByText(
-      "Should Ask Agent continue with the read-only plan?",
-    );
-    const composer = screen.getByTestId("mock-input-area");
-    expect(
-      within(composer).getByText(
-        "Should Ask Agent continue with the read-only plan?",
-      ),
-    ).toBeTruthy();
-    expect(composer.querySelectorAll(".question-card")).toHaveLength(1);
-    expect(
-      screen.getAllByText("Should Ask Agent continue with the read-only plan?"),
-    ).toHaveLength(1);
+    const composer = await screen.findByTestId("mock-input-area");
+    await waitFor(() => {
+      expect(composer.querySelectorAll(".question-card")).toHaveLength(1);
+    });
     expect(screen.getAllByText("Auditing parity").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByText("Yes"));
     await waitFor(() => {
+      expect(screen.getByTestId("trigger-question-primary").textContent).toBe(
+        "Next",
+      );
+    });
+    fireEvent.click(screen.getByTestId("trigger-question-primary"));
+    await waitFor(() => {
+      expect(screen.getByTestId("trigger-question-primary").textContent).toBe(
+        "Submit",
+      );
+    });
+    await waitFor(() => {
       expect(
-        fetchMock.mock.calls.some(([input]) =>
-          String(input).includes("/api/ask-agent/question-progress"),
-        ),
+        fetchMock.mock.calls.some(([input, init]) => {
+          if (String(input) !== "/api/ask-agent/question-progress")
+            return false;
+          const body = JSON.parse(
+            String((init as RequestInit).body ?? "{}"),
+          ) as { step?: number; answers?: Record<string, boolean> };
+          return body.step === 1 && body.answers?.continue === true;
+        }),
       ).toBe(true);
     });
-    fireEvent.click(screen.getByText("Submit"));
+    fireEvent.click(screen.getAllByText("Yes").at(-1)!);
+    fireEvent.click(screen.getByTestId("trigger-question-primary"));
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(([input, init]) => {
@@ -4870,11 +4990,12 @@ describe("BrowserGatewayApp /mcp behavior", () => {
             String((init as RequestInit).body ?? "{}"),
           ) as {
             id?: string;
-            answers?: Record<string, boolean>;
+            answers?: Record<string, boolean | string>;
           };
           return (
             body.id === "ask-agent-question-1" &&
-            body.answers?.continue === true
+            body.answers?.continue === true &&
+            body.answers?.scope === true
           );
         }),
       ).toBe(true);

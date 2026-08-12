@@ -241,6 +241,7 @@ describe("BrowserGatewayHelperLeaseClient", () => {
     const release = calls.find(
       (call) => call.pathname === "/internal/client/release",
     );
+    expect(client.getEffectiveOwnerId()).toBe("owner-1~generation-1");
     expect(secondHeartbeat?.body).toContain('"ownerId":"owner-1~generation-1"');
     expect(release?.body).toContain('"ownerId":"owner-1~generation-1"');
   });

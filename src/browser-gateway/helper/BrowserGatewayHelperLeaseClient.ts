@@ -44,6 +44,10 @@ export class BrowserGatewayHelperLeaseClient implements vscode.Disposable {
     await this.renewLease();
   }
 
+  getEffectiveOwnerId(): string | undefined {
+    return this.effectiveOwnerId;
+  }
+
   async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;

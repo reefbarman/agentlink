@@ -2442,6 +2442,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
               providerId: "openai-compatible:local",
               baseUrl: "http://127.0.0.1:1234/v1",
               profile: "generic",
+              reasoningEffortMode: "reasoning_effort",
               headers: { "X-Test-Static": "safe-value" },
               timeoutMs: 30_000,
               authRequired: false,
@@ -2449,6 +2450,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
                 "local-gemma": {
                   id: "local-gemma",
                   model: "private-wire-model",
+                  modelFamily: "openai",
                   capabilities: {
                     supportsThinking: false,
                     supportsCaching: false,
@@ -4212,6 +4214,66 @@ describe("BrowserGatewayHelper proxy routing", () => {
         livenessReasons: [],
       });
     });
+  });
+
+  it("uses a reconnected owner's collision-safe catalog for Ask Agent sends", async () => {
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      completionParams.push(params);
+      return { text: "Catalog restored.", toolCalls: [] };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      grantCredential: false,
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const discovery = JSON.parse(
+      await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
+    ) as { clientSharedSecret: string; helperGenerationId: string };
+    await provisionAskAgentModelForTest({
+      helperBase: harness.helperBase,
+      discovery,
+      ownerId: "vscode-owner~generation-1",
+      ownerGenerationId: "vscode-generation-1",
+      instanceId: "vscode-instance-reconnected",
+    });
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({
+        text: "Use the reconnected catalog",
+        instanceId: "vscode-instance-reconnected",
+      }),
+    });
+    const body = (await send.json()) as {
+      ok?: boolean;
+      snapshot?: {
+        session: { foreground: { projectedMessages: ChatMessage[] } };
+      };
+    };
+
+    expect(send.ok).toBe(true);
+    expect(body.ok).toBe(true);
+    expect(completionParams).toHaveLength(1);
+    expect(completionParams[0]).toMatchObject({
+      model: "gpt-5.6-luna",
+      providerId: "openai-codex",
+    });
+    expect(body.snapshot?.session.foreground.projectedMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: "Use the reconnected catalog",
+        }),
+        expect.objectContaining({
+          role: "assistant",
+          content: "Catalog restored.",
+        }),
+      ]),
+    );
   });
 
   it("publishes credential failure as a committed controller snapshot", async () => {
