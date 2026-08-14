@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { resolveAndValidatePath, getRelativePath } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import { isAgentInstructionReadPath } from "../approvals/protectedPaths.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 
@@ -36,6 +37,7 @@ export async function resolveAndOpenDocument(
   if (
     !inWorkspace &&
     !isAgentlinkTmpArtifact(absolutePath) &&
+    !isAgentInstructionReadPath(absolutePath) &&
     !approvalManager.isPathTrusted(sessionId, absolutePath)
   ) {
     const { approved, reason } = await approveOutsideWorkspaceAccess(

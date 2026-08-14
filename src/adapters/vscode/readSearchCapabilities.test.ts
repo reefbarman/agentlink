@@ -35,12 +35,26 @@ vi.mock("../../tools/pathAccessUI.js", () => ({
 const semanticSearch = vi.hoisted(() => vi.fn());
 vi.mock("../../services/semanticSearch.js", () => ({ semanticSearch }));
 
+const canonicalizePath = vi.hoisted(() =>
+  vi.fn((filePath: string) => filePath),
+);
 const getWorkspaceRoots = vi.hoisted(() => vi.fn(() => ["/workspace"]));
+const isPathWithinRoot = vi.hoisted(() =>
+  vi.fn((filePath: string, rootPath: string) => {
+    const relative = path.relative(rootPath, filePath);
+    return (
+      relative === "" ||
+      (!relative.startsWith("..") && !path.isAbsolute(relative))
+    );
+  }),
+);
 const resolveAndValidatePath = vi.hoisted(() => vi.fn());
 const tryGetFirstWorkspaceRoot = vi.hoisted(() => vi.fn());
 const resolveAndOpenDocument = vi.hoisted(() => vi.fn());
 vi.mock("../../util/paths.js", () => ({
+  canonicalizePath,
   getWorkspaceRoots,
+  isPathWithinRoot,
   resolveAndValidatePath,
   tryGetFirstWorkspaceRoot,
 }));
@@ -408,6 +422,90 @@ describe("createVscodePathAccessProvider", () => {
       "session-2",
       undefined,
     );
+  });
+
+  it("allows advertised skill bundle files without UI approval", async () => {
+    const approvalManager = { isPathTrusted: vi.fn(() => false) };
+    const provider = createVscodePathAccessProvider(
+      approvalManager as never,
+      {} as never,
+      {
+        advertisedSkillPaths: [
+          "/extensions/agentlink/resources/builtin-skills/documentation/SKILL.md",
+        ],
+      },
+    );
+
+    await expect(
+      provider.ensureAccess({
+        absolutePath:
+          "/extensions/agentlink/resources/builtin-skills/documentation/references/complete-reference.md",
+        inputPath:
+          "/extensions/agentlink/resources/builtin-skills/documentation/references/complete-reference.md",
+        inWorkspace: false,
+        sessionId: "session-3",
+        kind: "read",
+      }),
+    ).resolves.toEqual({ approved: true });
+
+    expect(approvalManager.isPathTrusted).not.toHaveBeenCalled();
+    expect(approveOutsideWorkspaceAccess).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "/Users/tristan/.claude/CLAUDE.md",
+    "/Users/tristan/.agentlink/skills/helper/SKILL.md",
+  ])(
+    "allows exact agent instruction artifact %s without UI or Guardian approval",
+    async (instructionPath) => {
+      const approvalManager = { isPathTrusted: vi.fn(() => false) };
+      const provider = createVscodePathAccessProvider(
+        approvalManager as never,
+        {} as never,
+        {
+          guardian: {
+            requestingTool: "open_file",
+            operation: { kind: "open-file" },
+            getPolicy: vi.fn(() => undefined),
+            isSessionActive: vi.fn(() => true),
+          },
+        },
+      );
+
+      await expect(
+        provider.ensureAccess({
+          absolutePath: instructionPath,
+          inputPath: instructionPath,
+          inWorkspace: false,
+          sessionId: "session-instructions",
+          kind: "read",
+        }),
+      ).resolves.toEqual({ approved: true });
+
+      expect(approvalManager.isPathTrusted).not.toHaveBeenCalled();
+      expect(approveOutsideWorkspaceAccess).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not exempt arbitrary files beside agent instruction artifacts", async () => {
+    approveOutsideWorkspaceAccess.mockResolvedValue({ approved: false });
+    const approvalManager = { isPathTrusted: vi.fn(() => false) };
+    const provider = createVscodePathAccessProvider(
+      approvalManager as never,
+      {} as never,
+    );
+
+    await expect(
+      provider.ensureAccess({
+        absolutePath: "/Users/tristan/.agentlink/memory.md",
+        inputPath: "/Users/tristan/.agentlink/memory.md",
+        inWorkspace: false,
+        sessionId: "session-memory",
+        kind: "read",
+      }),
+    ).resolves.toEqual({ approved: false });
+
+    expect(approveOutsideWorkspaceAccess).toHaveBeenCalledOnce();
   });
 
   it("allows temporary AgentLink artifacts without UI approval", async () => {

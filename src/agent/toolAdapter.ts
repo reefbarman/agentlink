@@ -55,6 +55,7 @@ import type {
   OutsideReadOperation,
 } from "../approvals/actionApprovalReview.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
+import { isTeaserOnlyFinalSummary } from "../shared/finalSummaryHeuristics.js";
 import { McpClientHub } from "./McpClientHub.js";
 import type { Question } from "./webview/types.js";
 import { IS_DEV_BUILD } from "../shared/buildFlags.js";
@@ -217,6 +218,7 @@ import {
   resolveAndValidatePath,
   withWorkspaceRoots,
 } from "../util/paths.js";
+import { isAgentInstructionReadPath } from "../approvals/protectedPaths.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 import { getCodeRetrievalStoreRoot } from "../indexer/codeRetrievalIdentity.js";
 import { createComposeExecutionScope } from "./compose/composeScope.js";
@@ -1536,43 +1538,6 @@ function semanticSearchResultToToolResult(
   };
 }
 
-function isTeaserOnlyFinalSummary(summary: string): boolean {
-  const normalized = summary
-    .toLowerCase()
-    .replace(/[‘’]/g, "'")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!normalized) return false;
-
-  const startsLikeTeaser =
-    /^(?:you'?re right\s*[—-]\s*)?(?:here(?:'s| is)|below is|paste this|copy this)\b/.test(
-      normalized,
-    );
-  const namesArtifact =
-    /\b(prompt|answer|command|snippet|code|plan|review|message|response|text|artifact)\b/.test(
-      normalized,
-    );
-  if (!startsLikeTeaser || !namesArtifact) return false;
-
-  const hasObviousPayload =
-    summary.includes("```") ||
-    /`[^`]+`/.test(summary) ||
-    /:\s*\S.{24,}/s.test(summary) ||
-    summary.split(/\r?\n/).some((line) => {
-      const trimmed = line.trim();
-      if (trimmed.length < 40) return false;
-      const normalizedLine = trimmed
-        .toLowerCase()
-        .replace(/[‘’]/g, "'")
-        .replace(/\s+/g, " ")
-        .trim();
-      return !/^(?:you'?re right\s*[—-]\s*)?(?:here(?:'s| is)|below is|paste this|copy this)\b/.test(
-        normalizedLine,
-      );
-    });
-  return !hasObviousPayload;
-}
-
 function clampToolLimit(value: unknown): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) return 50;
@@ -2532,7 +2497,10 @@ function isAdvertisedSkillRead(
     if (toolName === "load_skill") {
       return (
         pathsMatch(absolutePath, skillPath) ||
-        pathsMatch(absolutePath, realSkillPath)
+        pathsMatch(absolutePath, realSkillPath) ||
+        (skill.sourceScope === "builtin" &&
+          (isPathWithinRoot(absolutePath, path.dirname(skillPath)) ||
+            isPathWithinRoot(absolutePath, path.dirname(realSkillPath))))
       );
     }
     return (
@@ -2557,6 +2525,7 @@ function enforceNonInteractiveReadPathPolicy(
   if (
     inWorkspace ||
     isAgentlinkTmpArtifact(absolutePath) ||
+    (toolName !== "load_skill" && isAgentInstructionReadPath(absolutePath)) ||
     isAdvertisedSkillRead(toolName, absolutePath, getAdvertisedSkills) ||
     approvalManager.isPathTrusted(sessionId, absolutePath)
   ) {
@@ -3486,15 +3455,25 @@ export async function dispatchToolCall(
           pathAccessProvider: createVscodePathAccessProvider(
             approvalManager,
             approvalPanel,
-            toolAbortSignal,
-            createGuardianOutsideReadOptions(ctx, sessionId, "list_files", {
-              kind: "list",
-              recursive: params.recursive === true,
-              includeIgnored: params.include_ignored === true,
-              depth: params.depth,
-              pattern: params.pattern,
-              query: params.query,
-            }),
+            {
+              advertisedSkillPaths: (ctx.getAdvertisedSkills?.() ?? []).flatMap(
+                (skill) => [skill.skillPath, skill.realSkillPath],
+              ),
+              signal: toolAbortSignal,
+              guardian: createGuardianOutsideReadOptions(
+                ctx,
+                sessionId,
+                "list_files",
+                {
+                  kind: "list",
+                  recursive: params.recursive === true,
+                  includeIgnored: params.include_ignored === true,
+                  depth: params.depth,
+                  pattern: params.pattern,
+                  query: params.query,
+                },
+              ),
+            },
           ),
           semanticQueryOptions: ctx.globalStorageUri
             ? {
@@ -3518,21 +3497,31 @@ export async function dispatchToolCall(
           pathAccessProvider: createVscodePathAccessProvider(
             approvalManager,
             approvalPanel,
-            toolAbortSignal,
-            createGuardianOutsideReadOptions(ctx, sessionId, "search_files", {
-              kind: "search",
-              pattern: params.regex,
-              patternKind: params.semantic ? "semantic" : "regex",
-              filePattern: params.file_pattern,
-              caseInsensitive: params.case_insensitive,
-              context: params.context,
-              contextBefore: params.context_before,
-              contextAfter: params.context_after,
-              multiline: params.multiline === true,
-              maxResults: params.max_results,
-              offset: params.offset,
-              outputMode: params.output_mode,
-            }),
+            {
+              advertisedSkillPaths: (ctx.getAdvertisedSkills?.() ?? []).flatMap(
+                (skill) => [skill.skillPath, skill.realSkillPath],
+              ),
+              signal: toolAbortSignal,
+              guardian: createGuardianOutsideReadOptions(
+                ctx,
+                sessionId,
+                "search_files",
+                {
+                  kind: "search",
+                  pattern: params.regex,
+                  patternKind: params.semantic ? "semantic" : "regex",
+                  filePattern: params.file_pattern,
+                  caseInsensitive: params.case_insensitive,
+                  context: params.context,
+                  contextBefore: params.context_before,
+                  contextAfter: params.context_after,
+                  multiline: params.multiline === true,
+                  maxResults: params.max_results,
+                  offset: params.offset,
+                  outputMode: params.output_mode,
+                },
+              ),
+            },
           ),
           semanticQueryOptions: ctx.globalStorageUri
             ? {
@@ -3650,19 +3639,21 @@ export async function dispatchToolCall(
           pathAccessProvider: createVscodePathAccessProvider(
             approvalManager,
             approvalPanel,
-            toolAbortSignal,
-            createGuardianOutsideReadOptions(
-              ctx,
-              sessionId,
-              "find_and_replace",
-              {
-                kind: "search",
-                pattern: params.find,
-                patternKind: params.regex ? "regex" : "literal",
-                multiline: false,
-                outputMode: "content",
-              },
-            ),
+            {
+              signal: toolAbortSignal,
+              guardian: createGuardianOutsideReadOptions(
+                ctx,
+                sessionId,
+                "find_and_replace",
+                {
+                  kind: "search",
+                  pattern: params.find,
+                  patternKind: params.regex ? "regex" : "literal",
+                  multiline: false,
+                  outputMode: "content",
+                },
+              ),
+            },
           ),
           prepareOneShotAuthorization: createGuardianOutsideWritePreparer(
             ctx,
@@ -3685,13 +3676,20 @@ export async function dispatchToolCall(
           pathAccessProvider: createVscodePathAccessProvider(
             approvalManager,
             approvalPanel,
-            toolAbortSignal,
-            createGuardianOutsideReadOptions(ctx, sessionId, "rename_symbol", {
-              kind: "language-intelligence",
-              feature: "references",
-              line: params.line,
-              column: params.column,
-            }),
+            {
+              signal: toolAbortSignal,
+              guardian: createGuardianOutsideReadOptions(
+                ctx,
+                sessionId,
+                "rename_symbol",
+                {
+                  kind: "language-intelligence",
+                  feature: "references",
+                  line: params.line,
+                  column: params.column,
+                },
+              ),
+            },
           ),
         },
       );
@@ -3767,14 +3765,21 @@ export async function dispatchToolCall(
         pathAccessProvider: createVscodePathAccessProvider(
           approvalManager,
           approvalPanel,
-          toolAbortSignal,
-          createGuardianOutsideReadOptions(ctx, sessionId, "open_file", {
-            kind: "open-file",
-            line: params.line,
-            column: params.column,
-            endLine: params.end_line,
-            endColumn: params.end_column,
-          }),
+          {
+            signal: toolAbortSignal,
+            guardian: createGuardianOutsideReadOptions(
+              ctx,
+              sessionId,
+              "open_file",
+              {
+                kind: "open-file",
+                line: params.line,
+                column: params.column,
+                endLine: params.end_line,
+                endColumn: params.end_column,
+              },
+            ),
+          },
         ),
         editorRevealProvider:
           ctx.editorRevealProvider ?? createVscodeEditorRevealProvider(),

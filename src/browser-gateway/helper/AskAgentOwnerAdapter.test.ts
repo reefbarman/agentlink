@@ -22,6 +22,7 @@ import {
   type AskAgentOwnerResolvedDetail,
 } from "./AskAgentOwnerAdapter.js";
 import { describe, expect, it, vi } from "vitest";
+import { RelayOwnerStore } from "../webview/relay/RelayOwnerStore.js";
 
 const theme: BrowserGatewayThemeSnapshot = {
   cssVariables: { "--vscode-foreground": "#ffffff" },
@@ -443,6 +444,115 @@ describe("AskAgentOwnerAdapter", () => {
     expect(() => harness.adapter.getCheckpoint()).toThrow(
       "ask_agent_owner_adapter_disposed",
     );
+    await harness.controller.dispose();
+  });
+
+  it("keeps relay consumers coherent across an ask-agent session switch", async () => {
+    // Regression: mid-stream full checkpoints (emitted on session switches)
+    // used to reuse the previous event's owner sequence, so relay consumers
+    // discarded them as duplicates and then applied the new session's
+    // message events onto the OLD session's transcript — briefly rendering
+    // the previous conversation with the new message appended.
+    const harness = createHarness();
+    harness.adapter.setDemanded(true);
+    await harness.adapter.drain();
+
+    const publish = async () => {
+      await harness.controller.publishSnapshot(
+        harness.controller.projectState({
+          now: 1_000,
+          theme,
+          modelCredentialStatus: missingCredential,
+        }).snapshot,
+      );
+      await harness.adapter.drain();
+    };
+
+    // Old conversation.
+    harness.controller.sessionStore.sendMessage({
+      id: "old-user-1",
+      text: "Old conversation question",
+      now: 1_000,
+      theme,
+      modelCredentialStatus: missingCredential,
+    });
+    await publish();
+
+    // New Chat with a client-minted id, then its first message.
+    const mintedId = "browser-gateway:ask-agent:minted-by-client";
+    harness.controller.sessionStore.createSession(2_000, undefined, mintedId);
+    await publish();
+    harness.controller.sessionStore.appendUserMessage({
+      id: "new-user-1",
+      text: "First message of the new chat",
+      now: 3_000,
+    });
+    harness.controller.sessionStore.startAssistantMessage({ now: 3_000 });
+    await publish();
+
+    // Apply every published frame in order, exactly as the browser relay
+    // client does, and assert no materialized state ever pairs the new
+    // session with the old transcript.
+    const clientStore = new RelayOwnerStore();
+    let relaySequence = 0;
+    const applied: Array<{
+      sessionId: string | undefined;
+      messageIds: string[];
+    }> = [];
+    for (const batch of harness.batches) {
+      const results = [] as Array<
+        ReturnType<RelayOwnerStore["applyCheckpoint"]>
+      >;
+      if (batch.checkpoint) {
+        results.push(
+          clientStore.applyCheckpoint("helper-generation-1", {
+            kind: "checkpoint",
+            relaySequence: ++relaySequence,
+            ownerSequence: batch.checkpoint.checkpointSequence,
+            checkpoint: batch.checkpoint,
+          }),
+        );
+      }
+      for (const event of batch.events) {
+        results.push(
+          clientStore.applyEvent("helper-generation-1", {
+            kind: "event",
+            relaySequence: ++relaySequence,
+            ownerSequence: event.ownerSequence,
+            event,
+          }),
+        );
+      }
+      for (const result of results) {
+        expect(result.status).not.toBe("checkpoint_required");
+        if (result.status !== "applied") continue;
+        applied.push({
+          sessionId: result.checkpoint.foreground?.sessionId,
+          messageIds: result.checkpoint.transcript.messages.map(
+            (transcriptMessage) => transcriptMessage.messageId,
+          ),
+        });
+      }
+    }
+
+    // The session switch must arrive as an applied full checkpoint with an
+    // empty transcript — never dropped as a duplicate.
+    const switchState = applied.find(
+      (state) => state.sessionId === mintedId && state.messageIds.length === 0,
+    );
+    expect(switchState).toBeDefined();
+    // No materialized state ever mixes the new session with old messages.
+    for (const state of applied) {
+      if (state.sessionId !== mintedId) continue;
+      expect(state.messageIds).not.toContain("old-user-1");
+    }
+    // The first message of the new chat lands in the new transcript.
+    expect(applied.at(-1)).toMatchObject({
+      sessionId: mintedId,
+      messageIds: expect.arrayContaining(["new-user-1"]),
+    });
+
+    await harness.adapter.dispose();
     await harness.controller.dispose();
   });
 });

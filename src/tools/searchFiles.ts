@@ -14,6 +14,7 @@ import {
 } from "../util/ripgrep.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import { isAgentInstructionReadPath } from "../approvals/protectedPaths.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 
@@ -61,7 +62,10 @@ function createLegacySearchFilesProviders(
         if (request.inWorkspace) {
           return { approved: true };
         }
-        if (isAgentlinkTmpArtifact(request.absolutePath)) {
+        if (
+          isAgentlinkTmpArtifact(request.absolutePath) ||
+          isAgentInstructionReadPath(request.absolutePath)
+        ) {
           return { approved: true };
         }
         if (

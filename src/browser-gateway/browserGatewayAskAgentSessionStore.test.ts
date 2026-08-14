@@ -101,7 +101,109 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
 
     expect(store.getActiveSessionId()).toBe(firstSessionId);
     expect(store.listSessions()).toEqual([]);
-    expect(store.getHistorySnapshot()).toEqual({ sessions: [] });
+    const history = store.getHistorySnapshot();
+    expect(history.sessions).toHaveLength(1);
+    expect(history.activeSessionId).toBe(firstSessionId);
+    expect(history.sessions[0]?.messages).toEqual([]);
+  });
+
+  it("persists a freshly created empty session as the active session", () => {
+    const store = createStore();
+    store.sendMessage({
+      now: 100,
+      theme,
+      modelCredentialStatus: { state: "not_required", providerId: "test" },
+      text: "First conversation",
+    });
+    const previousSessionId = store.getActiveSessionId();
+    store.createSession(200);
+    const newSessionId = store.getActiveSessionId();
+    expect(newSessionId).not.toBe(previousSessionId);
+
+    const history = store.getHistorySnapshot();
+    expect(history.activeSessionId).toBe(newSessionId);
+    expect(history.sessions.map((session) => session.id)).toEqual([
+      newSessionId,
+      previousSessionId,
+    ]);
+
+    // A helper restart reloads the persisted history: the new chat must stay
+    // active instead of falling back to the previous conversation.
+    const reloaded = createStore();
+    reloaded.loadHistory(history);
+    expect(reloaded.getActiveSessionId()).toBe(newSessionId);
+    expect(reloaded.getTranscriptMessages()).toEqual([]);
+  });
+
+  it("drops non-active empty sessions from the history snapshot", () => {
+    const store = createStore();
+    store.createSession(100);
+    store.sendMessage({
+      now: 150,
+      theme,
+      modelCredentialStatus: { state: "not_required", providerId: "test" },
+      text: "Only conversation",
+    });
+    const conversationId = store.getActiveSessionId();
+    store.createSession(200);
+    const emptyId = store.getActiveSessionId();
+    store.loadSession(conversationId);
+
+    const history = store.getHistorySnapshot();
+    expect(history.activeSessionId).toBe(conversationId);
+    expect(history.sessions.map((session) => session.id)).not.toContain(
+      emptyId,
+    );
+  });
+
+  it("adopts a client-minted session id when creating a session", () => {
+    const store = createStore();
+    store.sendMessage({
+      now: 100,
+      theme,
+      modelCredentialStatus: { state: "not_required", providerId: "test" },
+      text: "First conversation",
+    });
+    const mintedId = "browser-gateway:ask-agent:client-minted-1";
+    store.createSession(200, undefined, mintedId);
+    expect(store.getActiveSessionId()).toBe(mintedId);
+
+    // Reusing an empty active session adopts the newly minted id too.
+    const secondMintedId = "browser-gateway:ask-agent:client-minted-2";
+    store.createSession(300, undefined, secondMintedId);
+    expect(store.getActiveSessionId()).toBe(secondMintedId);
+    expect(store.hasSession(mintedId)).toBe(false);
+
+    // Creating again with a known id just switches to it.
+    store.sendMessage({
+      now: 400,
+      theme,
+      modelCredentialStatus: { state: "not_required", providerId: "test" },
+      text: "Second conversation",
+    });
+    store.createSession(500, undefined, secondMintedId);
+    expect(store.getActiveSessionId()).toBe(secondMintedId);
+  });
+
+  it("targets an unknown session id by re-creating it for the send", () => {
+    const store = createStore();
+    store.sendMessage({
+      now: 100,
+      theme,
+      modelCredentialStatus: { state: "not_required", providerId: "test" },
+      text: "Previous conversation",
+    });
+    const previousSessionId = store.getActiveSessionId();
+
+    const lostId = "browser-gateway:ask-agent:lost-after-restart";
+    expect(store.targetSession(lostId, 200)).toEqual({ created: true });
+    expect(store.getActiveSessionId()).toBe(lostId);
+    expect(store.getTranscriptMessages()).toEqual([]);
+
+    expect(store.targetSession(previousSessionId, 300)).toEqual({
+      created: false,
+    });
+    expect(store.getActiveSessionId()).toBe(previousSessionId);
   });
 
   it("treats repeated client message ids as idempotent sends", () => {

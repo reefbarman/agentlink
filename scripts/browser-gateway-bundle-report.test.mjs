@@ -89,6 +89,12 @@ test("summarizes deterministic browser gateway bundle composition", () => {
         bytes: 80,
         inputs: {},
       },
+      [path.join(rootDir, "dist", "browser-gateway-notifications.js")]: {
+        bytes: 25,
+        entryPoint:
+          "src/browser-gateway/webview/browserGatewayNotificationsWorker.ts",
+        inputs: {},
+      },
       [path.join(rootDir, "dist", "shared.js")]: {
         bytes: 100,
         inputs: {
@@ -110,9 +116,9 @@ function expectReport(report) {
   assert.deepEqual(report, {
     schemaVersion: 2,
     entryPoint: "src/browser-gateway/webview/index.tsx",
-    totalBytes: 1_820,
+    totalBytes: 1_845,
     initialScriptBytes: 250,
-    lazyScriptBytes: 1_290,
+    lazyScriptBytes: 1_315,
     initialScriptOutputs: ["dist/browser-gateway.js", "dist/shared.js"],
     outputs: [
       {
@@ -138,6 +144,13 @@ function expectReport(report) {
         bytes: 700,
         kind: "script",
         entryPoint: "src/browser-gateway/webview/components/browserMonaco.ts",
+      },
+      {
+        path: "dist/browser-gateway-notifications.js",
+        bytes: 25,
+        kind: "script",
+        entryPoint:
+          "src/browser-gateway/webview/browserGatewayNotificationsWorker.ts",
       },
       {
         path: "dist/browser-gateway.css",
@@ -195,6 +208,7 @@ const PACKAGE_ALLOWLIST = `
 !dist/browser-gateway.css
 !dist/browser-gateway-monaco.js
 !dist/browser-gateway-monaco.css
+!dist/browser-gateway-notifications.js
 !dist/browser-gateway-chunks/
 !dist/browser-gateway-chunks/*.js
 `;
@@ -205,6 +219,7 @@ const PACKAGED_REPORT = {
     { path: "dist/browser-gateway.css", kind: "style" },
     { path: "dist/browser-gateway-monaco.js", kind: "script" },
     { path: "dist/browser-gateway-monaco.css", kind: "style" },
+    { path: "dist/browser-gateway-notifications.js", kind: "script" },
     {
       path: "dist/browser-gateway-chunks/renderer-ABC123.js",
       kind: "script",
@@ -229,9 +244,12 @@ test("rejects missing browser gateway package rules", () => {
     () =>
       verifyBrowserGatewayBundlePackaging(
         PACKAGED_REPORT,
-        PACKAGE_ALLOWLIST.replace("!dist/browser-gateway-monaco.css\n", ""),
+        PACKAGE_ALLOWLIST.replace(
+          "!dist/browser-gateway-notifications.js\n",
+          "",
+        ),
       ),
-    /browser_gateway_package_allowlist_missing:dist\/browser-gateway-monaco\.css/,
+    /browser_gateway_package_allowlist_missing:dist\/browser-gateway-notifications\.js/,
   );
 });
 

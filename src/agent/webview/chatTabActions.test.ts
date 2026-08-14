@@ -68,4 +68,25 @@ describe("addressChatWebviewMessage", () => {
     });
     expect(addressChatWebviewMessage("text", snapshot)).toBe("text");
   });
+
+  it("passes through a focused tab's null session without dereferencing an absent pinned pane", () => {
+    // Regression: a focused tab awaiting its session has sessionId null; the
+    // fallback must not treat that as missing and crash on pinnedPane!.
+    const sessionlessSnapshot: ChatWorkspaceViewSnapshot = {
+      ...snapshot,
+      tabs: [{ ...snapshot.tabs[0], sessionId: null }],
+    };
+    expect(
+      addressChatWebviewMessage(
+        { command: "searchWorkspaceFiles", query: "chat" },
+        sessionlessSnapshot,
+      ),
+    ).toEqual({
+      command: "searchWorkspaceFiles",
+      query: "chat",
+      controllerEpoch: "epoch-1",
+      tabId: "tab-2",
+      sessionId: null,
+    });
+  });
 });

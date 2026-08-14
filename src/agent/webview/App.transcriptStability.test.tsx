@@ -479,6 +479,54 @@ describe("transcript stability across hydrations", () => {
     deliver({ type: "agentRestoreSessionDone" });
   });
 
+  it("starts a new chat immediately while a restored transcript is still loading", async () => {
+    const vscodeApi = createVsCodeApi();
+    const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver({ type: "agentRestoreSessionStart" });
+    deliver(
+      sessionLoaded("session-1", {
+        restored: true,
+        transcriptRevision: 2,
+        userText: "SlowRestoredTranscript",
+      }),
+    );
+    await waitFor(() => {
+      expect(transcriptOccurrences(container, "SlowRestoredTranscript")).toBe(
+        1,
+      );
+    });
+
+    const newChatButton = container.querySelector<HTMLButtonElement>(
+      ".chat-header .icon-button",
+    );
+    expect(newChatButton).toBeTruthy();
+    fireEvent.click(newChatButton!);
+
+    // The webview clears to an empty chat right away — it does not wait for
+    // the (possibly still transcript-parsing) host to respond.
+    await waitFor(() => {
+      expect(transcriptOccurrences(container, "SlowRestoredTranscript")).toBe(
+        0,
+      );
+    });
+    expect(vscodeApi.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "chatTabNewChat" }),
+    );
+
+    // A late hydration from the superseded restore must not repaint the old
+    // transcript over the fresh chat.
+    deliver(
+      sessionLoaded("session-1", {
+        restored: true,
+        transcriptRevision: 3,
+        userText: "SlowRestoredTranscript",
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(transcriptOccurrences(container, "SlowRestoredTranscript")).toBe(0);
+  });
+
   it("re-arms restored hydration acceptance for a reconnected webview", async () => {
     const vscodeApi = createVsCodeApi();
     const { container } = render(<App vscodeApi={vscodeApi} />);

@@ -409,6 +409,7 @@ export type PublicHelperRouteHandler =
   | "browserGatewayCss"
   | "browserGatewayMonacoJs"
   | "browserGatewayMonacoCss"
+  | "browserGatewayNotificationsWorker"
   | "browserGatewayChunk"
   | "monacoWorker"
   | "monacoWorkerMap"
@@ -440,6 +441,11 @@ export const PUBLIC_HELPER_EXACT_ROUTES = [
     method: "GET",
     path: "/browser-gateway-monaco.css",
     handler: "browserGatewayMonacoCss",
+  },
+  {
+    method: "GET",
+    path: "/browser-gateway-notifications.js",
+    handler: "browserGatewayNotificationsWorker",
   },
   { method: "GET", path: "/codicon.css", handler: "codiconCss" },
   { method: "GET", path: "/codicon.ttf", handler: "codiconFont" },

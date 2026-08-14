@@ -59,6 +59,7 @@ export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
   "browserGatewayPort",
   "browserGatewayLanAccess",
   "browserGatewayMdnsName",
+  "browserGatewaySecureLanAccess",
   "browserGateway.dataPlane",
   "openaiCompatible.baseUrl",
   "openaiCompatible.model",

@@ -7503,6 +7503,39 @@ describe("handleExecuteCommand", () => {
     });
   });
 
+  it("returns structured retry guidance when sandbox PTY launch fails twice", async () => {
+    executeCommand.mockRejectedValue(
+      new Error(
+        "Sandbox PTY launch failed twice before the command started (node-pty reported posix_spawnp failed). Retry the same command; if failures continue, reload the VS Code window so AgentLink can recreate its sandbox runtime.",
+      ),
+    );
+
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const result = await handleExecuteCommand(
+      { command: "git status --short" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-pty-launch-failure",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      status: "retry_required",
+      error_code: "sandbox_pty_launch_failed",
+      command: "git status --short",
+      command_sent: false,
+      process_launched: false,
+      retry_safe: true,
+      failure_stage: "launch",
+      retry_guidance: {
+        code: "sandbox_pty_launch_failed",
+        automatic_retry: false,
+        options: [{ action: "retry_same_command", same_command: true }],
+      },
+    });
+  });
+
   it("returns actionable newline regex hint on ripgrep newline error", async () => {
     executeCommand.mockRejectedValue(
       new Error("ripgrep error: regex parse error: unescaped literal newline"),

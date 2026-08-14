@@ -80,6 +80,38 @@ describe("browser gateway helper bootstrap", () => {
     },
   );
 
+  it("requires a restart when secure LAN HTTPS configuration changes", () => {
+    const discovery = {
+      pid: process.pid,
+      port: 47137,
+      url: "http://127.0.0.1:47137",
+      protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
+      startedAt: new Date().toISOString(),
+      lastHeartbeatAt: new Date().toISOString(),
+      helperVersion: "test-version",
+      browserBootstrapToken: "token",
+      clientSharedSecret: "secret",
+      lanAccess: true,
+      mdnsHostName: "agentlink",
+      mdnsUrl: "https://agentlink.local:47138",
+      secureLanAccess: true,
+    };
+    expect(
+      discoveryMatchesDesiredConfig(discovery, {
+        lanAccess: true,
+        mdnsName: "agentlink",
+        secureLanAccess: true,
+      }),
+    ).toBe(true);
+    expect(
+      discoveryMatchesDesiredConfig(discovery, {
+        lanAccess: true,
+        mdnsName: "agentlink",
+        secureLanAccess: false,
+      }),
+    ).toBe(false);
+  });
+
   it("returns null when no discovery exists", async () => {
     const resolved = await resolveHealthyDiscoveredHelper(47137, {
       lanAccess: false,

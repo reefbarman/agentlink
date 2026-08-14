@@ -257,6 +257,33 @@ describe("handleSearchFiles ripgrep args", () => {
     });
   });
 
+  it("skips outside-workspace approval for exact agent instruction artifacts", async () => {
+    const instructionPath = "/Users/tester/.claude/CLAUDE.md";
+    resolveAndValidatePath.mockReturnValue({
+      absolutePath: instructionPath,
+      inWorkspace: false,
+    });
+    const approvalManager = { isPathTrusted: vi.fn(() => false) };
+
+    const result = await handleSearchFiles(
+      {
+        path: instructionPath,
+        regex: "instruction",
+        semantic: false,
+      },
+      approvalManager as never,
+      {} as never,
+      "session-instruction-artifact",
+    );
+
+    expect(approveOutsideWorkspaceAccess).not.toHaveBeenCalled();
+    expect(approvalManager.isPathTrusted).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      isError: true,
+      data: { error: "path does not exist", path: instructionPath },
+    });
+  });
+
   it("skips outside-workspace approval for agentlink tmp artifacts", async () => {
     const tmpArtifactPath = path.join(
       os.tmpdir(),

@@ -1621,31 +1621,57 @@ describe("AgentSession", () => {
       expect(session.disabledSkillIds).not.toBe(disabledSkillIds);
     });
 
-    it("forwards the Approve for Me flag on rebuild and mode switch", async () => {
-      const session = await makeSession();
+    it("marks only new foreground Architect sessions for initial review", async () => {
+      const initialArchitect = await makeSession({ mode: "architect" });
+      const code = await makeSession({ mode: "code" });
+      const backgroundArchitect = await makeSession({
+        mode: "architect",
+        background: true,
+        isBackground: true,
+      });
+
+      expect(initialArchitect.initialArchitectReviewPending).toBe(true);
+      expect(code.initialArchitectReviewPending).toBe(false);
+      expect(backgroundArchitect.initialArchitectReviewPending).toBe(false);
+
+      await code.setMode("architect");
+      expect(code.initialArchitectReviewPending).toBe(false);
+    });
+
+    it("forwards Approve for Me and initial Architect review state", async () => {
+      const session = await makeSession({ mode: "architect" });
       mockedBuildPromptArtifacts.mockClear();
       await session.rebuildSystemPrompt();
       expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
-        "code",
+        "architect",
         "/test",
-        expect.objectContaining({ approveForMe: false }),
+        expect.objectContaining({
+          approveForMe: false,
+          initialArchitectReviewPending: true,
+        }),
       );
 
       session.approveForMe = true;
       mockedBuildPromptArtifacts.mockClear();
       await session.rebuildSystemPrompt();
       expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
-        "code",
+        "architect",
         "/test",
-        expect.objectContaining({ approveForMe: true }),
+        expect.objectContaining({
+          approveForMe: true,
+          initialArchitectReviewPending: true,
+        }),
       );
 
       mockedBuildPromptArtifacts.mockClear();
-      await session.setMode("architect");
+      await session.setMode("code");
       expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
-        "architect",
+        "code",
         "/test",
-        expect.objectContaining({ approveForMe: true }),
+        expect.objectContaining({
+          approveForMe: true,
+          initialArchitectReviewPending: true,
+        }),
       );
     });
   });

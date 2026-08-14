@@ -33,6 +33,7 @@ export class ProductionBrowserGatewayOwnerCommandExecutor implements BrowserGate
   async execute(
     command: BrowserGatewayOwnerCommandBody,
     signal: AbortSignal,
+    operationId: string,
   ): ReturnType<BrowserGatewayOwnerCommandExecutor["execute"]> {
     assertNotAborted(signal);
     switch (command.kind) {
@@ -72,6 +73,7 @@ export class ProductionBrowserGatewayOwnerCommandExecutor implements BrowserGate
         }
         const result = await this.target.submitBrowserSend({
           sessionId: command.sessionId,
+          id: operationId,
           text: command.text,
         });
         assertNotAborted(signal);

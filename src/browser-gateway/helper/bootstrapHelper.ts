@@ -20,6 +20,8 @@ export interface BrowserGatewayHelperBootstrapOptions {
   lanAccess?: boolean;
   /** mDNS hostname (without `.local`). */
   mdnsName?: string;
+  /** Serve LAN browser traffic through a local-CA HTTPS listener. */
+  secureLanAccess?: boolean;
   log: (message: string) => void;
 }
 
@@ -67,6 +69,7 @@ export async function fetchHelperHealth(
 export interface DesiredHelperConfig {
   lanAccess: boolean;
   mdnsName?: string;
+  secureLanAccess?: boolean;
   helperVersion?: string;
 }
 
@@ -131,6 +134,9 @@ export function discoveryMatchesDesiredConfig(
 ): boolean {
   const discoveredLanAccess = Boolean(discovery.lanAccess);
   if (discoveredLanAccess !== desired.lanAccess) return false;
+  if (Boolean(discovery.secureLanAccess) !== Boolean(desired.secureLanAccess)) {
+    return false;
+  }
   if (desired.lanAccess) {
     const gotName = (discovery.mdnsHostName ?? "").trim();
     if (!gotName) {
@@ -270,6 +276,7 @@ export async function bootstrapBrowserGatewayHelper(
   const desired: DesiredHelperConfig = {
     lanAccess: Boolean(options.lanAccess),
     mdnsName: options.mdnsName,
+    secureLanAccess: Boolean(options.secureLanAccess),
     helperVersion: options.helperVersion,
   };
 
@@ -328,6 +335,9 @@ export async function bootstrapBrowserGatewayHelper(
   }
   if (options.mdnsName && options.mdnsName.trim()) {
     args.push(`--mdnsName=${options.mdnsName.trim()}`);
+  }
+  if (options.secureLanAccess) {
+    args.push("--secureLanAccess=true");
   }
 
   const child = spawn(process.execPath, args, {

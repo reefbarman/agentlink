@@ -77,6 +77,7 @@ function createHarness({
   const dataListeners = new Set();
   const exitListeners = new Set();
   const signals = [];
+  const delays = [];
   const calls = {
     writes: [],
     resizes: [],
@@ -219,6 +220,9 @@ function createHarness({
         };
       },
       createNetworkRequestId: () => `network-${++networkRequestIdsCreated}`,
+      async delay(milliseconds) {
+        delays.push(milliseconds);
+      },
       async loadRuntime() {
         return runtime;
       },
@@ -269,6 +273,7 @@ function createHarness({
     terminal,
     calls,
     signals,
+    delays,
     timers,
     frames,
     networkRequestIdsCreated: () => networkRequestIdsCreated,
@@ -505,6 +510,101 @@ test("launches loopback networking with a private environment and emits ready be
     "validate-structural",
     "spawn",
   ]);
+});
+
+test("retries one legacy node-pty spawn failure before command readiness", async (t) => {
+  let attempts = 0;
+  const harness = createHarness({
+    dependencyOverrides: {
+      async loadNodePty() {
+        harness.calls.order.push("load-node-pty");
+        return {
+          spawn(...args) {
+            attempts += 1;
+            harness.calls.order.push("spawn");
+            harness.calls.spawn.push(args);
+            if (attempts === 1) throw new Error("posix_spawnp failed.");
+            return harness.terminal;
+          },
+        };
+      },
+    },
+  });
+  t.after(() => harness.helper.close());
+
+  harness.send(launch());
+  await harness.waitFor(() =>
+    harness.frames().some((frame) => frame.type === "ready"),
+  );
+
+  assert.equal(attempts, 2);
+  assert.deepEqual(harness.delays, [25]);
+  assert.deepEqual(
+    harness.frames().map((frame) => frame.type),
+    ["ready"],
+  );
+});
+
+test("reports repeated legacy node-pty spawn failure as pre-launch", async (t) => {
+  const harness = createHarness({
+    dependencyOverrides: {
+      async loadNodePty() {
+        harness.calls.order.push("load-node-pty");
+        return {
+          spawn(...args) {
+            harness.calls.order.push("spawn");
+            harness.calls.spawn.push(args);
+            throw new Error("posix_spawnp failed.");
+          },
+        };
+      },
+    },
+  });
+  t.after(() => harness.helper.close());
+
+  harness.send(launch());
+  await harness.waitFor(() =>
+    harness.frames().some((frame) => frame.type === "error"),
+  );
+
+  assert.equal(harness.calls.spawn.length, 2);
+  assert.deepEqual(harness.delays, [25]);
+  assert.match(
+    harness.frames().find((frame) => frame.type === "error").message,
+    /failed twice before the command started/,
+  );
+  assert.equal(harness.calls.cleanup, 1);
+  assert.equal(harness.calls.reset, 1);
+});
+
+test("does not retry a non-legacy PTY spawn failure", async (t) => {
+  const harness = createHarness({
+    dependencyOverrides: {
+      async loadNodePty() {
+        harness.calls.order.push("load-node-pty");
+        return {
+          spawn(...args) {
+            harness.calls.order.push("spawn");
+            harness.calls.spawn.push(args);
+            throw new Error("posix_spawn failed: Exec format error");
+          },
+        };
+      },
+    },
+  });
+  t.after(() => harness.helper.close());
+
+  harness.send(launch());
+  await harness.waitFor(() =>
+    harness.frames().some((frame) => frame.type === "error"),
+  );
+
+  assert.equal(harness.calls.spawn.length, 1);
+  assert.deepEqual(harness.delays, []);
+  assert.match(
+    harness.frames().find((frame) => frame.type === "error").message,
+    /Exec format error/,
+  );
 });
 
 test("allows host history bootstrap to settle before the late protected-root snapshot", async (t) => {

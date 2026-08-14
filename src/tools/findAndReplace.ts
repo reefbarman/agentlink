@@ -7,6 +7,7 @@ import {
 } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import { isAgentInstructionReadPath } from "../approvals/protectedPaths.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 
 import {
@@ -97,6 +98,7 @@ export async function handleFindAndReplace(
       // proposal-bound; read approval never authorizes the mutation.
       if (
         !inWorkspace &&
+        !isAgentInstructionReadPath(absolutePath) &&
         !approvalManager.isPathTrusted(sessionId, absolutePath)
       ) {
         const { approved, reason } = providers.pathAccessProvider

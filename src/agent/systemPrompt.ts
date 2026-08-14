@@ -339,6 +339,15 @@ If any answer is no, ask first with \`ask_user\`: batch related questions, make 
 
 If the task is genuinely trivial and unambiguous, proceed directly — but state the interpreted goal and key assumptions visibly in the first response so the user can correct course immediately.`;
 
+const ARCHITECT_INITIAL_REVIEW_GATE = `### Required Initial Plan Approval
+
+This foreground session began in Architect mode. The user chose that starting mode to review the plan before implementation, so the first exit from Architect requires explicit human approval even when Approve for Me is enabled.
+
+- Present the completed plan before requesting approval.
+- Use \`ask_user\` with a clear revise option and an approval option mapped to the intended next mode through \`modeSwitch\` (for example, \`{ "Approve the plan and switch to Code": "code" }\`). The mapped answer is the user's approval and performs the switch; do not also call \`switch_mode\`.
+- Do not call \`switch_mode\` directly to leave Architect while this requirement is pending. Direct calls are forced through a human approval card, but \`ask_user\` is preferred because it keeps plan approval and the mode change in one decision.
+- Rejection or a request for revisions leaves this requirement pending. After the first human-approved exit, later changes to or from Architect follow the normal Approve for Me behavior.`;
+
 const ARCHITECT_STANDARD_REVIEW_FLOW = `### Review & Iteration
 
 Architect mode is an **iterative loop**, not a one-shot plan dump. After presenting a plan or design:
@@ -356,7 +365,7 @@ This loop continues until the user explicitly approves the plan or asks to move 
 
 const ARCHITECT_APPROVE_FOR_ME_REVIEW_FLOW = `### Autonomous Review & Transition
 
-Approve for Me is enabled, so the architect review loop is autonomous:
+Approve for Me is enabled and this session's one-time initial Architect review is already satisfied or not required, so the architect review loop is autonomous:
 
 1. **Resolve genuine uncertainty** — Use \`ask_user\` only for unresolved requirements, constraints, or trade-offs that require the user's judgment. Do not ask the user to review or approve the plan, confirm proceeding, or choose whether to switch modes.
 2. **Review the plan** — Critically self-review the plan and use the background review agent where warranted. Incorporate valid findings before presenting it.
@@ -1019,6 +1028,7 @@ export async function buildModeInstructionBlock(
   options?: {
     agentMode?: AgentMode;
     approveForMe?: boolean;
+    initialArchitectReviewPending?: boolean;
     promptProfile?: PromptProfile;
   },
 ): Promise<string> {
@@ -1027,6 +1037,7 @@ export async function buildModeInstructionBlock(
     options?.agentMode,
     options?.promptProfile,
     options?.approveForMe,
+    options?.initialArchitectReviewPending,
   ).trim();
   const modeRules = await loadModeRules(cwd, mode);
   const rulesSection = modeRules ? `\n\n### Mode Rules\n\n${modeRules}` : "";
@@ -1046,12 +1057,21 @@ function buildModePrompt(
   agentMode?: AgentMode,
   promptProfile: PromptProfile = "compatibility",
   approveForMe = false,
+  initialArchitectReviewPending = false,
 ): string {
   const prompts =
     promptProfile === "reasoning" ? REASONING_MODE_PROMPTS : MODE_PROMPTS;
   const baseBuiltInPrompt = prompts[mode];
-  let builtInPrompt = baseBuiltInPrompt;
-  if (mode === "architect" && baseBuiltInPrompt && approveForMe) {
+  let builtInPrompt =
+    mode === "architect" && baseBuiltInPrompt && initialArchitectReviewPending
+      ? `${baseBuiltInPrompt}\n\n${ARCHITECT_INITIAL_REVIEW_GATE}`
+      : baseBuiltInPrompt;
+  if (
+    mode === "architect" &&
+    baseBuiltInPrompt &&
+    approveForMe &&
+    !initialArchitectReviewPending
+  ) {
     const autonomousPrompt = baseBuiltInPrompt.replace(
       ARCHITECT_STANDARD_REVIEW_FLOW,
       ARCHITECT_APPROVE_FOR_ME_REVIEW_FLOW,
@@ -1164,6 +1184,8 @@ export async function buildPromptArtifacts(
     skillCatalogBudgetChars?: number;
     /** Approve for Me is active: mode switches are allowed automatically. */
     approveForMe?: boolean;
+    /** Initial Architect sessions require one explicit human-approved exit. */
+    initialArchitectReviewPending?: boolean;
     /**
      * Where mode-specific instructions live. "system" (default) inlines them
      * in the system prompt; "conversation" keeps the system prompt
@@ -1221,6 +1243,7 @@ export async function buildPromptArtifacts(
         options?.agentMode,
         promptProfile.profile,
         options?.approveForMe,
+        options?.initialArchitectReviewPending,
       );
   const providerPrompts =
     promptProfile.profile === "reasoning"
@@ -1305,10 +1328,10 @@ export async function buildPromptArtifacts(
   const approveForMeSection = options?.approveForMe
     ? `\n\n## Mode Switching Under Approve for Me
 
-Approve for Me is enabled for this session: mode switches are allowed automatically, so a \`switch_mode\` call does not require Guardian or user approval and does not interrupt the user. This section overrides the mode-switch consent guidance elsewhere in this prompt:
+Approve for Me is enabled for this session: mode switches are normally allowed automatically, so a \`switch_mode\` call does not require Guardian or user approval and does not interrupt the user. This section overrides the mode-switch consent guidance elsewhere in this prompt, except when the current Architect mode instructions say the session's one-time initial plan review is still pending:
 
-- When a mode change is warranted, call \`switch_mode\` directly with a clear \`reason\`. Do not use \`ask_user\` to request permission to switch modes or to proceed — the switch is allowed automatically.
-- Never ask a question whose only purpose is mode-change or plan-approval consent. Keep using \`ask_user\` whenever you genuinely need the user's input on requirements, trade-offs, or open design decisions; if such a question's answer naturally implies a mode, you may still attach a \`modeSwitch\` map — the user's explicit choice remains valid consent.`
+- When a mode change is warranted, call \`switch_mode\` directly with a clear \`reason\`. Do not use \`ask_user\` to request permission to switch modes or to proceed unless the current Architect instructions require the one-time initial plan approval.
+- Never ask a question whose only purpose is mode-change or plan-approval consent, except for that one-time initial Architect plan approval. Keep using \`ask_user\` whenever you genuinely need the user's input on requirements, trade-offs, or open design decisions; if such a question's answer naturally implies a mode, you may still attach a \`modeSwitch\` map — the user's explicit choice remains valid consent.`
     : "";
 
   const boundedReviewSection =
@@ -1410,6 +1433,8 @@ export async function buildSystemPrompt(
     skillCatalogBudgetChars?: number;
     /** Approve for Me is active: mode switches are allowed automatically. */
     approveForMe?: boolean;
+    /** Initial Architect sessions require one explicit human-approved exit. */
+    initialArchitectReviewPending?: boolean;
   },
 ): Promise<string> {
   const artifacts = await buildPromptArtifacts(mode, cwd, options);

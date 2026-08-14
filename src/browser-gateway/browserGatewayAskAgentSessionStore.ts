@@ -386,8 +386,12 @@ export class BrowserGatewayAskAgentSessionStore {
   }
 
   getHistorySnapshot(): BrowserGatewayAskAgentHistorySnapshot {
+    // Keep the active session even when it is still empty: a freshly started
+    // chat must survive a helper restart, or the next send silently lands in
+    // the previously active session. Non-active empty sessions are dropped.
     const sessions = this.sessions.filter(
-      (session) => session.messages.length > 0,
+      (session) =>
+        session.messages.length > 0 || session.id === this.activeSessionId,
     );
     const activeSessionId = sessions.some(
       (session) => session.id === this.activeSessionId,
@@ -428,11 +432,27 @@ export class BrowserGatewayAskAgentSessionStore {
       .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
   }
 
-  createSession(now: number, title = "Ask Agent"): void {
+  createSession(
+    now: number,
+    title = "Ask Agent",
+    requestedSessionId?: string,
+  ): void {
+    const requestedId = requestedSessionId?.trim() || undefined;
+    if (requestedId && this.sessions.some((s) => s.id === requestedId)) {
+      // A retried create for an id the client already targets: just switch.
+      this.loadSession(requestedId);
+      return;
+    }
     const active = this.sessions.find(
       (session) => session.id === this.activeSessionId,
     );
     if (active && active.messages.length === 0) {
+      // Reuse the empty active session, adopting the client-minted id so the
+      // browser and helper agree on which session the next send targets.
+      if (requestedId) {
+        active.id = requestedId;
+        this.activeSessionId = requestedId;
+      }
       active.title = title;
       active.createdAt = now;
       active.lastActiveAt = now;
@@ -447,7 +467,7 @@ export class BrowserGatewayAskAgentSessionStore {
     }
 
     const session: BrowserGatewayAskAgentPersistedSession = {
-      id: this.nextSessionId(now),
+      id: requestedId ?? this.nextSessionId(now),
       title,
       createdAt: now,
       lastActiveAt: now,
@@ -458,6 +478,17 @@ export class BrowserGatewayAskAgentSessionStore {
     this.activeSessionId = session.id;
     this.streaming = false;
     this.clearEphemeralUiState();
+  }
+
+  /**
+   * Make the given session active for an incoming message, creating it when
+   * the id is unknown (for example after a helper restart discarded a session
+   * the browser is still displaying). Returns whether a session was created.
+   */
+  targetSession(sessionId: string, now: number): { created: boolean } {
+    if (this.loadSession(sessionId)) return { created: false };
+    this.createSession(now, "Ask Agent", sessionId);
+    return { created: true };
   }
 
   loadSession(sessionId: string): boolean {
@@ -1093,6 +1124,10 @@ export class BrowserGatewayAskAgentSessionStore {
     session.lastActiveAt = params.now;
     this.streaming = true;
     return message;
+  }
+
+  getAssistantMessageText(messageId: string): string {
+    return this.getAssistantMessage(messageId)?.content ?? "";
   }
 
   appendAssistantDelta(messageId: string, delta: string): void {

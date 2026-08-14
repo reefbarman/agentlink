@@ -26,6 +26,12 @@ export function addressChatWebviewMessage(
     sessionId:
       record.sessionId === null || typeof record.sessionId === "string"
         ? record.sessionId
-        : (selected?.sessionId ?? pinnedPane!.sessionId),
+        : selected
+          ? // A tab legitimately has a null sessionId before its session is
+            // created/hydrated; `??` must not treat that null as missing, or
+            // an unpinned view dereferences an absent pinnedPane and crashes
+            // the webview on any composer message.
+            selected.sessionId
+          : pinnedPane!.sessionId,
   };
 }

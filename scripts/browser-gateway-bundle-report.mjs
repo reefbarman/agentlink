@@ -180,6 +180,7 @@ export function verifyBrowserGatewayBundlePackaging(report, vscodeIgnore) {
     "dist/browser-gateway.css",
     "dist/browser-gateway-monaco.js",
     "dist/browser-gateway-monaco.css",
+    "dist/browser-gateway-notifications.js",
   ];
   for (const output of requiredExactOutputs) {
     if (!report.outputs.some((candidate) => candidate.path === output)) {

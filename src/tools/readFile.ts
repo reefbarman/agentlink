@@ -18,6 +18,7 @@ import {
 } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import { isAgentInstructionReadPath } from "../approvals/protectedPaths.js";
 import {
   approveOutsideWorkspaceAccess,
   type GuardianOutsideReadOptions,
@@ -700,13 +701,14 @@ export async function handleReadFile(
       params.path,
     );
 
-    // Outside-workspace gate — agentlink tmp artifacts (truncated tool results)
-    // are always readable without approval since we wrote them ourselves. Files
-    // bundled next to advertised skills are also readable because the model was
-    // explicitly instructed to load those skill resources for this session.
+    // Outside-workspace gate — AgentLink tmp artifacts (truncated tool results),
+    // exact agent instruction artifacts, and files bundled next to advertised
+    // skills are readable without approval. The instruction exemption is exact
+    // so it does not grant access to sibling memory, credentials, or config.
     if (
       !inWorkspace &&
       !isAgentlinkTmpArtifact(filePath) &&
+      !isAgentInstructionReadPath(filePath) &&
       !isAdvertisedSkillAssociatedFile(filePath, advertisedSkills) &&
       !approvalManager.isPathTrusted(sessionId, filePath)
     ) {

@@ -228,6 +228,12 @@ export class AgentSession {
    *  Owned by AgentSessionManager, which syncs it from the session's command
    *  approval policy and rebuilds the prompt when it changes. */
   approveForMe = false;
+  /**
+   * True until a foreground session that began in Architect mode successfully
+   * exits Architect with explicit human consent. Persisted so reload cannot
+   * remove or repeat the one-time review boundary.
+   */
+  initialArchitectReviewPending: boolean;
   /** Last OpenAI/Codex Responses API response ID used for optional stateful chaining. */
   providerResponseId: string | undefined;
 
@@ -299,6 +305,7 @@ export class AgentSession {
     workspaceFolders?: WorkspaceFolderInfo[];
     mcpToolDisclosure?: McpToolDisclosurePartition;
     skillCatalogBudgetChars?: number;
+    initialArchitectReviewPending: boolean;
   }) {
     this.id = randomUUID();
     this.mode = opts.mode;
@@ -331,6 +338,7 @@ export class AgentSession {
     this.providerId = opts.providerId;
     this.workspaceFolders = opts.workspaceFolders;
     this.mcpToolDisclosure = opts.mcpToolDisclosure;
+    this.initialArchitectReviewPending = opts.initialArchitectReviewPending;
   }
 
   static async create(opts: {
@@ -348,6 +356,8 @@ export class AgentSession {
     providerId?: string;
     workspaceFolders?: WorkspaceFolderInfo[];
     mcpToolDisclosure?: McpToolDisclosurePartition;
+    /** Restored sessions pass the persisted value; new sessions derive it. */
+    initialArchitectReviewPending?: boolean;
   }): Promise<AgentSession> {
     if (isProjectlessSessionScope(opts.projectScope)) {
       if (opts.mode !== "ask" || opts.background || opts.isBackground) {
@@ -373,6 +383,12 @@ export class AgentSession {
       opts.background || opts.isBackground || opts.lightweight
         ? "system"
         : "conversation";
+    const initialArchitectReviewPending =
+      opts.initialArchitectReviewPending ??
+      (opts.mode === "architect" &&
+        !opts.background &&
+        !opts.isBackground &&
+        !opts.lightweight);
     const artifacts = await buildPromptArtifacts(opts.mode, cwd, {
       devMode: opts.devMode,
       activeFilePath: opts.activeFilePath,
@@ -385,6 +401,7 @@ export class AgentSession {
       mcpToolCatalog: opts.mcpToolDisclosure?.catalog,
       agentMode: opts.agentMode,
       disabledSkillIds: opts.config.disabledSkillIds,
+      initialArchitectReviewPending,
       modeInstructionPlacement,
     });
     const agentMode =
@@ -408,6 +425,7 @@ export class AgentSession {
       workspaceFolders: opts.workspaceFolders,
       mcpToolDisclosure: opts.mcpToolDisclosure,
       skillCatalogBudgetChars: artifacts.skillCatalog?.budgetChars,
+      initialArchitectReviewPending,
     });
     session.setAdvertisedSkills(artifacts.skills);
     session.setSkillCatalogProjection(artifacts.skillCatalog);
@@ -464,6 +482,7 @@ export class AgentSession {
       projectScope: opts.projectScope,
       projectAvailability: "unavailable",
       providerId: opts.providerId,
+      initialArchitectReviewPending: false,
     });
   }
 
@@ -497,6 +516,7 @@ export class AgentSession {
     activeContextResourceUri?: string;
     providerId?: string;
     workspaceFolders?: WorkspaceFolderInfo[];
+    initialArchitectReviewPending?: boolean;
   }): AgentSession {
     const agentMode =
       opts.agentMode ??
@@ -529,6 +549,8 @@ export class AgentSession {
       activeContextResourceUri: opts.activeContextResourceUri,
       providerId: opts.providerId,
       workspaceFolders: opts.workspaceFolders,
+      initialArchitectReviewPending:
+        opts.initialArchitectReviewPending ?? false,
     });
   }
 
@@ -581,6 +603,7 @@ export class AgentSession {
               mcpToolCatalog: this.mcpToolDisclosure?.catalog,
               agentMode: this.agentMode,
               approveForMe: this.approveForMe,
+              initialArchitectReviewPending: this.initialArchitectReviewPending,
               modeInstructionPlacement: this.modeInstructionPlacement,
             })
           : undefined;
@@ -636,6 +659,7 @@ export class AgentSession {
         disabledSkillIds,
         skillCatalogBudgetChars: this.skillCatalogBudgetChars,
         approveForMe: this.approveForMe,
+        initialArchitectReviewPending: this.initialArchitectReviewPending,
         modeInstructionPlacement: this.modeInstructionPlacement,
       },
     );
@@ -647,6 +671,7 @@ export class AgentSession {
             {
               agentMode: this.agentMode,
               approveForMe: this.approveForMe,
+              initialArchitectReviewPending: this.initialArchitectReviewPending,
               promptProfile: artifacts.promptProfile.profile,
             },
           )
@@ -702,6 +727,7 @@ export class AgentSession {
         disabledSkillIds: this.disabledSkillIds,
         skillCatalogBudgetChars: this.skillCatalogBudgetChars,
         approveForMe: this.approveForMe,
+        initialArchitectReviewPending: this.initialArchitectReviewPending,
         modeInstructionPlacement: this.modeInstructionPlacement,
       },
     );
@@ -1077,6 +1103,7 @@ export class AgentSession {
       {
         agentMode: this.agentMode,
         approveForMe: this.approveForMe,
+        initialArchitectReviewPending: this.initialArchitectReviewPending,
         promptProfile: this.promptProfile.profile,
       },
     );
@@ -1163,6 +1190,7 @@ export class AgentSession {
     lineage?: PersistedSessionLineage;
     messages: AgentMessage[];
     modeInstructionAnchors?: ModeInstructionAnchor[];
+    initialArchitectReviewPending?: boolean;
   }): void {
     this.id = data.id;
     this.title = data.title;
@@ -1180,6 +1208,8 @@ export class AgentSession {
     this.runState = data.runState;
     this.fleetMetadata = data.fleetMetadata;
     this.lineage = data.lineage;
+    this.initialArchitectReviewPending =
+      data.initialArchitectReviewPending ?? false;
     this.messagesRevision++;
     this.messages = data.messages;
     if (data.modeInstructionAnchors?.length) {

@@ -27,7 +27,9 @@ import {
 } from "../../tools/context/getContext.js";
 import { hashContent } from "../../indexer/workerLib.js";
 import {
+  canonicalizePath,
   getWorkspaceRoots,
+  isPathWithinRoot,
   resolveAndValidatePath,
   tryGetFirstWorkspaceRoot,
 } from "../../util/paths.js";
@@ -35,6 +37,7 @@ import { getCodeIndexWorkspaceRootForPath } from "../../indexer/codeIndexPaths.j
 
 import type { ApprovalManager } from "../../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../../approvals/ApprovalPanelProvider.js";
+import { isAgentInstructionReadPath } from "../../approvals/protectedPaths.js";
 import { WorkingSetStore } from "../../tools/context/WorkingSetStore.js";
 import {
   approveOutsideWorkspaceAccess,
@@ -305,11 +308,29 @@ export function createVscodeStructuralGraphProvider(
   };
 }
 
+export interface VscodePathAccessOptions {
+  advertisedSkillPaths?: readonly string[];
+  signal?: AbortSignal;
+  guardian?: GuardianOutsideReadOptions;
+}
+
+function isWithinAdvertisedSkillDirectory(
+  filePath: string,
+  advertisedSkillPaths: readonly string[] = [],
+): boolean {
+  const canonicalFilePath = canonicalizePath(filePath);
+  return advertisedSkillPaths.some((skillPath) =>
+    isPathWithinRoot(
+      canonicalFilePath,
+      path.dirname(canonicalizePath(skillPath)),
+    ),
+  );
+}
+
 export function createVscodePathAccessProvider(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
-  signal?: AbortSignal,
-  guardian?: GuardianOutsideReadOptions,
+  options: VscodePathAccessOptions = {},
 ): PathAccessProvider {
   return {
     async ensureAccess(request) {
@@ -317,11 +338,18 @@ export function createVscodePathAccessProvider(
         return { approved: true };
       }
 
-      if (isAgentlinkTmpArtifact(request.absolutePath)) {
+      if (
+        isAgentlinkTmpArtifact(request.absolutePath) ||
+        isAgentInstructionReadPath(request.absolutePath)
+      ) {
         return { approved: true };
       }
 
       if (
+        isWithinAdvertisedSkillDirectory(
+          request.absolutePath,
+          options.advertisedSkillPaths,
+        ) ||
         approvalManager.isPathTrusted(request.sessionId, request.absolutePath)
       ) {
         return { approved: true };
@@ -332,8 +360,8 @@ export function createVscodePathAccessProvider(
         approvalManager,
         approvalPanel,
         request.sessionId,
-        signal,
-        ...(guardian ? [guardian] : []),
+        options.signal,
+        ...(options.guardian ? [options.guardian] : []),
       );
     },
   };

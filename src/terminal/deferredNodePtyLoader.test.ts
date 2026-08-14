@@ -90,7 +90,7 @@ function fakeFileOperations(overrides?: {
       JSON.stringify(
         overrides?.metadata ?? {
           name: "node-pty",
-          version: "1.1.0",
+          version: "1.2.0-beta.15",
           main: "./lib/index.js",
         },
       ),
@@ -204,9 +204,9 @@ describe("deferred node-pty loader", () => {
   });
 
   it.each([
-    { name: "wrong package", version: "1.1.0", main: "./lib/index.js" },
+    { name: "wrong package", version: "1.2.0-beta.15", main: "./lib/index.js" },
     { name: "node-pty", version: "2.0.0", main: "./lib/index.js" },
-    { name: "node-pty", version: "1.1.0", main: "./evil.js" },
+    { name: "node-pty", version: "1.2.0-beta.15", main: "./evil.js" },
   ])("rejects unpinned package metadata: $name $version $main", (metadata) => {
     const loader = createDeferredNodePtyLoader({
       extensionRoot,
@@ -215,7 +215,9 @@ describe("deferred node-pty loader", () => {
       fileOperations: fakeFileOperations({ metadata }),
       createRequire: vi.fn(),
     });
-    expect(() => loader.load()).toThrow("metadata must be node-pty 1.1.0");
+    expect(() => loader.load()).toThrow(
+      "metadata must be node-pty 1.2.0-beta.15",
+    );
   });
 
   it("rejects invalid module shapes and retries rather than caching failure", () => {

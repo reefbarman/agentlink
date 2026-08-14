@@ -182,7 +182,10 @@ export class BrowserGatewayOwnerProjectionAdapter {
     try {
       const publication = this.createCheckpointPublication(
         this.sources.capture(),
-        true,
+        // Advance the sequence: state may have changed while undemanded, and a
+        // resubscribing consumer holding the old sequence must not treat this
+        // fresh baseline as a duplicate.
+        { rebaseProjection: true, advanceSequence: true },
       );
       this.demanded = true;
       this.publish(publication);
@@ -213,7 +216,12 @@ export class BrowserGatewayOwnerProjectionAdapter {
     { kind: "checkpoint" }
   > {
     if (this.disposed) throw new Error("owner projection adapter is disposed");
-    return this.createCheckpointPublication(this.sources.capture(), true);
+    // Advance the sequence so a consumer recovering from divergent state at
+    // the same sequence re-applies this baseline instead of ignoring it.
+    return this.createCheckpointPublication(this.sources.capture(), {
+      rebaseProjection: true,
+      advanceSequence: true,
+    });
   }
 
   publishTranscriptHistory(
@@ -485,18 +493,26 @@ export class BrowserGatewayOwnerProjectionAdapter {
 
   private createCheckpointPublication(
     readSet: BrowserGatewayOwnerProjectionReadSet,
-    rebaseProjection = false,
+    options: { rebaseProjection?: boolean; advanceSequence?: boolean } = {},
   ): Extract<BrowserGatewayOwnerProjectionPublication, { kind: "checkpoint" }> {
     const { state, details } = this.projectReadSet(readSet);
+    // Checkpoints published into the stream must claim a fresh sequence, or
+    // consumers that already applied the preceding event discard them as
+    // duplicates — dropping full-state replacements (for example a session
+    // switch) and then applying later incremental events onto stale state.
+    const checkpointSequence = options.advanceSequence
+      ? this.ownerSequence + 1
+      : this.ownerSequence;
     const checkpoint = parseBrowserGatewayOwnerCheckpoint({
       protocolVersion: BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
       ...this.identity,
-      checkpointId: this.createId("checkpoint", this.ownerSequence),
-      checkpointSequence: this.ownerSequence,
+      checkpointId: this.createId("checkpoint", checkpointSequence),
+      checkpointSequence,
       emittedAt: this.now(),
       ...state,
     });
-    if (rebaseProjection) this.projected = state;
+    if (options.advanceSequence) this.ownerSequence = checkpointSequence;
+    if (options.rebaseProjection) this.projected = state;
     return {
       kind: "checkpoint",
       checkpoint,
@@ -507,7 +523,12 @@ export class BrowserGatewayOwnerProjectionAdapter {
   private publishCheckpoint(
     readSet: BrowserGatewayOwnerProjectionReadSet,
   ): void {
-    this.publish(this.createCheckpointPublication(readSet, true));
+    this.publish(
+      this.createCheckpointPublication(readSet, {
+        rebaseProjection: true,
+        advanceSequence: true,
+      }),
+    );
   }
 
   private projectReadSet(

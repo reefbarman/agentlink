@@ -47,6 +47,10 @@ export interface BrowserGatewayHelperDiscoveryRecord {
   mdnsUrl?: string;
   /** Direct-IP LAN URLs (non-loopback IPv4 interfaces), empty when LAN off. */
   lanUrls?: string[];
+  /** True when LAN browser traffic is served over HTTPS using AgentLink's local CA. */
+  secureLanAccess?: boolean;
+  /** Public CA certificate path to install on devices that access the secure LAN gateway. */
+  localCaCertificatePath?: string;
 }
 
 export interface BrowserGatewayHelperHealthResponse {

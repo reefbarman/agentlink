@@ -62,6 +62,8 @@ interface ActiveAskAgentControllerTurn extends AskAgentControllerTurn {
   readonly controller: AbortController;
   readonly settled: Promise<void>;
   stopped: boolean;
+  /** Whether the turn already received a missing-response completion nudge. */
+  finalStatusNudged: boolean;
   settle(): void;
 }
 
@@ -404,6 +406,7 @@ export class AskAgentController {
       signal: controller.signal,
       controller,
       stopped: false,
+      finalStatusNudged: false,
       settled,
       settle: () => {
         if (didSettle) return;
@@ -413,6 +416,21 @@ export class AskAgentController {
     };
     this.notifyActiveTurnChanged(true);
     return this.activeTurn;
+  }
+
+  getActiveTurnMessageId(): string | null {
+    return this.activeTurn?.messageId ?? null;
+  }
+
+  /**
+   * Record that the active turn was nudged to actually deliver a response
+   * before completing. Returns true only for the first nudge of a turn, so a
+   * model that insists on completing without content cannot loop forever.
+   */
+  noteFinalStatusNudge(): boolean {
+    if (!this.activeTurn || this.activeTurn.finalStatusNudged) return false;
+    this.activeTurn.finalStatusNudged = true;
+    return true;
   }
 
   isTurnStopped(turn: AskAgentControllerTurn): boolean {

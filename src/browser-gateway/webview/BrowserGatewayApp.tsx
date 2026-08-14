@@ -137,6 +137,7 @@ import {
   BROWSER_GATEWAY_ASK_AGENT_TAB_ID,
   BROWSER_GATEWAY_ASK_AGENT_TAB_TITLE,
 } from "../askAgentTabs";
+import { BROWSER_GATEWAY_ASK_AGENT_SESSION_ID_PREFIX } from "../browserGatewayAskAgentIdentity";
 import {
   RELAY_SHADOW_OVERRIDE_STORAGE_KEY,
   resolveRelayClientEnabled,
@@ -152,6 +153,19 @@ import {
   requestDirectSessionDetail,
   type BrowserGatewaySessionDetailRequest,
 } from "./sessionDetailTransport";
+import {
+  BrowserGatewayNotificationTracker,
+  browserGatewayNotificationPromptDismissed,
+  notificationPermissionState,
+  notificationsAvailable,
+  readBrowserGatewayNotificationPreference,
+  registerBrowserGatewayNotificationServiceWorker,
+  requestBrowserGatewayNotificationPermission,
+  showBrowserGatewayNotification,
+  writeBrowserGatewayNotificationPreference,
+  writeBrowserGatewayNotificationPromptDismissed,
+  type BrowserGatewayNotificationPreference,
+} from "./browserGatewayNotifications";
 
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
@@ -721,11 +735,19 @@ export function mergeDetachedSessionDetail(
     ...ownerSnapshot,
     ui: {
       ...ownerSnapshot.ui,
-      approval: detail.ui.approval,
-      question: detail.ui.question,
-      questionProgress: detail.ui.questionProgress,
-      formElicitation: detail.ui.formElicitation,
-      urlElicitation: detail.ui.urlElicitation,
+      // Instance-level interaction state is authoritative for the active
+      // workspace session. Do not hide its approval merely because the browser
+      // is currently rendering another logical tab whose detail has no local
+      // interaction; the instance attention indicator otherwise leads to an
+      // empty activity shelf.
+      approval: detail.ui.approval ?? ownerSnapshot.ui.approval,
+      question: detail.ui.question ?? ownerSnapshot.ui.question,
+      questionProgress:
+        detail.ui.questionProgress ?? ownerSnapshot.ui.questionProgress,
+      formElicitation:
+        detail.ui.formElicitation ?? ownerSnapshot.ui.formElicitation,
+      urlElicitation:
+        detail.ui.urlElicitation ?? ownerSnapshot.ui.urlElicitation,
     },
     session: {
       ...ownerSnapshot.session,
@@ -1241,6 +1263,26 @@ export function BrowserGatewayApp({
   const snapshotCacheRef = useRef<
     Map<string, { generation: number; snapshot: GatewaySnapshot }>
   >(new Map());
+  const notificationTrackerRef = useRef(
+    new BrowserGatewayNotificationTracker(),
+  );
+  const [notificationPreference, setNotificationPreference] =
+    useState<BrowserGatewayNotificationPreference>(() =>
+      readBrowserGatewayNotificationPreference(),
+    );
+  const notificationPreferenceRef = useRef(notificationPreference);
+  notificationPreferenceRef.current = notificationPreference;
+  const [notificationPermission, setNotificationPermission] = useState(() =>
+    notificationPermissionState(),
+  );
+  const [notificationSettingsOpen, setNotificationSettingsOpen] =
+    useState(false);
+  const [notificationPromptOpen, setNotificationPromptOpen] = useState(
+    () =>
+      notificationPermissionState() === "default" &&
+      !browserGatewayNotificationPromptDismissed(),
+  );
+  const [notificationStatus, setNotificationStatus] = useState("");
   const workspaceHydrationInFlightRef = useRef<Set<string>>(new Set());
   const [ownerSnapshotRevision, setOwnerSnapshotRevision] = useState(0);
   const initialLogicalSelection =
@@ -1271,6 +1313,9 @@ export function BrowserGatewayApp({
     tabId: initialSelectedTabId,
     generation: 0,
   });
+  // Keep Ask Agent's active session separate from the rendered snapshot so an
+  // out-of-order stream update cannot switch the chat back to a prior session.
+  const askAgentSessionTargetRef = useRef<string | null>(null);
   const touchTabPointerRef = useRef<{
     instanceId: string;
     pointerId: number;
@@ -1428,6 +1473,21 @@ export function BrowserGatewayApp({
       generation: number,
       sourceEventPaint?: RelaySourceEventPaintMarker,
     ): boolean => {
+      const incomingAskAgentSessionId =
+        tabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID
+          ? (next.session.foreground?.sessionId ?? null)
+          : null;
+      const expectedAskAgentSessionId = askAgentSessionTargetRef.current;
+      if (
+        incomingAskAgentSessionId &&
+        expectedAskAgentSessionId &&
+        incomingAskAgentSessionId !== expectedAskAgentSessionId
+      ) {
+        return false;
+      }
+      if (incomingAskAgentSessionId) {
+        askAgentSessionTargetRef.current = incomingAskAgentSessionId;
+      }
       const cached = snapshotCacheRef.current.get(tabId);
       const selectedLogicalTab = selectedLogicalTabRef.current;
       const incomingWorkspace = next.session.chatWorkspace;
@@ -1476,13 +1536,37 @@ export function BrowserGatewayApp({
                 },
               }
             : next;
-      if (!cached || generation >= cached.generation) {
-        snapshotCacheRef.current.set(tabId, {
-          generation,
-          snapshot: normalizedNext,
-        });
-        setOwnerSnapshotRevision((revision) => revision + 1);
-      }
+      if (cached && generation < cached.generation) return false;
+      snapshotCacheRef.current.set(tabId, {
+        generation,
+        snapshot: normalizedNext,
+      });
+      setOwnerSnapshotRevision((revision) => revision + 1);
+      const currentSelectedTabId = selectedTabIdRef.current;
+      const currentLogicalSelection = selectedLogicalTabRef.current;
+      const selectedSnapshot =
+        snapshotCacheRef.current.get(currentSelectedTabId)?.snapshot;
+      const selectedSessionId =
+        currentLogicalSelection?.instanceId === currentSelectedTabId
+          ? currentLogicalSelection.sessionId
+          : (selectedSnapshot?.session.foreground?.sessionId ?? null);
+      void notificationTrackerRef.current.process({
+        scopeKey: `${tabId}:${normalizedNext.session.foreground?.sessionId ?? "none"}`,
+        snapshot: {
+          approval: normalizedNext.ui.approval,
+          question:
+            normalizedNext.session.foreground?.questionRequest ??
+            normalizedNext.ui.question,
+          foreground: normalizedNext.session.foreground,
+          background: normalizedNext.background,
+        },
+        preference: notificationPreferenceRef.current,
+        selectedSessionId,
+        browser: {
+          isDocumentVisible: () => document.visibilityState === "visible",
+          show: showBrowserGatewayNotification,
+        },
+      });
       if (
         selectedTabIdRef.current !== tabId ||
         selectedTabGenerationRef.current !== generation
@@ -1530,6 +1614,15 @@ export function BrowserGatewayApp({
       return true;
     },
     [],
+  );
+  const commitAskAgentSnapshot = useCallback(
+    (next: GatewaySnapshot): boolean =>
+      commitSnapshot(
+        next,
+        BROWSER_GATEWAY_ASK_AGENT_TAB_ID,
+        selectedTabGenerationRef.current,
+      ),
+    [commitSnapshot],
   );
   const [questionContextMode, setQuestionContextMode] = useState<{
     requestId: string;
@@ -1580,8 +1673,6 @@ export function BrowserGatewayApp({
   const pendingNewSessionRef = useRef<Promise<GatewaySnapshot | null> | null>(
     null,
   );
-  const askAgentNewSessionSendTargetRef =
-    useRef<Promise<GatewaySnapshot | null> | null>(null);
   const [askAgentCapabilities, setAskAgentCapabilities] = useState<
     AskAgentCapabilityStatus[]
   >([]);
@@ -1692,7 +1783,6 @@ export function BrowserGatewayApp({
   const questionProgressOriginRef = useRef<string>(
     `br-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`,
   );
-  const seenFleetEventIdsRef = useRef<Set<string> | null>(null);
 
   useEffect(() => {
     return () => {
@@ -2205,29 +2295,50 @@ export function BrowserGatewayApp({
     transcriptView?.visible,
   ]);
   useEffect(() => {
-    const currentIds = new Set(
-      background.flatMap(
-        (session) => session.events?.map((event) => event.id) ?? [],
-      ),
-    );
-    if (seenFleetEventIdsRef.current === null) {
-      seenFleetEventIdsRef.current = currentIds;
+    void registerBrowserGatewayNotificationServiceWorker();
+  }, []);
+
+  async function enableBrowserNotifications(): Promise<void> {
+    const permission = await requestBrowserGatewayNotificationPermission();
+    setNotificationPermission(permission);
+    writeBrowserGatewayNotificationPromptDismissed(true);
+    setNotificationPromptOpen(false);
+    if (permission === "granted") {
+      setNotificationPreference((current) => {
+        const next = current === "off" ? "attention" : current;
+        writeBrowserGatewayNotificationPreference(next);
+        return next;
+      });
+      setNotificationStatus("Browser notifications enabled");
       return;
     }
-    if (
-      typeof Notification !== "undefined" &&
-      Notification.permission === "granted"
-    ) {
-      for (const session of background) {
-        for (const event of session.events ?? []) {
-          if (!seenFleetEventIdsRef.current.has(event.id) && !event.readAt) {
-            new Notification(session.task, { body: event.summary });
-          }
-        }
-      }
-    }
-    seenFleetEventIdsRef.current = currentIds;
-  }, [background]);
+    setNotificationStatus(
+      permission === "unavailable"
+        ? "Notifications require a secure browser origin (HTTPS or localhost)."
+        : permission === "denied"
+          ? "Notifications are blocked in this browser."
+          : "Notification permission was not granted.",
+    );
+  }
+
+  function dismissBrowserNotificationPrompt(): void {
+    writeBrowserGatewayNotificationPromptDismissed(true);
+    setNotificationPromptOpen(false);
+  }
+
+  function setBrowserNotificationPreference(
+    preference: BrowserGatewayNotificationPreference,
+  ): void {
+    setNotificationPreference(preference);
+    writeBrowserGatewayNotificationPreference(preference);
+    setNotificationStatus(
+      preference === "off"
+        ? "Browser notifications turned off"
+        : notificationPermission === "granted"
+          ? "Browser notification preference saved"
+          : "Choose Enable notifications to allow browser alerts.",
+    );
+  }
   const pendingApproval = snapshot?.ui.approval ?? null;
   const pendingQuestion =
     foreground?.questionRequest ?? snapshot?.ui.question ?? null;
@@ -3433,7 +3544,7 @@ export function BrowserGatewayApp({
         setSendStatus(`Dismiss failed: ${body.error ?? response.status}`);
         return;
       }
-      setSnapshot(body.snapshot);
+      commitAskAgentSnapshot(body.snapshot);
       logAskAgentBrowserEvent("memory.nudge.dismiss", {
         ok: true,
         kind: nudge.kind,
@@ -3517,7 +3628,7 @@ export function BrowserGatewayApp({
         setSendStatus(`Read grant failed: ${body.error ?? response.status}`);
         return;
       }
-      setSnapshot(body.snapshot);
+      commitAskAgentSnapshot(body.snapshot);
       setAskAgentReadGrantPath("");
       setSendStatus("Read-only access granted for Ask Agent.");
       logAskAgentBrowserEvent("read_grant.add", { ok: true });
@@ -3555,7 +3666,7 @@ export function BrowserGatewayApp({
         );
         return;
       }
-      setSnapshot(body.snapshot);
+      commitAskAgentSnapshot(body.snapshot);
       setSendStatus("Read-only access revoked.");
       logAskAgentBrowserEvent("read_grant.revoke", { ok: true });
     } catch (err) {
@@ -3606,7 +3717,7 @@ export function BrowserGatewayApp({
         );
         return;
       }
-      setSnapshot(body.snapshot);
+      commitAskAgentSnapshot(body.snapshot);
       setShowAskAgentHandoff(false);
       setSendStatus("Review the project handoff before launching it.");
       logAskAgentBrowserEvent("project_handoff.propose", {
@@ -3648,7 +3759,7 @@ export function BrowserGatewayApp({
         );
         return;
       }
-      setSnapshot(body.snapshot);
+      commitAskAgentSnapshot(body.snapshot);
       setSendStatus("Project handoff cancelled.");
       logAskAgentBrowserEvent("project_handoff.cancel", { ok: true });
     } catch (err) {
@@ -3682,7 +3793,7 @@ export function BrowserGatewayApp({
         snapshot?: GatewaySnapshot;
       };
       if (body.snapshot) {
-        setSnapshot(body.snapshot);
+        commitAskAgentSnapshot(body.snapshot);
       }
       if (!response.ok || !body.ok) {
         setSendStatus(
@@ -3756,7 +3867,7 @@ export function BrowserGatewayApp({
         return null;
       }
       const nextSnapshot = await readGatewaySnapshotResponse(response);
-      setSnapshot(nextSnapshot.snapshot);
+      commitAskAgentSnapshot(nextSnapshot.snapshot);
       if (nextSnapshot.askAgentCapabilities) {
         setAskAgentCapabilities(nextSnapshot.askAgentCapabilities);
       }
@@ -3790,23 +3901,7 @@ export function BrowserGatewayApp({
     targetForeground?: GatewaySnapshot["session"]["foreground"],
     interject = false,
   ): Promise<boolean> {
-    let pendingNewSessionForeground:
-      | GatewaySnapshot["session"]["foreground"]
-      | null = null;
-    let newSessionSendTarget: Promise<GatewaySnapshot | null> | null = null;
     if (isAskAgentSelected) {
-      newSessionSendTarget = askAgentNewSessionSendTargetRef.current;
-      if (newSessionSendTarget) {
-        setSendStatus("Waiting for new session…");
-        pendingNewSessionForeground =
-          (await newSessionSendTarget)?.session.foreground ?? null;
-        if (!pendingNewSessionForeground) {
-          setSendStatus(
-            "Message not sent because the new session failed to start.",
-          );
-          return false;
-        }
-      }
       const pendingModelSelection = pendingModelSelectionRef.current;
       if (pendingModelSelection) {
         setSendStatus("Waiting for model switch…");
@@ -3817,10 +3912,18 @@ export function BrowserGatewayApp({
       }
     }
     const activeForeground =
-      targetForeground ??
-      pendingNewSessionForeground ??
-      (await ensureAskAgentForeground());
-    if (!activeForeground) {
+      targetForeground ?? (await ensureAskAgentForeground());
+    const askAgentSessionTarget =
+      isAskAgentSelected && askAgentSessionTargetRef.current
+        ? askAgentSessionTargetRef.current
+        : null;
+    const sendForeground =
+      activeForeground &&
+      askAgentSessionTarget &&
+      activeForeground.sessionId !== askAgentSessionTarget
+        ? { ...activeForeground, sessionId: askAgentSessionTarget }
+        : activeForeground;
+    if (!sendForeground) {
       logAskAgentBrowserEvent("send.ignored", {
         reason: "missing_foreground",
         askAgentSelected: isAskAgentSelected,
@@ -3837,7 +3940,7 @@ export function BrowserGatewayApp({
       ? null
       : selectedLogicalTabRef.current;
     const detachedSendTarget =
-      selectedSendTarget?.sessionId === activeForeground.sessionId
+      selectedSendTarget?.sessionId === sendForeground.sessionId
         ? selectedSendTarget
         : null;
 
@@ -3947,7 +4050,7 @@ export function BrowserGatewayApp({
           body.snapshot &&
           body.result?.disposition
         ) {
-          setSnapshot(body.snapshot);
+          commitAskAgentSnapshot(body.snapshot);
           const changed = autonomousMemoryChanged(body.result.disposition);
           setSendStatus(
             changed
@@ -3990,19 +4093,19 @@ export function BrowserGatewayApp({
       setOptimisticUserMessages((current) => [
         ...current,
         {
-          sessionId: activeForeground.sessionId,
+          sessionId: sendForeground.sessionId,
           message: optimisticUserMessage,
         },
       ]);
       setSendStatus("Sending…");
       logAskAgentBrowserEvent("send.start", {
         askAgentSelected: isAskAgentSelected,
-        sessionId: activeForeground.sessionId,
+        sessionId: sendForeground.sessionId,
         textChars: trimmed.length,
         attachmentCount: attachments.length,
         imageCount: images.length,
         documentCount: documents.length,
-        model: activeForeground.model,
+        model: sendForeground.model,
         reasoningEffort: effectiveReasoningEffort,
         origin,
         interject,
@@ -4018,7 +4121,9 @@ export function BrowserGatewayApp({
         displayText === undefined &&
         slashCommandLabel === undefined;
       if (relayEligible) {
-        const relayOperationId = randomId();
+        // The owner commits this operation id as the transcript message id, so
+        // it must match the optimistic row for reconciliation rather than append.
+        const relayOperationId = userMessageId;
         if (detachedSendTarget) {
           pendingRelaySendSelectionsRef.current.set(
             relayOperationId,
@@ -4030,7 +4135,7 @@ export function BrowserGatewayApp({
           const relay = await dispatchRelayCommand(
             {
               kind: "session.send",
-              sessionId: activeForeground.sessionId,
+              sessionId: sendForeground.sessionId,
               text: trimmed,
               detailHandles: [],
             },
@@ -4060,12 +4165,6 @@ export function BrowserGatewayApp({
       const sendPath = isAskAgentSelected
         ? "/api/ask-agent/send"
         : buildApiPath("/api/send");
-      if (
-        isAskAgentSelected &&
-        askAgentNewSessionSendTargetRef.current === newSessionSendTarget
-      ) {
-        askAgentNewSessionSendTargetRef.current = null;
-      }
       const response = await fetch(sendPath, {
         method: "POST",
         credentials: "same-origin",
@@ -4076,12 +4175,12 @@ export function BrowserGatewayApp({
         body: JSON.stringify({
           text: trimmed,
           id: userMessageId,
-          sessionId: activeForeground.sessionId,
+          sessionId: sendForeground.sessionId,
           projectId: isAskAgentSelected
             ? undefined
             : snapshot?.session.foreground?.project?.projectId,
-          mode: activeForeground.mode,
-          model: activeForeground.model,
+          mode: sendForeground.mode,
+          model: sendForeground.model,
           reasoningEffort: effectiveReasoningEffort,
           thinkingEnabled: effectiveReasoningEffort !== "none",
           attachments,
@@ -4101,12 +4200,16 @@ export function BrowserGatewayApp({
         error?: string;
         snapshot?: GatewaySnapshot;
       };
-      if (!relayClientEnabled && body.ok && body.snapshot) {
-        commitSnapshot(
-          body.snapshot,
-          actionOrigin.tabId,
-          actionOrigin.generation,
-        );
+      if (body.ok && body.snapshot) {
+        if (isAskAgentSelected) {
+          commitAskAgentSnapshot(body.snapshot);
+        } else if (!relayClientEnabled) {
+          commitSnapshot(
+            body.snapshot,
+            actionOrigin.tabId,
+            actionOrigin.generation,
+          );
+        }
       }
       if (!body.ok) removeOptimisticUserMessage();
       if (body.ok && detachedSendTarget) {
@@ -4114,7 +4217,7 @@ export function BrowserGatewayApp({
       }
       logAskAgentBrowserEvent("send.response", {
         askAgentSelected: isAskAgentSelected,
-        sessionId: activeForeground.sessionId,
+        sessionId: sendForeground.sessionId,
         ok: Boolean(body.ok),
         queued: Boolean(body.queued),
         interjected: Boolean(body.interjected),
@@ -4138,7 +4241,7 @@ export function BrowserGatewayApp({
     } catch (err) {
       logAskAgentBrowserEvent("send.error", {
         askAgentSelected: isAskAgentSelected,
-        sessionId: activeForeground.sessionId,
+        sessionId: sendForeground.sessionId,
         error: String(err),
       });
       removeOptimisticUserMessage();
@@ -4362,7 +4465,7 @@ export function BrowserGatewayApp({
         };
         if (body.ok && body.snapshot) {
           if (isAskAgentSelected) {
-            setSnapshot(body.snapshot);
+            commitAskAgentSnapshot(body.snapshot);
           } else {
             commitSnapshot(
               body.snapshot,
@@ -4430,41 +4533,147 @@ export function BrowserGatewayApp({
     });
   };
 
-  async function createNewSession(
-    projectId?: string,
-    stopRunning = false,
-  ): Promise<GatewaySnapshot | null> {
-    try {
-      const selection = isAskAgentSelected
-        ? null
-        : selectedLogicalTabRef.current;
-      const response = await fetch(
-        isAskAgentSelected
-          ? "/api/ask-agent/session/new"
-          : buildApiPath("/api/session/new"),
+  /**
+   * Start a new Ask Agent session. The session id is minted client-side and
+   * targeted synchronously, so the next send goes to the new session even if
+   * the helper request below is still in flight, hangs, or the helper
+   * restarts before the first message: the send materializes the session
+   * server-side by id. This is what makes "New Chat → send" immune to helper
+   * handoffs — the previous session can no longer swallow the message.
+   */
+  function startAskAgentSession(): {
+    sessionId: string;
+    ready: Promise<GatewaySnapshot | null>;
+  } {
+    const sessionId = `${BROWSER_GATEWAY_ASK_AGENT_SESSION_ID_PREFIX}${randomId()}`;
+    askAgentSessionTargetRef.current = sessionId;
+    logAskAgentBrowserEvent("session.new.start", { sessionId });
+    // Optimistically clear the transcript. The commit guard now rejects any
+    // snapshot for a different session, so a stale stream update cannot bring
+    // the previous transcript back.
+    const cached = snapshotCacheRef.current.get(
+      BROWSER_GATEWAY_ASK_AGENT_TAB_ID,
+    )?.snapshot;
+    // The selected snapshot can contain a newer model/thinking choice than the
+    // cache while its selection request is settling. Preserve what the user is
+    // currently seeing when optimistically starting the next chat.
+    const base = (isAskAgentSelected ? snapshot : null) ?? cached;
+    if (base?.session.foreground) {
+      commitSnapshot(
         {
+          ...base,
+          ui: {
+            ...base.ui,
+            approval: null,
+            question: null,
+            questionProgress: null,
+          },
+          session: {
+            ...base.session,
+            foreground: {
+              ...base.session.foreground,
+              sessionId,
+              title: BROWSER_GATEWAY_ASK_AGENT_TAB_TITLE,
+              originalPrompt: undefined,
+              status: "idle",
+              streaming: false,
+              interrupted: undefined,
+              projectedMessages: [],
+              messageQueue: [],
+              questionRequest: null,
+              detectedQuestion: null,
+              todos: [],
+              restoringSession: false,
+              revertRecoveryNotice: null,
+              lastInputTokens: 0,
+              lastOutputTokens: 0,
+              lastCacheReadTokens: 0,
+              estimatedTotalUsed: 0,
+            },
+          },
+        },
+        BROWSER_GATEWAY_ASK_AGENT_TAB_ID,
+        selectedTabGenerationRef.current,
+      );
+    }
+    setShowHistory(false);
+    setShowMcpStatus(false);
+    const ready = (async (): Promise<GatewaySnapshot | null> => {
+      try {
+        const response = await fetch("/api/ask-agent/session/new", {
           method: "POST",
           credentials: "same-origin",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${authToken}`,
           },
-          body: JSON.stringify({
-            mode: isAskAgentSelected ? "ask" : (foreground?.mode ?? "code"),
-            projectId: isAskAgentSelected
-              ? undefined
-              : (projectId ?? snapshot?.session.defaultProjectId),
-            selection: selection
-              ? {
-                  controllerEpoch: selection.controllerEpoch,
-                  tabId: selection.tabId,
-                  sessionId: selection.sessionId,
-                }
+          body: JSON.stringify({ mode: "ask", sessionId }),
+          signal:
+            typeof AbortSignal.timeout === "function"
+              ? AbortSignal.timeout(15_000)
               : undefined,
-            stopRunning,
-          }),
+        });
+        const body = (await response.json()) as {
+          ok?: boolean;
+          snapshot?: GatewaySnapshot;
+          reason?: string;
+          error?: string;
+        };
+        logAskAgentBrowserEvent("session.new.response", {
+          sessionId,
+          ok: Boolean(body.ok),
+          status: response.status,
+          error: body.error ?? body.reason ?? null,
+        });
+        if (!body.ok || !body.snapshot) {
+          // The first send will create the session by id; no user-facing
+          // failure unless sending also fails.
+          return null;
+        }
+        commitSnapshot(
+          body.snapshot,
+          BROWSER_GATEWAY_ASK_AGENT_TAB_ID,
+          selectedTabGenerationRef.current,
+        );
+        void fetchSessions();
+        return body.snapshot;
+      } catch (error) {
+        logAskAgentBrowserEvent("session.new.error", {
+          sessionId,
+          error: String(error),
+        });
+        return null;
+      }
+    })();
+    return { sessionId, ready };
+  }
+
+  async function createNewSession(
+    projectId?: string,
+    stopRunning = false,
+  ): Promise<GatewaySnapshot | null> {
+    try {
+      const selection = selectedLogicalTabRef.current;
+      const response = await fetch(buildApiPath("/api/session/new"), {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
         },
-      );
+        body: JSON.stringify({
+          mode: foreground?.mode ?? "code",
+          projectId: projectId ?? snapshot?.session.defaultProjectId,
+          selection: selection
+            ? {
+                controllerEpoch: selection.controllerEpoch,
+                tabId: selection.tabId,
+                sessionId: selection.sessionId,
+              }
+            : undefined,
+          stopRunning,
+        }),
+      });
       const body = (await response.json()) as {
         ok?: boolean;
         snapshot?: GatewaySnapshot;
@@ -4528,12 +4737,16 @@ export function BrowserGatewayApp({
   }
 
   const handleNewSession = (): void => {
+    if (isAskAgentSelected) {
+      // Never gated on an in-flight request: each click targets a freshly
+      // minted session id immediately, so a hung earlier request can't turn
+      // the click into a silent no-op.
+      void startAskAgentSession().ready;
+      return;
+    }
     if (pendingNewSessionRef.current) return;
     const pending = createNewSession();
     pendingNewSessionRef.current = pending;
-    if (isAskAgentSelected) {
-      askAgentNewSessionSendTargetRef.current = pending;
-    }
     void pending.finally(() => {
       if (pendingNewSessionRef.current === pending) {
         pendingNewSessionRef.current = null;
@@ -4561,8 +4774,9 @@ export function BrowserGatewayApp({
   };
 
   const handleLoadSession = (sessionId: string, stopRunning = false): void => {
+    const previousAskAgentSessionTarget = askAgentSessionTargetRef.current;
     if (isAskAgentSelected) {
-      askAgentNewSessionSendTargetRef.current = null;
+      askAgentSessionTargetRef.current = sessionId;
     }
     void (async () => {
       try {
@@ -4619,12 +4833,19 @@ export function BrowserGatewayApp({
           return;
         }
         if (!response.ok || body.ok === false) {
+          if (isAskAgentSelected) {
+            askAgentSessionTargetRef.current = previousAskAgentSessionTarget;
+          }
           setSessionHistoryError(
             `Failed to load session: ${body.error ?? body.reason ?? response.status}`,
           );
           return;
         }
-        if (!relayClientEnabled && body.snapshot) {
+        if (isAskAgentSelected && body.snapshot) {
+          askAgentSessionTargetRef.current =
+            body.snapshot.session.foreground?.sessionId ?? null;
+          commitAskAgentSnapshot(body.snapshot);
+        } else if (!relayClientEnabled && body.snapshot) {
           setSnapshot(body.snapshot);
         } else if (
           selection &&
@@ -4655,6 +4876,9 @@ export function BrowserGatewayApp({
         setShowHistory(false);
         setShowMcpStatus(false);
       } catch (error) {
+        if (isAskAgentSelected) {
+          askAgentSessionTargetRef.current = previousAskAgentSessionTarget;
+        }
         setSessionHistoryError(`Failed to load session: ${String(error)}`);
       }
     })();
@@ -4685,6 +4909,14 @@ export function BrowserGatewayApp({
           body.message ?? `Failed to delete session (${response.status}).`,
         );
         return;
+      }
+      if (
+        isAskAgentSelected &&
+        askAgentSessionTargetRef.current === sessionId
+      ) {
+        // The deleted session can no longer be the target; let the next
+        // snapshot from the helper re-establish which session is active.
+        askAgentSessionTargetRef.current = null;
       }
       setSessionHistoryError(null);
       void fetchSessions();
@@ -4744,8 +4976,17 @@ export function BrowserGatewayApp({
         return;
       }
 
-      const nextSnapshot = await createNewSession();
-      const nextForeground = nextSnapshot?.session.foreground;
+      let nextForeground: GatewaySnapshot["session"]["foreground"];
+      if (isAskAgentSelected) {
+        const started = startAskAgentSession();
+        const readySnapshot = await started.ready;
+        const baseForeground =
+          readySnapshot?.session.foreground ??
+          (foreground ? { ...foreground, sessionId: started.sessionId } : null);
+        nextForeground = baseForeground;
+      } else {
+        nextForeground = (await createNewSession())?.session.foreground ?? null;
+      }
       if (!nextForeground) {
         setSendStatus("Unable to start a new session for the copied prompt.");
         return;
@@ -4850,7 +5091,7 @@ export function BrowserGatewayApp({
           };
           if (body.ok && body.snapshot) {
             if (isAskAgentSelected) {
-              setSnapshot(body.snapshot);
+              commitAskAgentSnapshot(body.snapshot);
             } else {
               commitSnapshot(
                 body.snapshot,
@@ -6517,8 +6758,140 @@ export function BrowserGatewayApp({
           {modeStatus && (
             <span class="browser-status-detail">{modeStatus}</span>
           )}
+          {notificationStatus && (
+            <span class="browser-status-detail">{notificationStatus}</span>
+          )}
         </div>
+        <button
+          aria-label="Open browser settings"
+          class="icon-button browser-header-settings"
+          onClick={() => setNotificationSettingsOpen(true)}
+          title="Browser settings"
+          type="button"
+        >
+          <i aria-hidden="true" class="codicon codicon-settings-gear" />
+        </button>
       </header>
+
+      {notificationPromptOpen && (
+        <div class="browser-notification-prompt" role="status">
+          <div>
+            <strong>Stay informed while AgentLink works</strong>
+            <span>
+              {notificationsAvailable()
+                ? "Enable browser notifications for questions, approvals, and optional task updates."
+                : "Browser notifications need HTTPS or a localhost gateway URL. You can still review the setting now."}
+            </span>
+          </div>
+          <div class="browser-notification-prompt-actions">
+            <button
+              class="secondary"
+              onClick={dismissBrowserNotificationPrompt}
+              type="button"
+            >
+              Not now
+            </button>
+            {notificationsAvailable() ? (
+              <button
+                onClick={() => void enableBrowserNotifications()}
+                type="button"
+              >
+                Enable notifications
+              </button>
+            ) : (
+              <button
+                onClick={() => setNotificationSettingsOpen(true)}
+                type="button"
+              >
+                Review settings
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {notificationSettingsOpen && (
+        <div
+          class="browser-notification-settings-backdrop"
+          onClick={() => setNotificationSettingsOpen(false)}
+          role="presentation"
+        >
+          <section
+            aria-describedby="browser-notification-settings-description"
+            aria-labelledby="browser-notification-settings-title"
+            aria-modal="true"
+            class="browser-notification-settings"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <div class="browser-notification-settings-header">
+              <div>
+                <h2 id="browser-notification-settings-title">
+                  Browser settings
+                </h2>
+                <p id="browser-notification-settings-description">
+                  Configure how this browser gateway gets your attention.
+                </p>
+              </div>
+              <button
+                aria-label="Close browser settings"
+                class="browser-notification-settings-close secondary"
+                onClick={() => setNotificationSettingsOpen(false)}
+                type="button"
+              >
+                <i aria-hidden="true" class="codicon codicon-close" />
+              </button>
+            </div>
+            <label class="browser-notification-settings-field">
+              <span>Notifications</span>
+              <select
+                aria-label="Browser notification preference"
+                onChange={(event) =>
+                  setBrowserNotificationPreference(
+                    (event.target as HTMLSelectElement)
+                      .value as BrowserGatewayNotificationPreference,
+                  )
+                }
+                value={notificationPreference}
+              >
+                <option value="off">Off</option>
+                <option value="attention">Needs attention</option>
+                <option value="all">All updates</option>
+              </select>
+              <small>
+                Needs attention alerts for questions and approvals. All updates
+                also includes task status and background updates.
+              </small>
+            </label>
+            {notificationPermission !== "granted" && (
+              <div class="browser-notification-settings-permission">
+                <span>
+                  {!notificationsAvailable()
+                    ? "Notifications require HTTPS or a localhost gateway URL."
+                    : notificationPermission === "denied"
+                      ? "Notifications are blocked in this browser. Update browser permissions to enable them."
+                      : "Allow this browser to show AgentLink notifications."}
+                </span>
+                {notificationsAvailable() &&
+                  notificationPermission !== "denied" && (
+                    <button
+                      onClick={() => void enableBrowserNotifications()}
+                      type="button"
+                    >
+                      Enable notifications
+                    </button>
+                  )}
+              </div>
+            )}
+            {notificationPermission === "granted" && (
+              <p class="browser-notification-settings-enabled">
+                <i aria-hidden="true" class="codicon codicon-check" /> Browser
+                notifications are enabled.
+              </p>
+            )}
+          </section>
+        </div>
+      )}
 
       <div class="browser-instance-tabs" role="tablist" aria-label="Instances">
         <button

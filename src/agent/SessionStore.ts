@@ -88,6 +88,13 @@ interface MessagesFile {
  * reload can paint the recent conversation without parsing the (potentially
  * multi-MB) full transcript first. Message payloads stay externalized on disk
  * (attachment markers), mirroring messages.json.
+ *
+ * Deliberately transcript-derived data ONLY. Session state (runState, mode,
+ * model, title, token counters) lives in metadata.json and is composed in at
+ * read time: the tail file is refreshed only on transcript writes, so any
+ * session state baked into it goes stale on metadata-only saves — e.g. the
+ * end-of-turn save that clears runState after an in-flight persist already
+ * wrote the final transcript would leave a phantom "interrupted" phase here.
  */
 interface SessionTailSnapshotFile {
   schemaVersion: number;
@@ -98,13 +105,7 @@ interface SessionTailSnapshotFile {
   userTurnOffset: number;
   hasMoreBefore: boolean;
   transcriptRevision?: number;
-  title: string;
-  mode: string;
-  model: string;
-  lastInputTokens?: number;
   todos: TodoItem[];
-  /** Persisted run phase, so a provisional restore can surface interrupted-run controls. */
-  runStatePhase?: PersistedSessionRunState["phase"];
   /** First visible user turn (for originalPrompt), usually outside the tail. */
   firstUserMessage?: AgentMessage;
   messages: AgentMessage[];
@@ -121,9 +122,6 @@ function isValidTailSnapshotFile(
     typeof file.messageIndexOffset === "number" &&
     typeof file.userTurnOffset === "number" &&
     typeof file.hasMoreBefore === "boolean" &&
-    typeof file.title === "string" &&
-    typeof file.mode === "string" &&
-    typeof file.model === "string" &&
     Array.isArray(file.todos) &&
     Array.isArray(file.messages)
   );
@@ -160,6 +158,7 @@ interface MetadataFile {
   activeContextResourceUri?: string;
   mode: string;
   model: string;
+  initialArchitectReviewPending?: boolean;
   promptProfile?: import("../core/promptProfile.js").PromptProfileResolution;
   contextLedger?: import("../core/contextLedger.js").ContextLedgerSnapshot;
   commandApprovalPolicy?: import("../core/capabilities/terminal.js").TerminalCommandApprovalPolicySnapshot;
@@ -1102,7 +1101,6 @@ export class SessionStore implements SessionPersistenceProvider {
       await this.writeSessionTailSnapshot(
         sessionDir,
         summary,
-        metadata,
         record,
         getExternalized().messages,
       );
@@ -1182,7 +1180,6 @@ export class SessionStore implements SessionPersistenceProvider {
   private async writeSessionTailSnapshot(
     sessionDir: string,
     summary: SessionSummary,
-    metadata: PersistedSessionMetadata,
     record: PersistedSessionRecord,
     externalizedMessages: AgentMessage[],
   ): Promise<void> {
@@ -1198,12 +1195,7 @@ export class SessionStore implements SessionPersistenceProvider {
         userTurnOffset: tail.userTurnOffset,
         hasMoreBefore: tail.hasMoreBefore,
         transcriptRevision: record.transcriptRevision,
-        title: summary.title,
-        mode: metadata.mode,
-        model: metadata.model,
-        lastInputTokens: metadata.lastInputTokens,
         todos: getLatestTodoState(record.messages),
-        runStatePhase: metadata.runState?.phase,
         firstUserMessage: findFirstUserMessage(externalizedMessages),
         messages: tail.chunk,
       };
@@ -1232,7 +1224,8 @@ export class SessionStore implements SessionPersistenceProvider {
   async readSessionTailSnapshot(
     sessionId: string,
   ): Promise<SessionTailSnapshot | null> {
-    if (!this.index.has(sessionId)) return null;
+    const summary = this.index.get(sessionId);
+    if (!summary) return null;
     const sessionDir = path.join(this.historyDir, sessionId);
     const tailPath = path.join(sessionDir, TAIL_SNAPSHOT_FILE);
     const messagesPath = path.join(sessionDir, "messages.json");
@@ -1248,6 +1241,12 @@ export class SessionStore implements SessionPersistenceProvider {
       const raw = await fs.promises.readFile(tailPath, "utf-8");
       const parsed: unknown = JSON.parse(raw);
       if (!isValidTailSnapshotFile(parsed)) return null;
+      // Session state comes from metadata.json, which every save refreshes —
+      // the tail file only tracks transcript writes, so state baked into it
+      // (runState especially) would go stale on metadata-only saves.
+      const metadataResult = this.readMetadataFile(sessionId);
+      if (!metadataResult.ok) return null;
+      const metadata = metadataResult.value;
       return {
         sessionId,
         totalMessages: parsed.totalMessages,
@@ -1255,12 +1254,12 @@ export class SessionStore implements SessionPersistenceProvider {
         userTurnOffset: parsed.userTurnOffset,
         hasMoreBefore: parsed.hasMoreBefore,
         transcriptRevision: parsed.transcriptRevision,
-        title: parsed.title,
-        mode: parsed.mode,
-        model: parsed.model,
-        lastInputTokens: parsed.lastInputTokens,
+        title: metadata.summary?.title ?? summary.title,
+        mode: metadata.mode,
+        model: metadata.model,
+        lastInputTokens: metadata.lastInputTokens,
         todos: parsed.todos,
-        runStatePhase: parsed.runStatePhase,
+        runStatePhase: metadata.runState?.phase,
         firstUserMessage: parsed.firstUserMessage
           ? this.rehydrateMessages(sessionId, [parsed.firstUserMessage])[0]
           : undefined,
@@ -1336,6 +1335,7 @@ export class SessionStore implements SessionPersistenceProvider {
       activeContextResourceUri: file.activeContextResourceUri,
       mode: file.mode,
       model: file.model,
+      initialArchitectReviewPending: file.initialArchitectReviewPending,
       promptProfile: file.promptProfile,
       contextLedger: file.contextLedger,
       commandApprovalPolicy: file.commandApprovalPolicy,
@@ -1383,6 +1383,7 @@ export class SessionStore implements SessionPersistenceProvider {
       activeContextResourceUri: metadata.activeContextResourceUri,
       mode: metadata.mode,
       model: metadata.model,
+      initialArchitectReviewPending: metadata.initialArchitectReviewPending,
       promptProfile: metadata.promptProfile,
       contextLedger: metadata.contextLedger,
       commandApprovalPolicy: metadata.commandApprovalPolicy,

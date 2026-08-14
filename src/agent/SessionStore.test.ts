@@ -164,6 +164,37 @@ describe("SessionStore", () => {
     }
   });
 
+  it("round-trips the initial Architect review gate and leaves legacy records ungated", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    const summary = createSummary({ id: "architect-gate", mode: "architect" });
+
+    await expect(
+      store.saveSession({
+        session: createRecord({
+          summary,
+          metadata: { initialArchitectReviewPending: true },
+        }),
+        expectedRevision: null,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    const restored = await store.readSession("architect-gate");
+    expect(restored).toMatchObject({
+      ok: true,
+      value: {
+        metadata: { initialArchitectReviewPending: true },
+      },
+    });
+
+    writeLegacySession(tmpDir, "legacy-architect");
+    const legacyStore = new SessionStore(tmpDir);
+    const legacy = await legacyStore.readSession("legacy-architect");
+    expect(
+      legacy.ok && legacy.value.metadata.initialArchitectReviewPending,
+    ).toBe(undefined);
+  });
+
   it("stores namespaced sessions separately from the legacy single-folder history", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
     const legacyStore = new SessionStore(tmpDir);
@@ -2017,6 +2048,54 @@ describe("SessionStore tail snapshots", () => {
     expect(snapshot!.lastInputTokens).toBe(4321);
     expect(snapshot!.todos).toEqual([]);
     expect(snapshot!.runStatePhase).toBe("running");
+  });
+
+  it("reflects session state from metadata-only saves without a transcript rewrite", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    const messages = conversation(2);
+    const summary = createSummary({ id: "tail-metadata" });
+    // Mid-run persist: the in-flight loop writes the final transcript while
+    // the run is still marked as running.
+    const saved = await store.saveSession({
+      session: createRecord({
+        summary,
+        messages,
+        transcriptRevision: 3,
+        metadata: { runState: { phase: "running", startedAt: 1 } },
+      }),
+      expectedRevision: null,
+    });
+    expect(saved.ok).toBe(true);
+    expect(
+      (await store.readSessionTailSnapshot("tail-metadata"))?.runStatePhase,
+    ).toBe("running");
+
+    // End-of-turn save: same transcript revision (messages.json rewrite is
+    // skipped, so the tail file is not refreshed) but runState cleared and
+    // the title updated. The snapshot must reflect the cleared runState —
+    // a cleanly finished session must not paint an interrupted banner.
+    const tailPath = path.join(
+      sessionDirFor(tmpDir, "tail-metadata"),
+      "messages.tail.json",
+    );
+    const tailMtimeBefore = fs.statSync(tailPath).mtimeMs;
+    const resaved = await store.saveSession({
+      session: createRecord({
+        summary: { ...summary, title: "Finished cleanly" },
+        messages,
+        transcriptRevision: 3,
+        metadata: { runState: undefined },
+      }),
+      expectedRevision: saved.ok ? saved.revision : null,
+    });
+    expect(resaved.ok).toBe(true);
+    expect(fs.statSync(tailPath).mtimeMs).toBe(tailMtimeBefore);
+
+    const snapshot = await store.readSessionTailSnapshot("tail-metadata");
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.runStatePhase).toBeUndefined();
+    expect(snapshot!.title).toBe("Finished cleanly");
   });
 
   it("captures the latest todo state even when it predates the tail window", async () => {

@@ -68,6 +68,8 @@ export interface MdnsAdvertiserOptions {
   port: number;
   /** Called when mDNS errors occur (e.g. conflict detection, bind failure). */
   log?: (message: string) => void;
+  /** URL scheme advertised in returned browser URLs. Defaults to HTTP. */
+  protocol?: "http" | "https";
 }
 
 export interface MdnsAdvertiserState {
@@ -126,6 +128,7 @@ export class MdnsAdvertiser {
   private readonly desiredName: string;
   private readonly port: number;
   private readonly log: (message: string) => void;
+  private readonly protocol: "http" | "https";
 
   private transports: MdnsTransport[] = [];
   private hostName: string | null = null;
@@ -138,6 +141,7 @@ export class MdnsAdvertiser {
     this.desiredName = sanitizeDesiredName(options.desiredName);
     this.port = options.port;
     this.log = options.log ?? (() => undefined);
+    this.protocol = options.protocol ?? "http";
   }
 
   async start(): Promise<MdnsAdvertiserState> {
@@ -250,7 +254,7 @@ export class MdnsAdvertiser {
   }
 
   private buildUrls(fqdn: string): string[] {
-    return [`http://${fqdn}:${this.port}`];
+    return [`${this.protocol}://${fqdn}:${this.port}`];
   }
 
   private async createTransports(): Promise<MdnsTransport[]> {
@@ -409,10 +413,13 @@ export class MdnsAdvertiser {
   }
 }
 
-export function listLanIpv4UrlsForPort(port: number): string[] {
+export function listLanIpv4UrlsForPort(
+  port: number,
+  protocol: "http" | "https" = "http",
+): string[] {
   const urls: string[] = [];
   for (const ip of listLanIpv4Addresses()) {
-    urls.push(`http://${ip}:${port}`);
+    urls.push(`${protocol}://${ip}:${port}`);
   }
   return urls;
 }

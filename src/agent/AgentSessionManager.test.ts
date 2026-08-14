@@ -66,6 +66,12 @@ const mocks = vi.hoisted(() => {
       thinkingBudget: opts.config.thinkingBudget,
       title: "New Chat",
       background: Boolean(opts.background),
+      initialArchitectReviewPending:
+        opts.initialArchitectReviewPending ??
+        (opts.mode === "architect" &&
+          !opts.background &&
+          !opts.isBackground &&
+          !opts.lightweight),
       modeInstructionPlacement:
         opts.background || opts.isBackground || opts.lightweight
           ? "system"
@@ -1053,6 +1059,37 @@ describe("AgentSessionManager host injection", () => {
     expect(mgr.getCommandApprovalPolicy(session.id)).toBe("sensitive");
     mgr.clearSessionCommandApprovalPolicy(session.id);
     expect(mgr.getCommandApprovalPolicy(session.id, "manual")).toBe("manual");
+  });
+
+  it("enforces and durably satisfies only the initial Architect review", async () => {
+    const saveSession = vi.fn(async () => undefined);
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const initialArchitect = await mgr.createSession("architect");
+    vi.spyOn(mgr, "saveSession").mockImplementation(saveSession);
+
+    expect(
+      mgr.requiresInitialArchitectReview(initialArchitect.id, "code"),
+    ).toBe(true);
+    expect(
+      mgr.requiresInitialArchitectReview(initialArchitect.id, "architect"),
+    ).toBe(false);
+    await expect(
+      mgr.switchSessionMode(initialArchitect.id, "code"),
+    ).rejects.toThrow("must be approved by the user");
+    expect(initialArchitect.mode).toBe("architect");
+    expect(initialArchitect.initialArchitectReviewPending).toBe(true);
+
+    await expect(
+      mgr.switchSessionMode(initialArchitect.id, "code", {
+        initialArchitectReviewApproved: true,
+      }),
+    ).resolves.toBe(initialArchitect);
+    expect(initialArchitect.initialArchitectReviewPending).toBe(false);
+    expect(saveSession).toHaveBeenCalledWith(initialArchitect.id);
+
+    const code = await mgr.createSession("code");
+    await mgr.switchSessionMode(code.id, "architect");
+    expect(mgr.requiresInitialArchitectReview(code.id, "debug")).toBe(false);
   });
 
   it("syncs Approve for Me guidance in the system prompt and mode anchor", async () => {

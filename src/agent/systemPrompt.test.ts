@@ -170,6 +170,18 @@ describe("conversation mode placement", () => {
       'Call `switch_mode` with `mode: "code"`',
     );
 
+    const gatedBlock = await buildModeInstructionBlock("architect", tmpDir, {
+      approveForMe: true,
+      initialArchitectReviewPending: true,
+    });
+    expect(gatedBlock).toContain("### Required Initial Plan Approval");
+    expect(gatedBlock).toContain(
+      "first exit from Architect requires explicit human approval",
+    );
+    expect(gatedBlock).toContain("modeSwitch");
+    expect(gatedBlock).toContain("### Review & Iteration");
+    expect(gatedBlock).not.toContain("### Autonomous Review & Transition");
+
     const codeBlock = await buildModeInstructionBlock("code", tmpDir);
     expect(codeBlock).toContain("You are in **Code mode**");
     expect(codeBlock).not.toContain("Plans folder");
@@ -476,12 +488,26 @@ describe("buildSystemPrompt", () => {
     expect(result).not.toContain("architect review loop is autonomous");
   });
 
-  it("replaces architect's user-consent loop under Approve for Me", async () => {
+  it("keeps initial Architect review human-approved under Approve for Me", async () => {
+    const result = await buildSystemPrompt("architect", tmpDir, {
+      approveForMe: true,
+      initialArchitectReviewPending: true,
+    });
+    expect(result).toContain("### Required Initial Plan Approval");
+    expect(result).toContain(
+      "first exit from Architect requires explicit human approval",
+    );
+    expect(result).toContain("one-time initial plan approval");
+    expect(result).not.toContain("### Autonomous Review & Transition");
+  });
+
+  it("replaces later architect user-consent loops under Approve for Me", async () => {
     const result = await buildSystemPrompt("architect", tmpDir, {
       approveForMe: true,
     });
     expect(result).toContain("### Autonomous Review & Transition");
     expect(result).toContain("the architect review loop is autonomous");
+    expect(result).toContain("already satisfied or not required");
     expect(result).toContain(
       "Do not ask the user to review or approve the plan",
     );

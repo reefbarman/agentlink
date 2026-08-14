@@ -7,11 +7,57 @@ const ROOT_INSTRUCTION_FILES = new Set([
   "AGENTS.local.md",
   "CLAUDE.md",
 ]);
+const READABLE_AGENT_INSTRUCTION_FILES = new Set([
+  ...ROOT_INSTRUCTION_FILES,
+  "SKILL.md",
+]);
 
 const PROTECTED_DOT_DIRS = new Set([".agentlink", ".agents", ".claude"]);
+const CREDENTIAL_DIRS = new Set([".ssh", ".aws", ".gnupg"]);
+const AUTHENTICATED_CLI_DIRS = [
+  [".config", "gh"],
+  [".config", "glab"],
+  [".config", "gcloud"],
+  [".azure"],
+  [".kube"],
+] as const;
 
 function normalize(filePath: string): string {
   return path.resolve(filePath);
+}
+
+/**
+ * Exact agent instruction artifacts are safe to read without a path approval.
+ * This is intentionally filename-only: it does not trust sibling memory,
+ * command, rule, credential, or environment files in the same directory.
+ */
+export function isAgentInstructionReadPath(filePath: string): boolean {
+  const normalized = normalize(filePath);
+  if (!READABLE_AGENT_INSTRUCTION_FILES.has(path.basename(normalized))) {
+    return false;
+  }
+
+  const parts = normalized
+    .split(path.sep)
+    .filter(Boolean)
+    .map((part) => part.toLowerCase());
+  if (parts.some((part) => CREDENTIAL_DIRS.has(part))) return false;
+  return !AUTHENTICATED_CLI_DIRS.some((directory) =>
+    partsContainSequence(parts, directory),
+  );
+}
+
+function partsContainSequence(
+  parts: readonly string[],
+  sequence: readonly string[],
+): boolean {
+  if (sequence.length === 0 || sequence.length > parts.length) return false;
+  for (let index = 0; index <= parts.length - sequence.length; index++) {
+    if (sequence.every((part, offset) => parts[index + offset] === part)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isWithin(parent: string, child: string): boolean {

@@ -301,6 +301,7 @@ describe("BrowserGatewayOwnerRuntime", () => {
     expect(execute).toHaveBeenCalledWith(
       { kind: "session.stop", sessionId: "session-1" },
       expect.any(AbortSignal),
+      "operation-1",
     );
     expect(
       transport.acknowledgements.map((ack) => ack.operation.state),

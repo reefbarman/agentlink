@@ -142,6 +142,34 @@ describe("handleListFiles", () => {
     });
   });
 
+  it("bypasses outside-workspace approval for exact agent instruction artifacts", async () => {
+    const instructionPath = "/Users/tester/.claude/CLAUDE.md";
+    resolveAndValidatePathMock.mockReturnValue({
+      absolutePath: instructionPath,
+      inWorkspace: false,
+    });
+    statMock.mockResolvedValue({ isDirectory: () => false });
+    const rejectingApprovalManager = {
+      isPathTrusted: vi.fn(() => false),
+    } as unknown as ApprovalManager;
+
+    const { handleListFiles } = await import("./listFiles.js");
+    const result = await handleListFiles(
+      { path: instructionPath },
+      rejectingApprovalManager,
+      approvalPanel,
+      sessionId,
+    );
+
+    expect(approveOutsideWorkspaceAccessMock).not.toHaveBeenCalled();
+    expect(rejectingApprovalManager.isPathTrusted).not.toHaveBeenCalled();
+    expect(JSON.parse(textResult(result))).toMatchObject({
+      error:
+        "Path is a file, not a directory — use read_file to read its contents",
+      path: instructionPath,
+    });
+  });
+
   it("bypasses outside-workspace approval for AgentLink temporary artifacts", async () => {
     const outputPath = path.join(
       os.tmpdir(),

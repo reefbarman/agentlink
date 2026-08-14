@@ -131,6 +131,7 @@ export function registerBrowserGatewayCommands({
           `AgentLink browser gateway helper (pid ${discovery.pid}, helperVersion ${discovery.helperVersion})`,
           `Loopback: ${discovery.url}`,
           `LAN access: ${discovery.lanAccess ? "on" : "off"}`,
+          `Secure LAN HTTPS: ${discovery.secureLanAccess ? "on" : "off"}`,
         ];
         if (discovery.mdnsUrl) {
           lines.push(`mDNS URL: ${discovery.mdnsUrl}`);
@@ -142,18 +143,36 @@ export function registerBrowserGatewayCommands({
         if (discovery.lanUrls && discovery.lanUrls.length > 0) {
           lines.push(`LAN IP URLs: ${discovery.lanUrls.join(", ")}`);
         }
+        if (discovery.localCaCertificatePath) {
+          lines.push(
+            `Local CA certificate: ${discovery.localCaCertificatePath}`,
+          );
+        }
         const message = lines.join("\n");
         log(`[browser-gateway-helper] status requested:\n${message}`);
+        const actions: vscode.MessageItem[] = [
+          { title: "Copy mDNS URL" },
+          { title: "Copy loopback URL" },
+          ...(discovery.localCaCertificatePath
+            ? [{ title: "Copy local CA path" }]
+            : []),
+        ];
         const pick = await vscode.window.showInformationMessage(
           message,
           { modal: true },
-          "Copy mDNS URL",
-          "Copy loopback URL",
+          ...actions,
         );
-        if (pick === "Copy mDNS URL" && discovery.mdnsUrl) {
+        if (pick?.title === "Copy mDNS URL" && discovery.mdnsUrl) {
           await vscode.env.clipboard.writeText(discovery.mdnsUrl);
-        } else if (pick === "Copy loopback URL") {
+        } else if (pick?.title === "Copy loopback URL") {
           await vscode.env.clipboard.writeText(discovery.url);
+        } else if (
+          pick?.title === "Copy local CA path" &&
+          discovery.localCaCertificatePath
+        ) {
+          await vscode.env.clipboard.writeText(
+            discovery.localCaCertificatePath,
+          );
         }
       },
     ),

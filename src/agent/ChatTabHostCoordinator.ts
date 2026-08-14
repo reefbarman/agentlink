@@ -109,8 +109,14 @@ export class ChatTabHostCoordinator {
     }
 
     if (options.focus !== false) {
-      const focused = await this.focus(address);
-      if (!focused.ok) return focused;
+      // Focus only the tab — deliberately not `this.focus(address)`, which
+      // materializes the tab's current session. That session is about to be
+      // replaced, and loading it can mean parsing a multi-MB persisted
+      // transcript before the new chat exists (a New Chat click during
+      // startup restore would block on the very load it is escaping).
+      if (!(await this.tabs.focusTab(address.tabId))) {
+        return { ok: false, reason: "not_found" };
+      }
     }
     await this.stopForReplacement(validated.tab, options.stopRunning === true);
 

@@ -1488,7 +1488,9 @@ describe("ChatViewProvider session state sync", () => {
       provider.submitBrowserModeSwitch("debug", projectScope.projectId),
     ).resolves.toEqual({ approved: true, mode: "debug" });
 
-    expect(switchForegroundMode).toHaveBeenCalledWith("debug");
+    expect(switchForegroundMode).toHaveBeenCalledWith("debug", {
+      initialArchitectReviewApproved: true,
+    });
     expect(switchSessionMode).not.toHaveBeenCalled();
   });
 
@@ -4645,7 +4647,7 @@ describe("ChatViewProvider session state sync", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("queues browser sends during an active turn without registering an interjection", async () => {
+  it("preserves a browser message id when an active-turn send is queued and drained", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
     const provider = new ChatViewProvider(
@@ -4683,7 +4685,7 @@ describe("ChatViewProvider session state sync", () => {
       })),
       getSessionInfos: vi.fn(() => []),
       getBgSessionInfos: vi.fn(() => []),
-      sendMessage: vi.fn(),
+      sendMessage: vi.fn(async () => undefined),
       onEvent: undefined,
       onSessionsChanged: undefined,
     };
@@ -4691,6 +4693,7 @@ describe("ChatViewProvider session state sync", () => {
     provider.setSessionManager(manager as never);
 
     const result = await provider.submitBrowserSend({
+      id: "browser-message-1",
       text: "please do this next",
       sessionId: "session-1",
       mode: "code",
@@ -4703,10 +4706,33 @@ describe("ChatViewProvider session state sync", () => {
       provider.getBrowserProjectedForegroundState()?.messageQueue,
     ).toMatchObject([
       {
+        id: "browser-message-1",
         text: "please do this next",
         source: "browser",
       },
     ]);
+
+    mockPostMessage.mockClear();
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+    (
+      provider as unknown as {
+        drainBrowserQueuedMessage(sessionId: string): void;
+      }
+    ).drainBrowserQueuedMessage("session-1");
+
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agentCommittedUserMessage",
+        sessionId: "session-1",
+        id: "browser-message-1",
+        text: "please do this next",
+        origin: "browser",
+      }),
+    );
+    expect(manager.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("does not drain the foreground browser queue when another session completes", async () => {
@@ -8057,9 +8083,10 @@ describe("handleModeSwitch resume queueing", () => {
     vi.clearAllMocks();
   });
 
-  const session = () => ({
+  const session = (initialArchitectReviewPending = false) => ({
     id: "session-1",
     mode: "architect",
+    initialArchitectReviewPending,
     model: "claude-sonnet-4-6",
     background: false,
     status: "streaming",
@@ -8100,6 +8127,116 @@ describe("handleModeSwitch resume queueing", () => {
     provider.setSessionManager({ ...manager, getSession } as never);
     return provider;
   }
+
+  it("requires human approval for the first exit from an initial Architect session", async () => {
+    const fg = session(true);
+    const switched = {
+      ...fg,
+      mode: "code",
+      initialArchitectReviewPending: false,
+    };
+    const switchSessionMode = vi.fn(async () => switched);
+    const provider = await makeProvider({
+      getForegroundSession: vi.fn(() => fg),
+      switchSessionMode,
+      queueModeSwitchResume: vi.fn(),
+      requiresInitialArchitectReview: vi.fn(() => true),
+      getSessionApprovalMode: vi.fn(() => ({
+        commandApprovalPolicy: "approve-for-me",
+        approvalPolicy: "on-request",
+        approvalReviewer: "auto-review",
+        executionPreset: "workspace-write",
+      })),
+      getCommandApprovalPolicy: vi.fn(() => "approve-for-me"),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+    });
+    const requestApproval = vi
+      .spyOn(provider, "requestApproval")
+      .mockResolvedValue("run-once");
+
+    const result = await provider.handleModeSwitch(
+      "code",
+      "Implement the approved plan",
+      false,
+      fg.id,
+    );
+
+    expect(result).toMatchObject({ approved: true, mode: "code" });
+    expect(requestApproval).toHaveBeenCalledOnce();
+    expect(switchSessionMode).toHaveBeenCalledWith(fg.id, "code", {
+      initialArchitectReviewApproved: true,
+    });
+  });
+
+  it("keeps the initial Architect gate pending when the user rejects the exit", async () => {
+    const fg = session(true);
+    const switchSessionMode = vi.fn();
+    const provider = await makeProvider({
+      getForegroundSession: vi.fn(() => fg),
+      switchSessionMode,
+      queueModeSwitchResume: vi.fn(),
+      requiresInitialArchitectReview: vi.fn(() => true),
+      getSessionApprovalMode: vi.fn(() => ({
+        commandApprovalPolicy: "approve-for-me",
+        approvalPolicy: "on-request",
+        approvalReviewer: "auto-review",
+        executionPreset: "workspace-write",
+      })),
+      getCommandApprovalPolicy: vi.fn(() => "approve-for-me"),
+    });
+    vi.spyOn(provider, "requestApproval").mockResolvedValue("reject");
+
+    const result = await provider.handleModeSwitch(
+      "code",
+      undefined,
+      false,
+      fg.id,
+    );
+
+    expect(result.approved).toBe(false);
+    expect(switchSessionMode).not.toHaveBeenCalled();
+  });
+
+  it("accepts ask_user modeSwitch consent without a second approval card", async () => {
+    const fg = session(true);
+    const switched = {
+      ...fg,
+      mode: "code",
+      initialArchitectReviewPending: false,
+    };
+    const switchSessionMode = vi.fn(async () => switched);
+    const provider = await makeProvider({
+      getForegroundSession: vi.fn(() => fg),
+      switchSessionMode,
+      queueModeSwitchResume: vi.fn(),
+      requiresInitialArchitectReview: vi.fn(() => true),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+    });
+    const requestApproval = vi.spyOn(provider, "requestApproval");
+
+    const result = await provider.handleModeSwitch(
+      "code",
+      'ask_user: "Approve the plan and switch to Code"',
+      true,
+      fg.id,
+    );
+
+    expect(result).toMatchObject({ approved: true, mode: "code" });
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(switchSessionMode).toHaveBeenCalledWith(fg.id, "code", {
+      initialArchitectReviewApproved: true,
+    });
+  });
 
   it("switches seamlessly without Guardian or human approval under Approve for Me", async () => {
     const fg = session();
@@ -8144,7 +8281,9 @@ describe("handleModeSwitch resume queueing", () => {
     expect(result).toMatchObject({ approved: true, mode: "code" });
     expect(getSessionApprovalMode).toHaveBeenCalledWith(fg.id, "safe");
     expect(requestApproval).not.toHaveBeenCalled();
-    expect(switchSessionMode).toHaveBeenCalledWith("session-1", "code");
+    expect(switchSessionMode).toHaveBeenCalledWith("session-1", "code", {
+      initialArchitectReviewApproved: false,
+    });
     expect(resetSessionAgentWriteApproval).not.toHaveBeenCalled();
     expect(queueModeSwitchResume).toHaveBeenCalledOnce();
   });
@@ -8221,7 +8360,9 @@ describe("handleModeSwitch resume queueing", () => {
 
     expect(result).toMatchObject({ approved: true, mode: "code" });
     expect(requestApproval).toHaveBeenCalledOnce();
-    expect(switchSessionMode).toHaveBeenCalledWith("session-1", "code");
+    expect(switchSessionMode).toHaveBeenCalledWith("session-1", "code", {
+      initialArchitectReviewApproved: false,
+    });
   });
 
   it("keeps the manual mode-switch approval card outside Approve for Me", async () => {
@@ -8259,7 +8400,9 @@ describe("handleModeSwitch resume queueing", () => {
 
     expect(result).toMatchObject({ approved: true, mode: "code" });
     expect(requestApproval).toHaveBeenCalledOnce();
-    expect(switchSessionMode).toHaveBeenCalledWith("session-1", "code");
+    expect(switchSessionMode).toHaveBeenCalledWith("session-1", "code", {
+      initialArchitectReviewApproved: false,
+    });
     expect(queueModeSwitchResume).toHaveBeenCalledOnce();
   });
 

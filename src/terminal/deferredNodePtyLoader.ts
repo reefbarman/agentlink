@@ -10,7 +10,7 @@ export const STAGED_NODE_PTY_RELATIVE_PATH = path.join(
   "node_modules",
   "node-pty",
 );
-const EXPECTED_NODE_PTY_VERSION = "1.1.0";
+const EXPECTED_NODE_PTY_VERSION = "1.2.0-beta.15";
 
 export interface CommonJsRequire {
   (specifier: string): unknown;

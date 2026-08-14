@@ -29,6 +29,7 @@ describe("handleLoadSkill", () => {
           revision,
           skillPath: "/provider/skills/helper/SKILL.md",
           realSkillPath: "/provider/skills/helper/SKILL.md",
+          sourceScope: "global",
         },
       ],
       artifactProvider,
@@ -71,6 +72,7 @@ describe("handleLoadSkill", () => {
             .digest("hex"),
           skillPath: "/provider/skills/helper/SKILL.md",
           realSkillPath: "/provider/skills/helper/SKILL.md",
+          sourceScope: "global",
         },
       ],
       artifactProvider,
@@ -106,6 +108,7 @@ describe("handleLoadSkill", () => {
           revision: createHash("sha256").update(content).digest("hex"),
           skillPath: "/provider/skills/helper/SKILL.md",
           realSkillPath: "/provider/skills/original/SKILL.md",
+          sourceScope: "global",
         },
       ],
       artifactProvider,
@@ -115,6 +118,95 @@ describe("handleLoadSkill", () => {
     expect(JSON.parse(textOf(result))).toMatchObject({
       error: expect.stringContaining("changed after it was advertised"),
       status: "stale_advertised_artifact",
+    });
+  });
+
+  it("loads resources from an advertised built-in skill directory", async () => {
+    const skillContent = "# Built-in documentation";
+    const resourceContent = "# Complete reference\nBundled documentation.";
+    const revision = createHash("sha256").update(skillContent).digest("hex");
+    const artifactProvider = {
+      resolvePath: vi.fn((filePath: string) => filePath),
+      normalizeExistingPath: vi.fn((filePath: string) => filePath),
+      readTextFile: vi.fn(async (filePath: string) =>
+        filePath.endsWith("SKILL.md") ? skillContent : resourceContent,
+      ),
+    };
+
+    const result = await handleLoadSkill(
+      {
+        path: "/extensions/agentlink/resources/builtin-skills/documentation/references/complete-reference.md",
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      [
+        {
+          id: "builtin:agentlink:documentation",
+          name: "documentation",
+          revision,
+          skillPath:
+            "/extensions/agentlink/resources/builtin-skills/documentation/SKILL.md",
+          realSkillPath:
+            "/extensions/agentlink/resources/builtin-skills/documentation/SKILL.md",
+          sourceScope: "builtin",
+        },
+      ],
+      artifactProvider,
+    );
+
+    expect(artifactProvider.readTextFile).toHaveBeenNthCalledWith(
+      1,
+      "/extensions/agentlink/resources/builtin-skills/documentation/SKILL.md",
+    );
+    expect(artifactProvider.readTextFile).toHaveBeenNthCalledWith(
+      2,
+      "/extensions/agentlink/resources/builtin-skills/documentation/references/complete-reference.md",
+    );
+    expect(JSON.parse(textOf(result))).toEqual({
+      skill_name: "documentation",
+      skillPath:
+        "/extensions/agentlink/resources/builtin-skills/documentation/SKILL.md",
+      skill_id: "builtin:agentlink:documentation",
+      revision,
+      resourcePath:
+        "/extensions/agentlink/resources/builtin-skills/documentation/references/complete-reference.md",
+      content: resourceContent,
+    });
+  });
+
+  it("does not load resources from an advertised non-built-in skill", async () => {
+    const skillContent = "# Global helper";
+    const revision = createHash("sha256").update(skillContent).digest("hex");
+    const artifactProvider = {
+      resolvePath: vi.fn((filePath: string) => filePath),
+      normalizeExistingPath: vi.fn((filePath: string) => filePath),
+      readTextFile: vi.fn(async () => skillContent),
+    };
+
+    const result = await handleLoadSkill(
+      { path: "/provider/skills/helper/references/guide.md" },
+      {} as never,
+      {} as never,
+      "session-1",
+      [
+        {
+          id: "global:agentlink:helper",
+          name: "helper",
+          revision,
+          skillPath: "/provider/skills/helper/SKILL.md",
+          realSkillPath: "/provider/skills/helper/SKILL.md",
+          sourceScope: "global",
+        },
+      ],
+      artifactProvider,
+    );
+
+    expect(artifactProvider.readTextFile).not.toHaveBeenCalled();
+    expect(JSON.parse(textOf(result))).toMatchObject({
+      error:
+        "Skill path is not in the current session's advertised skill allowlist",
+      path: "/provider/skills/helper/references/guide.md",
     });
   });
 

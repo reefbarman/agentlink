@@ -2850,8 +2850,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       approvalMode.approvalPolicy === "on-request" &&
       approvalMode.approvalReviewer === "auto-review" &&
       approvalMode.executionPreset === "workspace-write";
+    const requiresInitialArchitectReview = Boolean(
+      targetSessionId &&
+      this.sessionManager?.requiresInitialArchitectReview?.(
+        targetSessionId,
+        mode,
+      ),
+    );
+    // `silent` is host-owned evidence that the user chose an ask_user option
+    // carrying a modeSwitch map. The model cannot set it on switch_mode.
+    const hasExplicitUserConsent = silent === true;
 
-    if (!silent && !approveForMe) {
+    if (
+      !hasExplicitUserConsent &&
+      (!approveForMe || requiresInitialArchitectReview)
+    ) {
       try {
         const approval = await this.requestApproval(
           {
@@ -2906,6 +2919,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const switched = await this.sessionManager!.switchSessionMode(
           targetSessionId,
           mode,
+          {
+            initialArchitectReviewApproved:
+              hasExplicitUserConsent || requiresInitialArchitectReview,
+          },
         );
         if (!switched) return null;
         if (previousMode && previousMode !== switched.mode) {
@@ -4082,7 +4099,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       this.ensureProjectedForegroundSession(foregroundSession);
 
-      const queueId = randomUUID();
+      // Preserve a browser-supplied message identity through the queue so the
+      // remote commit replaces the browser's optimistic transcript row.
+      const queueId = input.id ?? randomUUID();
       const displayQueueText = displayText ?? text;
       const displayMedia = mediaToDisplayMedia({ images, documents });
 
@@ -4211,8 +4230,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const switched = await this.withAsyncApprovalStateTransition(
           async () => {
             const updated = sessionId
-              ? await this.sessionManager?.switchSessionMode(session.id, mode)
-              : await this.sessionManager?.switchForegroundMode(mode);
+              ? await this.sessionManager?.switchSessionMode(session.id, mode, {
+                  initialArchitectReviewApproved: true,
+                })
+              : await this.sessionManager?.switchForegroundMode(mode, {
+                  initialArchitectReviewApproved: true,
+                });
             if (!updated) return null;
             if (previousMode !== updated.mode) {
               this.recordSurfaceChange(updated, {
@@ -7905,6 +7928,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             const switched = await this.sessionManager!.switchSessionMode(
               sourceSession.id,
               mode,
+              { initialArchitectReviewApproved: true },
             );
             if (!switched) return;
             if (previousMode !== switched.mode) {
@@ -11695,7 +11719,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
     } else if (mode) {
       const previousMode = current.mode;
-      const switched = await this.sessionManager.switchForegroundMode(mode);
+      const switched = await this.sessionManager.switchForegroundMode(mode, {
+        initialArchitectReviewApproved: true,
+      });
       if (switched) {
         current = switched;
         if (previousMode !== switched.mode) {
@@ -11865,6 +11891,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           typeof document.base64 === "string",
       );
       return {
+        id: queued.id,
         text: queued.fullText ?? queued.text,
         displayText: queued.text,
         isSlashCommand: queued.isSlashCommand,
@@ -11882,6 +11909,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.postMessage({
         type: "agentCommittedUserMessage",
         sessionId,
+        id: message.id,
         text: message.text,
         displayText: message.displayText,
         isSlashCommand: message.isSlashCommand,

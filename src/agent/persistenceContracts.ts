@@ -246,6 +246,8 @@ export interface PersistedSessionMetadata {
   activeContextResourceUri?: string;
   mode: string;
   model: string;
+  /** One-time human review boundary for sessions that began in Architect mode. */
+  initialArchitectReviewPending?: boolean;
   /** Rendered profile evidence for audit/debug only; current policy is recomputed on restore. */
   promptProfile?: import("../core/promptProfile.js").PromptProfileResolution;
   /** Latest completed request ledger for read-only context diagnostics. */

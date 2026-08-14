@@ -3,6 +3,7 @@
 import {
   BrowserGatewayApp,
   cacheDetachedSessionDetail,
+  mergeDetachedSessionDetail,
   pruneDetachedSessionDetailCache,
 } from "./BrowserGatewayApp";
 import type {
@@ -42,6 +43,8 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     slashCommands,
     submitOnEnter,
     contextMode,
+    currentModel,
+    reasoningEffort,
   }: {
     allowThinkingToggle?: boolean;
     availableModels?: Array<{ id: string; displayName?: string }>;
@@ -59,6 +62,8 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     onStop?: () => void;
     slashCommands?: Array<{ name: string }>;
     submitOnEnter?: boolean;
+    currentModel?: string;
+    reasoningEffort?: string;
     contextMode?: {
       onSubmit: (
         text: string,
@@ -220,6 +225,8 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
         },
         "Trigger thinking",
       ),
+      h("span", { "data-testid": "current-model" }, currentModel ?? ""),
+      h("span", { "data-testid": "reasoning-effort" }, reasoningEffort ?? ""),
       h(
         "span",
         { "data-testid": "model-count" },
@@ -688,6 +695,43 @@ async function selectWorkspaceTab(): Promise<HTMLElement> {
 }
 
 describe("detached session detail cache", () => {
+  it("retains the owner approval when a detached detail has no local card", () => {
+    const ownerSnapshot = createGroupedSnapshot();
+    ownerSnapshot.ui.approval = {
+      kind: "command",
+      id: "native-terminal-approval",
+      command: "npm test",
+      cwd: "/workspace",
+      reason: "Run the test suite in the native terminal.",
+    };
+
+    const merged = mergeDetachedSessionDetail(
+      ownerSnapshot as never,
+      {
+        selection: {
+          controllerEpoch: "controller-1",
+          tabId: "tab-2",
+          sessionId: "session-2",
+        },
+        session: {
+          ...ownerSnapshot.session.foreground,
+          sessionId: "session-2",
+          title: "Detached chat",
+        },
+        ui: {
+          approval: null,
+          question: null,
+          questionProgress: null,
+          formElicitation: null,
+          urlElicitation: null,
+        },
+        revertRecoveryState: null,
+      } as never,
+    );
+
+    expect(merged.ui.approval).toEqual(ownerSnapshot.ui.approval);
+  });
+
   it("caps retained transcripts and evicts the oldest entry", () => {
     const cache = new Map();
     for (let index = 1; index <= 3; index += 1) {
@@ -903,6 +947,277 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     window.localStorage.clear();
     window.sessionStorage.clear();
     document.documentElement.removeAttribute("style");
+  });
+
+  it("restores a completed Ask Agent response after switching tabs mid-turn", async () => {
+    const fallbackFetch = globalThis.fetch;
+    let resolveAskAgentSend: ((response: Response) => void) | undefined;
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/relay/subscription")) {
+          const request = JSON.parse(String(init?.body)) as {
+            browserConnectionId: string;
+            ownerId: string;
+            ownerGenerationId: string;
+          };
+          return jsonResponse(
+            {
+              ok: true,
+              protocolVersion: "1",
+              helperGenerationId: "helper-1",
+              browserConnectionId: request.browserConnectionId,
+              subscriptionId: `subscription-${request.ownerId}`,
+              ownerId: request.ownerId,
+              ownerGenerationId: request.ownerGenerationId,
+            },
+            202,
+          );
+        }
+        if (url.includes("/api/ask-agent/send")) {
+          return new Promise<Response>((resolve) => {
+            resolveAskAgentSend = resolve;
+          });
+        }
+        return fallbackFetch(input, init);
+      },
+    ) as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        dataPlaneMode: "on",
+      }),
+    );
+
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
+    const source = MockEventSource.instances[0]!;
+    await act(async () => {
+      source.emit("hello", {
+        protocolVersion: "1",
+        helperGenerationId: "helper-1",
+        browserConnectionId: "connection-1",
+        csrfNonce: "nonce-1",
+        emittedAt: 1,
+      });
+      source.emit("catalog", {
+        protocolVersion: "1",
+        helperGenerationId: "helper-1",
+        emittedAt: 1,
+        owners: [
+          {
+            ownerId: BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+            ownerGenerationId: "ask-generation",
+            ownerKind: "browser-gateway",
+            displayName: "Ask Agent",
+            scope: {
+              kind: "projectless",
+              scopeId: "ask-agent",
+              displayName: "Ask Agent",
+            },
+            status: "connected",
+            capabilities: [],
+            lastHeartbeatAt: 1,
+          },
+        ],
+      });
+    });
+    await waitFor(() => {
+      expect(
+        vi
+          .mocked(globalThis.fetch)
+          .mock.calls.some(([input]) =>
+            String(input).includes("/api/relay/subscription"),
+          ),
+      ).toBe(true);
+    });
+    await act(async () => {
+      source.emit("checkpoint", {
+        protocolVersion: "1",
+        helperGenerationId: "helper-1",
+        subscriptionId: `subscription-${BROWSER_GATEWAY_ASK_AGENT_OWNER_ID}`,
+        ownerId: BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+        ownerGenerationId: "ask-generation",
+        record: {
+          kind: "checkpoint",
+          relaySequence: 1,
+          ownerSequence: 1,
+          checkpoint: {
+            protocolVersion: "1",
+            helperGenerationId: "helper-1",
+            ownerId: BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+            ownerGenerationId: "ask-generation",
+            checkpointId: "checkpoint-ask-agent-tab-switch",
+            checkpointSequence: 1,
+            emittedAt: 2,
+            foreground: {
+              sessionId: "browser-gateway:ask-agent:default",
+              title: "Ask Agent",
+              mode: "ask",
+              model: "gpt-5.3-codex",
+              status: "idle",
+              streaming: false,
+            },
+            catalog: {
+              projects: [],
+              sessions: [
+                {
+                  sessionId: "browser-gateway:ask-agent:default",
+                  projectId: null,
+                  title: "Ask Agent",
+                  mode: "ask",
+                  model: "gpt-5.3-codex",
+                  messageCount: 0,
+                  createdAt: 1,
+                  updatedAt: 2,
+                },
+              ],
+              defaultProjectId: null,
+              foregroundSessionId: "browser-gateway:ask-agent:default",
+            },
+            transcript: {
+              messages: [],
+              earlierCursor: null,
+              hasEarlier: false,
+            },
+            ui: {
+              interaction: null,
+              queue: [],
+              todos: [],
+              operations: [],
+            },
+            background: [],
+            fleet: [],
+            diffs: [],
+            repository: null,
+            theme: {
+              revision: "theme-ask-agent",
+              colorScheme: "dark",
+              variables: [],
+            },
+            modelCatalogRevision: "models-ask-agent",
+            capabilities: [],
+          },
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Loading Ask Agent session…")).toBeNull();
+    });
+
+    fireEvent.click(screen.getByTestId("trigger-send"));
+    await waitFor(() => expect(resolveAskAgentSend).toBeTypeOf("function"));
+    await selectWorkspaceTab();
+
+    const completed = createAskAgentSessionResponse().snapshot;
+    completed.session.foreground.projectedMessages = [
+      {
+        id: "ask-agent-user-tab-switch",
+        role: "user",
+        content: "Ship it",
+        timestamp: 200,
+        blocks: [{ type: "text", text: "Ship it" }],
+      },
+      {
+        id: "ask-agent-assistant-tab-switch",
+        role: "assistant",
+        content: "Completed while Workspace was selected.",
+        timestamp: 201,
+        blocks: [
+          { type: "text", text: "Completed while Workspace was selected." },
+        ],
+      },
+    ];
+    await act(async () => {
+      resolveAskAgentSend?.(jsonResponse({ ok: true, snapshot: completed }));
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: /Ask Agent/ }));
+    await screen.findByText("Completed while Workspace was selected.");
+    expect(screen.queryByText("Responding…")).toBeNull();
+  });
+
+  it("offers notifications once, then keeps configuration behind browser settings", async () => {
+    const notification = {
+      permission: "default",
+      requestPermission: vi.fn(async () => "denied" as NotificationPermission),
+    };
+    Object.defineProperty(globalThis, "Notification", {
+      configurable: true,
+      value: notification,
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    expect(
+      await screen.findByText("Stay informed while AgentLink works"),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    expect(
+      screen.queryByText("Stay informed while AgentLink works"),
+    ).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open browser settings" }),
+    );
+    expect(
+      await screen.findByRole("dialog", { name: "Browser settings" }),
+    ).toBeTruthy();
+    expect(
+      (
+        screen.getByRole("combobox", {
+          name: "Browser notification preference",
+        }) as HTMLSelectElement
+      ).value,
+    ).toBe("off");
+  });
+
+  it("offers notification settings on insecure first visits without requesting permission", async () => {
+    Object.defineProperty(window, "isSecureContext", {
+      configurable: true,
+      value: false,
+    });
+    const notification = {
+      permission: "default",
+      requestPermission: vi.fn(async () => "granted" as NotificationPermission),
+    };
+    Object.defineProperty(globalThis, "Notification", {
+      configurable: true,
+      value: notification,
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    expect(
+      await screen.findByText("Stay informed while AgentLink works"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Browser notifications need HTTPS or a localhost gateway URL. You can still review the setting now.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Review settings" }));
+    expect(
+      await screen.findByRole("dialog", { name: "Browser settings" }),
+    ).toBeTruthy();
+    expect(notification.requestPermission).not.toHaveBeenCalled();
   });
 
   it("opens workspace environment details in the Activity Shelf", async () => {
@@ -1225,6 +1540,40 @@ describe("BrowserGatewayApp /mcp behavior", () => {
           snapshot.session.foreground.model = "moonshotai/kimi-k2";
           return jsonResponse({ ok: true, snapshot });
         }
+        if (url === "/api/ask-agent/sessions") {
+          return jsonResponse({
+            sessions: [
+              {
+                id: "browser-gateway:ask-agent:saved",
+                mode: "ask",
+                model: "gpt-5.3-codex",
+                title: "Saved relay Ask Agent chat",
+                messageCount: 2,
+                totalInputTokens: 0,
+                totalOutputTokens: 0,
+                createdAt: 100,
+                lastActiveAt: 200,
+              },
+            ],
+          });
+        }
+        if (url === "/api/ask-agent/session/load") {
+          const snapshot = createAskAgentSessionResponse().snapshot;
+          snapshot.session.foreground.sessionId =
+            "browser-gateway:ask-agent:saved";
+          snapshot.session.foreground.projectedMessages = [
+            {
+              id: "saved-relay-message",
+              role: "assistant",
+              content: "Selected relay history transcript",
+              timestamp: 200,
+              blocks: [
+                { type: "text", text: "Selected relay history transcript" },
+              ],
+            },
+          ];
+          return jsonResponse({ ok: true, snapshot });
+        }
         return legacyFetch(input, init);
       },
     ) as unknown as typeof fetch;
@@ -1443,6 +1792,17 @@ describe("BrowserGatewayApp /mcp behavior", () => {
           ([input]) => String(input) === "/api/ask-agent/send",
         ),
     ).toHaveLength(1);
+
+    fireEvent.click(screen.getByTitle("Session History"));
+    fireEvent.click(await screen.findByText("Saved relay Ask Agent chat"));
+    await screen.findByText("Selected relay history transcript");
+    expect(
+      vi
+        .mocked(globalThis.fetch)
+        .mock.calls.some(
+          ([input]) => String(input) === "/api/ask-agent/session/load",
+        ),
+    ).toBe(true);
   });
 
   it("opens workspace file mentions through the owning VS Code instance", async () => {
@@ -1599,8 +1959,12 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(source.url).not.toBe("/api/ask-agent/events");
   });
 
-  it("waits for the selected relay project before fetching workspace modes and slash commands", async () => {
+  it("waits for the selected relay project and reuses the optimistic message id for sends", async () => {
     const legacyFetch = globalThis.fetch;
+    let relayCommandRequest: {
+      operationId: string;
+      command: { kind: string; sessionId?: string; text?: string };
+    } | null = null;
     globalThis.fetch = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -1636,6 +2000,22 @@ describe("BrowserGatewayApp /mcp behavior", () => {
             },
             202,
           );
+        }
+        if (url.includes("/api/relay/commands")) {
+          relayCommandRequest = JSON.parse(String(init?.body)) as {
+            operationId: string;
+            command: { kind: string; sessionId?: string; text?: string };
+          };
+          return jsonResponse({
+            ok: true,
+            ownerId: "openapi-owner",
+            ownerGenerationId: "openapi-generation",
+            operation: {
+              operationId: relayCommandRequest.operationId,
+              kind: relayCommandRequest.command.kind,
+              state: "completed",
+            },
+          });
         }
         return legacyFetch(input, init);
       },
@@ -1692,7 +2072,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
               displayName: "Workspace",
             },
             status: "connected",
-            capabilities: [],
+            capabilities: [{ capabilityId: "session.send", state: "enabled" }],
             lastHeartbeatAt: 1,
           },
         ],
@@ -1816,6 +2196,24 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(requestedUrls()).not.toContain(
       "/api/slash-commands?instanceId=openapi-generation-oss",
     );
+
+    const optimisticMessageId = "11111111-1111-4111-8111-111111111111";
+    const randomUuid = vi
+      .spyOn(globalThis.crypto, "randomUUID")
+      .mockReturnValueOnce(optimisticMessageId);
+    fireEvent.click(screen.getByTestId("trigger-send"));
+
+    await waitFor(() => expect(relayCommandRequest).not.toBeNull());
+    expect(relayCommandRequest).toMatchObject({
+      operationId: optimisticMessageId,
+      command: {
+        kind: "session.send",
+        sessionId: "session-openapi",
+        text: "Ship it",
+      },
+    });
+    expect(screen.getAllByText("Ship it")).toHaveLength(1);
+    randomUuid.mockRestore();
   });
 
   it("fetches project-scoped workspace metadata after a legacy SSE snapshot", async () => {
@@ -3809,6 +4207,12 @@ describe("BrowserGatewayApp /mcp behavior", () => {
 
   it("keeps Ask Agent pinned when no routed VS Code instances are available", async () => {
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    let activeAskAgentSessionId = "browser-gateway:ask-agent:default";
+    const createActiveAskAgentResponse = () => {
+      const response = createAskAgentSessionResponse();
+      response.snapshot.session.foreground.sessionId = activeAskAgentSessionId;
+      return response;
+    };
     fetchMock.mockImplementation(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -3819,7 +4223,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
           return jsonResponse({ currentInstanceId: "", instances: [] });
         }
         if (pathname === "/api/ask-agent/session") {
-          return jsonResponse(createAskAgentSessionResponse());
+          return jsonResponse(createActiveAskAgentResponse());
         }
         if (pathname === "/api/ask-agent/sessions") {
           return jsonResponse({
@@ -3839,9 +4243,12 @@ describe("BrowserGatewayApp /mcp behavior", () => {
           });
         }
         if (pathname === "/api/ask-agent/session/new") {
-          const response = createAskAgentSessionResponse();
-          response.snapshot.session.foreground.sessionId =
-            "browser-gateway:ask-agent:next";
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            sessionId?: string;
+          };
+          activeAskAgentSessionId =
+            body.sessionId ?? "browser-gateway:ask-agent:next";
+          const response = createActiveAskAgentResponse();
           return jsonResponse({ ok: true, snapshot: response.snapshot });
         }
         if (pathname === "/api/ask-agent/session/copy-first-prompt") {
@@ -3953,7 +4360,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
             operation?: string;
             statement?: string;
           };
-          const response = createAskAgentSessionResponse();
+          const response = createActiveAskAgentResponse();
           const disposition =
             input.operation === "undo"
               ? "undone"
@@ -3971,7 +4378,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
           });
         }
         if (pathname === "/api/ask-agent/memory/nudge/dismiss") {
-          const response = createAskAgentSessionResponse();
+          const response = createActiveAskAgentResponse();
           response.snapshot.session.foreground.projectedMessages = [
             {
               id: "ask-agent-user-1",
@@ -3998,7 +4405,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
           return jsonResponse({ ok: true, snapshot: response.snapshot });
         }
         if (pathname === "/api/ask-agent/retry") {
-          const response = createAskAgentSessionResponse();
+          const response = createActiveAskAgentResponse();
           response.snapshot.session.foreground.projectedMessages.push(
             {
               id: "ask-agent-user-retry",
@@ -4018,7 +4425,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
           return jsonResponse({ ok: true, snapshot: response.snapshot });
         }
         if (pathname === "/api/ask-agent/stop") {
-          const response = createAskAgentSessionResponse();
+          const response = createActiveAskAgentResponse();
           return jsonResponse({
             ok: true,
             stopped: true,
@@ -4026,10 +4433,13 @@ describe("BrowserGatewayApp /mcp behavior", () => {
           });
         }
         if (url.includes("/api/ask-agent/send")) {
-          const snapshot = createAskAgentSessionResponse().snapshot;
+          const sendBody = JSON.parse(String(init?.body ?? "{}")) as {
+            id?: string;
+          };
+          const snapshot = createActiveAskAgentResponse().snapshot;
           snapshot.ui.memoryCandidateNudge = {
             id: "ask-agent-memory-nudge-1",
-            sessionId: "browser-gateway:ask-agent:default",
+            sessionId: activeAskAgentSessionId,
             createdAt: 200,
             kind: "preference",
             matchedPhrase:
@@ -4043,7 +4453,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
           };
           snapshot.session.foreground.projectedMessages.push(
             {
-              id: "ask-agent-user-1",
+              id: sendBody.id ?? "ask-agent-user-1",
               role: "user",
               content: "Ship it",
               timestamp: 200,
@@ -4157,12 +4567,12 @@ describe("BrowserGatewayApp /mcp behavior", () => {
           });
         }
         if (pathname === "/api/ask-agent/model") {
-          const response = createAskAgentSessionResponse();
+          const response = createActiveAskAgentResponse();
           response.snapshot.session.foreground.model = "gpt-5.3-codex";
           return jsonResponse({ ok: true, snapshot: response.snapshot });
         }
         if (url.includes("/api/ask-agent/thinking")) {
-          const response = createAskAgentSessionResponse();
+          const response = createActiveAskAgentResponse();
           response.snapshot.session.foreground.reasoningEffort = "low";
           response.snapshot.session.foreground.thinkingEnabled = true;
           return jsonResponse({ ok: true, snapshot: response.snapshot });
@@ -4342,7 +4752,9 @@ describe("BrowserGatewayApp /mcp behavior", () => {
             text?: string;
           };
           return (
-            body.sessionId === "browser-gateway:ask-agent:next" &&
+            typeof body.sessionId === "string" &&
+            body.sessionId.startsWith("browser-gateway:ask-agent:") &&
+            body.sessionId !== "browser-gateway:ask-agent:default" &&
             body.text === "Copied first prompt"
           );
         }),
@@ -4464,7 +4876,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       ).toBe(true);
     });
 
-    const dismissSnapshot = createAskAgentSessionResponse().snapshot;
+    const dismissSnapshot = createActiveAskAgentResponse().snapshot;
     dismissSnapshot.session.foreground.projectedMessages = [
       {
         id: "ask-agent-user-1",
@@ -4541,7 +4953,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     ];
     dismissSnapshot.ui.memoryCandidateNudge = {
       id: "ask-agent-memory-nudge-dismiss",
-      sessionId: "browser-gateway:ask-agent:default",
+      sessionId: activeAskAgentSessionId,
       createdAt: 220,
       kind: "preference",
       matchedPhrase: "Remember that I prefer concise answers.",
@@ -4637,7 +5049,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(revokeObjectUrl).toHaveBeenCalledWith("blob:ask-agent-transcript");
     await screen.findByText("Exported Ask Agent transcript.");
 
-    const errorSnapshot = createAskAgentSessionResponse().snapshot;
+    const errorSnapshot = createActiveAskAgentResponse().snapshot;
     errorSnapshot.session.foreground.projectedMessages.push(
       {
         id: "ask-agent-user-error",
@@ -4731,9 +5143,62 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     }
   });
 
-  it("waits for a new Ask Agent session before routing its first message", async () => {
+  it("preserves the latest Ask Agent model and thinking level when starting a new chat", async () => {
     const fallbackFetch = globalThis.fetch;
-    let resolveNewSession: ((response: Response) => void) | undefined;
+    const newSessionBodies: Array<{ sessionId?: string }> = [];
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const pathname = String(input).split("?")[0];
+        if (pathname === "/api/ask-agent/model") {
+          const response = createAskAgentSessionResponse();
+          response.snapshot.session.foreground.model = "claude-sonnet-4-6";
+          response.snapshot.session.foreground.reasoningEffort = "high";
+          return jsonResponse({ ok: true, snapshot: response.snapshot });
+        }
+        if (pathname === "/api/ask-agent/session/new") {
+          newSessionBodies.push(
+            JSON.parse(String(init?.body ?? "{}")) as { sessionId?: string },
+          );
+          return new Promise<Response>(() => {});
+        }
+        return fallbackFetch(input, init);
+      },
+    ) as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("current-model").textContent).toBe(
+        "gpt-5.3-codex",
+      );
+    });
+    fireEvent.click(screen.getByTestId("trigger-select-model"));
+    await waitFor(() => {
+      expect(screen.getByTestId("current-model").textContent).toBe(
+        "claude-sonnet-4-6",
+      );
+      expect(screen.getByTestId("reasoning-effort").textContent).toBe("high");
+    });
+
+    fireEvent.click(screen.getByTitle("New Chat"));
+    await waitFor(() => expect(newSessionBodies).toHaveLength(1));
+
+    expect(screen.getByTestId("current-model").textContent).toBe(
+      "claude-sonnet-4-6",
+    );
+    expect(screen.getByTestId("reasoning-effort").textContent).toBe("high");
+  });
+
+  it("routes the first message to the freshly minted Ask Agent session without waiting for the helper", async () => {
+    const fallbackFetch = globalThis.fetch;
+    const newSessionBodies: Array<{ sessionId?: string }> = [];
     const sendBodies: Array<{ sessionId?: string; text?: string }> = [];
     const fetchMock = vi.fn(
       async (
@@ -4742,20 +5207,21 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       ): Promise<Response> => {
         const pathname = String(input).split("?")[0];
         if (pathname === "/api/ask-agent/session/new") {
-          return new Promise<Response>((resolve) => {
-            resolveNewSession = resolve;
-          });
+          newSessionBodies.push(
+            JSON.parse(String(init?.body ?? "{}")) as { sessionId?: string },
+          );
+          // The helper never answers (hung handoff/restart): the send below
+          // must still target the minted session id.
+          return new Promise<Response>(() => {});
         }
         if (pathname === "/api/ask-agent/send") {
-          sendBodies.push(
-            JSON.parse(String(init?.body ?? "{}")) as {
-              sessionId?: string;
-              text?: string;
-            },
-          );
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            sessionId?: string;
+            text?: string;
+          };
+          sendBodies.push(body);
           const response = createAskAgentSessionResponse();
-          response.snapshot.session.foreground.sessionId =
-            "browser-gateway:ask-agent:next";
+          response.snapshot.session.foreground.sessionId = body.sessionId ?? "";
           return jsonResponse({ ok: true, snapshot: response.snapshot });
         }
         return fallbackFetch(input, init);
@@ -4773,23 +5239,75 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     );
 
     fireEvent.click(await screen.findByTitle("New Chat"));
-    await waitFor(() => expect(resolveNewSession).toBeTypeOf("function"));
+    await waitFor(() => expect(newSessionBodies).toHaveLength(1));
+    const mintedSessionId = newSessionBodies[0]?.sessionId;
+    expect(mintedSessionId).toMatch(/^browser-gateway:ask-agent:/);
 
     fireEvent.click(screen.getByTestId("trigger-send"));
-    await screen.findByText("Waiting for new session…");
-    expect(sendBodies).toEqual([]);
-
-    const next = createAskAgentSessionResponse();
-    next.snapshot.session.foreground.sessionId =
-      "browser-gateway:ask-agent:next";
-    await act(async () => {
-      resolveNewSession?.(jsonResponse({ ok: true, snapshot: next.snapshot }));
-    });
-
     await waitFor(() => {
       expect(sendBodies).toHaveLength(1);
       expect(sendBodies[0]).toMatchObject({
-        sessionId: "browser-gateway:ask-agent:next",
+        sessionId: mintedSessionId,
+        text: "Ship it",
+      });
+    });
+  });
+
+  it("targets a fresh Ask Agent session for every New Chat click even when an earlier request hangs", async () => {
+    const fallbackFetch = globalThis.fetch;
+    const newSessionBodies: Array<{ sessionId?: string }> = [];
+    const sendBodies: Array<{ sessionId?: string; text?: string }> = [];
+    const fetchMock = vi.fn(
+      async (
+        input: RequestInfo | URL,
+        init?: RequestInit,
+      ): Promise<Response> => {
+        const pathname = String(input).split("?")[0];
+        if (pathname === "/api/ask-agent/session/new") {
+          newSessionBodies.push(
+            JSON.parse(String(init?.body ?? "{}")) as { sessionId?: string },
+          );
+          return new Promise<Response>(() => {});
+        }
+        if (pathname === "/api/ask-agent/send") {
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            sessionId?: string;
+            text?: string;
+          };
+          sendBodies.push(body);
+          const response = createAskAgentSessionResponse();
+          response.snapshot.session.foreground.sessionId = body.sessionId ?? "";
+          return jsonResponse({ ok: true, snapshot: response.snapshot });
+        }
+        return fallbackFetch(input, init);
+      },
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    fireEvent.click(await screen.findByTitle("New Chat"));
+    await waitFor(() => expect(newSessionBodies).toHaveLength(1));
+    // The first request never settles; a second click must not become a
+    // silent no-op — it targets another fresh session id.
+    fireEvent.click(screen.getByTitle("New Chat"));
+    await waitFor(() => expect(newSessionBodies).toHaveLength(2));
+    const secondMintedSessionId = newSessionBodies[1]?.sessionId;
+    expect(secondMintedSessionId).toMatch(/^browser-gateway:ask-agent:/);
+    expect(secondMintedSessionId).not.toBe(newSessionBodies[0]?.sessionId);
+
+    fireEvent.click(screen.getByTestId("trigger-send"));
+    await waitFor(() => {
+      expect(sendBodies).toHaveLength(1);
+      expect(sendBodies[0]).toMatchObject({
+        sessionId: secondMintedSessionId,
         text: "Ship it",
       });
     });
@@ -4798,6 +5316,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
   it("keeps routing to the new Ask Agent session after a stale snapshot renders", async () => {
     const fallbackFetch = globalThis.fetch;
     let resolveNewSession: ((response: Response) => void) | undefined;
+    const newSessionBodies: Array<{ sessionId?: string }> = [];
     const sendBodies: Array<{ sessionId?: string; text?: string }> = [];
     const fetchMock = vi.fn(
       async (
@@ -4806,20 +5325,21 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       ): Promise<Response> => {
         const pathname = String(input).split("?")[0];
         if (pathname === "/api/ask-agent/session/new") {
+          newSessionBodies.push(
+            JSON.parse(String(init?.body ?? "{}")) as { sessionId?: string },
+          );
           return new Promise<Response>((resolve) => {
             resolveNewSession = resolve;
           });
         }
         if (pathname === "/api/ask-agent/send") {
-          sendBodies.push(
-            JSON.parse(String(init?.body ?? "{}")) as {
-              sessionId?: string;
-              text?: string;
-            },
-          );
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            sessionId?: string;
+            text?: string;
+          };
+          sendBodies.push(body);
           const response = createAskAgentSessionResponse();
-          response.snapshot.session.foreground.sessionId =
-            "browser-gateway:ask-agent:next";
+          response.snapshot.session.foreground.sessionId = body.sessionId ?? "";
           return jsonResponse({ ok: true, snapshot: response.snapshot });
         }
         return fallbackFetch(input, init);
@@ -4838,15 +5358,35 @@ describe("BrowserGatewayApp /mcp behavior", () => {
 
     fireEvent.click(await screen.findByTitle("New Chat"));
     await waitFor(() => expect(resolveNewSession).toBeTypeOf("function"));
+    const mintedSessionId = newSessionBodies[0]?.sessionId ?? "";
+    expect(mintedSessionId).toMatch(/^browser-gateway:ask-agent:/);
 
     const next = createAskAgentSessionResponse();
-    next.snapshot.session.foreground.sessionId =
-      "browser-gateway:ask-agent:next";
+    next.snapshot.session.foreground.sessionId = mintedSessionId;
+    next.snapshot.session.foreground.projectedMessages = [
+      {
+        id: "new-session-message",
+        role: "assistant",
+        content: "New session transcript",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "New session transcript" }],
+      },
+    ];
     await act(async () => {
       resolveNewSession?.(jsonResponse({ ok: true, snapshot: next.snapshot }));
     });
+    await screen.findByText("New session transcript");
 
     const stale = createAskAgentSessionResponse().snapshot;
+    stale.session.foreground.projectedMessages = [
+      {
+        id: "old-session-message",
+        role: "assistant",
+        content: "Old session transcript",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "Old session transcript" }],
+      },
+    ];
     await act(async () => {
       MockEventSource.instances
         .at(-1)
@@ -4855,24 +5395,92 @@ describe("BrowserGatewayApp /mcp behavior", () => {
         )?.[1]?.({ data: JSON.stringify(stale) });
     });
 
+    expect(screen.queryByText("Old session transcript")).toBeNull();
+    expect(screen.getByText("New session transcript")).toBeTruthy();
+
     fireEvent.click(screen.getByTestId("trigger-send"));
 
     await waitFor(() => {
       expect(sendBodies).toHaveLength(1);
       expect(sendBodies[0]).toMatchObject({
-        sessionId: "browser-gateway:ask-agent:next",
+        sessionId: mintedSessionId,
         text: "Ship it",
       });
     });
 
     fireEvent.click(screen.getByTitle("New Chat"));
     await waitFor(() => {
-      expect(
-        fetchMock.mock.calls.filter(
-          ([input]) =>
-            String(input).split("?")[0] === "/api/ask-agent/session/new",
-        ),
-      ).toHaveLength(2);
+      expect(newSessionBodies).toHaveLength(2);
+    });
+  });
+
+  it("keeps the current Ask Agent session targeted when history loading throws", async () => {
+    const fallbackFetch = globalThis.fetch;
+    const sendBodies: Array<{ sessionId?: string; text?: string }> = [];
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const pathname = String(input).split("?")[0];
+        if (pathname === "/api/ask-agent/sessions") {
+          return jsonResponse({
+            sessions: [
+              {
+                id: "browser-gateway:ask-agent:unavailable",
+                mode: "ask",
+                model: "gpt-5.3-codex",
+                title: "Unavailable Ask Agent chat",
+                messageCount: 1,
+                totalInputTokens: 0,
+                totalOutputTokens: 0,
+                createdAt: 100,
+                lastActiveAt: 200,
+              },
+            ],
+          });
+        }
+        if (pathname === "/api/ask-agent/session/load") {
+          throw new Error("network unavailable");
+        }
+        if (pathname === "/api/ask-agent/send") {
+          sendBodies.push(
+            JSON.parse(String(init?.body ?? "{}")) as {
+              sessionId?: string;
+              text?: string;
+            },
+          );
+          return jsonResponse({
+            ok: true,
+            snapshot: createAskAgentSessionResponse().snapshot,
+          });
+        }
+        return fallbackFetch(input, init);
+      },
+    ) as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText("Loading Ask Agent session…")).toBeNull();
+    });
+    fireEvent.click(screen.getByTitle("Session History"));
+    fireEvent.click(await screen.findByText("Unavailable Ask Agent chat"));
+    await screen.findByText(
+      "Failed to load session: Error: network unavailable",
+    );
+
+    fireEvent.click(screen.getByTestId("trigger-send"));
+    await waitFor(() => {
+      expect(sendBodies).toHaveLength(1);
+      expect(sendBodies[0]).toMatchObject({
+        sessionId: "browser-gateway:ask-agent:default",
+        text: "Ship it",
+      });
     });
   });
 

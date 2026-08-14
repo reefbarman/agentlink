@@ -181,6 +181,24 @@ describe("ChatTabHostCoordinator", () => {
     expect(harness.manager.switchTo).toHaveBeenCalledWith("session-2");
   });
 
+  it("starts a new chat without loading the replaced session's persisted transcript", async () => {
+    const harness = createHarness();
+    // The focused tab is bound to a session that is not in memory (e.g. its
+    // multi-MB transcript is still being restored). New Chat must not load it.
+    await harness.tabs.bindFocusedSession("session-cold");
+
+    const result = await harness.coordinator.newChat(harness.address(), "code");
+
+    expect(result).toMatchObject({
+      ok: true,
+      tab: { id: "tab-1", sessionId: "session-1" },
+      session: { id: "session-1" },
+    });
+    expect(harness.manager.loadPersistedSession).not.toHaveBeenCalled();
+    expect(harness.manager.hydratePersistedSession).not.toHaveBeenCalled();
+    expect(harness.manager.switchTo).toHaveBeenCalledWith("session-1");
+  });
+
   it("does not promote a new tab session after focus moves during creation", async () => {
     const harness = createHarness();
     const first = session("session-1");

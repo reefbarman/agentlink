@@ -424,6 +424,39 @@ describe("handleReadFile outside-workspace approval ordering", () => {
     });
   });
 
+  it.each([
+    "/Users/tristan/.claude/CLAUDE.md",
+    "/Users/tristan/.agentlink/skills/helper/SKILL.md",
+  ])(
+    "skips outside-workspace approval for exact agent instruction artifact %s",
+    async (instructionPath) => {
+      resolveAndValidatePathMock.mockReturnValue({
+        absolutePath: instructionPath,
+        inWorkspace: false,
+      });
+      readFileMock.mockResolvedValue("# Agent instructions");
+
+      const approvalManager = {
+        isPathTrusted: vi.fn(() => false),
+      } as unknown as ApprovalManager;
+
+      const result = await handleReadFile(
+        { path: instructionPath, include_symbols: false },
+        approvalManager,
+        {} as ApprovalPanelProvider,
+        sessionId,
+      );
+
+      expect(approveOutsideWorkspaceAccessMock).not.toHaveBeenCalled();
+      expect(approvalManager.isPathTrusted).not.toHaveBeenCalled();
+      expect(
+        JSON.parse(
+          result.content[0].type === "text" ? result.content[0].text : "{}",
+        ),
+      ).toMatchObject({ content: "1 | # Agent instructions" });
+    },
+  );
+
   it("still requires outside-workspace approval for files outside advertised skill directories", async () => {
     resolveAndValidatePathMock.mockReturnValue({
       absolutePath: "/Users/tristan/.agentlink/skills/other/secret.md",

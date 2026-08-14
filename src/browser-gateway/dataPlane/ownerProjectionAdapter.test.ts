@@ -372,7 +372,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     expect(publications).toHaveLength(1);
     expect(publications[0]).toMatchObject({
       kind: "checkpoint",
-      checkpoint: { checkpointSequence: 0, checkpointId: "checkpoint-0" },
+      checkpoint: { checkpointSequence: 1, checkpointId: "checkpoint-1" },
     });
 
     adapter.setDemanded(false);
@@ -904,21 +904,21 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
       expect.objectContaining({
         kind: "event",
         event: expect.objectContaining({
-          ownerSequence: 1,
+          ownerSequence: 2,
           kind: "repository.updated",
         }),
       }),
       expect.objectContaining({
         kind: "event",
         event: expect.objectContaining({
-          ownerSequence: 2,
+          ownerSequence: 3,
           kind: "model_catalog.revision.updated",
         }),
       }),
       expect.objectContaining({
         kind: "event",
         event: expect.objectContaining({
-          ownerSequence: 3,
+          ownerSequence: 4,
           kind: "session.catalog.updated",
         }),
       }),
@@ -1022,19 +1022,19 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     expect(publications).toEqual([
       expect.objectContaining({
         kind: "checkpoint",
-        checkpoint: expect.objectContaining({ checkpointSequence: 0 }),
+        checkpoint: expect.objectContaining({ checkpointSequence: 1 }),
       }),
       expect.objectContaining({
         kind: "event",
         event: expect.objectContaining({
-          ownerSequence: 1,
+          ownerSequence: 2,
           kind: "foreground.control.updated",
         }),
       }),
       expect.objectContaining({
         kind: "event",
         event: expect.objectContaining({
-          ownerSequence: 2,
+          ownerSequence: 3,
           kind: "transcript.message.appended",
           payload: {
             message: expect.objectContaining({ messageId: "message-final" }),
@@ -1044,7 +1044,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
       expect.objectContaining({
         kind: "event",
         event: expect.objectContaining({
-          ownerSequence: 3,
+          ownerSequence: 4,
           kind: "theme.updated",
         }),
       }),
@@ -1081,18 +1081,11 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     expect(publications).toEqual([
       expect.objectContaining({
         kind: "checkpoint",
-        checkpoint: expect.objectContaining({ checkpointSequence: 0 }),
+        checkpoint: expect.objectContaining({ checkpointSequence: 1 }),
       }),
       expect.objectContaining({
         kind: "event",
-        event: expect.objectContaining({ ownerSequence: 1 }),
-      }),
-      expect.objectContaining({
-        kind: "event",
-        event: expect.objectContaining({
-          ownerSequence: 2,
-          kind: "transcript.message.appended",
-        }),
+        event: expect.objectContaining({ ownerSequence: 2 }),
       }),
       expect.objectContaining({
         kind: "event",
@@ -1103,7 +1096,14 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
       }),
       expect.objectContaining({
         kind: "event",
-        event: expect.objectContaining({ ownerSequence: 4 }),
+        event: expect.objectContaining({
+          ownerSequence: 4,
+          kind: "transcript.message.appended",
+        }),
+      }),
+      expect.objectContaining({
+        kind: "event",
+        event: expect.objectContaining({ ownerSequence: 5 }),
       }),
     ]);
   });
@@ -1168,7 +1168,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     expect(event).toMatchObject({
       kind: "event",
       event: {
-        ownerSequence: 1,
+        ownerSequence: 2,
         kind: "transcript.block.delta",
         payload: {
           messageId: "message-assistant",
@@ -1200,7 +1200,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     expect(publications[1]).toMatchObject({
       kind: "event",
       event: {
-        ownerSequence: 1,
+        ownerSequence: 2,
         kind: "transcript.message.upserted",
         payload: {
           message: expect.objectContaining({ messageId: "message-assistant" }),
@@ -1212,7 +1212,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     sources.fire("foreground");
     expect(publications[2]).toMatchObject({
       kind: "checkpoint",
-      checkpoint: { checkpointSequence: 1 },
+      checkpoint: { checkpointSequence: 3 },
     });
   });
 
@@ -1301,12 +1301,12 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     expect(publications).toEqual([
       expect.objectContaining({
         kind: "checkpoint",
-        checkpoint: expect.objectContaining({ checkpointSequence: 0 }),
+        checkpoint: expect.objectContaining({ checkpointSequence: 1 }),
       }),
       expect.objectContaining({
         kind: "event",
         event: expect.objectContaining({
-          ownerSequence: 1,
+          ownerSequence: 2,
           kind: "foreground.control.updated",
         }),
       }),

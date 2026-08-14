@@ -154,6 +154,15 @@ const browserGatewayMonacoOptions = {
   metafile: true,
 };
 
+const browserGatewayNotificationsWorkerOptions = {
+  ...webviewBase,
+  entryPoints: [
+    "src/browser-gateway/webview/browserGatewayNotificationsWorker.ts",
+  ],
+  entryNames: "browser-gateway-notifications",
+  metafile: true,
+};
+
 /** @type {esbuild.BuildOptions} */
 const terminalOptions = {
   ...webviewBase,
@@ -245,6 +254,7 @@ if (watch) {
     specialBlockPanelCtx,
     browserGatewayCtx,
     browserGatewayMonacoCtx,
+    browserGatewayNotificationsWorkerCtx,
     terminalCtx,
     monacoWorkerCtx,
     idxCtx,
@@ -259,6 +269,7 @@ if (watch) {
     esbuild.context(specialBlockPanelOptions),
     esbuild.context(browserGatewayOptions),
     esbuild.context(browserGatewayMonacoOptions),
+    esbuild.context(browserGatewayNotificationsWorkerOptions),
     esbuild.context(terminalOptions),
     esbuild.context(monacoWorkerOptions),
     esbuild.context(indexerOptions),
@@ -274,6 +285,7 @@ if (watch) {
     specialBlockPanelCtx.watch(),
     browserGatewayCtx.watch(),
     browserGatewayMonacoCtx.watch(),
+    browserGatewayNotificationsWorkerCtx.watch(),
     terminalCtx.watch(),
     monacoWorkerCtx.watch(),
     idxCtx.watch(),
@@ -283,6 +295,9 @@ if (watch) {
 } else {
   const browserGatewayBuild = esbuild.build(browserGatewayOptions);
   const browserGatewayMonacoBuild = esbuild.build(browserGatewayMonacoOptions);
+  const browserGatewayNotificationsWorkerBuild = esbuild.build(
+    browserGatewayNotificationsWorkerOptions,
+  );
   await Promise.all([
     esbuild.build(extensionOptions),
     esbuild.build(composeRuntimeOptions),
@@ -293,26 +308,38 @@ if (watch) {
     esbuild.build(specialBlockPanelOptions),
     browserGatewayBuild,
     browserGatewayMonacoBuild,
+    browserGatewayNotificationsWorkerBuild,
     esbuild.build(terminalOptions),
     esbuild.build(monacoWorkerOptions),
     esbuild.build(indexerOptions),
     esbuild.build(browserGatewayHelperOptions),
   ]);
-  const [browserGatewayResult, browserGatewayMonacoResult] = await Promise.all([
+  const [
+    browserGatewayResult,
+    browserGatewayMonacoResult,
+    browserGatewayNotificationsWorkerResult,
+  ] = await Promise.all([
     browserGatewayBuild,
     browserGatewayMonacoBuild,
+    browserGatewayNotificationsWorkerBuild,
   ]);
-  if (!browserGatewayResult.metafile || !browserGatewayMonacoResult.metafile) {
+  if (
+    !browserGatewayResult.metafile ||
+    !browserGatewayMonacoResult.metafile ||
+    !browserGatewayNotificationsWorkerResult.metafile
+  ) {
     throw new Error("browser_gateway_metafile_missing");
   }
   const browserGatewayBundleReport = createBrowserGatewayBundleReport({
     inputs: {
       ...browserGatewayResult.metafile.inputs,
       ...browserGatewayMonacoResult.metafile.inputs,
+      ...browserGatewayNotificationsWorkerResult.metafile.inputs,
     },
     outputs: {
       ...browserGatewayResult.metafile.outputs,
       ...browserGatewayMonacoResult.metafile.outputs,
+      ...browserGatewayNotificationsWorkerResult.metafile.outputs,
     },
   });
   verifyBrowserGatewayBundlePackaging(

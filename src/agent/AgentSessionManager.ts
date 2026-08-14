@@ -1273,6 +1273,8 @@ export class AgentSessionManager {
       mode: args.summary.mode,
       config: this.buildConfigForModel(model),
       background: args.background,
+      initialArchitectReviewPending:
+        args.metadata.initialArchitectReviewPending ?? false,
       activeFilePath,
       activeContextResourceUri: args.metadata.activeContextResourceUri,
       workspaceFolders: this.getWorkspaceFolders(),
@@ -1662,6 +1664,7 @@ export class AgentSessionManager {
             revision: skill.revision,
             skillPath: skill.skillPath,
             realSkillPath: skill.provenance.realSkillPath,
+            sourceScope: skill.provenance.scope,
           })),
         getAdvertisedRules: () => session.getAdvertisedRules(),
         onSkillLoad: (activation: SkillLoadActivation) =>
@@ -5333,6 +5336,7 @@ export class AgentSessionManager {
         activeContextResourceUri: session.activeContextResourceUri,
         mode: session.mode,
         model: session.model,
+        initialArchitectReviewPending: session.initialArchitectReviewPending,
         promptProfile: session.promptProfile,
         contextLedger: session.contextBreakdown?.contextLedger
           ? structuredClone(session.contextBreakdown.contextLedger)
@@ -7341,14 +7345,40 @@ export class AgentSessionManager {
     );
   }
 
+  requiresInitialArchitectReview(
+    sessionId: string,
+    targetMode: string,
+  ): boolean {
+    const session = this.sessions.get(sessionId);
+    return Boolean(
+      session &&
+      !session.background &&
+      session.mode === "architect" &&
+      targetMode !== "architect" &&
+      session.initialArchitectReviewPending,
+    );
+  }
+
   /** Switch one session in-place without changing foreground ownership. */
   async switchSessionMode(
     sessionId: string,
     mode: string,
-    opts?: { agentMode?: AgentMode; devMode?: boolean },
+    opts?: {
+      agentMode?: AgentMode;
+      devMode?: boolean;
+      initialArchitectReviewApproved?: boolean;
+    },
   ): Promise<AgentSession | null> {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
+    if (
+      this.requiresInitialArchitectReview(sessionId, mode) &&
+      opts?.initialArchitectReviewApproved !== true
+    ) {
+      throw new Error(
+        "The initial Architect plan must be approved by the user before changing modes.",
+      );
+    }
     this.requireSessionExecution(session);
     const agentMode =
       opts?.agentMode ?? (await this.resolveSessionMode(sessionId, mode));
@@ -7367,10 +7397,16 @@ export class AgentSessionManager {
     this.applyThresholdToSession(session);
     this.refreshMcpToolDisclosure(session);
     await session.setMode(mode, {
-      ...opts,
       agentMode,
+      devMode: opts?.devMode,
       promptProfileOverrides: config.promptProfileOverrides,
     });
+    if (
+      opts?.initialArchitectReviewApproved === true &&
+      session.mode !== "architect"
+    ) {
+      session.initialArchitectReviewPending = false;
+    }
     this.updateSkillCatalogFallback(session);
 
     if (!session.background && this.foregroundId === session.id) {
@@ -7388,7 +7424,11 @@ export class AgentSessionManager {
   /** Switch the current foreground session while preserving its identity. */
   async switchForegroundMode(
     mode: string,
-    opts?: { agentMode?: AgentMode; devMode?: boolean },
+    opts?: {
+      agentMode?: AgentMode;
+      devMode?: boolean;
+      initialArchitectReviewApproved?: boolean;
+    },
   ): Promise<AgentSession | null> {
     const session = this.getForegroundSession();
     if (!session) return null;
@@ -8402,6 +8442,8 @@ export class AgentSessionManager {
       lineage: metadata.lineage,
       messages: interruptedRunRecovery.messages,
       modeInstructionAnchors: readResult.value.modeInstructionAnchors,
+      initialArchitectReviewPending:
+        metadata.initialArchitectReviewPending ?? false,
     });
     this.restoreContextLedger(session, metadata);
 

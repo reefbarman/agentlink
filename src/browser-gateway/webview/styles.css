@@ -111,6 +111,164 @@ textarea {
   text-overflow: ellipsis;
 }
 
+.browser-header-settings {
+  flex: 0 0 auto;
+}
+
+.browser-shell > .browser-header .browser-header-settings {
+  width: auto;
+  height: auto;
+  min-height: 0;
+  padding: 4px;
+  color: var(--vscode-foreground, var(--ag-text));
+  background: none;
+  border: none;
+}
+
+.browser-shell > .browser-header .browser-header-settings:hover:not(:disabled) {
+  background: var(--vscode-toolbar-hoverBackground, transparent);
+}
+
+.browser-header-settings .codicon {
+  font-size: 16px;
+}
+
+.browser-notification-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  color: var(--ag-text);
+  background: var(--ag-panel-2);
+  border-bottom: 1px solid var(--ag-border);
+}
+
+.browser-notification-prompt > div:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.browser-notification-prompt strong {
+  font-size: 12px;
+}
+
+.browser-notification-prompt span,
+.browser-notification-settings small,
+.browser-notification-settings p {
+  color: var(--ag-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.browser-notification-prompt-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.browser-notification-prompt-actions button,
+.browser-notification-settings button {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.browser-notification-settings-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: color-mix(in srgb, var(--ag-bg) 72%, transparent);
+}
+
+.browser-notification-settings {
+  width: min(100%, 420px);
+  padding: 16px;
+  color: var(--ag-text);
+  background: var(--ag-panel);
+  border: 1px solid var(--ag-border-2);
+  border-radius: 6px;
+  box-shadow: 0 16px 48px rgb(0 0 0 / 35%);
+}
+
+.browser-notification-settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.browser-notification-settings h2,
+.browser-notification-settings p {
+  margin: 0;
+}
+
+.browser-notification-settings h2 {
+  font-size: 14px;
+}
+
+.browser-notification-settings-header p {
+  margin-top: 4px;
+}
+
+.browser-notification-settings-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 !important;
+}
+
+.browser-notification-settings-field {
+  display: grid;
+  gap: 6px;
+}
+
+.browser-notification-settings-field > span {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.browser-notification-settings select {
+  min-height: 32px;
+  padding: 5px 8px;
+  color: var(--ag-text);
+  background: var(--ag-panel-2);
+  border: 1px solid var(--ag-border-2);
+  border-radius: 4px;
+}
+
+.browser-notification-settings-permission {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--ag-border);
+}
+
+.browser-notification-settings-permission span {
+  color: var(--ag-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.browser-notification-settings-enabled {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 16px !important;
+  color: var(--vscode-testing-iconPassed, #73c991) !important;
+}
+
 .memory-count-badge {
   display: inline-flex;
   align-items: center;
@@ -1627,6 +1785,22 @@ pre {
 
   .browser-status-detail {
     max-width: 36vw;
+  }
+
+  .browser-notification-prompt {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .browser-notification-prompt-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .browser-notification-settings-permission {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .browser-layout {

@@ -2752,6 +2752,18 @@ export function App({
       startupRestorePendingRef.current = false;
       dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
       setTranscriptView(null);
+      // Optimistically clear to an empty chat: the host may still be busy
+      // parsing a large restored transcript, and the New Chat click must not
+      // appear dead until that finishes. Late restored hydrations for the
+      // replaced session are dropped (startupRestorePendingRef is false),
+      // and the host's own new-chat hydration re-establishes the session.
+      dispatch({ type: "NEW_SESSION" });
+      streamingRef.current = false;
+      stateRef.current = {
+        ...stateRef.current,
+        sessionId: null,
+        streaming: false,
+      };
       vscodeApi.postMessage({
         command: "chatTabNewChat",
         mode: stateRef.current.mode,

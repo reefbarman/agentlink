@@ -56,6 +56,8 @@ export interface AdvertisedSkillReference {
   revision: string;
   skillPath: string;
   realSkillPath: string;
+  /** Source classification used to scope bundled-skill resource access. */
+  sourceScope: "builtin" | "global" | "ancestor" | "project";
 }
 
 export interface SkillLoadActivation {

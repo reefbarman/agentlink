@@ -347,6 +347,7 @@ type ExecuteCommandRetryGuidance = {
     | "sandbox_host_integration"
     | "sandbox_node_oom"
     | "sandbox_preparation_changed"
+    | "sandbox_pty_launch_failed"
     | "managed_network_ssh_git_transport"
     | "managed_network_tls_trust";
   message: string;
@@ -2591,6 +2592,36 @@ export async function handleExecuteCommand(
       };
     }
     const lowerMessage = message.toLowerCase();
+    if (
+      lowerMessage.includes(
+        "sandbox pty launch failed twice before the command started",
+      )
+    ) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "retry_required",
+              error: message,
+              error_code: "sandbox_pty_launch_failed",
+              command: params.command,
+              command_sent: false,
+              process_launched: false,
+              retry_safe: true,
+              failure_stage: "launch",
+              retry_guidance: {
+                code: "sandbox_pty_launch_failed",
+                message:
+                  "The sandbox could not create its PTY after one automatic retry, and the command did not start. Retry the same command; if this repeats, reload the VS Code window to recreate AgentLink's sandbox runtime.",
+                automatic_retry: false,
+                options: [{ action: "retry_same_command", same_command: true }],
+              } satisfies ExecuteCommandRetryGuidance,
+            }),
+          },
+        ],
+      };
+    }
     const newlineRegexHint =
       lowerMessage.includes("ripgrep error") &&
       lowerMessage.includes("regex") &&

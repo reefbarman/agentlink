@@ -110,13 +110,16 @@ describe("ProjectSettingsAccessor", () => {
     };
     const properties = manifest.contributes.configuration.properties;
 
-    expect(classifications).toHaveLength(56);
+    expect(classifications).toHaveLength(57);
     expect(PROJECT_SCOPED_AGENTLINK_SETTINGS).toContain(
       "semanticEmbeddingsEnabled",
     );
     expect(PROJECT_SCOPED_AGENTLINK_SETTINGS).toContain("modelPromptProfiles");
     expect(PROJECT_SCOPED_AGENTLINK_SETTINGS).toContain("skills.disabledIds");
     expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain("disabledProviders");
+    expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain(
+      "browserGatewaySecureLanAccess",
+    );
     expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain("memory.mode");
     expect(MACHINE_SCOPED_AGENTLINK_SETTINGS).toContain(
       "terminal.environmentPolicy",

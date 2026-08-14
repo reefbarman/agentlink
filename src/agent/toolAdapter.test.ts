@@ -3195,6 +3195,7 @@ describe("dispatchToolCall", () => {
         revision: "a".repeat(64),
         skillPath,
         realSkillPath: skillPath,
+        sourceScope: "global" as const,
       },
     ];
     const runtime = createAgentToolRuntime({
@@ -3231,6 +3232,49 @@ describe("dispatchToolCall", () => {
     expect(mockOnApprovalRequest).not.toHaveBeenCalled();
   });
 
+  it("allows non-interactive loading of resources from an advertised built-in skill", async () => {
+    const skillPath =
+      "/extensions/agentlink/resources/builtin-skills/documentation/SKILL.md";
+    const resourcePath =
+      "/extensions/agentlink/resources/builtin-skills/documentation/references/complete-reference.md";
+    const advertisedSkills = [
+      {
+        id: "builtin:agentlink:documentation",
+        name: "documentation",
+        revision: "a".repeat(64),
+        skillPath,
+        realSkillPath: skillPath,
+        sourceScope: "builtin" as const,
+      },
+    ];
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      approvalManager: {
+        isPathTrusted: vi.fn(() => false),
+      } as any,
+    });
+    vi.mocked(handleLoadSkill).mockClear();
+
+    await runtime.executeTool({
+      name: "load_skill",
+      input: { path: resourcePath },
+      context: {
+        sessionId: "background-session",
+        interactionPolicy: "deny",
+        getAdvertisedSkills: () => advertisedSkills,
+      },
+    });
+
+    expect(handleLoadSkill).toHaveBeenCalledWith(
+      { path: resourcePath },
+      expect.anything(),
+      expect.anything(),
+      "background-session",
+      advertisedSkills,
+      expect.anything(),
+    );
+  });
+
   it("allows non-interactive reads of resources associated with an advertised skill", async () => {
     const skillPath = "/outside/skills/helper/SKILL.md";
     const resourcePath = "/outside/skills/helper/references/guide.md";
@@ -3241,6 +3285,7 @@ describe("dispatchToolCall", () => {
         revision: "a".repeat(64),
         skillPath,
         realSkillPath: skillPath,
+        sourceScope: "global" as const,
       },
     ];
     const runtime = createAgentToolRuntime({
@@ -3303,43 +3348,36 @@ describe("dispatchToolCall", () => {
     expect(handleLoadSkill).not.toHaveBeenCalled();
   });
 
-  it("does not exempt other tools for an advertised outside-workspace skill path", async () => {
-    const skillPath = "/outside/skills/helper/SKILL.md";
-    const runtime = createAgentToolRuntime({
-      ...mockCtx,
-      approvalManager: {
-        isPathTrusted: vi.fn(() => false),
-      } as any,
-    });
-    vi.mocked(handleGetContext).mockClear();
+  it.each([
+    "/Users/tester/.claude/CLAUDE.md",
+    "/Users/tester/.agentlink/skills/helper/SKILL.md",
+  ])(
+    "allows non-interactive get_context reads of agent instruction artifact %s",
+    async (instructionPath) => {
+      const runtime = createAgentToolRuntime({
+        ...mockCtx,
+        approvalManager: {
+          isPathTrusted: vi.fn(() => false),
+        } as any,
+      });
+      vi.mocked(handleGetContext).mockClear();
 
-    const result = await runtime.executeTool({
-      name: "get_context",
-      input: { path: skillPath },
-      context: {
-        sessionId: "background-session",
-        interactionPolicy: "deny",
-        getAdvertisedSkills: () => [
-          {
-            id: "global:agentlink:helper",
-            name: "helper",
-            revision: "a".repeat(64),
-            skillPath,
-            realSkillPath: skillPath,
-          },
-        ],
-      },
-    });
+      await runtime.executeTool({
+        name: "get_context",
+        input: { path: instructionPath },
+        context: {
+          sessionId: "background-session",
+          interactionPolicy: "deny",
+        },
+      });
 
-    expect(result).toMatchObject({
-      isError: true,
-      data: {
-        status: "rejected",
-        reason: "interaction_denied",
-      },
-    });
-    expect(handleGetContext).not.toHaveBeenCalled();
-  });
+      expect(handleGetContext).toHaveBeenCalledWith(
+        { path: instructionPath },
+        "background-session",
+        expect.anything(),
+      );
+    },
+  );
 
   it("denies untrusted nested read paths without invoking the handler", async () => {
     const runtime = createAgentToolRuntime({
@@ -3775,6 +3813,7 @@ describe("dispatchToolCall", () => {
         revision: "a".repeat(64),
         skillPath: "/outside/skills/helper/SKILL.md",
         realSkillPath: "/outside/skills/helper/SKILL.md",
+        sourceScope: "global" as const,
       },
     ];
     const result = await dispatchToolCall(

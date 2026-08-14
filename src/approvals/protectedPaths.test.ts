@@ -1,8 +1,10 @@
 import * as path from "path";
 
 import { describe, expect, it } from "vitest";
-
-import { isMemoryProtectedPath } from "./protectedPaths.js";
+import {
+  isAgentInstructionReadPath,
+  isMemoryProtectedPath,
+} from "./protectedPaths.js";
 
 const cwd = path.resolve("/workspace/project");
 const home = path.resolve("/Users/tester");
@@ -10,6 +12,35 @@ const home = path.resolve("/Users/tester");
 function p(...parts: string[]): string {
   return path.join(...parts);
 }
+
+describe("isAgentInstructionReadPath", () => {
+  it("allows reads of exact agent instruction artifact filenames", () => {
+    for (const file of [
+      p(home, ".claude", "CLAUDE.md"),
+      p(cwd, "AGENTS.md"),
+      p(cwd, "packages", "api", "AGENTS.local.md"),
+      p(home, ".agentlink", "skills", "helper", "SKILL.md"),
+    ]) {
+      expect(isAgentInstructionReadPath(file), file).toBe(true);
+    }
+  });
+
+  it("does not trust sibling memory, rule, credential, or environment files", () => {
+    for (const file of [
+      p(home, ".agentlink", "memory.md"),
+      p(home, ".agentlink", "rules", "security.md"),
+      p(home, ".ssh", "config"),
+      p(home, ".ssh", "SKILL.md"),
+      p(home, ".SSH", "SKILL.md"),
+      p(home, ".config", "gh", "CLAUDE.md"),
+      p(home, ".CONFIG", "GH", "CLAUDE.md"),
+      p(cwd, ".env"),
+      p(cwd, "SKILL.md.bak"),
+    ]) {
+      expect(isAgentInstructionReadPath(file), file).toBe(false);
+    }
+  });
+});
 
 describe("isMemoryProtectedPath", () => {
   it("protects workspace instruction files at any depth", () => {

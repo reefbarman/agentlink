@@ -119,6 +119,39 @@ describe("handleFindAndReplace", () => {
     });
   });
 
+  it("skips only the read approval for outside agent instruction artifacts", async () => {
+    const instructionPath = path.join(tempDir, "outside", "CLAUDE.md");
+    fs.mkdirSync(path.dirname(instructionPath), { recursive: true });
+    fs.writeFileSync(instructionPath, "old value", "utf-8");
+    mockWorkspace.openTextDocument.mockResolvedValue(
+      createDocument(instructionPath, "old value"),
+    );
+    const approvalManager = { isPathTrusted: vi.fn(() => false) };
+    const reviewAndApply = vi.fn(async () => ({
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({ status: "review_required" }),
+        },
+      ],
+    }));
+    const { handleFindAndReplace } = await import("./findAndReplace.js");
+
+    const result = await handleFindAndReplace(
+      { path: instructionPath, find: "old", replace: "new" },
+      approvalManager as never,
+      {} as never,
+      "session-instruction",
+      {} as never,
+      undefined,
+      { multiFileEditReviewProvider: { reviewAndApply } },
+    );
+
+    expect(approvalManager.isPathTrusted).not.toHaveBeenCalled();
+    expect(reviewAndApply).toHaveBeenCalledOnce();
+    expect(toolJson(result)).toMatchObject({ status: "review_required" });
+  });
+
   it("uses VS Code's default ignore behavior for glob searches", async () => {
     mockWorkspace.findFiles.mockResolvedValue([]);
     const { handleFindAndReplace } = await import("./findAndReplace.js");

@@ -1,6 +1,7 @@
 import * as fsSync from "fs";
 import * as fs from "fs/promises";
 import * as http from "http";
+import * as https from "https";
 import * as os from "os";
 import * as path from "path";
 import { PassThrough, Writable } from "stream";
@@ -110,6 +111,11 @@ import {
   type BrowserGatewayAskAgentPersistedSession,
   type BrowserGatewayAskAgentProjectHandoff,
 } from "../browserGatewayAskAgentSessionStore.js";
+import { isBrowserGatewayAskAgentSessionId } from "../browserGatewayAskAgentIdentity.js";
+import {
+  isRecapOnlyFinalSummary,
+  isTeaserOnlyFinalSummary,
+} from "../../shared/finalSummaryHeuristics.js";
 import {
   BrowserGatewayAskAgentPreferencesStore,
   type BrowserGatewayAskAgentWebPolicyCache,
@@ -242,6 +248,7 @@ import {
 import { DeviceStore } from "./deviceStore.js";
 import { PairingBroker } from "./pairingBroker.js";
 import { MdnsAdvertiser, listLanIpv4UrlsForPort } from "./mdnsAdvertiser.js";
+import { ensureBrowserGatewayLocalCertificateAuthority } from "./localCertificateAuthority.js";
 import type {
   CoreCapabilityStatusDto,
   CoreHostKind,
@@ -337,6 +344,8 @@ export interface HelperRuntimeOptions {
   lanAccess?: boolean;
   /** mDNS hostname (without `.local`). Default "agentlink". */
   mdnsName?: string;
+  /** Serve LAN browser requests over HTTPS with AgentLink's local CA. */
+  secureLanAccess?: boolean;
 }
 
 const DEFAULT_IDLE_SHUTDOWN_MS = 60_000;
@@ -509,6 +518,10 @@ function parseArgs(argv: string[]): HelperRuntimeOptions {
   const lanAccess = parseBoolFlag(
     byKey.get("lanAccess") ?? process.env.AGENTLINK_BROWSER_GATEWAY_LAN_ACCESS,
   );
+  const secureLanAccess = parseBoolFlag(
+    byKey.get("secureLanAccess") ??
+      process.env.AGENTLINK_BROWSER_GATEWAY_SECURE_LAN_ACCESS,
+  );
   const mdnsName = (
     byKey.get("mdnsName") ??
     process.env.AGENTLINK_BROWSER_GATEWAY_MDNS_NAME ??
@@ -528,6 +541,7 @@ function parseArgs(argv: string[]): HelperRuntimeOptions {
     askAgentLogPath: askAgentLogPath || getDefaultAskAgentLogPath(),
     lanAccess,
     mdnsName: mdnsName || DEFAULT_MDNS_NAME,
+    secureLanAccess: lanAccess && secureLanAccess,
   };
 }
 
@@ -850,6 +864,11 @@ type AskAgentToolExecutionResult = {
   modelResult?: string;
 };
 
+type AskAgentToolTurnContext = {
+  /** Assistant text the user has been (or will be) shown for this turn. */
+  getVisibleAssistantText(): string;
+};
+
 type ResolvedAskAgentToolCall = {
   providerCall: BrowserGatewayAskAgentToolCall;
   canonicalCall: BrowserGatewayAskAgentToolCall;
@@ -993,6 +1012,9 @@ export class BrowserGatewayHelper {
   private readonly pairingBroker: PairingBroker;
   private mdnsAdvertiser: MdnsAdvertiser | null = null;
   private mdnsState: BrowserGatewayMdnsState = { enabled: false };
+  private httpsServer: https.Server | null = null;
+  private localCaCertificatePath: string | undefined;
+  private readonly secureLanPort: number | undefined;
   private idleCheckTimer: NodeJS.Timeout | undefined;
   private discoveryHeartbeatTimer: NodeJS.Timeout | undefined;
   private shuttingDown = false;
@@ -1256,6 +1278,10 @@ export class BrowserGatewayHelper {
     this.askAgentLogPath =
       options.askAgentLogPath ?? getDefaultAskAgentLogPath();
     this.bindHost = options.lanAccess ? "0.0.0.0" : "127.0.0.1";
+    if (options.secureLanAccess && options.port >= 65_535) {
+      throw new Error("secure_lan_port_requires_port_below_65535");
+    }
+    this.secureLanPort = options.secureLanAccess ? options.port + 1 : undefined;
     this.httpRouter = new HelperHttpRouter(options.port, {
       isInternalAuthorized: (req) => this.isInternalClientAuthorized(req),
       isOwnerPlaneLoopback: (req) =>
@@ -1366,14 +1392,25 @@ export class BrowserGatewayHelper {
       };
       this.server.once("error", onError);
       this.server.once("listening", onListening);
-      this.server.listen(this.options.port, this.bindHost);
+      this.server.listen(
+        this.options.port,
+        this.options.secureLanAccess ? "127.0.0.1" : this.bindHost,
+      );
     });
 
-    if (this.options.lanAccess) {
-      await this.startMdnsAdvertiser();
-    }
+    try {
+      if (this.options.secureLanAccess) {
+        await this.startSecureLanServer();
+      }
+      if (this.options.lanAccess) {
+        await this.startMdnsAdvertiser();
+      }
 
-    await this.writeDiscovery();
+      await this.writeDiscovery();
+    } catch (error) {
+      await this.closeStartupServers();
+      throw error;
+    }
     this.discoveryHeartbeatTimer = setInterval(() => {
       void this.writeDiscovery().catch((error) => {
         logHelper(`discovery heartbeat failed: ${String(error)}`);
@@ -1448,6 +1485,13 @@ export class BrowserGatewayHelper {
           }
           this.mdnsAdvertiser = null;
         }
+        if (this.httpsServer?.listening) {
+          this.httpsServer.closeAllConnections?.();
+          await new Promise<void>((resolve) =>
+            this.httpsServer?.close(() => resolve()),
+          );
+        }
+        this.httpsServer = null;
         await clearBrowserGatewayHelperDiscovery(this.helperGenerationId);
       },
     });
@@ -1497,7 +1541,7 @@ export class BrowserGatewayHelper {
         this.handleAskAgentSessionsRequest(res);
         return;
       case "sessionNew":
-        return this.handleAskAgentNewSessionRequest(res);
+        return this.handleAskAgentNewSessionRequest(req, res);
       case "sessionLoad":
         return this.handleAskAgentLoadSessionRequest(req, res);
       case "sessionDelete":
@@ -1634,6 +1678,12 @@ export class BrowserGatewayHelper {
         return this.handleStaticAssetRequest(
           "dist/browser-gateway-monaco.css",
           "text/css; charset=utf-8",
+          res,
+        );
+      case "browserGatewayNotificationsWorker":
+        return this.handleStaticAssetRequest(
+          "dist/browser-gateway-notifications.js",
+          "text/javascript; charset=utf-8",
           res,
         );
       case "browserGatewayChunk":
@@ -1800,7 +1850,7 @@ export class BrowserGatewayHelper {
           await this.resolveInitialTheme(selectedInstance),
           await this.resolveEffectiveDataPlaneMode(),
         ),
-        { "Set-Cookie": this.buildBootstrapCookie() },
+        { "Set-Cookie": this.buildBootstrapCookie(req) },
       );
       return;
     }
@@ -2020,11 +2070,41 @@ export class BrowserGatewayHelper {
   }
 
   private async handleAskAgentNewSessionRequest(
+    req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
-    this.askAgentSessionStore.createSession(Date.now());
+    let requestedSessionId = "";
+    try {
+      const body = (await readJsonBody(req)) as { sessionId?: unknown } | null;
+      requestedSessionId =
+        typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
+    } catch {
+      // A missing/invalid body keeps the server-generated session id.
+    }
+    if (
+      requestedSessionId &&
+      !isBrowserGatewayAskAgentSessionId(requestedSessionId)
+    ) {
+      this.logAskAgentEvent("ask-agent.session.new", {
+        sessionId: requestedSessionId,
+        ok: false,
+        error: "ask_agent_session_id_invalid",
+      });
+      writeJson(res, 400, { error: "ask_agent_session_id_invalid" });
+      return;
+    }
+    this.askAgentSessionStore.createSession(
+      Date.now(),
+      undefined,
+      requestedSessionId || undefined,
+    );
     await this.persistAskAgentHistory();
     const response = await this.buildAskAgentResponse();
+    this.logAskAgentEvent("ask-agent.session.new", {
+      sessionId: requestedSessionId || "none",
+      activeSessionId: this.askAgentSessionStore.getActiveSessionId(),
+      ok: true,
+    });
     await this.publishAskAgentSnapshot(response.snapshot);
     writeJson(res, 200, { ok: true, snapshot: response.snapshot });
   }
@@ -2038,11 +2118,17 @@ export class BrowserGatewayHelper {
       const sessionId =
         typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
       if (!sessionId || !this.askAgentSessionStore.loadSession(sessionId)) {
+        this.logAskAgentEvent("ask-agent.session.load", {
+          sessionId: sessionId || "none",
+          ok: false,
+          error: "ask_agent_session_not_found",
+        });
         writeJson(res, 404, { error: "ask_agent_session_not_found" });
         return;
       }
       await this.persistAskAgentHistory();
       const response = await this.buildAskAgentResponse();
+      this.logAskAgentEvent("ask-agent.session.load", { sessionId, ok: true });
       await this.publishAskAgentSnapshot(response.snapshot);
       writeJson(res, 200, { ok: true, snapshot: response.snapshot });
     } catch (err) {
@@ -4814,6 +4900,10 @@ export class BrowserGatewayHelper {
       return { outcome: "model_empty", assistantText: "" };
     }
 
+    // Mirrors the loop's accumulated assistant text so tool handlers (the
+    // set_task_status completion guard) can tell whether the user has been
+    // shown any response this turn.
+    let turnVisibleAssistantText = "";
     return runAgentToolLoop<AskAgentToolLoopResult, AskAgentToolLoopOutcome>({
       initialToolMessages: params.initialToolMessages,
       callModel: async ({ iterationMessages, toolMessages, onText }) => {
@@ -4833,6 +4923,7 @@ export class BrowserGatewayHelper {
           signal: params.signal,
           onDelta: (delta) => {
             onText(delta);
+            turnVisibleAssistantText += delta;
             if (this.streamingMetrics.enabled) {
               this.streamingMetrics.record({
                 type: "delta",
@@ -4848,6 +4939,11 @@ export class BrowserGatewayHelper {
             scheduleTurnSnapshot();
           },
         });
+        // Mirror the loop's fallback: a client that returns text without
+        // streaming deltas still counts as having produced a visible response.
+        if (!turnVisibleAssistantText && result.text) {
+          turnVisibleAssistantText = result.text;
+        }
         return {
           text: result.text,
           toolCalls: result.toolCalls,
@@ -4924,6 +5020,7 @@ export class BrowserGatewayHelper {
                 params.modelContext.model,
                 params.modelContext.ownerId,
                 params.signal,
+                { getVisibleAssistantText: () => turnVisibleAssistantText },
               );
         this.recordAskAgentSemanticDelta();
         this.askAgentController.completeAssistantToolCall({
@@ -5884,6 +5981,7 @@ export class BrowserGatewayHelper {
     model: string,
     modelOwnerId: string,
     signal: AbortSignal,
+    turnContext?: AskAgentToolTurnContext,
   ): Promise<AskAgentToolExecutionResult> {
     const startedAt = Date.now();
     if (toolCall.name === "web_search" || toolCall.name === "web_fetch") {
@@ -6020,7 +6118,11 @@ export class BrowserGatewayHelper {
       };
     }
 
-    return this.executeAskAgentFinalStatusTool(toolCall, startedAt);
+    return this.executeAskAgentFinalStatusTool(
+      toolCall,
+      startedAt,
+      turnContext,
+    );
   }
 
   private async executeAskAgentAutonomousMemoryTool(
@@ -6387,6 +6489,7 @@ export class BrowserGatewayHelper {
   private executeAskAgentFinalStatusTool(
     toolCall: BrowserGatewayAskAgentToolCall,
     startedAt: number,
+    turnContext?: AskAgentToolTurnContext,
   ): AskAgentToolExecutionResult {
     const status = toolCall.input.status;
     if (
@@ -6411,6 +6514,52 @@ export class BrowserGatewayHelper {
       typeof toolCall.input.summary === "string"
         ? toolCall.input.summary.trim()
         : "";
+    if (status === "completed") {
+      // The user sees only the turn's assistant text plus this summary. If
+      // the turn produced no text and the summary is empty, a teaser ("Here
+      // is the plan") or a past-tense recap ("Prepared a meeting guide…"),
+      // the model is claiming a deliverable it never sent. Bounce the
+      // completion back once so it writes the actual response.
+      const activeTurnMessageId =
+        this.askAgentController.getActiveTurnMessageId();
+      const streamedText = (
+        turnContext?.getVisibleAssistantText() ??
+        (activeTurnMessageId
+          ? this.askAgentSessionStore.getAssistantMessageText(
+              activeTurnMessageId,
+            )
+          : "")
+      ).trim();
+      const summaryLacksSubstance =
+        !summary ||
+        isTeaserOnlyFinalSummary(summary) ||
+        isRecapOnlyFinalSummary(summary);
+      if (
+        !streamedText &&
+        summaryLacksSubstance &&
+        this.askAgentController.noteFinalStatusNudge()
+      ) {
+        const content = JSON.stringify({
+          error: "response_not_delivered",
+          detail:
+            "You have not sent the user any response this turn. The user sees only your streamed message text plus this summary — never tool calls or their results. Write the complete answer (the actual content, not a description of it) as normal assistant text, then call set_task_status again; alternatively include the full deliverable in `summary`.",
+        });
+        this.logAskAgentEvent("ask-agent.tool.set_task_status", {
+          ok: false,
+          status,
+          error: "response_not_delivered",
+        });
+        return {
+          content,
+          stop: false,
+          toolMessage: this.buildAskAgentToolResultMessage(
+            toolCall,
+            content,
+            true,
+          ),
+        };
+      }
+    }
     const continueLabel =
       typeof toolCall.input.continueLabel === "string"
         ? toolCall.input.continueLabel.trim()
@@ -6862,7 +7011,8 @@ export class BrowserGatewayHelper {
         typeof body.sessionId === "string" ? body.sessionId.trim() : "";
       if (
         requestedSessionId &&
-        !this.askAgentSessionStore.hasSession(requestedSessionId)
+        !this.askAgentSessionStore.hasSession(requestedSessionId) &&
+        !isBrowserGatewayAskAgentSessionId(requestedSessionId)
       ) {
         this.logAskAgentEvent("ask-agent.send", {
           sessionId: requestedSessionId,
@@ -6870,23 +7020,6 @@ export class BrowserGatewayHelper {
           error: "ask_agent_session_not_found",
         });
         writeJson(res, 404, { error: "ask_agent_session_not_found" });
-        return;
-      }
-      if (
-        requestedSessionId &&
-        requestedSessionId !== this.askAgentSessionStore.getActiveSessionId()
-      ) {
-        const activeSessionId = this.askAgentSessionStore.getActiveSessionId();
-        this.logAskAgentEvent("ask-agent.send", {
-          sessionId: requestedSessionId,
-          activeSessionId,
-          ok: false,
-          error: "ask_agent_session_mismatch",
-        });
-        writeJson(res, 409, {
-          error: "ask_agent_session_mismatch",
-          activeSessionId,
-        });
         return;
       }
       if (Array.isArray(body.attachments) && body.attachments.length > 0) {
@@ -6908,18 +7041,30 @@ export class BrowserGatewayHelper {
         requestedSessionId &&
         requestedSessionId !== this.askAgentSessionStore.getActiveSessionId()
       ) {
-        const activeSessionId = this.askAgentSessionStore.getActiveSessionId();
-        this.logAskAgentEvent("ask-agent.send", {
+        // The browser is authoritative about which session it is sending to:
+        // switch to (or re-create) the requested session instead of appending
+        // to whatever the helper currently considers active. A helper restart
+        // discards nothing user-visible this way — a new chat started in the
+        // browser is materialized here by its first message.
+        if (this.askAgentController.hasActiveTurn()) {
+          this.logAskAgentEvent("ask-agent.send", {
+            sessionId: requestedSessionId,
+            activeSessionId: this.askAgentSessionStore.getActiveSessionId(),
+            ok: false,
+            error: "ask_agent_turn_in_progress",
+          });
+          writeJson(res, 409, { error: "ask_agent_turn_in_progress" });
+          return;
+        }
+        const targeted = this.askAgentSessionStore.targetSession(
+          requestedSessionId,
+          now,
+        );
+        this.logAskAgentEvent("ask-agent.session.target", {
           sessionId: requestedSessionId,
-          activeSessionId,
-          ok: false,
-          error: "ask_agent_session_mismatch",
+          created: targeted.created,
+          ok: true,
         });
-        writeJson(res, 409, {
-          error: "ask_agent_session_mismatch",
-          activeSessionId,
-        });
-        return;
       }
       const activeSessionId = this.askAgentSessionStore.getActiveSessionId();
       const priorUserTexts =
@@ -6979,24 +7124,6 @@ export class BrowserGatewayHelper {
       }
       if (!duplicateUserMessage && modelContext) {
         await this.pinAskAgentModelOwner(modelContext);
-        if (
-          requestedSessionId &&
-          requestedSessionId !== this.askAgentSessionStore.getActiveSessionId()
-        ) {
-          const currentSessionId =
-            this.askAgentSessionStore.getActiveSessionId();
-          this.logAskAgentEvent("ask-agent.send", {
-            sessionId: requestedSessionId,
-            activeSessionId: currentSessionId,
-            ok: false,
-            error: "ask_agent_session_mismatch",
-          });
-          writeJson(res, 409, {
-            error: "ask_agent_session_mismatch",
-            activeSessionId: currentSessionId,
-          });
-          return;
-        }
         this.askAgentSessionStore.appendUserMessage({
           id: typeof body.id === "string" ? body.id : undefined,
           text: body.text,
@@ -7495,23 +7622,81 @@ export class BrowserGatewayHelper {
     });
   }
 
+  private async closeStartupServers(): Promise<void> {
+    if (this.mdnsAdvertiser) {
+      try {
+        await this.mdnsAdvertiser.stop();
+      } catch {
+        // Best effort: startup failed before the helper became discoverable.
+      }
+      this.mdnsAdvertiser = null;
+    }
+    if (this.httpsServer?.listening) {
+      this.httpsServer.closeAllConnections?.();
+      await new Promise<void>((resolve) =>
+        this.httpsServer?.close(() => resolve()),
+      );
+    }
+    this.httpsServer = null;
+    if (this.server.listening) {
+      this.server.closeAllConnections?.();
+      await new Promise<void>((resolve) => this.server.close(() => resolve()));
+    }
+  }
+
+  private async startSecureLanServer(): Promise<void> {
+    const certificate = await ensureBrowserGatewayLocalCertificateAuthority();
+    this.localCaCertificatePath = certificate.caCertificatePath;
+    this.httpsServer = https.createServer(
+      {
+        cert: certificate.certificatePem,
+        key: certificate.privateKeyPem,
+      },
+      this.handleRequest,
+    );
+    this.httpsServer.timeout = 0;
+    this.httpsServer.keepAliveTimeout = 0;
+    this.httpsServer.headersTimeout = 0;
+    await new Promise<void>((resolve, reject) => {
+      const server = this.httpsServer!;
+      const onError = (error: Error) => {
+        server.off("listening", onListening);
+        reject(error);
+      };
+      const onListening = () => {
+        server.off("error", onError);
+        resolve();
+      };
+      server.once("error", onError);
+      server.once("listening", onListening);
+      server.listen(this.secureLanPort!, this.bindHost);
+    });
+  }
+
   private isAllowedRelayHost(host: string): boolean {
     if (!/^(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+)(?::\d{1,5})?$/.test(host)) {
       return false;
     }
     let requestedOrigin: string;
     try {
-      requestedOrigin = new URL(`http://${host}`).origin;
+      requestedOrigin = new URL(
+        `${this.options.secureLanAccess ? "https" : "http"}://${host}`,
+      ).origin;
     } catch {
       return false;
     }
+    const protocol = this.options.secureLanAccess ? "https" : "http";
     const allowedOrigins = new Set([
       `http://localhost:${this.options.port}`,
       `http://127.0.0.1:${this.options.port}`,
       `http://[::1]:${this.options.port}`,
-      ...listLanIpv4UrlsForPort(this.options.port).map(
-        (url) => new URL(url).origin,
-      ),
+      `https://localhost:${this.secureLanPort ?? this.options.port}`,
+      `https://127.0.0.1:${this.secureLanPort ?? this.options.port}`,
+      `https://[::1]:${this.secureLanPort ?? this.options.port}`,
+      ...listLanIpv4UrlsForPort(
+        this.secureLanPort ?? this.options.port,
+        protocol,
+      ).map((url) => new URL(url).origin),
       ...(this.mdnsState.url ? [new URL(this.mdnsState.url).origin] : []),
     ]);
     return allowedOrigins.has(requestedOrigin);
@@ -7522,14 +7707,14 @@ export class BrowserGatewayHelper {
     return auth === `Bearer ${this.clientSharedSecret}`;
   }
 
-  private buildBootstrapCookie(): string {
-    return `${BROWSER_SESSION_COOKIE_NAME}=${encodeURIComponent(this.browserBootstrapToken)}; Path=/; HttpOnly; SameSite=Lax`;
+  private buildBootstrapCookie(req: http.IncomingMessage): string {
+    return `${BROWSER_SESSION_COOKIE_NAME}=${encodeURIComponent(this.browserBootstrapToken)}; Path=/; HttpOnly; SameSite=Lax${(req.socket as import("tls").TLSSocket).encrypted ? "; Secure" : ""}`;
   }
 
-  private buildDeviceCookie(token: string): string {
+  private buildDeviceCookie(token: string, req: http.IncomingMessage): string {
     // Persist across restarts — a year. Pairing is revocable server-side.
     const maxAge = 60 * 60 * 24 * 365;
-    return `${BROWSER_SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
+    return `${BROWSER_SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${(req.socket as import("tls").TLSSocket).encrypted ? "; Secure" : ""}`;
   }
 
   private readCookie(req: http.IncomingMessage, name: string): string | null {
@@ -8623,7 +8808,7 @@ export class BrowserGatewayHelper {
     const destination = "/";
     res.writeHead(303, {
       Location: destination,
-      "Set-Cookie": this.buildDeviceCookie(token),
+      "Set-Cookie": this.buildDeviceCookie(token, req),
       "Cache-Control": "no-store",
     });
     res.end();
@@ -8642,8 +8827,14 @@ export class BrowserGatewayHelper {
     if (this.mdnsState.enabled && this.mdnsState.url) {
       urls.add(`${this.mdnsState.url}/pair`);
     }
-    for (const url of listLanIpv4UrlsForPort(this.options.port)) {
-      urls.add(`${url}/pair`);
+    const protocol = this.options.secureLanAccess ? "https" : "http";
+    if (!this.options.secureLanAccess) {
+      for (const url of listLanIpv4UrlsForPort(
+        this.secureLanPort ?? this.options.port,
+        protocol,
+      )) {
+        urls.add(`${url}/pair`);
+      }
     }
     // Always include loopback as a last-resort debug URL.
     urls.add(`http://127.0.0.1:${this.options.port}/pair`);
@@ -8655,7 +8846,8 @@ export class BrowserGatewayHelper {
       this.mdnsAdvertiser ??
       new MdnsAdvertiser({
         desiredName: this.options.mdnsName ?? DEFAULT_MDNS_NAME,
-        port: this.options.port,
+        port: this.secureLanPort ?? this.options.port,
+        protocol: this.options.secureLanAccess ? "https" : "http",
         log: (message) => process.stdout.write(`${message}\n`),
       });
     this.mdnsAdvertiser = advertiser;
@@ -8746,9 +8938,10 @@ export class BrowserGatewayHelper {
   }
 
   private async writeDiscovery(): Promise<void> {
-    const lanUrls = this.options.lanAccess
-      ? listLanIpv4UrlsForPort(this.options.port)
-      : [];
+    const lanUrls =
+      this.options.lanAccess && !this.options.secureLanAccess
+        ? listLanIpv4UrlsForPort(this.options.port)
+        : [];
     const dataPlaneMode = await this.resolveEffectiveDataPlaneMode();
     const record: BrowserGatewayHelperDiscoveryRecord = {
       pid: process.pid,
@@ -8767,6 +8960,8 @@ export class BrowserGatewayHelper {
       mdnsHostName: this.mdnsState.hostName,
       mdnsUrl: this.mdnsState.url,
       lanUrls,
+      secureLanAccess: Boolean(this.options.secureLanAccess),
+      localCaCertificatePath: this.localCaCertificatePath,
     };
     await writeBrowserGatewayHelperDiscovery(record);
   }

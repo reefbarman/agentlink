@@ -202,6 +202,34 @@ describe("registerBrowserGatewayCommands", () => {
     );
   });
 
+  it("shows and copies the local CA path for secure LAN access", async () => {
+    const current = discovery({
+      lanAccess: true,
+      secureLanAccess: true,
+      mdnsUrl: "https://agentlink.local:47138",
+      localCaCertificatePath:
+        "/home/test/.agentlink/browser-gateway-ca/agentlink-local-ca.pem",
+    });
+    const dependencies = createDependencies(current);
+    registerBrowserGatewayCommands(dependencies);
+    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue({
+      title: "Copy local CA path",
+    });
+
+    await invoke("agentlink.showBrowserGatewayStatus");
+
+    expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+      expect.stringContaining("Secure LAN HTTPS: on"),
+      { modal: true },
+      { title: "Copy mDNS URL" },
+      { title: "Copy loopback URL" },
+      { title: "Copy local CA path" },
+    );
+    expect(vscode.env.clipboard.writeText).toHaveBeenCalledWith(
+      current.localCaCertificatePath,
+    );
+  });
+
   it("formats status and copies the selected URL", async () => {
     const current = discovery({
       lanAccess: true,
@@ -210,9 +238,9 @@ describe("registerBrowserGatewayCommands", () => {
     });
     const dependencies = createDependencies(current);
     registerBrowserGatewayCommands(dependencies);
-    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(
-      "Copy loopback URL" as never,
-    );
+    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue({
+      title: "Copy loopback URL",
+    });
 
     await invoke("agentlink.showBrowserGatewayStatus");
 

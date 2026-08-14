@@ -2,6 +2,7 @@
 
 import * as fs from "fs/promises";
 import * as http from "http";
+import * as https from "https";
 import * as os from "os";
 import * as path from "path";
 
@@ -73,6 +74,31 @@ async function getAvailablePort(): Promise<number> {
   const port = await waitForListening(server);
   await new Promise<void>((resolve) => server.close(() => resolve()));
   return port;
+}
+
+async function getAvailableConsecutivePorts(): Promise<number> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const first = http.createServer();
+    const port = await waitForListening(first);
+    const second = http.createServer();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        second.once("error", reject);
+        second.listen(port + 1, "127.0.0.1", () => resolve());
+      });
+      await Promise.all([
+        new Promise<void>((resolve) => first.close(() => resolve())),
+        new Promise<void>((resolve) => second.close(() => resolve())),
+      ]);
+      return port;
+    } catch {
+      await Promise.all([
+        new Promise<void>((resolve) => first.close(() => resolve())),
+        new Promise<void>((resolve) => second.close(() => resolve())),
+      ]);
+    }
+  }
+  throw new Error("unable_to_find_consecutive_available_ports");
 }
 
 async function readJsonlLog(
@@ -407,6 +433,11 @@ async function makeExtensionRoot(): Promise<string> {
     "utf-8",
   );
   await fs.writeFile(
+    path.join(extensionRootPath, "dist", "browser-gateway-notifications.js"),
+    "self.addEventListener('notificationclick', () => {});",
+    "utf-8",
+  );
+  await fs.writeFile(
     path.join(extensionRootPath, "dist", "codicon.css"),
     "@font-face{}",
     "utf-8",
@@ -432,6 +463,7 @@ async function makeExtensionRoot(): Promise<string> {
 describe("BrowserGatewayHelper proxy routing", () => {
   const servers: http.Server[] = [];
   const isolatedStoreDirs: string[] = [];
+  const localCaDirs: string[] = [];
   let helper: BrowserGatewayHelper | null = null;
 
   type BrowserGatewayHelperInjectables = NonNullable<
@@ -478,6 +510,10 @@ describe("BrowserGatewayHelper proxy routing", () => {
     }
     while (isolatedStoreDirs.length > 0) {
       const dir = isolatedStoreDirs.pop()!;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+    while (localCaDirs.length > 0) {
+      const dir = localCaDirs.pop()!;
       await fs.rm(dir, { recursive: true, force: true });
     }
     try {
@@ -560,6 +596,81 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(authorized.ok).toBe(true);
 
     await fs.rm(extensionRootPath, { recursive: true, force: true });
+  });
+
+  it("serves the LAN browser gateway through HTTPS when local-CA access is enabled", async () => {
+    const extensionRootPath = await makeExtensionRoot();
+    const helperPort = await getAvailableConsecutivePorts();
+    const helperServer = http.createServer();
+    servers.push(helperServer);
+    const localCaDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), ".tmp-browser-gateway-local-ca-"),
+    );
+    localCaDirs.push(localCaDir);
+    const originalHome = process.env.HOME;
+    process.env.HOME = localCaDir;
+    try {
+      helper = await createIsolatedHelper(
+        {
+          port: helperPort,
+          helperVersion: "test-version",
+          idleShutdownMs: 120_000,
+          extensionRootPath,
+          lanAccess: true,
+          secureLanAccess: true,
+        },
+        helperServer,
+      );
+      helperServer.on("request", helper.handleRequest);
+      await helper.start();
+
+      const securePort = helperPort + 1;
+      const discovery = JSON.parse(
+        await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
+      ) as {
+        secureLanAccess?: boolean;
+        localCaCertificatePath?: string;
+        lanUrls?: string[];
+      };
+      expect(discovery.secureLanAccess).toBe(true);
+      expect(discovery.localCaCertificatePath).toContain(
+        "agentlink-local-ca.pem",
+      );
+      expect(discovery.lanUrls).toEqual([]);
+      expect(helperServer.address()).toMatchObject({ address: "127.0.0.1" });
+      expect(
+        (
+          helper as unknown as {
+            httpsServer: https.Server;
+          }
+        ).httpsServer.address(),
+      ).toMatchObject({ address: "0.0.0.0", port: securePort });
+
+      const localCa = await fs.readFile(
+        discovery.localCaCertificatePath!,
+        "utf-8",
+      );
+      const secureResponse = await new Promise<http.IncomingMessage>(
+        (resolve, reject) => {
+          const request = https.get(
+            {
+              hostname: "127.0.0.1",
+              servername: "localhost",
+              port: securePort,
+              path: "/health",
+              ca: localCa,
+            },
+            resolve,
+          );
+          request.once("error", reject);
+        },
+      );
+      expect(secureResponse.statusCode).toBe(200);
+      secureResponse.resume();
+    } finally {
+      process.env.HOME = originalHome;
+      await fs.rm(extensionRootPath, { recursive: true, force: true });
+    }
   });
 
   it("serves authenticated Ask Agent projectless slash commands", async () => {
@@ -995,6 +1106,241 @@ describe("BrowserGatewayHelper proxy routing", () => {
       process.env.HOME = originalHome;
       await fs.rm(homeDir, { recursive: true, force: true });
       await fs.rm(extensionRootPath, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a new Ask Agent session active across a helper restart and routes the first send to it", async () => {
+    const extensionRootPath = await makeExtensionRoot();
+    const askAgentHistoryPath = path.join(
+      await fs.mkdtemp(path.join(os.tmpdir(), ".tmp-ask-agent-history-")),
+      "history.json",
+    );
+    const previousSessionId = "browser-gateway:ask-agent:previous";
+    await new BrowserGatewayAskAgentHistoryStore({
+      filePath: askAgentHistoryPath,
+    }).write({
+      activeSessionId: previousSessionId,
+      sessions: [
+        {
+          id: previousSessionId,
+          title: "Previous conversation",
+          createdAt: 100,
+          lastActiveAt: 200,
+          nextMessageSequence: 3,
+          messages: [
+            {
+              id: "previous-user",
+              role: "user",
+              content: "Earlier question",
+              timestamp: 150,
+              blocks: [{ type: "text", text: "Earlier question" }],
+            },
+            {
+              id: "previous-assistant",
+              role: "assistant",
+              content: "Earlier answer",
+              timestamp: 160,
+              blocks: [{ type: "text", text: "Earlier answer" }],
+            },
+          ],
+        },
+      ],
+    });
+
+    try {
+      const firstPort = await getAvailablePort();
+      const firstServer = http.createServer();
+      servers.push(firstServer);
+      helper = await createIsolatedHelper(
+        {
+          port: firstPort,
+          helperVersion: "test-version",
+          idleShutdownMs: 120_000,
+          extensionRootPath,
+        },
+        firstServer,
+        {
+          askAgentHistoryStore: new BrowserGatewayAskAgentHistoryStore({
+            filePath: askAgentHistoryPath,
+          }),
+        },
+      );
+      firstServer.on("request", helper.handleRequest);
+      await helper.start();
+      const firstBase = `http://127.0.0.1:${firstPort}`;
+      const bootstrap = await fetch(firstBase);
+      const cookie = bootstrap.headers.get("set-cookie")?.split(";")[0] ?? "";
+
+      const before = (await (
+        await fetch(`${firstBase}/api/ask-agent/session`, {
+          headers: { Cookie: cookie },
+        })
+      ).json()) as {
+        snapshot: {
+          session: {
+            foreground: { sessionId: string; projectedMessages: unknown[] };
+          };
+        };
+      };
+      expect(before.snapshot.session.foreground.sessionId).toBe(
+        previousSessionId,
+      );
+
+      // The browser mints the new session id and passes it along.
+      const mintedSessionId = "browser-gateway:ask-agent:minted-by-client";
+      const created = (await (
+        await fetch(`${firstBase}/api/ask-agent/session/new`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: cookie },
+          body: JSON.stringify({ mode: "ask", sessionId: mintedSessionId }),
+        })
+      ).json()) as {
+        ok?: boolean;
+        snapshot: {
+          session: {
+            foreground: { sessionId: string; projectedMessages: unknown[] };
+          };
+        };
+      };
+      expect(created.ok).toBe(true);
+      expect(created.snapshot.session.foreground.sessionId).toBe(
+        mintedSessionId,
+      );
+      expect(created.snapshot.session.foreground.projectedMessages).toEqual([]);
+
+      // The fresh (still empty) session must survive persistence.
+      await expect(
+        new BrowserGatewayAskAgentHistoryStore({
+          filePath: askAgentHistoryPath,
+        }).read(),
+      ).resolves.toMatchObject({ activeSessionId: mintedSessionId });
+
+      // Simulate the constant helper churn (idle shutdown, dogfood installs,
+      // VS Code reloads) between clicking "New Chat" and sending.
+      await helper.stop("test-restart");
+      helper = null;
+
+      const secondPort = await getAvailablePort();
+      const secondServer = http.createServer();
+      servers.push(secondServer);
+      helper = await createIsolatedHelper(
+        {
+          port: secondPort,
+          helperVersion: "test-version",
+          idleShutdownMs: 120_000,
+          extensionRootPath,
+        },
+        secondServer,
+        {
+          askAgentHistoryStore: new BrowserGatewayAskAgentHistoryStore({
+            filePath: askAgentHistoryPath,
+          }),
+        },
+      );
+      secondServer.on("request", helper.handleRequest);
+      await helper.start();
+      const secondBase = `http://127.0.0.1:${secondPort}`;
+      const secondBootstrap = await fetch(secondBase);
+      const secondCookie =
+        secondBootstrap.headers.get("set-cookie")?.split(";")[0] ?? "";
+
+      const restored = (await (
+        await fetch(`${secondBase}/api/ask-agent/session`, {
+          headers: { Cookie: secondCookie },
+        })
+      ).json()) as {
+        snapshot: {
+          session: {
+            foreground: { sessionId: string; projectedMessages: unknown[] };
+          };
+        };
+      };
+      expect(restored.snapshot.session.foreground.sessionId).toBe(
+        mintedSessionId,
+      );
+      expect(restored.snapshot.session.foreground.projectedMessages).toEqual(
+        [],
+      );
+
+      const sent = (await (
+        await fetch(`${secondBase}/api/ask-agent/send`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: secondCookie },
+          body: JSON.stringify({
+            sessionId: mintedSessionId,
+            text: "First message of the new chat",
+          }),
+        })
+      ).json()) as {
+        ok?: boolean;
+        snapshot: {
+          session: {
+            foreground: {
+              sessionId: string;
+              projectedMessages: Array<{ role: string; content: string }>;
+            };
+          };
+        };
+      };
+      expect(sent.ok).toBe(true);
+      expect(sent.snapshot.session.foreground.sessionId).toBe(mintedSessionId);
+      const sentContents =
+        sent.snapshot.session.foreground.projectedMessages.map(
+          (message) => message.content,
+        );
+      expect(sentContents).toContain("First message of the new chat");
+      expect(sentContents).not.toContain("Earlier question");
+
+      // Even a session id the helper has never seen (for example minted while
+      // a hung helper never processed session/new) is materialized by its
+      // first send instead of falling back to the previous conversation.
+      const unseenSessionId = "browser-gateway:ask-agent:never-seen";
+      const recovered = (await (
+        await fetch(`${secondBase}/api/ask-agent/send`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: secondCookie },
+          body: JSON.stringify({
+            sessionId: unseenSessionId,
+            text: "Message for a lost session",
+          }),
+        })
+      ).json()) as {
+        ok?: boolean;
+        snapshot: {
+          session: {
+            foreground: {
+              sessionId: string;
+              projectedMessages: Array<{ role: string; content: string }>;
+            };
+          };
+        };
+      };
+      expect(recovered.ok).toBe(true);
+      expect(recovered.snapshot.session.foreground.sessionId).toBe(
+        unseenSessionId,
+      );
+      expect(
+        recovered.snapshot.session.foreground.projectedMessages.map(
+          (message) => message.content,
+        ),
+      ).toContain("Message for a lost session");
+
+      // Ids that do not look like Ask Agent sessions are still rejected.
+      const rejected = await fetch(`${secondBase}/api/ask-agent/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: secondCookie },
+        body: JSON.stringify({
+          sessionId: "not-an-ask-agent-session",
+          text: "Should not create anything",
+        }),
+      });
+      expect(rejected.status).toBe(404);
+    } finally {
+      await fs.rm(extensionRootPath, { recursive: true, force: true });
+      await fs.rm(path.dirname(askAgentHistoryPath), {
+        recursive: true,
+        force: true,
+      });
     }
   });
 
@@ -1496,6 +1842,20 @@ describe("BrowserGatewayHelper proxy routing", () => {
     );
     expect(chunkResponse.headers.get("etag")).toBe(
       '"test version/with spaces:dist/browser-gateway-chunks/mermaid-ABC123.js"',
+    );
+
+    const notificationsWorkerResponse = await fetch(
+      `${helperBase}/browser-gateway-notifications.js?v=${encodedVersion}`,
+    );
+    expect(notificationsWorkerResponse.ok).toBe(true);
+    expect(notificationsWorkerResponse.headers.get("content-type")).toBe(
+      "text/javascript; charset=utf-8",
+    );
+    expect(notificationsWorkerResponse.headers.get("cache-control")).toBe(
+      "no-cache",
+    );
+    expect(notificationsWorkerResponse.headers.get("etag")).toBe(
+      '"test version/with spaces:dist/browser-gateway-notifications.js"',
     );
 
     const monacoScriptResponse = await fetch(
@@ -2123,32 +2483,46 @@ describe("BrowserGatewayHelper proxy routing", () => {
       },
     });
 
-    const staleSessionSend = await fetch(`${helperBase}/api/ask-agent/send`, {
+    // Sending with a session id that is not the helper-active session follows
+    // the sender: the helper switches to that session instead of rejecting.
+    const crossSessionSend = await fetch(`${helperBase}/api/ask-agent/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Cookie: cookie },
       body: JSON.stringify({
-        id: "ask-user-stale-session",
+        id: "ask-user-cross-session",
         sessionId: newSessionId,
-        text: "Do not route this message",
+        text: "Route this to the session I am viewing",
       }),
     });
-    expect(staleSessionSend.status).toBe(409);
-    await expect(staleSessionSend.json()).resolves.toEqual({
-      error: "ask_agent_session_mismatch",
-      activeSessionId: body.session.sessionId,
+    expect(crossSessionSend.ok).toBe(true);
+    await expect(crossSessionSend.json()).resolves.toMatchObject({
+      ok: true,
+      snapshot: {
+        session: {
+          foreground: {
+            sessionId: newSessionId,
+            projectedMessages: expect.arrayContaining([
+              expect.objectContaining({
+                role: "user",
+                content: "Route this to the session I am viewing",
+              }),
+            ]),
+          },
+        },
+      },
     });
 
-    const selectedAfterStaleSend = await fetch(
+    const selectedAfterCrossSend = await fetch(
       `${helperBase}/api/ask-agent/session`,
       { headers: { Cookie: cookie } },
     );
-    await expect(selectedAfterStaleSend.json()).resolves.toMatchObject({
+    await expect(selectedAfterCrossSend.json()).resolves.toMatchObject({
       snapshot: {
-        session: { foreground: { sessionId: body.session.sessionId } },
+        session: { foreground: { sessionId: newSessionId } },
       },
     });
     await expect(askAgentHistoryStore.read()).resolves.toMatchObject({
-      activeSessionId: body.session.sessionId,
+      activeSessionId: newSessionId,
       sessions: expect.arrayContaining([
         expect.objectContaining({
           id: body.session.sessionId,
@@ -2160,10 +2534,24 @@ describe("BrowserGatewayHelper proxy routing", () => {
           id: newSessionId,
           messages: expect.arrayContaining([
             expect.objectContaining({ content: "Hello new Ask Agent session" }),
+            expect.objectContaining({
+              content: "Route this to the session I am viewing",
+            }),
           ]),
         }),
       ]),
     });
+
+    // Restore the original session as active for the rest of the flow.
+    const reloadOriginal = await fetch(
+      `${helperBase}/api/ask-agent/session/load`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: cookie },
+        body: JSON.stringify({ sessionId: body.session.sessionId }),
+      },
+    );
+    expect(reloadOriginal.ok).toBe(true);
 
     const emptySessionResponse = await fetch(
       `${helperBase}/api/ask-agent/session/new`,
@@ -5117,6 +5505,118 @@ describe("BrowserGatewayHelper proxy routing", () => {
         (message) => message.role === "assistant",
       )?.finalMarker,
     ).toMatchObject({ status: "completed", source: "tool" });
+  });
+
+  it("bounces set_task_status back when the turn delivered no response content", async () => {
+    let callCount = 0;
+    const nudges: string[] = [];
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      callCount++;
+      for (const message of params.iterationMessages ?? []) {
+        if (message.role !== "user" || !Array.isArray(message.content)) {
+          continue;
+        }
+        for (const block of message.content) {
+          if (
+            block.type === "tool_result" &&
+            typeof block.content === "string" &&
+            block.content.includes("response_not_delivered")
+          ) {
+            nudges.push(block.content);
+          }
+        }
+      }
+      if (callCount === 1) {
+        // Claims completion without ever writing the deliverable.
+        return {
+          text: "",
+          toolCalls: [
+            {
+              id: "call_final_empty",
+              name: "set_task_status",
+              input: {
+                status: "completed",
+                summary:
+                  "Prepared a requirements-focused meeting guide with architecture recommendations, privacy prompts, and effort ranges.",
+              },
+            },
+          ],
+        };
+      }
+      return {
+        text: "Meeting guide: 1. Confirm stakeholder requirements. 2. Compare Azure API Management tiers. 3. Review OAIC privacy obligations.",
+        toolCalls: [
+          {
+            id: "call_final_real",
+            name: "set_task_status",
+            input: {
+              status: "completed",
+              summary: "Meeting guide with agenda and architecture options.",
+            },
+          },
+        ],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Prepare a meeting guide" }),
+    });
+    const body = (await send.json()) as {
+      snapshot: {
+        session: {
+          foreground: { projectedMessages: ChatMessage[] };
+        };
+      };
+    };
+    expect(send.ok).toBe(true);
+    expect(callCount).toBe(2);
+    expect(nudges.length).toBeGreaterThan(0);
+
+    const assistant = body.snapshot.session.foreground.projectedMessages.find(
+      (message) => message.role === "assistant",
+    );
+    expect(assistant?.content).toContain("Meeting guide: 1.");
+    expect(assistant?.finalMarker).toMatchObject({
+      status: "completed",
+      source: "tool",
+    });
+  });
+
+  it("accepts a repeated contentless completion instead of looping forever", async () => {
+    let callCount = 0;
+    const modelClient = makeAskAgentToolLoopClient(async () => {
+      callCount++;
+      return {
+        text: "",
+        toolCalls: [
+          {
+            id: `call_final_${callCount}`,
+            name: "set_task_status",
+            input: {
+              status: "completed",
+              summary: "Prepared the meeting guide.",
+            },
+          },
+        ],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Prepare a meeting guide" }),
+    });
+    expect(send.ok).toBe(true);
+    // One nudge, then the second attempt is accepted to bound the loop.
+    expect(callCount).toBe(2);
   });
 
   it("executes autonomous memory locally with browser provenance and no approval", async () => {

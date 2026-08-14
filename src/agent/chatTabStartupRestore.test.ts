@@ -169,6 +169,34 @@ describe("restoreChatTabStartup", () => {
     expect(fake.restoreLastSession).not.toHaveBeenCalled();
   });
 
+  it("hydrates a tab's current binding when it was rebound during an earlier hydration", async () => {
+    const fake = createFakeHost({
+      tabs: [tab("tab-1", "big-1"), tab("tab-2", "old-2")],
+      focusedTabId: "tab-1",
+      persistedSessionIds: ["big-1", "new-2"],
+    });
+    const original = fake.hydratePersistedSession.getMockImplementation()!;
+    fake.hydratePersistedSession.mockImplementation(
+      async (sessionId: string) => {
+        if (sessionId === "big-1") {
+          // While the first tab's (slow) transcript hydration runs, the user
+          // starts a new chat in tab-2, replacing its session.
+          await fake.host.replaceSession("tab-2", "old-2", "new-2");
+        }
+        return original(sessionId);
+      },
+    );
+
+    const result = await restoreChatTabStartup(fake.host);
+
+    expect(result.hadRestorableSession).toBe(true);
+    // The superseded session is never resurrected; the tab's current binding
+    // is hydrated instead.
+    expect(
+      fake.hydratePersistedSession.mock.calls.map(([sessionId]) => sessionId),
+    ).toEqual(["big-1", "new-2"]);
+  });
+
   it("repairs invalid bindings and promotes a valid docked fallback", async () => {
     const fake = createFakeHost({
       tabs: [

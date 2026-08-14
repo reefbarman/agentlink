@@ -2993,6 +2993,7 @@ export class AgentEngine {
                       revision: skill.revision,
                       skillPath: skill.skillPath,
                       realSkillPath: skill.provenance.realSkillPath,
+                      sourceScope: skill.provenance.scope,
                     })),
                   getAdvertisedRules: () => session.getAdvertisedRules(),
                   onSkillLoad: (activation) =>
@@ -3024,6 +3025,7 @@ export class AgentEngine {
                     revision: skill.revision,
                     skillPath: skill.skillPath,
                     realSkillPath: skill.provenance.realSkillPath,
+                    sourceScope: skill.provenance.scope,
                   })),
                 getAdvertisedRules: () => session.getAdvertisedRules(),
                 onSkillLoad: (activation) =>

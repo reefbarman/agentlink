@@ -23,6 +23,8 @@ const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_DATA_BYTES = 256 * 1024;
 const MAX_PENDING_OUTPUT_BYTES = 2 * 1024 * 1024;
 const FORCE_KILL_DELAY_MS = 500;
+const LEGACY_POSIX_SPAWN_ERROR = "posix_spawnp failed.";
+const LEGACY_POSIX_SPAWN_RETRY_DELAY_MS = 25;
 const PUBLIC_NETWORK_ALLOWED_DOMAINS = Object.freeze(["*"]);
 const IDENTITY_KEYS = ["type", "channelId", "commandId", "generation"];
 const CONTROL_KEYS = {
@@ -206,6 +208,10 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isLegacyPosixSpawnError(error) {
+  return errorMessage(error).trim() === LEGACY_POSIX_SPAWN_ERROR;
+}
+
 function classifyViolation(line) {
   const operation = /network|socket|connect/i.test(line)
     ? "network-connect"
@@ -284,6 +290,8 @@ function defaultDependencies() {
     kill: process.kill.bind(process),
     setTimeout,
     clearTimeout,
+    delay: (milliseconds) =>
+      new Promise((resolve) => setTimeout(resolve, milliseconds)),
     async loadRuntime() {
       const { SandboxManager } = await import("@anthropic-ai/sandbox-runtime");
       return SandboxManager;
@@ -670,18 +678,34 @@ export function createSandboxInteractiveHelper(options = {}) {
       if (session.terminationRequested) {
         throw new Error("sandbox helper launch cancelled before PTY spawn");
       }
-      const terminal = nodePty.spawn(
-        authenticatedArgv[0],
-        authenticatedArgv.slice(1),
-        {
+      const spawnTerminal = () =>
+        nodePty.spawn(authenticatedArgv[0], authenticatedArgv.slice(1), {
           name: environment.TERM ?? "xterm-256color",
           cols: frame.dimensions.columns,
           rows: frame.dimensions.rows,
           cwd,
           env: environment,
           encoding: "utf8",
-        },
-      );
+        });
+      let terminal;
+      try {
+        terminal = spawnTerminal();
+      } catch (error) {
+        if (!isLegacyPosixSpawnError(error)) throw error;
+        await dependencies.delay(LEGACY_POSIX_SPAWN_RETRY_DELAY_MS);
+        if (session.terminationRequested) {
+          throw new Error("sandbox helper launch cancelled before PTY retry");
+        }
+        try {
+          terminal = spawnTerminal();
+        } catch (retryError) {
+          if (!isLegacyPosixSpawnError(retryError)) throw retryError;
+          throw new Error(
+            "Sandbox PTY launch failed twice before the command started (node-pty reported posix_spawnp failed). Retry the same command; if failures continue, reload the VS Code window so AgentLink can recreate its sandbox runtime.",
+            { cause: retryError },
+          );
+        }
+      }
       if (!Number.isSafeInteger(terminal.pid) || terminal.pid <= 0) {
         throw new Error("node-pty returned an invalid process group leader");
       }

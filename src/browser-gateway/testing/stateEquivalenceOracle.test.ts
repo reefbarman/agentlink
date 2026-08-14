@@ -757,7 +757,10 @@ describe("browser gateway state equivalence oracle", () => {
     expect(() =>
       harness.accumulator.apply({
         kind: "event",
-        event: { ...eventBase, ownerSequence: 2 },
+        event: {
+          ...eventBase,
+          ownerSequence: checkpoint.checkpointSequence + 2,
+        },
       }),
     ).toThrow("state_equivalence_sequence_gap");
     expect(() =>
@@ -766,7 +769,7 @@ describe("browser gateway state equivalence oracle", () => {
         event: {
           ...eventBase,
           ownerGenerationId: "owner-generation-2",
-          ownerSequence: 1,
+          ownerSequence: checkpoint.checkpointSequence + 1,
         },
       }),
     ).toThrow("state_equivalence_owner_generation_changed");
@@ -885,7 +888,7 @@ describe("browser gateway state equivalence oracle", () => {
       ownerGenerationId: checkpoint.ownerGenerationId,
       eventId: "invalid-transcript-event",
       emittedAt: 2_000,
-      ownerSequence: 1,
+      ownerSequence: checkpoint.checkpointSequence + 1,
     };
 
     expect(() =>

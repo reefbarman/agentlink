@@ -594,7 +594,14 @@ describe("RelayConnectionManager", () => {
       },
     });
     await vi.waitFor(() => expect(commandRequest).toBeDefined());
-    expect(commandRequest?.operationId).toBe("browser-send-1");
+    expect(commandRequest).toMatchObject({
+      operationId: "browser-send-1",
+      command: {
+        kind: "session.send",
+        sessionId: "session-2",
+        text: "hello",
+      },
+    });
 
     sources[0]!.emit("relay.operation", {
       protocolVersion: BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,

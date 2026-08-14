@@ -2255,12 +2255,18 @@ export async function activate(
     return `AgentLink browser gateway helper failed to start: ${message}`;
   };
 
-  const getDesiredBrowserGatewayHelperConfig = () => ({
-    lanAccess: getConfig<boolean>("browserGatewayLanAccess") === true,
-    mdnsName:
-      getConfig<string>("browserGatewayMdnsName")?.trim() || "agentlink",
-    helperVersion,
-  });
+  const getDesiredBrowserGatewayHelperConfig = () => {
+    const lanAccess = getConfig<boolean>("browserGatewayLanAccess") === true;
+    return {
+      lanAccess,
+      mdnsName:
+        getConfig<string>("browserGatewayMdnsName")?.trim() || "agentlink",
+      secureLanAccess:
+        lanAccess &&
+        getConfig<boolean>("browserGatewaySecureLanAccess") === true,
+      helperVersion,
+    };
+  };
 
   const isBrowserGatewayBridgeHealthy = async (
     url: string,
@@ -2330,6 +2336,7 @@ export async function activate(
         helperVersion,
         lanAccess: desired.lanAccess,
         mdnsName: desired.mdnsName,
+        secureLanAccess: desired.secureLanAccess,
         log,
       });
 

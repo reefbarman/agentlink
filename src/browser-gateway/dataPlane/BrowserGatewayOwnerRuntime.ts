@@ -45,6 +45,7 @@ export interface BrowserGatewayOwnerCommandExecutor {
   execute(
     command: BrowserGatewayOwnerCommandBody,
     signal: AbortSignal,
+    operationId: string,
   ): Promise<BrowserGatewayOwnerCommandExecutionResult | void>;
 }
 
@@ -255,6 +256,7 @@ export class BrowserGatewayOwnerRuntime {
       const result = await this.options.executor.execute(
         command.command,
         controller.signal,
+        command.operationId,
       );
       if (controller.signal.aborted) return;
       let detailHandle: BrowserGatewayDetailHandle | undefined;

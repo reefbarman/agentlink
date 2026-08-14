@@ -39,6 +39,7 @@ describe("ProductionBrowserGatewayOwnerCommandExecutor", () => {
     await executor.execute(
       { kind: "session.select", sessionId: "session-1" },
       signal,
+      "select-operation-1",
     );
     await executor.execute(
       {
@@ -48,10 +49,12 @@ describe("ProductionBrowserGatewayOwnerCommandExecutor", () => {
         detailHandles: [],
       },
       signal,
+      "browser-message-1",
     );
     await executor.execute(
       { kind: "session.stop", sessionId: "session-1" },
       signal,
+      "stop-operation-1",
     );
 
     expect(commandTarget.submitBrowserLoadSession).toHaveBeenCalledWith(
@@ -59,6 +62,7 @@ describe("ProductionBrowserGatewayOwnerCommandExecutor", () => {
     );
     expect(commandTarget.submitBrowserSend).toHaveBeenCalledWith({
       sessionId: "session-1",
+      id: "browser-message-1",
       text: "Continue",
     });
     expect(commandTarget.submitBrowserStop).toHaveBeenCalledWith("session-1");
@@ -89,6 +93,7 @@ describe("ProductionBrowserGatewayOwnerCommandExecutor", () => {
         sessionId: "session-2",
       },
       new AbortController().signal,
+      "detail-operation-1",
     );
 
     expect(getSessionDetail).toHaveBeenCalledWith({
@@ -118,6 +123,7 @@ describe("ProductionBrowserGatewayOwnerCommandExecutor", () => {
           sessionId: "session-2",
         },
         new AbortController().signal,
+        "detail-operation-mismatch",
       ),
     ).rejects.toThrow("browser_gateway_session_detail_instance_mismatch");
 
@@ -132,6 +138,7 @@ describe("ProductionBrowserGatewayOwnerCommandExecutor", () => {
           sessionId: "session-2",
         },
         new AbortController().signal,
+        "detail-operation-stale",
       ),
     ).rejects.toThrow("browser_gateway_session_detail_unavailable");
   });
@@ -164,6 +171,7 @@ describe("ProductionBrowserGatewayOwnerCommandExecutor", () => {
           ],
         },
         new AbortController().signal,
+        "send-operation-with-details",
       ),
     ).rejects.toThrow("browser_gateway_session_send_details_unsupported");
     expect(commandTarget.submitBrowserSend).not.toHaveBeenCalled();
@@ -188,6 +196,7 @@ describe("ProductionBrowserGatewayOwnerCommandExecutor", () => {
       executor.execute(
         { kind: "session.select", sessionId: "missing" },
         new AbortController().signal,
+        "select-operation-missing",
       ),
     ).rejects.toThrow("browser_gateway_session_select_failed");
     await expect(
@@ -199,6 +208,7 @@ describe("ProductionBrowserGatewayOwnerCommandExecutor", () => {
           detailHandles: [],
         },
         new AbortController().signal,
+        "send-operation-rejected",
       ),
     ).rejects.toThrow(
       "browser_gateway_session_send_failed:project_unavailable",
@@ -207,6 +217,7 @@ describe("ProductionBrowserGatewayOwnerCommandExecutor", () => {
       executor.execute(
         { kind: "session.stop", sessionId: "missing" },
         new AbortController().signal,
+        "stop-operation-missing",
       ),
     ).rejects.toThrow("browser_gateway_session_stop_failed");
 
@@ -216,6 +227,7 @@ describe("ProductionBrowserGatewayOwnerCommandExecutor", () => {
       executor.execute(
         { kind: "session.stop", sessionId: "session-1" },
         controller.signal,
+        "stop-operation-cancelled",
       ),
     ).rejects.toThrow("browser_gateway_owner_command_cancelled");
   });

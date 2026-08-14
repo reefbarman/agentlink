@@ -70,15 +70,24 @@ export async function restoreChatTabStartup(
 
   for (const tab of host.getLayout().tabs) {
     if (!tab.sessionId) continue;
-    const session = await host.hydratePersistedSession(tab.sessionId);
+    // Re-read the binding before hydrating: an earlier tab's (potentially
+    // multi-second) transcript hydration can let the user rebind this tab in
+    // the meantime (e.g. New Chat replacing the session) — hydrate whatever
+    // the tab points at now instead of resurrecting the captured session.
+    const currentTab = host
+      .getLayout()
+      .tabs.find((candidate) => candidate.id === tab.id);
+    const sessionId = currentTab?.sessionId;
+    if (!currentTab || !sessionId) continue;
+    const session = await host.hydratePersistedSession(sessionId);
     if (session) {
       restoredRootSessionIds.add(session.id);
       continue;
     }
-    if (tab.placement === "popped") {
-      await host.setPlacement(tab.id, "popped", "docked");
+    if (currentTab.placement === "popped") {
+      await host.setPlacement(currentTab.id, "popped", "docked");
     }
-    await host.replaceSession(tab.id, tab.sessionId, null);
+    await host.replaceSession(currentTab.id, sessionId, null);
   }
 
   await host.restorePersistedBackgroundSessions(restoredRootSessionIds);
