@@ -1,4 +1,5 @@
 import * as fs from "fs";
+import * as fsPromises from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
@@ -16,6 +17,11 @@ vi.mock("vscode", () => ({
     workspaceFolders: [] as Array<{ uri: { fsPath: string } }>,
   },
 }));
+
+vi.mock("fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs/promises")>();
+  return { ...actual, readFile: vi.fn(actual.readFile) };
+});
 
 describe("handleApplyDiff", () => {
   let tempDir: string;
@@ -68,6 +74,30 @@ describe("handleApplyDiff", () => {
     ].join("\n");
   }
 
+  function durable(
+    content: string,
+    outcome: "exact" | "transformed" = "exact",
+  ) {
+    const hash = createHash("sha256").update(content).digest("hex");
+    return {
+      finalContent: content,
+      durability: {
+        status: "durable" as const,
+        outcome,
+        policy: "allow_transform" as const,
+        baseline_exists: true,
+        final_exists: true,
+        disk_changed: true,
+        baseline_content_hash: "baseline",
+        approved_content_hash: outcome === "exact" ? hash : "approved",
+        expected_disk_content_hash: outcome === "exact" ? hash : "expected",
+        editor_content_hash: hash,
+        final_content_hash: hash,
+        requires_reread: false,
+      },
+    };
+  }
+
   it("returns explicit unavailable before approval checks or mutation when no edit-review provider exists", async () => {
     const filePath = path.join(workspaceDir, "src", "unavailable.ts");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -117,6 +147,34 @@ describe("handleApplyDiff", () => {
     });
   });
 
+  it("does not claim durable no-op evidence after a concurrent change", async () => {
+    const filePath = path.join(workspaceDir, "src", "noop-race.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "same", "utf-8");
+
+    const readFile = vi.mocked(fsPromises.readFile);
+    const originalReadFile = readFile.getMockImplementation()!;
+    readFile.mockImplementationOnce(async (...args) => {
+      const content = await originalReadFile(...args);
+      fs.writeFileSync(filePath, "changed concurrently", "utf-8");
+      return content;
+    });
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/noop-race.ts", diff: searchReplaceDiff("same", "same") },
+      {} as never,
+      {} as never,
+      "session-1",
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      status: "error",
+      path: "src/noop-race.ts",
+      reason: "concurrent_change",
+    });
+  });
+
   it("delegates auto-approved diffs to the edit-review provider", async () => {
     const filePath = path.join(workspaceDir, "plans", "existing.md");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -126,6 +184,7 @@ describe("handleApplyDiff", () => {
         status: "accepted" as const,
         path: "plans/existing.md",
         operation: "modified" as const,
+        ...durable("updated plan"),
       })),
     };
     const policy = createApprovalPolicy(true);
@@ -243,7 +302,7 @@ describe("handleApplyDiff", () => {
           status: "accepted" as const,
           path: "src/example.ts",
           operation: "modified" as const,
-          finalContent: "new",
+          ...durable("new"),
           decision: "accept-session" as const,
           writeApprovalResponse: { decision: "accept-session" },
         };
@@ -398,6 +457,7 @@ describe("handleApplyDiff", () => {
           status: "accepted" as const,
           path: "src/changed.ts",
           operation: "modified" as const,
+          ...durable(providerContent),
         };
       }),
     };
@@ -475,7 +535,7 @@ describe("handleApplyDiff", () => {
           status: "accepted" as const,
           path: "src/controlled.ts",
           operation: "modified" as const,
-          finalContent: params.content,
+          ...durable(params.content),
         };
       }),
     };
@@ -591,7 +651,7 @@ describe("handleApplyDiff", () => {
           status: "accepted" as const,
           path: "src/index-gap.ts",
           operation: "modified" as const,
-          finalContent: params.content,
+          ...durable(params.content),
         };
       }),
     };
@@ -650,6 +710,7 @@ describe("handleApplyDiff", () => {
           status: "accepted" as const,
           path: "src/controlled-reapply.ts",
           operation: "modified" as const,
+          ...durable(lockedContent),
         };
       }),
     };
@@ -915,7 +976,7 @@ describe("handleApplyDiff", () => {
           status: "accepted" as const,
           path: "src/atomic-success.ts",
           operation: "modified" as const,
-          finalContent: params.content,
+          ...durable(params.content),
         };
       }),
     };
@@ -1000,7 +1061,7 @@ describe("handleApplyDiff", () => {
         status: "accepted" as const,
         path: "src/partial-ambiguous.ts",
         operation: "modified" as const,
-        finalContent: params.content,
+        ...durable(params.content),
       })),
     };
     const diff = [
@@ -1055,7 +1116,7 @@ describe("handleApplyDiff", () => {
         status: "accepted" as const,
         path: "src/partial-locations.ts",
         operation: "modified" as const,
-        finalContent: params.content,
+        ...durable(params.content),
       })),
     };
     const diff = [
@@ -1104,7 +1165,7 @@ describe("handleApplyDiff", () => {
         status: "accepted" as const,
         path: "src/partial.ts",
         operation: "modified" as const,
-        finalContent: "new",
+        ...durable("new"),
       })),
     };
     const diff = [
@@ -1155,7 +1216,7 @@ describe("handleApplyDiff", () => {
         status: "accepted" as const,
         path: "src/formatted.ts",
         operation: "modified" as const,
-        finalContent,
+        ...durable(finalContent, "transformed"),
       })),
     };
     const diff = [
@@ -1182,7 +1243,12 @@ describe("handleApplyDiff", () => {
       createHash("sha256").update(finalContent).digest("hex"),
     );
     expect(payload.block_results).toEqual([
-      expect.objectContaining({ index: 0, status: "applied" }),
+      expect.objectContaining({
+        index: 0,
+        status: "unverified_after_transform",
+        proposal_status: "applied",
+        reason: "final_content_differs_from_reviewed_content",
+      }),
       expect.objectContaining({ index: 1, status: "failed" }),
     ]);
     expect(

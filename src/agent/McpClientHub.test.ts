@@ -18,6 +18,12 @@ interface Page<T> {
 
 const mocks = vi.hoisted(() => ({
   clientInfo: undefined as unknown,
+  sseTransportOptions: undefined as
+    | { fetch?: typeof globalThis.fetch }
+    | undefined,
+  httpTransportOptions: undefined as
+    | { fetch?: typeof globalThis.fetch }
+    | undefined,
   clientOptions: undefined as
     | {
         capabilities?: Record<string, unknown>;
@@ -78,11 +84,25 @@ vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
 vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
   SSEClientTransport: class MockSseClientTransport {
     onclose?: () => void;
+
+    constructor(
+      _url: URL,
+      options: { fetch?: typeof globalThis.fetch } | undefined,
+    ) {
+      mocks.sseTransportOptions = options;
+    }
   },
 }));
 vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
   StreamableHTTPClientTransport: class MockHttpClientTransport {
     onclose?: () => void;
+
+    constructor(
+      _url: URL,
+      options: { fetch?: typeof globalThis.fetch } | undefined,
+    ) {
+      mocks.httpTransportOptions = options;
+    }
   },
 }));
 
@@ -141,6 +161,8 @@ describe("McpClientHub protocol correctness", () => {
     vi.clearAllMocks();
     mocks.clientInfo = undefined;
     mocks.clientOptions = undefined;
+    mocks.sseTransportOptions = undefined;
+    mocks.httpTransportOptions = undefined;
     setCatalogPages(mocks.listTools, "tools", {
       first: { items: [] },
     });
@@ -203,6 +225,24 @@ describe("McpClientHub protocol correctness", () => {
     ]);
   });
 
+  it.each(["sse", "streamable-http"] as const)(
+    "uses the long-poll fetch for %s transports",
+    async (type) => {
+      const hub = new McpClientHub();
+      await hub.connect([
+        {
+          name: "fixture",
+          type,
+          url: "https://example.test/mcp",
+        },
+      ]);
+
+      const options =
+        type === "sse" ? mocks.sseTransportOptions : mocks.httpTransportOptions;
+      expect(options?.fetch).toEqual(expect.any(Function));
+    },
+  );
+
   it("treats MCP read-only annotations as per-tool parallel opt-ins", async () => {
     setCatalogPages(mocks.listTools, "tools", {
       first: {
@@ -239,7 +279,7 @@ describe("McpClientHub protocol correctness", () => {
     expect(hub.getReadOnlyToolDefs()).toEqual([]);
   });
 
-  it("forwards the configured bounded timeout and exact nested arguments", async () => {
+  it("forwards the configured timeout, progress keepalives, and exact nested arguments", async () => {
     const input = {
       import_settings: {
         textureType: "Default",
@@ -259,39 +299,48 @@ describe("McpClientHub protocol correctness", () => {
         arguments: expectedArguments,
       },
       undefined,
-      { timeout: 299_000 },
+      {
+        timeout: 300_000,
+        onprogress: expect.any(Function),
+        resetTimeoutOnProgress: true,
+      },
     );
   });
 
-  it("uses the SDK-compatible default timeout when no server timeout is configured", async () => {
+  it.each([undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "uses the SDK-compatible default timeout for invalid config value %s",
+    async (timeout) => {
+      const hub = new McpClientHub(new FakeMemento());
+      await hub.connect([{ ...config, timeout }]);
+
+      await hub.callTool("fixture__read", {});
+
+      expect(mocks.callTool).toHaveBeenCalledWith(
+        { name: "read", arguments: {} },
+        undefined,
+        {
+          timeout: 60_000,
+          onprogress: expect.any(Function),
+          resetTimeoutOnProgress: true,
+        },
+      );
+    },
+  );
+
+  it("preserves configured timeouts longer than the former HTTP deadline", async () => {
     const hub = new McpClientHub(new FakeMemento());
-    await hub.connect([config]);
+    await hub.connect([{ ...config, timeout: 900_000 }]);
 
     await hub.callTool("fixture__read", {});
 
     expect(mocks.callTool).toHaveBeenCalledWith(
       { name: "read", arguments: {} },
       undefined,
-      { timeout: 60_000 },
-    );
-  });
-
-  it("caps oversized raw config timeouts without logging every call", async () => {
-    const hub = new McpClientHub(new FakeMemento());
-    const log = vi.fn();
-    hub.onLog = log;
-    await hub.connect([{ ...config, timeout: 9_999_999 }]);
-
-    await hub.callTool("fixture__read", {});
-    await hub.callTool("fixture__read", {});
-
-    expect(mocks.callTool).toHaveBeenCalledWith(
-      { name: "read", arguments: {} },
-      undefined,
-      { timeout: 299_000 },
-    );
-    expect(log).not.toHaveBeenCalledWith(
-      "[mcp:fixture] configured timeout 9999999ms normalized to 299000ms",
+      {
+        timeout: 900_000,
+        onprogress: expect.any(Function),
+        resetTimeoutOnProgress: true,
+      },
     );
   });
 
@@ -308,13 +357,13 @@ describe("McpClientHub protocol correctness", () => {
       isError: true,
       error: {
         kind: "mcp_request_timeout",
-        message: "MCP tool 'write' timed out after 299000ms.",
+        message: "MCP tool 'write' timed out after 300000ms.",
       },
       data: {
         error: "mcp_request_timeout",
         server: "fixture",
         tool: "write",
-        timeoutMs: 299_000,
+        timeoutMs: 300_000,
         completionState: "unknown",
         retrySafe: false,
       },

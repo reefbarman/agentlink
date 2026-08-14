@@ -423,9 +423,11 @@ async function runAuthorizedCommand(
     dimensions: { columns: 100, rows: 30 },
   });
   let commandProcess: SandboxCommandProcess | undefined;
-  request.registerCleanup(() => authorized.finalize?.());
+  request.registerCleanup(() => authorized.finalize());
   request.registerCleanup(() => commandProcess?.dispose());
-  commandProcess = runtime.launch(authorized.helperRequest);
+  const activeLaunch = authorized.activate();
+  activeLaunch.assertLaunchValid?.();
+  commandProcess = runtime.launch(activeLaunch.helperRequest);
   const events: SandboxCommandEvent[] = [];
   let output = "";
   const subscription = commandProcess.onEvent((event) => {
@@ -444,7 +446,7 @@ async function runAuthorizedCommand(
   const ready = await commandProcess.ready;
   const exit = await commandProcess.completion;
   subscription.dispose();
-  authorized.finalize?.();
+  authorized.finalize();
   return {
     ready,
     output,
@@ -706,9 +708,11 @@ async function runInterruptProbe(
     dimensions: { columns: 100, rows: 30 },
   });
   let commandProcess: SandboxCommandProcess | undefined;
-  request.registerCleanup(() => authorized.finalize?.());
+  request.registerCleanup(() => authorized.finalize());
   request.registerCleanup(() => commandProcess?.dispose());
-  commandProcess = runtime.launch(authorized.helperRequest);
+  const activeLaunch = authorized.activate();
+  activeLaunch.assertLaunchValid?.();
+  commandProcess = runtime.launch(activeLaunch.helperRequest);
   let output = "";
   const events: SandboxCommandEvent[] = [];
   const subscription = commandProcess.onEvent((event) => {
@@ -726,7 +730,7 @@ async function runInterruptProbe(
   }
   const exit = await commandProcess.completion;
   subscription.dispose();
-  authorized.finalize?.();
+  authorized.finalize();
   return {
     ready,
     output,

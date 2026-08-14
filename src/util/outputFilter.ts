@@ -155,12 +155,21 @@ function grepLines(
   pattern: string,
   context: number,
 ): string[] {
+  // The filter is always case-insensitive. Accept ripgrep/PCRE-style `(?i)`
+  // at the start as a redundant flag so callers can reuse familiar patterns.
+  const normalizedPattern = pattern.startsWith("(?i)")
+    ? pattern.slice("(?i)".length)
+    : pattern;
+  if (normalizedPattern.length === 0) {
+    return [];
+  }
+
   let regex: RegExp;
   try {
-    regex = new RegExp(pattern, "i");
+    regex = new RegExp(normalizedPattern, "i");
   } catch {
-    // If the pattern is invalid regex, treat it as a literal string
-    regex = new RegExp(escapeRegex(pattern), "i");
+    // If the pattern is invalid regex, treat the normalized input as literal text.
+    regex = new RegExp(escapeRegex(normalizedPattern), "i");
   }
 
   // Collect matching line indices, expanding with context ranges

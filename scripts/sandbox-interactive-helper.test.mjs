@@ -196,10 +196,16 @@ function createHarness({
       async validateStructurallyProtectedRoots(roots) {
         calls.order.push("validate-structural");
         calls.structurallyValidated.push(roots);
+        return roots;
       },
       replaceProcessEnvironment(environment) {
         calls.replacedEnvironment.push(environment);
       },
+      async canonicalizeFilesystemPolicy(filesystem) {
+        return filesystem;
+      },
+      async canonicalizeProtectedRootPolicy() {},
+      assertProtectedRootsCovered() {},
       async startTrustedNetworkProxies(
         allowedDomains,
         _resolverOptions,
@@ -577,6 +583,77 @@ test("reports repeated legacy node-pty spawn failure as pre-launch", async (t) =
   assert.equal(harness.calls.reset, 1);
 });
 
+test("does not expand protected roots into the sandbox profile", async (t) => {
+  const sandboxRoot = "/private/tmp/agentlink-interactive";
+  const policyRoot = path.join(sandboxRoot, ".claude");
+  const protectedRoots = Array.from({ length: 10_000 }, (_, index) =>
+    path.join(policyRoot, "skills", `skill-${index}`, "SKILL.md"),
+  );
+  const harness = createHarness();
+  t.after(() => harness.helper.close());
+
+  harness.send(
+    launch({
+      filesystem: {
+        denyRead: [],
+        allowRead: [sandboxRoot],
+        allowWrite: [sandboxRoot],
+        denyWrite: [policyRoot],
+      },
+      protectedRoots,
+    }),
+  );
+  await harness.waitFor(() => harness.frames()[0]?.type === "ready");
+
+  assert.deepEqual(harness.calls.initialize[0].filesystem.denyWrite, [
+    policyRoot,
+  ]);
+  assert.equal(
+    JSON.stringify(harness.calls.initialize[0]).includes("skill-9999"),
+    false,
+  );
+  assert.equal(harness.calls.spawn.length, 1);
+});
+
+test("fails before runtime initialization when canonical protected roots escape deny-write coverage", async (t) => {
+  const harness = createHarness({
+    dependencyOverrides: {
+      async canonicalizeProtectedRootPolicy() {
+        throw new Error("canonical protected root must be covered");
+      },
+    },
+  });
+  t.after(() => harness.helper.close());
+
+  harness.send(launch());
+  await harness.waitFor(() => harness.frames()[0]?.type === "error");
+
+  assert.match(harness.frames()[0].message, /canonical protected root/);
+  assert.equal(harness.calls.initialize.length, 0);
+  assert.equal(harness.calls.spawn.length, 0);
+});
+
+test("rechecks canonical protected-root coverage immediately before spawn", async (t) => {
+  let coverageChecks = 0;
+  const harness = createHarness({
+    dependencyOverrides: {
+      assertProtectedRootsCovered() {
+        coverageChecks += 1;
+        throw new Error("canonical coverage changed before spawn");
+      },
+    },
+  });
+  t.after(() => harness.helper.close());
+
+  harness.send(launch());
+  await harness.waitFor(() => harness.frames()[0]?.type === "error");
+
+  assert.match(harness.frames()[0].message, /coverage changed before spawn/);
+  assert.equal(coverageChecks, 1);
+  assert.equal(harness.calls.initialize.length, 1);
+  assert.equal(harness.calls.spawn.length, 0);
+});
+
 test("does not retry a non-legacy PTY spawn failure", async (t) => {
   const harness = createHarness({
     dependencyOverrides: {
@@ -678,8 +755,6 @@ test("allows host history bootstrap to settle before the late protected-root sna
   assert.equal(harness.calls.spawn.length, 1);
   assert.deepEqual(harness.calls.initialize[0].filesystem.denyWrite, [
     agentlinkRoot,
-    gitignoreFile,
-    policyFile,
   ]);
   assert.deepEqual(harness.calls.order, [
     "initialize",

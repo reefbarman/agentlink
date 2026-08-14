@@ -12,8 +12,11 @@ import {
   DEFAULT_DIAGNOSTIC_DELAY_MS,
   normalizeEditorText,
   type EditApplyFailureRecovery,
+  type EditReviewResult,
   type EditSaveFailureRecovery,
 } from "../core/capabilities/editReview.js";
+import { classifyEditDurability } from "../core/editDurability.js";
+import { commitAndVerifyEdit } from "./editDurability.js";
 import { DIFF_VIEW_URI_SCHEME } from "./diffViewContentProvider.js";
 import type { OnApprovalRequest } from "../shared/types.js";
 import { diffSnapshotHub } from "../browser-gateway/DiffSnapshotHub.js";
@@ -127,7 +130,6 @@ export async function showDiffMoreOptions(): Promise<void> {
   }
 }
 
-const FORMAT_ON_SAVE_PATCH_LIMIT = 4_000;
 const APPROVAL_PATCH_LIMIT = 12_000;
 
 function createApprovalPatch(
@@ -147,19 +149,12 @@ function createApprovalPatch(
   return `${patch.slice(0, APPROVAL_PATCH_LIMIT)}\n[patch truncated at ${APPROVAL_PATCH_LIMIT} characters]`;
 }
 
-export interface FormatOnSaveReport {
-  format_on_save: true;
-  format_on_save_edits?: string;
-  format_on_save_edits_omitted?: "size_cap";
-  /** The save completed, but formatting restored the original pre-edit content. */
-  format_on_save_reverted_proposal?: true;
-  eol_changed?: boolean;
-  hint?: string;
-  warnings?: string[];
-}
+export type { FormatOnSaveReport } from "../core/editDurability.js";
+export { createFormatOnSaveReport } from "../core/editDurability.js";
+export { diagnoseEditSaveFailure } from "./editDurability.js";
 
 export interface DiffResult {
-  status: "accepted" | "rejected" | "rejected_by_user";
+  status: "accepted" | "rejected" | "rejected_by_user" | "error";
   path: string;
   operation?: "created" | "modified";
   user_edits?: string;
@@ -168,10 +163,12 @@ export interface DiffResult {
   format_on_save_edits_omitted?: "size_cap";
   format_on_save_reverted_proposal?: true;
   eol_changed?: boolean;
+  durability?: EditReviewResult["durability"];
   hint?: string;
   new_diagnostics?: string;
   finalContent?: string;
   reason?: string;
+  error?: string;
   follow_up?: string;
   warnings?: string[];
   apply_failure?: EditApplyFailureRecovery;
@@ -231,81 +228,6 @@ export async function diagnoseEditApplyFailure(params: {
   };
 }
 
-export async function diagnoseEditSaveFailure(params: {
-  absolutePath: string;
-  baselineContent: string;
-  documentDirty: boolean;
-  saveAttemptContent?: string;
-  currentDocumentContent?: string;
-  reviewState: EditSaveFailureRecovery["review_state"];
-}): Promise<{
-  save_failure: EditSaveFailureRecovery;
-  next_steps: string[];
-}> {
-  let diskState: EditSaveFailureRecovery["disk_state"];
-  let diskErrorCode: string | undefined;
-  try {
-    const diskContent = await fs.readFile(params.absolutePath, "utf-8");
-    diskState =
-      diskContent === params.baselineContent ? "unchanged" : "changed";
-  } catch (error) {
-    diskErrorCode =
-      typeof error === "object" &&
-      error !== null &&
-      typeof (error as { code?: unknown }).code === "string"
-        ? (error as { code: string }).code
-        : undefined;
-    diskState = diskErrorCode === "ENOENT" ? "missing" : "unreadable";
-  }
-
-  const concurrentChange =
-    diskState === "changed"
-      ? true
-      : diskState === "unchanged"
-        ? false
-        : "unknown";
-  const dirtyDocumentState =
-    params.saveAttemptContent === undefined ||
-    params.currentDocumentContent === undefined
-      ? "unavailable"
-      : params.saveAttemptContent === params.currentDocumentContent
-        ? "matches_save_attempt"
-        : "changed_after_save_attempt";
-  return {
-    save_failure: {
-      document_dirty: params.documentDirty,
-      disk_state: diskState,
-      concurrent_change: concurrentChange,
-      review_state: params.reviewState,
-      dirty_document_state: dirtyDocumentState,
-      vscode_error_detail: "unavailable",
-      retryable: true,
-      retry_target: "editor_save",
-      ...(diskErrorCode ? { disk_error_code: diskErrorCode } : {}),
-    },
-    next_steps: [
-      dirtyDocumentState === "matches_save_attempt"
-        ? "The exact content submitted to the failed save remains in the dirty editor. Do not submit another file-edit tool call; resolve the save issue and retry the editor save."
-        : dirtyDocumentState === "changed_after_save_attempt"
-          ? "The dirty editor changed during the failed save. Inspect and reconcile its current content before saving or composing another edit."
-          : params.reviewState === "diff_snapshot_preserved"
-            ? "The review snapshot and dirty editor are preserved. Inspect the file/editor state before retrying the editor save."
-            : "The dirty editor is preserved. Inspect the file/editor state before retrying the editor save.",
-      concurrentChange === true
-        ? "The file changed on disk after the edit baseline was captured; re-read it before composing another diff."
-        : concurrentChange === false
-          ? "The file still matches the pre-edit disk baseline; VS Code returned false without exposing an underlying save exception."
-          : "Disk state could not be compared with the pre-edit baseline; use read_file before retrying.",
-    ],
-  };
-}
-
-function detectEol(content: string): "\r\n" | "\n" | undefined {
-  if (content.includes("\r\n")) return "\r\n";
-  if (content.includes("\n")) return "\n";
-  return undefined;
-}
-
 export function interactiveDiffEditorOptions(): vscode.TextDocumentShowOptions {
   return withPrimaryEditorColumn({ preview: true });
 }
@@ -335,77 +257,6 @@ export function createUserEditsPatch(
     "user-edited",
     { context: 1 },
   );
-}
-
-function isUnitySerializationPath(relPath: string): boolean {
-  return [
-    ".meta",
-    ".asset",
-    ".unity",
-    ".mat",
-    ".prefab",
-    ".anim",
-    ".controller",
-    ".physicMaterial",
-  ].includes(path.extname(relPath).toLowerCase());
-}
-
-export function createFormatOnSaveReport(
-  relPath: string,
-  expectedContent: string,
-  finalContent: string,
-  originalContent?: string,
-): FormatOnSaveReport | undefined {
-  const expectedEol = detectEol(expectedContent);
-  const finalEol = detectEol(finalContent);
-  const eol = expectedEol ?? finalEol ?? "\n";
-  const normalizedExpected = expectedContent.replace(/\r\n|\n/g, eol);
-  const normalizedFinal = finalContent.replace(/\r\n|\n/g, eol);
-  const eolChanged = Boolean(
-    expectedEol && finalEol && expectedEol !== finalEol,
-  );
-
-  if (normalizedExpected === normalizedFinal && !eolChanged) {
-    return undefined;
-  }
-
-  const report: FormatOnSaveReport = { format_on_save: true };
-  if (originalContent !== undefined && finalContent === originalContent) {
-    report.format_on_save_reverted_proposal = true;
-    report.hint =
-      "Format-on-save restored the pre-edit file content. The proposed edit is not durable; re-read the file before composing another diff.";
-  }
-  if (isUnitySerializationPath(relPath)) {
-    report.warnings = [
-      "Format-on-save changed a Unity serialization file. Re-read and inspect the full change because a generic YAML formatter can create invalid Unity serialization, not just formatting churn.",
-    ];
-  }
-  if (eolChanged) {
-    report.eol_changed = true;
-  }
-
-  if (normalizedExpected !== normalizedFinal) {
-    const patch = diffLib.createPatch(
-      relPath,
-      normalizedExpected,
-      normalizedFinal,
-      "proposed",
-      "saved",
-      { context: 1 },
-    );
-
-    if (patch.length <= FORMAT_ON_SAVE_PATCH_LIMIT) {
-      report.format_on_save_edits = patch;
-    } else {
-      report.format_on_save_edits_omitted = "size_cap";
-      if (!report.format_on_save_reverted_proposal) {
-        report.hint =
-          "Format-on-save changed the file substantially; re-read the file before composing further diffs.";
-      }
-    }
-  }
-
-  return report;
 }
 
 export class DiffViewProvider {
@@ -757,92 +608,82 @@ export class DiffViewProvider {
   }
 
   async saveChanges(): Promise<DiffResult> {
-    if (!this.relPath || !this.newContent || !this.activeDiffEditor) {
-      return { status: "accepted", path: this.relPath ?? "" };
+    if (
+      !this.relPath ||
+      this.newContent === undefined ||
+      !this.absolutePath ||
+      !this.activeDiffEditor ||
+      this.originalContent === undefined ||
+      !this.editType
+    ) {
+      const classification = classifyEditDurability({
+        relativePath: this.relPath ?? "",
+        baselineExists: false,
+        baselineContent: "",
+        approvedContent: "",
+        disk: { status: "unreadable", errorCode: "EDIT_REVIEW_STATE_MISSING" },
+      });
+      return {
+        status: "error",
+        path: this.relPath ?? "",
+        error: "Edit review state is incomplete",
+        reason: "edit_review_state_missing",
+        durability: classification.durability,
+        next_steps: [
+          "Re-open the edit review and verify the target file before retrying.",
+        ],
+      };
     }
 
     const document = this.activeDiffEditor.document;
-    const editedContent = document.getText();
+    const approvedContent = document.getText();
+    const userEdits = createUserEditsPatch(
+      this.relPath,
+      this.newContent,
+      approvedContent,
+    );
+    const commit = await commitAndVerifyEdit({
+      document,
+      absolutePath: this.absolutePath,
+      relativePath: this.relPath,
+      baselineExists: this.editType === "modify",
+      baselineContent: this.originalContent,
+      approvedContent,
+      reviewState: "diff_snapshot_preserved",
+    });
 
-    // Save document (triggers format-on-save, etc.)
-    if (document.isDirty) {
-      const saved = await document.save();
-      if (!saved) {
-        return {
-          status: "rejected",
-          path: this.relPath,
-          reason: "save_failed",
-          ...(await diagnoseEditSaveFailure({
-            absolutePath: this.absolutePath!,
-            baselineContent: this.originalContent ?? "",
-            documentDirty: document.isDirty,
-            saveAttemptContent: editedContent,
-            currentDocumentContent: document.getText(),
-            reviewState: "diff_snapshot_preserved",
-          })),
-        };
-      }
+    const result: DiffResult = {
+      ...commit,
+      operation: this.editType === "create" ? "created" : "modified",
+      ...(userEdits ? { user_edits: userEdits } : {}),
+      ...(this.writeApprovalResponse?.followUp
+        ? { follow_up: this.writeApprovalResponse.followUp }
+        : {}),
+    };
+
+    // A failed save keeps the dirty editor and review snapshot intact so the
+    // user can resolve the save problem without losing the approved content.
+    if (commit.status === "error" && document.isDirty) {
+      return result;
     }
 
+    // Once save has completed, even a verification failure is a resolved
+    // review. Remove the read-only browser snapshot and leave the file open for
+    // inspection instead of presenting a stale pending approval.
     diffSnapshotHub.remove(this.requestId);
-
-    // Show file in normal editor (not diff)
     await vscode.window.showTextDocument(
-      vscode.Uri.file(this.absolutePath!),
+      vscode.Uri.file(this.absolutePath),
       withPrimaryEditorColumn({
         preview: false,
         preserveFocus: true,
       }),
     );
-
-    // Close diff views
     await this.closeAllDiffViews();
 
-    // Wait for diagnostics (event-driven with timeout fallback)
     const newProblems = await this.waitForDiagnostics();
-
-    // Re-read the saved file to get the final content after format-on-save
-    const finalContent = await fs.readFile(this.absolutePath!, "utf-8");
-
-    // Separate user edits from format-on-save changes:
-    // - editedContent = what was in the editor when user accepted (proposed + user edits)
-    // - finalContent  = what ended up on disk after save (+ format-on-save)
-    // user_edits = only intentional changes the user made in the diff editor
-    const userEdits = createUserEditsPatch(
-      this.relPath,
-      this.newContent,
-      editedContent,
-    );
-
-    // Detect if format-on-save changed the file beyond user edits.
-    // The resulting patch composes after `user_edits`: proposed -> user-edited -> saved.
-    const formatOnSaveReport = createFormatOnSaveReport(
-      this.relPath,
-      editedContent,
-      finalContent,
-      this.originalContent,
-    );
-
-    const result: DiffResult = {
-      status: "accepted",
-      path: this.relPath,
-      operation: this.editType === "create" ? "created" : "modified",
-      finalContent,
-    };
-
-    if (userEdits) {
-      result.user_edits = userEdits;
-    }
-    if (formatOnSaveReport) {
-      Object.assign(result, formatOnSaveReport);
-    }
     if (newProblems) {
       result.new_diagnostics = newProblems;
     }
-    if (this.writeApprovalResponse?.followUp) {
-      result.follow_up = this.writeApprovalResponse.followUp;
-    }
-
     return result;
   }
 

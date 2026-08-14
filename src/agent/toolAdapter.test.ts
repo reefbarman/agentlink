@@ -8,6 +8,8 @@ import {
   getAgentTools,
   dispatchToolCall,
   createAgentToolRuntime,
+  getExecuteCommandUsageMetrics,
+  getWriteToolUsageMetrics,
   getToolUsageOutcomeFromResult,
   READ_ONLY_TOOLS,
   STATIC_ADAPTER_TOOL_NAMES,
@@ -4337,6 +4339,112 @@ describe("dispatchToolCall", () => {
       { names: ["Server"] },
       { terminalProvider: mockCtx.terminalProvider },
     );
+  });
+
+  describe("write tool usage metrics", () => {
+    it("records only bounded durability categories", () => {
+      expect(
+        getWriteToolUsageMetrics({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "error",
+                reason: "editor_disk_diverged",
+                path: "/sensitive/project/file.ts",
+                format_on_save_edits: "secret patch",
+                durability: {
+                  status: "failed",
+                  outcome: "diverged",
+                  policy: "allow_transform",
+                  baseline_content_hash: "secret-baseline-hash",
+                  final_content_hash: "secret-final-hash",
+                },
+              }),
+            },
+          ],
+        }),
+      ).toEqual({
+        editDurabilityStatus: "failed",
+        editDurabilityOutcome: "diverged",
+        editDurabilityPolicy: "allow_transform",
+        editDurabilityReason: "editor_disk_diverged",
+      });
+    });
+
+    it("ignores invalid durability categories", () => {
+      expect(
+        getWriteToolUsageMetrics({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                reason: 42,
+                durability: {
+                  status: "unknown",
+                  outcome: "custom",
+                  policy: "unsafe",
+                },
+              }),
+            },
+          ],
+        }),
+      ).toEqual({});
+    });
+  });
+
+  describe("execute command usage metrics", () => {
+    it("records only bounded launch failure dimensions", () => {
+      expect(
+        getExecuteCommandUsageMetrics({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error_code: "sandbox_capability_launch_failed",
+                failure_stage: "launch",
+                command_sent: false,
+                process_launched: false,
+                capability_failure: "expired",
+                retry_safe: true,
+                sandbox: { grantTiming: "launch" },
+                command: "npm test --token secret",
+                grant_id: "grant-secret",
+              }),
+            },
+          ],
+        }),
+      ).toEqual({
+        error_code: "sandbox_capability_launch_failed",
+        failure_stage: "launch",
+        command_sent: false,
+        process_launched: false,
+        capability_failure: "expired",
+        retry_safe: true,
+        sandbox_grant_timing: "launch",
+      });
+    });
+
+    it("ignores arbitrary string dimensions", () => {
+      expect(
+        getExecuteCommandUsageMetrics({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error_code: "secret error body",
+                failure_stage: "/private/path",
+                capability_failure: "grant-secret",
+                command_sent: "false",
+                process_launched: { value: false },
+                retry_safe: 1,
+                sandbox: { grantTiming: "future-mode" },
+              }),
+            },
+          ],
+        }),
+      ).toEqual({});
+    });
   });
 
   describe("tool usage outcome normalization", () => {

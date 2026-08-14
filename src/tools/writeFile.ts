@@ -14,6 +14,7 @@ import type {
   WriteApprovalPromptEvent,
   WriteApprovalPolicyProvider,
 } from "../core/capabilities/editReview.js";
+import { finalizeEditReviewResult } from "./editReviewResult.js";
 import { handlePendingEditLockError } from "./pendingEditLock.js";
 import {
   DEFAULT_DIAGNOSTIC_DELAY_MS,
@@ -67,8 +68,7 @@ export async function handleWriteFile(
     // as a side effect when the user clicks "For Session"/"Always" on the diff view.
 
     if (!providers.editReviewProvider) {
-      return successResult({
-        error: "Edit review is unavailable in this runtime",
+      return errorResult("Edit review is unavailable in this runtime", {
         path: relPath,
         reason: "edit_review_unavailable",
       });
@@ -126,17 +126,6 @@ export async function handleWriteFile(
       });
     }
 
-    const warnings =
-      result.status === "accepted"
-        ? getWriteRiskWarnings(relPath, params.content)
-        : undefined;
-    const {
-      finalContent: _finalContent,
-      decision: _decision,
-      writeApprovalResponse: _writeApprovalResponse,
-      ...response
-    } = warnings ? { ...result, warnings } : result;
-
     const appliedAuthorization = result.authorization
       ? result.authorization
       : canAutoApprove
@@ -149,10 +138,17 @@ export async function handleWriteFile(
             }
           : undefined;
 
-    return successResult({
-      ...response,
+    const warnings =
+      result.status === "accepted"
+        ? getWriteRiskWarnings(relPath, params.content)
+        : undefined;
+    const finalized = finalizeEditReviewResult(result, {
       ...(appliedAuthorization ? { authorization: appliedAuthorization } : {}),
+      ...(warnings ? { warnings } : {}),
     });
+    return finalized.accepted
+      ? successResult(finalized.response)
+      : finalized.result;
   } catch (err) {
     return (
       handlePendingEditLockError(err, params.path) ??

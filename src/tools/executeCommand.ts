@@ -20,6 +20,7 @@ import type {
 } from "../core/capabilities/terminal.js";
 
 import type { SandboxViolation } from "../core/sandboxPolicy.js";
+import { SandboxCapabilityLaunchError } from "../core/capabilities/SandboxCapabilityLaunchError.js";
 import { TerminalAdmissionCancelledError } from "../terminal/terminalAdmissionQueue.js";
 import {
   SandboxPreparationDriftError,
@@ -347,6 +348,7 @@ type ExecuteCommandRetryGuidance = {
     | "sandbox_host_integration"
     | "sandbox_node_oom"
     | "sandbox_preparation_changed"
+    | "sandbox_capability_launch_failed"
     | "sandbox_pty_launch_failed"
     | "managed_network_ssh_git_transport"
     | "managed_network_tls_trust";
@@ -2586,6 +2588,35 @@ export async function handleExecuteCommand(
               process_launched: false,
               retry_safe: true,
               failure_stage: "preparation",
+            }),
+          },
+        ],
+      };
+    }
+    if (err instanceof SandboxCapabilityLaunchError) {
+      const retryGuidance: ExecuteCommandRetryGuidance = {
+        code: err.code,
+        message:
+          "The sandbox capability grant could not be activated before launch, so the command did not start. Retry the same command.",
+        automatic_retry: false,
+        options: [{ action: "retry_same_command", same_command: true }],
+      };
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "retry_required",
+              error:
+                "The sandbox capability grant could not be activated before launch.",
+              error_code: err.code,
+              capability_failure: err.reason,
+              retry_guidance: retryGuidance,
+              command: params.command,
+              command_sent: false,
+              process_launched: false,
+              retry_safe: true,
+              failure_stage: err.failureStage,
             }),
           },
         ],

@@ -106,7 +106,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   write_file: {
     label: "Create/overwrite with diff review",
     description:
-      "Create a new file or overwrite an existing file, creating missing parent directories if the write is approved. Opens a diff view in VS Code for the user to review, optionally edit, and accept or reject the changes. Benefits from VS Code's format-on-save. Returns any user edits, format-on-save edits, and new diagnostics.",
+      "Create a new file or overwrite an existing file, creating missing parent directories if the write is approved. Opens a diff view in VS Code for the user to review, optionally edit, and accept or reject the changes. After saving, AgentLink reads and verifies the disk content: accepted results include exact or transformed durability evidence and a final SHA-256 hash, while reverted, divergent, missing, unreadable, or exact-preservation failures are canonical errors. Known Unity serialization files are saved without format/save participants.",
   },
   generate_image: {
     label: "Generate image",
@@ -136,7 +136,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   apply_diff: {
     label: "Search/replace with diff review",
     description:
-      "Edit an existing file with SEARCH/REPLACE blocks. Opens a diff view for review. Each block requires a unique match by default; block_options can select a 1-based occurrence or intentionally replace all exact matches, and atomic=true requires every block to validate before review/write. Ambiguous failures include bounded candidate ranges/snippets plus copy-ready block_options and a pre-edit content hash; prefer expanding SEARCH context, then re-read before using an occurrence selector if the hash drifted. Accepted multi-block results include recovery ranges plus a post-edit content hash when available. If format_on_save_edits is returned, update your model or re-read before composing more diffs. Format:\n<<<<<<< SEARCH\nexact content to find\n======= DIVIDER =======\nreplacement content\n>>>>>>> REPLACE",
+      "Edit an existing file with SEARCH/REPLACE blocks. Opens a diff view for review. Each block requires a unique match by default; block_options can select a 1-based occurrence or intentionally replace all exact matches, and atomic=true requires every block to validate before review/write. Ambiguous failures include bounded candidate ranges/snippets plus copy-ready block_options and a pre-edit content hash; prefer expanding SEARCH context, then re-read before using an occurrence selector if the hash drifted. Accepted results include durability evidence and a final SHA-256 hash. After an ordinary save transformation, proposal-level applied blocks become unverified_after_transform and omit stale ranges; re-read when durability.requires_reread is true. Failed post-save verification returns a canonical error and no applied/partial success claims. Format:\n<<<<<<< SEARCH\nexact content to find\n======= DIVIDER =======\nreplacement content\n>>>>>>> REPLACE",
   },
   find_and_replace: {
     label: "Bulk find-and-replace across files",

@@ -142,13 +142,10 @@ export function resolveAndValidatePath(inputPath: string): ResolvedPath {
  * Get relative path from workspace root.
  */
 export function getRelativePath(absolutePath: string): string {
-  const roots = getWorkspaceRoots();
-  for (const root of roots) {
-    if (pathStartsWith(absolutePath, root) || pathsEqual(absolutePath, root)) {
-      return path.relative(root, absolutePath).replace(/\\/g, "/");
-    }
-  }
-  return absolutePath;
+  const root = getWorkspaceRootForPath(absolutePath);
+  return root
+    ? path.relative(root, absolutePath).replace(/\\/g, "/")
+    : absolutePath;
 }
 
 /**

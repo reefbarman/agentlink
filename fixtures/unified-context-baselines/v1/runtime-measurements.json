@@ -567,16 +567,16 @@
     {
       "mode": "code",
       "toolCount": 63,
-      "chars": 81482,
-      "estimatedTokens": 20371,
-      "sha256": "4c52205b4822ad9369ac0caa9d7ccd4dce7d9fa2909077ceac4bceaf49ee1864"
+      "chars": 81852,
+      "estimatedTokens": 20463,
+      "sha256": "4bd0cf786b16358e9dc8312e87b593ddf8e289e6a1ce2c5dc446ea534e157d1e"
     },
     {
       "mode": "architect",
       "toolCount": 58,
-      "chars": 75279,
-      "estimatedTokens": 18820,
-      "sha256": "156d1407d9c327d217298512b8fbda7b55e8628b0df86cc400a0ff9cd3c52a97"
+      "chars": 75649,
+      "estimatedTokens": 18913,
+      "sha256": "a7937eb1cd1b7d4707197ec69dce82355df372ab9be6631fdba1d747dc48f1c2"
     },
     {
       "mode": "ask",
@@ -605,17 +605,17 @@
       "mode": "code",
       "toolCount": 38,
       "deferredToolCount": 25,
-      "chars": 56625,
-      "estimatedTokens": 14157,
-      "sha256": "4cbbc11cd77c5394a67de4f143f8260e822285fc2354f548457671823f1cdf78"
+      "chars": 56995,
+      "estimatedTokens": 14249,
+      "sha256": "9ab57660558725d70c818f3f6d0ff4ee1691c165e695d59b84c64136e382e524"
     },
     {
       "mode": "architect",
       "toolCount": 37,
       "deferredToolCount": 21,
-      "chars": 55423,
-      "estimatedTokens": 13856,
-      "sha256": "e8695f11e81c8ec9251862cb0eaad3386c0c4a4217c566a045c3270af14e4e8f"
+      "chars": 55793,
+      "estimatedTokens": 13949,
+      "sha256": "35068b02676e50ac11df5d56c7a8dc23b1cf58f034902a0ee7b79de81c8a2f55"
     },
     {
       "mode": "ask",

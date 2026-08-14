@@ -12,6 +12,7 @@ import {
 } from "../approvals/commandApprovalReview.js";
 
 import { AgentTerminalProviderRouter } from "../terminal/sandbox/AgentTerminalProviderRouter.js";
+import { SandboxCapabilityLaunchError } from "../core/capabilities/SandboxCapabilityLaunchError.js";
 import { evaluateCommandRulePolicy } from "../approvals/commandRulePolicy.js";
 
 vi.mock("node:os", async (importOriginal) => {
@@ -7501,6 +7502,44 @@ describe("handleExecuteCommand", () => {
       retry_safe: true,
       failure_stage: "preparation",
     });
+  });
+
+  it("returns a bounded retry-safe result when sandbox capability activation fails", async () => {
+    executeCommand.mockRejectedValue(
+      new SandboxCapabilityLaunchError("expired", {
+        cause: new Error("secret grant token and /private/path"),
+      }),
+    );
+
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const result = await handleExecuteCommand(
+      { command: "npm test" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-capability-launch-failure",
+      undefined,
+      { terminalProvider },
+    );
+
+    const payload = textPayload(result);
+    expect(payload).toMatchObject({
+      status: "retry_required",
+      error_code: "sandbox_capability_launch_failed",
+      capability_failure: "expired",
+      command: "npm test",
+      command_sent: false,
+      process_launched: false,
+      retry_safe: true,
+      failure_stage: "launch",
+      retry_guidance: {
+        code: "sandbox_capability_launch_failed",
+        automatic_retry: false,
+        options: [{ action: "retry_same_command", same_command: true }],
+      },
+    });
+    expect(executeCommand).toHaveBeenCalledOnce();
+    expect(JSON.stringify(payload)).not.toContain("secret grant token");
+    expect(JSON.stringify(payload)).not.toContain("/private/path");
   });
 
   it("returns structured retry guidance when sandbox PTY launch fails twice", async () => {

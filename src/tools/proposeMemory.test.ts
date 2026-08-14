@@ -116,6 +116,20 @@ beforeEach(() => {
       status: "accepted",
       path: lastOpenCall?.[1],
       finalContent: content,
+      durability: {
+        status: "durable",
+        outcome: "exact",
+        policy: "allow_transform",
+        baseline_exists: false,
+        final_exists: true,
+        disk_changed: true,
+        baseline_content_hash: "baseline",
+        approved_content_hash: "approved",
+        expected_disk_content_hash: "expected",
+        editor_content_hash: "editor",
+        final_content_hash: "final",
+        requires_reread: false,
+      },
     };
   });
   diffGetEditedContent.mockImplementation(
@@ -458,6 +472,20 @@ describe("handleProposeMemory", () => {
         status: "accepted",
         path: filePath,
         finalContent: "Run full verification.\n",
+        durability: {
+          status: "durable",
+          outcome: "exact",
+          policy: "allow_transform",
+          baseline_exists: false,
+          final_exists: true,
+          disk_changed: true,
+          baseline_content_hash: "baseline",
+          approved_content_hash: "approved",
+          expected_disk_content_hash: "expected",
+          editor_content_hash: "editor",
+          final_content_hash: "final",
+          requires_reread: false,
+        },
       };
     });
 
@@ -479,5 +507,89 @@ describe("handleProposeMemory", () => {
         "utf-8",
       ),
     ).toBe("Run full verification.\n");
+  });
+
+  it.each([
+    ["save_reverted_edit", "reverted"],
+    ["editor_disk_diverged", "diverged"],
+    ["post_save_file_missing", "unverifiable"],
+  ] as const)(
+    "returns a canonical error when the reviewed save fails durability (%s)",
+    async (reason, outcome) => {
+      const { handleProposeMemory } = await import("./proposeMemory.js");
+      const { panel } = approvingPanel();
+      diffSaveChanges.mockResolvedValue({
+        status: "error",
+        path: "AGENTS.md",
+        error: "Approved memory proposal was not durably saved",
+        reason,
+        finalContent: "observed disk content",
+        durability: {
+          status: "failed",
+          outcome,
+          policy: "allow_transform",
+          baseline_exists: true,
+          final_exists: outcome === "unverifiable" ? false : true,
+          disk_changed: outcome === "unverifiable" ? "unknown" : false,
+          baseline_content_hash: "baseline",
+          approved_content_hash: "approved",
+          expected_disk_content_hash: "expected",
+          editor_content_hash: "editor",
+          ...(outcome === "unverifiable"
+            ? {}
+            : { final_content_hash: "final" }),
+          requires_reread: true,
+        },
+        next_steps: ["Re-read the file before retrying."],
+      });
+
+      const result = await handleProposeMemory(
+        {
+          tier: "instructions",
+          scope: "project",
+          operation: "add",
+          title: "Remember durable preference",
+          rationale: "User preference.",
+          content: "- Preserve this preference.",
+        },
+        panel as never,
+      );
+
+      expect(result.isError).toBe(true);
+      expect(text(result)).toMatchObject({
+        status: "error",
+        reason,
+        durability: { status: "failed", outcome },
+      });
+      expect(text(result)).not.toHaveProperty("finalContent");
+      expect(diffRevertChanges).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fails closed when an accepted save lacks durability evidence", async () => {
+    const { handleProposeMemory } = await import("./proposeMemory.js");
+    const { panel } = approvingPanel();
+    diffSaveChanges.mockResolvedValue({
+      status: "accepted",
+      path: "AGENTS.md",
+      finalContent: "proposed content",
+    });
+
+    const result = await handleProposeMemory(
+      {
+        tier: "instructions",
+        scope: "project",
+        operation: "add",
+        title: "Remember durable preference",
+        rationale: "User preference.",
+        content: "- Preserve this preference.",
+      },
+      panel as never,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toMatchObject({ status: "error" });
+    expect(text(result)).not.toHaveProperty("finalContent");
+    expect(diffRevertChanges).not.toHaveBeenCalled();
   });
 });

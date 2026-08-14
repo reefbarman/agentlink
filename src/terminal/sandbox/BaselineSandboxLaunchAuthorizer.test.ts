@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 
 import { BaselineSandboxLaunchAuthorizer } from "./BaselineSandboxLaunchAuthorizer.js";
 import { CURRENT_SANDBOX_POLICY_VERSION } from "../../core/sandboxPolicy.js";
+import type { SandboxCapabilityGrantTimingEvent } from "./sandboxCapabilityGrantTiming.js";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -102,6 +103,20 @@ async function fixture() {
   };
 }
 
+async function authorizeAndActivate(
+  authorizer: BaselineSandboxLaunchAuthorizer,
+  input: Parameters<BaselineSandboxLaunchAuthorizer["authorize"]>[0],
+) {
+  const prepared = await authorizer.authorize(input);
+  const active = prepared.activate();
+  return {
+    ...active,
+    policy: prepared.policy,
+    bindingDigest: prepared.bindingDigest,
+    finalize: prepared.finalize,
+  };
+}
+
 function request(
   workspace: string,
   overrides: Record<string, unknown> = {},
@@ -136,9 +151,12 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       trustedRuntimeRoots: [runtimeRoot],
     });
     try {
-      const launch = await authorizer.authorize(request(test.workspace));
-      expect(launch.authorization.policy.readableRoots).toEqual(["/"]);
-      expect(launch.authorization.policy.writableRoots).not.toContain(
+      const launch = await authorizeAndActivate(
+        authorizer,
+        request(test.workspace),
+      );
+      expect(launch.policy.readableRoots).toEqual(["/"]);
+      expect(launch.policy.writableRoots).not.toContain(
         await realpath(runtimeRoot),
       );
       launch.finalize?.();
@@ -150,8 +168,11 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
   it("compiles a loopback workspace-write policy without a grant", async () => {
     const test = await fixture();
     try {
-      const launch = await test.authorizer.authorize(request(test.workspace));
-      const policy = launch.authorization.policy;
+      const launch = await authorizeAndActivate(
+        test.authorizer,
+        request(test.workspace),
+      );
+      const policy = launch.policy;
       const environment = policy.environment.values;
       const canonicalWorkspace = await realpath(test.workspace);
 
@@ -260,9 +281,9 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
           path.join(environment.CLAUDE_CODE_TMPDIR, "xcrun_db"),
         );
       }
-      expect(launch.authorization.bindingDigest).toMatch(/^[a-f0-9]{64}$/);
-      expect(launch.authorization.capabilityRequest).toBeUndefined();
-      expect(launch.authorization.grant).toBeUndefined();
+      expect(launch.bindingDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(launch.metadata.capabilityRequest).toBeUndefined();
+      expect(launch.metadata.grant).toBeUndefined();
       expect(launch.helperRequest.network).toEqual({ mode: "loopback" });
       expect(launch.metadata.capabilities).toMatchObject({
         filesystemRead: "host-visible",
@@ -297,8 +318,11 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       },
     });
     try {
-      const launch = await authorizer.authorize(request(test.workspace));
-      expect(launch.authorization.policy.environment.values).toMatchObject({
+      const launch = await authorizeAndActivate(
+        authorizer,
+        request(test.workspace),
+      );
+      expect(launch.policy.environment.values).toMatchObject({
         OPENAI_API_KEY: "secret-key-value",
         SERVICE_SECRET: "secret-value",
         SESSION_TOKEN: "token-value",
@@ -342,12 +366,13 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       },
     });
     try {
-      const launch = await authorizer.authorize(
+      const launch = await authorizeAndActivate(
+        authorizer,
         request(test.workspace, {
           env: { CUSTOM_FLAG: "command", COMMAND_VALUE: "yes" },
         }),
       );
-      const environment = launch.authorization.policy.environment.values;
+      const environment = launch.policy.environment.values;
       expect(environment).toMatchObject({
         PATH: expect.any(String),
         CUSTOM_FLAG: "command",
@@ -392,10 +417,11 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
   it("uses a disposable writable HOME and sandbox-owned Go caches", async () => {
     const test = await fixture();
     try {
-      const launch = await test.authorizer.authorize(
+      const launch = await authorizeAndActivate(
+        test.authorizer,
         request(test.workspace, { temporaryHome: true }),
       );
-      const environment = launch.authorization.policy.environment.values;
+      const environment = launch.policy.environment.values;
       const privateRoot = path.dirname(environment.HOME);
       expect(environment.HOME).toBe(path.join(privateRoot, "h"));
       expect(environment.XDG_CACHE_HOME).toBe(path.join(privateRoot, "c"));
@@ -404,8 +430,8 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
         path.join(privateRoot, "c", "golangci-lint"),
       );
       expect(await readdir(environment.HOME)).toEqual([]);
-      expect(launch.authorization.policy.readableRoots).toEqual(["/"]);
-      expect(launch.authorization.policy.writableRoots).toContain(privateRoot);
+      expect(launch.policy.readableRoots).toEqual(["/"]);
+      expect(launch.policy.writableRoots).toContain(privateRoot);
       expect(launch.metadata.capabilities.privateHome).toBe(true);
       expect(launch.metadata.capabilities.warnings).toEqual(
         expect.arrayContaining([
@@ -435,8 +461,11 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       },
     });
     try {
-      const launch = await authorizer.authorize(request(test.workspace));
-      const environment = launch.authorization.policy.environment.values;
+      const launch = await authorizeAndActivate(
+        authorizer,
+        request(test.workspace),
+      );
+      const environment = launch.policy.environment.values;
       const privateRoot = path.dirname(environment.XDG_CACHE_HOME);
 
       expect(environment.HOME).toBe(path.join(test.root, "real-home"));
@@ -454,7 +483,8 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
   it("preserves explicit reviewed Go cache overrides", async () => {
     const test = await fixture();
     try {
-      const launch = await test.authorizer.authorize(
+      const launch = await authorizeAndActivate(
+        test.authorizer,
         request(test.workspace, {
           env: {
             GOCACHE: path.join(test.workspace, ".cache", "go"),
@@ -466,7 +496,7 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
           },
         }),
       );
-      expect(launch.authorization.policy.environment.values).toMatchObject({
+      expect(launch.policy.environment.values).toMatchObject({
         GOCACHE: path.join(test.workspace, ".cache", "go"),
         GOLANGCI_LINT_CACHE: path.join(
           test.workspace,
@@ -483,12 +513,11 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
   it("lets explicit command environment override shared agent defaults", async () => {
     const test = await fixture();
     try {
-      const launch = await test.authorizer.authorize(
+      const launch = await authorizeAndActivate(
+        test.authorizer,
         request(test.workspace, { env: { GIT_PAGER: "less" } }),
       );
-      expect(launch.authorization.policy.environment.values.GIT_PAGER).toBe(
-        "less",
-      );
+      expect(launch.policy.environment.values.GIT_PAGER).toBe("less");
       launch.finalize?.();
     } finally {
       await test.dispose();
@@ -507,8 +536,11 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       await writeFile(path.join(skills, "local.md"), "# Local\n");
       await symlink(external, alias);
 
-      const launch = await test.authorizer.authorize(request(test.workspace));
-      const policy = launch.authorization.policy;
+      const launch = await authorizeAndActivate(
+        test.authorizer,
+        request(test.workspace),
+      );
+      const policy = launch.policy;
       expect(policy.deniedWriteRoots).toContain(
         path.join(await realpath(test.workspace), ".claude"),
       );
@@ -594,15 +626,18 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       await rm(instruction);
       await symlink("CLAUDE.md", instruction);
 
-      const launch = await test.authorizer.authorize(request(test.workspace));
+      const launch = await authorizeAndActivate(
+        test.authorizer,
+        request(test.workspace),
+      );
       const canonicalWorkspace = await realpath(test.workspace);
-      expect(launch.authorization.policy.deniedWriteRoots).toEqual(
+      expect(launch.policy.deniedWriteRoots).toEqual(
         expect.arrayContaining([
           path.join(canonicalWorkspace, "AGENTS.md"),
           path.join(canonicalWorkspace, "CLAUDE.md"),
         ]),
       );
-      expect(launch.authorization.policy.protectedReadOnlyRoots).toContain(
+      expect(launch.policy.protectedReadOnlyRoots).toContain(
         await realpath(target),
       );
       launch.finalize?.();
@@ -716,26 +751,26 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
         privateDirectoryPrefix: path.join(privateRoot, "al-"),
       });
 
-      const launch = await authorizer.authorize(request(workspace));
+      const launch = await authorizeAndActivate(authorizer, request(workspace));
       const canonicalCommonGit = await realpath(commonGit);
-      expect(launch.authorization.policy.readableRoots).toEqual(["/"]);
-      expect(launch.authorization.policy.deniedWriteRoots).toEqual(
+      expect(launch.policy.readableRoots).toEqual(["/"]);
+      expect(launch.policy.deniedWriteRoots).toEqual(
         expect.arrayContaining([
           await realpath(path.join(workspace, ".git")),
           canonicalCommonGit,
         ]),
       );
-      expect(launch.authorization.policy.protectedReadOnlyRoots).toEqual(
+      expect(launch.policy.protectedReadOnlyRoots).toEqual(
         expect.arrayContaining([
           await realpath(path.join(workspace, ".git")),
           await realpath(path.join(worktreeGit, "commondir")),
           await realpath(path.join(commonGit, "config")),
         ]),
       );
-      expect(launch.authorization.policy.protectedReadOnlyRoots).not.toContain(
+      expect(launch.policy.protectedReadOnlyRoots).not.toContain(
         canonicalCommonGit,
       );
-      expect(launch.authorization.policy.structurallyProtectedRoots).toEqual([
+      expect(launch.policy.structurallyProtectedRoots).toEqual([
         canonicalCommonGit,
       ]);
       launch.finalize?.();
@@ -754,7 +789,8 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       const content = "hello `code`";
       await writeFile(inlinePath, content);
       const sha256 = createHash("sha256").update(content).digest("hex");
-      const launch = await test.authorizer.authorize(
+      const launch = await authorizeAndActivate(
+        test.authorizer,
         request(test.workspace, {
           command: `cat '${inlinePath}'`,
           sandboxInlineFiles: [
@@ -769,12 +805,12 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       );
 
       const canonicalInlineRoot = await realpath(inlineRoot);
-      expect(launch.authorization.policy.readableRoots).toEqual(["/"]);
+      expect(launch.policy.readableRoots).toEqual(["/"]);
       expect(canonicalInlineRoot).toMatch(/^\//);
       const expectedBinding = createSandboxLaunchBindingDigest({
         command: `cat '${inlinePath}'`,
         cwd: await realpath(test.workspace),
-        environment: launch.authorization.policy.environment.values,
+        environment: launch.policy.environment.values,
         inlineFiles: [
           { name: "body", bytes: Buffer.byteLength(content), sha256 },
         ],
@@ -783,10 +819,123 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
         profileId: "workspace-write",
         capability: { publicNetwork: false, localBinding: false },
       });
-      expect(launch.authorization.bindingDigest).toBe(expectedBinding);
+      expect(launch.bindingDigest).toBe(expectedBinding);
       launch.finalize?.();
     } finally {
       await rm(inlineRoot, { recursive: true, force: true });
+      await test.dispose();
+    }
+  });
+
+  it("issues no grant until launch and tolerates preparation beyond the legacy TTL", async () => {
+    const test = await fixture();
+    let now = 100;
+    let nextId = 1;
+    const timingEvents: SandboxCapabilityGrantTimingEvent[] = [];
+    const capabilityAuthority = new SandboxCapabilityAuthority({
+      now: () => now,
+      createId: () => `grant-id-${nextId++}`,
+    });
+    const authorizer = new BaselineSandboxLaunchAuthorizer({
+      workspaceRoots: [test.workspace],
+      privateDirectoryPrefix: path.join(
+        test.privateRoot,
+        "al-delayed-network-",
+      ),
+      homeDirectory: path.join(test.root, "real-home"),
+      hostTemporaryDirectory: os.tmpdir(),
+      capabilityAuthority,
+      capabilityGrantTtlMs: 100,
+      now: () => now,
+      onCapabilityGrantTimingEvent: (event) => timingEvents.push(event),
+    });
+
+    try {
+      const prepared = await authorizer.authorize(
+        request(test.workspace, {
+          sandboxCapabilityRequest: { unrestrictedPublicNetwork: true },
+        }),
+      );
+      expect(prepared.metadata.grant).toBeUndefined();
+      expect(capabilityAuthority.getAuditEvents()).toEqual([]);
+      expect(timingEvents).toEqual([]);
+
+      now = 1_500;
+      const active = prepared.activate();
+      expect(active.metadata).toMatchObject({
+        grantTiming: "launch",
+        grant: {
+          grantId: "grant-id-1",
+          auditId: "grant-id-2",
+        },
+      });
+      expect(
+        capabilityAuthority.getAuditEvents().map(({ type }) => type),
+      ).toEqual(["issued", "consumed"]);
+      expect(timingEvents).toEqual([
+        expect.objectContaining({
+          type: "activated",
+          timing: "launch",
+          capability: "public_network",
+          preparationAgeBucket: "1s_to_10s",
+          exceededLegacyTtl: true,
+        }),
+      ]);
+      expect(() => prepared.activate()).toThrow(
+        "Prepared sandbox launch is no longer available",
+      );
+
+      prepared.finalize();
+      prepared.finalize();
+      expect(
+        capabilityAuthority.getAuditEvents().map(({ type }) => type),
+      ).toEqual(["issued", "consumed", "revoked"]);
+    } finally {
+      await test.dispose();
+    }
+  });
+
+  it("keeps preparation-timed grants as a rollback mode", async () => {
+    const test = await fixture();
+    let now = 100;
+    let nextId = 1;
+    const capabilityAuthority = new SandboxCapabilityAuthority({
+      now: () => now,
+      createId: () => `grant-id-${nextId++}`,
+    });
+    const authorizer = new BaselineSandboxLaunchAuthorizer({
+      workspaceRoots: [test.workspace],
+      privateDirectoryPrefix: path.join(test.privateRoot, "al-legacy-network-"),
+      homeDirectory: path.join(test.root, "real-home"),
+      hostTemporaryDirectory: os.tmpdir(),
+      capabilityAuthority,
+      capabilityGrantTtlMs: 100,
+      capabilityGrantTiming: "preparation",
+      now: () => now,
+    });
+
+    try {
+      const prepared = await authorizer.authorize(
+        request(test.workspace, {
+          sandboxCapabilityRequest: { unrestrictedPublicNetwork: true },
+        }),
+      );
+      expect(prepared.metadata).toMatchObject({
+        grantTiming: "preparation",
+        grant: { grantId: "grant-id-1", auditId: "grant-id-2" },
+      });
+      expect(
+        capabilityAuthority.getAuditEvents().map(({ type }) => type),
+      ).toEqual(["issued", "consumed"]);
+
+      now = 201;
+      expect(() => prepared.activate()).toThrow(
+        "Sandbox capability grant could not be activated: expired",
+      );
+      expect(
+        capabilityAuthority.getAuditEvents().map(({ type }) => type),
+      ).toEqual(["issued", "consumed", "revoked"]);
+    } finally {
       await test.dispose();
     }
   });
@@ -810,28 +959,33 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
     });
 
     try {
-      const launch = await authorizer.authorize(
+      const launch = await authorizeAndActivate(
+        authorizer,
         request(test.workspace, {
           sandboxCapabilityRequest: { unrestrictedPublicNetwork: true },
         }),
       );
-      expect(launch.authorization.policy.network).toEqual({
+      expect(launch.policy.network).toEqual({
         mode: "public-proxy",
       });
-      expect(launch.authorization.capabilityRequest).toEqual({
+      expect(launch.metadata.capabilityRequest).toEqual({
         unrestrictedPublicNetwork: true,
-      });
-      expect(launch.authorization.grant).toMatchObject({
-        consumedAt: now,
-        bindingDigest: launch.authorization.bindingDigest,
       });
       expect(launch.helperRequest.network).toEqual({ mode: "public-proxy" });
       expect(launch.metadata).toMatchObject({
         capabilities: { network: "proxy-only" },
+        grantTiming: "launch",
         grant: {
-          grantId: launch.authorization.grant?.grantId,
-          auditId: launch.authorization.grant?.auditId,
+          grantId: expect.any(String),
+          auditId: expect.any(String),
         },
+      });
+      const grant = capabilityAuthority.getGrant(
+        launch.metadata.grant?.grantId as string,
+      );
+      expect(grant).toMatchObject({
+        consumedAt: now,
+        bindingDigest: launch.bindingDigest,
       });
       expect(
         capabilityAuthority.getAuditEvents().map(({ type }) => type),
@@ -878,18 +1032,22 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       });
 
       try {
-        const launch = await authorizer.authorize(
+        const launch = await authorizeAndActivate(
+          authorizer,
           request(test.workspace, {
             sandboxCapabilityRequest: capabilityRequest,
           }),
         );
-        expect(launch.authorization.policy.network).toEqual(network);
-        expect(launch.authorization.capabilityRequest).toEqual(
-          capabilityRequest,
-        );
-        expect(launch.authorization.grant).toMatchObject({
+        expect(launch.policy.network).toEqual(network);
+        expect(launch.metadata.capabilityRequest).toEqual(capabilityRequest);
+        expect(launch.metadata.grantTiming).toBe("launch");
+        expect(
+          capabilityAuthority.getGrant(
+            launch.metadata.grant?.grantId as string,
+          ),
+        ).toMatchObject({
           consumedAt: 100,
-          bindingDigest: launch.authorization.bindingDigest,
+          bindingDigest: launch.bindingDigest,
         });
         expect(launch.helperRequest.network).toEqual(network);
         expect(
@@ -944,7 +1102,10 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
 
   it("does not include inline file contents or paths in execution metadata", async () => {
     const test = await fixture();
-    const launch = await test.authorizer.authorize(request(test.workspace));
+    const launch = await authorizeAndActivate(
+      test.authorizer,
+      request(test.workspace),
+    );
     try {
       const serialized = JSON.stringify(launch.metadata);
       expect(serialized).not.toContain(test.workspace);

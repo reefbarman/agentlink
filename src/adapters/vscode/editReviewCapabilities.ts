@@ -4,11 +4,10 @@ import * as vscode from "vscode";
 
 import {
   DiffViewProvider,
-  createFormatOnSaveReport,
   diagnoseEditApplyFailure,
-  diagnoseEditSaveFailure,
   snapshotDiagnostics,
 } from "../../integrations/DiffViewProvider.js";
+import { commitAndVerifyEdit } from "../../integrations/editDurability.js";
 import {
   normalizeEditorText,
   type EditReviewDecision,
@@ -293,9 +292,11 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
             recursive: true,
           });
 
+          let baselineExists = true;
           try {
             await fs.access(params.absolutePath);
           } catch {
+            baselineExists = false;
             if (params.allowCreate === false) {
               return {
                 error: "File not found",
@@ -305,13 +306,9 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
             await fs.writeFile(params.absolutePath, "", "utf-8");
           }
 
-          let baselineContent = "";
-          try {
-            baselineContent = await fs.readFile(params.absolutePath, "utf-8");
-          } catch {
-            // Missing files are represented as empty content after the
-            // allowCreate branch above, matching the write_file behavior.
-          }
+          const baselineContent = baselineExists
+            ? await fs.readFile(params.absolutePath, "utf-8")
+            : "";
           let content = params.content;
           if (params.prepareContent) {
             const prepared = await params.prepareContent(baselineContent);
@@ -371,55 +368,24 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                 })),
               };
             }
-          } else if (baselineContent !== content) {
-            // A clean VS Code document can briefly retain stale text after an
-            // external disk change. If it already equals the proposal, there
-            // is no editor change to save, so make the approved content durable.
-            await fs.writeFile(params.absolutePath, content, "utf-8");
           }
-          if (doc.isDirty) {
-            const saveAttemptContent = doc.getText();
-            const saved = await doc.save();
-            if (!saved) {
-              return {
-                error: "File save failed",
-                path: params.relativePath,
-                reason: "save_failed",
-                ...(await diagnoseEditSaveFailure({
-                  absolutePath: params.absolutePath,
-                  baselineContent,
-                  documentDirty: doc.isDirty,
-                  saveAttemptContent,
-                  currentDocumentContent: doc.getText(),
-                  reviewState: "dirty_document_preserved",
-                })),
-              };
-            }
-          }
-          const finalContent = await fs.readFile(params.absolutePath, "utf-8");
+          const commit = await commitAndVerifyEdit({
+            document: doc,
+            absolutePath: params.absolutePath,
+            relativePath: params.relativePath,
+            baselineExists,
+            baselineContent,
+            approvedContent: content,
+            reviewState: "dirty_document_preserved",
+          });
           const newDiagnostics = await snap.collectNewErrors(
             params.diagnosticDelay,
           );
-
-          const response: Record<string, unknown> = {
-            status: "accepted",
-            path: params.relativePath,
+          return {
+            ...commit,
             operation: params.operation ?? "auto-approved",
-            finalContent,
+            ...(newDiagnostics ? { new_diagnostics: newDiagnostics } : {}),
           };
-          const formatOnSaveReport = createFormatOnSaveReport(
-            params.relativePath,
-            content,
-            finalContent,
-            baselineContent,
-          );
-          if (formatOnSaveReport) {
-            Object.assign(response, formatOnSaveReport);
-          }
-          if (newDiagnostics) {
-            response.new_diagnostics = newDiagnostics;
-          }
-          return response;
         });
       }
 
@@ -535,47 +501,23 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                     })),
                   };
                 }
-              } else if (baseline.content !== content) {
-                await fs.writeFile(params.absolutePath, content, "utf-8");
               }
-              if (doc.isDirty) {
-                const saveAttemptContent = doc.getText();
-                if (!(await doc.save())) {
-                  return {
-                    error: "File save failed",
-                    path: params.relativePath,
-                    reason: "save_failed",
-                    ...(await diagnoseEditSaveFailure({
-                      absolutePath: params.absolutePath,
-                      baselineContent: baseline.content,
-                      documentDirty: doc.isDirty,
-                      saveAttemptContent,
-                      currentDocumentContent: doc.getText(),
-                      reviewState: "dirty_document_preserved",
-                    })),
-                  };
-                }
-              }
-              const finalContent = await fs.readFile(
-                params.absolutePath,
-                "utf-8",
-              );
-              const formatOnSaveReport = createFormatOnSaveReport(
-                params.relativePath,
-                content,
-                finalContent,
-                baseline.content,
-              );
+              const commit = await commitAndVerifyEdit({
+                document: doc,
+                absolutePath: params.absolutePath,
+                relativePath: params.relativePath,
+                baselineExists: baseline.exists,
+                baselineContent: baseline.content,
+                approvedContent: content,
+                reviewState: "dirty_document_preserved",
+              });
               const newDiagnostics = await snap.collectNewErrors(
                 params.diagnosticDelay,
               );
               return {
-                status: "accepted",
-                path: params.relativePath,
+                ...commit,
                 operation: params.operation ?? "auto-approved",
-                finalContent,
                 authorization: authorization.authorization,
-                ...formatOnSaveReport,
                 ...(newDiagnostics ? { new_diagnostics: newDiagnostics } : {}),
               };
             }

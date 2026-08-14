@@ -29,6 +29,31 @@ function getModelThreshold(
   return model.condenseThreshold;
 }
 
+function getProviderGroupKey(model: WebviewModelInfo): string {
+  const providerLower = model.provider.toLowerCase();
+  const providerDisplayLower = model.providerDisplayName?.toLowerCase() ?? "";
+  if (
+    providerLower === "openrouter" ||
+    providerLower.startsWith("openai-compatible:openrouter") ||
+    providerDisplayLower.startsWith("openrouter") ||
+    model.id.startsWith("openrouter-") ||
+    model.id.startsWith("openrouter/")
+  ) {
+    return "openrouter";
+  }
+  return model.provider;
+}
+
+function getProviderGroupDisplayName(
+  groupKey: string,
+  model: WebviewModelInfo,
+): string {
+  if (groupKey === "openrouter") {
+    return "OpenRouter";
+  }
+  return model.providerDisplayName ?? model.provider;
+}
+
 export function ModelSelector({
   currentModel,
   currentCondenseThreshold,
@@ -95,12 +120,13 @@ export function ModelSelector({
     { displayName: string; models: WebviewModelInfo[] }
   >();
   for (const m of models) {
-    const group = providers.get(m.provider) ?? {
-      displayName: m.providerDisplayName ?? m.provider,
+    const groupKey = getProviderGroupKey(m);
+    const group = providers.get(groupKey) ?? {
+      displayName: getProviderGroupDisplayName(groupKey, m),
       models: [],
     };
     group.models.push(m);
-    providers.set(m.provider, group);
+    providers.set(groupKey, group);
   }
 
   const providerIcon = (provider: string): string => {
@@ -110,6 +136,8 @@ export function ModelSelector({
       case "codex":
       case "openai":
         return "symbol-interface";
+      case "openrouter":
+        return "symbol-namespace";
       default:
         return "symbol-namespace";
     }

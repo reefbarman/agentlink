@@ -6,6 +6,7 @@ import type {
 } from "../approvals/ApprovalPanelProvider.js";
 import {
   DiffViewProvider,
+  type DiffResult,
   withFileLock,
 } from "../integrations/DiffViewProvider.js";
 
@@ -38,6 +39,24 @@ const validateSkill = validateMemoryProposalSkill;
 const applyProposal = applyMemoryProposal;
 const deleteTarget = deleteMemoryProposalTarget;
 const isSameMemoryDestination = isSameMemoryProposalDestination;
+
+class MemorySaveError extends Error {
+  constructor(readonly result: DiffResult) {
+    super(result.error ?? "Approved memory proposal was not durably saved");
+    this.name = "MemorySaveError";
+  }
+}
+
+function requireDurableMemorySave(result: DiffResult): string {
+  if (
+    result.status !== "accepted" ||
+    result.durability?.status !== "durable" ||
+    result.finalContent === undefined
+  ) {
+    throw new MemorySaveError(result);
+  }
+  return result.finalContent;
+}
 
 function assertAuthoritativeTier(
   params: Pick<ProposeMemoryParams, "tier">,
@@ -162,11 +181,13 @@ async function reviewProposedContentInDiff(
       const saved = await diffView.saveChanges();
       return {
         decision: "accept",
-        finalContent: saved.finalContent ?? proposedContent,
+        finalContent: requireDurableMemorySave(saved),
         followUp: saved.follow_up,
       };
     } catch (err) {
-      await revert().catch(() => undefined);
+      if (!(err instanceof MemorySaveError)) {
+        await revert().catch(() => undefined);
+      }
       throw err;
     }
   });
@@ -250,11 +271,13 @@ async function reviewMemoryProposalInDiff(
       return {
         decision: "accept",
         memoryDecision: approval,
-        finalContent: saved.finalContent ?? proposedContent,
+        finalContent: requireDurableMemorySave(saved),
         followUp: saved.follow_up ?? approval.followUp,
       };
     } catch (err) {
-      await revert().catch(() => undefined);
+      if (!(err instanceof MemorySaveError)) {
+        await revert().catch(() => undefined);
+      }
       throw err;
     }
   });
@@ -410,6 +433,18 @@ export async function handleProposeMemory(
         .map((d) => ({ message: d.message, source: d.source })),
     });
   } catch (err) {
+    if (err instanceof MemorySaveError) {
+      const {
+        finalContent: _finalContent,
+        error: _error,
+        status: _status,
+        ...evidence
+      } = err.result;
+      return errorResult(err.message, {
+        ...evidence,
+        status: "error",
+      });
+    }
     const extra =
       err instanceof Error && "currentContent" in err
         ? {

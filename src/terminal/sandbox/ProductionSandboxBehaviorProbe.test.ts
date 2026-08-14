@@ -313,7 +313,9 @@ describe("createProductionSandboxRuntimeFingerprint", () => {
           generation: 1,
           dimensions: { columns: 100, rows: 30 },
         });
-        const command = runtime.launch(authorized.helperRequest);
+        const activeLaunch = authorized.activate();
+        activeLaunch.assertLaunchValid?.();
+        const command = runtime.launch(activeLaunch.helperRequest);
         let output = "";
         const subscription = command.onEvent((event) => {
           if (event.type === "data") output += event.data;
@@ -411,7 +413,9 @@ describe("createProductionSandboxRuntimeFingerprint", () => {
             generation: 1,
             dimensions: { columns: 100, rows: 30 },
           });
-          const command = runtime.launch(authorized.helperRequest);
+          const activeLaunch = authorized.activate();
+          activeLaunch.assertLaunchValid?.();
+          const command = runtime.launch(activeLaunch.helperRequest);
           command.dispose();
           await expect(command.ready).rejects.toThrow("disposed");
           await expect(command.completion).rejects.toThrow("disposed");

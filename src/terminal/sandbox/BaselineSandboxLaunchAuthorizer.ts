@@ -13,19 +13,22 @@ import path from "node:path";
 import {
   CURRENT_SANDBOX_POLICY_VERSION,
   validateCheckpointBSandboxCapabilityRequest,
+  type ApprovedSandboxCapabilityGrant,
   type SandboxExecutionMetadata,
   type SandboxLaunchAuthorization,
   type SandboxLaunchBindingInput,
 } from "../../core/sandboxPolicy.js";
+import { SandboxCapabilityLaunchError } from "../../core/capabilities/SandboxCapabilityLaunchError.js";
 import type { TerminalExecuteOptions } from "../../core/capabilities/terminal.js";
 import { buildAgentExecutionEnv } from "../../process/agentExecutionPolicy.js";
 import {
   createSandboxLaunchBindingDigest,
   SandboxCapabilityAuthority,
 } from "./SandboxCapabilityAuthority.js";
-import {
-  type AuthorizedSandboxLaunch,
-  type SandboxLaunchAuthorizer,
+import type {
+  ActiveSandboxLaunch,
+  PreparedSandboxLaunch,
+  SandboxLaunchAuthorizer,
 } from "./SandboxTerminalCoordinator.js";
 import {
   buildSandboxPolicyEnvironment,
@@ -34,6 +37,12 @@ import {
 import { resolveWorkspaceGitProtection } from "./gitMetadataProtection.js";
 import { compileSandboxHelperLaunchRequest } from "./sandboxPolicyCompiler.js";
 import { verifyTerminalInlineFiles } from "../inlineFileIntegrity.js";
+import {
+  sandboxCapabilityKind,
+  sandboxCapabilityPreparationAgeBucket,
+  type SandboxCapabilityGrantTiming,
+  type SandboxCapabilityGrantTimingEvent,
+} from "./sandboxCapabilityGrantTiming.js";
 
 const PROFILE_ID = "workspace-write";
 const DEFAULT_CAPABILITY_GRANT_TTL_MS = 10 * 60_000;
@@ -107,6 +116,10 @@ export interface BaselineSandboxLaunchAuthorizerOptions {
   trustedRuntimeRoots?: readonly string[];
   capabilityAuthority?: SandboxCapabilityAuthority;
   capabilityGrantTtlMs?: number;
+  capabilityGrantTiming?: SandboxCapabilityGrantTiming;
+  onCapabilityGrantTimingEvent?: (
+    event: SandboxCapabilityGrantTimingEvent,
+  ) => void;
   now?: () => number;
 }
 
@@ -458,6 +471,10 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
   private readonly environmentPolicy: SandboxShellEnvironmentPolicy | undefined;
   private readonly capabilityAuthority: SandboxCapabilityAuthority;
   private readonly capabilityGrantTtlMs: number;
+  private readonly capabilityGrantTiming: SandboxCapabilityGrantTiming;
+  private readonly onCapabilityGrantTimingEvent?: (
+    event: SandboxCapabilityGrantTimingEvent,
+  ) => void;
   private readonly now: () => number;
 
   constructor(options: BaselineSandboxLaunchAuthorizerOptions) {
@@ -492,6 +509,8 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
     ) {
       throw new Error("Sandbox capability grant TTL must be positive");
     }
+    this.capabilityGrantTiming = options.capabilityGrantTiming ?? "launch";
+    this.onCapabilityGrantTimingEvent = options.onCapabilityGrantTimingEvent;
     this.now = options.now ?? Date.now;
   }
 
@@ -503,7 +522,8 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
     dimensions,
   }: Parameters<
     SandboxLaunchAuthorizer["authorize"]
-  >[0]): Promise<AuthorizedSandboxLaunch> {
+  >[0]): Promise<PreparedSandboxLaunch> {
+    const preparedAt = this.now();
     if (!options.sandboxSessionId) {
       throw new Error("Sandbox launch requires an owning AgentLink session ID");
     }
@@ -610,41 +630,20 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
         },
       };
       const bindingDigest = createSandboxLaunchBindingDigest(binding);
-      let consumedGrant:
-        | ReturnType<
-            SandboxCapabilityAuthority["issuePublicNetworkGrant"]
-          >["grant"]
-        | undefined;
-      if (capability.publicNetwork || capability.localBinding) {
-        const issued = this.capabilityAuthority.issueCapabilityGrant({
-          binding,
-          expiresAt: this.now() + this.capabilityGrantTtlMs,
-        });
-        const consumed = this.capabilityAuthority.consume(
-          issued.handle,
-          binding,
-        );
-        if (!consumed.ok) {
-          this.capabilityAuthority.revoke(issued.grant.grantId);
-          throw new Error(
-            `Sandbox capability grant could not be consumed: ${consumed.reason}`,
-          );
-        }
-        consumedGrant = consumed.grant;
-      }
+      const hasCapability = capability.publicNetwork || capability.localBinding;
+      const capabilityRequest = hasCapability
+        ? {
+            ...(capability.publicNetwork
+              ? { unrestrictedPublicNetwork: true as const }
+              : {}),
+            ...(capability.localBinding
+              ? { allowLocalBinding: true as const }
+              : {}),
+          }
+        : undefined;
       const authorization: SandboxLaunchAuthorization = {
         bindingDigest,
-        ...(capability.publicNetwork || capability.localBinding
-          ? {
-              capabilityRequest: {
-                ...(capability.publicNetwork
-                  ? { unrestrictedPublicNetwork: true }
-                  : {}),
-                ...(capability.localBinding ? { allowLocalBinding: true } : {}),
-              },
-              grant: consumedGrant,
-            }
-          : {}),
+        ...(capabilityRequest ? { capabilityRequest } : {}),
         policy: {
           version: CURRENT_SANDBOX_POLICY_VERSION,
           profileId: PROFILE_ID,
@@ -666,27 +665,27 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
           },
           environment: {
             inheritHost: false,
-            values: environmentResult.environment,
-            summary: environmentPolicySummary,
+            values: { ...environmentResult.environment },
+            summary: {
+              ...environmentPolicySummary,
+              exclude: [...environmentPolicySummary.exclude],
+              includeOnly: [...environmentPolicySummary.includeOnly],
+              setKeys: [...environmentPolicySummary.setKeys],
+            },
           },
           allowedUnixSockets: [],
         },
       };
-      const helperRequest = compileSandboxHelperLaunchRequest({
-        channelId,
-        commandId,
-        generation,
-        command: options.command,
-        cwd,
-        shell: this.shell,
-        dimensions,
-        authorization,
-      });
       const metadata: SandboxExecutionMetadata = {
         policyVersion: CURRENT_SANDBOX_POLICY_VERSION,
         profileId: PROFILE_ID,
         backend: "seatbelt",
-        environmentPolicy: environmentPolicySummary,
+        environmentPolicy: {
+          ...environmentPolicySummary,
+          exclude: [...environmentPolicySummary.exclude],
+          includeOnly: [...environmentPolicySummary.includeOnly],
+          setKeys: [...environmentPolicySummary.setKeys],
+        },
         capabilities: {
           backend: "seatbelt",
           processTree: true,
@@ -712,53 +711,203 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
             "CPU, memory, process-count, and disk quotas are not fully enforced.",
           ],
         },
-        ...(capability.publicNetwork || capability.localBinding
-          ? {
-              capabilityRequest: {
-                ...(capability.publicNetwork
-                  ? { unrestrictedPublicNetwork: true }
-                  : {}),
-                ...(capability.localBinding ? { allowLocalBinding: true } : {}),
-              },
-            }
-          : {}),
-        ...(consumedGrant
-          ? {
-              grant: {
-                grantId: consumedGrant.grantId,
-                auditId: consumedGrant.auditId,
-              },
-            }
-          : {}),
+        ...(capabilityRequest ? { capabilityRequest } : {}),
       };
+      const identity = Object.freeze({ channelId, commandId, generation });
+      const compile = (activeAuthorization: SandboxLaunchAuthorization) =>
+        compileSandboxHelperLaunchRequest({
+          channelId,
+          commandId,
+          generation,
+          command: options.command,
+          cwd,
+          shell: this.shell,
+          dimensions: { ...dimensions },
+          authorization: activeAuthorization,
+        });
+      let activeGrantId: string | undefined;
       let finalized = false;
+      let activated = false;
+      const timingEvent = (
+        type: SandboxCapabilityGrantTimingEvent["type"],
+        reason?: SandboxCapabilityGrantTimingEvent["reason"],
+      ) => {
+        if (!hasCapability) return;
+        const ageMs = Math.max(0, this.now() - preparedAt);
+        this.onCapabilityGrantTimingEvent?.({
+          type,
+          timing: this.capabilityGrantTiming,
+          capability: sandboxCapabilityKind(capability),
+          preparationAgeBucket: sandboxCapabilityPreparationAgeBucket(ageMs),
+          exceededLegacyTtl: ageMs >= this.capabilityGrantTtlMs,
+          ...(reason ? { reason } : {}),
+        });
+      };
       const finalize = () => {
         if (finalized) return;
         finalized = true;
-        if (consumedGrant) {
-          this.capabilityAuthority.revoke(consumedGrant.grantId);
+        if (activeGrantId && this.capabilityAuthority.revoke(activeGrantId)) {
+          timingEvent("revoked");
         }
         directories.cleanup();
       };
-      return {
-        authorization,
-        helperRequest,
-        metadata,
-        ...(consumedGrant
+      const activeMetadata = (
+        grant: ApprovedSandboxCapabilityGrant | undefined,
+      ): SandboxExecutionMetadata => ({
+        ...metadata,
+        capabilities: {
+          ...metadata.capabilities,
+          warnings: [...metadata.capabilities.warnings],
+        },
+        ...(metadata.environmentPolicy
           ? {
-              assertLaunchValid: () => {
-                const validation = this.capabilityAuthority.validateConsumed(
-                  consumedGrant.grantId,
-                  binding,
-                );
-                if (!validation.ok) {
-                  throw new Error(
-                    `Prepared sandbox capability grant is no longer valid: ${validation.reason}`,
-                  );
-                }
+              environmentPolicy: {
+                ...metadata.environmentPolicy,
+                exclude: [...metadata.environmentPolicy.exclude],
+                includeOnly: [...metadata.environmentPolicy.includeOnly],
+                setKeys: [...metadata.environmentPolicy.setKeys],
               },
             }
           : {}),
+        ...(metadata.capabilityRequest
+          ? { capabilityRequest: { ...metadata.capabilityRequest } }
+          : {}),
+        ...(grant
+          ? {
+              grantTiming: this.capabilityGrantTiming,
+              grant: { grantId: grant.grantId, auditId: grant.auditId },
+            }
+          : {}),
+      });
+      const activateGrant = () => {
+        let grant: ApprovedSandboxCapabilityGrant;
+        try {
+          const issued = this.capabilityAuthority.issueCapabilityGrant({
+            binding,
+            expiresAt: this.now() + this.capabilityGrantTtlMs,
+          });
+          activeGrantId = issued.grant.grantId;
+          const consumed = this.capabilityAuthority.consume(
+            issued.handle,
+            binding,
+          );
+          if (!consumed.ok) {
+            throw new SandboxCapabilityLaunchError(consumed.reason);
+          }
+          grant = consumed.grant;
+        } catch (error) {
+          const failure =
+            error instanceof SandboxCapabilityLaunchError
+              ? error
+              : new SandboxCapabilityLaunchError("issue_failed", {
+                  cause: error,
+                });
+          timingEvent("activation_failed", failure.reason);
+          finalize();
+          throw failure;
+        }
+        const activeAuthorization = { ...authorization, grant };
+        try {
+          const helperRequest = compile(activeAuthorization);
+          const assertLaunchValid = () => {
+            const validation = this.capabilityAuthority.validateConsumed(
+              grant.grantId,
+              binding,
+            );
+            if (!validation.ok) {
+              throw new SandboxCapabilityLaunchError(validation.reason);
+            }
+          };
+          assertLaunchValid();
+          timingEvent("activated");
+          return {
+            helperRequest,
+            metadata: activeMetadata(grant),
+            assertLaunchValid,
+          };
+        } catch (error) {
+          const failure =
+            error instanceof SandboxCapabilityLaunchError
+              ? error
+              : new SandboxCapabilityLaunchError("compile_failed", {
+                  cause: error,
+                });
+          timingEvent("activation_failed", failure.reason);
+          finalize();
+          throw failure;
+        }
+      };
+      let cachedActive: ActiveSandboxLaunch | undefined = !hasCapability
+        ? {
+            helperRequest: compile(authorization),
+            metadata: activeMetadata(undefined),
+          }
+        : this.capabilityGrantTiming === "preparation"
+          ? activateGrant()
+          : undefined;
+      const preparedMetadata = cachedActive?.metadata ?? metadata;
+      return {
+        identity,
+        policy: {
+          ...authorization.policy,
+          readableRoots: [...authorization.policy.readableRoots],
+          writableRoots: [...authorization.policy.writableRoots],
+          deniedRoots: [...authorization.policy.deniedRoots],
+          deniedWriteRoots: [...(authorization.policy.deniedWriteRoots ?? [])],
+          protectedReadOnlyRoots: [
+            ...authorization.policy.protectedReadOnlyRoots,
+          ],
+          structurallyProtectedRoots: [
+            ...(authorization.policy.structurallyProtectedRoots ?? []),
+          ],
+          network: { ...authorization.policy.network },
+          environment: {
+            inheritHost: false,
+            values: { ...authorization.policy.environment.values },
+            ...(authorization.policy.environment.summary
+              ? {
+                  summary: {
+                    ...authorization.policy.environment.summary,
+                    exclude: [
+                      ...authorization.policy.environment.summary.exclude,
+                    ],
+                    includeOnly: [
+                      ...authorization.policy.environment.summary.includeOnly,
+                    ],
+                    setKeys: [
+                      ...authorization.policy.environment.summary.setKeys,
+                    ],
+                  },
+                }
+              : {}),
+          },
+          allowedUnixSockets: [...authorization.policy.allowedUnixSockets],
+        },
+        bindingDigest,
+        metadata: preparedMetadata,
+        activate: () => {
+          if (activated || finalized) {
+            throw new Error("Prepared sandbox launch is no longer available");
+          }
+          activated = true;
+          if (!cachedActive) cachedActive = activateGrant();
+          if (cachedActive.assertLaunchValid) {
+            try {
+              cachedActive.assertLaunchValid();
+            } catch (error) {
+              const failure =
+                error instanceof SandboxCapabilityLaunchError
+                  ? error
+                  : new SandboxCapabilityLaunchError("issue_failed", {
+                      cause: error,
+                    });
+              timingEvent("activation_failed", failure.reason);
+              finalize();
+              throw failure;
+            }
+          }
+          return cachedActive;
+        },
         finalize,
       };
     } catch (error) {

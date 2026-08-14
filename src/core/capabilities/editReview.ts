@@ -1,10 +1,10 @@
 import type { OnApprovalRequest, ToolResult } from "../../shared/types.js";
 
-export const DEFAULT_DIAGNOSTIC_DELAY_MS = 1_500;
+import type { EditDurabilityEvidence } from "../editDurability.js";
 
-export function normalizeEditorText(content: string): string {
-  return content.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
-}
+export { normalizeEditorText } from "../editDurability.js";
+
+export const DEFAULT_DIAGNOSTIC_DELAY_MS = 1_500;
 
 export interface EditorRevealParams {
   absolutePath: string;
@@ -106,14 +106,16 @@ export interface EditReviewParams {
 }
 
 export interface EditReviewResult {
-  status?: "accepted" | "rejected" | "rejected_by_user";
+  status?: "accepted" | "rejected" | "rejected_by_user" | "error";
   path?: string;
   operation?: "auto-approved" | "created" | "modified";
   user_edits?: string;
   format_on_save?: boolean;
   format_on_save_edits?: string;
   format_on_save_edits_omitted?: "size_cap";
+  format_on_save_reverted_proposal?: true;
   eol_changed?: boolean;
+  durability?: EditDurabilityEvidence;
   hint?: string;
   new_diagnostics?: string;
   finalContent?: string;

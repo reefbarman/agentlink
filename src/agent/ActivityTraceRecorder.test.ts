@@ -461,6 +461,22 @@ describe("ActivityTraceRecorder", () => {
                 scope: "project",
                 rule: { pattern: "src/**", mode: "glob" },
               },
+              durability: {
+                status: "durable",
+                outcome: "transformed",
+                policy: "allow_transform",
+                baseline_exists: true,
+                final_exists: true,
+                disk_changed: true,
+                baseline_content_hash: "secret-baseline-hash",
+                approved_content_hash: "secret-approved-hash",
+                expected_disk_content_hash: "secret-expected-hash",
+                editor_content_hash: "secret-editor-hash",
+                final_content_hash: "secret-final-hash",
+                requires_reread: false,
+                error_code: "BOUNDED_CODE",
+              },
+              format_on_save_edits: "secret format patch",
               user_edits: "file contents must not enter the trace",
             }),
           },
@@ -492,11 +508,26 @@ describe("ActivityTraceRecorder", () => {
             scope: "project",
             rule: { pattern: "src/**", mode: "glob" },
           },
+          durability: {
+            status: "durable",
+            outcome: "transformed",
+            policy: "allow_transform",
+            final_exists: true,
+            disk_changed: true,
+            requires_reread: false,
+            error_code: "BOUNDED_CODE",
+          },
         },
       },
     ]);
     expect(JSON.stringify(diagnosis)).not.toContain("file contents");
     expect(JSON.stringify(diagnosis)).not.toContain("secret file body");
+    expect(JSON.stringify(diagnosis)).not.toContain("secret format patch");
+    expect(JSON.stringify(diagnosis)).not.toContain("secret-baseline-hash");
+    expect(JSON.stringify(diagnosis)).not.toContain("secret-approved-hash");
+    expect(JSON.stringify(diagnosis)).not.toContain("secret-expected-hash");
+    expect(JSON.stringify(diagnosis)).not.toContain("secret-editor-hash");
+    expect(JSON.stringify(diagnosis)).not.toContain("secret-final-hash");
   });
 
   it("records condense, interjection, final marker, warning, and error counts", () => {

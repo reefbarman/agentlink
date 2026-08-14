@@ -22,7 +22,7 @@ import {
 } from "../../core/capabilities/terminal.js";
 import type {
   SandboxExecutionMetadata,
-  SandboxLaunchAuthorization,
+  SandboxPolicy,
 } from "../../core/sandboxPolicy.js";
 import type { TerminalDimensions } from "../../core/terminalProtocol.js";
 import {
@@ -33,7 +33,10 @@ import {
   cleanTerminalOutput,
   cleanTerminalRawOutput,
 } from "../../util/ansi.js";
-import type { SandboxHelperLaunchRequest } from "./sandboxHelperProtocol.js";
+import type {
+  SandboxCommandIdentity,
+  SandboxHelperLaunchRequest,
+} from "./sandboxHelperProtocol.js";
 import type {
   SandboxCommandProcess,
   SandboxRuntimeProvider,
@@ -59,12 +62,20 @@ const IMPLICIT_ADMISSION_TIMEOUT_MS = 30_000;
 const EXHAUSTED_COMMAND_LABEL_LIMIT = 60;
 export const SANDBOX_INTERACTIVE_PROMPT_GRACE_MS = 1_500;
 
-export interface AuthorizedSandboxLaunch {
-  authorization: SandboxLaunchAuthorization;
+export interface ActiveSandboxLaunch {
   helperRequest: SandboxHelperLaunchRequest;
   metadata: SandboxExecutionMetadata;
   assertLaunchValid?: () => void;
-  finalize?: () => void;
+}
+
+export interface PreparedSandboxLaunch {
+  identity: SandboxCommandIdentity;
+  /** Detached token-free preview; mutating it cannot affect the captured launch policy. */
+  policy: SandboxPolicy;
+  bindingDigest: string;
+  metadata: SandboxExecutionMetadata;
+  activate(): ActiveSandboxLaunch;
+  finalize(): void;
 }
 
 export interface SandboxLaunchAuthorizer {
@@ -74,7 +85,7 @@ export interface SandboxLaunchAuthorizer {
     commandId: string;
     generation: number;
     dimensions: TerminalDimensions;
-  }): Promise<AuthorizedSandboxLaunch>;
+  }): Promise<PreparedSandboxLaunch>;
 }
 
 export interface SandboxTerminalChannelEvent {
@@ -236,43 +247,46 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         ? {
             sandbox: Object.freeze({
               ...security.sandbox,
-              policyVersion: prepared.authorized.metadata.policyVersion,
-              profileId: prepared.authorized.metadata.profileId,
-              backend: prepared.authorized.metadata.backend as "seatbelt",
+              policyVersion: prepared.preparedLaunch.metadata.policyVersion,
+              profileId: prepared.preparedLaunch.metadata.profileId,
+              backend: prepared.preparedLaunch.metadata.backend as "seatbelt",
               capabilities: Object.freeze({
-                ...prepared.authorized.metadata.capabilities,
+                ...prepared.preparedLaunch.metadata.capabilities,
                 warnings: Object.freeze([
-                  ...prepared.authorized.metadata.capabilities.warnings,
+                  ...prepared.preparedLaunch.metadata.capabilities.warnings,
                 ]) as unknown as string[],
               }),
-              ...(prepared.authorized.metadata.grant
+              ...(prepared.preparedLaunch.metadata.grantTiming
+                ? { grantTiming: prepared.preparedLaunch.metadata.grantTiming }
+                : {}),
+              ...(prepared.preparedLaunch.metadata.grant
                 ? {
                     grant: Object.freeze({
-                      ...prepared.authorized.metadata.grant,
+                      ...prepared.preparedLaunch.metadata.grant,
                     }),
                   }
                 : {}),
-              ...(prepared.authorized.metadata.capabilityRequest
+              ...(prepared.preparedLaunch.metadata.capabilityRequest
                 ? {
                     capabilityRequest: Object.freeze({
-                      ...prepared.authorized.metadata.capabilityRequest,
+                      ...prepared.preparedLaunch.metadata.capabilityRequest,
                     }),
                   }
                 : {}),
-              ...(prepared.authorized.metadata.environmentPolicy
+              ...(prepared.preparedLaunch.metadata.environmentPolicy
                 ? {
                     environmentPolicy: Object.freeze({
-                      ...prepared.authorized.metadata.environmentPolicy,
+                      ...prepared.preparedLaunch.metadata.environmentPolicy,
                       exclude: Object.freeze([
-                        ...prepared.authorized.metadata.environmentPolicy
+                        ...prepared.preparedLaunch.metadata.environmentPolicy
                           .exclude,
                       ]) as unknown as string[],
                       setKeys: Object.freeze([
-                        ...prepared.authorized.metadata.environmentPolicy
+                        ...prepared.preparedLaunch.metadata.environmentPolicy
                           .setKeys,
                       ]) as unknown as string[],
                       includeOnly: Object.freeze([
-                        ...prepared.authorized.metadata.environmentPolicy
+                        ...prepared.preparedLaunch.metadata.environmentPolicy
                           .includeOnly,
                       ]) as unknown as string[],
                     }),
@@ -294,7 +308,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
           reservation
         ) {
           state = "disposed";
-          prepared.authorized.finalize?.();
+          prepared.preparedLaunch.finalize();
           throw new Error("Prepared sandbox terminal reservation is stale");
         }
         const current = prepared.channel.session.snapshot();
@@ -306,10 +320,9 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         ) {
           state = "disposed";
           this.clearReservation(prepared.before.channelId, reservation);
-          prepared.authorized.finalize?.();
+          prepared.preparedLaunch.finalize();
           throw new Error("Prepared sandbox terminal target changed");
         }
-        prepared.authorized.assertLaunchValid?.();
         if (descriptor.sandboxInlineFiles?.length) {
           try {
             await verifyTerminalInlineFiles(descriptor.sandboxInlineFiles, {
@@ -318,7 +331,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
           } catch (error) {
             state = "disposed";
             this.clearReservation(prepared.before.channelId, reservation);
-            prepared.authorized.finalize?.();
+            prepared.preparedLaunch.finalize();
             throw error;
           }
         }
@@ -341,7 +354,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         ) {
           this.clearReservation(prepared.before.channelId, reservation);
         }
-        prepared.authorized.finalize?.();
+        prepared.preparedLaunch.finalize();
       },
     };
   }
@@ -372,36 +385,39 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       channel: ManagedSandboxChannel;
       before: SandboxTerminalSessionSnapshot;
       commandId: string;
-      authorized: AuthorizedSandboxLaunch;
+      preparedLaunch: PreparedSandboxLaunch;
     },
     security?: TerminalExecutionSecuritySummary,
   ): Promise<TerminalCommandResult> {
     this.assertActive();
-    const { channel, before, commandId, authorized } = prepared;
+    const { channel, before, commandId, preparedLaunch } = prepared;
     const sandboxSessionId = options.sandboxSessionId as string;
-    const networkAuditId =
-      security?.auditId ?? authorized.metadata.grant?.auditId;
+    let activeLaunch: ActiveSandboxLaunch;
+    let networkAuditId: string | undefined;
     let process: SandboxCommandProcess;
     try {
+      activeLaunch = preparedLaunch.activate();
+      networkAuditId =
+        security?.auditId ?? activeLaunch.metadata.grant?.auditId;
       if (
-        authorized.helperRequest.network.mode === "public-proxy" &&
+        activeLaunch.helperRequest.network.mode === "public-proxy" &&
         !networkAuditId
       ) {
         throw new Error(
           "Managed sandbox networking requires command audit attribution",
         );
       }
-      authorized.assertLaunchValid?.();
-      process = this.runtime.launch(authorized.helperRequest);
+      activeLaunch.assertLaunchValid?.();
+      process = this.runtime.launch(activeLaunch.helperRequest);
     } catch (error) {
-      authorized.finalize?.();
+      preparedLaunch.finalize();
       throw error;
     }
     const finalizer = finalizedOnce(() => {
       try {
         options.onCommandFinalized?.();
       } finally {
-        authorized.finalize?.();
+        preparedLaunch.finalize();
       }
     });
     let resolveDetach!: () => void;
@@ -411,9 +427,9 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     const detachForeground = () => resolveDetach();
     channel.active = {
       commandId,
-      generation: authorized.helperRequest.generation,
+      generation: activeLaunch.helperRequest.generation,
       process,
-      metadata: authorized.metadata,
+      metadata: activeLaunch.metadata,
       finalizer,
       networkAbortController: new AbortController(),
       networkReviewPendingCount: 0,
@@ -435,7 +451,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       background: options.background === true,
       detachedFromPool: false,
     };
-    channel.latestMetadata = authorized.metadata;
+    channel.latestMetadata = activeLaunch.metadata;
     channel.latestTermination = undefined;
 
     try {
@@ -469,7 +485,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       void completion.catch((error) =>
         this.log?.(`[sandbox-terminal] Background command failed: ${error}`),
       );
-      return this.backgroundResult(channel, commandId, authorized.metadata);
+      return this.backgroundResult(channel, commandId, activeLaunch.metadata);
     }
 
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -551,7 +567,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       void completion.catch((error) =>
         this.log?.(`[sandbox-terminal] Background command failed: ${error}`),
       );
-      return this.backgroundResult(channel, commandId, authorized.metadata);
+      return this.backgroundResult(channel, commandId, activeLaunch.metadata);
     }
 
     if (outcome === "detached") await completion;
@@ -568,7 +584,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         this.log?.(`[sandbox-terminal] Timed-out command failed: ${error}`),
       );
       return {
-        ...this.backgroundResult(channel, commandId, authorized.metadata),
+        ...this.backgroundResult(channel, commandId, activeLaunch.metadata),
         timed_out: true,
       };
     }
@@ -583,7 +599,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       channel,
       snapshot,
       completed,
-      authorized.metadata,
+      activeLaunch.metadata,
       channel.session.getCommandOutput(commandId),
     );
   }
@@ -595,7 +611,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     channel: ManagedSandboxChannel;
     before: SandboxTerminalSessionSnapshot;
     commandId: string;
-    authorized: AuthorizedSandboxLaunch;
+    preparedLaunch: PreparedSandboxLaunch;
   }> {
     try {
       this.assertActive();
@@ -624,7 +640,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     channel: ManagedSandboxChannel;
     before: SandboxTerminalSessionSnapshot;
     commandId: string;
-    authorized: AuthorizedSandboxLaunch;
+    preparedLaunch: PreparedSandboxLaunch;
   }> {
     const before = channel.session.snapshot();
     if (
@@ -643,9 +659,9 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       this.clearReservation(before.channelId, reservation);
       throw new Error("createCommandId must return a non-empty ID without NUL");
     }
-    let authorized: AuthorizedSandboxLaunch;
+    let preparedLaunch: PreparedSandboxLaunch;
     try {
-      authorized = await this.authorizer.authorize({
+      preparedLaunch = await this.authorizer.authorize({
         options,
         channelId: before.channelId,
         commandId,
@@ -657,11 +673,11 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       throw error;
     }
     if (
-      authorized.helperRequest.channelId !== before.channelId ||
-      authorized.helperRequest.commandId !== commandId ||
-      authorized.helperRequest.generation !== before.nextGeneration
+      preparedLaunch.identity.channelId !== before.channelId ||
+      preparedLaunch.identity.commandId !== commandId ||
+      preparedLaunch.identity.generation !== before.nextGeneration
     ) {
-      authorized.finalize?.();
+      preparedLaunch.finalize();
       this.clearReservation(before.channelId, reservation);
       throw new Error(
         "Sandbox authorizer returned a mismatched command identity",
@@ -675,11 +691,11 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       current.status !== "idle" ||
       current.nextGeneration !== before.nextGeneration
     ) {
-      authorized.finalize?.();
+      preparedLaunch.finalize();
       this.clearReservation(before.channelId, reservation);
       throw new Error("Sandbox terminal target changed during authorization");
     }
-    return { channel, before, commandId, authorized };
+    return { channel, before, commandId, preparedLaunch };
   }
 
   private snapshotOptions(

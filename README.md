@@ -66,6 +66,32 @@ See the [getting started guide](resources/builtin-skills/documentation/reference
 | **MCP**               | Layered user/project MCP configuration and progressively disclosed tools, resources, and prompts.  |
 | **Customization**     | `AGENTS.md`/`CLAUDE.md`, rules, skills, custom modes, custom slash commands, and auditable memory. |
 
+## Write tools
+
+AgentLink's single-file write tools use the same reviewed save boundary. After an approved edit is saved, AgentLink reads the file from disk and compares it with the approved editor content. A successful result includes `durability.status: "durable"`, an `exact` or `transformed` outcome, and `post_edit_content_hash` (SHA-256 of the final disk content). Reverted edits, editor/disk divergence, unreadable or missing files, and transformations of exact-preservation formats return canonical errors; AgentLink reports the observed state rather than overwriting it automatically.
+
+### `write_file`
+
+Create a file or replace its complete content.
+
+| Parameter | Type   | Description                          |
+| --------- | ------ | ------------------------------------ |
+| `path`    | string | Workspace-relative or absolute path. |
+| `content` | string | Complete proposed file content.      |
+
+### `apply_diff`
+
+Apply one or more reviewed SEARCH/REPLACE blocks to an existing file.
+
+| Parameter       | Type      | Description                                                                                                          |
+| --------------- | --------- | -------------------------------------------------------------------------------------------------------------------- |
+| `path`          | string    | Existing file path.                                                                                                  |
+| `diff`          | string    | SEARCH/REPLACE blocks.                                                                                               |
+| `block_options` | object[]? | Select a 1-based occurrence or intentionally replace every exact occurrence for a block.                             |
+| `atomic`        | boolean?  | Require every block to validate before review/write. This validates the proposal; it does not bypass format-on-save. |
+
+If an ordinary save participant transforms the approved content, the write remains accepted with `durability.outcome: "transformed"`. For `apply_diff`, proposal-level successful blocks become `unverified_after_transform` and omit positional ranges because those ranges no longer describe final disk content. Re-read the file whenever `durability.requires_reread` is true. Known Unity serialization files (`.meta`, `.asset`, `.unity`, `.mat`, `.prefab`, `.anim`, `.controller`, and `.physicMaterial`) use VS Code's Save without Formatting path and fail closed instead of falling back to normal save participants.
+
 ## Documentation
 
 Detailed product documentation ships with the extension and is also what the built-in documentation skill uses.

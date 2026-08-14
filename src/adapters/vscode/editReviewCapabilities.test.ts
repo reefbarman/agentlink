@@ -616,13 +616,26 @@ describe("createVscodeEditReviewProvider", () => {
     );
     const filePath = path.join(tempDir, "file.ts");
     fs.writeFileSync(filePath, "old", "utf-8");
+    let documentContent = "old";
+    let dirty = false;
     const doc = {
-      getText: vi.fn(() => "old"),
+      getText: vi.fn(() => documentContent),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
       uri: { fsPath: filePath },
-      isDirty: false,
-      save: vi.fn(async () => true),
+      get isDirty() {
+        return dirty;
+      },
+      save: vi.fn(async () => {
+        fs.writeFileSync(filePath, documentContent, "utf-8");
+        dirty = false;
+        return true;
+      }),
     };
+    applyEdit.mockImplementationOnce(async () => {
+      documentContent = "prepared";
+      dirty = true;
+      return true;
+    });
     openTextDocument.mockResolvedValue(doc);
     const prepareContent = vi.fn(() => ({
       status: "continue" as const,
@@ -647,7 +660,7 @@ describe("createVscodeEditReviewProvider", () => {
         status: "accepted",
         path: "file.ts",
         operation: "modified",
-        finalContent: "old",
+        finalContent: "prepared",
       });
       expect(prepareContent).toHaveBeenCalledWith("old");
       expect(showTextDocument).toHaveBeenCalledWith(doc, {

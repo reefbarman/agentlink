@@ -883,6 +883,30 @@ function summarizeToolResultEvidence(
       TOOL_RESULT_EVIDENCE_KEYS.has(key),
     ),
   );
+  const durability = summarizeDurabilityEvidence(parsed.durability);
+  if (durability) evidence.durability = durability;
+  return Object.keys(evidence).length > 0 ? evidence : undefined;
+}
+
+function summarizeDurabilityEvidence(
+  value: unknown,
+): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  const evidence: Record<string, unknown> = {};
+  for (const key of ["status", "outcome", "policy", "error_code"] as const) {
+    if (typeof raw[key] === "string") evidence[key] = raw[key];
+  }
+  for (const key of ["final_exists", "disk_changed"] as const) {
+    if (typeof raw[key] === "boolean" || raw[key] === "unknown") {
+      evidence[key] = raw[key];
+    }
+  }
+  if (typeof raw.requires_reread === "boolean") {
+    evidence.requires_reread = raw.requires_reread;
+  }
   return Object.keys(evidence).length > 0 ? evidence : undefined;
 }
 

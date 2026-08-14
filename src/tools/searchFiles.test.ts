@@ -16,6 +16,7 @@ const {
   getRipgrepBinPath,
   semanticSearch,
   resolveAndValidatePath,
+  getRelativePath,
   tryGetFirstWorkspaceRoot,
   approveOutsideWorkspaceAccess,
 } = vi.hoisted(() => ({
@@ -23,6 +24,7 @@ const {
   getRipgrepBinPath: vi.fn(),
   semanticSearch: vi.fn(),
   resolveAndValidatePath: vi.fn(),
+  getRelativePath: vi.fn(),
   tryGetFirstWorkspaceRoot: vi.fn(),
   approveOutsideWorkspaceAccess: vi.fn(),
 }));
@@ -45,6 +47,7 @@ vi.mock("../services/semanticSearch.js", () => ({
 
 vi.mock("../util/paths.js", () => ({
   resolveAndValidatePath,
+  getRelativePath,
   tryGetFirstWorkspaceRoot,
 }));
 
@@ -65,6 +68,9 @@ describe("handleSearchFiles ripgrep args", () => {
       absolutePath: resolvedPath,
       inWorkspace: true,
     });
+    getRelativePath.mockImplementation((filePath: string) =>
+      path.relative(resolvedPath, filePath).replaceAll(path.sep, "/"),
+    );
     tryGetFirstWorkspaceRoot.mockReturnValue(resolvedPath);
   });
 
@@ -129,6 +135,58 @@ describe("handleSearchFiles ripgrep args", () => {
     expect(args).toContain("templates/templates/**/*.ts");
   });
 
+  it.each(["content", "files_with_matches", "count"] as const)(
+    "keeps the searched directory prefix in %s result paths",
+    async (outputMode) => {
+      const searchRoot = path.resolve(".");
+      const searchDir = path.join(searchRoot, "src");
+      const matchedFile = path.join(searchDir, "nested", "Example.ts");
+      resolveAndValidatePath.mockReturnValue({
+        absolutePath: searchDir,
+        inWorkspace: true,
+      });
+      execRipgrepSearch.mockResolvedValue(
+        outputMode === "content"
+          ? [
+              JSON.stringify({
+                type: "begin",
+                data: { path: { text: matchedFile } },
+              }),
+              JSON.stringify({
+                type: "match",
+                data: {
+                  path: { text: matchedFile },
+                  lines: { text: "needle\n" },
+                  line_number: 3,
+                  absolute_offset: 12,
+                },
+              }),
+              JSON.stringify({
+                type: "end",
+                data: { path: { text: matchedFile } },
+              }),
+            ].join("\n")
+          : outputMode === "files_with_matches"
+            ? matchedFile
+            : `${matchedFile}:1`,
+      );
+
+      const result = await handleSearchFiles(
+        {
+          path: "src",
+          regex: "needle",
+          output_mode: outputMode,
+          semantic: false,
+        },
+        { isPathTrusted: () => true } as never,
+        {} as never,
+        `session-prefixed-${outputMode}`,
+      );
+
+      expect(JSON.stringify(result.data)).toContain("src/nested/Example.ts");
+    },
+  );
+
   it("returns canonical data for regex search results", async () => {
     const result = await handleSearchFiles(
       { path: ".", regex: "missing", semantic: false },
@@ -142,6 +200,43 @@ describe("handleSearchFiles ripgrep args", () => {
         total_matches: 0,
         truncated: false,
         results: "No results found",
+      },
+      isError: false,
+    });
+  });
+
+  it("keeps every counted match inspectable when ripgrep output ends mid-file", async () => {
+    const searchRoot = path.resolve(".");
+    const matchedFile = path.join(searchRoot, "src", "example.ts");
+    execRipgrepSearch.mockResolvedValue(
+      [
+        JSON.stringify({
+          type: "begin",
+          data: { path: { text: matchedFile } },
+        }),
+        JSON.stringify({
+          type: "match",
+          data: {
+            path: { text: matchedFile },
+            lines: { text: "const needle = true;\n" },
+            line_number: 7,
+            absolute_offset: 42,
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const result = await handleSearchFiles(
+      { path: ".", regex: "needle", semantic: false },
+      { isPathTrusted: () => true } as never,
+      {} as never,
+      "session-partial-ripgrep-output",
+    );
+
+    expect(result).toMatchObject({
+      data: {
+        total_matches: 1,
+        results: expect.stringContaining("> 7 | const needle = true;"),
       },
       isError: false,
     });

@@ -91,3 +91,72 @@ describe("getRipgrepBinPath", () => {
     );
   });
 });
+
+describe("parseRipgrepOutput", () => {
+  it("preserves captured matches when a capped stream omits the final end event", async () => {
+    const { parseRipgrepOutput } = await import("./ripgrep.js");
+    const output = [
+      JSON.stringify({
+        type: "begin",
+        data: { path: { text: "/workspace/src/example.ts" } },
+      }),
+      JSON.stringify({
+        type: "match",
+        data: {
+          path: { text: "/workspace/src/example.ts" },
+          lines: { text: "const needle = true;\n" },
+          line_number: 7,
+          absolute_offset: 42,
+        },
+      }),
+    ].join("\n");
+
+    expect(parseRipgrepOutput(output, "/workspace")).toEqual({
+      totalMatches: 1,
+      results: [
+        {
+          file: "/workspace/src/example.ts",
+          searchResults: [
+            {
+              lines: [
+                {
+                  line: 7,
+                  text: "const needle = true;\n",
+                  isMatch: true,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("flushes a matched file when a capped stream starts another file", async () => {
+    const { parseRipgrepOutput } = await import("./ripgrep.js");
+    const output = [
+      JSON.stringify({
+        type: "begin",
+        data: { path: { text: "/workspace/src/first.ts" } },
+      }),
+      JSON.stringify({
+        type: "match",
+        data: {
+          path: { text: "/workspace/src/first.ts" },
+          lines: { text: "needle\n" },
+          line_number: 1,
+          absolute_offset: 0,
+        },
+      }),
+      JSON.stringify({
+        type: "begin",
+        data: { path: { text: "/workspace/src/second.ts" } },
+      }),
+    ].join("\n");
+
+    expect(parseRipgrepOutput(output, "/workspace")).toMatchObject({
+      totalMatches: 1,
+      results: [{ file: "/workspace/src/first.ts" }],
+    });
+  });
+});

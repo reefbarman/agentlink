@@ -9,6 +9,8 @@ import type {
 } from "../core/capabilities/editReview.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createHash } from "node:crypto";
+
 vi.mock("vscode", () => ({
   workspace: {
     workspaceFolders: [] as Array<{ uri: { fsPath: string } }>,
@@ -45,6 +47,27 @@ describe("handleWriteFile", () => {
     const text =
       result.content[0]?.type === "text" ? result.content[0].text : "";
     return JSON.parse(text) as Record<string, unknown>;
+  }
+
+  function durable(content: string) {
+    const hash = createHash("sha256").update(content).digest("hex");
+    return {
+      finalContent: content,
+      durability: {
+        status: "durable" as const,
+        outcome: "exact" as const,
+        policy: "allow_transform" as const,
+        baseline_exists: true,
+        final_exists: true,
+        disk_changed: true,
+        baseline_content_hash: "baseline",
+        approved_content_hash: hash,
+        expected_disk_content_hash: hash,
+        editor_content_hash: hash,
+        final_content_hash: hash,
+        requires_reread: false,
+      },
+    };
   }
 
   function createApprovalPolicy(
@@ -88,6 +111,7 @@ describe("handleWriteFile", () => {
         status: "accepted" as const,
         path: "plans/existing.md",
         operation: "auto-approved" as const,
+        ...durable("updated plan"),
       })),
     };
     const policy = createApprovalPolicy(true);
@@ -133,6 +157,7 @@ describe("handleWriteFile", () => {
         status: "accepted" as const,
         path: "src/example.ts",
         operation: "auto-approved" as const,
+        ...durable("new"),
       })),
     };
     const authorization = {
@@ -170,7 +195,7 @@ describe("handleWriteFile", () => {
           status: "accepted" as const,
           path: "src/example.ts",
           operation: "modified" as const,
-          finalContent: "new",
+          ...durable("new"),
           decision: "accept-session" as const,
           writeApprovalResponse: { decision: "accept-session" },
         };
@@ -333,6 +358,7 @@ describe("handleWriteFile", () => {
         status: "accepted" as const,
         path: "src/example.test.ts",
         operation: "modified" as const,
+        ...durable("vi.mock('x', () => ({ value }));\nconst value = 1;\n"),
       })),
     };
 

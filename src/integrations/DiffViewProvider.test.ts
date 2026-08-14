@@ -16,6 +16,7 @@ import {
 } from "./DiffViewProvider.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { diffSnapshotHub } from "../browser-gateway/DiffSnapshotHub.js";
 import { withFileLock } from "../util/fileLock.js";
 
 // Each test uses a unique path to avoid interference from the shared
@@ -514,6 +515,106 @@ describe("DiffViewProvider rollback", () => {
       next_steps: [expect.stringContaining("preserved")],
     });
     expect(save).not.toHaveBeenCalled();
+  });
+});
+
+describe("DiffViewProvider durable save lifecycle", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await Promise.all(
+      tempDirs
+        .splice(0)
+        .map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
+  });
+
+  async function makeProvider(params: {
+    requestId: string;
+    save: () => Promise<boolean>;
+    dirtyAfterSave: () => boolean;
+  }): Promise<{ provider: DiffViewProvider; filePath: string }> {
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-diff-save-"),
+    );
+    tempDirs.push(dir);
+    const filePath = path.join(dir, "file.ts");
+    await fs.writeFile(filePath, "old", "utf-8");
+    const document = {
+      uri: { scheme: "file", fsPath: filePath },
+      getText: () => "approved",
+      get isDirty() {
+        return params.dirtyAfterSave();
+      },
+      save: params.save,
+    };
+    const provider = new DiffViewProvider(0, params.requestId);
+    Object.assign(provider, {
+      absolutePath: filePath,
+      relPath: "file.ts",
+      originalContent: "old",
+      newContent: "approved",
+      editType: "modify",
+      activeDiffEditor: { document },
+    });
+    diffSnapshotHub.upsert({
+      requestId: params.requestId,
+      filePath: "file.ts",
+      operation: "modify",
+      originalContent: "old",
+      proposedContent: "approved",
+      outsideWorkspace: false,
+      createdAt: Date.now(),
+    });
+    vi.spyOn(vscode.window, "showTextDocument").mockResolvedValue({} as never);
+    return { provider, filePath };
+  }
+
+  it("retains the pending diff snapshot when the editor save fails", async () => {
+    let dirty = true;
+    const requestId = "save-failed-snapshot";
+    const { provider } = await makeProvider({
+      requestId,
+      save: async () => false,
+      dirtyAfterSave: () => dirty,
+    });
+
+    const result = await provider.saveChanges();
+
+    expect(result).toMatchObject({ status: "error", reason: "save_failed" });
+    expect(dirty).toBe(true);
+    expect(diffSnapshotHub.get(requestId)).toBeDefined();
+    diffSnapshotHub.remove(requestId);
+  });
+
+  it("clears the pending snapshot after save when disk verification fails", async () => {
+    let dirty = true;
+    const requestId = "verification-failed-snapshot";
+    let filePath = "";
+    const created = await makeProvider({
+      requestId,
+      save: async () => {
+        await fs.writeFile(filePath, "different disk content", "utf-8");
+        dirty = false;
+        return true;
+      },
+      dirtyAfterSave: () => dirty,
+    });
+    filePath = created.filePath;
+
+    const result = await created.provider.saveChanges();
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "editor_disk_diverged",
+      durability: { status: "failed", outcome: "diverged" },
+    });
+    expect(diffSnapshotHub.get(requestId)).toBeUndefined();
+    expect(vscode.window.showTextDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ fsPath: filePath }),
+      expect.objectContaining({ preview: false, preserveFocus: true }),
+    );
   });
 });
 

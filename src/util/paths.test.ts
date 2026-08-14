@@ -75,6 +75,25 @@ describe("getRelativePath", () => {
     );
   });
 
+  it("uses the deepest containing root for nested workspace folders", async () => {
+    mockWorkspace.workspaceFolders = [
+      {
+        name: "outer-root",
+        uri: { fsPath: "/workspace/project" },
+      },
+      {
+        name: "inner-root",
+        uri: { fsPath: "/workspace/project/packages/app" },
+      },
+    ];
+
+    const { getRelativePath } = await import("./paths.js");
+
+    expect(
+      getRelativePath("/workspace/project/packages/app/src/index.ts"),
+    ).toBe("src/index.ts");
+  });
+
   it("currently allows an explicit workspace-folder prefix to select a later root", async () => {
     mockWorkspace.workspaceFolders = [
       {

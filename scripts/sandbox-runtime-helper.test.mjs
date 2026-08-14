@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rename,
   rm,
   symlink,
@@ -13,6 +14,8 @@ import {
 import {
   bindProxyCredentialsToRuntimeDescriptor,
   buildSandboxEnvironment,
+  canonicalizeProtectedRootPolicy,
+  canonicalizeSandboxFilesystemPolicy,
   constrainLoopbackRuntimeDescriptor,
   describeLaunch,
   isSandboxRuntimeDescriptor,
@@ -214,6 +217,76 @@ test("validates the one-request protocol and rejects authority-like extras", () 
       }),
     /protected root must be covered by filesystem.denyWrite/,
   );
+});
+
+test("canonicalizes and deduplicates deny-write roots", async () => {
+  const fixture = await mkdtemp(path.join(REPO_ROOT, "tmp", "al-policy-"));
+  const target = path.join(fixture, "target");
+  const alias = path.join(fixture, "alias");
+  try {
+    await mkdir(target);
+    await symlink(target, alias);
+    const canonical = await realpath(target);
+    const filesystem = await canonicalizeSandboxFilesystemPolicy({
+      denyRead: [],
+      allowRead: [fixture],
+      allowWrite: [fixture],
+      denyWrite: [alias, target],
+    });
+    assert.deepEqual(filesystem.denyWrite, [canonical]);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("canonicalizes not-yet-existing deny roots through symlinked ancestors", async () => {
+  const fixture = await mkdtemp(path.join(REPO_ROOT, "tmp", "al-policy-"));
+  const target = path.join(fixture, "target");
+  const alias = path.join(fixture, "alias");
+  try {
+    await mkdir(target);
+    await symlink(target, alias);
+    const filesystem = await canonicalizeSandboxFilesystemPolicy({
+      denyRead: [],
+      allowRead: [fixture],
+      allowWrite: [fixture],
+      denyWrite: [path.join(alias, "missing", "policy")],
+    });
+    assert.deepEqual(filesystem.denyWrite, [
+      path.join(await realpath(target), "missing", "policy"),
+    ]);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("rejects canonical protected roots outside canonical deny-write coverage", async () => {
+  const fixture = await mkdtemp(path.join(REPO_ROOT, "tmp", "al-policy-"));
+  const denied = path.join(fixture, "denied");
+  const writable = path.join(fixture, "writable");
+  const alias = path.join(denied, "alias");
+  const protectedFile = path.join(writable, "policy.md");
+  try {
+    await Promise.all([mkdir(denied), mkdir(writable)]);
+    await writeFile(protectedFile, "policy");
+    await symlink(writable, alias);
+    const filesystem = await canonicalizeSandboxFilesystemPolicy({
+      denyRead: [],
+      allowRead: [fixture],
+      allowWrite: [fixture],
+      denyWrite: [denied],
+    });
+    await assert.rejects(
+      canonicalizeProtectedRootPolicy(
+        filesystem,
+        [path.join(alias, "policy.md")],
+        [],
+      ),
+      /canonical protected root must be covered/,
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
 });
 
 test("builds a deterministic environment without inheriting host values", () => {

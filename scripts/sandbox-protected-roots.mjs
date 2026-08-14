@@ -18,7 +18,7 @@ function statValue(value) {
   return typeof value === "bigint" ? value.toString() : String(value);
 }
 
-async function canonicalizeMutationPath(
+export async function canonicalizeMutationPath(
   candidatePath,
   seenSymlinks = new Set(),
 ) {

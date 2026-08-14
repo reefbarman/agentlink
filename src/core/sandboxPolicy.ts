@@ -271,6 +271,8 @@ export interface SandboxExecutionMetadata {
   backend: string;
   backendVersion?: string;
   capabilities: SandboxBackendCapabilities;
+  /** Whether an additional capability grant was minted at preparation or launch. */
+  grantTiming?: "preparation" | "launch";
   grant?: {
     grantId: string;
     auditId: string;

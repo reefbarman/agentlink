@@ -278,6 +278,16 @@ export function parseRipgrepOutput(
       const parsed = JSON.parse(line) as RgMessage;
 
       if (parsed.type === "begin") {
+        // A capped stream may omit the previous file's `end` event. Preserve
+        // any captured matches before starting the next file rather than
+        // silently dropping inspectable results.
+        if (
+          currentFile?.searchResults.some((result) =>
+            result.lines.some((line) => line.isMatch),
+          )
+        ) {
+          results.push(currentFile);
+        }
         currentFile = {
           file: parsed.data.path.text,
           searchResults: [],
@@ -318,6 +328,17 @@ export function parseRipgrepOutput(
     } catch {
       // Skip unparseable lines
     }
+  }
+
+  // execRipgrepSearch intentionally caps large JSON streams and can stop
+  // before ripgrep emits the final `end` event. Keep the in-progress file when
+  // it contains a captured match so totalMatches never refers to hidden data.
+  if (
+    currentFile?.searchResults.some((result) =>
+      result.lines.some((line) => line.isMatch),
+    )
+  ) {
+    results.push(currentFile);
   }
 
   return { results, totalMatches };

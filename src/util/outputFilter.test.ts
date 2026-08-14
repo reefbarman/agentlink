@@ -173,10 +173,37 @@ describe("filterOutput", () => {
     expect(result.filtered).toBe("ERROR: fail");
   });
 
+  it("accepts a redundant leading ripgrep-style case-insensitive flag", () => {
+    const input =
+      "License: Apache-2.0\nname: dprint-plugin-java\nCopyright holder";
+    const result = filterOutput(input, {
+      output_grep: "(?i)license|apache|dprint-plugin-java|copyright",
+      output_head: 10,
+    });
+
+    expect(result.linesShown).toBe(3);
+    expect(result.filtered).toBe(input);
+  });
+
   it("output_grep treats invalid regex as literal", () => {
     const input = "foo[bar\nbaz\nfoo[bar again";
     const result = filterOutput(input, { output_grep: "foo[bar" });
     expect(result.linesShown).toBe(2);
+  });
+
+  it("treats an invalid regex after a leading case-insensitive flag as literal", () => {
+    const input = "foo[bar\n(?i)foo[bar\nbaz";
+    const result = filterOutput(input, { output_grep: "(?i)foo[bar" });
+
+    expect(result.linesShown).toBe(2);
+    expect(result.filtered).toBe("foo[bar\n(?i)foo[bar");
+  });
+
+  it("does not match every line for a bare case-insensitive flag", () => {
+    const result = filterOutput("first\nsecond", { output_grep: "(?i)" });
+
+    expect(result.linesShown).toBe(0);
+    expect(result.filtered).toBe("");
   });
 
   it("output_grep with context includes surrounding lines", () => {

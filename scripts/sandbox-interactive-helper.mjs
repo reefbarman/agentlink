@@ -1,6 +1,9 @@
 import {
+  assertProtectedRootsCovered,
   bindProxyCredentialsToRuntimeDescriptor,
   buildSandboxEnvironment,
+  canonicalizeProtectedRootPolicy,
+  canonicalizeSandboxFilesystemPolicy,
   constrainLoopbackRuntimeDescriptor,
   isSandboxRuntimeDescriptor,
   parseSandboxRuntimeRequest,
@@ -286,6 +289,9 @@ function defaultDependencies() {
     validateStructurallyProtectedRoots,
     startTrustedNetworkProxies,
     replaceProcessEnvironment,
+    canonicalizeFilesystemPolicy: canonicalizeSandboxFilesystemPolicy,
+    canonicalizeProtectedRootPolicy,
+    assertProtectedRootsCovered,
     createNetworkRequestId: () => randomBytes(16).toString("hex"),
     kill: process.kill.bind(process),
     setTimeout,
@@ -491,6 +497,14 @@ export function createSandboxInteractiveHelper(options = {}) {
     });
     const identity = identityOf(frame);
     const environment = buildSandboxEnvironment(request.environment);
+    const filesystem = await dependencies.canonicalizeFilesystemPolicy(
+      request.filesystem,
+    );
+    await dependencies.canonicalizeProtectedRootPolicy(
+      filesystem,
+      request.protectedRoots,
+      request.structurallyProtectedRoots,
+    );
     dependencies.replaceProcessEnvironment(environment);
     let networkProxies;
     const session = {
@@ -632,16 +646,11 @@ export function createSandboxInteractiveHelper(options = {}) {
           httpProxyPort: networkProxies.httpPort,
           socksProxyPort: networkProxies.socksPort,
         },
-        filesystem: {
-          ...request.filesystem,
-          denyWrite: [
-            ...new Set([
-              ...request.filesystem.denyWrite,
-              ...request.protectedRoots,
-              ...request.structurallyProtectedRoots,
-            ]),
-          ],
-        },
+        // Request validation requires every integrity-protected root to be covered
+        // by denyWrite already. Do not expand those roots into the generated
+        // sandbox-exec profile: large skill/rule trees can otherwise exceed
+        // macOS's argv limit before the command starts.
+        filesystem,
         allowPty: true,
         allowAppleEvents: false,
         enableWeakerNetworkIsolation: false,
@@ -672,9 +681,14 @@ export function createSandboxInteractiveHelper(options = {}) {
         request.protectedRoots,
       );
       await dependencies.revalidateProtectedRoots(protectedRoots);
-      await dependencies.validateStructurallyProtectedRoots(
-        request.structurallyProtectedRoots,
-      );
+      const structuralRoots =
+        await dependencies.validateStructurallyProtectedRoots(
+          request.structurallyProtectedRoots,
+        );
+      dependencies.assertProtectedRootsCovered(filesystem, [
+        ...protectedRoots.roots,
+        ...structuralRoots,
+      ]);
       if (session.terminationRequested) {
         throw new Error("sandbox helper launch cancelled before PTY spawn");
       }

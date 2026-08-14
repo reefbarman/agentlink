@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
 import { MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER } from "../core/modelRequestScheduler.js";
 
 const PROXY_ENV_KEYS = [
@@ -118,6 +119,29 @@ describe("installAgentLinkHttpDispatcher", () => {
     expect(proxy).not.toBe(directA);
     expect(mocks.Agent).toHaveBeenCalledTimes(1);
     expect(mocks.EnvHttpProxyAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a no-deadline dispatcher for protocol-owned long polls", async () => {
+    const { agentLinkLongPollingFetch } = await import("./httpDispatcher.js");
+
+    await agentLinkLongPollingFetch("https://example.com/mcp", {
+      method: "POST",
+    });
+
+    expect(mocks.fetch).toHaveBeenCalledWith(
+      "https://example.com/mcp",
+      expect.objectContaining({
+        method: "POST",
+        dispatcher: { kind: "agent:composed" },
+      }),
+    );
+    expect(mocks.Agent).toHaveBeenCalledWith({
+      keepAliveTimeout: 60_000,
+      headersTimeout: 0,
+      bodyTimeout: 0,
+      connections: MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER,
+      allowH2: true,
+    });
   });
 
   it("uses the tuned dispatcher for explicit SDK fetch calls", async () => {

@@ -11,7 +11,10 @@ import {
   errorResult,
   successResult,
 } from "../shared/types.js";
+import { classifyEditDurability } from "../core/editDurability.js";
+import { finalizeEditReviewResult } from "./editReviewResult.js";
 import { handlePendingEditLockError } from "./pendingEditLock.js";
+import { withFileLock } from "../util/fileLock.js";
 import type {
   EditReviewProvider,
   EditReviewParams,
@@ -816,6 +819,29 @@ function previewSearch(text: string): string {
   return `${compact.slice(0, 77)}...`;
 }
 
+function describeTransformedBlockResult(
+  result: BlockApplyResult,
+): Record<string, unknown> {
+  if (result.status === "failed") {
+    return describeBlockResult(result, {
+      includeCandidateLocations: false,
+      includeRecoveryOptions: false,
+    });
+  }
+  return {
+    index: result.index,
+    status: "unverified_after_transform",
+    proposal_status: "applied",
+    reason: "final_content_differs_from_reviewed_content",
+    match_type: result.matchType,
+    selection: result.selection,
+    replacement_count: result.replacementCount,
+    ...(result.selectedOccurrence !== undefined
+      ? { selected_occurrence: result.selectedOccurrence }
+      : {}),
+  };
+}
+
 function describeBlockResult(
   result: BlockApplyResult,
   options: {
@@ -1222,27 +1248,59 @@ export async function handleApplyDiff(
       };
     }
 
-    // If content unchanged (all blocks matched but produced same result)
+    // If content is unchanged, still verify the current disk state under the
+    // same per-path lock used by write providers before claiming durability.
     if (newContent === originalContent) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              status: "accepted",
+      return withFileLock(filePath, async () => {
+        let currentContent: string;
+        try {
+          currentContent = await fs.readFile(filePath, "utf-8");
+        } catch {
+          return errorResult(
+            "File could not be verified after the no-op diff",
+            {
+              status: "error",
               path: relPath,
-              operation: "modified",
-              note: "No changes resulted from the diff application",
-              post_edit_content_hash: contentHash(originalContent),
-            }),
-          },
-        ],
-      };
+              reason: "post_edit_verification_failed",
+              next_steps: [
+                "Re-read the file and retry the diff against its current content.",
+              ],
+            },
+          );
+        }
+
+        if (currentContent !== originalContent) {
+          return errorResult("File changed while applying the no-op diff", {
+            status: "error",
+            path: relPath,
+            reason: "concurrent_change",
+            next_steps: [
+              "Re-read the file and retry the diff against its current content.",
+            ],
+          });
+        }
+
+        const classification = classifyEditDurability({
+          relativePath: relPath,
+          baselineExists: true,
+          baselineContent: originalContent,
+          approvedContent: originalContent,
+          editorContent: currentContent,
+          disk: { status: "readable", content: currentContent },
+        });
+        return successResult({
+          status: "accepted",
+          path: relPath,
+          operation: "modified",
+          note: "No changes resulted from the diff application",
+          post_edit_content_hash: classification.durability.final_content_hash,
+          durability: classification.durability,
+        });
+      });
     }
 
     if (!providers.editReviewProvider) {
-      return successResult({
-        error: "Edit review is unavailable in this runtime",
+      return errorResult("Edit review is unavailable in this runtime", {
         path: relPath,
         reason: "edit_review_unavailable",
       });
@@ -1272,7 +1330,6 @@ export async function handleApplyDiff(
 
     let lockedFailedBlocks = failedBlocks;
     let lockedBlockResults = blockResults;
-    let lockedProposedContent = newContent;
     const result = await providers.editReviewProvider.reviewAndApply({
       mode: canAutoApprove ? "auto" : "interactive",
       absolutePath: filePath,
@@ -1304,7 +1361,6 @@ export async function handleApplyDiff(
         );
         lockedFailedBlocks = reapplied.failedBlocks;
         lockedBlockResults = reapplied.blockResults;
-        lockedProposedContent = reapplied.result;
         if (
           params.atomic &&
           (lockedFailedBlocks.length > 0 || malformedBlocks > 0)
@@ -1348,40 +1404,29 @@ export async function handleApplyDiff(
       });
     }
 
-    const {
-      finalContent: _finalContent,
-      decision: _decision,
-      writeApprovalResponse: _writeApprovalResponse,
-      ...response
-    } = result;
-    const responseObj = response as Record<string, unknown>;
-    responseObj.authorization = result.authorization
+    const appliedAuthorization = result.authorization
       ? result.authorization
       : canAutoApprove
         ? authorization
         : result.decision
           ? {
               allowed: result.decision !== "reject",
-              basis: "human",
+              basis: "human" as const,
               decision: result.decision,
             }
           : undefined;
-    const acceptedContent =
-      result.status === "accepted"
-        ? (result.finalContent ??
-          (await fs.readFile(filePath, "utf-8").catch(() => undefined)))
-        : undefined;
-    if (acceptedContent !== undefined) {
-      responseObj.post_edit_content_hash = contentHash(acceptedContent);
-    }
-    const rangesDescribeAcceptedContent =
-      acceptedContent === lockedProposedContent;
+    const finalized = finalizeEditReviewResult(
+      result,
+      appliedAuthorization ? { authorization: appliedAuthorization } : {},
+    );
+    if (!finalized.accepted) return finalized.result;
+
+    const responseObj = finalized.response;
+    const transformed = finalized.durability.outcome === "transformed";
+    const rangesDescribeAcceptedContent = !transformed;
 
     // Add partial failure info if applicable
-    if (
-      (lockedFailedBlocks.length > 0 || malformedBlocks > 0) &&
-      result.status === "accepted"
-    ) {
+    if (lockedFailedBlocks.length > 0 || malformedBlocks > 0) {
       responseObj.partial = true;
       if (lockedFailedBlocks.length > 0) {
         responseObj.failed_blocks = lockedFailedBlocks;
@@ -1398,31 +1443,22 @@ export async function handleApplyDiff(
     }
 
     if (
-      result.status === "accepted" &&
-      (blocks.length > 1 ||
-        lockedBlockResults.some(
-          (blockResult) =>
-            blockResult.status === "failed" ||
-            (blockResult.status === "applied" &&
-              blockResult.matchType !== "exact"),
-        ))
+      transformed ||
+      blocks.length > 1 ||
+      lockedBlockResults.some(
+        (blockResult) =>
+          blockResult.status === "failed" ||
+          (blockResult.status === "applied" &&
+            blockResult.matchType !== "exact"),
+      )
     ) {
       responseObj.block_results = lockedBlockResults.map((blockResult) =>
-        describeBlockResult(
-          blockResult.status === "applied" && !rangesDescribeAcceptedContent
-            ? {
-                ...blockResult,
-                postEditSpans: blockResult.postEditSpans.map((span) => ({
-                  ...span,
-                  range: undefined,
-                })),
-              }
-            : blockResult,
-          {
-            includeCandidateLocations: rangesDescribeAcceptedContent,
-            includeRecoveryOptions: false,
-          },
-        ),
+        transformed
+          ? describeTransformedBlockResult(blockResult)
+          : describeBlockResult(blockResult, {
+              includeCandidateLocations: rangesDescribeAcceptedContent,
+              includeRecoveryOptions: false,
+            }),
       );
     }
 

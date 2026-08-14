@@ -1479,12 +1479,96 @@ export function getToolUsageOutcomeFromResult(
   return "ok";
 }
 
+const EXECUTE_COMMAND_ERROR_CODES = new Set([
+  "sandbox_preparation_changed",
+  "terminal_target_rejected",
+  "sandbox_capability_launch_failed",
+  "sandbox_pty_launch_failed",
+]);
+const EXECUTE_COMMAND_FAILURE_STAGES = new Set([
+  "validation",
+  "preparation",
+  "approval",
+  "launch",
+]);
+const SANDBOX_CAPABILITY_LAUNCH_FAILURES = new Set([
+  "issue_failed",
+  "compile_failed",
+  "unknown_handle",
+  "unknown_grant",
+  "not_consumed",
+  "consumed",
+  "expired",
+  "revoked",
+  "wrong_session",
+  "wrong_binding",
+  "wrong_policy_version",
+]);
+
 /**
  * Approval-path and route dimensions for execute_command usage telemetry, so
  * the aggregate report can show how often commands were auto-approved
  * deterministically (tier/routine/sandbox verification), by the Guardian model
  * reviewer, or by a human, and which execution route served them.
  */
+const WRITE_DURABILITY_REASONS = new Set([
+  "save_failed",
+  "preserving_save_failed",
+  "save_reverted_edit",
+  "editor_disk_diverged",
+  "post_save_file_missing",
+  "post_save_file_unreadable",
+  "exact_preservation_failed",
+  "missing_durability_evidence",
+  "edit_review_state_missing",
+]);
+
+export function getWriteToolUsageMetrics(result: ToolResult): ToolUsageMetrics {
+  const text = result.content.find((item) => item.type === "text")?.text;
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text) as {
+      reason?: unknown;
+      durability?: {
+        status?: unknown;
+        outcome?: unknown;
+        policy?: unknown;
+      };
+    };
+    const metrics: ToolUsageMetrics = {};
+    if (
+      parsed.durability?.status === "durable" ||
+      parsed.durability?.status === "failed"
+    ) {
+      metrics.editDurabilityStatus = parsed.durability.status;
+    }
+    if (
+      parsed.durability?.outcome === "exact" ||
+      parsed.durability?.outcome === "transformed" ||
+      parsed.durability?.outcome === "reverted" ||
+      parsed.durability?.outcome === "diverged" ||
+      parsed.durability?.outcome === "unverifiable"
+    ) {
+      metrics.editDurabilityOutcome = parsed.durability.outcome;
+    }
+    if (
+      parsed.durability?.policy === "allow_transform" ||
+      parsed.durability?.policy === "preserve_exact"
+    ) {
+      metrics.editDurabilityPolicy = parsed.durability.policy;
+    }
+    if (
+      typeof parsed.reason === "string" &&
+      WRITE_DURABILITY_REASONS.has(parsed.reason)
+    ) {
+      metrics.editDurabilityReason = parsed.reason;
+    }
+    return metrics;
+  } catch {
+    return {};
+  }
+}
+
 export function getExecuteCommandUsageMetrics(
   result: ToolResult,
 ): ToolUsageMetrics {
@@ -1495,6 +1579,13 @@ export function getExecuteCommandUsageMetrics(
       approval?: { by?: unknown };
       security?: { route?: unknown };
       timed_out?: unknown;
+      error_code?: unknown;
+      failure_stage?: unknown;
+      command_sent?: unknown;
+      process_launched?: unknown;
+      capability_failure?: unknown;
+      retry_safe?: unknown;
+      sandbox?: { grantTiming?: unknown };
     };
     const metrics: ToolUsageMetrics = {};
     if (typeof parsed.approval?.by === "string") {
@@ -1502,6 +1593,39 @@ export function getExecuteCommandUsageMetrics(
     }
     if (typeof parsed.security?.route === "string") {
       metrics.route = parsed.security.route;
+    }
+    if (
+      typeof parsed.error_code === "string" &&
+      EXECUTE_COMMAND_ERROR_CODES.has(parsed.error_code)
+    ) {
+      metrics.error_code = parsed.error_code;
+    }
+    if (
+      typeof parsed.failure_stage === "string" &&
+      EXECUTE_COMMAND_FAILURE_STAGES.has(parsed.failure_stage)
+    ) {
+      metrics.failure_stage = parsed.failure_stage;
+    }
+    if (typeof parsed.command_sent === "boolean") {
+      metrics.command_sent = parsed.command_sent;
+    }
+    if (typeof parsed.process_launched === "boolean") {
+      metrics.process_launched = parsed.process_launched;
+    }
+    if (
+      typeof parsed.capability_failure === "string" &&
+      SANDBOX_CAPABILITY_LAUNCH_FAILURES.has(parsed.capability_failure)
+    ) {
+      metrics.capability_failure = parsed.capability_failure;
+    }
+    if (typeof parsed.retry_safe === "boolean") {
+      metrics.retry_safe = parsed.retry_safe;
+    }
+    if (
+      parsed.sandbox?.grantTiming === "preparation" ||
+      parsed.sandbox?.grantTiming === "launch"
+    ) {
+      metrics.sandbox_grant_timing = parsed.sandbox.grantTiming;
     }
     if (parsed.timed_out === true) metrics.timed_out = true;
     return metrics;
@@ -2383,6 +2507,10 @@ export function createAgentToolRuntime(
           request.name === "execute_command"
             ? getExecuteCommandUsageMetrics(result)
             : undefined;
+        const writeToolMetrics =
+          request.name === "write_file" || request.name === "apply_diff"
+            ? getWriteToolUsageMetrics(result)
+            : undefined;
         ctx.toolUsageTelemetry?.record({
           toolName: request.name,
           params:
@@ -2417,7 +2545,9 @@ export function createAgentToolRuntime(
               }
             : executeCommandMetrics && Object.keys(executeCommandMetrics).length
               ? { metrics: executeCommandMetrics }
-              : {}),
+              : writeToolMetrics && Object.keys(writeToolMetrics).length
+                ? { metrics: writeToolMetrics }
+                : {}),
         });
         return result;
       } catch (err) {

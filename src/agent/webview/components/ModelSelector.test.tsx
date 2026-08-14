@@ -97,4 +97,61 @@ describe("ModelSelector", () => {
       "openai-compatible:openrouter-moonshotai-kimi-k3",
     );
   });
+
+  it("groups multiple OpenRouter models together under a single OpenRouter header", () => {
+    const multiModels: WebviewModelInfo[] = [
+      {
+        id: "gpt-5.6-sol",
+        displayName: "GPT-5.6 Sol",
+        provider: "codex",
+        providerDisplayName: "ChatGPT/Codex",
+        contextWindow: 200_000,
+        authenticated: true,
+      },
+      {
+        id: "openrouter-moonshotai-kimi-k3",
+        displayName: "MoonshotAI: Kimi K3",
+        provider: "openai-compatible:openrouter-moonshotai-kimi-k3",
+        providerDisplayName: "OpenRouter — MoonshotAI: Kimi K3",
+        contextWindow: 1_048_576,
+        authenticated: true,
+      },
+      {
+        id: "claude-sonnet-4-6",
+        displayName: "Claude Sonnet 4.6",
+        provider: "anthropic",
+        providerDisplayName: "Claude",
+        contextWindow: 200_000,
+        authenticated: true,
+      },
+      {
+        id: "openrouter-google-gemini-3-7-flash",
+        displayName: "Google: Gemini 3.7 Flash",
+        provider: "openai-compatible:openrouter-google-gemini-3-7-flash",
+        providerDisplayName: "OpenRouter — Google: Gemini 3.7 Flash",
+        contextWindow: 1_048_576,
+        authenticated: true,
+      },
+    ];
+
+    render(
+      <ModelSelector
+        currentModel="gpt-5.6-sol"
+        models={multiModels}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle(/Model: GPT-5\.6 Sol/));
+
+    const openRouterHeaders = screen.getAllByText("OpenRouter");
+    expect(openRouterHeaders).toHaveLength(1);
+
+    expect(
+      screen.getByRole("button", { name: /MoonshotAI: Kimi K3/ }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /Google: Gemini 3\.7 Flash/ }),
+    ).toBeTruthy();
+  });
 });

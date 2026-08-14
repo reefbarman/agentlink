@@ -20,7 +20,7 @@ import type {
 import {
   SANDBOX_INTERACTIVE_PROMPT_GRACE_MS,
   SandboxTerminalCoordinator,
-  type AuthorizedSandboxLaunch,
+  type PreparedSandboxLaunch,
   type SandboxLaunchAuthorizer,
 } from "./SandboxTerminalCoordinator.js";
 
@@ -122,43 +122,45 @@ function harness() {
         commandId,
         generation,
         dimensions,
-      }): Promise<AuthorizedSandboxLaunch> => ({
-        authorization: {
-          bindingDigest: "binding",
-          policy: {
-            version: CURRENT_SANDBOX_POLICY_VERSION,
-            profileId: "workspace-write",
-            readableRoots: ["/workspace"],
-            writableRoots: ["/workspace"],
-            deniedRoots: [],
-            protectedReadOnlyRoots: [],
-            network: { mode: "loopback" },
-            environment: { inheritHost: false, values: {} },
-            allowedUnixSockets: [],
-          },
-        },
-        helperRequest: {
-          version: 3,
-          type: "launch",
-          channelId,
-          commandId,
-          generation,
-          command: options.command,
-          cwd: options.cwd,
-          shell: "/bin/zsh",
-          environment: {},
-          filesystem: {
-            denyRead: [],
-            allowRead: ["/workspace"],
-            allowWrite: ["/workspace"],
-            denyWrite: [],
-          },
+      }): Promise<PreparedSandboxLaunch> => ({
+        identity: { channelId, commandId, generation },
+        policy: {
+          version: CURRENT_SANDBOX_POLICY_VERSION,
+          profileId: "workspace-write",
+          readableRoots: ["/workspace"],
+          writableRoots: ["/workspace"],
+          deniedRoots: [],
+          protectedReadOnlyRoots: [],
           network: { mode: "loopback" },
-          protectedRoots: [],
-          structurallyProtectedRoots: [],
-          dimensions,
+          environment: { inheritHost: false, values: {} },
+          allowedUnixSockets: [],
         },
+        bindingDigest: "binding",
         metadata,
+        activate: () => ({
+          helperRequest: {
+            version: 3,
+            type: "launch",
+            channelId,
+            commandId,
+            generation,
+            command: options.command,
+            cwd: options.cwd,
+            shell: "/bin/zsh",
+            environment: {},
+            filesystem: {
+              denyRead: [],
+              allowRead: ["/workspace"],
+              allowWrite: ["/workspace"],
+              denyWrite: [],
+            },
+            network: { mode: "loopback" },
+            protectedRoots: [],
+            structurallyProtectedRoots: [],
+            dimensions,
+          },
+          metadata,
+        }),
         finalize: authorizedFinalizer,
       }),
     ),
@@ -207,15 +209,24 @@ function enableManagedNetworking(test: ReturnType<typeof harness>): void {
   if (!authorize) throw new Error("expected authorizer implementation");
   vi.mocked(test.authorizer.authorize).mockImplementation(async (input) => {
     const authorized = await authorize(input);
+    const activate = authorized.activate;
+    const networkMetadata = {
+      ...authorized.metadata,
+      grant: { grantId: "grant-network", auditId: "audit-network" },
+    };
     return {
       ...authorized,
-      helperRequest: {
-        ...authorized.helperRequest,
-        network: { mode: "public-proxy" },
-      },
-      metadata: {
-        ...authorized.metadata,
-        grant: { grantId: "grant-network", auditId: "audit-network" },
+      metadata: networkMetadata,
+      activate: () => {
+        const active = activate();
+        return {
+          ...active,
+          helperRequest: {
+            ...active.helperRequest,
+            network: { mode: "public-proxy" },
+          },
+          metadata: networkMetadata,
+        };
       },
     };
   });
@@ -400,7 +411,7 @@ describe("SandboxTerminalCoordinator", () => {
 
   it("does not launch after its channel closes during authorization", async () => {
     const test = harness();
-    const authorization = deferred<AuthorizedSandboxLaunch>();
+    const authorization = deferred<PreparedSandboxLaunch>();
     const defaultAuthorize = vi
       .mocked(test.authorizer.authorize)
       .getMockImplementation();
@@ -432,7 +443,7 @@ describe("SandboxTerminalCoordinator", () => {
 
   it("reserves separate terminals while parallel direct executions authorize", async () => {
     const test = harness();
-    const firstAuthorization = deferred<AuthorizedSandboxLaunch>();
+    const firstAuthorization = deferred<PreparedSandboxLaunch>();
     const defaultAuthorize = vi
       .mocked(test.authorizer.authorize)
       .getMockImplementation();
@@ -857,11 +868,18 @@ describe("SandboxTerminalCoordinator", () => {
     vi.mocked(test.authorizer.authorize).mockImplementationOnce(
       async (input) => {
         const authorized = await authorize(input);
+        const activate = authorized.activate;
         return {
           ...authorized,
-          helperRequest: {
-            ...authorized.helperRequest,
-            network: { mode: "public-proxy" },
+          activate: () => {
+            const active = activate();
+            return {
+              ...active,
+              helperRequest: {
+                ...active.helperRequest,
+                network: { mode: "public-proxy" },
+              },
+            };
           },
         };
       },
@@ -2223,7 +2241,7 @@ describe("SandboxTerminalCoordinator", () => {
         const authorized = await authorize(input);
         return {
           ...authorized,
-          helperRequest: { ...authorized.helperRequest, commandId: "wrong" },
+          identity: { ...authorized.identity, commandId: "wrong" },
         };
       },
     );

@@ -1,9 +1,11 @@
-import { createHash, randomBytes } from "node:crypto";
 import {
+  canonicalizeMutationPath,
+  canonicalizeProtectedRoots,
   prepareProtectedRoots,
   revalidateProtectedRoots,
   validateStructurallyProtectedRoots,
 } from "./sandbox-protected-roots.mjs";
+import { createHash, randomBytes } from "node:crypto";
 
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -265,6 +267,44 @@ export function parseSandboxRuntimeRequest(value) {
     structurallyProtectedRoots,
     timeoutMs,
   };
+}
+
+export async function canonicalizeSandboxFilesystemPolicy(filesystem) {
+  const denyWrite = await Promise.all(
+    filesystem.denyWrite.map((entry) => canonicalizeMutationPath(entry)),
+  );
+  return {
+    ...filesystem,
+    denyWrite: [...new Set(denyWrite)].sort(),
+  };
+}
+
+export function assertProtectedRootsCovered(filesystem, protectedRoots) {
+  for (const protectedRoot of protectedRoots) {
+    if (!isWithinAnyRoot(protectedRoot, filesystem.denyWrite)) {
+      throw new Error(
+        `canonical protected root must be covered by filesystem.denyWrite: ${protectedRoot}`,
+      );
+    }
+  }
+}
+
+export async function canonicalizeProtectedRootPolicy(
+  filesystem,
+  protectedRoots,
+  structurallyProtectedRoots,
+) {
+  const [canonicalProtectedRoots, canonicalStructuralRoots] = await Promise.all(
+    [
+      canonicalizeProtectedRoots(protectedRoots),
+      canonicalizeProtectedRoots(structurallyProtectedRoots),
+    ],
+  );
+  assertProtectedRootsCovered(filesystem, [
+    ...canonicalProtectedRoots,
+    ...canonicalStructuralRoots,
+  ]);
+  return { canonicalProtectedRoots, canonicalStructuralRoots };
 }
 
 export function buildSandboxEnvironment(environment) {
@@ -615,6 +655,14 @@ export async function runSandboxRuntimeRequest(request) {
 
   const cwd = await realpath(request.cwd);
   const environment = buildSandboxEnvironment(request.environment);
+  const filesystem = await canonicalizeSandboxFilesystemPolicy(
+    request.filesystem,
+  );
+  await canonicalizeProtectedRootPolicy(
+    filesystem,
+    request.protectedRoots,
+    request.structurallyProtectedRoots,
+  );
   replaceProcessEnvironment(environment);
   const protectedRoots = await prepareProtectedRoots(request.protectedRoots);
 
@@ -636,16 +684,10 @@ export async function runSandboxRuntimeRequest(request) {
       httpProxyPort: networkProxies.httpPort,
       socksProxyPort: networkProxies.socksPort,
     },
-    filesystem: {
-      ...request.filesystem,
-      denyWrite: [
-        ...new Set([
-          ...request.filesystem.denyWrite,
-          ...protectedRoots.roots,
-          ...request.structurallyProtectedRoots,
-        ]),
-      ],
-    },
+    // Protected roots are already required to be covered by denyWrite. Keep
+    // integrity snapshots separate from the generated sandbox-exec profile so
+    // large policy trees cannot overflow macOS's process argument limit.
+    filesystem,
     allowPty: false,
     allowAppleEvents: false,
     enableWeakerNetworkIsolation: false,
@@ -677,9 +719,13 @@ export async function runSandboxRuntimeRequest(request) {
     const launch = describeLaunch(authenticatedArgv, environment, cwd);
     if (request.operation === "describe") {
       await revalidateProtectedRoots(protectedRoots);
-      await validateStructurallyProtectedRoots(
+      const structuralRoots = await validateStructurallyProtectedRoots(
         request.structurallyProtectedRoots,
       );
+      assertProtectedRootsCovered(filesystem, [
+        ...protectedRoots.roots,
+        ...structuralRoots,
+      ]);
       return { ok: true, launch };
     }
     const result = await executeLaunch(
@@ -689,9 +735,13 @@ export async function runSandboxRuntimeRequest(request) {
       request.timeoutMs,
       async () => {
         await revalidateProtectedRoots(protectedRoots);
-        await validateStructurallyProtectedRoots(
+        const structuralRoots = await validateStructurallyProtectedRoots(
           request.structurallyProtectedRoots,
         );
+        assertProtectedRootsCovered(filesystem, [
+          ...protectedRoots.roots,
+          ...structuralRoots,
+        ]);
       },
     );
     return { ok: true, launch, result };

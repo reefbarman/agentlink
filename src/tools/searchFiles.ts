@@ -6,7 +6,7 @@ import type {
   SearchFilesParams,
   WorkspaceFileProvider,
 } from "../core/capabilities/readSearch.js";
-import { resolveAndValidatePath } from "../util/paths.js";
+import { getRelativePath, resolveAndValidatePath } from "../util/paths.js";
 import {
   getRipgrepBinPath,
   execRipgrepSearch,
@@ -32,6 +32,13 @@ export interface SearchFilesProviders {
   workspaceFileProvider: WorkspaceFileProvider;
   pathAccessProvider: PathAccessProvider;
   semanticQueryOptions?: SemanticQueryOptions;
+}
+
+function formatResultPath(filePath: string, searchDir: string): string {
+  const absolutePath = path.isAbsolute(filePath)
+    ? filePath
+    : path.resolve(searchDir, filePath);
+  return getRelativePath(absolutePath);
 }
 
 function withWarning(result: ToolResult, warning?: string): ToolResult {
@@ -412,7 +419,7 @@ export async function handleSearchFiles(
     for (const file of fileResults) {
       if (matchCount >= maxResults) break;
 
-      const relPath = path.relative(searchDir, file.file);
+      const relPath = formatResultPath(file.file, searchDir);
       const fileLines: string[] = [];
       let fileMatchCount = 0;
 
@@ -513,7 +520,7 @@ async function searchFilesOnly(
   const maxResults = params.max_results ?? DEFAULT_MAX_RESULTS;
   const offsetVal = params.offset ?? 0;
   const sliced = files.slice(offsetVal, offsetVal + maxResults);
-  const limited = sliced.map((f) => path.relative(searchDir, f));
+  const limited = sliced.map((file) => formatResultPath(file, searchDir));
 
   return jsonResult(
     {
@@ -578,7 +585,7 @@ async function searchCount(
   for (const line of lines) {
     const sepIdx = line.lastIndexOf(":");
     if (sepIdx === -1) continue;
-    const file = path.relative(searchDir, line.substring(0, sepIdx));
+    const file = formatResultPath(line.substring(0, sepIdx), searchDir);
     const count = parseInt(line.substring(sepIdx + 1), 10);
     if (!isNaN(count)) {
       allCounts.push({ file, count });

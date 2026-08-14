@@ -177,6 +177,7 @@ import { SandboxHelperClient } from "./terminal/sandbox/SandboxHelperClient.js";
 import { createNodeSandboxHelperTransportFactory } from "./terminal/sandbox/NodeSandboxHelperTransport.js";
 import { SandboxTerminalChannelHub } from "./terminal/sandbox/SandboxTerminalChannelHub.js";
 import { SandboxTerminalCoordinator } from "./terminal/sandbox/SandboxTerminalCoordinator.js";
+import { resolveSandboxCapabilityGrantTiming } from "./terminal/sandbox/sandboxCapabilityGrantTiming.js";
 import { SandboxBehaviorAttestationService } from "./terminal/sandbox/SandboxBehaviorAttestationService.js";
 import {
   createProductionSandboxBehaviorProbe,
@@ -1037,6 +1038,17 @@ export async function activate(
         }),
       );
       try {
+        const capabilityGrantTiming = resolveSandboxCapabilityGrantTiming(
+          process.env.AGENTLINK_SANDBOX_CAPABILITY_GRANT_TIMING,
+        );
+        if (capabilityGrantTiming.invalidValue) {
+          log(
+            `[sandbox-capability-timing] Invalid AGENTLINK_SANDBOX_CAPABILITY_GRANT_TIMING; defaulting to launch`,
+          );
+        }
+        log(
+          `[sandbox-capability-timing] selected=${capabilityGrantTiming.timing}`,
+        );
         const coordinator = new SandboxTerminalCoordinator({
           runtime,
           authorizer: new BaselineSandboxLaunchAuthorizer({
@@ -1050,6 +1062,9 @@ export async function activate(
             trustedRuntimeRoots: [
               path.dirname(resolvedSandboxNodeRuntime.executable),
             ],
+            capabilityGrantTiming: capabilityGrantTiming.timing,
+            onCapabilityGrantTimingEvent: (event) =>
+              log(`[sandbox-capability-timing] ${JSON.stringify(event)}`),
           }),
           initialCwd: workspaceCwd,
           createChannelId: randomUUID,

@@ -13,6 +13,7 @@ import {
 const KEEP_ALIVE_TIMEOUT_MS = 60_000;
 const HEADERS_TIMEOUT_MS = 300_000;
 const BODY_TIMEOUT_MS = 300_000;
+const LONG_POLL_TIMEOUT_MS = 0;
 // Must never cap below what the model-request scheduler can admit
 // (`agentlink.provider.maxConcurrentRequests`): streaming turns hold a
 // connection for their entire duration, so a lower socket cap queues whole
@@ -54,6 +55,7 @@ const diagnostics: AgentLinkHttpDiagnostics = {
 
 let installed = false;
 const dispatchers = new Map<boolean, Dispatcher>();
+const longPollingDispatchers = new Map<boolean, Dispatcher>();
 
 function hasProxyEnv(env: NodeJS.ProcessEnv): boolean {
   return Boolean(
@@ -66,25 +68,54 @@ function hasProxyEnv(env: NodeJS.ProcessEnv): boolean {
  * process. Proxy environment changes after activation require a window reload to
  * rebuild the underlying connection pools.
  */
-export function getAgentLinkHttpDispatcher(
-  env: NodeJS.ProcessEnv = process.env,
+function getCachedDispatcher(
+  cache: Map<boolean, Dispatcher>,
+  env: NodeJS.ProcessEnv,
+  headersTimeout: number,
+  bodyTimeout: number,
 ): Dispatcher {
   const useProxy = hasProxyEnv(env);
-  const cached = dispatchers.get(useProxy);
+  const cached = cache.get(useProxy);
   if (cached) return cached;
 
   const options = {
     keepAliveTimeout: KEEP_ALIVE_TIMEOUT_MS,
-    headersTimeout: HEADERS_TIMEOUT_MS,
-    bodyTimeout: BODY_TIMEOUT_MS,
+    headersTimeout,
+    bodyTimeout,
     connections: CONNECTIONS_PER_ORIGIN,
     allowH2: true,
   };
   const dispatcher = useProxy
     ? new EnvHttpProxyAgent(options)
     : new Agent(options).compose(interceptors.dns());
-  dispatchers.set(useProxy, dispatcher);
+  cache.set(useProxy, dispatcher);
   return dispatcher;
+}
+
+export function getAgentLinkHttpDispatcher(
+  env: NodeJS.ProcessEnv = process.env,
+): Dispatcher {
+  return getCachedDispatcher(
+    dispatchers,
+    env,
+    HEADERS_TIMEOUT_MS,
+    BODY_TIMEOUT_MS,
+  );
+}
+
+/**
+ * Dispatcher for protocols such as MCP that define their own request deadline.
+ * Undici's independent header/body deadlines must not preempt that contract.
+ */
+export function getAgentLinkLongPollingHttpDispatcher(
+  env: NodeJS.ProcessEnv = process.env,
+): Dispatcher {
+  return getCachedDispatcher(
+    longPollingDispatchers,
+    env,
+    LONG_POLL_TIMEOUT_MS,
+    LONG_POLL_TIMEOUT_MS,
+  );
 }
 
 export function withAgentLinkHttpActivity<T>(
@@ -175,6 +206,18 @@ export function installAgentLinkHttpDispatcher(
   installed = true;
   setGlobalDispatcher(getAgentLinkHttpDispatcher(env));
 }
+
+export const agentLinkLongPollingFetch: typeof globalThis.fetch = async (
+  input,
+  init,
+) =>
+  (await undiciFetch(
+    input as Parameters<typeof undiciFetch>[0],
+    {
+      ...init,
+      dispatcher: getAgentLinkLongPollingHttpDispatcher(),
+    } as Parameters<typeof undiciFetch>[1],
+  )) as unknown as globalThis.Response;
 
 export const agentLinkFetch: typeof globalThis.fetch = async (input, init) => {
   const listener = activityContext.getStore();

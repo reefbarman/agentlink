@@ -20,6 +20,7 @@ import {
   inheritProcessEnv,
 } from "../process/agentExecutionPolicy.js";
 import { isMcpToolName, parseMcpToolName } from "./mcpToolNames.js";
+import { agentLinkLongPollingFetch } from "../util/httpDispatcher.js";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { McpServerConfig } from "./mcpConfig.js";
@@ -1233,6 +1234,7 @@ export class McpClientHub {
       if (cfg.headers) Object.assign(headers, cfg.headers);
       return new SSEClientTransport(new URL(cfg.url), {
         authProvider,
+        fetch: agentLinkLongPollingFetch,
         requestInit: Object.keys(headers).length ? { headers } : undefined,
       });
     }
@@ -1246,6 +1248,7 @@ export class McpClientHub {
       if (cfg.headers) Object.assign(headers, cfg.headers);
       return new StreamableHTTPClientTransport(new URL(cfg.url), {
         authProvider,
+        fetch: agentLinkLongPollingFetch,
         requestInit: Object.keys(headers).length ? { headers } : undefined,
       });
     }
@@ -1544,7 +1547,12 @@ export class McpClientHub {
             arguments: input,
           },
           undefined,
-          { ...options, timeout },
+          {
+            ...options,
+            timeout,
+            onprogress: () => {},
+            resetTimeoutOnProgress: true,
+          },
         ),
       );
       if (!isCallToolResult(result)) {
