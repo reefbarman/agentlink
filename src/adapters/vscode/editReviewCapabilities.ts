@@ -1,4 +1,5 @@
 import * as fs from "fs/promises";
+import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 
@@ -52,6 +53,60 @@ import { errorResult, type ToolResult } from "../../shared/types.js";
 interface ClassifiedWriteTarget {
   absolutePath: string;
   inWorkspace: boolean;
+}
+
+function isApproveForMePolicy(
+  policy:
+    | import("../../core/capabilities/terminal.js").TerminalApprovalModeSnapshot
+    | undefined,
+): boolean {
+  return (
+    policy?.commandApprovalPolicy === "approve-for-me" &&
+    policy.approvalPolicy === "on-request" &&
+    policy.approvalReviewer === "auto-review" &&
+    policy.executionPreset === "workspace-write"
+  );
+}
+
+function temporaryWriteRoot(absolutePath: string): string | undefined {
+  const canonicalTarget = canonicalizePath(absolutePath);
+  const temporaryRoots = [os.tmpdir()];
+  if (process.platform === "darwin") {
+    temporaryRoots.push("/tmp", "/private/tmp");
+  }
+  return temporaryRoots.map(canonicalizePath).find((canonicalRoot) => {
+    const relative = path.relative(canonicalRoot, canonicalTarget);
+    return (
+      relative === "" ||
+      (!relative.startsWith(`..${path.sep}`) &&
+        relative !== ".." &&
+        !path.isAbsolute(relative))
+    );
+  });
+}
+
+function isTemporaryWriteGuardianEligible(
+  absolutePath: string,
+  temporaryRoot: string,
+): boolean {
+  const canonicalTarget = canonicalizePath(absolutePath);
+  const relativeParts = path
+    .relative(temporaryRoot, canonicalTarget)
+    .split(path.sep);
+  const parentParts = relativeParts.slice(0, -1);
+  const candidateHomes = [temporaryRoot];
+  for (let index = 1; index <= parentParts.length; index += 1) {
+    candidateHomes.push(
+      path.join(temporaryRoot, ...parentParts.slice(0, index)),
+    );
+  }
+  return candidateHomes.every(
+    (home) =>
+      classifyGuardianPathRisk(
+        { status: "resolved", canonicalPath: canonicalTarget },
+        { home },
+      ).guardianEligible,
+  );
 }
 
 function classifyWriteTargets(
@@ -1205,6 +1260,9 @@ export function createVscodeRenameSymbolProvider(
 
 export function createVscodeWriteApprovalPolicyProvider(
   approvalManager: ApprovalManager,
+  getApprovalMode?: (
+    sessionId: string,
+  ) => import("../../core/capabilities/terminal.js").TerminalApprovalModeSnapshot,
 ): WriteApprovalPolicyProvider {
   const getAuthorization = (query: WriteApprovalQuery) => {
     const masterBypass = getConfiguredMasterBypass();
@@ -1226,6 +1284,16 @@ export function createVscodeWriteApprovalPolicyProvider(
     }
     if (isArchitectPlanFile) {
       return { allowed: true, basis: "architect_plan" as const };
+    }
+    const temporaryRoot = !query.inWorkspace
+      ? temporaryWriteRoot(query.absolutePath)
+      : undefined;
+    if (
+      temporaryRoot &&
+      isApproveForMePolicy(getApprovalMode?.(query.sessionId)) &&
+      isTemporaryWriteGuardianEligible(query.absolutePath, temporaryRoot)
+    ) {
+      return { allowed: true, basis: "approve_for_me_temp" as const };
     }
     const authorization = query.inWorkspace
       ? approvalManager.getAgentWriteAuthorization(

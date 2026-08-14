@@ -3696,7 +3696,10 @@ export async function dispatchToolCall(
             ctx.editReviewProvider ?? createVscodeEditReviewProvider(),
           writeApprovalPolicyProvider:
             ctx.writeApprovalPolicyProvider ??
-            createVscodeWriteApprovalPolicyProvider(approvalManager),
+            createVscodeWriteApprovalPolicyProvider(
+              approvalManager,
+              ctx.getCommandApprovalMode,
+            ),
           ...(ctx.toolUsageTelemetry
             ? {
                 onApprovalPrompt: (event: WriteApprovalPromptEvent) =>
@@ -3735,7 +3738,10 @@ export async function dispatchToolCall(
             ctx.editReviewProvider ?? createVscodeEditReviewProvider(),
           writeApprovalPolicyProvider:
             ctx.writeApprovalPolicyProvider ??
-            createVscodeWriteApprovalPolicyProvider(approvalManager),
+            createVscodeWriteApprovalPolicyProvider(
+              approvalManager,
+              ctx.getCommandApprovalMode,
+            ),
           ...(ctx.toolUsageTelemetry
             ? {
                 onApprovalPrompt: (event: WriteApprovalPromptEvent) =>

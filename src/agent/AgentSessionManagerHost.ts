@@ -337,7 +337,10 @@ export function createDefaultAgentSessionManagerHost(args: {
           ctx.editReviewProvider ?? createVscodeEditReviewProvider(),
         writeApprovalPolicyProvider:
           ctx.writeApprovalPolicyProvider ??
-          createVscodeWriteApprovalPolicyProvider(ctx.approvalManager),
+          createVscodeWriteApprovalPolicyProvider(
+            ctx.approvalManager,
+            ctx.getCommandApprovalMode,
+          ),
         multiFileEditReviewProvider:
           ctx.multiFileEditReviewProvider ??
           createVscodeMultiFileEditReviewProvider(

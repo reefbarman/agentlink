@@ -214,6 +214,7 @@ export interface WriteApprovalQuery {
 export type WriteAuthorizationBasis =
   | "master_bypass"
   | "architect_plan"
+  | "approve_for_me_temp"
   | "blanket_approval"
   | "write_rule"
   | "settings_rule"

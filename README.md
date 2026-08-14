@@ -70,6 +70,8 @@ See the [getting started guide](resources/builtin-skills/documentation/reference
 
 AgentLink's single-file write tools use the same reviewed save boundary. After an approved edit is saved, AgentLink reads the file from disk and compares it with the approved editor content. A successful result includes `durability.status: "durable"`, an `exact` or `transformed` outcome, and `post_edit_content_hash` (SHA-256 of the final disk content). Reverted edits, editor/disk divergence, unreadable or missing files, and transformations of exact-preservation formats return canonical errors; AgentLink reports the observed state rather than overwriting it automatically.
 
+With **Approve for Me** active, `write_file` and `apply_diff` may write directly under the operating system's canonical temporary roots (including the per-user temp root and `/tmp` aliases on macOS) without a separate outside-workspace approval. This narrow exception does not apply in manual approval modes or to protected instruction/memory files, `.env*` files, credential stores, authenticated CLI configuration, unresolved paths, or symlink escapes.
+
 ### `write_file`
 
 Create a file or replace its complete content.

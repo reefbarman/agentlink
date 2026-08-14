@@ -4041,16 +4041,28 @@ describe("dispatchToolCall", () => {
     expect(result.content[0]).toMatchObject({ type: "text", text: "output" });
   });
 
-  it("dispatches write_file to handleWriteFile", async () => {
+  it("dispatches write_file with the active approval mode", async () => {
     const { handleWriteFile } = await import("../tools/writeFile.js");
+    const getCommandApprovalMode = vi.fn(() => ({
+      commandApprovalPolicy: "approve-for-me" as const,
+      approvalPolicy: "on-request" as const,
+      approvalReviewer: "auto-review" as const,
+      executionPreset: "workspace-write" as const,
+    }));
+    const approvalManager = {
+      getFileWriteAuthorization: vi.fn(() => ({
+        allowed: false as const,
+        basis: "none" as const,
+      })),
+    } as any;
     await dispatchToolCall(
       "write_file",
       { path: "foo.ts", content: "hello" },
-      mockCtx,
+      { ...mockCtx, approvalManager, getCommandApprovalMode },
     );
     expect(handleWriteFile).toHaveBeenCalledWith(
       { path: "foo.ts", content: "hello" },
-      mockCtx.approvalManager,
+      approvalManager,
       mockCtx.approvalPanel,
       mockCtx.sessionId,
       mockCtx.onApprovalRequest,
@@ -4066,6 +4078,18 @@ describe("dispatchToolCall", () => {
         diagnosticDelay: 1500,
       },
     );
+    const providers = vi.mocked(handleWriteFile).mock.calls.at(-1)?.[6];
+    const temporaryPath = path.join(os.tmpdir(), "agentlink", "dispatch.txt");
+    expect(
+      providers?.writeApprovalPolicyProvider?.getAuthorization?.({
+        sessionId: mockCtx.sessionId,
+        absolutePath: temporaryPath,
+        relativePath: temporaryPath,
+        inWorkspace: false,
+        mode: "code",
+      }),
+    ).toEqual({ allowed: true, basis: "approve_for_me_temp" });
+    expect(getCommandApprovalMode).toHaveBeenCalledWith(mockCtx.sessionId);
   });
 
   it("dispatches apply_diff block options unchanged", async () => {

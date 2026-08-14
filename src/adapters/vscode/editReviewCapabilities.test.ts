@@ -25,6 +25,9 @@ const resolveAndValidatePath = vi.hoisted(() =>
     inWorkspace: !inputPath.startsWith("/outside/"),
   })),
 );
+const canonicalizePath = vi.hoisted(() =>
+  vi.fn((absolutePath: string) => path.resolve(absolutePath)),
+);
 const acceptedMatchIds = vi.hoisted(() => new Set<string>(["0:0"]));
 const textDocuments = vi.hoisted(
   () =>
@@ -148,7 +151,7 @@ vi.mock("../../integrations/DiffViewProvider.js", () => ({
 }));
 
 vi.mock("../../util/paths.js", () => ({
-  canonicalizePath: vi.fn((absolutePath: string) => absolutePath),
+  canonicalizePath,
   getRelativePath: vi.fn((absolutePath: string) =>
     absolutePath.replace("/workspace/", ""),
   ),
@@ -1475,6 +1478,142 @@ describe("createVscodeWriteApprovalPolicyProvider", () => {
     });
     expect(approvalManager.getAgentWriteAuthorization).toHaveBeenCalledOnce();
     expect(approvalManager.getFileWriteAuthorization).toHaveBeenCalledOnce();
+  });
+
+  it("auto-approves safe temporary files only under the complete Approve for Me policy", () => {
+    const denied = { allowed: false as const, basis: "none" as const };
+    const approvalManager = {
+      getFileWriteAuthorization: vi.fn(() => denied),
+    };
+    const approveForMe = vi.fn(() => ({
+      commandApprovalPolicy: "approve-for-me" as const,
+      approvalPolicy: "on-request" as const,
+      approvalReviewer: "auto-review" as const,
+      executionPreset: "workspace-write" as const,
+    }));
+    const provider = createVscodeWriteApprovalPolicyProvider(
+      approvalManager as never,
+      approveForMe,
+    );
+    const temporaryPath = path.join(os.tmpdir(), "agentlink", "result.txt");
+
+    expect(
+      provider.getAuthorization?.({
+        sessionId: "session-1",
+        absolutePath: temporaryPath,
+        relativePath: temporaryPath,
+        inWorkspace: false,
+        mode: "code",
+      }),
+    ).toEqual({ allowed: true, basis: "approve_for_me_temp" });
+    expect(approveForMe).toHaveBeenCalledWith("session-1");
+    expect(approvalManager.getFileWriteAuthorization).not.toHaveBeenCalled();
+  });
+
+  it("keeps symlink escapes from a temporary root prompting", () => {
+    const denied = { allowed: false as const, basis: "none" as const };
+    const approvalManager = {
+      getFileWriteAuthorization: vi.fn(() => denied),
+    };
+    const provider = createVscodeWriteApprovalPolicyProvider(
+      approvalManager as never,
+      () => ({
+        commandApprovalPolicy: "approve-for-me",
+        approvalPolicy: "on-request",
+        approvalReviewer: "auto-review",
+        executionPreset: "workspace-write",
+      }),
+    );
+    const temporaryPath = path.join(
+      os.tmpdir(),
+      "agentlink-link",
+      "result.txt",
+    );
+    canonicalizePath.withImplementation(
+      (absolutePath: string) =>
+        absolutePath === temporaryPath
+          ? "/outside/symlink-target/result.txt"
+          : path.resolve(absolutePath),
+      () => {
+        expect(
+          provider.getAuthorization?.({
+            sessionId: "session-1",
+            absolutePath: temporaryPath,
+            relativePath: temporaryPath,
+            inWorkspace: false,
+            mode: "code",
+          }),
+        ).toEqual({
+          ...denied,
+          reason: "outside_workspace_requires_matching_rule",
+        });
+      },
+    );
+  });
+
+  it("keeps temporary writes prompting outside Approve for Me", () => {
+    const denied = { allowed: false as const, basis: "none" as const };
+    const approvalManager = {
+      getFileWriteAuthorization: vi.fn(() => denied),
+    };
+    const provider = createVscodeWriteApprovalPolicyProvider(
+      approvalManager as never,
+      () => ({
+        commandApprovalPolicy: "safe",
+        approvalPolicy: "on-request",
+        approvalReviewer: "user",
+        executionPreset: "native-manual",
+      }),
+    );
+    const temporaryPath = path.join(os.tmpdir(), "agentlink", "result.txt");
+
+    expect(
+      provider.getAuthorization?.({
+        sessionId: "session-1",
+        absolutePath: temporaryPath,
+        relativePath: temporaryPath,
+        inWorkspace: false,
+        mode: "code",
+      }),
+    ).toEqual({
+      ...denied,
+      reason: "outside_workspace_requires_matching_rule",
+    });
+    expect(approvalManager.getFileWriteAuthorization).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["environment file", ["agentlink", ".env.local"]],
+    ["credential store", ["agentlink", ".ssh", "config"]],
+    ["authenticated CLI config", ["agentlink", ".config", "gh", "hosts.yml"]],
+  ])("does not auto-approve a temporary %s", (_label, segments) => {
+    const denied = { allowed: false as const, basis: "none" as const };
+    const approvalManager = {
+      getFileWriteAuthorization: vi.fn(() => denied),
+    };
+    const provider = createVscodeWriteApprovalPolicyProvider(
+      approvalManager as never,
+      () => ({
+        commandApprovalPolicy: "approve-for-me",
+        approvalPolicy: "on-request",
+        approvalReviewer: "auto-review",
+        executionPreset: "workspace-write",
+      }),
+    );
+    const temporaryPath = path.join(os.tmpdir(), ...segments);
+
+    expect(
+      provider.getAuthorization?.({
+        sessionId: "session-1",
+        absolutePath: temporaryPath,
+        relativePath: temporaryPath,
+        inWorkspace: false,
+        mode: "code",
+      }),
+    ).toEqual({
+      ...denied,
+      reason: "outside_workspace_requires_matching_rule",
+    });
   });
 
   it("does not auto-approve protected memory paths even with masterBypass", () => {
