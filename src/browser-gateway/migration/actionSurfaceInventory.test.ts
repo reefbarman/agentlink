@@ -32,7 +32,7 @@ function vscodeBrowserRoutesFromSource(): string[] {
   );
   const matches = [
     ...createRoutes.matchAll(
-      /route\(\s*"(GET|POST|DELETE)"\s*,\s*(?:(rawExact|pathExact)\("([^"]+)"\)|match\("(raw-prefix|path-prefix)",\s*"([^"]+)"\))/g,
+      /route\(\s*"(GET|POST|DELETE|\*)"\s*,\s*(?:(rawExact|pathExact)\("([^"]+)"\)|match\("(raw-prefix|path-prefix)",\s*"([^"]+)"\))/g,
     ),
   ];
   const routeCallCount = [...createRoutes.matchAll(/\broute\(/g)].length;

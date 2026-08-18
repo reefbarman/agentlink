@@ -19,6 +19,7 @@ import type {
   McpConfigSnapshot,
   McpManagerScope,
 } from "../../shared/mcpManagerTypes";
+import type { AgentPluginManagerSnapshot } from "../../shared/agentPluginManagerTypes";
 import {
   agentMessagesToChatMessages,
   initialState,
@@ -69,6 +70,7 @@ import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
 import { SessionHandoffPanel } from "../../shared/ui/SessionHandoffPanel";
 import type { SessionHandoffDraft } from "../sessionHandoff";
 
+import { AgentPluginManagerPanel } from "../../shared/ui/AgentPluginManagerPanel";
 import { MemoryPanel } from "../../shared/ui/MemoryPanel";
 import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
 import type {
@@ -469,6 +471,8 @@ export function App({
   const dragCounterRef = useRef(0);
   const [mcpManagerSnapshot, setMcpManagerSnapshot] =
     useState<McpConfigSnapshot | null>(null);
+  const [agentPluginManagerSnapshot, setAgentPluginManagerSnapshot] =
+    useState<AgentPluginManagerSnapshot | null>(null);
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
   const [environmentPanelOpen, setEnvironmentPanelOpen] = useState(false);
   const [memoryPanelSnapshot, setMemoryPanelSnapshot] =
@@ -1234,6 +1238,7 @@ export function App({
         case "agentProviderUsage": {
           setEnvironmentPanelOpen(false);
           setMcpManagerSnapshot(null);
+          setAgentPluginManagerSnapshot(null);
           setProviderUsage(msg.data);
           break;
         }
@@ -1308,6 +1313,7 @@ export function App({
             if (msg.open) {
               setEnvironmentPanelOpen(false);
               setProviderUsage(null);
+              setAgentPluginManagerSnapshot(null);
               setMcpManagerSnapshot(msg.configSnapshot);
               setMcpManagerView(msg.view ?? "status");
             } else {
@@ -1316,6 +1322,15 @@ export function App({
               );
             }
           }
+          break;
+        case "agentPluginManagerSnapshot":
+          if (msg.open) {
+            setEnvironmentPanelOpen(false);
+            setMemoryPanelOpen(false);
+            setMcpManagerSnapshot(null);
+            setProviderUsage(null);
+          }
+          setAgentPluginManagerSnapshot(msg.snapshot);
           break;
         case "showApproval":
           if (msg.sessionId === undefined) {
@@ -2971,6 +2986,7 @@ export function App({
           setEnvironmentPanelOpen(true);
           setMemoryPanelOpen(false);
           setMcpManagerSnapshot(null);
+          setAgentPluginManagerSnapshot(null);
           setProviderUsage(null);
           vscodeApi.postMessage({
             command: "agentRefreshDebugInfo",
@@ -2988,6 +3004,7 @@ export function App({
           setMemoryPanelLoading(true);
           setMemoryPanelError(null);
           setMcpManagerSnapshot(null);
+          setAgentPluginManagerSnapshot(null);
           setProviderUsage(null);
           vscodeApi.postMessage({
             command: "agentMemoryQuery",
@@ -3278,6 +3295,7 @@ export function App({
     (promotion: {
       serverName: string;
       bareToolName: string;
+      mutationTarget?: import("../../shared/types").McpApprovalPromotionMeta["mutationTarget"];
       scope: "session" | "project" | "global";
     }) => {
       const sessionId = stateRef.current.sessionId;
@@ -4050,6 +4068,40 @@ export function App({
                       request: memoryPanelQueryRef.current,
                     });
                   }}
+                />
+              )}
+              {agentPluginManagerSnapshot && (
+                <AgentPluginManagerPanel
+                  snapshot={agentPluginManagerSnapshot}
+                  onClose={() => setAgentPluginManagerSnapshot(null)}
+                  onRefresh={() =>
+                    vscodeApi.postMessage({
+                      command: "agentPluginManagerRefresh",
+                      projectId: agentPluginManagerSnapshot.project?.projectId,
+                    })
+                  }
+                  onSelectProject={(projectId) =>
+                    vscodeApi.postMessage({
+                      command: "agentPluginManagerSelectProject",
+                      projectId,
+                    })
+                  }
+                  onInstall={(source) =>
+                    vscodeApi.postMessage({
+                      command: "agentPluginManagerInstall",
+                      source,
+                      projectId: agentPluginManagerSnapshot.project?.projectId,
+                    })
+                  }
+                  onAction={(row, action) =>
+                    vscodeApi.postMessage({
+                      command: "agentPluginManagerAction",
+                      action,
+                      installInstanceId: row.installInstanceId,
+                      manifestName: row.manifestName,
+                      projectId: agentPluginManagerSnapshot.project?.projectId,
+                    })
+                  }
                 />
               )}
               {mcpManagerSnapshot && (

@@ -28,6 +28,7 @@ import type {
   McpManagerServerDraft,
   McpManagerView,
 } from "../../shared/mcpManagerTypes";
+import type { AgentPluginManagerSnapshot } from "../../shared/agentPluginManagerTypes";
 import type { DetectedQuestion } from "../../shared/questionDetection";
 import {
   useCallback,
@@ -54,6 +55,7 @@ import { EnvironmentPanel } from "../../agent/webview/components/EnvironmentPane
 import { BackgroundSessionStrip } from "../../agent/webview/components/BackgroundSessionStrip";
 import { ModelSetupCard } from "../../agent/webview/components/ModelSetupCard";
 import { BrowserDiffViewer } from "./components/BrowserDiffViewer";
+import { LazyAgentPluginManagerPanel } from "./components/LazyAgentPluginManagerPanel";
 import { LazyMcpManagerPanel } from "./components/LazyMcpManagerPanel";
 import {
   InputArea,
@@ -576,6 +578,7 @@ export type GatewaySnapshot = {
   }>;
   theme: BrowserGatewayThemeSnapshot;
   modelsVersion?: number;
+  pluginsVersion?: number;
 };
 
 function logicalTabDomId(instanceId: string, tabId: string): string {
@@ -1735,6 +1738,15 @@ export function BrowserGatewayApp({
   const [askAgentHandoffPending, setAskAgentHandoffPending] = useState(false);
   const [showMcpStatus, setShowMcpStatus] = useState(false);
   const [environmentPanelOpen, setEnvironmentPanelOpen] = useState(false);
+  const [agentPluginManagerOpen, setAgentPluginManagerOpen] = useState(false);
+  const [agentPluginManagerSnapshot, setAgentPluginManagerSnapshot] =
+    useState<AgentPluginManagerSnapshot | null>(null);
+  const [agentPluginManagerProjectId, setAgentPluginManagerProjectId] =
+    useState<string | null>(null);
+  const [agentPluginManagerError, setAgentPluginManagerError] = useState<
+    string | null
+  >(null);
+  const agentPluginManagerRequestGenerationRef = useRef(0);
   const [mcpManagerSnapshot, setMcpManagerSnapshot] =
     useState<McpConfigSnapshot | null>(null);
   const [mcpManagerView, setMcpManagerView] =
@@ -2166,6 +2178,32 @@ export function BrowserGatewayApp({
     if (modelsVersion === undefined || modelsVersion === 0) return;
     void fetchModels();
   }, [modelsVersion]);
+
+  const pluginsVersion = snapshot?.pluginsVersion;
+  useEffect(() => {
+    if (
+      !agentPluginManagerOpen ||
+      isAskAgentSelected ||
+      !agentPluginManagerProjectId
+    ) {
+      return;
+    }
+    void refreshAgentPluginManager(agentPluginManagerProjectId);
+  }, [pluginsVersion]);
+
+  useEffect(() => {
+    if (!agentPluginManagerOpen) return;
+    if (isAskAgentSelected || !selectedProjectId) {
+      agentPluginManagerRequestGenerationRef.current += 1;
+      setAgentPluginManagerOpen(false);
+      setAgentPluginManagerSnapshot(null);
+      setAgentPluginManagerProjectId(null);
+      setAgentPluginManagerError(null);
+      return;
+    }
+    setAgentPluginManagerProjectId(selectedProjectId);
+    void refreshAgentPluginManager(selectedProjectId);
+  }, [selectedInstanceId, selectedProjectId]);
 
   const foreground = snapshot?.session.foreground ?? null;
   const foregroundProjectedMessages = foreground?.projectedMessages;
@@ -5199,6 +5237,58 @@ export function BrowserGatewayApp({
     // Keep control visible for parity, but browser does not persist this yet.
   };
 
+  const refreshAgentPluginManager = async (
+    projectId: string,
+  ): Promise<void> => {
+    const instanceId = selectedInstanceId;
+    const tabId = selectedTabId;
+    const tabGeneration = selectedTabGenerationRef.current;
+    const requestGeneration = ++agentPluginManagerRequestGenerationRef.current;
+    setAgentPluginManagerError(null);
+    try {
+      const response = await fetch(
+        buildApiPathForInstance(
+          `/api/plugins/snapshot?projectId=${encodeURIComponent(projectId)}`,
+          instanceId,
+        ),
+        {
+          credentials: "same-origin",
+          headers: { Authorization: `Bearer ${authToken}` },
+        },
+      );
+      const body = (await response.json().catch(() => ({}))) as
+        | AgentPluginManagerSnapshot
+        | { error?: string };
+      if (
+        requestGeneration !== agentPluginManagerRequestGenerationRef.current ||
+        selectedTabIdRef.current !== tabId ||
+        selectedTabGenerationRef.current !== tabGeneration
+      ) {
+        return;
+      }
+      if (!response.ok || !("schemaVersion" in body)) {
+        setAgentPluginManagerSnapshot(null);
+        setAgentPluginManagerError(
+          `Agent Plugin Manager unavailable: ${"error" in body ? (body.error ?? response.status) : response.status}`,
+        );
+        return;
+      }
+      setAgentPluginManagerSnapshot(body);
+    } catch (error) {
+      if (
+        requestGeneration !== agentPluginManagerRequestGenerationRef.current ||
+        selectedTabIdRef.current !== tabId ||
+        selectedTabGenerationRef.current !== tabGeneration
+      ) {
+        return;
+      }
+      setAgentPluginManagerSnapshot(null);
+      setAgentPluginManagerError(
+        `Agent Plugin Manager unavailable: ${String(error)}`,
+      );
+    }
+  };
+
   const refreshAskAgentMcpStatus = async (options?: {
     reconnect?: boolean;
     view?: McpManagerView;
@@ -5876,6 +5966,12 @@ export function BrowserGatewayApp({
         setShowMcpStatus(true);
         void refreshAskAgentMcpStatus({ reconnect: true });
         break;
+      case "plugin":
+      case "plugins":
+        setModeStatus(
+          "Agent Plugins are unavailable in projectless Ask Agent. Open a VS Code workspace session to inspect them.",
+        );
+        break;
       default:
         setModeStatus(`Unsupported Ask Agent slash command: /${name}`);
         break;
@@ -6023,6 +6119,20 @@ export function BrowserGatewayApp({
         setModeStatus(
           "Run /worktree in VS Code to configure and open a local worktree window.",
         );
+        return;
+      case "plugin":
+      case "plugins":
+        setEnvironmentPanelOpen(false);
+        setShowMcpStatus(false);
+        if (isAskAgentSelected || !selectedProjectId) {
+          setModeStatus(
+            "Agent Plugins are unavailable in projectless Ask Agent. Open a VS Code workspace session to inspect them.",
+          );
+          return;
+        }
+        setAgentPluginManagerOpen(true);
+        setAgentPluginManagerProjectId(selectedProjectId);
+        void refreshAgentPluginManager(selectedProjectId);
         return;
     }
 
@@ -7995,6 +8105,68 @@ export function BrowserGatewayApp({
                     }
                   />
                 )}
+                {!mobileReviewOpen &&
+                  agentPluginManagerOpen &&
+                  (agentPluginManagerSnapshot ? (
+                    <LazyAgentPluginManagerPanel
+                      snapshot={agentPluginManagerSnapshot}
+                      onClose={() => {
+                        agentPluginManagerRequestGenerationRef.current += 1;
+                        setAgentPluginManagerOpen(false);
+                        setAgentPluginManagerSnapshot(null);
+                        setAgentPluginManagerProjectId(null);
+                        setAgentPluginManagerError(null);
+                      }}
+                      onRefresh={() => {
+                        const projectId =
+                          agentPluginManagerSnapshot.project?.projectId ??
+                          selectedProjectId;
+                        if (projectId)
+                          void refreshAgentPluginManager(projectId);
+                      }}
+                      onSelectProject={(projectId) => {
+                        setAgentPluginManagerProjectId(projectId);
+                        void refreshAgentPluginManager(projectId);
+                      }}
+                    />
+                  ) : (
+                    <div
+                      class="pane-card browser-lazy-panel-state"
+                      role={agentPluginManagerError ? "alert" : "status"}
+                    >
+                      <p>
+                        {agentPluginManagerError ??
+                          "Loading Agent Plugin management…"}
+                      </p>
+                      <div class="pane-actions">
+                        {agentPluginManagerError &&
+                          agentPluginManagerProjectId && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void refreshAgentPluginManager(
+                                  agentPluginManagerProjectId,
+                                )
+                              }
+                            >
+                              Retry
+                            </button>
+                          )}
+                        <button
+                          type="button"
+                          class="secondary"
+                          onClick={() => {
+                            agentPluginManagerRequestGenerationRef.current += 1;
+                            setAgentPluginManagerOpen(false);
+                            setAgentPluginManagerProjectId(null);
+                            setAgentPluginManagerError(null);
+                          }}
+                        >
+                          Close
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 {!mobileReviewOpen &&
                   showMcpStatus &&
                   (mcpManagerSnapshot ||

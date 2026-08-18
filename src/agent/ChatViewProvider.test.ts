@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentMessage } from "./types.js";
 import type { AppAction } from "../shared/chatProjection.js";
+import type { ChatState } from "./webview/types.js";
 import type { ChatTab } from "./ChatTabController.js";
 
 type Listener<T> = (value: T) => void;
@@ -314,6 +315,146 @@ describe("tool terminal reveal messages", () => {
       parallelSafeToolNames: ["parallel__read"],
       parallelSafeServerNames: ["parallel"],
     });
+  }, 15_000);
+
+  it("opens the Agent Plugin Manager with help for an empty /plugin command", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const getManagerSnapshot = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      registryRevision: 1,
+      catalogRevision: 1,
+      projects: [],
+      rows: [],
+      diagnostics: [],
+      capabilities: {
+        canInstall: true,
+        canEnable: true,
+        canInspect: true,
+        canReinstall: true,
+        canRollback: true,
+        canUninstall: true,
+        canRemoveData: true,
+        canEditPolicy: true,
+      },
+    }));
+    provider.setAgentPluginManagerHost({ getManagerSnapshot } as never);
+    const postMessage = vi.spyOn(
+      provider as unknown as { postMessage: (message: unknown) => void },
+      "postMessage",
+    );
+
+    await (
+      provider as unknown as {
+        handlePluginSlashCommand(
+          rawArgs: string,
+          projectScope?: unknown,
+        ): Promise<void>;
+      }
+    ).handlePluginSlashCommand("");
+
+    expect(getManagerSnapshot).toHaveBeenCalledWith(undefined, {
+      readOnly: false,
+    });
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agentPluginManagerSnapshot",
+        open: true,
+      }),
+    );
+  });
+
+  it("routes plugin disablement with its overlay target and registry revision", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const projectScope = {
+      schemaVersion: 1 as const,
+      kind: "project" as const,
+      projectId: "project-a",
+      workspaceFolderUri: "file:///workspace/a",
+      displayName: "Project A",
+      rootPath: "/workspace/a",
+    };
+    const target = {
+      kind: "agent-plugin-overlay" as const,
+      installInstanceId: "install-a",
+      packageDigest: "a".repeat(64),
+      declaredServerName: "tools",
+      runtimeServerName: "plugin-install-a-tools",
+      scope: "global" as const,
+      projectId: "project-a",
+    };
+    const privateProvider = provider as unknown as {
+      buildMcpConfigSnapshot: ReturnType<typeof vi.fn>;
+      persistMcpServerDisabled(
+        profile: "main",
+        serverName: string,
+        scope: typeof projectScope,
+      ): Promise<unknown>;
+    };
+    privateProvider.buildMcpConfigSnapshot = vi.fn(async () => ({
+      profile: "main",
+      version: 1,
+      revision: "native-revision",
+      sources: [],
+      statusInfos: [],
+      capabilities: {
+        canEditConfig: true,
+        canOpenRawConfig: false,
+        canReconnect: true,
+        canReauthenticate: true,
+        canDisable: true,
+        canUseProjectConfig: true,
+      },
+      entries: [
+        {
+          name: target.runtimeServerName,
+          config: { name: target.runtimeServerName, disabled: false },
+          mutationTarget: target,
+          mutationRevision: "plugin-registry:7",
+          preferredEditScope: "global",
+        },
+      ],
+    }));
+    const submitMcpConfigMutation = vi
+      .spyOn(provider, "submitMcpConfigMutation")
+      .mockResolvedValue({
+        operationId: "disable-plugin",
+        ok: true,
+        configSaved: true,
+        errors: [],
+      });
+
+    await privateProvider.persistMcpServerDisabled(
+      "main",
+      target.runtimeServerName,
+      projectScope,
+    );
+
+    expect(submitMcpConfigMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profile: "main",
+        scope: "global",
+        projectId: "project-a",
+        target,
+        expectedRevision: "plugin-registry:7",
+        operations: [
+          {
+            kind: "upsert",
+            conflictAction: "replace",
+            server: { name: target.runtimeServerName, disabled: true },
+          },
+        ],
+      }),
+      { allowMainProfileMutation: true },
+    );
+    provider.dispose();
   }, 15_000);
 
   it("uses the selected provider's fast model and enforces selector variants", async () => {
@@ -7327,6 +7468,119 @@ describe("ChatViewProvider session state sync", () => {
     expect(publishApprovalSpy).not.toHaveBeenCalled();
   });
 
+  it("records why an Approve for Me approval card interrupts the user once", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = {
+      id: "session-approval-telemetry",
+      background: false,
+      mode: "code",
+      projectScope: { projectId: "project-opaque" },
+    };
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      getSession: vi.fn(() => session),
+      getSessionApprovalMode: vi.fn(() => ({
+        commandApprovalPolicy: "approve-for-me",
+        approvalPolicy: "on-request",
+        approvalReviewer: "auto-review",
+        executionPreset: "workspace-write",
+      })),
+    } as never);
+    const record = vi.fn();
+    provider.setSessionOutcomeTelemetry({ record } as never);
+    const request = {
+      kind: "command" as const,
+      id: "command-approval-interruption",
+      command: "private command must not be recorded",
+      subCommands: [],
+      commandReview: {
+        status: "reviewed" as const,
+        outcome: "deny" as const,
+        risk: "high" as const,
+        userAuthorization: "unknown" as const,
+        rationale: "private rationale must not be recorded",
+        model: "guardian-model",
+      },
+    };
+
+    provider.forwardApproval(
+      { sessionId: session.id, request },
+      vi.fn(() => true),
+    );
+    (
+      provider as unknown as {
+        showApprovalRequest(
+          sessionId: string,
+          approvalRequest: typeof request,
+        ): void;
+      }
+    ).showApprovalRequest(session.id, request);
+
+    expect(record).toHaveBeenCalledOnce();
+    expect(record).toHaveBeenCalledWith({
+      type: "approval_interruption",
+      sessionId: session.id,
+      background: false,
+      mode: "code",
+      projectId: "project-opaque",
+      approvalKind: "command",
+      reason: "guardian_denied",
+      guardianStatus: "reviewed",
+      guardianOutcome: "deny",
+      risk: "high",
+      permissionIntent: undefined,
+      authorityReason: undefined,
+      routeReason: undefined,
+    });
+    expect(JSON.stringify(record.mock.calls)).not.toContain("private command");
+    expect(JSON.stringify(record.mock.calls)).not.toContain(
+      "private rationale",
+    );
+  });
+
+  it("does not record approval cards outside the complete Approve for Me policy", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = {
+      id: "session-manual",
+      background: false,
+      mode: "code",
+    };
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      getSession: vi.fn(() => session),
+      getSessionApprovalMode: vi.fn(() => ({
+        commandApprovalPolicy: "approve-for-me",
+        approvalPolicy: "never",
+        approvalReviewer: "auto-review",
+        executionPreset: "workspace-write",
+      })),
+    } as never);
+    const record = vi.fn();
+    provider.setSessionOutcomeTelemetry({ record } as never);
+
+    provider.forwardApproval(
+      {
+        sessionId: "session-manual",
+        request: {
+          kind: "write",
+          id: "manual-write-approval",
+          filePath: "src/file.ts",
+        },
+      },
+      vi.fn(() => true),
+    );
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it("publishes approval idle after resolving an inline browser approval decision", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
@@ -8599,10 +8853,27 @@ describe("chat tab host routing", () => {
     };
     const chatTabController = {
       getFocusedTabId: vi.fn(() => "tab-1"),
+      getTab: vi.fn<(tabId: string) => ChatTab | undefined>(() => ({
+        id: "tab-1",
+        displayNumber: 1,
+        sessionId: "session-1",
+        placement: "docked",
+        terminalGeneration: 1,
+      })),
       getTabForSession: vi.fn<(sessionId: string) => ChatTab | undefined>(
         () => undefined,
       ),
       getWorkspaceSnapshot: vi.fn(() => ({ controllerEpoch: "epoch-1" })),
+      replaceSession: vi.fn(async () => ({
+        ok: true,
+        tab: {
+          id: "tab-1",
+          displayNumber: 1,
+          sessionId: null,
+          placement: "docked",
+          terminalGeneration: 1,
+        },
+      })),
       validateAction: vi.fn(() => ({
         ok: true,
         tab: {
@@ -9345,6 +9616,120 @@ describe("chat tab host routing", () => {
         reason: "stale_session",
         snapshot,
       },
+    });
+  });
+
+  it("publishes NEW_SESSION composer state when focusing a session-less tab", async () => {
+    const { chatTabController, coordinator, handle, postMessage, provider } =
+      await makeTabRoutingProvider();
+    const sessionlessTab: ChatTab = {
+      id: "tab-1",
+      displayNumber: 1,
+      sessionId: null,
+      placement: "docked",
+      terminalGeneration: 1,
+    };
+    chatTabController.validateAction.mockReturnValueOnce({
+      ok: true,
+      tab: sessionlessTab,
+    } as never);
+    chatTabController.getTab.mockReturnValue(sessionlessTab);
+    coordinator.focus.mockResolvedValueOnce({ ok: true, tab: sessionlessTab });
+    const foregroundSession = { id: "other-session" };
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: vi.fn(() => foregroundSession),
+      getConfig: vi.fn(() => ({
+        model: "model-x",
+        maxTokens: 8192,
+        thinkingBudget: 0,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getCommandApprovalPolicy: vi.fn(() => "safe"),
+    };
+    const postSessionLoaded = vi.fn();
+    (
+      provider as unknown as { postSessionLoaded: typeof postSessionLoaded }
+    ).postSessionLoaded = postSessionLoaded;
+    (
+      provider as unknown as { sendModelsUpdate(): Promise<void> }
+    ).sendModelsUpdate = vi.fn(async () => {});
+    (
+      provider as unknown as { sendModesUpdate(): Promise<void> }
+    ).sendModesUpdate = vi.fn(async () => {});
+    (
+      provider as unknown as { sendSlashCommands(): Promise<void> }
+    ).sendSlashCommands = vi.fn(async () => {});
+
+    await handle({
+      command: "chatTabFocus",
+      controllerEpoch: "epoch-1",
+      tabId: "tab-1",
+      sessionId: null,
+    });
+
+    // The diverged foreground session's state must not be re-published at the
+    // starved tab — the webview drops state addressed to other sessions.
+    expect(postSessionLoaded).not.toHaveBeenCalled();
+    const stateUpdates = postMessage.mock.calls
+      .map(([message]) => message as { type?: string; state?: ChatState })
+      .filter((message) => message.type === "stateUpdate");
+    expect(stateUpdates).toHaveLength(1);
+    expect(stateUpdates[0]!.state).toMatchObject({
+      sessionId: null,
+      model: "model-x",
+    });
+  });
+
+  it("unbinds a focused tab whose session record is missing and revives it as a New Chat", async () => {
+    const { chatTabController, coordinator, handle, postMessage, provider } =
+      await makeTabRoutingProvider();
+    coordinator.focus.mockResolvedValueOnce({
+      ok: false,
+      reason: "session_not_found",
+    });
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: vi.fn(() => undefined),
+      getConfig: vi.fn(() => ({
+        model: "model-x",
+        maxTokens: 8192,
+        thinkingBudget: 0,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getCommandApprovalPolicy: vi.fn(() => "safe"),
+    };
+    (
+      provider as unknown as { sendModelsUpdate(): Promise<void> }
+    ).sendModelsUpdate = vi.fn(async () => {});
+    (
+      provider as unknown as { sendModesUpdate(): Promise<void> }
+    ).sendModesUpdate = vi.fn(async () => {});
+    (
+      provider as unknown as { sendSlashCommands(): Promise<void> }
+    ).sendSlashCommands = vi.fn(async () => {});
+
+    await handle({
+      command: "chatTabFocus",
+      controllerEpoch: "epoch-1",
+      tabId: "tab-1",
+      sessionId: "deleted-session",
+    });
+
+    expect(chatTabController.replaceSession).toHaveBeenCalledWith(
+      "tab-1",
+      "deleted-session",
+      null,
+    );
+    const rejected = postMessage.mock.calls
+      .map(([message]) => message as { type?: string })
+      .filter((message) => message.type === "chatTabActionRejected");
+    expect(rejected).toHaveLength(0);
+    const stateUpdates = postMessage.mock.calls
+      .map(([message]) => message as { type?: string; state?: ChatState })
+      .filter((message) => message.type === "stateUpdate");
+    expect(stateUpdates).toHaveLength(1);
+    expect(stateUpdates[0]!.state).toMatchObject({
+      sessionId: null,
+      model: "model-x",
     });
   });
 

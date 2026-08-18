@@ -133,6 +133,8 @@ export function readSessionOutcomes(inputPath, filters = {}) {
     else if (record.type === "task_completed") mergeTask(report, record);
     else if (record.type === "background_lifecycle") {
       mergeBackground(report, record);
+    } else if (record.type === "approval_interruption") {
+      mergeApprovalInterruption(report, record);
     } else report.unknownEvents += 1;
   }
   finalizeReport(report);
@@ -192,6 +194,14 @@ function createEmptyReport() {
       runDurationsMs: [],
       parentBlockedDurationsMs: [],
     },
+    approvalInterruptions: {
+      count: 0,
+      backgroundCount: 0,
+      byKind: {},
+      byReason: {},
+      byGuardianStatus: {},
+      byRisk: {},
+    },
     byVersion: {},
     indicators: {},
   };
@@ -216,6 +226,7 @@ function versionBucket(report, record) {
     backgroundAgents: 0,
     emptyReviews: 0,
     reviews: 0,
+    approvalInterruptions: 0,
   };
   return report.byVersion[version];
 }
@@ -320,6 +331,29 @@ function mergeBackground(report, record) {
       }
     }
   }
+}
+
+function mergeApprovalInterruption(report, record) {
+  const interruptions = report.approvalInterruptions;
+  interruptions.count += 1;
+  if (record.background === true) interruptions.backgroundCount += 1;
+  const kind =
+    typeof record.approvalKind === "string" ? record.approvalKind : "unknown";
+  interruptions.byKind[kind] = (interruptions.byKind[kind] ?? 0) + 1;
+  const reason = typeof record.reason === "string" ? record.reason : "unknown";
+  interruptions.byReason[reason] = (interruptions.byReason[reason] ?? 0) + 1;
+  if (typeof record.guardianStatus === "string") {
+    interruptions.byGuardianStatus[record.guardianStatus] =
+      (interruptions.byGuardianStatus[record.guardianStatus] ?? 0) + 1;
+  }
+  if (typeof record.risk === "string") {
+    interruptions.byRisk[record.risk] =
+      (interruptions.byRisk[record.risk] ?? 0) + 1;
+  }
+  if (typeof record.sessionId === "string") {
+    report.sessions.add(record.sessionId);
+  }
+  versionBucket(report, record).approvalInterruptions += 1;
 }
 
 function updateRange(report, value) {
@@ -468,6 +502,49 @@ function printSummary(report, inputPath, top) {
     );
   }
 
+  const interruptions = report.approvalInterruptions;
+  if (interruptions.count > 0) {
+    console.log("");
+    console.log("Approve for Me interruptions (approval cards shown)");
+    printTable(
+      ["metric", "value"],
+      [
+        [
+          "cards",
+          `${interruptions.count} (${interruptions.backgroundCount} background)`,
+        ],
+        [
+          "by reason",
+          Object.entries(interruptions.byReason)
+            .sort(([, a], [, b]) => b - a)
+            .map(([reason, count]) => `${reason}:${count}`)
+            .join(" "),
+        ],
+        [
+          "by approval kind",
+          Object.entries(interruptions.byKind)
+            .sort(([, a], [, b]) => b - a)
+            .map(([kind, count]) => `${kind}:${count}`)
+            .join(" "),
+        ],
+        [
+          "Guardian status",
+          Object.entries(interruptions.byGuardianStatus)
+            .sort(([, a], [, b]) => b - a)
+            .map(([status, count]) => `${status}:${count}`)
+            .join(" ") || "none",
+        ],
+        [
+          "risk",
+          Object.entries(interruptions.byRisk)
+            .sort(([, a], [, b]) => b - a)
+            .map(([risk, count]) => `${risk}:${count}`)
+            .join(" ") || "none",
+        ],
+      ],
+    );
+  }
+
   if (report.tasks.count > 0) {
     console.log("");
     console.log("Tasks (set_task_status terminal reports)");
@@ -600,6 +677,7 @@ function printSummary(report, inputPath, top) {
         "spawns/turn",
         "reviews",
         "empty_reviews",
+        "approval_cards",
         "tasks_done",
         "avg_task",
       ],
@@ -613,6 +691,7 @@ function printSummary(report, inputPath, top) {
         formatNumber(bucket.turns > 0 ? bucket.spawns / bucket.turns : 0),
         bucket.reviews,
         bucket.emptyReviews,
+        bucket.approvalInterruptions,
         bucket.tasksCompleted,
         formatMinutes(
           bucket.tasksCompleted > 0 ? bucket.taskMs / bucket.tasksCompleted : 0,
@@ -626,9 +705,10 @@ function printHelp() {
   console.log(`Usage: node scripts/report-session-outcomes.mjs [options]
 
 Reads AgentLink's local session-outcome telemetry JSONL (turn_completed,
-task_completed, background_lifecycle events) and prints goal-level metrics:
-where turn wall-clock went, time-to-goal per task status, background agent
-cost/benefit, and named sanity indicators for delegation behavior.
+task_completed, background_lifecycle, approval_interruption events) and prints
+goal-level metrics: where turn wall-clock went, time-to-goal per task status,
+background agent cost/benefit, Approve for Me interruptions, and named sanity
+indicators for delegation behavior.
 
 Options:
   --input <path>     Telemetry JSONL path

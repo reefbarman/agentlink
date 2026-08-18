@@ -5,6 +5,9 @@ import { describe, expect, it } from "vitest";
 
 interface ExtensionPackage {
   description?: string;
+  capabilities?: {
+    untrustedWorkspaces?: unknown;
+  };
   contributes?: {
     commands?: Array<{ command?: string; title?: string }>;
     views?: Record<string, Array<{ id?: string; name?: string }>>;
@@ -25,6 +28,10 @@ const extensionPackage = JSON.parse(
 ) as ExtensionPackage;
 const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
 const changelog = fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
+const extensionSource = fs.readFileSync(
+  path.join(root, "src", "extension.ts"),
+  "utf8",
+);
 const installScript = fs.readFileSync(
   path.join(root, "scripts", "install.sh"),
   "utf8",
@@ -114,6 +121,19 @@ describe("extension package contributions", () => {
     );
 
     expect(activityView?.name).toBe("Activity");
+  });
+
+  it("does not opt into untrusted workspaces while Agent Plugins rely on VS Code's extension gate", () => {
+    expect(extensionPackage.capabilities?.untrustedWorkspaces).toBeUndefined();
+  });
+
+  it("enables Agent Plugins in production on supported platforms", () => {
+    expect(extensionSource).toMatch(
+      /agentPluginActivationEnabled\s*=\s*process\.platform\s*!==\s*["']win32["']/,
+    );
+    expect(extensionSource).not.toMatch(
+      /agentPluginActivationEnabled\s*=\s*isDevMode/,
+    );
   });
 
   it("scopes approval commands to built-in agent sessions", () => {

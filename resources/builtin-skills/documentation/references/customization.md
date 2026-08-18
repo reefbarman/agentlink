@@ -40,6 +40,26 @@ Directories containing a `SKILL.md` with single-line YAML frontmatter (`name`, `
 
 The bundled `skill-writing` skill documents the authoring spec and AgentLink's frontmatter parser constraints.
 
+## Agent Plugins
+
+On macOS/Linux, `/plugin` and the Agent Plugin manager install and manage canonical Agent Plugins 1.0.0 packages containing Agent Skills and MCP servers. Running `/plugin` without arguments opens the manager in the Chat Activity Shelf with usage help. Windows loading is disabled. `/plugins` lists the current project's global, project, and declared entries. Packages in another harness's plugin format are not automatically translated into this standard.
+
+Supported sources are Git HTTPS/SSH/SCP remotes, HTTP(S) ZIP/TAR archives, file URLs, local directories, direct `plugin.json` paths, and local ZIP/TAR-family archives. A source may contain one plugin or a collection. Use:
+
+- `/plugin install <source> [--ref <branch-or-tag>]` (alias: `add`)
+- `/plugin install-declared <name>` for an entry already present in the current project's declaration file
+- `/plugin list`
+- `/plugin enable <install-id-or-name>` / `disable`
+- `/plugin update <install-id-or-name>` (alias: `reinstall`)
+- `/plugin uninstall <install-id-or-name>` (aliases: `remove`, `rm`)
+- `/plugin purge` to request safe cleanup after all AgentLink windows close
+
+AgentLink stages and bounds acquisition, validates the canonical schema, and shows source, digest, manifest metadata, skills, and MCP commands/URLs before installation or update. The explicit choices are **Install and Enable** or **Install Disabled**. Plugin metadata never grants AgentLink approvals, and setup/dependency hooks are never run automatically. Runtime uses immutable managed copies under `~/.agentlink/plugins/packages/`; source/download bytes are not executed in place. Local absolute source paths are not persisted, so replace a local-directory/archive install by running `install` again.
+
+An install can be global or project-scoped. In the owning project, an enabled project install shadows an enabled global install with the same manifest name. Shareable project sources are written to `<workspace>/.agentlink/plugins.json` as a workspace-relative directory or pinned Git commit. This committed declaration has zero activation authority: it contains no enablement, trust, policy, credentials, absolute local path, data, or package bytes, and `install-declared` still runs the normal acquisition and review flow. Archive and outside-workspace sources stay machine-local. Projectless sessions load no plugin components.
+
+The VS Code manager supports install, diagnostics, enable/disable, update, rollback to the validated previous generation, uninstall, data deletion, and editable MCP policy. The browser remote shows a bounded read-only inventory and directs all mutations to VS Code. Plugin data is stored separately under `~/.agentlink/plugin-data/` and survives updates and ordinary uninstall/reinstall unless explicitly deleted.
+
 ## Autonomous memory, /memory, and /remember
 
 `agentlink.memory.mode = autonomous` enables typed low-authority memory. `/memory` opens a local manager without a model request: inspect/filter records and provenance, revisions, and audit history; forget/restore, undo, clear a confirmed scope, or import/export versioned archives. VS Code supports global and current-project scopes; projectless Browser Ask Agent supports global scope only. `/remember` is the model-assisted workflow for identifying durable candidates.

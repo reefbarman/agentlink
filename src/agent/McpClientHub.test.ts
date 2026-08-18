@@ -19,10 +19,31 @@ interface Page<T> {
 const mocks = vi.hoisted(() => ({
   clientInfo: undefined as unknown,
   sseTransportOptions: undefined as
-    | { fetch?: typeof globalThis.fetch }
+    | {
+        fetch?: typeof globalThis.fetch;
+        requestInit?: RequestInit;
+      }
     | undefined,
   httpTransportOptions: undefined as
-    | { fetch?: typeof globalThis.fetch }
+    | {
+        fetch?: typeof globalThis.fetch;
+        requestInit?: RequestInit;
+      }
+    | undefined,
+  pluginSseUrl: undefined as URL | undefined,
+  pluginSseTransportOptions: undefined as
+    | {
+        mcpFetch: typeof globalThis.fetch;
+        oauthFetch: typeof globalThis.fetch;
+      }
+    | undefined,
+  stdioTransportOptions: undefined as
+    | {
+        command?: string;
+        args?: string[];
+        env?: Record<string, string>;
+        cwd?: string;
+      }
     | undefined,
   clientOptions: undefined as
     | {
@@ -79,6 +100,26 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
 vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
   StdioClientTransport: class MockStdioClientTransport {
     onclose?: () => void;
+
+    constructor(options: typeof mocks.stdioTransportOptions) {
+      mocks.stdioTransportOptions = options;
+    }
+  },
+}));
+vi.mock("./AgentPluginSseClientTransport.js", () => ({
+  AgentPluginSseClientTransport: class MockAgentPluginSseClientTransport {
+    onclose?: () => void;
+
+    constructor(
+      url: URL,
+      options: {
+        mcpFetch: typeof globalThis.fetch;
+        oauthFetch: typeof globalThis.fetch;
+      },
+    ) {
+      mocks.pluginSseUrl = url;
+      mocks.pluginSseTransportOptions = options;
+    }
   },
 }));
 vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
@@ -87,7 +128,9 @@ vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
 
     constructor(
       _url: URL,
-      options: { fetch?: typeof globalThis.fetch } | undefined,
+      options:
+        | { fetch?: typeof globalThis.fetch; requestInit?: RequestInit }
+        | undefined,
     ) {
       mocks.sseTransportOptions = options;
     }
@@ -99,7 +142,9 @@ vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
 
     constructor(
       _url: URL,
-      options: { fetch?: typeof globalThis.fetch } | undefined,
+      options:
+        | { fetch?: typeof globalThis.fetch; requestInit?: RequestInit }
+        | undefined,
     ) {
       mocks.httpTransportOptions = options;
     }
@@ -163,6 +208,9 @@ describe("McpClientHub protocol correctness", () => {
     mocks.clientOptions = undefined;
     mocks.sseTransportOptions = undefined;
     mocks.httpTransportOptions = undefined;
+    mocks.pluginSseUrl = undefined;
+    mocks.pluginSseTransportOptions = undefined;
+    mocks.stdioTransportOptions = undefined;
     setCatalogPages(mocks.listTools, "tools", {
       first: { items: [] },
     });
@@ -242,6 +290,217 @@ describe("McpClientHub protocol correctness", () => {
       expect(options?.fetch).toEqual(expect.any(Function));
     },
   );
+
+  it("keeps native HTTP transports on the stock SDK path", async () => {
+    const hub = new McpClientHub();
+    await hub.connect([
+      {
+        name: "native-sse",
+        type: "sse",
+        url: "https://example.test/events",
+        headers: { "X-Native": "sse" },
+      },
+      {
+        name: "native-http",
+        type: "streamable-http",
+        url: "https://example.test/mcp",
+        headers: { "X-Native": "http" },
+      },
+    ]);
+
+    expect(mocks.sseTransportOptions).toMatchObject({
+      fetch: expect.any(Function),
+      requestInit: { headers: { "X-Native": "sse" } },
+    });
+    expect(mocks.httpTransportOptions).toMatchObject({
+      fetch: expect.any(Function),
+      requestInit: { headers: { "X-Native": "http" } },
+    });
+    expect(mocks.pluginSseTransportOptions).toBeUndefined();
+  });
+
+  it("uses the dedicated SSE transport and origin-bound fetches for plugin HTTP servers", async () => {
+    const provenance = {
+      kind: "agent-plugin" as const,
+      scope: { kind: "global" as const },
+      installInstanceId: "install-a",
+      packageDigest: "a".repeat(64),
+      portableServerName: "fixture",
+      runtimeServerName: "fixture",
+    };
+    const hub = new McpClientHub();
+    await hub.connect([
+      {
+        name: "plugin-sse",
+        type: "sse",
+        url: "https://example.test/events",
+        headers: { "X-Plugin": "sse" },
+        provenance,
+      },
+      {
+        name: "plugin-http",
+        type: "streamable-http",
+        url: "https://example.test/mcp",
+        headers: { "X-Plugin": "http" },
+        provenance: {
+          ...provenance,
+          portableServerName: "http",
+          runtimeServerName: "plugin-http",
+        },
+      },
+    ]);
+
+    expect(mocks.pluginSseUrl?.href).toBe("https://example.test/events");
+    expect(mocks.pluginSseTransportOptions).toMatchObject({
+      mcpFetch: expect.any(Function),
+      oauthFetch: expect.any(Function),
+    });
+    expect(mocks.pluginSseTransportOptions?.mcpFetch).not.toBe(
+      mocks.pluginSseTransportOptions?.oauthFetch,
+    );
+    expect(mocks.sseTransportOptions).toBeUndefined();
+    expect(mocks.httpTransportOptions).toMatchObject({
+      fetch: expect.any(Function),
+      requestInit: undefined,
+    });
+  });
+
+  it("isolates a plugin HTTP transport construction failure from sibling servers", async () => {
+    const hub = new McpClientHub();
+    await hub.connect([
+      {
+        name: "invalid-plugin",
+        type: "streamable-http",
+        url: "http://example.test/mcp",
+        provenance: {
+          kind: "agent-plugin",
+          scope: { kind: "global" },
+          installInstanceId: "install-a",
+          packageDigest: "a".repeat(64),
+          portableServerName: "invalid",
+          runtimeServerName: "invalid-plugin",
+        },
+      },
+      config,
+    ]);
+
+    expect(hub.getServerInfos()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "invalid-plugin",
+          status: "error",
+          error: expect.stringContaining("Plain HTTP is allowed only"),
+        }),
+        expect.objectContaining({ name: "fixture", status: "connected" }),
+      ]),
+    );
+  });
+
+  it("launches plugin stdio with its bounded environment and cwd", async () => {
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([
+      {
+        ...config,
+        env: { FIXTURE: "yes" },
+        cwd: "/plugin/data/runtime",
+        pluginRoot: "/plugin/package",
+        pluginData: "/plugin/data",
+        provenance: {
+          kind: "agent-plugin",
+          scope: { kind: "global" },
+          installInstanceId: "install-a",
+          packageDigest: "a".repeat(64),
+          portableServerName: "fixture",
+          runtimeServerName: "fixture",
+        },
+      },
+    ]);
+
+    expect(mocks.stdioTransportOptions).toMatchObject({
+      command: "node",
+      args: ["fixture.js"],
+      cwd: "/plugin/data/runtime",
+      env: {
+        FIXTURE: "yes",
+        PLUGIN_ROOT: "/plugin/package",
+        PLUGIN_DATA: "/plugin/data",
+      },
+    });
+  });
+
+  it("fails plugin stdio closed without authorized root/data boundaries", async () => {
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([
+      {
+        ...config,
+        provenance: {
+          kind: "agent-plugin",
+          scope: { kind: "global" },
+          installInstanceId: "install-a",
+          packageDigest: "a".repeat(64),
+          portableServerName: "fixture",
+          runtimeServerName: "fixture",
+        },
+      },
+    ]);
+
+    expect(hub.getServerInfos()).toMatchObject([
+      {
+        name: "fixture",
+        status: "error",
+        error: expect.stringContaining("authorized root/data boundary"),
+      },
+    ]);
+    expect(mocks.stdioTransportOptions).toBeUndefined();
+  });
+
+  it("does not dispatch stale or policy-denied plugin tool calls", async () => {
+    const isConfigCurrent = vi.fn(async () => true);
+    const onBeforeToolCall = vi.fn(async () => "deny" as const);
+    const hub = new McpClientHub(new FakeMemento(), "unknown", {
+      isConfigCurrent,
+      onBeforeToolCall,
+    });
+    await hub.connect([config]);
+    isConfigCurrent.mockResolvedValueOnce(false);
+
+    const stale = await hub.callTool("fixture__write", {});
+    expect(stale).toMatchObject({
+      isError: true,
+      error: { kind: "mcp_catalog_changed" },
+    });
+    expect(onBeforeToolCall).not.toHaveBeenCalled();
+    expect(mocks.callTool).not.toHaveBeenCalled();
+
+    const denied = await hub.callTool("fixture__write", { value: 1 });
+    expect(denied).toMatchObject({
+      isError: true,
+      error: { kind: "mcp_tool_not_authorized" },
+    });
+    expect(onBeforeToolCall).toHaveBeenCalledWith({
+      serverName: "fixture",
+      bareToolName: "write",
+      input: { value: 1 },
+      config,
+      approvedByCaller: false,
+    });
+    expect(mocks.callTool).not.toHaveBeenCalled();
+  });
+
+  it("forwards caller approval to the hub authorization boundary", async () => {
+    const onBeforeToolCall = vi.fn(async () => "allow" as const);
+    const hub = new McpClientHub(new FakeMemento(), "unknown", {
+      onBeforeToolCall,
+    });
+    await hub.connect([config]);
+
+    await hub.callTool("fixture__write", {}, { authorizedByCaller: true });
+
+    expect(onBeforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({ approvedByCaller: true }),
+    );
+    expect(mocks.callTool).toHaveBeenCalledTimes(1);
+  });
 
   it("treats MCP read-only annotations as per-tool parallel opt-ins", async () => {
     setCatalogPages(mocks.listTools, "tools", {

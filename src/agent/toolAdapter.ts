@@ -35,6 +35,11 @@ import type {
 import { isFleetResultEnvelope } from "./FleetWorkflows.js";
 import type { FleetAutomation } from "./FleetAutomationStore.js";
 import {
+  mcpMutationTarget,
+  type McpPolicyMutationProvider,
+} from "./McpPolicyMutationProvider.js";
+import type { McpConfigProvenance } from "./mcpConfig.js";
+import {
   getMcpConfigFilePaths,
   persistMcpServerApproval,
   persistMcpToolApproval,
@@ -659,12 +664,12 @@ const RESPOND_TO_BACKGROUND_QUESTION_TOOL: ToolDefinition = {
 const AGENT_BUDGET_SCHEMA = {
   type: "object",
   description:
-    "Optional soft resource-cap overrides. Review task classes receive an automatic complexity-based session budget when this is omitted; other task classes remain uncapped. Reaching a cap asks the agent to finish promptly without blocking necessary tools; work is force-stopped only when observed usage reaches the 3x safety backstop.",
+    "Optional soft resource-cap overrides. Review task classes always receive an automatic complexity-based tool-call, API-turn, and elapsed-time budget; defined work-unit overrides are merged into it, while token and cost caps are ignored for reviews so large captured inputs do not consume the exploration budget. Other task classes remain uncapped unless a budget is supplied. Reaching a cap asks the agent to finish promptly without blocking necessary tools; work is force-stopped only when observed usage reaches the 3x safety backstop.",
   properties: {
     maxTokens: {
       type: "number",
       description:
-        "Cap on uncached input + output tokens summed across all API turns. Cache misses charge the full context, so reading a large diff or repo can cost 30k-100k tokens in a single turn; a typical diff review spends 100k-300k total. Do not set below 100000 for review tasks.",
+        "Cap on uncached input + output tokens summed across all API turns. Ignored for review task classes because captured review input can be large before any exploration occurs.",
     },
     maxToolCalls: {
       type: "number",
@@ -1855,6 +1860,7 @@ function createMcpToolInvocationProvider(
       }
       return mcpHub.callTool(request.toolName, request.input, {
         signal: request.signal,
+        authorizedByCaller: request.authorizedByCaller,
       });
     },
   };
@@ -1987,6 +1993,8 @@ export interface ToolDispatchContext {
   trackerCtx?: import("./AgentToolCallTracker.js").TrackerContext;
   toolCallTracker?: import("./AgentToolCallTracker.js").AgentToolCallTracker;
   mcpHub?: McpClientHub;
+  /** Provenance-routed durable MCP policy authority. */
+  mcpPolicyMutationProvider?: McpPolicyMutationProvider;
   /** Restricts MCP discovery and invocation to explicitly annotated read-only tools. */
   mcpToolAccess?: "all" | "read-only";
   /** Owned stable MCP generation reference for this request. Internal lifecycle metadata. */
@@ -3065,6 +3073,20 @@ export async function dispatchToolCall(
         })
       | undefined;
     const sourceServerName = sourceConfig?.sourceServerName ?? serverName;
+    const opaqueProvenance = serverConfig?.provenance;
+    const provenance: McpConfigProvenance =
+      opaqueProvenance &&
+      typeof opaqueProvenance === "object" &&
+      "kind" in opaqueProvenance &&
+      (opaqueProvenance.kind === "native" ||
+        opaqueProvenance.kind === "agent-plugin")
+        ? (opaqueProvenance as McpConfigProvenance)
+        : {
+            kind: "native",
+            sourceServerName,
+            sourceProjectIds: sourceConfig?.sourceProjectIds ?? [],
+            sourceProjectRoots: sourceConfig?.sourceProjectRoots ?? [],
+          };
     const sourceProjectIndex = ctx.projectScope
       ? sourceConfig?.sourceProjectIds?.indexOf(ctx.projectScope.projectId)
       : -1;
@@ -3215,11 +3237,15 @@ export async function dispatchToolCall(
           promotionMeta = {
             serverName,
             bareToolName,
-            scopes: [
-              "session",
-              ...(projectConfigPath ? (["project"] as const) : []),
-              "global",
-            ],
+            mutationTarget: mcpMutationTarget(provenance, ctx.projectScope),
+            scopes:
+              provenance.kind === "agent-plugin"
+                ? ["session", provenance.scope.kind]
+                : [
+                    "session",
+                    ...(projectConfigPath ? (["project"] as const) : []),
+                    "global",
+                  ],
           };
           break;
         case "always-tool-session":
@@ -3236,11 +3262,20 @@ export async function dispatchToolCall(
             );
           }
           try {
-            await persistMcpToolApproval(
-              sourceServerName,
-              bareToolName,
-              filePath,
-            );
+            if (ctx.mcpPolicyMutationProvider && ctx.projectScope) {
+              await ctx.mcpPolicyMutationProvider.persistToolApproval({
+                provenance,
+                bareToolName,
+                scope: "project",
+                requestingScope: ctx.projectScope,
+              });
+            } else {
+              await persistMcpToolApproval(
+                sourceServerName,
+                bareToolName,
+                filePath,
+              );
+            }
           } catch (error) {
             return errorResult(
               `Could not save the project MCP tool approval: ${error instanceof Error ? error.message : String(error)}`,
@@ -3251,11 +3286,20 @@ export async function dispatchToolCall(
         }
         case "always-tool-global":
           try {
-            await persistMcpToolApproval(
-              sourceServerName,
-              bareToolName,
-              globalConfigPath,
-            );
+            if (ctx.mcpPolicyMutationProvider && ctx.projectScope) {
+              await ctx.mcpPolicyMutationProvider.persistToolApproval({
+                provenance,
+                bareToolName,
+                scope: "global",
+                requestingScope: ctx.projectScope,
+              });
+            } else {
+              await persistMcpToolApproval(
+                sourceServerName,
+                bareToolName,
+                globalConfigPath,
+              );
+            }
           } catch (error) {
             return errorResult(
               `Could not save the global MCP tool approval: ${error instanceof Error ? error.message : String(error)}`,
@@ -3271,7 +3315,15 @@ export async function dispatchToolCall(
             );
           }
           try {
-            await persistMcpServerApproval(sourceServerName, filePath);
+            if (ctx.mcpPolicyMutationProvider && ctx.projectScope) {
+              await ctx.mcpPolicyMutationProvider.persistServerApproval({
+                provenance,
+                scope: "project",
+                requestingScope: ctx.projectScope,
+              });
+            } else {
+              await persistMcpServerApproval(sourceServerName, filePath);
+            }
           } catch (error) {
             return errorResult(
               `Could not save the project MCP server approval: ${error instanceof Error ? error.message : String(error)}`,
@@ -3282,7 +3334,18 @@ export async function dispatchToolCall(
         }
         case "always-server-global":
           try {
-            await persistMcpServerApproval(sourceServerName, globalConfigPath);
+            if (ctx.mcpPolicyMutationProvider && ctx.projectScope) {
+              await ctx.mcpPolicyMutationProvider.persistServerApproval({
+                provenance,
+                scope: "global",
+                requestingScope: ctx.projectScope,
+              });
+            } else {
+              await persistMcpServerApproval(
+                sourceServerName,
+                globalConfigPath,
+              );
+            }
           } catch (error) {
             return errorResult(
               `Could not save the global MCP server approval: ${error instanceof Error ? error.message : String(error)}`,
@@ -3295,7 +3358,12 @@ export async function dispatchToolCall(
     }
 
     const result = await mcpToolInvocationProvider
-      .callTool({ toolName, input, signal: toolAbortSignal })
+      .callTool({
+        toolName,
+        input,
+        signal: toolAbortSignal,
+        authorizedByCaller: true,
+      })
       .catch(handleToolError);
     if (promotionMeta) {
       result.uiMeta = {

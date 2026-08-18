@@ -5,6 +5,8 @@ import { isForwardedBuiltinCommand } from "./builtinCommandForwarding";
 describe("isForwardedBuiltinCommand", () => {
   it.each([
     "skills",
+    "plugin",
+    "plugins",
     "mcp",
     "mcp-config",
     "mcp-refresh",
@@ -42,6 +44,8 @@ describe("isForwardedBuiltinCommand", () => {
     ["vscode", "model"],
     ["browser", "unknown"],
     ["browser", "skills"],
+    ["browser", "plugin"],
+    ["browser", "plugins"],
     ["browser", "usage"],
     ["browser", "new"],
     ["browser", "mode"],

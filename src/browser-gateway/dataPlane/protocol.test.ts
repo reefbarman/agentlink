@@ -331,6 +331,7 @@ const payloadByKind = {
     },
   },
   "model_catalog.revision.updated": { revision: "models-2" },
+  "plugin_catalog.revision.updated": { revision: "plugins-2" },
   "owner.capabilities.updated": {
     capabilities: [{ capabilityId: "history.load", state: "enabled" }],
   },

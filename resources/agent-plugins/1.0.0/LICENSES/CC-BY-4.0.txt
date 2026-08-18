@@ -1,0 +1,5 @@
+Creative Commons Attribution 4.0 International
+
+License text: https://creativecommons.org/licenses/by/4.0/legalcode.txt
+
+This vendored notice accompanies Agent Plugins specification/documentation material licensed under CC-BY-4.0. The canonical full license text is available at the URL above and in the Agent Plugins upstream repository at commit bd383552095128f6effe895b9257cfd580a6d179 under LICENSES/CC-BY-4.0.txt.

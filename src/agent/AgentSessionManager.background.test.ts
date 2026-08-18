@@ -5406,9 +5406,9 @@ describe("AgentSessionManager background agents", () => {
       routingReason: "balanced bounded review",
       fallbackUsed: false,
       defaultBudget: {
-        maxToolCalls: 72,
-        maxApiTurns: 32,
-        maxElapsedMs: 1_200_000,
+        maxToolCalls: 48,
+        maxApiTurns: 16,
+        maxElapsedMs: 600_000,
         warningThresholdRatio: 0.8,
       },
     });
@@ -5441,9 +5441,9 @@ describe("AgentSessionManager background agents", () => {
           expectedResult: "review_findings",
         }),
         budget: {
-          maxToolCalls: 72,
-          maxApiTurns: 32,
-          maxElapsedMs: 1_200_000,
+          maxToolCalls: 48,
+          maxApiTurns: 16,
+          maxElapsedMs: 600_000,
           warningThresholdRatio: 0.8,
         },
       }),
@@ -5452,8 +5452,8 @@ describe("AgentSessionManager background agents", () => {
       session,
       expect.objectContaining({
         toolProfile: "review",
-        maxToolCalls: 216,
-        maxApiTurns: 96,
+        maxToolCalls: 144,
+        maxApiTurns: 48,
       }),
     );
     expect(createToolRuntime).toHaveBeenCalledWith(
@@ -5504,7 +5504,56 @@ describe("AgentSessionManager background agents", () => {
     expect(handedOff).toContain("+const value = 2;");
   });
 
-  it("honors explicit review execution overrides", async () => {
+  it("keeps review work-unit defaults when a caller supplies only a token cap", async () => {
+    mocks.resolveBackgroundRoute.mockResolvedValueOnce({
+      resolvedMode: "review",
+      resolvedModel: "claude-sonnet-4-6",
+      resolvedProvider: "anthropic",
+      taskClass: "review_code",
+      routingReason: "balanced bounded review",
+      fallbackUsed: false,
+      defaultBudget: {
+        maxToolCalls: 48,
+        maxApiTurns: 16,
+        maxElapsedMs: 600_000,
+        warningThresholdRatio: 0.8,
+      },
+    });
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "review a large captured diff",
+      message: "review without stopping on input size",
+      taskClass: "review_code",
+      budget: {
+        maxTokens: 100_000,
+        maxEstimatedCostUsd: 1,
+        estimatedCostPerMillionTokens: 5,
+      },
+    });
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    await waitFor(
+      () => mocks.runArgs.mock.calls.length,
+      (calls) => calls === 1,
+    );
+
+    expect(session.fleetMetadata.budget).toEqual({
+      maxToolCalls: 48,
+      maxApiTurns: 16,
+      maxElapsedMs: 600_000,
+      warningThresholdRatio: 0.8,
+    });
+    expect(mocks.runArgs).toHaveBeenCalledWith(
+      session,
+      expect.objectContaining({
+        maxToolCalls: 144,
+        maxApiTurns: 48,
+      }),
+    );
+  });
+
+  it("honors review work-unit overrides while ignoring token and cost caps", async () => {
     mocks.resolveBackgroundRoute.mockResolvedValueOnce({
       resolvedMode: "review",
       resolvedModel: "claude-sonnet-4-6",
@@ -5523,7 +5572,13 @@ describe("AgentSessionManager background agents", () => {
       taskClass: "review_code",
       permissionProfile: "interactive",
       expectedResult: "text",
-      budget: { maxToolCalls: 20, maxApiTurns: 11 },
+      budget: {
+        maxTokens: 100_000,
+        maxToolCalls: 20,
+        maxApiTurns: 11,
+        maxEstimatedCostUsd: 1,
+        estimatedCostPerMillionTokens: 5,
+      },
     });
     const session = (mgr as any).sessions.get(spawned.sessionId);
     await waitFor(

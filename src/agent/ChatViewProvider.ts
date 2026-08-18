@@ -104,8 +104,26 @@ import {
   type ResolvedAttachments,
 } from "./attachmentResolver.js";
 import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
+import type {
+  AgentPluginInstallTarget,
+  AgentPluginManagerHost,
+} from "./AgentPluginManagerHost.js";
+import type { AgentPluginManagerAction } from "../shared/agentPluginManagerTypes.js";
+import type { AgentPluginInstallCandidate } from "./AgentPluginInstaller.js";
+import { parsePluginCommandArgs } from "./agentPluginSources.js";
 import { getSkillDiscoveryRoots } from "./skillLoader.js";
 import { ProjectMcpHubRegistry } from "./ProjectMcpHubRegistry.js";
+import type { AgentPluginCatalogProvider } from "./AgentPluginCatalog.js";
+import {
+  agentPluginMcpRuntimeServerName,
+  authorizeAgentPluginMcpTool,
+  isAgentPluginMcpConfigCurrent,
+  loadWorkspaceMcpRuntimeConfigs,
+} from "./agentPluginMcpRuntime.js";
+import {
+  DefaultMcpPolicyMutationProvider,
+  type McpPolicyMutationProvider,
+} from "./McpPolicyMutationProvider.js";
 import { McpClientHub, type McpServerInfo } from "./McpClientHub.js";
 import {
   McpFormElicitationCoordinator,
@@ -596,6 +614,11 @@ export type ExtensionToWebview =
     }
   | { type: "agentMcpConfigMutationResult"; result: McpConfigMutationResult }
   | {
+      type: "agentPluginManagerSnapshot";
+      open?: boolean;
+      snapshot: import("../shared/agentPluginManagerTypes.js").AgentPluginManagerSnapshot;
+    }
+  | {
       type: "agentMemoryPanelUpdate";
       requestId?: string;
       open?: boolean;
@@ -1084,7 +1107,11 @@ import {
 
 export { getPreviousChunkByUserTurns, getTailChunkByUserTurns };
 
-export type BrowserGatewaySurfaceChangeKind = "background" | "mcp" | "theme";
+export type BrowserGatewaySurfaceChangeKind =
+  | "background"
+  | "mcp"
+  | "plugins"
+  | "theme";
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "agentLink.chatView";
@@ -1236,6 +1263,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private approvalStatePublishPending = false;
   private toolCallTracker: AgentToolCallTracker | undefined;
   private contextJumpTracker: ContextJumpTracker | undefined;
+  private sessionOutcomeTelemetry:
+    | import("../telemetry/SessionOutcomeTelemetry.js").SessionOutcomeTelemetry
+    | undefined;
   private contextHealth: ContextHealthSnapshot = {
     memory: { ...INITIAL_CONTEXT_HEALTH.memory },
     retrieval: { ...INITIAL_CONTEXT_HEALTH.retrieval },
@@ -1291,6 +1321,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     assistantText: string;
   } | null = null;
   private projectedLastDetectKey: string | null = null;
+  private agentPluginManagerHost: AgentPluginManagerHost | undefined;
+  private agentPluginCatalogProvider: AgentPluginCatalogProvider | undefined;
+  private mcpPolicyMutationProvider: McpPolicyMutationProvider | undefined;
   private detectRequestInputs = new Map<
     string,
     { messageId: string; assistantText: string; detectKey: string }
@@ -1373,9 +1406,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.askAgentMcpHub.onUrlElicitationComplete =
       handleMcpUrlElicitationComplete;
     this.projectMcpHubRegistry = new ProjectMcpHubRegistry({
-      createHub: () => new McpClientHub(globalState, extensionVersion),
-      loadConfigs: () =>
-        loadWorkspaceMcpConfigs(this.getWorkspaceMcpProjects()),
+      createHub: (scope) =>
+        new McpClientHub(globalState, extensionVersion, {
+          isConfigCurrent: (config) =>
+            this.agentPluginCatalogProvider
+              ? isAgentPluginMcpConfigCurrent(config, {
+                  requestingScope: scope,
+                  pluginCatalog: this.agentPluginCatalogProvider,
+                })
+              : config.provenance?.kind !== "agent-plugin",
+          onBeforeToolCall: (request) =>
+            authorizeAgentPluginMcpTool({
+              bareToolName: request.bareToolName,
+              config: request.config,
+              approved: request.approvedByCaller,
+            }),
+        }),
+      loadConfigs: (scope) =>
+        this.agentPluginCatalogProvider
+          ? loadWorkspaceMcpRuntimeConfigs({
+              requestingScope: scope,
+              workspaceProjects: this.getWorkspaceMcpProjects(),
+              pluginCatalog: this.agentPluginCatalogProvider,
+            })
+          : loadWorkspaceMcpConfigs(this.getWorkspaceMcpProjects()),
       configureHub: (hub, scope) => {
         hub.onElicitation = handleMcpElicitation;
         hub.onUrlElicitation = handleMcpUrlElicitation;
@@ -1486,6 +1540,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     listener: (kind: BrowserGatewaySurfaceChangeKind) => void,
   ): vscode.Disposable {
     return this.browserGatewaySurfaceChangeEmitter.event(listener);
+  }
+
+  notifyBrowserGatewaySurfaceChanged(
+    kind: BrowserGatewaySurfaceChangeKind,
+  ): void {
+    this.browserGatewaySurfaceChangeEmitter.fire(kind);
   }
 
   getBrowserGatewayThemeSnapshot(): BrowserGatewayThemeSnapshot {
@@ -1803,6 +1863,72 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.toolCallTracker = tracker;
   }
 
+  setAgentPluginManagerHost(host: AgentPluginManagerHost): void {
+    this.agentPluginManagerHost = host;
+    this.mcpPolicyMutationProvider = new DefaultMcpPolicyMutationProvider({
+      agentPluginManagerHost: host,
+    });
+  }
+
+  getMcpPolicyMutationProvider(): McpPolicyMutationProvider | undefined {
+    return this.mcpPolicyMutationProvider;
+  }
+
+  setAgentPluginCatalogProvider(provider: AgentPluginCatalogProvider): void {
+    this.agentPluginCatalogProvider = provider;
+  }
+
+  async openAgentPluginManager(projectId?: string): Promise<void> {
+    const host = this.agentPluginManagerHost;
+    if (!host) {
+      void vscode.window.showWarningMessage(
+        "Agent Plugins support is unavailable in this AgentLink build.",
+      );
+      return;
+    }
+    const projectScope = this.resolveMcpProjectScope(projectId);
+    if (projectId && !projectScope) {
+      void vscode.window.showErrorMessage(
+        "The selected project is unavailable. Choose an available workspace folder.",
+      );
+      return;
+    }
+    try {
+      this.postMessage({
+        type: "agentPluginManagerSnapshot",
+        open: true,
+        snapshot: await host.getManagerSnapshot(projectScope, {
+          readOnly: false,
+        }),
+      });
+    } catch (error) {
+      this.log(`[plugins] Failed to open manager: ${String(error)}`);
+      void vscode.window.showErrorMessage(
+        `Could not open Agent Plugin Manager: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  async getBrowserAgentPluginManagerSnapshot(projectId: string) {
+    const host = this.agentPluginManagerHost;
+    if (!host) return undefined;
+    const projectScope = this.getAvailableBrowserProjectScope(projectId);
+    if (!projectScope) return undefined;
+    return host.getManagerSnapshot(projectScope, { readOnly: true });
+  }
+
+  async installAgentPluginFromSource(source?: string): Promise<void> {
+    const projectScope = this.getCurrentProjectScope();
+    const selectedSource =
+      source?.trim() ||
+      (await this.promptForAgentPluginSource(projectScope?.rootPath));
+    if (!selectedSource) return;
+    await this.handlePluginSlashCommand(
+      `install ${selectedSource}`,
+      projectScope,
+    );
+  }
+
   setPendingInteractionAlertProvider(
     showAlert: (message: string, command: vscode.Command) => vscode.Disposable,
   ): void {
@@ -1815,6 +1941,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.contextJumpTracker = new ContextJumpTracker((record) =>
       telemetry.record(record),
     );
+  }
+
+  setSessionOutcomeTelemetry(
+    telemetry:
+      | import("../telemetry/SessionOutcomeTelemetry.js").SessionOutcomeTelemetry
+      | undefined,
+  ): void {
+    this.sessionOutcomeTelemetry = telemetry;
   }
 
   setContextHealthListener(
@@ -2504,6 +2638,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return refresh;
   }
 
+  async refreshAllPluginMcpConnections(): Promise<void> {
+    await this.refreshAllWorkspaceMcpConnections({
+      interactiveForNewServers: false,
+    });
+  }
+
   private async refreshAllWorkspaceMcpConnections(options?: {
     interactiveForNewServers?: boolean;
   }): Promise<void> {
@@ -2626,7 +2766,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return [
         {
           ...info,
-          name: config?.sourceServerName ?? info.name,
+          name:
+            config?.provenance?.kind === "agent-plugin"
+              ? info.name
+              : (config?.sourceServerName ?? info.name),
         },
       ];
     });
@@ -2640,7 +2783,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return hub.getServerInfos().find((info) => {
       const config = hub.getServerConfig(info.name);
       return (
-        (config?.sourceServerName ?? info.name) === sourceServerName &&
+        (info.name === sourceServerName ||
+          (config?.sourceServerName ?? info.name) === sourceServerName) &&
         (!config?.sourceProjectIds ||
           config.sourceProjectIds.includes(projectId))
       );
@@ -2690,10 +2834,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       profile === "ask-agent"
         ? await getMcpConfigSources("ask-agent")
         : await getMcpConfigSources("main", projectRoot);
-    const entries =
+    const nativeEntries =
       profile === "ask-agent"
         ? await buildMcpConfigEntries("ask-agent")
         : await buildMcpConfigEntries("main", projectRoot);
+    const pluginEntries =
+      profile === "main" && projectScope && this.agentPluginCatalogProvider
+        ? await this.buildAgentPluginMcpManagerEntries(projectScope)
+        : [];
+    const entries = [...nativeEntries, ...pluginEntries];
 
     return {
       profile,
@@ -2730,6 +2879,64 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         canConfigureLocalProcess: true,
       },
     };
+  }
+
+  private async buildAgentPluginMcpManagerEntries(
+    projectScope: Readonly<SessionProjectScope>,
+  ): Promise<McpConfigSnapshot["entries"]> {
+    if (!this.agentPluginCatalogProvider) return [];
+    const catalog =
+      await this.agentPluginCatalogProvider.getSnapshot(projectScope);
+    return catalog.mcpServers.flatMap((entry) => {
+      if (entry.server.type !== "stdio") return [];
+      const runtimeServerName = agentPluginMcpRuntimeServerName(
+        entry.installInstanceId,
+        entry.portableServerName,
+      );
+      const target = {
+        kind: "agent-plugin-overlay" as const,
+        installInstanceId: entry.installInstanceId,
+        packageDigest: entry.packageDigest,
+        declaredServerName: entry.portableServerName,
+        runtimeServerName,
+        scope: entry.scope.kind,
+        projectId: projectScope.projectId,
+      };
+      const result: McpConfigSnapshot["entries"][number] = {
+        name: runtimeServerName,
+        config: {
+          name: runtimeServerName,
+          type: "stdio" as const,
+          command: entry.server.command,
+          args: entry.server.args ? [...entry.server.args] : undefined,
+          toolPolicy: entry.policy.toolPolicy ?? "ask",
+          toolDisclosure: entry.policy.toolDisclosure ?? "auto",
+          supportsParallelToolCalls:
+            entry.policy.supportsParallelToolCalls ?? false,
+          allowedTools: entry.policy.allowedTools
+            ? [...entry.policy.allowedTools]
+            : undefined,
+          disabled: entry.policy.disabled ?? false,
+        },
+        mutationTarget: target,
+        mutationRevision: `plugin-registry:${catalog.registryRevision}`,
+        mutationCapabilities: {
+          connectionFields: false,
+          policyFields: true,
+          remove: false,
+          openRaw: false,
+        },
+        sourceIds: [],
+        editableScopes: [entry.scope.kind],
+        preferredEditScope: entry.scope.kind,
+        inherited: entry.scope.kind === "global",
+        hasSecrets: false,
+        writableOverrideScopes: [entry.scope.kind],
+        envKeys: [],
+        headerKeys: [],
+      };
+      return [result];
+    });
   }
 
   private async postMcpManagerSnapshot(options: {
@@ -2992,6 +3199,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ): void {
     if (!this.activeApprovalRequests.has(request.id)) {
       this.activeApprovalOrder.push(request.id);
+      this.recordApprovalInterruption(sessionId, request);
     }
     this.activeApprovalRequests.set(request.id, request);
     this.approvalSessionById.set(request.id, sessionId);
@@ -3006,6 +3214,50 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       );
     } else {
       this.uiPublisher.publishApproval(presentation.sessionId, request);
+    }
+  }
+
+  private recordApprovalInterruption(
+    sessionId: string,
+    request: ApprovalRequest,
+  ): void {
+    if (!this.sessionOutcomeTelemetry) return;
+    const session = this.sessionManager?.getSession(sessionId);
+    if (!session) return;
+    const approvalMode = this.sessionManager?.getSessionApprovalMode(
+      sessionId,
+      this.getConfiguredCommandApprovalPolicy(session.projectScope),
+    );
+    if (
+      approvalMode?.commandApprovalPolicy !== "approve-for-me" ||
+      approvalMode.approvalPolicy !== "on-request" ||
+      approvalMode.approvalReviewer !== "auto-review" ||
+      approvalMode.executionPreset !== "workspace-write"
+    ) {
+      return;
+    }
+
+    const review = request.commandReview ?? request.networkReview;
+    try {
+      this.sessionOutcomeTelemetry.record({
+        type: "approval_interruption",
+        sessionId,
+        background: session.background === true,
+        mode: session.mode,
+        projectId: session.projectScope?.projectId,
+        approvalKind: request.kind,
+        reason: classifyApprovalInterruptionReason(request),
+        guardianStatus: review?.status,
+        guardianOutcome: review?.outcome,
+        risk: review?.risk,
+        permissionIntent: request.security?.permissionIntent,
+        authorityReason: request.security?.authorityReason,
+        routeReason: request.security?.routeReason,
+      });
+    } catch (err) {
+      this.log(
+        `[session-outcome] approval interruption record failed: ${String(err)}`,
+      );
     }
   }
 
@@ -4926,6 +5178,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       sessionId,
       extensionUri: this.extensionUri,
       mcpHub: this.askAgentMcpHub,
+      mcpPolicyMutationProvider: this.mcpPolicyMutationProvider,
       mode: "code",
       onApprovalRequest: (request, requestSessionId) =>
         this.requestApproval(request, requestSessionId),
@@ -5048,7 +5301,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     );
     const scope =
       entry?.preferredEditScope ?? entry?.writableOverrideScopes?.at(-1);
-    if (!entry || !scope || !snapshot.revision) {
+    const expectedRevision = entry?.mutationRevision ?? snapshot.revision;
+    if (!entry || !scope || !expectedRevision) {
       return {
         operationId: randomUUID(),
         ok: false,
@@ -5061,8 +5315,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         operationId: randomUUID(),
         profile,
         scope,
+        ...(entry.mutationTarget ? { target: entry.mutationTarget } : {}),
         ...(projectScope ? { projectId: projectScope.projectId } : {}),
-        expectedRevision: snapshot.revision,
+        expectedRevision,
         operations: [
           {
             kind: "upsert",
@@ -5214,7 +5469,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       };
     }
 
-    const result = await mutateMcpConfigBatch(mutation, projectRoot);
+    const result =
+      mutation.profile === "main" && projectScope
+        ? await (
+            this.mcpPolicyMutationProvider ??
+            new DefaultMcpPolicyMutationProvider()
+          ).mutateManagerPolicy(mutation, projectScope)
+        : await mutateMcpConfigBatch(mutation, projectRoot);
     if (!result.ok) return result;
 
     if (mutation.profile === "ask-agent") {
@@ -7087,6 +7348,41 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return;
       }
       if (
+        command === "chatTabFocus" &&
+        result.reason === "session_not_found" &&
+        address.sessionId !== null
+      ) {
+        // The tab's bound session has no readable persisted record (deleted
+        // or corrupt on disk). focusTab already switched the visible tab, so
+        // leaving the dead binding in place would strand the tab on its
+        // placeholder. Unbind it into a usable New Chat tab instead — the
+        // same repair the startup restore applies to reload-time ghosts.
+        this.log(
+          `[chat-tabs] unbinding tab ${address.tabId} from missing session ${address.sessionId}`,
+        );
+        const rebound = await this.chatTabController?.replaceSession(
+          address.tabId,
+          address.sessionId,
+          null,
+        );
+        if (rebound?.ok && this.sessionManager) {
+          this.foregroundSessionTransition = undefined;
+          this.sendChatWorkspaceUpdate();
+          this.postMessage({
+            type: "stateUpdate",
+            state: this.buildChatState(undefined),
+          });
+          this.postMessage({
+            type: "agentSessionUpdate",
+            sessions: this.sessionManager.getSessionInfos(),
+          });
+          await this.sendModelsUpdate();
+          await this.sendModesUpdate();
+          await this.sendSlashCommands();
+          return;
+        }
+      }
+      if (
         result.reason === "stale_controller" ||
         result.reason === "not_found" ||
         result.reason === "stale_session" ||
@@ -7109,8 +7405,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.chatTabPanelHost?.releaseTab(address.tabId);
     }
     this.foregroundSessionTransition = undefined;
+    // A docked tab can legitimately end up with no session: a reloaded layout
+    // may reference a never-persisted session (an empty New Chat at reload
+    // time), which the startup restore unbinds. Selecting such a tab must
+    // publish the NEW_SESSION composer state — the webview drops session-
+    // scoped state addressed to other sessions, so falling back to the
+    // foreground session here would leave the tab starved in its "Checking
+    // model setup" placeholder forever.
+    const focusedTab = this.chatTabController?.getTab(
+      this.chatTabController.getFocusedTabId(),
+    );
+    const focusedTabSessionless = focusedTab?.sessionId === null;
     const selectedSession =
-      result.session ?? this.sessionManager?.getForegroundSession();
+      result.session ??
+      (focusedTabSessionless
+        ? undefined
+        : this.sessionManager?.getForegroundSession());
     // Publish the final tab-to-session binding before any session-scoped state.
     // Otherwise the webview cannot attribute hydration for a newly created tab.
     this.sendChatWorkspaceUpdate();
@@ -7129,17 +7439,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             ? "focus"
             : undefined,
       });
+      this.sendInitialState();
+    } else if (focusedTabSessionless && this.sessionManager) {
+      this.postMessage({
+        type: "stateUpdate",
+        state: this.buildChatState(undefined),
+      });
+      this.postMessage({
+        type: "agentSessionUpdate",
+        sessions: this.sessionManager.getSessionInfos(),
+      });
+    } else {
+      this.sendInitialState();
     }
-    this.sendInitialState();
     // The model catalog is shared across tabs, but a tab action can switch the
     // active projection while the initial asynchronous catalog hydration is
     // still in flight. Re-send it after every successful handoff so the newly
     // selected tab cannot remain indefinitely in its "checking" state.
     await this.sendModelsUpdate();
-    if (selectedSession) {
-      await this.sendModesUpdate();
-      await this.sendSlashCommands();
-    }
+    await this.sendModesUpdate();
+    await this.sendSlashCommands();
   }
 
   private sendBgSessionsUpdate(): void {
@@ -8097,24 +8416,59 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           break;
         }
 
-        const toolName = `${serverName}__${bareToolName}`;
+        const mutationTarget = msg.mutationTarget as
+          | McpApprovalPromotionMeta["mutationTarget"]
+          | undefined;
+        const runtimeServerName =
+          mutationTarget?.kind === "agent-plugin-overlay"
+            ? mutationTarget.runtimeServerName
+            : serverName;
+        const toolName = `${runtimeServerName}__${bareToolName}`;
         this.approvalManager.approveMcpTool(sessionId, toolName);
 
         if (scope === "project" || scope === "global") {
-          const cwd = this.getSessionProjectRoot(sessionId);
-          if (!cwd) {
+          const projectScope =
+            this.sessionManager?.getSession(sessionId)?.projectScope;
+          const cwd =
+            projectScope?.rootPath ?? this.getSessionProjectRoot(sessionId);
+          if (!cwd || !projectScope) {
             vscode.window.showErrorMessage(
               "Unable to persist MCP approval: no workspace or cwd available.",
             );
             break;
           }
-          const configPaths = getMcpConfigFilePaths(cwd);
           try {
-            await persistMcpToolApproval(
-              serverName,
-              bareToolName,
-              scope === "project" ? configPaths.project : configPaths.global,
-            );
+            if (mutationTarget?.kind === "agent-plugin-overlay") {
+              if (!this.mcpPolicyMutationProvider) {
+                throw new Error("Agent Plugin policy mutation is unavailable.");
+              }
+              await this.mcpPolicyMutationProvider.persistToolApproval({
+                provenance: {
+                  kind: "agent-plugin",
+                  scope:
+                    mutationTarget.scope === "global"
+                      ? { kind: "global" }
+                      : {
+                          kind: "project",
+                          projectId: mutationTarget.projectId,
+                        },
+                  installInstanceId: mutationTarget.installInstanceId,
+                  packageDigest: mutationTarget.packageDigest,
+                  portableServerName: mutationTarget.declaredServerName,
+                  runtimeServerName: mutationTarget.runtimeServerName,
+                },
+                bareToolName,
+                scope,
+                requestingScope: projectScope,
+              });
+            } else {
+              const configPaths = getMcpConfigFilePaths(cwd);
+              await persistMcpToolApproval(
+                serverName,
+                bareToolName,
+                scope === "project" ? configPaths.project : configPaths.global,
+              );
+            }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             vscode.window.showErrorMessage(
@@ -8127,6 +8481,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         vscode.window.showInformationMessage(
           `Allowed MCP tool "${bareToolName}" from "${serverName}" for ${scope}.`,
         );
+        break;
+      }
+
+      case "agentPluginManagerRefresh":
+      case "agentPluginManagerSelectProject": {
+        await this.openAgentPluginManager(
+          typeof msg.projectId === "string" ? msg.projectId : undefined,
+        );
+        break;
+      }
+
+      case "agentPluginManagerInstall": {
+        const projectScope = this.resolveMcpProjectScope(
+          typeof msg.projectId === "string" ? msg.projectId : undefined,
+        );
+        const source = typeof msg.source === "string" ? msg.source.trim() : "";
+        if (!source) break;
+        await this.handlePluginSlashCommand(`install ${source}`, projectScope);
+        await this.openAgentPluginManager(projectScope?.projectId);
+        break;
+      }
+
+      case "agentPluginManagerAction": {
+        const projectScope = this.resolveMcpProjectScope(
+          typeof msg.projectId === "string" ? msg.projectId : undefined,
+        );
+        await this.handleAgentPluginManagerAction({
+          action: msg.action as AgentPluginManagerAction,
+          installInstanceId:
+            typeof msg.installInstanceId === "string"
+              ? msg.installInstanceId
+              : undefined,
+          manifestName:
+            typeof msg.manifestName === "string" ? msg.manifestName : undefined,
+          projectScope,
+        });
+        await this.openAgentPluginManager(projectScope?.projectId);
         break;
       }
 
@@ -8571,6 +8962,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           await this.postMemoryPanelSnapshot(
             { scope: "global", limit: 100 },
             { open: true },
+          );
+        } else if (name === "plugins") {
+          await this.openAgentPluginManager(
+            sourceSession?.projectScope.projectId,
+          );
+        } else if (name === "plugin") {
+          await this.handlePluginSlashCommand(
+            String(msg.args ?? ""),
+            sourceSession?.projectScope,
           );
         } else if (name === "mcp") {
           const projectScope = sourceSession?.projectScope;
@@ -10795,6 +11195,558 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * Handle /btw side question: make a one-shot completion using the current
    * session's context, without modifying conversation history.
    */
+  private async handleAgentPluginManagerAction(input: {
+    action: AgentPluginManagerAction;
+    installInstanceId?: string;
+    manifestName?: string;
+    projectScope?: Readonly<SessionProjectScope>;
+  }): Promise<void> {
+    const host = this.agentPluginManagerHost;
+    if (!host) return;
+    const allowedActions: readonly AgentPluginManagerAction[] = [
+      "enable",
+      "disable",
+      "reinstall",
+      "rollback",
+      "uninstall",
+      "remove-data",
+      "install-declared",
+    ];
+    if (!allowedActions.includes(input.action)) {
+      this.log(
+        `[plugins] Rejected unknown manager action: ${String(input.action)}`,
+      );
+      return;
+    }
+    try {
+      if (input.action === "install-declared") {
+        if (!input.projectScope || !input.manifestName) {
+          throw new Error(
+            "Declared plugins require an available owning project.",
+          );
+        }
+        await this.handlePluginSlashCommand(
+          `install-declared ${input.manifestName}`,
+          input.projectScope,
+        );
+        return;
+      }
+      if (!input.installInstanceId) {
+        throw new Error("The selected plugin is no longer installed.");
+      }
+      if (input.action === "enable" || input.action === "disable") {
+        await host.setEnabled(
+          input.installInstanceId,
+          input.action === "enable",
+        );
+        return;
+      }
+      if (input.action === "reinstall") {
+        await this.handlePluginSlashCommand(
+          `reinstall ${input.installInstanceId}`,
+          input.projectScope,
+        );
+        return;
+      }
+      const labels = {
+        rollback: "Rollback",
+        uninstall: "Uninstall",
+        "remove-data": "Remove Data",
+      } as const;
+      const label = labels[input.action];
+      const consequences =
+        input.action === "rollback"
+          ? "Swap the current package generation with its previous reviewed generation?"
+          : input.action === "uninstall"
+            ? "Remove this plugin from the registry? Immutable package bytes remain until a later safe purge. Plugin data is not removed."
+            : "Permanently remove this plugin's stored data? The installed plugin and package bytes remain.";
+      const confirmed = await vscode.window.showWarningMessage(
+        `${consequences}\n\nPlugin: ${input.manifestName ?? input.installInstanceId}`,
+        { modal: true },
+        label,
+      );
+      if (confirmed !== label) return;
+      if (input.action === "rollback") {
+        await host.rollback(input.installInstanceId);
+      } else if (input.action === "uninstall") {
+        await host.remove(input.installInstanceId);
+      } else {
+        await host.removeData(input.installInstanceId);
+      }
+    } catch (error) {
+      this.log(`[plugins] Manager action failed: ${String(error)}`);
+      void vscode.window.showErrorMessage(
+        `Agent Plugin operation failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  private async handlePluginSlashCommand(
+    rawArgs: string,
+    projectScope?: Readonly<SessionProjectScope>,
+  ): Promise<void> {
+    const host = this.agentPluginManagerHost;
+    if (!host) {
+      vscode.window.showWarningMessage(
+        "Agent Plugins support is unavailable in this AgentLink build.",
+      );
+      return;
+    }
+    const trimmedArgs = rawArgs.trim();
+    if (!trimmedArgs) {
+      await this.openAgentPluginManager(projectScope?.projectId);
+      return;
+    }
+    const parsed = parsePluginCommandArgs(trimmedArgs);
+    const action = parsed.action === "add" ? "install" : parsed.action;
+    try {
+      if (action === "list" || action === "ls") {
+        await this.showInstalledAgentPlugins(projectScope);
+        return;
+      }
+      if (action === "install-declared") {
+        if (!projectScope?.rootPath || !parsed.operand) {
+          throw new Error(
+            "Usage: /plugin install-declared <name> from an available project session.",
+          );
+        }
+        const prepared = await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: `Acquiring declared Agent Plugin '${parsed.operand}'…`,
+            cancellable: false,
+          },
+          () => host.prepareDeclaredInstall(projectScope, parsed.operand),
+        );
+        try {
+          const selected = prepared.candidates[0];
+          if (!selected) return;
+          const enabled = await this.reviewAgentPluginInstall(
+            selected,
+            prepared.acquired.source.display,
+            undefined,
+            prepared.target,
+            prepared.shareability,
+          );
+          if (enabled === undefined) return;
+          const row = await host.commitPrepared({
+            prepared,
+            candidate: selected,
+            enabled,
+          });
+          this.showAgentPluginCommitResult(
+            row,
+            `Installed declared Agent Plugin '${row.manifestName}' ${row.enabled ? "and enabled it" : "disabled"}.`,
+          );
+        } finally {
+          await prepared.acquired.cleanup();
+        }
+        return;
+      }
+      if (action === "install") {
+        const source =
+          parsed.operand ||
+          (await this.promptForAgentPluginSource(projectScope?.rootPath));
+        if (!source) return;
+        const target = await this.pickAgentPluginInstallTarget(projectScope);
+        if (!target) return;
+        const prepared = await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: "Acquiring and validating Agent Plugin…",
+            cancellable: false,
+          },
+          () =>
+            host.prepareInstall(source, {
+              cwd: projectScope?.rootPath,
+              ref: parsed.ref,
+              target,
+            }),
+        );
+        try {
+          const selected = await this.pickAgentPluginCandidate(
+            prepared.candidates,
+          );
+          if (!selected) return;
+          const enabled = await this.reviewAgentPluginInstall(
+            selected,
+            prepared.acquired.source.display,
+            undefined,
+            prepared.target,
+            prepared.shareability,
+          );
+          if (enabled === undefined) return;
+          const row = await host.commitPrepared({
+            prepared,
+            candidate: selected,
+            enabled,
+          });
+          this.showAgentPluginCommitResult(
+            row,
+            `Installed Agent Plugin '${row.manifestName}' ${row.enabled ? "and enabled it" : "disabled"}.`,
+          );
+        } finally {
+          await prepared.acquired.cleanup();
+        }
+        return;
+      }
+      if (action === "enable" || action === "disable") {
+        const id = await this.resolveAgentPluginInstallId(
+          parsed.operand,
+          action,
+        );
+        if (!id) return;
+        await host.setEnabled(id, action === "enable");
+        vscode.window.showInformationMessage(
+          `${action === "enable" ? "Enabled" : "Disabled"} Agent Plugin '${id}'.`,
+        );
+        return;
+      }
+      if (action === "remove" || action === "uninstall" || action === "rm") {
+        const id = await this.resolveAgentPluginInstallId(
+          parsed.operand,
+          "uninstall",
+        );
+        if (!id) return;
+        const confirm = await vscode.window.showWarningMessage(
+          `Uninstall Agent Plugin '${id}'? Immutable package bytes remain until a safe purge after all AgentLink windows close.`,
+          { modal: true },
+          "Uninstall",
+        );
+        if (confirm !== "Uninstall") return;
+        await host.remove(id);
+        vscode.window.showInformationMessage(
+          `Uninstalled Agent Plugin '${id}'.`,
+        );
+        return;
+      }
+      if (action === "update" || action === "reinstall") {
+        const id = await this.resolveAgentPluginInstallId(
+          parsed.operand,
+          "update",
+        );
+        if (!id) return;
+        const registry = await host.list();
+        const existing = registry.installs[id];
+        const prepared = await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: `Reacquiring Agent Plugin '${id}'…`,
+            cancellable: false,
+          },
+          () => host.prepareUpdate(id),
+        );
+        try {
+          const selected = prepared.candidates[0];
+          if (!selected) return;
+          const enabled = await this.reviewAgentPluginInstall(
+            selected,
+            prepared.acquired.source.display,
+            existing?.enabled,
+            prepared.target,
+            prepared.shareability,
+          );
+          if (enabled === undefined) return;
+          const row = await host.commitPrepared({
+            prepared,
+            candidate: selected,
+            enabled,
+            scope: existing?.scope,
+            replacingInstallInstanceId: id,
+          });
+          this.showAgentPluginCommitResult(
+            row,
+            `Updated Agent Plugin '${row.manifestName}' to ${row.currentDigest.slice(0, 12)}.`,
+          );
+        } finally {
+          await prepared.acquired.cleanup();
+        }
+        return;
+      }
+      if (action === "purge") {
+        const confirm = await vscode.window.showWarningMessage(
+          "Request removal of unreferenced Agent Plugin package generations? Purge runs only on a later safe startup after all AgentLink windows have closed.",
+          { modal: true },
+          "Request Purge",
+        );
+        if (confirm !== "Request Purge") return;
+        await host.requestPurge();
+        vscode.window.showInformationMessage(
+          "Agent Plugin package purge requested. Close all AgentLink windows before the next startup to allow safe cleanup.",
+        );
+        return;
+      }
+      vscode.window.showInformationMessage(
+        "Usage: /plugin <install|install-declared|list|enable|disable|update|uninstall|purge> [source|name|install-id] [--ref <branch-or-tag>]",
+      );
+    } catch (error) {
+      this.log(`[plugins] Slash command failed: ${String(error)}`);
+      vscode.window.showErrorMessage(
+        `Agent Plugin operation failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  private async promptForAgentPluginSource(
+    cwd?: string,
+  ): Promise<string | undefined> {
+    const source = await vscode.window.showInputBox({
+      title: "Install Agent Plugin",
+      prompt:
+        "Enter a Git URL/SSH remote, HTTP(S) archive URL, file URL, directory, plugin.json, ZIP, or TAR path",
+      placeHolder: "https://host/owner/plugin.git or ./path/to/plugin.zip",
+      ignoreFocusOut: true,
+    });
+    if (source?.trim()) return source.trim();
+    const picked = await vscode.window.showOpenDialog({
+      title: "Choose Agent Plugin directory, manifest, or archive",
+      canSelectFiles: true,
+      canSelectFolders: true,
+      canSelectMany: false,
+      ...(cwd ? { defaultUri: vscode.Uri.file(cwd) } : {}),
+      filters: {
+        "Agent Plugin sources": [
+          "json",
+          "zip",
+          "tar",
+          "gz",
+          "tgz",
+          "bz2",
+          "xz",
+        ],
+      },
+    });
+    return picked?.[0]?.fsPath;
+  }
+
+  private async pickAgentPluginInstallTarget(
+    currentScope?: Readonly<SessionProjectScope>,
+  ): Promise<AgentPluginInstallTarget | undefined> {
+    const availableProjects = this.getWorkspaceProjects()
+      .filter(
+        (project) =>
+          project.availability.status === "available" &&
+          project.rootPath !== undefined,
+      )
+      .sort((left, right) => {
+        if (left.id === currentScope?.projectId) return -1;
+        if (right.id === currentScope?.projectId) return 1;
+        return left.name.localeCompare(right.name);
+      });
+    const selected = await vscode.window.showQuickPick(
+      [
+        {
+          label: "Global",
+          description: "Available in every project on this machine",
+          target: { kind: "global" } as AgentPluginInstallTarget,
+        },
+        ...availableProjects.map((project) => ({
+          label: project.name,
+          description:
+            project.id === currentScope?.projectId
+              ? "Current project"
+              : "Project install",
+          detail: project.rootPath,
+          target: {
+            kind: "project",
+            scope: createSessionProjectScope(project),
+          } as AgentPluginInstallTarget,
+        })),
+      ],
+      {
+        title: "Choose Agent Plugin install target",
+        placeHolder: "Install globally or for one workspace folder",
+        ignoreFocusOut: true,
+      },
+    );
+    return selected?.target;
+  }
+
+  private async pickAgentPluginCandidate(
+    candidates: readonly AgentPluginInstallCandidate[],
+  ): Promise<AgentPluginInstallCandidate | undefined> {
+    if (candidates.length === 1) return candidates[0];
+    const selected = await vscode.window.showQuickPick(
+      candidates.map((candidate) => ({
+        label: candidate.snapshot.manifest?.name ?? candidate.relativePath,
+        description: candidate.snapshot.manifest?.version,
+        detail: `${candidate.relativePath} · ${candidate.snapshot.skills.length} skill(s) · ${Object.keys(candidate.snapshot.mcp?.servers ?? {}).length} MCP server(s)`,
+        candidate,
+      })),
+      {
+        title: "Select Agent Plugin from source",
+        placeHolder: "The source contains multiple standards-compliant plugins",
+        ignoreFocusOut: true,
+      },
+    );
+    return selected?.candidate;
+  }
+
+  private async reviewAgentPluginInstall(
+    candidate: AgentPluginInstallCandidate,
+    source: string,
+    currentEnabled?: boolean,
+    target: Readonly<AgentPluginInstallTarget> = { kind: "global" },
+    shareability:
+      | "shareable"
+      | "not-shareable"
+      | "not-applicable" = "not-applicable",
+  ): Promise<boolean | undefined> {
+    const manifest = candidate.snapshot.manifest;
+    if (!manifest) return undefined;
+    const mcpServers = Object.entries(candidate.snapshot.mcp?.servers ?? {});
+    const stdio = mcpServers.filter(([, server]) => server.type === "stdio");
+    const remote = mcpServers.filter(([, server]) => server.type !== "stdio");
+    const author = manifest.author?.name ?? "Not declared";
+    const detail = [
+      `Source: ${source}`,
+      `Plugin: ${manifest.name}${manifest.version ? ` ${manifest.version}` : ""}`,
+      `Author: ${author} · License: ${manifest.license ?? "Not declared"}`,
+      `Digest: ${candidate.digest}`,
+      `Target: ${target.kind === "global" ? "Global" : `Project ${target.scope.displayName}`}`,
+      ...(target.kind === "project"
+        ? [
+            shareability === "shareable"
+              ? `This install will write or update ${path.join(target.scope.rootPath ?? "<project>", ".agentlink", "plugins.json")}.`
+              : "This source is not shareable; the project install will remain machine-local and no declaration file will be changed.",
+          ]
+        : []),
+      `Contents: ${candidate.snapshot.skills.length} skill(s), ${stdio.length} local stdio MCP server(s), ${remote.length} remote MCP server(s)`,
+      ...(stdio.length > 0
+        ? [
+            `Local commands: ${stdio
+              .map(([name, server]) =>
+                server.type === "stdio"
+                  ? `${name}: ${[server.command, ...(server.args ?? [])].join(" ")}`
+                  : name,
+              )
+              .join("; ")}`,
+            "WARNING: enabled stdio MCP servers execute local code outside AgentLink's command sandbox.",
+          ]
+        : []),
+      ...(candidate.snapshot.skills.length > 0
+        ? [
+            `Skills: ${candidate.snapshot.skills.map((skill) => skill.name).join(", ")}`,
+            "Skill instructions may ask the agent to run bundled scripts; normal AgentLink command approval still applies.",
+          ]
+        : []),
+      ...(remote.length > 0
+        ? [
+            `Remote MCP: ${remote
+              .map(([name, server]) =>
+                server.type === "stdio" ? name : `${name}: ${server.url}`,
+              )
+              .join("; ")}`,
+          ]
+        : []),
+      "Plugin metadata never grants command, write, network, native-tool, or MCP-tool approval.",
+    ].join("\n\n");
+    const enableLabel =
+      currentEnabled === undefined ? "Install and Enable" : "Update and Enable";
+    const disabledLabel =
+      currentEnabled === undefined ? "Install Disabled" : "Update Disabled";
+    const choice = await vscode.window.showWarningMessage(
+      detail,
+      { modal: true },
+      enableLabel,
+      disabledLabel,
+    );
+    if (!choice) return undefined;
+    return choice === enableLabel;
+  }
+
+  private showAgentPluginCommitResult(
+    result: Awaited<ReturnType<AgentPluginManagerHost["commitPrepared"]>>,
+    successMessage: string,
+  ): void {
+    if (result.declarationOutcome.status === "failed") {
+      vscode.window.showWarningMessage(
+        `${successMessage} The machine-local install succeeded, but .agentlink/plugins.json could not be updated: ${result.declarationOutcome.message}`,
+      );
+      return;
+    }
+    vscode.window.showInformationMessage(successMessage);
+  }
+
+  private async resolveAgentPluginInstallId(
+    query: string,
+    action: string,
+  ): Promise<string | undefined> {
+    const host = this.agentPluginManagerHost;
+    if (!host) return undefined;
+    const registry = await host.list();
+    const rows = Object.values(registry.installs);
+    if (query) {
+      const exact = rows.find(
+        (row) => row.installInstanceId === query || row.manifestName === query,
+      );
+      if (exact) return exact.installInstanceId;
+    }
+    const picked = await vscode.window.showQuickPick(
+      rows.map((row) => ({
+        label: row.manifestName,
+        description: `${row.enabled ? "enabled" : "disabled"} · ${row.scope.kind}`,
+        detail: `${row.installInstanceId} · ${row.currentDigest.slice(0, 12)}`,
+        installInstanceId: row.installInstanceId,
+      })),
+      {
+        title: `${action[0]?.toUpperCase()}${action.slice(1)} Agent Plugin`,
+        placeHolder: query
+          ? `No exact plugin matched '${query}'. Choose one instead.`
+          : "Choose an installed plugin",
+        ignoreFocusOut: true,
+      },
+    );
+    return picked?.installInstanceId;
+  }
+
+  private async showInstalledAgentPlugins(
+    projectScope?: Readonly<SessionProjectScope>,
+  ): Promise<void> {
+    const host = this.agentPluginManagerHost;
+    if (!host) return;
+    const snapshot = await host.getSnapshot(projectScope);
+    const lines = snapshot.entries.map((entry) => {
+      if (entry.status === "declared") {
+        const source = entry.declaration
+          ? "git" in entry.declaration.source
+            ? `${entry.declaration.source.git} @ ${entry.declaration.source.commit}`
+            : entry.declaration.source.path
+          : "unknown source";
+        return `declared  ${entry.manifestName}\n  ${source}\n  Install with /plugin install-declared ${entry.manifestName}`;
+      }
+      const row = entry.install!;
+      const state = !row.enabled
+        ? "disabled"
+        : entry.effective === false
+          ? "shadowed"
+          : "enabled ";
+      const shareability =
+        entry.shareability === "not-shareable" ? " · not shareable" : "";
+      const shadowed = entry.shadowedByInstallInstanceId
+        ? `\n  shadowed by ${entry.shadowedByInstallInstanceId}`
+        : "";
+      return `${state}  ${row.manifestName}${row.manifestVersion ? ` ${row.manifestVersion}` : ""}\n  ${row.installInstanceId}\n  ${row.scope.kind} · ${row.source.kind}${shareability} · ${row.currentDigest}${shadowed}`;
+    });
+    const diagnostics = snapshot.declarationDiagnostics.map(
+      (diagnostic) =>
+        `${diagnostic.severity}: ${diagnostic.message}${diagnostic.name ? ` (${diagnostic.name})` : ""}`,
+    );
+    this.outputChannel.appendLine(
+      lines.length === 0 && diagnostics.length === 0
+        ? "No Agent Plugins are installed or declared. Use /plugin install <source>."
+        : [
+            `Agent Plugins (${snapshot.entries.length})${projectScope ? ` for ${projectScope.displayName}` : ""}`,
+            "",
+            ...lines,
+            ...(diagnostics.length > 0
+              ? ["", "Declaration diagnostics", ...diagnostics]
+              : []),
+          ].join("\n"),
+    );
+    this.outputChannel.show(true);
+  }
+
   private async handleBtwQuestion(
     question: string,
     sessionId: string,
@@ -12389,6 +13341,55 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 </body>
 </html>`;
   }
+}
+
+export function classifyApprovalInterruptionReason(
+  request: ApprovalRequest,
+): string {
+  if (request.recoveryAttempt) return "sandbox_native_retry";
+  if (request.humanOnlyReason) {
+    const normalized = request.humanOnlyReason.trim().toLowerCase();
+    if (normalized.includes("repeated denial")) return "guardian_circuit_open";
+    if (normalized.includes("prompt rule")) return "prompt_rule";
+    if (normalized.includes("forbidden rule")) return "forbidden_rule";
+    if (normalized.includes("native")) return "native_execution_human_only";
+    const boundedHumanOnlyReasons = new Set([
+      "authenticated-cli-config",
+      "canonical-target-drift",
+      "credential-store",
+      "environment-secret",
+      "guardian-denied",
+      "inactive-auto-review-policy",
+      "incomplete-write-evidence",
+      "invalid-action",
+      "operation-parameter-limit",
+      "protected-instructions-or-memory",
+      "symlink-ambiguous",
+      "unresolved",
+      "write-evidence-limit",
+    ]);
+    return boundedHumanOnlyReasons.has(normalized)
+      ? `human_only:${normalized}`
+      : "human_only";
+  }
+  const review = request.commandReview ?? request.networkReview;
+  if (review?.status && review.status !== "reviewed") {
+    return `guardian_${review.status}`;
+  }
+  if (review?.outcome === "deny") return "guardian_denied";
+  if (request.kind === "network") return "network_destination_approval";
+  if (request.kind === "path") return "outside_path_approval";
+  if (request.kind === "write") {
+    return request.outsideWorkspace
+      ? "outside_write_approval"
+      : "write_approval";
+  }
+  if (request.kind === "rename") return "rename_approval";
+  if (request.kind === "mcp") return "mcp_tool_approval";
+  if (request.kind === "mode-switch") return "initial_architect_review";
+  if (request.kind === "memory") return "memory_approval";
+  if (request.kind === "worktree") return "worktree_launch_approval";
+  return "other_approval";
 }
 
 /**

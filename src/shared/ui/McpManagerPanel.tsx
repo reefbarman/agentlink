@@ -384,7 +384,9 @@ function GuidedEditor({
   const isHttp =
     type === "sse" || type === "streamable-http" || type === "http";
   const canWriteSecrets =
-    Boolean(onMutateConfig) && snapshot.capabilities.canWriteSecrets !== false;
+    Boolean(onMutateConfig) &&
+    snapshot.capabilities.canWriteSecrets !== false &&
+    entry?.mutationCapabilities?.connectionFields !== false;
   const credentialKeyCount =
     (entry?.envKeys?.length ?? 0) + (entry?.headerKeys?.length ?? 0);
 
@@ -454,11 +456,20 @@ function GuidedEditor({
           return;
         }
 
-        const server: McpManagerServerWriteDraft = {
-          ...review.draft,
-          env: parsedEnv.value,
-          headers: parsedHeaders.value,
-        };
+        const server: McpManagerServerWriteDraft = entry?.mutationTarget
+          ? {
+              name: review.draft.name,
+              toolPolicy: review.draft.toolPolicy,
+              toolDisclosure: review.draft.toolDisclosure,
+              supportsParallelToolCalls: review.draft.supportsParallelToolCalls,
+              allowedTools: review.draft.allowedTools,
+              disabled: review.draft.disabled,
+            }
+          : {
+              ...review.draft,
+              env: parsedEnv.value,
+              headers: parsedHeaders.value,
+            };
         const batch: McpConfigBatchMutation = {
           operationId: randomId(),
           profile: snapshot.profile,
@@ -466,7 +477,9 @@ function GuidedEditor({
           ...(snapshot.project
             ? { projectId: snapshot.project.projectId }
             : {}),
-          expectedRevision: revisionForScope(snapshot, scope),
+          ...(entry?.mutationTarget ? { target: entry.mutationTarget } : {}),
+          expectedRevision:
+            entry?.mutationRevision ?? revisionForScope(snapshot, scope),
           operations: [
             {
               kind: "upsert",
@@ -520,7 +533,9 @@ function GuidedEditor({
         <Field label="Save to">
           <select
             value={scope}
-            disabled={submission.kind === "pending"}
+            disabled={
+              Boolean(entry?.mutationTarget) || submission.kind === "pending"
+            }
             onInput={(event) =>
               setScope(event.currentTarget.value as McpManagerScope)
             }
@@ -543,7 +558,10 @@ function GuidedEditor({
         <Field label="Transport">
           <select
             value={type}
-            disabled={submission.kind === "pending"}
+            disabled={
+              entry?.mutationCapabilities?.connectionFields === false ||
+              submission.kind === "pending"
+            }
             onInput={(event) =>
               setType(
                 event.currentTarget.value as McpManagerServerDraft["type"],
@@ -569,7 +587,10 @@ function GuidedEditor({
         <Field label="Server URL">
           <input
             value={url}
-            disabled={submission.kind === "pending"}
+            disabled={
+              entry?.mutationCapabilities?.connectionFields === false ||
+              submission.kind === "pending"
+            }
             placeholder="https://example.com/mcp"
             onInput={(event) => setUrl(event.currentTarget.value)}
           />
@@ -579,7 +600,10 @@ function GuidedEditor({
           <Field label="Command">
             <input
               value={command}
-              disabled={submission.kind === "pending"}
+              disabled={
+                entry?.mutationCapabilities?.connectionFields === false ||
+                submission.kind === "pending"
+              }
               placeholder="npx"
               onInput={(event) => setCommand(event.currentTarget.value)}
             />
@@ -591,7 +615,10 @@ function GuidedEditor({
             <textarea
               value={args}
               rows={4}
-              disabled={submission.kind === "pending"}
+              disabled={
+                entry?.mutationCapabilities?.connectionFields === false ||
+                submission.kind === "pending"
+              }
               placeholder={
                 '-y\n@modelcontextprotocol/server-example\n"or use a JSON array"'
               }
@@ -613,7 +640,10 @@ function GuidedEditor({
             <input
               value={timeout}
               inputMode="numeric"
-              disabled={submission.kind === "pending"}
+              disabled={
+                entry?.mutationCapabilities?.connectionFields === false ||
+                submission.kind === "pending"
+              }
               placeholder="60000"
               onInput={(event) => setTimeoutValue(event.currentTarget.value)}
             />
@@ -708,8 +738,9 @@ function GuidedEditor({
       </details>
       {!canWriteSecrets && (
         <p class="mcp-manager-note">
-          Secret editing requires a host that supports batch config mutations
-          and secret writes. Existing values will be preserved.
+          {entry?.mutationCapabilities?.connectionFields === false
+            ? "Plugin connection fields and credentials are declared by the immutable package. Only AgentLink policy fields can be edited here."
+            : "Secret editing requires a host that supports batch config mutations and secret writes. Existing values will be preserved."}
         </p>
       )}
       <Feedback state={submission} />
@@ -1201,12 +1232,24 @@ export function McpManagerPanel({
       profile: snapshot.profile,
       scope,
       ...(snapshot.project ? { projectId: snapshot.project.projectId } : {}),
-      expectedRevision: revisionForScope(snapshot, scope),
+      ...(entry.mutationTarget ? { target: entry.mutationTarget } : {}),
+      expectedRevision:
+        entry.mutationRevision ?? revisionForScope(snapshot, scope),
       operations: [
         {
           kind: "upsert",
           conflictAction: "replace",
-          server: { ...entry.config, disabled },
+          server: entry.mutationTarget
+            ? {
+                name: entry.config.name,
+                toolPolicy: entry.config.toolPolicy,
+                toolDisclosure: entry.config.toolDisclosure,
+                supportsParallelToolCalls:
+                  entry.config.supportsParallelToolCalls,
+                allowedTools: entry.config.allowedTools,
+                disabled,
+              }
+            : { ...entry.config, disabled },
         },
       ],
     };
@@ -1257,7 +1300,9 @@ export function McpManagerPanel({
       profile: snapshot.profile,
       scope,
       ...(snapshot.project ? { projectId: snapshot.project.projectId } : {}),
-      expectedRevision: revisionForScope(snapshot, scope),
+      ...(entry.mutationTarget ? { target: entry.mutationTarget } : {}),
+      expectedRevision:
+        entry.mutationRevision ?? revisionForScope(snapshot, scope),
       operations: [{ kind: "remove", serverName: entry.name }],
     };
     setSubmission({ kind: "pending", message: `Removing ${entry.name}…` });
@@ -1539,38 +1584,43 @@ export function McpManagerPanel({
                               />
                             </button>
                           )}
-                        {canEdit && entry && (
-                          <button
-                            class="icon-button"
-                            type="button"
-                            aria-label={`Edit ${name}`}
-                            title="Edit"
-                            onClick={() => {
-                              setEditingServer(name);
-                              setView("guided");
-                            }}
-                          >
-                            <i
-                              class="codicon codicon-edit"
-                              aria-hidden="true"
-                            />
-                          </button>
-                        )}
-                        {canEdit && entry?.preferredEditScope && (
-                          <button
-                            class="icon-button mcp-manager-icon-danger"
-                            type="button"
-                            disabled={submission.kind === "pending"}
-                            aria-label={`Remove ${name}`}
-                            title="Remove"
-                            onClick={() => removeServer(entry)}
-                          >
-                            <i
-                              class="codicon codicon-trash"
-                              aria-hidden="true"
-                            />
-                          </button>
-                        )}
+                        {canEdit &&
+                          entry &&
+                          entry.mutationCapabilities?.policyFields !==
+                            false && (
+                            <button
+                              class="icon-button"
+                              type="button"
+                              aria-label={`Edit ${name}`}
+                              title="Edit"
+                              onClick={() => {
+                                setEditingServer(name);
+                                setView("guided");
+                              }}
+                            >
+                              <i
+                                class="codicon codicon-edit"
+                                aria-hidden="true"
+                              />
+                            </button>
+                          )}
+                        {canEdit &&
+                          entry?.preferredEditScope &&
+                          entry.mutationCapabilities?.remove !== false && (
+                            <button
+                              class="icon-button mcp-manager-icon-danger"
+                              type="button"
+                              disabled={submission.kind === "pending"}
+                              aria-label={`Remove ${name}`}
+                              title="Remove"
+                              onClick={() => removeServer(entry)}
+                            >
+                              <i
+                                class="codicon codicon-trash"
+                                aria-hidden="true"
+                              />
+                            </button>
+                          )}
                       </span>
                     </div>
                     {expanded && info && (

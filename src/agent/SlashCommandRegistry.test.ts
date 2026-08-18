@@ -344,6 +344,8 @@ describe("SlashCommandRegistry", () => {
     expect(names).toContain("rule:global-rule");
     expect(names).toContain("mcp");
     expect(names).toContain("mcp-config");
+    expect(names).not.toContain("plugin");
+    expect(names).not.toContain("plugins");
     expect(names).toContain("mcp-refresh");
     expect(names).toContain("memory");
     expect(commands.find((cmd) => cmd.name === "memory")?.builtin).toBe(true);

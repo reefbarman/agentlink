@@ -15,8 +15,16 @@ const BUNDLED_SKILLS_DIRS = [
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export type SkillSourceScope = "builtin" | "global" | "ancestor" | "project";
-export type SkillSourceNamespace = "agents" | "claude" | "agentlink";
+export type SkillSourceNamespace = "agents" | "claude" | "agentlink" | "plugin";
 export type SkillDiagnosticSeverity = "warning" | "error";
+
+export interface PluginSkillProvenance {
+  installInstanceId: string;
+  packageDigest: string;
+  manifestName: string;
+  packageRelativePath: string;
+  effectiveScope: "global" | "project";
+}
 
 export interface SkillProvenance {
   scope: SkillSourceScope;
@@ -26,6 +34,7 @@ export interface SkillProvenance {
   skillDirectory: string;
   realSkillPath: string;
   priority: number;
+  plugin?: PluginSkillProvenance;
 }
 
 export interface SkillRestrictions {
@@ -129,6 +138,8 @@ interface SkillSource {
 export interface SkillCatalogOptions {
   includeBody?: boolean;
   disabledSkillIds?: readonly string[];
+  /** Already validated external entries merged before canonical resolution. */
+  additionalEntries?: readonly SkillEntry[];
 }
 
 type FrontmatterRecord = Record<string, unknown>;
@@ -723,6 +734,24 @@ async function loadSkillCatalogFromSources(
     }
     diagnostics.push(...scanned.diagnostics);
   }
+  entries.push(
+    ...(options.additionalEntries ?? []).map((entry) => ({
+      ...entry,
+      provenance: { ...entry.provenance },
+      restrictions: {
+        ...entry.restrictions,
+        allowedTools: entry.restrictions.allowedTools
+          ? [...entry.restrictions.allowedTools]
+          : undefined,
+      },
+      permissions: {
+        requestedTools: [...entry.permissions.requestedTools],
+      },
+      dependencies: [...entry.dependencies],
+      recommendations: [...entry.recommendations],
+      resolvedDependencies: [...entry.resolvedDependencies],
+    })),
+  );
 
   const uniqueById = new Map<string, RawSkill>();
   for (const entry of entries) {

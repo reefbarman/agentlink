@@ -30,6 +30,7 @@ export type BrowserGatewayOwnerProjectionSourceKind =
   | "theme"
   | "model_catalog"
   | "mcp"
+  | "plugins"
   | "policies";
 
 export interface BrowserGatewayOwnerProjectionDisposable {
@@ -178,6 +179,7 @@ export interface BrowserGatewayOwnerProjectionReadSet {
   repository: BrowserGatewayRepositoryInfo | null;
   theme: BrowserGatewayThemeSnapshot;
   modelCatalogRevision: string;
+  pluginCatalogRevision?: string;
   mcp: readonly BrowserGatewayOwnerMcpSource[];
   policies: BrowserGatewayOwnerPolicySource;
 }

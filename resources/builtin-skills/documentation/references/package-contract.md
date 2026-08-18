@@ -9,7 +9,7 @@ This bundled reference is generated from the extension's `package.json` during b
 | Field          | Value       |
 | -------------- | ----------- |
 | Name           | `AgentLink` |
-| Version        | `1.18.66`   |
+| Version        | `1.18.71`   |
 | Publisher      | `agentlink` |
 | License        | `MIT`       |
 | VS Code engine | `^1.109.0`  |
@@ -41,6 +41,8 @@ This bundled reference is generated from the extension's `package.json` during b
 | `agentlink.dockChatTab`                    | AgentLink: Dock Chat Tab                              |
 | `agentlink.explainWithAgent`               | Explain with AgentLink                                |
 | `agentlink.fixWithAgent`                   | Fix with AgentLink                                    |
+| `agentlink.installAgentPluginFromSource`   | AgentLink: Install Agent Plugin From Source           |
+| `agentlink.manageAgentPlugins`             | AgentLink: Manage Agent Plugins                       |
 | `agentlink.managePairedDevices`            | AgentLink: Manage Paired Browser Devices              |
 | `agentlink.openBrowserGateway`             | AgentLink: Open Browser Gateway                       |
 | `agentlink.openTerminal`                   | AgentLink: Open Terminal                              |

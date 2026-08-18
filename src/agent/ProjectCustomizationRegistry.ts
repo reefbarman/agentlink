@@ -4,6 +4,7 @@ import {
   type SlashCommand,
 } from "./SlashCommandRegistry.js";
 import { getAllModes, loadCustomModes, type AgentMode } from "./modes.js";
+import type { AgentPluginCatalogProvider } from "./AgentPluginCatalog.js";
 
 interface ProjectCustomizationEntry {
   workspaceFolderUri: string;
@@ -18,13 +19,23 @@ export interface ProjectCustomizationRegistryDependencies {
     rootPath: string,
     mode: string,
     disabledSkillIds: readonly string[],
+    context?: {
+      readonly scope: Readonly<SessionProjectScope>;
+      readonly agentPluginCatalogProvider?: AgentPluginCatalogProvider;
+    },
   ): Promise<SlashCommand[]>;
 }
 
 const defaultDependencies: ProjectCustomizationRegistryDependencies = {
   loadCustomModes,
-  async loadSlashCommands(rootPath, mode, disabledSkillIds) {
-    const registry = new SlashCommandRegistry(rootPath, mode, disabledSkillIds);
+  async loadSlashCommands(rootPath, mode, disabledSkillIds, context) {
+    const registry = new SlashCommandRegistry(
+      rootPath,
+      mode,
+      disabledSkillIds,
+      context?.scope,
+      context?.agentPluginCatalogProvider,
+    );
     await registry.reload();
     return registry.getAll();
   },
@@ -43,6 +54,7 @@ export class ProjectCustomizationRegistry {
     private readonly getDisabledSkillIds: (
       scope: SessionProjectScope,
     ) => readonly string[] = () => [],
+    private readonly agentPluginCatalogProvider?: AgentPluginCatalogProvider,
   ) {}
 
   async getModes(scope: SessionProjectScope): Promise<AgentMode[]> {
@@ -64,9 +76,24 @@ export class ProjectCustomizationRegistry {
     const cacheKey = `${mode}\0${disabledSkillIds.join("\0")}`;
     let commands = entry.slashCommandsByMode.get(cacheKey);
     if (!commands) {
-      commands = this.dependencies
-        .loadSlashCommands(entry.rootPath, mode, disabledSkillIds)
-        .then((loaded) => Object.freeze(loaded.map(cloneSlashCommand)));
+      const loaded = this.agentPluginCatalogProvider
+        ? this.dependencies.loadSlashCommands(
+            entry.rootPath,
+            mode,
+            disabledSkillIds,
+            {
+              scope,
+              agentPluginCatalogProvider: this.agentPluginCatalogProvider,
+            },
+          )
+        : this.dependencies.loadSlashCommands(
+            entry.rootPath,
+            mode,
+            disabledSkillIds,
+          );
+      commands = loaded.then((items) =>
+        Object.freeze(items.map(cloneSlashCommand)),
+      );
       entry.slashCommandsByMode.set(cacheKey, commands);
     }
     return (await commands).map(cloneSlashCommand);

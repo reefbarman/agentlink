@@ -270,6 +270,8 @@ export interface BrowserGatewaySnapshotState {
    * dedicated event (Target A / Q7).
    */
   modelsVersion: number;
+  /** Monotonic invalidation signal for the lazily fetched plugin manager. */
+  pluginsVersion?: number;
 }
 
 export interface BrowserGatewaySnapshotPublication {
@@ -316,6 +318,7 @@ export class BrowserGatewayService implements vscode.Disposable {
   private seededForegroundSessionId: string | undefined;
   private recentEvents: AgentUiEvent[] = [];
   private modelsVersion = 0;
+  private pluginsVersion = 0;
   private repositoryInfoCache:
     | { value: BrowserGatewayRepositoryInfo | null; expiresAt: number }
     | undefined;
@@ -501,13 +504,14 @@ export class BrowserGatewayService implements vscode.Disposable {
 
   subscribeToSurfaceChanges(
     onDidChangeSurface: (
-      listener: (kind: "background" | "mcp" | "theme") => void,
+      listener: (kind: "background" | "mcp" | "plugins" | "theme") => void,
     ) => {
       dispose(): void;
     },
   ): void {
     this.disposables.push(
       onDidChangeSurface((kind) => {
+        if (kind === "plugins") this.pluginsVersion += 1;
         this.onDidChangeOwnerProjectionEmitter.fire(kind);
         this.invalidateBrowserSnapshot({
           publishWithoutClients: kind === "theme",
@@ -1087,6 +1091,7 @@ export class BrowserGatewayService implements vscode.Disposable {
       })),
       theme: this.getThemeSnapshot(),
       modelsVersion: this.modelsVersion,
+      pluginsVersion: this.pluginsVersion,
     };
   }
 
@@ -1241,6 +1246,7 @@ export class BrowserGatewayService implements vscode.Disposable {
       repository: snapshot.session.repository,
       theme: snapshot.theme,
       modelCatalogRevision: String(snapshot.modelsVersion),
+      pluginCatalogRevision: String(snapshot.pluginsVersion),
       mcp: snapshot.ui.mcpStatusInfos.map((server) => ({
         name: server.name,
         status: server.status,

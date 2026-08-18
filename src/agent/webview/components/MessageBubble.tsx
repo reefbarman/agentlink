@@ -127,6 +127,7 @@ interface MessageBubbleProps {
   onPromoteMcpToolApproval?: (promotion: {
     serverName: string;
     bareToolName: string;
+    mutationTarget?: import("../../../shared/types").McpApprovalPromotionMeta["mutationTarget"];
     scope: "session" | "project" | "global";
   }) => void;
   onOpenSpecialBlockPanel?: (block: {

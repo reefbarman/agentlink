@@ -1,8 +1,8 @@
 import * as os from "os";
 import * as path from "path";
 
-import { randomUUID } from "crypto";
 import { appendJsonlLinesWithLock } from "./jsonlAppend.js";
+import { randomUUID } from "crypto";
 
 /**
  * Session-outcome telemetry: a local, event-level stream (one JSONL line per
@@ -89,10 +89,32 @@ export interface BackgroundLifecycleEvent {
   reviewScopeBytes?: number;
 }
 
+/**
+ * A human-facing approval card shown while the complete Approve for Me policy
+ * was active. Values are deliberately bounded categories; action text, paths,
+ * reviewer rationale, and other request payloads are never recorded.
+ */
+export interface ApprovalInterruptionEvent {
+  type: "approval_interruption";
+  sessionId: string;
+  background: boolean;
+  mode?: string;
+  projectId?: string;
+  approvalKind: string;
+  reason: string;
+  guardianStatus?: string;
+  guardianOutcome?: string;
+  risk?: string;
+  permissionIntent?: string;
+  authorityReason?: string;
+  routeReason?: string;
+}
+
 export type SessionOutcomeEvent =
   | TurnCompletedEvent
   | TaskCompletedEvent
-  | BackgroundLifecycleEvent;
+  | BackgroundLifecycleEvent
+  | ApprovalInterruptionEvent;
 
 export interface SessionOutcomeRecord {
   version: 1;

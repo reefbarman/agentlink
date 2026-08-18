@@ -111,6 +111,7 @@ interface ProjectedOwnerState {
   repository: BrowserGatewayRepositoryState | null;
   theme: BrowserGatewayThemeState;
   modelCatalogRevision: string;
+  pluginCatalogRevision: string;
   capabilities: BrowserGatewayCapabilityStatus[];
 }
 
@@ -447,6 +448,17 @@ export class BrowserGatewayOwnerProjectionAdapter {
           revision,
         );
         previous.modelCatalogRevision = revision;
+        return;
+      }
+      case "plugins": {
+        const revision = bounded(readSet.pluginCatalogRevision ?? "0", 256);
+        this.publishIfChanged(
+          "plugin_catalog.revision.updated",
+          { revision },
+          previous.pluginCatalogRevision,
+          revision,
+        );
+        previous.pluginCatalogRevision = revision;
         return;
       }
       case "mcp": {
@@ -829,6 +841,7 @@ function projectReadSet(
     repository: projectRepository(readSet),
     theme: projectTheme(readSet),
     modelCatalogRevision: bounded(readSet.modelCatalogRevision, 256),
+    pluginCatalogRevision: bounded(readSet.pluginCatalogRevision ?? "0", 256),
     capabilities: projectCapabilities(readSet, commandCapabilities),
   };
 }

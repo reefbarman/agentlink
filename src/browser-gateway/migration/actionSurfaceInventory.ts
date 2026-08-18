@@ -319,6 +319,18 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
   retainedHttp(
     "vscode_gateway",
     "GET",
+    "/api/plugins/snapshot",
+    "The bounded read-only Agent Plugin Manager snapshot remains a lazy authenticated HTTP read.",
+  ),
+  unsupported(
+    "vscode_gateway",
+    "*",
+    "/api/plugins/*",
+    "Browser plugin mutations are intentionally unavailable and return an explicit read-only error.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "GET",
     "/api/mcp/config",
     "Read-only MCP configuration view remains HTTP.",
   ),

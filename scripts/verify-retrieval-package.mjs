@@ -28,6 +28,12 @@ const REQUIRED_PATHS = [
   "resources/builtin-skills/documentation/references/complete-reference.md",
   "resources/builtin-skills/documentation/references/package-contract.md",
   "resources/builtin-skills/documentation/references/release-notes.md",
+  "resources/agent-plugins/1.0.0/plugin.schema.json",
+  "resources/agent-plugins/1.0.0/mcp.schema.json",
+  "resources/agent-plugins/1.0.0/README.md",
+  "resources/agent-plugins/1.0.0/LICENSE.md",
+  "resources/agent-plugins/1.0.0/LICENSES/Apache-2.0.txt",
+  "resources/agent-plugins/1.0.0/LICENSES/CC-BY-4.0.txt",
 ];
 
 function normalizePackagePath(value) {

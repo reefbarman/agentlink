@@ -367,6 +367,30 @@ function makeChatViewProviderStub() {
     })),
     submitBrowserMcpConfigOpenRaw: vi.fn(async () => ({ ok: true })),
     submitBrowserMcpAction: vi.fn(async () => ({ ok: true, infos: [] })),
+    getBrowserAgentPluginManagerSnapshot: vi.fn(async (projectId: string) => ({
+      schemaVersion: 1 as const,
+      registryRevision: 2,
+      catalogRevision: 3,
+      project: {
+        projectId,
+        displayName: "Project A",
+        availability: "available" as const,
+      },
+      projects: [],
+      rows: [],
+      diagnostics: [],
+      capabilities: {
+        canInstall: false,
+        canEnable: false,
+        canInspect: true,
+        canReinstall: false,
+        canRollback: false,
+        canUninstall: false,
+        canRemoveData: false,
+        canEditPolicy: false,
+      },
+      readOnlyReason: "Manage plugins in VS Code.",
+    })),
     getBrowserBgTranscript: vi.fn((sessionId: string) => ({
       ok: true,
       transcript: {
@@ -1066,6 +1090,81 @@ describe("BrowserGatewayServer", () => {
     expect(
       chatViewProvider.submitBrowserMcpConfigSnapshot,
     ).toHaveBeenCalledWith("ask-agent");
+
+    const unauthorizedPluginSnapshot = await fetch(
+      `${baseUrl}/api/plugins/snapshot?projectId=project-a`,
+    );
+    expect(unauthorizedPluginSnapshot.status).toBe(401);
+
+    const pluginSnapshot = await fetch(
+      `${baseUrl}/api/plugins/snapshot?projectId=project-a`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(pluginSnapshot.status).toBe(200);
+    expect(pluginSnapshot.headers.get("Cache-Control")).toBe("no-store");
+    expect(await pluginSnapshot.json()).toMatchObject({
+      schemaVersion: 1,
+      project: { projectId: "project-a" },
+      readOnlyReason: "Manage plugins in VS Code.",
+    });
+    expect(
+      chatViewProvider.getBrowserAgentPluginManagerSnapshot,
+    ).toHaveBeenCalledWith("project-a");
+
+    const availableProjects = sessionManager.getWorkspaceProjects();
+    chatViewProvider.getBrowserAgentPluginManagerSnapshot.mockImplementationOnce(
+      async () => {
+        sessionManager.getWorkspaceProjects.mockReturnValue([]);
+        return undefined as never;
+      },
+    );
+    const vanishedPluginProject = await fetch(
+      `${baseUrl}/api/plugins/snapshot?projectId=project-a`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(vanishedPluginProject.status).toBe(409);
+    expect(await vanishedPluginProject.json()).toMatchObject({
+      error: "project_state_mismatch",
+      reason: "project_not_found",
+      projectId: "project-a",
+      refresh: true,
+    });
+    sessionManager.getWorkspaceProjects.mockReturnValue(availableProjects);
+
+    const missingPluginProject = await fetch(
+      `${baseUrl}/api/plugins/snapshot`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(missingPluginProject.status).toBe(409);
+    expect(await missingPluginProject.json()).toMatchObject({
+      error: "project_state_mismatch",
+      reason: "project_required",
+    });
+
+    const pluginSnapshotCalls =
+      chatViewProvider.getBrowserAgentPluginManagerSnapshot.mock.calls.length;
+    for (const method of [
+      "POST",
+      "DELETE",
+      "PUT",
+      "PATCH",
+      "OPTIONS",
+    ] as const) {
+      const mutationResponse = await fetch(
+        `${baseUrl}/api/plugins/snapshot?projectId=project-a`,
+        {
+          method,
+          headers: { Authorization: "Bearer test-token" },
+        },
+      );
+      expect(mutationResponse.status).toBe(403);
+      expect(await mutationResponse.json()).toEqual({
+        error: "browser_plugins_read_only",
+      });
+    }
+    expect(
+      chatViewProvider.getBrowserAgentPluginManagerSnapshot,
+    ).toHaveBeenCalledTimes(pluginSnapshotCalls);
 
     const mainMcpConfigResponse = await fetch(
       `${baseUrl}/api/mcp/config?profile=main&projectId=project-a`,

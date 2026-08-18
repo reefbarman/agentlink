@@ -7,6 +7,8 @@ import {
   loadSkillCatalog,
   type SkillEntry,
 } from "./skillLoader.js";
+import type { AgentPluginCatalogProvider } from "./AgentPluginCatalog.js";
+import type { SessionProjectScope } from "../core/workspaceProjects.js";
 
 export interface SlashCommand {
   name: string;
@@ -198,6 +200,19 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   {
     name: "skills",
     description: "Show detected AgentLink skills for the current mode",
+    source: "builtin",
+    builtin: true,
+  },
+  {
+    name: "plugin",
+    description:
+      "Install or manage plugins: /plugin <install|list|enable|disable|update|uninstall|purge> [source|id]",
+    source: "builtin",
+    builtin: true,
+  },
+  {
+    name: "plugins",
+    description: "Open the Agent Plugin Manager",
     source: "builtin",
     builtin: true,
   },
@@ -418,6 +433,8 @@ export class SlashCommandRegistry {
     cwd: string,
     modeSlug = "code",
     disabledSkillIds: readonly string[] = [],
+    private readonly projectScope?: Readonly<SessionProjectScope>,
+    private readonly agentPluginCatalogProvider?: AgentPluginCatalogProvider,
   ) {
     this.cwd = cwd;
     this.modeSlug = modeSlug;
@@ -471,8 +488,14 @@ export class SlashCommandRegistry {
   }
 
   private async loadSkillCommands(): Promise<SlashCommand[]> {
+    const pluginSkills =
+      this.projectScope && this.agentPluginCatalogProvider
+        ? (await this.agentPluginCatalogProvider.getSnapshot(this.projectScope))
+            .skills
+        : [];
     const catalog = await loadSkillCatalog(this.cwd, this.modeSlug, {
       disabledSkillIds: this.disabledSkillIds,
+      additionalEntries: pluginSkills,
     });
     const skills = catalog.entries.filter((skill) => skill.enabled);
     const collidedNames = getCollidedSkillNames(skills);

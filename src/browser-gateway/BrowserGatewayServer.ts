@@ -637,6 +637,19 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "GET",
+        pathExact("/api/plugins/snapshot"),
+        ({ req, rawUrl, res }) =>
+          this.handleAgentPluginSnapshot(req, rawUrl, res),
+        internal("plugin snapshot failed"),
+      ),
+      route(
+        "*",
+        match("path-prefix", "/api/plugins/"),
+        ({ req, res }) => this.handleAgentPluginMutationUnavailable(req, res),
+        none,
+      ),
+      route(
+        "GET",
         pathExact("/api/mcp/config"),
         ({ req, rawUrl, res }) =>
           this.handleMcpConfigSnapshot(req, rawUrl, res),
@@ -2264,6 +2277,59 @@ export class BrowserGatewayServer implements vscode.Disposable {
       value === "ask-agent-global"
       ? value
       : null;
+  }
+
+  private async handleAgentPluginSnapshot(
+    req: http.IncomingMessage,
+    url: string,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const requestUrl = new URL(url, "http://agentlink.local");
+    const projectId = this.resolveRequestedProjectId(
+      requestUrl.searchParams.get("projectId"),
+      res,
+      { requireExplicit: true },
+    );
+    if (!projectId) return;
+    const snapshot =
+      await this.chatViewProvider.getBrowserAgentPluginManagerSnapshot(
+        projectId,
+      );
+    if (!snapshot) {
+      const availability =
+        this.gatewayService.getProjectAvailability(projectId);
+      if (availability !== "available") {
+        this.writeJson(res, 409, {
+          error: "project_state_mismatch",
+          reason:
+            availability === "unknown"
+              ? "project_not_found"
+              : "project_unavailable",
+          projectId,
+          refresh: true,
+        });
+      } else {
+        this.writeJson(res, 503, { error: "plugin_manager_unavailable" });
+      }
+      return;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    this.writeJson(res, 200, snapshot);
+  }
+
+  private handleAgentPluginMutationUnavailable(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): void {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    this.writeJson(res, 403, { error: "browser_plugins_read_only" });
   }
 
   private async handleMcpConfigSnapshot(

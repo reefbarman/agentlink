@@ -5925,6 +5925,7 @@ describe("dispatchToolCall", () => {
       toolName: "linear__list_issues",
       input: { query: "bug" },
       signal: undefined,
+      authorizedByCaller: true,
     });
     expect(mcpHub.getServerConfig).not.toHaveBeenCalled();
     expect(mcpHub.callTool).not.toHaveBeenCalled();
@@ -5972,6 +5973,7 @@ describe("dispatchToolCall", () => {
       toolName: "linear__list_issues",
       input: { query: "bug" },
       signal: undefined,
+      authorizedByCaller: true,
     });
     expect(mcpHub.getToolDefs).not.toHaveBeenCalled();
     expect(mcpHub.getServerConfig).not.toHaveBeenCalled();
@@ -6016,6 +6018,7 @@ describe("dispatchToolCall", () => {
       toolName: "unityMCP__manage_texture",
       input,
       signal: undefined,
+      authorizedByCaller: true,
     });
   });
 
@@ -6082,7 +6085,7 @@ describe("dispatchToolCall", () => {
     expect(currentHub.callTool).toHaveBeenCalledWith(
       "linear__list_issues",
       { query: "bug" },
-      { signal: undefined },
+      { signal: undefined, authorizedByCaller: true },
     );
     expect(staleHub.callTool).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
@@ -6120,7 +6123,7 @@ describe("dispatchToolCall", () => {
       {
         ok: true,
       },
-      { signal: undefined },
+      { signal: undefined, authorizedByCaller: true },
     );
   });
 
@@ -6222,7 +6225,7 @@ describe("dispatchToolCall", () => {
       {
         query: "bug",
       },
-      { signal: undefined },
+      { signal: undefined, authorizedByCaller: true },
     );
   });
 
@@ -6281,7 +6284,7 @@ describe("dispatchToolCall", () => {
       {
         query: "bug",
       },
-      { signal: undefined },
+      { signal: undefined, authorizedByCaller: true },
     );
     expect(result.uiMeta?.mcpApprovalPromotion).toEqual({
       serverName: "linear",
@@ -6338,7 +6341,7 @@ describe("dispatchToolCall", () => {
     expect(mcpHub.callTool).toHaveBeenCalledWith(
       "linear__list_issues",
       {},
-      { signal: undefined },
+      { signal: undefined, authorizedByCaller: true },
     );
     expect(onApprovalRequest).not.toHaveBeenCalled();
   });
@@ -6407,7 +6410,7 @@ describe("dispatchToolCall", () => {
     expect(mcpHub.callTool).toHaveBeenCalledWith(
       "linear__list_issues",
       { query: "bug" },
-      { signal: undefined },
+      { signal: undefined, authorizedByCaller: true },
     );
   });
 
@@ -6847,6 +6850,7 @@ describe("dispatchToolCall", () => {
       toolName: "notion__search",
       input: { query: "docs" },
       signal: undefined,
+      authorizedByCaller: true,
     });
     expect((result.content[0] as { text: string }).text).toContain(
       "provider failed",

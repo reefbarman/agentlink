@@ -28,6 +28,8 @@ import {
   loadSkillCatalog,
   type SkillEntry,
 } from "./skillLoader.js";
+import type { AgentPluginCatalogProvider } from "./AgentPluginCatalog.js";
+import type { SessionProjectScope } from "../core/workspaceProjects.js";
 import {
   projectSkillCatalog,
   resolveSkillCatalogBudgetChars,
@@ -1178,6 +1180,8 @@ export async function buildPromptArtifacts(
     mcpToolCatalog?: McpToolDisclosureCatalogEntry[];
     agentMode?: AgentMode;
     disabledSkillIds?: readonly string[];
+    projectScope?: Readonly<SessionProjectScope>;
+    agentPluginCatalogProvider?: AgentPluginCatalogProvider;
     promptProfile?: Readonly<PromptProfileResolution>;
     promptProfileOverrides?: Readonly<Record<string, PromptProfile>>;
     /** Deterministic catalog-budget override for evaluation and tests. */
@@ -1272,6 +1276,18 @@ export async function buildPromptArtifacts(
     ...BUILT_IN_MODE_SLUGS,
     ...(BUILT_IN_MODE_SLUGS.includes(mode) ? [] : [mode]),
   ];
+  const pluginSkills =
+    options?.projectScope && options.agentPluginCatalogProvider
+      ? (
+          await options.agentPluginCatalogProvider.getSnapshot(
+            options.projectScope,
+          )
+        ).skills
+      : [];
+  const skillOptions = {
+    disabledSkillIds: options?.disabledSkillIds,
+    additionalEntries: pluginSkills,
+  };
   const [instructionBlocks, modeRules, skills] = await Promise.all([
     loadWorkspaceInstructionBlocks(
       cwd,
@@ -1284,12 +1300,10 @@ export async function buildPromptArtifacts(
     // Likewise the skills TOC must not vary by mode: advertise the union
     // across modes (mode-restricted skills are still labeled by their dirs).
     conversationModePlacement
-      ? loadCanonicalSkillsForModes(cwd, skillModeSlugs, {
-          disabledSkillIds: options?.disabledSkillIds,
-        })
-      : loadSkillCatalog(cwd, mode, {
-          disabledSkillIds: options?.disabledSkillIds,
-        }).then((catalog) => catalog.entries.filter((entry) => entry.enabled)),
+      ? loadCanonicalSkillsForModes(cwd, skillModeSlugs, skillOptions)
+      : loadSkillCatalog(cwd, mode, skillOptions).then((catalog) =>
+          catalog.entries.filter((entry) => entry.enabled),
+        ),
   ]);
   const instructionSections = buildInstructionSections(instructionBlocks, cwd, {
     activeFilePath,
@@ -1428,6 +1442,8 @@ export async function buildSystemPrompt(
     mcpToolCatalog?: McpToolDisclosureCatalogEntry[];
     agentMode?: AgentMode;
     disabledSkillIds?: readonly string[];
+    projectScope?: Readonly<SessionProjectScope>;
+    agentPluginCatalogProvider?: AgentPluginCatalogProvider;
     promptProfile?: Readonly<PromptProfileResolution>;
     promptProfileOverrides?: Readonly<Record<string, PromptProfile>>;
     skillCatalogBudgetChars?: number;

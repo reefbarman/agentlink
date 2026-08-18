@@ -25,6 +25,7 @@ import type {
   TerminalExecutionPreset,
 } from "../../core/capabilities/terminal.js";
 
+import type { AgentPluginManagerSnapshot } from "../../shared/agentPluginManagerTypes.js";
 import type { CommandApprovalPolicy } from "../../approvals/commandApprovalPolicy.js";
 import type { ComposeTrace } from "../../shared/composeTypes.js";
 import type { ContextHealthSnapshot } from "../../shared/contextHealth.js";
@@ -451,6 +452,11 @@ export type ExtensionMessage =
       configSnapshot?: McpConfigSnapshot;
     }
   | { type: "agentMcpConfigMutationResult"; result: McpConfigMutationResult }
+  | {
+      type: "agentPluginManagerSnapshot";
+      open?: boolean;
+      snapshot: AgentPluginManagerSnapshot;
+    }
   | {
       type: "agentMemoryPanelUpdate";
       requestId?: string;

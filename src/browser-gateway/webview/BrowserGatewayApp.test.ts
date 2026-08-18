@@ -120,6 +120,15 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
         "button",
         {
           type: "button",
+          "data-testid": "trigger-plugins",
+          onClick: () => onExecuteBuiltinCommand?.("plugins", ""),
+        },
+        "Trigger /plugins",
+      ),
+      h(
+        "button",
+        {
+          type: "button",
           "data-testid": "trigger-mcp-config",
           onClick: () => onExecuteBuiltinCommand?.("mcp-config", ""),
         },
@@ -266,6 +275,63 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     json: async () => body,
   } as Response;
+}
+
+function createAgentPluginManagerSnapshot(projectId = "project-1") {
+  return {
+    schemaVersion: 1 as const,
+    registryRevision: 2,
+    catalogRevision: 3,
+    project: {
+      projectId,
+      displayName: projectId === "project-2" ? "Second" : "Workspace",
+      availability: "available" as const,
+    },
+    projects: [
+      {
+        projectId: "project-1",
+        displayName: "Workspace",
+        availability: "available" as const,
+      },
+      {
+        projectId: "project-2",
+        displayName: "Second",
+        availability: "available" as const,
+      },
+    ],
+    rows: [
+      {
+        status: "enabled" as const,
+        manifestName:
+          projectId === "project-2" ? "second-plugin" : "demo-plugin",
+        manifestVersion: "1.0.0",
+        enabled: true,
+        scope: "project" as const,
+        projectId,
+        source: {
+          kind: "git" as const,
+          label: "https://example.com/plugin.git",
+          shareability: "shareable" as const,
+        },
+        currentDigest: "sha256:demo",
+        skills: [],
+        mcpServers: [],
+        diagnostics: [],
+      },
+    ],
+    diagnostics: [],
+    capabilities: {
+      canInstall: false,
+      canEnable: false,
+      canInspect: true,
+      canReinstall: false,
+      canRollback: false,
+      canUninstall: false,
+      canRemoveData: false,
+      canEditPolicy: false,
+    },
+    readOnlyReason: "Manage plugins in VS Code.",
+  };
 }
 
 function createAskAgentMcpConfigSnapshot() {
@@ -446,6 +512,7 @@ type TestSnapshot = {
     themeLabel: string;
     source: string;
   };
+  pluginsVersion?: number;
 };
 
 function createAskAgentSessionResponse(
@@ -893,6 +960,14 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       if (url.includes("/api/ui-state")) {
         return jsonResponse(snapshot);
       }
+      if (url.includes("/api/plugins/snapshot")) {
+        const projectId = new URL(url, "http://localhost").searchParams.get(
+          "projectId",
+        );
+        return jsonResponse(
+          createAgentPluginManagerSnapshot(projectId ?? "project-1"),
+        );
+      }
       if (url.includes("/api/slash-commands")) {
         return jsonResponse({
           commands: [
@@ -947,6 +1022,200 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     window.localStorage.clear();
     window.sessionStorage.clear();
     document.documentElement.removeAttribute("style");
+  });
+
+  it("lazily fetches and renders the workspace plugin manager read-only", async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).includes("/api/ui-state"),
+        ),
+      ).toBe(true);
+    });
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("/api/plugins/snapshot"),
+      ),
+    ).toBe(false);
+
+    await selectWorkspaceTab();
+    await waitFor(() => {
+      expect(screen.getByTestId("current-model").textContent).toBe(
+        "claude-sonnet-4-6",
+      );
+    });
+    fireEvent.click(screen.getByTestId("trigger-plugins"));
+
+    await screen.findByText("Agent Plugin Manager");
+    expect(screen.getByText("demo-plugin 1.0.0")).toBeTruthy();
+    expect(document.body.textContent).toContain(
+      "Use /plugin list to inspect installs",
+    );
+    expect(screen.getByText("Manage plugins in VS Code.")).toBeTruthy();
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Install" })
+        .disabled,
+    ).toBe(true);
+    const pluginCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).includes("/api/plugins/snapshot"),
+    );
+    expect(pluginCall).toBeDefined();
+    const [pluginRequest, pluginInit] = pluginCall!;
+    expect(String(pluginRequest)).toContain("projectId=project-1");
+    expect(String(pluginRequest)).toContain("instanceId=instance-1");
+    const pluginHeaders = pluginInit?.headers as
+      | Record<string, string>
+      | undefined;
+    expect(pluginHeaders?.Authorization).toBe("Bearer test-token");
+  });
+
+  it("does not load plugins in projectless Ask Agent", async () => {
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await screen.findByTestId("trigger-plugins");
+    fireEvent.click(screen.getByTestId("trigger-plugins"));
+    await screen.findByText(
+      "Agent Plugins are unavailable in projectless Ask Agent. Open a VS Code workspace session to inspect them.",
+    );
+    expect(
+      vi
+        .mocked(globalThis.fetch)
+        .mock.calls.some(([input]) =>
+          String(input).includes("/api/plugins/snapshot"),
+        ),
+    ).toBe(false);
+  });
+
+  it("ignores stale plugin project responses and accepts panel project selection", async () => {
+    const fallbackFetch = globalThis.fetch;
+    let resolveProjectOne: ((response: Response) => void) | undefined;
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (
+          url.includes("/api/plugins/snapshot") &&
+          url.includes("projectId=project-1")
+        ) {
+          return new Promise<Response>((resolve) => {
+            resolveProjectOne = resolve;
+          });
+        }
+        if (
+          url.includes("/api/plugins/snapshot") &&
+          url.includes("projectId=project-2")
+        ) {
+          return jsonResponse(createAgentPluginManagerSnapshot("project-2"));
+        }
+        return fallbackFetch(input, init);
+      },
+    ) as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+    await selectWorkspaceTab();
+    await waitFor(() => {
+      expect(screen.getByTestId("current-model").textContent).toBe(
+        "claude-sonnet-4-6",
+      );
+    });
+    fireEvent.click(await screen.findByTestId("trigger-plugins"));
+    await waitFor(() => expect(resolveProjectOne).toBeTypeOf("function"));
+    await act(async () => {
+      resolveProjectOne!(jsonResponse(createAgentPluginManagerSnapshot()));
+    });
+    await screen.findByText("demo-plugin 1.0.0");
+
+    fireEvent.input(screen.getByLabelText("Agent Plugin project"), {
+      target: { value: "project-2" },
+    });
+    await screen.findByText("second-plugin 1.0.0");
+
+    const projectTwoFetchCount = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.filter(([input]) =>
+        String(input).includes("projectId=project-2"),
+      ).length;
+    const invalidatedSnapshot = createSnapshot();
+    invalidatedSnapshot.pluginsVersion = 1;
+    await act(async () => {
+      MockEventSource.instances.at(-1)?.emit("snapshot", invalidatedSnapshot);
+    });
+    await waitFor(() => {
+      expect(
+        vi
+          .mocked(globalThis.fetch)
+          .mock.calls.filter(([input]) =>
+            String(input).includes("projectId=project-2"),
+          ).length,
+      ).toBe(projectTwoFetchCount + 1);
+    });
+    expect(screen.getByText("second-plugin 1.0.0")).toBeTruthy();
+  });
+
+  it("refetches an open plugin panel when pluginsVersion changes", async () => {
+    const snapshot = createSnapshot();
+    snapshot.pluginsVersion = 1;
+    const fallbackFetch = globalThis.fetch;
+    let currentSnapshot = snapshot;
+    let pluginFetches = 0;
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/ui-state")) return jsonResponse(currentSnapshot);
+        if (url.includes("/api/plugins/snapshot")) {
+          pluginFetches += 1;
+          return jsonResponse(createAgentPluginManagerSnapshot());
+        }
+        return fallbackFetch(input, init);
+      },
+    ) as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+    await selectWorkspaceTab();
+    await waitFor(() => {
+      expect(screen.getByTestId("current-model").textContent).toBe(
+        "claude-sonnet-4-6",
+      );
+    });
+    fireEvent.click(await screen.findByTestId("trigger-plugins"));
+    await waitFor(() => expect(pluginFetches).toBe(1));
+
+    currentSnapshot = { ...snapshot, pluginsVersion: 2 };
+    await act(async () => {
+      const source = MockEventSource.instances[0];
+      source?.emit("snapshot", currentSnapshot);
+    });
+    await waitFor(() => expect(pluginFetches).toBe(2));
   });
 
   it("restores a completed Ask Agent response after switching tabs mid-turn", async () => {

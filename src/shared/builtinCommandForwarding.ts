@@ -6,6 +6,8 @@ const FORWARDED_BUILTIN_COMMANDS: Record<
 > = {
   vscode: new Set([
     "skills",
+    "plugin",
+    "plugins",
     "mcp",
     "mcp-config",
     "mcp-refresh",

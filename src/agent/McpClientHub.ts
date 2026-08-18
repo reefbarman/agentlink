@@ -36,6 +36,9 @@ import {
   type McpUrlElicitationRequest,
 } from "../shared/mcpUrlElicitation.js";
 import { normalizeMcpToolResult } from "./mcpToolResult.js";
+import { createAgentPluginMcpFetch } from "./agentPluginHttpFetch.js";
+import { buildAgentPluginStdioEnvironment } from "./agentPluginMcpRuntime.js";
+import { AgentPluginSseClientTransport } from "./AgentPluginSseClientTransport.js";
 import {
   normalizeMcpElicitationSchema,
   type McpFormElicitationInput,
@@ -93,6 +96,23 @@ type McpOutputValidator = (
 ) =>
   | { valid: true; data: Record<string, unknown>; errorMessage: undefined }
   | { valid: false; data: undefined; errorMessage: string };
+
+export interface McpToolAuthorizationRequest {
+  readonly serverName: string;
+  readonly bareToolName: string;
+  readonly input: Readonly<Record<string, unknown>>;
+  readonly config: Readonly<McpServerConfig>;
+  readonly approvedByCaller: boolean;
+}
+
+export interface McpClientHubOptions {
+  readonly isConfigCurrent?: (
+    config: Readonly<McpServerConfig>,
+  ) => boolean | Promise<boolean>;
+  readonly onBeforeToolCall?: (
+    request: Readonly<McpToolAuthorizationRequest>,
+  ) => "allow" | "deny" | Promise<"allow" | "deny">;
+}
 
 interface McpSchemaValidatorProvider {
   getValidator<T>(
@@ -259,11 +279,18 @@ export class McpClientHub {
   private static readonly MAX_AUTH_RETRIES = 3;
   private schemaValidator: McpSchemaValidatorProvider | undefined;
 
+  private readonly options: Readonly<McpClientHubOptions>;
+
   constructor(
     globalState?: vscode.Memento,
     private readonly clientVersion = "unknown",
+    options:
+      | Readonly<McpClientHubOptions>
+      | McpClientHubOptions["isConfigCurrent"] = {},
   ) {
     this.globalState = globalState;
+    this.options =
+      typeof options === "function" ? { isConfigCurrent: options } : options;
   }
 
   onLog?: (message: string) => void;
@@ -685,6 +712,12 @@ export class McpClientHub {
     cfg: McpServerConfig,
     options: ConnectServerOptions = {},
   ): Promise<void> {
+    if (!(await this.configIsCurrent(cfg))) {
+      this.disabledServers.delete(cfg.name);
+      await this.disconnectServer(cfg.name);
+      this.onStatusChange?.(this.getServerInfos());
+      return;
+    }
     const retryCount = options.retryCount ?? 0;
     const afterAuth = options.afterAuth ?? false;
     const authMode = options.authMode ?? "noninteractive";
@@ -1216,20 +1249,46 @@ export class McpClientHub {
     if (type === "stdio") {
       if (!cfg.command)
         throw new Error(`Server '${cfg.name}' is stdio but missing 'command'`);
+      const baseEnvironment = {
+        ...inheritProcessEnv(),
+        ...buildAgentExecutionEnv(),
+      };
+      const env =
+        cfg.provenance?.kind === "agent-plugin"
+          ? cfg.pluginRoot && cfg.pluginData
+            ? buildAgentPluginStdioEnvironment(baseEnvironment, cfg.env, {
+                pluginRoot: cfg.pluginRoot,
+                pluginData: cfg.pluginData,
+              })
+            : (() => {
+                throw new Error(
+                  `Plugin MCP server '${cfg.name}' is missing its authorized root/data boundary.`,
+                );
+              })()
+          : { ...baseEnvironment, ...cfg.env };
       return new StdioClientTransport({
         command: cfg.command,
         args: cfg.args ?? [],
-        env: {
-          ...inheritProcessEnv(),
-          ...buildAgentExecutionEnv(),
-          ...cfg.env,
-        },
+        env,
+        ...(cfg.cwd ? { cwd: cfg.cwd } : {}),
       });
     }
 
     if (type === "sse") {
       if (!cfg.url)
         throw new Error(`Server '${cfg.name}' is sse but missing 'url'`);
+      const isPlugin = cfg.provenance?.kind === "agent-plugin";
+      if (isPlugin) {
+        return new AgentPluginSseClientTransport(new URL(cfg.url), {
+          authProvider,
+          mcpFetch: createAgentPluginMcpFetch(
+            cfg.url,
+            cfg.headers,
+            agentLinkLongPollingFetch,
+          ),
+          oauthFetch: agentLinkLongPollingFetch,
+        });
+      }
       const headers: Record<string, string> = {};
       if (cfg.headers) Object.assign(headers, cfg.headers);
       return new SSEClientTransport(new URL(cfg.url), {
@@ -1244,11 +1303,18 @@ export class McpClientHub {
         throw new Error(
           `Server '${cfg.name}' is streamable-http but missing 'url'`,
         );
+      const isPlugin = cfg.provenance?.kind === "agent-plugin";
       const headers: Record<string, string> = {};
-      if (cfg.headers) Object.assign(headers, cfg.headers);
+      if (!isPlugin && cfg.headers) Object.assign(headers, cfg.headers);
       return new StreamableHTTPClientTransport(new URL(cfg.url), {
         authProvider,
-        fetch: agentLinkLongPollingFetch,
+        fetch: isPlugin
+          ? createAgentPluginMcpFetch(
+              cfg.url,
+              cfg.headers,
+              agentLinkLongPollingFetch,
+            )
+          : agentLinkLongPollingFetch,
         requestInit: Object.keys(headers).length ? { headers } : undefined,
       });
     }
@@ -1277,6 +1343,12 @@ export class McpClientHub {
     this.servers.delete(name);
     this.oauthProviders.get(name)?.stop();
     this.oauthProviders.delete(name);
+  }
+
+  private async configIsCurrent(
+    config: Readonly<McpServerConfig>,
+  ): Promise<boolean> {
+    return (await this.options.isConfigCurrent?.(config)) ?? true;
   }
 
   /** Return the stored config for a connected or disabled server. */
@@ -1506,7 +1578,9 @@ export class McpClientHub {
   async callTool(
     prefixedName: string,
     input: Record<string, unknown>,
-    options?: Pick<RequestOptions, "signal">,
+    options?: Pick<RequestOptions, "signal"> & {
+      readonly authorizedByCaller?: boolean;
+    },
   ): Promise<ToolResult> {
     const parsed = parseMcpToolName(prefixedName);
     if (!parsed) {
@@ -1535,6 +1609,50 @@ export class McpClientHub {
             }),
           },
         ],
+      };
+    }
+
+    if (!(await this.configIsCurrent(server.config))) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error: `MCP server '${serverName}' is no longer authorized by the current plugin catalog`,
+            }),
+          },
+        ],
+        isError: true,
+        error: {
+          kind: "mcp_catalog_changed",
+          message: `MCP server '${serverName}' is no longer current.`,
+        },
+      };
+    }
+
+    const authorization =
+      (await this.options.onBeforeToolCall?.({
+        serverName,
+        bareToolName: toolName,
+        input,
+        config: server.config,
+        approvedByCaller: options?.authorizedByCaller === true,
+      })) ?? "allow";
+    if (authorization !== "allow") {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error: `MCP tool '${prefixedName}' is not authorized by the current policy`,
+            }),
+          },
+        ],
+        isError: true,
+        error: {
+          kind: "mcp_tool_not_authorized",
+          message: `MCP tool '${prefixedName}' is not authorized.`,
+        },
       };
     }
 

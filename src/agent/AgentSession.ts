@@ -44,6 +44,7 @@ import type {
   PersistedFleetMetadata,
   PersistedSessionRunState,
 } from "./persistenceContracts.js";
+import type { AgentPluginCatalogProvider } from "./AgentPluginCatalog.js";
 import type { PersistedSessionLineage } from "./sessionHandoff.js";
 import {
   buildModeInstructionBlock,
@@ -223,6 +224,9 @@ export class AgentSession {
 
   /** Provider ID (e.g. "anthropic", "codex") — used for provider-specific system prompt tuning. */
   providerId: string | undefined;
+  private readonly agentPluginCatalogProvider:
+    | AgentPluginCatalogProvider
+    | undefined;
   /** Approve for Me is active for this session — switches the system prompt's
    *  mode-switch guidance from user consent to automatic allowance.
    *  Owned by AgentSessionManager, which syncs it from the session's command
@@ -305,6 +309,7 @@ export class AgentSession {
     workspaceFolders?: WorkspaceFolderInfo[];
     mcpToolDisclosure?: McpToolDisclosurePartition;
     skillCatalogBudgetChars?: number;
+    agentPluginCatalogProvider?: AgentPluginCatalogProvider;
     initialArchitectReviewPending: boolean;
   }) {
     this.id = randomUUID();
@@ -338,6 +343,7 @@ export class AgentSession {
     this.providerId = opts.providerId;
     this.workspaceFolders = opts.workspaceFolders;
     this.mcpToolDisclosure = opts.mcpToolDisclosure;
+    this.agentPluginCatalogProvider = opts.agentPluginCatalogProvider;
     this.initialArchitectReviewPending = opts.initialArchitectReviewPending;
   }
 
@@ -356,6 +362,7 @@ export class AgentSession {
     providerId?: string;
     workspaceFolders?: WorkspaceFolderInfo[];
     mcpToolDisclosure?: McpToolDisclosurePartition;
+    agentPluginCatalogProvider?: AgentPluginCatalogProvider;
     /** Restored sessions pass the persisted value; new sessions derive it. */
     initialArchitectReviewPending?: boolean;
   }): Promise<AgentSession> {
@@ -401,6 +408,8 @@ export class AgentSession {
       mcpToolCatalog: opts.mcpToolDisclosure?.catalog,
       agentMode: opts.agentMode,
       disabledSkillIds: opts.config.disabledSkillIds,
+      projectScope: opts.projectScope,
+      agentPluginCatalogProvider: opts.agentPluginCatalogProvider,
       initialArchitectReviewPending,
       modeInstructionPlacement,
     });
@@ -425,6 +434,7 @@ export class AgentSession {
       workspaceFolders: opts.workspaceFolders,
       mcpToolDisclosure: opts.mcpToolDisclosure,
       skillCatalogBudgetChars: artifacts.skillCatalog?.budgetChars,
+      agentPluginCatalogProvider: opts.agentPluginCatalogProvider,
       initialArchitectReviewPending,
     });
     session.setAdvertisedSkills(artifacts.skills);
@@ -602,6 +612,8 @@ export class AgentSession {
               workspaceFolders,
               mcpToolCatalog: this.mcpToolDisclosure?.catalog,
               agentMode: this.agentMode,
+              projectScope: this.projectScope,
+              agentPluginCatalogProvider: this.agentPluginCatalogProvider,
               approveForMe: this.approveForMe,
               initialArchitectReviewPending: this.initialArchitectReviewPending,
               modeInstructionPlacement: this.modeInstructionPlacement,
@@ -657,6 +669,8 @@ export class AgentSession {
         mcpToolCatalog: this.mcpToolDisclosure?.catalog,
         agentMode: this.agentMode,
         disabledSkillIds,
+        projectScope: this.projectScope,
+        agentPluginCatalogProvider: this.agentPluginCatalogProvider,
         skillCatalogBudgetChars: this.skillCatalogBudgetChars,
         approveForMe: this.approveForMe,
         initialArchitectReviewPending: this.initialArchitectReviewPending,
@@ -725,6 +739,8 @@ export class AgentSession {
         mcpToolCatalog: this.mcpToolDisclosure?.catalog,
         agentMode: opts?.agentMode,
         disabledSkillIds: this.disabledSkillIds,
+        projectScope: this.projectScope,
+        agentPluginCatalogProvider: this.agentPluginCatalogProvider,
         skillCatalogBudgetChars: this.skillCatalogBudgetChars,
         approveForMe: this.approveForMe,
         initialArchitectReviewPending: this.initialArchitectReviewPending,

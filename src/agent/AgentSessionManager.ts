@@ -169,6 +169,7 @@ import {
   countMemoryNudges,
 } from "../shared/memoryCandidates.js";
 import type {
+  AgentBudget,
   SpawnBackgroundRequest,
   SpawnBackgroundResult,
 } from "./backgroundTypes.js";
@@ -464,6 +465,37 @@ function getEngineHardLimit(limit: number | undefined): number | undefined {
     : Math.ceil(limit * BUDGET_HARD_LIMIT_RATIO);
 }
 
+function resolveBackgroundBudget(
+  isReviewTask: boolean,
+  defaultBudget: AgentBudget | undefined,
+  requestedBudget: AgentBudget | undefined,
+): AgentBudget | undefined {
+  if (!isReviewTask) return requestedBudget ?? defaultBudget;
+
+  // Review input size is not a useful proxy for progress: a captured diff can
+  // consume a token cap before the agent has inspected any surrounding code.
+  // Keep reviews bounded by committed work units and wall-clock time instead.
+  const reviewBudget: AgentBudget = {
+    ...defaultBudget,
+    ...(requestedBudget?.maxToolCalls !== undefined
+      ? { maxToolCalls: requestedBudget.maxToolCalls }
+      : {}),
+    ...(requestedBudget?.maxApiTurns !== undefined
+      ? { maxApiTurns: requestedBudget.maxApiTurns }
+      : {}),
+    ...(requestedBudget?.maxElapsedMs !== undefined
+      ? { maxElapsedMs: requestedBudget.maxElapsedMs }
+      : {}),
+    ...(requestedBudget?.warningThresholdRatio !== undefined
+      ? { warningThresholdRatio: requestedBudget.warningThresholdRatio }
+      : {}),
+    ...(requestedBudget?.scope !== undefined
+      ? { scope: requestedBudget.scope }
+      : {}),
+  };
+  return Object.keys(reviewBudget).length > 0 ? reviewBudget : undefined;
+}
+
 /** Human-readable label for a budget check kind (e.g. "tool_calls" → "tool call"). */
 function formatBudgetKind(kind: string): string {
   switch (kind) {
@@ -756,6 +788,9 @@ export class AgentSessionManager {
   private readonly projectMcpHubRegistry: ProjectMcpHubRegistry | undefined;
   private readonly skillCatalogFallbackProvider:
     | NonNullable<AgentSessionManagerOptions["skillCatalogFallbackProvider"]>
+    | undefined;
+  private readonly agentPluginCatalogProvider:
+    | NonNullable<AgentSessionManagerOptions["agentPluginCatalogProvider"]>
     | undefined;
   private readonly legacyProjectScope: SessionProjectScope | undefined;
   private readonly executionUnavailableReason: string | undefined;
@@ -1065,6 +1100,7 @@ export class AgentSessionManager {
       opts?.projectCustomizationRegistry ?? new ProjectCustomizationRegistry();
     this.projectMcpHubRegistry = opts?.projectMcpHubRegistry;
     this.skillCatalogFallbackProvider = opts?.skillCatalogFallbackProvider;
+    this.agentPluginCatalogProvider = opts?.agentPluginCatalogProvider;
     this.executionUnavailableReason = opts?.executionUnavailableReason;
     this.terminalProviderForSession = opts?.terminalProviderForSession;
     this.browserPreferredProjectId = opts?.browserPreferredProjectId;
@@ -1145,7 +1181,11 @@ export class AgentSessionManager {
       ? BUILT_IN_MODES
       : await this.projectCustomizationRegistry.getModes(opts.projectScope);
     const agentMode = opts.agentMode ?? resolveMode(opts.mode, allModes);
-    const session = await this.host.createSession({ ...opts, agentMode });
+    const session = await this.host.createSession({
+      ...opts,
+      agentMode,
+      agentPluginCatalogProvider: this.agentPluginCatalogProvider,
+    });
     const existingScope = session.projectScope;
     if (existingScope === undefined) {
       Object.defineProperty(session, "projectScope", {
@@ -4635,11 +4675,10 @@ export class AgentSessionManager {
     return session;
   }
 
-  /** Rebuild stored prompts for matching executable foreground sessions. */
+  /** Rebuild stored prompts for matching executable foreground and background sessions. */
   async rebuildSystemPrompts(projectId?: string): Promise<void> {
     const sessions = Array.from(this.sessions.values()).filter(
       (session) =>
-        !session.background &&
         !isProjectlessSessionScope(session.projectScope) &&
         (!projectId || session.projectScope.projectId === projectId),
     );
@@ -10273,7 +10312,11 @@ export class AgentSessionManager {
       request.permissionProfile ?? (isReviewTask ? "review-only" : undefined);
     const effectiveExpectedResult =
       request.expectedResult ?? (isReviewTask ? "review_findings" : undefined);
-    const effectiveBudget = request.budget ?? route.defaultBudget;
+    const effectiveBudget = resolveBackgroundBudget(
+      isReviewTask,
+      route.defaultBudget,
+      request.budget,
+    );
     const effectiveToolProfile =
       effectivePermissionProfile === "review-only"
         ? "review"

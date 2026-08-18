@@ -89,6 +89,8 @@ export type OnApprovalRequest = (
 export interface McpApprovalPromotionMeta {
   serverName: string;
   bareToolName: string;
+  /** Canonical durable authority retained across transcript/UI round trips. */
+  mutationTarget?: import("./mcpManagerTypes.js").McpConfigMutationTarget;
   scopes: Array<"session" | "project" | "global">;
 }
 

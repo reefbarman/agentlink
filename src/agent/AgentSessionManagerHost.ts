@@ -51,6 +51,7 @@ import type {
 } from "../core/workspaceProjects.js";
 import { WorkspaceMutationCoordinator } from "./WorkspaceMutationCoordinator.js";
 import type { SkillCatalogFallbackProvider } from "./skillCatalogFallbackProvider.js";
+import type { AgentPluginCatalogProvider } from "./AgentPluginCatalog.js";
 import { normalizePromptProfileOverrides } from "../core/promptProfile.js";
 import { commandApprovalPolicyFromLegacyTier } from "../approvals/commandApprovalPolicy.js";
 
@@ -176,6 +177,7 @@ export interface AgentSessionManagerOptions {
   projectCustomizationRegistry?: ProjectCustomizationRegistry;
   projectMcpHubRegistry?: ProjectMcpHubRegistry;
   skillCatalogFallbackProvider?: SkillCatalogFallbackProvider;
+  agentPluginCatalogProvider?: AgentPluginCatalogProvider;
   browserPreferredProjectId?: string;
   onBrowserPreferredProjectChanged?: (
     projectId: string,

@@ -266,6 +266,7 @@ function readSet(): BrowserGatewayOwnerProjectionReadSet {
       colorScheme: "dark",
     },
     modelCatalogRevision: "models-1",
+    pluginCatalogRevision: "plugins-1",
     mcp: [
       { name: "connected-server", status: "connected" },
       { name: "disabled-server", status: "disabled" },
@@ -890,6 +891,8 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     sources.fire("repository");
     state.modelCatalogRevision = "models-2";
     sources.fire("model_catalog");
+    state.pluginCatalogRevision = "plugins-2";
+    sources.fire("plugins");
     state.catalog.sessions = [
       {
         ...state.catalog.sessions[0],
@@ -899,7 +902,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     ];
     sources.fire("sessions");
 
-    expect(sources.captureCount).toBe(4);
+    expect(sources.captureCount).toBe(5);
     expect(publications.slice(1)).toEqual([
       expect.objectContaining({
         kind: "event",
@@ -919,6 +922,13 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
         kind: "event",
         event: expect.objectContaining({
           ownerSequence: 4,
+          kind: "plugin_catalog.revision.updated",
+        }),
+      }),
+      expect.objectContaining({
+        kind: "event",
+        event: expect.objectContaining({
+          ownerSequence: 5,
           kind: "session.catalog.updated",
         }),
       }),
@@ -983,6 +993,8 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     sources.fire("theme");
     state.mcp = [{ name: "connected-server", status: "error" }];
     sources.fire("mcp");
+    state.pluginCatalogRevision = "plugins-2";
+    sources.fire("plugins");
     state.policies.agentWriteApproval = "session";
     sources.fire("policies");
 
@@ -993,6 +1005,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
       "diff.preview.updated",
       "theme.updated",
       "owner.capabilities.updated",
+      "plugin_catalog.revision.updated",
       "foreground.control.updated",
       "owner.capabilities.updated",
     ]);

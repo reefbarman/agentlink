@@ -28,6 +28,7 @@ export const BROWSER_GATEWAY_OWNER_EVENT_KINDS = [
   "repository.updated",
   "theme.updated",
   "model_catalog.revision.updated",
+  "plugin_catalog.revision.updated",
   "owner.capabilities.updated",
   "operation.updated",
 ] as const;
@@ -486,6 +487,7 @@ export interface BrowserGatewayOwnerCheckpoint extends BrowserGatewayDataPlaneId
   repository: BrowserGatewayRepositoryState | null;
   theme: BrowserGatewayThemeState;
   modelCatalogRevision: string;
+  pluginCatalogRevision?: string;
   capabilities: BrowserGatewayCapabilityStatus[];
 }
 
@@ -1109,6 +1111,7 @@ function parseCheckpoint(
     "repository",
     "theme",
     "modelCatalogRevision",
+    "pluginCatalogRevision",
     "capabilities",
   ]);
   const transcript = parseTranscriptWindow(
@@ -1171,6 +1174,15 @@ function parseCheckpoint(
       `${path}.modelCatalogRevision`,
       256,
     ),
+    ...(object.pluginCatalogRevision === undefined
+      ? {}
+      : {
+          pluginCatalogRevision: nonEmptyString(
+            object.pluginCatalogRevision,
+            `${path}.pluginCatalogRevision`,
+            256,
+          ),
+        }),
     capabilities: parseCapabilities(
       object.capabilities,
       `${path}.capabilities`,
@@ -1308,7 +1320,8 @@ function parseEventPayload(
       const object = strictRecord(value, path, ["theme"]);
       return { theme: parseTheme(object.theme, `${path}.theme`) };
     }
-    case "model_catalog.revision.updated": {
+    case "model_catalog.revision.updated":
+    case "plugin_catalog.revision.updated": {
       const object = strictRecord(value, path, ["revision"]);
       return {
         revision: nonEmptyString(object.revision, `${path}.revision`, 256),

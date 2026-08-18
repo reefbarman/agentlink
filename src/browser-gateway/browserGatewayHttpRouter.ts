@@ -1,6 +1,14 @@
 import type * as http from "http";
 
-export type BrowserGatewayHttpMethod = "GET" | "POST" | "DELETE";
+export type BrowserGatewayHttpMethod =
+  | "GET"
+  | "POST"
+  | "DELETE"
+  | "PUT"
+  | "PATCH"
+  | "HEAD"
+  | "OPTIONS"
+  | "*";
 
 export type BrowserGatewayRouteMatch =
   | { kind: "raw-exact"; value: string }
@@ -39,7 +47,7 @@ export function matchesBrowserGatewayRoute(
   rawUrl: string,
   pathOnly: string,
 ): boolean {
-  if (route.method !== method) return false;
+  if (route.method !== "*" && route.method !== method) return false;
   switch (route.match.kind) {
     case "raw-exact":
       return rawUrl === route.match.value;

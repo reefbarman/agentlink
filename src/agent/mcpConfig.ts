@@ -23,6 +23,24 @@ import { createHash, randomUUID } from "crypto";
 
 import { parseJsonWithComments } from "../util/jsonc.js";
 
+export type McpConfigProvenance =
+  | {
+      readonly kind: "native";
+      readonly sourceServerName: string;
+      readonly sourceProjectIds: readonly string[];
+      readonly sourceProjectRoots: readonly string[];
+    }
+  | {
+      readonly kind: "agent-plugin";
+      readonly scope:
+        | { readonly kind: "global" }
+        | { readonly kind: "project"; readonly projectId: string };
+      readonly installInstanceId: string;
+      readonly packageDigest: string;
+      readonly portableServerName: string;
+      readonly runtimeServerName: string;
+    };
+
 export interface McpServerConfig {
   /** Unique server name (key from config file) */
   name: string;
@@ -67,6 +85,13 @@ export interface McpServerConfig {
   sourceProjectIds?: string[];
   /** Project roots corresponding to sourceProjectIds. */
   sourceProjectRoots?: string[];
+  /** Plugin-only child process working directory. Native config never populates it. */
+  cwd?: string;
+  /** Canonical mutation and dispatch authority for this runtime server. */
+  provenance?: McpConfigProvenance;
+  /** Plugin package/data roots used only for stdio launch and lifecycle checks. */
+  pluginRoot?: string;
+  pluginData?: string;
 }
 
 export interface WorkspaceMcpProject {
@@ -620,18 +645,27 @@ export async function loadWorkspaceMcpConfigs(
     }
     for (const matches of variants.values()) {
       const representative = matches[0]!;
+      const runtimeServerName =
+        variants.size === 1
+          ? sourceServerName
+          : workspaceRuntimeServerName(
+              representative.project,
+              sourceServerName,
+            );
+      const sourceProjectIds = matches.map((match) => match.project.projectId);
+      const sourceProjectRoots = matches.map((match) => match.project.rootPath);
       result.push({
         ...representative.config,
-        name:
-          variants.size === 1
-            ? sourceServerName
-            : workspaceRuntimeServerName(
-                representative.project,
-                sourceServerName,
-              ),
+        name: runtimeServerName,
         sourceServerName,
-        sourceProjectIds: matches.map((match) => match.project.projectId),
-        sourceProjectRoots: matches.map((match) => match.project.rootPath),
+        sourceProjectIds,
+        sourceProjectRoots,
+        provenance: {
+          kind: "native",
+          sourceServerName,
+          sourceProjectIds,
+          sourceProjectRoots,
+        },
       });
     }
   }

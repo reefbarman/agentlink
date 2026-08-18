@@ -61,12 +61,71 @@ describe("matchesBrowserGatewayRoute", () => {
       ).toBe(expected);
     },
   );
+
+  it("matches wildcard methods without weakening specific method routes", () => {
+    const wildcard = route(
+      { kind: "path-prefix", value: "/api/plugins/" },
+      "*",
+    );
+    const get = route(
+      { kind: "path-exact", value: "/api/plugins/snapshot" },
+      "GET",
+    );
+
+    expect(
+      matchesBrowserGatewayRoute(
+        wildcard,
+        "PATCH",
+        "/api/plugins/snapshot",
+        "/api/plugins/snapshot",
+      ),
+    ).toBe(true);
+    expect(
+      matchesBrowserGatewayRoute(
+        get,
+        "POST",
+        "/api/plugins/snapshot",
+        "/api/plugins/snapshot",
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("BrowserGatewayHttpRouter", () => {
   function response(): http.ServerResponse {
     return { headersSent: false } as http.ServerResponse;
   }
+
+  it("keeps an exact GET route ahead of a later wildcard mutation guard", () => {
+    const get = route(
+      { kind: "path-exact", value: "/api/plugins/snapshot" },
+      "GET",
+    );
+    const wildcard = route(
+      { kind: "path-prefix", value: "/api/plugins/" },
+      "*",
+    );
+    const router = new BrowserGatewayHttpRouter([get, wildcard], {
+      writeJson: vi.fn(),
+      log: vi.fn(),
+    });
+
+    router.dispatch(
+      { method: "GET", url: "/api/plugins/snapshot" } as http.IncomingMessage,
+      response(),
+    );
+    expect(get.invoke).toHaveBeenCalledOnce();
+    expect(wildcard.invoke).not.toHaveBeenCalled();
+
+    router.dispatch(
+      {
+        method: "DELETE",
+        url: "/api/plugins/snapshot",
+      } as http.IncomingMessage,
+      response(),
+    );
+    expect(wildcard.invoke).toHaveBeenCalledOnce();
+  });
 
   it("uses the first matching route and writes the existing 404 fallback", () => {
     const first = route({ kind: "raw-prefix", value: "/api/" });

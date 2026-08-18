@@ -28,22 +28,26 @@ export function isForegroundOnlyModel(modelId: string): boolean {
 }
 
 const REVIEW_BUDGETS: Record<ModelTier, AgentBudget> = {
+  // Review budgets intentionally track work units rather than tokens. A captured
+  // diff can dominate token usage before the reviewer has had a chance to
+  // inspect any surrounding code, while committed tool calls and API turns are
+  // much better signals for whether useful exploration is still happening.
   cheap: {
-    maxToolCalls: 36,
-    maxApiTurns: 16,
-    maxElapsedMs: 480_000,
+    maxToolCalls: 24,
+    maxApiTurns: 10,
+    maxElapsedMs: 360_000,
     warningThresholdRatio: 0.8,
   },
   balanced: {
-    maxToolCalls: 72,
-    maxApiTurns: 32,
-    maxElapsedMs: 1_200_000,
+    maxToolCalls: 48,
+    maxApiTurns: 16,
+    maxElapsedMs: 600_000,
     warningThresholdRatio: 0.8,
   },
   deep_reasoning: {
-    maxToolCalls: 120,
-    maxApiTurns: 56,
-    maxElapsedMs: 2_400_000,
+    maxToolCalls: 72,
+    maxApiTurns: 24,
+    maxElapsedMs: 900_000,
     warningThresholdRatio: 0.8,
   },
 };

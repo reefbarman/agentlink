@@ -2,6 +2,23 @@ export type McpManagerProfile = "main" | "ask-agent";
 
 export type McpManagerScope = "global" | "project" | "ask-agent-global";
 
+export type McpConfigMutationTarget =
+  | {
+      kind: "native";
+      profile: McpManagerProfile;
+      scope: McpManagerScope;
+      projectId?: string;
+    }
+  | {
+      kind: "agent-plugin-overlay";
+      installInstanceId: string;
+      packageDigest: string;
+      declaredServerName: string;
+      runtimeServerName: string;
+      scope: "global" | "project";
+      projectId: string;
+    };
+
 export type McpManagerView = "status" | "config" | "add" | "edit";
 
 export interface McpManagerProjectInfo {
@@ -93,6 +110,15 @@ export interface McpConfigSourceContribution {
 export interface McpConfigEntrySummary {
   name: string;
   config: McpManagerServerDraft;
+  mutationTarget?: McpConfigMutationTarget;
+  /** Authority-specific optimistic revision used instead of the native source revision. */
+  mutationRevision?: string;
+  mutationCapabilities?: {
+    connectionFields: boolean;
+    policyFields: boolean;
+    remove: boolean;
+    openRaw: boolean;
+  };
   sourceIds: string[];
   editableScopes: McpManagerScope[];
   preferredEditScope?: McpManagerScope;
@@ -126,6 +152,8 @@ export interface McpConfigBatchMutation {
   operationId: string;
   profile: McpManagerProfile;
   scope: McpManagerScope;
+  /** Canonical authority target. Omitted only by legacy native callers. */
+  target?: McpConfigMutationTarget;
   /** Project targeted by a main-profile mutation in a multi-project workspace. */
   projectId?: string;
   expectedRevision: string;

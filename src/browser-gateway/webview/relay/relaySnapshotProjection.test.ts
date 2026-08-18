@@ -198,6 +198,7 @@ function checkpoint(
       variables: [{ name: "--vscode-foreground", value: "#fff" }],
     },
     modelCatalogRevision: "models-1",
+    pluginCatalogRevision: "plugins-1",
     capabilities: [],
     ...overrides,
   };
@@ -705,6 +706,17 @@ describe("RelaySnapshotProjector", () => {
     expect(sameRevision.modelsVersion).toBe(1);
     expect(nextRevision.modelsVersion).toBe(2);
     expect(nextGeneration.modelsVersion).toBe(1);
+    expect(first.pluginsVersion).toBe(1);
+    expect(sameRevision.pluginsVersion).toBe(1);
+    const nextPluginRevision = projector.project(
+      checkpoint({
+        ownerGenerationId: "generation-2",
+        checkpointSequence: 2,
+        modelCatalogRevision: "models-2",
+        pluginCatalogRevision: "plugins-2",
+      }),
+    );
+    expect(nextPluginRevision.pluginsVersion).toBe(2);
     expect(nextGeneration.session.foreground!.projectedMessages[0]).not.toBe(
       nextRevision.session.foreground!.projectedMessages[0],
     );

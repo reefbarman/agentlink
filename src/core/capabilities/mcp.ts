@@ -10,12 +10,16 @@ export interface McpServerToolConfig {
   toolPolicy?: "ask" | "allow";
   toolDisclosure?: "inline" | "deferred" | "auto";
   allowedTools?: string[];
+  /** Surface-owned opaque authority metadata forwarded unchanged by adapters. */
+  provenance?: unknown;
 }
 
 export interface McpToolInvocationRequest {
   toolName: string;
   input: Record<string, unknown>;
   signal?: AbortSignal;
+  /** Surface-owned evidence that ordinary approval checks completed. */
+  authorizedByCaller?: boolean;
 }
 
 export interface McpToolSummary {

@@ -349,6 +349,12 @@ export const BROWSER_GATEWAY_SNAPSHOT_PARITY_CONTRACT = {
     "owner_event",
     "retained_http",
   ),
+  pluginsVersion: covered(
+    "A plugin catalog revision is projected into a monotonic browser invalidation version; the bounded manager snapshot remains a lazy authenticated HTTP read.",
+    "checkpoint",
+    "owner_event",
+    "retained_http",
+  ),
 } as const satisfies SnapshotCoverage;
 
 export interface BrowserGatewayFlattenedParityEntry extends BrowserGatewayParityCoverage {

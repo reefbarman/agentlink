@@ -1493,7 +1493,9 @@ For review delegations, use `reviewScope` to describe the target. AgentLink capt
 
 Image handoff is available for native in-process background agents. It copies selected base64 image payloads into the background agent's first user turn so UI screenshots and important user-provided references can be reviewed directly. Image ids are numbered over the model-visible history (`image_1`, `image_2`, …), and the spawn result echoes an `attachedImages` manifest (`id`, `name`, `mimeType`) so the coordinator can verify the intended captures were attached before relying on a visual review. ACP backgrounds do not currently accept inline image handoff; save the image in the workspace and reference its path instead.
 
-Budgets are optional. Review task classes receive automatic complexity-based soft budgets when `budget` is omitted; other task classes run uncapped. `maxTokens` counts uncached input + output tokens summed across all API turns (cache misses charge the full context, so a large diff review typically spends 100k–300k tokens; don't cap reviews below ~100k). At `warningThresholdRatio` (default 0.8) the agent is nudged to prioritize remaining work. Reaching a cap asks the agent to finish promptly but does not block tools that are still needed for a correct result. The manager only force-stops the agent (`budget_exhausted:<kind>`) when observed usage reaches the `3×` safety backstop. Session-scoped `maxToolCalls`/`maxApiTurns` caps are also enforced inside the engine at that same hard boundary. Tool calls are tracked only after a provider response commits successfully, so interrupted or retried partial tool streams do not consume the tool budget; automatic review budgets also allow substantially more tool calls than API turns.
+Budgets are optional for non-review tasks, which run uncapped when `budget` is omitted. Review task classes always receive complexity-tiered soft budgets based on committed tool calls, successful model API turns, and elapsed time: cheap reviews get 24 calls / 10 turns / 6 minutes, balanced reviews get 48 / 16 / 10 minutes, and deep-reasoning reviews get 72 / 24 / 15 minutes. A review caller can override those work-unit limits, but `maxTokens`, `maxEstimatedCostUsd`, and `estimatedCostPerMillionTokens` are ignored for review classes. This prevents a large captured diff from consuming the review budget before the agent can inspect surrounding code. Token and estimated-cost caps remain available for non-review tasks.
+
+At `warningThresholdRatio` (default 0.8) the agent is nudged to prioritize remaining work. Reaching a cap asks the agent to finish promptly but does not block tools that are still needed for a correct result. The manager only force-stops the agent (`budget_exhausted:<kind>`) when observed usage reaches the `3×` safety backstop. Session-scoped `maxToolCalls`/`maxApiTurns` caps are also enforced inside the engine at that same hard boundary. Tool calls are tracked only after a provider response commits successfully, so interrupted or retried partial tool streams do not consume the tool budget.
 
 Returns structured JSON including:
 
@@ -2186,15 +2188,18 @@ Logically hides feedback by stable `ids` (preferred) or legacy immutable `indice
 
 The development sidebar defaults to untriaged feedback grouped by tool. It can switch among all, untriaged, and triaged views; filter accepted feedback by priority; group by tool or priority; and search feedback text and tool names. Assigning a priority accepts an item for fixing, while **Untriage** clears its priority.
 
-To inspect local tool-adoption telemetry without exposing invocation payloads, run:
+To inspect local telemetry without exposing invocation payloads, run:
 
 ```sh
 npm run telemetry:tools -- --top 60
 npm run telemetry:tools -- --since 7d --version 1.17.12
 npm run telemetry:tools:csv
+npm run telemetry:sessions -- --since 7d
 ```
 
-The reporter accepts `--since <ISO date|Nd|Nh|Nm>`, `--until <ISO date>`, repeatable `--version`, `--feedback-input`, `--json`, and `--csv-dir`. It reports aggregate tool/parameter/outcome, latency, feedback-count, and attribution metrics. For `write_file` and `apply_diff`, an interactive review also records bounded approval-state and policy-reason metrics so unexpected prompts can be diagnosed without recording the target path or content. Feedback text, feedback parameters/result summaries, raw tool inputs/results, project paths, and individual project IDs are never emitted. Dynamic direct MCP names (`server__tool`) are classified separately and do not trigger static inventory-drift warnings.
+The tool reporter accepts `--since <ISO date|Nd|Nh|Nm>`, `--until <ISO date>`, repeatable `--version`, `--feedback-input`, `--json`, and `--csv-dir`. It reports aggregate tool/parameter/outcome, latency, feedback-count, and attribution metrics. For `write_file` and `apply_diff`, an interactive review also records bounded approval-state and policy-reason metrics so unexpected prompts can be diagnosed without recording the target path or content. Feedback text, feedback parameters/result summaries, raw tool inputs/results, project paths, and individual project IDs are never emitted. Dynamic direct MCP names (`server__tool`) are classified separately and do not trigger static inventory-drift warnings.
+
+The session-outcome reporter covers turn timing, task status, background-agent outcomes, and approval cards that interrupted **Approve for Me**. Approval-interruption events contain only bounded categories: approval kind, interruption reason, Guardian status/outcome/risk, and host-owned route/permission classifications. They never include command text, target paths, user prompts, reviewer rationale, or approval-card detail. `ask_user` remains ordinary user-question telemetry rather than an approval interruption.
 
 To release:
 

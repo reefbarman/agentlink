@@ -68,6 +68,10 @@ import { restoreChatTabStartup } from "./agent/chatTabStartupRestore.js";
 import { TabTerminalProviderRegistry } from "./agent/TabTerminalProviderRegistry.js";
 import { WorkspaceMutationCoordinator } from "./agent/WorkspaceMutationCoordinator.js";
 import { ProjectCustomizationRegistry } from "./agent/ProjectCustomizationRegistry.js";
+import { AgentPluginStore } from "./agent/AgentPluginStore.js";
+import { AgentPluginCatalog } from "./agent/AgentPluginCatalog.js";
+import { AgentPluginInstaller } from "./agent/AgentPluginInstaller.js";
+import { AgentPluginManagerHost } from "./agent/AgentPluginManagerHost.js";
 import { getConfiguredBaseThresholdForModel } from "./agent/modelCondenseThresholds.js";
 import {
   resolveModelForMode,
@@ -141,7 +145,10 @@ import {
   migrateWorkspaceHistory,
   type WorkspaceHistoryShape,
 } from "./agent/workspaceHistoryMigration.js";
-import { createSessionProjectScope } from "./core/workspaceProjects.js";
+import {
+  createSessionProjectScope,
+  type ProjectScopeResolver,
+} from "./core/workspaceProjects.js";
 import {
   createWorkspaceProjectCatalog,
   selectNewSessionProject,
@@ -1112,7 +1119,14 @@ export async function activate(
         }
       },
     });
-  const projectCatalog = createCurrentProjectCatalog();
+  let currentProjectCatalog = createCurrentProjectCatalog();
+  const projectCatalog: ProjectScopeResolver = {
+    listProjects: () => currentProjectCatalog.listProjects(),
+    resolveProjectForResource: (resourceUri) =>
+      currentProjectCatalog.resolveProjectForResource(resourceUri),
+    resolvePersistedScope: (scope) =>
+      currentProjectCatalog.resolvePersistedScope(scope),
+  };
   const browserGatewayWorkspaceInstanceId =
     context.workspaceState.get<string>("browserGatewayInstanceId") ??
     randomUUID();
@@ -1301,6 +1315,26 @@ export async function activate(
   // so they must also get the dev-mode system prompt — not just F5 sessions.
   const isDevMode =
     __DEV_BUILD__ || context.extensionMode === vscode.ExtensionMode.Development;
+  const agentPluginStore = new AgentPluginStore({
+    rootPath: path.join(os.homedir(), ".agentlink", "plugins"),
+  });
+  let agentPluginActivationEnabled = process.platform !== "win32";
+  if (agentPluginActivationEnabled) {
+    try {
+      await agentPluginStore.initializeHost();
+    } catch (error) {
+      agentPluginActivationEnabled = false;
+      log(`[plugins] Activation disabled: ${String(error)}`);
+    }
+  }
+  const agentPluginCatalog = new AgentPluginCatalog(agentPluginStore, {
+    enabled: agentPluginActivationEnabled,
+  });
+  const agentPluginManagerHost = new AgentPluginManagerHost(
+    agentPluginStore,
+    new AgentPluginInstaller(),
+    { enabled: agentPluginActivationEnabled, projectResolver: projectCatalog },
+  );
   const projectCustomizationRegistry = new ProjectCustomizationRegistry(
     undefined,
     (scope) =>
@@ -1310,6 +1344,11 @@ export async function activate(
           vscode.Uri.parse(scope.workspaceFolderUri),
         )
         .get<string[]>("skills.disabledIds", []),
+    agentPluginCatalog,
+  );
+  context.subscriptions.push(
+    { dispose: () => agentPluginCatalog.dispose() },
+    { dispose: () => void agentPluginStore.dispose() },
   );
   chatTabController = new ChatTabController(context.workspaceState, { log });
   context.subscriptions.push(chatTabController);
@@ -1324,6 +1363,8 @@ export async function activate(
     projectCustomizationRegistry,
     extVersion,
   );
+  chatViewProvider.setAgentPluginManagerHost(agentPluginManagerHost);
+  chatViewProvider.setAgentPluginCatalogProvider(agentPluginCatalog);
   chatViewProvider.setPendingInteractionAlertProvider((message, command) =>
     statusBarManager.showAlert(message, command),
   );
@@ -1795,6 +1836,7 @@ export async function activate(
       },
       projectMcpHubRegistry: chatViewProvider.getProjectMcpHubRegistry(),
       skillCatalogFallbackProvider,
+      agentPluginCatalogProvider: agentPluginCatalog,
       executionUnavailableReason:
         workspaceSessionLocation.status === "legacy_conflict"
           ? "Local execution is disabled because multiple legacy session-history locations were found. Resolve the history-storage conflict before starting or continuing a session."
@@ -1814,6 +1856,32 @@ export async function activate(
       },
     },
   );
+  if (agentPluginActivationEnabled) {
+    context.subscriptions.push(
+      agentPluginCatalog.subscribe(() => {
+        projectCustomizationRegistry.clear();
+        chatViewProvider.notifyBrowserGatewaySurfaceChanged("plugins");
+        void Promise.all([
+          chatViewProvider.refreshSkillConfiguration(),
+          chatViewProvider.refreshAllPluginMcpConnections(),
+        ]).catch((error) =>
+          log(
+            `[plugins] Failed to refresh plugin runtime state: ${String(error)}`,
+          ),
+        );
+      }),
+      vscode.window.onDidChangeWindowState((state) => {
+        if (!state.focused) return;
+        void agentPluginStore
+          .checkForUpdates()
+          .catch((error) =>
+            log(
+              `[plugins] Failed to refresh registry on focus: ${String(error)}`,
+            ),
+          );
+      }),
+    );
+  }
   let workspaceMigrationPromptInFlight = false;
   const offerWorkspaceHistoryMigration = async (
     source: WorkspaceHistoryShape & {
@@ -1905,6 +1973,7 @@ export async function activate(
   };
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      currentProjectCatalog = createCurrentProjectCatalog();
       const destination = resolveWorkspaceSessionLocation({
         workspaceFolders: vscode.workspace.workspaceFolders,
         workspaceFile: vscode.workspace.workspaceFile,
@@ -2730,6 +2799,9 @@ export async function activate(
   agentSessionManager.setSessionOutcomeTelemetry(
     sessionOutcomeTelemetry ?? undefined,
   );
+  chatViewProvider.setSessionOutcomeTelemetry(
+    sessionOutcomeTelemetry ?? undefined,
+  );
 
   // Wire up window-level capabilities. MCP is captured from the session project registry.
   agentSessionManager.setToolContext({
@@ -2838,6 +2910,7 @@ export async function activate(
         agentSessionManager.getForegroundSession()?.id ?? "agent",
     }),
     toolCallTracker,
+    mcpPolicyMutationProvider: chatViewProvider.getMcpPolicyMutationProvider(),
     memoryToolProvider: autonomousMemoryToolProvider,
     toolUsageTelemetry: toolUsageTelemetry ?? undefined,
   });
@@ -3022,6 +3095,19 @@ export async function activate(
     vscode.commands.registerCommand("agentlink.showWorkspaceHistory", () => {
       chatViewProvider.showWorkspaceHistory();
     }),
+    vscode.commands.registerCommand(
+      "agentlink.manageAgentPlugins",
+      async () => {
+        await vscode.commands.executeCommand("agentLink.chatView.focus");
+        await chatViewProvider.openAgentPluginManager();
+      },
+    ),
+    vscode.commands.registerCommand(
+      "agentlink.installAgentPluginFromSource",
+      async () => {
+        await chatViewProvider.installAgentPluginFromSource();
+      },
+    ),
     vscode.commands.registerCommand("agentlink.popChatTab", async () => {
       const tab = chatTabController.getFocusedTab();
       if (await chatTabPanelHost?.popOut(tab.id)) return;

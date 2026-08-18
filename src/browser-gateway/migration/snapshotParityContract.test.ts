@@ -72,6 +72,7 @@ describe("browser gateway snapshot parity contract", () => {
       "background",
       "diffs",
       "modelsVersion",
+      "pluginsVersion",
       "session",
       "theme",
       "ui",

@@ -11,8 +11,8 @@ These are the shipped product docs for AgentLink. They are written for people us
 ## Focused guides
 
 - [Settings](references/settings.md) — grouped `agentlink.*` settings and their purpose.
-- [MCP](references/mcp.md) — configure and use Model Context Protocol servers.
-- [Customization](references/customization.md) — instructions, rules, modes, slash commands, skills, and memory.
+- [MCP](references/mcp.md) — configure and use Model Context Protocol servers, including servers contributed by Agent Plugins.
+- [Customization](references/customization.md) — instructions, rules, modes, slash commands, skills, Agent Plugins, and memory.
 - [Package contract](references/package-contract.md) — generated exact commands, views, settings, defaults, scopes, and allowed values.
 - [Release notes](references/release-notes.md) — generated copy of the current release history.
 

@@ -413,6 +413,9 @@ function applyOwnerEvent(
     case "model_catalog.revision.updated":
       next.modelCatalogRevision = payload.revision as string;
       break;
+    case "plugin_catalog.revision.updated":
+      next.pluginCatalogRevision = payload.revision as string;
+      break;
     case "owner.capabilities.updated":
       next.capabilities =
         payload.capabilities as BrowserGatewayOwnerCheckpoint["capabilities"];

@@ -25,6 +25,12 @@ function inventory(...extraPaths) {
     "resources/builtin-skills/documentation/references/complete-reference.md",
     "resources/builtin-skills/documentation/references/package-contract.md",
     "resources/builtin-skills/documentation/references/release-notes.md",
+    "resources/agent-plugins/1.0.0/plugin.schema.json",
+    "resources/agent-plugins/1.0.0/mcp.schema.json",
+    "resources/agent-plugins/1.0.0/README.md",
+    "resources/agent-plugins/1.0.0/LICENSE.md",
+    "resources/agent-plugins/1.0.0/LICENSES/Apache-2.0.txt",
+    "resources/agent-plugins/1.0.0/LICENSES/CC-BY-4.0.txt",
     ...extraPaths,
   ].join("\n");
 }
@@ -57,6 +63,34 @@ test("rejects an inventory without the bundled package contract", () => {
         "darwin-arm64",
       ),
     /missing required paths: resources\/builtin-skills\/documentation\/references\/package-contract\.md/u,
+  );
+});
+
+test("rejects an inventory without an Agent Plugins schema", () => {
+  assert.throws(
+    () =>
+      verifyRetrievalPackageFiles(
+        inventory(
+          "dist/node_modules/@lancedb/lancedb-darwin-arm64/package.json",
+          "dist/node_modules/@lancedb/lancedb-darwin-arm64/lancedb.darwin-arm64.node",
+        ).replace("resources/agent-plugins/1.0.0/mcp.schema.json\n", ""),
+        "darwin-arm64",
+      ),
+    /missing required paths: resources\/agent-plugins\/1\.0\.0\/mcp\.schema\.json/u,
+  );
+});
+
+test("rejects an inventory without Agent Plugins attribution", () => {
+  assert.throws(
+    () =>
+      verifyRetrievalPackageFiles(
+        inventory(
+          "dist/node_modules/@lancedb/lancedb-darwin-arm64/package.json",
+          "dist/node_modules/@lancedb/lancedb-darwin-arm64/lancedb.darwin-arm64.node",
+        ).replace("resources/agent-plugins/1.0.0/LICENSE.md\n", ""),
+        "darwin-arm64",
+      ),
+    /missing required paths: resources\/agent-plugins\/1\.0\.0\/LICENSE\.md/u,
   );
 });
 

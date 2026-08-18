@@ -26,6 +26,8 @@ export class RelaySnapshotProjector {
   private ownerGenerationId: string | null = null;
   private modelCatalogRevision: string | null = null;
   private modelsVersion = 0;
+  private pluginCatalogRevision: string | null = null;
+  private pluginsVersion = 0;
 
   project(
     checkpoint: BrowserGatewayOwnerCheckpoint,
@@ -127,6 +129,11 @@ export class RelaySnapshotProjector {
       this.modelCatalogRevision = checkpoint.modelCatalogRevision;
       this.modelsVersion += 1;
     }
+    const pluginCatalogRevision = checkpoint.pluginCatalogRevision ?? "0";
+    if (pluginCatalogRevision !== this.pluginCatalogRevision) {
+      this.pluginCatalogRevision = pluginCatalogRevision;
+      this.pluginsVersion += 1;
+    }
 
     return {
       ui: {
@@ -165,6 +172,7 @@ export class RelaySnapshotProjector {
         colorScheme: checkpoint.theme.colorScheme,
       },
       modelsVersion: this.modelsVersion,
+      pluginsVersion: this.pluginsVersion,
     };
   }
 
@@ -181,6 +189,8 @@ export class RelaySnapshotProjector {
     this.ownerGenerationId = checkpoint.ownerGenerationId;
     this.modelCatalogRevision = null;
     this.modelsVersion = 0;
+    this.pluginCatalogRevision = null;
+    this.pluginsVersion = 0;
     this.messageCache.clear();
   }
 

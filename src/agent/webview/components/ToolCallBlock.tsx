@@ -4,6 +4,7 @@ import type { ContentBlock } from "../types";
 import { ImagePreview } from "./ImagePreview";
 import { InlineDiff } from "./InlineDiff";
 import { JsonHighlight } from "../../../shared/ui/JsonHighlight";
+import type { McpApprovalPromotionMeta } from "../../../shared/types";
 import { matchFilePaths } from "./filePathLinks";
 import { recordFileLinkClick } from "./fileLinkFeedback";
 
@@ -34,11 +35,12 @@ interface ToolCallBlockProps {
   onContinueToolCallInBackground?: (id: string) => void;
   onCompleteToolCall?: (id: string) => void;
   onCancelToolCall?: (id: string) => void;
-  onPromoteMcpToolApproval?: (promotion: {
-    serverName: string;
-    bareToolName: string;
-    scope: "session" | "project" | "global";
-  }) => void;
+  onPromoteMcpToolApproval?: (
+    promotion: Pick<
+      McpApprovalPromotionMeta,
+      "serverName" | "bareToolName" | "mutationTarget"
+    > & { scope: "session" | "project" | "global" },
+  ) => void;
 }
 
 function FilePathLinkedText({
@@ -1126,6 +1128,8 @@ export function ToolCallBlock({
                             onPromoteMcpToolApproval({
                               serverName: mcpApprovalPromotion.serverName,
                               bareToolName: mcpApprovalPromotion.bareToolName,
+                              mutationTarget:
+                                mcpApprovalPromotion.mutationTarget,
                               scope,
                             });
                             setPromotedScopes((prev) =>

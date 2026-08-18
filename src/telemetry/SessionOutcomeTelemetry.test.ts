@@ -67,13 +67,28 @@ describe("SessionOutcomeTelemetry", () => {
       reviewEmptyDiff: false,
       reviewScopeBytes: 1_234,
     });
+    telemetry.record({
+      type: "approval_interruption",
+      sessionId: "session-a",
+      background: false,
+      mode: "code",
+      projectId: "opaque-project-id",
+      approvalKind: "command",
+      reason: "guardian_denied",
+      guardianStatus: "reviewed",
+      guardianOutcome: "deny",
+      risk: "high",
+      permissionIntent: "require_escalated",
+      authorityReason: "explicit-escalation",
+      routeReason: "explicit-native-request",
+    });
 
     await telemetry.flush();
 
     const records = (await readJsonLines(telemetryPath)) as Array<
       Record<string, unknown>
     >;
-    expect(records).toHaveLength(3);
+    expect(records).toHaveLength(4);
     for (const record of records) {
       expect(record.version).toBe(1);
       expect(record.extensionVersion).toBe("1.2.3");
@@ -98,6 +113,14 @@ describe("SessionOutcomeTelemetry", () => {
       parentBlockedMs: 45_000,
       reviewFindings: { high: 1, low: 2 },
       reviewEmptyDiff: false,
+    });
+    expect(records[3]).toMatchObject({
+      type: "approval_interruption",
+      approvalKind: "command",
+      reason: "guardian_denied",
+      guardianStatus: "reviewed",
+      risk: "high",
+      permissionIntent: "require_escalated",
     });
   });
 

@@ -11,8 +11,8 @@ import {
 } from "./report-session-outcomes.mjs";
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
 const SCRIPT_PATH = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -124,16 +124,32 @@ test("aggregates turns, tasks, and background lifecycles into indicators", () =>
       runMs: 60_000,
       killed: true,
     }),
+    event({
+      type: "approval_interruption",
+      sessionId: "s1",
+      background: false,
+      approvalKind: "command",
+      reason: "guardian_denied",
+      guardianStatus: "reviewed",
+      risk: "high",
+    }),
+    event({
+      type: "approval_interruption",
+      sessionId: "bg1",
+      background: true,
+      approvalKind: "path",
+      reason: "human_only",
+    }),
     "not json",
     event({ type: "mystery_event", sessionId: "s9" }),
   ]);
 
   const report = readSessionOutcomes(inputPath);
 
-  assert.equal(report.events, 7);
+  assert.equal(report.events, 9);
   assert.equal(report.invalidLines, 1);
   assert.equal(report.unknownEvents, 1);
-  assert.equal(report.sessionCount, 2);
+  assert.equal(report.sessionCount, 3);
 
   assert.equal(report.turns.count, 2);
   assert.equal(report.turns.totalMs, 700_000);
@@ -151,6 +167,21 @@ test("aggregates turns, tasks, and background lifecycles into indicators", () =>
   // Zero findings on a non-empty diff counts as an empty review.
   assert.equal(report.background.emptyReviews, 1);
   assert.equal(report.background.smallScopeReviews, 1);
+
+  assert.equal(report.approvalInterruptions.count, 2);
+  assert.equal(report.approvalInterruptions.backgroundCount, 1);
+  assert.deepEqual(report.approvalInterruptions.byKind, {
+    command: 1,
+    path: 1,
+  });
+  assert.deepEqual(report.approvalInterruptions.byReason, {
+    guardian_denied: 1,
+    human_only: 1,
+  });
+  assert.deepEqual(report.approvalInterruptions.byGuardianStatus, {
+    reviewed: 1,
+  });
+  assert.equal(report.byVersion["1.18.21"].approvalInterruptions, 2);
 
   const indicators = report.indicators;
   // Active time = 700k - 100k user wait; 200k blocked on background.
@@ -280,6 +311,13 @@ test("CLI prints a summary and writes JSON", () => {
       turnDurationMs: 60_000,
       backgroundWaitMs: 30_000,
     }),
+    event({
+      type: "approval_interruption",
+      sessionId: "s1",
+      background: false,
+      approvalKind: "command",
+      reason: "guardian_denied",
+    }),
   ]);
 
   const result = spawnSync(
@@ -291,6 +329,8 @@ test("CLI prints a summary and writes JSON", () => {
   assert.match(result.stdout, /Session Outcome Telemetry/);
   assert.match(result.stdout, /Sanity indicators/);
   assert.match(result.stdout, /blocked-wait ratio/);
+  assert.match(result.stdout, /Approve for Me interruptions/);
+  assert.match(result.stdout, /guardian_denied:1/);
   const parsed = JSON.parse(fs.readFileSync(jsonPath, "utf-8"));
   assert.equal(parsed.turns.count, 1);
 });

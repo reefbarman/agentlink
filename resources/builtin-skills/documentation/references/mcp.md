@@ -51,6 +51,18 @@ Standard `mcpServers` object:
 - `timeout` is the per-tool-call inactivity timeout in milliseconds (default: `60000`). AgentLink respects any positive finite configured value; MCP progress notifications reset the inactivity window, and HTTP/SSE transport deadlines do not shorten it. There is no separate hidden total cap: an active server can extend the call by continuing to report progress, while caller cancellation still stops it.
 - MCP tools run concurrently only when the tool advertises the read-only annotation, or when the server opts in via `supportsParallelToolCalls: true`.
 
+## MCP from Agent Plugins
+
+Canonical Agent Plugins 1.0.0 may declare `stdio`, Streamable HTTP, and legacy SSE servers. These definitions are immutable package content rather than ordinary `mcp.json` sources: connection details are shown in the Agent Plugin install/update review and cannot be edited in the MCP Manager. AgentLink-owned overlays can disable a plugin server or change its tool policy, allowlist, disclosure, and parallel-call setting without modifying the package.
+
+Plugin servers are scoped to global or one canonical project identity. The requesting project receives its enabled global servers plus its own enabled project servers; another project's plugin server is excluded. A project plugin shadows a global plugin with the same manifest name. Projectless sessions receive no plugin MCP servers. Each server connects independently so one invalid, offline, or authentication-failing entry does not block its siblings.
+
+For `stdio`, `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` are expanded only in arguments, environment values, and `cwd`; command tokens, URLs, and headers are never interpolated. `PLUGIN_ROOT` points at the reviewed immutable package generation. `PLUGIN_DATA` points at persistent AgentLink-owned data that survives updates and ordinary uninstall/reinstall. **The server process runs locally outside AgentLink's command sandbox**, so review its command, arguments, working directory, and environment before enabling the plugin. No dependency or setup hooks run automatically. MCP tool calls still use ordinary discovery and approval policy after connection.
+
+For Streamable HTTP and SSE, configured headers are injected only for the reviewed MCP origin. They are not sent to OAuth endpoints, cross-origin redirects, or cross-origin SSE endpoint events; client- and OAuth-controlled headers take precedence. Plugin transports do not silently fall back to another transport type.
+
+Plugin MCP entries appear read-only in the main MCP Manager and in the Agent Plugin manager. The browser remote may inspect bounded status and policy summaries but cannot mutate plugin state or configuration. Agent Plugin management itself is documented in `references/customization.md`.
+
 ## Behavior notes
 
 - Saving and connecting are separate: a valid config stays saved even when the server is offline or needs auth.
