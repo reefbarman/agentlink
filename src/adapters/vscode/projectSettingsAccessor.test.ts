@@ -110,7 +110,7 @@ describe("ProjectSettingsAccessor", () => {
     };
     const properties = manifest.contributes.configuration.properties;
 
-    expect(classifications).toHaveLength(57);
+    expect(classifications).toHaveLength(58);
     expect(PROJECT_SCOPED_AGENTLINK_SETTINGS).toContain(
       "semanticEmbeddingsEnabled",
     );

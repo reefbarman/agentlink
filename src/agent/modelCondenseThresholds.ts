@@ -7,6 +7,7 @@ export const MODEL_THRESHOLD_KEY = "modelCondenseThresholds";
 // next request reprocesses the whole rewritten history uncached. With healthy
 // caching, large contexts are cheap per-request — condense near the limit
 // (like Claude Code/Codex auto-compaction), not as routine hygiene.
+const GPT_5_6_DEFAULT_THRESHOLD = 0.65;
 const LARGE_CONTEXT_DEFAULT_THRESHOLD = 0.85;
 const LEGACY_LARGE_MODEL_DEFAULT_THRESHOLD = 0.8;
 const OTHER_MODELS_DEFAULT_THRESHOLD = 0.9;
@@ -32,6 +33,10 @@ export function isAnthropicFrontierModel(modelId: string): boolean {
   );
 }
 
+function isGpt56Model(modelId: string): boolean {
+  return /^gpt-5\.6(?:-|$)/i.test(modelId);
+}
+
 /** Frontier models historically treated as large when capabilities are unavailable. */
 function isLegacyLargeContextFrontierModel(modelId: string): boolean {
   const lower = modelId.toLowerCase();
@@ -47,6 +52,7 @@ export function getDefaultAutoCondenseThreshold(
   modelId: string,
   capabilities?: { contextWindow?: number },
 ): number {
+  if (isGpt56Model(modelId)) return GPT_5_6_DEFAULT_THRESHOLD;
   if (
     typeof capabilities?.contextWindow === "number" &&
     capabilities.contextWindow >= LARGE_CONTEXT_WINDOW_TOKENS

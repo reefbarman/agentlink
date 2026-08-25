@@ -69,6 +69,7 @@ export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
   "memory.mode",
   "showThinking",
   "anthropic.dynamicModelCapabilities",
+  "codex.textVerbosity",
 ] as const;
 
 export type ProjectScopedAgentLinkSetting =

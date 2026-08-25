@@ -124,7 +124,12 @@ import {
   DefaultMcpPolicyMutationProvider,
   type McpPolicyMutationProvider,
 } from "./McpPolicyMutationProvider.js";
-import { McpClientHub, type McpServerInfo } from "./McpClientHub.js";
+import {
+  McpClientHub,
+  type McpConnectOptions,
+  type McpServerInfo,
+} from "./McpClientHub.js";
+import { McpAuthCoordinator } from "./mcpAuthCoordinator.js";
 import {
   McpFormElicitationCoordinator,
   type McpFormElicitationSubmitResult,
@@ -1144,6 +1149,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private chatTabStartupRestoreSettled = true;
   private readonly projectCustomizationRegistry: ProjectCustomizationRegistry;
   private readonly projectMcpHubRegistry: ProjectMcpHubRegistry;
+  private readonly mcpAuthCoordinator: McpAuthCoordinator;
   private initialProjectScope: SessionProjectScope | undefined;
   /** Compatibility-only fallback for tests/pre-initialization; production requests lease project hubs. */
   private mcpHub: McpClientHub;
@@ -1338,6 +1344,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.projectCustomizationRegistry =
       projectCustomizationRegistry ?? new ProjectCustomizationRegistry();
     this.outputChannel = vscode.window.createOutputChannel("AgentLink Agent");
+    this.mcpAuthCoordinator = new McpAuthCoordinator({
+      log: (message) => this.log(message),
+    });
     this.uiEventHub = new InMemoryAgentUiEventHub();
     this.uiPublisher = new FanoutAgentUiPublisher([
       new WebviewAgentUiPublisher((message) => {
@@ -1356,8 +1365,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       isBackgroundSession: (sessionId) =>
         Boolean(this.sessionManager?.getSession(sessionId)?.background),
     });
-    this.mcpHub = new McpClientHub(globalState, extensionVersion);
-    this.askAgentMcpHub = new McpClientHub(globalState, extensionVersion);
+    this.mcpHub = new McpClientHub(globalState, extensionVersion, {
+      authCoordinator: this.mcpAuthCoordinator,
+      hubScope: "compatibility",
+    });
+    this.askAgentMcpHub = new McpClientHub(globalState, extensionVersion, {
+      authCoordinator: this.mcpAuthCoordinator,
+      hubScope: "ask-agent",
+    });
     void cleanupOrphanedMcpOAuthState(globalState);
 
     const handleMcpElicitation: NonNullable<McpClientHub["onElicitation"]> = (
@@ -1406,8 +1421,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.askAgentMcpHub.onUrlElicitationComplete =
       handleMcpUrlElicitationComplete;
     this.projectMcpHubRegistry = new ProjectMcpHubRegistry({
-      createHub: (scope) =>
+      createHub: (scope, generation) =>
         new McpClientHub(globalState, extensionVersion, {
+          authCoordinator: this.mcpAuthCoordinator,
+          hubScope: scope.projectId,
+          hubGeneration: generation,
           isConfigCurrent: (config) =>
             this.agentPluginCatalogProvider
               ? isAgentPluginMcpConfigCurrent(config, {
@@ -1949,6 +1967,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       | undefined,
   ): void {
     this.sessionOutcomeTelemetry = telemetry;
+  }
+
+  setMcpAuthTelemetry(
+    telemetry:
+      | import("../telemetry/McpAuthTelemetry.js").McpAuthTelemetry
+      | undefined,
+  ): void {
+    this.mcpAuthCoordinator.setTelemetry(telemetry);
   }
 
   setContextHealthListener(
@@ -2600,7 +2626,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async refreshMcpConnections(
-    options?: { interactiveForNewServers?: boolean },
+    options?: McpConnectOptions,
     explicitScope?: SessionProjectScope,
   ): Promise<void> {
     const scope = explicitScope ?? this.getCurrentProjectScope();
@@ -2629,7 +2655,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (current && current.generation > 0) return Promise.resolve();
     const existing = this.startupMcpRefreshes.get(scope.projectId);
     if (existing) return existing;
-    const refresh = this.refreshMcpConnections(undefined, scope).finally(() => {
+    const refresh = this.refreshMcpConnections(
+      { trigger: "startup" },
+      scope,
+    ).finally(() => {
       if (this.startupMcpRefreshes.get(scope.projectId) === refresh) {
         this.startupMcpRefreshes.delete(scope.projectId);
       }
@@ -2641,12 +2670,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   async refreshAllPluginMcpConnections(): Promise<void> {
     await this.refreshAllWorkspaceMcpConnections({
       interactiveForNewServers: false,
+      trigger: "plugin-refresh",
     });
   }
 
-  private async refreshAllWorkspaceMcpConnections(options?: {
-    interactiveForNewServers?: boolean;
-  }): Promise<void> {
+  private async refreshAllWorkspaceMcpConnections(
+    options?: McpConnectOptions,
+  ): Promise<void> {
     await Promise.all(
       this.getWorkspaceProjects().flatMap((project) => {
         if (!project.rootPath || project.availability.status !== "available")
@@ -2791,9 +2821,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     })?.name;
   }
 
-  private async refreshAskAgentMcpConnections(options?: {
-    interactiveForNewServers?: boolean;
-  }): Promise<void> {
+  private async refreshAskAgentMcpConnections(
+    options: McpConnectOptions = { trigger: "ask-agent-refresh" },
+  ): Promise<void> {
     if (!this.askAgentMcpHub) return;
     try {
       const configs = await loadAskAgentMcpConfigs();
@@ -5482,10 +5512,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.askAgentMcpConfigVersion += 1;
       await this.refreshAskAgentMcpConnections({
         interactiveForNewServers: false,
+        trigger: "config-mutation",
+        userInitiated: true,
       });
     } else {
       await this.refreshAllWorkspaceMcpConnections({
         interactiveForNewServers: true,
+        trigger: "config-mutation",
+        userInitiated: true,
       });
     }
     const configSnapshot = await this.buildMcpConfigSnapshot(
@@ -6408,6 +6442,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (refreshMainMcp) {
         void this.refreshAllWorkspaceMcpConnections({
           interactiveForNewServers: true,
+          trigger: "config-watcher",
         });
       }
     };
@@ -6462,6 +6497,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const reloadGlobalMcp = () => {
           void this.refreshAllWorkspaceMcpConnections({
             interactiveForNewServers: true,
+            trigger: "config-watcher",
           });
         };
         globalMcpWatcher.onDidChange(reloadGlobalMcp);
@@ -6483,6 +6519,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const reloadAskAgentMcp = () => {
           void this.refreshAskAgentMcpConnections({
             interactiveForNewServers: true,
+            trigger: "config-watcher",
           });
         };
         askAgentMcpWatcher.onDidChange(reloadAskAgentMcp);

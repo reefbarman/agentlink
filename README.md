@@ -137,6 +137,8 @@ Detailed product documentation ships with the extension and is also what the bui
 
 The bundled documentation skill is self-contained: it uses these shipped references instead of reading extension source files or local settings to answer product questions.
 
+MCP OAuth browser flows are coordinated across project hubs and open VS Code windows to prevent repeated login-tab bursts. Existing servers stay non-interactive across config reloads, explicit Reauthenticate remains available after an active flow finishes, and maintainers can inspect bounded local diagnostics with `npm run telemetry:mcp-auth` (no tokens, headers, authorization URLs, callback parameters, or raw SDK errors are recorded).
+
 ## Contributing
 
 AgentLink development requires Node.js 22.19 or newer and VS Code 1.109 or newer.

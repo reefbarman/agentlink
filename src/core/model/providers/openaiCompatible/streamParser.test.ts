@@ -21,6 +21,7 @@ async function collect(
     estimatedInputTokens?: number;
     state?: { outputStarted: boolean };
     maxReplayBytes?: number;
+    availableToolNames?: string[];
   } = {},
 ): Promise<CoreModelStreamEvent[]> {
   const result: CoreModelStreamEvent[] = [];
@@ -29,6 +30,7 @@ async function collect(
     estimatedInputTokens: options.estimatedInputTokens ?? 11,
     state: options.state,
     maxReplayBytes: options.maxReplayBytes,
+    availableToolNames: options.availableToolNames,
     createThinkingId: () => "thinking-fixed",
   })) {
     result.push(event);
@@ -267,6 +269,159 @@ describe("parseOpenAiCompatibleStreamEvents", () => {
         ],
       }),
     });
+  });
+
+  it("recovers split XML-style tool calls emitted as text", async () => {
+    const events = await collect(
+      [
+        {
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  'All three nits are applied.\n<mcp__oc__set_task_status> <parameter name="status">completed</parameter>',
+              },
+            },
+          ],
+        },
+        {
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<parameter name="summary">✅ Updated &lt;three&gt; items.</parameter><parameter name="completeTodos">true</parameter></invoke>',
+              },
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ],
+      { availableToolNames: ["set_task_status"] },
+    );
+
+    expect(events.filter((event) => event.type === "text_delta")).toEqual([
+      { type: "text_delta", text: "All three nits are applied.\n" },
+    ]);
+    const toolStart = events.find((event) => event.type === "tool_start");
+    expect(toolStart).toMatchObject({
+      type: "tool_start",
+      toolName: "set_task_status",
+    });
+    const toolCallId =
+      toolStart?.type === "tool_start" ? toolStart.toolCallId : undefined;
+    expect(events).toContainEqual({
+      type: "tool_input_delta",
+      toolCallId,
+      partialJson: JSON.stringify({
+        status: "completed",
+        summary: "✅ Updated <three> items.",
+        completeTodos: true,
+      }),
+    });
+    expect(events).toContainEqual({
+      type: "tool_done",
+      toolCallId,
+      toolName: "set_task_status",
+      input: {
+        status: "completed",
+        summary: "✅ Updated <three> items.",
+        completeTodos: true,
+      },
+    });
+    expect(events).toContainEqual({
+      type: "content_blocks",
+      blocks: [
+        { type: "text", text: "All three nits are applied.\n" },
+        {
+          type: "tool_use",
+          id: toolCallId,
+          name: "set_task_status",
+          input: {
+            status: "completed",
+            summary: "✅ Updated <three> items.",
+            completeTodos: true,
+          },
+        },
+      ],
+    });
+    expect(events).toContainEqual({
+      type: "model_stop",
+      reason: "tool_use",
+      assistantMessage: expect.any(Object),
+    });
+  });
+
+  it("recovers invoke wrappers and preserves unavailable or incomplete markup", async () => {
+    const recovered = await collect(
+      [
+        {
+          choices: [
+            {
+              delta: {
+                content:
+                  '<function_calls><invoke name="write_file"><parameter name="path">README.md</parameter><parameter name="content">hello</parameter></invoke></function_calls>',
+              },
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ],
+      { availableToolNames: ["write_file"] },
+    );
+    expect(recovered).toContainEqual({
+      type: "tool_done",
+      toolCallId: expect.any(String),
+      toolName: "write_file",
+      input: { path: "README.md", content: "hello" },
+    });
+
+    const unavailable =
+      '<invoke name="delete_everything"><parameter name="force">true</parameter></invoke>';
+    const incomplete =
+      '<invoke name="write_file"><parameter name="path">README.md';
+    const preserved = await collect(
+      [
+        {
+          choices: [
+            {
+              delta: { content: `${unavailable}\n${incomplete}` },
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ],
+      { availableToolNames: ["write_file"] },
+    );
+    expect(preserved).toContainEqual({
+      type: "content_blocks",
+      blocks: [{ type: "text", text: `${unavailable}\n${incomplete}` }],
+    });
+    expect(preserved.some((event) => event.type === "tool_done")).toBe(false);
+
+    const malformed =
+      '<function_calls><invoke name="write_file"><parameter name="path">README.md</parameter>unexpected</invoke></function_calls>';
+    const malformedEvents = await collect(
+      [
+        {
+          choices: [
+            {
+              delta: { content: malformed },
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ],
+      { availableToolNames: ["write_file"] },
+    );
+    expect(malformedEvents).toContainEqual({
+      type: "content_blocks",
+      blocks: [{ type: "text", text: malformed }],
+    });
+    expect(malformedEvents.some((event) => event.type === "tool_done")).toBe(
+      false,
+    );
   });
 
   it("accepts empty tool arguments as an empty object", async () => {

@@ -16,6 +16,14 @@ import type {
 import type { JsonSchema, ToolDefinition } from "./providers/types.js";
 import { McpOAuthError, McpOAuthProvider } from "./McpOAuthProvider.js";
 import {
+  McpAuthCoordinator,
+  mcpServerIdentityHash,
+  type McpAuthorizationAttempt,
+  type McpAuthMode,
+  type McpAuthTrigger,
+} from "./mcpAuthCoordinator.js";
+import { randomUUID } from "crypto";
+import {
   buildAgentExecutionEnv,
   inheritProcessEnv,
 } from "../process/agentExecutionPolicy.js";
@@ -81,12 +89,21 @@ export interface McpPrompt {
 
 export type UrlElicitationAction = "accept" | "cancel" | "decline";
 
-type McpConnectAuthMode = "interactive" | "noninteractive";
+export interface McpConnectOptions {
+  readonly interactiveForNewServers?: boolean;
+  readonly interactiveServerNames?: ReadonlySet<string>;
+  readonly trigger?: McpAuthTrigger;
+  readonly userInitiated?: boolean;
+}
 
 interface ConnectServerOptions {
   retryCount?: number;
   afterAuth?: boolean;
-  authMode?: McpConnectAuthMode;
+  authMode?: McpAuthMode;
+  trigger?: McpAuthTrigger;
+  userInitiated?: boolean;
+  rootAttemptId?: string;
+  parentAttemptId?: string;
 }
 
 type McpCatalogKind = "tools" | "resources" | "prompts";
@@ -112,6 +129,9 @@ export interface McpClientHubOptions {
   readonly onBeforeToolCall?: (
     request: Readonly<McpToolAuthorizationRequest>,
   ) => "allow" | "deny" | Promise<"allow" | "deny">;
+  readonly authCoordinator?: McpAuthCoordinator;
+  readonly hubScope?: string;
+  readonly hubGeneration?: number;
 }
 
 interface McpSchemaValidatorProvider {
@@ -271,15 +291,14 @@ export class McpClientHub {
   private oauthProviders = new Map<string, McpOAuthProvider>();
   private globalState?: vscode.Memento;
   private authFailureCounts = new Map<string, number>();
-  private oauthDialogOpenCounts = new Map<string, number>();
   private invalidRedirectRecoveryAttempted = new Set<string>();
-  private manualReauthRequired = new Set<string>();
   private runtimeReconnectPending = new Set<string>();
   private interactiveAuthUseCounts = new Map<string, number>();
   private static readonly MAX_AUTH_RETRIES = 3;
   private schemaValidator: McpSchemaValidatorProvider | undefined;
 
   private readonly options: Readonly<McpClientHubOptions>;
+  private readonly authCoordinator: McpAuthCoordinator;
 
   constructor(
     globalState?: vscode.Memento,
@@ -291,6 +310,9 @@ export class McpClientHub {
     this.globalState = globalState;
     this.options =
       typeof options === "function" ? { isConfigCurrent: options } : options;
+    this.authCoordinator =
+      this.options.authCoordinator ??
+      new McpAuthCoordinator({ log: (message) => this.log(message) });
   }
 
   onLog?: (message: string) => void;
@@ -365,48 +387,43 @@ export class McpClientHub {
     return parts.join(" | ");
   }
 
-  private onBeforeAuthorizationOpen(serverName: string): boolean {
-    if (this.manualReauthRequired.has(serverName)) {
-      this.log(
-        `[mcp:${serverName}] blocking oauth dialog open; manual reauthenticate required`,
-      );
-      return false;
-    }
+  private showReauthenticateNotification(
+    serverName: string,
+    message: string,
+  ): void {
+    const action = "Reauthenticate";
+    void vscode.window
+      .showErrorMessage(`AgentLink: ${message}`, action)
+      .then((selection) => {
+        if (selection !== action) return;
+        void this.reauthenticateServer(serverName).catch((error) => {
+          this.log(
+            `[mcp:${serverName}] notification-triggered reauthentication failed: ${this.describeError(error)}`,
+          );
+        });
+      });
+  }
 
-    const current = this.oauthDialogOpenCounts.get(serverName) ?? 0;
-    const entry = this.servers.get(serverName);
-    if (entry?.status === "connecting" && current >= 1) {
-      void this.oauthProviders
-        .get(serverName)
-        ?.debugStateSnapshot("at second oauth authorization request");
-      const message = `Authentication loop detected for '${serverName}' (multiple browser authorization requests in one connection attempt). Automatic prompts paused. Use Reauthenticate to try again.`;
-      entry.status = "error";
-      entry.error = message;
-      this.manualReauthRequired.add(serverName);
-      this.oauthDialogOpenCounts.delete(serverName);
-      this.authFailureCounts.delete(serverName);
-      this.invalidRedirectRecoveryAttempted.delete(serverName);
-      this.log(`[mcp:${serverName}] ${message}`);
+  private async onBeforeAuthorizationOpen(
+    request: Readonly<McpAuthorizationAttempt>,
+  ) {
+    const decision = await this.authCoordinator.beforeBrowserOpen(request);
+    if (!decision.allowed) {
+      const entry = this.servers.get(request.serverName);
+      const message = `Authentication for '${request.serverName}' was paused (${decision.reason}). Use Reauthenticate to try again.`;
+      if (entry) {
+        entry.status = "error";
+        entry.error = message;
+      }
+      if (decision.reason === "blocked_dialog_cap") {
+        void this.oauthProviders
+          .get(request.serverName)
+          ?.debugStateSnapshot("at repeated oauth authorization request");
+      }
+      this.log(`[mcp:${request.serverName}] ${message}`);
       this.onStatusChange?.(this.getServerInfos());
-      return false;
     }
-
-    const next = current + 1;
-    this.oauthDialogOpenCounts.set(serverName, next);
-    this.log(
-      `[mcp:${serverName}] oauth dialog open count=${next}/${McpClientHub.MAX_AUTH_RETRIES}`,
-    );
-
-    if (next > McpClientHub.MAX_AUTH_RETRIES) {
-      const message = `Authentication did not succeed for '${serverName}'. Automatic reauthentication stopped after ${McpClientHub.MAX_AUTH_RETRIES} dialog attempts. Use Reauthenticate to try again.`;
-      this.manualReauthRequired.add(serverName);
-      this.oauthDialogOpenCounts.delete(serverName);
-      void vscode.window.showErrorMessage(`AgentLink: ${message}`);
-      this.log(`[mcp:${serverName}] ${message}`);
-      return false;
-    }
-
-    return true;
+    return decision;
   }
 
   onStatusChange?: (servers: McpServerInfo[]) => void;
@@ -436,7 +453,7 @@ export class McpClientHub {
   /** Connect to all configured servers, replacing existing connections. */
   async connect(
     configs: McpServerConfig[],
-    options: { interactiveForNewServers?: boolean } = {},
+    options: McpConnectOptions = {},
   ): Promise<void> {
     const existingNames = new Set([
       ...this.servers.keys(),
@@ -457,11 +474,15 @@ export class McpClientHub {
           return;
         }
         this.disabledServers.delete(cfg.name);
+        const isInteractive = options.interactiveServerNames
+          ? options.interactiveServerNames.has(cfg.name)
+          : Boolean(
+              options.interactiveForNewServers && !existingNames.has(cfg.name),
+            );
         await this.connectServer(cfg, {
-          authMode:
-            options.interactiveForNewServers && !existingNames.has(cfg.name)
-              ? "interactive"
-              : "noninteractive",
+          authMode: isInteractive ? "interactive" : "noninteractive",
+          trigger: options.trigger ?? "startup",
+          userInitiated: options.userInitiated ?? false,
         });
       }),
     );
@@ -680,14 +701,14 @@ export class McpClientHub {
     }
   }
 
-  private shouldAllowInteractiveAuth(
+  private resolveAuthMode(
     cfg: McpServerConfig,
-    authMode: McpConnectAuthMode,
-  ): boolean {
-    return (
-      authMode === "interactive" ||
+    authMode: McpAuthMode,
+  ): McpAuthMode {
+    return authMode === "interactive" ||
       (this.interactiveAuthUseCounts.get(cfg.name) ?? 0) > 0
-    );
+      ? "interactive"
+      : "noninteractive";
   }
 
   private async withInteractiveAuthForUse<T>(
@@ -720,7 +741,32 @@ export class McpClientHub {
     }
     const retryCount = options.retryCount ?? 0;
     const afterAuth = options.afterAuth ?? false;
-    const authMode = options.authMode ?? "noninteractive";
+    const authMode = this.resolveAuthMode(
+      cfg,
+      options.authMode ?? "noninteractive",
+    );
+    const attemptId = randomUUID();
+    const rootAttemptId = options.rootAttemptId ?? attemptId;
+    const trigger = options.trigger ?? "startup";
+    const serverIdentityHash = cfg.url
+      ? mcpServerIdentityHash(cfg.name, cfg.url)
+      : "stdio";
+    const authorizationAttempt: McpAuthorizationAttempt = {
+      serverName: cfg.name,
+      serverUrl: cfg.url ?? "",
+      serverIdentityHash,
+      trigger,
+      userInitiated: options.userInitiated ?? false,
+      authMode,
+      attemptId,
+      rootAttemptId,
+      parentAttemptId: options.parentAttemptId,
+      retryCount,
+      hubScope: this.options.hubScope,
+      hubGeneration: this.options.hubGeneration,
+      tokenGenerationBefore:
+        await this.authCoordinator.readTokenGeneration(serverIdentityHash),
+    };
     const existing = this.servers.get(cfg.name);
     if (existing?.status === "connected") return;
     if (existing?.status === "connecting") {
@@ -728,7 +774,11 @@ export class McpClientHub {
       return;
     }
 
-    if (this.manualReauthRequired.has(cfg.name) && !afterAuth) {
+    if (
+      this.authCoordinator.isManualReauthRequired(serverIdentityHash) &&
+      !afterAuth &&
+      !authorizationAttempt.userInitiated
+    ) {
       this.log(
         `[mcp:${cfg.name}] manual reauthenticate required; skipping auto-connect`,
       );
@@ -753,14 +803,20 @@ export class McpClientHub {
           this.globalState,
         );
         oauthProvider.onLog = (message) => this.log(message);
-        oauthProvider.onBeforeAuthorizationOpen = () =>
-          this.onBeforeAuthorizationOpen(cfg.name);
+        oauthProvider.onBeforeAuthorizationOpen = (request) =>
+          this.onBeforeAuthorizationOpen(request);
+        oauthProvider.onTokensSaved = async (request) => {
+          await this.authCoordinator.incrementTokenGeneration(
+            request.serverIdentityHash,
+          );
+        };
+        oauthProvider.readTokenGeneration = (identity) =>
+          this.authCoordinator.readTokenGeneration(identity);
+        oauthProvider.onAuthEvent = (event) =>
+          this.authCoordinator.record(event);
         this.oauthProviders.set(cfg.name, oauthProvider);
       }
-      oauthProvider.allowInteractiveAuth = this.shouldAllowInteractiveAuth(
-        cfg,
-        authMode,
-      );
+      oauthProvider.authorizationAttempt = authorizationAttempt;
       oauthProvider.suppressRefreshTokenReauthPrompt = !afterAuth;
       await oauthProvider.start();
     }
@@ -914,8 +970,23 @@ export class McpClientHub {
         },
       );
 
+      this.authCoordinator.record({
+        type: "connect_start",
+        serverName: cfg.name,
+        serverIdentityHash,
+        trigger,
+        authMode,
+        userInitiated: authorizationAttempt.userInitiated,
+        attemptId,
+        rootAttemptId,
+        parentAttemptId: authorizationAttempt.parentAttemptId,
+        hubScope: authorizationAttempt.hubScope,
+        hubGeneration: authorizationAttempt.hubGeneration,
+        retryCount,
+        tokenGenerationBefore: authorizationAttempt.tokenGenerationBefore,
+      });
       this.log(
-        `[mcp:${cfg.name}] connect start type=${cfg.type ?? "stdio"} retryCount=${retryCount} afterAuth=${afterAuth} authMode=${authMode} allowInteractiveAuth=${oauthProvider?.allowInteractiveAuth ?? false}`,
+        `[mcp:${cfg.name}] connect start type=${cfg.type ?? "stdio"} retryCount=${retryCount} afterAuth=${afterAuth} authMode=${authMode} trigger=${trigger} attemptId=${attemptId} rootAttemptId=${rootAttemptId}`,
       );
       if (isHttpServer && cfg.url) {
         await withHttpConnectLock(cfg.url, () =>
@@ -925,11 +996,28 @@ export class McpClientHub {
         await entry.client.connect(transport);
       }
       this.log(`[mcp:${cfg.name}] connect succeeded`);
+      this.authCoordinator.record({
+        type: "connect_success",
+        serverName: cfg.name,
+        serverIdentityHash,
+        trigger,
+        authMode,
+        userInitiated: authorizationAttempt.userInitiated,
+        attemptId,
+        rootAttemptId,
+        parentAttemptId: authorizationAttempt.parentAttemptId,
+        hubScope: authorizationAttempt.hubScope,
+        hubGeneration: authorizationAttempt.hubGeneration,
+        retryCount,
+        tokenGenerationBefore: authorizationAttempt.tokenGenerationBefore,
+        tokenGenerationAfter:
+          await this.authCoordinator.readTokenGeneration(serverIdentityHash),
+      });
       entry.retryCount = 0;
       this.authFailureCounts.delete(cfg.name);
-      this.oauthDialogOpenCounts.delete(cfg.name);
       this.invalidRedirectRecoveryAttempted.delete(cfg.name);
-      this.manualReauthRequired.delete(cfg.name);
+      this.authCoordinator.clearManualReauth(serverIdentityHash);
+      this.authCoordinator.clearAttempt(attemptId);
       this.runtimeReconnectPending.delete(cfg.name);
 
       await Promise.all(
@@ -950,7 +1038,7 @@ export class McpClientHub {
         `[mcp:${cfg.name}] connect exception details: ${this.describeError(err)}`,
       );
       this.log(
-        `[mcp:${cfg.name}] connect exception context type=${cfg.type ?? "stdio"} retryCount=${retryCount} afterAuth=${afterAuth} authMode=${authMode} allowInteractiveAuth=${oauthProvider?.allowInteractiveAuth ?? false} manualReauthRequired=${this.manualReauthRequired.has(cfg.name)} authFailureCount=${this.authFailureCounts.get(cfg.name) ?? 0} oauthDialogOpenCount=${this.oauthDialogOpenCounts.get(cfg.name) ?? 0} hasSavedTokens=${hasSavedTokens}`,
+        `[mcp:${cfg.name}] connect exception context type=${cfg.type ?? "stdio"} retryCount=${retryCount} afterAuth=${afterAuth} authMode=${authMode} trigger=${trigger} attemptId=${attemptId} manualReauthRequired=${this.authCoordinator.isManualReauthRequired(serverIdentityHash)} authFailureCount=${this.authFailureCounts.get(cfg.name) ?? 0} hasSavedTokens=${hasSavedTokens}`,
       );
 
       // After a 401, the SDK opens the browser via redirectToAuthorization (which
@@ -958,12 +1046,45 @@ export class McpClientHub {
       // Tokens are now saved; retry once immediately without re-triggering auth.
       const isAuthFailure = this.isAuthFailureError(err);
       if (isAuthFailure) {
+        this.authCoordinator.record({
+          type: "connect_auth_failure",
+          serverName: cfg.name,
+          serverIdentityHash,
+          trigger,
+          authMode,
+          userInitiated: authorizationAttempt.userInitiated,
+          attemptId,
+          rootAttemptId,
+          parentAttemptId: authorizationAttempt.parentAttemptId,
+          hubScope: authorizationAttempt.hubScope,
+          hubGeneration: authorizationAttempt.hubGeneration,
+          retryCount,
+          tokenGenerationBefore: authorizationAttempt.tokenGenerationBefore,
+          errorKind: this.authErrorKind(err),
+        });
         const nextCount = (this.authFailureCounts.get(cfg.name) ?? 0) + 1;
         this.authFailureCounts.set(cfg.name, nextCount);
 
         this.log(
           `[mcp:${cfg.name}] auth failure detected attempt=${nextCount}/${McpClientHub.MAX_AUTH_RETRIES} message=${errMsg}`,
         );
+
+        const credentialsUpdated =
+          err instanceof McpOAuthError && err.kind === "credentials_updated";
+        if (credentialsUpdated) {
+          this.log(
+            `[mcp:${cfg.name}] credentials changed during connect; retrying silently with shared tokens`,
+          );
+          this.authFailureCounts.delete(cfg.name);
+          await this.disconnectServer(cfg.name);
+          await this.connectServer(cfg, {
+            authMode: "noninteractive",
+            trigger: "scheduled-retry",
+            rootAttemptId,
+            parentAttemptId: attemptId,
+          });
+          return;
+        }
 
         const isUnauthorized = normalizedErr === "unauthorized";
         const isStaleClientRedirect =
@@ -985,7 +1106,6 @@ export class McpClientHub {
               `[mcp:${cfg.name}] failed to clear oauth client registration during redirect recovery: ${invalidateErr}`,
             );
           }
-          this.oauthDialogOpenCounts.delete(cfg.name);
           this.authFailureCounts.delete(cfg.name);
           entry.status = "error";
           entry.error = `Authentication did not succeed for '${cfg.name}' (redirect URI/client registration mismatch). Retrying once with fresh OAuth client registration…`;
@@ -1002,7 +1122,6 @@ export class McpClientHub {
             `[mcp:${cfg.name}] unauthorized immediately after token save; retrying silently with saved tokens`,
           );
           this.authFailureCounts.delete(cfg.name);
-          this.oauthDialogOpenCounts.delete(cfg.name);
           this.invalidRedirectRecoveryAttempted.delete(cfg.name);
           await this.disconnectServer(cfg.name);
           this.onStatusChange?.(this.getServerInfos());
@@ -1011,6 +1130,10 @@ export class McpClientHub {
           await this.connectServer(cfg, {
             afterAuth: true,
             authMode,
+            trigger,
+            userInitiated: authorizationAttempt.userInitiated,
+            rootAttemptId,
+            parentAttemptId: attemptId,
           });
           return;
         }
@@ -1018,9 +1141,23 @@ export class McpClientHub {
         const wasUserCancel =
           normalizedErr.includes("access_denied") ||
           normalizedErr.includes("cancel");
+        const isTransientCoordinationBlock =
+          normalizedErr.includes("blocked_active_lease") ||
+          normalizedErr.includes("blocked_cooldown");
+        if (isTransientCoordinationBlock) {
+          const message = `Authentication for '${cfg.name}' is already active or recently completed in another connection. Use Reauthenticate after the active flow finishes.`;
+          entry.status = "error";
+          entry.error = message;
+          this.authFailureCounts.delete(cfg.name);
+          this.log(`[mcp:${cfg.name}] ${message}`);
+          this.onStatusChange?.(this.getServerInfos());
+          return;
+        }
+
         const isManualReauthBlocked =
           normalizedErr.includes("manual reauthentication required") ||
-          normalizedErr.includes("authorization blocked");
+          normalizedErr.includes("blocked_manual_reauth") ||
+          normalizedErr.includes("blocked_dialog_cap");
 
         if (
           isManualReauthBlocked ||
@@ -1036,9 +1173,8 @@ export class McpClientHub {
           entry.status = "error";
           entry.error = message;
           this.authFailureCounts.delete(cfg.name);
-          this.oauthDialogOpenCounts.delete(cfg.name);
-          this.manualReauthRequired.add(cfg.name);
-          void vscode.window.showErrorMessage(`AgentLink: ${message}`);
+          this.authCoordinator.requireManualReauth(serverIdentityHash);
+          this.showReauthenticateNotification(cfg.name, message);
           this.log(`[mcp:${cfg.name}] ${message}`);
           this.onStatusChange?.(this.getServerInfos());
           return;
@@ -1054,8 +1190,7 @@ export class McpClientHub {
         this.log(`[mcp:${cfg.name}] non-auth error: ${errMsg}`);
 
         const normalizedErr = errMsg.toLowerCase();
-        const hasOpenOauthDialog =
-          (this.oauthDialogOpenCounts.get(cfg.name) ?? 0) > 0;
+        const hasOpenOauthDialog = authMode === "interactive";
         const isConnectTimeout =
           normalizedErr.includes("request timed out") ||
           normalizedErr.includes("timed out");
@@ -1065,10 +1200,9 @@ export class McpClientHub {
           entry.status = "error";
           entry.error = message;
           this.authFailureCounts.delete(cfg.name);
-          this.oauthDialogOpenCounts.delete(cfg.name);
           this.invalidRedirectRecoveryAttempted.delete(cfg.name);
-          this.manualReauthRequired.add(cfg.name);
-          void vscode.window.showErrorMessage(`AgentLink: ${message}`);
+          this.authCoordinator.requireManualReauth(serverIdentityHash);
+          this.showReauthenticateNotification(cfg.name, message);
           this.log(`[mcp:${cfg.name}] ${message}`);
           this.onStatusChange?.(this.getServerInfos());
           return;
@@ -1082,6 +1216,25 @@ export class McpClientHub {
     }
 
     this.onStatusChange?.(this.getServerInfos());
+  }
+
+  private authErrorKind(
+    err: unknown,
+  ): import("../telemetry/McpAuthTelemetry.js").McpAuthErrorKind {
+    if (err instanceof McpOAuthError) {
+      if (err.kind === "callback_timeout") return "callback_timeout";
+      if (err.kind === "callback_missing_code") return "callback_missing_code";
+      if (err.kind === "stale_client_redirect") return "redirect_mismatch";
+      return "authorization_error";
+    }
+    if (err instanceof UnauthorizedError) return "unauthorized";
+    const normalized = (
+      err instanceof Error ? err.message : String(err)
+    ).toLowerCase();
+    if (normalized.includes("timeout")) return "request_timeout";
+    if (normalized.includes("forbidden")) return "forbidden";
+    if (normalized.includes("network")) return "network";
+    return "unknown";
   }
 
   private isRedirectMismatchMessage(normalizedMessage: string): boolean {
@@ -1115,13 +1268,26 @@ export class McpClientHub {
     }
 
     this.runtimeReconnectPending.add(cfg.name);
+    if (cfg.url) {
+      this.authCoordinator.record({
+        type: "runtime_reconnect",
+        serverName: cfg.name,
+        serverIdentityHash: mcpServerIdentityHash(cfg.name, cfg.url),
+        trigger: "runtime-reconnect",
+        authMode: "interactive",
+        userInitiated: false,
+      });
+    }
     this.log(
       `[mcp:${cfg.name}] runtime auth recovery scheduling immediate reconnect`,
     );
     void (async () => {
       try {
         await this.disconnectServer(cfg.name);
-        await this.connectServer(cfg, { authMode: "interactive" });
+        await this.connectServer(cfg, {
+          authMode: "interactive",
+          trigger: "runtime-reconnect",
+        });
       } catch (reconnectErr) {
         this.log(
           `[mcp:${cfg.name}] runtime auth recovery reconnect failed: ${this.describeError(reconnectErr)}`,
@@ -1168,7 +1334,6 @@ export class McpClientHub {
         );
       }
 
-      this.oauthDialogOpenCounts.delete(serverName);
       this.authFailureCounts.delete(serverName);
       entry.status = "error";
       entry.error = `Authentication did not succeed for '${serverName}' (redirect URI/client registration mismatch). Retrying once with fresh OAuth client registration…`;
@@ -1180,9 +1345,23 @@ export class McpClientHub {
     const wasUserCancel =
       normalizedErr.includes("access_denied") ||
       normalizedErr.includes("cancel");
+    const isTransientCoordinationBlock =
+      normalizedErr.includes("blocked_active_lease") ||
+      normalizedErr.includes("blocked_cooldown");
+    if (isTransientCoordinationBlock) {
+      const message = `Authentication for '${serverName}' is already active or recently completed in another connection. Use Reauthenticate after the active flow finishes.`;
+      entry.status = "error";
+      entry.error = message;
+      this.authFailureCounts.delete(serverName);
+      this.onStatusChange?.(this.getServerInfos());
+      this.log(`[mcp:${serverName}] ${message}`);
+      return message;
+    }
+
     const isManualReauthBlocked =
       normalizedErr.includes("manual reauthentication required") ||
-      normalizedErr.includes("authorization blocked");
+      normalizedErr.includes("blocked_manual_reauth") ||
+      normalizedErr.includes("blocked_dialog_cap");
 
     if (isManualReauthBlocked || wasUserCancel) {
       const reason = isManualReauthBlocked
@@ -1192,10 +1371,13 @@ export class McpClientHub {
       entry.status = "error";
       entry.error = message;
       this.authFailureCounts.delete(serverName);
-      this.oauthDialogOpenCounts.delete(serverName);
-      this.manualReauthRequired.add(serverName);
+      if (entry.config.url) {
+        this.authCoordinator.requireManualReauth(
+          mcpServerIdentityHash(serverName, entry.config.url),
+        );
+      }
       this.onStatusChange?.(this.getServerInfos());
-      void vscode.window.showErrorMessage(`AgentLink: ${message}`);
+      this.showReauthenticateNotification(serverName, message);
       this.log(`[mcp:${serverName}] ${message}`);
       return message;
     }
@@ -1204,7 +1386,6 @@ export class McpClientHub {
     entry.status = "error";
     entry.error = message;
     this.authFailureCounts.delete(serverName);
-    this.oauthDialogOpenCounts.delete(serverName);
     this.onStatusChange?.(this.getServerInfos());
     void vscode.window.showWarningMessage(`AgentLink: ${message}`);
     this.log(`[mcp:${serverName}] ${message}`);
@@ -1217,7 +1398,13 @@ export class McpClientHub {
     attempt: number,
     reason: "auth-failure" | "transport-error",
   ): void {
-    if (reason === "auth-failure" && this.manualReauthRequired.has(cfg.name)) {
+    const serverIdentity = cfg.url
+      ? mcpServerIdentityHash(cfg.name, cfg.url)
+      : "stdio";
+    if (
+      reason === "auth-failure" &&
+      this.authCoordinator.isManualReauthRequired(serverIdentity)
+    ) {
       this.log(
         `[mcp:${cfg.name}] not scheduling reconnect (${reason}); manual reauthenticate required`,
       );
@@ -1236,6 +1423,7 @@ export class McpClientHub {
       this.connectServer(cfg, {
         retryCount: attempt,
         authMode: "noninteractive",
+        trigger: "scheduled-retry",
       });
     }, delay);
   }
@@ -1411,12 +1599,19 @@ export class McpClientHub {
     const cfg = entry?.config;
     if (!cfg) return;
     this.authFailureCounts.delete(name);
-    this.oauthDialogOpenCounts.delete(name);
     this.invalidRedirectRecoveryAttempted.delete(name);
-    this.manualReauthRequired.delete(name);
     this.runtimeReconnectPending.delete(name);
+    if (cfg.url) {
+      this.authCoordinator.clearManualReauth(
+        mcpServerIdentityHash(cfg.name, cfg.url),
+      );
+    }
     await this.disconnectServer(name);
-    await this.connectServer(cfg, { authMode: "noninteractive" });
+    await this.connectServer(cfg, {
+      authMode: "noninteractive",
+      trigger: "manual-reconnect",
+      userInitiated: true,
+    });
     this.onStatusChange?.(this.getServerInfos());
   }
 
@@ -1427,10 +1622,12 @@ export class McpClientHub {
     if (!cfg) return;
 
     this.authFailureCounts.delete(name);
-    this.oauthDialogOpenCounts.delete(name);
     this.invalidRedirectRecoveryAttempted.delete(name);
-    this.manualReauthRequired.delete(name);
     this.runtimeReconnectPending.delete(name);
+    const serverIdentityHash = cfg.url
+      ? mcpServerIdentityHash(cfg.name, cfg.url)
+      : "stdio";
+    this.authCoordinator.clearManualReauth(serverIdentityHash);
     await this.disconnectServer(name);
 
     const isHttpServer =
@@ -1445,8 +1642,32 @@ export class McpClientHub {
         this.globalState,
       );
       provider.onLog = (message) => this.log(message);
-      provider.onBeforeAuthorizationOpen = () =>
-        this.onBeforeAuthorizationOpen(cfg.name);
+      provider.onBeforeAuthorizationOpen = (request) =>
+        this.onBeforeAuthorizationOpen(request);
+      provider.onTokensSaved = async (request) => {
+        await this.authCoordinator.incrementTokenGeneration(
+          request.serverIdentityHash,
+        );
+      };
+      provider.readTokenGeneration = (identity) =>
+        this.authCoordinator.readTokenGeneration(identity);
+      provider.onAuthEvent = (event) => this.authCoordinator.record(event);
+      const attemptId = randomUUID();
+      provider.authorizationAttempt = {
+        serverName: cfg.name,
+        serverUrl: cfg.url,
+        serverIdentityHash,
+        trigger: "manual-reauth",
+        userInitiated: true,
+        authMode: "interactive",
+        attemptId,
+        rootAttemptId: attemptId,
+        retryCount: 0,
+        hubScope: this.options.hubScope,
+        hubGeneration: this.options.hubGeneration,
+        tokenGenerationBefore:
+          await this.authCoordinator.readTokenGeneration(serverIdentityHash),
+      };
       await provider.start();
       try {
         await withHttpConnectLock(cfg.url, () => provider.forceReauth());
@@ -1463,7 +1684,11 @@ export class McpClientHub {
       // forceReauth already completed an explicit browser flow. If the freshly
       // saved tokens are still rejected during reconnect, suppress another
       // automatic fallback prompt and enter manual reauth mode instead.
-      await this.connectServer(cfg, { authMode: "interactive" });
+      await this.connectServer(cfg, {
+        authMode: "interactive",
+        trigger: "manual-reauth",
+        userInitiated: true,
+      });
     } finally {
       const current = this.servers.get(cfg.name);
       if (!current || current.status !== "connected") {

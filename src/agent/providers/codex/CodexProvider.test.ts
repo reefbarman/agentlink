@@ -1308,6 +1308,158 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     });
   });
 
+  it("sends text.verbosity=low for GPT-5.6 agent-turn streams but not for gpt-5.5", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    createMock.mockImplementation(async (body: Record<string, unknown>) => {
+      bodies.push(body);
+      return (async function* () {
+        yield {
+          type: "response.done",
+          response: {
+            id: "resp",
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        };
+      })();
+    });
+
+    const provider = new CodexProvider(makeAuthManager() as never);
+    for (const model of ["gpt-5.6-terra", "gpt-5.5"]) {
+      for await (const _event of provider.stream({
+        model,
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "ping" }],
+        maxTokens: 64,
+      })) {
+        // drain
+      }
+    }
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toMatchObject({
+      model: "gpt-5.6-terra",
+      text: { verbosity: "low" },
+    });
+    expect(bodies[1]).not.toHaveProperty("text");
+  });
+
+  it("applies the configured text-verbosity setting to agent-turn streams", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    createMock.mockImplementation(async (body: Record<string, unknown>) => {
+      bodies.push(body);
+      return (async function* () {
+        yield {
+          type: "response.done",
+          response: {
+            id: "resp",
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        };
+      })();
+    });
+
+    let setting: string | undefined = "off";
+    const provider = new CodexProvider(makeAuthManager() as never, undefined, {
+      getTextVerbositySetting: () => setting,
+    });
+
+    const drain = async (model: string) => {
+      for await (const _event of provider.stream({
+        model,
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "ping" }],
+        maxTokens: 64,
+      })) {
+        // drain
+      }
+    };
+
+    await drain("gpt-5.6-terra");
+    setting = "high";
+    await drain("gpt-5.5");
+    setting = "default";
+    await drain("gpt-5.6-terra");
+
+    expect(bodies).toHaveLength(3);
+    expect(bodies[0]).not.toHaveProperty("text");
+    expect(bodies[1]).toMatchObject({
+      model: "gpt-5.5",
+      text: { verbosity: "high" },
+    });
+    expect(bodies[2]).toMatchObject({
+      model: "gpt-5.6-terra",
+      text: { verbosity: "low" },
+    });
+  });
+
+  it("omits text.verbosity from detached complete() requests", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    createMock.mockImplementationOnce(async (body: Record<string, unknown>) => {
+      requestBody = body;
+      return (async function* () {
+        yield { type: "response.output_text.delta", delta: "ok" };
+        yield {
+          type: "response.done",
+          response: { usage: { input_tokens: 1, output_tokens: 1 } },
+        };
+      })();
+    });
+
+    const provider = new CodexProvider(makeAuthManager() as never);
+    await provider.complete({
+      model: "gpt-5.6-terra",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "Summarize this" }],
+      maxTokens: 64,
+    });
+
+    expect(requestBody).toMatchObject({ model: "gpt-5.6-terra" });
+    expect(requestBody).not.toHaveProperty("text");
+  });
+
+  it("retries once without text.verbosity when the endpoint rejects it", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    createMock
+      .mockImplementationOnce(async (body: Record<string, unknown>) => {
+        bodies.push(body);
+        throw Object.assign(new Error("Unknown parameter: 'text.verbosity'."), {
+          status: 400,
+        });
+      })
+      .mockImplementationOnce(async (body: Record<string, unknown>) => {
+        bodies.push(body);
+        return (async function* () {
+          yield { type: "response.output_text.delta", delta: "hello" };
+          yield {
+            type: "response.done",
+            response: {
+              id: "resp",
+              usage: { input_tokens: 1, output_tokens: 1 },
+            },
+          };
+        })();
+      });
+
+    const provider = new CodexProvider(makeAuthManager() as never);
+    const events = [];
+    for await (const event of provider.stream({
+      model: "gpt-5.6-terra",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+    })) {
+      events.push(event);
+    }
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toMatchObject({ text: { verbosity: "low" } });
+    expect(bodies[1]).not.toHaveProperty("text");
+    expect(bodies[1]).toMatchObject({ model: "gpt-5.6-terra" });
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "text_delta", text: "hello" }),
+    );
+  });
+
   it("reports OAuth-specific GPT-5.5 caps unless API-key auth is preferred", async () => {
     const oauthProvider = new CodexProvider(makeAuthManager() as never);
     await new Promise((resolve) => setTimeout(resolve, 0));

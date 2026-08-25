@@ -66,6 +66,9 @@ Plugin MCP entries appear read-only in the main MCP Manager and in the Agent Plu
 ## Behavior notes
 
 - Saving and connecting are separate: a valid config stays saved even when the server is offline or needs auth.
+- HTTP OAuth is coordinated across project hubs and open VS Code windows. Automatic connection recovery can open at most one authorization flow for a server at a time; other attempts pause with a **Reauthenticate** action instead of opening duplicate browser tabs. A short post-flow cooldown blocks repeated automatic prompts, while an explicit Reauthenticate may bypass the cooldown after any active flow finishes.
+- MCP config reloads preserve which servers were already known, so touching an existing config does not reclassify every OAuth server as newly added or trigger interactive authorization. When another window refreshes shared credentials first, the waiting connection retries silently with the newer token generation.
+- For local diagnostics, `npm run telemetry:mcp-auth` summarizes bounded MCP auth events from `~/.agentlink/mcp-auth-telemetry.jsonl`, including browser-open bursts, trigger paths, refresh fallbacks, and lease contention. It never records tokens, headers, authorization URLs, callback parameters, or raw SDK errors; server identities are locally salted in telemetry.
 - Writes are revision-checked and atomic; concurrent external edits produce a `config_changed` result rather than an overwrite.
 - Large catalogs are progressively disclosed (`find_mcp_tools` / `call_mcp_tool`); the same approval model applies to MCP tools as to native ones.
 - A timeout or cancellation leaves remote completion unknown. AgentLink does not automatically retry; check a server-provided status/read operation before repeating a potentially mutating call.

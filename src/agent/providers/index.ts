@@ -38,7 +38,7 @@ export {
   codexOAuthManager,
   OpenAiCodexAuthManager,
   openAiCodexAuthManager,
-  queryCodexCliUsage,
+  queryCodexUsage,
   type CodexCredentials,
   type CodexOAuthAccountInfo,
   type SaveOAuthAccountOptions,
@@ -46,6 +46,7 @@ export {
   type OpenAiCodexAuthMethod,
   type OpenAiCodexResolvedAuth,
   type OpenAiApiKeyCredential,
+  type CodexUsageResult,
   type CodexCliUsageResult,
   type CodexSubscriptionUsage,
 } from "./codex/index.js";

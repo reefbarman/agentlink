@@ -221,8 +221,7 @@ async function provisionAskAgentModelForTest(params: {
             id: "gpt-5.6-luna",
             displayName: "GPT-5.6 Luna",
             providerId: "openai-codex",
-            contextWindow: 481_000,
-            maxInputTokens: 353_000,
+            contextWindow: 1_050_000,
             reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
             defaultReasoningEffort: "medium",
             authenticated: true,
@@ -4790,8 +4789,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
               id: "gpt-5.6-luna",
               displayName: "GPT-5.6 Luna",
               providerId: "openai-codex",
-              contextWindow: 481_000,
-              maxInputTokens: 353_000,
+              contextWindow: 1_050_000,
               reasoningEfforts: [
                 "none",
                 "low",
@@ -6772,8 +6770,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
         id: "gpt-5.6-sol",
         displayName: "GPT-5.6 Sol",
         providerId: "openai-codex",
-        contextWindow: 481_000,
-        maxInputTokens: 353_000,
+        contextWindow: 1_050_000,
         authenticated: true,
       },
     });
@@ -6913,8 +6910,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       id: codexModelId,
       displayName: "GPT-5.6 Sol",
       providerId: "codex",
-      contextWindow: 481_000,
-      maxInputTokens: 353_000,
+      contextWindow: 1_050_000,
       authenticated: true,
     };
     const harness = await makeAskAgentToolLoopTestHarness({

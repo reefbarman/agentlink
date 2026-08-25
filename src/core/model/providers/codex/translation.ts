@@ -13,6 +13,7 @@ import {
   getEndpointCaps,
   resolveCodexEffectiveModel,
   type CodexAuthMethod,
+  type CodexTextVerbosity,
   type ResponsesCaps,
 } from "./models.js";
 
@@ -407,6 +408,7 @@ export function buildCodexEndpointRequestBody(args: {
   cache?: { key?: string; retention?: CodexPromptCacheRetention };
   reasoningEffort?: CoreReasoningEffort;
   reasoningMode?: "standard" | "pro";
+  textVerbosity?: CodexTextVerbosity;
   tools?: CodexTool[];
   hostedTools?: readonly CoreHostedToolDefinition[];
   caps: ResponsesCaps;
@@ -448,6 +450,9 @@ export function buildCodexEndpointRequestBody(args: {
     previousResponseId: args.caps.supportsPreviousResponseId
       ? args.state?.previousResponseId
       : undefined,
+    textVerbosity: args.caps.supportsTextVerbosity
+      ? args.textVerbosity
+      : undefined,
     tools,
     include,
     promptCacheKey: args.caps.supportsPromptCacheKey
@@ -468,6 +473,7 @@ export function buildCodexStreamRequestBody(args: {
   maxTokens?: number;
   reasoning?: Reasoning;
   previousResponseId?: string;
+  textVerbosity?: CodexTextVerbosity;
   tools?: CodexTool[];
   include?: CodexRequestBody["include"];
   promptCacheKey?: string;
@@ -483,6 +489,7 @@ export function buildCodexStreamRequestBody(args: {
       ? ({ max_output_tokens: args.maxTokens } as Record<string, unknown>)
       : {}),
     ...(args.reasoning ? { reasoning: args.reasoning } : {}),
+    ...(args.textVerbosity ? { text: { verbosity: args.textVerbosity } } : {}),
     ...(args.previousResponseId
       ? { previous_response_id: args.previousResponseId }
       : {}),

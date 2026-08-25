@@ -158,8 +158,11 @@ vi.mock("./McpOAuthProvider.js", async () => {
     ...actual,
     McpOAuthProvider: class MockMcpOAuthProvider {
       onLog?: (message: string) => void;
-      onBeforeAuthorizationOpen?: () => boolean | Promise<boolean>;
-      allowInteractiveAuth = true;
+      onBeforeAuthorizationOpen?: (...args: unknown[]) => unknown;
+      onTokensSaved?: (...args: unknown[]) => unknown;
+      readTokenGeneration?: (...args: unknown[]) => unknown;
+      onAuthEvent?: (...args: unknown[]) => unknown;
+      authorizationAttempt?: { authMode: "interactive" | "noninteractive" };
       suppressRefreshTokenReauthPrompt = false;
 
       constructor(
@@ -307,6 +310,11 @@ describe("McpClientHub OAuth recovery", () => {
     await hub.connect([notionCfg]);
 
     await hub.callTool("notion__get_page", { id: "p" });
+    await vi.waitFor(() => {
+      expect(
+        hub.getServerInfos().find((server) => server.name === "notion")?.status,
+      ).toBe("connected");
+    });
 
     expect(mocks.providerInvalidateCredentials).toHaveBeenCalledWith("client");
     expect(
@@ -364,11 +372,15 @@ describe("McpClientHub OAuth recovery", () => {
       .mockImplementationOnce(
         async function (this: {
           authProvider?: {
-            allowInteractiveAuth?: boolean;
+            authorizationAttempt?: {
+              authMode: "interactive" | "noninteractive";
+            };
             suppressRefreshTokenReauthPrompt?: boolean;
           };
         }) {
-          expect(this.authProvider?.allowInteractiveAuth).toBe(false);
+          expect(this.authProvider?.authorizationAttempt?.authMode).toBe(
+            "noninteractive",
+          );
           expect(this.authProvider?.suppressRefreshTokenReauthPrompt).toBe(
             false,
           );
@@ -385,6 +397,7 @@ describe("McpClientHub OAuth recovery", () => {
     expect(mocks.createTransportConnect).toHaveBeenCalledTimes(2);
     expect(mocks.showErrorMessage).toHaveBeenCalledWith(
       "AgentLink: Authentication is in manual reauthenticate mode for 'notion'. Use Reauthenticate to try again.",
+      "Reauthenticate",
     );
     expect(mocks.showWarningMessage).not.toHaveBeenCalledWith(
       'AgentLink: Automatic token refresh failed for "notion". Reauthenticate to continue.',
@@ -392,12 +405,42 @@ describe("McpClientHub OAuth recovery", () => {
     );
   });
 
+  it("starts interactive reauthentication from the manual-auth notification action", async () => {
+    mocks.createTransportConnect
+      .mockRejectedValueOnce(
+        new McpOAuthError(
+          "authorization_error",
+          'OAuth authorization blocked for "notion": manual reauthentication required after refresh token failure',
+        ),
+      )
+      .mockResolvedValueOnce(undefined);
+    mocks.showErrorMessage.mockResolvedValueOnce("Reauthenticate");
+
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([notionCfg]);
+
+    await vi.waitFor(() => {
+      expect(mocks.providerForceReauth).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.showErrorMessage).toHaveBeenCalledWith(
+      "AgentLink: Authentication is in manual reauthenticate mode for 'notion'. Use Reauthenticate to try again.",
+      "Reauthenticate",
+    );
+    expect(mocks.createTransportConnect).toHaveBeenCalledTimes(2);
+  });
+
   it("allows interactive auth for newly added MCP servers when requested", async () => {
     mocks.createTransportConnect.mockImplementationOnce(
       async function (this: {
-        authProvider?: { allowInteractiveAuth?: boolean };
+        authProvider?: {
+          authorizationAttempt?: {
+            authMode: "interactive" | "noninteractive";
+          };
+        };
       }) {
-        expect(this.authProvider?.allowInteractiveAuth).toBe(true);
+        expect(this.authProvider?.authorizationAttempt?.authMode).toBe(
+          "interactive",
+        );
       },
     );
 

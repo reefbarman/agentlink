@@ -254,7 +254,7 @@ describe("BrowserGatewayHelperModelAuthLeaseClient", () => {
           id: "gpt-5.6-luna",
           displayName: "GPT-5.6 Luna",
           providerId: "openai-codex",
-          contextWindow: 481_000,
+          contextWindow: 1_050_000,
           authenticated: true,
         },
       ],

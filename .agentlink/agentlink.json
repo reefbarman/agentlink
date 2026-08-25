@@ -42,6 +42,11 @@
       "pattern": "npm run telemetry:sessions",
       "mode": "prefix",
       "decision": "allow"
+    },
+    {
+      "pattern": "npm run telemetry:context",
+      "mode": "prefix",
+      "decision": "allow"
     }
   ],
   "pathRules": [

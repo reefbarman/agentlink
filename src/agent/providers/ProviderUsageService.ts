@@ -1,4 +1,4 @@
-import { queryCodexCliUsage } from "./codex/CodexCliUsageClient.js";
+import { queryCodexUsage } from "./codex/CodexUsageClient.js";
 
 export interface ProviderUsageWindow {
   usedPercent: number;
@@ -41,7 +41,7 @@ export function createCodexUsageAdapter(): ProviderUsageAdapter {
     providerId: "openai-codex",
     providerName: "Codex",
     async query() {
-      const result = await queryCodexCliUsage();
+      const result = await queryCodexUsage();
       if (!result.available) return result;
 
       const usage = result.usage;
@@ -55,9 +55,9 @@ export function createCodexUsageAdapter(): ProviderUsageAdapter {
           (usage.account.type === "chatgpt"
             ? "ChatGPT account (email unavailable)"
             : usage.account.type),
-        accountSource: "Signed in to the Codex CLI",
+        accountSource: "Active AgentLink ChatGPT/Codex account",
         switchAccountInstructions:
-          "To view another account, run codex logout, sign in to that account with codex login, then run /usage again. Switching AgentLink's active OAuth account does not change the Codex CLI account.",
+          "Use AgentLink: Switch Active ChatGPT/Codex Account, then run /usage again.",
         ...((usage.account.planType ?? usage.rateLimits.planType)
           ? { planType: usage.account.planType ?? usage.rateLimits.planType! }
           : {}),

@@ -7,7 +7,7 @@ vi.mock("vscode", async () => ({
 }));
 
 import * as vscode from "vscode";
-import type { CodexSubscriptionUsage } from "./providers/codex/CodexCliUsageClient.js";
+import type { CodexSubscriptionUsage } from "./providers/codex/CodexUsageClient.js";
 import { CodexOAuthFlowError } from "./providers/codex/CodexOAuthManager.js";
 import {
   createCodexAuthFlows,
@@ -183,16 +183,16 @@ describe("createCodexAuthFlows", () => {
     const dependencies = createDependencies();
     vi.mocked(dependencies.queryUsage).mockResolvedValue({
       available: false,
-      reason: "missing CLI",
+      reason: "Sign in to ChatGPT/Codex in AgentLink.",
     });
 
     await createCodexAuthFlows(dependencies).showSubscriptionUsage();
 
     expect(dependencies.log).toHaveBeenCalledWith(
-      "[codex] Subscription usage unavailable: missing CLI",
+      "[codex] Subscription usage unavailable: Sign in to ChatGPT/Codex in AgentLink.",
     );
     expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
-      "Codex subscription usage is unavailable. Install and sign in to the Codex CLI to enable it.",
+      "Sign in to ChatGPT/Codex in AgentLink.",
     );
     expect(vscode.window.showQuickPick).not.toHaveBeenCalled();
   });

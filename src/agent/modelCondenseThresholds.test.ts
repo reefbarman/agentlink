@@ -7,7 +7,16 @@ import {
 import { describe, expect, it } from "vitest";
 
 describe("modelCondenseThresholds", () => {
-  it("defaults models with 1m+ context windows to 0.85", () => {
+  it("defaults GPT-5.6 models to 0.65", () => {
+    for (const model of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+      expect(
+        getDefaultAutoCondenseThreshold(model, { contextWindow: 1_050_000 }),
+      ).toBe(0.65);
+      expect(getDefaultAutoCondenseThreshold(model)).toBe(0.65);
+    }
+  });
+
+  it("defaults other models with 1m+ context windows to 0.85", () => {
     expect(
       getDefaultAutoCondenseThreshold("claude-sonnet-4-6", {
         contextWindow: 1_000_000,
@@ -46,6 +55,13 @@ describe("modelCondenseThresholds", () => {
         { contextWindow: 1_000_000 },
       ),
     ).toBe(0.72);
+    expect(
+      getEffectiveAutoCondenseThreshold(
+        "gpt-5.6-sol",
+        { "gpt-5.6-sol": 0.74 },
+        { contextWindow: 1_050_000 },
+      ),
+    ).toBe(0.74);
   });
 
   it("normalizes and clamps stored threshold maps", () => {

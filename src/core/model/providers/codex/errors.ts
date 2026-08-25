@@ -256,6 +256,21 @@ export function isCodexModelNotFoundError(error: CodexErrorShape): boolean {
   );
 }
 
+/**
+ * True when the endpoint rejected the request because it does not accept the
+ * `text.verbosity` parameter (expected shape: 400 invalid_request_error with
+ * param "text.verbosity" or a message naming it). Callers should retry once
+ * without the parameter.
+ */
+export function isCodexTextVerbosityRejectionError(
+  error: CodexErrorShape,
+): boolean {
+  if (error.status !== 400) return false;
+  return /verbosity|(?:unknown|unsupported|unexpected|invalid) (?:parameter|field|property|value)[^A-Za-z]*'?"?text\b/i.test(
+    extractCodexErrorText(error),
+  );
+}
+
 export function buildCodexUsageLimitExhaustedError(params: {
   attemptedOAuthAccountIds: Iterable<string>;
   sourceError: CodexErrorShape;

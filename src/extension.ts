@@ -92,7 +92,7 @@ import {
   providerRegistry,
   CodexProvider,
   openAiCodexAuthManager,
-  queryCodexCliUsage,
+  queryCodexUsage,
 } from "./agent/providers/index.js";
 import { BrowserGatewayService } from "./browser-gateway/BrowserGatewayService.js";
 import { wireBrowserGatewayApprovalPolicies } from "./browser-gateway/browserGatewayPolicyWiring.js";
@@ -166,6 +166,10 @@ import {
   createSessionOutcomeTelemetry,
   type SessionOutcomeTelemetry,
 } from "./telemetry/SessionOutcomeTelemetry.js";
+import {
+  createMcpAuthTelemetry,
+  type McpAuthTelemetry,
+} from "./telemetry/McpAuthTelemetry.js";
 import { createVscodeTerminalProvider } from "./adapters/vscode/terminalCapabilities.js";
 import { AgentTerminalViewProvider } from "./terminal/AgentTerminalViewProvider.js";
 import { createDeferredNodePtyLoader } from "./terminal/deferredNodePtyLoader.js";
@@ -225,6 +229,7 @@ let browserGatewayHelperDiscovery:
 let toolUsageTelemetry: ToolUsageTelemetry | null = null;
 let contextUsageTelemetry: ContextUsageTelemetry | null = null;
 let sessionOutcomeTelemetry: SessionOutcomeTelemetry | null = null;
+let mcpAuthTelemetry: McpAuthTelemetry | null = null;
 
 let browserGatewayHelperLeaseClient: BrowserGatewayHelperLeaseClient | null =
   null;
@@ -757,6 +762,11 @@ export async function activate(
     log,
   });
   context.subscriptions.push(sessionOutcomeTelemetry);
+  mcpAuthTelemetry = createMcpAuthTelemetry({
+    extensionVersion: extVersion,
+    log,
+  });
+  context.subscriptions.push(mcpAuthTelemetry);
 
   // Event-loop stall watchdog: reports extension-host lockups the moment the
   // loop unblocks, with the flight-recorder ops that were running at the time
@@ -1363,6 +1373,7 @@ export async function activate(
     projectCustomizationRegistry,
     extVersion,
   );
+  chatViewProvider.setMcpAuthTelemetry(mcpAuthTelemetry ?? undefined);
   chatViewProvider.setAgentPluginManagerHost(agentPluginManagerHost);
   chatViewProvider.setAgentPluginCatalogProvider(agentPluginCatalog);
   chatViewProvider.setPendingInteractionAlertProvider((message, command) =>
@@ -1414,7 +1425,12 @@ export async function activate(
 
   // Register the OpenAI/Codex provider with unified OAuth + API key auth.
   openAiCodexAuthManager.initialize(context);
-  const codexProvider = new CodexProvider(openAiCodexAuthManager, agentLog);
+  const codexProvider = new CodexProvider(openAiCodexAuthManager, agentLog, {
+    getTextVerbositySetting: () =>
+      vscode.workspace
+        .getConfiguration("agentlink")
+        .get<string>("codex.textVerbosity"),
+  });
   providerRegistry.register(codexProvider);
   const readDisabledProviderIds = (): string[] => {
     const raw = vscode.workspace
@@ -3086,7 +3102,7 @@ export async function activate(
 
   const codexAuthFlows = createCodexAuthFlows({
     authManager: openAiCodexAuthManager,
-    queryUsage: queryCodexCliUsage,
+    queryUsage: queryCodexUsage,
     log,
   });
 

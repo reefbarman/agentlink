@@ -1287,6 +1287,18 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
       "gpt-5.6-terra",
       "gpt-5.5",
     ]);
+    expect(
+      store
+        .getAvailableModels()
+        .filter((model) => model.id.startsWith("gpt-5.6-"))
+        .map(({ contextWindow, maxInputTokens }) => ({
+          contextWindow,
+          maxInputTokens,
+        })),
+    ).toEqual([
+      { contextWindow: 1_050_000, maxInputTokens: undefined },
+      { contextWindow: 1_050_000, maxInputTokens: undefined },
+    ]);
     expect(store.setReasoningEffort("high")).toBe(true);
     expect(store.setModel("gpt-5.6-luna")).toBe(true);
 

@@ -12,6 +12,8 @@ export interface CodexResolvedAuthShape {
   method: CodexAuthMethod;
 }
 
+export type CodexTextVerbosity = "low" | "medium" | "high";
+
 export interface CodexModelDef {
   id: string;
   displayName: string;
@@ -22,6 +24,13 @@ export interface CodexModelDef {
   supportsThinking: boolean;
   defaultReasoningEffort: CoreReasoningEffort;
   reasoningEfforts: CoreReasoningEffort[];
+  /**
+   * `text.verbosity` sent for agent-turn requests. GPT-5.x final-message
+   * length is governed primarily by this parameter (default "medium"), not by
+   * prompt instructions, so verbose models need it set explicitly. Absent
+   * means the parameter is omitted from requests.
+   */
+  defaultTextVerbosity?: CodexTextVerbosity;
   /**
    * False for models the ChatGPT/Codex OAuth backend serves but the public
    * API-key endpoint does not (e.g. gpt-5.3-codex-spark). Absent means
@@ -88,6 +97,13 @@ export interface ResponsesCaps {
   supportsPromptCacheRetention: boolean;
   supportsMaxOutputTokens: boolean;
   supportsHostedWebSearch: boolean;
+  /**
+   * Whether the endpoint accepts `text.verbosity`. The public API supports it
+   * for GPT-5-family models; the ChatGPT backend is enabled optimistically —
+   * unverified by probing — and callers must fall back on a 400 rejection
+   * (see isCodexTextVerbosityRejectionError).
+   */
+  supportsTextVerbosity: boolean;
 }
 
 /**
@@ -252,9 +268,6 @@ export const CODEX_CONDENSE_MODEL_FALLBACKS = [
 const CODEX_400K_INPUT_TOKENS = 272_000;
 const CODEX_1M_CONTEXT_TOKENS = 1_050_000;
 const CODEX_OAUTH_GPT_5_5_CONTEXT_TOKENS = 400_000;
-const CODEX_OAUTH_GPT_5_6_INPUT_TOKENS = 353_000;
-const CODEX_OAUTH_GPT_5_6_CONTEXT_TOKENS =
-  CODEX_OAUTH_GPT_5_6_INPUT_TOKENS + 128_000;
 
 export const CODEX_MODELS: CodexModelDef[] = [
   {
@@ -266,6 +279,7 @@ export const CODEX_MODELS: CodexModelDef[] = [
     supportsThinking: true,
     defaultReasoningEffort: "medium",
     reasoningEfforts: [...GPT_5_6_REASONING_EFFORTS],
+    defaultTextVerbosity: "low",
   },
   {
     id: "gpt-5.6-terra",
@@ -276,6 +290,7 @@ export const CODEX_MODELS: CodexModelDef[] = [
     supportsThinking: true,
     defaultReasoningEffort: "medium",
     reasoningEfforts: [...GPT_5_6_REASONING_EFFORTS],
+    defaultTextVerbosity: "low",
   },
   {
     id: "gpt-5.6-luna",
@@ -286,6 +301,7 @@ export const CODEX_MODELS: CodexModelDef[] = [
     supportsThinking: true,
     defaultReasoningEffort: "medium",
     reasoningEfforts: [...GPT_5_6_REASONING_EFFORTS],
+    defaultTextVerbosity: "low",
   },
   {
     id: "gpt-5.5",
@@ -426,6 +442,7 @@ export function getEndpointCaps(auth: CodexResolvedAuthShape): ResponsesCaps {
       supportsPromptCacheRetention: true,
       supportsMaxOutputTokens: true,
       supportsHostedWebSearch: true,
+      supportsTextVerbosity: true,
     };
   }
 
@@ -437,17 +454,37 @@ export function getEndpointCaps(auth: CodexResolvedAuthShape): ResponsesCaps {
     supportsPromptCacheRetention: false,
     supportsMaxOutputTokens: false,
     supportsHostedWebSearch: true,
+    supportsTextVerbosity: true,
   };
 }
 
+/** User-facing values of the `agentlink.codex.textVerbosity` setting. */
+export type CodexTextVerbositySetting = "default" | "off" | CodexTextVerbosity;
+
 /**
- * The ChatGPT/Codex OAuth backend enforces smaller context windows than the
- * models' API metadata advertises, and rejects over-limit requests with
- * context_window_exceeded instead of compacting. GPT-5.5 errors at ~272k input
- * tokens (400k window minus the 128k output reserve); GPT-5.6 Sol errors at
- * ~353k. Terra/Luna are unverified but assumed to share the 5.6 generation cap
- * — under-clamping only compacts earlier, while over-advertising causes hard
- * request failures.
+ * The `text.verbosity` an agent-turn request should carry for a model, or
+ * undefined to omit the parameter. `setting` is the raw user configuration:
+ * "off" omits the parameter, an explicit level forces it for every model, and
+ * "default" (or any unrecognized value) falls back to the per-model default.
+ * Deliberately not applied to detached completions (condense, image prompts,
+ * web summaries), whose output length should not be tied to chat-narration
+ * tuning.
+ */
+export function resolveCodexTextVerbosity(
+  modelId: string,
+  setting?: string,
+): CodexTextVerbosity | undefined {
+  if (setting === "off") return undefined;
+  if (setting === "low" || setting === "medium" || setting === "high") {
+    return setting;
+  }
+  return CODEX_MODEL_MAP.get(modelId)?.defaultTextVerbosity;
+}
+
+/**
+ * The ChatGPT/Codex OAuth backend still enforces a smaller GPT-5.5 context
+ * window than the public API advertises. GPT-5.6 uses its full advertised
+ * 1.05M-token window on both auth surfaces.
  */
 const CODEX_OAUTH_WINDOW_OVERRIDES: Record<
   string,
@@ -456,18 +493,6 @@ const CODEX_OAUTH_WINDOW_OVERRIDES: Record<
   "gpt-5.5": {
     contextWindow: CODEX_OAUTH_GPT_5_5_CONTEXT_TOKENS,
     maxInputTokens: CODEX_400K_INPUT_TOKENS,
-  },
-  "gpt-5.6-sol": {
-    contextWindow: CODEX_OAUTH_GPT_5_6_CONTEXT_TOKENS,
-    maxInputTokens: CODEX_OAUTH_GPT_5_6_INPUT_TOKENS,
-  },
-  "gpt-5.6-terra": {
-    contextWindow: CODEX_OAUTH_GPT_5_6_CONTEXT_TOKENS,
-    maxInputTokens: CODEX_OAUTH_GPT_5_6_INPUT_TOKENS,
-  },
-  "gpt-5.6-luna": {
-    contextWindow: CODEX_OAUTH_GPT_5_6_CONTEXT_TOKENS,
-    maxInputTokens: CODEX_OAUTH_GPT_5_6_INPUT_TOKENS,
   },
 };
 

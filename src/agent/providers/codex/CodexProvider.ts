@@ -40,6 +40,7 @@ import {
   listCodexModels,
   resolveCodexEffectiveModel,
   resolveCodexReasoningEffort,
+  resolveCodexTextVerbosity,
 } from "../../../core/model/providers/codex/models.js";
 import {
   buildCodexClientCacheKey,
@@ -66,6 +67,7 @@ import {
   createCodexRequestError,
   getCodexErrorHandlingAction,
   isCodexModelNotFoundError,
+  isCodexTextVerbosityRejectionError,
   toCodexRequestError,
   type CodexErrorShape,
 } from "../../../core/model/providers/codex/errors.js";
@@ -104,14 +106,24 @@ export class CodexProvider implements ModelProvider {
    * for filtering.
    */
   private lastResolvedAuthMethod: OpenAiCodexAuthMethod | undefined;
+  private getTextVerbositySetting: () => string | undefined;
 
   constructor(
     authManager?: OpenAiCodexAuthManager,
     log?: (msg: string) => void,
+    options?: {
+      /**
+       * Live reader for the `agentlink.codex.textVerbosity` setting; called
+       * per stream so configuration changes apply without a reload.
+       */
+      getTextVerbositySetting?: () => string | undefined;
+    },
   ) {
     this.authManager = authManager ?? openAiCodexAuthManager;
     this.sessionId = randomUUID();
     this.log = log ?? (() => {});
+    this.getTextVerbositySetting =
+      options?.getTextVerbositySetting ?? (() => undefined);
     // Warm the auth-method cache so listModels() filters correctly before the
     // first request (API-key users keep the full model list; OAuth users get
     // only the ChatGPT-backend-served subset).
@@ -313,6 +325,13 @@ export class CodexProvider implements ModelProvider {
       requestedEffort,
     });
 
+    let textVerbosityRejected = false;
+    const textVerbositySetting = this.getTextVerbositySetting();
+    let textVerbosity = resolveCodexTextVerbosity(
+      effectiveModel,
+      textVerbositySetting,
+    );
+
     const attemptedOAuthAccountIds = new Set<string>();
     const refreshedOAuthAccountIds = new Set<string>();
     let oauthRefreshAttempts = 0;
@@ -333,6 +352,7 @@ export class CodexProvider implements ModelProvider {
           cache,
           reasoningEffort,
           reasoningMode,
+          textVerbosity,
           tools: codexTools,
           hostedTools,
           caps: getEndpointCaps(auth),
@@ -343,7 +363,7 @@ export class CodexProvider implements ModelProvider {
           const inputSummary = summarizeCodexRequestInput(requestBody.input);
           const body = requestBody as unknown as Record<string, unknown>;
           this.log(
-            `[codex] request: model=${requestBody.model} auth=${auth.method} input=${inputSummary} tools=${requestBody.tools?.length ?? 0} store=${requestBody.store} previousResponseId=${body.previous_response_id ?? "none"} cacheKey=${body.prompt_cache_key ?? "none"}`,
+            `[codex] request: model=${requestBody.model} auth=${auth.method} input=${inputSummary} tools=${requestBody.tools?.length ?? 0} store=${requestBody.store} previousResponseId=${body.previous_response_id ?? "none"} cacheKey=${body.prompt_cache_key ?? "none"} textVerbosity=${(body.text as { verbosity?: string } | undefined)?.verbosity ?? "none"}`,
           );
         }
 
@@ -383,6 +403,22 @@ export class CodexProvider implements ModelProvider {
             modelId: effectiveModel,
             requestedEffort,
           });
+          textVerbosity = textVerbosityRejected
+            ? undefined
+            : resolveCodexTextVerbosity(effectiveModel, textVerbositySetting);
+          continue;
+        }
+
+        if (
+          textVerbosity &&
+          !streamState.outputStarted &&
+          isCodexTextVerbosityRejectionError(sdkErr)
+        ) {
+          textVerbosityRejected = true;
+          textVerbosity = undefined;
+          this.log(
+            `[codex] stream(): endpoint rejected text.verbosity for "${effectiveModel}"; retrying without it`,
+          );
           continue;
         }
 

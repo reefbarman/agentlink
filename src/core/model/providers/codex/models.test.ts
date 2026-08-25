@@ -4,11 +4,41 @@ import {
   getCodexModelCapabilities,
   getCodexModelMigration,
   getCodexUnavailableModelFallback,
+  getEndpointCaps,
   listCodexModels,
   resolveCodexEffectiveModel,
   resolveCodexReasoningEffort,
+  resolveCodexTextVerbosity,
 } from "./models.js";
 import { describe, expect, it } from "vitest";
+
+describe("Codex text verbosity", () => {
+  it("defaults GPT-5.6 chat models to low and leaves others unset", () => {
+    expect(resolveCodexTextVerbosity("gpt-5.6-sol")).toBe("low");
+    expect(resolveCodexTextVerbosity("gpt-5.6-terra")).toBe("low");
+    expect(resolveCodexTextVerbosity("gpt-5.6-luna")).toBe("low");
+    expect(resolveCodexTextVerbosity("gpt-5.5")).toBeUndefined();
+    expect(resolveCodexTextVerbosity("unknown-model")).toBeUndefined();
+  });
+
+  it("honors the user setting over per-model defaults", () => {
+    expect(resolveCodexTextVerbosity("gpt-5.6-terra", "off")).toBeUndefined();
+    expect(resolveCodexTextVerbosity("gpt-5.6-terra", "high")).toBe("high");
+    expect(resolveCodexTextVerbosity("gpt-5.5", "medium")).toBe("medium");
+    expect(resolveCodexTextVerbosity("gpt-5.6-terra", "default")).toBe("low");
+    expect(resolveCodexTextVerbosity("gpt-5.6-terra", "bogus")).toBe("low");
+    expect(resolveCodexTextVerbosity("gpt-5.5", "off")).toBeUndefined();
+  });
+
+  it("is enabled for both endpoint auth surfaces", () => {
+    expect(getEndpointCaps({ method: "apiKey" }).supportsTextVerbosity).toBe(
+      true,
+    );
+    expect(getEndpointCaps({ method: "oauth" }).supportsTextVerbosity).toBe(
+      true,
+    );
+  });
+});
 
 describe("Codex model resolution", () => {
   it("keeps API-key models unchanged", () => {
@@ -158,18 +188,18 @@ describe("Codex hosted web capabilities", () => {
   });
 });
 
-describe("Codex OAuth context window clamps", () => {
+describe("Codex auth-adjusted context windows", () => {
   it("clamps gpt-5.5 to the enforced 400k/272k window over OAuth", () => {
     const caps = getCodexModelCapabilities("gpt-5.5", "oauth");
     expect(caps.contextWindow).toBe(400_000);
     expect(caps.maxInputTokens).toBe(272_000);
   });
 
-  it("clamps GPT-5.6 models to the enforced 353k input window over OAuth", () => {
+  it("uses the full advertised GPT-5.6 window over OAuth", () => {
     for (const model of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
       const caps = getCodexModelCapabilities(model, "oauth");
-      expect(caps.maxInputTokens).toBe(353_000);
-      expect(caps.contextWindow).toBe(481_000);
+      expect(caps.contextWindow).toBe(1_050_000);
+      expect(caps.maxInputTokens).toBeUndefined();
     }
   });
 

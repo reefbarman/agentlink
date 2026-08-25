@@ -442,6 +442,7 @@ describe("Codex translation", () => {
         cache: { key: "cache-key", retention: "24h" },
         reasoningEffort: "high",
         reasoningMode: "pro",
+        textVerbosity: "low",
         caps: {
           supportsPreviousResponseId: true,
           supportsPersistedReasoning: true,
@@ -450,6 +451,7 @@ describe("Codex translation", () => {
           supportsPromptCacheRetention: true,
           supportsMaxOutputTokens: true,
           supportsHostedWebSearch: true,
+          supportsTextVerbosity: true,
         },
       }),
     ).toMatchObject({
@@ -468,6 +470,7 @@ describe("Codex translation", () => {
       previous_response_id: "resp_123",
       prompt_cache_key: "cache-key",
       prompt_cache_retention: "24h",
+      text: { verbosity: "low" },
     });
   });
 
@@ -486,6 +489,7 @@ describe("Codex translation", () => {
           supportsPromptCacheRetention: true,
           supportsMaxOutputTokens: true,
           supportsHostedWebSearch: true,
+          supportsTextVerbosity: true,
         },
       }),
     ).toEqual({
@@ -518,6 +522,7 @@ describe("Codex translation", () => {
           supportsPromptCacheRetention: true,
           supportsMaxOutputTokens: true,
           supportsHostedWebSearch: true,
+          supportsTextVerbosity: true,
         },
       }),
     ).toMatchObject({
@@ -546,6 +551,7 @@ describe("Codex translation", () => {
           supportsPromptCacheRetention: false,
           supportsMaxOutputTokens: false,
           supportsHostedWebSearch: true,
+          supportsTextVerbosity: false,
         },
       }),
     ).toMatchObject({
@@ -564,6 +570,7 @@ describe("Codex translation", () => {
         state: { store: true, previousResponseId: "resp_123" },
         cache: { key: "cache-key", retention: "24h" },
         reasoningEffort: "medium",
+        textVerbosity: "low",
         caps: {
           supportsPreviousResponseId: false,
           supportsPersistedReasoning: false,
@@ -572,6 +579,7 @@ describe("Codex translation", () => {
           supportsPromptCacheRetention: false,
           supportsMaxOutputTokens: false,
           supportsHostedWebSearch: true,
+          supportsTextVerbosity: false,
         },
       }),
     ).toEqual({

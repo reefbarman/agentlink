@@ -18,7 +18,7 @@ All settings live under the `agentlink.*` namespace and are set in VS Code Setti
 ## Context condensing
 
 - `autoCondense` — condense automatically when context fills
-- `modelCondenseThresholds` — per-model thresholds (1M+ context models default 0.7, others 0.9)
+- `modelCondenseThresholds` — per-model thresholds (GPT-5.6 defaults to 0.65, other 1M+ context models to 0.85, legacy frontier models to 0.8 when capabilities are unavailable, and remaining models to 0.9); explicit model-ID overrides take precedence
 
 ## Autonomous memory
 
@@ -81,6 +81,7 @@ MCP servers are configured in `mcp.json` files, not VS Code settings — see `re
 - `codexStatefulResponses` — OpenAI Responses chaining via `previous_response_id`
 - `codexStoreResponses` — set `store=true` on Responses requests
 - `codexProMode` — GPT-5.6 Pro reasoning mode for API-key requests
+- `codex.textVerbosity` — final-message verbosity (`text.verbosity`) for Codex agent turns: `default` sends `low` for GPT-5.6 models and omits the parameter for older ones; `off` never sends it; `low`/`medium`/`high` force a level for all Codex models. Does not affect detached requests such as condensing. If an endpoint rejects the parameter, the request is retried once without it.
 
 ## Terminal, worktrees, misc
 

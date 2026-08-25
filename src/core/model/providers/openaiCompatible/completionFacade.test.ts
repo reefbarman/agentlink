@@ -186,6 +186,56 @@ describe("streamOpenAiCompatibleCompletion", () => {
     ]);
   });
 
+  it("forwards request tool names to text tool-call recovery", async () => {
+    const fetch: OpenAiCompatibleFetch = async () =>
+      sseResponse([
+        event({
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<mcp__oc__set_task_status><parameter name="status">completed</parameter><parameter name="summary">Done</parameter></invoke>',
+              },
+              finish_reason: "stop",
+            },
+          ],
+        }),
+        "data: [DONE]\n\n",
+      ]);
+
+    const events = await collectEvents(
+      streamOpenAiCompatibleCompletion({
+        profile: profile(),
+        apiKey: "secret",
+        request: streamRequest({
+          tools: [
+            {
+              name: "set_task_status",
+              description: "Finish the task",
+              input_schema: { type: "object" },
+            },
+          ],
+        }),
+        fetch,
+        maxRetries: 0,
+      }),
+    );
+
+    expect(events).toContainEqual({
+      type: "tool_done",
+      toolCallId: expect.any(String),
+      toolName: "set_task_status",
+      input: { status: "completed", summary: "Done" },
+    });
+    expect(events).toContainEqual({
+      type: "model_stop",
+      reason: "tool_use",
+      assistantMessage: expect.any(Object),
+    });
+    expect(events.some((entry) => entry.type === "text_delta")).toBe(false);
+  });
+
   it("accepts clean EOF after finish_reason and rejects truncated EOF", async () => {
     const completeFetch: OpenAiCompatibleFetch = async () =>
       sseResponse([

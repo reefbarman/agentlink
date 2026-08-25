@@ -1,9 +1,11 @@
-import { describe, it, expect } from "vitest";
 import type * as vscode from "vscode";
+
 import {
-  cleanupOrphanedMcpOAuthState,
   McpOAuthProvider,
+  cleanupOrphanedMcpOAuthState,
+  renderMcpOAuthCallbackPage,
 } from "./McpOAuthProvider.js";
+import { describe, expect, it } from "vitest";
 
 class FakeMemento implements vscode.Memento {
   private store = new Map<string, unknown>();
@@ -27,6 +29,34 @@ class FakeMemento implements vscode.Memento {
     return [...this.store.keys()];
   }
 }
+
+describe("MCP OAuth callback page", () => {
+  it("renders a branded auto-closing success state", () => {
+    const html = renderMcpOAuthCallbackPage({ serverName: "linear" });
+
+    expect(html).toContain("AgentLink");
+    expect(html).toContain("#4EC9B0");
+    expect(html).toContain("You're connected");
+    expect(html).toContain("linear is now ready to use in AgentLink.");
+    expect(html).toContain("window.setTimeout(() => window.close(), 1800)");
+    expect(html).toContain("prefers-color-scheme: light");
+  });
+
+  it("renders and escapes a branded error state", () => {
+    const html = renderMcpOAuthCallbackPage({
+      serverName: '<linear & "friends">',
+      oauthError: "access_denied<script>",
+      oauthErrorDescription: "No <access> & try again",
+    });
+
+    expect(html).toContain("Authorization failed");
+    expect(html).toContain("access_denied&lt;script&gt;");
+    expect(html).toContain("No &lt;access&gt; &amp; try again");
+    expect(html).toContain("&lt;linear &amp; &quot;friends&quot;&gt;");
+    expect(html).not.toContain("access_denied<script>");
+    expect(html).toContain("window.setTimeout(() => window.close(), 8000)");
+  });
+});
 
 describe("McpOAuthProvider callback port reuse", () => {
   it("reuses cached localhost redirect port when available", async () => {

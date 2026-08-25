@@ -22,6 +22,7 @@
 
 ### Changed
 
+- `/usage` and **Show Codex Subscription Usage** now read subscription limits and token activity directly with AgentLink's active ChatGPT/Codex OAuth account. They no longer require, invoke, or use the local Codex CLI account.
 - Made the helper-owned browser relay/data plane the dogfood default through `agentlink.browserGateway.dataPlane`; `shadow` retains dual publication with legacy browser traffic, and `off` preserves complete snapshot/proxy rollback while semantic parity work continues.
 - Hide the Agent Fleet panel after every background agent finishes, while keeping paused work visible and adding `/fleet` to reveal completed results again in VS Code or the browser remote.
 - `get_background_result` now returns early with `status: "wait_interrupted"` when a user message is interjected into the waiting session (including steering a blocked background parent), so new instructions no longer wait behind a long-running background agent. The background agent keeps running; the agent handles the message and re-waits.
@@ -35,6 +36,8 @@
 
 ### Fixed
 
+- Fixed OAuth-capable MCP servers opening repeated browser login tabs across project hubs and VS Code windows when token refresh or config reloads overlapped. AgentLink now coordinates one active authorization flow per server across windows, retains known-server state across hub generations, retries silently when another window refreshed shared credentials, keeps explicit Reauthenticate available after the active flow, and adds privacy-bounded local diagnostics through `npm run telemetry:mcp-auth`.
+- Fixed OpenAI-compatible models sometimes printing XML-style tool-call blocks into the assistant response instead of executing them. AgentLink now recovers complete fallback calls for tools offered on that exact request, while unknown, malformed, or incomplete markup remains visible and is never executed or silently dropped.
 - Fixed a reload wedge in multi-tab chat: a tab whose bound session was never persisted (an empty New Chat at reload time) or whose session record disappeared from disk would stay stuck on "Checking model setup" after switching to it, with sending blocked. Selecting such a tab now publishes a usable New Chat composer state, and a tab pointing at a missing session record is unbound and revived instead of rejected.
 - Fixed `write_file` and `apply_diff` reporting accepted edits that did not survive save or diverged between the editor and disk. Accepted writes now include verified exact/transformed durability evidence and a final-content hash; reverted, divergent, missing, unreadable, and exact-preservation failures return canonical errors. Known Unity serialization files use VS Code's Save without Formatting path, and transformed `apply_diff` blocks no longer claim stale applied ranges.
 - Fixed sandbox commands failing before launch with `posix_spawn failed: Argument list too long` in repositories with large protected skill, rule, or instruction trees. Sandbox runtime helpers now canonicalize the compact filesystem write-denial roots and keep integrity snapshots separate instead of redundantly expanding every protected file into the macOS `sandbox-exec` argument.

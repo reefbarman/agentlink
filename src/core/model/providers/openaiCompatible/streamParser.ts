@@ -38,6 +38,24 @@ interface ToolCallBuffer {
   emittedArgumentLength: number;
 }
 
+interface TextToolCall {
+  name: string;
+  input: Record<string, unknown>;
+}
+
+interface ParsedTextDelta {
+  visibleText: string;
+  toolCalls: TextToolCall[];
+}
+
+const TEXT_TOOL_MARKER = /<(?:invoke\b|mcp__|\/?function_calls\b)/i;
+const TEXT_TOOL_MARKER_PREFIXES = [
+  "<invoke",
+  "<mcp__",
+  "<function_calls",
+  "</function_calls",
+] as const;
+
 export class OpenAiCompatibleStreamError extends Error {
   constructor(message: string) {
     super(message);
@@ -51,6 +69,9 @@ export async function* parseOpenAiCompatibleStreamEvents(
 ): AsyncGenerator<CoreModelStreamEvent> {
   const choices = new Map<number, ChoiceBuffer>();
   const toolCalls = new Map<string, ToolCallBuffer>();
+  const textToolParsers = new Map<number, TextToolCallParser>();
+  const availableToolNames = new Set(options.availableToolNames ?? []);
+  let textToolCallSequence = 0;
   let providerResponseId: string | undefined;
   let reportedUsage: OpenAiCompatibleUsage | undefined;
   let sawChunk = false;
@@ -73,9 +94,43 @@ export async function* parseOpenAiCompatibleStreamEvents(
       if (delta) {
         const content = typeof delta.content === "string" ? delta.content : "";
         if (content) {
-          choice.text += content;
           markOutputStarted(options);
-          yield { type: "text_delta", text: content };
+          const parsed =
+            availableToolNames.size > 0
+              ? getTextToolParser(
+                  textToolParsers,
+                  choiceIndex,
+                  availableToolNames,
+                ).push(content)
+              : { visibleText: content, toolCalls: [] };
+          choice.text += parsed.visibleText;
+          if (parsed.visibleText) {
+            yield { type: "text_delta", text: parsed.visibleText };
+          }
+          for (const parsedCall of parsed.toolCalls) {
+            textToolCallSequence += 1;
+            const id = `openai-compatible-text-tool-${globalThis.crypto.randomUUID()}`;
+            const argumentsJson = JSON.stringify(parsedCall.input);
+            toolCalls.set(`text:${choiceIndex}:${textToolCallSequence}`, {
+              choiceIndex,
+              toolIndex: Number.MAX_SAFE_INTEGER,
+              id,
+              name: parsedCall.name,
+              arguments: argumentsJson,
+              started: true,
+              emittedArgumentLength: argumentsJson.length,
+            });
+            yield {
+              type: "tool_start",
+              toolCallId: id,
+              toolName: parsedCall.name,
+            };
+            yield {
+              type: "tool_input_delta",
+              toolCallId: id,
+              partialJson: argumentsJson,
+            };
+          }
         }
 
         const reasoning =
@@ -174,7 +229,12 @@ export async function* parseOpenAiCompatibleStreamEvents(
     );
   }
 
-  for (const [, choice] of sortedChoices(choices)) {
+  for (const [choiceIndex, choice] of sortedChoices(choices)) {
+    const pendingText = textToolParsers.get(choiceIndex)?.finish() ?? "";
+    if (pendingText) {
+      choice.text += pendingText;
+      yield { type: "text_delta", text: pendingText };
+    }
     if (choice.thinkingStarted) {
       yield { type: "thinking_end", thinkingId: choice.thinkingId! };
     }
@@ -323,6 +383,236 @@ function mergeStreamedField(existing: string, incoming: string): string {
   if (existing.startsWith(incoming) || existing.endsWith(incoming))
     return existing;
   return existing + incoming;
+}
+
+class TextToolCallParser {
+  private pending = "";
+
+  constructor(private readonly availableToolNames: ReadonlySet<string>) {}
+
+  push(text: string): ParsedTextDelta {
+    this.pending += text;
+    return this.drain(false);
+  }
+
+  finish(): string {
+    return this.drain(true).visibleText;
+  }
+
+  private drain(final: boolean): ParsedTextDelta {
+    let visibleText = "";
+    const toolCalls: TextToolCall[] = [];
+
+    while (this.pending) {
+      const marker = TEXT_TOOL_MARKER.exec(this.pending);
+      if (!marker) {
+        if (final) {
+          visibleText += this.pending;
+          this.pending = "";
+          break;
+        }
+        const heldPrefixIndex = getHeldTextToolPrefixIndex(this.pending);
+        if (heldPrefixIndex < 0) {
+          visibleText += this.pending;
+          this.pending = "";
+        } else {
+          visibleText += this.pending.slice(0, heldPrefixIndex);
+          this.pending = this.pending.slice(heldPrefixIndex);
+        }
+        break;
+      }
+
+      visibleText += this.pending.slice(0, marker.index);
+      this.pending = this.pending.slice(marker.index);
+
+      const wrapper = /^<function_calls\b[^>]*>/i.exec(this.pending);
+      if (wrapper) {
+        const wrapperEnd = /<\/function_calls\s*>/i.exec(
+          this.pending.slice(wrapper[0].length),
+        );
+        if (!wrapperEnd) {
+          if (final) {
+            visibleText += this.pending;
+            this.pending = "";
+          }
+          break;
+        }
+        const rawWrapper = this.pending.slice(
+          0,
+          wrapper[0].length + wrapperEnd.index + wrapperEnd[0].length,
+        );
+        const wrappedBody = this.pending.slice(
+          wrapper[0].length,
+          wrapper[0].length + wrapperEnd.index,
+        );
+        const parsedWrapper = this.parseWrappedCalls(wrappedBody);
+        if (parsedWrapper) toolCalls.push(...parsedWrapper);
+        else visibleText += rawWrapper;
+        this.pending = this.pending.slice(rawWrapper.length);
+        continue;
+      }
+      const closingWrapper = /^<\/function_calls\b[^>]*>/i.exec(this.pending);
+      if (closingWrapper) {
+        visibleText += closingWrapper[0];
+        this.pending = this.pending.slice(closingWrapper[0].length);
+        continue;
+      }
+
+      const openingEnd = this.pending.indexOf(">");
+      if (openingEnd < 0) {
+        if (final) {
+          visibleText += this.pending;
+          this.pending = "";
+        }
+        break;
+      }
+      const closingMatch = /<\/invoke\s*>/i.exec(
+        this.pending.slice(openingEnd + 1),
+      );
+      if (!closingMatch) {
+        if (final) {
+          visibleText += this.pending;
+          this.pending = "";
+        }
+        break;
+      }
+
+      const closingStart = openingEnd + 1 + closingMatch.index;
+      const rawBlock = this.pending.slice(
+        0,
+        closingStart + closingMatch[0].length,
+      );
+      const opening = this.pending.slice(0, openingEnd + 1);
+      const body = this.pending.slice(openingEnd + 1, closingStart);
+      const parsedCall = this.parseCall(opening, body);
+      if (parsedCall) toolCalls.push(parsedCall);
+      else visibleText += rawBlock;
+      this.pending = this.pending.slice(rawBlock.length);
+    }
+
+    return { visibleText, toolCalls };
+  }
+
+  private parseCall(opening: string, body: string): TextToolCall | null {
+    const invokeMatch = /^<invoke\b([^>]*)>$/i.exec(opening);
+    const taggedMatch = /^<([A-Za-z0-9_.:-]+)>$/.exec(opening);
+    const rawName = invokeMatch
+      ? readXmlAttribute(invokeMatch[1], "name")
+      : taggedMatch?.[1];
+    if (!rawName) return null;
+    const name = resolveTextToolName(rawName, this.availableToolNames);
+    if (!name) return null;
+
+    const input: Record<string, unknown> = {};
+    const parameterPattern =
+      /<parameter\s+name\s*=\s*(["'])(.*?)\1\s*>([\s\S]*?)<\/parameter\s*>/gi;
+    let unmatchedBody = "";
+    let offset = 0;
+    for (const match of body.matchAll(parameterPattern)) {
+      unmatchedBody += body.slice(offset, match.index);
+      input[decodeXmlText(match[2])] = parseTextToolParameter(
+        decodeXmlText(match[3]),
+      );
+      offset = (match.index ?? 0) + match[0].length;
+    }
+    unmatchedBody += body.slice(offset);
+    if (unmatchedBody.trim()) return null;
+    return { name, input };
+  }
+
+  private parseWrappedCalls(body: string): TextToolCall[] | null {
+    const calls: TextToolCall[] = [];
+    const invokePattern = /<invoke\b[^>]*>[\s\S]*?<\/invoke\s*>/gi;
+    let unmatchedBody = "";
+    let offset = 0;
+    for (const match of body.matchAll(invokePattern)) {
+      unmatchedBody += body.slice(offset, match.index);
+      const openingEnd = match[0].indexOf(">");
+      const closingStart = match[0].search(/<\/invoke\s*>/i);
+      const parsedCall = this.parseCall(
+        match[0].slice(0, openingEnd + 1),
+        match[0].slice(openingEnd + 1, closingStart),
+      );
+      if (!parsedCall) return null;
+      calls.push(parsedCall);
+      offset = (match.index ?? 0) + match[0].length;
+    }
+    unmatchedBody += body.slice(offset);
+    return calls.length > 0 && !unmatchedBody.trim() ? calls : null;
+  }
+}
+
+function getTextToolParser(
+  parsers: Map<number, TextToolCallParser>,
+  choiceIndex: number,
+  availableToolNames: ReadonlySet<string>,
+): TextToolCallParser {
+  const existing = parsers.get(choiceIndex);
+  if (existing) return existing;
+  const created = new TextToolCallParser(availableToolNames);
+  parsers.set(choiceIndex, created);
+  return created;
+}
+
+function getHeldTextToolPrefixIndex(text: string): number {
+  const lastOpening = text.lastIndexOf("<");
+  if (lastOpening < 0) return -1;
+  const suffix = text.slice(lastOpening).toLowerCase();
+  return TEXT_TOOL_MARKER_PREFIXES.some((prefix) => prefix.startsWith(suffix))
+    ? lastOpening
+    : -1;
+}
+
+function readXmlAttribute(
+  attributes: string,
+  name: string,
+): string | undefined {
+  const pattern = new RegExp(`\\b${name}\\s*=\\s*(["'])(.*?)\\1`, "i");
+  const match = pattern.exec(attributes);
+  return match ? decodeXmlText(match[2]) : undefined;
+}
+
+function resolveTextToolName(
+  rawName: string,
+  availableToolNames: ReadonlySet<string>,
+): string | undefined {
+  const aliases = [
+    rawName,
+    rawName.startsWith("mcp__") ? rawName.slice("mcp__".length) : undefined,
+    /^mcp__[^_]+__(.+)$/.exec(rawName)?.[1],
+    rawName.includes(".") ? rawName.split(".").at(-1) : undefined,
+  ];
+  return aliases.find(
+    (alias): alias is string =>
+      alias !== undefined && availableToolNames.has(alias),
+  );
+}
+
+function decodeXmlText(value: string): string {
+  return value
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#(\d+);/g, (_match, code: string) =>
+      String.fromCodePoint(Number(code)),
+    )
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code: string) =>
+      String.fromCodePoint(Number.parseInt(code, 16)),
+    )
+    .replace(/&amp;/gi, "&");
+}
+
+function parseTextToolParameter(value: string): unknown {
+  const trimmed = value.trim();
+  if (/^(?:true|false|null|-?\d+(?:\.\d+)?|[[{])/i.test(trimmed)) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      // Ordinary string values may begin with punctuation that resembles JSON.
+    }
+  }
+  return value;
 }
 
 function parseToolArguments(

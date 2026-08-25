@@ -1,10 +1,10 @@
 import * as vscode from "vscode";
 
 import type {
-  CodexCliUsageResult,
+  CodexUsageResult,
   CodexRateLimitSnapshot,
   CodexSubscriptionUsage,
-} from "./providers/codex/CodexCliUsageClient.js";
+} from "./providers/codex/CodexUsageClient.js";
 import {
   CodexOAuthFlowError,
   type CodexCredentials,
@@ -28,7 +28,7 @@ interface CodexAuthFlowManager {
 
 export interface CodexAuthFlowDependencies {
   authManager: CodexAuthFlowManager;
-  queryUsage(): Promise<CodexCliUsageResult>;
+  queryUsage(): Promise<CodexUsageResult>;
   log(message: string): void;
 }
 
@@ -186,15 +186,14 @@ export function createCodexAuthFlows({
 
     if (!result.available) {
       log(`[codex] Subscription usage unavailable: ${result.reason}`);
-      vscode.window.showInformationMessage(
-        "Codex subscription usage is unavailable. Install and sign in to the Codex CLI to enable it.",
-      );
+      vscode.window.showInformationMessage(result.reason);
       return;
     }
 
     await vscode.window.showQuickPick(usageQuickPickItems(result.usage), {
       title: "Codex Subscription Usage",
-      placeHolder: "Usage is read from the locally installed Codex CLI",
+      placeHolder:
+        "Usage is read from your active AgentLink ChatGPT/Codex account",
       ignoreFocusOut: true,
     });
   };

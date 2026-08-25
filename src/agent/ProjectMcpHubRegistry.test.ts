@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import type { McpConnectOptions } from "./McpClientHub.js";
 import type { McpServerConfig } from "./mcpConfig.js";
 import {
   ProjectMcpHubRegistry,
@@ -8,7 +9,10 @@ import {
 } from "./ProjectMcpHubRegistry.js";
 
 class FakeHub implements ManagedProjectMcpHub {
-  readonly connect = vi.fn(async (_configs: McpServerConfig[]) => undefined);
+  readonly connect = vi.fn(
+    async (_configs: McpServerConfig[], _options?: McpConnectOptions) =>
+      undefined,
+  );
   readonly disconnectAll = vi.fn(async () => undefined);
 
   constructor(
@@ -53,6 +57,83 @@ describe("ProjectMcpHubRegistry", () => {
     expect(b.hub.connect).toHaveBeenCalledWith(
       [{ name: "shared", command: "server-b" }],
       {},
+    );
+  });
+
+  it("only marks genuinely added servers interactive across generations", async () => {
+    const project = scope("project-a", "/workspace/a");
+    let configs: McpServerConfig[] = [
+      { name: "linear", url: "https://mcp.linear.app/mcp", type: "http" },
+    ];
+    const hubs: FakeHub[] = [];
+    const registry = new ProjectMcpHubRegistry<FakeHub>({
+      createHub: (projectScope, generation) => {
+        const hub = new FakeHub(projectScope.projectId, generation);
+        hubs.push(hub);
+        return hub;
+      },
+      loadConfigs: async () => configs,
+    });
+
+    await registry.reload(project, {
+      interactiveForNewServers: true,
+      trigger: "config-watcher",
+    });
+    const firstOptions = hubs[0].connect.mock.calls[0]?.[1];
+    expect(firstOptions?.interactiveServerNames).toEqual(new Set(["linear"]));
+
+    await registry.reload(project, {
+      interactiveForNewServers: true,
+      trigger: "config-watcher",
+    });
+    const secondOptions = hubs[1].connect.mock.calls[0]?.[1];
+    expect(secondOptions?.interactiveServerNames).toEqual(new Set());
+
+    configs = [
+      ...configs,
+      { name: "notion", url: "https://mcp.notion.com/mcp", type: "http" },
+    ];
+    await registry.reload(project, {
+      interactiveForNewServers: true,
+      trigger: "config-watcher",
+    });
+    const thirdOptions = hubs[2].connect.mock.calls[0]?.[1];
+    expect(thirdOptions?.interactiveServerNames).toEqual(new Set(["notion"]));
+  });
+
+  it("remembers configured servers after a failed first connect", async () => {
+    const project = scope("project-a", "/workspace/a");
+    const configs: McpServerConfig[] = [
+      { name: "linear", url: "https://mcp.linear.app/mcp", type: "http" },
+    ];
+    const hubs: FakeHub[] = [];
+    let failFirstConnect = true;
+    const registry = new ProjectMcpHubRegistry<FakeHub>({
+      createHub: (projectScope, generation) => {
+        const hub = new FakeHub(projectScope.projectId, generation);
+        if (failFirstConnect) {
+          failFirstConnect = false;
+          hub.connect.mockRejectedValueOnce(new Error("auth failed"));
+        }
+        hubs.push(hub);
+        return hub;
+      },
+      loadConfigs: async () => configs,
+    });
+
+    await expect(
+      registry.reload(project, {
+        interactiveForNewServers: true,
+        trigger: "config-watcher",
+      }),
+    ).rejects.toThrow("auth failed");
+
+    await registry.reload(project, {
+      interactiveForNewServers: true,
+      trigger: "config-watcher",
+    });
+    expect(hubs[1].connect.mock.calls[0]?.[1]?.interactiveServerNames).toEqual(
+      new Set(),
     );
   });
 

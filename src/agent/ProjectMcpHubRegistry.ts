@@ -1,11 +1,11 @@
 import type { SessionProjectScope } from "../core/workspaceProjects.js";
-import { McpClientHub } from "./McpClientHub.js";
+import { McpClientHub, type McpConnectOptions } from "./McpClientHub.js";
 import { loadMcpConfigs, type McpServerConfig } from "./mcpConfig.js";
 
 export interface ManagedProjectMcpHub {
   connect(
     configs: McpServerConfig[],
-    options?: { interactiveForNewServers?: boolean },
+    options?: McpConnectOptions,
   ): Promise<void>;
   disconnectAll(): Promise<void>;
 }
@@ -61,6 +61,7 @@ interface ProjectEntry<THub extends ManagedProjectMcpHub> {
   current?: HubGeneration<THub>;
   reloadQueue: Promise<ProjectMcpHubGeneration<THub>>;
   retired: boolean;
+  knownServerNames: Set<string>;
 }
 
 export class ProjectMcpHubRegistry<
@@ -108,7 +109,7 @@ export class ProjectMcpHubRegistry<
 
   async reload(
     scope: Readonly<SessionProjectScope>,
-    options: { interactiveForNewServers?: boolean } = {},
+    options: McpConnectOptions = {},
   ): Promise<ProjectMcpHubGeneration<THub>> {
     const entry = this.getOrCreateEntry(scope);
     const run = entry.reloadQueue
@@ -173,7 +174,7 @@ export class ProjectMcpHubRegistry<
   private async replaceGeneration(
     scope: Readonly<SessionProjectScope>,
     entry: ProjectEntry<THub>,
-    options: { interactiveForNewServers?: boolean },
+    options: McpConnectOptions,
   ): Promise<ProjectMcpHubGeneration<THub>> {
     this.assertScopeMatchesEntry(scope, entry);
     const generation = entry.nextGeneration++;
@@ -182,7 +183,21 @@ export class ProjectMcpHubRegistry<
 
     try {
       const configs = await this.loadConfigs(scope);
-      await hub.connect(configs, options);
+      const interactiveServerNames = options.interactiveForNewServers
+        ? new Set(
+            configs
+              .filter((config) => !entry.knownServerNames.has(config.name))
+              .map((config) => config.name),
+          )
+        : undefined;
+      // Server identity is config state, not connection success. Remember the
+      // snapshot before connecting so a failed first attempt is not repeatedly
+      // reclassified as a newly added interactive server on later reloads.
+      entry.knownServerNames = new Set(configs.map((config) => config.name));
+      await hub.connect(configs, {
+        ...options,
+        ...(interactiveServerNames ? { interactiveServerNames } : {}),
+      });
       if (entry.retired) {
         throw new Error(
           `MCP project '${scope.displayName}' was retired during reload.`,
@@ -267,6 +282,7 @@ export class ProjectMcpHubRegistry<
       nextGeneration: 1,
       reloadQueue: Promise.resolve(undefined as never),
       retired: false,
+      knownServerNames: new Set<string>(),
     };
     this.entries.set(scope.projectId, entry);
     return entry;

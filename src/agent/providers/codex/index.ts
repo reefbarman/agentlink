@@ -19,7 +19,8 @@ export {
   type OpenAiApiKeyCredential,
 } from "./OpenAiCodexAuthManager.js";
 export {
-  queryCodexCliUsage,
+  queryCodexUsage,
+  type CodexUsageResult,
   type CodexCliUsageResult,
   type CodexSubscriptionUsage,
-} from "./CodexCliUsageClient.js";
+} from "./CodexUsageClient.js";

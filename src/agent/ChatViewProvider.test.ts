@@ -2295,6 +2295,94 @@ describe("ChatViewProvider session state sync", () => {
     provider.dispose();
   });
 
+  it("forwards canonical MCP auth attempt data to the injected telemetry sink", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const record = vi.fn();
+    provider.setMcpAuthTelemetry({ record } as never);
+    const coordinator = (
+      provider as unknown as {
+        mcpAuthCoordinator: {
+          record(event: Record<string, unknown>): void;
+        };
+      }
+    ).mcpAuthCoordinator;
+
+    coordinator.record({
+      type: "connect_start",
+      serverName: "linear",
+      serverIdentityHash: "raw-server-identity",
+      trigger: "config-watcher",
+      authMode: "interactive",
+      userInitiated: false,
+      attemptId: "attempt-distinctive",
+      rootAttemptId: "root-distinctive",
+      hubScope: "project-a",
+      hubGeneration: 7,
+    });
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "connect_start",
+        serverName: "linear",
+        trigger: "config-watcher",
+        attemptId: "attempt-distinctive",
+        rootAttemptId: "root-distinctive",
+        hubScope: "project-a",
+        hubGeneration: 7,
+        serverIdentityHash: expect.not.stringMatching("raw-server-identity"),
+      }),
+    );
+    provider.dispose();
+  });
+
+  it("routes browser reauthentication through the project MCP hub", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const scope = {
+      schemaVersion: 1 as const,
+      kind: "project" as const,
+      projectId: "project-a",
+      workspaceFolderUri: "file:///workspace/a",
+      displayName: "project-a",
+      rootPath: "/workspace/a",
+    };
+    const reauthenticateServer = vi.fn(async () => undefined);
+    const hub = {
+      reauthenticateServer,
+      reconnectServer: vi.fn(async () => undefined),
+      getServerInfos: vi.fn(() => []),
+    };
+    const internals = provider as unknown as {
+      resolveMcpProjectScope(projectId?: string): typeof scope;
+      getCurrentProjectMcpHub(projectScope?: typeof scope): typeof hub;
+      resolveProjectMcpRuntimeServerName(): string;
+      buildMcpConfigSnapshot(): Promise<Record<string, unknown>>;
+      postMcpManagerSnapshot(): Promise<void>;
+    };
+    internals.resolveMcpProjectScope = () => scope;
+    internals.getCurrentProjectMcpHub = () => hub;
+    internals.resolveProjectMcpRuntimeServerName = () => "linear";
+    internals.buildMcpConfigSnapshot = async () => ({ revision: "rev-1" });
+    internals.postMcpManagerSnapshot = async () => undefined;
+
+    await expect(
+      provider.submitBrowserMcpAction(
+        "linear",
+        "reauthenticate",
+        scope.projectId,
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    expect(reauthenticateServer).toHaveBeenCalledWith("linear");
+    provider.dispose();
+  });
+
   it("ignores MCP status changes from a hub that is no longer current", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(

@@ -165,6 +165,8 @@ export interface OpenAiCompatibleStreamOptions {
   state?: OpenAiCompatibleStreamParserState;
   createThinkingId?: (choiceIndex: number) => string;
   maxReplayBytes?: number;
+  /** Exact client-dispatched tool names exposed on this request. */
+  availableToolNames?: readonly string[];
 }
 
 export interface OpenAiCompatibleFacadeRequest {

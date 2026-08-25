@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.18.71",
+  "version": "1.18.83",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -718,6 +718,26 @@
           "default": 5000,
           "description": "Max milliseconds to wait for the OpenAI-compatible endpoint before falling back."
         },
+        "agentlink.codex.textVerbosity": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "default",
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
+          "enumDescriptions": [
+            "Per-model default: \"low\" for GPT-5.6 models (Sol, Terra, Luna); omitted for older models.",
+            "Never send text.verbosity; the model uses its API default (medium).",
+            "Force low verbosity for all Codex models.",
+            "Force medium verbosity for all Codex models.",
+            "Force high verbosity for all Codex models."
+          ],
+          "default": "default",
+          "description": "Final-message verbosity (text.verbosity) sent to OpenAI Codex models for agent turns. GPT-5.x response length is governed primarily by this API parameter rather than prompt instructions."
+        },
         "agentlink.questionDetection.mode": {
           "scope": "window",
           "type": "string",
@@ -1053,7 +1073,7 @@
             "minimum": 0.1,
             "maximum": 1
           },
-          "description": "Per-model auto-condense thresholds keyed by model ID. Models with 1M+ context windows default to 0.7; other models default to 0.9 when no override is stored."
+          "description": "Per-model auto-condense thresholds keyed by model ID. GPT-5.6 models default to 0.65; other models with 1M+ context windows default to 0.85; legacy frontier models default to 0.8 when capabilities are unavailable; all remaining models default to 0.9."
         },
         "agentlink.writeRules": {
           "scope": "resource",
@@ -1124,10 +1144,11 @@
     "telemetry:tools:csv": "node scripts/report-tool-usage-telemetry.mjs --csv",
     "telemetry:context": "node scripts/report-context-jumps.mjs",
     "telemetry:sessions": "node scripts/report-session-outcomes.mjs",
+    "telemetry:mcp-auth": "node scripts/report-mcp-auth-telemetry.mjs",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "lint": "bash -c 'e=0; npm run docs:check || e=1; oxfmt --check || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
-    "test": "vitest run && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-session-outcomes.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/verify-retrieval-package.test.mjs",
+    "test": "vitest run && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-mcp-auth-telemetry.test.mjs scripts/report-session-outcomes.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/verify-retrieval-package.test.mjs",
     "test:watch": "vitest",
     "test:browser-gateway-security-gate": "node scripts/run-browser-gateway-security-gate.mjs",
     "test:browser-gateway-phase0-gate": "npm run test:browser-gateway-security-gate && BROWSER_GATEWAY_RUN_LOAD_GATE=1 vitest run src/browser-gateway/testing/stateEquivalenceOracle.test.ts src/browser-gateway/testing/ownerDataPlaneLoadFixture.test.ts",

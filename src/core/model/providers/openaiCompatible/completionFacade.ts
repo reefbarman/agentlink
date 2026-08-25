@@ -120,6 +120,7 @@ export async function* streamOpenAiCompatibleCompletion(
           estimatedInputTokens,
           state,
           sensitiveValues: args.apiKey ? [args.apiKey] : undefined,
+          availableToolNames: args.request.tools?.map((tool) => tool.name),
         });
         return;
       } catch (error) {

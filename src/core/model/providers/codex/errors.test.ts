@@ -8,10 +8,49 @@ import {
   getCodexErrorHandlingAction,
   isCodexAuthError,
   isCodexContextWindowExceeded,
+  isCodexTextVerbosityRejectionError,
   isCodexUsageLimitError,
   toCodexRequestError,
 } from "./errors.js";
 import { describe, expect, it } from "vitest";
+
+describe("isCodexTextVerbosityRejectionError", () => {
+  it("matches 400s that reject the text.verbosity parameter", () => {
+    expect(
+      isCodexTextVerbosityRejectionError({
+        status: 400,
+        message: "Unknown parameter: 'text.verbosity'.",
+      }),
+    ).toBe(true);
+    expect(
+      isCodexTextVerbosityRejectionError({
+        status: 400,
+        message: "Unsupported parameter: 'text' is not supported.",
+      }),
+    ).toBe(true);
+  });
+
+  it("ignores other errors", () => {
+    expect(
+      isCodexTextVerbosityRejectionError({
+        status: 404,
+        message: "Unknown parameter: 'text.verbosity'.",
+      }),
+    ).toBe(false);
+    expect(
+      isCodexTextVerbosityRejectionError({
+        status: 400,
+        message: "Your input exceeds the context window of this model.",
+      }),
+    ).toBe(false);
+    expect(
+      isCodexTextVerbosityRejectionError({
+        status: 400,
+        message: "Invalid value: 'textual' for parameter 'mode'.",
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("Codex error classification", () => {
   it("extracts raw and display error text for matching", () => {
