@@ -96,11 +96,13 @@ The VS Code manager can install, inspect diagnostics, enable/disable, update, se
 
 ## Background review budgets
 
-Review agents are bounded by useful work rather than input size. Automatic tiered budgets count committed tool calls, successful model API turns, and elapsed time; token and estimated-cost caps are ignored for review task classes so a large captured diff cannot exhaust the budget before the reviewer explores surrounding code. Non-review background tasks remain uncapped by default and can still use explicit token, cost, tool-call, turn, or elapsed-time limits. Soft limits request wrap-up, with a 3× hard safety backstop for runs that do not finish.
+Review agents are bounded by useful work rather than input size. Automatic tiered budgets count committed tool calls, successful model API turns, and elapsed time; token and estimated-cost caps are ignored for review task classes so a large captured diff cannot exhaust the budget before the reviewer explores surrounding code. Immutable Git review captures omit binary patch payloads, represent binary changes with bounded metadata, and push `excludePaths` into Git before buffering so large excluded diffs cannot fail capture first. Non-review background tasks remain uncapped by default and can still use explicit token, cost, tool-call, turn, or elapsed-time limits. Soft limits request wrap-up, with a 3× hard safety backstop for runs that do not finish.
+
+Image handoff remains native-only. If a configured default or review ACP backend is selected automatically for a spawn with images, AgentLink transparently falls back to native and reports that routing reason; an explicit `provider: "acp:<id>"` stays authoritative and rejects images. OpenAI-compatible streams that close before any provider event are treated as safe stream reconnects under the existing bounded retry budget instead of immediately failing the background review.
 
 ## Tool reliability
 
-AgentLink's structured read and terminal tools report uncertainty instead of silently fabricating success: exact-file search counts preserve ripgrep's single-file output, recursive listings retain usable results with bounded broken-path warnings, `read_file`/`get_context` refresh VS Code Git status before reporting `clean`, and Native Agent timeouts distinguish a confirmed running process from a command that never reached the shell start marker. `execute_command` also accepts correctly terminated quoted heredocs during syntax validation while keeping approval classification and inline-file rewriting fail-closed. See the [complete tool reference](resources/builtin-skills/documentation/references/complete-reference.md#tools-reference) for response details and recovery codes.
+AgentLink's structured read and terminal tools report uncertainty instead of silently fabricating success: exact-file search counts preserve ripgrep's single-file output, recursive listings retain usable results with bounded broken-path warnings, `read_file`/`get_context` refresh VS Code Git status before reporting `clean`, and Native Agent timeouts distinguish a confirmed running process from a command that never reached the shell start marker. Unnamed native commands may reuse an idle logical terminal, but each command runs in an isolated shell scope so aliases, exports, PATH changes, `cd`, and `exit` cannot leak into the next unrelated command; named and explicitly targeted terminals retain intentional persistent-shell state, and explicitly targeting a formerly pooled terminal removes it from later unnamed reuse. Foreground prompt termination interrupts only the active command and preserves that persistent shell. `execute_command` returns structured `native_shell_startup_timeout`, `pnpm_store_mismatch`, and `managed_network_proxy_unaware_dns` recovery guidance for recognized failures without automatic native replay or destructive dependency cleanup. Store paths are bounded evidence for an explicit pnpm configuration/reinstall choice, never an automatic `.npmrc` pin; managed-DNS guidance is limited to direct Node commands with undici-style `fetch failed` plus ENOTFOUND/EAI_AGAIN evidence. `execute_command` also accepts correctly terminated quoted heredocs during syntax validation while keeping approval classification and inline-file rewriting fail-closed. Cleaned command output strips complete ECMA-48 control sequences and keeps only the final redraw after a lone carriage return, while `terminal_raw_output` retains terminal-renderable controls. Foreground sandbox and Native Agent commands that stop at a high-confidence prompt — including `Yes/No/All` choice lists — are terminated after the same short inactivity grace with structured prompt evidence; background commands remain observation-only. If sandbox launch finds a symlink, hard link, or unsupported node inside a protected tree, `sandbox_structural_protection` reports the protected or unexpected path and node kind, then asks for trusted-host inspection and cleanup without weakening or bypassing protection. Invalid root instruction aliases are ignored consistently by instruction loading and sandbox protection, reported as sandbox metadata warnings, and no longer block unrelated commands. See the [complete tool reference](resources/builtin-skills/documentation/references/complete-reference.md#tools-reference) for response details and recovery codes.
 
 ## Write tools
 
@@ -120,15 +122,35 @@ Create a file or replace its complete content.
 
 ### `apply_diff`
 
-Apply one or more reviewed SEARCH/REPLACE blocks to an existing file.
+Apply one or more reviewed SEARCH/REPLACE blocks or unified-diff hunks to an existing file.
 
 | Parameter                 | Type      | Description                                                                                                          |
 | ------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------- |
 | `path`                    | string    | Existing file path.                                                                                                  |
-| `diff`                    | string    | SEARCH/REPLACE blocks.                                                                                               |
+| `diff`                    | string    | SEARCH/REPLACE blocks or unified-diff `@@` hunks.                                                                    |
 | `block_options`           | object[]? | Select a 1-based occurrence or intentionally replace every exact occurrence for a block.                             |
 | `atomic`                  | boolean?  | Require every block to validate before review/write. This validates the proposal; it does not bypass format-on-save. |
 | `save_without_formatting` | boolean?  | Save without ordinary participants and require exact disk-content preservation.                                      |
+
+Canonical SEARCH/REPLACE form (the `diff` string is directly copyable JSON):
+
+```json
+{
+  "diff": "<<<<<<< SEARCH\nexact content to find\n======= DIVIDER =======\nreplacement content\n>>>>>>> REPLACE"
+}
+```
+
+Use the `DIVIDER` form above. A bare `=======` line is literal payload in this mode, so ordinary Git conflict hunks can be edited directly. Marker recognition trims surrounding whitespace, and `<<<<<<< SEARCH>` remains a reserved compatibility spelling. If a search or replacement payload line's trimmed text equals one of the reserved markers (`<<<<<<< SEARCH`, `<<<<<<< SEARCH>`, `======= DIVIDER =======`, or `>>>>>>> REPLACE`), use unified-diff input instead. Every unified hunk-body line must begin with a space, `+`, or `-` (apart from the standard `\ No newline` marker):
+
+```diff
+@@ -1 +1,3 @@
+-old
++<<<<<<< SEARCH
++======= DIVIDER =======
++>>>>>>> REPLACE
+```
+
+Malformed input returns `malformed_block_details` with the positional block `index`, 1-based `line`, stable `reason`, the violated marker rule, and copyable recovery guidance. Successful and failed match results retain the existing per-block diagnostics.
 
 If an ordinary save participant transforms the approved content, the write remains accepted with `durability.outcome: "transformed"`, except when valid YAML/JSON becomes unparseable: AgentLink restores the approved content with Save without Formatting or fails closed. For `apply_diff`, proposal-level successful blocks become `unverified_after_transform` and omit positional ranges because those ranges no longer describe final disk content. Re-read the file whenever `durability.requires_reread` is true. Known Unity serialization files (`.meta`, `.asset`, `.unity`, `.mat`, `.prefab`, `.anim`, `.controller`, and `.physicMaterial`) use VS Code's Save without Formatting path automatically.
 

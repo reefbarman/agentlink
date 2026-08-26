@@ -174,8 +174,15 @@ describe("Git metadata protection", () => {
     await Promise.all([mkdir(workspace), mkdir(metadata)]);
     await symlink(metadata, path.join(workspace, ".git"));
 
-    await expect(resolveWorkspaceGitProtection(workspace)).rejects.toThrow(
-      "must not be a symbolic link",
-    );
+    const canonicalWorkspace = await realpath(workspace);
+    await expect(
+      resolveWorkspaceGitProtection(workspace),
+    ).rejects.toMatchObject({
+      code: "sandbox_structural_protection",
+      details: {
+        kind: "symbolic_link",
+        path: path.join(canonicalWorkspace, ".git"),
+      },
+    });
   });
 });

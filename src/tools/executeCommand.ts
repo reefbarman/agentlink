@@ -22,7 +22,10 @@ import type {
 import type { SandboxViolation } from "../core/sandboxPolicy.js";
 import { SandboxCapabilityLaunchError } from "../core/capabilities/SandboxCapabilityLaunchError.js";
 import { TerminalAdmissionCancelledError } from "../terminal/terminalAdmissionQueue.js";
-import { SandboxPreCommandLaunchError } from "../terminal/sandbox/SandboxRuntimeProvider.js";
+import {
+  SandboxPreCommandLaunchError,
+  SandboxStructuralProtectionError,
+} from "../terminal/sandbox/SandboxRuntimeProvider.js";
 import {
   SandboxPreparationDriftError,
   TerminalTargetRecoveryError,
@@ -353,9 +356,13 @@ type ExecuteCommandRetryGuidance = {
     | "sandbox_capability_launch_failed"
     | "sandbox_pty_launch_failed"
     | "sandbox_environment_too_large"
+    | "sandbox_structural_protection"
     | "protected_git_metadata"
     | "managed_network_ssh_git_transport"
-    | "managed_network_tls_trust";
+    | "managed_network_tls_trust"
+    | "managed_network_proxy_unaware_dns"
+    | "pnpm_store_mismatch"
+    | "native_shell_startup_timeout";
   message: string;
   automatic_retry: false;
   options: Array<Record<string, unknown>>;
@@ -382,6 +389,23 @@ const TLS_TRUST_FAILURE_PATTERNS = [
   /x509: certificate signed by unknown authority/i,
   /tls: failed to verify certificate: x509: OSStatus -26276\b/i,
 ];
+const NODE_UNDICI_DNS_FAILURE_PATTERN =
+  /(?:TypeError:\s*)?fetch failed[\s\S]{0,1024}(?:\bENOTFOUND\b|\bEAI_AGAIN\b|getaddrinfo[^\n]*(?:failed|not known|temporary failure))/i;
+const PNPM_STORE_MISMATCH_PATTERN = /\bERR_PNPM_UNEXPECTED_STORE\b/i;
+const PNPM_STORE_LINKING_SUBCOMMANDS = new Set([
+  "add",
+  "install",
+  "i",
+  "update",
+  "up",
+  "remove",
+  "rm",
+  "unlink",
+  "prune",
+  "rebuild",
+  "import",
+  "deploy",
+]);
 
 const LOOPBACK_LISTEN_DENIAL_PATTERNS = [
   /listen EPERM: operation not permitted 127\.0\.0\.1(?::\d+)?\b/i,
@@ -460,6 +484,18 @@ function singleCommandTokens(command: string): string[] | undefined {
     return undefined;
   }
   return tokenScan.tokens;
+}
+
+function isDirectCommand(command: string, executable: string): boolean {
+  return singleCommandTokens(command)?.[0] === executable;
+}
+
+function isDirectPnpmStoreLinkingCommand(command: string): boolean {
+  const tokens = singleCommandTokens(command);
+  return (
+    tokens?.[0] === "pnpm" &&
+    PNPM_STORE_LINKING_SUBCOMMANDS.has(tokens[1] ?? "")
+  );
 }
 
 function directGitNetworkCommandTokens(command: string): string[] | undefined {
@@ -652,6 +688,35 @@ function attachManagedNetworkFailureGuidance(input: {
         "inject_unverified_ca",
       ],
     };
+  } else if (
+    isDirectCommand(command, "node") &&
+    NODE_UNDICI_DNS_FAILURE_PATTERN.test(output)
+  ) {
+    guidance = {
+      code: "managed_network_proxy_unaware_dns",
+      message:
+        "The command ran with AgentLink's managed public proxy, but this client attempted direct DNS resolution. Use a proxy-aware client or configure this exact client to use the supplied HTTP(S)/SOCKS proxy environment before retrying; AgentLink will not bypass mediation or retry natively.",
+      automatic_retry: false,
+      options: [
+        {
+          action: "retry_with_proxy_aware_client",
+          sandbox_permissions: "require_managed_network",
+          same_destination_approval_state: true,
+        },
+        {
+          action: "configure_node_undici_proxy_then_retry",
+          client: "node-undici",
+          sandbox_permissions: "require_managed_network",
+          same_command: true,
+          guidance:
+            "Use a reviewed undici ProxyAgent/EnvHttpProxyAgent setup; do not disable TLS verification.",
+        },
+      ],
+      prohibited_workarounds: [
+        "native_network_bypass",
+        "disable_tls_verification",
+      ],
+    };
   }
 
   if (guidance) {
@@ -661,6 +726,76 @@ function attachManagedNetworkFailureGuidance(input: {
 
 function hasRetryGuidance(result: TerminalCommandResult): boolean {
   return "retry_guidance" in result;
+}
+
+function boundedPnpmStorePath(
+  output: string,
+  pattern: RegExp,
+): string | undefined {
+  const value = output.match(pattern)?.[1]?.trim();
+  if (
+    !value ||
+    value.length > 512 ||
+    value.includes("\0") ||
+    /[\r\n]/.test(value) ||
+    !path.isAbsolute(value)
+  ) {
+    return undefined;
+  }
+  return path.normalize(value);
+}
+
+function attachPnpmStoreMismatchGuidance(input: {
+  result: TerminalCommandResult;
+  command: string;
+  output: string;
+}): void {
+  const { result, command, output } = input;
+  if (
+    hasRetryGuidance(result) ||
+    result.exit_code === 0 ||
+    result.exit_code === null ||
+    result.backgrounded ||
+    result.is_running ||
+    result.timed_out ||
+    result.output_complete === false ||
+    result.output_finalized === false ||
+    !isDirectPnpmStoreLinkingCommand(command) ||
+    !PNPM_STORE_MISMATCH_PATTERN.test(output)
+  ) {
+    return;
+  }
+
+  const existingStore = boundedPnpmStorePath(
+    output,
+    /currently linked from the store at\s+["']?([^"'\r\n]+)["']?/i,
+  );
+  const requestedStore = boundedPnpmStorePath(
+    output,
+    /(?:now wants to (?:use|link dependencies from) the store at|new store location is)\s+["']?([^"'\r\n]+)["']?/i,
+  );
+  Object.assign(result, {
+    retry_guidance: {
+      code: "pnpm_store_mismatch",
+      message:
+        "pnpm refused to modify dependencies because node_modules is linked to a different store. Inspect the active project configuration and existing linked store before retrying; do not delete node_modules or change the global store implicitly.",
+      automatic_retry: false,
+      options: [
+        {
+          action: "inspect_store_configuration",
+          commands: ["pnpm store path", "pnpm config get store-dir"],
+          ...(existingStore ? { detected_existing_store: existingStore } : {}),
+          ...(requestedStore ? { requested_store: requestedStore } : {}),
+        },
+        {
+          action: "choose_store_resolution",
+          guidance:
+            "After inspecting project and pnpm configuration, either retry with the intended store explicitly or perform a reviewed dependency reinstall using that selected store.",
+          destructive_cleanup_recommended: false,
+        },
+      ],
+    } satisfies ExecuteCommandRetryGuidance,
+  });
 }
 
 function outputHasHostHomeWriteDenial(
@@ -1353,6 +1488,7 @@ export async function handleExecuteCommand(
   trackerCtx?: TrackerContext,
   providers: ExecuteCommandProviders = {},
 ): Promise<ToolResult> {
+  let commandToRun = params.command;
   try {
     if (!params.command || params.command.trim().length === 0) {
       return {
@@ -1522,7 +1658,6 @@ export async function handleExecuteCommand(
     // Master bypass check
     const masterBypass = getConfiguredMasterBypass();
 
-    let commandToRun = params.command;
     let commandEditedByUser = false;
     let inlineRun: ReturnType<typeof materializeInlineCommandFiles> | undefined;
     let inlineFiles: InlineCommandFilePreview[] | undefined;
@@ -2584,6 +2719,11 @@ export async function handleExecuteCommand(
             output: result.output,
           });
         }
+        attachPnpmStoreMismatchGuidance({
+          result,
+          command: commandToRun,
+          output: result.output,
+        });
         attachSandboxCapabilityRetryGuidance({
           result,
           command: commandToRun,
@@ -2765,6 +2905,57 @@ export async function handleExecuteCommand(
         ],
       };
     }
+    if (err instanceof SandboxStructuralProtectionError) {
+      const isGitMetadata = err.details.path
+        .split(path.sep)
+        .some((entry) => entry === ".git");
+      const hardLink = err.details.kind === "hard_link";
+      const retryGuidance: ExecuteCommandRetryGuidance = {
+        code: err.code,
+        message: hardLink
+          ? `The sandbox found a protected ${isGitMetadata ? "Git metadata " : ""}file with an unexpected hard-link count before launch. Inspect all links to the reported protected file with a trusted host tool, remove only the unintended extra link, then retry the same command. Do not delete the reported protected file itself. AgentLink will not clean or ignore protected content automatically.`
+          : `The sandbox found an unsafe filesystem node inside ${isGitMetadata ? "protected Git metadata" : "a protected tree"} before launch. Inspect and remove the reported unexpected node with a trusted host tool, then retry the same command. AgentLink will not clean or ignore protected content automatically.`,
+        automatic_retry: false,
+        options: [
+          hardLink
+            ? {
+                action: "inspect_hard_links_and_remove_extra_link",
+                protected_file: err.details.path,
+                alias_kind: err.details.kind,
+                preserve_reported_file: true,
+                same_command_after_cleanup: true,
+                trusted_host_action_required: true,
+              }
+            : {
+                action: "inspect_and_remove_unexpected_node",
+                protected_path: err.details.path,
+                alias_kind: err.details.kind,
+                same_command_after_cleanup: true,
+                trusted_host_action_required: true,
+              },
+        ],
+      };
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "retry_required",
+              error: err.message,
+              error_code: err.code,
+              protected_path: err.details.path,
+              alias_kind: err.details.kind,
+              retry_guidance: retryGuidance,
+              command: params.command,
+              command_sent: false,
+              process_launched: false,
+              retry_safe: true,
+              failure_stage: "launch",
+            }),
+          },
+        ],
+      };
+    }
     if (err instanceof SandboxPreCommandLaunchError) {
       const largestEnvironmentEntries = err.details.largestEnvironmentEntries;
       return {
@@ -2838,6 +3029,43 @@ export async function handleExecuteCommand(
       };
     }
     const lowerMessage = message.toLowerCase();
+    if (
+      lowerMessage.includes("native agent shell integration startup timed out")
+    ) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "retry_required",
+              error: message,
+              error_code: "native_shell_startup_timeout",
+              command: commandToRun,
+              ...(commandToRun !== params.command
+                ? { original_command: params.command, command_modified: true }
+                : {}),
+              command_sent: false,
+              process_launched: false,
+              retry_safe: true,
+              failure_stage: "launch",
+              retry_guidance: {
+                code: "native_shell_startup_timeout",
+                message:
+                  "The Native Agent shell did not become ready before the startup deadline, and the command did not launch. Retry the same command; if startup repeatedly times out, reload the VS Code window so AgentLink can recreate its native terminal runtime.",
+                automatic_retry: false,
+                options: [
+                  { action: "retry_same_command", same_command: true },
+                  {
+                    action: "reload_window_then_retry",
+                    same_command_after_reload: true,
+                  },
+                ],
+              } satisfies ExecuteCommandRetryGuidance,
+            }),
+          },
+        ],
+      };
+    }
     if (
       lowerMessage.includes(
         "sandbox pty launch failed twice before the command started",

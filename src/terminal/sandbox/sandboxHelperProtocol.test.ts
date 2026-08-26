@@ -233,12 +233,37 @@ describe("sandbox helper event protocol", () => {
           largestEnvironmentEntries: [{ name: "LARGE_VALUE", bytes: 900_000 }],
         },
       },
+      {
+        ...identity,
+        type: "error",
+        message: "protected tree contains a symbolic link",
+        code: "sandbox_structural_protection",
+        details: {
+          kind: "symbolic_link",
+          path: "/workspace/.git/tool-worktree/alias",
+        },
+      },
     ];
 
     for (const event of events) {
       expect(isSandboxHelperEventFrame(event), event.type).toBe(true);
       expect(parseSandboxHelperEventLine(JSON.stringify(event))).toEqual(event);
     }
+  });
+
+  it("rejects invalid structural protection failure paths", () => {
+    expect(
+      isSandboxHelperEventFrame({
+        ...identity,
+        type: "error",
+        message: "protected tree contains a symbolic link",
+        code: "sandbox_structural_protection",
+        details: {
+          kind: "symbolic_link",
+          path: ".git/relative-alias",
+        },
+      }),
+    ).toBe(false);
   });
 
   it("rejects secret-bearing structured launch failure entries", () => {

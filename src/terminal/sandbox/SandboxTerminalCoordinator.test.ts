@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   SandboxPreCommandLaunchError,
+  SandboxStructuralProtectionError,
   type SandboxCommandDisposable,
   type SandboxCommandEvent,
   type SandboxCommandExit,
@@ -100,7 +101,8 @@ const metadata: SandboxExecutionMetadata = {
   },
 };
 
-function harness() {
+function harness(options: { autoReady?: boolean } = {}) {
+  const autoReady = options.autoReady ?? true;
   const processes: FakeProcess[] = [];
   const authorizedFinalizer = vi.fn();
   const runtime: SandboxRuntimeProvider = {
@@ -111,6 +113,13 @@ function harness() {
         generation: request.generation,
       });
       processes.push(process);
+      if (autoReady) {
+        process.readyDeferred.resolve({
+          pid: processes.length,
+          pgid: processes.length,
+          backend: "seatbelt",
+        });
+      }
       return process;
     }),
     dispose: vi.fn(),
@@ -1187,7 +1196,12 @@ describe("SandboxTerminalCoordinator", () => {
 
     test.coordinator.dispose();
 
-    expect(order).toEqual(["command-started", "closed", "disposed"]);
+    expect(order).toEqual([
+      "command-started",
+      "command-ready",
+      "closed",
+      "disposed",
+    ]);
   });
 
   it("publishes identity-bound channel lifecycle snapshots", async () => {
@@ -2259,7 +2273,7 @@ describe("SandboxTerminalCoordinator", () => {
   });
 
   it("reclaims a channel after a typed pre-command launch failure", async () => {
-    const test = harness();
+    const test = harness({ autoReady: false });
     const execution = test.coordinator.executeCommand({
       owner: undefined,
       command: "pwd",
@@ -2283,6 +2297,63 @@ describe("SandboxTerminalCoordinator", () => {
     await expect(execution).rejects.toBe(error);
     expect(test.coordinator.listTerminals({ owner: undefined })).toEqual([]);
     expect(test.authorizedFinalizer).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a typed structural failure before acknowledging a background command", async () => {
+    const test = harness({ autoReady: false });
+    const execution = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "git status --short",
+      cwd: "/workspace",
+      background: true,
+      sandboxSessionId: "agent-session",
+    });
+    await flush();
+    const error = new SandboxStructuralProtectionError(
+      "structurally protected tree contains a symbolic link",
+      {
+        kind: "symbolic_link",
+        path: "/workspace/.git/tool-worktree/alias",
+      },
+    );
+    test.processes[0].readyDeferred.reject(error);
+    test.processes[0].completionDeferred.reject(error);
+
+    await expect(execution).rejects.toBe(error);
+    expect(test.coordinator.listTerminals({ owner: undefined })).toEqual([]);
+    expect(test.authorizedFinalizer).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for readiness, not completion, before acknowledging a background command", async () => {
+    const test = harness({ autoReady: false });
+    const execution = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "sleep 10",
+      cwd: "/workspace",
+      background: true,
+      sandboxSessionId: "agent-session",
+    });
+    await flush();
+    let settled = false;
+    void execution.finally(() => {
+      settled = true;
+    });
+    await flush();
+    expect(settled).toBe(false);
+
+    test.processes[0].readyDeferred.resolve({
+      pid: 42,
+      pgid: 42,
+      backend: "seatbelt",
+    });
+    await expect(execution).resolves.toMatchObject({
+      terminal_id: "sandbox-1",
+      backgrounded: true,
+      is_running: true,
+    });
+    expect(test.processes[0].completionDeferred.promise).toBeInstanceOf(
+      Promise,
+    );
   });
 
   it("finalizes authorization when runtime launch fails synchronously", async () => {

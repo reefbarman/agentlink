@@ -8,6 +8,7 @@ export interface OpenAiCompatibleErrorDetails {
   providerType?: string;
   retryAfterMs?: number;
   retryable: boolean;
+  shouldRetry?: boolean;
   authentication: boolean;
   body?: unknown;
   cause?: unknown;
@@ -19,6 +20,7 @@ export class OpenAiCompatibleRequestError extends Error {
   readonly providerType?: string;
   readonly retryAfterMs?: number;
   readonly retryable: boolean;
+  readonly shouldRetry?: boolean;
   readonly authentication: boolean;
   readonly body?: unknown;
   override readonly cause?: unknown;
@@ -31,6 +33,7 @@ export class OpenAiCompatibleRequestError extends Error {
     this.providerType = details.providerType;
     this.retryAfterMs = details.retryAfterMs;
     this.retryable = details.retryable;
+    this.shouldRetry = details.shouldRetry;
     this.authentication = details.authentication;
     this.body = details.body;
     this.cause = details.cause;
@@ -75,6 +78,7 @@ export async function createOpenAiCompatibleHttpError(
   const sanitizedText = redactSensitiveText(body.text, options.sensitiveValues);
   const extracted = extractProviderError(sanitizedValue);
   const status = response.status;
+  const shouldRetry = parseShouldRetry(response.headers);
   const message = boundUtf8Text(
     extracted.message ||
       sanitizedText ||
@@ -90,7 +94,8 @@ export async function createOpenAiCompatibleHttpError(
       response.headers,
       options.now?.() ?? Date.now(),
     ),
-    retryable: isRetryableStatus(status),
+    retryable: shouldRetry ?? isRetryableStatus(status),
+    ...(shouldRetry !== undefined ? { shouldRetry } : {}),
     authentication: status === 401 || status === 403,
     body: boundJsonValue(sanitizedValue),
   });
@@ -145,6 +150,13 @@ export function toOpenAiCompatibleRequestError(
 
 export function isOpenAiCompatibleRetryableError(error: unknown): boolean {
   return error instanceof OpenAiCompatibleRequestError && error.retryable;
+}
+
+export function parseShouldRetry(headers: Headers): boolean | undefined {
+  const value = headers.get("x-should-retry")?.trim().toLowerCase();
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return undefined;
 }
 
 export function parseRetryAfterMs(

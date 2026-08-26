@@ -1,5 +1,6 @@
 import { lstat, readFile, realpath } from "node:fs/promises";
 
+import { SandboxStructuralProtectionError } from "./SandboxRuntimeProvider.js";
 import path from "node:path";
 
 const GIT_INTEGRITY_ENTRIES = [
@@ -54,13 +55,15 @@ async function resolveGitIntegrityEntry(
     throw error;
   }
   if (metadata.isSymbolicLink()) {
-    throw new Error(
+    throw new SandboxStructuralProtectionError(
       `Workspace Git integrity entry must not be a symbolic link: ${candidate}`,
+      { kind: "symbolic_link", path: candidate },
     );
   }
   if (!metadata.isDirectory() && !metadata.isFile()) {
-    throw new Error(
+    throw new SandboxStructuralProtectionError(
       `Workspace Git integrity entry must be a regular file or directory: ${candidate}`,
+      { kind: "unsupported_node", path: candidate },
     );
   }
   return realpath(candidate);
@@ -100,13 +103,15 @@ export async function resolveWorkspaceGitProtection(
     throw error;
   }
   if (markerMetadata.isSymbolicLink()) {
-    throw new Error(
+    throw new SandboxStructuralProtectionError(
       `Workspace .git path must not be a symbolic link: ${marker}`,
+      { kind: "symbolic_link", path: marker },
     );
   }
   if (!markerMetadata.isDirectory() && !markerMetadata.isFile()) {
-    throw new Error(
+    throw new SandboxStructuralProtectionError(
       `Workspace .git path must be a regular file or directory: ${marker}`,
+      { kind: "unsupported_node", path: marker },
     );
   }
 

@@ -32,6 +32,10 @@ export interface NativeAgentChannelRequest {
 
 export interface NativeAgentCommandRequest extends SandboxCommandIdentity {
   command: string;
+  /** Run inside a shell subshell so mutations cannot leak to later commands. */
+  isolateShellState?: boolean;
+  /** Fires at the shell command-end marker, before prompt rendering completes. */
+  onShellCommandEnd?: () => void;
 }
 
 export interface NativeAgentPreparedCommand {
@@ -88,6 +92,7 @@ class PersistentNativeCommandProcess implements SandboxCommandProcess {
     private readonly channel: PersistentNativeChannel,
     identity: SandboxCommandIdentity,
     readonly command: string,
+    private readonly onShellCommandEnd?: () => void,
   ) {
     this.identity = { ...identity };
     this.ready = this.readyDeferred.promise;
@@ -126,6 +131,11 @@ class PersistentNativeCommandProcess implements SandboxCommandProcess {
       return;
     }
     for (const listener of this.listeners) listener(event);
+  }
+
+  markShellCommandEnd(): void {
+    if (this.state !== "running" || this.disposed) return;
+    this.onShellCommandEnd?.();
   }
 
   complete(exit: SandboxCommandExit): void {
@@ -173,7 +183,12 @@ class PersistentNativeCommandProcess implements SandboxCommandProcess {
   }
 
   terminate(): boolean {
-    return !this.disposed && this.channel.close();
+    // Terminate only the active command. Closing the persistent PTY here would
+    // destroy intentional named/explicit terminal state and race command-end
+    // finalization against the channel-close callback.
+    return this.state === "running" && !this.disposed
+      ? this.channel.interrupt()
+      : false;
   }
 
   dispose(): void {
@@ -236,6 +251,7 @@ class PersistentNativeChannel {
       this,
       request,
       request.command,
+      request.onShellCommandEnd,
     );
     this.active = process;
     this.pendingExit = undefined;
@@ -248,7 +264,10 @@ class PersistentNativeChannel {
         }
         process.start();
         this.onData(`${request.command}\r\n`);
-        this.pty.write(`builtin eval ${shellQuote(` ${request.command}`)}\r`);
+        const evaluatedCommand = request.isolateShellState
+          ? `(\n${request.command}\n)`
+          : request.command;
+        this.pty.write(`builtin eval ${shellQuote(` ${evaluatedCommand}`)}\r`);
       },
     };
   }
@@ -339,6 +358,7 @@ class PersistentNativeChannel {
       }
       if (event.type === "command-end") {
         if (!this.active || !this.commandStarted) continue;
+        this.active.markShellCommandEnd();
         this.pendingExit = { exitCode: event.exitCode, timedOut: false };
         this.completionImmediate = setImmediate(() => {
           this.completionImmediate = undefined;

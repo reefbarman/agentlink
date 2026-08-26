@@ -33,6 +33,13 @@ const PROMPT_PATTERNS: readonly PromptPattern[] = [
   {
     kind: "confirmation",
     confidence: "high",
+    pattern:
+      /\b(?:trust|confirm|continue|proceed|choose|select|enter|allow|install|accept)\b[^\n]{0,160}[?:]\s*(?:yes|y)\s*\/\s*(?:no|n)(?:\s*\/\s*(?:all|a))?\s*$/i,
+    scope: "tail-line",
+  },
+  {
+    kind: "confirmation",
+    confidence: "high",
     pattern: /(?:^|\b)(?:continue|are you sure)\?\s*$/i,
     scope: "tail-line",
   },

@@ -5,6 +5,7 @@
  * provider tool definitions.
  */
 
+import { APPLY_DIFF_INPUT_GRAMMAR } from "./applyDiffFormat.js";
 import { z } from "zod";
 
 // ─── Web tools ───────────────────────────────────────────────────────────────
@@ -766,11 +767,7 @@ export const applyDiffSchema = {
   path: z
     .string()
     .describe("File path (absolute or relative to workspace root)"),
-  diff: z
-    .string()
-    .describe(
-      "Search/replace blocks in <<<<<<< SEARCH / ======= DIVIDER ======= / >>>>>>> REPLACE format",
-    ),
+  diff: z.string().describe(APPLY_DIFF_INPUT_GRAMMAR),
   block_options: z
     .array(applyDiffBlockOptionSchema)
     .max(64)
@@ -961,7 +958,7 @@ export const executeCommandSchema = {
     ])
     .optional()
     .describe(
-      'Execution authority intent. Omit or use "use_default" for the policy-selected route: native with normal command approval when Approve for Me is off; sandboxed when it is on. Default sandboxed commands use mediated public networking: unseen destinations pause for exact human approval and private/local destinations remain blocked. Use "with_additional_permissions" with additional_permissions for a narrow sandbox capability such as local listener binding. Recognized default-sandbox HOME/listener failures may return retry_guidance code "sandbox_missing_capabilities" with the exact narrow retry parameters; changed sandbox preparation security may return "sandbox_preparation_changed" with the changed fields; predictable Git metadata writers may return "protected_git_metadata" guidance before launch. Matching Allow command rules may authorize the requested route and capabilities, but do not bypass unseen-destination approval; validation and explicit Forbidden rules still apply. "require_managed_network" is the explicit sandbox intent for one command that needs mediated public network access; Git-over-SSH and recognized gh TLS trust failures may return non-automatic retry_guidance codes "managed_network_ssh_git_transport" or "managed_network_tls_trust". Never replace trust repair with disabled TLS verification. Use "require_escalated" only when execution must occur outside the sandbox. A recognized sandbox denial after process launch opens the normal one-shot human approval card before native replay; it never retries automatically. Every non-default intent requires a non-empty reason; an uncovered command requires approval.',
+      'Execution authority intent. Omit or use "use_default" for the policy-selected route: native with normal command approval when Approve for Me is off; sandboxed when it is on. Default sandboxed commands use mediated public networking: unseen destinations pause for exact human approval and private/local destinations remain blocked. Use "with_additional_permissions" with additional_permissions for a narrow sandbox capability such as local listener binding. Recognized default-sandbox HOME/listener failures may return retry_guidance code "sandbox_missing_capabilities" with the exact narrow retry parameters; changed sandbox preparation security may return "sandbox_preparation_changed" with the changed fields; predictable Git metadata writers may return "protected_git_metadata" guidance before launch; unsafe symlink, hard-link, or node aliases in protected trees may return "sandbox_structural_protection" with the protected or unexpected path, node kind, and trusted-host inspection guidance. Matching Allow command rules may authorize the requested route and capabilities, but do not bypass unseen-destination approval; validation and explicit Forbidden rules still apply. "require_managed_network" is the explicit sandbox intent for one command that needs mediated public network access; Git-over-SSH, recognized gh TLS trust failures, and proxy-unaware DNS failures may return non-automatic retry_guidance codes "managed_network_ssh_git_transport", "managed_network_tls_trust", or "managed_network_proxy_unaware_dns". Direct pnpm store mismatches return evidence-led "pnpm_store_mismatch" guidance without automatic pinning or cleanup, while pre-launch Native Agent shell timeouts return "native_shell_startup_timeout". Never replace trust repair with disabled TLS verification. Use "require_escalated" only when execution must occur outside the sandbox. A recognized sandbox denial after process launch opens the normal one-shot human approval card before native replay; it never retries automatically. Every non-default intent requires a non-empty reason; an uncovered command requires approval.',
     ),
   additional_permissions: z
     .object({

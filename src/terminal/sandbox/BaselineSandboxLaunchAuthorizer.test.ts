@@ -696,6 +696,38 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
     },
   );
 
+  it("protects a valid instruction alias through a symlinked workspace root", async () => {
+    const test = await fixture();
+    const workspaceAlias = path.join(test.root, "workspace-alias");
+    const instruction = path.join(test.workspace, "AGENTS.md");
+    const target = path.join(test.workspace, "CLAUDE.md");
+    try {
+      await writeFile(target, "# Shared instructions\n");
+      await rm(instruction);
+      await symlink("CLAUDE.md", instruction);
+      await symlink(test.workspace, workspaceAlias, "dir");
+      const authorizer = new BaselineSandboxLaunchAuthorizer({
+        workspaceRoots: [workspaceAlias],
+        privateDirectoryPrefix: path.join(test.privateRoot, "alias-"),
+        homeDirectory: path.join(test.root, "real-home"),
+        hostTemporaryDirectory: os.tmpdir(),
+      });
+
+      const launch = await authorizeAndActivate(
+        authorizer,
+        request(workspaceAlias),
+      );
+      const canonicalTarget = await realpath(target);
+      expect(launch.policy.protectedReadOnlyRoots).toContain(canonicalTarget);
+      expect(launch.metadata.capabilities.warnings).not.toContainEqual(
+        expect.stringContaining("Ignored invalid workspace instruction file"),
+      );
+      launch.finalize?.();
+    } finally {
+      await test.dispose();
+    }
+  });
+
   it("allows a root instruction alias to another declared regular instruction file", async () => {
     const test = await fixture();
     const instruction = path.join(test.workspace, "AGENTS.md");
@@ -732,7 +764,7 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
     ["missing declared target", "missing"],
     ["instruction symlink chain", "chain"],
   ])(
-    "fails closed for a root instruction alias with %s",
+    "ignores and warns about a root instruction alias with %s",
     async (_label, kind) => {
       const test = await fixture();
       const instruction = path.join(test.workspace, "AGENTS.md");
@@ -762,10 +794,21 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
           await symlink("CLAUDE.md", instruction);
         }
 
-        await expect(
-          test.authorizer.authorize(request(test.workspace)),
-        ).rejects.toThrow(/Workspace instruction alias/);
-        await expect.poll(async () => readdir(test.privateRoot)).toEqual([]);
+        const launch = await authorizeAndActivate(
+          test.authorizer,
+          request(test.workspace),
+        );
+        const canonicalWorkspace = await realpath(test.workspace);
+        expect(launch.policy.deniedWriteRoots).toContain(
+          path.join(canonicalWorkspace, "AGENTS.md"),
+        );
+        expect(launch.policy.protectedReadOnlyRoots).not.toContain(
+          path.join(canonicalWorkspace, "AGENTS.md"),
+        );
+        expect(launch.metadata.capabilities.warnings).toContainEqual(
+          expect.stringContaining("Ignored invalid workspace instruction file"),
+        );
+        launch.finalize?.();
       } finally {
         await test.dispose();
       }

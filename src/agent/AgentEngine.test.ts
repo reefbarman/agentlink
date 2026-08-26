@@ -31,6 +31,7 @@ import type {
   SkillAuthoritySnapshot,
 } from "../core/tools/types.js";
 import type { CoreModelContentBlock } from "../core/modelRuntime.js";
+import { createOpenAiCompatibleHttpError } from "../core/model/providers/openaiCompatible/errors.js";
 import { CORE_NATIVE_WEB_MAX_PAUSE_TURNS } from "../core/nativeWebTools.js";
 import {
   createAgentToolRuntime,
@@ -5446,6 +5447,81 @@ describe("AgentEngine", () => {
         expect(capacityDuringBackoff).toEqual([true]);
         expect(session.getLastAssistantText()).toBe(
           "Recovered after rate limit",
+        );
+      } finally {
+        timerSpy.mockRestore();
+      }
+    });
+
+    it("does not retry an OpenAI-compatible HTTP response that vetoes retries", async () => {
+      let attempts = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        attempts += 1;
+        const error = await createOpenAiCompatibleHttpError(
+          new Response("server error", {
+            status: 503,
+            headers: { "x-should-retry": "false" },
+          }),
+        );
+        if (!error.retryable) throw error;
+        yield* makeProviderStream({ text: "unexpected retry" });
+      };
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(engine.run(session));
+
+      expect(attempts).toBe(1);
+      expect(events.some((event) => event.type === "warning")).toBe(false);
+      expect(events.find((event) => event.type === "error")).toMatchObject({
+        type: "error",
+        retryable: false,
+      });
+    });
+
+    it("uses the stream reconnect budget for a structured zero-event failure", async () => {
+      let attempts = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        attempts += 1;
+        if (attempts === 1) {
+          throw Object.assign(
+            new Error(
+              "OpenAI-compatible stream ended before any provider event",
+            ),
+            { retryable: true, retryLayer: "stream" as const },
+          );
+        }
+        yield* makeProviderStream({ text: "Recovered zero-event stream" });
+      };
+      const timerSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((fn: TimerHandler) => {
+          if (typeof fn === "function") fn();
+          return 0 as unknown as ReturnType<typeof setTimeout>;
+        });
+
+      try {
+        const session = await makeSession();
+        session.addUserMessage("hello");
+        const engine = new AgentEngine(makeRegistry(provider));
+
+        const events = await collectEvents(engine.run(session));
+        const warning = events.find((event) => event.type === "warning");
+
+        expect(attempts).toBe(2);
+        expect(warning).toMatchObject({
+          type: "warning",
+          retryAttempt: 1,
+          retryMaxAttempts: 5,
+        });
+        expect((warning as { message: string }).message).toContain(
+          "retrying stream",
+        );
+        expect(session.getLastAssistantText()).toBe(
+          "Recovered zero-event stream",
         );
       } finally {
         timerSpy.mockRestore();

@@ -335,6 +335,32 @@ describe("SandboxHelperClient", () => {
     });
   });
 
+  it("surfaces typed structural protection failures", async () => {
+    const test = harness();
+    const process = test.client.launch(request);
+    test.transports[0].emit({
+      ...process.identity,
+      type: "error",
+      message: "protected tree contains a symbolic link",
+      code: "sandbox_structural_protection",
+      details: {
+        kind: "symbolic_link",
+        path: "/workspace/.git/tool-worktree/alias",
+      },
+    });
+
+    await expect(process.ready).rejects.toMatchObject({
+      code: "sandbox_structural_protection",
+      details: {
+        kind: "symbolic_link",
+        path: "/workspace/.git/tool-worktree/alias",
+      },
+    });
+    await expect(process.completion).rejects.toMatchObject({
+      code: "sandbox_structural_protection",
+    });
+  });
+
   it("fails when data or exit arrives before readiness", async () => {
     const dataTest = harness();
     const dataProcess = dataTest.client.launch(request);

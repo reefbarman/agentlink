@@ -92,6 +92,82 @@ describe("project active-file containment", () => {
   });
 });
 
+describe("project root instruction aliases", () => {
+  it("loads a declared same-root instruction alias through a symlinked workspace root", async () => {
+    const parent = await tempDir("agentlink-config-parent-");
+    const project = path.join(parent, "project");
+    const projectAlias = path.join(parent, "project-alias");
+    await fs.mkdir(project);
+    await fs.writeFile(path.join(project, "CLAUDE.md"), "SHARED INSTRUCTIONS");
+    await fs.symlink("CLAUDE.md", path.join(project, "AGENTS.md"));
+    await fs.symlink(project, projectAlias, "dir");
+
+    const blocks = await loadAllInstructionBlocks(projectAlias);
+
+    expect(blocks).toContainEqual({
+      source: "AGENTS.md",
+      content: "SHARED INSTRUCTIONS",
+    });
+  });
+
+  it("loads a declared same-root instruction alias", async () => {
+    const project = await tempDir("agentlink-config-project-");
+    await fs.writeFile(path.join(project, "CLAUDE.md"), "SHARED INSTRUCTIONS");
+    await fs.symlink("CLAUDE.md", path.join(project, "AGENTS.md"));
+
+    const blocks = await loadAllInstructionBlocks(project);
+
+    expect(blocks).toContainEqual({
+      source: "AGENTS.md",
+      content: "SHARED INSTRUCTIONS",
+    });
+  });
+
+  it.each([
+    ["external target", "external"],
+    ["undeclared workspace file", "undeclared"],
+    ["path-bearing declared target", "path-bearing"],
+    ["missing declared target", "missing"],
+    ["instruction symlink chain", "chain"],
+  ])("ignores a root instruction alias with %s", async (_label, kind) => {
+    const project = await tempDir("agentlink-config-project-");
+    const instruction = path.join(project, "AGENTS.md");
+    if (kind === "external") {
+      const outside = await tempDir("agentlink-config-outside-");
+      const target = path.join(outside, "AGENTS.md");
+      await fs.writeFile(target, "EXTERNAL INSTRUCTIONS");
+      await fs.symlink(target, instruction);
+    } else if (kind === "undeclared") {
+      await fs.writeFile(
+        path.join(project, "README.md"),
+        "README INSTRUCTIONS",
+      );
+      await fs.symlink("README.md", instruction);
+    } else if (kind === "path-bearing") {
+      await fs.writeFile(
+        path.join(project, "CLAUDE.md"),
+        "SHARED INSTRUCTIONS",
+      );
+      await fs.symlink("nested/../CLAUDE.md", instruction);
+    } else if (kind === "missing") {
+      await fs.symlink("CLAUDE.md", instruction);
+    } else {
+      await fs.writeFile(path.join(project, "AGENT.md"), "FINAL INSTRUCTIONS");
+      await fs.symlink("AGENT.md", path.join(project, "CLAUDE.md"));
+      await fs.symlink("CLAUDE.md", instruction);
+    }
+
+    const blocks = await loadAllInstructionBlocks(project);
+
+    expect(blocks.some((block) => block.source === "AGENTS.md")).toBe(false);
+    expect(
+      blocks.some((block) =>
+        /EXTERNAL|README INSTRUCTIONS/.test(block.content),
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("project AgentLink instructions", () => {
   it("loads .agentlink/AGENTS.md", async () => {
     const project = await tempDir("agentlink-config-project-");

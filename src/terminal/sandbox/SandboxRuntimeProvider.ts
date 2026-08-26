@@ -3,6 +3,7 @@ import type {
   SandboxHelperLaunchRequest,
   SandboxManagedNetworkDestination,
   SandboxPreCommandFailureDetails,
+  SandboxStructuralProtectionFailureDetails,
 } from "./sandboxHelperProtocol.js";
 
 import type { SandboxViolation } from "../../core/sandboxPolicy.js";
@@ -15,6 +16,20 @@ export class SandboxPreCommandLaunchError extends Error {
   constructor(message: string, details: SandboxPreCommandFailureDetails) {
     super(message);
     this.name = "SandboxPreCommandLaunchError";
+    this.details = details;
+  }
+}
+
+export class SandboxStructuralProtectionError extends Error {
+  readonly code = "sandbox_structural_protection" as const;
+  readonly details: SandboxStructuralProtectionFailureDetails;
+
+  constructor(
+    message: string,
+    details: SandboxStructuralProtectionFailureDetails,
+  ) {
+    super(message);
+    this.name = "SandboxStructuralProtectionError";
     this.details = details;
   }
 }

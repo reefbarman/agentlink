@@ -71,6 +71,108 @@ describe("resolveBackgroundBackendRoute", () => {
     ).toMatchObject({ backend: "acp", reason: "explicit_provider" });
   });
 
+  it("falls back to native for images routed through an automatic default ACP agent", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      defaultAgent: "acp:claude",
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+
+    expect(
+      resolveBackgroundBackendRoute(settings, {
+        images: [
+          { name: "diagram.png", mimeType: "image/png", base64: "AA==" },
+        ],
+      }),
+    ).toEqual({
+      backend: "native",
+      fallback: {
+        reason: "images_unsupported",
+        reference: "acp:claude",
+      },
+    });
+  });
+
+  it("falls back to native for images routed through an automatic review ACP agent", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewAgent: "acp:claude",
+      acpAgents: [
+        { id: "claude", provider: "anthropic", command: "claude-agent-acp" },
+      ],
+    });
+
+    expect(
+      resolveBackgroundBackendRoute(
+        settings,
+        {
+          taskClass: "review_code",
+          images: [
+            { name: "diagram.png", mimeType: "image/png", base64: "AA==" },
+          ],
+        },
+        { foregroundProvider: "codex" },
+      ),
+    ).toEqual({
+      backend: "native",
+      fallback: {
+        reason: "images_unsupported",
+        reference: "acp:claude",
+      },
+    });
+  });
+
+  it("keeps same-provider review fall-through when images are present", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewAgent: "acp:claude",
+      acpAgents: [
+        { id: "claude", provider: "anthropic", command: "claude-agent-acp" },
+      ],
+    });
+
+    expect(
+      resolveBackgroundBackendRoute(
+        settings,
+        {
+          taskClass: "review_code",
+          images: [
+            { name: "diagram.png", mimeType: "image/png", base64: "AA==" },
+          ],
+        },
+        { foregroundProvider: "anthropic" },
+      ),
+    ).toEqual({ backend: "native" });
+  });
+
+  it("validates an automatic ACP review agent before image fallback", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      reviewAgent: "acp:claude",
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+
+    expect(() =>
+      resolveBackgroundBackendRoute(settings, {
+        taskClass: "review_code",
+        images: [
+          { name: "diagram.png", mimeType: "image/png", base64: "AA==" },
+        ],
+      }),
+    ).toThrow(/requires a provider/);
+  });
+
+  it("keeps explicit ACP routing authoritative when images are present", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+
+    expect(
+      resolveBackgroundBackendRoute(settings, {
+        provider: "acp:claude",
+        images: [
+          { name: "diagram.png", mimeType: "image/png", base64: "AA==" },
+        ],
+      }),
+    ).toMatchObject({ backend: "acp", reason: "explicit_provider" });
+  });
+
   it("explicit ACP provider beats native default", () => {
     const settings = normalizeBackgroundAgentSettings({
       acpAgents: [{ id: "claude", command: "claude-agent-acp" }],

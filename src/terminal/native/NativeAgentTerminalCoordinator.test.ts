@@ -16,6 +16,7 @@ import type {
 } from "../../core/capabilities/terminal.js";
 import { describe, expect, it, vi } from "vitest";
 
+import { INTERACTIVE_PROMPT_GRACE_MS } from "../interactivePromptWatchdog.js";
 import type { MaterializedHostShellBootstrap } from "../hostShellBootstrap.js";
 import { NativeAgentTerminalCoordinator } from "./NativeAgentTerminalCoordinator.js";
 import type { NodePtyModuleLoader } from "../deferredNodePtyLoader.js";
@@ -210,6 +211,8 @@ describe("NativeAgentTerminalCoordinator", () => {
       commandId: "native-command-1",
       generation: 1,
       command: "printf native",
+      isolateShellState: true,
+      onShellCommandEnd: expect.any(Function),
     });
     expect(test.starts[0]).toHaveBeenCalledOnce();
     expect(assigned).toHaveBeenCalledWith("native-agent-1");
@@ -574,12 +577,45 @@ describe("NativeAgentTerminalCoordinator", () => {
     await expect(pending).resolves.toMatchObject({ terminal_name: "Server" });
   });
 
-  it("reuses one persistent shell for compatible commands", async () => {
+  it("reuses one implicit shell while isolating each command's shell state", async () => {
     const test = harness();
     const first = test.coordinator.executeCommand({
       owner: undefined,
-      command: "typeset -g NATIVE_STATE=ready",
+      command: "export NATIVE_STATE=ready",
       cwd: "/workspace",
+    });
+    await flush();
+    await finish(test.processes[0], "", 0);
+    await first;
+
+    const second = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf ${NATIVE_STATE-unset}",
+      cwd: "/workspace",
+    });
+    await flush();
+    await finish(test.processes[1], "unset\r\n", 0);
+    await expect(second).resolves.toMatchObject({
+      terminal_id: "native-agent-1",
+      output: "unset",
+    });
+
+    expect(test.commands).toMatchObject([
+      { command: "export NATIVE_STATE=ready", isolateShellState: true },
+      { command: "printf ${NATIVE_STATE-unset}", isolateShellState: true },
+    ]);
+    expect(test.prepareShell).toHaveBeenCalledOnce();
+    expect(test.runtime.prepareChannel).toHaveBeenCalledOnce();
+    expect(test.runtime.createCommand).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves persistent-shell semantics for an explicitly named terminal", async () => {
+    const test = harness();
+    const first = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "export NATIVE_STATE=ready",
+      cwd: "/workspace",
+      terminal_name: "Persistent",
     });
     await flush();
     await finish(test.processes[0], "", 0);
@@ -589,17 +625,57 @@ describe("NativeAgentTerminalCoordinator", () => {
       owner: undefined,
       command: "printf $NATIVE_STATE",
       cwd: "/workspace",
+      terminal_name: "Persistent",
     });
     await flush();
     await finish(test.processes[1], "ready\r\n", 0);
-    await expect(second).resolves.toMatchObject({
-      terminal_id: "native-agent-1",
-      output: "ready",
-    });
+    await second;
 
-    expect(test.prepareShell).toHaveBeenCalledOnce();
-    expect(test.runtime.prepareChannel).toHaveBeenCalledOnce();
-    expect(test.runtime.createCommand).toHaveBeenCalledTimes(2);
+    expect(test.commands).toMatchObject([
+      { command: "export NATIVE_STATE=ready" },
+      { command: "printf $NATIVE_STATE" },
+    ]);
+    expect(test.commands.every((request) => !request.isolateShellState)).toBe(
+      true,
+    );
+  });
+
+  it("removes an explicitly targeted implicit terminal from unnamed reuse", async () => {
+    const test = harness();
+    const first = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf first",
+      cwd: "/workspace",
+    });
+    await flush();
+    await finish(test.processes[0], "first\r\n");
+    const firstResult = await first;
+
+    const targeted = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "export TARGETED_STATE=ready",
+      cwd: "/workspace",
+      terminal_id: firstResult.terminal_id,
+    });
+    await flush();
+    await finish(test.processes[1], "", 0);
+    await targeted;
+
+    const unrelated = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf ${TARGETED_STATE-unset}",
+      cwd: "/workspace",
+    });
+    await flush();
+    await finish(test.processes[2], "unset\r\n");
+    const unrelatedResult = await unrelated;
+
+    expect(unrelatedResult.terminal_id).toBe("native-agent-2");
+    expect(test.commands).toMatchObject([
+      { command: "printf first", isolateShellState: true },
+      { command: "export TARGETED_STATE=ready" },
+      { command: "printf ${TARGETED_STATE-unset}", isolateShellState: true },
+    ]);
   });
 
   it("creates another shell for incompatible implicit cwd or environment", async () => {
@@ -865,6 +941,162 @@ describe("NativeAgentTerminalCoordinator", () => {
         terminalId: "native-agent-1",
       }),
     ).toBe(false);
+  });
+
+  it("terminates a foreground native command after a high-confidence prompt stays inactive", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const resultPromise = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "mise test",
+        cwd: "/workspace",
+      });
+      await flush();
+      const process = test.processes[0];
+      process.readyDeferred.resolve({ pid: 2, pgid: 2, backend: "native-pty" });
+      await flush();
+      process.terminate.mockImplementation(() => {
+        process.completionDeferred.resolve({
+          exitCode: 143,
+          signal: 15,
+          timedOut: false,
+        });
+        return true;
+      });
+
+      process.emit({
+        type: "data",
+        data: "mise config files are not trusted. Trust them? Yes/No/All ",
+      });
+      await vi.advanceTimersByTimeAsync(INTERACTIVE_PROMPT_GRACE_MS - 1);
+      expect(process.terminate).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(process.terminate).toHaveBeenCalledOnce();
+
+      const result = await resultPromise;
+      expect(result).toMatchObject({
+        exit_code: 143,
+        termination_reason: "interactive_prompt",
+        interactive_prompt: {
+          kind: "confirmation",
+          confidence: "high",
+          evidence: "mise config files are not trusted. Trust them? Yes/No/All",
+        },
+        is_running: false,
+      });
+      expect(
+        test.coordinator.getBackgroundState({
+          owner: undefined,
+          terminalId: result.terminal_id,
+        }),
+      ).toMatchObject({
+        state: "interactive_prompt",
+        termination_reason: "interactive_prompt",
+        interactive_prompt: {
+          evidence: "mise config files are not trusted. Trust them? Yes/No/All",
+        },
+      });
+
+      test.channelRequests[0].onClosed();
+      expect(
+        test.coordinator.getRecentlyClosedTerminals({ owner: undefined }),
+      ).toEqual([
+        expect.objectContaining({
+          id: result.terminal_id,
+          state: "interactive_prompt",
+          termination_reason: "interactive_prompt",
+          interactive_prompt: expect.objectContaining({
+            evidence:
+              "mise config files are not trusted. Trust them? Yes/No/All",
+          }),
+        }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the foreground native watchdog at shell command-end before prompt rendering", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const resultPromise = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "prints-prompt-like-tail",
+        cwd: "/workspace",
+      });
+      await flush();
+      const process = test.processes[0];
+      process.readyDeferred.resolve({ pid: 2, pgid: 2, backend: "native-pty" });
+      await flush();
+
+      process.emit({ type: "data", data: "Continue? " });
+      await vi.advanceTimersByTimeAsync(INTERACTIVE_PROMPT_GRACE_MS - 1);
+      test.commands[0].onShellCommandEnd?.();
+      await vi.advanceTimersByTimeAsync(INTERACTIVE_PROMPT_GRACE_MS);
+      expect(process.terminate).not.toHaveBeenCalled();
+
+      process.completionDeferred.resolve({ exitCode: 0, timedOut: false });
+      await expect(resultPromise).resolves.toMatchObject({ exit_code: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the foreground native watchdog when later output clears the prompt", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const resultPromise = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "interactive-native",
+        cwd: "/workspace",
+      });
+      await flush();
+      const process = test.processes[0];
+      process.readyDeferred.resolve({ pid: 2, pgid: 2, backend: "native-pty" });
+      await flush();
+
+      process.emit({ type: "data", data: "Continue? " });
+      await vi.advanceTimersByTimeAsync(INTERACTIVE_PROMPT_GRACE_MS - 100);
+      process.emit({ type: "data", data: "\rWorking...\n" });
+      await vi.advanceTimersByTimeAsync(INTERACTIVE_PROMPT_GRACE_MS);
+      expect(process.terminate).not.toHaveBeenCalled();
+
+      process.completionDeferred.resolve({ exitCode: 0, timedOut: false });
+      await expect(resultPromise).resolves.toMatchObject({ exit_code: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves background native prompts observation-only", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      await test.coordinator.executeCommand({
+        owner: undefined,
+        command: "interactive-native-server",
+        cwd: "/workspace",
+        background: true,
+      });
+      const process = test.processes[0];
+      process.readyDeferred.resolve({ pid: 2, pgid: 2, backend: "native-pty" });
+      await flush();
+      process.emit({ type: "data", data: "Continue? " });
+
+      await vi.advanceTimersByTimeAsync(INTERACTIVE_PROMPT_GRACE_MS * 2);
+      expect(process.terminate).not.toHaveBeenCalled();
+      expect(
+        test.coordinator.getBackgroundState({
+          owner: undefined,
+          terminalId: "native-agent-1",
+        }),
+      ).toMatchObject({ is_running: true, state: "running" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("supports background output, interrupt, and deferred cleanup", async () => {

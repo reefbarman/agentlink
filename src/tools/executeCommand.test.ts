@@ -2,6 +2,10 @@ import * as fs from "fs";
 import * as os from "node:os";
 
 import {
+  SandboxPreCommandLaunchError,
+  SandboxStructuralProtectionError,
+} from "../terminal/sandbox/SandboxRuntimeProvider.js";
+import {
   SandboxPreparationDriftError,
   TerminalTargetRecoveryError,
 } from "../core/capabilities/terminalTargetError.js";
@@ -13,7 +17,6 @@ import {
 
 import { AgentTerminalProviderRouter } from "../terminal/sandbox/AgentTerminalProviderRouter.js";
 import { SandboxCapabilityLaunchError } from "../core/capabilities/SandboxCapabilityLaunchError.js";
-import { SandboxPreCommandLaunchError } from "../terminal/sandbox/SandboxRuntimeProvider.js";
 import { evaluateCommandRulePolicy } from "../approvals/commandRulePolicy.js";
 
 vi.mock("node:os", async (importOriginal) => {
@@ -709,6 +712,79 @@ describe("handleExecuteCommand", () => {
       command_modified: true,
       command: "npm test -- --runInBand",
       security: { auditId: "audit-edited" },
+    });
+  });
+
+  it("reports the edited effective command when native shell startup times out", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const baseSecurity = {
+      auditId: "audit-edit-timeout",
+      route: "native" as const,
+      confinement: "native-unsandboxed" as const,
+      routeReason: "verified-local-macos" as const,
+      executionSurface: "agentlink-native" as const,
+      requiredAuthority: "native-agent" as const,
+      approvalPolicySnapshot: "on-request" as const,
+      approvalReviewerSnapshot: "user" as const,
+      executionPresetSnapshot: "native-manual" as const,
+      commandApprovalPolicySnapshot: "manual" as const,
+      executionPolicy: "native-legacy-v1" as const,
+      preparedAt: 100,
+    };
+    const firstDispose = vi.fn();
+    const prepareExecution = vi
+      .fn()
+      .mockResolvedValueOnce({
+        security: baseSecurity,
+        execute: vi.fn(),
+        dispose: firstDispose,
+      })
+      .mockResolvedValueOnce({
+        security: { ...baseSecurity, auditId: "audit-edited-timeout" },
+        execute: vi.fn(async () => {
+          throw new Error("Native Agent shell integration startup timed out");
+        }),
+        dispose: vi.fn(),
+      });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm test" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      {
+        isRecentlyApproved: () => false,
+        enqueueCommandApproval: vi.fn(() => ({
+          promise: Promise.resolve({
+            decision: "edit",
+            editedCommand: "npm test -- --runInBand",
+          }),
+        })),
+      } as never,
+      "session-edited-native-startup-timeout",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "manual",
+      },
+    );
+
+    expect(firstDispose).toHaveBeenCalledOnce();
+    expect(textPayload(result)).toMatchObject({
+      status: "retry_required",
+      error_code: "native_shell_startup_timeout",
+      command: "npm test -- --runInBand",
+      original_command: "npm test",
+      command_modified: true,
+      command_sent: false,
+      process_launched: false,
+      retry_guidance: { code: "native_shell_startup_timeout" },
     });
   });
 
@@ -3563,6 +3639,12 @@ describe("handleExecuteCommand", () => {
         "Post https://api.github.com/graphql: tls: failed to verify certificate: x509: OSStatus -26276",
       code: "managed_network_tls_trust",
     },
+    {
+      name: "proxy-unaware Node DNS failure",
+      command: "node fetch-package.mjs",
+      output: "TypeError: fetch failed: getaddrinfo ENOTFOUND unpkg.com",
+      code: "managed_network_proxy_unaware_dns",
+    },
   ])(
     "attaches bounded guidance after a managed-network $name without retrying natively",
     async ({ command, output, code }) => {
@@ -3651,6 +3733,18 @@ describe("handleExecuteCommand", () => {
     {
       command: "gh api /user & curl https://example.com",
       output: "x509: certificate signed by unknown authority",
+    },
+    {
+      command: "npm run fetch-fixture",
+      output: "TypeError: fetch failed: getaddrinfo ENOTFOUND unpkg.com",
+    },
+    {
+      command: "node app.mjs",
+      output: "application log: dependency ENOTFOUND but no fetch failure",
+    },
+    {
+      command: "node --test",
+      output: `fixture: TypeError: fetch failed${"x".repeat(1_100)}getaddrinfo ENOTFOUND fixture.invalid`,
     },
   ])(
     "does not attach managed transport guidance to unrelated failure: $command",
@@ -7717,6 +7811,97 @@ describe("handleExecuteCommand", () => {
     });
   });
 
+  it("returns safe cleanup guidance for a protected Git alias before launch", async () => {
+    executeCommand.mockRejectedValue(
+      new SandboxStructuralProtectionError(
+        "structurally protected tree contains a symbolic link",
+        {
+          kind: "symbolic_link",
+          path: "/workspace/.git/gcl-lint-worktree-123/alias",
+        },
+      ),
+    );
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "git status --short", cwd: "/workspace" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-structural-protection",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      status: "retry_required",
+      error_code: "sandbox_structural_protection",
+      protected_path: "/workspace/.git/gcl-lint-worktree-123/alias",
+      alias_kind: "symbolic_link",
+      command_sent: false,
+      process_launched: false,
+      retry_safe: true,
+      failure_stage: "launch",
+      retry_guidance: {
+        code: "sandbox_structural_protection",
+        automatic_retry: false,
+        options: [
+          {
+            action: "inspect_and_remove_unexpected_node",
+            protected_path: "/workspace/.git/gcl-lint-worktree-123/alias",
+            alias_kind: "symbolic_link",
+            same_command_after_cleanup: true,
+            trusted_host_action_required: true,
+          },
+        ],
+      },
+    });
+  });
+
+  it("preserves the reported protected file in hard-link cleanup guidance", async () => {
+    executeCommand.mockRejectedValue(
+      new SandboxStructuralProtectionError(
+        "structurally protected file has unexpected hard-link count 2",
+        {
+          kind: "hard_link",
+          path: "/workspace/.git/refs/heads/main",
+        },
+      ),
+    );
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "git status --short", cwd: "/workspace" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-structural-hard-link",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      retry_guidance: {
+        code: "sandbox_structural_protection",
+        automatic_retry: false,
+        options: [
+          {
+            action: "inspect_hard_links_and_remove_extra_link",
+            protected_file: "/workspace/.git/refs/heads/main",
+            alias_kind: "hard_link",
+            preserve_reported_file: true,
+            same_command_after_cleanup: true,
+            trusted_host_action_required: true,
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(textPayload(result))).toContain(
+      "Do not delete the reported protected file itself",
+    );
+  });
+
   it("returns safe environment-size guidance for a pre-command launch failure", async () => {
     executeCommand.mockRejectedValue(
       new SandboxPreCommandLaunchError("environment too large", {
@@ -7798,6 +7983,144 @@ describe("handleExecuteCommand", () => {
     expect(executeCommand).toHaveBeenCalledOnce();
     expect(JSON.stringify(payload)).not.toContain("secret grant token");
     expect(JSON.stringify(payload)).not.toContain("/private/path");
+  });
+
+  it("returns bounded pnpm store mismatch guidance with detected stores", async () => {
+    executeCommand.mockResolvedValue({
+      exit_code: 1,
+      output: [
+        "ERR_PNPM_UNEXPECTED_STORE Unexpected store location",
+        'The dependencies at "/workspace/node_modules" are currently linked from the store at "/workspace/.agentlink-tmp/pnpm-store/v10".',
+        'pnpm now wants to link dependencies from the store at "/workspace/.pnpm-store/v3".',
+      ].join("\n"),
+      output_captured: true,
+      output_complete: true,
+      output_finalized: true,
+      terminal_id: "term-pnpm-store",
+      command_sent: true,
+      process_launched: true,
+    });
+
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const result = await handleExecuteCommand(
+      { command: "pnpm add zod", cwd: "/workspace" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-pnpm-store-mismatch",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      exit_code: 1,
+      retry_guidance: {
+        code: "pnpm_store_mismatch",
+        automatic_retry: false,
+        options: [
+          {
+            action: "inspect_store_configuration",
+            detected_existing_store: "/workspace/.agentlink-tmp/pnpm-store/v10",
+            requested_store: "/workspace/.pnpm-store/v3",
+          },
+          {
+            action: "choose_store_resolution",
+            destructive_cleanup_recommended: false,
+          },
+        ],
+      },
+    });
+  });
+
+  it("does not attach pnpm-store guidance to project-script output", async () => {
+    executeCommand.mockResolvedValue({
+      exit_code: 1,
+      output:
+        "fixture text: ERR_PNPM_UNEXPECTED_STORE currently linked from the store at /tmp/untrusted",
+      output_captured: true,
+      output_complete: true,
+      output_finalized: true,
+      terminal_id: "term-pnpm-fixture",
+      command_sent: true,
+      process_launched: true,
+    });
+
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const result = await handleExecuteCommand(
+      { command: "npm run print-pnpm-fixture", cwd: "/workspace" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-pnpm-fixture",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(textPayload(result)).not.toHaveProperty("retry_guidance");
+  });
+
+  it.each(["pnpm run fixture", "pnpm exec fixture", "pnpm dlx fixture"])(
+    "does not attach pnpm-store guidance to pass-through command: %s",
+    async (command) => {
+      executeCommand.mockResolvedValue({
+        exit_code: 1,
+        output:
+          "ERR_PNPM_UNEXPECTED_STORE currently linked from the store at /tmp/untrusted",
+        output_captured: true,
+        output_complete: true,
+        output_finalized: true,
+        terminal_id: "term-pnpm-pass-through",
+        command_sent: true,
+        process_launched: true,
+      });
+
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const result = await handleExecuteCommand(
+        { command, cwd: "/workspace" },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-pnpm-pass-through",
+        undefined,
+        { terminalProvider },
+      );
+
+      expect(textPayload(result)).not.toHaveProperty("retry_guidance");
+    },
+  );
+
+  it("returns structured retry guidance when native shell startup times out before launch", async () => {
+    executeCommand.mockRejectedValue(
+      new Error("Native Agent shell integration startup timed out"),
+    );
+
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const result = await handleExecuteCommand(
+      { command: "npm run telemetry:tools -- --help" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-native-startup-timeout",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      status: "retry_required",
+      error_code: "native_shell_startup_timeout",
+      command: "npm run telemetry:tools -- --help",
+      command_sent: false,
+      process_launched: false,
+      retry_safe: true,
+      failure_stage: "launch",
+      retry_guidance: {
+        code: "native_shell_startup_timeout",
+        automatic_retry: false,
+        options: [
+          { action: "retry_same_command", same_command: true },
+          {
+            action: "reload_window_then_retry",
+            same_command_after_reload: true,
+          },
+        ],
+      },
+    });
   });
 
   it("returns structured retry guidance when sandbox PTY launch fails twice", async () => {

@@ -75,8 +75,9 @@ describe("removeAnsiColors", () => {
     expect(removeAnsiColors("\x1B[31mred\x1B[0m")).toBe("red");
   });
 
-  it("removes multi-parameter SGR codes", () => {
+  it("removes multi-parameter and colon-delimited SGR codes", () => {
     expect(removeAnsiColors("\x1B[1;32mbold green\x1B[0m")).toBe("bold green");
+    expect(removeAnsiColors("\x1B[38:2:10:20:30mrgb\x1B[0m")).toBe("rgb");
   });
 
   it("leaves plain text untouched", () => {
@@ -94,9 +95,18 @@ describe("stripAnsi", () => {
     expect(stripAnsi("plain text")).toBe("plain text");
   });
 
-  it("removes remaining CSI sequences not caught by specific strippers", () => {
-    // Some arbitrary CSI sequence
+  it("removes complete ECMA-48 CSI and ESC control sequences", () => {
     expect(stripAnsi("\x1B[99zhello")).toBe("hello");
+    expect(stripAnsi("\x1B[?1h\x1B=hello\x1B>\x1B[?1l")).toBe("hello");
+    expect(stripAnsi("\x1B(0hello\x1B(B")).toBe("hello");
+    expect(stripAnsi("\x9B?1hhello\x9B?1l")).toBe("hello");
+  });
+
+  it("consumes OSC and control-string payloads instead of leaking metadata", () => {
+    expect(stripAnsi("\x1B]custom-selector;secret\x07json")).toBe("json");
+    expect(stripAnsi("\x1BP1;2|payload\x1B\\json")).toBe("json");
+    expect(stripAnsi("\x1B_hidden payload\x1B\\json")).toBe("json");
+    expect(stripAnsi("\x90payload\x9Cjson")).toBe("json");
   });
 });
 
@@ -105,6 +115,21 @@ describe("cleanTerminalOutput", () => {
     expect(cleanTerminalOutput("\x1B[31mhello\x1B[0m\r\nworld")).toBe(
       "hello\nworld",
     );
+  });
+
+  it("keeps only the final lone-carriage-return redraw", () => {
+    expect(cleanTerminalOutput("progress 10%\rprogress 90%\rresult")).toBe(
+      "result",
+    );
+    expect(cleanTerminalOutput("first\r\nspin\rfinished\r\nlast")).toBe(
+      "first\nfinished\nlast",
+    );
+  });
+
+  it("cleans Unity JSON output wrapped in terminal mode sequences", () => {
+    expect(
+      cleanTerminalOutput('\x1B[?1h\x1B=\r{"installed":true}\r\n\x1B[?1l\x1B>'),
+    ).toBe('{"installed":true}');
   });
 
   it("strips trailing % (zsh PROMPT_EOL_MARK)", () => {

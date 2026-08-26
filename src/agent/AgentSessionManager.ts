@@ -10303,7 +10303,9 @@ export class AgentSessionManager {
     const backendFallbackReason = configuredReviewDetail
       ? `configured review model target (${configuredReviewDetail})`
       : backendRoute.fallback
-        ? `configured ACP agent ${backendRoute.fallback.reference} was unavailable; ${route.routingReason}`
+        ? backendRoute.fallback.reason === "images_unsupported"
+          ? `configured ACP agent ${backendRoute.fallback.reference} does not support image handoff; routed to native background agent; ${route.routingReason}`
+          : `configured ACP agent ${backendRoute.fallback.reference} was unavailable; ${route.routingReason}`
         : route.routingReason;
     const backendFallbackUsed =
       Boolean(backendRoute.fallback) || route.fallbackUsed;

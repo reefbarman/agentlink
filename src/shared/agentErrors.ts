@@ -24,6 +24,7 @@ export interface AgentRetryDecision {
   category: AgentRetryCategory;
   retryAfterMs?: number;
   status?: number;
+  retryLayer?: "request" | "stream";
 }
 
 /** Walk the error cause chain and join unique messages into one string. */
@@ -183,10 +184,28 @@ export function getAgentRetryDecision(err: unknown): AgentRetryDecision {
   const headers = chain
     .map((value) => getObjectProperty(value, "headers"))
     .find((value) => value !== undefined);
-  const shouldRetry = getHeader(headers, "x-should-retry")?.toLowerCase();
+  const shouldRetryHeader = getHeader(headers, "x-should-retry")?.toLowerCase();
+  const structuredShouldRetry = chain
+    .map((value) => getObjectProperty(value, "shouldRetry"))
+    .find((value): value is boolean => typeof value === "boolean");
+  const shouldRetry =
+    shouldRetryHeader === "true"
+      ? true
+      : shouldRetryHeader === "false"
+        ? false
+        : structuredShouldRetry;
   const retryAfterMs = parseRetryAfterMs(headers);
+  const structuredRetryable = chain.some(
+    (value) => getObjectProperty(value, "retryable") === true,
+  );
+  const retryLayer = chain
+    .map((value) => getObjectProperty(value, "retryLayer"))
+    .find(
+      (value): value is "request" | "stream" =>
+        value === "request" || value === "stream",
+    );
 
-  if (shouldRetry === "false") {
+  if (shouldRetry === false) {
     return { retryable: false, category: "unknown", status };
   }
 
@@ -230,12 +249,14 @@ export function getAgentRetryDecision(err: unknown): AgentRetryDecision {
     (status !== undefined && status >= 500);
   return {
     retryable:
-      shouldRetry === "true" ||
+      shouldRetry === true ||
       retryableStatus ||
+      structuredRetryable ||
       isAgentRetryableErrorMessage(message),
     category,
     retryAfterMs,
     status,
+    ...(retryLayer ? { retryLayer } : {}),
   };
 }
 

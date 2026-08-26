@@ -830,6 +830,62 @@ test("allows host Git ref replacement before late structural validation", async 
   ]);
 });
 
+test("returns typed structural failure when an integrity root also has a hard-link alias", async (t) => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "al-i-"));
+  const gitRoot = path.join(fixture, ".git");
+  const config = path.join(gitRoot, "config");
+  await mkdir(gitRoot);
+  await writeFile(config, "[core]\n");
+  await link(config, path.join(fixture, "config-alias"));
+
+  const harness = createHarness({
+    dependencyOverrides: {
+      async prepareProtectedRoots(roots) {
+        harness.calls.order.push("prepare");
+        harness.calls.prepared.push(roots);
+        return prepareProtectedRoots(roots);
+      },
+    },
+  });
+  t.after(async () => {
+    harness.helper.close();
+    await rm(fixture, { recursive: true, force: true });
+  });
+
+  harness.send(
+    launch({
+      cwd: fixture,
+      environment: {
+        HOME: path.join(fixture, "home"),
+        TMPDIR: path.join(fixture, "tmp"),
+        TERM: "xterm-256color",
+      },
+      filesystem: {
+        denyRead: [],
+        allowRead: [fixture],
+        allowWrite: [fixture],
+        denyWrite: [gitRoot],
+      },
+      protectedRoots: [config],
+      structurallyProtectedRoots: [gitRoot],
+    }),
+  );
+  await harness.waitFor(() => harness.frames()[0]?.type === "error");
+
+  assert.equal(harness.frames()[0].code, "sandbox_structural_protection");
+  assert.deepEqual(harness.frames()[0].details, {
+    kind: "hard_link",
+    path: config,
+  });
+  assert.equal(harness.calls.spawn.length, 0);
+  assert.deepEqual(harness.calls.order, [
+    "initialize",
+    "wrap",
+    "load-node-pty",
+    "prepare",
+  ]);
+});
+
 test("fails closed when structural validation finds a Git hard-link alias", async (t) => {
   const fixture = await mkdtemp(path.join(tmpdir(), "al-a-"));
   const gitRoot = path.join(fixture, ".git");
@@ -876,6 +932,11 @@ test("fails closed when structural validation finds a Git hard-link alias", asyn
     harness.frames()[0].message,
     /structurally protected file has unexpected hard-link count 2/,
   );
+  assert.equal(harness.frames()[0].code, "sandbox_structural_protection");
+  assert.deepEqual(harness.frames()[0].details, {
+    kind: "hard_link",
+    path: ref,
+  });
   assert.equal(harness.calls.spawn.length, 0);
   assert.deepEqual(harness.calls.order, [
     "initialize",

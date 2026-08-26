@@ -9,6 +9,7 @@ import {
 } from "./sandboxHelperProtocol.js";
 import {
   SandboxPreCommandLaunchError,
+  SandboxStructuralProtectionError,
   type SandboxCommandDisposable,
   type SandboxCommandEvent,
   type SandboxCommandExit,
@@ -197,11 +198,13 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
       return;
     }
     if (event.type === "error") {
-      this.fail(
+      const error =
         event.code === "sandbox_environment_too_large" && event.details
           ? new SandboxPreCommandLaunchError(event.message, event.details)
-          : new Error(event.message),
-      );
+          : event.code === "sandbox_structural_protection" && event.details
+            ? new SandboxStructuralProtectionError(event.message, event.details)
+            : new Error(event.message);
+      this.fail(error);
       return;
     }
     if (event.type === "exit") {

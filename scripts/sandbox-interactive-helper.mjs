@@ -1,4 +1,10 @@
 import {
+  StructuralProtectionError,
+  prepareProtectedRoots,
+  revalidateProtectedRoots,
+  validateStructurallyProtectedRoots,
+} from "./sandbox-protected-roots.mjs";
+import {
   assertProtectedRootsCovered,
   bindProxyCredentialsToRuntimeDescriptor,
   buildSandboxEnvironment,
@@ -8,11 +14,6 @@ import {
   isSandboxRuntimeDescriptor,
   parseSandboxRuntimeRequest,
 } from "./sandbox-runtime-helper.mjs";
-import {
-  prepareProtectedRoots,
-  revalidateProtectedRoots,
-  validateStructurallyProtectedRoots,
-} from "./sandbox-protected-roots.mjs";
 
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
@@ -279,14 +280,23 @@ export function calculateSandboxExecSize(
 }
 
 function preCommandFailureFrame(error) {
-  return error instanceof SandboxPreCommandFailure
-    ? {
-        type: "error",
-        message: errorMessage(error),
-        code: "sandbox_environment_too_large",
-        details: error.failure,
-      }
-    : { type: "error", message: errorMessage(error) };
+  if (error instanceof SandboxPreCommandFailure) {
+    return {
+      type: "error",
+      message: errorMessage(error),
+      code: "sandbox_environment_too_large",
+      details: error.failure,
+    };
+  }
+  if (error instanceof StructuralProtectionError) {
+    return {
+      type: "error",
+      message: errorMessage(error),
+      code: error.code,
+      details: error.details,
+    };
+  }
+  return { type: "error", message: errorMessage(error) };
 }
 
 function classifyViolation(line) {

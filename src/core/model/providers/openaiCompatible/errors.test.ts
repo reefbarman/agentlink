@@ -6,6 +6,7 @@ import {
   createOpenAiCompatibleHttpError,
   createOpenAiCompatibleInBandError,
   parseRetryAfterMs,
+  parseShouldRetry,
   toOpenAiCompatibleRequestError,
 } from "./errors.js";
 
@@ -47,6 +48,27 @@ describe("OpenAI-compatible errors", () => {
     },
   );
 
+  it.each([
+    ["true", true],
+    ["false", false],
+  ])(
+    "preserves x-should-retry %s as structured metadata",
+    async (value, expected) => {
+      const error = await createOpenAiCompatibleHttpError(
+        new Response("provider failed", {
+          status: 503,
+          headers: { "x-should-retry": value },
+        }),
+      );
+
+      expect(error).toMatchObject({
+        status: 503,
+        shouldRetry: expected,
+        retryable: expected,
+      });
+    },
+  );
+
   it("bounds HTTP error bodies by bytes and redacts secrets", async () => {
     const secret = "sëcret-key";
     const error = await createOpenAiCompatibleHttpError(
@@ -59,6 +81,18 @@ describe("OpenAI-compatible errors", () => {
     expect(
       new TextEncoder().encode(String(error.body)).byteLength,
     ).toBeLessThanOrEqual(18);
+  });
+
+  it("parses explicit retry directives", () => {
+    expect(parseShouldRetry(new Headers({ "x-should-retry": " TRUE " }))).toBe(
+      true,
+    );
+    expect(parseShouldRetry(new Headers({ "x-should-retry": "false" }))).toBe(
+      false,
+    );
+    expect(parseShouldRetry(new Headers({ "x-should-retry": "later" }))).toBe(
+      undefined,
+    );
   });
 
   it("parses Retry-After milliseconds, seconds, and HTTP dates", () => {

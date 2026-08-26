@@ -26,9 +26,12 @@ import type {
 } from "../../core/sandboxPolicy.js";
 import type { TerminalDimensions } from "../../core/terminalProtocol.js";
 import {
-  detectInteractivePrompt,
-  INTERACTIVE_PROMPT_MAX_INPUT_CHARS,
-} from "../interactivePromptDetector.js";
+  clearInteractivePromptWatchdog,
+  createInteractivePromptWatchdog,
+  INTERACTIVE_PROMPT_GRACE_MS,
+  observeInteractivePrompt,
+  type InteractivePromptWatchdog,
+} from "../interactivePromptWatchdog.js";
 import {
   cleanTerminalOutput,
   cleanTerminalRawOutput,
@@ -39,6 +42,7 @@ import type {
 } from "./sandboxHelperProtocol.js";
 import {
   SandboxPreCommandLaunchError,
+  SandboxStructuralProtectionError,
   type SandboxCommandProcess,
   type SandboxRuntimeProvider,
 } from "./SandboxRuntimeProvider.js";
@@ -61,7 +65,7 @@ const MAX_DETACHED_IMPLICIT_CHANNELS_PER_OWNER = 8;
 const MAX_IMPLICIT_ADMISSION_WAITERS_PER_OWNER = 16;
 const IMPLICIT_ADMISSION_TIMEOUT_MS = 30_000;
 const EXHAUSTED_COMMAND_LABEL_LIMIT = 60;
-export const SANDBOX_INTERACTIVE_PROMPT_GRACE_MS = 1_500;
+export const SANDBOX_INTERACTIVE_PROMPT_GRACE_MS = INTERACTIVE_PROMPT_GRACE_MS;
 
 export interface ActiveSandboxLaunch {
   helperRequest: SandboxHelperLaunchRequest;
@@ -130,10 +134,7 @@ interface ManagedSandboxChannel {
     > & {
       auditId?: string;
     };
-    interactivePromptWatchdog?: {
-      outputTail: string;
-      timer?: ReturnType<typeof setTimeout>;
-    };
+    interactivePromptWatchdog?: InteractivePromptWatchdog;
     detachForeground?: () => void;
     background: boolean;
     /** Implicit channel released from the foreground pool while this command runs. */
@@ -447,7 +448,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       },
       interactivePromptWatchdog: options.background
         ? undefined
-        : { outputTail: "" },
+        : createInteractivePromptWatchdog(),
       detachForeground: options.background ? undefined : detachForeground,
       background: options.background === true,
       detachedFromPool: false,
@@ -481,12 +482,27 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     );
 
     if (options.background) {
+      try {
+        await process.ready;
+      } catch (error) {
+        if (
+          error instanceof SandboxPreCommandLaunchError ||
+          error instanceof SandboxStructuralProtectionError
+        ) {
+          this.reclaimFailedLaunchChannel(channel);
+        }
+        void completion.catch((completionError) => {
+          if (completionError !== error) {
+            this.log?.(
+              `[sandbox-terminal] Background launch completion also failed: ${completionError}`,
+            );
+          }
+        });
+        throw error;
+      }
       this.detachImplicitFromPool(channel);
       options.onCommandFinalizationDeferred?.();
       void completion.catch((error) => {
-        if (error instanceof SandboxPreCommandLaunchError) {
-          this.reclaimFailedLaunchChannel(channel);
-        }
         this.log?.(`[sandbox-terminal] Background command failed: ${error}`);
       });
       return this.backgroundResult(channel, commandId, activeLaunch.metadata);
@@ -556,7 +572,10 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
           : []),
       ]);
     } catch (error) {
-      if (error instanceof SandboxPreCommandLaunchError) {
+      if (
+        error instanceof SandboxPreCommandLaunchError ||
+        error instanceof SandboxStructuralProtectionError
+      ) {
         this.reclaimFailedLaunchChannel(channel);
       }
       throw error;
@@ -577,7 +596,10 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       this.detachImplicitFromPool(channel);
       options.onCommandFinalizationDeferred?.();
       void completion.catch((error) => {
-        if (error instanceof SandboxPreCommandLaunchError) {
+        if (
+          error instanceof SandboxPreCommandLaunchError ||
+          error instanceof SandboxStructuralProtectionError
+        ) {
           this.reclaimFailedLaunchChannel(channel);
         }
         this.log?.(`[sandbox-terminal] Background command failed: ${error}`);
@@ -1337,21 +1359,13 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     ) {
       return;
     }
-    this.clearInteractivePromptWatchdog(active);
-    watchdog.outputTail = `${watchdog.outputTail}${event.data}`.slice(
-      -INTERACTIVE_PROMPT_MAX_INPUT_CHARS,
-    );
-    const detection = detectInteractivePrompt(watchdog.outputTail);
-    if (detection?.confidence !== "high") return;
-
-    watchdog.timer = setTimeout(() => {
+    observeInteractivePrompt(watchdog, event.data, (detection) => {
       if (
         channel.active !== active ||
         active.interactivePromptWatchdog !== watchdog
       ) {
         return;
       }
-      watchdog.timer = undefined;
       channel.latestTermination = {
         commandId: active.commandId,
         reason: "interactive_prompt",
@@ -1365,17 +1379,13 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
           `[sandbox-terminal] Failed to terminate command ${active.commandId} after interactive prompt detection`,
         );
       }
-    }, SANDBOX_INTERACTIVE_PROMPT_GRACE_MS);
-    watchdog.timer.unref();
+    });
   }
 
   private clearInteractivePromptWatchdog(
     active: ManagedSandboxChannel["active"] | undefined,
   ): void {
-    const watchdog = active?.interactivePromptWatchdog;
-    if (!watchdog?.timer) return;
-    clearTimeout(watchdog.timer);
-    watchdog.timer = undefined;
+    clearInteractivePromptWatchdog(active?.interactivePromptWatchdog);
   }
 
   private disableInteractivePromptWatchdog(

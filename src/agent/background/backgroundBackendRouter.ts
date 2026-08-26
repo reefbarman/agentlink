@@ -18,7 +18,7 @@ export type BackgroundBackendRoute =
   | {
       backend: "native";
       fallback?: {
-        reason: "unavailable_reference";
+        reason: "unavailable_reference" | "images_unsupported";
         reference: string;
       };
       /**
@@ -40,7 +40,10 @@ export type BackgroundBackendRoute =
 
 export function resolveBackgroundBackendRoute(
   settings: BackgroundAgentSettings,
-  request: Pick<SpawnBackgroundRequest, "model" | "provider" | "taskClass">,
+  request: Pick<
+    SpawnBackgroundRequest,
+    "images" | "model" | "provider" | "taskClass"
+  >,
   context: {
     foregroundProvider?: string;
     /**
@@ -95,15 +98,6 @@ export function resolveBackgroundBackendRoute(
       return { backend: "native", configuredReviewEffort: target.effort };
     }
     if (target.kind === "acp") {
-      if (context.unavailableReferences?.has(target.reference)) {
-        return {
-          backend: "native",
-          fallback: {
-            reason: "unavailable_reference",
-            reference: target.reference,
-          },
-        };
-      }
       const reviewAgent = resolveAcpBackgroundAgent(settings, target.reference);
       if (!reviewAgent.provider) {
         throw new Error(
@@ -115,6 +109,24 @@ export function resolveBackgroundBackendRoute(
       // through to AgentLink's native cross-provider model router.
       if (context.foregroundProvider?.toLowerCase() === reviewAgent.provider) {
         return { backend: "native" };
+      }
+      if (context.unavailableReferences?.has(target.reference)) {
+        return {
+          backend: "native",
+          fallback: {
+            reason: "unavailable_reference",
+            reference: target.reference,
+          },
+        };
+      }
+      if (request.images?.length) {
+        return {
+          backend: "native",
+          fallback: {
+            reason: "images_unsupported",
+            reference: target.reference,
+          },
+        };
       }
       return {
         backend: "acp",
@@ -143,10 +155,23 @@ export function resolveBackgroundBackendRoute(
   }
 
   if (isAcpBackgroundAgentReference(settings.defaultAgent)) {
+    const defaultAgent = resolveAcpBackgroundAgent(
+      settings,
+      settings.defaultAgent,
+    );
+    if (request.images?.length) {
+      return {
+        backend: "native",
+        fallback: {
+          reason: "images_unsupported",
+          reference: settings.defaultAgent,
+        },
+      };
+    }
     return {
       backend: "acp",
       reference: settings.defaultAgent,
-      agent: resolveAcpBackgroundAgent(settings, settings.defaultAgent),
+      agent: defaultAgent,
       reason: "default_agent",
     };
   }

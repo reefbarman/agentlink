@@ -2025,9 +2025,11 @@ export class AgentEngine {
           // prevents one failure class from consuming the other's budget.
           const retry = getAgentRetryDecision(streamErr);
           const isStreamFailure =
-            firstTokenReceived ||
-            (Boolean(transportMonitor?.hasTransportActivity) &&
-              retry.status === undefined);
+            retry.retryLayer === "stream" ||
+            (retry.retryLayer !== "request" &&
+              (firstTokenReceived ||
+                (Boolean(transportMonitor?.hasTransportActivity) &&
+                  retry.status === undefined)));
           const retryLayer = isStreamFailure ? "stream" : "request";
           const currentRetryCount = isStreamFailure
             ? streamRetryCount

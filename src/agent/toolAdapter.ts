@@ -773,7 +773,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "spawn_background_agent",
     description:
-      "Spawn a background agent for work that genuinely benefits from running in parallel: research that cannot be answered with a few targeted reads, a non-conflicting workstream large enough to shorten time to the goal, an alternate debug hypothesis, or an end-of-task review of a substantial body of work. Prefer doing small or sequential work directly instead of delegating it. Returns immediately with a sessionId so the foreground can keep working; call get_background_status for non-blocking progress and get_background_result only when you need the final output.",
+      "Spawn a background agent for work that genuinely benefits from running in parallel: research that cannot be answered with a few targeted reads, a non-conflicting workstream large enough to shorten time to the goal, an alternate debug hypothesis, or an end-of-task review of a substantial body of work. Prefer doing small or sequential work directly instead of delegating it. Returns immediately with a sessionId so the foreground can keep working; call get_background_status for non-blocking progress and get_background_result only when you need the final output. Automatic ACP routes fall back transparently to native when images require native handoff; an explicit ACP provider remains authoritative and rejects images.",
     input_schema: {
       type: "object",
       properties: {
@@ -828,7 +828,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
           type: "array",
           items: { type: "string" },
           description:
-            "Specific image IDs from the current foreground session to copy into the background agent's first message. IDs follow image_1, image_2 order over the images currently visible in your context. The spawn result echoes attachedImages (id, name, mimeType) — verify it matches the images you intended. Native in-process backgrounds only; not supported for ACP agents.",
+            "Specific image IDs from the current foreground session to copy into the background agent's first message. IDs follow image_1, image_2 order over the images currently visible in your context. The spawn result echoes attachedImages (id, name, mimeType) — verify it matches the images you intended. Native in-process backgrounds only; an automatic ACP default/review route falls back to native, while an explicit provider=acp:<id> request is rejected.",
         },
         useRecentImages: {
           oneOf: [{ type: "boolean" }, { type: "number" }],
@@ -837,7 +837,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         },
         reviewScope: {
           description:
-            "Structured review target captured into an immutable snapshot when the background agent is spawned. Relative paths resolve from the executing project; absolute paths inside any open workspace root are accepted. working_tree defaults to unstaged tracked changes plus untracked files; Git scopes must stay within one root — in multi-root workspaces pass root (absolute path or folder name) to pick which one. files captures exact current files and may span roots, including non-Git workspaces. commit_range resolves Git diff output immediately. diff accepts already captured content. excludePaths drops matching root-relative path prefixes from the capture (e.g. large binary assets); oversized files are recorded as metadata with content omitted instead of failing the capture.",
+            "Structured review target captured into an immutable snapshot when the background agent is spawned. Relative paths resolve from the executing project; absolute paths inside any open workspace root are accepted. working_tree defaults to unstaged tracked changes plus untracked files; Git scopes must stay within one root — in multi-root workspaces pass root (absolute path or folder name) to pick which one. files captures exact current files and may span roots, including non-Git workspaces. commit_range resolves Git diff output immediately. diff accepts already captured content. excludePaths is pushed into Git before output buffering and drops matching root-relative prefixes. Binary Git changes are captured as bounded metadata rather than binary patch payloads; oversized exact files are also recorded as metadata with content omitted.",
           oneOf: [
             {
               type: "object",

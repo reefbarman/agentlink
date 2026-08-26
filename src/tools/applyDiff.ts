@@ -12,6 +12,10 @@ import {
   successResult,
 } from "../shared/types.js";
 import { classifyEditDurability } from "../core/editDurability.js";
+import {
+  APPLY_DIFF_INPUT_GRAMMAR,
+  APPLY_DIFF_SEARCH_REPLACE_FORMAT,
+} from "../shared/applyDiffFormat.js";
 import { finalizeEditReviewResult } from "./editReviewResult.js";
 import { handlePendingEditLockError } from "./pendingEditLock.js";
 import { withFileLock } from "../util/fileLock.js";
@@ -84,6 +88,7 @@ const MAX_AMBIGUOUS_CANDIDATES = 12;
 const SEARCH_MARKER = "<<<<<<< SEARCH";
 const DIVIDER_MARKER = "======= DIVIDER =======";
 const REPLACE_MARKER = ">>>>>>> REPLACE";
+const TOLERATED_SEARCH_MARKER = `${SEARCH_MARKER}>`;
 
 // Legacy delimiter for backward compatibility
 const LEGACY_DIVIDER = "=======";
@@ -112,6 +117,7 @@ export function isUnifiedDiff(diff: string): boolean {
 export function parseUnifiedDiff(diff: string): ParseResult {
   const lines = diff.split("\n");
   const blocks: SearchReplaceBlock[] = [];
+  const malformedBlockDetails: MalformedApplyDiffBlock[] = [];
   let blockIndex = 0;
   let i = 0;
 
@@ -122,42 +128,130 @@ export function parseUnifiedDiff(diff: string): ParseResult {
       continue;
     }
 
-    // Found a hunk header — skip it and parse the hunk body
+    const hunkHeader = lines[i].match(
+      /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/,
+    );
+    if (!hunkHeader) {
+      i++;
+      continue;
+    }
+    const expectedSearchLines = Number(hunkHeader[1] ?? 1);
+    const expectedReplaceLines = Number(hunkHeader[2] ?? 1);
+
+    // Found a hunk header — skip it and parse exactly the declared old/new
+    // line counts. This distinguishes body lines such as `--- old` from file
+    // headers without weakening hunk-body prefix validation.
     i++;
     const searchLines: string[] = [];
     const replaceLines: string[] = [];
+    let malformed: MalformedApplyDiffBlock | undefined;
+    let previousBodyPrefix: " " | "+" | "-" | undefined;
 
-    while (i < lines.length) {
+    while (
+      i < lines.length &&
+      (searchLines.length < expectedSearchLines ||
+        replaceLines.length < expectedReplaceLines)
+    ) {
       const line = lines[i];
 
-      // Stop at next hunk header, next file header, or end of meaningful content
-      if (
-        line.startsWith("@@ ") ||
-        line.startsWith("--- ") ||
-        line.startsWith("+++ ")
-      ) {
-        break;
-      }
-
-      // Skip "no newline" markers
-      if (line.startsWith("\\ ")) {
+      if (line === "\\ No newline at end of file") {
+        if (previousBodyPrefix !== "+" && previousBodyPrefix !== "-") {
+          malformed = {
+            index: blockIndex,
+            line: i + 1,
+            reason: "invalid_unified_line",
+          };
+          break;
+        }
         i++;
         continue;
       }
 
       if (line.startsWith("-")) {
         searchLines.push(line.slice(1));
+        previousBodyPrefix = "-";
       } else if (line.startsWith("+")) {
         replaceLines.push(line.slice(1));
-      } else {
-        // Context line (starts with space or is empty)
-        const content = line.startsWith(" ") ? line.slice(1) : line;
+        previousBodyPrefix = "+";
+      } else if (line.startsWith(" ")) {
+        const content = line.slice(1);
         searchLines.push(content);
         replaceLines.push(content);
+        previousBodyPrefix = " ";
+      } else {
+        malformed = {
+          index: blockIndex,
+          line: i + 1,
+          reason: "invalid_unified_line",
+        };
+        break;
+      }
+      if (
+        searchLines.length > expectedSearchLines ||
+        replaceLines.length > expectedReplaceLines
+      ) {
+        malformed = {
+          index: blockIndex,
+          line: i + 1,
+          reason: "invalid_unified_hunk_counts",
+        };
+        break;
       }
       i++;
     }
 
+    if (
+      !malformed &&
+      (searchLines.length !== expectedSearchLines ||
+        replaceLines.length !== expectedReplaceLines)
+    ) {
+      malformed = {
+        index: blockIndex,
+        line: Math.min(i + 1, lines.length),
+        reason: "invalid_unified_hunk_counts",
+      };
+    }
+
+    // Counts may be followed only by an exact no-newline marker, the next hunk
+    // or file, or the final split artifact. Never silently discard extra body
+    // lines after the declared counts.
+    if (!malformed && i < lines.length) {
+      if (lines[i] === "\\ No newline at end of file") {
+        if (previousBodyPrefix !== "+" && previousBodyPrefix !== "-") {
+          malformed = {
+            index: blockIndex,
+            line: i + 1,
+            reason: "invalid_unified_line",
+          };
+        } else {
+          i++;
+        }
+      }
+      if (!malformed && i < lines.length) {
+        const line = lines[i];
+        const atBoundary =
+          line.startsWith("@@ ") ||
+          (line.startsWith("--- ") && lines[i + 1]?.startsWith("+++ ")) ||
+          (line === "" && i === lines.length - 1);
+        if (!atBoundary) {
+          malformed = {
+            index: blockIndex,
+            line: i + 1,
+            reason: line.startsWith("\\ ")
+              ? "invalid_unified_line"
+              : "invalid_unified_hunk_counts",
+          };
+        } else if (line === "") {
+          i++;
+        }
+      }
+    }
+
+    if (malformed) {
+      malformedBlockDetails.push(malformed);
+      blockIndex++;
+      continue;
+    }
     if (searchLines.length > 0 || replaceLines.length > 0) {
       blocks.push({
         search: searchLines.join("\n"),
@@ -168,7 +262,11 @@ export function parseUnifiedDiff(diff: string): ParseResult {
     }
   }
 
-  return { blocks, malformedBlocks: 0 };
+  return {
+    blocks,
+    malformedBlocks: malformedBlockDetails.length,
+    malformedBlockDetails,
+  };
 }
 
 // ── Search/replace block support ───────────────────────────────────────────
@@ -182,9 +280,28 @@ export function parseUnifiedDiff(diff: string): ParseResult {
  * replacement content
  * >>>>>>> REPLACE
  */
+export interface MalformedApplyDiffBlock {
+  index: number;
+  line: number;
+  reason:
+    | "missing_divider"
+    | "missing_replace_marker"
+    | "duplicate_divider"
+    | "replace_before_divider"
+    | "unexpected_search_marker"
+    | "invalid_unified_line"
+    | "invalid_unified_hunk_counts";
+}
+
 interface ParseResult {
   blocks: SearchReplaceBlock[];
   malformedBlocks: number;
+  malformedBlockDetails: MalformedApplyDiffBlock[];
+}
+
+function isSearchMarkerLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed === SEARCH_MARKER || trimmed === TOLERATED_SEARCH_MARKER;
 }
 
 export function parseSearchReplaceBlocks(diff: string): ParseResult {
@@ -193,7 +310,7 @@ export function parseSearchReplaceBlocks(diff: string): ParseResult {
 
   let i = 0;
   let blockIndex = 0;
-  let malformedBlocks = 0;
+  const malformedBlockDetails: MalformedApplyDiffBlock[] = [];
 
   // Detect whether this diff uses the new or legacy delimiter.
   // If the new delimiter appears anywhere, use strict mode (only match new delimiter).
@@ -201,14 +318,16 @@ export function parseSearchReplaceBlocks(diff: string): ParseResult {
   const useNewDelimiter = lines.some((l) => l.trim() === DIVIDER_MARKER);
 
   while (i < lines.length) {
-    // Look for <<<<<<< SEARCH — compare without leading/trailing whitespace.
-    // Also accept trailing characters (e.g. "<<<<<<< SEARCH>" with a stray ">").
-    if (lines[i].trim().startsWith(SEARCH_MARKER)) {
+    // Look for the exact SEARCH marker, retaining compatibility with the
+    // historically tolerated single trailing ">" spelling.
+    if (isSearchMarkerLine(lines[i])) {
+      const searchMarkerLine = i + 1;
       i++;
       const searchLines: string[] = [];
       const replaceLines: string[] = [];
       let inReplace = false;
       let foundReplace = false;
+      let malformed: MalformedApplyDiffBlock | undefined;
 
       while (i < lines.length) {
         const trimmed = lines[i].trim();
@@ -227,11 +346,35 @@ export function parseSearchReplaceBlocks(diff: string): ParseResult {
         // malformed — the LLM likely included marker syntax as content.
         // Reject the block rather than silently writing markers to the file.
         if (isDivider && inReplace) {
-          inReplace = false;
+          malformed = {
+            index: blockIndex,
+            line: i + 1,
+            reason: "duplicate_divider",
+          };
+          break;
+        }
+
+        if (isSearchMarkerLine(lines[i])) {
+          malformed = {
+            index: blockIndex,
+            line: i + 1,
+            reason: "unexpected_search_marker",
+          };
+          // Leave i on this marker so the outer loop can recover it as the
+          // next positional block, including the tolerated SEARCH> spelling.
           break;
         }
 
         if (trimmed === REPLACE_MARKER) {
+          if (!inReplace) {
+            malformed = {
+              index: blockIndex,
+              line: i + 1,
+              reason: "replace_before_divider",
+            };
+            i++;
+            break;
+          }
           blocks.push({
             search: searchLines.join("\n"),
             replace: replaceLines.join("\n"),
@@ -252,7 +395,13 @@ export function parseSearchReplaceBlocks(diff: string): ParseResult {
       }
 
       if (!foundReplace) {
-        malformedBlocks++;
+        malformedBlockDetails.push(
+          malformed ?? {
+            index: blockIndex,
+            line: Math.max(searchMarkerLine, lines.length),
+            reason: inReplace ? "missing_replace_marker" : "missing_divider",
+          },
+        );
         blockIndex++;
       }
     } else {
@@ -260,7 +409,11 @@ export function parseSearchReplaceBlocks(diff: string): ParseResult {
     }
   }
 
-  return { blocks, malformedBlocks };
+  return {
+    blocks,
+    malformedBlocks: malformedBlockDetails.length,
+    malformedBlockDetails,
+  };
 }
 
 /**
@@ -286,11 +439,43 @@ export function applyBlocks(
     delta: number,
   ): void => {
     for (const prior of blockResults) {
-      const spans =
-        prior.status === "applied"
-          ? prior.postEditSpans
-          : (prior.candidateLocations ?? []);
-      for (const span of spans) {
+      if (prior.status === "applied") {
+        const preserved: TrackedSpan[] = [];
+        for (const span of prior.postEditSpans) {
+          if (!span.valid) {
+            preserved.push(span);
+          } else if (span.start >= end) {
+            preserved.push({
+              ...span,
+              start: span.start + delta,
+              end: span.end + delta,
+            });
+          } else if (span.end <= start) {
+            preserved.push(span);
+          } else {
+            // Preserve provenance for the unaffected portions of an earlier
+            // replacement rather than invalidating its entire span.
+            let retained = false;
+            if (span.start < start) {
+              preserved.push({ ...span, end: start });
+              retained = true;
+            }
+            if (span.end > end) {
+              preserved.push({
+                ...span,
+                start: end + delta,
+                end: span.end + delta,
+              });
+              retained = true;
+            }
+            if (!retained) preserved.push({ ...span, valid: false });
+          }
+        }
+        prior.postEditSpans.splice(0, prior.postEditSpans.length, ...preserved);
+        continue;
+      }
+
+      for (const span of prior.candidateLocations ?? []) {
         if (span.start >= end) {
           span.start += delta;
           span.end += delta;
@@ -813,6 +998,57 @@ function contentHash(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
+function findMarkerLineInAppliedSpans(
+  proposed: string,
+  blockResults: BlockApplyResult[],
+): string | undefined {
+  const appliedSpans = blockResults.flatMap((result) =>
+    result.status === "applied"
+      ? result.postEditSpans.filter((span) => span.valid)
+      : [],
+  );
+  if (appliedSpans.length === 0) return undefined;
+
+  let lineStart = 0;
+  for (const line of proposed.split("\n")) {
+    const lineEnd = lineStart + line.length;
+    const marker = [
+      SEARCH_MARKER,
+      TOLERATED_SEARCH_MARKER,
+      DIVIDER_MARKER,
+      REPLACE_MARKER,
+    ].find((candidate) => line.trim() === candidate);
+    if (
+      marker &&
+      appliedSpans.some((span) =>
+        span.start === span.end
+          ? span.start >= lineStart && span.start <= lineEnd
+          : span.start <= lineEnd && span.end >= lineStart,
+      )
+    ) {
+      return marker;
+    }
+    lineStart = lineEnd + 1;
+  }
+  return undefined;
+}
+
+function buildMarkerSyntaxFailurePayload(
+  path: string,
+  options: { atomic?: boolean; preEditContent?: string } = {},
+): EditReviewResult {
+  return {
+    error:
+      "Diff would introduce search/replace marker syntax into the file — aborting to prevent corruption",
+    hint: "SEARCH/REPLACE input cannot safely distinguish standalone tool-marker payload lines. Retry with a unified-diff @@ hunk, or use write_file for a complete replacement.",
+    path,
+    ...(options.atomic ? { atomic: true, no_changes_applied: true } : {}),
+    ...(options.preEditContent !== undefined
+      ? { pre_edit_content_hash: contentHash(options.preEditContent) }
+      : {}),
+  };
+}
+
 function previewSearch(text: string): string {
   const compact = text.replace(/\s+/g, " ").trim();
   if (compact.length <= 80) return compact;
@@ -960,12 +1196,40 @@ function formatFailedBlockMessage(
     : `Block ${result.index}: ${reason}`;
 }
 
+function describeMalformedBlock(
+  detail: MalformedApplyDiffBlock,
+): Record<string, unknown> {
+  const violatedRule =
+    detail.reason === "missing_divider"
+      ? `Block ended before the required ${DIVIDER_MARKER} marker.`
+      : detail.reason === "missing_replace_marker"
+        ? `Block ended before the required ${REPLACE_MARKER} marker.`
+        : detail.reason === "duplicate_divider"
+          ? `Found a second ${DIVIDER_MARKER} marker after replacement content began.`
+          : detail.reason === "replace_before_divider"
+            ? `Found ${REPLACE_MARKER} before ${DIVIDER_MARKER}.`
+            : detail.reason === "unexpected_search_marker"
+              ? `Found a new ${SEARCH_MARKER} before the current block was closed.`
+              : detail.reason === "invalid_unified_line"
+                ? "Unified-diff hunk body lines must begin with a space, +, or -, and only the exact standard \\ No newline at end of file marker may be unprefixed."
+                : "Unified-diff hunk body line counts did not match the @@ header.";
+  return {
+    index: detail.index,
+    line: detail.line,
+    reason: detail.reason,
+    violated_marker_rule: violatedRule,
+    recovery:
+      "Use the canonical SEARCH/DIVIDER/REPLACE order. Bare ======= is literal payload in DIVIDER mode; for standalone tool-marker payload lines, use a unified-diff @@ hunk.",
+  };
+}
+
 function buildFailedBlocksPayload(
   paramsPath: string,
   blocks: SearchReplaceBlock[],
   blockResults: BlockApplyResult[],
   error = "All search/replace blocks failed",
   preEditContent?: string,
+  malformedBlockDetails: MalformedApplyDiffBlock[] = [],
 ): EditReviewResult {
   const failedDetails = blockResults.map((result) =>
     describeBlockResult(result),
@@ -987,6 +1251,14 @@ function buildFailedBlocksPayload(
     failed_blocks: failedSearches,
     failed_block_details: failedDetails,
     path: paramsPath,
+    ...(malformedBlockDetails.length > 0
+      ? {
+          malformed_blocks: malformedBlockDetails.length,
+          malformed_block_details: malformedBlockDetails.map(
+            describeMalformedBlock,
+          ),
+        }
+      : {}),
     ...(preEditContent !== undefined && {
       pre_edit_content_hash: contentHash(preEditContent),
     }),
@@ -1004,7 +1276,7 @@ function buildAtomicFailurePayload(
   paramsPath: string,
   blocks: SearchReplaceBlock[],
   blockResults: BlockApplyResult[],
-  malformedBlocks: number,
+  malformedBlockDetails: MalformedApplyDiffBlock[],
   error: string,
   preEditContent?: string,
 ): EditReviewResult {
@@ -1027,11 +1299,14 @@ function buildAtomicFailurePayload(
       failedResults,
       error,
       preEditContent,
+      malformedBlockDetails,
     ),
     failed_block_details: failedDetails,
     atomic: true,
     no_changes_applied: true,
-    ...(malformedBlocks > 0 ? { malformed_blocks: malformedBlocks } : {}),
+    ...(malformedBlockDetails.length > 0
+      ? { malformed_blocks: malformedBlockDetails.length }
+      : {}),
   };
 }
 
@@ -1095,25 +1370,23 @@ export async function handleApplyDiff(
       };
     }
 
-    // Parse blocks — try SEARCH/REPLACE format first, fall back to unified diff
+    // Parse blocks — use unified diff when an @@ hunk is present, otherwise
+    // parse the canonical SEARCH/REPLACE grammar.
     let blocks: SearchReplaceBlock[];
     let malformedBlocks: number;
+    let malformedBlockDetails: MalformedApplyDiffBlock[];
+    const unifiedInput = isUnifiedDiff(params.diff);
 
-    if (isUnifiedDiff(params.diff)) {
-      ({ blocks, malformedBlocks } = parseUnifiedDiff(params.diff));
+    if (unifiedInput) {
+      ({ blocks, malformedBlocks, malformedBlockDetails } = parseUnifiedDiff(
+        params.diff,
+      ));
     } else {
-      ({ blocks, malformedBlocks } = parseSearchReplaceBlocks(params.diff));
+      ({ blocks, malformedBlocks, malformedBlockDetails } =
+        parseSearchReplaceBlocks(params.diff));
     }
 
     if (blocks.length === 0) {
-      const formatExample = [
-        "<<<<<<< SEARCH",
-        "exact text to find",
-        "======= DIVIDER =======",
-        "replacement text",
-        ">>>>>>> REPLACE",
-      ].join("\n");
-
       return {
         content: [
           {
@@ -1123,11 +1396,18 @@ export async function handleApplyDiff(
               path: params.path,
               hint:
                 malformedBlocks > 0
-                  ? "One or more blocks were malformed. Ensure every block has all three marker lines in order: SEARCH, DIVIDER, REPLACE."
-                  : "Ensure marker lines are on their own lines and use exact markers: <<<<<<< SEARCH / ======= DIVIDER ======= / >>>>>>> REPLACE",
-              expected_format: formatExample,
+                  ? "One or more blocks violated the marker grammar. Use malformed_block_details for the exact line and rule."
+                  : APPLY_DIFF_INPUT_GRAMMAR,
+              expected_format: APPLY_DIFF_SEARCH_REPLACE_FORMAT,
               ...(malformedBlocks > 0 && {
                 malformed_blocks: malformedBlocks,
+                malformed_block_details: malformedBlockDetails.map(
+                  describeMalformedBlock,
+                ),
+              }),
+              ...(params.atomic && {
+                atomic: true,
+                no_changes_applied: true,
               }),
             }),
           },
@@ -1193,7 +1473,7 @@ export async function handleApplyDiff(
                 params.path,
                 blocks,
                 blockResults,
-                malformedBlocks,
+                malformedBlockDetails,
                 "Atomic apply_diff validation failed",
                 originalContent,
               ),
@@ -1206,27 +1486,22 @@ export async function handleApplyDiff(
     // Safety check: reject if the diff would introduce marker syntax into
     // the file. This prevents cascading corruption where a misparsed block
     // writes "======= DIVIDER =======" or other markers as literal content.
-    const markers = [SEARCH_MARKER, DIVIDER_MARKER, REPLACE_MARKER];
-    for (const marker of markers) {
-      if (newContent.includes(marker) && !originalContent.includes(marker)) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                error:
-                  "Diff would introduce search/replace marker syntax into the file — aborting to prevent corruption",
-                hint: "The replacement content contains SEARCH/REPLACE markers that would corrupt the file. Use write_file instead.",
-                path: params.path,
-                ...(params.atomic && {
-                  atomic: true,
-                  no_changes_applied: true,
-                }),
+    if (
+      !unifiedInput &&
+      findMarkerLineInAppliedSpans(newContent, blockResults)
+    ) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              buildMarkerSyntaxFailurePayload(params.path, {
+                atomic: params.atomic,
               }),
-            },
-          ],
-        };
-      }
+            ),
+          },
+        ],
+      };
     }
 
     // If all blocks failed, return error without opening diff
@@ -1242,6 +1517,7 @@ export async function handleApplyDiff(
                 blockResults,
                 undefined,
                 originalContent,
+                malformedBlockDetails,
               ),
             ),
           },
@@ -1296,6 +1572,40 @@ export async function handleApplyDiff(
           note: "No changes resulted from the diff application",
           post_edit_content_hash: classification.durability.final_content_hash,
           durability: classification.durability,
+          ...(failedBlocks.length > 0 || malformedBlocks > 0
+            ? { partial: true }
+            : {}),
+          ...(failedBlocks.length > 0
+            ? {
+                failed_blocks: failedBlocks,
+                failed_block_details: blockResults
+                  .filter((blockResult) => blockResult.status === "failed")
+                  .map((blockResult) =>
+                    describeBlockResult(blockResult, {
+                      includeRecoveryOptions: false,
+                    }),
+                  ),
+              }
+            : {}),
+          ...(malformedBlocks > 0
+            ? {
+                malformed_blocks: malformedBlocks,
+                malformed_block_details: malformedBlockDetails.map(
+                  describeMalformedBlock,
+                ),
+              }
+            : {}),
+          ...(blocks.length > 1 ||
+          failedBlocks.length > 0 ||
+          malformedBlocks > 0
+            ? {
+                block_results: blockResults.map((blockResult) =>
+                  describeBlockResult(blockResult, {
+                    includeRecoveryOptions: false,
+                  }),
+                ),
+              }
+            : {}),
         });
       });
     }
@@ -1373,7 +1683,7 @@ export async function handleApplyDiff(
               params.path,
               blocks,
               lockedBlockResults,
-              malformedBlocks,
+              malformedBlockDetails,
               "Atomic apply_diff validation failed after re-reading the file under lock",
               lockedOriginalContent,
             ),
@@ -1388,7 +1698,20 @@ export async function handleApplyDiff(
               lockedBlockResults,
               "All search/replace blocks failed after re-reading the file under lock",
               lockedOriginalContent,
+              malformedBlockDetails,
             ),
+          };
+        }
+        if (
+          !unifiedInput &&
+          findMarkerLineInAppliedSpans(reapplied.result, lockedBlockResults)
+        ) {
+          return {
+            status: "abort",
+            result: buildMarkerSyntaxFailurePayload(params.path, {
+              atomic: params.atomic,
+              preEditContent: lockedOriginalContent,
+            }),
           };
         }
         return { status: "continue", content: reapplied.result };
@@ -1441,12 +1764,18 @@ export async function handleApplyDiff(
             }),
           );
       }
-      if (malformedBlocks > 0) responseObj.malformed_blocks = malformedBlocks;
+      if (malformedBlocks > 0) {
+        responseObj.malformed_blocks = malformedBlocks;
+        responseObj.malformed_block_details = malformedBlockDetails.map(
+          describeMalformedBlock,
+        );
+      }
     }
 
     if (
       transformed ||
       blocks.length > 1 ||
+      malformedBlocks > 0 ||
       lockedBlockResults.some(
         (blockResult) =>
           blockResult.status === "failed" ||

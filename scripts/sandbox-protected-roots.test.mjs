@@ -233,7 +233,18 @@ test("rejects nested symbolic links under structural protection", async () => {
 
     await assert.rejects(
       validateStructurallyProtectedRoots([gitRoot]),
-      /structurally protected tree contains a symbolic link/,
+      (error) => {
+        assert.equal(error.code, "sandbox_structural_protection");
+        assert.deepEqual(error.details, {
+          kind: "symbolic_link",
+          path: path.join(refRoot, "main"),
+        });
+        assert.match(
+          error.message,
+          /structurally protected tree contains a symbolic link/,
+        );
+        return true;
+      },
     );
   } finally {
     await rm(fixture, { recursive: true, force: true });
@@ -252,7 +263,18 @@ test("rejects hard-linked files under structural protection", async () => {
 
     await assert.rejects(
       validateStructurallyProtectedRoots([gitRoot]),
-      /structurally protected file has unexpected hard-link count 2/,
+      (error) => {
+        assert.equal(error.code, "sandbox_structural_protection");
+        assert.deepEqual(error.details, {
+          kind: "hard_link",
+          path: ref,
+        });
+        assert.match(
+          error.message,
+          /structurally protected file has unexpected hard-link count 2/,
+        );
+        return true;
+      },
     );
   } finally {
     await rm(fixture, { recursive: true, force: true });

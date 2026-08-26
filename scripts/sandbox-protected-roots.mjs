@@ -6,6 +6,15 @@ import path from "node:path";
 const MAX_PROTECTED_ENTRIES = 100_000;
 const MAX_HASHED_FILE_BYTES = 1024 * 1024;
 
+export class StructuralProtectionError extends Error {
+  constructor(kind, target, message) {
+    super(message);
+    this.name = "StructuralProtectionError";
+    this.code = "sandbox_structural_protection";
+    this.details = { kind, path: target };
+  }
+}
+
 function isWithin(candidate, root) {
   return candidate === root || candidate.startsWith(`${root}${path.sep}`);
 }
@@ -116,17 +125,23 @@ async function validateStructuralNode(root, target, state, isRoot = false) {
   }
   state.entries += 1;
   if (stat.isSymbolicLink()) {
-    throw new Error(
+    throw new StructuralProtectionError(
+      "symbolic_link",
+      target,
       `structurally protected tree contains a symbolic link: ${target}`,
     );
   }
   if (stat.isFile() && stat.nlink !== 1n) {
-    throw new Error(
+    throw new StructuralProtectionError(
+      "hard_link",
+      target,
       `structurally protected file has unexpected hard-link count ${stat.nlink}: ${target}`,
     );
   }
   if (!stat.isDirectory() && !stat.isFile()) {
-    throw new Error(
+    throw new StructuralProtectionError(
+      "unsupported_node",
+      target,
       `structurally protected tree contains an unsupported node: ${target}`,
     );
   }
@@ -162,15 +177,25 @@ async function snapshotNode(root, target, entries) {
   const stat = await lstat(target, { bigint: true });
   const relativePath = path.relative(root, target) || ".";
   if (stat.isSymbolicLink()) {
-    throw new Error(`protected tree contains a symbolic link: ${target}`);
+    throw new StructuralProtectionError(
+      "symbolic_link",
+      target,
+      `protected tree contains a symbolic link: ${target}`,
+    );
   }
   if (stat.isFile() && stat.nlink !== 1n) {
-    throw new Error(
+    throw new StructuralProtectionError(
+      "hard_link",
+      target,
       `protected file has unexpected hard-link count ${stat.nlink}: ${target}`,
     );
   }
   if (!stat.isDirectory() && !stat.isFile()) {
-    throw new Error(`protected tree contains an unsupported node: ${target}`);
+    throw new StructuralProtectionError(
+      "unsupported_node",
+      target,
+      `protected tree contains an unsupported node: ${target}`,
+    );
   }
 
   entries.push({

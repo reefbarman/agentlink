@@ -39,6 +39,11 @@ export interface SandboxPreCommandFailureDetails {
   largestEnvironmentEntries: Array<{ name: string; bytes: number }>;
 }
 
+export interface SandboxStructuralProtectionFailureDetails {
+  kind: "symbolic_link" | "hard_link" | "unsupported_node";
+  path: string;
+}
+
 export interface SandboxHelperLaunchRequest extends SandboxCommandIdentity {
   version: typeof SANDBOX_HELPER_PROTOCOL_VERSION;
   type: "launch";
@@ -104,8 +109,20 @@ export type SandboxHelperEventFrame =
   | (SandboxCommandIdentity & {
       type: "error";
       message: string;
-      code?: "sandbox_environment_too_large";
-      details?: SandboxPreCommandFailureDetails;
+      code?: undefined;
+      details?: undefined;
+    })
+  | (SandboxCommandIdentity & {
+      type: "error";
+      message: string;
+      code: "sandbox_environment_too_large";
+      details: SandboxPreCommandFailureDetails;
+    })
+  | (SandboxCommandIdentity & {
+      type: "error";
+      message: string;
+      code: "sandbox_structural_protection";
+      details: SandboxStructuralProtectionFailureDetails;
     });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -241,6 +258,19 @@ function isManagedNetworkDestination(
         (answer.family === 4 || answer.family === 6),
     ) &&
     value.destinationClass === "public"
+  );
+}
+
+function isStructuralProtectionFailureDetails(
+  value: unknown,
+): value is SandboxStructuralProtectionFailureDetails {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["kind", "path"]) &&
+    ["symbolic_link", "hard_link", "unsupported_node"].includes(
+      String(value.kind),
+    ) &&
+    isAbsolutePath(value.path)
   );
 }
 
@@ -401,14 +431,17 @@ export function isSandboxHelperEventFrame(
     );
   }
   if (value.type === "error") {
-    const structured = value.code === "sandbox_environment_too_large";
+    const environmentFailure = value.code === "sandbox_environment_too_large";
+    const structuralFailure = value.code === "sandbox_structural_protection";
     return (
       hasOnlyKeys(value, [...identityKeys, "message", "code", "details"]) &&
       isNonEmptyString(value.message) &&
-      (value.code === undefined || structured) &&
-      (structured
+      (value.code === undefined || environmentFailure || structuralFailure) &&
+      (environmentFailure
         ? isPreCommandFailureDetails(value.details)
-        : value.details === undefined)
+        : structuralFailure
+          ? isStructuralProtectionFailureDetails(value.details)
+          : value.details === undefined)
     );
   }
   if (value.type === "ready") {

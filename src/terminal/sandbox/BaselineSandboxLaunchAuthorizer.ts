@@ -1,12 +1,5 @@
 import { rmSync } from "node:fs";
-import {
-  lstat,
-  mkdir,
-  mkdtemp,
-  readlink,
-  readdir,
-  realpath,
-} from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -41,6 +34,11 @@ import { resolveWorkspaceGitProtection } from "./gitMetadataProtection.js";
 import { compileSandboxHelperLaunchRequest } from "./sandboxPolicyCompiler.js";
 import { verifyTerminalInlineFiles } from "../inlineFileIntegrity.js";
 import {
+  describeIgnoredWorkspaceInstructionFile,
+  resolveWorkspaceInstructionFile,
+  WORKSPACE_INSTRUCTION_FILENAMES,
+} from "../../util/workspaceInstructionFile.js";
+import {
   sandboxCapabilityKind,
   sandboxCapabilityPreparationAgeBucket,
   type SandboxCapabilityGrantTiming,
@@ -62,9 +60,7 @@ const PROTECTED_WORKSPACE_ENTRIES = [
   "AGENTS.local.md",
   "CLAUDE.md",
 ] as const;
-const PROTECTED_INSTRUCTION_FILENAMES: ReadonlySet<string> = new Set(
-  PROTECTED_WORKSPACE_ENTRIES.filter((entry) => !entry.startsWith(".")),
-);
+const PROTECTED_INSTRUCTION_FILENAMES = WORKSPACE_INSTRUCTION_FILENAMES;
 const AGENTLINK_RUNTIME_ENTRIES = new Set([
   "history",
   "transcripts",
@@ -156,67 +152,9 @@ function uniqueRoots(roots: readonly string[]): string[] {
   return result.sort((left, right) => left.localeCompare(right));
 }
 
-async function resolveProtectedInstructionFile(
-  candidate: string,
-  workspaceRoot: string,
-): Promise<string | undefined> {
-  let metadata;
-  try {
-    metadata = await lstat(candidate);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-  if (metadata.isSymbolicLink()) {
-    const target = await readlink(candidate);
-    if (
-      path.basename(target) !== target ||
-      !PROTECTED_INSTRUCTION_FILENAMES.has(target)
-    ) {
-      throw new Error(
-        `Workspace instruction alias must target another declared instruction file in the same workspace root: ${candidate}`,
-      );
-    }
-    const resolvedTarget = path.join(workspaceRoot, target);
-    let targetMetadata;
-    try {
-      targetMetadata = await lstat(resolvedTarget);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new Error(
-          `Workspace instruction alias target must exist: ${candidate}`,
-        );
-      }
-      throw error;
-    }
-    if (targetMetadata.isSymbolicLink() || !targetMetadata.isFile()) {
-      throw new Error(
-        `Workspace instruction alias target must be a regular non-symlink file: ${candidate}`,
-      );
-    }
-    try {
-      const canonicalTarget = await realpath(resolvedTarget);
-      if (canonicalTarget !== resolvedTarget) {
-        throw new Error(
-          `Workspace instruction alias target must resolve directly within the workspace root: ${candidate}`,
-        );
-      }
-      return canonicalTarget;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new Error(
-          `Workspace instruction alias target must exist: ${candidate}`,
-        );
-      }
-      throw error;
-    }
-  }
-  if (!metadata.isFile()) {
-    throw new Error(
-      `Workspace instruction path must be a regular file: ${candidate}`,
-    );
-  }
-  return realpath(candidate);
+interface WorkspacePolicyIntegrityRoots {
+  roots: string[];
+  warnings: string[];
 }
 
 async function resolveRegularPolicyFiles(root: string): Promise<string[]> {
@@ -296,7 +234,7 @@ async function resolvePolicyNamespaceIntegrityRoots(
 
 async function resolveWorkspacePolicyIntegrityRoots(
   workspaceRoot: string,
-): Promise<string[]> {
+): Promise<WorkspacePolicyIntegrityRoots> {
   const namespaceRoots = await Promise.all([
     resolvePolicyNamespaceIntegrityRoots(
       path.join(workspaceRoot, ".agentlink"),
@@ -308,18 +246,30 @@ async function resolveWorkspacePolicyIntegrityRoots(
       resolvePolicyNamespaceIntegrityRoots(path.join(workspaceRoot, name)),
     ),
   ]);
-  const instructionFiles = (
-    await Promise.all(
-      PROTECTED_WORKSPACE_ENTRIES.filter((entry) => !entry.startsWith(".")).map(
-        (entry) =>
-          resolveProtectedInstructionFile(
-            path.join(workspaceRoot, entry),
-            workspaceRoot,
-          ),
-      ),
-    )
-  ).filter((entry): entry is string => entry !== undefined);
-  return uniqueRoots([...namespaceRoots.flat(), ...instructionFiles]);
+  const instructionResolutions = await Promise.all(
+    [...PROTECTED_INSTRUCTION_FILENAMES].map(async (entry) => {
+      const candidate = path.join(workspaceRoot, entry);
+      return {
+        candidate,
+        resolution: await resolveWorkspaceInstructionFile(
+          candidate,
+          workspaceRoot,
+        ),
+      };
+    }),
+  );
+  const instructionFiles = instructionResolutions.flatMap(({ resolution }) =>
+    resolution.status === "accepted" ? [resolution.canonicalPath] : [],
+  );
+  const warnings = instructionResolutions.flatMap(({ candidate, resolution }) =>
+    resolution.status === "ignored"
+      ? [describeIgnoredWorkspaceInstructionFile(candidate, resolution.reason)]
+      : [],
+  );
+  return {
+    roots: uniqueRoots([...namespaceRoots.flat(), ...instructionFiles]),
+    warnings,
+  };
 }
 
 async function resolveDeveloperToolchain(): Promise<{
@@ -599,11 +549,15 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
         path.join(root, ".agentlink"),
         ...PROTECTED_WORKSPACE_ENTRIES.map((entry) => path.join(root, entry)),
       ]);
-      const policyIntegrityRoots = (
-        await Promise.all(
-          workspaceRoots.map(resolveWorkspacePolicyIntegrityRoots),
-        )
-      ).flat();
+      const policyIntegrity = await Promise.all(
+        workspaceRoots.map(resolveWorkspacePolicyIntegrityRoots),
+      );
+      const policyIntegrityRoots = policyIntegrity.flatMap(
+        (result) => result.roots,
+      );
+      const policyWarnings = policyIntegrity.flatMap(
+        (result) => result.warnings,
+      );
       const developerToolchain = await resolveDeveloperToolchain();
       await Promise.all(
         this.trustedRuntimeRoots.map(async (root) => {
@@ -762,6 +716,7 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
             "Go and GolangCI caches use writable per-command sandbox directories unless explicitly overridden.",
             "Host temporary directories and POSIX IPC are available for development toolchain compatibility.",
             "CPU, memory, process-count, and disk quotas are not fully enforced.",
+            ...policyWarnings,
           ],
         },
         ...(capabilityRequest ? { capabilityRequest } : {}),

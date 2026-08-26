@@ -9,6 +9,7 @@ import {
   TerminalExecutionSecuritySummary,
   TerminalExecuteOptions,
   TerminalExecutionOwner,
+  TerminalInteractivePromptDetection,
   TerminalMetadata,
   TerminalOutputRequest,
   TerminalRecentlyClosedRequest,
@@ -26,6 +27,12 @@ import {
   cleanTerminalRawOutput,
 } from "../../util/ansi.js";
 import type { NodePtyModuleLoader } from "../deferredNodePtyLoader.js";
+import {
+  clearInteractivePromptWatchdog,
+  createInteractivePromptWatchdog,
+  observeInteractivePrompt,
+  type InteractivePromptWatchdog,
+} from "../interactivePromptWatchdog.js";
 import { TerminalAdmissionQueue } from "../terminalAdmissionQueue.js";
 import type { MaterializedHostShellBootstrap } from "../hostShellBootstrap.js";
 import type { SandboxCommandProcess } from "../sandbox/SandboxRuntimeProvider.js";
@@ -86,10 +93,16 @@ interface ManagedNativeChannel {
     commandId: string;
     process: SandboxCommandProcess;
     finalizer?: () => void;
+    interactivePromptWatchdog?: InteractivePromptWatchdog;
     detachForeground?: () => void;
     background: boolean;
     /** Implicit channel released from the foreground pool while this command runs. */
     detachedFromPool: boolean;
+  };
+  latestTermination?: {
+    commandId: string;
+    reason: "interactive_prompt";
+    detection: TerminalInteractivePromptDetection;
   };
 }
 
@@ -302,7 +315,11 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
   ): TerminalBackgroundState | undefined {
     const channel = this.ownedChannel(request.terminalId, request.owner);
     return channel
-      ? this.backgroundStateFromSnapshot(channel.session.snapshot())
+      ? this.backgroundStateFromSnapshot(
+          channel.session.snapshot(),
+          false,
+          channel.latestTermination,
+        )
       : undefined;
   }
 
@@ -348,10 +365,9 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
   }
 
   interruptTerminal(request: TerminalTargetRequest): boolean {
-    return (
-      this.ownedChannel(request.terminalId, request.owner) !== undefined &&
-      this.runtime.interrupt(request.terminalId)
-    );
+    const channel = this.ownedChannel(request.terminalId, request.owner);
+    clearInteractivePromptWatchdog(channel?.active?.interactivePromptWatchdog);
+    return channel !== undefined && this.runtime.interrupt(request.terminalId);
   }
 
   detachTerminal(request: TerminalTargetRequest): boolean {
@@ -412,12 +428,18 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
         ? channel.session.detachCommandOutput(commandId)
         : undefined;
       channel.session.close();
+      this.disableInteractivePromptWatchdog(channel.active);
       channel.active?.finalizer?.();
       this.runtime.closeChannel(channelId);
       this.channels.delete(channelId);
       this.reservations.delete(channelId);
       this.notifyAdmission(channel.owner);
-      this.rememberClosed(snapshot, channel.owner, outputLease);
+      this.rememberClosed(
+        snapshot,
+        channel.owner,
+        outputLease,
+        channel.latestTermination,
+      );
       closed += 1;
     }
     return {
@@ -455,7 +477,9 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
   }
 
   write(channelId: string, data: string): boolean {
-    return this.channels.has(channelId) && this.runtime.write(channelId, data);
+    const channel = this.channels.get(channelId);
+    clearInteractivePromptWatchdog(channel?.active?.interactivePromptWatchdog);
+    return channel !== undefined && this.runtime.write(channelId, data);
   }
 
   resize(channelId: string, dimensions: TerminalDimensions): boolean {
@@ -476,6 +500,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     this.retired = true;
     for (const channel of this.channels.values()) {
       channel.session.close();
+      this.disableInteractivePromptWatchdog(channel.active);
       channel.active?.finalizer?.();
       this.runtime.closeChannel(channel.session.channelId);
     }
@@ -560,11 +585,27 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     if (!this.isReservedTarget(channel, before, reservation)) {
       throw new Error("Native Agent terminal target changed during startup");
     }
+    // Untargeted commands may reuse an implicit logical terminal for low startup
+    // overhead, but each command runs in a shell subshell so aliases, exports,
+    // PATH changes, `cd`, and `exit` cannot mutate the next unrelated command.
+    // Explicitly named/targeted terminals retain intentional persistent-shell
+    // semantics for user-directed workflows.
+    const isolateShellState =
+      channel.implicit &&
+      options.terminal_id === undefined &&
+      options.terminal_name === undefined &&
+      options.split_from === undefined;
     const preparedCommand = this.runtime.createCommand({
       channelId: before.channelId,
       commandId,
       generation: before.nextGeneration,
       command: options.command,
+      ...(isolateShellState ? { isolateShellState: true } : {}),
+      onShellCommandEnd: () => {
+        if (channel.active?.commandId === commandId) {
+          this.disableInteractivePromptWatchdog(channel.active);
+        }
+      },
     });
     const process = preparedCommand.process;
     const finalizer = finalizedOnce(options.onCommandFinalized);
@@ -577,10 +618,14 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       commandId,
       process,
       finalizer,
+      interactivePromptWatchdog: options.background
+        ? undefined
+        : createInteractivePromptWatchdog(),
       detachForeground: options.background ? undefined : detachForeground,
       background: options.background === true,
       detachedFromPool: false,
     };
+    channel.latestTermination = undefined;
     try {
       channel.session.startCommand({
         command: options.command,
@@ -591,6 +636,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
         process,
       });
     } catch (error) {
+      this.disableInteractivePromptWatchdog(channel.active);
       channel.active = undefined;
       process.dispose();
       finalizer?.();
@@ -637,6 +683,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     });
 
     if (outcome === "detached" && channel.active?.commandId === commandId) {
+      this.disableInteractivePromptWatchdog(channel.active);
       channel.active.background = true;
       this.detachImplicitFromPool(channel);
       options.onCommandFinalizationDeferred?.();
@@ -651,6 +698,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     if (outcome === "detached") await completion;
 
     if (outcome === "timed_out") {
+      this.disableInteractivePromptWatchdog(channel.active);
       const timeoutSnapshot = channel.session.snapshot();
       const timedOutCommand = timeoutSnapshot.commands.find(
         (candidate) => candidate.commandId === commandId,
@@ -709,6 +757,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       );
     }
     return this.completedResult(
+      channel,
       snapshot,
       completed,
       channel.session.getCommandOutput(commandId),
@@ -748,6 +797,10 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
           `Native Agent terminal not found: ${options.terminal_id}`,
         );
       }
+      // Explicit selection opts this channel into stateful semantics. Remove a
+      // formerly implicit channel from the unnamed pool so later unrelated
+      // commands cannot inherit state intentionally added through terminal_id.
+      existing.implicit = false;
       return this.reuseChannel(existing, options.owner);
     }
     if (
@@ -764,9 +817,17 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
           session.snapshot().title === options.terminal_name &&
           sameTerminalOwnerScope(owner, options.owner),
       );
-      return named
-        ? this.reuseChannel(named, options.owner)
-        : this.createChannel(options.terminal_name, options.cwd, options.owner);
+      if (named) {
+        // Naming an existing pooled channel likewise makes its persistence
+        // intentional and excludes it from later unnamed reuse.
+        named.implicit = false;
+        return this.reuseChannel(named, options.owner);
+      }
+      return this.createChannel(
+        options.terminal_name,
+        options.cwd,
+        options.owner,
+      );
     }
     if (options.split_from) {
       return this.createChannel(
@@ -972,6 +1033,9 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       lastUsedAt: this.now(),
     };
     session.onEvent((event) => {
+      if (event.type === "data") {
+        this.handleInteractivePromptOutput(channel, event);
+      }
       const snapshot = session.snapshot();
       const update: NativeAgentTerminalChannelEvent = { event, snapshot };
       for (const listener of this.channelListeners) listener(update);
@@ -987,13 +1051,21 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       ? channel.session.detachCommandOutput(commandId)
       : undefined;
     channel.session.close();
+    this.disableInteractivePromptWatchdog(channel.active);
     channel.active?.finalizer?.();
     channel.active = undefined;
     this.runtime.closeChannel(snapshot.channelId);
     this.channels.delete(snapshot.channelId);
     this.reservations.delete(snapshot.channelId);
     this.notifyAdmission(channel.owner);
-    if (commandId) this.rememberClosed(snapshot, channel.owner, outputLease);
+    if (commandId) {
+      this.rememberClosed(
+        snapshot,
+        channel.owner,
+        outputLease,
+        channel.latestTermination,
+      );
+    }
   }
 
   private handleRuntimeChannelClosed(channelId: string): void {
@@ -1006,11 +1078,17 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       ? channel.session.detachCommandOutput(commandId)
       : undefined;
     channel.session.close();
+    this.disableInteractivePromptWatchdog(channel.active);
     channel.active?.finalizer?.();
     this.channels.delete(channelId);
     this.reservations.delete(channelId);
     this.notifyAdmission(channel.owner);
-    this.rememberClosed(snapshot, channel.owner, outputLease);
+    this.rememberClosed(
+      snapshot,
+      channel.owner,
+      outputLease,
+      channel.latestTermination,
+    );
   }
 
   private backgroundResult(
@@ -1041,6 +1119,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
   }
 
   private completedResult(
+    channel: ManagedNativeChannel,
     snapshot: SandboxTerminalSessionSnapshot,
     command: SandboxTerminalSessionSnapshot["commands"][number],
     retained: SandboxTerminalCommandOutput | undefined,
@@ -1056,6 +1135,12 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       terminal_name: snapshot.title,
       cwd: snapshot.cwd,
       command: command.command,
+      ...(channel.latestTermination?.commandId === command.commandId
+        ? {
+            termination_reason: channel.latestTermination.reason,
+            interactive_prompt: { ...channel.latestTermination.detection },
+          }
+        : {}),
       is_running: false,
       execution_mode: "native_pty",
       command_sent: true,
@@ -1064,8 +1149,46 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     };
   }
 
+  private handleInteractivePromptOutput(
+    channel: ManagedNativeChannel,
+    event: Extract<SandboxTerminalSessionEvent, { type: "data" }>,
+  ): void {
+    const active = channel.active;
+    const watchdog = active?.interactivePromptWatchdog;
+    if (!active || !watchdog || active.commandId !== event.commandId) return;
+
+    observeInteractivePrompt(watchdog, event.data, (detection) => {
+      if (
+        channel.active !== active ||
+        active.interactivePromptWatchdog !== watchdog
+      ) {
+        return;
+      }
+      channel.latestTermination = {
+        commandId: active.commandId,
+        reason: "interactive_prompt",
+        detection: { ...detection },
+      };
+      const terminated = active.process.terminate();
+      if (!terminated) {
+        channel.latestTermination = undefined;
+        this.log?.(
+          `[native-agent-terminal] Failed to terminate command ${active.commandId} after interactive prompt detection`,
+        );
+      }
+    });
+  }
+
+  private disableInteractivePromptWatchdog(
+    active: ManagedNativeChannel["active"] | undefined,
+  ): void {
+    clearInteractivePromptWatchdog(active?.interactivePromptWatchdog);
+    if (active) active.interactivePromptWatchdog = undefined;
+  }
+
   private finishActive(channel: ManagedNativeChannel, commandId: string): void {
     if (channel.active?.commandId !== commandId) return;
+    this.disableInteractivePromptWatchdog(channel.active);
     channel.active.finalizer?.();
     channel.active = undefined;
     channel.lastUsedAt = this.now();
@@ -1105,6 +1228,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
   private backgroundStateFromSnapshot(
     snapshot: SandboxTerminalSessionSnapshot,
     closed = false,
+    termination?: ManagedNativeChannel["latestTermination"],
   ): TerminalBackgroundState {
     const command = snapshot.commands.at(-1);
     if (!command) {
@@ -1120,18 +1244,29 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       command.status === "launching" || command.status === "running";
     return {
       is_running: !closed && running,
-      state: running
-        ? closed
-          ? "unknown_termination"
-          : "running"
-        : command.status === "exited"
-          ? "completed"
-          : "unknown_termination",
+      state:
+        termination?.commandId === command.commandId
+          ? "interactive_prompt"
+          : running
+            ? closed
+              ? "unknown_termination"
+              : "running"
+            : command.status === "exited"
+              ? command.timedOut
+                ? "timed_out"
+                : "completed"
+              : "unknown_termination",
       exit_code:
         command.status === "exited" ? (command.exitCode ?? null) : null,
       output: cleanTerminalOutput(command.output),
       output_captured: true,
       terminal_raw_output: cleanTerminalRawOutput(command.output),
+      ...(termination?.commandId === command.commandId
+        ? {
+            termination_reason: termination.reason,
+            interactive_prompt: { ...termination.detection },
+          }
+        : {}),
     };
   }
 
@@ -1226,6 +1361,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     snapshot: SandboxTerminalSessionSnapshot,
     owner: TerminalExecutionOwner | undefined,
     outputLease?: SandboxTerminalCommandOutputLease,
+    termination?: ManagedNativeChannel["latestTermination"],
   ): void {
     if (outputLease)
       this.recentlyClosedOutput.set(snapshot.channelId, outputLease);
@@ -1234,7 +1370,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       name: snapshot.title,
       closedAt: this.now(),
       ...(owner ? { owner: { ...owner } } : {}),
-      ...this.backgroundStateFromSnapshot(snapshot, true),
+      ...this.backgroundStateFromSnapshot(snapshot, true, termination),
       ...this.outputMetadata(outputLease?.metadata()),
     });
     const removed = this.recentlyClosed.splice(DEFAULT_RECENTLY_CLOSED_LIMIT);

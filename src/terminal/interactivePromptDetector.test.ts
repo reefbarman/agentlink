@@ -8,6 +8,11 @@ describe("detectInteractivePrompt", () => {
   it.each([
     ["Continue? ", "confirmation"],
     ["Proceed with changes? [y/N] ", "confirmation"],
+    [
+      "mise config files are not trusted. Trust them? Yes/No/All ",
+      "confirmation",
+    ],
+    ["Trust this file? Y/N ", "confirmation"],
     ["Press Enter to continue", "press_enter"],
     ["Enter project name: ", "input_request"],
     ["Select an option: ", "choice_request"],
@@ -53,6 +58,9 @@ describe("detectInteractivePrompt", () => {
     "The user said press enter yesterday.\nWork completed.",
     "Select option parsing passed",
     "Are you sure? yes",
+    "Documentation supports yes/no/all choices without prompting",
+    "Supported values: Yes/No/All",
+    "Build matrix result Y/N/A",
   ])("rejects non-prompt output %s", (output) => {
     expect(detectInteractivePrompt(output)).toBeUndefined();
   });

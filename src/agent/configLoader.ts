@@ -2,6 +2,8 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 
+import { resolveWorkspaceInstructionFile } from "../util/workspaceInstructionFile.js";
+
 /** A loaded instruction block with its source for display/debugging. */
 export interface InstructionBlock {
   source: string;
@@ -161,6 +163,20 @@ async function safeReadFile(filePath: string): Promise<string> {
     if (code === "ENOENT" || code === "EISDIR") return "";
     throw err;
   }
+}
+
+async function safeReadWorkspaceInstruction(
+  workspaceRoot: string,
+  filename: string,
+): Promise<string> {
+  const candidate = path.join(workspaceRoot, filename);
+  const resolution = await resolveWorkspaceInstructionFile(
+    candidate,
+    workspaceRoot,
+  );
+  return resolution.status === "accepted"
+    ? safeReadFile(resolution.canonicalPath)
+    : "";
 }
 
 /** Read all *.md files in a directory, sorted alphabetically. Returns InstructionBlocks. */
@@ -397,7 +413,7 @@ export async function loadAllInstructionBlocks(
 
   // Workspace root — first of AGENTS.md / AGENT.md / CLAUDE.md wins
   for (const filename of ["AGENTS.md", "AGENT.md", "CLAUDE.md"]) {
-    const content = await safeReadFile(path.join(cwd, filename));
+    const content = await safeReadWorkspaceInstruction(cwd, filename);
     if (content) {
       blocks.push({ source: filename, content });
       break;
@@ -509,7 +525,10 @@ export async function loadAllInstructionBlocks(
   }
 
   // 10. Root AGENTS.local.md (personal overrides, gitignored by convention)
-  const localContent = await safeReadFile(path.join(cwd, "AGENTS.local.md"));
+  const localContent = await safeReadWorkspaceInstruction(
+    cwd,
+    "AGENTS.local.md",
+  );
   if (localContent) {
     blocks.push({ source: "AGENTS.local.md", content: localContent });
   }

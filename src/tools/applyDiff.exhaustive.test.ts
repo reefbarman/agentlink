@@ -1,3 +1,11 @@
+import {
+  applyBlocks,
+  isUnifiedDiff,
+  parseSearchReplaceBlocks,
+  parseUnifiedDiff,
+  tryEscapeNormalizedMatch,
+  tryFlexibleMatch,
+} from "./applyDiff.js";
 /**
  * Exhaustive edge-case tests for applyDiff matching pipeline.
  *
@@ -5,15 +13,7 @@
  * interactions between the fallback chain:
  *   exact indexOf → tryFlexibleMatch → tryEscapeNormalizedMatch → fail
  */
-import { describe, it, expect } from "vitest";
-import {
-  parseSearchReplaceBlocks,
-  parseUnifiedDiff,
-  isUnifiedDiff,
-  applyBlocks,
-  tryFlexibleMatch,
-  tryEscapeNormalizedMatch,
-} from "./applyDiff.js";
+import { describe, expect, it } from "vitest";
 
 // Helper to build a diff string with the new delimiter format
 function diff(...blocks: Array<{ search: string; replace: string }>): string {
@@ -865,17 +865,17 @@ describe("parseUnifiedDiff — edge cases", () => {
     expect(blocks[2].replace).toBe("C");
   });
 
-  it("handles context lines with no prefix (bare lines)", () => {
-    // Some tools emit context lines without the leading space
+  it("rejects bare context lines without the required space prefix", () => {
     const udiff = `@@ -1,3 +1,3 @@
 line 1
 -old
 +new
-line 3`;
-    const { blocks } = parseUnifiedDiff(udiff);
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0].search).toBe("line 1\nold\nline 3");
-    expect(blocks[0].replace).toBe("line 1\nnew\nline 3");
+ line 3`;
+    const { blocks, malformedBlockDetails } = parseUnifiedDiff(udiff);
+    expect(blocks).toEqual([]);
+    expect(malformedBlockDetails).toEqual([
+      { index: 0, line: 2, reason: "invalid_unified_line" },
+    ]);
   });
 });
 

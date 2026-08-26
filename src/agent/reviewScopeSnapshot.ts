@@ -94,7 +94,7 @@ async function git(cwd: string, args: string[]): Promise<string> {
     const { stdout } = await execFileAsync("git", args, {
       cwd,
       encoding: "utf8",
-      env: { ...process.env, GIT_LITERAL_PATHSPECS: "1" },
+      env: { ...process.env },
       maxBuffer: MAX_REVIEW_SNAPSHOT_BYTES * 2,
     });
     return stdout;
@@ -136,6 +136,22 @@ function pathMatchesExclude(
       prefix.length > 0 &&
       (normalized === prefix || normalized.startsWith(`${prefix}/`)),
   );
+}
+
+/**
+ * Build explicit long-form pathspecs so user paths remain literal while excludes
+ * are applied by Git before stdout is buffered. A directory literal pathspec also
+ * matches descendants, matching reviewScope.excludePaths prefix semantics.
+ */
+function gitPathArgs(
+  includePaths: readonly string[],
+  excludePrefixes: readonly string[],
+): string[] {
+  const pathspecs = [
+    ...includePaths.map((entry) => `:(top,literal)${entry}`),
+    ...excludePrefixes.map((entry) => `:(top,exclude,literal)${entry}`),
+  ];
+  return pathspecs.length > 0 ? ["--", ...pathspecs] : [];
 }
 
 /**
@@ -348,7 +364,7 @@ export async function captureReviewScope(
     .map(normalizeExcludePrefix)
     .filter(Boolean);
   const sizeHints: SizeHints = [];
-  const allExcluded: string[] = [];
+  const allExcluded: string[] = [...excludePrefixes];
 
   if (scope.kind === "files") {
     const paths = normalizePaths(cwd, scope.paths, options).filter((entry) => {
@@ -384,7 +400,7 @@ export async function captureReviewScope(
   }
   const gitRoot = selectedRoot ?? pathRoots[0] ?? canonicalizePath(cwd);
   const gitPaths = paths.map((entry) => entry.relativePath);
-  const pathArgs = gitPaths.length > 0 ? ["--", ...gitPaths] : [];
+  const pathArgs = gitPathArgs(gitPaths, excludePrefixes);
   const applyExcludes = (diff: string): string => {
     const filtered = filterDiffByExcludes(diff, excludePrefixes, sizeHints);
     allExcluded.push(...filtered.excluded);
@@ -400,8 +416,8 @@ export async function captureReviewScope(
       await git(gitRoot, [
         "diff",
         "--no-ext-diff",
+        "--no-textconv",
         "--no-color",
-        "--binary",
         range,
         ...pathArgs,
       ]),
@@ -435,8 +451,8 @@ export async function captureReviewScope(
         "diff",
         "--cached",
         "--no-ext-diff",
+        "--no-textconv",
         "--no-color",
-        "--binary",
         ...pathArgs,
       ]),
     );
@@ -447,8 +463,8 @@ export async function captureReviewScope(
       await git(gitRoot, [
         "diff",
         "--no-ext-diff",
+        "--no-textconv",
         "--no-color",
-        "--binary",
         ...pathArgs,
       ]),
     );

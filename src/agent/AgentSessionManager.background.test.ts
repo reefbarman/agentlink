@@ -1825,6 +1825,61 @@ describe("AgentSessionManager background agents", () => {
     expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
   });
 
+  it("falls back to native and preserves images when automatic ACP review routing cannot hand them off", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      reviewAgent: "acp:claude",
+      acpAgents: [
+        {
+          id: "claude",
+          provider: "anthropic",
+          command: "claude-agent-acp",
+        },
+      ],
+    });
+    const acpBackgroundRunner = { run: vi.fn() };
+    const mgr = new AgentSessionManager(
+      { ...config, model: "gpt-5.6-sol" },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    const parent = await mgr.createSession("code");
+    parent.providerId = "codex";
+    mgr.setToolContext(toolCtx);
+    const images = [
+      { name: "diagram.png", mimeType: "image/png", base64: "YWJjZA==" },
+    ];
+
+    const spawned = await mgr.spawnBackground(
+      {
+        task: "visual review",
+        message: "review this image",
+        taskClass: "review_code",
+        images,
+      },
+      parent.id,
+    );
+
+    expect(spawned).toMatchObject({
+      resolvedProvider: expect.not.stringMatching(/^acp$/),
+      taskClass: "review_code",
+      fallbackUsed: true,
+      routingReason: expect.stringContaining(
+        "configured ACP agent acp:claude does not support image handoff",
+      ),
+    });
+    expect(acpBackgroundRunner.run).not.toHaveBeenCalled();
+    expect(mocks.resolveBackgroundRoute).toHaveBeenCalledOnce();
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    expect(session.addUserMessage).toHaveBeenCalledWith("review this image", {
+      images,
+    });
+  });
+
   it("forwards a provider-mapped review model target to native background routing", async () => {
     const providers = new ProviderRegistry();
     providers.register(makeReviewProvider("codex", [{ id: "gpt-5.6-sol" }]));

@@ -180,6 +180,35 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     );
   });
 
+  it("isolates shell evaluation without changing the visible command", async () => {
+    const pty = new FakeNodePtyProcess();
+    const runtime = new NodePtyNativeAgentRuntimeProvider({
+      spawn: vi.fn(() => pty),
+    });
+    const channel = launch(runtime);
+    await emitInitialPrompt(pty, channel.ready);
+
+    const command = runtime.createCommand({
+      channelId: "native-agent-1",
+      commandId: "native-command-1",
+      generation: 1,
+      command: "export NATIVE_STATE=ready",
+      isolateShellState: true,
+    });
+    command.process.onEvent(() => undefined);
+    command.start();
+
+    expect(pty.writes).toEqual([
+      "builtin eval ' (\nexport NATIVE_STATE=ready\n)'\r",
+    ]);
+    expect(channel.rawData.join("")).toContain(
+      "➜  workspace export NATIVE_STATE=ready\r\n",
+    );
+    expect(channel.rawData.join("")).not.toContain(
+      "➜  workspace (\nexport NATIVE_STATE=ready\n)",
+    );
+  });
+
   it("waits for the zsh prompt-end marker after delayed async prompt segments", async () => {
     vi.useFakeTimers();
     try {
@@ -344,6 +373,45 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     await flush();
     expect(channel.closed).toHaveBeenCalledOnce();
     expect(channel.cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("terminates only the active command and preserves the persistent shell", async () => {
+    const pty = new FakeNodePtyProcess();
+    const runtime = new NodePtyNativeAgentRuntimeProvider({
+      spawn: vi.fn(() => pty),
+    });
+    const channel = launch(runtime);
+    await emitInitialPrompt(pty, channel.ready);
+
+    const onShellCommandEnd = vi.fn();
+    const command = runtime.createCommand({
+      channelId: "native-agent-1",
+      commandId: "native-command-1",
+      generation: 1,
+      command: "interactive-command",
+      onShellCommandEnd,
+    });
+    command.process.onEvent(() => undefined);
+    command.start();
+    pty.emitData(`${frame("B")}${frame("C", "interactive-command")}`);
+
+    expect(command.process.terminate()).toBe(true);
+    expect(pty.writes).toEqual([
+      "builtin eval ' interactive-command'\r",
+      "\x03",
+    ]);
+    expect(pty.kill).not.toHaveBeenCalled();
+    expect(channel.closed).not.toHaveBeenCalled();
+
+    pty.emitData(`^C\r\n${frame("D", "130")}`);
+    expect(onShellCommandEnd).toHaveBeenCalledOnce();
+    pty.emitData(`${frame("P", "/workspace")}${frame("A")}${frame("B")}`);
+    await expect(command.process.completion).resolves.toEqual({
+      exitCode: 130,
+      timedOut: false,
+    });
+    expect(runtime.hasChannel("native-agent-1")).toBe(true);
+    expect(channel.closed).not.toHaveBeenCalled();
   });
 
   it("reports the shell marker exit after Ctrl+C", async () => {

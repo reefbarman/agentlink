@@ -147,6 +147,69 @@ describe("handleApplyDiff", () => {
     });
   });
 
+  it("preserves failed and malformed diagnostics on a durable no-op", async () => {
+    const filePath = path.join(workspaceDir, "src", "noop-partial.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "same", "utf-8");
+    const diff = [
+      searchReplaceDiff("same", "same"),
+      searchReplaceDiff("missing", "replacement"),
+      "<<<<<<< SEARCH",
+      "unterminated",
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/noop-partial.ts", diff },
+      {} as never,
+      {} as never,
+      "session-1",
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      status: "accepted",
+      partial: true,
+      failed_blocks: [1],
+      failed_block_details: [
+        expect.objectContaining({ index: 1, reason: "not_found" }),
+      ],
+      malformed_blocks: 1,
+      malformed_block_details: [
+        { index: 2, line: 12, reason: "missing_divider" },
+      ],
+      block_results: [
+        expect.objectContaining({ index: 0, status: "applied" }),
+        expect.objectContaining({ index: 1, status: "failed" }),
+      ],
+    });
+  });
+
+  it("includes the successful block result for a no-op with one malformed slot", async () => {
+    const filePath = path.join(workspaceDir, "src", "noop-malformed.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "same", "utf-8");
+    const diff = [
+      searchReplaceDiff("same", "same"),
+      "<<<<<<< SEARCH",
+      "unterminated",
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/noop-malformed.ts", diff },
+      {} as never,
+      {} as never,
+      "session-1",
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      status: "accepted",
+      partial: true,
+      malformed_blocks: 1,
+      block_results: [expect.objectContaining({ index: 0, status: "applied" })],
+    });
+  });
+
   it("does not claim durable no-op evidence after a concurrent change", async () => {
     const filePath = path.join(workspaceDir, "src", "noop-race.ts");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -727,6 +790,14 @@ describe("handleApplyDiff", () => {
       status: "accepted",
       partial: true,
       malformed_blocks: 1,
+      malformed_block_details: [
+        {
+          index: 0,
+          line: 5,
+          reason: "duplicate_divider",
+        },
+      ],
+      block_results: [expect.objectContaining({ index: 1, status: "applied" })],
     });
   });
 
@@ -929,7 +1000,249 @@ describe("handleApplyDiff", () => {
     );
   });
 
-  it("marks atomic marker-corruption rejection as no-write", async () => {
+  it("allows tool-marker text embedded inside a replacement line", async () => {
+    const filePath = path.join(workspaceDir, "src", "embedded-marker.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old", "utf-8");
+    let proposedContent = "";
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async (params) => {
+        proposedContent = params.content;
+        return {
+          status: "accepted" as const,
+          path: "src/embedded-marker.ts",
+          operation: "modified" as const,
+          ...durable(params.content),
+        };
+      }),
+    };
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      {
+        path: "src/embedded-marker.ts",
+        diff: searchReplaceDiff("old", 'const example = "<<<<<<< SEARCH";'),
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+
+    expect(proposedContent).toBe('const example = "<<<<<<< SEARCH";');
+    expect(toolJson(result)).toMatchObject({ status: "accepted" });
+  });
+
+  it("accepts standalone tool-marker payload lines through unified-diff input", async () => {
+    const filePath = path.join(workspaceDir, "src", "literal-markers.txt");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old", "utf-8");
+    let proposedContent = "";
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async (params) => {
+        proposedContent = params.content;
+        return {
+          status: "accepted" as const,
+          path: "src/literal-markers.txt",
+          operation: "modified" as const,
+          ...durable(params.content),
+        };
+      }),
+    };
+    const unifiedDiff = [
+      "@@ -1 +1,3 @@",
+      "-old",
+      "+<<<<<<< SEARCH",
+      "+======= DIVIDER =======",
+      "+>>>>>>> REPLACE",
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/literal-markers.txt", diff: unifiedDiff },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+
+    expect(proposedContent).toBe(
+      ["<<<<<<< SEARCH", "======= DIVIDER =======", ">>>>>>> REPLACE"].join(
+        "\n",
+      ),
+    );
+    expect(toolJson(result)).toMatchObject({ status: "accepted" });
+  });
+
+  it("preserves marker provenance when a later block overlaps part of an earlier replacement", async () => {
+    const filePath = path.join(workspaceDir, "src", "overlapping-marker.txt");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "<<<<<<< old\nextra", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(),
+    };
+    const diff = [
+      searchReplaceDiff("old\nextra", "SEARCH\nnew"),
+      searchReplaceDiff("new", "done"),
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/overlapping-marker.txt", diff },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      { editReviewProvider },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error:
+        "Diff would introduce search/replace marker syntax into the file — aborting to prevent corruption",
+    });
+    expect(editReviewProvider.reviewAndApply).not.toHaveBeenCalled();
+  });
+
+  it("rejects the reserved SEARCH> compatibility marker constructed by deletion", async () => {
+    const filePath = path.join(
+      workspaceDir,
+      "src",
+      "deleted-search-compat.txt",
+    );
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "<<<<<<< XSEARCH>", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(),
+    };
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      {
+        path: "src/deleted-search-compat.txt",
+        diff: searchReplaceDiff("X", ""),
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      { editReviewProvider },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error:
+        "Diff would introduce search/replace marker syntax into the file — aborting to prevent corruption",
+    });
+    expect(editReviewProvider.reviewAndApply).not.toHaveBeenCalled();
+  });
+
+  it("rejects a marker made standalone by inserting a newline at its boundary", async () => {
+    const filePath = path.join(workspaceDir, "src", "boundary-marker.txt");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "<<<<<<< SEARCH suffix", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(),
+    };
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      {
+        path: "src/boundary-marker.txt",
+        diff: searchReplaceDiff(" suffix", "\nnext"),
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      { editReviewProvider },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error:
+        "Diff would introduce search/replace marker syntax into the file — aborting to prevent corruption",
+    });
+    expect(editReviewProvider.reviewAndApply).not.toHaveBeenCalled();
+  });
+
+  it("rejects a standalone marker constructed by deletion", async () => {
+    const filePath = path.join(workspaceDir, "src", "deleted-marker-text.txt");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "<<<<<<< XSEARCH", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(),
+    };
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      {
+        path: "src/deleted-marker-text.txt",
+        diff: searchReplaceDiff("X", ""),
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      { editReviewProvider },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error:
+        "Diff would introduce search/replace marker syntax into the file — aborting to prevent corruption",
+    });
+    expect(editReviewProvider.reviewAndApply).not.toHaveBeenCalled();
+  });
+
+  it("rejects moving an existing marker to a changed replacement span", async () => {
+    const filePath = path.join(workspaceDir, "src", "moved-marker.txt");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "prefix SEARCH\n<<<<<<< SEARCH", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(),
+    };
+    const diff = [
+      // Construct a marker by joining replacement text to untouched suffix.
+      searchReplaceDiff("prefix", "<<<<<<<"),
+      // Remove only the pre-existing marker suffix. Net marker count stays one,
+      // but the surviving marker belongs to the changed replacement span.
+      searchReplaceDiff("SEARCH", "ordinary"),
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      {
+        path: "src/moved-marker.txt",
+        diff,
+        block_options: [{ index: 1, occurrence: 2 }],
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      { editReviewProvider },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error:
+        "Diff would introduce search/replace marker syntax into the file — aborting to prevent corruption",
+    });
+    expect(editReviewProvider.reviewAndApply).not.toHaveBeenCalled();
+  });
+
+  it("rejects standalone marker payload in SEARCH/REPLACE input as no-write", async () => {
     const filePath = path.join(workspaceDir, "src", "atomic-marker.ts");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, "old", "utf-8");
@@ -953,13 +1266,49 @@ describe("handleApplyDiff", () => {
     );
 
     expect(toolJson(result)).toMatchObject({
-      error:
-        "Diff would introduce search/replace marker syntax into the file — aborting to prevent corruption",
-      atomic: true,
-      no_changes_applied: true,
+      error: "No valid search/replace blocks found in diff",
+      malformed_blocks: 2,
+      malformed_block_details: [
+        {
+          index: 0,
+          line: 4,
+          reason: "unexpected_search_marker",
+          recovery: expect.stringContaining("unified-diff @@ hunk"),
+        },
+        {
+          index: 1,
+          line: 5,
+          reason: "replace_before_divider",
+        },
+      ],
     });
     expect(editReviewProvider.reviewAndApply).not.toHaveBeenCalled();
     expect(fs.readFileSync(filePath, "utf-8")).toBe("old");
+  });
+
+  it("marks malformed-only atomic input as no-write", async () => {
+    const filePath = path.join(workspaceDir, "src", "atomic-only-malformed.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old", "utf-8");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      {
+        path: "src/atomic-only-malformed.ts",
+        diff: "<<<<<<< SEARCH\nmissing divider",
+        atomic: true,
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error: "No valid search/replace blocks found in diff",
+      atomic: true,
+      no_changes_applied: true,
+      malformed_blocks: 1,
+    });
   });
 
   it("rejects malformed blocks in atomic mode", async () => {
@@ -996,6 +1345,15 @@ describe("handleApplyDiff", () => {
       atomic: true,
       no_changes_applied: true,
       malformed_blocks: 1,
+      malformed_block_details: [
+        {
+          index: 1,
+          line: 9,
+          reason: "missing_replace_marker",
+          violated_marker_rule: expect.stringContaining(">>>>>>> REPLACE"),
+          recovery: expect.stringContaining("unified-diff @@ hunk"),
+        },
+      ],
     });
     expect(editReviewProvider.reviewAndApply).not.toHaveBeenCalled();
   });
@@ -1042,6 +1400,98 @@ describe("handleApplyDiff", () => {
         expect.objectContaining({ index: 0, status: "applied" }),
         expect.objectContaining({ index: 1, status: "applied" }),
       ],
+    });
+  });
+
+  it("rejects a deletion-constructed marker introduced only under the write lock", async () => {
+    const filePath = path.join(
+      workspaceDir,
+      "src",
+      "locked-deletion-marker.ts",
+    );
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "safe\nkeep", "utf-8");
+    const lockedOriginal = "<<<<<<< XSEARCH\nkeep";
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async (params) => {
+        const prepared = await params.prepareContent?.(lockedOriginal);
+        expect(prepared?.status).toBe("abort");
+        return prepared?.status === "abort"
+          ? prepared.result
+          : { error: "Expected abort" };
+      }),
+    };
+    const diff = [
+      searchReplaceDiff("X", ""),
+      searchReplaceDiff("keep", "kept"),
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/locked-deletion-marker.ts", diff },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error:
+        "Diff would introduce search/replace marker syntax into the file — aborting to prevent corruption",
+      pre_edit_content_hash: createHash("sha256")
+        .update(lockedOriginal)
+        .digest("hex"),
+    });
+  });
+
+  it("rejects a standalone marker introduced only during lock-bound reapplication", async () => {
+    const filePath = path.join(workspaceDir, "src", "locked-marker.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const originalContent = "anchor\nkeep";
+    fs.writeFileSync(filePath, originalContent, "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async (params) => {
+        const lockedOriginal = "future SEARCH\nkeep";
+        const prepared = await params.prepareContent?.(lockedOriginal);
+        expect(prepared?.status).toBe("abort");
+        return prepared?.status === "abort"
+          ? prepared.result
+          : { error: "Expected abort" };
+      }),
+    };
+    const diff = [
+      // This target exists only after the concurrent locked-content change.
+      searchReplaceDiff("future", "<<<<<<<"),
+      // Keep one valid block in both passes so the lock seam reaches marker
+      // safety instead of the all-blocks-failed branch.
+      searchReplaceDiff("keep", "kept"),
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/locked-marker.ts", diff },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error:
+        "Diff would introduce search/replace marker syntax into the file — aborting to prevent corruption",
+      pre_edit_content_hash: createHash("sha256")
+        .update("future SEARCH\nkeep")
+        .digest("hex"),
     });
   });
 

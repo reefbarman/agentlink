@@ -1,8 +1,8 @@
 import {
   buildAgentErrorMessage,
-  getAgentRetryDecision,
   getAgentErrorActions,
   getAgentErrorCode,
+  getAgentRetryDecision,
   hasAgentRetryableErrorFlag,
   isAgentAuthError,
   isAgentAuthErrorMessage,
@@ -10,6 +10,8 @@ import {
   summarizeHtmlErrorText,
 } from "./agentErrors.js";
 import { describe, expect, it } from "vitest";
+
+import { createOpenAiCompatibleHttpError } from "../core/model/providers/openaiCompatible/errors.js";
 
 // Trimmed Cloudflare 5xx page: the SVG path digits ("10.4013") historically
 // tripped the "401" auth-message classifier.
@@ -128,11 +130,26 @@ describe("agentErrors", () => {
     });
   });
 
-  it("honors an explicit x-should-retry false response", () => {
-    const error = Object.assign(new Error("server error 503"), {
-      status: 503,
-      headers: { "x-should-retry": "false" },
+  it("honors structured retryability and retry layer metadata", () => {
+    const error = Object.assign(new Error("stream ended before first event"), {
+      retryable: true,
+      retryLayer: "stream" as const,
     });
+
+    expect(getAgentRetryDecision(error)).toEqual({
+      retryable: true,
+      category: "unknown",
+      retryLayer: "stream",
+    });
+  });
+
+  it("honors an x-should-retry false directive preserved from an HTTP response", async () => {
+    const error = await createOpenAiCompatibleHttpError(
+      new Response("server error", {
+        status: 503,
+        headers: { "x-should-retry": "false" },
+      }),
+    );
 
     expect(getAgentRetryDecision(error)).toEqual({
       retryable: false,

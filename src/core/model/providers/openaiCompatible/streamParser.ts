@@ -57,9 +57,17 @@ const TEXT_TOOL_MARKER_PREFIXES = [
 ] as const;
 
 export class OpenAiCompatibleStreamError extends Error {
-  constructor(message: string) {
+  readonly retryable?: boolean;
+  readonly retryLayer?: "request" | "stream";
+
+  constructor(
+    message: string,
+    options: { retryable?: boolean; retryLayer?: "request" | "stream" } = {},
+  ) {
     super(message);
     this.name = "OpenAiCompatibleStreamError";
+    this.retryable = options.retryable;
+    this.retryLayer = options.retryLayer;
   }
 }
 
@@ -226,6 +234,7 @@ export async function* parseOpenAiCompatibleStreamEvents(
   if (!sawChunk) {
     throw new OpenAiCompatibleStreamError(
       "OpenAI-compatible stream ended before any provider event",
+      { retryable: true, retryLayer: "stream" },
     );
   }
 

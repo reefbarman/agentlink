@@ -98,18 +98,69 @@ describe("parseSearchReplaceBlocks", () => {
 
   // ── Malformed blocks ────────────────────────────────────────────────
 
-  it("detects malformed block (missing REPLACE marker)", () => {
+  it("reports the exact line and rule for a missing REPLACE marker", () => {
     const input = "<<<<<<< SEARCH\nhello\n======= DIVIDER =======\nworld";
-    const { blocks, malformedBlocks } = parseSearchReplaceBlocks(input);
+    const { blocks, malformedBlocks, malformedBlockDetails } =
+      parseSearchReplaceBlocks(input);
     expect(blocks).toHaveLength(0);
     expect(malformedBlocks).toBe(1);
+    expect(malformedBlockDetails).toEqual([
+      { index: 0, line: 4, reason: "missing_replace_marker" },
+    ]);
   });
 
-  it("detects malformed block (missing divider and REPLACE)", () => {
+  it("reports the exact line and rule for a missing divider", () => {
     const input = "<<<<<<< SEARCH\nhello";
-    const { blocks, malformedBlocks } = parseSearchReplaceBlocks(input);
+    const { blocks, malformedBlocks, malformedBlockDetails } =
+      parseSearchReplaceBlocks(input);
     expect(blocks).toHaveLength(0);
     expect(malformedBlocks).toBe(1);
+    expect(malformedBlockDetails).toEqual([
+      { index: 0, line: 2, reason: "missing_divider" },
+    ]);
+  });
+
+  it("recovers an unterminated replacement at the next SEARCH marker", () => {
+    const input = [
+      "<<<<<<< SEARCH",
+      "bad",
+      "======= DIVIDER =======",
+      "unterminated replacement",
+      "<<<<<<< SEARCH>",
+      "good",
+      "======= DIVIDER =======",
+      "better",
+      ">>>>>>> REPLACE",
+    ].join("\n");
+
+    const { blocks, malformedBlockDetails } = parseSearchReplaceBlocks(input);
+
+    expect(malformedBlockDetails).toEqual([
+      { index: 0, line: 5, reason: "unexpected_search_marker" },
+    ]);
+    expect(blocks).toEqual([{ search: "good", replace: "better", index: 1 }]);
+  });
+
+  it("reports duplicate dividers and preserves later block indices", () => {
+    const input = [
+      "<<<<<<< SEARCH",
+      "bad",
+      "======= DIVIDER =======",
+      "replacement",
+      "======= DIVIDER =======",
+      "<<<<<<< SEARCH",
+      "good",
+      "======= DIVIDER =======",
+      "better",
+      ">>>>>>> REPLACE",
+    ].join("\n");
+
+    const { blocks, malformedBlockDetails } = parseSearchReplaceBlocks(input);
+
+    expect(malformedBlockDetails).toEqual([
+      { index: 0, line: 5, reason: "duplicate_divider" },
+    ]);
+    expect(blocks).toEqual([{ search: "good", replace: "better", index: 1 }]);
   });
 
   it("counts valid and malformed blocks separately", () => {
@@ -158,6 +209,32 @@ describe("parseSearchReplaceBlocks", () => {
     expect(blocks).toHaveLength(1);
     expect(blocks[0].search).toBe("hello");
     expect(blocks[0].replace).toBe("world");
+  });
+
+  it("treats longer SEARCH-prefixed payload lines as content", () => {
+    const input = diff({
+      search: "old",
+      replace: "<<<<<<< SEARCH is documentation",
+    });
+    const { blocks, malformedBlockDetails } = parseSearchReplaceBlocks(input);
+
+    expect(malformedBlockDetails).toEqual([]);
+    expect(blocks).toEqual([
+      {
+        search: "old",
+        replace: "<<<<<<< SEARCH is documentation",
+        index: 0,
+      },
+    ]);
+  });
+
+  it("reports REPLACE before DIVIDER as malformed", () => {
+    const input = "<<<<<<< SEARCH\nhello\n>>>>>>> REPLACE";
+    const { blocks, malformedBlockDetails } = parseSearchReplaceBlocks(input);
+    expect(blocks).toHaveLength(0);
+    expect(malformedBlockDetails).toEqual([
+      { index: 0, line: 3, reason: "replace_before_divider" },
+    ]);
   });
 
   it("marks malformed blocks when REPLACE marker is missing", () => {
@@ -1027,6 +1104,71 @@ describe("parseUnifiedDiff", () => {
     expect(malformedBlocks).toBe(0);
   });
 
+  it("rejects unified hunk body lines without a standard prefix", () => {
+    const diff = ["@@ -1 +1 @@", "-old", "<<<<<<< SEARCH"].join("\n");
+
+    const { blocks, malformedBlocks, malformedBlockDetails } =
+      parseUnifiedDiff(diff);
+
+    expect(blocks).toEqual([]);
+    expect(malformedBlocks).toBe(1);
+    expect(malformedBlockDetails).toEqual([
+      { index: 0, line: 3, reason: "invalid_unified_line" },
+    ]);
+  });
+
+  it("rejects extra hunk body lines after declared counts", () => {
+    const diff = ["@@ -1 +1 @@", "-old", "+new", "+extra"].join("\n");
+
+    const { blocks, malformedBlockDetails } = parseUnifiedDiff(diff);
+
+    expect(blocks).toEqual([]);
+    expect(malformedBlockDetails).toEqual([
+      { index: 0, line: 4, reason: "invalid_unified_hunk_counts" },
+    ]);
+  });
+
+  it("rejects malformed backslash lines after declared counts", () => {
+    const diff = [
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "\\ not the standard marker",
+    ].join("\n");
+
+    const { blocks, malformedBlockDetails } = parseUnifiedDiff(diff);
+
+    expect(blocks).toEqual([]);
+    expect(malformedBlockDetails).toEqual([
+      { index: 0, line: 4, reason: "invalid_unified_line" },
+    ]);
+  });
+
+  it("parses hunk content that resembles file headers", () => {
+    const diff = ["@@ -1 +1 @@", "--- old", "+++ new"].join("\n");
+
+    const { blocks, malformedBlockDetails } = parseUnifiedDiff(diff);
+
+    expect(malformedBlockDetails).toEqual([]);
+    expect(blocks).toEqual([{ search: "-- old", replace: "++ new", index: 0 }]);
+  });
+
+  it("rejects nonstandard backslash hunk lines", () => {
+    const diff = [
+      "@@ -1 +1 @@",
+      "-old",
+      "\\ not the standard marker",
+      "+new",
+    ].join("\n");
+
+    const { blocks, malformedBlockDetails } = parseUnifiedDiff(diff);
+
+    expect(blocks).toEqual([]);
+    expect(malformedBlockDetails).toEqual([
+      { index: 0, line: 3, reason: "invalid_unified_line" },
+    ]);
+  });
+
   it("parses multiple hunks as separate blocks", () => {
     const diff = `--- a/file.ts
 +++ b/file.ts
@@ -1093,7 +1235,7 @@ describe("parseUnifiedDiff", () => {
   it("skips 'No newline at end of file' markers", () => {
     const diff = `--- a/file.ts
 +++ b/file.ts
-@@ -1,2 +1,2 @@
+@@ -1 +1 @@
 -old
 \\ No newline at end of file
 +new
@@ -1135,7 +1277,7 @@ describe("parseUnifiedDiff", () => {
   it("parses indented code in unified diff (real-world feedback case)", () => {
     const diff = `--- a/templates/templates/common/common/security.ts
 +++ b/templates/templates/common/common/security.ts
-@@ -332,7 +332,7 @@
+@@ -332,6 +332,6 @@
        }
  
 -      const opId = op.GetID();

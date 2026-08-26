@@ -219,6 +219,51 @@ describe("captureReviewScope", () => {
     expect(snapshot).not.toContain("binary-ish payload");
   });
 
+  it("captures large binary deletions as bounded Git metadata", async () => {
+    const cwd = await createRepository();
+    const binaryPath = path.join(cwd, "large.wasm");
+    await fs.writeFile(binaryPath, Buffer.alloc(2_500_000, 0));
+    await runGit(cwd, ["add", "large.wasm"]);
+    await runGit(cwd, ["commit", "-m", "add binary"]);
+    await fs.rm(binaryPath);
+
+    const snapshot = await captureReviewScope(cwd, {
+      kind: "working_tree",
+      include: ["unstaged"],
+    });
+
+    expect(snapshot).toContain(
+      "Binary files a/large.wasm and /dev/null differ",
+    );
+    expect(Buffer.byteLength(snapshot)).toBeLessThan(50_000);
+    expect(snapshot).not.toContain("GIT binary patch");
+  });
+
+  it("applies excludes before buffering a large tracked diff", async () => {
+    const cwd = await createRepository();
+    const largePath = path.join(cwd, "generated", "large.txt");
+    await fs.mkdir(path.dirname(largePath));
+    await fs.writeFile(largePath, `${"a".repeat(2_200_000)}\n`);
+    await runGit(cwd, ["add", "generated/large.txt"]);
+    await runGit(cwd, ["commit", "-m", "add generated text"]);
+    await fs.writeFile(largePath, `${"b".repeat(2_200_000)}\n`);
+    await fs.writeFile(
+      path.join(cwd, "tracked.ts"),
+      "export const value = 2;\n",
+    );
+
+    const snapshot = await captureReviewScope(cwd, {
+      kind: "working_tree",
+      include: ["unstaged"],
+      excludePaths: ["generated"],
+    });
+
+    expect(snapshot).toContain("+export const value = 2;");
+    expect(snapshot).toContain("Excluded paths: generated");
+    expect(snapshot).not.toContain("large.txt");
+    expect(Buffer.byteLength(snapshot)).toBeLessThan(50_000);
+  });
+
   it("records oversized files as metadata instead of rejecting the capture", async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "review-large-test-"));
     await fs.writeFile(path.join(cwd, "small.ts"), "export const ok = 1;\n");

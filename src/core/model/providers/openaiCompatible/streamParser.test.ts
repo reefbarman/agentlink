@@ -606,10 +606,16 @@ describe("parseOpenAiCompatibleStreamEvents", () => {
     } satisfies Partial<OpenAiCompatibleRequestError>);
   });
 
-  it("rejects empty streams and incomplete tool calls", async () => {
-    await expect(collect([])).rejects.toThrow(
-      "ended before any provider event",
-    );
+  it("rejects empty streams as structured retryable stream failures", async () => {
+    await expect(collect([])).rejects.toMatchObject({
+      name: "OpenAiCompatibleStreamError",
+      message: "OpenAI-compatible stream ended before any provider event",
+      retryable: true,
+      retryLayer: "stream",
+    });
+  });
+
+  it("rejects incomplete tool calls without making them retryable", async () => {
     await expect(
       collect([
         {
