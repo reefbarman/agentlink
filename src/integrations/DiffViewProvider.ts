@@ -271,15 +271,21 @@ export class DiffViewProvider {
   private documentWasOpen = false;
   private diagnosticDelay: number;
   private outsideWorkspace = false;
+  private readonly saveWithoutFormatting: boolean;
 
   /** Populated when the approval panel is used for write decisions */
   writeApprovalResponse?: WriteApprovalResponse;
 
   readonly requestId: string;
 
-  constructor(diagnosticDelay?: number, requestId?: string) {
+  constructor(
+    diagnosticDelay?: number,
+    requestId?: string,
+    saveWithoutFormatting = false,
+  ) {
     this.diagnosticDelay = diagnosticDelay ?? DEFAULT_DIAGNOSTIC_DELAY_MS;
     this.requestId = requestId ?? randomUUID();
+    this.saveWithoutFormatting = saveWithoutFormatting;
   }
 
   async open(
@@ -650,6 +656,7 @@ export class DiffViewProvider {
       baselineContent: this.originalContent,
       approvedContent,
       reviewState: "diff_snapshot_preserved",
+      saveWithoutFormatting: this.saveWithoutFormatting,
     });
 
     const result: DiffResult = {

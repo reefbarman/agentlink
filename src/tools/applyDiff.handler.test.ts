@@ -230,6 +230,42 @@ describe("handleApplyDiff", () => {
     );
   });
 
+  it("forwards save_without_formatting to the edit-review boundary", async () => {
+    const filePath = path.join(workspaceDir, "src", "exact.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "accepted" as const,
+        path: "src/exact.ts",
+        operation: "modified" as const,
+        ...durable("new"),
+      })),
+    };
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    await handleApplyDiff(
+      {
+        path: "src/exact.ts",
+        diff: searchReplaceDiff("old", "new"),
+        save_without_formatting: true,
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+
+    expect(editReviewProvider.reviewAndApply).toHaveBeenCalledWith(
+      expect.objectContaining({ saveWithoutFormatting: true }),
+    );
+  });
+
   it("preserves save-failure recovery diagnostics in the public result", async () => {
     const filePath = path.join(workspaceDir, "src", "save-failed.ts");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });

@@ -185,6 +185,7 @@ interface GitChange {
   status: number;
 }
 interface GitRepository {
+  status(): Promise<void>;
   state: {
     mergeChanges?: GitChange[];
     indexChanges: GitChange[];
@@ -200,7 +201,9 @@ interface GitExtension {
   getAPI(version: 1): GitAPI;
 }
 
-export function getGitStatus(filePath: string): string | undefined {
+export async function getGitStatus(
+  filePath: string,
+): Promise<string | undefined> {
   try {
     const gitExtension =
       vscode.extensions.getExtension<GitExtension>("vscode.git");
@@ -222,6 +225,7 @@ export function getGitStatus(filePath: string): string | undefined {
           normalizeGitPath(left.rootUri.fsPath).length,
       )[0];
     if (!repo) return undefined;
+    await repo.status();
 
     const hasChange = (changes: GitChange[] | undefined): boolean =>
       changes?.some((change) => {
@@ -581,7 +585,7 @@ async function readPdfFile(
       modified: stat.mtime.toISOString(),
       file_type: "pdf",
     };
-    const gitStatus = getGitStatus(filePath);
+    const gitStatus = await getGitStatus(filePath);
     if (gitStatus) emptyResult.git_status = gitStatus;
     return {
       content: [{ type: "text" as const, text: JSON.stringify(emptyResult) }],
@@ -625,7 +629,7 @@ async function readPdfFile(
 
   result.size = stat.size;
   result.modified = stat.mtime.toISOString();
-  const gitStatus = getGitStatus(filePath);
+  const gitStatus = await getGitStatus(filePath);
   if (gitStatus) result.git_status = gitStatus;
   result.file_type = "pdf";
   result.content = numbered;
@@ -968,7 +972,7 @@ export async function handleReadFile(
       };
       emptyResult.size = stat.size;
       emptyResult.modified = stat.mtime.toISOString();
-      const gitStatus = enrichmentProvider.getGitStatus(filePath);
+      const gitStatus = await enrichmentProvider.getGitStatus(filePath);
       if (gitStatus) emptyResult.git_status = gitStatus;
       emptyResult.language = enrichmentProvider.detectLanguage(filePath);
       if (semanticMatchMetadata) {
@@ -1055,7 +1059,7 @@ export async function handleReadFile(
     if (redactionMetadata) result.redaction = redactionMetadata;
 
     // Git status
-    const gitStatus = enrichmentProvider.getGitStatus(filePath);
+    const gitStatus = await enrichmentProvider.getGitStatus(filePath);
     if (gitStatus) result.git_status = gitStatus;
 
     // Detect language early so we can use it for symbol filtering

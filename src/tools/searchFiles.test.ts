@@ -271,6 +271,37 @@ describe("handleSearchFiles ripgrep args", () => {
     expect(options?.cwd).toBe(path.dirname(filePath));
   });
 
+  it("preserves count results when ripgrep emits a bare count for one explicit file", async () => {
+    const filePath = path.resolve("src/tools/searchFiles.ts");
+    resolveAndValidatePath.mockReturnValue({
+      absolutePath: filePath,
+      inWorkspace: true,
+    });
+    execRipgrepSearch.mockResolvedValue("3\n");
+
+    const result = await handleSearchFiles(
+      {
+        path: "src/tools/searchFiles.ts",
+        regex: "handleSearchFiles",
+        output_mode: "count",
+        semantic: false,
+      },
+      { isPathTrusted: () => true } as never,
+      {} as never,
+      "session-single-file-count",
+    );
+
+    expect(execRipgrepSearch.mock.calls[0][1]).toContain("--with-filename");
+    expect(result).toMatchObject({
+      data: {
+        total_files: 1,
+        total_matches: 3,
+        counts: [{ file: "src/tools/searchFiles.ts", count: 3 }],
+      },
+      isError: false,
+    });
+  });
+
   it.each(["content", "count", "files_with_matches"] as const)(
     "ignores file_pattern with a warning when path is a file in %s mode",
     async (outputMode) => {

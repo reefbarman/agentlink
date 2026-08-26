@@ -204,6 +204,7 @@ import {
   readVscodeTerminalSurfaceConfiguration,
   resolveVscodeTerminalCreateRequest,
 } from "./terminal/vscodeTerminalConfiguration.js";
+import { createVscodeTasksFileAdapter } from "./terminal/vscodeTasksFileAdapter.js";
 import { showWebAccessDisclosureOnce } from "./util/webAccessDisclosure.js";
 
 const BROWSER_GATEWAY_HEALTH_CHECK_INTERVAL_MS = 30_000;
@@ -590,6 +591,7 @@ export async function activate(
           listener();
       }),
     createRuntime: async () => {
+      const tasksFileAdapter = createVscodeTasksFileAdapter();
       const controller = new LiveHostTerminalSurfaceController({
         host: {
           platform: process.platform,
@@ -614,6 +616,11 @@ export async function activate(
         },
         readClipboard: () => vscode.env.clipboard.readText(),
         writeClipboard: (text) => vscode.env.clipboard.writeText(text),
+        resolveTasksProjectRoot: (activeTerminalCwd) =>
+          tasksFileAdapter.resolveProjectRoot(activeTerminalCwd),
+        readTasksFile: (projectRoot) => tasksFileAdapter.read(projectRoot),
+        openTasksFile: (projectRoot, template) =>
+          tasksFileAdapter.open(projectRoot, template),
         sandboxChannelHub: sandboxTerminalChannelHub,
         requestTerminalViewReveal: () => {
           agentTerminalViewProvider?.revealPreservingFocus();

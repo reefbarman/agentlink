@@ -13,6 +13,7 @@ import {
 
 import { AgentTerminalProviderRouter } from "../terminal/sandbox/AgentTerminalProviderRouter.js";
 import { SandboxCapabilityLaunchError } from "../core/capabilities/SandboxCapabilityLaunchError.js";
+import { SandboxPreCommandLaunchError } from "../terminal/sandbox/SandboxRuntimeProvider.js";
 import { evaluateCommandRulePolicy } from "../approvals/commandRulePolicy.js";
 
 vi.mock("node:os", async (importOriginal) => {
@@ -143,6 +144,79 @@ describe("handleExecuteCommand", () => {
       terminal_id: "term_1",
       command_sent: true,
     });
+  });
+
+  it("adds protected Git recovery after an unclassified sandbox denial", async () => {
+    resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+      marker: "/workspace/.git",
+    });
+    executeCommand.mockResolvedValue({
+      exit_code: 1,
+      output:
+        "error: unable to create '/workspace/.git/index.lock': Operation not permitted",
+      output_captured: true,
+      terminal_id: "term_git_denial",
+      command_sent: true,
+      process_launched: true,
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "hk fix", cwd: "/workspace" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-git-postlaunch",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      exit_code: 1,
+      capability_code: "protected_git_metadata",
+      protected_path: "/workspace/.git",
+      retry_guidance: {
+        code: "protected_git_metadata",
+        automatic_retry: false,
+        options: [
+          expect.objectContaining({
+            sandbox_permissions: "require_escalated",
+            command: "hk fix",
+          }),
+        ],
+      },
+    });
+  });
+
+  it("does not trust a quoted protected path without a denial signature", async () => {
+    resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+      marker: "/workspace/.git",
+    });
+    executeCommand.mockResolvedValue({
+      exit_code: 1,
+      output: "expected fixture text: /workspace/.git/index.lock",
+      output_captured: true,
+      terminal_id: "term_git_quote",
+      command_sent: true,
+      process_launched: true,
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "rg index.lock", cwd: "/workspace" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-git-quote",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(textPayload(result)).not.toHaveProperty("retry_guidance");
   });
 
   it("returns native escalation guidance after resolving a protected Git writer to the sandbox", async () => {
@@ -3481,6 +3555,14 @@ describe("handleExecuteCommand", () => {
         "Post https://api.github.com/graphql: tls: failed to verify certificate: x509: OSStatus -26276",
       code: "managed_network_tls_trust",
     },
+    {
+      name: "GraphQL TLS trust failure with quoted variables",
+      command:
+        "gh api graphql -f query='query($owner:String!){repository(owner:$owner,name:\"repo\"){id}}' -F owner=agentlink",
+      output:
+        "Post https://api.github.com/graphql: tls: failed to verify certificate: x509: OSStatus -26276",
+      code: "managed_network_tls_trust",
+    },
   ])(
     "attaches bounded guidance after a managed-network $name without retrying natively",
     async ({ command, output, code }) => {
@@ -3665,6 +3747,19 @@ describe("handleExecuteCommand", () => {
       },
     },
     {
+      name: "Turbopack internal listener denial",
+      command: "pnpm build",
+      output:
+        "Turbopack panic: failed to bind internal worker socket: Operation not permitted (os error 1)",
+      missing: ["network.allow_local_binding"],
+      action: "retry_with_missing_sandbox_capabilities",
+      option: {
+        sandbox_permissions: "with_additional_permissions",
+        additional_permissions: { network: { allow_local_binding: true } },
+        reason_required: true,
+      },
+    },
+    {
       name: "Node heap exhaustion",
       command: "npx vitest run src/tools/executeCommand.test.ts",
       output:
@@ -3692,6 +3787,56 @@ describe("handleExecuteCommand", () => {
       command: "docker compose down",
       output:
         "permission denied while trying to connect to the Docker daemon socket at unix:///Users/test/.colima/default/docker.sock",
+      action: "reviewed_native_retry",
+      code: "sandbox_host_integration",
+      option: {
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    },
+    {
+      name: "testcontainers socket denial",
+      command: "go test ./internal/integration/...",
+      output:
+        "testcontainers: permission denied connecting to unix:///Users/test/.colima/default/docker.sock",
+      action: "reviewed_native_retry",
+      code: "sandbox_host_integration",
+      option: {
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    },
+    {
+      name: "Rust testcontainers socket denial",
+      command: "cargo test",
+      output:
+        "testcontainers: permission denied connecting to unix:///Users/test/.colima/default/docker.sock",
+      action: "reviewed_native_retry",
+      code: "sandbox_host_integration",
+      option: {
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    },
+    {
+      name: "indirect test-runner signal denial",
+      command: "make test",
+      output: "failed to send SIGTERM: operation not permitted",
+      action: "reviewed_native_retry",
+      code: "sandbox_host_integration",
+      option: {
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    },
+    {
+      name: "host process signal denial",
+      command: "kill 80446",
+      output: "operation not permitted",
       action: "reviewed_native_retry",
       code: "sandbox_host_integration",
       option: {
@@ -3921,6 +4066,22 @@ describe("handleExecuteCommand", () => {
       name: "temporary HOME already requested",
       params: { command: "npm test", temporary_home: true as const },
       output: `npm error failed to write '${os.homedir()}/.npm/_logs/error.log'`,
+      outputComplete: true,
+      approvalPolicy: "approve-for-me" as const,
+    },
+    {
+      name: "unrelated command printing a container socket denial",
+      params: { command: "echo diagnostic" },
+      output:
+        "permission denied while trying to connect to /Users/test/.colima/default/docker.sock",
+      outputComplete: true,
+      approvalPolicy: "approve-for-me" as const,
+    },
+    {
+      name: "uncorrelated Turbopack output",
+      params: { command: "pnpm build" },
+      output:
+        "Turbopack build started\ninternal socket initialized\nunrelated file permission denied",
       outputComplete: true,
       approvalPolicy: "approve-for-me" as const,
     },
@@ -4853,12 +5014,15 @@ describe("handleExecuteCommand", () => {
       },
     );
 
-    expect(textPayload(result)).toEqual({
+    expect(textPayload(result)).toMatchObject({
       status: "rejected",
+      code: "readonly_policy_rejected",
       command: "pwd",
       reason:
         "Read-only command execution does not allow the sandbox_permissions parameter",
+      guardian_review_available: false,
       command_sent: false,
+      process_launched: false,
     });
     expect(prepareExecution).not.toHaveBeenCalled();
     expect(enqueueCommandApproval).not.toHaveBeenCalled();
@@ -5587,6 +5751,52 @@ describe("handleExecuteCommand", () => {
     expect(executeCommand).toHaveBeenCalledTimes(1);
     expect(executeCommand.mock.calls[0][0]).toMatchObject({ command });
     expect(textPayload(result).command).toBeUndefined();
+  });
+
+  it("treats quoted heredoc bodies as opaque during malformed-syntax validation", async () => {
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const command = [
+      "python - <<'PY'",
+      `text = "it's safe"`,
+      "```markdown",
+      String.raw`assert re.match(r"['\\\"]", text)`,
+      "PY",
+    ].join("\n");
+
+    const result = await handleExecuteCommand(
+      { command },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-valid-heredoc",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(executeCommand).toHaveBeenCalledTimes(1);
+    expect(executeCommand.mock.calls[0][0]).toMatchObject({ command });
+    expect(textPayload(result).reason).toBeUndefined();
+  });
+
+  it("names a missing heredoc terminator in malformed-syntax rejection", async () => {
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const command = "python - <<'PY'\nprint('unterminated')";
+
+    const result = await handleExecuteCommand(
+      { command },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-invalid-heredoc",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      status: "rejected",
+      command,
+      reason: expect.stringContaining('missing heredoc terminator "PY"'),
+      command_sent: false,
+    });
   });
 
   it("rejects protected memory writes before masterBypass and force handling", async () => {
@@ -7363,8 +7573,11 @@ describe("handleExecuteCommand", () => {
         expect(enqueueCommandApproval).not.toHaveBeenCalled();
         expect(textPayload(result)).toMatchObject({
           status: "rejected",
+          code: "readonly_policy_rejected",
           reason: expect.stringContaining(reason),
+          guardian_review_available: false,
           command_sent: false,
+          process_launched: false,
         });
       },
     );
@@ -7502,6 +7715,51 @@ describe("handleExecuteCommand", () => {
       retry_safe: true,
       failure_stage: "preparation",
     });
+  });
+
+  it("returns safe environment-size guidance for a pre-command launch failure", async () => {
+    executeCommand.mockRejectedValue(
+      new SandboxPreCommandLaunchError("environment too large", {
+        limitBytes: 1_048_576,
+        headroomBytes: 65_536,
+        argvBytes: 100,
+        environmentBytes: 990_000,
+        pointerTableBytes: 2_000,
+        payloadBytes: 992_100,
+        requiredBytes: 1_057_636,
+        largestEnvironmentEntries: [{ name: "LARGE_VALUE", bytes: 900_000 }],
+      }),
+    );
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "pwd" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-env-too-large",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      status: "retry_required",
+      error_code: "sandbox_environment_too_large",
+      command_sent: false,
+      process_launched: false,
+      failure_stage: "launch",
+      launch_size: {
+        required_bytes: 1_057_636,
+        largest_environment_entries: [{ name: "LARGE_VALUE", bytes: 900_000 }],
+      },
+      retry_guidance: {
+        code: "sandbox_environment_too_large",
+        automatic_retry: false,
+      },
+    });
+    expect(JSON.stringify(textPayload(result))).not.toContain("secret");
   });
 
   it("returns a bounded retry-safe result when sandbox capability activation fails", async () => {

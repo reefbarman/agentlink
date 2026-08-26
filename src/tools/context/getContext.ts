@@ -16,15 +16,15 @@ import {
   jsonResult,
   type ToolResult,
 } from "../../shared/types.js";
-import path from "node:path";
+
 import {
   getStructuredSecretRedactionMetadata,
   isStructuredConfigPath,
   redactStructuredSecrets,
   type StructuredSecretRedactionResult,
 } from "../../shared/structuredSecretRedaction.js";
-import { canonicalizePath } from "../../util/paths.js";
-import { buildReadFileError } from "../readFile.js";
+
+import { buildReadFileError, getGitStatus } from "../readFile.js";
 
 export interface GetContextParams {
   path: string;
@@ -137,7 +137,8 @@ export async function handleGetContext(
       getStructuredSecretRedactionMetadata(structuredRedaction);
     if (redactionMetadata) result.redaction = redactionMetadata;
 
-    const gitStatus = providers.enrichmentProvider.getGitStatus(absolutePath);
+    const gitStatus =
+      await providers.enrichmentProvider.getGitStatus(absolutePath);
     if (gitStatus) result.git_status = gitStatus;
 
     const symbols = await getDocumentSymbolsWithTimeout(
@@ -283,90 +284,10 @@ export function getContextDiagnosticsSummary(
   return { errors, warnings };
 }
 
-interface GitChange {
-  uri: vscode.Uri;
-}
-
-interface GitRepository {
-  state: {
-    mergeChanges?: GitChange[];
-    indexChanges: GitChange[];
-    workingTreeChanges: GitChange[];
-    untrackedChanges?: GitChange[];
-  };
-  rootUri: vscode.Uri;
-}
-
-interface GitAPI {
-  repositories: GitRepository[];
-}
-
-interface GitExtension {
-  getAPI(version: 1): GitAPI;
-}
-
-export function getContextGitStatus(filePath: string): string | undefined {
-  try {
-    const gitExtension =
-      vscode.extensions.getExtension<GitExtension>("vscode.git");
-    if (!gitExtension?.isActive) {
-      return undefined;
-    }
-
-    const api = gitExtension.exports.getAPI(1);
-    const normalizedFilePath = normalizeGitPath(filePath);
-    const normalizedLexicalFilePath = normalizeGitPathLexically(filePath);
-    const repo = api.repositories
-      .filter((candidate) =>
-        isPathInGitRepository(
-          normalizedLexicalFilePath,
-          candidate.rootUri.fsPath,
-        ),
-      )
-      .sort(
-        (left, right) =>
-          normalizeGitPath(right.rootUri.fsPath).length -
-          normalizeGitPath(left.rootUri.fsPath).length,
-      )[0];
-    if (!repo) return undefined;
-
-    const hasChange = (changes: GitChange[] | undefined): boolean =>
-      changes?.some((change) => {
-        const changePath = normalizeGitPathLexically(change.uri.fsPath);
-        return (
-          changePath === normalizedLexicalFilePath ||
-          changePath === normalizedFilePath
-        );
-      }) ?? false;
-    // A conflicted entry can also appear in staged or working-tree lists, so
-    // surface it first instead of masking the state that requires resolution.
-    if (hasChange(repo.state.mergeChanges)) return "unmerged";
-    if (hasChange(repo.state.indexChanges)) return "staged";
-    if (hasChange(repo.state.workingTreeChanges)) return "modified";
-    if (hasChange(repo.state.untrackedChanges)) return "untracked";
-    return "clean";
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizeGitPath(filePath: string): string {
-  return normalizeGitPathLexically(canonicalizePath(filePath));
-}
-
-function normalizeGitPathLexically(filePath: string): string {
-  const normalized = path.normalize(path.resolve(filePath));
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
-function isPathInGitRepository(filePath: string, repoRoot: string): boolean {
-  const relative = path.relative(normalizeGitPathLexically(repoRoot), filePath);
-  return (
-    relative === "" ||
-    (!relative.startsWith(`..${path.sep}`) &&
-      relative !== ".." &&
-      !path.isAbsolute(relative))
-  );
+export function getContextGitStatus(
+  filePath: string,
+): Promise<string | undefined> {
+  return getGitStatus(filePath);
 }
 
 function isMissingFileError(err: unknown): err is NodeJS.ErrnoException {

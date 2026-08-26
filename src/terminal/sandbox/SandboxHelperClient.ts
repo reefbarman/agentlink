@@ -7,13 +7,14 @@ import {
   type SandboxHelperEventFrame,
   type SandboxHelperLaunchRequest,
 } from "./sandboxHelperProtocol.js";
-import type {
-  SandboxCommandDisposable,
-  SandboxCommandEvent,
-  SandboxCommandExit,
-  SandboxCommandProcess,
-  SandboxCommandReady,
-  SandboxRuntimeProvider,
+import {
+  SandboxPreCommandLaunchError,
+  type SandboxCommandDisposable,
+  type SandboxCommandEvent,
+  type SandboxCommandExit,
+  type SandboxCommandProcess,
+  type SandboxCommandReady,
+  type SandboxRuntimeProvider,
 } from "./SandboxRuntimeProvider.js";
 
 export const SANDBOX_HELPER_GRACEFUL_CLOSE_TIMEOUT_MS = 2_000;
@@ -196,7 +197,11 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
       return;
     }
     if (event.type === "error") {
-      this.fail(new Error(event.message));
+      this.fail(
+        event.code === "sandbox_environment_too_large" && event.details
+          ? new SandboxPreCommandLaunchError(event.message, event.details)
+          : new Error(event.message),
+      );
       return;
     }
     if (event.type === "exit") {

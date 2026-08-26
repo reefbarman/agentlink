@@ -22,6 +22,7 @@ import type {
 import type { SandboxViolation } from "../core/sandboxPolicy.js";
 import { SandboxCapabilityLaunchError } from "../core/capabilities/SandboxCapabilityLaunchError.js";
 import { TerminalAdmissionCancelledError } from "../terminal/terminalAdmissionQueue.js";
+import { SandboxPreCommandLaunchError } from "../terminal/sandbox/SandboxRuntimeProvider.js";
 import {
   SandboxPreparationDriftError,
   TerminalTargetRecoveryError,
@@ -73,6 +74,7 @@ import { resolveBaselineProtectedGitMetadataForCwd } from "../terminal/sandbox/g
 import { classifyPredictableGitMetadataWriter } from "../util/gitMetadataWriterClassifier.js";
 import { validateProtectedWriteCommand } from "../util/protectedWriteValidator.js";
 import {
+  maskShellHeredocBodies,
   scanShellLexBoundaries,
   scanShellLexTokens,
   scanShellLexWords,
@@ -350,6 +352,8 @@ type ExecuteCommandRetryGuidance = {
     | "sandbox_preparation_changed"
     | "sandbox_capability_launch_failed"
     | "sandbox_pty_launch_failed"
+    | "sandbox_environment_too_large"
+    | "protected_git_metadata"
     | "managed_network_ssh_git_transport"
     | "managed_network_tls_trust";
   message: string;
@@ -384,6 +388,20 @@ const LOOPBACK_LISTEN_DENIAL_PATTERNS = [
   /listen EPERM: operation not permitted ::1(?::\d+)?\b/i,
 ];
 
+const TURBOPACK_LISTENER_DENIAL_PATTERNS = [
+  /turbopack/i,
+  /(?:bind|listen|socket)/i,
+  /(?:operation not permitted|permission denied|os error 1)/i,
+];
+
+function outputHasTurbopackListenerDenial(output: string): boolean {
+  return output
+    .split(/\r?\n/)
+    .some((line) =>
+      TURBOPACK_LISTENER_DENIAL_PATTERNS.every((pattern) => pattern.test(line)),
+    );
+}
+
 const HOME_WRITE_DENIAL_PATTERNS = [
   /(?:not written|error writing|failed to write|cannot write|unable to write)/i,
   /(?:\bEPERM\b|operation not permitted|permission denied|read-only file system).*\b(?:create|mkdir|rename|truncate|unlink|write|writing)\b/i,
@@ -395,6 +413,15 @@ const PROCESS_INSPECTION_DENIAL_PATTERNS = [
   /(?:operation not permitted|permission denied).*\b(?:\/usr)?\/bin\/ps\b/i,
 ];
 
+const PROCESS_SIGNAL_DENIAL_PATTERNS = [
+  /\b(?:operation not permitted|permission denied)\b/i,
+];
+
+const INDIRECT_PROCESS_SIGNAL_DENIAL_PATTERNS = [
+  /\b(?:SIGTERM|signal|kill|terminate)\b.*\b(?:operation not permitted|permission denied)\b/i,
+  /\b(?:operation not permitted|permission denied)\b.*\b(?:SIGTERM|signal|kill|terminate)\b/i,
+];
+
 const CONTAINER_RUNTIME_DENIAL_PATTERNS = [
   /(?:permission denied|operation not permitted).*(?:docker\.sock|colima)/i,
   /(?:docker\.sock|colima).*(?:permission denied|operation not permitted)/i,
@@ -404,6 +431,11 @@ const NODE_OOM_PATTERNS = [
   /fatal error:.*(?:heap out of memory|allocation failed)/i,
   /javascript heap out of memory/i,
   /reached heap limit/i,
+];
+
+const PROTECTED_GIT_DENIAL_PATTERNS = [
+  /(?:permission denied|operation not permitted|read-only file system|unable to create|could not create|failed to write)/i,
+  /(?:index\.lock|FETCH_HEAD|objects\/tmp_object_)/i,
 ];
 
 const NODE_RUNNER_COMMANDS = new Set(["node", "npm", "npx", "pnpm", "yarn"]);
@@ -442,8 +474,43 @@ function directGitNetworkCommandTokens(command: string): string[] | undefined {
   return tokens;
 }
 
+function hasUnquotedShellControlSyntax(command: string): boolean {
+  let quote: "single" | "double" | null = null;
+  for (let index = 0; index < command.length; index++) {
+    const ch = command[index];
+    if (ch === "\\" && quote !== "single") {
+      index++;
+      continue;
+    }
+    if (ch === "'" && quote !== "double") {
+      quote = quote === "single" ? null : "single";
+      continue;
+    }
+    if (ch === '"' && quote !== "single") {
+      quote = quote === "double" ? null : "double";
+      continue;
+    }
+    if (quote === "single") continue;
+    if (ch === "`" || (quote === null && ["<", ">", "&"].includes(ch))) {
+      return true;
+    }
+    if (ch === "$" && ["(", "{", "["].includes(command[index + 1] ?? "")) {
+      return true;
+    }
+  }
+  return quote !== null;
+}
+
 function isDirectGhCommand(command: string): boolean {
-  return singleCommandTokens(command)?.[0] === "gh";
+  if (hasUnquotedShellControlSyntax(command)) return false;
+  const boundaryScan = scanShellLexBoundaries(command);
+  const tokenScan = scanShellLexTokens(command);
+  return (
+    boundaryScan.boundaries.length === 0 &&
+    !isMalformedShellState(boundaryScan.finalState) &&
+    !isMalformedShellState(tokenScan.finalState) &&
+    tokenScan.tokens[0] === "gh"
+  );
 }
 
 function isGhOnlyCommand(command: string): boolean {
@@ -661,7 +728,8 @@ function attachSandboxCapabilityRetryGuidance(input: {
 
   const needsLocalBinding =
     !localBinding &&
-    LOOPBACK_LISTEN_DENIAL_PATTERNS.some((pattern) => pattern.test(output));
+    (LOOPBACK_LISTEN_DENIAL_PATTERNS.some((pattern) => pattern.test(output)) ||
+      outputHasTurbopackListenerDenial(output));
   const needsTemporaryHome =
     allowTemporaryHome &&
     !temporaryHome &&
@@ -696,6 +764,66 @@ function attachSandboxCapabilityRetryGuidance(input: {
   Object.assign(result, {
     retry_guidance: guidance,
     missing_sandbox_capabilities: missingCapabilities,
+  });
+}
+
+async function attachProtectedGitMetadataRetryGuidance(input: {
+  result: TerminalCommandResult;
+  command: string;
+  output: string;
+  cwd: string;
+  workspaceRoots: readonly string[];
+}): Promise<void> {
+  const { result, command, output, cwd, workspaceRoots } = input;
+  if (
+    hasRetryGuidance(result) ||
+    result.security?.route !== "sandbox" ||
+    result.exit_code === 0 ||
+    !result.process_launched ||
+    !PROTECTED_GIT_DENIAL_PATTERNS.every((pattern) => pattern.test(output))
+  ) {
+    return;
+  }
+  const protection = await resolveBaselineProtectedGitMetadataForCwd(
+    cwd,
+    workspaceRoots,
+  ).catch(() => undefined);
+  if (!protection) return;
+  const normalizedMarker = protection.marker.replaceAll("\\", "/");
+  const normalizedOutput = output.replaceAll("\\", "/");
+  const referencesProtectedPath =
+    normalizedOutput.includes(normalizedMarker) ||
+    normalizedOutput
+      .split(/\r?\n/)
+      .some(
+        (line) =>
+          /(?:index\.lock|FETCH_HEAD|objects\/tmp_object_)/i.test(line) &&
+          /(?:permission denied|operation not permitted|read-only file system|unable to create|could not create|failed to write)/i.test(
+            line,
+          ),
+      );
+  if (!referencesProtectedPath) return;
+  Object.assign(result, {
+    retry_guidance: {
+      code: "protected_git_metadata",
+      message:
+        "The sandbox denied a write to this repository's protected Git metadata. Retry the exact command with reviewed native execution; AgentLink will not retry automatically.",
+      automatic_retry: false,
+      options: [
+        {
+          action: "reviewed_native_retry",
+          same_command: true,
+          sandbox_permissions: "require_escalated",
+          reason_required: true,
+          reviewed_native_execution: true,
+          command,
+          suggested_reason:
+            "The command needs to write protected repository Git metadata.",
+        },
+      ],
+    } satisfies ExecuteCommandRetryGuidance,
+    capability_code: "protected_git_metadata",
+    protected_path: protection.marker,
   });
 }
 
@@ -749,8 +877,10 @@ function attachSandboxHostIntegrationRetryGuidance(input: {
   command: string;
   output: string;
   replayable: boolean;
+  cwd: string;
+  workspaceRoots: readonly string[];
 }): void {
-  const { result, command, output, replayable } = input;
+  const { result, command, output, replayable, cwd, workspaceRoots } = input;
   if (
     hasRetryGuidance(result) ||
     !replayable ||
@@ -769,17 +899,41 @@ function attachSandboxHostIntegrationRetryGuidance(input: {
   }
 
   const tokens = singleCommandTokens(command);
+  const classified = classifyCommand(command, {
+    cwd,
+    workspaceRoots: [...workspaceRoots],
+  });
+  const isProjectToolchain =
+    classified.perSubCommand.length > 0 &&
+    classified.perSubCommand.every(
+      ({ result: classification }) =>
+        classification.code === "project_toolchain" &&
+        classification.tier !== "dangerous",
+    );
   const isPsInspection =
     tokens?.[0] === "ps" &&
     PROCESS_INSPECTION_DENIAL_PATTERNS.some((pattern) => pattern.test(output));
-  const isContainerRuntimeCommand =
-    (tokens?.[0] === "docker" || tokens?.[0] === "colima") &&
+  const isDirectProcessSignal =
+    ["kill", "pkill", "killall"].includes(tokens?.[0] ?? "") &&
+    PROCESS_SIGNAL_DENIAL_PATTERNS.some((pattern) => pattern.test(output));
+  const isIndirectProcessSignal =
+    isProjectToolchain &&
+    INDIRECT_PROCESS_SIGNAL_DENIAL_PATTERNS.some((pattern) =>
+      pattern.test(output),
+    );
+  const isProcessSignal = isDirectProcessSignal || isIndirectProcessSignal;
+  const isContainerRuntimeDenial =
+    (tokens?.[0] === "docker" ||
+      tokens?.[0] === "colima" ||
+      isProjectToolchain) &&
     CONTAINER_RUNTIME_DENIAL_PATTERNS.some((pattern) => pattern.test(output));
-  if (!isPsInspection && !isContainerRuntimeCommand) return;
+  if (!isPsInspection && !isProcessSignal && !isContainerRuntimeDenial) return;
 
   const capability = isPsInspection
     ? "host_process_inspection"
-    : "container_runtime_socket";
+    : isProcessSignal
+      ? "host_process_signal"
+      : "container_runtime_socket";
   Object.assign(result, {
     retry_guidance: {
       code: "sandbox_host_integration",
@@ -1355,7 +1509,7 @@ export async function handleExecuteCommand(
         workspaceRoots,
       );
       if (rejectionReason) {
-        return rejectedCommandResult(params.command, rejectionReason);
+        return readOnlyRejectedCommandResult(params.command, rejectionReason);
       }
       if (routeContext.commandApprovalPolicySnapshot !== "approve-for-me") {
         return rejectedCommandResult(
@@ -1986,6 +2140,15 @@ export async function handleExecuteCommand(
           command: commandToRun,
           output: result.output,
           replayable: replayableWithNarrowSandboxCapabilities,
+          cwd,
+          workspaceRoots,
+        });
+        await attachProtectedGitMetadataRetryGuidance({
+          result,
+          command: commandToRun,
+          output: result.output,
+          cwd,
+          workspaceRoots,
         });
       }
 
@@ -2444,6 +2607,15 @@ export async function handleExecuteCommand(
           command: commandToRun,
           output: result.output,
           replayable: replayableWithNarrowSandboxCapabilities,
+          cwd,
+          workspaceRoots,
+        });
+        await attachProtectedGitMetadataRetryGuidance({
+          result,
+          command: commandToRun,
+          output: result.output,
+          cwd,
+          workspaceRoots,
         });
       }
       if (result.output_captured && result.output) {
@@ -2593,6 +2765,49 @@ export async function handleExecuteCommand(
         ],
       };
     }
+    if (err instanceof SandboxPreCommandLaunchError) {
+      const largestEnvironmentEntries = err.details.largestEnvironmentEntries;
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "retry_required",
+              error: err.message,
+              error_code: err.code,
+              command: params.command,
+              command_sent: false,
+              process_launched: false,
+              retry_safe: true,
+              failure_stage: "launch",
+              launch_size: {
+                required_bytes: err.details.requiredBytes,
+                limit_bytes: err.details.limitBytes,
+                headroom_bytes: err.details.headroomBytes,
+                argv_bytes: err.details.argvBytes,
+                environment_bytes: err.details.environmentBytes,
+                largest_environment_entries: largestEnvironmentEntries,
+              },
+              retry_guidance: {
+                code: "sandbox_environment_too_large",
+                message:
+                  "The final sandbox argv and environment exceed the operating-system launch limit. Reduce the named environment contributors before retrying; values are intentionally omitted.",
+                automatic_retry: false,
+                options: [
+                  {
+                    action: "reduce_environment_then_retry",
+                    same_command: true,
+                    contributor_names: largestEnvironmentEntries.map(
+                      (entry) => entry.name,
+                    ),
+                  },
+                ],
+              } satisfies ExecuteCommandRetryGuidance,
+            }),
+          },
+        ],
+      };
+    }
     if (err instanceof SandboxCapabilityLaunchError) {
       const retryGuidance: ExecuteCommandRetryGuidance = {
         code: err.code,
@@ -2709,6 +2924,37 @@ function getReadOnlyCommandRejectionReason(
   return undefined;
 }
 
+function readOnlyRejectedCommandResult(
+  command: string,
+  reason: string,
+): ToolResult {
+  const alternative =
+    command.includes("rg ") && !command.includes("--no-config")
+      ? "Use rg --no-config with workspace-local paths."
+      : command.includes("git diff")
+        ? "Use git diff --no-ext-diff --no-textconv for workspace inspection."
+        : undefined;
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          status: "rejected",
+          code: "readonly_policy_rejected",
+          command,
+          reason,
+          ...(alternative ? { recognized_alternative: alternative } : {}),
+          guardian_review_available: false,
+          recovery:
+            "Use a dedicated read/search tool or a simpler classifier-recognized local read. Network reads and ambiguous commands require a writable foreground session with the normal approval flow.",
+          command_sent: false,
+          process_launched: false,
+        }),
+      },
+    ],
+  };
+}
+
 function cancelledCommandResult(
   command: string,
   security?: TerminalExecutionSecuritySummary,
@@ -2750,10 +2996,15 @@ function isMalformedShellState(state: ShellLexFinalState): boolean {
 }
 
 function validateMalformedShellCommand(command: string): string | null {
+  const { maskedInput, unterminatedDelimiters } =
+    maskShellHeredocBodies(command);
+  if (unterminatedDelimiters.length > 0) {
+    return `Command has malformed shell syntax: missing heredoc terminator ${JSON.stringify(unterminatedDelimiters[0])}.`;
+  }
   const finalStates = [
-    scanShellLexBoundaries(command).finalState,
-    scanShellLexWords(command).finalState,
-    scanShellLexTokens(command, {
+    scanShellLexBoundaries(maskedInput).finalState,
+    scanShellLexWords(maskedInput).finalState,
+    scanShellLexTokens(maskedInput, {
       escapeInSingleQuotes: true,
       operators: [">>", ">", "<"],
     }).finalState,

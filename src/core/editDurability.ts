@@ -28,7 +28,8 @@ export type EditDurabilityFailureReason =
   | "editor_disk_diverged"
   | "post_save_file_missing"
   | "post_save_file_unreadable"
-  | "exact_preservation_failed";
+  | "exact_preservation_failed"
+  | "transformed_content_invalid";
 
 export interface EditDurabilityEvidence {
   status: "durable" | "failed";
@@ -57,7 +58,7 @@ export interface FormatOnSaveReport {
 }
 
 export type EditDiskObservation =
-  | { status: "readable"; content: string }
+  | { status: "readable"; content: string; contentHash?: string }
   | { status: "missing"; errorCode?: string }
   | { status: "unreadable"; errorCode?: string };
 
@@ -222,7 +223,8 @@ export function classifyEditDurability(
   );
   const finalFields = {
     final_exists: true as const,
-    final_content_hash: hashEditContent(finalContent),
+    final_content_hash:
+      params.disk.contentHash ?? hashEditContent(finalContent),
     disk_changed:
       !params.baselineExists || finalContent !== params.baselineContent,
   };

@@ -13,6 +13,7 @@ vi.mock("./xtermRenderer.js", () => ({
   xtermRendererFactory: { create: vi.fn() },
 }));
 
+import { TERMINAL_SURFACE_PROTOCOL_VERSION } from "../terminalSurfaceProtocol.js";
 import { App } from "./App.js";
 import {
   TerminalWebviewController,
@@ -93,7 +94,7 @@ describe("terminal App", () => {
     );
     await test.terminalController.receive({
       type: "terminal-view/bootstrap",
-      protocolVersion: 1,
+      protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
       rendererEpoch: "renderer-1",
       state: { tabs: [] },
       configuration: { scrollback: 1000 },
@@ -122,7 +123,7 @@ describe("terminal App", () => {
     );
     await test.terminalController.receive({
       type: "terminal-view/bootstrap",
-      protocolVersion: 1,
+      protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
       rendererEpoch: "renderer-1",
       state: { tabs: [] },
       configuration: { scrollback: 1000 },
@@ -155,7 +156,7 @@ describe("terminal App", () => {
     );
     await test.terminalController.receive({
       type: "terminal-view/bootstrap",
-      protocolVersion: 1,
+      protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
       rendererEpoch: "renderer-1",
       state: {
         tabs: [
@@ -225,7 +226,7 @@ describe("terminal App", () => {
     );
     await test.terminalController.receive({
       type: "terminal-view/bootstrap",
-      protocolVersion: 1,
+      protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
       rendererEpoch: "renderer-1",
       state: {
         tabs: [
@@ -296,7 +297,7 @@ describe("terminal App", () => {
     );
     await test.terminalController.receive({
       type: "terminal-view/bootstrap",
-      protocolVersion: 1,
+      protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
       rendererEpoch: "renderer-1",
       state: {
         tabs: [
@@ -480,7 +481,7 @@ describe("terminal App", () => {
     );
     await test.terminalController.receive({
       type: "terminal-view/bootstrap",
-      protocolVersion: 1,
+      protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
       rendererEpoch: "renderer-1",
       state: {
         tabs: [
@@ -660,7 +661,7 @@ describe("terminal App", () => {
     );
     await test.terminalController.receive({
       type: "terminal-view/bootstrap",
-      protocolVersion: 1,
+      protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
       rendererEpoch: "renderer-1",
       state: { tabs: [] },
       configuration: { scrollback: 1000 },
@@ -717,7 +718,7 @@ describe("terminal App", () => {
     );
     await test.terminalController.receive({
       type: "terminal-view/bootstrap",
-      protocolVersion: 1,
+      protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
       rendererEpoch: "renderer-1",
       state: {
         tabs: [
@@ -803,7 +804,7 @@ describe("terminal App", () => {
     );
     await test.terminalController.receive({
       type: "terminal-view/bootstrap",
-      protocolVersion: 1,
+      protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
       rendererEpoch: "renderer-1",
       state: {
         tabs: [
@@ -1009,6 +1010,33 @@ describe("terminal App", () => {
     ).toBeTruthy();
   });
 
+  it("dismisses the terminal tasks menu with Escape and outside pointer input", async () => {
+    const test = controller();
+    render(
+      <App
+        vscodeApi={{ postMessage: test.postMessage }}
+        controller={test.terminalController}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Terminal Tasks" }));
+    await test.terminalController.receive({
+      type: "terminal-view/tasks",
+      requestId: "terminal-tasks-1-request-id",
+      status: "ok",
+      revision: "revision-1",
+      tasks: [{ id: "task-0", label: "Build", command: "npm run build" }],
+    });
+    expect(screen.getByRole("menu", { name: "Terminal tasks" })).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: "Terminal tasks" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Terminal Tasks" }));
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("menu", { name: "Terminal tasks" })).toBeNull();
+  });
+
   it("renders a compact terminal toolbar and delegates on-demand search", async () => {
     const test = controller();
     render(
@@ -1019,7 +1047,7 @@ describe("terminal App", () => {
     );
     await test.terminalController.receive({
       type: "terminal-view/bootstrap",
-      protocolVersion: 1,
+      protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
       rendererEpoch: "renderer-1",
       state: {
         tabs: [

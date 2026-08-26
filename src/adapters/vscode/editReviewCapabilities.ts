@@ -14,6 +14,7 @@ import {
   type EditReviewDecision,
   EditReviewParams,
   EditReviewProvider,
+  EditReviewResult,
   EditorRevealParams,
   EditorRevealProvider,
   MultiFileEditReviewParams,
@@ -336,6 +337,41 @@ export function createVscodeEditorRevealProvider(): EditorRevealProvider {
   };
 }
 
+function dirtyDocumentConflictResult(params: {
+  document: vscode.TextDocument;
+  absolutePath: string;
+  relativePath: string;
+  baselineContent: string;
+  proposedContent: string;
+}): EditReviewResult {
+  const targetPath = canonicalizePath(params.absolutePath);
+  const trackedDocument = vscode.workspace.textDocuments.find(
+    (document) =>
+      canonicalizePath(document.uri.fsPath) === targetPath && document.isDirty,
+  );
+  const document = trackedDocument ?? params.document;
+  const pendingBufferMatchesProposal =
+    normalizeEditorText(document.getText()) ===
+    normalizeEditorText(params.proposedContent);
+  return {
+    error: "File has unsaved editor changes",
+    path: params.relativePath,
+    reason: "dirty_document_conflict",
+    document_dirty: true,
+    document_state:
+      normalizeEditorText(document.getText()) ===
+      normalizeEditorText(params.baselineContent)
+        ? "matches_baseline"
+        : "differs_from_baseline",
+    pending_buffer_matches_proposal: pendingBufferMatchesProposal,
+    next_steps: [
+      pendingBufferMatchesProposal
+        ? "The unsaved editor buffer already contains the proposed content. Save it in the editor, then re-read the file before continuing."
+        : "The unsaved editor buffer differs from the proposed content. Review and reconcile it before saving or retrying the file-edit tool call.",
+    ],
+  };
+}
+
 export function createVscodeEditReviewProvider(): EditReviewProvider {
   return {
     async reviewAndApply(params: EditReviewParams) {
@@ -377,20 +413,13 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
             params.absolutePath,
           );
           if (doc.isDirty) {
-            return {
-              error: "File has unsaved editor changes",
-              path: params.relativePath,
-              reason: "dirty_document_conflict",
-              document_dirty: true,
-              document_state:
-                normalizeEditorText(doc.getText()) ===
-                normalizeEditorText(baselineContent)
-                  ? "matches_baseline"
-                  : "differs_from_baseline",
-              next_steps: [
-                "The editor has unsaved user changes. Save or reconcile them before retrying the file-edit tool call.",
-              ],
-            };
+            return dirtyDocumentConflictResult({
+              document: doc,
+              absolutePath: params.absolutePath,
+              relativePath: params.relativePath,
+              baselineContent,
+              proposedContent: content,
+            });
           }
           await vscode.window.showTextDocument(
             doc,
@@ -432,6 +461,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
             baselineContent,
             approvedContent: content,
             reviewState: "dirty_document_preserved",
+            saveWithoutFormatting: params.saveWithoutFormatting,
           });
           const newDiagnostics = await snap.collectNewErrors(
             params.diagnosticDelay,
@@ -468,20 +498,13 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
           ? await vscode.workspace.openTextDocument(params.absolutePath)
           : undefined;
         if (existingDocument?.isDirty) {
-          return {
-            error: "File has unsaved editor changes",
-            path: params.relativePath,
-            reason: "dirty_document_conflict",
-            document_dirty: true,
-            document_state:
-              normalizeEditorText(existingDocument.getText()) ===
-              normalizeEditorText(baseline.content)
-                ? "matches_baseline"
-                : "differs_from_baseline",
-            next_steps: [
-              "The editor has unsaved user changes. Save or reconcile them before retrying the file-edit tool call.",
-            ],
-          };
+          return dirtyDocumentConflictResult({
+            document: existingDocument,
+            absolutePath: params.absolutePath,
+            relativePath: params.relativePath,
+            baselineContent: baseline.content,
+            proposedContent: params.content,
+          });
         }
         let prepared = await prepare(baseline.content);
         if (prepared.status === "abort") return prepared.result;
@@ -565,6 +588,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                 baselineContent: baseline.content,
                 approvedContent: content,
                 reviewState: "dirty_document_preserved",
+                saveWithoutFormatting: params.saveWithoutFormatting,
               });
               const newDiagnostics = await snap.collectNewErrors(
                 params.diagnosticDelay,
@@ -579,7 +603,11 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
           }
         }
 
-        const diffView = new DiffViewProvider(params.diagnosticDelay);
+        const diffView = new DiffViewProvider(
+          params.diagnosticDelay,
+          undefined,
+          params.saveWithoutFormatting,
+        );
 
         await diffView.open(params.absolutePath, params.relativePath, content, {
           outsideWorkspace: params.outsideWorkspace,

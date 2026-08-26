@@ -236,6 +236,49 @@ describe("TerminalWebviewController", () => {
     );
   });
 
+  it("correlates task lists and preserves stale-run guidance across refresh", async () => {
+    const test = harness();
+    const firstRequest = test.controller.openTasksMenu();
+    test.controller.closeTasksMenu();
+    const secondRequest = test.controller.openTasksMenu();
+
+    await test.controller.receive({
+      type: "terminal-view/tasks",
+      requestId: secondRequest,
+      status: "ok",
+      revision: "revision-2",
+      tasks: [{ id: "task-0", label: "New", command: "npm test" }],
+    });
+    await test.controller.receive({
+      type: "terminal-view/tasks",
+      requestId: firstRequest,
+      status: "ok",
+      revision: "revision-1",
+      tasks: [{ id: "task-0", label: "Old", command: "npm run old" }],
+    });
+    expect(test.controller.getSnapshot().tasksMenu.tasks[0]?.label).toBe("New");
+
+    const runRequest = test.controller.runTask("revision-2", "task-0");
+    expect(runRequest).toBeDefined();
+    await test.controller.receive({
+      type: "terminal-view/task-run-result",
+      requestId: runRequest!,
+      status: "stale",
+      message: "tasks.json changed. Review the refreshed task list.",
+    });
+    await test.controller.receive({
+      type: "terminal-view/tasks",
+      requestId: runRequest!,
+      status: "ok",
+      revision: "revision-3",
+      tasks: [{ id: "task-0", label: "Latest", command: "npm run latest" }],
+    });
+    expect(test.controller.getSnapshot().tasksMenu).toMatchObject({
+      revision: "revision-3",
+      errorSummary: "tasks.json changed. Review the refreshed task list.",
+    });
+  });
+
   it("retains multiple tabs from sequential New Terminal lifecycles", async () => {
     const test = harness();
     await test.controller.receive(bootstrap([], []));

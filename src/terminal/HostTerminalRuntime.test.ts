@@ -230,6 +230,31 @@ describe("HostTerminalRuntime", () => {
     expect(integratedRuntime.closeRequiresConfirmation).toBe(false);
   });
 
+  it("authorizes a task run only once at a pristine integrated prompt", () => {
+    const runtime = integrated();
+    expect(runtime.authorizeTaskRun()).toBe(false);
+    runtime.processData(
+      [
+        marker("P", encodeShellIntegrationValue("/workspace")),
+        marker("A"),
+        "$ ",
+      ].join(""),
+    );
+    runtime.processData(marker("B"));
+    expect(runtime.authorizeTaskRun()).toBe(true);
+    expect(runtime.authorizeTaskRun()).toBe(false);
+
+    const typed = integrated();
+    typed.processData(marker("A"));
+    typed.noteUserInput(terminalInstanceId);
+    expect(typed.authorizeTaskRun()).toBe(false);
+
+    const alternate = integrated();
+    alternate.processData(`${marker("A")}\x1b[?1049h`);
+    expect(alternate.authorizeTaskRun()).toBe(false);
+    expect(raw().authorizeTaskRun()).toBe(false);
+  });
+
   it("authorizes only sanitized plain-text copy payloads", () => {
     const runtime = raw();
     runtime.processData("before\x1b[31mred\x1b[0mafter");

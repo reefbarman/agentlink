@@ -207,6 +207,76 @@ describe("AgentSessionManager host injection", () => {
     });
   });
 
+  it("keeps prompt-budget omissions loadable in the captured tool context", async () => {
+    const skillPath = "/tmp/.agents/skills/pull-request/SKILL.md";
+    const omittedSkill = {
+      id: "project:agents:.agents/skills/pull-request",
+      name: "pull-request",
+      description: "Prepare pull requests",
+      revision: "a".repeat(64),
+      sourceChars: 512,
+      provenance: {
+        scope: "project" as const,
+        namespace: "agents",
+        sourceRoot: "/tmp/.agents/skills",
+        skillDirectory: path.dirname(skillPath),
+        realSkillPath: skillPath,
+        priority: 1,
+      },
+      skillPath,
+      restrictions: {},
+      permissions: { requestedTools: [] },
+      dependencies: [],
+      recommendations: [],
+      resolvedDependencies: [],
+      enabled: true,
+    };
+    mocks.setSkillCatalog(
+      {
+        revision: "catalog-with-omission",
+        omissions: [
+          {
+            id: omittedSkill.id,
+            name: omittedSkill.name,
+            revision: omittedSkill.revision,
+            reason: "budget",
+          },
+        ],
+      },
+      [omittedSkill],
+    );
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    mgr.setToolContext({
+      approvalManager: {
+        bindSessionProject: vi.fn(),
+        touchSession: vi.fn(),
+      } as any,
+      approvalPanel: {} as any,
+      sessionId: "window",
+      extensionUri: {} as any,
+    });
+    const session = await mgr.createSession("code");
+
+    const captured = (
+      mgr as unknown as {
+        captureSessionToolContext: (session: unknown) => {
+          getAdvertisedSkills?: () => unknown[];
+        };
+      }
+    ).captureSessionToolContext(session);
+
+    expect(captured.getAdvertisedSkills?.()).toEqual([
+      {
+        id: omittedSkill.id,
+        name: omittedSkill.name,
+        revision: omittedSkill.revision,
+        skillPath,
+        realSkillPath: skillPath,
+        sourceScope: "project",
+      },
+    ]);
+  });
+
   it("publishes committed skill catalog fallback updates without blocking sessions", async () => {
     const update = vi
       .fn()

@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
+import * as path from "node:path";
 import * as fs from "fs/promises";
 import * as vscode from "vscode";
+import { parse as parseYaml } from "yaml";
 
 import type {
   EditReviewResult,
@@ -21,6 +24,7 @@ export interface CommitAndVerifyEditRequest {
   baselineContent: string;
   approvedContent: string;
   reviewState: EditSaveFailureRecovery["review_state"];
+  saveWithoutFormatting?: boolean;
 }
 
 export interface CommitAndVerifyEditResult extends EditReviewResult {
@@ -37,11 +41,41 @@ let preservingSaveTail: Promise<void> = Promise.resolve();
 export async function commitAndVerifyEdit(
   request: CommitAndVerifyEditRequest,
 ): Promise<CommitAndVerifyEditResult> {
-  const policy = getEditDurabilityPolicy(request.relativePath);
+  const policy = request.saveWithoutFormatting
+    ? "preserve_exact"
+    : getEditDurabilityPolicy(request.relativePath);
   const expectedDiskContent = deriveExpectedDiskContent(
     request.baselineContent,
     request.approvedContent,
   );
+  if (!documentMatchesTarget(request.document, request.absolutePath)) {
+    const disk = await observeDisk(request.absolutePath);
+    const classification = classifyEditDurability({
+      relativePath: request.relativePath,
+      baselineExists: request.baselineExists,
+      baselineContent: request.baselineContent,
+      approvedContent: request.approvedContent,
+      editorContent: request.document.getText(),
+      disk,
+      policy,
+    });
+    return {
+      status: "error",
+      path: request.relativePath,
+      error: "Edit document does not match the target file",
+      reason: "document_target_mismatch",
+      durability: {
+        ...classification.durability,
+        status: "failed",
+        outcome: "unverifiable",
+        requires_reread: true,
+      },
+      ...(disk.status === "readable" ? { finalContent: disk.content } : {}),
+      next_steps: [
+        "Close the stale review buffer, re-read the target file, and compose the edit again.",
+      ],
+    };
+  }
 
   if (request.document.isDirty) {
     const saveAttemptContent = request.document.getText();
@@ -105,7 +139,7 @@ export async function commitAndVerifyEdit(
 
   const editorContent = request.document.getText();
   const disk = await observeDisk(request.absolutePath);
-  const classification = classifyEditDurability({
+  let classification = classifyEditDurability({
     relativePath: request.relativePath,
     baselineExists: request.baselineExists,
     baselineContent: request.baselineContent,
@@ -114,6 +148,71 @@ export async function commitAndVerifyEdit(
     disk,
     policy,
   });
+
+  if (
+    classification.durability.status === "durable" &&
+    classification.durability.outcome === "transformed" &&
+    disk.status === "readable" &&
+    approvedStructuredContentBecameInvalid(
+      request.relativePath,
+      expectedDiskContent,
+      disk.content,
+    )
+  ) {
+    const transformedContent = disk.content;
+    if (
+      !request.document.isDirty &&
+      request.document.getText() === transformedContent &&
+      documentMatchesTarget(request.document, request.absolutePath)
+    ) {
+      const restored = await replaceDocumentContent(
+        request.document,
+        request.approvedContent,
+      );
+      const preserved =
+        restored &&
+        (await withPreservingSaveCoordinator(() =>
+          saveWithoutFormatting(request.document, request.absolutePath),
+        ));
+      if (preserved) {
+        const recoveredDisk = await observeDisk(request.absolutePath);
+        classification = classifyEditDurability({
+          relativePath: request.relativePath,
+          baselineExists: request.baselineExists,
+          baselineContent: request.baselineContent,
+          approvedContent: request.approvedContent,
+          editorContent: request.document.getText(),
+          disk: recoveredDisk,
+          policy: "preserve_exact",
+        });
+        if (classification.durability.status === "durable") {
+          return {
+            status: "accepted",
+            path: request.relativePath,
+            durability: classification.durability,
+            ...(recoveredDisk.status === "readable"
+              ? { finalContent: recoveredDisk.content }
+              : {}),
+          };
+        }
+      }
+    }
+    return {
+      status: "error",
+      path: request.relativePath,
+      error: "Save transformation made structured content invalid",
+      reason: "transformed_content_invalid",
+      durability: {
+        ...classification.durability,
+        status: "failed",
+        requires_reread: true,
+      },
+      finalContent: transformedContent,
+      next_steps: [
+        "Inspect the transformed editor content and save-participant configuration before retrying.",
+      ],
+    };
+  }
 
   if (classification.durability.status !== "durable") {
     return {
@@ -200,11 +299,74 @@ async function saveWithoutFormatting(
   }
 }
 
+async function replaceDocumentContent(
+  document: vscode.TextDocument,
+  content: string,
+): Promise<boolean> {
+  const edit = new vscode.WorkspaceEdit();
+  edit.replace(
+    document.uri,
+    new vscode.Range(
+      document.positionAt(0),
+      document.positionAt(document.getText().length),
+    ),
+    content,
+  );
+  return vscode.workspace.applyEdit(edit);
+}
+
+function approvedStructuredContentBecameInvalid(
+  relativePath: string,
+  approvedContent: string,
+  finalContent: string,
+): boolean {
+  const extension = path.extname(relativePath).toLowerCase();
+  if (extension === ".json") {
+    try {
+      JSON.parse(approvedContent);
+    } catch {
+      return false;
+    }
+    try {
+      JSON.parse(finalContent);
+      return false;
+    } catch {
+      return true;
+    }
+  }
+  if (extension === ".yaml" || extension === ".yml") {
+    try {
+      parseYaml(approvedContent, { strict: true });
+    } catch {
+      return false;
+    }
+    try {
+      parseYaml(finalContent, { strict: true });
+      return false;
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
+function documentMatchesTarget(
+  document: vscode.TextDocument,
+  absolutePath: string,
+): boolean {
+  if (document.uri.scheme && document.uri.scheme !== "file") return false;
+  return (
+    canonicalizePath(document.uri.fsPath) === canonicalizePath(absolutePath)
+  );
+}
+
 async function observeDisk(absolutePath: string): Promise<EditDiskObservation> {
   try {
+    const bytes = await fs.readFile(absolutePath);
     return {
       status: "readable",
-      content: await fs.readFile(absolutePath, "utf-8"),
+      content: bytes.toString("utf-8"),
+      contentHash: createHash("sha256").update(bytes).digest("hex"),
     };
   } catch (error) {
     const errorCode =

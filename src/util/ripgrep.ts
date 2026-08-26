@@ -208,6 +208,8 @@ export async function execRipgrepSearch(
 export interface RipgrepFilesResult {
   files: string[];
   warnings: string[];
+  exitCode: number | null;
+  truncated: boolean;
 }
 
 export async function execRipgrepFiles(
@@ -223,12 +225,16 @@ export async function execRipgrepFiles(
     });
 
     const files: string[] = [];
+    let truncated = false;
+    let settled = false;
 
     rl.on("line", (line) => {
       if (files.length < limit) {
         files.push(line);
-      } else {
-        rl.close();
+        return;
+      }
+      if (!truncated) {
+        truncated = true;
         rgProcess.kill();
       }
     });
@@ -238,23 +244,29 @@ export async function execRipgrepFiles(
       errorOutput += data.toString();
     });
 
-    rl.on("close", () => {
-      const warnings = errorOutput
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => /file system loop/i.test(line));
-      const nonLoopErrors = errorOutput
-        .split(/\r?\n/)
-        .filter((line) => line.trim() && !/file system loop/i.test(line))
-        .join("\n");
-      if (nonLoopErrors && files.length === 0) {
-        reject(new Error(`ripgrep error: ${nonLoopErrors}`));
-      } else {
-        resolve({ files, warnings });
+    rgProcess.on("close", (exitCode) => {
+      if (settled) return;
+      settled = true;
+      rl.close();
+      const warnings = Array.from(
+        new Set(
+          errorOutput
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean),
+        ),
+      ).slice(0, 20);
+      if (warnings.length > 0 && files.length === 0 && !truncated) {
+        reject(new Error(`ripgrep error: ${warnings.join("\n")}`));
+        return;
       }
+      resolve({ files, warnings, exitCode, truncated });
     });
 
     rgProcess.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      rl.close();
       reject(new Error(`ripgrep process error: ${error.message}`));
     });
   });

@@ -262,7 +262,13 @@ describe("AgentTerminalViewProvider", () => {
   });
 
   it.each([
-    ["wrong protocol", { type: "terminal-view/ready", protocolVersion: 2 }],
+    [
+      "wrong protocol",
+      {
+        type: "terminal-view/ready",
+        protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION + 1,
+      },
+    ],
     [
       "extra key",
       {

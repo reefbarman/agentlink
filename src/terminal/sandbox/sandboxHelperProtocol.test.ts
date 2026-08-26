@@ -217,12 +217,51 @@ describe("sandbox helper event protocol", () => {
       },
       { ...identity, type: "exit", exitCode: 0, timedOut: false },
       { ...identity, type: "error", message: "helper failed" },
+      {
+        ...identity,
+        type: "error",
+        message: "environment too large",
+        code: "sandbox_environment_too_large",
+        details: {
+          limitBytes: 1_048_576,
+          headroomBytes: 65_536,
+          argvBytes: 100,
+          environmentBytes: 990_000,
+          pointerTableBytes: 2_000,
+          payloadBytes: 992_100,
+          requiredBytes: 1_057_636,
+          largestEnvironmentEntries: [{ name: "LARGE_VALUE", bytes: 900_000 }],
+        },
+      },
     ];
 
     for (const event of events) {
       expect(isSandboxHelperEventFrame(event), event.type).toBe(true);
       expect(parseSandboxHelperEventLine(JSON.stringify(event))).toEqual(event);
     }
+  });
+
+  it("rejects secret-bearing structured launch failure entries", () => {
+    expect(
+      isSandboxHelperEventFrame({
+        ...identity,
+        type: "error",
+        message: "environment too large",
+        code: "sandbox_environment_too_large",
+        details: {
+          limitBytes: 100,
+          headroomBytes: 10,
+          argvBytes: 10,
+          environmentBytes: 90,
+          pointerTableBytes: 10,
+          payloadBytes: 110,
+          requiredBytes: 120,
+          largestEnvironmentEntries: [
+            { name: "TOKEN=secret-value", bytes: 80 },
+          ],
+        },
+      }),
+    ).toBe(false);
   });
 
   it("rejects mismatched process groups and incomplete identities", () => {

@@ -11,6 +11,7 @@ export type PredictableGitMetadataWriterSubcommand =
   | "checkout"
   | "switch"
   | "merge"
+  | "merge-tree"
   | "reset"
   | "fetch"
   | "rebase";
@@ -37,6 +38,7 @@ const SUBCOMMANDS = new Set<PredictableGitMetadataWriterSubcommand>([
   "checkout",
   "switch",
   "merge",
+  "merge-tree",
   "reset",
   "fetch",
   "rebase",
@@ -423,6 +425,15 @@ function classifyMerge(args: readonly string[]): boolean {
   );
 }
 
+function classifyMergeTree(args: readonly string[]): boolean {
+  const parsed = parseArguments(args, new Set(["--write-tree"]), new Set());
+  return Boolean(
+    parsed &&
+    parsed.options.has("--write-tree") &&
+    parsed.operands.length === 2,
+  );
+}
+
 function classifyReset(args: readonly string[]): boolean {
   if (args.length === 2 && ["--soft", "--mixed"].includes(args[0])) return true;
   const separator = args.indexOf("--");
@@ -552,6 +563,7 @@ const CLASSIFIERS: Record<
   checkout: classifyCheckout,
   switch: classifySwitch,
   merge: classifyMerge,
+  "merge-tree": classifyMergeTree,
   reset: classifyReset,
   fetch: classifyFetch,
   rebase: classifyRebase,

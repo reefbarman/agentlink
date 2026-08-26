@@ -124,6 +124,62 @@ input:focus-visible {
   background: var(--vscode-toolbar-hoverBackground);
 }
 
+.terminal-tasks-control {
+  position: relative;
+}
+
+.terminal-tasks-menu {
+  position: absolute;
+  z-index: 20;
+  top: 28px;
+  right: 0;
+  width: min(320px, calc(100vw - 24px));
+  max-height: min(360px, calc(100vh - 60px));
+  overflow: auto;
+  border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border));
+  border-radius: 4px;
+  padding: 4px;
+  background: var(
+    --vscode-menu-background,
+    var(--vscode-editorWidget-background)
+  );
+  box-shadow: 0 4px 12px var(--vscode-widget-shadow);
+}
+
+.terminal-tasks-menu button {
+  width: 100%;
+  height: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.terminal-task-command,
+.terminal-tasks-message,
+.terminal-tasks-error {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.terminal-task-command {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-tasks-message,
+.terminal-tasks-error {
+  padding: 6px 8px;
+}
+
+.terminal-tasks-error {
+  color: var(--vscode-errorForeground);
+}
+
 .terminal-status {
   width: 7px;
   height: 7px;

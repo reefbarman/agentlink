@@ -37,9 +37,10 @@ import type {
   SandboxCommandIdentity,
   SandboxHelperLaunchRequest,
 } from "./sandboxHelperProtocol.js";
-import type {
-  SandboxCommandProcess,
-  SandboxRuntimeProvider,
+import {
+  SandboxPreCommandLaunchError,
+  type SandboxCommandProcess,
+  type SandboxRuntimeProvider,
 } from "./SandboxRuntimeProvider.js";
 import {
   SandboxTerminalSession,
@@ -482,9 +483,12 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     if (options.background) {
       this.detachImplicitFromPool(channel);
       options.onCommandFinalizationDeferred?.();
-      void completion.catch((error) =>
-        this.log?.(`[sandbox-terminal] Background command failed: ${error}`),
-      );
+      void completion.catch((error) => {
+        if (error instanceof SandboxPreCommandLaunchError) {
+          this.reclaimFailedLaunchChannel(channel);
+        }
+        this.log?.(`[sandbox-terminal] Background command failed: ${error}`);
+      });
       return this.backgroundResult(channel, commandId, activeLaunch.metadata);
     }
 
@@ -537,18 +541,26 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       channel.active.resumeTimeoutAfterNetworkReview =
         resumeTimeoutAfterNetworkReview;
     }
-    const outcome = await Promise.race([
-      completion.then(() => "completed" as const),
-      detachPromise.then(() => "detached" as const),
-      ...(options.timeout !== undefined
-        ? [
-            new Promise<"timed_out">((resolve) => {
-              resolveTimeout = resolve;
-              startTimeout();
-            }),
-          ]
-        : []),
-    ]).finally(() => {
+    let outcome: "completed" | "detached" | "timed_out";
+    try {
+      outcome = await Promise.race([
+        completion.then(() => "completed" as const),
+        detachPromise.then(() => "detached" as const),
+        ...(options.timeout !== undefined
+          ? [
+              new Promise<"timed_out">((resolve) => {
+                resolveTimeout = resolve;
+                startTimeout();
+              }),
+            ]
+          : []),
+      ]);
+    } catch (error) {
+      if (error instanceof SandboxPreCommandLaunchError) {
+        this.reclaimFailedLaunchChannel(channel);
+      }
+      throw error;
+    } finally {
       if (timer) clearTimeout(timer);
       if (channel.active?.commandId === commandId) {
         channel.active.pauseTimeoutForNetworkReview = undefined;
@@ -557,16 +569,19 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       if (channel.active?.detachForeground === detachForeground) {
         channel.active.detachForeground = undefined;
       }
-    });
+    }
 
     if (outcome === "detached" && channel.active?.commandId === commandId) {
       this.disableInteractivePromptWatchdog(channel.active);
       channel.active.background = true;
       this.detachImplicitFromPool(channel);
       options.onCommandFinalizationDeferred?.();
-      void completion.catch((error) =>
-        this.log?.(`[sandbox-terminal] Background command failed: ${error}`),
-      );
+      void completion.catch((error) => {
+        if (error instanceof SandboxPreCommandLaunchError) {
+          this.reclaimFailedLaunchChannel(channel);
+        }
+        this.log?.(`[sandbox-terminal] Background command failed: ${error}`);
+      });
       return this.backgroundResult(channel, commandId, activeLaunch.metadata);
     }
 
@@ -1200,6 +1215,22 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     });
     this.channels.set(channelId, channel);
     return channel;
+  }
+
+  private reclaimFailedLaunchChannel(channel: ManagedSandboxChannel): void {
+    const snapshot = channel.session.snapshot();
+    const commandId = snapshot.commands.at(-1)?.commandId;
+    const outputLease = commandId
+      ? channel.session.detachCommandOutput(commandId)
+      : undefined;
+    this.clearInteractivePromptWatchdog(channel.active);
+    channel.active?.networkAbortController.abort();
+    channel.session.close();
+    channel.active?.finalizer?.();
+    channel.active = undefined;
+    this.clearReservation(snapshot.channelId);
+    this.channels.delete(snapshot.channelId);
+    if (commandId) this.rememberClosed(snapshot, channel.owner, outputLease);
   }
 
   private reclaimImplicitChannel(channel: ManagedSandboxChannel): void {

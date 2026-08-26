@@ -25,6 +25,9 @@ const PROTOCOL_VERSION = 3;
 const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_DATA_BYTES = 256 * 1024;
 const MAX_PENDING_OUTPUT_BYTES = 2 * 1024 * 1024;
+const MACOS_EXEC_SIZE_LIMIT_BYTES = 1024 * 1024;
+const EXEC_SIZE_HEADROOM_BYTES = 64 * 1024;
+const EXEC_POINTER_BYTES = 8;
 const FORCE_KILL_DELAY_MS = 500;
 const LEGACY_POSIX_SPAWN_ERROR = "posix_spawnp failed.";
 const LEGACY_POSIX_SPAWN_RETRY_DELAY_MS = 25;
@@ -215,6 +218,77 @@ function isLegacyPosixSpawnError(error) {
   return errorMessage(error).trim() === LEGACY_POSIX_SPAWN_ERROR;
 }
 
+class SandboxPreCommandFailure extends Error {
+  constructor(failure) {
+    super(
+      `Sandbox command cannot start because argv and environment require ${failure.requiredBytes} bytes, exceeding the ${failure.limitBytes}-byte launch limit with ${failure.headroomBytes} bytes reserved as headroom.`,
+    );
+    this.name = "SandboxPreCommandFailure";
+    this.failure = failure;
+  }
+}
+
+function encodedStringBytes(value) {
+  return Buffer.byteLength(value, "utf8") + 1;
+}
+
+export function calculateSandboxExecSize(
+  argv,
+  environment,
+  {
+    limitBytes = MACOS_EXEC_SIZE_LIMIT_BYTES,
+    headroomBytes = EXEC_SIZE_HEADROOM_BYTES,
+    pointerBytes = EXEC_POINTER_BYTES,
+  } = {},
+) {
+  const argvBytes = argv.reduce(
+    (total, value) => total + encodedStringBytes(value),
+    0,
+  );
+  const environmentEntries = Object.entries(environment).map(
+    ([name, value]) => ({
+      name,
+      bytes: encodedStringBytes(`${name}=${value}`),
+    }),
+  );
+  const environmentBytes = environmentEntries.reduce(
+    (total, entry) => total + entry.bytes,
+    0,
+  );
+  const pointerTableBytes =
+    (argv.length + environmentEntries.length + 2) * pointerBytes;
+  const payloadBytes = argvBytes + environmentBytes + pointerTableBytes;
+  const requiredBytes = payloadBytes + headroomBytes;
+  return {
+    limitBytes,
+    headroomBytes,
+    argvBytes,
+    environmentBytes,
+    pointerTableBytes,
+    payloadBytes,
+    requiredBytes,
+    overBudget: requiredBytes > limitBytes,
+    largestEnvironmentEntries: environmentEntries
+      .sort((left, right) =>
+        right.bytes !== left.bytes
+          ? right.bytes - left.bytes
+          : left.name.localeCompare(right.name),
+      )
+      .slice(0, 8),
+  };
+}
+
+function preCommandFailureFrame(error) {
+  return error instanceof SandboxPreCommandFailure
+    ? {
+        type: "error",
+        message: errorMessage(error),
+        code: "sandbox_environment_too_large",
+        details: error.failure,
+      }
+    : { type: "error", message: errorMessage(error) };
+}
+
 function classifyViolation(line) {
   const operation = /network|socket|connect/i.test(line)
     ? "network-connect"
@@ -298,6 +372,9 @@ function defaultDependencies() {
     clearTimeout,
     delay: (milliseconds) =>
       new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    execSizeLimitBytes: MACOS_EXEC_SIZE_LIMIT_BYTES,
+    execSizeHeadroomBytes: EXEC_SIZE_HEADROOM_BYTES,
+    execPointerBytes: EXEC_POINTER_BYTES,
     async loadRuntime() {
       const { SandboxManager } = await import("@anthropic-ai/sandbox-runtime");
       return SandboxManager;
@@ -692,6 +769,27 @@ export function createSandboxInteractiveHelper(options = {}) {
       if (session.terminationRequested) {
         throw new Error("sandbox helper launch cancelled before PTY spawn");
       }
+      const execSize = calculateSandboxExecSize(
+        authenticatedArgv,
+        environment,
+        {
+          limitBytes: dependencies.execSizeLimitBytes,
+          headroomBytes: dependencies.execSizeHeadroomBytes,
+          pointerBytes: dependencies.execPointerBytes,
+        },
+      );
+      if (execSize.overBudget) {
+        throw new SandboxPreCommandFailure({
+          limitBytes: execSize.limitBytes,
+          headroomBytes: execSize.headroomBytes,
+          argvBytes: execSize.argvBytes,
+          environmentBytes: execSize.environmentBytes,
+          pointerTableBytes: execSize.pointerTableBytes,
+          payloadBytes: execSize.payloadBytes,
+          requiredBytes: execSize.requiredBytes,
+          largestEnvironmentEntries: execSize.largestEnvironmentEntries,
+        });
+      }
       const spawnTerminal = () =>
         nodePty.spawn(authenticatedArgv[0], authenticatedArgv.slice(1), {
           name: environment.TERM ?? "xterm-256color",
@@ -820,7 +918,7 @@ export function createSandboxInteractiveHelper(options = {}) {
       }
       if (session.pendingExit) handleExit(session.pendingExit);
     } catch (error) {
-      writeFrame(identity, { type: "error", message: errorMessage(error) });
+      writeFrame(identity, preCommandFailureFrame(error));
       await cleanup(session);
       active = undefined;
     }
@@ -849,10 +947,7 @@ export function createSandboxInteractiveHelper(options = {}) {
       }
       launching = launch(frame)
         .catch(async (error) => {
-          writeFrame(identityOf(frame), {
-            type: "error",
-            message: errorMessage(error),
-          });
+          writeFrame(identityOf(frame), preCommandFailureFrame(error));
           if (active && sameIdentity(active.identity, identityOf(frame))) {
             await cleanup(active);
             active = undefined;

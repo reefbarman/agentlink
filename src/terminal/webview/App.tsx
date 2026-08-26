@@ -561,6 +561,62 @@ function EmptyState({
   );
 }
 
+function TasksMenu({
+  controller,
+  state,
+}: {
+  controller: TerminalWebviewController;
+  state: TerminalWebviewState;
+}) {
+  const menu = state.tasksMenu;
+  if (!menu.open) return null;
+  return (
+    <div class="terminal-tasks-menu" role="menu" aria-label="Terminal tasks">
+      {menu.loading ? (
+        <div class="terminal-tasks-message">Loading tasks…</div>
+      ) : menu.tasks.length > 0 && menu.revision ? (
+        menu.tasks.map((task) => (
+          <button
+            key={task.id}
+            type="button"
+            role="menuitem"
+            title={task.command}
+            disabled={Boolean(menu.pendingRun)}
+            onClick={() => controller.runTask(menu.revision!, task.id)}
+          >
+            <span>{task.label}</span>
+            <span class="terminal-task-command">{task.command}</span>
+          </button>
+        ))
+      ) : (
+        <div class="terminal-tasks-message">
+          {menu.status === "invalid"
+            ? "tasks.json has errors"
+            : menu.status === "unavailable"
+              ? "Terminal tasks unavailable"
+              : "No tasks defined"}
+        </div>
+      )}
+      {menu.errorSummary && (
+        <div class="terminal-tasks-error">{menu.errorSummary}</div>
+      )}
+      {!menu.loading &&
+        menu.tasks.length === 0 &&
+        menu.status !== "unavailable" && (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => controller.openTasksFile()}
+          >
+            {menu.status === "invalid"
+              ? "Open .agentlink/tasks.json"
+              : "Create .agentlink/tasks.json"}
+          </button>
+        )}
+    </div>
+  );
+}
+
 export function App({ vscodeApi, controller: providedController }: AppProps) {
   const [controller] = useState(
     () =>
@@ -588,6 +644,7 @@ export function App({ vscodeApi, controller: providedController }: AppProps) {
   const [terminalListResizing, setTerminalListResizing] = useState(false);
   const [workbenchWidth, setWorkbenchWidth] = useState(0);
   const workbenchRef = useRef<HTMLDivElement>(null);
+  const tasksControlRef = useRef<HTMLDivElement>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -645,14 +702,32 @@ export function App({ vscodeApi, controller: providedController }: AppProps) {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+      if (event.key === "Escape" && state.tasksMenu.open) {
+        event.preventDefault();
+        controller.closeTasksMenu();
+      } else if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === "f"
+      ) {
         event.preventDefault();
         setSearchVisible(true);
       }
     };
+    const onPointerDown = (event: PointerEvent) => {
+      if (
+        state.tasksMenu.open &&
+        !tasksControlRef.current?.contains(event.target as Node)
+      ) {
+        controller.closeTasksMenu();
+      }
+    };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [controller, state.tasksMenu.open]);
 
   const effectiveTerminalListWidth = clampTerminalListWidth(
     terminalListWidth,
@@ -759,6 +834,24 @@ export function App({ vscodeApi, controller: providedController }: AppProps) {
           )}
         </div>
         <div class="terminal-actions" aria-label="Terminal actions">
+          <div class="terminal-tasks-control" ref={tasksControlRef}>
+            <button
+              type="button"
+              class={state.tasksMenu.open ? "active" : undefined}
+              aria-label="Terminal Tasks"
+              aria-haspopup="menu"
+              aria-expanded={state.tasksMenu.open}
+              title="Terminal Tasks"
+              onClick={() =>
+                state.tasksMenu.open
+                  ? controller.closeTasksMenu()
+                  : controller.openTasksMenu()
+              }
+            >
+              <span class="codicon codicon-checklist" aria-hidden="true" />
+            </button>
+            <TasksMenu controller={controller} state={state} />
+          </div>
           <button
             type="button"
             aria-label="New Terminal"

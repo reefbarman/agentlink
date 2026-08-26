@@ -80,6 +80,59 @@ export interface ShellLexLiteralScanResult {
   finalState: ShellLexFinalState;
 }
 
+export interface ShellLexHeredocMaskResult {
+  maskedInput: string;
+  unterminatedDelimiters: string[];
+}
+
+interface ShellLexHeredocDeclaration {
+  delimiter: string;
+  stripLeadingTabs: boolean;
+}
+
+/**
+ * Masks heredoc bodies while preserving source length and line boundaries.
+ *
+ * This is intentionally opt-in. Security-sensitive token, approval, and source
+ * rewriting consumers keep treating heredocs as opaque or unsupported; callers
+ * that only validate quote/escape balance can use the masked source so literal
+ * body text is not misread as shell syntax.
+ */
+export function maskShellHeredocBodies(
+  input: string,
+): ShellLexHeredocMaskResult {
+  const masked = input.split("");
+  const pending: ShellLexHeredocDeclaration[] = [];
+  let lineStart = 0;
+
+  while (lineStart < input.length) {
+    const newline = input.indexOf("\n", lineStart);
+    const lineEnd = newline === -1 ? input.length : newline;
+    const line = input.slice(lineStart, lineEnd).replace(/\r$/, "");
+
+    if (pending.length > 0) {
+      const current = pending[0];
+      const candidate = current.stripLeadingTabs
+        ? line.replace(/^\t+/, "")
+        : line;
+      for (let index = lineStart; index < lineEnd; index++) {
+        masked[index] = " ";
+      }
+      if (candidate === current.delimiter) pending.shift();
+    } else {
+      pending.push(...readHeredocDeclarations(line));
+    }
+
+    if (newline === -1) break;
+    lineStart = newline + 1;
+  }
+
+  return {
+    maskedInput: masked.join(""),
+    unterminatedDelimiters: pending.map(({ delimiter }) => delimiter),
+  };
+}
+
 /**
  * Scans the legacy command-splitter dialect without interpreting shell syntax.
  *
@@ -443,6 +496,118 @@ export function scanShellLexLiteralOccurrences(
     unsupportedSyntax,
     finalState: { quote, danglingEscape },
   };
+}
+
+function readHeredocDeclarations(line: string): ShellLexHeredocDeclaration[] {
+  const declarations: ShellLexHeredocDeclaration[] = [];
+  let quote: ShellLexQuote | null = null;
+  let arithmeticDepth = 0;
+  let index = 0;
+
+  while (index < line.length) {
+    const ch = line[index];
+    if (ch === "\\" && quote !== "single") {
+      index += index + 1 < line.length ? 2 : 1;
+      continue;
+    }
+    if (ch === "'" && quote !== "double") {
+      quote = quote === "single" ? null : "single";
+      index++;
+      continue;
+    }
+    if (ch === '"' && quote !== "single") {
+      quote = quote === "double" ? null : "double";
+      index++;
+      continue;
+    }
+    if (quote === null && line.startsWith("$((", index)) {
+      arithmeticDepth++;
+      index += 3;
+      continue;
+    }
+    if (
+      quote === null &&
+      arithmeticDepth === 0 &&
+      line.startsWith("((", index) &&
+      (index === 0 || /[\s;&|]/.test(line[index - 1] ?? ""))
+    ) {
+      arithmeticDepth++;
+      index += 2;
+      continue;
+    }
+    if (quote === null && arithmeticDepth > 0 && line.startsWith("))", index)) {
+      arithmeticDepth--;
+      index += 2;
+      continue;
+    }
+    if (
+      quote === null &&
+      arithmeticDepth === 0 &&
+      ch === "#" &&
+      (index === 0 || /[\s;&|]/.test(line[index - 1] ?? ""))
+    ) {
+      break;
+    }
+    if (
+      quote !== null ||
+      arithmeticDepth > 0 ||
+      !line.startsWith("<<", index) ||
+      line[index - 1] === "<" ||
+      line[index + 2] === "<"
+    ) {
+      index++;
+      continue;
+    }
+
+    let delimiterStart = index + 2;
+    const stripLeadingTabs = line[delimiterStart] === "-";
+    if (stripLeadingTabs) delimiterStart++;
+    while (/\s/.test(line[delimiterStart] ?? "")) delimiterStart++;
+    const parsed = readHeredocDelimiter(line, delimiterStart);
+    if (!parsed) {
+      index = delimiterStart;
+      continue;
+    }
+    declarations.push({ delimiter: parsed.value, stripLeadingTabs });
+    index = parsed.end;
+  }
+
+  return declarations;
+}
+
+function readHeredocDelimiter(
+  line: string,
+  start: number,
+): { value: string; end: number } | undefined {
+  let value = "";
+  let quote: ShellLexQuote | null = null;
+  let index = start;
+
+  while (index < line.length) {
+    const ch = line[index];
+    if (quote === null && /[\s;&|<>]/.test(ch)) break;
+    if (ch === "\\" && quote !== "single") {
+      if (index + 1 >= line.length) return undefined;
+      value += line[index + 1];
+      index += 2;
+      continue;
+    }
+    if (ch === "'" && quote !== "double") {
+      quote = quote === "single" ? null : "single";
+      index++;
+      continue;
+    }
+    if (ch === '"' && quote !== "single") {
+      quote = quote === "double" ? null : "double";
+      index++;
+      continue;
+    }
+    value += ch;
+    index++;
+  }
+
+  if (quote !== null || value === "") return undefined;
+  return { value, end: index };
 }
 
 function readSeparator(

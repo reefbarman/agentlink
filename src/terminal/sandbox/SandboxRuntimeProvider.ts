@@ -2,10 +2,22 @@ import type {
   SandboxCommandIdentity,
   SandboxHelperLaunchRequest,
   SandboxManagedNetworkDestination,
+  SandboxPreCommandFailureDetails,
 } from "./sandboxHelperProtocol.js";
 
 import type { SandboxViolation } from "../../core/sandboxPolicy.js";
 import type { TerminalDimensions } from "../../core/terminalProtocol.js";
+
+export class SandboxPreCommandLaunchError extends Error {
+  readonly code = "sandbox_environment_too_large" as const;
+  readonly details: SandboxPreCommandFailureDetails;
+
+  constructor(message: string, details: SandboxPreCommandFailureDetails) {
+    super(message);
+    this.name = "SandboxPreCommandLaunchError";
+    this.details = details;
+  }
+}
 
 export interface SandboxCommandReady {
   pid: number;

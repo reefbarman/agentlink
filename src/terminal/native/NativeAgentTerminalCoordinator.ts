@@ -651,6 +651,39 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     if (outcome === "detached") await completion;
 
     if (outcome === "timed_out") {
+      const timeoutSnapshot = channel.session.snapshot();
+      const timedOutCommand = timeoutSnapshot.commands.find(
+        (candidate) => candidate.commandId === commandId,
+      );
+      if (timedOutCommand?.status === "launching") {
+        const retained = channel.session.getCommandOutput(commandId);
+        const output = retained?.output ?? timedOutCommand.output;
+        const result: TerminalCommandResult = {
+          exit_code: null,
+          output: cleanTerminalOutput(output),
+          terminal_raw_output: cleanTerminalRawOutput(output),
+          ...this.outputMetadata(retained),
+          output_captured: true,
+          terminal_id: timeoutSnapshot.channelId,
+          terminal_name: timeoutSnapshot.title,
+          cwd: timeoutSnapshot.cwd,
+          command: timedOutCommand.command,
+          timed_out: true,
+          is_running: false,
+          execution_mode: "native_pty",
+          command_sent: true,
+          process_launched: false,
+          retry_safe: false,
+          failure_stage: "launch",
+          output_warning:
+            "The command was submitted to the Native Agent terminal, but shell integration never confirmed command start before the timeout. The terminal was closed to avoid leaving an unknown running process.",
+        };
+        this.closeTerminals({
+          owner: channel.owner,
+          names: [timeoutSnapshot.channelId],
+        });
+        return result;
+      }
       if (channel.active?.commandId === commandId) {
         channel.active.background = true;
         this.detachImplicitFromPool(channel);
@@ -1002,7 +1035,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
         command?.status === "launching" || command?.status === "running",
       execution_mode: "native_pty",
       command_sent: command !== undefined,
-      process_launched: command?.startedAt !== undefined,
+      process_launched: command?.readyAt !== undefined,
       retry_safe: command === undefined,
     };
   }
@@ -1026,7 +1059,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       is_running: false,
       execution_mode: "native_pty",
       command_sent: true,
-      process_launched: command.startedAt !== undefined,
+      process_launched: command.readyAt !== undefined,
       retry_safe: false,
     };
   }

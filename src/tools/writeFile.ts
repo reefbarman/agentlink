@@ -49,7 +49,7 @@ export interface WriteFileProviders {
 }
 
 export async function handleWriteFile(
-  params: { path: string; content: string },
+  params: { path: string; content: string; save_without_formatting?: boolean },
   _approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
@@ -103,6 +103,7 @@ export async function handleWriteFile(
       content: params.content,
       outsideWorkspace: !inWorkspace,
       diagnosticDelay: providers.diagnosticDelay ?? DEFAULT_DIAGNOSTIC_DELAY_MS,
+      saveWithoutFormatting: params.save_without_formatting,
       approvalPanel,
       onApprovalRequest,
       prepareOneShotAuthorization: providers.prepareOneShotAuthorization,

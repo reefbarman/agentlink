@@ -61,6 +61,38 @@ describe("terminal surface protocol", () => {
     ).toBe(false);
   });
 
+  it("accepts exact task requests", () => {
+    expect(
+      isTerminalSurfaceRequest({
+        type: "terminal-view/list-tasks",
+        requestId: "tasks-1",
+      }),
+    ).toBe(true);
+    expect(
+      isTerminalSurfaceRequest({
+        type: "terminal-view/run-task",
+        requestId: "run-1",
+        revision: "abc123",
+        taskId: "task-0",
+      }),
+    ).toBe(true);
+    expect(
+      isTerminalSurfaceRequest({
+        type: "terminal-view/open-tasks-file",
+        requestId: "open-1",
+      }),
+    ).toBe(true);
+    expect(
+      isTerminalSurfaceRequest({
+        type: "terminal-view/run-task",
+        requestId: "run-1",
+        revision: "abc123",
+        taskId: "task-0",
+        command: "rm -rf .",
+      }),
+    ).toBe(false);
+  });
+
   it("accepts bounded create and target-bound lifecycle requests", () => {
     expect(
       isTerminalSurfaceRequest({

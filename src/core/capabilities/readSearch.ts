@@ -88,7 +88,9 @@ export type ReadFileSymbolOutlineResult =
   | undefined;
 
 export interface ReadFileEnrichmentProvider {
-  getGitStatus(filePath: string): string | undefined;
+  getGitStatus(
+    filePath: string,
+  ): string | undefined | Promise<string | undefined>;
   detectLanguage(filePath: string): string | undefined;
   getSymbolOutline(filePath: string): Promise<ReadFileSymbolOutlineResult>;
   getDiagnosticsSummary(
@@ -179,7 +181,9 @@ export interface ContextWorkingSetProvider {
 }
 
 export interface ContextEnrichmentProvider {
-  getGitStatus(filePath: string): string | undefined;
+  getGitStatus(
+    filePath: string,
+  ): string | undefined | Promise<string | undefined>;
   getDocumentSymbols(
     document: ContextResolvedDocument,
   ): Promise<Record<string, string[]> | undefined>;

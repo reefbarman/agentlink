@@ -43,9 +43,78 @@ describe("command tier classifier", () => {
   });
 
   it.each([
+    "git merge-base HEAD origin/main",
+    "git merge-base --is-ancestor HEAD origin/main",
+    "git ls-tree -r --name-only HEAD -- src",
+    "git ls-tree --format='%(objectname) %(path)' HEAD",
+    "git for-each-ref --count=10 --sort=-committerdate --format='%(refname)' refs/heads",
+  ])("classifies narrowly validated git inspection as safe: %s", (command) => {
+    expect(classify(command).perSubCommand[0]?.result).toMatchObject({
+      tier: "safe",
+      code: "read_only",
+      executable: "git",
+    });
+    expect(isCommandEligibleForReadOnlyExecution(command, ctx)).toEqual({
+      eligible: true,
+    });
+  });
+
+  it.each([
+    "git merge-base --all",
+    "git merge-base --is-ancestor --fork-point HEAD origin/main",
+    "git merge-base --stdin HEAD origin/main",
+    "git ls-tree HEAD --pathspec-from-file=paths.txt",
+    "git ls-tree --format HEAD",
+    "git for-each-ref --format-file=template.txt",
+    "git for-each-ref --shell --format='%(refname)'",
+  ])("rejects unsupported git inspection form: %s", (command) => {
+    expect(classify(command).perSubCommand[0]?.result).toMatchObject({
+      tier: "sensitive",
+      code: "unrecognized_operation",
+      executable: "git",
+    });
+    expect(isCommandEligibleForReadOnlyExecution(command, ctx)).toEqual({
+      eligible: false,
+      reason: expect.stringContaining("git"),
+    });
+  });
+
+  it.each(["mise --help", "mise help install", "mise help plugins:list"])(
+    "classifies exact mise help as safe: %s",
+    (command) => {
+      expect(classify(command).perSubCommand[0]?.result).toMatchObject({
+        tier: "safe",
+        code: "read_only",
+        executable: "mise",
+      });
+      expect(isCommandEligibleForReadOnlyExecution(command, ctx)).toEqual({
+        eligible: true,
+      });
+    },
+  );
+
+  it.each([
+    "mise",
+    "mise help",
+    "mise help install extra",
+    "mise help ../install",
+    "mise tasks",
+    "mise tasks --help",
+    "mise run test --help",
+    "mise --help install",
+  ])("does not classify other mise forms as safe: %s", (command) => {
+    expect(classify(command).perSubCommand[0]?.result).toMatchObject({
+      tier: "sensitive",
+      code: "unrecognized_operation",
+      executable: "mise",
+    });
+  });
+
+  it.each([
     "npm test > src/test-output.txt",
     "npm run build >> src/build-output.txt",
     "go test ./... > test-results.txt",
+    "git for-each-ref --format='%(refname)' > refs.txt",
   ])("preserves workspace redirection classification for %s", (command) => {
     expect(classify(command).perSubCommand[0]?.result).toMatchObject({
       tier: "sensitive",

@@ -98,6 +98,10 @@ The VS Code manager can install, inspect diagnostics, enable/disable, update, se
 
 Review agents are bounded by useful work rather than input size. Automatic tiered budgets count committed tool calls, successful model API turns, and elapsed time; token and estimated-cost caps are ignored for review task classes so a large captured diff cannot exhaust the budget before the reviewer explores surrounding code. Non-review background tasks remain uncapped by default and can still use explicit token, cost, tool-call, turn, or elapsed-time limits. Soft limits request wrap-up, with a 3× hard safety backstop for runs that do not finish.
 
+## Tool reliability
+
+AgentLink's structured read and terminal tools report uncertainty instead of silently fabricating success: exact-file search counts preserve ripgrep's single-file output, recursive listings retain usable results with bounded broken-path warnings, `read_file`/`get_context` refresh VS Code Git status before reporting `clean`, and Native Agent timeouts distinguish a confirmed running process from a command that never reached the shell start marker. `execute_command` also accepts correctly terminated quoted heredocs during syntax validation while keeping approval classification and inline-file rewriting fail-closed. See the [complete tool reference](resources/builtin-skills/documentation/references/complete-reference.md#tools-reference) for response details and recovery codes.
+
 ## Write tools
 
 AgentLink's single-file write tools use the same reviewed save boundary. After an approved edit is saved, AgentLink reads the file from disk and compares it with the approved editor content. A successful result includes `durability.status: "durable"`, an `exact` or `transformed` outcome, and `post_edit_content_hash` (SHA-256 of the final disk content). Reverted edits, editor/disk divergence, unreadable or missing files, and transformations of exact-preservation formats return canonical errors; AgentLink reports the observed state rather than overwriting it automatically.
@@ -108,23 +112,25 @@ With **Approve for Me** active, `write_file` and `apply_diff` may write directly
 
 Create a file or replace its complete content.
 
-| Parameter | Type   | Description                          |
-| --------- | ------ | ------------------------------------ |
-| `path`    | string | Workspace-relative or absolute path. |
-| `content` | string | Complete proposed file content.      |
+| Parameter                 | Type     | Description                                                                     |
+| ------------------------- | -------- | ------------------------------------------------------------------------------- |
+| `path`                    | string   | Workspace-relative or absolute path.                                            |
+| `content`                 | string   | Complete proposed file content.                                                 |
+| `save_without_formatting` | boolean? | Save without ordinary participants and require exact disk-content preservation. |
 
 ### `apply_diff`
 
 Apply one or more reviewed SEARCH/REPLACE blocks to an existing file.
 
-| Parameter       | Type      | Description                                                                                                          |
-| --------------- | --------- | -------------------------------------------------------------------------------------------------------------------- |
-| `path`          | string    | Existing file path.                                                                                                  |
-| `diff`          | string    | SEARCH/REPLACE blocks.                                                                                               |
-| `block_options` | object[]? | Select a 1-based occurrence or intentionally replace every exact occurrence for a block.                             |
-| `atomic`        | boolean?  | Require every block to validate before review/write. This validates the proposal; it does not bypass format-on-save. |
+| Parameter                 | Type      | Description                                                                                                          |
+| ------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------- |
+| `path`                    | string    | Existing file path.                                                                                                  |
+| `diff`                    | string    | SEARCH/REPLACE blocks.                                                                                               |
+| `block_options`           | object[]? | Select a 1-based occurrence or intentionally replace every exact occurrence for a block.                             |
+| `atomic`                  | boolean?  | Require every block to validate before review/write. This validates the proposal; it does not bypass format-on-save. |
+| `save_without_formatting` | boolean?  | Save without ordinary participants and require exact disk-content preservation.                                      |
 
-If an ordinary save participant transforms the approved content, the write remains accepted with `durability.outcome: "transformed"`. For `apply_diff`, proposal-level successful blocks become `unverified_after_transform` and omit positional ranges because those ranges no longer describe final disk content. Re-read the file whenever `durability.requires_reread` is true. Known Unity serialization files (`.meta`, `.asset`, `.unity`, `.mat`, `.prefab`, `.anim`, `.controller`, and `.physicMaterial`) use VS Code's Save without Formatting path and fail closed instead of falling back to normal save participants.
+If an ordinary save participant transforms the approved content, the write remains accepted with `durability.outcome: "transformed"`, except when valid YAML/JSON becomes unparseable: AgentLink restores the approved content with Save without Formatting or fails closed. For `apply_diff`, proposal-level successful blocks become `unverified_after_transform` and omit positional ranges because those ranges no longer describe final disk content. Re-read the file whenever `durability.requires_reread` is true. Known Unity serialization files (`.meta`, `.asset`, `.unity`, `.mat`, `.prefab`, `.anim`, `.controller`, and `.physicMaterial`) use VS Code's Save without Formatting path automatically.
 
 ## Documentation
 

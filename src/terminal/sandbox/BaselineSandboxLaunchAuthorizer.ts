@@ -31,7 +31,10 @@ import type {
   SandboxLaunchAuthorizer,
 } from "./SandboxTerminalCoordinator.js";
 import {
+  budgetSandboxEnvironment,
   buildSandboxPolicyEnvironment,
+  SANDBOX_AUTHORIZER_EXEC_BUDGET_BYTES,
+  type SandboxEnvironmentProvenance,
   type SandboxShellEnvironmentPolicy,
 } from "./sandboxEnvironmentPolicy.js";
 import { resolveWorkspaceGitProtection } from "./gitMetadataProtection.js";
@@ -112,6 +115,8 @@ export interface BaselineSandboxLaunchAuthorizerOptions {
   /** Host environment used as the source for the configured shell environment policy. */
   hostEnvironment?: Readonly<Record<string, string | undefined>>;
   environmentPolicy?: SandboxShellEnvironmentPolicy;
+  /** Conservative argv/environment budget used before the helper composes final argv. */
+  environmentBudgetBytes?: number;
   /** Canonical validated runtime directories required by sandboxed commands. */
   trustedRuntimeRoots?: readonly string[];
   capabilityAuthority?: SandboxCapabilityAuthority;
@@ -408,7 +413,9 @@ function buildEnvironment(
   hostTemporaryDirectory: string,
   developerDirectory: string | undefined,
   temporaryHome: boolean,
-): ReturnType<typeof buildSandboxPolicyEnvironment> {
+  command: string,
+  budgetBytes: number,
+) {
   const resolved = buildSandboxPolicyEnvironment(hostEnvironment, policy);
   if (resolved.policy.useProfile) {
     throw new Error(
@@ -417,44 +424,71 @@ function buildEnvironment(
   }
   const agentEnvironment = buildAgentExecutionEnv();
   const environment: Record<string, string> = {};
+  const provenance: Record<string, SandboxEnvironmentProvenance> = {};
+  const setEntry = (
+    name: string,
+    value: string,
+    source: SandboxEnvironmentProvenance,
+  ) => {
+    environment[name] = value;
+    provenance[name] = source;
+  };
   for (const [name, value] of Object.entries(resolved.environment)) {
     if (isReservedEnvironmentName(name)) continue;
-    environment[name] = value;
+    setEntry(name, value, resolved.provenance[name]);
   }
-  Object.assign(environment, agentEnvironment);
+  for (const [name, value] of Object.entries(agentEnvironment)) {
+    setEntry(name, value, "agent-reserved");
+  }
   for (const [name, value] of Object.entries(explicit ?? {})) {
     if (isReservedEnvironmentName(name)) {
       throw new Error(`Sandbox environment override is reserved: ${name}`);
     }
-    environment[name] = value;
+    setEntry(name, value, "per-command");
   }
   const hostPath = hostEnvironment.PATH?.trim() || DEFAULT_PATH;
   const executablePath = developerDirectory
     ? `${path.join(developerDirectory, "usr", "bin")}:${hostPath}`
     : hostPath;
+  for (const [name, value] of Object.entries({
+    HOME: temporaryHome ? directories.home : homeDirectory,
+    TMPDIR: hostTemporaryDirectory,
+    XDG_CACHE_HOME: directories.cache,
+    GOCACHE: explicit?.GOCACHE ?? path.join(directories.cache, "go-build"),
+    GOLANGCI_LINT_CACHE:
+      explicit?.GOLANGCI_LINT_CACHE ??
+      path.join(directories.cache, "golangci-lint"),
+    CLAUDE_CODE_TMPDIR: directories.tmp,
+    PATH: executablePath,
+    TERM: "xterm-256color",
+    LANG: "en_US.UTF-8",
+    LC_ALL: "en_US.UTF-8",
+    ...(developerDirectory
+      ? {
+          DEVELOPER_DIR: developerDirectory,
+          xcrun_db: path.join(directories.tmp, "xcrun_db"),
+        }
+      : {}),
+  })) {
+    setEntry(
+      name,
+      value,
+      explicit && Object.hasOwn(explicit, name)
+        ? "per-command"
+        : "agent-reserved",
+    );
+  }
+  const budget = budgetSandboxEnvironment(
+    environment,
+    provenance,
+    command,
+    budgetBytes,
+  );
   return {
     policy: resolved.policy,
-    environment: {
-      ...environment,
-      HOME: temporaryHome ? directories.home : homeDirectory,
-      TMPDIR: hostTemporaryDirectory,
-      XDG_CACHE_HOME: directories.cache,
-      GOCACHE: explicit?.GOCACHE ?? path.join(directories.cache, "go-build"),
-      GOLANGCI_LINT_CACHE:
-        explicit?.GOLANGCI_LINT_CACHE ??
-        path.join(directories.cache, "golangci-lint"),
-      CLAUDE_CODE_TMPDIR: directories.tmp,
-      PATH: executablePath,
-      TERM: "xterm-256color",
-      LANG: "en_US.UTF-8",
-      LC_ALL: "en_US.UTF-8",
-      ...(developerDirectory
-        ? {
-            DEVELOPER_DIR: developerDirectory,
-            xcrun_db: path.join(directories.tmp, "xcrun_db"),
-          }
-        : {}),
-    },
+    provenance,
+    environment: budget.environment,
+    budget,
   };
 }
 
@@ -469,6 +503,7 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
   >;
   private readonly trustedRuntimeRoots: readonly string[];
   private readonly environmentPolicy: SandboxShellEnvironmentPolicy | undefined;
+  private readonly environmentBudgetBytes: number;
   private readonly capabilityAuthority: SandboxCapabilityAuthority;
   private readonly capabilityGrantTtlMs: number;
   private readonly capabilityGrantTiming: SandboxCapabilityGrantTiming;
@@ -498,6 +533,14 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
           includeOnly: [...(options.environmentPolicy.includeOnly ?? [])],
         }
       : undefined;
+    this.environmentBudgetBytes =
+      options.environmentBudgetBytes ?? SANDBOX_AUTHORIZER_EXEC_BUDGET_BYTES;
+    if (
+      !Number.isSafeInteger(this.environmentBudgetBytes) ||
+      this.environmentBudgetBytes <= 0
+    ) {
+      throw new Error("Sandbox environment budget must be a positive integer");
+    }
     this.trustedRuntimeRoots = [...(options.trustedRuntimeRoots ?? [])];
     this.capabilityAuthority =
       options.capabilityAuthority ?? new SandboxCapabilityAuthority();
@@ -594,6 +637,8 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
         hostTemporaryDirectory,
         developerToolchain.developerDirectory,
         options.temporaryHome === true,
+        options.command,
+        this.environmentBudgetBytes,
       );
       const { set: environmentOverrides, ...environmentPolicyFields } =
         environmentResult.policy;
@@ -686,6 +731,14 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
           includeOnly: [...environmentPolicySummary.includeOnly],
           setKeys: [...environmentPolicySummary.setKeys],
         },
+        environmentBudget: {
+          limitBytes: this.environmentBudgetBytes,
+          estimatedBytes: environmentResult.budget.estimatedBytes,
+          protectedBytes: environmentResult.budget.protectedBytes,
+          dropped: environmentResult.budget.dropped.map((entry) => ({
+            ...entry,
+          })),
+        },
         capabilities: {
           backend: "seatbelt",
           processTree: true,
@@ -766,6 +819,16 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
                 exclude: [...metadata.environmentPolicy.exclude],
                 includeOnly: [...metadata.environmentPolicy.includeOnly],
                 setKeys: [...metadata.environmentPolicy.setKeys],
+              },
+            }
+          : {}),
+        ...(metadata.environmentBudget
+          ? {
+              environmentBudget: {
+                ...metadata.environmentBudget,
+                dropped: metadata.environmentBudget.dropped.map((entry) => ({
+                  ...entry,
+                })),
               },
             }
           : {}),

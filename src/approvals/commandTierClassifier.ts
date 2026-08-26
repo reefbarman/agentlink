@@ -257,9 +257,11 @@ export class StaticCommandTierClassifier implements CommandTierClassifier {
     const semanticClassification =
       command === "git"
         ? classifyGit(args)
-        : command === "npm" || command === "pnpm" || command === "yarn"
-          ? classifyPackageManager(command, args)
-          : undefined;
+        : command === "mise"
+          ? classifyMise(args)
+          : command === "npm" || command === "pnpm" || command === "yarn"
+            ? classifyPackageManager(command, args)
+            : undefined;
     if (semanticClassification?.tier === "dangerous") {
       return semanticClassification;
     }
@@ -556,6 +558,130 @@ function parseGitInvocation(args: string[]): ParsedGitInvocation {
   };
 }
 
+interface NarrowReadOnlyGitValidation {
+  recognized: boolean;
+  reason?: string;
+}
+
+const MERGE_BASE_MODE_OPTIONS = new Set([
+  "--octopus",
+  "--independent",
+  "--is-ancestor",
+  "--fork-point",
+]);
+
+function validateNarrowReadOnlyGit(
+  parsed: ParsedGitInvocation,
+): NarrowReadOnlyGitValidation {
+  const { subcommand, subcommandArgs } = parsed;
+  if (subcommand === "merge-base") {
+    const options = subcommandArgs.filter((arg) => arg.startsWith("-"));
+    const unsupportedOption = options.find(
+      (arg) => !["-a", "--all", ...MERGE_BASE_MODE_OPTIONS].includes(arg),
+    );
+    if (unsupportedOption) {
+      return {
+        recognized: true,
+        reason: `git merge-base option is not read-only-safe: ${unsupportedOption}`,
+      };
+    }
+    const modes = options.filter((arg) => MERGE_BASE_MODE_OPTIONS.has(arg));
+    if (modes.length > 1) {
+      return {
+        recognized: true,
+        reason: "git merge-base accepts at most one operation mode",
+      };
+    }
+    const operands = subcommandArgs.filter((arg) => !arg.startsWith("-"));
+    const mode = modes[0];
+    const validOperandCount =
+      mode === "--is-ancestor"
+        ? operands.length === 2
+        : mode === "--fork-point"
+          ? operands.length >= 1 && operands.length <= 2
+          : mode === "--independent"
+            ? operands.length >= 1
+            : operands.length >= 2;
+    return validOperandCount
+      ? { recognized: true }
+      : {
+          recognized: true,
+          reason: "git merge-base requires operands matching its selected mode",
+        };
+  }
+
+  if (subcommand === "ls-tree") {
+    const separatorIndex = subcommandArgs.indexOf("--");
+    const optionAndTreeArgs =
+      separatorIndex < 0
+        ? subcommandArgs
+        : subcommandArgs.slice(0, separatorIndex);
+    const unsupportedOption = optionAndTreeArgs.find(
+      (arg) =>
+        arg.startsWith("-") &&
+        ![
+          "-d",
+          "-r",
+          "-t",
+          "-l",
+          "-z",
+          "--long",
+          "--name-only",
+          "--name-status",
+          "--object-only",
+          "--full-name",
+          "--full-tree",
+          "--abbrev",
+        ].includes(arg) &&
+        !/^--abbrev=\d+$/.test(arg) &&
+        !/^--format=.+/.test(arg),
+    );
+    if (unsupportedOption) {
+      return {
+        recognized: true,
+        reason: `git ls-tree option is not read-only-safe: ${unsupportedOption}`,
+      };
+    }
+    const operands = optionAndTreeArgs.filter((arg) => !arg.startsWith("-"));
+    return operands.length >= 1
+      ? { recognized: true }
+      : {
+          recognized: true,
+          reason: "git ls-tree requires an explicit tree-ish",
+        };
+  }
+
+  if (subcommand === "for-each-ref") {
+    const unsupportedOption = subcommandArgs.find(
+      (arg) =>
+        arg.startsWith("-") &&
+        ![
+          "--ignore-case",
+          "--include-root-refs",
+          "--omit-empty",
+          "--color",
+          "--no-color",
+          "--merged",
+          "--no-merged",
+          "--contains",
+          "--no-contains",
+        ].includes(arg) &&
+        !/^--count=\d+$/.test(arg) &&
+        !/^--(?:sort|format|exclude|points-at)=.+/.test(arg) &&
+        !/^--color=(?:always|never|auto)$/.test(arg) &&
+        !/^--(?:merged|no-merged|contains|no-contains)=.+/.test(arg),
+    );
+    return unsupportedOption
+      ? {
+          recognized: true,
+          reason: `git for-each-ref option is not read-only-safe: ${unsupportedOption}`,
+        }
+      : { recognized: true };
+  }
+
+  return { recognized: false };
+}
+
 function validateReadOnlyGit(args: string[]): string | undefined {
   const parsed = parseGitInvocation(args);
   const { globalArgs, subcommand, subcommandOptionArgs } = parsed;
@@ -595,6 +721,9 @@ function validateReadOnlyGit(args: string[]): string | undefined {
       arg.startsWith("--output="),
   );
   if (unsafeFlag) return `git option is not read-only-safe: ${unsafeFlag}`;
+
+  const narrowValidation = validateNarrowReadOnlyGit(parsed);
+  if (narrowValidation.reason) return narrowValidation.reason;
 
   const requiredGuards = ["diff", "show", "log"].includes(subcommand)
     ? ["--no-ext-diff", "--no-textconv"]
@@ -767,6 +896,13 @@ function classifyGit(args: string[]): CommandTierResult {
       : sensitive("git stash mutation", "unrecognized_operation", "git");
   }
 
+  const narrowValidation = validateNarrowReadOnlyGit(parsed);
+  if (narrowValidation.recognized) {
+    return narrowValidation.reason
+      ? sensitive(narrowValidation.reason, "unrecognized_operation", "git")
+      : safe(`git ${subcommand}`, "read_only", "git");
+  }
+
   if (SAFE_GIT_SUBCOMMANDS.has(subcommand)) {
     return safe(`git ${subcommand}`, "read_only", "git");
   }
@@ -783,6 +919,20 @@ function classifyGit(args: string[]): CommandTierResult {
     "unrecognized_operation",
     "git",
   );
+}
+
+function classifyMise(args: string[]): CommandTierResult {
+  if (args.length === 1 && args[0] === "--help") {
+    return safe("mise help", "read_only", "mise");
+  }
+  if (
+    args.length === 2 &&
+    args[0] === "help" &&
+    /^[A-Za-z0-9][A-Za-z0-9:_-]*$/.test(args[1] ?? "")
+  ) {
+    return safe(`mise help ${args[1]}`, "read_only", "mise");
+  }
+  return sensitive("mise command", "unrecognized_operation", "mise");
 }
 
 function classifyPackageManager(

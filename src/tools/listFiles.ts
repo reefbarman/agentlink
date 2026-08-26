@@ -237,12 +237,12 @@ async function listRecursive(
 
   args.push(dirPath);
 
-  const { files, warnings } = await execRipgrepFiles(
-    rgPath,
-    args,
-    MAX_ENTRIES + 1,
-  );
-  const truncated = files.length > MAX_ENTRIES;
+  const {
+    files,
+    warnings,
+    truncated: ripgrepTruncated,
+  } = await execRipgrepFiles(rgPath, args, MAX_ENTRIES + 1);
+  const truncated = ripgrepTruncated || files.length > MAX_ENTRIES;
   const entries = files
     .slice(0, MAX_ENTRIES)
     .map((f) => path.relative(dirPath, f));
@@ -256,7 +256,7 @@ async function listRecursive(
     ...(includeIgnored && { include_ignored: true }),
     ...(warnings.length > 0 && {
       warnings: [
-        "Skipped filesystem symlink loops while listing files.",
+        "Some paths could not be inspected; partial listing results are shown.",
         ...warnings,
       ],
     }),

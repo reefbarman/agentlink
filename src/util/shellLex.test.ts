@@ -1,10 +1,63 @@
 import { describe, expect, it } from "vitest";
 import {
+  maskShellHeredocBodies,
   scanShellLexBoundaries,
   scanShellLexLiteralOccurrences,
   scanShellLexTokens,
   scanShellLexWords,
 } from "./shellLex.js";
+
+describe("maskShellHeredocBodies", () => {
+  it("masks quoted heredoc bodies without changing source length or newlines", () => {
+    const input = [
+      "python - <<'PY'",
+      `text = "it's safe"`,
+      "```markdown",
+      String.raw`assert re.match(r"['\\\"]", text)`,
+      "PY",
+      "echo done",
+    ].join("\n");
+    const result = maskShellHeredocBodies(input);
+
+    expect(result.unterminatedDelimiters).toEqual([]);
+    expect(result.maskedInput).toHaveLength(input.length);
+    expect(result.maskedInput.match(/\n/g)).toHaveLength(
+      input.match(/\n/g)?.length ?? 0,
+    );
+    expect(result.maskedInput).toContain("python - <<'PY'");
+    expect(result.maskedInput).toContain("echo done");
+    expect(result.maskedInput).not.toContain("it's safe");
+  });
+
+  it("supports multiple heredocs and tab-stripped terminators", () => {
+    const input = [
+      "cat <<FIRST <<-'SECOND'",
+      "first ' body",
+      "FIRST",
+      '\tsecond " body',
+      "\tSECOND",
+    ].join("\n");
+
+    expect(maskShellHeredocBodies(input).unterminatedDelimiters).toEqual([]);
+  });
+
+  it("reports missing delimiters in declaration order", () => {
+    expect(
+      maskShellHeredocBodies("cat <<'FIRST' <<SECOND\nbody")
+        .unterminatedDelimiters,
+    ).toEqual(["FIRST", "SECOND"]);
+  });
+
+  it.each(["echo $((1 << 2))", "(( value = 1 << 2 ))"])(
+    "does not interpret arithmetic shifts as heredocs: %s",
+    (input) => {
+      expect(maskShellHeredocBodies(input)).toEqual({
+        maskedInput: input,
+        unterminatedDelimiters: [],
+      });
+    },
+  );
+});
 
 describe("scanShellLexBoundaries", () => {
   it.each([

@@ -12,6 +12,7 @@ interface MutableDocument {
   isDirty: boolean;
   content: string;
   getText(): string;
+  positionAt(offset: number): vscode.Position;
   save(): Promise<boolean>;
 }
 
@@ -42,6 +43,9 @@ function makeDocument(
     content,
     getText() {
       return this.content;
+    },
+    positionAt(offset) {
+      return new vscode.Position(0, offset);
     },
     async save() {
       if (options?.save) return options.save(this);
@@ -78,6 +82,18 @@ describe("commitAndVerifyEdit", () => {
       value: undefined,
       writable: true,
     });
+    vi.spyOn(vscode.workspace, "applyEdit").mockImplementation(async (edit) => {
+      const entries = edit.entries();
+      const uri = entries[0]?.[0];
+      const replacement = entries[0]?.[1][0]?.newText;
+      const document = (
+        vscode.workspace.textDocuments as unknown as MutableDocument[]
+      ).find((candidate) => candidate.uri.fsPath === uri?.fsPath);
+      if (!document || replacement === undefined) return false;
+      document.content = replacement;
+      document.isDirty = true;
+      return true;
+    });
   });
 
   afterEach(async () => {
@@ -89,6 +105,66 @@ describe("commitAndVerifyEdit", () => {
         }),
       ),
     );
+  });
+
+  it("rejects a stale document whose backing path differs from the target", async () => {
+    const target = await makeFile("target.ts", "target baseline");
+    const stale = await makeFile("stale.ts", "stale baseline");
+    const document = makeDocument(stale.absolutePath, "approved", {
+      save: async (doc) => {
+        await fs.writeFile(stale.absolutePath, doc.content, "utf-8");
+        doc.isDirty = false;
+        return true;
+      },
+    });
+    const save = vi.spyOn(document, "save");
+
+    const result = await commitAndVerifyEdit(
+      request(
+        document,
+        target.absolutePath,
+        target.relativePath,
+        "target baseline",
+      ),
+    );
+
+    expect(save).not.toHaveBeenCalled();
+    expect(await fs.readFile(target.absolutePath, "utf-8")).toBe(
+      "target baseline",
+    );
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "document_target_mismatch",
+      durability: {
+        status: "failed",
+        outcome: "unverifiable",
+        disk_changed: false,
+      },
+    });
+  });
+
+  it("rejects a non-file review document even when its fsPath matches", async () => {
+    const target = await makeFile("target.ts", "target baseline");
+    const document = makeDocument(target.absolutePath, "approved");
+    document.uri = {
+      ...document.uri,
+      scheme: "agentlink-diff",
+    } as vscode.Uri;
+
+    const result = await commitAndVerifyEdit(
+      request(
+        document,
+        target.absolutePath,
+        target.relativePath,
+        "target baseline",
+      ),
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "document_target_mismatch",
+      durability: { status: "failed", outcome: "unverifiable" },
+    });
   });
 
   it("uses the normal document save and verifies exact disk content", async () => {
@@ -109,6 +185,94 @@ describe("commitAndVerifyEdit", () => {
         outcome: "exact",
         disk_changed: true,
       },
+    });
+  });
+
+  it("recovers when format-on-save corrupts valid YAML", async () => {
+    const target = await makeFile("workflow.yml", "name: old\n");
+    const approved = "name: CI\non:\n  push:\n";
+    const corrupted = "name: CI\non:\n  push: [\n";
+    const document = makeDocument(target.absolutePath, approved, {
+      save: async (doc) => {
+        doc.content = corrupted;
+        await fs.writeFile(target.absolutePath, corrupted, "utf-8");
+        doc.isDirty = false;
+        return true;
+      },
+    });
+    (vscode.workspace.textDocuments as unknown as MutableDocument[]).push(
+      document,
+    );
+    vi.spyOn(vscode.workspace, "applyEdit").mockImplementationOnce(async () => {
+      document.content = approved;
+      document.isDirty = true;
+      return true;
+    });
+    const editor = {
+      document: document as unknown as vscode.TextDocument,
+      viewColumn: vscode.ViewColumn.One,
+    } as vscode.TextEditor;
+    vi.spyOn(vscode.window, "showTextDocument").mockImplementation(async () => {
+      Object.assign(vscode.window, { activeTextEditor: editor });
+      return editor;
+    });
+    vi.spyOn(vscode.commands, "executeCommand").mockImplementation(
+      async (name) => {
+        expect(name).toBe("workbench.action.files.saveWithoutFormatting");
+        await fs.writeFile(target.absolutePath, document.content, "utf-8");
+        document.isDirty = false;
+        return undefined;
+      },
+    );
+
+    const result = await commitAndVerifyEdit(
+      request(
+        document,
+        target.absolutePath,
+        target.relativePath,
+        "name: old\n",
+      ),
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      finalContent: approved,
+      durability: { status: "durable", outcome: "exact" },
+    });
+    expect(await fs.readFile(target.absolutePath, "utf-8")).toBe(approved);
+  });
+
+  it("fails closed when corrupted structured content cannot be restored", async () => {
+    const target = await makeFile("workflow.yml", "name: old\n");
+    const approved = "name: CI\non:\n  push:\n";
+    const corrupted = "name: CI\non:\n  push: [\n";
+    const document = makeDocument(target.absolutePath, approved, {
+      save: async (doc) => {
+        doc.content = corrupted;
+        await fs.writeFile(target.absolutePath, corrupted, "utf-8");
+        doc.isDirty = false;
+        return true;
+      },
+    });
+    (vscode.workspace.textDocuments as unknown as MutableDocument[]).push(
+      document,
+    );
+    vi.spyOn(vscode.workspace, "applyEdit").mockResolvedValueOnce(false);
+
+    const result = await commitAndVerifyEdit(
+      request(
+        document,
+        target.absolutePath,
+        target.relativePath,
+        "name: old\n",
+      ),
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "transformed_content_invalid",
+      finalContent: corrupted,
+      durability: { status: "failed", outcome: "transformed" },
     });
   });
 
@@ -201,6 +365,39 @@ describe("commitAndVerifyEdit", () => {
         final_exists: false,
         error_code: "ENOENT",
       },
+    });
+  });
+
+  it("uses requested save-without-formatting for ordinary files", async () => {
+    const target = await makeFile("example.ts", "old");
+    const document = makeDocument(target.absolutePath, "new");
+    const editor = {
+      document: document as unknown as vscode.TextDocument,
+      viewColumn: vscode.ViewColumn.One,
+    } as vscode.TextEditor;
+    vi.spyOn(vscode.window, "showTextDocument").mockImplementation(async () => {
+      Object.assign(vscode.window, { activeTextEditor: editor });
+      return editor;
+    });
+    const command = vi
+      .spyOn(vscode.commands, "executeCommand")
+      .mockImplementation(async () => {
+        await fs.writeFile(target.absolutePath, document.content, "utf-8");
+        document.isDirty = false;
+        return undefined;
+      });
+
+    const result = await commitAndVerifyEdit({
+      ...request(document, target.absolutePath, target.relativePath, "old"),
+      saveWithoutFormatting: true,
+    });
+
+    expect(command).toHaveBeenCalledWith(
+      "workbench.action.files.saveWithoutFormatting",
+    );
+    expect(result).toMatchObject({
+      status: "accepted",
+      durability: { status: "durable", policy: "preserve_exact" },
     });
   });
 

@@ -267,6 +267,7 @@ describe("createVscodeEditReviewProvider", () => {
     });
     applyEdit.mockResolvedValue(true);
     showTextDocument.mockResolvedValue(undefined);
+    textDocuments.length = 0;
     workspaceEditInstances.length = 0;
   });
 
@@ -482,6 +483,7 @@ describe("createVscodeEditReviewProvider", () => {
       isDirty: true,
       save: vi.fn(async () => true),
     };
+    textDocuments.push(doc);
     openTextDocument.mockResolvedValue(doc);
 
     try {
@@ -503,12 +505,53 @@ describe("createVscodeEditReviewProvider", () => {
         reason: "dirty_document_conflict",
         document_dirty: true,
         document_state: "differs_from_baseline",
+        pending_buffer_matches_proposal: false,
         next_steps: [
-          "The editor has unsaved user changes. Save or reconcile them before retrying the file-edit tool call.",
+          "The unsaved editor buffer differs from the proposed content. Review and reconcile it before saving or retrying the file-edit tool call.",
         ],
       });
       expect(applyEdit).not.toHaveBeenCalled();
       expect(doc.save).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports when an interrupted proposal is already in the dirty buffer", async () => {
+    const tempDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
+    );
+    const filePath = path.join(tempDir, "file.ts");
+    fs.writeFileSync(filePath, "disk baseline", "utf-8");
+    const doc = {
+      getText: vi.fn(() => "proposed content"),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { fsPath: filePath },
+      isDirty: true,
+      save: vi.fn(async () => true),
+    };
+    textDocuments.push(doc);
+    openTextDocument.mockResolvedValue(doc);
+
+    try {
+      const provider = createVscodeEditReviewProvider();
+      const result = await provider.reviewAndApply({
+        mode: "auto",
+        absolutePath: filePath,
+        relativePath: "file.ts",
+        content: "proposed content",
+        outsideWorkspace: false,
+        diagnosticDelay: 0,
+        sessionId: "session-1",
+      });
+
+      expect(result).toMatchObject({
+        reason: "dirty_document_conflict",
+        pending_buffer_matches_proposal: true,
+        next_steps: [
+          "The unsaved editor buffer already contains the proposed content. Save it in the editor, then re-read the file before continuing.",
+        ],
+      });
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

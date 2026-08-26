@@ -20,6 +20,27 @@ export interface ResolvedSandboxShellEnvironmentPolicy {
   useProfile: boolean;
 }
 
+export type SandboxEnvironmentProvenance =
+  | "host-inherited"
+  | "policy-set"
+  | "agent-reserved"
+  | "per-command";
+
+export interface SandboxEnvironmentBudgetEntry {
+  name: string;
+  bytes: number;
+}
+
+export interface SandboxEnvironmentBudgetResult {
+  environment: Record<string, string>;
+  estimatedBytes: number;
+  protectedBytes: number;
+  dropped: SandboxEnvironmentBudgetEntry[];
+}
+
+export const SANDBOX_AUTHORIZER_EXEC_BUDGET_BYTES = 768 * 1024;
+const EXEC_POINTER_BYTES = 8;
+
 const DEFAULT_EXCLUDES = ["*KEY*", "*SECRET*", "*TOKEN*"] as const;
 const UNIX_CORE_ENVIRONMENT_NAMES = new Set([
   "HOME",
@@ -109,6 +130,7 @@ export function buildSandboxPolicyEnvironment(
   platform: NodeJS.Platform = process.platform,
 ): {
   environment: Record<string, string>;
+  provenance: Record<string, SandboxEnvironmentProvenance>;
   policy: ResolvedSandboxShellEnvironmentPolicy;
 } {
   const policy = resolveSandboxShellEnvironmentPolicy(value);
@@ -117,6 +139,7 @@ export function buildSandboxPolicyEnvironment(
       ? WINDOWS_CORE_ENVIRONMENT_NAMES
       : UNIX_CORE_ENVIRONMENT_NAMES;
   const environment: Record<string, string> = {};
+  const provenance: Record<string, SandboxEnvironmentProvenance> = {};
 
   if (policy.inherit !== "none") {
     for (const [name, entry] of Object.entries(hostEnvironment)) {
@@ -128,23 +151,114 @@ export function buildSandboxPolicyEnvironment(
         continue;
       }
       environment[name] = entry;
+      provenance[name] = "host-inherited";
     }
   }
 
+  const remove = (name: string) => {
+    delete environment[name];
+    delete provenance[name];
+  };
   if (!policy.ignoreDefaultExcludes) {
     for (const name of Object.keys(environment)) {
-      if (matchesAny(name, DEFAULT_EXCLUDES)) delete environment[name];
+      if (matchesAny(name, DEFAULT_EXCLUDES)) remove(name);
     }
   }
   for (const name of Object.keys(environment)) {
-    if (matchesAny(name, policy.exclude)) delete environment[name];
+    if (matchesAny(name, policy.exclude)) remove(name);
   }
-  Object.assign(environment, policy.set);
+  for (const [name, entry] of Object.entries(policy.set)) {
+    environment[name] = entry;
+    provenance[name] = "policy-set";
+  }
   if (policy.includeOnly.length > 0) {
     for (const name of Object.keys(environment)) {
-      if (!matchesAny(name, policy.includeOnly)) delete environment[name];
+      if (!matchesAny(name, policy.includeOnly)) remove(name);
     }
   }
 
-  return { environment, policy };
+  return { environment, provenance, policy };
+}
+
+function environmentEntryBytes(name: string, value: string): number {
+  return Buffer.byteLength(`${name}=${value}`, "utf8") + 1;
+}
+
+export function budgetSandboxEnvironment(
+  environment: Readonly<Record<string, string>>,
+  provenance: Readonly<Record<string, SandboxEnvironmentProvenance>>,
+  command: string,
+  limitBytes = SANDBOX_AUTHORIZER_EXEC_BUDGET_BYTES,
+): SandboxEnvironmentBudgetResult {
+  if (!Number.isSafeInteger(limitBytes) || limitBytes <= 0) {
+    throw new Error("Sandbox environment budget must be a positive integer");
+  }
+  const entries = Object.entries(environment).map(([name, value]) => ({
+    name,
+    bytes: environmentEntryBytes(name, value),
+    provenance: provenance[name],
+  }));
+  for (const entry of entries) {
+    if (!entry.provenance) {
+      throw new Error(
+        `Sandbox environment provenance is missing for ${entry.name}`,
+      );
+    }
+  }
+  const commandBytes = Buffer.byteLength(command, "utf8") + 1;
+  const commandCost = commandBytes + EXEC_POINTER_BYTES;
+  const protectedEntries = entries.filter(
+    (entry) => entry.provenance !== "host-inherited",
+  );
+  const protectedBytes =
+    commandCost +
+    protectedEntries.reduce(
+      (total, entry) => total + entry.bytes + EXEC_POINTER_BYTES,
+      0,
+    );
+  if (protectedBytes > limitBytes) {
+    const contributors = [
+      { name: "<command>", bytes: commandBytes },
+      ...protectedEntries.map(({ name, bytes }) => ({ name, bytes })),
+    ]
+      .sort((left, right) =>
+        right.bytes !== left.bytes
+          ? right.bytes - left.bytes
+          : left.name.localeCompare(right.name),
+      )
+      .slice(0, 8)
+      .map(({ name, bytes }) => `${name} (${bytes} bytes)`)
+      .join(", ");
+    throw new Error(
+      `Sandbox protected environment contributors exceed the ${limitBytes}-byte conservative launch budget (${protectedBytes} bytes): ${contributors}`,
+    );
+  }
+
+  let estimatedBytes =
+    commandCost +
+    entries.reduce(
+      (total, entry) => total + entry.bytes + EXEC_POINTER_BYTES,
+      0,
+    );
+  const retained = { ...environment };
+  const dropped: SandboxEnvironmentBudgetEntry[] = [];
+  const candidates = entries
+    .filter((entry) => entry.provenance === "host-inherited")
+    .sort((left, right) =>
+      right.bytes !== left.bytes
+        ? right.bytes - left.bytes
+        : left.name.localeCompare(right.name),
+    );
+  for (const entry of candidates) {
+    if (estimatedBytes <= limitBytes) break;
+    delete retained[entry.name];
+    estimatedBytes -= entry.bytes + EXEC_POINTER_BYTES;
+    dropped.push({ name: entry.name, bytes: entry.bytes });
+  }
+  if (estimatedBytes > limitBytes) {
+    throw new Error(
+      `Sandbox environment exceeds the ${limitBytes}-byte conservative launch budget after all host-inherited entries were removed`,
+    );
+  }
+  return { environment: retained, estimatedBytes, protectedBytes, dropped };
 }

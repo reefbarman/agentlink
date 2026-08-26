@@ -12,6 +12,8 @@ import {
   type HostTerminalReplaySnapshot,
   type HostTerminalSurfaceAction,
   type HostTerminalSurfaceBlockPresentation,
+  type HostTerminalTaskMenuItem,
+  type HostTerminalTasksStatus,
   type HostTerminalSurfacePresentation,
   type TerminalSurfaceConfiguration,
   type TerminalSurfaceEvent,
@@ -96,6 +98,17 @@ export interface TerminalConfirmationView {
   confirmLabel: string;
 }
 
+export interface TerminalTasksMenuState {
+  open: boolean;
+  loading: boolean;
+  tasks: readonly HostTerminalTaskMenuItem[];
+  status?: HostTerminalTasksStatus;
+  revision?: string;
+  errorSummary?: string;
+  pendingRun?: string;
+  listRequestId?: string;
+}
+
 export interface TerminalWebviewState {
   phase: "loading" | "ready";
   tabs: readonly TerminalTabView[];
@@ -108,6 +121,7 @@ export interface TerminalWebviewState {
   blockStates: Readonly<Record<string, TerminalBlockStateView>>;
   rendererErrors: Readonly<Record<string, string>>;
   replayWarnings: Readonly<Record<string, string>>;
+  tasksMenu: TerminalTasksMenuState;
 }
 
 interface RendererEntry {
@@ -217,6 +231,7 @@ export class TerminalWebviewController {
     blockStates: {},
     rendererErrors: {},
     replayWarnings: {},
+    tasksMenu: { open: false, loading: false, tasks: [] },
   };
   private configuration = DEFAULT_CONFIGURATION;
   private rendererEpoch: string | undefined;
@@ -291,6 +306,55 @@ export class TerminalWebviewController {
         this.patchState({ error: errorMessage(error), creating: false });
       });
     return this.eventQueue;
+  }
+
+  openTasksMenu(): string {
+    this.requestCounter += 1;
+    const requestId = `terminal-tasks-${this.requestCounter}-${this.createRequestId()}`;
+    this.patchState({
+      tasksMenu: {
+        ...this.state.tasksMenu,
+        open: true,
+        loading: true,
+        errorSummary: undefined,
+        listRequestId: requestId,
+      },
+    });
+    this.post({ type: "terminal-view/list-tasks", requestId });
+    return requestId;
+  }
+
+  closeTasksMenu(): void {
+    this.patchState({
+      tasksMenu: {
+        ...this.state.tasksMenu,
+        open: false,
+        pendingRun: undefined,
+      },
+    });
+  }
+
+  runTask(revision: string, taskId: string): string | undefined {
+    if (this.state.tasksMenu.pendingRun) return undefined;
+    this.requestCounter += 1;
+    const requestId = `terminal-task-run-${this.requestCounter}-${this.createRequestId()}`;
+    this.patchState({
+      tasksMenu: { ...this.state.tasksMenu, pendingRun: requestId },
+    });
+    this.post({
+      type: "terminal-view/run-task",
+      requestId,
+      revision,
+      taskId,
+    });
+    return requestId;
+  }
+
+  openTasksFile(): string {
+    this.requestCounter += 1;
+    const requestId = `terminal-tasks-open-${this.requestCounter}-${this.createRequestId()}`;
+    this.post({ type: "terminal-view/open-tasks-file", requestId });
+    return requestId;
   }
 
   createTerminal(): string {
@@ -493,6 +557,40 @@ export class TerminalWebviewController {
         return;
       case "terminal-view/fallback":
         this.patchState({ fallback: message.fallback });
+        return;
+      case "terminal-view/tasks":
+        if (
+          !this.state.tasksMenu.open ||
+          (message.requestId !== this.state.tasksMenu.listRequestId &&
+            message.requestId !== this.state.tasksMenu.pendingRun)
+        )
+          return;
+        this.patchState({
+          tasksMenu: {
+            ...this.state.tasksMenu,
+            loading: false,
+            tasks: message.tasks,
+            status: message.status,
+            revision: message.revision,
+            ...(message.errorSummary
+              ? { errorSummary: message.errorSummary }
+              : {}),
+          },
+        });
+        return;
+      case "terminal-view/task-run-result":
+        if (this.state.tasksMenu.pendingRun !== message.requestId) return;
+        this.patchState({
+          tasksMenu: {
+            ...this.state.tasksMenu,
+            pendingRun: undefined,
+            ...(message.status === "stale"
+              ? { listRequestId: message.requestId }
+              : {}),
+            ...(message.status === "started" ? { open: false } : {}),
+            ...(message.message ? { errorSummary: message.message } : {}),
+          },
+        });
         return;
       case "terminal-view/render-batch":
         this.enqueueRenderBatch(message);
@@ -705,6 +803,7 @@ export class TerminalWebviewController {
       blockStates: this.projectBlockStates(),
       rendererErrors,
       replayWarnings,
+      tasksMenu: this.state.tasksMenu,
     };
     this.emit();
     if (

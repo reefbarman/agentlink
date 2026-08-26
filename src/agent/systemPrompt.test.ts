@@ -349,6 +349,9 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain(
       "Before any final `set_task_status`, verify the TODO list matches the claimed outcome",
     );
+    expect(result).toContain(
+      "If you forget it after otherwise finishing a turn, the engine may give you one private reminder",
+    );
     expect(result).toContain("When the top-level list exceeds 10 items");
     expect(result).toContain(
       "keep every unfinished item and the 3 most recent ordinary completed items",

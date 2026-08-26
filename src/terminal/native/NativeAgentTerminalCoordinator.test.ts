@@ -721,7 +721,7 @@ describe("NativeAgentTerminalCoordinator", () => {
         backgrounded: true,
         is_running: true,
         command_sent: true,
-        process_launched: true,
+        process_launched: false,
         retry_safe: false,
       });
       expect(detached).toBe(true);
@@ -922,6 +922,41 @@ describe("NativeAgentTerminalCoordinator", () => {
       exit_code: 130,
       output: "partial",
     });
+  });
+
+  it("closes commands that time out before shell integration confirms start", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const finalized = vi.fn();
+      const resultPromise = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "python -c 'print(1)'",
+        cwd: "/workspace",
+        timeout: 25,
+        onCommandFinalized: finalized,
+      });
+      await flush();
+
+      await vi.advanceTimersByTimeAsync(25);
+      await expect(resultPromise).resolves.toMatchObject({
+        timed_out: true,
+        is_running: false,
+        command_sent: true,
+        process_launched: false,
+        retry_safe: false,
+        failure_stage: "launch",
+        execution_mode: "native_pty",
+        output_warning: expect.stringContaining(
+          "shell integration never confirmed command start",
+        ),
+      });
+      expect(test.runtime.closeChannel).toHaveBeenCalledWith("native-agent-1");
+      expect(test.coordinator.listTerminals({ owner: undefined })).toEqual([]);
+      expect(finalized).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns timed-out commands as running and finalizes when they exit", async () => {

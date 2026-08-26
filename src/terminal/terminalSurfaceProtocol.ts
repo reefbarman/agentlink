@@ -8,13 +8,34 @@ import type { AlternateScreenTransition } from "./alternateScreenTracker.js";
 import type { HostTerminalBlockState } from "./hostTerminalBlocks.js";
 import type { TerminalOutputPolicyDecision } from "./terminalOutputPolicy.js";
 
-export const TERMINAL_SURFACE_PROTOCOL_VERSION = 1;
+export const TERMINAL_SURFACE_PROTOCOL_VERSION = 2;
 export const MAX_TERMINAL_IDENTIFIER_BYTES = 256;
 export const MAX_TERMINAL_CWD_BYTES = 16 * 1024;
 export const MAX_TERMINAL_INPUT_BYTES = 64 * 1024;
 export const MAX_TERMINAL_LINK_BYTES = 8 * 1024;
 export const MAX_TERMINAL_DIMENSION = 1_000;
 export const MAX_TERMINAL_PASTE_BYTES = 64 * 1024;
+export const MAX_TERMINAL_TASK_LABEL_BYTES = 200;
+export const MAX_TERMINAL_TASK_COMMAND_BYTES = 64 * 1024 - 1;
+export const MAX_TERMINAL_TASK_MESSAGE_BYTES = 2 * 1024;
+
+export interface HostTerminalTaskMenuItem {
+  id: string;
+  label: string;
+  command: string;
+}
+
+export type HostTerminalTasksStatus =
+  | "ok"
+  | "missing"
+  | "invalid"
+  | "unavailable";
+
+export type HostTerminalTaskRunStatus =
+  | "started"
+  | "stale"
+  | "unavailable"
+  | "failed";
 
 export type HostTerminalSurfaceAction =
   | "copy-command"
@@ -72,7 +93,15 @@ export type TerminalSurfaceRequest =
       action: HostTerminalSurfaceAction;
     })
   | { type: "terminal-view/open-link"; rendererEpoch: string; url: string }
-  | { type: "terminal-view/open-native-fallback"; rendererEpoch: string };
+  | { type: "terminal-view/open-native-fallback"; rendererEpoch: string }
+  | { type: "terminal-view/list-tasks"; requestId: string }
+  | {
+      type: "terminal-view/run-task";
+      requestId: string;
+      revision: string;
+      taskId: string;
+    }
+  | { type: "terminal-view/open-tasks-file"; requestId: string };
 
 export type HostTerminalBlockBoundary =
   | "prompt-start"
@@ -260,7 +289,22 @@ export type TerminalSurfaceEvent =
       configuration: TerminalSurfaceConfiguration;
     }
   | { type: "terminal-view/resync-required"; rendererEpoch: string }
-  | { type: "terminal-view/fallback"; fallback: HostTerminalFallbackState };
+  | { type: "terminal-view/fallback"; fallback: HostTerminalFallbackState }
+  | {
+      type: "terminal-view/tasks";
+      requestId: string;
+      status: HostTerminalTasksStatus;
+      revision?: string;
+      tasks: readonly HostTerminalTaskMenuItem[];
+      errorSummary?: string;
+    }
+  | {
+      type: "terminal-view/task-run-result";
+      requestId: string;
+      status: HostTerminalTaskRunStatus;
+      terminalId?: string;
+      message?: string;
+    };
 
 const textEncoder = new TextEncoder();
 
@@ -351,6 +395,25 @@ export function isTerminalSurfaceRequest(
       (!Object.hasOwn(value, "cwd") ||
         isBoundedString(value.cwd, MAX_TERMINAL_CWD_BYTES)) &&
       (!Object.hasOwn(value, "profileName") || isIdentifier(value.profileName))
+    );
+  }
+
+  if (
+    value.type === "terminal-view/list-tasks" ||
+    value.type === "terminal-view/open-tasks-file"
+  ) {
+    return (
+      hasExactKeys(value, ["type", "requestId"]) &&
+      isIdentifier(value.requestId)
+    );
+  }
+
+  if (value.type === "terminal-view/run-task") {
+    return (
+      hasExactKeys(value, ["type", "requestId", "revision", "taskId"]) &&
+      isIdentifier(value.requestId) &&
+      isIdentifier(value.revision) &&
+      isIdentifier(value.taskId)
     );
   }
 

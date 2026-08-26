@@ -549,7 +549,7 @@ async function searchCount(
   },
 ): Promise<ToolResult> {
   const sanitized = sanitizeRegex(params.regex);
-  const args = ["--count", "-e", sanitized, "--no-messages"];
+  const args = ["--count", "--with-filename", "-e", sanitized, "--no-messages"];
 
   if (params.case_insensitive) args.push("--ignore-case");
   if (params.multiline || needsMultiline(sanitized))
@@ -584,9 +584,15 @@ async function searchCount(
 
   for (const line of lines) {
     const sepIdx = line.lastIndexOf(":");
-    if (sepIdx === -1) continue;
-    const file = formatResultPath(line.substring(0, sepIdx), searchDir);
-    const count = parseInt(line.substring(sepIdx + 1), 10);
+    const bareCount = sepIdx === -1 ? Number.parseInt(line, 10) : Number.NaN;
+    const file =
+      sepIdx === -1
+        ? formatResultPath(defaultSearchTarget, searchDir)
+        : formatResultPath(line.substring(0, sepIdx), searchDir);
+    const count =
+      sepIdx === -1
+        ? bareCount
+        : Number.parseInt(line.substring(sepIdx + 1), 10);
     if (!isNaN(count)) {
       allCounts.push({ file, count });
       totalMatches += count;

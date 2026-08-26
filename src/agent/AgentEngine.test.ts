@@ -1404,11 +1404,17 @@ describe("AgentEngine", () => {
 
       await collectEvents(engine.run(session));
 
-      expect(requests).toHaveLength(2);
+      expect(requests).toHaveLength(3);
       expect(requests[1].messages.at(-1)).toEqual({
         role: "user",
         content:
           '<file path="note.md">\n```md\n# Note\nhello\n```\n</file>\n\nfollow up',
+      });
+      expect(requests[2].messages.at(-1)).toEqual({
+        role: "user",
+        content: expect.stringContaining(
+          "You ended the turn without calling set_task_status",
+        ),
       });
     });
 
@@ -1474,7 +1480,7 @@ describe("AgentEngine", () => {
 
       await collectEvents(engine.run(session));
 
-      expect(requests).toHaveLength(2);
+      expect(requests).toHaveLength(3);
       expect(requests[1].messages.at(-1)).toEqual({
         role: "user",
         content: [
@@ -1545,7 +1551,7 @@ describe("AgentEngine", () => {
         "queue-2",
       ]);
 
-      expect(requests).toHaveLength(2);
+      expect(requests).toHaveLength(3);
       expect(requests[1].messages.slice(-2)).toEqual([
         { role: "user", content: "first follow up" },
         { role: "user", content: "second follow up" },
@@ -1879,6 +1885,201 @@ describe("AgentEngine", () => {
       expect(executeTool).toHaveBeenCalledWith(
         expect.objectContaining({ name: "read_file" }),
       );
+    });
+
+    it("nudges once when a natural stop omits set_task_status and recovers", async () => {
+      const requests: StreamRequest[] = [];
+      const logs: string[] = [];
+      let callCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        callCount += 1;
+        if (callCount === 1) {
+          yield* makeProviderStream({ text: "Implemented and validated." });
+          return;
+        }
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "tool_use",
+              id: "call_final",
+              name: "set_task_status",
+              input: {
+                status: "completed",
+                summary: "Implemented and validated.",
+              },
+            },
+          ],
+        };
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("implement it");
+      const engine = new AgentEngine(makeRegistry(provider), (message) =>
+        logs.push(message),
+      );
+      setEngineToolContext(
+        engine,
+        {
+          approvalManager: {} as ToolDispatchContext["approvalManager"],
+          approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+          sessionId: "seed-session",
+          extensionUri: {} as ToolDispatchContext["extensionUri"],
+        },
+        async (request: AgentToolExecutionRequest) => {
+          if (request.name === "set_task_status") {
+            request.context.onFinalStatus?.({
+              status: "completed",
+              source: "tool",
+              summary: "Implemented and validated.",
+            });
+          }
+          return {
+            content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+          };
+        },
+      );
+
+      const events = await collectEvents(engine.run(session));
+
+      expect(requests).toHaveLength(2);
+      expect(requests[1].messages.at(-1)).toEqual({
+        role: "user",
+        content: expect.stringContaining(
+          "You ended the turn without calling set_task_status",
+        ),
+      });
+      expect(
+        session
+          .getAllMessages()
+          .filter(
+            (message) =>
+              message.role === "user" && typeof message.content === "string",
+          )
+          .map((message) => message.content),
+      ).toEqual(["implement it"]);
+      expect(
+        events.find((event) => event.type === "final_marker"),
+      ).toMatchObject({
+        marker: {
+          status: "completed",
+          source: "tool",
+          summary: "Implemented and validated.",
+        },
+      });
+      expect(logs).toContain(
+        "[agent] final-status nudge: natural stop without set_task_status",
+      );
+      expect(logs).toContain(
+        "[agent] final-status nudge recovered with set_task_status",
+      );
+    });
+
+    it("accepts an unmarked turn when the one final-status nudge is ignored", async () => {
+      const logs: string[] = [];
+      let callCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        callCount += 1;
+        yield* makeProviderStream({ text: `Answer ${callCount}` });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("answer it");
+      const engine = new AgentEngine(makeRegistry(provider), (message) =>
+        logs.push(message),
+      );
+      setEngineToolContext(engine, {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      });
+
+      const events = await collectEvents(engine.run(session));
+
+      expect(callCount).toBe(2);
+      expect(
+        events.find((event) => event.type === "final_marker"),
+      ).toBeUndefined();
+      expect(logs).toContain(
+        "[agent] final-status nudge ignored: accepting unmarked turn",
+      );
+    });
+
+    it("leaves pending-todo recovery to the session manager", async () => {
+      let callCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        callCount += 1;
+        yield* makeProviderStream({ text: "Stopping with work pending." });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("start it");
+      session.appendAssistantTurn([
+        {
+          type: "tool_use",
+          id: "call_todos",
+          name: "todo_write",
+          input: {
+            todos: [
+              {
+                id: "1",
+                content: "Finish implementation",
+                activeForm: "Finishing implementation",
+                status: "in_progress",
+              },
+            ],
+          },
+        },
+      ]);
+      session.appendToolResults([
+        {
+          type: "tool_result",
+          tool_use_id: "call_todos",
+          content: "Updated: 0/1 complete, 1 in progress, 0 pending",
+        },
+      ]);
+      const engine = new AgentEngine(makeRegistry(provider));
+      setEngineToolContext(engine, {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      });
+
+      await collectEvents(engine.run(session));
+
+      expect(callCount).toBe(1);
+    });
+
+    it("does not nudge when a user message is already queued", async () => {
+      let callCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        callCount += 1;
+        yield* makeProviderStream({ text: "Responding before follow-up." });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("answer it");
+      session.setPendingInterjection("one more thing", "queue-1");
+      const engine = new AgentEngine(makeRegistry(provider));
+      setEngineToolContext(engine, {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      });
+
+      await collectEvents(engine.run(session));
+
+      expect(callCount).toBe(1);
     });
 
     it("stops turn and skips trailing tools after set_task_status", async () => {
@@ -2265,7 +2466,7 @@ describe("AgentEngine", () => {
 
       const events = await collectEvents(engine.run(session));
 
-      expect(callCount).toBe(2);
+      expect(callCount).toBe(3);
       expect(events.at(-1)).toMatchObject({ type: "done" });
       const results = events.filter(
         (e): e is Extract<AgentEvent, { type: "tool_result" }> =>
@@ -2524,7 +2725,7 @@ describe("AgentEngine", () => {
 
       await collectEvents(engine.run(session));
 
-      expect(streamCalls).toHaveLength(1);
+      expect(streamCalls).toHaveLength(2);
       const names = streamCalls[0]?.tools?.map((tool) => tool.name) ?? [];
       expect(names).toContain("ddg-search__search");
       expect(names).not.toContain("linear__list_issues");
@@ -2892,13 +3093,13 @@ describe("AgentEngine", () => {
       session.addUserMessage("second turn");
       await collectEvents(engine.run(session));
 
-      expect(streamCalls).toHaveLength(2);
-      expect(streamCalls[1]?.tools).toStrictEqual(streamCalls[0]?.tools);
+      expect(streamCalls).toHaveLength(4);
+      expect(streamCalls[2]?.tools).toStrictEqual(streamCalls[0]?.tools);
       const firstReadSchema = streamCalls[0]?.tools?.find(
         (tool) => tool.name === "read_file",
       )?.input_schema;
       expect(
-        streamCalls[1]?.tools?.find((tool) => tool.name === "read_file")
+        streamCalls[2]?.tools?.find((tool) => tool.name === "read_file")
           ?.input_schema,
       ).toBe(firstReadSchema);
       const discoveryDescription = streamCalls[0]?.tools?.find(
@@ -2906,7 +3107,7 @@ describe("AgentEngine", () => {
       )?.description;
       expect(discoveryDescription).toContain("generate_image");
       expect(
-        streamCalls[1]?.tools?.find((tool) => tool.name === "find_native_tools")
+        streamCalls[2]?.tools?.find((tool) => tool.name === "find_native_tools")
           ?.description,
       ).toBe(discoveryDescription);
     });
@@ -3959,7 +4160,7 @@ describe("AgentEngine", () => {
         }),
       );
 
-      expect(streamCalls).toHaveLength(1);
+      expect(streamCalls).toHaveLength(2);
       expect(streamCalls[0]?.hostedTools).toBeUndefined();
       expect(streamCalls[0]?.tools?.map((tool) => tool.name)).toContain(
         "web_search",
@@ -4912,7 +5113,7 @@ describe("AgentEngine", () => {
           },
         ],
       };
-      expect(streamCalls).toHaveLength(2);
+      expect(streamCalls).toHaveLength(3);
       // messages[0] is the injected mode instruction block.
       expect(streamCalls[0]?.messages[1]).toEqual(expectedImageMessage);
       // Regression: the API is stateless, so the image must be re-sent after
@@ -4940,7 +5141,9 @@ describe("AgentEngine", () => {
             ],
           };
         } else {
-          estimateBeforeSecondRequest = session.estimatedAccumulatedTokens;
+          if (callCount === 2) {
+            estimateBeforeSecondRequest = session.estimatedAccumulatedTokens;
+          }
           yield {
             type: "content_blocks",
             blocks: [{ type: "text", text: "done" }],
@@ -4980,7 +5183,7 @@ describe("AgentEngine", () => {
 
       await collectEvents(engine.run(session));
 
-      expect(callCount).toBe(2);
+      expect(callCount).toBe(3);
       expect(condenseSpy).not.toHaveBeenCalled();
       expect(estimateBeforeSecondRequest).toBeGreaterThan(0);
       expect(estimateBeforeSecondRequest).toBeLessThan(1_000);

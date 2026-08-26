@@ -1,4 +1,5 @@
 import {
+  budgetSandboxEnvironment,
   buildSandboxPolicyEnvironment,
   resolveSandboxShellEnvironmentPolicy,
 } from "./sandboxEnvironmentPolicy.js";
@@ -31,6 +32,11 @@ describe("sandboxEnvironmentPolicy", () => {
       useProfile: false,
     });
     expect(result.environment).toMatchObject(hostEnvironment);
+    expect(result.provenance).toMatchObject(
+      Object.fromEntries(
+        Object.keys(hostEnvironment).map((name) => [name, "host-inherited"]),
+      ),
+    );
   });
 
   it("supports core and none inheritance", () => {
@@ -67,6 +73,49 @@ describe("sandboxEnvironmentPolicy", () => {
       CUSTOM_FLAG: "set-after-exclude",
       SESSION_TOKEN: "set-after-default-exclude",
     });
+    expect(result.provenance).toEqual({
+      PATH: "host-inherited",
+      CUSTOM_FLAG: "policy-set",
+      SESSION_TOKEN: "policy-set",
+    });
+  });
+
+  it("evicts only host-inherited entries by encoded size and name", () => {
+    const result = budgetSandboxEnvironment(
+      {
+        HOST_B: "x".repeat(20),
+        HOST_A: "x".repeat(20),
+        POLICY_VALUE: "protected",
+        COMMAND_VALUE: "protected",
+      },
+      {
+        HOST_B: "host-inherited",
+        HOST_A: "host-inherited",
+        POLICY_VALUE: "policy-set",
+        COMMAND_VALUE: "per-command",
+      },
+      "true",
+      112,
+    );
+
+    expect(result.environment).toEqual({
+      HOST_B: "x".repeat(20),
+      POLICY_VALUE: "protected",
+      COMMAND_VALUE: "protected",
+    });
+    expect(result.dropped).toEqual([{ name: "HOST_A", bytes: 28 }]);
+    expect(result.estimatedBytes).toBeLessThanOrEqual(112);
+  });
+
+  it("fails closed when protected contributors alone exceed the budget", () => {
+    expect(() =>
+      budgetSandboxEnvironment(
+        { POLICY_VALUE: "x".repeat(100) },
+        { POLICY_VALUE: "policy-set" },
+        "true",
+        64,
+      ),
+    ).toThrow(/protected environment contributors exceed.*POLICY_VALUE/);
   });
 
   it("treats environment patterns case-insensitively", () => {

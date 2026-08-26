@@ -75,6 +75,8 @@ describe("handleListFiles", () => {
     execRipgrepFilesMock.mockResolvedValue({
       files: [path.join("/workspace/docs", "ignored", "manual.pdf")],
       warnings: [],
+      exitCode: 0,
+      truncated: false,
     });
   });
 
@@ -247,7 +249,9 @@ describe("handleListFiles", () => {
   it("returns partial recursive results with a loop warning", async () => {
     execRipgrepFilesMock.mockResolvedValue({
       files: [path.join("/workspace/docs", "NOTICE")],
-      warnings: ["rg: symlink: File system loop (os error 62)"],
+      warnings: ["rg: broken-link: No such file or directory (os error 2)"],
+      exitCode: 2,
+      truncated: false,
     });
     const { handleListFiles } = await import("./listFiles.js");
 
@@ -267,8 +271,8 @@ describe("handleListFiles", () => {
       entries: "NOTICE",
       count: 1,
       warnings: [
-        "Skipped filesystem symlink loops while listing files.",
-        "rg: symlink: File system loop (os error 62)",
+        "Some paths could not be inspected; partial listing results are shown.",
+        "rg: broken-link: No such file or directory (os error 2)",
       ],
     });
   });

@@ -540,6 +540,7 @@ describe("handleGetContext", () => {
           repositories: [
             {
               rootUri: { fsPath: workspace },
+              status: vi.fn(async () => undefined),
               state: {
                 indexChanges: [],
                 workingTreeChanges: [],
@@ -548,6 +549,7 @@ describe("handleGetContext", () => {
             },
             {
               rootUri: { fsPath: path.join(nestedRoot, ".") },
+              status: vi.fn(async () => undefined),
               state: {
                 indexChanges: [],
                 workingTreeChanges: [
@@ -566,7 +568,7 @@ describe("handleGetContext", () => {
     });
 
     const { getContextGitStatus } = await import("./getContext.js");
-    expect(getContextGitStatus(filePath)).toBe("modified");
+    await expect(getContextGitStatus(filePath)).resolves.toBe("modified");
   });
 
   it("reports unmerged Git entries before staged or working-tree state", async () => {
@@ -581,6 +583,7 @@ describe("handleGetContext", () => {
           repositories: [
             {
               rootUri: { fsPath: workspace },
+              status: vi.fn(async () => undefined),
               state: {
                 mergeChanges: [{ uri: { fsPath: filePath } }],
                 indexChanges: [{ uri: { fsPath: filePath } }],
@@ -594,7 +597,7 @@ describe("handleGetContext", () => {
     });
 
     const { getContextGitStatus } = await import("./getContext.js");
-    expect(getContextGitStatus(filePath)).toBe("unmerged");
+    await expect(getContextGitStatus(filePath)).resolves.toBe("unmerged");
   });
 
   it("summarizes diagnostics in the context enrichment helper", async () => {

@@ -77,6 +77,7 @@ export interface EditReviewParams {
   content: string;
   outsideWorkspace: boolean;
   diagnosticDelay: number;
+  saveWithoutFormatting?: boolean;
   approvalPanel?: unknown;
   onApprovalRequest?: OnApprovalRequest;
   /** Called only after the interactive approval UI has been enqueued. */
@@ -132,6 +133,7 @@ export interface EditReviewResult {
   error?: string;
   document_dirty?: boolean;
   document_state?: "matches_baseline" | "differs_from_baseline" | "unavailable";
+  pending_buffer_matches_proposal?: boolean;
   apply_failure?: EditApplyFailureRecovery;
   save_failure?: EditSaveFailureRecovery;
   next_steps?: string[];

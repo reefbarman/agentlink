@@ -459,6 +459,21 @@ export class HostTerminalRuntime {
     return this.userMayBeBusy;
   }
 
+  authorizeTaskRun(): boolean {
+    if (
+      !this.presentation.terminalRunning ||
+      this.presentation.alternateScreen ||
+      this.blocks.mode !== "integrated" ||
+      this.blocks.activeCommandBlockId !== undefined ||
+      !this.promptPristine
+    ) {
+      return false;
+    }
+    this.promptPristine = false;
+    this.activityRevision += 1;
+    return true;
+  }
+
   get interactionStateKey(): string {
     return [
       this.presentation.terminalRunning ? "running" : "exited",
@@ -617,10 +632,7 @@ export class HostTerminalRuntime {
       ) {
         this.promptPristine = true;
       }
-      if (
-        segment.event.type === "prompt-end" ||
-        segment.event.type === "command-start"
-      ) {
+      if (segment.event.type === "command-start") {
         this.promptPristine = false;
       }
       this.presentation = reduceHostTerminalPresentation(this.presentation, {

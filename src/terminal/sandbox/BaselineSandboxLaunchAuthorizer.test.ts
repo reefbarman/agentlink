@@ -252,6 +252,12 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
         policy.structurallyProtectedRoots,
       );
       expect(environment.CUSTOM_FLAG).toBe("yes");
+      expect(launch.metadata.environmentBudget).toMatchObject({
+        limitBytes: 768 * 1024,
+        estimatedBytes: expect.any(Number),
+        protectedBytes: expect.any(Number),
+        dropped: [],
+      });
       expect(environment).toMatchObject({
         AGENTLINK: "1",
         GIT_TERMINAL_PROMPT: "0",
@@ -298,6 +304,79 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       expect(await exists(privateCommandRoot)).toBe(true);
       launch.finalize?.();
       await expect.poll(() => exists(privateCommandRoot)).toBe(false);
+    } finally {
+      await test.dispose();
+    }
+  });
+
+  it("drops only oversized host-inherited entries and records token-free metadata", async () => {
+    const test = await fixture();
+    const authorizer = new BaselineSandboxLaunchAuthorizer({
+      workspaceRoots: [test.workspace],
+      privateDirectoryPrefix: path.join(test.privateRoot, "al-budget-"),
+      homeDirectory: path.join(test.root, "real-home"),
+      hostTemporaryDirectory: os.tmpdir(),
+      environmentBudgetBytes: 2_100,
+      hostEnvironment: {
+        PATH: "/usr/bin:/bin",
+        HOST_LARGE_B: "b".repeat(600),
+        HOST_LARGE_A: "a".repeat(600),
+      },
+      environmentPolicy: { set: { POLICY_VALUE: "policy-protected" } },
+    });
+    try {
+      const launch = await authorizeAndActivate(
+        authorizer,
+        request(test.workspace, {
+          env: { COMMAND_VALUE: "command-protected" },
+        }),
+      );
+      expect(launch.policy.environment.values.POLICY_VALUE).toBe(
+        "policy-protected",
+      );
+      expect(launch.policy.environment.values.COMMAND_VALUE).toBe(
+        "command-protected",
+      );
+      expect(launch.policy.environment.values.HOST_LARGE_A).toBeUndefined();
+      expect(launch.metadata.environmentBudget?.dropped).toEqual([
+        { name: "HOST_LARGE_A", bytes: 614 },
+      ]);
+      expect(launch.policy.environment.values.HOST_LARGE_B).toBe(
+        "b".repeat(600),
+      );
+      expect(JSON.stringify(launch.metadata)).not.toContain("policy-protected");
+      expect(JSON.stringify(launch.metadata)).not.toContain(
+        "command-protected",
+      );
+      launch.finalize?.();
+    } finally {
+      await test.dispose();
+    }
+  });
+
+  it("fails closed when protected command environment exceeds the budget", async () => {
+    const test = await fixture();
+    const authorizer = new BaselineSandboxLaunchAuthorizer({
+      workspaceRoots: [test.workspace],
+      privateDirectoryPrefix: path.join(
+        test.privateRoot,
+        "al-protected-budget-",
+      ),
+      homeDirectory: path.join(test.root, "real-home"),
+      hostTemporaryDirectory: os.tmpdir(),
+      environmentBudgetBytes: 1_500,
+      hostEnvironment: { PATH: "/usr/bin:/bin" },
+    });
+    try {
+      await expect(
+        authorizer.authorize(
+          request(test.workspace, {
+            env: { COMMAND_VALUE: "x".repeat(1_000) },
+          }),
+        ),
+      ).rejects.toThrow(
+        /protected environment contributors exceed.*COMMAND_VALUE/,
+      );
     } finally {
       await test.dispose();
     }

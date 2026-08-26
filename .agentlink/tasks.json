@@ -1,0 +1,16 @@
+{
+  "tasks": [
+    {
+      "label": "Release patch and install",
+      "command": "npm run release -- --install"
+    },
+    {
+      "label": "Release minor and install",
+      "command": "npm run release -- --minor --install"
+    },
+    {
+      "label": "Run tests",
+      "command": "npm test"
+    }
+  ]
+}

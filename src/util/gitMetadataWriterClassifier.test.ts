@@ -91,6 +91,7 @@ const positives: Array<[PredictableGitMetadataWriterSubcommand, string[]]> = [
       "git merge --quit",
     ],
   ],
+  ["merge-tree", ["git merge-tree --write-tree main feature"]],
   [
     "reset",
     [
@@ -163,6 +164,10 @@ const negatives = [
   "git checkout --conflict=diff3 -- src/a.ts",
   "git checkout --pathspec-from-file=list -- src/a.ts",
   "git merge feature",
+  "git merge-tree main feature",
+  "git merge-tree --trivial-merge main feature",
+  "git merge-tree --write-tree main",
+  "git merge-tree --write-tree main feature extra",
   "git add --pathspec-from-file=list",
   "git add",
   "git rm",

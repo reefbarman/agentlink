@@ -1049,6 +1049,7 @@ export async function handleApplyDiff(
     diff: string;
     block_options?: ApplyDiffBlockOption[];
     atomic?: boolean;
+    save_without_formatting?: boolean;
   },
   _approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
@@ -1337,6 +1338,7 @@ export async function handleApplyDiff(
       content: newContent,
       outsideWorkspace: !inWorkspace,
       diagnosticDelay: providers.diagnosticDelay ?? DEFAULT_DIAGNOSTIC_DELAY_MS,
+      saveWithoutFormatting: params.save_without_formatting,
       approvalPanel,
       onApprovalRequest,
       prepareOneShotAuthorization: providers.prepareOneShotAuthorization,

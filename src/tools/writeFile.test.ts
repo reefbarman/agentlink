@@ -151,6 +151,37 @@ describe("handleWriteFile", () => {
     );
   });
 
+  it("forwards save_without_formatting to the edit-review boundary", async () => {
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "accepted" as const,
+        path: "src/example.ts",
+        operation: "auto-approved" as const,
+        ...durable("new"),
+      })),
+    };
+    const policy = createApprovalPolicy(true);
+    const { handleWriteFile } = await import("./writeFile.js");
+
+    await handleWriteFile(
+      {
+        path: "src/example.ts",
+        content: "new",
+        save_without_formatting: true,
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      { editReviewProvider, writeApprovalPolicyProvider: policy },
+    );
+
+    expect(editReviewProvider.reviewAndApply).toHaveBeenCalledWith(
+      expect.objectContaining({ saveWithoutFormatting: true }),
+    );
+  });
+
   it("returns exact automatic write authorization evidence", async () => {
     const editReviewProvider: EditReviewProvider = {
       reviewAndApply: vi.fn(async () => ({

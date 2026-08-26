@@ -18,6 +18,14 @@ import {
   materializeHostShellBootstrap,
   type MaterializedHostShellBootstrap,
 } from "./hostShellBootstrap.js";
+import {
+  composeHostTerminalTaskCommand,
+  createHostTerminalTasksRevision,
+  HOST_TERMINAL_TASKS_TEMPLATE,
+  parseHostTerminalTasks,
+  resolveHostTerminalTaskCwd,
+  type HostTerminalTaskDefinition,
+} from "./hostTerminalTasks.js";
 import { HostTerminalRuntime } from "./HostTerminalRuntime.js";
 import type {
   HostTerminalSurfaceConnection,
@@ -64,6 +72,12 @@ interface PendingTerminalConfirmation {
   bracketedPasteMode?: boolean;
 }
 
+interface PendingTerminalTask {
+  requestId: string;
+  command: string;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
 interface ManagedSurfaceTerminal {
   terminalId: string;
   terminalInstanceId: string;
@@ -76,6 +90,7 @@ interface ManagedSurfaceTerminal {
   renderPaused: boolean;
   resyncRequested: boolean;
   pending: PendingRenderQueue;
+  pendingTask?: PendingTerminalTask;
 }
 
 /**
@@ -137,6 +152,11 @@ export interface LiveHostTerminalSurfaceControllerOptions {
   openNativeTerminal?(fallback: HostTerminalFallbackState): void;
   readClipboard?(): PromiseLike<string> | string;
   writeClipboard?(text: string): PromiseLike<unknown> | unknown;
+  resolveTasksProjectRoot?(
+    activeTerminalCwd?: string,
+  ): Promise<string | undefined>;
+  readTasksFile?(projectRoot: string): Promise<string | undefined>;
+  openTasksFile?(projectRoot: string, template: string): Promise<void>;
   runtimeWatermarks?: {
     high: number;
     low: number;
@@ -220,6 +240,8 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     string,
     PendingTerminalConfirmation
   >();
+  private readonly taskRootsByRevision = new Map<string, string>();
+  private latestTasksRoot: string | undefined;
   private readonly interactionGenerations = new Map<string, number>();
   private nextConnectionGeneration = 1;
   private state: HostTerminalState = EMPTY_HOST_TERMINAL_STATE;
@@ -338,6 +360,18 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     }
     if (request.type === "host-terminal/create") {
       await this.createTerminal(connection, request);
+      return;
+    }
+    if (request.type === "terminal-view/list-tasks") {
+      await this.listTasks(connection, request.requestId);
+      return;
+    }
+    if (request.type === "terminal-view/run-task") {
+      await this.runTask(connection, request);
+      return;
+    }
+    if (request.type === "terminal-view/open-tasks-file") {
+      await this.openTasksFile(connection, request.requestId);
       return;
     }
     if (request.type === "terminal-view/open-native-fallback") {
@@ -741,6 +775,9 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
       replay,
       ...(this.fallback ? { fallback: this.fallback } : {}),
     });
+    for (const terminal of this.terminals.values()) {
+      if (terminal.pendingTask) this.deliverPendingTask(terminal, connection);
+    }
   }
 
   private handleAgentRawData(update: {
@@ -1231,9 +1268,236 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     await this.post(connection, surfaceEvent);
   }
 
+  private activeUserTerminal(): ManagedSurfaceTerminal | undefined {
+    const activeTabId = this.state.activeTabId;
+    return activeTabId ? this.terminals.get(activeTabId) : undefined;
+  }
+
+  private async resolveTasksRoot(): Promise<string | undefined> {
+    return this.options.resolveTasksProjectRoot?.(
+      this.activeUserTerminal()?.runtime.currentCwd,
+    );
+  }
+
+  private async loadTasks(projectRoot: string): Promise<{
+    tasks: readonly HostTerminalTaskDefinition[];
+    errors: readonly string[];
+    revision: string;
+    missing: boolean;
+  }> {
+    const content = await this.options.readTasksFile?.(projectRoot);
+    if (content === undefined) {
+      return { tasks: [], errors: [], revision: "", missing: true };
+    }
+    const parsed = parseHostTerminalTasks(content);
+    return {
+      ...parsed,
+      revision: createHostTerminalTasksRevision(projectRoot, parsed.tasks),
+      missing: false,
+    };
+  }
+
+  private async listTasks(
+    connection: HostTerminalSurfaceConnection,
+    requestId: string,
+    pinnedProjectRoot?: string,
+  ): Promise<void> {
+    try {
+      const projectRoot = pinnedProjectRoot ?? (await this.resolveTasksRoot());
+      if (!projectRoot) {
+        await this.post(connection, {
+          type: "terminal-view/tasks",
+          requestId,
+          status: "unavailable",
+          tasks: [],
+          errorSummary: "Open a local workspace folder to use terminal tasks.",
+        });
+        return;
+      }
+      const snapshot = this.options.getConfigurationSnapshot({
+        cwd: projectRoot,
+      });
+      if (!snapshot.isWorkspaceTrusted) {
+        await this.post(connection, {
+          type: "terminal-view/tasks",
+          requestId,
+          status: "unavailable",
+          tasks: [],
+          errorSummary: "Trust this workspace to use terminal tasks.",
+        });
+        return;
+      }
+      const loaded = await this.loadTasks(projectRoot);
+      this.latestTasksRoot = projectRoot;
+      if (loaded.revision) {
+        this.taskRootsByRevision.clear();
+        this.taskRootsByRevision.set(loaded.revision, projectRoot);
+      }
+      await this.post(connection, {
+        type: "terminal-view/tasks",
+        requestId,
+        status: loaded.missing
+          ? "missing"
+          : loaded.errors.length > 0 && loaded.tasks.length === 0
+            ? "invalid"
+            : "ok",
+        ...(loaded.revision ? { revision: loaded.revision } : {}),
+        tasks: loaded.tasks.map(({ id, label, command }) => ({
+          id,
+          label,
+          command,
+        })),
+        ...(loaded.errors.length > 0
+          ? { errorSummary: loaded.errors.join("; ").slice(0, 2_048) }
+          : {}),
+      });
+    } catch (error) {
+      await this.post(connection, {
+        type: "terminal-view/tasks",
+        requestId,
+        status: "invalid",
+        tasks: [],
+        errorSummary: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async runTask(
+    connection: HostTerminalSurfaceConnection,
+    request: Extract<
+      TerminalSurfaceRequest,
+      { type: "terminal-view/run-task" }
+    >,
+  ): Promise<void> {
+    try {
+      const projectRoot =
+        this.taskRootsByRevision.get(request.revision) ??
+        (await this.resolveTasksRoot());
+      if (!projectRoot) {
+        await this.post(connection, {
+          type: "terminal-view/task-run-result",
+          requestId: request.requestId,
+          status: "unavailable",
+          message: "Open a local workspace folder to run terminal tasks.",
+        });
+        return;
+      }
+      const snapshot = this.options.getConfigurationSnapshot({
+        cwd: projectRoot,
+      });
+      if (!snapshot.isWorkspaceTrusted) {
+        await this.post(connection, {
+          type: "terminal-view/task-run-result",
+          requestId: request.requestId,
+          status: "unavailable",
+          message: "Trust this workspace to run terminal tasks.",
+        });
+        return;
+      }
+      const loaded = await this.loadTasks(projectRoot);
+      if (loaded.revision !== request.revision) {
+        await this.post(connection, {
+          type: "terminal-view/task-run-result",
+          requestId: request.requestId,
+          status: "stale",
+          message: "tasks.json changed. Review the refreshed task list.",
+        });
+        await this.listTasks(connection, request.requestId, projectRoot);
+        return;
+      }
+      const task = loaded.tasks.find(({ id }) => id === request.taskId);
+      if (!task) {
+        await this.post(connection, {
+          type: "terminal-view/task-run-result",
+          requestId: request.requestId,
+          status: "stale",
+          message: "This task no longer exists.",
+        });
+        return;
+      }
+      const resolvedCwd = task.cwd
+        ? await resolveHostTerminalTaskCwd(projectRoot, task.cwd)
+        : undefined;
+      if (task.cwd && !resolvedCwd) {
+        await this.post(connection, {
+          type: "terminal-view/task-run-result",
+          requestId: request.requestId,
+          status: "failed",
+          message: "The task cwd must exist inside the project folder.",
+        });
+        return;
+      }
+
+      const active = this.activeUserTerminal();
+      const inPlaceCommand = composeHostTerminalTaskCommand(task, resolvedCwd);
+      if (
+        active &&
+        inPlaceCommand &&
+        active.runtime.authorizeTaskRun() &&
+        active.service.write(active.terminalId, `${inPlaceCommand}\r`)
+      ) {
+        this.state = reduceHostTerminalState(this.state, {
+          type: "host-terminal/activated",
+          terminalId: active.terminalId,
+        });
+        this.options.requestTerminalViewReveal?.();
+        await this.post(connection, {
+          type: "terminal-view/task-run-result",
+          requestId: request.requestId,
+          status: "started",
+          terminalId: active.terminalId,
+        });
+        return;
+      }
+
+      await this.createTerminal(
+        connection,
+        {
+          type: "host-terminal/create",
+          requestId: `task-terminal-${this.options.createId()}`,
+          cwd: resolvedCwd ?? projectRoot,
+        },
+        { requestId: request.requestId, command: task.command },
+      );
+    } catch (error) {
+      await this.post(connection, {
+        type: "terminal-view/task-run-result",
+        requestId: request.requestId,
+        status: "failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async openTasksFile(
+    connection: HostTerminalSurfaceConnection,
+    requestId: string,
+  ): Promise<void> {
+    try {
+      const projectRoot =
+        this.latestTasksRoot ?? (await this.resolveTasksRoot());
+      if (!projectRoot || !this.options.openTasksFile) {
+        throw new Error(
+          "Open a local workspace folder to edit terminal tasks.",
+        );
+      }
+      await this.options.openTasksFile(
+        projectRoot,
+        HOST_TERMINAL_TASKS_TEMPLATE,
+      );
+    } catch (error) {
+      await this.post(connection, {
+        type: "host-terminal/error",
+        requestId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private async createTerminal(
     connection: HostTerminalSurfaceConnection,
     request: Extract<TerminalSurfaceRequest, { type: "host-terminal/create" }>,
+    pendingTask?: { requestId: string; command: string },
   ): Promise<void> {
     const terminalId = `host-terminal-${this.options.createId()}`;
     const terminalInstanceId = this.options.createId();
@@ -1258,6 +1522,14 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
           type: "terminal-view/fallback",
           fallback,
         });
+        if (pendingTask) {
+          await this.post(connection, {
+            type: "terminal-view/task-run-result",
+            requestId: pendingTask.requestId,
+            status: "unavailable",
+            message: fallback.message,
+          });
+        }
         return;
       }
       const prepared = prepareHostShellBootstrap({
@@ -1281,6 +1553,14 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
           type: "terminal-view/fallback",
           fallback,
         });
+        if (pendingTask) {
+          await this.post(connection, {
+            type: "terminal-view/task-run-result",
+            requestId: pendingTask.requestId,
+            status: "unavailable",
+            message: fallback.message,
+          });
+        }
         return;
       }
 
@@ -1300,12 +1580,33 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
         materialized,
         this.options.nodePtyLoader,
       );
-      if (loaded.mode !== "custom") return;
+      if (loaded.mode !== "custom") {
+        if (pendingTask) {
+          await this.post(connection, {
+            type: "terminal-view/task-run-result",
+            requestId: pendingTask.requestId,
+            status: "unavailable",
+            message: "A compatible Host Shell is unavailable for this task.",
+          });
+        }
+        await this.cleanupBootstrap(materialized);
+        return;
+      }
       if (!this.isCurrent(connection)) {
         await this.cleanupBootstrap(materialized);
         return;
       }
 
+      if (pendingTask && materialized.mode !== "integrated") {
+        await this.post(connection, {
+          type: "terminal-view/task-run-result",
+          requestId: pendingTask.requestId,
+          status: "unavailable",
+          message: "Task launch requires shell integration.",
+        });
+        await this.cleanupBootstrap(materialized);
+        return;
+      }
       const parser =
         materialized.mode === "integrated"
           ? createShellIntegrationParser(materialized.nonce)
@@ -1341,6 +1642,24 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
         renderPaused: false,
         resyncRequested: false,
         pending: createPendingRenderQueue(),
+        ...(pendingTask
+          ? {
+              pendingTask: {
+                ...pendingTask,
+                timeout: setTimeout(() => {
+                  if (managed?.pendingTask?.requestId !== pendingTask.requestId)
+                    return;
+                  managed.pendingTask = undefined;
+                  void this.post(connection, {
+                    type: "terminal-view/task-run-result",
+                    requestId: pendingTask.requestId,
+                    status: "failed",
+                    message: "The new shell did not become ready for the task.",
+                  });
+                }, 15_000),
+              },
+            }
+          : {}),
       };
       managed.serviceSubscription = service.onEvent((event) =>
         this.handleServiceEvent(managed!, event),
@@ -1363,11 +1682,22 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
         await this.cleanupBootstrap(materialized);
       }
       if (!managed && this.isCurrent(connection)) {
-        await this.post(connection, {
-          type: "host-terminal/error",
-          requestId: request.requestId,
-          message: error instanceof Error ? error.message : String(error),
-        });
+        const message = error instanceof Error ? error.message : String(error);
+        await this.post(
+          connection,
+          pendingTask
+            ? {
+                type: "terminal-view/task-run-result",
+                requestId: pendingTask.requestId,
+                status: "failed",
+                message,
+              }
+            : {
+                type: "host-terminal/error",
+                requestId: request.requestId,
+                message,
+              },
+        );
       }
     }
   }
@@ -1424,6 +1754,17 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
       const previousCwd = terminal.runtime.currentCwd;
       const update = terminal.runtime.processData(data);
       if (update.batch) this.enqueueBatch(terminal, update.batch);
+      if (
+        terminal.pendingTask &&
+        update.batch?.operations.some(
+          (operation) =>
+            operation.type === "block-boundary" &&
+            operation.boundary === "prompt-start",
+        )
+      ) {
+        const connection = this.currentReadyConnection();
+        if (connection) this.deliverPendingTask(terminal, connection);
+      }
       if (terminal.runtime.currentCwd !== previousCwd) {
         const cwdEvent: HostTerminalEvent = {
           type: "host-terminal/cwd",
@@ -1781,6 +2122,29 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     );
   }
 
+  private deliverPendingTask(
+    terminal: ManagedSurfaceTerminal,
+    connection: HostTerminalSurfaceConnection,
+  ): void {
+    const pendingTask = terminal.pendingTask;
+    if (!pendingTask || !terminal.runtime.authorizeTaskRun()) return;
+    terminal.pendingTask = undefined;
+    clearTimeout(pendingTask.timeout);
+    const written = terminal.service.write(
+      terminal.terminalId,
+      `${pendingTask.command}\r`,
+    );
+    void this.post(connection, {
+      type: "terminal-view/task-run-result",
+      requestId: pendingTask.requestId,
+      status: written ? "started" : "failed",
+      ...(written ? { terminalId: terminal.terminalId } : {}),
+      ...(!written
+        ? { message: "The new shell exited before the task ran." }
+        : {}),
+    });
+  }
+
   private async post(
     connection: HostTerminalSurfaceConnection,
     event: TerminalSurfaceEvent,
@@ -1795,6 +2159,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
   }
 
   private disposeTerminal(terminal: ManagedSurfaceTerminal): void {
+    if (terminal.pendingTask) clearTimeout(terminal.pendingTask.timeout);
     this.deleteConfirmationsForTerminal(terminal.terminalId);
     terminal.serviceSubscription.dispose();
     terminal.service.dispose();

@@ -302,6 +302,39 @@ describe("SandboxHelperClient", () => {
     expect(transport.dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("surfaces typed pre-command environment failures", async () => {
+    const test = harness();
+    const process = test.client.launch(request);
+    const transport = test.transports[0];
+    transport.emit({
+      ...process.identity,
+      type: "error",
+      message: "environment too large",
+      code: "sandbox_environment_too_large",
+      details: {
+        limitBytes: 1_048_576,
+        headroomBytes: 65_536,
+        argvBytes: 100,
+        environmentBytes: 990_000,
+        pointerTableBytes: 2_000,
+        payloadBytes: 992_100,
+        requiredBytes: 1_057_636,
+        largestEnvironmentEntries: [{ name: "LARGE_VALUE", bytes: 900_000 }],
+      },
+    });
+
+    await expect(process.ready).rejects.toMatchObject({
+      code: "sandbox_environment_too_large",
+      details: {
+        requiredBytes: 1_057_636,
+        largestEnvironmentEntries: [{ name: "LARGE_VALUE", bytes: 900_000 }],
+      },
+    });
+    await expect(process.completion).rejects.toMatchObject({
+      code: "sandbox_environment_too_large",
+    });
+  });
+
   it("fails when data or exit arrives before readiness", async () => {
     const dataTest = harness();
     const dataProcess = dataTest.client.launch(request);

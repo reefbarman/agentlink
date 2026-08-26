@@ -31,6 +31,13 @@ export interface SandboxEnvironmentPolicy {
   summary?: SandboxEnvironmentPolicySummary;
 }
 
+export interface SandboxEnvironmentBudgetMetadata {
+  limitBytes: number;
+  estimatedBytes: number;
+  protectedBytes: number;
+  dropped: Array<{ name: string; bytes: number }>;
+}
+
 export interface SandboxResourceLimits {
   maxProcesses?: number;
   maxCpuSeconds?: number;
@@ -278,6 +285,8 @@ export interface SandboxExecutionMetadata {
     auditId: string;
   };
   environmentPolicy?: SandboxEnvironmentPolicySummary;
+  /** Token-free conservative environment sizing and deterministic host-entry eviction. */
+  environmentBudget?: SandboxEnvironmentBudgetMetadata;
   /** Exact token-free additional capability delta bound to this launch. */
   capabilityRequest?: SandboxCapabilityRequest;
   violations?: SandboxViolation[];

@@ -9,13 +9,14 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import type {
-  SandboxCommandDisposable,
-  SandboxCommandEvent,
-  SandboxCommandExit,
-  SandboxCommandProcess,
-  SandboxCommandReady,
-  SandboxRuntimeProvider,
+import {
+  SandboxPreCommandLaunchError,
+  type SandboxCommandDisposable,
+  type SandboxCommandEvent,
+  type SandboxCommandExit,
+  type SandboxCommandProcess,
+  type SandboxCommandReady,
+  type SandboxRuntimeProvider,
 } from "./SandboxRuntimeProvider.js";
 import {
   SANDBOX_INTERACTIVE_PROMPT_GRACE_MS,
@@ -2254,6 +2255,33 @@ describe("SandboxTerminalCoordinator", () => {
       }),
     ).rejects.toThrow("mismatched command identity");
     expect(test.runtime.launch).not.toHaveBeenCalled();
+    expect(test.authorizedFinalizer).toHaveBeenCalledTimes(1);
+  });
+
+  it("reclaims a channel after a typed pre-command launch failure", async () => {
+    const test = harness();
+    const execution = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "pwd",
+      cwd: "/workspace",
+      sandboxSessionId: "agent-session",
+    });
+    await flush();
+    const error = new SandboxPreCommandLaunchError("environment too large", {
+      limitBytes: 100,
+      headroomBytes: 10,
+      argvBytes: 10,
+      environmentBytes: 90,
+      pointerTableBytes: 10,
+      payloadBytes: 110,
+      requiredBytes: 120,
+      largestEnvironmentEntries: [{ name: "LARGE_VALUE", bytes: 80 }],
+    });
+    test.processes[0].readyDeferred.reject(error);
+    test.processes[0].completionDeferred.reject(error);
+
+    await expect(execution).rejects.toBe(error);
+    expect(test.coordinator.listTerminals({ owner: undefined })).toEqual([]);
     expect(test.authorizedFinalizer).toHaveBeenCalledTimes(1);
   });
 

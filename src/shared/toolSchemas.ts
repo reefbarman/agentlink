@@ -548,6 +548,12 @@ export const writeFileSchema = {
     .string()
     .describe("File path (absolute or relative to workspace root)"),
   content: z.string().describe("Complete file content to write"),
+  save_without_formatting: z
+    .boolean()
+    .optional()
+    .describe(
+      "Save the approved content without format-on-save or other ordinary save participants, then verify exact disk preservation.",
+    ),
 };
 
 export const generateImageSchema = {
@@ -778,6 +784,12 @@ export const applyDiffSchema = {
     .describe(
       "When true, require every parsed block to succeed and no malformed blocks before opening review or applying any change. The same requirement is revalidated under the write lock.",
     ),
+  save_without_formatting: z
+    .boolean()
+    .optional()
+    .describe(
+      "Save the approved content without format-on-save or other ordinary save participants, then verify exact disk preservation.",
+    ),
 };
 
 export const findAndReplaceSchema = {
@@ -926,7 +938,7 @@ export const executeCommandSchema = {
     .number()
     .optional()
     .describe(
-      "Timeout in seconds. Always set one for quick commands; omit it only when you intentionally want to wait indefinitely.",
+      "Timeout in seconds. Always set one for quick commands; omit it only when you intentionally want to wait indefinitely. Confirmed running commands remain observable by terminal ID; a Native Agent timeout before command-start confirmation closes the terminal and reports a launch-stage failure.",
     ),
   env: z
     .record(z.string(), z.string())

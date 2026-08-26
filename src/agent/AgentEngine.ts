@@ -55,6 +55,7 @@ import {
   handleTodoWrite,
   completeTodos,
   getLatestTodoState,
+  hasPendingTodos,
   type TodoItem,
   type TodoToolInput,
 } from "./todoTool.js";
@@ -1146,6 +1147,9 @@ export class AgentEngine {
     let wrapUpAttempts = 0; // Track wrap-up injections to prevent infinite loops
     const MAX_WRAP_UP_ATTEMPTS = 2;
     let pendingFinalMarker: FinalMessageMarker | null = null;
+    let finalMarkerApplied = false;
+    let finalStatusNudgeAttempted = false;
+    let pendingFinalStatusNudge = false;
     let pendingCompletedTodoUpdate: TodoItem[] | null = null;
     let currentTodos: TodoItem[] = getLatestTodoState(session.getAllMessages());
     const retainedToolResults: ToolResultRetentionIndex = new Map();
@@ -1554,13 +1558,20 @@ export class AgentEngine {
             this.log,
           );
 
-          // Empty-response recovery input is request-local. It must reach the
-          // provider without becoming a persisted/user-visible chat message.
+          // Recovery input is request-local. It must reach the provider without
+          // becoming a persisted/user-visible chat message.
           if (pendingEmptyResponseNudge) {
             apiMessages.push({
               role: "user",
               content:
                 "Your previous response was empty. Continue from where you left off and provide the full response.",
+            });
+          }
+          if (pendingFinalStatusNudge) {
+            apiMessages.push({
+              role: "user",
+              content:
+                "You ended the turn without calling set_task_status. Do not redo completed work. If the user's ask is complete, call set_task_status now with the real user-facing summary. Otherwise use waiting_for_user, blocked, or cancelled when that is the true state. This is your one final-status reminder for this turn.",
             });
           }
 
@@ -2068,6 +2079,7 @@ export class AgentEngine {
         requestRetryCount = 0;
         streamRetryCount = 0;
         visibleTextFromRetriedStream = "";
+        pendingFinalStatusNudge = false;
         apiTurnCount++;
 
         if (signal.aborted) break;
@@ -2327,9 +2339,30 @@ export class AgentEngine {
         );
 
         if (toolUseBlocks.length === 0) {
-          // No tool calls — append the assistant turn on its own and finish.
           appendCommittedAssistantMessage();
           opts?.onAssistantTurnCommitted?.();
+
+          const canNudgeFinalStatus =
+            !finalMarkerApplied &&
+            !finalStatusNudgeAttempted &&
+            !hasPendingTodos(currentTodos) &&
+            !session.hasPendingInterjections &&
+            !session.hasQueuedUiMessages &&
+            rawTools?.some((tool) => tool.name === "set_task_status") === true;
+          if (canNudgeFinalStatus) {
+            finalStatusNudgeAttempted = true;
+            pendingFinalStatusNudge = true;
+            session.status = "streaming";
+            this.log?.(
+              "[agent] final-status nudge: natural stop without set_task_status",
+            );
+            continue;
+          }
+          if (finalStatusNudgeAttempted && !finalMarkerApplied) {
+            this.log?.(
+              "[agent] final-status nudge ignored: accepting unmarked turn",
+            );
+          }
           break;
         }
 
@@ -2702,6 +2735,12 @@ export class AgentEngine {
         appendCommittedAssistantMessage();
         if (finalMarkerForTurn) {
           session.applyFinalMarker(finalMarkerForTurn);
+          finalMarkerApplied = true;
+          if (finalStatusNudgeAttempted) {
+            this.log?.(
+              "[agent] final-status nudge recovered with set_task_status",
+            );
+          }
           yield { type: "final_marker", marker: finalMarkerForTurn };
           pendingFinalMarker = null;
         }

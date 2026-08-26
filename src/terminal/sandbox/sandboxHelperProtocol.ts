@@ -28,6 +28,17 @@ export interface SandboxManagedNetworkDestination {
   destinationClass: "public";
 }
 
+export interface SandboxPreCommandFailureDetails {
+  limitBytes: number;
+  headroomBytes: number;
+  argvBytes: number;
+  environmentBytes: number;
+  pointerTableBytes: number;
+  payloadBytes: number;
+  requiredBytes: number;
+  largestEnvironmentEntries: Array<{ name: string; bytes: number }>;
+}
+
 export interface SandboxHelperLaunchRequest extends SandboxCommandIdentity {
   version: typeof SANDBOX_HELPER_PROTOCOL_VERSION;
   type: "launch";
@@ -90,7 +101,12 @@ export type SandboxHelperEventFrame =
       signal?: number;
       timedOut: boolean;
     })
-  | (SandboxCommandIdentity & { type: "error"; message: string });
+  | (SandboxCommandIdentity & {
+      type: "error";
+      message: string;
+      code?: "sandbox_environment_too_large";
+      details?: SandboxPreCommandFailureDetails;
+    });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -228,6 +244,43 @@ function isManagedNetworkDestination(
   );
 }
 
+function isPreCommandFailureDetails(
+  value: unknown,
+): value is SandboxPreCommandFailureDetails {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, [
+      "limitBytes",
+      "headroomBytes",
+      "argvBytes",
+      "environmentBytes",
+      "pointerTableBytes",
+      "payloadBytes",
+      "requiredBytes",
+      "largestEnvironmentEntries",
+    ]) &&
+    [
+      value.limitBytes,
+      value.headroomBytes,
+      value.argvBytes,
+      value.environmentBytes,
+      value.pointerTableBytes,
+      value.payloadBytes,
+      value.requiredBytes,
+    ].every((entry) => Number.isSafeInteger(entry) && (entry as number) >= 0) &&
+    Array.isArray(value.largestEnvironmentEntries) &&
+    value.largestEnvironmentEntries.length <= 8 &&
+    value.largestEnvironmentEntries.every(
+      (entry) =>
+        isRecord(entry) &&
+        hasOnlyKeys(entry, ["name", "bytes"]) &&
+        /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(entry.name)) &&
+        Number.isSafeInteger(entry.bytes) &&
+        (entry.bytes as number) > 0,
+    )
+  );
+}
+
 function isViolation(value: unknown): value is SandboxViolation {
   if (!isRecord(value)) return false;
   return (
@@ -348,9 +401,14 @@ export function isSandboxHelperEventFrame(
     );
   }
   if (value.type === "error") {
+    const structured = value.code === "sandbox_environment_too_large";
     return (
-      hasOnlyKeys(value, [...identityKeys, "message"]) &&
-      isNonEmptyString(value.message)
+      hasOnlyKeys(value, [...identityKeys, "message", "code", "details"]) &&
+      isNonEmptyString(value.message) &&
+      (value.code === undefined || structured) &&
+      (structured
+        ? isPreCommandFailureDetails(value.details)
+        : value.details === undefined)
     );
   }
   if (value.type === "ready") {
