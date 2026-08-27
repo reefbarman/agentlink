@@ -793,6 +793,19 @@ describe("AgentSession", () => {
       });
     });
 
+    it("persists hidden user-message metadata without removing provider context", async () => {
+      const session = await makeSession();
+      session.addUserMessage("internal continuation", { hidden: true });
+
+      expect(session.getMessages()).toEqual([
+        {
+          role: "user",
+          content: "internal continuation",
+          uiHint: { userMessage: { hidden: true } },
+        },
+      ]);
+    });
+
     it("persists fresh-session handoff metadata on an ordinary user turn", async () => {
       const session = await makeSession();
       session.addUserMessage("continue the handoff", {

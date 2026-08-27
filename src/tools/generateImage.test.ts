@@ -636,6 +636,127 @@ describe("parseCodexImageSseForTest", () => {
     expect(generatedImages).toBe(result.images);
   });
 
+  it("collects the final result from a completed output item", async () => {
+    const finalBase64 = Buffer.from("final-output-item").toString("base64");
+
+    const result = await parseCodexImageSseForTest({
+      response: sseResponse([
+        {
+          type: "response.image_generation_call.completed",
+          item_id: "ig_1",
+          output_index: 0,
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            id: "ig_1",
+            type: "image_generation_call",
+            status: "completed",
+            result: finalBase64,
+            size: "1536x1024",
+            quality: "high",
+            output_format: "png",
+          },
+        },
+        {
+          type: "response.completed",
+          response: { status: "completed" },
+        },
+      ]),
+      maxImages: 1,
+      generatedImages: [],
+    });
+
+    expect(result.images).toEqual([
+      expect.objectContaining({
+        bytes: Buffer.byteLength("final-output-item"),
+        base64: finalBase64,
+        size: "1536x1024",
+        quality: "high",
+        output_format: "png",
+        event_type: "response.output_item.done",
+      }),
+    ]);
+  });
+
+  it("replaces a partial with the final result for the same output", async () => {
+    const partialBase64 = Buffer.from("partial-image").toString("base64");
+    const finalBase64 = Buffer.from("final-image").toString("base64");
+
+    const result = await parseCodexImageSseForTest({
+      response: sseResponse([
+        {
+          type: "response.image_generation_call.partial_image",
+          output_index: 0,
+          partial_image_index: 0,
+          partial_image_b64: partialBase64,
+          size: "1536x1024",
+          quality: "high",
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            id: "ig_1",
+            type: "image_generation_call",
+            status: "completed",
+            result: finalBase64,
+          },
+        },
+      ]),
+      maxImages: 1,
+      generatedImages: [],
+    });
+
+    expect(result.images).toEqual([
+      expect.objectContaining({
+        bytes: Buffer.byteLength("final-image"),
+        base64: finalBase64,
+        size: "1536x1024",
+        quality: "high",
+        event_type: "response.output_item.done",
+      }),
+    ]);
+  });
+
+  it("collects final image results from the completed response", async () => {
+    const firstBase64 = Buffer.from("first-final").toString("base64");
+    const secondBase64 = Buffer.from("second-final").toString("base64");
+
+    const result = await parseCodexImageSseForTest({
+      response: sseResponse([
+        {
+          type: "response.completed",
+          response: {
+            status: "completed",
+            output: [
+              {
+                id: "ig_1",
+                type: "image_generation_call",
+                status: "completed",
+                result: firstBase64,
+              },
+              {
+                id: "ig_2",
+                type: "image_generation_call",
+                status: "completed",
+                result: secondBase64,
+              },
+            ],
+          },
+        },
+      ]),
+      maxImages: 2,
+      generatedImages: [],
+    });
+
+    expect(result.images.map((image) => image.base64)).toEqual([
+      firstBase64,
+      secondBase64,
+    ]);
+  });
+
   it("classifies an explicit refusal without inferring quota use", async () => {
     const result = await parseCodexImageSseForTest({
       response: sseResponse([

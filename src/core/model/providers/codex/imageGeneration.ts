@@ -37,11 +37,23 @@ export interface CodexGeneratedImage {
 interface StreamImageEvent {
   type?: string;
   partial_image_b64?: string;
+  result?: string;
   size?: string;
   quality?: string;
   background?: string;
   output_format?: string;
   [key: string]: unknown;
+}
+
+interface StreamImagePayload {
+  base64: string;
+  identity?: string;
+  outputIndex?: number;
+  partialImageIndex?: number;
+  size?: string;
+  quality?: string;
+  background?: string;
+  outputFormat?: string;
 }
 
 export type CodexImageGenerationFailureCategory =
@@ -183,43 +195,36 @@ export async function parseCodexImageGenerationSse(params: {
     ) {
       terminalFailure = classifiedFailure;
     }
-    if (
-      event.type !== "response.image_generation_call.partial_image" ||
-      typeof event.partial_image_b64 !== "string"
-    ) {
-      return;
-    }
+    for (const payload of extractImageGenerationPayloads(event)) {
+      const identity =
+        typeof payload.outputIndex === "number"
+          ? `output:${payload.outputIndex}`
+          : (payload.identity ??
+            (typeof payload.partialImageIndex === "number"
+              ? `partial:${payload.partialImageIndex}`
+              : `fallback:${fallbackImageEventIndex++}`));
+      let slot = imageSlots.get(identity);
+      if (slot === undefined) {
+        if (imageSlots.size >= params.maxImages) continue;
+        slot = imageSlots.size;
+        imageSlots.set(identity, slot);
+      }
 
-    const eventWithIdentity = event as StreamImageEvent & {
-      item_id?: string;
-      output_index?: number;
-      partial_image_index?: number;
-    };
-    const identity =
-      eventWithIdentity.item_id ??
-      (typeof eventWithIdentity.output_index === "number"
-        ? `output:${eventWithIdentity.output_index}`
-        : typeof eventWithIdentity.partial_image_index === "number"
-          ? `partial:${eventWithIdentity.partial_image_index}`
-          : `fallback:${fallbackImageEventIndex++}`);
-    let slot = imageSlots.get(identity);
-    if (slot === undefined) {
-      if (imageSlots.size >= params.maxImages) return;
-      slot = imageSlots.size;
-      imageSlots.set(identity, slot);
+      const bytes = Buffer.from(payload.base64, "base64");
+      images[slot] = {
+        ...images[slot],
+        bytes: bytes.byteLength,
+        mimeType: "image/png",
+        base64: payload.base64,
+        ...(payload.size ? { size: payload.size } : {}),
+        ...(payload.quality ? { quality: payload.quality } : {}),
+        ...(payload.background ? { background: payload.background } : {}),
+        ...(payload.outputFormat
+          ? { output_format: payload.outputFormat }
+          : {}),
+        event_type: event.type ?? "image_generation_call",
+      };
     }
-
-    const bytes = Buffer.from(event.partial_image_b64, "base64");
-    images[slot] = {
-      bytes: bytes.byteLength,
-      mimeType: "image/png",
-      base64: event.partial_image_b64,
-      size: event.size,
-      quality: event.quality,
-      background: event.background,
-      output_format: event.output_format,
-      event_type: event.type,
-    };
   }
 
   const reader = params.response.body.getReader();
@@ -368,6 +373,76 @@ function classifyImageGenerationTerminalEvent(
   }
 
   return undefined;
+}
+
+function extractImageGenerationPayloads(
+  event: StreamImageEvent,
+): StreamImagePayload[] {
+  const payloads: StreamImagePayload[] = [];
+  if (
+    event.type === "response.image_generation_call.partial_image" &&
+    typeof event.partial_image_b64 === "string"
+  ) {
+    payloads.push(imagePayloadFromRecord(event, event.partial_image_b64));
+  }
+  if (
+    event.type === "response.image_generation_call.completed" &&
+    typeof event.result === "string"
+  ) {
+    payloads.push(imagePayloadFromRecord(event, event.result));
+  }
+
+  const item = isRecord(event.item) ? event.item : undefined;
+  if (
+    item?.type === "image_generation_call" &&
+    typeof item.result === "string"
+  ) {
+    payloads.push(
+      imagePayloadFromRecord(
+        item,
+        item.result,
+        numericValue(event.output_index),
+      ),
+    );
+  }
+
+  const response = isRecord(event.response) ? event.response : undefined;
+  if (Array.isArray(response?.output)) {
+    for (const [outputIndex, output] of response.output.entries()) {
+      if (
+        !isRecord(output) ||
+        output.type !== "image_generation_call" ||
+        typeof output.result !== "string"
+      ) {
+        continue;
+      }
+      payloads.push(imagePayloadFromRecord(output, output.result, outputIndex));
+    }
+  }
+  return payloads;
+}
+
+function imagePayloadFromRecord(
+  record: Record<string, unknown>,
+  base64: string,
+  fallbackOutputIndex?: number,
+): StreamImagePayload {
+  return {
+    base64,
+    identity: firstString(record.item_id, record.id),
+    outputIndex: numericValue(record.output_index) ?? fallbackOutputIndex,
+    partialImageIndex: numericValue(record.partial_image_index),
+    size: firstString(record.size),
+    quality: firstString(record.quality),
+    background: firstString(record.background),
+    outputFormat: firstString(record.output_format),
+  };
+}
+
+function numericValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function explicitQuotaConsumed(

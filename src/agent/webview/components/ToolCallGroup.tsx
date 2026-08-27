@@ -11,6 +11,7 @@ import {
   getToolCallVisualState,
   type ToolCallData,
 } from "./ToolCallBlock";
+import type { OpenImageInEditor } from "./ImagePreview";
 
 type ToolBlock = ToolCallData;
 
@@ -21,6 +22,7 @@ export type BlockSegment =
 interface ToolCallGroupProps {
   blocks: ToolBlock[];
   onOpenFile?: (path: string, line?: number) => void;
+  onOpenImageInEditor?: OpenImageInEditor;
   onRevealToolCallTerminal?: (id: string) => void;
   onContinueToolCallInBackground?: (id: string) => void;
   onCompleteToolCall?: (id: string) => void;
@@ -189,6 +191,7 @@ export function getToolGroupStatus(blocks: ToolBlock[]): {
 export function ToolCallGroup({
   blocks,
   onOpenFile,
+  onOpenImageInEditor,
   onRevealToolCallTerminal,
   onContinueToolCallInBackground,
   onCompleteToolCall,
@@ -262,6 +265,7 @@ export function ToolCallGroup({
               key={block.id}
               toolCall={block}
               onOpenFile={onOpenFile}
+              onOpenImageInEditor={onOpenImageInEditor}
               onRevealToolCallTerminal={onRevealToolCallTerminal}
               onContinueToolCallInBackground={onContinueToolCallInBackground}
               onCompleteToolCall={onCompleteToolCall}

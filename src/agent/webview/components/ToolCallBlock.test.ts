@@ -325,8 +325,10 @@ describe("ToolCallBlock", () => {
   });
 
   it("shows image results as previews instead of placeholder text when expanded", () => {
+    const onOpenImageInEditor = vi.fn();
     render(
       h(ToolCallBlock, {
+        onOpenImageInEditor,
         toolCall: {
           type: "tool_call",
           id: "read-image",
@@ -361,7 +363,13 @@ describe("ToolCallBlock", () => {
     expect(
       dialog.querySelector(".user-image-lightbox-image")?.getAttribute("src"),
     ).toBe("data:image/png;base64,YWJjZA==");
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open image in editor" }),
+    );
+    expect(onOpenImageInEditor).toHaveBeenCalledWith({
+      src: "data:image/png;base64,YWJjZA==",
+      mimeType: "image/png",
+    });
     expect(
       screen.queryByRole("dialog", { name: "read_file result image 1" }),
     ).toBeNull();

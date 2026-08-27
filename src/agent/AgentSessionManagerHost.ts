@@ -178,6 +178,7 @@ export interface AgentSessionManagerOptions {
   projectMcpHubRegistry?: ProjectMcpHubRegistry;
   skillCatalogFallbackProvider?: SkillCatalogFallbackProvider;
   agentPluginCatalogProvider?: AgentPluginCatalogProvider;
+  hookRuntimeProvider?: import("./HookService.js").HookRuntimeProvider;
   browserPreferredProjectId?: string;
   onBrowserPreferredProjectChanged?: (
     projectId: string,

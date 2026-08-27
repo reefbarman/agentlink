@@ -102,7 +102,8 @@ function Row({
           </span>
           <span class="mcp-status-detail">
             {row.source.label} · {row.skills.length} skill
-            {row.skills.length === 1 ? "" : "s"} · {row.mcpServers.length} MCP
+            {row.skills.length === 1 ? "" : "s"} · {row.mcpServers.length} MCP ·{" "}
+            {row.hooks.length} hook{row.hooks.length === 1 ? "" : "s"}
           </span>
         </div>
         <span class="mcp-manager-server-badges">
@@ -170,6 +171,26 @@ function Row({
                   </li>
                 ))}
               </ul>
+            </div>
+          )}
+          {row.hooks.length > 0 && (
+            <div>
+              <strong>Lifecycle hooks</strong>
+              <ul>
+                {row.hooks.map((hook, index) => (
+                  <li key={`${hook.sourceRelativePath}-${hook.event}-${index}`}>
+                    <code>{hook.event}</code>
+                    {hook.matcher ? ` · matcher ${hook.matcher}` : ""} ·{" "}
+                    {hook.handlerType}
+                    {hook.async ? " · async" : ""}
+                    {hook.command ? ` · ${hook.command}` : ""}
+                  </li>
+                ))}
+              </ul>
+              <p>
+                Command hooks execute local code outside AgentLink&apos;s
+                command sandbox from the reviewed immutable plugin package.
+              </p>
             </div>
           )}
           {row.diagnostics.length > 0 && (

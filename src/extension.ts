@@ -72,6 +72,7 @@ import { AgentPluginStore } from "./agent/AgentPluginStore.js";
 import { AgentPluginCatalog } from "./agent/AgentPluginCatalog.js";
 import { AgentPluginInstaller } from "./agent/AgentPluginInstaller.js";
 import { AgentPluginManagerHost } from "./agent/AgentPluginManagerHost.js";
+import { HookService } from "./agent/HookService.js";
 import { getConfiguredBaseThresholdForModel } from "./agent/modelCondenseThresholds.js";
 import {
   resolveModelForMode,
@@ -1383,6 +1384,13 @@ export async function activate(
   chatViewProvider.setMcpAuthTelemetry(mcpAuthTelemetry ?? undefined);
   chatViewProvider.setAgentPluginManagerHost(agentPluginManagerHost);
   chatViewProvider.setAgentPluginCatalogProvider(agentPluginCatalog);
+  const hookService = new HookService({
+    configStore,
+    pluginCatalog: agentPluginCatalog,
+    onApprovalRequest: (request, sessionId) =>
+      chatViewProvider.requestApproval(request, sessionId),
+    log,
+  });
   chatViewProvider.setPendingInteractionAlertProvider((message, command) =>
     statusBarManager.showAlert(message, command),
   );
@@ -1860,6 +1868,7 @@ export async function activate(
       projectMcpHubRegistry: chatViewProvider.getProjectMcpHubRegistry(),
       skillCatalogFallbackProvider,
       agentPluginCatalogProvider: agentPluginCatalog,
+      hookRuntimeProvider: hookService,
       executionUnavailableReason:
         workspaceSessionLocation.status === "legacy_conflict"
           ? "Local execution is disabled because multiple legacy session-history locations were found. Resolve the history-storage conflict before starting or continuing a session."
@@ -1883,6 +1892,7 @@ export async function activate(
     context.subscriptions.push(
       agentPluginCatalog.subscribe(() => {
         projectCustomizationRegistry.clear();
+        hookService.invalidate();
         chatViewProvider.notifyBrowserGatewaySurfaceChanged("plugins");
         void Promise.all([
           chatViewProvider.refreshSkillConfiguration(),

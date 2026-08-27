@@ -314,6 +314,7 @@ function makeChatViewProviderStub() {
       ],
     })),
     submitBrowserOpenFile: vi.fn(async () => ({ ok: true })),
+    submitBrowserOpenImageInEditor: vi.fn(async () => ({ ok: true })),
     submitBrowserSteerQueuedMessage: vi.fn(async () => ({ ok: true })),
     submitBrowserInterjectQueuedMessage: vi.fn(() => ({ ok: true })),
     submitBrowserStop: vi.fn(() => ({ ok: true })),
@@ -2445,6 +2446,30 @@ describe("BrowserGatewayServer", () => {
       12,
       "project-a",
     );
+
+    const authorizedOpenImage = await fetch(
+      `${baseUrl}/api/open-image-in-editor`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({
+          src: "data:image/png;base64,YWJjZA==",
+          name: "concept.png",
+          mimeType: "image/png",
+        }),
+      },
+    );
+    expect(authorizedOpenImage.status).toBe(200);
+    expect(
+      chatViewProvider.submitBrowserOpenImageInEditor,
+    ).toHaveBeenCalledWith({
+      src: "data:image/png;base64,YWJjZA==",
+      name: "concept.png",
+      mimeType: "image/png",
+    });
 
     const invalidOpenFile = await fetch(`${baseUrl}/api/open-file`, {
       method: "POST",

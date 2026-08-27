@@ -20,6 +20,15 @@ export interface AgentPluginManagerSkillSummary {
   readonly allowedTools?: string;
 }
 
+export interface AgentPluginManagerHookSummary {
+  readonly event: string;
+  readonly matcher?: string;
+  readonly command?: string;
+  readonly handlerType: "command" | "mcp_tool" | "prompt" | "agent";
+  readonly async: boolean;
+  readonly sourceRelativePath: string;
+}
+
 export interface AgentPluginManagerMcpSummary {
   readonly name: string;
   readonly type: "stdio" | "streamable-http" | "sse";
@@ -68,6 +77,7 @@ export interface AgentPluginManagerRow {
   readonly shadowedByInstallInstanceId?: string;
   readonly skills: readonly AgentPluginManagerSkillSummary[];
   readonly mcpServers: readonly AgentPluginManagerMcpSummary[];
+  readonly hooks: readonly AgentPluginManagerHookSummary[];
   readonly diagnostics: readonly AgentPluginManagerDiagnostic[];
 }
 

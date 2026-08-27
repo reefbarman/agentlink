@@ -172,17 +172,33 @@ describe("worktree startup prompt policy", () => {
       activeFilePath: undefined,
     };
     const setSessionApprovalMode = vi.fn(() => order.push("policy"));
+    let startupListener:
+      | ((sessionId: string, event: { type: string }) => void)
+      | undefined;
+    const removeStartupListener = vi.fn();
+    const addAgentEventListener = vi.fn((listener: typeof startupListener) => {
+      startupListener = listener;
+      return removeStartupListener;
+    });
     const sendMessage = vi.fn(async () => {
       order.push("prompt");
+      startupListener?.("worktree-session", { type: "api_request" });
     });
     (provider as unknown as { sessionManager: unknown }).sessionManager = {
       getForegroundSession: () => session,
       getSession: () => session,
       setSessionApprovalMode,
+      addAgentEventListener,
       sendMessage,
     };
     (provider as unknown as { sendInitialState: () => void }).sendInitialState =
       vi.fn();
+    const postSessionLoaded = vi.fn();
+    (
+      provider as unknown as {
+        postSessionLoaded: typeof postSessionLoaded;
+      }
+    ).postSessionLoaded = postSessionLoaded;
     vi.spyOn(provider, "injectPrompt");
 
     await provider.startPromptInMode({
@@ -215,6 +231,12 @@ describe("worktree startup prompt policy", () => {
       }),
     );
     expect(order).toEqual(["policy", "prompt"]);
+    expect(addAgentEventListener).toHaveBeenCalledOnce();
+    expect(removeStartupListener).toHaveBeenCalledOnce();
+    expect(postSessionLoaded).toHaveBeenCalledWith(
+      session,
+      expect.objectContaining({ tailTurns: 0 }),
+    );
     vi.useRealTimers();
   }, 15_000);
 });
@@ -735,6 +757,41 @@ describe("tool-block file links", () => {
     } finally {
       fs.rmSync(path.dirname(externalFile), { recursive: true, force: true });
     }
+  });
+
+  it("opens an in-memory image in VS Code's image editor", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: () => undefined,
+    };
+
+    await (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage({
+      command: "agentOpenImageInEditor",
+      src: "data:image/png;base64,YWJjZA==",
+      name: "concept.png",
+      mimeType: "image/png",
+    });
+
+    expect(mockExecuteCommand).toHaveBeenCalledWith(
+      "vscode.open",
+      expect.objectContaining({
+        fsPath: expect.stringMatching(/concept-.*\.png$/),
+      }),
+      expect.objectContaining({ preview: false }),
+    );
+    const openImageCall = mockExecuteCommand.mock.calls.at(-1);
+    expect(openImageCall).toBeDefined();
+    const imagePath = (openImageCall![1] as { fsPath: string }).fsPath;
+    expect(fs.readFileSync(imagePath)).toEqual(Buffer.from("abcd"));
+    provider.dispose();
   });
 
   it("falls back to vscode.open when the file cannot open as text (images, binaries)", async () => {

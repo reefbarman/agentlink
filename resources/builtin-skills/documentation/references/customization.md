@@ -40,9 +40,17 @@ Directories containing a `SKILL.md` with single-line YAML frontmatter (`name`, `
 
 The bundled `skill-writing` skill documents the authoring spec and AgentLink's frontmatter parser constraints.
 
+## Lifecycle hooks
+
+AgentLink supports additive `hooks.json` command hooks using a common Codex/Claude-compatible shape. It loads global sources from `~/.agents`, `~/.claude`, `~/.codex`, and `~/.agentlink`, then the same directories in the current project, then enabled Agent Plugin hooks. Hook definitions can use `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`, `SubagentStart`, `SubagentStop`, `Stop`, and `Interrupt` events. Matchers, command timeouts, asynchronous handlers, compact JSON stdin, exit-code blocking, and event-specific JSON output follow the compatible conventions. Recognized `mcp_tool`, `prompt`, and `agent` handlers are currently skipped with diagnostics.
+
+Manual command hooks require explicit definition-hash trust before first execution. Changing the event, matcher, or handler invalidates that trust. Plugin commands are disclosed during install/update review and run only from the enabled immutable package generation. Hook commands execute locally outside AgentLink's command sandbox, but hook decisions never grant AgentLink tool authority: rewritten calls still pass normal validation and approvals, and `PermissionRequest` hooks may deny but do not auto-approve AgentLink actions.
+
+Tool matchers accept AgentLink's canonical names plus common command/edit aliases (`Bash`, `Shell`, `shell_command`, `apply_patch`, `Edit`, `Write`). AgentLink runs tool hooks around in-process tools, including nested calls and `todo_write`. External ACP agents execute their own tools, so AgentLink emits subagent lifecycle hooks for them without claiming pre/post interception inside the external process.
+
 ## Agent Plugins
 
-On macOS/Linux, `/plugin` and the Agent Plugin manager install and manage canonical Agent Plugins 1.0.0 packages containing Agent Skills and MCP servers. Running `/plugin` without arguments opens the manager in the Chat Activity Shelf with usage help. Windows loading is disabled. `/plugins` lists the current project's global, project, and declared entries. Packages in another harness's plugin format are not automatically translated into this standard.
+On macOS/Linux, `/plugin` and the Agent Plugin manager install and manage canonical Agent Plugins 1.0.0 packages containing Agent Skills, lifecycle hooks, and MCP servers. Running `/plugin` without arguments opens the manager in the Chat Activity Shelf with usage help. Windows loading is disabled. `/plugins` lists the current project's global, project, and declared entries. Packages in another harness's plugin format are not automatically translated into this standard.
 
 Supported sources are Git HTTPS/SSH/SCP remotes, HTTP(S) ZIP/TAR archives, file URLs, local directories, direct `plugin.json` paths, and local ZIP/TAR-family archives. A source may contain one plugin or a collection. Use:
 
@@ -54,7 +62,7 @@ Supported sources are Git HTTPS/SSH/SCP remotes, HTTP(S) ZIP/TAR archives, file 
 - `/plugin uninstall <install-id-or-name>` (aliases: `remove`, `rm`)
 - `/plugin purge` to request safe cleanup after all AgentLink windows close
 
-AgentLink stages and bounds acquisition, validates the canonical schema, and shows source, digest, manifest metadata, skills, and MCP commands/URLs before installation or update. The explicit choices are **Install and Enable** or **Install Disabled**. Plugin metadata never grants AgentLink approvals, and setup/dependency hooks are never run automatically. Runtime uses immutable managed copies under `~/.agentlink/plugins/packages/`; source/download bytes are not executed in place. Local absolute source paths are not persisted, so replace a local-directory/archive install by running `install` again.
+AgentLink stages and bounds acquisition, validates the canonical schema, and shows source, digest, manifest metadata, skills, lifecycle hook commands, and MCP commands/URLs before installation or update. The explicit choices are **Install and Enable** or **Install Disabled**. Plugin metadata never grants AgentLink approvals, and dependency/setup scripts are never run automatically. Runtime uses immutable managed copies under `~/.agentlink/plugins/packages/`; source/download bytes are not executed in place. Local absolute source paths are not persisted, so replace a local-directory/archive install by running `install` again.
 
 An install can be global or project-scoped. In the owning project, an enabled project install shadows an enabled global install with the same manifest name. Shareable project sources are written to `<workspace>/.agentlink/plugins.json` as a workspace-relative directory or pinned Git commit. This committed declaration has zero activation authority: it contains no enablement, trust, policy, credentials, absolute local path, data, or package bytes, and `install-declared` still runs the normal acquisition and review flow. Archive and outside-workspace sources stay machine-local. Projectless sessions load no plugin components.
 

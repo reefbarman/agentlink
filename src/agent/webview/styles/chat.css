@@ -1648,6 +1648,7 @@ body.chat-activity-shelf-resizing * {
 }
 
 .user-image-lightbox-title {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1656,8 +1657,11 @@ body.chat-activity-shelf-resizing * {
   color: var(--vscode-descriptionForeground);
 }
 
+.user-image-lightbox-open-editor {
+  flex-shrink: 0;
+}
+
 .user-image-lightbox-download {
-  margin-left: auto;
   flex-shrink: 0;
   text-decoration: none;
 }

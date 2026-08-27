@@ -357,7 +357,15 @@ describe("AgentSessionManager /btw side questions", () => {
       ...makeToolCtx(),
       worktreeAgentLaunchProvider: { start },
     });
-    const request = { task: "Alternative", prompt: "Try the alternative" };
+    const request = {
+      task: "Review owner/repo#123",
+      prompt: "Review the pull request",
+      mode: "review",
+      fetchRef: {
+        repository: "owner/repo",
+        ref: "refs/pull/123/head",
+      },
+    };
 
     await mgr.startWorktreeAgent(request, {
       approvalDecision: "approve-prefill",

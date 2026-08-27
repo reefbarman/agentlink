@@ -8,6 +8,7 @@ import type { DetectedQuestion } from "../questionDetection";
 import { Fragment, type ComponentChildren } from "preact";
 import { memo } from "preact/compat";
 import { MessageBubble } from "./MessageBubble";
+import type { OpenImageInEditor } from "./ImagePreview";
 import { ModelChangeDivider } from "./ModelChangeDivider";
 import { WarningRow } from "./WarningRow";
 import { useLayoutEffect, useMemo, useRef } from "preact/hooks";
@@ -24,6 +25,7 @@ interface TranscriptMessageListProps {
   onDetectedQuestionAnswer?: (payload: string) => void;
   onDismissDetectedQuestion?: (messageId: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
+  onOpenImageInEditor?: OpenImageInEditor;
   onRevealToolCallTerminal?: (id: string) => void;
   onContinueToolCallInBackground?: (id: string) => void;
   onCompleteToolCall?: (id: string) => void;
@@ -465,6 +467,7 @@ interface TranscriptRowActions {
   onDetectedQuestionAnswer?: (payload: string) => void;
   onDismissDetectedQuestion?: (messageId: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
+  onOpenImageInEditor?: OpenImageInEditor;
   onRevealToolCallTerminal?: (id: string) => void;
   onContinueToolCallInBackground?: (id: string) => void;
   onCompleteToolCall?: (id: string) => void;
@@ -572,6 +575,11 @@ function renderTranscriptRow({
         onOpenFile={
           actions.onOpenFile
             ? (...args) => actions.onOpenFile?.(...args)
+            : undefined
+        }
+        onOpenImageInEditor={
+          actions.onOpenImageInEditor
+            ? (image) => actions.onOpenImageInEditor?.(image)
             : undefined
         }
         onRevealToolCallTerminal={
@@ -755,6 +763,7 @@ function rowActionAvailability(
       detectedQuestion && actions.onDismissDetectedQuestion,
     ),
     openFile: Boolean(actions.onOpenFile),
+    openImageInEditor: Boolean(actions.onOpenImageInEditor),
     revealToolCallTerminal: Boolean(
       hasToolCall && actions.onRevealToolCallTerminal,
     ),
@@ -848,6 +857,7 @@ export function TranscriptMessageList({
   onDetectedQuestionAnswer,
   onDismissDetectedQuestion,
   onOpenFile,
+  onOpenImageInEditor,
   onRevealToolCallTerminal,
   onContinueToolCallInBackground,
   onCompleteToolCall,
@@ -893,6 +903,7 @@ export function TranscriptMessageList({
     onDetectedQuestionAnswer,
     onDismissDetectedQuestion,
     onOpenFile,
+    onOpenImageInEditor,
     onRevealToolCallTerminal,
     onContinueToolCallInBackground,
     onCompleteToolCall,

@@ -81,7 +81,8 @@ export type ApprovalKind =
   | "mcp"
   | "mode-switch"
   | "memory"
-  | "worktree";
+  | "worktree"
+  | "hook";
 
 export interface ApprovalRequest {
   kind: ApprovalKind;
@@ -156,6 +157,13 @@ export interface ApprovalRequest {
   toolOrigin?: "mcp" | "acp";
   /** For MCP: approval choices */
   mcpChoices?: Array<{
+    label: string;
+    value: string;
+    isPrimary?: boolean;
+    isDanger?: boolean;
+  }>;
+  /** For lifecycle hook trust: run once, trust this hash, or disable. */
+  hookChoices?: Array<{
     label: string;
     value: string;
     isPrimary?: boolean;

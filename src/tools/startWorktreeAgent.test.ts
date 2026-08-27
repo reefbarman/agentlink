@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ToolResult } from "../shared/types.js";
 import {
+  findGitRemoteForRepository,
   generatedBranchName,
   handleStartWorktreeAgent,
   parseWorktreeList,
@@ -108,6 +109,30 @@ describe("startWorktreeAgent utilities", () => {
     await expect(
       validateDestinationPath("/repo/.git/worktrees/x", "/repo", "/repo/.git"),
     ).rejects.toThrow(/\.git/);
+  });
+
+  it("matches GitHub repositories across HTTPS and SSH remote URLs", () => {
+    expect(
+      findGitRemoteForRepository(
+        [
+          "origin https://github.com/owner/repo.git (fetch)",
+          "origin https://github.com/owner/repo.git (push)",
+        ].join("\n"),
+        "owner/repo",
+      ),
+    ).toBe("origin");
+    expect(
+      findGitRemoteForRepository(
+        "upstream git@github-personal:Owner/Repo.git (fetch)",
+        "owner/repo",
+      ),
+    ).toBe("upstream");
+    expect(
+      findGitRemoteForRepository(
+        "--upload-pack https://github.com/owner/repo.git (fetch)",
+        "owner/repo",
+      ),
+    ).toBeUndefined();
   });
 });
 
@@ -259,6 +284,148 @@ describe("handleStartWorktreeAgent", () => {
       }),
     );
     expect(order).toEqual(["intent", "open"]);
+  });
+
+  it("fetches an approved GitHub PR ref before creating the review worktree", async () => {
+    const repoRoot = await makeTmpDir();
+    const worktreePath = path.join(await makeTmpDir(), "review");
+    const branch = "agentlink/review-pr-123-abcdef12";
+    const git = makeGit({
+      "rev-parse --show-toplevel": `${repoRoot}\n`,
+      "rev-parse --git-common-dir": ".git\n",
+      "remote -v": [
+        "origin git@github.com:owner/repo.git (fetch)",
+        "origin git@github.com:owner/repo.git (push)",
+      ].join("\n"),
+      "status --porcelain": "",
+      "worktree list --porcelain": `worktree ${repoRoot}\nHEAD abc123\nbranch refs/heads/main\n\n`,
+      "fetch origin refs/pull/123/head": "",
+      "rev-parse FETCH_HEAD": "prhead123\n",
+      [`worktree add -b ${branch} ${worktreePath} prhead123`]: "",
+    });
+    const writeIntent = vi.fn(async () => ({ id: "intent-1" }));
+    const onApprovalRequest = vi.fn().mockResolvedValue("approve-autosubmit");
+
+    await handleStartWorktreeAgent(
+      {
+        task: "Review owner/repo#123",
+        prompt: "Review the PR",
+        branch,
+        worktreePath,
+        mode: "review",
+        autoSubmit: true,
+        fetchRef: {
+          repository: "owner/repo",
+          ref: "refs/pull/123/head",
+        },
+      },
+      {
+        globalStorageUri: vscode.Uri.file("/global"),
+        workspaceFolders: [workspaceFolder(repoRoot)],
+        runGit: git,
+        onApprovalRequest,
+        intentStore: { writeIntent } as never,
+        openFolder: vi.fn(async () => undefined),
+      },
+    );
+
+    const calls = git.calls.map((call) => call.args.join(" "));
+    expect(calls.indexOf("fetch origin refs/pull/123/head")).toBeGreaterThan(
+      calls.indexOf("worktree list --porcelain"),
+    );
+    expect(calls.indexOf("fetch origin refs/pull/123/head")).toBeLessThan(
+      calls.indexOf(`worktree add -b ${branch} ${worktreePath} prhead123`),
+    );
+    expect(onApprovalRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detail: expect.stringContaining("origin:refs/pull/123/head"),
+      }),
+      undefined,
+    );
+    expect(writeIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseRef: "prhead123",
+        mode: "review",
+        autoSubmit: true,
+      }),
+    );
+  });
+
+  it("rejects an existing review branch instead of opening stale PR code", async () => {
+    const repoRoot = await makeTmpDir();
+    const worktreePath = path.join(await makeTmpDir(), "review-stale");
+    const branch = "agentlink/review-pr-123-stale";
+    const git = makeGit({
+      "rev-parse --show-toplevel": `${repoRoot}\n`,
+      "rev-parse --git-common-dir": ".git\n",
+      "remote -v": "origin https://github.com/owner/repo.git (fetch)\n",
+      "status --porcelain": "",
+      "worktree list --porcelain": `worktree ${repoRoot}\nHEAD abc123\nbranch refs/heads/main\n\n`,
+      [`show-ref --verify --quiet refs/heads/${branch}`]: "",
+    });
+
+    const result = await handleStartWorktreeAgent(
+      {
+        task: "Review owner/repo#123",
+        prompt: "Review the PR",
+        branch,
+        worktreePath,
+        fetchRef: {
+          repository: "owner/repo",
+          ref: "refs/pull/123/head",
+        },
+      },
+      {
+        globalStorageUri: vscode.Uri.file("/global"),
+        workspaceFolders: [workspaceFolder(repoRoot)],
+        runGit: git,
+        onApprovalRequest: vi.fn(),
+        intentStore: { writeIntent: vi.fn() } as never,
+        openFolder: vi.fn(),
+      },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("fresh branch"),
+    });
+    expect(git.calls.map((call) => call.args[0])).not.toContain("fetch");
+  });
+
+  it("does not fetch a GitHub PR ref when launch approval is denied", async () => {
+    const repoRoot = await makeTmpDir();
+    const worktreePath = path.join(await makeTmpDir(), "review-denied");
+    const branch = "agentlink/review-pr-123-denied";
+    const git = makeGit({
+      "rev-parse --show-toplevel": `${repoRoot}\n`,
+      "rev-parse --git-common-dir": ".git\n",
+      "remote -v": "origin https://github.com/owner/repo.git (fetch)\n",
+      "status --porcelain": "",
+      "worktree list --porcelain": `worktree ${repoRoot}\nHEAD abc123\nbranch refs/heads/main\n\n`,
+    });
+
+    await handleStartWorktreeAgent(
+      {
+        task: "Review owner/repo#123",
+        prompt: "Review the PR",
+        branch,
+        worktreePath,
+        fetchRef: {
+          repository: "owner/repo",
+          ref: "refs/pull/123/head",
+        },
+      },
+      {
+        globalStorageUri: vscode.Uri.file("/global"),
+        workspaceFolders: [workspaceFolder(repoRoot)],
+        runGit: git,
+        onApprovalRequest: vi.fn().mockResolvedValue("deny"),
+        intentStore: { writeIntent: vi.fn() } as never,
+        openFolder: vi.fn(),
+      },
+    );
+
+    expect(git.calls.map((call) => call.args[0])).not.toContain("fetch");
   });
 
   it("uses git worktree add -b for new branches", async () => {

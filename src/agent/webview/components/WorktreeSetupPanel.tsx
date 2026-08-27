@@ -105,7 +105,11 @@ export function WorktreeSetupPanel({
             </div>
             <div>
               <dt>Base</dt>
-              <dd>{state.config.baseRef ?? "Current HEAD"}</dd>
+              <dd>
+                {state.config.fetchRef
+                  ? `${state.config.fetchRef.repository}:${state.config.fetchRef.ref}`
+                  : (state.config.baseRef ?? "Current HEAD")}
+              </dd>
             </div>
             <div>
               <dt>Location</dt>

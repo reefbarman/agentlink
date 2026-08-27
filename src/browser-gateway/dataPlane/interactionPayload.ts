@@ -86,12 +86,15 @@ function approvalRequest(value: unknown): ApprovalRequest {
   const result: ApprovalRequest = {
     kind: enumValue(source.kind, [
       "command",
+      "network",
       "path",
       "write",
       "rename",
       "mcp",
       "mode-switch",
       "memory",
+      "worktree",
+      "hook",
     ] as const),
     id: stringValue(source.id),
   };
@@ -147,7 +150,16 @@ function approvalRequest(value: unknown): ApprovalRequest {
     enumValue(item, ["mcp", "acp"] as const),
   );
   copyOptional(result, "mcpChoices", source.mcpChoices, (item) =>
-    arrayValue(item, mcpChoice),
+    arrayValue(item, approvalChoice),
+  );
+  copyOptional(result, "hookChoices", source.hookChoices, (item) =>
+    arrayValue(item, approvalChoice),
+  );
+  copyOptional(result, "worktreeChoices", source.worktreeChoices, (item) =>
+    arrayValue(item, approvalChoice),
+  );
+  copyOptional(result, "writeChoices", source.writeChoices, (item) =>
+    arrayValue(item, approvalChoice),
   );
   copyOptional(result, "memoryTier", source.memoryTier, (item) =>
     enumValue(item, ["instructions", "skill", "command", "memory"] as const),
@@ -400,7 +412,7 @@ function sandboxCapabilities(
   return result;
 }
 
-function mcpChoice(
+function approvalChoice(
   value: unknown,
 ): NonNullable<ApprovalRequest["mcpChoices"]>[number] {
   const source = recordValue(value);

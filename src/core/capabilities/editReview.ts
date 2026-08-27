@@ -134,6 +134,7 @@ export interface EditReviewResult {
   document_dirty?: boolean;
   document_state?: "matches_baseline" | "differs_from_baseline" | "unavailable";
   pending_buffer_matches_proposal?: boolean;
+  recovered_dirty_buffer?: "buffer_matched_proposal" | "buffer_matched_disk";
   apply_failure?: EditApplyFailureRecovery;
   save_failure?: EditSaveFailureRecovery;
   next_steps?: string[];

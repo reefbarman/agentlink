@@ -1,6 +1,13 @@
+import { BUILT_IN_MODES, buildUnionAgentMode } from "./modes.js";
 import { describe, expect, it } from "vitest";
 
-import { BUILT_IN_MODES, buildUnionAgentMode } from "./modes.js";
+describe("built-in modes", () => {
+  it("gives review mode terminal access without edit tools", () => {
+    const review = BUILT_IN_MODES.find((mode) => mode.slug === "review");
+    expect(review?.toolGroups).toContain("command");
+    expect(review?.toolGroups).not.toContain("edit");
+  });
+});
 
 describe("buildUnionAgentMode", () => {
   it("merges tool groups across all built-in modes", () => {

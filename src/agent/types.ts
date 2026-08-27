@@ -68,6 +68,8 @@ export type AgentMessage = MessageParam & {
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
       origin?: "vscode" | "browser";
+      /** Internal provider-history turn that must not appear in transcript surfaces. */
+      hidden?: boolean;
     };
     condense?: {
       prevInputTokens?: number;

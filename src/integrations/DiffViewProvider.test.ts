@@ -680,43 +680,34 @@ describe("withFileLock", () => {
     expect(result).toBe("recovered");
   });
 
-  it("timeout does not strand subsequent callers (regression)", async () => {
+  it("does not let a timed-out waiter unblock later callers", async () => {
     vi.useFakeTimers();
     const path = uniquePath();
-
-    // Lock A: never resolves — simulates a hung operation
-    let resolveA: () => void;
+    let resolveA!: () => void;
+    let enteredC = false;
     const lockA = withFileLock(
       path,
       () =>
-        new Promise<void>((r) => {
-          resolveA = r;
+        new Promise<void>((resolve) => {
+          resolveA = resolve;
         }),
     );
-
-    // Lock B: queued behind A
     const lockB = withFileLock(path, async () => "B");
-
-    // Lock C: queued behind B
-    const lockC = withFileLock(path, async () => "C");
-
-    // Attach rejection/resolution handlers BEFORE advancing timers so
-    // lockB's rejection is never "unhandled" during the timer tick.
     const expectB = expect(lockB).rejects.toThrow("Lock timeout");
-    const expectC = expect(lockC).resolves.toBe("C");
 
-    // Advance past the 60s timeout — B should timeout, C should proceed
-    await vi.advanceTimersByTimeAsync(61_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    const lockC = withFileLock(path, async () => {
+      enteredC = true;
+      return "C";
+    });
+
+    await vi.advanceTimersByTimeAsync(31_000);
     await expectB;
+    expect(enteredC).toBe(false);
 
-    // C should proceed (not strand forever) because B's timeout
-    // resolved B's lockPromise, unblocking C. Before the fix, B's
-    // promise was never resolved and C would be stuck forever.
-    await expectC;
-
-    // Clean up: resolve A so it doesn't leak
-    resolveA!();
+    resolveA();
     await vi.advanceTimersByTimeAsync(1);
-    await lockA.catch(() => {}); // ignore if it rejects
+    await expect(lockA).resolves.toBeUndefined();
+    await expect(lockC).resolves.toBe("C");
   });
 });

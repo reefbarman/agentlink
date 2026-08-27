@@ -5,6 +5,7 @@ import type {
 import type { ComponentChildren, RefObject } from "preact";
 
 import { CommandCard } from "../../../approvals/webview/components/CommandCard";
+import { HookCard } from "../../../approvals/webview/components/HookCard";
 import { McpCard } from "../../../approvals/webview/components/McpCard";
 import { MemoryCard } from "../../../approvals/webview/components/MemoryCard";
 import { ModeSwitchCard } from "../../../approvals/webview/components/ModeSwitchCard";
@@ -109,6 +110,8 @@ export function ApprovalPanelEmbed({
           submit={submit}
           followUpRef={followUpRef}
         />
+      ) : request.kind === "hook" ? (
+        <HookCard request={request} submit={submit} followUpRef={followUpRef} />
       ) : (
         <PathCard request={request} submit={submit} followUpRef={followUpRef} />
       )}

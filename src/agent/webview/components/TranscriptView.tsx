@@ -4,6 +4,7 @@ import { EmptyState, PaneHeader } from "../../../shared/ui/Panes";
 import type { BackgroundRuntimeStatus } from "./backgroundRuntimeStatus";
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import { ChatView } from "./ChatView";
+import type { OpenImageInEditor } from "./ImagePreview";
 import { StreamingStatusBar } from "./StreamingStatusBar";
 import { TodoPanel } from "./TodoPanel";
 
@@ -20,6 +21,7 @@ interface TranscriptViewProps {
     >;
   todos?: TodoItem[];
   onOpenFile?: (path: string, line?: number) => void;
+  onOpenImageInEditor?: OpenImageInEditor;
   onOpenSpecialBlockPanel?: (block: {
     kind: "mermaid" | "vega" | "vega-lite";
     source: string;
@@ -42,6 +44,7 @@ export function TranscriptView({
   runtimeStatus,
   todos = [],
   onOpenFile,
+  onOpenImageInEditor,
   onOpenSpecialBlockPanel,
   onRetry,
   onSignIn,
@@ -84,6 +87,7 @@ export function TranscriptView({
             streaming={streaming}
             sessionId={sessionId ?? null}
             onOpenFile={onOpenFile}
+            onOpenImageInEditor={onOpenImageInEditor}
             onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
             onRetry={onRetry}
             onSignIn={onSignIn}

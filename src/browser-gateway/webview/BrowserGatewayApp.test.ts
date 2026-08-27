@@ -316,6 +316,7 @@ function createAgentPluginManagerSnapshot(projectId = "project-1") {
         currentDigest: "sha256:demo",
         skills: [],
         mcpServers: [],
+        hooks: [],
         diagnostics: [],
       },
     ],

@@ -1,7 +1,17 @@
-import * as path from "path";
+import { canonicalizePath } from "./canonicalPath.js";
 
-// Per-path mutex to prevent concurrent edits to the same file.
-const pathLocks = new Map<string, Promise<void>>();
+interface LockWaiter {
+  grant(): void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+interface PathLock {
+  active: boolean;
+  waiters: LockWaiter[];
+}
+
+// Per-path mutex to prevent concurrent edits to the same canonical file.
+const pathLocks = new Map<string, PathLock>();
 const LOCK_TIMEOUT = 60_000;
 
 export class FileLockTimeoutError extends Error {
@@ -17,44 +27,41 @@ export async function withFileLock<T>(
   filePath: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  // Normalize the path to prevent different representations from getting separate locks.
-  const lockKey = path.resolve(filePath);
-  const existing = pathLocks.get(lockKey);
+  const lockKey = canonicalizePath(filePath);
+  let lock = pathLocks.get(lockKey);
+  if (!lock) {
+    lock = { active: false, waiters: [] };
+    pathLocks.set(lockKey, lock);
+  }
 
-  // Create a deferred to control the lock. Insert it immediately so later
-  // callers chain on this promise (linked-list lock).
-  let releaseLock: () => void;
-  const lockPromise = new Promise<void>((resolve) => {
-    releaseLock = resolve;
-  });
-  pathLocks.set(lockKey, lockPromise);
-
-  if (existing) {
-    const TIMED_OUT = Symbol("timeout");
-    let timerId: ReturnType<typeof setTimeout>;
-    const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
-      timerId = setTimeout(() => resolve(TIMED_OUT), LOCK_TIMEOUT);
+  if (lock.active) {
+    await new Promise<void>((resolve, reject) => {
+      const waiter: LockWaiter = {
+        grant: resolve,
+        timer: setTimeout(() => {
+          const index = lock!.waiters.indexOf(waiter);
+          if (index >= 0) lock!.waiters.splice(index, 1);
+          reject(new FileLockTimeoutError(filePath));
+        }, LOCK_TIMEOUT),
+      };
+      lock!.waiters.push(waiter);
     });
-    const result = await Promise.race([
-      existing.then(() => undefined as void),
-      timeout,
-    ]);
-    clearTimeout(timerId!);
-    if (result === TIMED_OUT) {
-      releaseLock!();
-      if (pathLocks.get(lockKey) === lockPromise) {
-        pathLocks.delete(lockKey);
-      }
-      throw new FileLockTimeoutError(filePath);
-    }
+  } else {
+    lock.active = true;
   }
 
   try {
     return await fn();
   } finally {
-    releaseLock!();
-    if (pathLocks.get(lockKey) === lockPromise) {
-      pathLocks.delete(lockKey);
+    const next = lock.waiters.shift();
+    if (next) {
+      clearTimeout(next.timer);
+      next.grant();
+    } else {
+      lock.active = false;
+      if (pathLocks.get(lockKey) === lock) {
+        pathLocks.delete(lockKey);
+      }
     }
   }
 }
@@ -65,7 +72,7 @@ export async function withFileLocks<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const paths = [
-    ...new Set(filePaths.map((filePath) => path.resolve(filePath))),
+    ...new Set(filePaths.map((filePath) => canonicalizePath(filePath))),
   ].sort();
   const acquire = async (index: number): Promise<T> => {
     if (index >= paths.length) return fn();

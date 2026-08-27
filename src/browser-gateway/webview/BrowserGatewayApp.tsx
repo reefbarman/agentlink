@@ -6116,8 +6116,9 @@ export function BrowserGatewayApp({
         );
         return;
       case "worktree":
+      case "review":
         setModeStatus(
-          "Run /worktree in VS Code to configure and open a local worktree window.",
+          `Run /${name} in VS Code to configure and open a local worktree window.`,
         );
         return;
       case "plugin":
@@ -6376,6 +6377,38 @@ export function BrowserGatewayApp({
               requestId,
               files: [],
             });
+          });
+        return;
+      }
+
+      if (command === "agentOpenImageInEditor") {
+        const src = String(data.src ?? "");
+        const name = typeof data.name === "string" ? data.name : undefined;
+        const mimeType =
+          typeof data.mimeType === "string" ? data.mimeType : undefined;
+        if (!src.startsWith("data:image/")) {
+          setModeStatus("Image cannot be opened in the editor.");
+          return;
+        }
+        void fetch(buildApiPath("/api/open-image-in-editor"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({ src, name, mimeType }),
+        })
+          .then(async (response) => {
+            if (response.ok) return;
+            const body = (await response.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            setModeStatus(
+              `Could not open image in the editor: ${body.error ?? response.status}`,
+            );
+          })
+          .catch(() => {
+            setModeStatus("Could not open image in the editor.");
           });
         return;
       }
@@ -7926,6 +7959,15 @@ export function BrowserGatewayApp({
                               command: "agentOpenFile",
                               path: filePath,
                               line,
+                            })
+                    }
+                    onOpenImageInEditor={
+                      isAskAgentSelected
+                        ? undefined
+                        : (image) =>
+                            browserVscodeApi.postMessage({
+                              command: "agentOpenImageInEditor",
+                              ...image,
                             })
                     }
                     onRetry={handleRetry}

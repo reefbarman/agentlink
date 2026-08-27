@@ -7554,11 +7554,13 @@ describe("AgentSessionManager background agents", () => {
       expect.stringContaining(
         "Before doing more work, reconcile the complete list against the conversation and current workspace",
       ),
+      { hidden: true },
     );
     expect(addUserMessageSpy).toHaveBeenCalledWith(
       expect.stringContaining(
         "Do not redo completed work merely because its TODO status is stale",
       ),
+      { hidden: true },
     );
   });
 

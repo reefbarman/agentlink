@@ -1,5 +1,6 @@
 import type { AgentMessage } from "./types.js";
 import { agentMessagesToChatMessages } from "../shared/chatProjection.js";
+import { getVisibleUserMessageIndexes } from "../shared/todoContinuation.js";
 
 /** User turns included in a restore hydration tail (and the persisted tail snapshot). */
 export const RESTORE_TAIL_TURNS = 8;
@@ -25,13 +26,7 @@ export function getTailChunkByUserTurns(
     };
   }
 
-  const userMessageIndexes: number[] = [];
-  for (let index = 0; index < messages.length; index++) {
-    const message = messages[index];
-    if (message.role === "user" && typeof message.content === "string") {
-      userMessageIndexes.push(index);
-    }
-  }
+  const userMessageIndexes = getVisibleUserMessageIndexes(messages);
 
   const startTurn = Math.max(0, userMessageIndexes.length - tailTurns);
   const startIndex = startTurn === 0 ? 0 : userMessageIndexes[startTurn];
@@ -54,13 +49,7 @@ export function getPreviousChunkByUserTurns(
   messageIndexOffset: number;
   hasMoreBefore: boolean;
 } {
-  const userMessageIndexes: number[] = [];
-  for (let index = 0; index < messages.length; index++) {
-    const message = messages[index];
-    if (message.role === "user" && typeof message.content === "string") {
-      userMessageIndexes.push(index);
-    }
-  }
+  const userMessageIndexes = getVisibleUserMessageIndexes(messages);
 
   const endTurn = Math.max(
     0,
@@ -89,9 +78,8 @@ export function getPreviousChunkByUserTurns(
 export function findFirstUserMessage(
   messages: readonly AgentMessage[],
 ): AgentMessage | undefined {
-  return messages.find(
-    (message) => message.role === "user" && typeof message.content === "string",
-  );
+  const firstIndex = getVisibleUserMessageIndexes(messages)[0];
+  return firstIndex === undefined ? undefined : messages[firstIndex];
 }
 
 /**

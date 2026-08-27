@@ -19,6 +19,7 @@ import type { BackgroundResultState } from "../core/capabilities/background.js";
 import type { ContextHealthSnapshot } from "./contextHealth.js";
 import type { DetectedQuestion } from "./questionDetection.js";
 import { randomId } from "./randomId.js";
+import { getHiddenUserMessageIndexes } from "./todoContinuation.js";
 import { getToolCapabilityMetadata } from "../core/tools/toolCapabilities.js";
 import type {
   BackgroundCompletionResult,
@@ -869,6 +870,7 @@ export function agentMessagesToChatMessages(
   },
 ): ChatMessage[] {
   const baseIndex = opts?.baseIndex;
+  const hiddenUserMessageIndexes = getHiddenUserMessageIndexes(raw);
   const rehydratedMessageId = (rawIndex: number): string =>
     baseIndex === undefined ? randomId() : `t${baseIndex + rawIndex}`;
   const stripSystemReminderBlocks = (text: string): string =>
@@ -972,6 +974,7 @@ export function agentMessagesToChatMessages(
           isSlashCommand?: boolean;
           slashCommandLabel?: string;
           origin?: "vscode" | "browser";
+          hidden?: boolean;
         };
         condense?: {
           prevInputTokens?: number;
@@ -1024,6 +1027,7 @@ export function agentMessagesToChatMessages(
     if (m.role === "user") {
       if (typeof m.content === "string") {
         const hint = m.uiHint?.userMessage;
+        if (hiddenUserMessageIndexes.has(rawIndex)) continue;
         result.push({
           id: rehydratedMessageId(rawIndex),
           role: "user",

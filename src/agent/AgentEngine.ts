@@ -1075,6 +1075,9 @@ export class AgentEngine {
       mcpToolDefinitions?: readonly ToolDefinition[];
       /** Immutable skill authority inherited from the spawning request. */
       inheritedSkillAuthority?: Readonly<SkillAuthoritySnapshot>;
+      /** Immutable lifecycle hook runtime captured at the logical turn boundary. */
+      hookRuntime?: import("../core/hooks/HookRuntime.js").HookRuntime;
+      hookTurnId?: string;
       /**
        * Persists a provider-complete assistant tool turn before dispatch starts.
        * The turn remains outside canonical live history until every tool result
@@ -1414,6 +1417,8 @@ export class AgentEngine {
               onProviderAdmissionPhase: opts?.onProviderAdmissionPhase,
               tools: rawTools,
               automaticMemoryContext: opts?.automaticMemoryContext,
+              hookRuntime: opts?.hookRuntime,
+              hookTurnId: opts?.hookTurnId,
             },
           );
           if (condensed) retainedToolResults.clear();
@@ -1983,6 +1988,8 @@ export class AgentEngine {
                   onProviderAdmissionPhase: opts?.onProviderAdmissionPhase,
                   tools: rawTools,
                   automaticMemoryContext: opts?.automaticMemoryContext,
+                  hookRuntime: opts?.hookRuntime,
+                  hookTurnId: opts?.hookTurnId,
                 },
               );
               if (signal.aborted) break;
@@ -2313,6 +2320,8 @@ export class AgentEngine {
                 onProviderAdmissionPhase: opts?.onProviderAdmissionPhase,
                 tools: rawTools,
                 automaticMemoryContext: opts?.automaticMemoryContext,
+                hookRuntime: opts?.hookRuntime,
+                hookTurnId: opts?.hookTurnId,
               },
             );
             if (signal.aborted) break;
@@ -2484,6 +2493,10 @@ export class AgentEngine {
           getSessionTranscript: () =>
             buildSessionTranscriptSnapshot(session.getAllMessages()),
           getHandoffSourceTranscript: opts?.getHandoffSourceTranscript,
+          hookRuntime: opts?.hookRuntime,
+          hookTurnId: opts?.hookTurnId,
+          hookModel: session.model,
+          hookCwd: session.requireProjectRoot(),
           // Number image_N ids over the model-visible history (post-condense,
           // no diagnostic-only messages): the model counts the images it can
           // see, so numbering the raw transcript makes ids silently drift onto
@@ -2543,9 +2556,48 @@ export class AgentEngine {
         for (const block of resolvedToolUseBlocks) {
           if (block.name === TODO_TOOL_NAME) {
             const start = Date.now();
-            const { content, todos } = handleTodoWrite(
-              block.input as unknown as TodoToolInput,
-            );
+            const preHook = opts?.hookRuntime
+              ? await opts.hookRuntime.preToolUse(
+                  {
+                    session_id: session.id,
+                    turn_id: opts.hookTurnId ?? "",
+                    transcript_path: null,
+                    cwd: session.requireProjectRoot(),
+                    hook_event_name: "PreToolUse",
+                    model: session.model,
+                    permission_mode: "default",
+                    tool_name: block.name,
+                    tool_input: block.input,
+                    tool_use_id: block.id,
+                  },
+                  block.name,
+                  signal,
+                )
+              : undefined;
+            if (preHook?.preToolUse?.decision === "deny") {
+              internalResults.push({
+                tool_use_id: block.id,
+                toolName: block.name,
+                result: {
+                  content: [
+                    {
+                      type: "text",
+                      text:
+                        preHook.preToolUse.reason ??
+                        "todo_write was blocked by a PreToolUse hook.",
+                    },
+                  ],
+                },
+                durationMs: Date.now() - start,
+              });
+              continue;
+            }
+            const todoInput =
+              preHook?.preToolUse?.updatedInput &&
+              typeof preHook.preToolUse.updatedInput === "object"
+                ? (preHook.preToolUse.updatedInput as unknown as TodoToolInput)
+                : (block.input as unknown as TodoToolInput);
+            const { content, todos } = handleTodoWrite(todoInput);
             internalResults.push({
               tool_use_id: block.id,
               toolName: block.name,
@@ -2564,6 +2616,25 @@ export class AgentEngine {
             });
             currentTodos = todos;
             yield { type: "todo_update" as const, todos };
+            if (opts?.hookRuntime) {
+              await opts.hookRuntime.postToolUse(
+                {
+                  session_id: session.id,
+                  turn_id: opts.hookTurnId ?? "",
+                  transcript_path: null,
+                  cwd: session.requireProjectRoot(),
+                  hook_event_name: "PostToolUse",
+                  model: session.model,
+                  permission_mode: "default",
+                  tool_name: block.name,
+                  tool_input: todoInput as unknown as Record<string, unknown>,
+                  tool_response: { content, todos },
+                  tool_use_id: block.id,
+                },
+                block.name,
+                signal,
+              );
+            }
           } else {
             dispatchBlocks.push(block);
           }
@@ -2827,6 +2898,8 @@ export class AgentEngine {
               onProviderAdmissionPhase: opts?.onProviderAdmissionPhase,
               tools: rawTools,
               automaticMemoryContext: opts?.automaticMemoryContext,
+              hookRuntime: opts?.hookRuntime,
+              hookTurnId: opts?.hookTurnId,
             },
           );
           if (condensed) retainedToolResults.clear();
@@ -3266,9 +3339,27 @@ export class AgentEngine {
         phase: "queued_for_provider" | "running",
       ) => void;
       tools?: ToolDefinition[];
+      hookRuntime?: import("../core/hooks/HookRuntime.js").HookRuntime;
+      hookTurnId?: string;
     },
   ): AsyncGenerator<AgentEvent, boolean> {
     const condenseStartedAt = Date.now();
+    const hookRuntime = opts?.hookRuntime;
+    const hookTurnId = opts?.hookTurnId ?? "";
+    if (hookRuntime) {
+      await hookRuntime.preCompact(
+        {
+          session_id: session.id,
+          turn_id: hookTurnId,
+          transcript_path: null,
+          cwd: session.requireProjectRoot(),
+          hook_event_name: "PreCompact",
+          model: session.model,
+          trigger: isAutomatic ? "auto" : "manual",
+        },
+        opts?.signal,
+      );
+    }
     yield { type: "condense_start", isAutomatic };
 
     const prevInputTokens = session.lastInputTokens;
@@ -3408,6 +3499,20 @@ export class AgentEngine {
     session.toolResultContextAttributions = [];
     session.omittedToolResultContextAttributions = 0;
 
+    if (hookRuntime) {
+      await hookRuntime.postCompact(
+        {
+          session_id: session.id,
+          turn_id: hookTurnId,
+          transcript_path: null,
+          cwd: session.requireProjectRoot(),
+          hook_event_name: "PostCompact",
+          model: session.model,
+          trigger: isAutomatic ? "auto" : "manual",
+        },
+        opts?.signal,
+      );
+    }
     yield {
       type: "condense",
       summary: result.summary,

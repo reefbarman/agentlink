@@ -7,6 +7,11 @@ import { isMap, isScalar, parseDocument } from "yaml";
 
 import type {
   AgentPluginDiagnostic,
+  AgentPluginHookEventMap,
+  AgentPluginHookEventName,
+  AgentPluginHookHandler,
+  AgentPluginHookMatcherGroup,
+  AgentPluginHookSnapshot,
   AgentPluginHttpServer,
   AgentPluginManifest,
   AgentPluginMcpServer,
@@ -57,6 +62,32 @@ const SKILL_FIELDS = new Set([
 const SKILL_NAME_PATTERN = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u;
 const BARE_COMMAND_PATTERN = /^[^/\\\s]+$/u;
 const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
+const HOOK_EVENT_NAMES = [
+  "PreToolUse",
+  "PermissionRequest",
+  "PostToolUse",
+  "PreCompact",
+  "PostCompact",
+  "SessionStart",
+  "SessionEnd",
+  "UserPromptSubmit",
+  "SubagentStart",
+  "SubagentStop",
+  "Stop",
+  "Interrupt",
+] as const satisfies readonly AgentPluginHookEventName[];
+const HOOK_EVENT_NAME_SET = new Set<string>(HOOK_EVENT_NAMES);
+const MAX_HOOK_FILE_CHARS = 1_048_576;
+const MAX_HOOK_DESCRIPTION_CHARS = 4_096;
+const MAX_HOOK_GROUPS_PER_EVENT = 100;
+const MAX_HOOK_HANDLERS_PER_GROUP = 100;
+const MAX_HOOK_MATCHER_CHARS = 2_048;
+const MAX_HOOK_COMMAND_CHARS = 16_384;
+const MAX_HOOK_STATUS_MESSAGE_CHARS = 1_024;
+const MAX_HOOK_NAME_CHARS = 256;
+const MAX_HOOK_TIMEOUT_SECONDS = 86_400;
+const MAX_HOOK_ADDITIONAL_CONTEXT_LIMIT = 10_000_000;
+const MAX_HOOK_MCP_INPUT_CHARS = 65_536;
 
 interface ValidatorSet {
   readonly manifest: ValidateFunction;
@@ -109,6 +140,7 @@ export async function loadAgentPluginPackage(
     manifestResult.schema,
     diagnostics,
   );
+  const hooks = await loadHooks(request.fileSystem, realRoot, diagnostics);
 
   return {
     schemaVersion: AGENT_PLUGIN_PACKAGE_SNAPSHOT_SCHEMA_VERSION,
@@ -117,6 +149,7 @@ export async function loadAgentPluginPackage(
     manifest: manifestResult,
     skills,
     ...(mcp ? { mcp } : {}),
+    hooks: hooks ? [hooks] : [],
     diagnostics,
     valid: true,
   };
@@ -755,6 +788,599 @@ async function loadMcp(
   return { schema: parsed.$schema as string, servers };
 }
 
+async function loadHooks(
+  fileSystem: PluginPackageFileSystem,
+  realRoot: string,
+  diagnostics: AgentPluginDiagnostic[],
+): Promise<AgentPluginHookSnapshot | undefined> {
+  const hooksPath = path.join(realRoot, "hooks", "hooks.json");
+  if (!(await exists(fileSystem, hooksPath))) return undefined;
+  const hooksFile = await requireContainedFile(
+    fileSystem,
+    realRoot,
+    hooksPath,
+    "hooks",
+    diagnostics,
+    "hooks_file_invalid",
+    "hooks/hooks.json must resolve to a regular file inside the plugin root.",
+  );
+  if (!hooksFile) return undefined;
+
+  const source = await fileSystem.readFile(hooksFile);
+  if (source.length > MAX_HOOK_FILE_CHARS) {
+    diagnostics.push(
+      diagnostic(
+        "hooks_file_too_large",
+        "hooks",
+        `hooks/hooks.json must not exceed ${MAX_HOOK_FILE_CHARS} characters.`,
+        hooksPath,
+      ),
+    );
+    return undefined;
+  }
+  const document = parseJsonDocument(source, "hooks", hooksPath, diagnostics);
+  const parsed = document?.value;
+  if (!isRecord(parsed)) {
+    if (parsed !== undefined) {
+      diagnostics.push(
+        diagnostic(
+          "hooks_not_object",
+          "hooks",
+          "hooks/hooks.json must contain a JSON object.",
+          hooksPath,
+          "$",
+        ),
+      );
+    }
+    return undefined;
+  }
+  if (
+    document!.duplicateMembers.some((duplicate) => duplicate.parentPath === "$")
+  ) {
+    addDuplicateDiagnostics(
+      diagnostics,
+      document!.duplicateMembers.filter(
+        (duplicate) => duplicate.parentPath === "$",
+      ),
+      "hooks",
+      hooksPath,
+    );
+    return undefined;
+  }
+
+  const unknownEnvelopeFields = Object.keys(parsed).filter(
+    (key) => key !== "description" && key !== "hooks",
+  );
+  for (const key of unknownEnvelopeFields) {
+    diagnostics.push(
+      diagnostic(
+        "hooks_unknown_field",
+        "hooks",
+        `Unknown hooks field '${key}'.`,
+        hooksPath,
+        jsonMemberPath("$", key),
+      ),
+    );
+  }
+  const description = optionalBoundedHookString(
+    parsed.description,
+    1,
+    MAX_HOOK_DESCRIPTION_CHARS,
+  );
+  if (
+    unknownEnvelopeFields.length > 0 ||
+    (parsed.description !== undefined && description === undefined) ||
+    !isRecord(parsed.hooks)
+  ) {
+    if (!isRecord(parsed.hooks)) {
+      diagnostics.push(
+        diagnostic(
+          "hooks_events_invalid",
+          "hooks",
+          "hooks must be an object keyed by supported hook event names.",
+          hooksPath,
+          "$.hooks",
+        ),
+      );
+    } else if (parsed.description !== undefined && description === undefined) {
+      diagnostics.push(
+        diagnostic(
+          "hooks_description_invalid",
+          "hooks",
+          `description must be a string of 1-${MAX_HOOK_DESCRIPTION_CHARS} characters.`,
+          hooksPath,
+          "$.description",
+        ),
+      );
+    }
+    return undefined;
+  }
+
+  const envelopeDuplicates = document!.duplicateMembers.filter(
+    (duplicate) => duplicate.parentPath === "$.hooks",
+  );
+  if (envelopeDuplicates.length > 0) {
+    addDuplicateDiagnostics(
+      diagnostics,
+      envelopeDuplicates,
+      "hooks",
+      hooksPath,
+    );
+    return undefined;
+  }
+
+  const events: Partial<
+    Record<AgentPluginHookEventName, readonly AgentPluginHookMatcherGroup[]>
+  > = {};
+  for (const [eventName, rawGroups] of Object.entries(parsed.hooks)) {
+    if (!HOOK_EVENT_NAME_SET.has(eventName)) {
+      diagnostics.push(
+        diagnostic(
+          "hook_event_unknown",
+          "hook",
+          `Unknown hook event '${eventName}'.`,
+          hooksPath,
+          jsonMemberPath("$.hooks", eventName),
+        ),
+      );
+      continue;
+    }
+    const event = eventName as AgentPluginHookEventName;
+    const eventPath = jsonMemberPath("$.hooks", event);
+    if (
+      !Array.isArray(rawGroups) ||
+      rawGroups.length === 0 ||
+      rawGroups.length > MAX_HOOK_GROUPS_PER_EVENT
+    ) {
+      diagnostics.push(
+        hookDiagnostic(
+          "hook_groups_invalid",
+          event,
+          `Hook event groups must be a non-empty array with at most ${MAX_HOOK_GROUPS_PER_EVENT} entries.`,
+          hooksPath,
+          eventPath,
+        ),
+      );
+      continue;
+    }
+    const groups: AgentPluginHookMatcherGroup[] = [];
+    for (let groupIndex = 0; groupIndex < rawGroups.length; groupIndex += 1) {
+      const groupPath = `${eventPath}[${groupIndex}]`;
+      const group = parseHookMatcherGroup(
+        rawGroups[groupIndex],
+        event,
+        groupPath,
+        hooksPath,
+        document!.duplicateMembers,
+        diagnostics,
+      );
+      if (group) groups.push(group);
+    }
+    if (groups.length > 0) events[event] = groups;
+  }
+  if (Object.keys(events).length === 0) {
+    diagnostics.push(
+      diagnostic(
+        "hooks_empty",
+        "hooks",
+        "hooks/hooks.json did not contain any valid hook handlers.",
+        hooksPath,
+        "$.hooks",
+      ),
+    );
+    return undefined;
+  }
+  return {
+    ...(description ? { description } : {}),
+    sourcePath: hooksFile,
+    sourceRelativePath: "hooks/hooks.json",
+    hooks: events as AgentPluginHookEventMap,
+  };
+}
+
+function parseHookMatcherGroup(
+  value: unknown,
+  event: AgentPluginHookEventName,
+  groupPath: string,
+  hooksPath: string,
+  duplicates: readonly StrictJsonDuplicateMember[],
+  diagnostics: AgentPluginDiagnostic[],
+): AgentPluginHookMatcherGroup | undefined {
+  if (!isRecord(value)) {
+    diagnostics.push(
+      hookDiagnostic(
+        "hook_group_invalid",
+        event,
+        "Hook matcher group must be an object.",
+        hooksPath,
+        groupPath,
+      ),
+    );
+    return undefined;
+  }
+  const directDuplicates = duplicates.filter(
+    (duplicate) => duplicate.parentPath === groupPath,
+  );
+  if (directDuplicates.length > 0) {
+    addHookDuplicateDiagnostics(
+      diagnostics,
+      directDuplicates,
+      event,
+      hooksPath,
+    );
+    return undefined;
+  }
+  const unknownFields = Object.keys(value).filter(
+    (key) => key !== "matcher" && key !== "hooks",
+  );
+  if (unknownFields.length > 0) {
+    for (const key of unknownFields) {
+      diagnostics.push(
+        hookDiagnostic(
+          "hook_group_unknown_field",
+          event,
+          `Unknown matcher group field '${key}'.`,
+          hooksPath,
+          jsonMemberPath(groupPath, key),
+        ),
+      );
+    }
+    return undefined;
+  }
+  let matcher: string | undefined;
+  if (value.matcher !== undefined) {
+    matcher = optionalBoundedHookString(
+      value.matcher,
+      1,
+      MAX_HOOK_MATCHER_CHARS,
+    );
+    if (!matcher) {
+      diagnostics.push(
+        hookDiagnostic(
+          "hook_matcher_invalid",
+          event,
+          `matcher must be a string of 1-${MAX_HOOK_MATCHER_CHARS} characters.`,
+          hooksPath,
+          `${groupPath}.matcher`,
+        ),
+      );
+      return undefined;
+    }
+    try {
+      new RegExp(matcher, "u");
+    } catch (error) {
+      diagnostics.push(
+        hookDiagnostic(
+          "hook_matcher_regex_invalid",
+          event,
+          `matcher is not a valid JavaScript regular expression: ${errorMessage(error)}`,
+          hooksPath,
+          `${groupPath}.matcher`,
+        ),
+      );
+      return undefined;
+    }
+  }
+  if (
+    !Array.isArray(value.hooks) ||
+    value.hooks.length === 0 ||
+    value.hooks.length > MAX_HOOK_HANDLERS_PER_GROUP
+  ) {
+    diagnostics.push(
+      hookDiagnostic(
+        "hook_handlers_invalid",
+        event,
+        `hooks must be a non-empty array with at most ${MAX_HOOK_HANDLERS_PER_GROUP} handlers.`,
+        hooksPath,
+        `${groupPath}.hooks`,
+      ),
+    );
+    return undefined;
+  }
+  const handlers: AgentPluginHookHandler[] = [];
+  for (
+    let handlerIndex = 0;
+    handlerIndex < value.hooks.length;
+    handlerIndex += 1
+  ) {
+    const handler = parseHookHandler(
+      value.hooks[handlerIndex],
+      event,
+      `${groupPath}.hooks[${handlerIndex}]`,
+      hooksPath,
+      duplicates,
+      diagnostics,
+    );
+    if (handler) handlers.push(handler);
+  }
+  if (handlers.length === 0) return undefined;
+  return { ...(matcher ? { matcher } : {}), hooks: handlers };
+}
+
+function parseHookHandler(
+  value: unknown,
+  event: AgentPluginHookEventName,
+  handlerPath: string,
+  hooksPath: string,
+  duplicates: readonly StrictJsonDuplicateMember[],
+  diagnostics: AgentPluginDiagnostic[],
+): AgentPluginHookHandler | undefined {
+  if (!isRecord(value)) {
+    diagnostics.push(
+      hookDiagnostic(
+        "hook_handler_invalid",
+        event,
+        "Hook handler must be an object.",
+        hooksPath,
+        handlerPath,
+      ),
+    );
+    return undefined;
+  }
+  const directDuplicates = duplicates.filter(
+    (duplicate) =>
+      duplicate.parentPath === handlerPath ||
+      duplicate.parentPath.startsWith(`${handlerPath}.`) ||
+      duplicate.parentPath.startsWith(`${handlerPath}[`),
+  );
+  if (directDuplicates.length > 0) {
+    addHookDuplicateDiagnostics(
+      diagnostics,
+      directDuplicates,
+      event,
+      hooksPath,
+    );
+    return undefined;
+  }
+  const type = value.type;
+  if (
+    type !== "command" &&
+    type !== "mcp_tool" &&
+    type !== "prompt" &&
+    type !== "agent"
+  ) {
+    diagnostics.push(
+      hookDiagnostic(
+        "hook_handler_type_invalid",
+        event,
+        "Hook handler type must be command, mcp_tool, prompt, or agent.",
+        hooksPath,
+        `${handlerPath}.type`,
+      ),
+    );
+    return undefined;
+  }
+  const allowedFields =
+    type === "command"
+      ? new Set([
+          "type",
+          "command",
+          "commandWindows",
+          "timeout",
+          "async",
+          "statusMessage",
+          "additionalContextLimit",
+        ])
+      : type === "mcp_tool"
+        ? new Set([
+            "type",
+            "server",
+            "tool",
+            "input",
+            "timeout",
+            "statusMessage",
+          ])
+        : new Set(["type"]);
+  const unknownFields = Object.keys(value).filter(
+    (key) => !allowedFields.has(key),
+  );
+  if (unknownFields.length > 0) {
+    for (const key of unknownFields) {
+      diagnostics.push(
+        hookDiagnostic(
+          "hook_handler_unknown_field",
+          event,
+          `Unknown ${type} hook handler field '${key}'.`,
+          hooksPath,
+          jsonMemberPath(handlerPath, key),
+        ),
+      );
+    }
+    return undefined;
+  }
+  if (type === "prompt" || type === "agent") return { type };
+
+  const timeout = optionalHookInteger(
+    value.timeout,
+    1,
+    MAX_HOOK_TIMEOUT_SECONDS,
+  );
+  const statusMessage = optionalBoundedHookString(
+    value.statusMessage,
+    1,
+    MAX_HOOK_STATUS_MESSAGE_CHARS,
+  );
+  if (
+    (value.timeout !== undefined && timeout === undefined) ||
+    (value.statusMessage !== undefined && statusMessage === undefined)
+  ) {
+    diagnostics.push(
+      hookDiagnostic(
+        "hook_handler_bounds_invalid",
+        event,
+        `timeout must be an integer from 1-${MAX_HOOK_TIMEOUT_SECONDS}, and statusMessage must contain 1-${MAX_HOOK_STATUS_MESSAGE_CHARS} characters.`,
+        hooksPath,
+        handlerPath,
+      ),
+    );
+    return undefined;
+  }
+
+  if (type === "command") {
+    const command = optionalBoundedHookString(
+      value.command,
+      1,
+      MAX_HOOK_COMMAND_CHARS,
+    );
+    const commandWindows = optionalBoundedHookString(
+      value.commandWindows,
+      1,
+      MAX_HOOK_COMMAND_CHARS,
+    );
+    const additionalContextLimit = optionalHookInteger(
+      value.additionalContextLimit,
+      0,
+      MAX_HOOK_ADDITIONAL_CONTEXT_LIMIT,
+    );
+    if (
+      !command ||
+      (value.commandWindows !== undefined && commandWindows === undefined) ||
+      (value.async !== undefined && typeof value.async !== "boolean") ||
+      (value.additionalContextLimit !== undefined &&
+        additionalContextLimit === undefined)
+    ) {
+      diagnostics.push(
+        hookDiagnostic(
+          "hook_command_invalid",
+          event,
+          "Command hook fields are invalid or exceed supported bounds.",
+          hooksPath,
+          handlerPath,
+        ),
+      );
+      return undefined;
+    }
+    return {
+      type,
+      command,
+      ...(commandWindows ? { commandWindows } : {}),
+      ...(timeout !== undefined ? { timeout } : {}),
+      ...(value.async !== undefined ? { async: value.async } : {}),
+      ...(statusMessage ? { statusMessage } : {}),
+      ...(additionalContextLimit !== undefined
+        ? { additionalContextLimit }
+        : {}),
+    };
+  }
+
+  const server = optionalBoundedHookString(
+    value.server,
+    1,
+    MAX_HOOK_NAME_CHARS,
+  );
+  const tool = optionalBoundedHookString(value.tool, 1, MAX_HOOK_NAME_CHARS);
+  let input: Readonly<Record<string, unknown>> | undefined;
+  if (value.input !== undefined) {
+    if (!isRecord(value.input) || !isPortableHookInput(value.input)) {
+      diagnostics.push(
+        hookDiagnostic(
+          "hook_mcp_tool_input_invalid",
+          event,
+          "MCP tool hook input must be a JSON object without null values.",
+          hooksPath,
+          `${handlerPath}.input`,
+        ),
+      );
+      return undefined;
+    }
+    if (JSON.stringify(value.input).length > MAX_HOOK_MCP_INPUT_CHARS) {
+      diagnostics.push(
+        hookDiagnostic(
+          "hook_mcp_tool_input_too_large",
+          event,
+          `MCP tool hook input must not exceed ${MAX_HOOK_MCP_INPUT_CHARS} serialized characters.`,
+          hooksPath,
+          `${handlerPath}.input`,
+        ),
+      );
+      return undefined;
+    }
+    input = value.input;
+  }
+  if (!server || !tool) {
+    diagnostics.push(
+      hookDiagnostic(
+        "hook_mcp_tool_invalid",
+        event,
+        `MCP tool hook server and tool must contain 1-${MAX_HOOK_NAME_CHARS} characters.`,
+        hooksPath,
+        handlerPath,
+      ),
+    );
+    return undefined;
+  }
+  return {
+    type,
+    server,
+    tool,
+    ...(input ? { input } : {}),
+    ...(timeout !== undefined ? { timeout } : {}),
+    ...(statusMessage ? { statusMessage } : {}),
+  };
+}
+
+function isPortableHookInput(value: unknown, depth = 0): boolean {
+  if (depth > 32 || value === null) return false;
+  if (
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.every((item) => isPortableHookInput(item, depth + 1));
+  }
+  if (isRecord(value)) {
+    return Object.values(value).every((item) =>
+      isPortableHookInput(item, depth + 1),
+    );
+  }
+  return false;
+}
+
+function optionalBoundedHookString(
+  value: unknown,
+  min: number,
+  max: number,
+): string | undefined {
+  return typeof value === "string" && value.length >= min && value.length <= max
+    ? value
+    : undefined;
+}
+
+function optionalHookInteger(
+  value: unknown,
+  min: number,
+  max: number,
+): number | undefined {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= min &&
+    value <= max
+    ? value
+    : undefined;
+}
+
+function addHookDuplicateDiagnostics(
+  diagnostics: AgentPluginDiagnostic[],
+  duplicates: readonly StrictJsonDuplicateMember[],
+  event: AgentPluginHookEventName,
+  hooksPath: string,
+): void {
+  for (const duplicate of duplicates) {
+    diagnostics.push(
+      hookDiagnostic(
+        "duplicate_member",
+        event,
+        duplicate.message,
+        hooksPath,
+        duplicate.path,
+      ),
+    );
+  }
+}
+
 async function validateMcpServerSemantics(
   fileSystem: PluginPackageFileSystem,
   server: AgentPluginMcpServer,
@@ -980,7 +1606,7 @@ interface ParsedJsonDocument {
 
 function parseJsonDocument(
   source: string,
-  boundary: "manifest" | "mcp",
+  boundary: "manifest" | "mcp" | "hooks",
   filePath: string,
   diagnostics: AgentPluginDiagnostic[],
 ): ParsedJsonDocument | undefined {
@@ -1006,7 +1632,7 @@ function parseJsonDocument(
 function addDuplicateDiagnostics(
   diagnostics: AgentPluginDiagnostic[],
   duplicates: readonly StrictJsonDuplicateMember[],
-  boundary: "manifest" | "mcp",
+  boundary: "manifest" | "mcp" | "hooks",
   filePath: string,
 ): void {
   for (const duplicate of duplicates) {
@@ -1152,6 +1778,19 @@ function skillDiagnostic(
   };
 }
 
+function hookDiagnostic(
+  code: string,
+  event: AgentPluginHookEventName,
+  message: string,
+  filePath: string,
+  jsonPath?: string,
+): AgentPluginDiagnostic {
+  return {
+    ...diagnostic(code, "hook", message, filePath, jsonPath),
+    componentName: event,
+  };
+}
+
 function mcpServerDiagnostic(
   code: string,
   serverName: string,
@@ -1174,6 +1813,7 @@ function invalidSnapshot(
     specificationVersion: AGENT_PLUGINS_SPECIFICATION_VERSION,
     rootPath,
     skills: [],
+    hooks: [],
     diagnostics,
     valid: false,
   };

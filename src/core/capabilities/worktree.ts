@@ -13,6 +13,11 @@ export interface WorktreeAgentLaunchRequest {
   sourcePath?: string;
   branch?: string;
   baseRef?: string;
+  /** Optional configured-remote ref to fetch into a new local branch after launch approval. */
+  fetchRef?: {
+    repository: string;
+    ref: string;
+  };
   worktreePath?: string;
   mode?: string;
   autoSubmit?: boolean;

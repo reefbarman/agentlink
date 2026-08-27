@@ -3263,6 +3263,18 @@ export function App({
     [vscodeApi],
   );
 
+  const handleOpenImageInEditor = useCallback(
+    (image: { src: string; name?: string; mimeType?: string }) => {
+      vscodeApi.postMessage({
+        command: "agentOpenImageInEditor",
+        src: image.src,
+        name: image.name,
+        mimeType: image.mimeType,
+      });
+    },
+    [vscodeApi],
+  );
+
   const handleRevealToolCallTerminal = useCallback(
     (id: string) => {
       vscodeApi.postMessage({ command: "revealToolCallTerminal", id });
@@ -3708,6 +3720,7 @@ export function App({
                 )}
                 todos={transcriptView.todos}
                 onOpenFile={handleOpenFile}
+                onOpenImageInEditor={handleOpenImageInEditor}
                 onOpenSpecialBlockPanel={handleOpenSpecialBlockPanel}
                 onRetry={() => handleRetryBackground(transcriptView.sessionId)}
                 onSignIn={handleErrorSignIn}
@@ -3771,6 +3784,7 @@ export function App({
               onDetectedQuestionAnswer={handleDetectedQuestionAnswer}
               onDismissDetectedQuestion={handleDismissDetectedQuestion}
               onOpenFile={handleOpenFile}
+              onOpenImageInEditor={handleOpenImageInEditor}
               onRevealToolCallTerminal={handleRevealToolCallTerminal}
               onContinueToolCallInBackground={
                 handleContinueToolCallInBackground

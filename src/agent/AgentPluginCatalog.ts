@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 
 import type {
   AgentPluginDiagnostic,
+  AgentPluginHookEventMap,
   AgentPluginMcpServer,
   AgentPluginPackageSnapshot,
 } from "../core/agentPlugins/contracts.js";
@@ -51,6 +52,19 @@ export interface AgentPluginCatalogInstall {
   readonly shadowedByInstallInstanceId?: string;
 }
 
+export interface AgentPluginCatalogHookSource {
+  readonly installInstanceId: string;
+  readonly packageDigest: string;
+  readonly manifestName: string;
+  readonly scope: AgentPluginRegistryScope;
+  readonly pluginRoot: string;
+  readonly pluginData: string;
+  readonly sourcePath: string;
+  readonly sourceRelativePath: string;
+  readonly description?: string;
+  readonly hooks: AgentPluginHookEventMap;
+}
+
 export interface AgentPluginCatalogMcpServer {
   readonly installInstanceId: string;
   readonly packageDigest: string;
@@ -72,6 +86,8 @@ export interface AgentPluginCatalogSnapshot {
   readonly installs: readonly AgentPluginCatalogInstall[];
   readonly skills: readonly SkillEntry[];
   readonly mcpServers: readonly AgentPluginCatalogMcpServer[];
+  /** Present on catalog-produced snapshots; optional for legacy/test providers. */
+  readonly hooks?: readonly AgentPluginCatalogHookSource[];
   readonly diagnostics: readonly AgentPluginCatalogDiagnostic[];
 }
 
@@ -290,6 +306,7 @@ export class AgentPluginCatalog implements AgentPluginCatalogProvider {
     const installs: AgentPluginCatalogInstall[] = [];
     const skills: SkillEntry[] = [];
     const mcpServers: AgentPluginCatalogMcpServer[] = [];
+    const hooks: AgentPluginCatalogHookSource[] = [];
     for (const item of loaded.values()) {
       const effectiveId = effectiveByManifest.get(item.row.manifestName);
       const effective = effectiveId === item.row.installInstanceId;
@@ -312,6 +329,22 @@ export class AgentPluginCatalog implements AgentPluginCatalogProvider {
                 item.row.scope.projectId,
                 item.row.installInstanceId,
               );
+        for (const hookSource of item.package.hooks) {
+          hooks.push({
+            installInstanceId: item.row.installInstanceId,
+            packageDigest: item.row.currentDigest,
+            manifestName: item.row.manifestName,
+            scope: item.row.scope,
+            pluginRoot: item.package.rootPath,
+            pluginData,
+            sourcePath: hookSource.sourcePath,
+            sourceRelativePath: hookSource.sourceRelativePath,
+            ...(hookSource.description
+              ? { description: hookSource.description }
+              : {}),
+            hooks: hookSource.hooks,
+          });
+        }
         for (const [portableServerName, server] of Object.entries(
           item.package.mcp?.servers ?? {},
         )) {
@@ -339,6 +372,11 @@ export class AgentPluginCatalog implements AgentPluginCatalogProvider {
         `${right.installInstanceId}:${right.portableServerName}`,
       ),
     );
+    hooks.sort((left, right) =>
+      `${left.installInstanceId}:${left.sourceRelativePath}`.localeCompare(
+        `${right.installInstanceId}:${right.sourceRelativePath}`,
+      ),
+    );
     diagnostics.sort((left, right) =>
       `${left.installInstanceId ?? ""}:${left.code}:${left.path ?? ""}`.localeCompare(
         `${right.installInstanceId ?? ""}:${right.code}:${right.path ?? ""}`,
@@ -355,6 +393,7 @@ export class AgentPluginCatalog implements AgentPluginCatalogProvider {
       installs,
       skills,
       mcpServers,
+      hooks,
       diagnostics,
     };
   }
@@ -461,6 +500,7 @@ function catalogSnapshotWithoutPlugins(
     installs: [],
     skills: [],
     mcpServers: [],
+    hooks: [],
     diagnostics,
   };
 }

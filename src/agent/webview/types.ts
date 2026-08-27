@@ -178,6 +178,10 @@ export interface WorktreeSetupConfig {
   sourcePath?: string;
   branch?: string;
   baseRef?: string;
+  fetchRef?: {
+    repository: string;
+    ref: string;
+  };
   worktreePath?: string;
   mode?: string;
   autoSubmit?: boolean;

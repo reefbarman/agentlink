@@ -227,6 +227,166 @@ describe("Agent Plugins 1.0.0 package validation", () => {
     );
   });
 
+  it("loads the canonical hooks source with all handler shapes", async () => {
+    await writeMinimalManifest();
+    await writeJson(path.join("hooks", "hooks.json"), {
+      description: "Lifecycle policy hooks.",
+      hooks: {
+        SessionStart: [
+          {
+            hooks: [
+              {
+                type: "command",
+                command: "node ${PLUGIN_ROOT}/hooks/start.js",
+                commandWindows: "node.exe %PLUGIN_ROOT%\\hooks\\start.js",
+                timeout: 30,
+                async: true,
+                statusMessage: "Loading policy",
+                additionalContextLimit: 2500,
+              },
+            ],
+          },
+        ],
+        PreToolUse: [
+          {
+            matcher: "^(Read|Bash)$",
+            hooks: [
+              {
+                type: "mcp_tool",
+                server: "policy",
+                tool: "check",
+                input: { strict: true, levels: [1, 2] },
+                timeout: 10,
+                statusMessage: "Checking policy",
+              },
+              { type: "prompt" },
+              { type: "agent" },
+            ],
+          },
+        ],
+      },
+    });
+
+    const snapshot = await load();
+    const realPluginRoot = await fs.realpath(pluginRoot);
+
+    expect(snapshot.valid).toBe(true);
+    expect(snapshot.hooks).toEqual([
+      {
+        description: "Lifecycle policy hooks.",
+        sourcePath: path.join(realPluginRoot, "hooks", "hooks.json"),
+        sourceRelativePath: "hooks/hooks.json",
+        hooks: {
+          SessionStart: [
+            {
+              hooks: [
+                expect.objectContaining({
+                  type: "command",
+                  command: "node ${PLUGIN_ROOT}/hooks/start.js",
+                  async: true,
+                  timeout: 30,
+                }),
+              ],
+            },
+          ],
+          PreToolUse: [
+            {
+              matcher: "^(Read|Bash)$",
+              hooks: [
+                expect.objectContaining({
+                  type: "mcp_tool",
+                  server: "policy",
+                  tool: "check",
+                }),
+                { type: "prompt" },
+                { type: "agent" },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+    expect(snapshot.diagnostics).toEqual([]);
+  });
+
+  it("isolates malformed, unknown, duplicate, and invalid-regex hooks", async () => {
+    await writeMinimalManifest();
+    await writeSkill(
+      "survives-hooks",
+      "---\nname: survives-hooks\ndescription: Still available.\n---\n",
+    );
+    await write(
+      path.join("hooks", "hooks.json"),
+      [
+        "{",
+        '  "description": "Invalid component only",',
+        '  "hooks": {',
+        '    "UnknownEvent": [{ "hooks": [{ "type": "prompt" }] }],',
+        '    "PreToolUse": [',
+        '      { "matcher": "[", "hooks": [{ "type": "command", "command": "echo invalid" }] },',
+        '      { "hooks": [{ "type": "command", "command": "echo first", "command": "echo duplicate" }] },',
+        '      { "extra": true, "hooks": [{ "type": "prompt" }] }',
+        "    ]",
+        "  }",
+        "}",
+      ].join("\n"),
+    );
+
+    const snapshot = await load();
+
+    expect(snapshot.valid).toBe(true);
+    expect(snapshot.skills.map((skill) => skill.name)).toEqual([
+      "survives-hooks",
+    ]);
+    expect(snapshot.hooks).toEqual([]);
+    expect(snapshot.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "hook_event_unknown",
+          boundary: "hook",
+        }),
+        expect.objectContaining({
+          code: "hook_matcher_regex_invalid",
+          boundary: "hook",
+          componentName: "PreToolUse",
+        }),
+        expect.objectContaining({
+          code: "duplicate_member",
+          boundary: "hook",
+          componentName: "PreToolUse",
+        }),
+        expect.objectContaining({
+          code: "hook_group_unknown_field",
+          boundary: "hook",
+          componentName: "PreToolUse",
+        }),
+        expect.objectContaining({ code: "hooks_empty", boundary: "hooks" }),
+      ]),
+    );
+  });
+
+  it("rejects an escaping hooks source without invalidating the plugin", async () => {
+    await writeMinimalManifest();
+    const outside = path.join(tempRoot, "outside-hooks.json");
+    await fs.writeFile(
+      outside,
+      JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "prompt" }] }] } }),
+    );
+    await fs.mkdir(path.join(pluginRoot, "hooks"));
+    await fs.symlink(outside, path.join(pluginRoot, "hooks", "hooks.json"));
+
+    const snapshot = await load();
+
+    expect(snapshot.valid).toBe(true);
+    expect(snapshot.hooks).toEqual([]);
+    expect(snapshot.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "hooks_file_invalid",
+        boundary: "hooks",
+      }),
+    );
+  });
+
   it("isolates invalid and duplicate MCP server entries", async () => {
     await writeMinimalManifest();
     await write(

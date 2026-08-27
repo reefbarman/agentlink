@@ -285,8 +285,13 @@ describe("MessageBubble slash-command rendering", () => {
       },
     };
 
+    const onOpenImageInEditor = vi.fn();
     const { container } = render(
-      <MessageBubble message={message} streaming={false} />,
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onOpenImageInEditor={onOpenImageInEditor}
+      />,
     );
 
     const preview = container.querySelector(
@@ -310,7 +315,12 @@ describe("MessageBubble slash-command rendering", () => {
     expect(fullPreview).toBeTruthy();
     expect(fullPreview.src).toBe("data:image/png;base64,abc123");
 
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open image in editor" }),
+    );
+    expect(onOpenImageInEditor).toHaveBeenCalledWith(
+      message.displayMedia?.images[0],
+    );
     expect(screen.queryByRole("dialog", { name: "screenshot.png" })).toBeNull();
 
     // Clicking the expanded image itself also closes the lightbox.

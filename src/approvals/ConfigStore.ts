@@ -9,6 +9,11 @@ import type { PathRule } from "./PathRuleStore.js";
 import { parseJsonWithComments } from "../util/jsonc.js";
 import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 
+export interface HookTrustState {
+  enabled?: boolean;
+  trustedHash?: string;
+}
+
 export interface AgentLinkConfig {
   version: number;
   writeApproved?: boolean;
@@ -17,6 +22,10 @@ export interface AgentLinkConfig {
   networkRules?: NetworkRule[];
   pathRules?: PathRule[];
   writeRules?: PathRule[];
+  /** Machine-local hook authority. Project files cannot grant their own trust. */
+  hooks?: {
+    state: Record<string, HookTrustState>;
+  };
 }
 
 const EMPTY_CONFIG: AgentLinkConfig = { version: 1 };
@@ -54,6 +63,36 @@ export class ConfigStore {
 
   getGlobalConfig(): Readonly<AgentLinkConfig> {
     return this.globalConfig;
+  }
+
+  getHookState(key: string): Readonly<HookTrustState> | undefined {
+    return this.globalConfig.hooks?.state[key];
+  }
+
+  setHookTrustedHash(key: string, trustedHash: string | undefined): boolean {
+    return this.updateGlobalConfig((config) => {
+      const state = (config.hooks ??= { state: {} }).state;
+      const current = state[key] ?? {};
+      if (trustedHash === undefined && current.enabled === undefined) {
+        delete state[key];
+      } else {
+        state[key] = { ...current, trustedHash };
+      }
+      if (Object.keys(state).length === 0) delete config.hooks;
+    });
+  }
+
+  setHookEnabled(key: string, enabled: boolean | undefined): boolean {
+    return this.updateGlobalConfig((config) => {
+      const state = (config.hooks ??= { state: {} }).state;
+      const current = state[key] ?? {};
+      if (enabled === undefined && current.trustedHash === undefined) {
+        delete state[key];
+      } else {
+        state[key] = { ...current, enabled };
+      }
+      if (Object.keys(state).length === 0) delete config.hooks;
+    });
   }
 
   updateGlobalConfig(updater: (config: AgentLinkConfig) => void): boolean {
@@ -259,6 +298,37 @@ export class ConfigStore {
           typeof (r as PathRule).pattern === "string" &&
           ["glob", "prefix", "exact"].includes((r as PathRule).mode),
       );
+    }
+
+    if (
+      typeof obj.hooks === "object" &&
+      obj.hooks !== null &&
+      !Array.isArray(obj.hooks)
+    ) {
+      const rawState = (obj.hooks as Record<string, unknown>).state;
+      if (
+        typeof rawState === "object" &&
+        rawState !== null &&
+        !Array.isArray(rawState)
+      ) {
+        const state: Record<string, HookTrustState> = {};
+        for (const [key, value] of Object.entries(rawState)) {
+          if (!key.trim() || typeof value !== "object" || value === null)
+            continue;
+          const record = value as Record<string, unknown>;
+          const enabled =
+            typeof record.enabled === "boolean" ? record.enabled : undefined;
+          const trustedHash =
+            typeof record.trustedHash === "string" &&
+            record.trustedHash.trim().length > 0
+              ? record.trustedHash
+              : undefined;
+          if (enabled !== undefined || trustedHash !== undefined) {
+            state[key] = { enabled, trustedHash };
+          }
+        }
+        if (Object.keys(state).length > 0) config.hooks = { state };
+      }
     }
 
     return config;

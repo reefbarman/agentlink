@@ -56,6 +56,24 @@ describe("SlashCommandRegistry", () => {
     ).toBe(false);
   });
 
+  it("exposes /review as a built-in worktree command", async () => {
+    const registry = new SlashCommandRegistry(tmpDir, "code");
+    await registry.reload();
+
+    expect(
+      registry.getAll().find((cmd) => cmd.name === "review"),
+    ).toMatchObject({
+      description: expect.stringContaining("/review <url>"),
+      source: "builtin",
+      builtin: true,
+    });
+    expect(
+      (await loadAskAgentSlashCommands("ask")).some(
+        (command) => command.name === "review",
+      ),
+    ).toBe(false);
+  });
+
   it("exposes /fleet as a built-in panel command", async () => {
     const registry = new SlashCommandRegistry(tmpDir, "code");
     await registry.reload();

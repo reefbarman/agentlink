@@ -248,6 +248,13 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     builtin: true,
   },
   {
+    name: "review",
+    description:
+      "Review a GitHub pull request in a new worktree: /review <url>",
+    source: "builtin",
+    builtin: true,
+  },
+  {
     name: "pair",
     description:
       "Show a pairing code for a new browser device (or /pair list to manage)",

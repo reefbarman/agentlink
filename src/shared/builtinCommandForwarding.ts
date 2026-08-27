@@ -13,6 +13,7 @@ const FORWARDED_BUILTIN_COMMANDS: Record<
     "mcp-refresh",
     "btw",
     "worktree",
+    "review",
     "pair",
     "usage",
     "condense",

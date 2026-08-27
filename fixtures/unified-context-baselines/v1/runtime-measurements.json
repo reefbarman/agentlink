@@ -594,10 +594,10 @@
     },
     {
       "mode": "review",
-      "toolCount": 47,
-      "chars": 57263,
-      "estimatedTokens": 14316,
-      "sha256": "4e69d6f68490916730b2c3f590947754e003aee6128fb8f49bacd28415d2348e"
+      "toolCount": 50,
+      "chars": 70375,
+      "estimatedTokens": 17594,
+      "sha256": "9dadb272cf80dc070653674e0f1085ba735e4306a7e56d2a197f6e19858f23d3"
     }
   ],
   "projectedToolsByMode": [
@@ -635,11 +635,11 @@
     },
     {
       "mode": "review",
-      "toolCount": 27,
-      "deferredToolCount": 20,
-      "chars": 39392,
-      "estimatedTokens": 9848,
-      "sha256": "cb1df95c6402daa7b45deff3d1745a072af042b026658cef5d4ad148be29a2f7"
+      "toolCount": 29,
+      "deferredToolCount": 21,
+      "chars": 51963,
+      "estimatedTokens": 12991,
+      "sha256": "657eafc161ebb5ae4285a9ae01e0daec6f1a9e7a4a6a8914269a5857528d8378"
     }
   ],
   "profileMatrix": {

@@ -45,6 +45,11 @@ interface ParsedWorktree {
   bare?: boolean;
 }
 
+interface ResolvedFetchRef {
+  remote: string;
+  ref: string;
+}
+
 export async function handleStartWorktreeAgent(
   params: StartWorktreeAgentParams,
   deps: StartWorktreeAgentDeps,
@@ -88,15 +93,20 @@ export async function handleStartWorktreeAgent(
     );
     launchContext.sourceRoot = sourceRoot;
     launchContext.repoRoot = repoRoot;
-    const baseRef =
+    const fetchRef = params.fetchRef
+      ? await resolveFetchRef(runGit, repoRoot, params.fetchRef)
+      : undefined;
+    const initialBaseRef =
       params.baseRef?.trim() ||
-      (await runGit(["rev-parse", "HEAD"], repoRoot)).trim();
-    if (!baseRef)
+      (fetchRef
+        ? `${fetchRef.remote}:${fetchRef.ref}`
+        : (await runGit(["rev-parse", "HEAD"], repoRoot)).trim());
+    if (!initialBaseRef)
       return worktreeError(
         "Unable to resolve baseRef from current HEAD.",
         launchContext,
       );
-    launchContext.baseRef = baseRef;
+    launchContext.baseRef = initialBaseRef;
 
     const branch = params.branch?.trim() || generatedBranchName(task);
     validateBranchName(branch);
@@ -132,10 +142,17 @@ export async function handleStartWorktreeAgent(
       `refs/heads/${branch}`,
     );
 
+    if (fetchRef && branchExists) {
+      return worktreeError(
+        `Review branch "${branch}" already exists. Run /review again to create a fresh branch for the current pull request head.`,
+        { worktreePath, branch, baseRef: initialBaseRef },
+      );
+    }
+
     if (checkedOutBranch && !pathsEqual(checkedOutBranch.path, worktreePath)) {
       return worktreeError(
         `Branch "${branch}" is already checked out at ${checkedOutBranch.path}. Choose a different branch or worktreePath.`,
-        { worktreePath, branch, baseRef },
+        { worktreePath, branch, baseRef: initialBaseRef },
       );
     }
 
@@ -149,7 +166,7 @@ export async function handleStartWorktreeAgent(
     if (existingTarget && !reuseExisting) {
       return worktreeError(
         `Destination path is already a Git worktree for ${existingTarget.branch ?? existingTarget.head ?? "an unknown ref"}, not branch "${branch}".`,
-        { worktreePath, branch, baseRef },
+        { worktreePath, branch, baseRef: initialBaseRef },
       );
     }
 
@@ -160,7 +177,7 @@ export async function handleStartWorktreeAgent(
       sourceRoot,
       worktreePath,
       branch,
-      baseRef,
+      baseRef: initialBaseRef,
       dirty: dirtyStatus.length > 0,
       existingWorktree: existingTarget,
       onApprovalRequest: deps.onApprovalRequest,
@@ -172,7 +189,7 @@ export async function handleStartWorktreeAgent(
         status: "rejected",
         worktreePath,
         branch,
-        baseRef,
+        baseRef: initialBaseRef,
         sourceRoot,
         repoRoot,
         sourceTreeDirty: dirtyStatus.length > 0,
@@ -185,6 +202,17 @@ export async function handleStartWorktreeAgent(
     }
 
     const finalAutoSubmit = approval.autoSubmit;
+    let baseRef = initialBaseRef;
+    if (fetchRef) {
+      await runGit(["fetch", fetchRef.remote, fetchRef.ref], repoRoot);
+      baseRef = (await runGit(["rev-parse", "FETCH_HEAD"], repoRoot)).trim();
+      if (!baseRef) {
+        throw new Error(
+          `Git fetched ${fetchRef.remote}:${fetchRef.ref} but did not resolve FETCH_HEAD.`,
+        );
+      }
+      launchContext.baseRef = baseRef;
+    }
 
     if (!reuseExisting) {
       await fs.mkdir(path.dirname(worktreePath), { recursive: true });
@@ -398,6 +426,68 @@ export async function validateDestinationPath(
       "Worktree destination already exists and is non-empty. It can only be reused if it is already the intended Git worktree.",
     );
   }
+}
+
+export function findGitRemoteForRepository(
+  remoteOutput: string,
+  repository: string,
+): string | undefined {
+  const expected = normalizeRepositoryPath(repository);
+  if (!expected) return undefined;
+
+  for (const line of remoteOutput.split(/\r?\n/)) {
+    const match = line.trim().match(/^(\S+)\s+(\S+)\s+\(fetch\)$/);
+    if (!match) continue;
+    const [, remote, remoteUrl] = match;
+    if (remote?.startsWith("-")) continue;
+    if (normalizeRepositoryPath(remoteUrl!) === expected) return remote;
+  }
+  return undefined;
+}
+
+function normalizeRepositoryPath(value: string): string | undefined {
+  const trimmed = value.trim().replace(/\/+$/, "");
+  const withoutScheme = trimmed.includes("://")
+    ? trimmed.slice(trimmed.indexOf("://") + 3)
+    : trimmed;
+  const pathPart = withoutScheme.includes(":")
+    ? withoutScheme.slice(withoutScheme.lastIndexOf(":") + 1)
+    : withoutScheme;
+  const segments = pathPart
+    .replace(/^\/+/, "")
+    .replace(/\.git$/i, "")
+    .split("/");
+  if (segments.length < 2) return undefined;
+  return segments.slice(-2).join("/").toLowerCase();
+}
+
+async function resolveFetchRef(
+  runGit: GitRunner,
+  cwd: string,
+  fetchRef: NonNullable<WorktreeAgentLaunchRequest["fetchRef"]>,
+): Promise<ResolvedFetchRef> {
+  const repository = fetchRef.repository.trim();
+  const ref = fetchRef.ref.trim();
+  if (!repository || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    throw new Error("Invalid repository for worktree fetch.");
+  }
+  if (
+    !ref.startsWith("refs/pull/") ||
+    !/^refs\/pull\/[1-9]\d*\/head$/.test(ref)
+  ) {
+    throw new Error("Invalid GitHub pull request ref for worktree fetch.");
+  }
+
+  const remote = findGitRemoteForRepository(
+    await runGit(["remote", "-v"], cwd),
+    repository,
+  );
+  if (!remote) {
+    throw new Error(
+      `No configured Git remote matches GitHub repository ${repository}. Open that repository or add a matching remote before using /review.`,
+    );
+  }
+  return { remote, ref };
 }
 
 async function gitRefExists(

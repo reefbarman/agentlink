@@ -97,6 +97,27 @@ async function writePlugin(
         mcpServers: { tools: { type: "stdio", command: "node" } },
       })}\n`,
     );
+    await fs.mkdir(path.join(root, "hooks"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "hooks", "hooks.json"),
+      `${JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: "^Bash$",
+              hooks: [
+                {
+                  type: "command",
+                  command: "node ${PLUGIN_ROOT}/hooks/check.js --token secret",
+                  async: true,
+                },
+                { type: "mcp_tool", server: "tools", tool: "check" },
+              ],
+            },
+          ],
+        },
+      })}\n`,
+    );
   }
 }
 
@@ -572,6 +593,23 @@ describe("AgentPluginManagerHost", () => {
               type: "stdio",
               command: "node",
               toolPolicy: "ask",
+            },
+          ],
+          hooks: [
+            {
+              event: "PreToolUse",
+              matcher: "^Bash$",
+              command: "node ${PLUGIN_ROOT}/hooks/check.js --token secret",
+              handlerType: "command",
+              async: true,
+              sourceRelativePath: "hooks/hooks.json",
+            },
+            {
+              event: "PreToolUse",
+              matcher: "^Bash$",
+              handlerType: "mcp_tool",
+              async: false,
+              sourceRelativePath: "hooks/hooks.json",
             },
           ],
         },

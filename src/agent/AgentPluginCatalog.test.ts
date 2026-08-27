@@ -48,6 +48,7 @@ async function createPackage(
   root: string,
   name: string,
   skillName: string,
+  withHooks = false,
 ): Promise<void> {
   await fs.mkdir(path.join(root, "skills", skillName), { recursive: true });
   await fs.writeFile(
@@ -58,6 +59,23 @@ async function createPackage(
     path.join(root, "skills", skillName, "SKILL.md"),
     `---\nname: ${skillName}\ndescription: Plugin ${skillName}\n---\n\nPlugin body.\n`,
   );
+  if (withHooks) {
+    await fs.mkdir(path.join(root, "hooks"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "hooks", "hooks.json"),
+      `${JSON.stringify({
+        description: `${name} hooks`,
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: "^Bash$",
+              hooks: [{ type: "command", command: `echo ${name}` }],
+            },
+          ],
+        },
+      })}\n`,
+    );
+  }
 }
 
 function registryRow(
@@ -114,7 +132,7 @@ describe("AgentPluginCatalog", () => {
     rowScope: AgentPluginRegistryRow["scope"] = { kind: "global" },
   ): Promise<AgentPluginRegistryRow> {
     const staged = path.join(directory, `staged-${installInstanceId}`);
-    await createPackage(staged, manifestName, skillName);
+    await createPackage(staged, manifestName, skillName, true);
     const digest = await digestAgentPluginTree(staged);
     await store.commitPackage({
       installInstanceId,
@@ -201,6 +219,32 @@ describe("AgentPluginCatalog", () => {
     expect(owningSnapshot.skills.map((skill) => skill.name)).toEqual([
       "project-skill",
     ]);
+    const projectPluginRoot = await fs.realpath(
+      store.getPackagePath(project.installInstanceId, project.currentDigest),
+    );
+    expect(owningSnapshot.hooks).toEqual([
+      expect.objectContaining({
+        installInstanceId: project.installInstanceId,
+        packageDigest: project.currentDigest,
+        manifestName: "shared-plugin",
+        scope: project.scope,
+        pluginRoot: projectPluginRoot,
+        pluginData: store.getProjectDataPath(
+          scope.projectId,
+          project.installInstanceId,
+        ),
+        sourcePath: path.join(projectPluginRoot, "hooks", "hooks.json"),
+        sourceRelativePath: "hooks/hooks.json",
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: "^Bash$",
+              hooks: [{ type: "command", command: "echo shared-plugin" }],
+            },
+          ],
+        },
+      }),
+    ]);
 
     const otherSnapshot = await catalog.getSnapshot(otherScope);
     expect(otherSnapshot.installs).toEqual([
@@ -211,6 +255,15 @@ describe("AgentPluginCatalog", () => {
     ]);
     expect(otherSnapshot.skills.map((skill) => skill.name)).toEqual([
       "global-skill",
+    ]);
+    expect(otherSnapshot.hooks).toEqual([
+      expect.objectContaining({
+        installInstanceId: global.installInstanceId,
+        packageDigest: global.currentDigest,
+        scope: global.scope,
+        pluginData: store.getGlobalDataPath(global.installInstanceId),
+        sourceRelativePath: "hooks/hooks.json",
+      }),
     ]);
     catalog.dispose();
   });
@@ -252,7 +305,7 @@ describe("AgentPluginCatalog", () => {
     ).resolves.toMatchObject({ skills: [], registryRevision: 0 });
     await expect(
       enabled.getSnapshot({ ...scope, rootPath: undefined }),
-    ).resolves.toMatchObject({ skills: [], registryRevision: 0 });
+    ).resolves.toMatchObject({ skills: [], hooks: [], registryRevision: 0 });
     await expect(disabled.getSnapshot(scope)).resolves.toMatchObject({
       skills: [],
     });

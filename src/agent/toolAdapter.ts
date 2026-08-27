@@ -1963,6 +1963,11 @@ export interface ToolDispatchContext {
   ) => import("../core/capabilities/terminal.js").TerminalApprovalModeSnapshot;
   /** Restricts execute_command independently of user approval settings. */
   commandExecutionPolicy?: import("../core/capabilities/terminal.js").CommandExecutionPolicy;
+  /** Immutable lifecycle hook runtime captured for this logical turn. */
+  hookRuntime?: import("../core/hooks/HookRuntime.js").HookRuntime;
+  hookTurnId?: string;
+  hookModel?: string;
+  hookCwd?: string;
   /** Snapshots session-scoped approvals from a spawning session into its child. */
   inheritSessionApprovalState?: (
     parentSessionId: string,
@@ -2381,6 +2386,46 @@ export function createAgentToolRuntime(
       const providerToolName = request.context.providerToolName ?? request.name;
       try {
         if (resolved.resolutionError) return resolved.resolutionError;
+        const hookRuntime = request.context.hookRuntime ?? ctx.hookRuntime;
+        const hookTurnId = request.context.hookTurnId ?? ctx.hookTurnId ?? "";
+        let preHookContext: readonly string[] = [];
+        if (hookRuntime) {
+          const preHook = await hookRuntime.preToolUse(
+            {
+              session_id: request.context.sessionId,
+              turn_id: hookTurnId,
+              transcript_path: null,
+              cwd:
+                request.context.hookCwd ?? ctx.hookCwd ?? ctx.projectRoot ?? "",
+              hook_event_name: "PreToolUse",
+              model: request.context.hookModel ?? ctx.hookModel ?? "",
+              permission_mode: "default",
+              tool_name: request.name,
+              tool_input: request.input,
+              tool_use_id: request.context.toolCallId ?? "",
+            },
+            request.name,
+            request.context.toolAbortSignal,
+            hookMatcherAliases(request.name),
+          );
+          preHookContext = preHook.additionalContext;
+          if (preHook.preToolUse?.decision === "deny") {
+            return errorResult(
+              preHook.preToolUse.reason ??
+                `Tool '${request.name}' was blocked by a PreToolUse hook.`,
+              { status: "hook_blocked", tool: request.name },
+            );
+          }
+          if (
+            preHook.preToolUse?.updatedInput &&
+            typeof preHook.preToolUse.updatedInput === "object" &&
+            !Array.isArray(preHook.preToolUse.updatedInput)
+          ) {
+            request.input = {
+              ...(preHook.preToolUse.updatedInput as Record<string, unknown>),
+            };
+          }
+        }
         if (
           request.context.availableToolNames &&
           !request.context.availableToolNames.has(providerToolName)
@@ -2507,9 +2552,48 @@ export function createAgentToolRuntime(
                   pendingQuestionRecovery:
                     request.context.pendingQuestionRecovery,
                 });
-        const result = operationRoots
+        let result = operationRoots
           ? await withWorkspaceRoots(operationRoots, execute)
           : await execute();
+        if (hookRuntime) {
+          const postHook = await hookRuntime.postToolUse(
+            {
+              session_id: request.context.sessionId,
+              turn_id: hookTurnId,
+              transcript_path: null,
+              cwd:
+                request.context.hookCwd ?? ctx.hookCwd ?? ctx.projectRoot ?? "",
+              hook_event_name: "PostToolUse",
+              model: request.context.hookModel ?? ctx.hookModel ?? "",
+              permission_mode: "default",
+              tool_name: request.name,
+              tool_input: request.input,
+              tool_response: result,
+              tool_use_id: request.context.toolCallId ?? "",
+            },
+            request.name,
+            request.context.toolAbortSignal,
+            hookMatcherAliases(request.name),
+          );
+          const hookContext = [
+            ...preHookContext,
+            ...postHook.additionalContext,
+            ...postHook.feedback,
+            ...(postHook.block?.reason ? [postHook.block.reason] : []),
+          ];
+          if (hookContext.length > 0) {
+            result = {
+              ...result,
+              content: [
+                ...result.content,
+                {
+                  type: "text",
+                  text: `<hook_context event="PostToolUse">\n${hookContext.join("\n\n")}\n</hook_context>`,
+                },
+              ],
+            };
+          }
+        }
         const composeTrace = result.uiMeta?.composeTrace;
         const executeCommandMetrics =
           request.name === "execute_command"
@@ -2614,6 +2698,14 @@ export function createAgentToolRuntime(
       return ctx.mcpHub?.getServerConfig(serverName)?.toolDisclosure;
     },
   };
+}
+
+function hookMatcherAliases(toolName: string): readonly string[] {
+  if (toolName === "execute_command") return ["Bash", "Shell", "shell_command"];
+  if (toolName === "apply_diff" || toolName === "write_file") {
+    return ["apply_patch", "Edit", "Write"];
+  }
+  return [];
 }
 
 function pathsMatch(left: string, right: string): boolean {

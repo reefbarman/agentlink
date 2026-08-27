@@ -147,6 +147,7 @@ vi.mock("../../integrations/DiffViewProvider.js", () => ({
   ),
   snapshotDiagnostics: vi.fn(() => ({
     collectNewErrors: vi.fn(async () => undefined),
+    dispose: vi.fn(),
   })),
 }));
 
@@ -517,14 +518,116 @@ describe("createVscodeEditReviewProvider", () => {
     }
   });
 
-  it("reports when an interrupted proposal is already in the dirty buffer", async () => {
+  it("recovers when an interrupted proposal is already in the dirty buffer", async () => {
     const tempDir = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
     );
     const filePath = path.join(tempDir, "file.ts");
     fs.writeFileSync(filePath, "disk baseline", "utf-8");
+    let dirty = true;
     const doc = {
       getText: vi.fn(() => "proposed content"),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { fsPath: filePath },
+      get isDirty() {
+        return dirty;
+      },
+      save: vi.fn(async () => {
+        fs.writeFileSync(filePath, "proposed content", "utf-8");
+        dirty = false;
+        return true;
+      }),
+    };
+    textDocuments.push(doc);
+    openTextDocument.mockResolvedValue(doc);
+
+    try {
+      const provider = createVscodeEditReviewProvider();
+      const result = await provider.reviewAndApply({
+        mode: "auto",
+        absolutePath: filePath,
+        relativePath: "file.ts",
+        content: "proposed content",
+        outsideWorkspace: false,
+        diagnosticDelay: 0,
+        sessionId: "session-1",
+      });
+
+      expect(result).toMatchObject({
+        status: "accepted",
+        path: "file.ts",
+        recovered_dirty_buffer: "buffer_matched_proposal",
+        finalContent: "proposed content",
+      });
+      expect(applyEdit).not.toHaveBeenCalled();
+      expect(doc.save).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers when the dirty buffer byte-matches disk", async () => {
+    const tempDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
+    );
+    const filePath = path.join(tempDir, "file.ts");
+    fs.writeFileSync(filePath, "disk baseline", "utf-8");
+    let documentContent = "disk baseline";
+    let dirty = true;
+    const doc = {
+      getText: vi.fn(() => documentContent),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { fsPath: filePath },
+      get isDirty() {
+        return dirty;
+      },
+      save: vi.fn(async () => {
+        fs.writeFileSync(filePath, documentContent, "utf-8");
+        dirty = false;
+        return true;
+      }),
+    };
+    textDocuments.push(doc);
+    openTextDocument.mockResolvedValue(doc);
+    applyEdit.mockImplementationOnce(async () => {
+      documentContent = "proposed content";
+      dirty = true;
+      return true;
+    });
+
+    try {
+      const provider = createVscodeEditReviewProvider();
+      const result = await provider.reviewAndApply({
+        mode: "auto",
+        absolutePath: filePath,
+        relativePath: "file.ts",
+        content: "proposed content",
+        outsideWorkspace: false,
+        diagnosticDelay: 0,
+        sessionId: "session-1",
+      });
+
+      expect(result).toMatchObject({
+        status: "accepted",
+        path: "file.ts",
+        recovered_dirty_buffer: "buffer_matched_disk",
+        finalContent: "proposed content",
+      });
+      expect(applyEdit).toHaveBeenCalledOnce();
+      expect(doc.save).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not recover a normalized-only dirty buffer match", async () => {
+    const tempDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
+    );
+    const filePath = path.join(tempDir, "file.ts");
+    fs.writeFileSync(filePath, "baseline\r\n", "utf-8");
+    const doc = {
+      getText: vi.fn(() => "baseline\n"),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
       uri: { fsPath: filePath },
       isDirty: true,
@@ -547,11 +650,10 @@ describe("createVscodeEditReviewProvider", () => {
 
       expect(result).toMatchObject({
         reason: "dirty_document_conflict",
-        pending_buffer_matches_proposal: true,
-        next_steps: [
-          "The unsaved editor buffer already contains the proposed content. Save it in the editor, then re-read the file before continuing.",
-        ],
+        document_state: "matches_baseline",
       });
+      expect(result).not.toHaveProperty("recovered_dirty_buffer");
+      expect(applyEdit).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

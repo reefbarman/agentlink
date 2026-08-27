@@ -309,26 +309,28 @@ export class DiffViewProvider {
     }
     this.editType = fileExists ? "modify" : "create";
 
-    // Save dirty document if file exists
+    // Read the disk baseline before touching an existing editor buffer. A dirty
+    // buffer may be an orphaned AgentLink proposal; saving it here would run save
+    // participants before the user has approved the review.
+    this.originalContent = fileExists
+      ? await fs.readFile(this.absolutePath, "utf-8")
+      : "";
     if (fileExists) {
       const existingDoc = vscode.workspace.textDocuments.find(
         (doc) =>
           doc.uri.scheme === "file" && doc.uri.fsPath === this.absolutePath,
       );
-      if (existingDoc?.isDirty && !(await existingDoc.save())) {
-        throw new Error("Unable to save existing editor changes before review");
+      if (
+        existingDoc?.isDirty &&
+        existingDoc.getText() !== this.originalContent &&
+        existingDoc.getText() !== newContent
+      ) {
+        throw new Error("File has divergent unsaved editor changes");
       }
     }
 
     // Capture pre-edit diagnostics
     this.preDiagnostics = vscode.languages.getDiagnostics();
-
-    // Read original content
-    if (fileExists) {
-      this.originalContent = await fs.readFile(this.absolutePath, "utf-8");
-    } else {
-      this.originalContent = "";
-    }
 
     // Create directories for new files
     if (!fileExists) {
@@ -971,6 +973,7 @@ async function waitForVisibleFileEditor(
  */
 export function snapshotDiagnostics(filePath: string): {
   collectNewErrors: (delayMs: number) => Promise<string | undefined>;
+  dispose(): void;
 } {
   const preDiagnostics = vscode.languages.getDiagnostics();
 
@@ -982,6 +985,13 @@ export function snapshotDiagnostics(filePath: string): {
       gotEvent = true;
     }
   });
+
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    disposable.dispose();
+  };
 
   return {
     collectNewErrors(delayMs: number): Promise<string | undefined> {
@@ -995,8 +1005,9 @@ export function snapshotDiagnostics(filePath: string): {
             }
           }),
         collect: () => collectNewDiagnosticErrors(preDiagnostics),
-        eagerDisposables: [disposable],
+        eagerDisposables: [{ dispose }],
       });
     },
+    dispose,
   };
 }

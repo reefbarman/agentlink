@@ -337,6 +337,26 @@ export function createVscodeEditorRevealProvider(): EditorRevealProvider {
   };
 }
 
+type DirtyBufferRecovery = NonNullable<
+  EditReviewResult["recovered_dirty_buffer"]
+>;
+
+function reconcileDirtyDocument(params: {
+  document: vscode.TextDocument | undefined;
+  baselineContent: string;
+  proposedContent: string;
+}): DirtyBufferRecovery | undefined {
+  if (!params.document?.isDirty) return undefined;
+  const bufferContent = params.document.getText();
+  if (bufferContent === params.proposedContent) {
+    return "buffer_matched_proposal";
+  }
+  if (bufferContent === params.baselineContent) {
+    return "buffer_matched_disk";
+  }
+  return undefined;
+}
+
 function dirtyDocumentConflictResult(params: {
   document: vscode.TextDocument;
   absolutePath: string;
@@ -378,99 +398,110 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
       if (params.mode === "auto") {
         return await withFileLock(params.absolutePath, async () => {
           const snap = snapshotDiagnostics(params.absolutePath);
-
-          await fs.mkdir(path.dirname(params.absolutePath), {
-            recursive: true,
-          });
-
-          let baselineExists = true;
           try {
-            await fs.access(params.absolutePath);
-          } catch {
-            baselineExists = false;
-            if (params.allowCreate === false) {
-              return {
-                error: "File not found",
-                path: params.relativePath,
-              };
-            }
-            await fs.writeFile(params.absolutePath, "", "utf-8");
-          }
+            await fs.mkdir(path.dirname(params.absolutePath), {
+              recursive: true,
+            });
 
-          const baselineContent = baselineExists
-            ? await fs.readFile(params.absolutePath, "utf-8")
-            : "";
-          let content = params.content;
-          if (params.prepareContent) {
-            const prepared = await params.prepareContent(baselineContent);
-            if (prepared.status === "abort") {
-              return prepared.result;
+            let baselineExists = true;
+            try {
+              await fs.access(params.absolutePath);
+            } catch {
+              baselineExists = false;
+              if (params.allowCreate === false) {
+                return {
+                  error: "File not found",
+                  path: params.relativePath,
+                };
+              }
+              await fs.writeFile(params.absolutePath, "", "utf-8");
             }
-            content = prepared.content;
-          }
 
-          const doc = await vscode.workspace.openTextDocument(
-            params.absolutePath,
-          );
-          if (doc.isDirty) {
-            return dirtyDocumentConflictResult({
+            const baselineContent = baselineExists
+              ? await fs.readFile(params.absolutePath, "utf-8")
+              : "";
+            let content = params.content;
+            if (params.prepareContent) {
+              const prepared = await params.prepareContent(baselineContent);
+              if (prepared.status === "abort") {
+                return prepared.result;
+              }
+              content = prepared.content;
+            }
+
+            const doc = await vscode.workspace.openTextDocument(
+              params.absolutePath,
+            );
+            const recoveredDirtyBuffer = reconcileDirtyDocument({
               document: doc,
-              absolutePath: params.absolutePath,
-              relativePath: params.relativePath,
               baselineContent,
               proposedContent: content,
             });
-          }
-          await vscode.window.showTextDocument(
-            doc,
-            withPrimaryEditorColumn({
-              preview: false,
-              preserveFocus: true,
-            }),
-          );
-
-          if (doc.getText() !== content) {
-            const edit = new vscode.WorkspaceEdit();
-            edit.replace(
-              doc.uri,
-              new vscode.Range(
-                doc.positionAt(0),
-                doc.positionAt(doc.getText().length),
-              ),
-              content,
-            );
-            const applied = await vscode.workspace.applyEdit(edit);
-            if (!applied) {
-              return {
-                error: "File edit failed",
-                path: params.relativePath,
-                reason: "apply_edit_failed",
-                ...(await diagnoseEditApplyFailure({
-                  absolutePath: params.absolutePath,
-                  baselineContent,
-                  document: doc,
-                })),
-              };
+            if (doc.isDirty && !recoveredDirtyBuffer) {
+              return dirtyDocumentConflictResult({
+                document: doc,
+                absolutePath: params.absolutePath,
+                relativePath: params.relativePath,
+                baselineContent,
+                proposedContent: content,
+              });
             }
+            await vscode.window.showTextDocument(
+              doc,
+              withPrimaryEditorColumn({
+                preview: false,
+                preserveFocus: true,
+              }),
+            );
+
+            if (doc.getText() !== content) {
+              const edit = new vscode.WorkspaceEdit();
+              edit.replace(
+                doc.uri,
+                new vscode.Range(
+                  doc.positionAt(0),
+                  doc.positionAt(doc.getText().length),
+                ),
+                content,
+              );
+              const applied = await vscode.workspace.applyEdit(edit);
+              if (!applied) {
+                return {
+                  error: "File edit failed",
+                  path: params.relativePath,
+                  reason: "apply_edit_failed",
+                  ...(await diagnoseEditApplyFailure({
+                    absolutePath: params.absolutePath,
+                    baselineContent,
+                    document: doc,
+                  })),
+                };
+              }
+            }
+            const commit = await commitAndVerifyEdit({
+              document: doc,
+              absolutePath: params.absolutePath,
+              relativePath: params.relativePath,
+              baselineExists,
+              baselineContent,
+              approvedContent: content,
+              reviewState: "dirty_document_preserved",
+              saveWithoutFormatting: params.saveWithoutFormatting,
+            });
+            const newDiagnostics = await snap.collectNewErrors(
+              params.diagnosticDelay,
+            );
+            return {
+              ...commit,
+              operation: params.operation ?? "auto-approved",
+              ...(recoveredDirtyBuffer
+                ? { recovered_dirty_buffer: recoveredDirtyBuffer }
+                : {}),
+              ...(newDiagnostics ? { new_diagnostics: newDiagnostics } : {}),
+            };
+          } finally {
+            snap.dispose();
           }
-          const commit = await commitAndVerifyEdit({
-            document: doc,
-            absolutePath: params.absolutePath,
-            relativePath: params.relativePath,
-            baselineExists,
-            baselineContent,
-            approvedContent: content,
-            reviewState: "dirty_document_preserved",
-            saveWithoutFormatting: params.saveWithoutFormatting,
-          });
-          const newDiagnostics = await snap.collectNewErrors(
-            params.diagnosticDelay,
-          );
-          return {
-            ...commit,
-            operation: params.operation ?? "auto-approved",
-            ...(newDiagnostics ? { new_diagnostics: newDiagnostics } : {}),
-          };
         });
       }
 
@@ -494,21 +525,26 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
         };
 
         let baseline = await readBaseline();
-        const existingDocument = baseline.exists
+        let existingDocument = baseline.exists
           ? await vscode.workspace.openTextDocument(params.absolutePath)
           : undefined;
-        if (existingDocument?.isDirty) {
+        let prepared = await prepare(baseline.content);
+        if (prepared.status === "abort") return prepared.result;
+        let content = prepared.content;
+        let recoveredDirtyBuffer = reconcileDirtyDocument({
+          document: existingDocument,
+          baselineContent: baseline.content,
+          proposedContent: content,
+        });
+        if (existingDocument?.isDirty && !recoveredDirtyBuffer) {
           return dirtyDocumentConflictResult({
             document: existingDocument,
             absolutePath: params.absolutePath,
             relativePath: params.relativePath,
             baselineContent: baseline.content,
-            proposedContent: params.content,
+            proposedContent: content,
           });
         }
-        let prepared = await prepare(baseline.content);
-        if (prepared.status === "abort") return prepared.result;
-        let content = prepared.content;
 
         if (params.outsideWorkspace && params.prepareOneShotAuthorization) {
           const proposal = {
@@ -521,6 +557,9 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
             await params.prepareOneShotAuthorization(proposal);
           if (authorization) {
             baseline = await readBaseline();
+            existingDocument = baseline.exists
+              ? await vscode.workspace.openTextDocument(params.absolutePath)
+              : undefined;
             prepared = await prepare(baseline.content);
             if (prepared.status === "abort") return prepared.result;
             content = prepared.content;
@@ -530,75 +569,97 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
               baselineContent: baseline.content,
               proposedContent: content,
             };
-            if (
-              !existingDocument?.isDirty &&
-              authorization.consume(currentProposal)
-            ) {
-              const snap = snapshotDiagnostics(params.absolutePath);
-              await fs.mkdir(path.dirname(params.absolutePath), {
-                recursive: true,
-              });
-              if (!baseline.exists) {
-                if (params.allowCreate === false) {
-                  return {
-                    error: "File not found",
-                    path: params.relativePath,
-                  };
-                }
-                await fs.writeFile(params.absolutePath, "", "utf-8");
-              }
-              const doc =
-                existingDocument ??
-                (await vscode.workspace.openTextDocument(params.absolutePath));
-              await vscode.window.showTextDocument(
-                doc,
-                withPrimaryEditorColumn({
-                  preview: false,
-                  preserveFocus: true,
-                }),
-              );
-              if (doc.getText() !== content) {
-                const edit = new vscode.WorkspaceEdit();
-                edit.replace(
-                  doc.uri,
-                  new vscode.Range(
-                    doc.positionAt(0),
-                    doc.positionAt(doc.getText().length),
-                  ),
-                  content,
-                );
-                if (!(await vscode.workspace.applyEdit(edit))) {
-                  return {
-                    error: "File edit failed",
-                    path: params.relativePath,
-                    reason: "apply_edit_failed",
-                    ...(await diagnoseEditApplyFailure({
-                      absolutePath: params.absolutePath,
-                      baselineContent: baseline.content,
-                      document: doc,
-                    })),
-                  };
-                }
-              }
-              const commit = await commitAndVerifyEdit({
-                document: doc,
+            recoveredDirtyBuffer = reconcileDirtyDocument({
+              document: existingDocument,
+              baselineContent: baseline.content,
+              proposedContent: content,
+            });
+            if (existingDocument?.isDirty && !recoveredDirtyBuffer) {
+              return dirtyDocumentConflictResult({
+                document: existingDocument,
                 absolutePath: params.absolutePath,
                 relativePath: params.relativePath,
-                baselineExists: baseline.exists,
                 baselineContent: baseline.content,
-                approvedContent: content,
-                reviewState: "dirty_document_preserved",
-                saveWithoutFormatting: params.saveWithoutFormatting,
+                proposedContent: content,
               });
-              const newDiagnostics = await snap.collectNewErrors(
-                params.diagnosticDelay,
-              );
-              return {
-                ...commit,
-                operation: params.operation ?? "auto-approved",
-                authorization: authorization.authorization,
-                ...(newDiagnostics ? { new_diagnostics: newDiagnostics } : {}),
-              };
+            }
+            if (authorization.consume(currentProposal)) {
+              const snap = snapshotDiagnostics(params.absolutePath);
+              try {
+                await fs.mkdir(path.dirname(params.absolutePath), {
+                  recursive: true,
+                });
+                if (!baseline.exists) {
+                  if (params.allowCreate === false) {
+                    return {
+                      error: "File not found",
+                      path: params.relativePath,
+                    };
+                  }
+                  await fs.writeFile(params.absolutePath, "", "utf-8");
+                }
+                const doc =
+                  existingDocument ??
+                  (await vscode.workspace.openTextDocument(
+                    params.absolutePath,
+                  ));
+                await vscode.window.showTextDocument(
+                  doc,
+                  withPrimaryEditorColumn({
+                    preview: false,
+                    preserveFocus: true,
+                  }),
+                );
+                if (doc.getText() !== content) {
+                  const edit = new vscode.WorkspaceEdit();
+                  edit.replace(
+                    doc.uri,
+                    new vscode.Range(
+                      doc.positionAt(0),
+                      doc.positionAt(doc.getText().length),
+                    ),
+                    content,
+                  );
+                  if (!(await vscode.workspace.applyEdit(edit))) {
+                    return {
+                      error: "File edit failed",
+                      path: params.relativePath,
+                      reason: "apply_edit_failed",
+                      ...(await diagnoseEditApplyFailure({
+                        absolutePath: params.absolutePath,
+                        baselineContent: baseline.content,
+                        document: doc,
+                      })),
+                    };
+                  }
+                }
+                const commit = await commitAndVerifyEdit({
+                  document: doc,
+                  absolutePath: params.absolutePath,
+                  relativePath: params.relativePath,
+                  baselineExists: baseline.exists,
+                  baselineContent: baseline.content,
+                  approvedContent: content,
+                  reviewState: "dirty_document_preserved",
+                  saveWithoutFormatting: params.saveWithoutFormatting,
+                });
+                const newDiagnostics = await snap.collectNewErrors(
+                  params.diagnosticDelay,
+                );
+                return {
+                  ...commit,
+                  operation: params.operation ?? "auto-approved",
+                  authorization: authorization.authorization,
+                  ...(recoveredDirtyBuffer
+                    ? { recovered_dirty_buffer: recoveredDirtyBuffer }
+                    : {}),
+                  ...(newDiagnostics
+                    ? { new_diagnostics: newDiagnostics }
+                    : {}),
+                };
+              } finally {
+                snap.dispose();
+              }
             }
           }
         }
@@ -626,6 +687,9 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
             )),
             decision,
             writeApprovalResponse: diffView.writeApprovalResponse,
+            ...(recoveredDirtyBuffer
+              ? { recovered_dirty_buffer: recoveredDirtyBuffer }
+              : {}),
           };
         }
 
@@ -633,6 +697,9 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
           ...(await diffView.saveChanges()),
           decision,
           writeApprovalResponse: diffView.writeApprovalResponse,
+          ...(recoveredDirtyBuffer
+            ? { recovered_dirty_buffer: recoveredDirtyBuffer }
+            : {}),
         };
       });
     },

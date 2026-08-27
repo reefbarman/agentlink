@@ -8,12 +8,15 @@ export interface PreviewImage {
   mimeType?: string;
 }
 
+export type OpenImageInEditor = (image: PreviewImage) => void;
+
 interface ImagePreviewProps {
   image: PreviewImage;
   alt: string;
   className: string;
   buttonClassName: string;
   loading?: "eager" | "lazy";
+  onOpenInEditor?: OpenImageInEditor;
   showDownload?: boolean;
 }
 
@@ -29,6 +32,7 @@ export function ImagePreview({
   className,
   buttonClassName,
   loading,
+  onOpenInEditor,
   showDownload = false,
 }: ImagePreviewProps) {
   const [expanded, setExpanded] = useState(false);
@@ -92,6 +96,20 @@ export function ImagePreview({
             >
               <div class="user-image-lightbox-header">
                 <span class="user-image-lightbox-title">{label}</span>
+                {onOpenInEditor && (
+                  <button
+                    class="icon-button user-image-lightbox-open-editor"
+                    type="button"
+                    title="Open in Editor"
+                    aria-label="Open image in editor"
+                    onClick={() => {
+                      onOpenInEditor(image);
+                      setExpanded(false);
+                    }}
+                  >
+                    <i class="codicon codicon-open-preview" />
+                  </button>
+                )}
                 {showDownload && (
                   <a
                     class="icon-button user-image-lightbox-download"

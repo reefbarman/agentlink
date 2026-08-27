@@ -237,6 +237,14 @@ import { canonicalizePath, isPathWithinRoot } from "../util/paths.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 import { randomId } from "../shared/randomId.js";
 import {
+  countVisibleUserMessages,
+  getLegacyTodoContinuationIndexes,
+  getVisibleUserMessageIndexes,
+  migrateLegacyTodoContinuationTurnIndex,
+  TODO_AUTO_CONTINUE_PROMPT,
+} from "../shared/todoContinuation.js";
+import type { HookRuntime } from "../core/hooks/HookRuntime.js";
+import {
   buildDeterministicSessionHandoffMarkdown,
   buildSessionHandoffSourcePack,
   isSessionHandoffDraftFresh,
@@ -431,6 +439,8 @@ const BUDGET_HARD_LIMIT_RATIO = 3;
 interface PreparedTurnExecution {
   context: Readonly<ToolDispatchContext> | undefined;
   policy: Readonly<CoreResolvedWebAccessPolicy>;
+  hookRuntime?: HookRuntime;
+  hookTurnId: string;
   mcpToolDisclosure: Readonly<McpToolDisclosurePartition>;
   mcpToolDefinitions: readonly import("./providers/types.js").ToolDefinition[];
   mutationLeaseHolder: WorkspaceMutationLeaseHolder;
@@ -781,6 +791,8 @@ export class AgentSessionManager {
   private handoffDrafts = new Map<string, SessionHandoffDraft>();
   private handoffCommittedSuccessors = new Map<string, string>();
   private resumingInterruptedSessions = new Set<string>();
+  private readonly hookStartedSessions = new Set<string>();
+  private readonly hookSessionRuntimes = new Map<string, HookRuntime>();
   private log?: (msg: string) => void;
   private readonly host: AgentSessionManagerHost;
   private readonly projectCatalog: ProjectScopeResolver;
@@ -791,6 +803,9 @@ export class AgentSessionManager {
     | undefined;
   private readonly agentPluginCatalogProvider:
     | NonNullable<AgentSessionManagerOptions["agentPluginCatalogProvider"]>
+    | undefined;
+  private readonly hookRuntimeProvider:
+    | NonNullable<AgentSessionManagerOptions["hookRuntimeProvider"]>
     | undefined;
   private readonly legacyProjectScope: SessionProjectScope | undefined;
   private readonly executionUnavailableReason: string | undefined;
@@ -1101,6 +1116,7 @@ export class AgentSessionManager {
     this.projectMcpHubRegistry = opts?.projectMcpHubRegistry;
     this.skillCatalogFallbackProvider = opts?.skillCatalogFallbackProvider;
     this.agentPluginCatalogProvider = opts?.agentPluginCatalogProvider;
+    this.hookRuntimeProvider = opts?.hookRuntimeProvider;
     this.executionUnavailableReason = opts?.executionUnavailableReason;
     this.terminalProviderForSession = opts?.terminalProviderForSession;
     this.browserPreferredProjectId = opts?.browserPreferredProjectId;
@@ -1799,6 +1815,10 @@ export class AgentSessionManager {
     context.mcpHubLease?.release();
   }
 
+  invalidateHookConfiguration(projectId?: string): void {
+    this.hookRuntimeProvider?.invalidate(projectId);
+  }
+
   setToolContext(ctx: ToolDispatchContext): void {
     // This is a window-level capability source only. Active requests capture a
     // project-bound snapshot and must not be mutated when the source changes.
@@ -2284,9 +2304,74 @@ export class AgentSessionManager {
             })
           : context;
 
+      const hookTurnId = crypto.randomUUID();
+      const hookRuntime = this.hookRuntimeProvider
+        ? await this.hookRuntimeProvider.getRuntime(
+            session.projectScope,
+            session.id,
+          )
+        : undefined;
+      const hookApprovalRequest = requestContext?.onApprovalRequest
+        ? async (
+            request: InlineApprovalRequest,
+            sessionId?: string,
+          ): Promise<
+            | string
+            | {
+                decision: string;
+                rejectionReason?: string;
+                followUp?: string;
+              }
+          > => {
+            if (hookRuntime) {
+              const hook = await hookRuntime.dispatch({
+                event: "PermissionRequest",
+                matcherValue: request.kind,
+                input: {
+                  session_id: session.id,
+                  turn_id: hookTurnId,
+                  transcript_path: null,
+                  cwd: session.requireProjectRoot(),
+                  hook_event_name: "PermissionRequest",
+                  model: session.model,
+                  permission_mode: "default",
+                  tool_name: request.kind,
+                  tool_input: request,
+                },
+              });
+              if (hook.permissionRequest?.decision === "deny") {
+                const denialDecision =
+                  request.choices.find((choice) => choice.isDanger)?.value ??
+                  request.choices.find((choice) =>
+                    /^(?:reject|deny|disable)/u.test(choice.value),
+                  )?.value ??
+                  "reject";
+                return {
+                  decision: denialDecision,
+                  rejectionReason:
+                    hook.permissionRequest.reason ??
+                    "Approval was denied by a PermissionRequest hook.",
+                };
+              }
+            }
+            return requestContext.onApprovalRequest!(request, sessionId);
+          }
+        : undefined;
+      const hookedContext = requestContext
+        ? Object.freeze({
+            ...requestContext,
+            onApprovalRequest: hookApprovalRequest,
+            hookRuntime,
+            hookTurnId,
+            hookModel: session.model,
+            hookCwd: session.requireProjectRoot(),
+          })
+        : requestContext;
       const preparedTurn: PreparedTurnExecution = Object.freeze({
-        context: requestContext,
+        context: hookedContext,
         policy: deepFreeze(policy),
+        hookRuntime,
+        hookTurnId,
         mcpToolDisclosure: deepFreeze(mcpToolDisclosure),
         mcpToolDefinitions: deepFreeze(mcpTools),
         mutationLeaseHolder,
@@ -6163,6 +6248,8 @@ export class AgentSessionManager {
           webAccessPolicy: preparedTurn.policy,
           mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
           mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
+          hookRuntime: preparedTurn.hookRuntime,
+          hookTurnId: preparedTurn.hookTurnId,
           onModelFallback: async ({ effectiveModel }) => {
             await this.reconcileRuntimeModelFallback(session, effectiveModel);
             session.systemPrompt = btwSystemPrompt;
@@ -6491,6 +6578,58 @@ export class AgentSessionManager {
         );
 
         try {
+          const hookRuntime = preparedTurn.hookRuntime;
+          let hookDisplayText: string | undefined;
+          const hookBase = {
+            session_id: session.id,
+            turn_id: preparedTurn.hookTurnId,
+            transcript_path: null,
+            cwd: session.projectScope?.rootPath ?? this.cwd,
+            model: session.model,
+            permission_mode: "default",
+          };
+          if (hookRuntime && !this.hookStartedSessions.has(session.id)) {
+            const source = session.messageCount === 0 ? "startup" : "resume";
+            const started = await hookRuntime.sessionStart({
+              ...hookBase,
+              hook_event_name: "SessionStart",
+              source,
+            });
+            this.hookStartedSessions.add(session.id);
+            this.hookSessionRuntimes.set(session.id, hookRuntime);
+            if (started.additionalContext.length > 0) {
+              hookDisplayText ??= text;
+              text = `${text}\n\n<hook_context event="SessionStart">\n${started.additionalContext.join("\n\n")}\n</hook_context>`;
+            }
+            if (started.block) {
+              throw new Error(
+                started.block.reason ??
+                  "Session start was blocked by a lifecycle hook.",
+              );
+            }
+          }
+          if (
+            hookRuntime &&
+            !opts?.skipUserMessage &&
+            !opts?.internalInterjection &&
+            (opts?.origin === "vscode" || opts?.origin === "browser")
+          ) {
+            const submitted = await hookRuntime.userPromptSubmit({
+              ...hookBase,
+              hook_event_name: "UserPromptSubmit",
+              prompt: text,
+            });
+            if (submitted.block) {
+              throw new Error(
+                submitted.block.reason ??
+                  "User prompt was blocked by a lifecycle hook.",
+              );
+            }
+            if (submitted.additionalContext.length > 0) {
+              hookDisplayText ??= text;
+              text = `${text}\n\n<hook_context event="UserPromptSubmit">\n${submitted.additionalContext.join("\n\n")}\n</hook_context>`;
+            }
+          }
           // Update reasoning effort. Legacy callers can still send thinkingEnabled.
           if (opts?.reasoningEffort) {
             session.reasoningEffort = opts.reasoningEffort;
@@ -6512,11 +6651,7 @@ export class AgentSessionManager {
           // `turnIndex` here means "how many visible user turns already exist at this
           // snapshot". Example: immediately before the second user message, turnIndex=1.
           // In the UI that checkpoint is displayed on the first user message.
-          const turnIndex = session
-            .getAllMessages()
-            .filter(
-              (m) => m.role === "user" && typeof m.content === "string",
-            ).length;
+          const turnIndex = countVisibleUserMessages(session.getAllMessages());
           await this.ensureCheckpointForTurn(session, turnIndex, {
             refreshExisting: true,
           });
@@ -6546,7 +6681,7 @@ export class AgentSessionManager {
               : [
                   {
                     text,
-                    displayText: opts?.displayText,
+                    displayText: opts?.displayText ?? hookDisplayText,
                     isSlashCommand: opts?.isSlashCommand,
                     slashCommandLabel: opts?.slashCommandLabel,
                     origin: opts?.origin,
@@ -6672,6 +6807,8 @@ export class AgentSessionManager {
                 webAccessPolicy: preparedTurn.policy,
                 mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
                 mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
+                hookRuntime: preparedTurn.hookRuntime,
+                hookTurnId: preparedTurn.hookTurnId,
                 onPendingToolTurn: (assistantMessage) =>
                   this.persistPendingToolTurn(session, assistantMessage),
                 onAssistantTurnCommitted: () =>
@@ -6716,12 +6853,7 @@ export class AgentSessionManager {
                   // The interjection is already present in the transcript here, so
                   // length - 1 gives the index of that injected user turn.
                   const interjectionTurnIndex =
-                    session
-                      .getAllMessages()
-                      .filter(
-                        (m) =>
-                          m.role === "user" && typeof m.content === "string",
-                      ).length - 1;
+                    countVisibleUserMessages(session.getAllMessages()) - 1;
                   await this.ensureCheckpointForTurn(
                     session,
                     interjectionTurnIndex,
@@ -6747,6 +6879,29 @@ export class AgentSessionManager {
                   totalCacheCreationTokens: session.totalCacheCreationTokens,
                 });
                 break;
+              }
+
+              if (
+                naturalDone &&
+                hookRuntime &&
+                autoContinueCount < MAX_AUTO_CONTINUE
+              ) {
+                const stopHook = await hookRuntime.stop({
+                  ...hookBase,
+                  hook_event_name: "Stop",
+                  stop_hook_active: autoContinueCount > 0,
+                  last_assistant_message:
+                    session.getLastAssistantText() ?? null,
+                });
+                if (stopHook.stop?.continue) {
+                  autoContinueCount++;
+                  session.addUserMessage(
+                    stopHook.stop.reason ??
+                      "A Stop lifecycle hook requested another agent pass.",
+                  );
+                  session.status = "streaming";
+                  continue;
+                }
               }
 
               const modeResumePrompt = naturalDone
@@ -6790,18 +6945,16 @@ export class AgentSessionManager {
                 this.log?.(
                   `[agent] auto-continuing (${autoContinueCount}/${MAX_AUTO_CONTINUE}): pending todos remain`,
                 );
-                session.addUserMessage(
-                  "You stopped but the TODO list still has unfinished items. Before doing more work, reconcile the complete list against the conversation and current workspace: mark already-finished items completed, revise or remove obsolete items, and keep exactly one actual current item in progress. Do not redo completed work merely because its TODO status is stale. Then continue the genuine remaining work.",
-                );
+                session.addUserMessage(TODO_AUTO_CONTINUE_PROMPT, {
+                  hidden: true,
+                });
                 session.status = "streaming";
                 continue;
               }
 
-              const completedTurnIndex = session
-                .getAllMessages()
-                .filter(
-                  (m) => m.role === "user" && typeof m.content === "string",
-                ).length;
+              const completedTurnIndex = countVisibleUserMessages(
+                session.getAllMessages(),
+              );
               await this.ensureCheckpointForTurn(session, completedTurnIndex);
               if (!session.background) {
                 session.runState = undefined;
@@ -6970,6 +7123,19 @@ export class AgentSessionManager {
    * agents that the session already owns.
    */
   interruptSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    const context = this.activeRequestToolContexts.get(sessionId);
+    if (session && context?.hookRuntime) {
+      void context.hookRuntime.interrupt({
+        session_id: session.id,
+        turn_id: context.hookTurnId ?? "",
+        transcript_path: null,
+        cwd: session.projectScope.rootPath ?? "",
+        hook_event_name: "Interrupt",
+        model: session.model,
+        permission_mode: "default",
+      });
+    }
     this.stopSingleSession(sessionId);
   }
 
@@ -7290,6 +7456,8 @@ export class AgentSessionManager {
             webAccessPolicy: preparedTurn.policy,
             mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
             mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
+            hookRuntime: preparedTurn.hookRuntime,
+            hookTurnId: preparedTurn.hookTurnId,
             onPendingToolTurn: (assistantMessage) =>
               this.persistPendingToolTurn(session, assistantMessage),
             onAssistantTurnCommitted: () =>
@@ -7690,9 +7858,7 @@ export class AgentSessionManager {
     if (!session) return null;
     this.requireSessionExecution(session);
 
-    const turnIndex = session
-      .getAllMessages()
-      .filter((m) => m.role === "user" && typeof m.content === "string").length;
+    const turnIndex = countVisibleUserMessages(session.getAllMessages());
     if (turnIndex === 0) return null;
 
     return this.ensureCheckpointForTurn(session, turnIndex, {
@@ -8057,26 +8223,17 @@ export class AgentSessionManager {
     checkpoint: Checkpoint,
   ): { messages: AgentMessage[]; restoredPrompt?: string } | null {
     const allMessages = session.getAllMessages();
-    let restoredPrompt: string | undefined;
-    let userCount = 0;
-    let keepUntil = allMessages.length;
-    for (let i = 0; i < allMessages.length; i++) {
-      const message = allMessages[i];
-      if (message.role === "user" && typeof message.content === "string") {
-        if (userCount === checkpoint.turnIndex) {
-          restoredPrompt = message.content;
-          keepUntil = i;
-          break;
-        }
-        userCount++;
-      }
-    }
-    if (
-      keepUntil === allMessages.length &&
-      userCount !== checkpoint.turnIndex
-    ) {
-      return null;
-    }
+    const visibleUserIndexes = getVisibleUserMessageIndexes(allMessages);
+    if (checkpoint.turnIndex > visibleUserIndexes.length) return null;
+
+    const keepUntil =
+      visibleUserIndexes[checkpoint.turnIndex] ?? allMessages.length;
+    const restoredMessage = allMessages[keepUntil];
+    const restoredPrompt =
+      restoredMessage?.role === "user" &&
+      typeof restoredMessage.content === "string"
+        ? restoredMessage.content
+        : undefined;
     return { messages: allMessages.slice(0, keepUntil), restoredPrompt };
   }
 
@@ -8431,17 +8588,41 @@ export class AgentSessionManager {
     if (existing) return existing;
 
     const { summary, messages, metadata } = readResult.value;
+    const checkpointState = metadata.checkpointState;
+    const legacyTodoContinuationIndexes =
+      getLegacyTodoContinuationIndexes(messages);
+    const migratedMessages =
+      legacyTodoContinuationIndexes.size === 0
+        ? messages
+        : messages.map((message, index) =>
+            legacyTodoContinuationIndexes.has(index)
+              ? {
+                  ...message,
+                  uiHint: {
+                    ...message.uiHint,
+                    userMessage: {
+                      ...message.uiHint?.userMessage,
+                      hidden: true,
+                    },
+                  },
+                }
+              : message,
+          );
     this.sessionRevisions.set(sessionId, readResult.revision);
     const session = await this.createRestoredSession({ summary, metadata });
     this.sessionApprovalModes.set(sessionId, restoredApprovalMode(metadata));
     const projectId = session.projectScope.projectId;
-    const checkpointState = metadata.checkpointState;
     const restoredCheckpoints =
       checkpointState?.projectId !== undefined &&
       checkpointState.projectId !== projectId
         ? []
         : (checkpointState?.checkpoints ?? []).map((checkpoint) => ({
             ...checkpoint,
+            turnIndex: migrateLegacyTodoContinuationTurnIndex(
+              messages,
+              legacyTodoContinuationIndexes,
+              checkpoint.turnIndex,
+            ),
             projectId: checkpoint.projectId ?? projectId,
           }));
     this.checkpoints.set(sessionId, restoredCheckpoints);
@@ -8459,7 +8640,7 @@ export class AgentSessionManager {
     }
 
     const interruptedRunRecovery = recoverInterruptedRunMessages(
-      messages,
+      migratedMessages,
       metadata.runState,
     );
     session.restoreFromStore({
@@ -8493,7 +8674,10 @@ export class AgentSessionManager {
     this.reconcileRestoredSessionApproval(session);
     this.updateSkillCatalogFallback(session);
     this.syncSessionApproveForMe(session);
-    if (interruptedRunRecovery.changed) {
+    if (
+      interruptedRunRecovery.changed ||
+      legacyTodoContinuationIndexes.size > 0
+    ) {
       await this.saveSessionNow(session.id);
     }
     return session;
@@ -8781,6 +8965,9 @@ export class AgentSessionManager {
       return { ok: false, operation: "delete", reason: "not_found" };
     }
 
+    const hookStarted = this.hookStartedSessions.delete(sessionId);
+    const sessionHookRuntime = this.hookSessionRuntimes.get(sessionId);
+    this.hookSessionRuntimes.delete(sessionId);
     this.sessionRevisions.delete(sessionId);
     this.sessionSaveQueues.delete(sessionId);
     this.pendingDeferredSaves.delete(sessionId);
@@ -8796,6 +8983,15 @@ export class AgentSessionManager {
     );
     const removedSession = this.sessions.get(sessionId);
     if (removedSession) {
+      if (hookStarted && sessionHookRuntime) {
+        await sessionHookRuntime.sessionEnd({
+          session_id: removedSession.id,
+          transcript_path: null,
+          cwd: removedSession.projectScope.rootPath ?? this.cwd,
+          hook_event_name: "SessionEnd",
+          reason: "other",
+        });
+      }
       this.sessions.delete(sessionId);
       this.removeSkillCatalogFallback(removedSession);
       if (this.foregroundId === sessionId) {
@@ -9088,6 +9284,49 @@ export class AgentSessionManager {
     });
   }
 
+  private async dispatchSubagentLifecycleHook(
+    session: AgentSession,
+    event: "SubagentStart" | "SubagentStop",
+  ): Promise<void> {
+    const runtime = await this.hookRuntimeProvider?.getRuntime(
+      session.projectScope,
+      session.id,
+    );
+    if (!runtime) return;
+    const meta = this.bgMeta.get(session.id);
+    const parentSessionId =
+      session.fleetMetadata?.parentSessionId ??
+      session.fleetMetadata?.rootSessionId ??
+      session.id;
+    const result = await runtime.dispatch({
+      event,
+      matcherValue: meta?.taskClass ?? meta?.resolvedMode,
+      input: {
+        session_id: parentSessionId,
+        turn_id: session.id,
+        transcript_path: null,
+        ...(event === "SubagentStop" ? { agent_transcript_path: null } : {}),
+        cwd: session.projectScope.rootPath ?? this.cwd,
+        hook_event_name: event,
+        model: session.model,
+        permission_mode: "default",
+        agent_id: session.id,
+        agent_type: meta?.taskClass ?? meta?.resolvedMode ?? session.mode,
+        ...(event === "SubagentStop"
+          ? {
+              stop_hook_active: false,
+              last_assistant_message: session.getLastAssistantText() ?? null,
+            }
+          : {}),
+      },
+    });
+    if (event === "SubagentStart" && result.additionalContext.length > 0) {
+      session.addUserMessage(
+        `<hook_context event="SubagentStart">\n${result.additionalContext.join("\n\n")}\n</hook_context>`,
+      );
+    }
+  }
+
   private scheduleBackgroundLaunch(
     session: AgentSession,
     start: () => Promise<void>,
@@ -9112,6 +9351,9 @@ export class AgentSessionManager {
           }, delayMs),
         );
         this.bgSafetyTimers.set(session.id, timers);
+      }
+      if (this.hookRuntimeProvider) {
+        await this.dispatchSubagentLifecycleHook(session, "SubagentStart");
       }
       await start();
     };
@@ -10525,6 +10767,8 @@ export class AgentSessionManager {
           webAccessPolicy: preparedTurn.policy,
           mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
           mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
+          hookRuntime: preparedTurn.hookRuntime,
+          hookTurnId: preparedTurn.hookTurnId,
           inheritedSkillAuthority: inheritedSkillAuthoritySnapshot,
           onModelFallback: ({ effectiveModel }) =>
             this.reconcileRuntimeModelFallback(session, effectiveModel),
@@ -12264,6 +12508,9 @@ export class AgentSessionManager {
         fleet.terminalReason,
         { deferPublish: true },
       );
+    }
+    if (this.hookRuntimeProvider) {
+      await this.dispatchSubagentLifecycleHook(session, "SubagentStop");
     }
     await this.saveSessionNow(session.id);
     if (terminalEvent) this.publishFleetEvent(session.id, terminalEvent);

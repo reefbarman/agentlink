@@ -15,6 +15,7 @@ import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import type { ChatMessage } from "../types";
 import type { ComponentChildren } from "preact";
 import type { DetectedQuestion } from "../questionDetection";
+import type { OpenImageInEditor } from "./ImagePreview";
 import { TranscriptMessageList } from "./TranscriptMessageList";
 import { useAutoScroll } from "./useAutoScroll";
 
@@ -27,6 +28,7 @@ interface ChatViewProps {
   onDetectedQuestionAnswer?: (payload: string) => void;
   onDismissDetectedQuestion?: (messageId: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
+  onOpenImageInEditor?: OpenImageInEditor;
   onRevealToolCallTerminal?: (id: string) => void;
   onContinueToolCallInBackground?: (id: string) => void;
   onCompleteToolCall?: (id: string) => void;
@@ -77,6 +79,7 @@ export function ChatView({
   onDetectedQuestionAnswer,
   onDismissDetectedQuestion,
   onOpenFile,
+  onOpenImageInEditor,
   onRevealToolCallTerminal,
   onContinueToolCallInBackground,
   onCompleteToolCall,
@@ -293,6 +296,7 @@ export function ChatView({
             onDetectedQuestionAnswer={onDetectedQuestionAnswer}
             onDismissDetectedQuestion={onDismissDetectedQuestion}
             onOpenFile={onOpenFile}
+            onOpenImageInEditor={onOpenImageInEditor}
             onRevealToolCallTerminal={onRevealToolCallTerminal}
             onContinueToolCallInBackground={onContinueToolCallInBackground}
             onCompleteToolCall={onCompleteToolCall}

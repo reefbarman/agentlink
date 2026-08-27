@@ -820,6 +820,7 @@ export class AgentSession {
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
       origin?: "vscode" | "browser";
+      hidden?: boolean;
       handoff?: NonNullable<NonNullable<AgentMessage["uiHint"]>["handoff"]>;
       images?: Array<{ name: string; mimeType: string; base64: string }>;
       documents?: Array<{ name: string; mimeType: string; base64: string }>;
@@ -843,13 +844,15 @@ export class AgentSession {
         opts.isSlashCommand ||
         opts.slashCommandLabel ||
         opts.origin ||
+        opts.hidden ||
         opts.handoff)
         ? {
             uiHint: {
               ...(opts.displayText ||
               opts.isSlashCommand ||
               opts.slashCommandLabel ||
-              opts.origin
+              opts.origin ||
+              opts.hidden
                 ? {
                     userMessage: {
                       ...(opts.displayText
@@ -860,6 +863,7 @@ export class AgentSession {
                         ? { slashCommandLabel: opts.slashCommandLabel }
                         : {}),
                       ...(opts.origin ? { origin: opts.origin } : {}),
+                      ...(opts.hidden ? { hidden: true } : {}),
                     },
                   }
                 : {}),

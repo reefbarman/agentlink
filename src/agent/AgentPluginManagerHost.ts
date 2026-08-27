@@ -268,6 +268,7 @@ export class AgentPluginManagerHost {
             source: managerSourceSummary(entry),
             skills: [],
             mcpServers: [],
+            hooks: [],
             diagnostics: [
               {
                 code: "manager_package_unavailable",
@@ -956,6 +957,7 @@ export class AgentPluginManagerHost {
         source: managerSourceSummary(entry),
         skills: [],
         mcpServers: [],
+        hooks: [],
         diagnostics: entry.diagnostics
           .slice(0, 50)
           .map(toManagerDeclarationDiagnostic),
@@ -1028,6 +1030,26 @@ export class AgentPluginManagerHost {
       mcpServers: Object.entries(packageSnapshot.mcp?.servers ?? {})
         .slice(0, 100)
         .map(([name, server]) => toManagerMcpSummary(name, server, row)),
+      hooks: packageSnapshot.hooks
+        .flatMap((source) =>
+          Object.entries(source.hooks).flatMap(([event, groups]) =>
+            (groups ?? []).flatMap((group) =>
+              group.hooks.map((handler) => ({
+                event,
+                ...(group.matcher
+                  ? { matcher: boundedMessage(group.matcher) }
+                  : {}),
+                ...(handler.type === "command"
+                  ? { command: boundedMessage(handler.command) }
+                  : {}),
+                handlerType: handler.type,
+                async: handler.type === "command" && handler.async === true,
+                sourceRelativePath: source.sourceRelativePath,
+              })),
+            ),
+          ),
+        )
+        .slice(0, 100),
       diagnostics,
     };
   }

@@ -7,6 +7,59 @@ import { describe, expect, it } from "vitest";
 
 import type { AppState } from "./chatProjection.js";
 import type { ChatMessage } from "../agent/webview/types.js";
+import { TODO_AUTO_CONTINUE_PROMPT } from "./todoContinuation.js";
+
+describe("user-message chat projection", () => {
+  it("omits explicitly hidden internal user turns", () => {
+    const messages = agentMessagesToChatMessages([
+      { role: "user", content: "visible user turn" },
+      {
+        role: "user",
+        content: "internal continuation",
+        uiHint: { userMessage: { hidden: true } },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "continued response" }],
+      },
+    ]);
+
+    expect(
+      messages
+        .filter((message) => message.role === "user")
+        .map((message) => message.content),
+    ).toEqual(["visible user turn"]);
+  });
+
+  it("keeps an ordinary matching user prompt visible", () => {
+    const messages = agentMessagesToChatMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "todo-1",
+            name: "todo_write",
+            input: {
+              todos: [{ id: "1", content: "Finish", status: "pending" }],
+            },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: TODO_AUTO_CONTINUE_PROMPT,
+        uiHint: { userMessage: { origin: "vscode" } },
+      },
+    ]);
+
+    expect(messages.at(-1)).toMatchObject({
+      role: "user",
+      content: TODO_AUTO_CONTINUE_PROMPT,
+      origin: "vscode",
+    });
+  });
+});
 
 describe("fresh-session handoff chat projection", () => {
   it("projects a valid handoff hint while retaining the ordinary user content", () => {

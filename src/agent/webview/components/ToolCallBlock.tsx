@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "preact/hooks";
 
 import type { ContentBlock } from "../types";
-import { ImagePreview } from "./ImagePreview";
+import { ImagePreview, type OpenImageInEditor } from "./ImagePreview";
 import { InlineDiff } from "./InlineDiff";
 import { JsonHighlight } from "../../../shared/ui/JsonHighlight";
 import type { McpApprovalPromotionMeta } from "../../../shared/types";
@@ -31,6 +31,7 @@ const MCP_APPROVAL_SCOPE_PRESENTATION = {
 interface ToolCallBlockProps {
   toolCall: ToolCallData;
   onOpenFile?: (path: string, line?: number) => void;
+  onOpenImageInEditor?: OpenImageInEditor;
   onRevealToolCallTerminal?: (id: string) => void;
   onContinueToolCallInBackground?: (id: string) => void;
   onCompleteToolCall?: (id: string) => void;
@@ -677,6 +678,7 @@ export function getToolCallVisualState(toolCall: {
 export function ToolCallBlock({
   toolCall,
   onOpenFile,
+  onOpenImageInEditor,
   onRevealToolCallTerminal,
   onContinueToolCallInBackground,
   onCompleteToolCall,
@@ -1064,6 +1066,7 @@ export function ToolCallBlock({
                         className="tool-result-image-preview"
                         buttonClassName="tool-result-image-preview-button"
                         loading="lazy"
+                        onOpenInEditor={onOpenImageInEditor}
                         showDownload
                       />
                     );

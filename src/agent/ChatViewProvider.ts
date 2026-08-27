@@ -247,6 +247,7 @@ import {
 import type { MemoryHealthSnapshot } from "../core/memory/contracts.js";
 import type { RetrievalHealthSnapshot } from "../core/retrieval/contracts.js";
 import {
+  createGitHubReviewWorktreeDraft,
   extractWorktreeSetupConfig,
   parseWorktreeSlashCommand,
   type WorktreeSlashDraft,
@@ -1087,6 +1088,13 @@ type ContextBudget = NonNullable<ChatState["contextBudget"]>;
 // Non-session UI work still needs a stable ownership bucket for targeted clears.
 // Persisted session IDs are UUIDs, so this sentinel cannot collide with one.
 const AMBIENT_AGENT_SESSION_ID = "agent";
+const MAX_EDITOR_IMAGE_BYTES = 20 * 1024 * 1024;
+const EDITOR_IMAGE_EXTENSION_BY_MIME = new Map([
+  ["image/gif", "gif"],
+  ["image/jpeg", "jpg"],
+  ["image/png", "png"],
+  ["image/webp", "webp"],
+]);
 
 /**
  * Drop attached media (base64 images/PDFs) before sending raw messages to a
@@ -1161,6 +1169,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private slashCatalogGlobalGeneration = 0;
   private readonly slashCatalogProjectGenerations = new Map<string, number>();
   private globalSkillWatchersInitialized = false;
+  private globalHookWatchersInitialized = false;
   private mainGlobalMcpWatchersInitialized = false;
   private askAgentMcpWatchersInitialized = false;
   private cwd: string = "";
@@ -1302,6 +1311,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     | undefined;
   private pairingPollTimers = new Map<string, ReturnType<typeof setInterval>>();
   private specialBlockPanel: vscode.WebviewPanel | undefined;
+  private editorImageTempDirectory: string | undefined;
   private lastMcpStatuses = new Map<
     string,
     Map<string, { status: string; error?: string }>
@@ -1465,6 +1475,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   dispose(): void {
+    if (this.editorImageTempDirectory) {
+      void fs.promises.rm(this.editorImageTempDirectory, {
+        recursive: true,
+        force: true,
+      });
+      this.editorImageTempDirectory = undefined;
+    }
     // Reject all pending promises so any awaiting tool calls/question handlers
     // don't stay suspended across view lifecycle.
     for (const [id, resolve] of this.pendingQuestions) {
@@ -3538,7 +3555,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         | "command"
         | "mode-switch"
         | "memory"
-        | "worktree";
+        | "worktree"
+        | "hook";
       title: string;
       detail?: string;
       mcpServerName?: string;
@@ -3790,6 +3808,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           ...projectContext,
           command: request.title,
           mcpDetail: request.detail,
+        };
+      case "hook":
+        return {
+          kind: "hook",
+          id,
+          ...projectContext,
+          command: request.commandText ?? request.title,
+          detail: request.detail,
+          hookChoices: request.choices,
         };
       case "worktree":
         return {
@@ -5679,6 +5706,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
   }
 
+  public async submitBrowserOpenImageInEditor(input: {
+    src: string;
+    name?: string;
+    mimeType?: string;
+  }): Promise<{ ok: boolean; error?: string }> {
+    try {
+      await this.openImageInEditor(input);
+      return { ok: true };
+    } catch (err) {
+      this.log(`[open-image] Failed to open browser image: ${err}`);
+      return { ok: false, error: "image_unavailable" };
+    }
+  }
+
   public async submitBrowserOpenFile(
     filePath: string,
     line: number | undefined,
@@ -5704,6 +5745,47 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.log(`[error] Failed to open browser path: ${err}`);
       return { ok: false, error: "path_unavailable" };
     }
+  }
+
+  private async openImageInEditor(input: {
+    src: string;
+    name?: string;
+    mimeType?: string;
+  }): Promise<void> {
+    const match =
+      /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\r\n]+)$/i.exec(input.src);
+    if (!match) throw new Error("invalid_image_data");
+
+    const mimeType = match[1].toLowerCase();
+    if (input.mimeType && input.mimeType.toLowerCase() !== mimeType) {
+      throw new Error("image_mime_mismatch");
+    }
+    const extension = EDITOR_IMAGE_EXTENSION_BY_MIME.get(mimeType);
+    if (!extension) throw new Error("unsupported_image_type");
+
+    const data = Buffer.from(match[2], "base64");
+    if (data.byteLength === 0 || data.byteLength > MAX_EDITOR_IMAGE_BYTES) {
+      throw new Error("invalid_image_size");
+    }
+
+    this.editorImageTempDirectory ??= await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-image-editor-"),
+    );
+    const inputName = input.name ?? "agentlink-image";
+    const requestedStem = path.basename(inputName, path.extname(inputName));
+    const safeStem =
+      requestedStem.replace(/[^a-z0-9._-]+/gi, "-").slice(0, 80) ||
+      "agentlink-image";
+    const imagePath = path.join(
+      this.editorImageTempDirectory,
+      `${safeStem}-${randomUUID()}.${extension}`,
+    );
+    await fs.promises.writeFile(imagePath, data, { flag: "wx" });
+    await vscode.commands.executeCommand(
+      "vscode.open",
+      vscode.Uri.file(imagePath),
+      withPrimaryEditorColumn({ preview: false }),
+    );
   }
 
   private async revealPathInEditor(
@@ -6427,7 +6509,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const configPattern = new vscode.RelativePattern(
       cwd,
-      "{.agents,.claude,.agentlink}/{commands/**,modes.json,mcp.json}",
+      "{.agents,.claude,.codex,.agentlink}/{commands/**,modes.json,mcp.json,hooks.json}",
     );
     const configWatcher =
       vscode.workspace.createFileSystemWatcher(configPattern);
@@ -6439,6 +6521,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         void this.sendSlashCommands();
         void this.sendModesUpdate();
       }
+      this.sessionManager?.invalidateHookConfiguration(scope.projectId);
       if (refreshMainMcp) {
         void this.refreshAllWorkspaceMcpConnections({
           interactiveForNewServers: true,
@@ -6482,6 +6565,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         globalSkillWatcher.onDidCreate(refreshGlobalSkills);
         globalSkillWatcher.onDidDelete(refreshGlobalSkills);
         this.fileWatchers.push(globalSkillWatcher);
+      }
+    }
+
+    if (!this.globalHookWatchersInitialized) {
+      this.globalHookWatchersInitialized = true;
+      const home = os.homedir();
+      for (const namespace of [".agents", ".claude", ".codex", ".agentlink"]) {
+        const globalHookWatcher = vscode.workspace.createFileSystemWatcher(
+          new vscode.RelativePattern(path.join(home, namespace), "hooks.json"),
+        );
+        const reloadGlobalHooks = () =>
+          this.sessionManager?.invalidateHookConfiguration();
+        globalHookWatcher.onDidChange(reloadGlobalHooks);
+        globalHookWatcher.onDidCreate(reloadGlobalHooks);
+        globalHookWatcher.onDidDelete(reloadGlobalHooks);
+        this.fileWatchers.push(globalHookWatcher);
       }
     }
 
@@ -9052,11 +9151,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (question && sourceSessionId) {
             void this.handleBtwQuestion(question, sourceSessionId);
           }
-        } else if (name === "worktree") {
+        } else if (name === "worktree" || name === "review") {
           if (sourceSessionId) {
             void this.handleWorktreeSlashCommand(
               String(msg.args ?? ""),
               sourceSessionId,
+              name,
             );
           }
         } else if (name === "pair") {
@@ -9129,6 +9229,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const answer = String(msg.answer ?? "");
         if (question && answer) {
           await this.promoteBtwAnswer(question, answer, sourceSessionId);
+        }
+        break;
+      }
+
+      case "agentOpenImageInEditor": {
+        const src = typeof msg.src === "string" ? msg.src : "";
+        const name = typeof msg.name === "string" ? msg.name : undefined;
+        const mimeType =
+          typeof msg.mimeType === "string" ? msg.mimeType : undefined;
+        try {
+          await this.openImageInEditor({ src, name, mimeType });
+        } catch (err) {
+          this.log(`[open-image] Failed to open image: ${err}`);
+          void vscode.window.showErrorMessage(
+            "AgentLink could not open this image in the editor.",
+          );
         }
         break;
       }
@@ -11648,7 +11764,35 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               : "This source is not shareable; the project install will remain machine-local and no declaration file will be changed.",
           ]
         : []),
-      `Contents: ${candidate.snapshot.skills.length} skill(s), ${stdio.length} local stdio MCP server(s), ${remote.length} remote MCP server(s)`,
+      `Contents: ${candidate.snapshot.skills.length} skill(s), ${stdio.length} local stdio MCP server(s), ${remote.length} remote MCP server(s), ${
+        candidate.snapshot.hooks.flatMap((source) =>
+          Object.values(source.hooks)
+            .flatMap((groups) => groups ?? [])
+            .flatMap((group) => group.hooks),
+        ).length
+      } lifecycle hook handler(s)`,
+      ...(candidate.snapshot.hooks.length > 0
+        ? [
+            `Hook commands: ${
+              candidate.snapshot.hooks
+                .flatMap((source) =>
+                  Object.entries(source.hooks).flatMap(([event, groups]) =>
+                    (groups ?? []).flatMap((group) =>
+                      group.hooks.flatMap((handler) =>
+                        handler.type === "command"
+                          ? [
+                              `${event}${group.matcher ? ` [${group.matcher}]` : ""}: ${handler.command}`,
+                            ]
+                          : [],
+                      ),
+                    ),
+                  ),
+                )
+                .join("; ") || "No command handlers"
+            }`,
+            "WARNING: enabled plugin command hooks execute local code outside AgentLink's command sandbox.",
+          ]
+        : []),
       ...(stdio.length > 0
         ? [
             `Local commands: ${stdio
@@ -11676,7 +11820,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               .join("; ")}`,
           ]
         : []),
-      "Plugin metadata never grants command, write, network, native-tool, or MCP-tool approval.",
+      "Plugin metadata never grants command, write, network, native-tool, or MCP-tool approval. Hook control decisions are limited to their documented lifecycle event and do not grant AgentLink tool authority.",
     ].join("\n\n");
     const enableLabel =
       currentEnabled === undefined ? "Install and Enable" : "Update and Enable";
@@ -11897,6 +12041,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async handleWorktreeSlashCommand(
     rawArgs: string,
     sessionId: string,
+    command: "worktree" | "review" = "worktree",
   ): Promise<void> {
     for (const [requestId, setup] of this.pendingWorktreeSetups) {
       if (setup.sessionId === sessionId) this.cancelWorktreeSetup(requestId);
@@ -11918,7 +12063,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     let parsed: ReturnType<typeof parseWorktreeSlashCommand>;
     try {
-      parsed = parseWorktreeSlashCommand(rawArgs);
+      parsed =
+        command === "review"
+          ? {
+              draft: createGitHubReviewWorktreeDraft(rawArgs),
+              needsConfiguration: false,
+            }
+          : parseWorktreeSlashCommand(rawArgs);
     } catch (error) {
       this.finishWorktreeSetup(requestId, "error", String(error));
       return;
@@ -12758,16 +12909,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (opts.autoSubmit && opts.prompt.trim()) {
       const sessionId = current.id;
       const prompt = opts.prompt;
-      this.postMessage({
-        type: "agentCommittedUserMessage",
-        sessionId,
-        text: prompt,
-        displayText: prompt,
-        origin: "vscode",
-      });
       setTimeout(() => {
         const session = this.sessionManager?.getSession(sessionId);
         if (!session || !this.sessionManager) return;
+        let removeStartupListener: (() => void) | undefined;
+        removeStartupListener = this.sessionManager.addAgentEventListener(
+          (eventSessionId, event) => {
+            if (eventSessionId !== sessionId || event.type !== "api_request")
+              return;
+            removeStartupListener?.();
+            removeStartupListener = undefined;
+            const committedSession = this.sessionManager?.getSession(sessionId);
+            if (!committedSession) return;
+            this.postSessionLoaded(committedSession, {
+              checkpoints: this.getSessionCheckpoints(sessionId),
+              tailTurns: 0,
+            });
+          },
+        );
         void this.sessionManager
           .sendMessage(sessionId, prompt, session.mode, {
             reasoningEffort: session.reasoningEffort,
@@ -12778,7 +12937,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           })
           .catch((error) => {
             this.log(`[worktree-agent] startup prompt failed: ${error}`);
-          });
+          })
+          .finally(() => removeStartupListener?.());
       }, 0);
     } else {
       this.injectPrompt(opts.prompt, [], false);

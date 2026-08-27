@@ -72,7 +72,7 @@ export const BUILT_IN_MODES: AgentMode[] = [
     slug: "review",
     name: "Review",
     icon: "checklist",
-    toolGroups: ["read", "language", "search"],
+    toolGroups: ["read", "command", "language", "search"],
   },
 ];
 

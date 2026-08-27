@@ -8,7 +8,9 @@ export type AgentPluginDiagnosticBoundary =
   | "skills"
   | "skill"
   | "mcp"
-  | "mcp-server";
+  | "mcp-server"
+  | "hooks"
+  | "hook";
 
 export interface AgentPluginDiagnostic {
   readonly code: string;
@@ -79,6 +81,71 @@ export interface AgentPluginMcpSnapshot {
   readonly servers: Readonly<Record<string, AgentPluginMcpServer>>;
 }
 
+export type AgentPluginHookEventName =
+  | "PreToolUse"
+  | "PermissionRequest"
+  | "PostToolUse"
+  | "PreCompact"
+  | "PostCompact"
+  | "SessionStart"
+  | "SessionEnd"
+  | "UserPromptSubmit"
+  | "SubagentStart"
+  | "SubagentStop"
+  | "Stop"
+  | "Interrupt";
+
+export interface AgentPluginCommandHookHandler {
+  readonly type: "command";
+  readonly command: string;
+  readonly commandWindows?: string;
+  readonly timeout?: number;
+  readonly async?: boolean;
+  readonly statusMessage?: string;
+  readonly additionalContextLimit?: number;
+}
+
+export interface AgentPluginMcpToolHookHandler {
+  readonly type: "mcp_tool";
+  readonly server: string;
+  readonly tool: string;
+  readonly input?: Readonly<Record<string, unknown>>;
+  readonly timeout?: number;
+  readonly statusMessage?: string;
+}
+
+export interface AgentPluginPromptHookHandler {
+  readonly type: "prompt";
+}
+
+export interface AgentPluginAgentHookHandler {
+  readonly type: "agent";
+}
+
+export type AgentPluginHookHandler =
+  | AgentPluginCommandHookHandler
+  | AgentPluginMcpToolHookHandler
+  | AgentPluginPromptHookHandler
+  | AgentPluginAgentHookHandler;
+
+export interface AgentPluginHookMatcherGroup {
+  readonly matcher?: string;
+  readonly hooks: readonly AgentPluginHookHandler[];
+}
+
+export type AgentPluginHookEventMap = Readonly<
+  Partial<
+    Record<AgentPluginHookEventName, readonly AgentPluginHookMatcherGroup[]>
+  >
+>;
+
+export interface AgentPluginHookSnapshot {
+  readonly description?: string;
+  readonly sourcePath: string;
+  readonly sourceRelativePath: string;
+  readonly hooks: AgentPluginHookEventMap;
+}
+
 export interface AgentPluginPackageSnapshot {
   readonly schemaVersion: typeof AGENT_PLUGIN_PACKAGE_SNAPSHOT_SCHEMA_VERSION;
   readonly specificationVersion: string;
@@ -86,6 +153,7 @@ export interface AgentPluginPackageSnapshot {
   readonly manifest?: AgentPluginManifest;
   readonly skills: readonly AgentPluginSkillSnapshot[];
   readonly mcp?: AgentPluginMcpSnapshot;
+  readonly hooks: readonly AgentPluginHookSnapshot[];
   readonly diagnostics: readonly AgentPluginDiagnostic[];
   readonly valid: boolean;
 }

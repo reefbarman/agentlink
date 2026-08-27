@@ -133,6 +133,14 @@ export interface AgentToolExecutionContext {
   providerToolInput?: Readonly<Record<string, unknown>>;
   /** Run-scoped accounting shared by top-level and nested tool dispatch. */
   toolCallBudget?: ToolCallBudget;
+  /** Immutable lifecycle hook runtime captured for this logical turn. */
+  hookRuntime?: import("../hooks/HookRuntime.js").HookRuntime;
+  /** Stable logical turn identity shared across provider retries and tool loops. */
+  hookTurnId?: string;
+  /** Model identifier included in compatible hook payloads. */
+  hookModel?: string;
+  /** Project working directory included in compatible hook payloads. */
+  hookCwd?: string;
   /** Current tool-call identity, used as the parent for nested activity. */
   toolCallId?: string;
   /** Parent tool call for nested activity. Undefined for model-emitted calls. */

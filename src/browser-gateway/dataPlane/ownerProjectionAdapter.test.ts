@@ -520,6 +520,43 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     adapter.dispose();
   });
 
+  it("projects lifecycle hook approvals with their exact decisions", () => {
+    const payload: BrowserGatewayOwnerInteractionPayload = {
+      approval: {
+        id: "hook-approval",
+        kind: "hook",
+        command: "node .agentlink/hooks/check.js",
+        detail: "Definition hash: abc123",
+        hookChoices: [
+          { label: "Run Once", value: "allow-once", isPrimary: true },
+          { label: "Trust Definition", value: "trust-definition" },
+          { label: "Disable Hook", value: "disable", isDanger: true },
+        ],
+      },
+      question: null,
+      questionProgress: null,
+      formElicitation: null,
+      urlElicitation: null,
+    };
+    const value = readSet();
+    value.interaction = {
+      requestId: "hook-approval",
+      kind: "approval",
+      payload,
+    };
+    const adapter = makeAdapter(new ProjectionSources(value));
+    const publication = adapter.getCheckpointPublication();
+    const handle = publication.checkpoint.ui.interaction?.detailHandle;
+    const detail = publication.details?.find(
+      (candidate) => candidate.handle.handleId === handle?.handleId,
+    );
+
+    expect(JSON.parse(new TextDecoder().decode(detail?.content))).toEqual(
+      payload,
+    );
+    adapter.dispose();
+  });
+
   it("suppresses mismatched interaction payloads that cannot be hydrated", () => {
     const value = readSet();
     value.interaction = {

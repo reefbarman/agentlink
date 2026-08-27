@@ -1,5 +1,9 @@
 import type { ChatMessage, ContentBlock } from "../types";
-import { ImagePreview, imageDownloadName } from "./ImagePreview";
+import {
+  ImagePreview,
+  imageDownloadName,
+  type OpenImageInEditor,
+} from "./ImagePreview";
 import { ToolCallGroup, segmentBlocks } from "./ToolCallGroup";
 import {
   useCallback,
@@ -120,6 +124,7 @@ interface MessageBubbleProps {
   onDetectedQuestionAnswer?: (payload: string) => void;
   onDismissDetectedQuestion?: (messageId: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
+  onOpenImageInEditor?: OpenImageInEditor;
   onRevealToolCallTerminal?: (id: string) => void;
   onContinueToolCallInBackground?: (id: string) => void;
   onCompleteToolCall?: (id: string) => void;
@@ -151,6 +156,7 @@ export function MessageBubble({
   onDetectedQuestionAnswer,
   onDismissDetectedQuestion,
   onOpenFile,
+  onOpenImageInEditor,
   onRevealToolCallTerminal,
   onContinueToolCallInBackground,
   onCompleteToolCall,
@@ -374,6 +380,7 @@ export function MessageBubble({
               slashLabel={hasSlashLabel ? slashLabel : undefined}
               remote={message.origin === "browser"}
               onOpenFile={onOpenFile}
+              onOpenImageInEditor={onOpenImageInEditor}
             />
           )}
           <UserText text={cleanText} onOpenFile={onOpenFile} />
@@ -406,6 +413,7 @@ export function MessageBubble({
             imageLabel="generated image"
             imageAlt="Generated image"
             onOpenFile={onOpenFile}
+            onOpenImageInEditor={onOpenImageInEditor}
           />
         )}
         {blockSegments.map((segment) => {
@@ -420,6 +428,7 @@ export function MessageBubble({
                 <ToolCallGroup
                   blocks={segment.blocks}
                   onOpenFile={onOpenFile}
+                  onOpenImageInEditor={onOpenImageInEditor}
                   onRevealToolCallTerminal={onRevealToolCallTerminal}
                   onContinueToolCallInBackground={
                     onContinueToolCallInBackground
@@ -436,6 +445,7 @@ export function MessageBubble({
                     imageLabel="generated image"
                     imageAlt="Generated image"
                     onOpenFile={onOpenFile}
+                    onOpenImageInEditor={onOpenImageInEditor}
                   />
                 )}
               </Fragment>
@@ -455,6 +465,7 @@ export function MessageBubble({
                   <ToolCallBlock
                     toolCall={block}
                     onOpenFile={onOpenFile}
+                    onOpenImageInEditor={onOpenImageInEditor}
                     onRevealToolCallTerminal={onRevealToolCallTerminal}
                     onContinueToolCallInBackground={
                       onContinueToolCallInBackground
@@ -471,6 +482,7 @@ export function MessageBubble({
                       imageLabel="generated image"
                       imageAlt="Generated image"
                       onOpenFile={onOpenFile}
+                      onOpenImageInEditor={onOpenImageInEditor}
                     />
                   )}
                 </Fragment>
@@ -900,6 +912,7 @@ function UserAttachments({
   imageLabel = "attached image",
   imageAlt = "Attached image",
   onOpenFile,
+  onOpenImageInEditor,
 }: {
   files: string[];
   mediaLabel: string | null;
@@ -909,6 +922,7 @@ function UserAttachments({
   imageLabel?: string;
   imageAlt?: string;
   onOpenFile?: (path: string, line?: number) => void;
+  onOpenImageInEditor?: OpenImageInEditor;
 }) {
   if (
     files.length === 0 &&
@@ -942,6 +956,7 @@ function UserAttachments({
                   alt={alt}
                   className="user-image-preview"
                   buttonClassName="user-image-preview-button"
+                  onOpenInEditor={onOpenImageInEditor}
                   showDownload
                 />
                 <a

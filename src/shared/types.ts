@@ -18,7 +18,7 @@ export interface InlineApprovalChoice {
 }
 
 export interface InlineApprovalRequest {
-  kind: "mcp" | "write" | "rename" | "command" | "memory" | "worktree";
+  kind: "mcp" | "write" | "rename" | "command" | "memory" | "worktree" | "hook";
   title: string;
   detail?: string;
   choices: InlineApprovalChoice[];

@@ -6,6 +6,7 @@ import type {
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 import { CommandCard } from "./components/CommandCard.js";
+import { HookCard } from "./components/HookCard.js";
 import { IdleState } from "./components/IdleState.js";
 import { McpCard } from "./components/McpCard.js";
 import { MemoryCard } from "./components/MemoryCard.js";
@@ -115,6 +116,10 @@ export function App({ vscodeApi }: AppProps) {
           submit={submit}
           followUpRef={followUpRef}
         />
+      );
+    case "hook":
+      return (
+        <HookCard request={request} submit={submit} followUpRef={followUpRef} />
       );
     case "worktree":
       return (

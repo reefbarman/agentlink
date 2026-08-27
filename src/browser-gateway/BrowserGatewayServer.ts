@@ -536,6 +536,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "POST",
+        rawExact("/api/open-image-in-editor"),
+        ({ req, res }) => this.handleOpenImageInEditorAction(req, res),
+        json("open image in editor action failed"),
+      ),
+      route(
+        "POST",
         rawExact("/api/project/default"),
         ({ req, res }) => this.handleDefaultProjectAction(req, res),
         json("default project action failed"),
@@ -1819,6 +1825,37 @@ export class BrowserGatewayServer implements vscode.Disposable {
       projectId,
     );
     this.writeJson(res, 200, result);
+  }
+
+  private async handleOpenImageInEditorAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as {
+      src?: unknown;
+      name?: unknown;
+      mimeType?: unknown;
+    };
+    if (
+      typeof body?.src !== "string" ||
+      !body.src.startsWith("data:image/") ||
+      (body.name !== undefined && typeof body.name !== "string") ||
+      (body.mimeType !== undefined && typeof body.mimeType !== "string")
+    ) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const result = await this.chatViewProvider.submitBrowserOpenImageInEditor({
+      src: body.src,
+      name: typeof body.name === "string" ? body.name : undefined,
+      mimeType: typeof body.mimeType === "string" ? body.mimeType : undefined,
+    });
+    this.writeJson(res, result.ok ? 200 : 400, result);
   }
 
   private async handleOpenFileAction(

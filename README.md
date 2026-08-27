@@ -64,12 +64,37 @@ See the [getting started guide](resources/builtin-skills/documentation/reference
 | **Background agents** | Parallel research and review with visible Fleet status, work-unit budgets, and results.            |
 | **Browser remote**    | Check on sessions, answer questions, review diffs, and supervise work from a paired browser.       |
 | **MCP**               | Layered user/project MCP configuration and progressively disclosed tools, resources, and prompts.  |
-| **Customization**     | `AGENTS.md`/`CLAUDE.md`, rules, skills, custom modes, custom slash commands, and auditable memory. |
+| **Customization**     | `AGENTS.md`/`CLAUDE.md`, rules, skills, custom modes, slash commands, hooks, and auditable memory. |
 | **Agent Plugins**     | Review-gated managed imports from Git, URLs, directories, manifests, ZIPs, and TAR archives.       |
+
+## Lifecycle hooks
+
+AgentLink supports local lifecycle hooks through the widely used `hooks.json` shape, including compatibility with Codex/Claude-style command hooks. Hook sources are additive and load in this order: global `~/.agents`, `~/.claude`, `~/.codex`, `~/.agentlink`, then the same four directories in the current project, followed by enabled Agent Plugin hooks. Each source uses:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "execute_command|Bash",
+        "hooks": [
+          { "type": "command", "command": "python3 .agentlink/hooks/check.py" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Supported events are `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`, `SubagentStart`, `SubagentStop`, `Stop`, and `Interrupt`. Commands receive compact JSON on stdin, run concurrently when several handlers match, and can use standard matcher, timeout, async, exit-code, and JSON-output conventions. `mcp_tool`, `prompt`, and `agent` handlers are recognized but currently skipped with diagnostics.
+
+**Hook commands execute local code outside AgentLink's command sandbox.** Manual hook definitions are therefore hash-trusted: the first attempted execution shows the exact command, source, and definition hash; changing the event, matcher, or handler invalidates trust and requires review again. Plugin hook commands are shown during install/update review and execute only from the enabled immutable package generation. Hook decisions never grant AgentLink command, write, network, native-tool, or MCP-tool authority: rewrites still pass through normal validation and approval, while `PermissionRequest` hooks are deny-only in AgentLink.
+
+Tool matchers use AgentLink's canonical names and compatibility aliases for common command/edit hooks (`Bash`, `Shell`, `shell_command`, `apply_patch`, `Edit`, `Write`). AgentLink owns in-process tool lifecycle hooks, including `todo_write` and nested tool calls. External ACP agents own their own tool execution, so AgentLink emits their subagent lifecycle events but does not claim `PreToolUse`/`PostToolUse` interception for tools executed inside the external process.
 
 ## Agent Plugins
 
-AgentLink supports standards-compliant Agent Plugins 1.0.0 on macOS and Linux. A plugin can contribute Agent Skills and MCP servers using `stdio`, Streamable HTTP, or legacy SSE. Windows plugin loading is currently disabled. Packages that use another harness's plugin format without the canonical Agent Plugins 1.0.0 schema are not treated as Agent Plugins; their individual skills may still be discovered through AgentLink's normal skill directories.
+AgentLink supports standards-compliant Agent Plugins 1.0.0 on macOS and Linux. A plugin can contribute Agent Skills, lifecycle hooks, and MCP servers using `stdio`, Streamable HTTP, or legacy SSE. Windows plugin loading is currently disabled. Packages that use another harness's plugin format without the canonical Agent Plugins 1.0.0 schema are not treated as Agent Plugins; their individual skills may still be discovered through AgentLink's normal skill directories.
 
 Install from the **AgentLink: Manage Agent Plugins** panel, **AgentLink: Install Agent Plugin From Source**, or `/plugin`. Running `/plugin` without arguments opens the manager in the Chat Activity Shelf with usage help. Accepted sources include Git HTTPS/SSH/SCP remotes, HTTP(S) ZIP/TAR archives, file URLs, local directories, direct `plugin.json` paths, and local ZIP/TAR-family archives. Repositories and archives may contain one plugin or a collection; AgentLink validates the candidates and asks which one to install.
 
@@ -84,7 +109,7 @@ Install from the **AgentLink: Manage Agent Plugins** panel, **AgentLink: Install
 /plugin purge
 ```
 
-Acquisition is staged and bounded. Archives reject traversal, absolute or case-colliding paths, symlinks, special files, excessive counts/sizes, and unsafe compression ratios. Git acquisition restricts protocols and arguments, does not initialize submodules or run dependency/setup hooks, and materializes only the selected commit. Before installation or update, a modal review shows source, digest, manifest metadata, skills, and every MCP command or remote URL. Choose **Install and Enable** or **Install Disabled**. Plugin metadata and project declarations never grant command, write, network, native-tool, or MCP-tool approval.
+Acquisition is staged and bounded. Archives reject traversal, absolute or case-colliding paths, symlinks, special files, excessive counts/sizes, and unsafe compression ratios. Git acquisition restricts protocols and arguments, does not initialize submodules or run dependency/setup hooks, and materializes only the selected commit. Before installation or update, a modal review shows source, digest, manifest metadata, skills, every lifecycle hook command, and every MCP command or remote URL. Choose **Install and Enable** or **Install Disabled**. Plugin metadata and project declarations never grant command, write, network, native-tool, or MCP-tool approval.
 
 Enabled plugin skills join the current project's skill and slash-command catalog. Plugin MCP servers join the same discovery, connection, policy, and tool-approval flows as native MCP configuration, but keep plugin provenance and independent failure isolation. **A plugin `stdio` server executes a local process outside AgentLink's command sandbox.** Review its command, arguments, working directory, and environment before enabling it; ordinary MCP tool approvals still apply after connection. Configured HTTP headers are restricted to the reviewed MCP origin and are not forwarded into OAuth or cross-origin redirect traffic.
 

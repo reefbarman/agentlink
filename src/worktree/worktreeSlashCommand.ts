@@ -9,6 +9,13 @@ export interface ParsedWorktreeSlashCommand {
   needsConfiguration: boolean;
 }
 
+export interface ParsedGitHubPullRequestUrl {
+  owner: string;
+  repository: string;
+  number: number;
+  url: string;
+}
+
 const VALUE_FLAGS: Record<string, keyof WorktreeSlashDraft> = {
   "--task": "task",
   "--prompt": "prompt",
@@ -67,6 +74,87 @@ export function parseWorktreeSlashCommand(
   return {
     draft,
     needsConfiguration: !draft.task?.trim() || !draft.prompt?.trim(),
+  };
+}
+
+export function parseGitHubPullRequestUrl(
+  input: string,
+): ParsedGitHubPullRequestUrl {
+  const raw = input.trim();
+  if (!raw) {
+    throw new Error("Usage: /review <github-pr-url>");
+  }
+  if (/\s/.test(raw)) {
+    throw new Error("/review accepts exactly one GitHub pull request URL.");
+  }
+
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("/review requires a valid GitHub pull request URL.");
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.hostname.toLowerCase() !== "github.com" ||
+    url.username ||
+    url.password ||
+    url.port
+  ) {
+    throw new Error(
+      "/review requires an https://github.com/<owner>/<repo>/pull/<number> URL.",
+    );
+  }
+
+  const segments = url.pathname.split("/").filter(Boolean);
+  const hasSupportedSuffix =
+    segments.length === 4 ||
+    (segments.length === 5 &&
+      (segments[4] === "files" || segments[4] === "commits"));
+  if (
+    !hasSupportedSuffix ||
+    segments[2] !== "pull" ||
+    !/^[1-9]\d*$/.test(segments[3]!)
+  ) {
+    throw new Error(
+      "/review requires an https://github.com/<owner>/<repo>/pull/<number> URL.",
+    );
+  }
+  const [owner, repository, , number] = segments;
+  if (
+    !owner ||
+    !repository ||
+    !number ||
+    !/^[A-Za-z0-9_.-]+$/.test(owner) ||
+    !/^[A-Za-z0-9_.-]+$/.test(repository)
+  ) {
+    throw new Error(
+      "/review requires an https://github.com/<owner>/<repo>/pull/<number> URL.",
+    );
+  }
+
+  return {
+    owner,
+    repository,
+    number: Number(number),
+    url: `https://github.com/${owner}/${repository}/pull/${number}`,
+  };
+}
+
+export function createGitHubReviewWorktreeDraft(
+  input: string,
+): WorktreeSlashDraft {
+  const pullRequest = parseGitHubPullRequestUrl(input);
+  const repository = `${pullRequest.owner}/${pullRequest.repository}`;
+  return {
+    task: `Review ${repository}#${pullRequest.number}`,
+    prompt: `Review GitHub pull request ${pullRequest.url}. Compare the pull request against its base branch, inspect the changed code and relevant surrounding behavior, run targeted validation when useful, and report actionable findings with file and line references. Do not modify the pull request branch unless the user explicitly asks for fixes.`,
+    mode: "review",
+    autoSubmit: true,
+    fetchRef: {
+      repository,
+      ref: `refs/pull/${pullRequest.number}/head`,
+    },
   };
 }
 
