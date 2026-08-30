@@ -1,0 +1,914 @@
+packages/protocol/src/toolResult.ts
+  h_9630b74bdac540 1-119
+src/agent/webview/components/ToolCallGroup.tsx
+  h_9630b74bdac540 3,33
+src/tools/searchFiles.ts
+  h_9630b74bdac540 28
+src/agent/backgroundDisplayStatus.ts
+  h_9630b74bdac540 1
+src/shared/ui/SessionHandoffPanel.tsx
+  h_9630b74bdac540 3
+src/terminal/sandbox/SandboxTerminalCoordinator.ts
+  h_9630b74bdac540 27
+packages/protocol/src/structuredQuestion.ts
+  h_9630b74bdac540 1-106
+src/findReplace/webview/App.tsx
+  h_9630b74bdac540 1-2,4
+src/terminal/sandbox/sandboxHelperProtocol.ts
+  h_9630b74bdac540 6
+src/agent/webview/components/BgAgentResultBlock.tsx
+  h_9630b74bdac540 1-5
+src/agent/types.ts
+  h_9630b74bdac540 2-4,9-13,17-18,30-31,130,176-179,185-194,206,318
+src/browser-gateway/helper/AskAgentOwnerAdapter.test.ts
+  h_9630b74bdac540 3-4
+src/shared/types.test.ts
+  h_9630b74bdac540 1,7-32,34,37-122
+src/tools/getReferences.test.ts
+  h_9630b74bdac540 3
+src/terminal/TerminalSessionService.test.ts
+  h_9630b74bdac540 3
+src/core/capabilities/memory.ts
+  h_9630b74bdac540 5-7,11-15,18-19,21-35
+src/agent/webview/App.chatWorkspace.test.tsx
+  h_9630b74bdac540 13,148-279
+src/agent/AgentToolCallTracker.ts
+  h_9630b74bdac540 6-7
+src/agent/webview/components/SessionHistory.tsx
+  h_9630b74bdac540 3
+src/agent/webview/components/TranscriptMessageList.tsx
+  h_9630b74bdac540 3-6,40
+src/tools/applyDiff.ts
+  h_9630b74bdac540 11-13
+src/browser-gateway/helper/AskAgentController.test.ts
+  h_9630b74bdac540 3-4
+packages/protocol/src/modelAuth.test.ts
+  h_9630b74bdac540 1-129
+src/storage/retrieval/sharedMemoryMigrationState.test.ts
+  h_9630b74bdac540 1-80
+src/test/memoryServiceContract.ts
+  h_9630b74bdac540 6-8,13
+src/agent/agentPluginMcpRuntime.ts
+  h_9630b74bdac540 13
+packages/protocol/src/promptProfile.test.ts
+  h_9630b74bdac540 1-111
+src/agent/AgentEngine.test.ts
+  h_9630b74bdac540 6320-6329,6357,6359-6361,6367-6374
+src/core/model/providers/anthropic/streamParser.test.ts
+  h_9630b74bdac540 165,246-268
+src/agent/webview/App.transcriptStability.test.tsx
+  h_9630b74bdac540 7
+src/agent/webview/components/WarningRow.test.tsx
+  h_9630b74bdac540 6
+src/shared/builtinCommandForwarding.ts
+  h_9630b74bdac540 1
+src/tools/proposeMemory.ts
+  h_9630b74bdac540 28-32
+src/worktree/WorktreeAgentIntentStore.ts
+  h_9630b74bdac540 9
+src/agent/ChatTabHostCoordinator.test.ts
+  h_9630b74bdac540 8
+src/agent/webview/components/ThinkingBlock.tsx
+  h_9630b74bdac540 1,3
+src/agent/chatTabStartupRestore.ts
+  h_9630b74bdac540 5
+packages/protocol/src/promptProfile.ts
+  h_9630b74bdac540 1-81
+src/agent/AgentPluginCatalog.ts
+  h_9630b74bdac540 16
+src/tools/loadSkill.ts
+  h_9630b74bdac540 6
+src/browser-gateway/BrowserGatewayService.ts
+  h_9630b74bdac540 8,13-18,21-22,27-28,38-39,47,74,78,87,95,125,174,205,263
+src/agent/webview/components/WarningRow.tsx
+  h_9630b74bdac540 3
+src/tools/writeApprovalUI.ts
+  h_9630b74bdac540 9
+src/agent/webview/components/ToolCallBlock.tsx
+  h_9630b74bdac540 3,7
+src/terminal/terminalOutputPolicy.ts
+  h_9630b74bdac540 1,3-7,9
+src/agent/webview/components/ChatView.tsx
+  h_9630b74bdac540 15,39
+src/agent/ChatViewProvider.ts
+  h_9630b74bdac540 6,22-28,48-49,54,66-69,72-75,78-80,82,92-93,97,103,117,211,225,230-233,236,240-241,250-251,564,629,661,786,1056-1057,1172-1173,1220,1283,2202,2278,3564-3565,3853,3983-3984,4040,8833,8836,8881,10653-10656
+src/tools/getCallHierarchy.test.ts
+  h_9630b74bdac540 3
+src/terminal/alternateScreenTracker.ts
+  h_9630b74bdac540 1-4
+src/approvals/webview/components/MemoryCard.tsx
+  h_9630b74bdac540 1,5
+src/browser-gateway/browserGatewayThemeCache.ts
+  h_9630b74bdac540 5-8
+src/agent/webview/App.memoryPanel.test.tsx
+  h_9630b74bdac540 3-6
+src/agent/toolAdapter.test.ts
+  h_9630b74bdac540 28,1002-1035
+src/terminal/sandbox/SandboxRuntimeProvider.ts
+  h_9630b74bdac540 10
+src/agent/agentPluginMcpRuntime.test.ts
+  h_9630b74bdac540 20
+src/agent/ChatTabPanelRegistry.ts
+  h_9630b74bdac540 1-2
+packages/protocol/src/chatState.ts
+  h_9630b74bdac540 1-47
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_9630b74bdac540 11,43,51,4264,5728,5730,6236,6245,7920-7945,8135-8138
+src/tools/startWorktreeAgent.test.ts
+  h_9630b74bdac540 7
+src/terminal/vscodeTerminalProfileAdapter.ts
+  h_9630b74bdac540 3
+src/agent/webview/components/ModelChangeDivider.tsx
+  h_9630b74bdac540 1,3
+src/agent/webview/components/ContextUsageRow.tsx
+  h_9630b74bdac540 2
+src/adapters/vscode/projectSettingsAccessor.ts
+  h_9630b74bdac540 6
+src/adapters/vscode/languageCapabilities.ts
+  h_9630b74bdac540 38
+src/agent/SlashCommandRegistry.ts
+  h_9630b74bdac540 11
+src/shared/chatProjection.test.ts
+  h_9630b74bdac540 9-10
+packages/protocol/src/questionDetection.test.ts
+  h_9630b74bdac540 1-152
+src/tools/getInlayHints.test.ts
+  h_9630b74bdac540 3
+packages/protocol/src/workspaceProject.ts
+  h_9630b74bdac540 1-157
+src/terminal/webview/terminalWebviewController.ts
+  h_9630b74bdac540 4
+src/agent/legacyMemoryMigration.ts
+  h_9630b74bdac540 11
+packages/protocol/src/findReplacePreview.ts
+  h_9630b74bdac540 1-50
+package.json
+  h_9630b74bdac540 5,13-16,1136-1138,1155-1159,1170-1172
+src/core/model/providers/openaiCompatible/streamParser.test.ts
+  h_9630b74bdac540 89-131
+src/agent/AgentSessionManager.background.test.ts
+  h_9630b74bdac540 1733-1734,1736,1755-1760,1832-1838,3528-3651,3875,3939,3975,4069,4090,4152,4195,4203,4214,4240,7068-7097
+src/agent/webview/components/ChatWorkspace.tsx
+  h_9630b74bdac540 4
+src/terminal/hostTerminalTasks.test.ts
+  h_9630b74bdac540 11
+packages/protocol/src/contextDiagnostics.test.ts
+  h_9630b74bdac540 1-111
+src/agent/webview/components/BgAgentBlock.tsx
+  h_9630b74bdac540 2
+src/adapters/vscode/editReviewCapabilities.ts
+  h_9630b74bdac540 32,52,61,1360
+src/browser-gateway/helper/askAgentModelClient.ts
+  h_9630b74bdac540 3-4,40
+src/browser-gateway/BrowserGatewayServer.test.ts
+  h_9630b74bdac540 9
+src/agent/todoTool.ts
+  h_9630b74bdac540 3-4,12
+src/agent/HookService.ts
+  h_9630b74bdac540 14-15
+src/core/memory/InMemoryMemoryRepository.ts
+  h_9630b74bdac540 11-14
+src/browser-gateway/helper/browserGatewayAskAgentMemoryProposal.ts
+  h_9630b74bdac540 9-13
+src/storage/retrieval/sharedMemoryMigrationState.ts
+  h_9630b74bdac540 1-102
+src/terminal/sandbox/SandboxTerminalSession.ts
+  h_9630b74bdac540 10
+src/agent/ActivityTraceRecorder.ts
+  h_9630b74bdac540 11,514
+packages/protocol/src/chatWorkspace.ts
+  h_9630b74bdac540 1-211
+src/browser-gateway/browserGatewayAskAgentPreferences.ts
+  h_9630b74bdac540 5-6
+src/agent/webview/components/SkillLoadBlock.tsx
+  h_9630b74bdac540 1
+src/browser-gateway/browserGatewayAskAgentMemory.ts
+  h_9630b74bdac540 7
+src/agent/contextBreakdown.ts
+  h_9630b74bdac540 4,8
+packages/protocol/src/diffSnapshot.test.ts
+  h_9630b74bdac540 1-49
+src/agent/ProjectCustomizationRegistry.ts
+  h_9630b74bdac540 1
+src/terminal/hostTerminalTasks.ts
+  h_9630b74bdac540 4
+src/agent/ActivityTraceRecorder.test.ts
+  h_9630b74bdac540 149,166-167
+src/tools/getSymbols.test.ts
+  h_9630b74bdac540 3
+src/shared/questionDetection.ts
+  h_9630b74bdac540 1
+src/agent/webview/components/TranscriptView.tsx
+  h_9630b74bdac540 3-4
+src/terminal/native/NativeAgentRuntimeProvider.ts
+  h_9630b74bdac540 12
+src/services/semanticSearch.ts
+  h_9630b74bdac540 32-33
+src/agent/ChatTabController.ts
+  h_9630b74bdac540 2-18
+src/protocolPackageBoundary.test.ts
+  h_9630b74bdac540 1-1537,1540-1933
+src/core/capabilities/sessionControl.test.ts
+  h_9630b74bdac540 1-50
+src/agent/systemPrompt.ts
+  h_9630b74bdac540 9,14-15,32,409-410,454,456,474-478,542,558
+src/terminal/terminalSurfaceProtocol.ts
+  h_9630b74bdac540 1
+src/core/model/providers/openaiCompatible/completionFacade.ts
+  h_9630b74bdac540 216-220
+src/agent/ProjectMcpHubRegistry.ts
+  h_9630b74bdac540 1
+packages/protocol/src/index.ts
+  h_9630b74bdac540 1-49
+src/tools/getRepoMap.ts
+  h_9630b74bdac540 18
+src/core/memory/contracts.test.ts
+  h_9630b74bdac540 1-22
+src/agent/webview/components/useSlashCommandPopup.test.tsx
+  h_9630b74bdac540 6
+src/agent/webview/components/TodoPanel.test.tsx
+  h_9630b74bdac540 4,6
+src/agent/FleetWorkflows.test.ts
+  h_9630b74bdac540 65,73
+src/agent/webview/components/QuestionCard.tsx
+  h_9630b74bdac540 3-4,6
+src/agent/AgentSessionManager.test.ts
+  h_9630b74bdac540 21-23,2149-2222,2231-2233,2311-2338,2349-2358
+packages/protocol/src/builtinCommandForwarding.test.ts
+  h_9630b74bdac540 1-100
+src/browser-gateway/helper/AskAgentOwnerAdapter.ts
+  h_9630b74bdac540 1,5,7
+src/browser-gateway/helper/browserGatewayAskAgentSummarizer.ts
+  h_9630b74bdac540 3,6
+src/agent/ChatPaneAuthorityController.test.ts
+  h_9630b74bdac540 3-4
+src/terminal/webview/App.tsx
+  h_9630b74bdac540 14
+packages/protocol/src/autonomousMemory.ts
+  h_9630b74bdac540 1-393
+src/tools/getTypeHierarchy.test.ts
+  h_9630b74bdac540 3
+src/agent/condense.ts
+  h_9630b74bdac540 26,34-36,52,593-596,1211,1221,1223,1229-1234
+src/tools/pendingEditLock.ts
+  h_9630b74bdac540 2-3
+src/agent/webview/components/ChatWorkspace.test.tsx
+  h_9630b74bdac540 7
+src/core/model/providers/codex/streamParser.ts
+  h_9630b74bdac540 67,347-360,505-507,509-514
+src/core/model/providers/openaiCompatible/types.ts
+  h_9630b74bdac540 7,123-134
+src/agent/webview/types.ts
+  h_9630b74bdac540 3-4,6-11,17,22,26,28-31,33-35,37-41,43-47,49-53,79-80,251,331,668,820,842-843,847,849-850,852
+src/shared/ui/MemoryPanel.test.tsx
+  h_9630b74bdac540 6,8
+src/terminal/webview/xtermRenderer.ts
+  h_9630b74bdac540 24
+src/tools/renameSymbol.ts
+  h_9630b74bdac540 1-2
+src/browser-gateway/dataPlane/protocol.ts
+  h_9630b74bdac540 1,5-7,119
+src/core/model/providers/codex/completionFacade.test.ts
+  h_9630b74bdac540 134,149
+src/core/memory/memoryPolicy.ts
+  h_9630b74bdac540 5
+src/terminal/LiveHostTerminalSurfaceController.test.ts
+  h_9630b74bdac540 18-19
+src/agent/webview/components/slashCommandOrdering.ts
+  h_9630b74bdac540 1
+src/agent/webview/components/QuestionAnswerBlock.tsx
+  h_9630b74bdac540 1
+packages/protocol/src/contextDiagnostics.ts
+  h_9630b74bdac540 1-118
+src/agent/mcpToolDisclosure.ts
+  h_9630b74bdac540 4-5,194-199,201-202,204-208,228
+src/core/memory/AutonomousMemoryService.ts
+  h_9630b74bdac540 3-6,30
+packages/protocol/src/chatTranscript.ts
+  h_9630b74bdac540 1-227
+src/core/modelRuntime.test.ts
+  h_9630b74bdac540 3,108,115,128
+src/core/model/providers/codex/streamParser.test.ts
+  h_9630b74bdac540 117,173,175
+scripts/report-context-jumps.test.mjs
+  h_9630b74bdac540 6,67-70,72-105,218-275,277-283,302-346
+src/agent/contextDoctor.ts
+  h_9630b74bdac540 5
+src/core/capabilities/memory.test.ts
+  h_9630b74bdac540 1-26
+src/core/capabilities/worktree.ts
+  h_9630b74bdac540 6,8
+src/agent/compose/composeRuntime.test.ts
+  h_9630b74bdac540 24
+src/tools/getDiagnostics.ts
+  h_9630b74bdac540 5
+packages/protocol/src/structuredQuestion.test.ts
+  h_9630b74bdac540 1-68
+packages/protocol/src/chatWorkspace.test.ts
+  h_9630b74bdac540 1-164
+src/agent/ChatTabPanelHost.test.ts
+  h_9630b74bdac540 21,27-30
+src/shared/streamingBaselineFixture.ts
+  h_9630b74bdac540 1
+src/agent/webview/components/InputArea.test.tsx
+  h_9630b74bdac540 7
+src/agent/webview/components/PairingCodeBlock.tsx
+  h_9630b74bdac540 3
+src/terminal/hostTerminalPresentation.ts
+  h_9630b74bdac540 2,5-6
+src/core/promptProfile.ts
+  h_9630b74bdac540 1-2
+src/tools/generateImage.ts
+  h_9630b74bdac540 20-21
+src/tools/getHover.test.ts
+  h_9630b74bdac540 3
+src/agent/questionDetectionLlm.ts
+  h_9630b74bdac540 12
+src/agent/chatTabStartupRestore.test.ts
+  h_9630b74bdac540 7
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_9630b74bdac540 82,1374,1436,1508,1516-1520,1524,1838,1861
+src/browser-gateway/webview/relay/relaySnapshotProjection.ts
+  h_9630b74bdac540 11-12,14
+src/tools/openFile.ts
+  h_9630b74bdac540 6
+src/core/capabilities/terminal.ts
+  h_9630b74bdac540 7-12,16-22
+src/terminal/sandbox/SandboxTerminalChannelHub.ts
+  h_9630b74bdac540 7
+src/tools/context/getContext.ts
+  h_9630b74bdac540 18
+src/agent/webview/InactiveChatProjectionCache.ts
+  h_9630b74bdac540 2,42-53
+src/storage/retrieval/fixtures/lanceDbMemoryProcessFixture.ts
+  h_9630b74bdac540 3
+packages/protocol/src/agentErrorPresentation.ts
+  h_9630b74bdac540 1-13
+src/browser-gateway/BrowserGatewayServer.ts
+  h_9630b74bdac540 4,8,14,38,40,978
+src/shared/autoContinueTabState.ts
+  h_9630b74bdac540 1-68
+src/tools/languageToolFactory.ts
+  h_9630b74bdac540 6
+src/telemetry/SessionOutcomeTelemetry.ts
+  h_9630b74bdac540 15-45,53-55,79,88-91,98-101
+src/tools/loadRule.ts
+  h_9630b74bdac540 4
+src/findReplace/webview/components/FileSection.tsx
+  h_9630b74bdac540 2-3
+src/agent/ChatPaneConnection.test.ts
+  h_9630b74bdac540 10
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_9630b74bdac540 570-572,577-579,584-586,591-593,598-600,608-610,616-618,624-626,632-634,640-642
+CHANGELOG.md
+  h_9630b74bdac540 25-27
+src/agent/webview/chatTabActions.ts
+  h_9630b74bdac540 2
+README.md
+  h_9630b74bdac540 122,124,130
+src/extension.ts
+  h_9630b74bdac540 54-60,73-75,93-94,132,157-158,1161-1164,1166-1183,1189,1215,1241,1243,1245-1249,1252-1257,1260,1266,1269-1272,2248-2249,2265,2273-2274,2283-2293,2296,2302-2305,2308-2313,2811-2812
+src/agent/webview/components/TodoPanel.tsx
+  h_9630b74bdac540 2-3
+src/browser-gateway/dataPlane/interactionPayload.ts
+  h_9630b74bdac540 10-13,19-20,22-25,30,438
+src/storage/retrieval/LanceDbMemoryRepository.contract.test.ts
+  h_9630b74bdac540 9,107-210
+src/shared/memoryProposalEngine.ts
+  h_9630b74bdac540 4-6
+src/tools/showNotification.ts
+  h_9630b74bdac540 3
+src/tools/executeCommand.test.ts
+  h_9630b74bdac540 131-132,5697-5866
+src/agent/agentPluginProjectDeclarations.ts
+  h_9630b74bdac540 8
+src/agent/background/backgroundBudgetPolicy.ts
+  h_9630b74bdac540 1-71
+src/tools/generateImage.test.ts
+  h_9630b74bdac540 17
+src/tools/languageFeatures.ts
+  h_9630b74bdac540 3-4,7,9
+src/agent/webview/InactiveChatProjectionCache.test.ts
+  h_9630b74bdac540 103-133
+src/terminal/hostTerminalPresentation.test.ts
+  h_9630b74bdac540 1
+packages/protocol/package.json
+  h_9630b74bdac540 1-699
+src/core/promptProfilePolicy.ts
+  h_9630b74bdac540 1-61
+src/core/model/providers/openaiCompatible/streamParser.ts
+  h_9630b74bdac540 333-367,370-377,379-383,393-401
+src/agent/SessionStore.ts
+  h_9630b74bdac540 46,162-167,744-745,756-759
+src/terminal/webview/terminalWebviewController.test.ts
+  h_9630b74bdac540 6
+src/agent/backgroundModelRouter.ts
+  h_9630b74bdac540 1-4,12-14,214
+src/agent/legacyMemoryMigration.test.ts
+  h_9630b74bdac540 8,80,96-99,127-128,130
+src/terminal/AgentTerminalViewProvider.ts
+  h_9630b74bdac540 12
+src/tools/writeFile.ts
+  h_9630b74bdac540 8-10
+src/integrations/DiffViewProvider.ts
+  h_9630b74bdac540 21,552-555
+src/adapters/vscode/workspaceProjectCapabilities.ts
+  h_9630b74bdac540 12-16
+src/shared/types.ts
+  h_9630b74bdac540 1-5,7-11,14-20,22,24-25,27-37,39,42,44-47,49
+src/core/tools/types.ts
+  h_9630b74bdac540 2,6
+src/approvals/webview/types.ts
+  h_9630b74bdac540 7-10,12-15
+src/core/model/providers/codex/completionFacade.ts
+  h_9630b74bdac540 1,87-91
+src/agent/ChatViewProvider.test.ts
+  h_9630b74bdac540 9-10,6046-6049,6116-6119
+src/agent/providers/codex/CodexProvider.test.ts
+  h_9630b74bdac540 373,427,482
+src/agent/webview/slashCommandInput.test.ts
+  h_9630b74bdac540 10
+packages/protocol/src/backgroundResult.ts
+  h_9630b74bdac540 1-300
+src/browser-gateway/testing/phase3LiveParityGate.ts
+  h_9630b74bdac540 1-2
+src/agent/webview/components/activityPresentation.ts
+  h_9630b74bdac540 1
+packages/protocol/src/sessionHydration.ts
+  h_9630b74bdac540 1-43
+src/storage/retrieval/AutonomousMemoryToolProvider.ts
+  h_9630b74bdac540 11,13-15,24,30-34,38-40,56,61,113-115,124-130,266-268,270-271,276-278,282,323-325
+src/agent/webview/questionDetection.ts
+  h_9630b74bdac540 4
+packages/protocol/src/contextLedger.ts
+  h_9630b74bdac540 1-179
+src/agent/harnessEfficiencyStats.ts
+  h_9630b74bdac540 1-134
+packages/protocol/src/chatState.test.ts
+  h_9630b74bdac540 1-99
+src/agent/compose/composeScope.test.ts
+  h_9630b74bdac540 9
+src/core/session/DerivedSessionRetrievalService.ts
+  h_9630b74bdac540 306-307,312-332,348,568-585
+src/agent/webview/components/BackgroundSessionStrip.tsx
+  h_9630b74bdac540 3,7-9
+src/agent/BackgroundSummaryScheduler.ts
+  h_9630b74bdac540 2
+src/tools/listFiles.test.ts
+  h_9630b74bdac540 8
+CLAUDE.md
+  h_9630b74bdac540 89-90
+src/tools/loadAdvertisedFile.ts
+  h_9630b74bdac540 10-11
+src/shared/agentErrors.ts
+  h_9630b74bdac540 1,3-6
+src/agent/mcpToolDisclosure.test.ts
+  h_9630b74bdac540 122-158
+scripts/report-context-jumps.mjs
+  h_9630b74bdac540 23,27-34,36-47,52-63,66-78,89-100,103-104,126-268,282-283,291-296,383-393,411-412,414,445-486,532-542,547
+src/agent/chatTabProtocol.ts
+  h_9630b74bdac540 1
+src/terminal/sandbox/sandboxPolicyCompiler.ts
+  h_9630b74bdac540 8
+src/shared/ui/MemoryPanel.tsx
+  h_9630b74bdac540 5,7,9-10
+src/browser-gateway/helper/BrowserGatewayAutonomousMemoryRuntime.ts
+  h_9630b74bdac540 4-6,10-13,17-20,22-26,31,40-42,49-51,60-71,86-87,92-93,99,103,108-109,114-115,120-121,128-129,136-137,144-145,152-153,174-187,190-191,197-200,206-207,209,213
+src/agent/AgentEngine.ts
+  h_9630b74bdac540 34,36-37,46,48-52,98,694,1517,1728-1731,1868-1869,2149-2151,3425-3428,3438-3463
+src/agent/ChatTabHostCoordinator.ts
+  h_9630b74bdac540 2,4,8
+src/tools/triageFeedback.ts
+  h_9630b74bdac540 4
+src/agent/harnessEfficiencyStats.test.ts
+  h_9630b74bdac540 1-205
+src/agent/chatPaneProtocol.ts
+  h_9630b74bdac540 1-22
+src/agent/webview/types.test.ts
+  h_9630b74bdac540 1-66
+src/core/terminalProtocol.test.ts
+  h_9630b74bdac540 6,9,22-31
+src/core/memory/contracts.ts
+  h_9630b74bdac540 1-13
+src/agent/ChatTabPanelHost.ts
+  h_9630b74bdac540 4-5,7-10
+src/tools/sessionTranscriptRecall.ts
+  h_9630b74bdac540 10
+src/storage/retrieval/LanceDbMemoryRepository.process.test.ts
+  h_9630b74bdac540 83,86-91,96-99
+src/storage/retrieval/sharedMemoryStoreMigration.ts
+  h_9630b74bdac540 1-98
+src/browser-gateway/protocol.ts
+  h_9630b74bdac540 6,11,15,17,84,97,107
+src/agent/webview/components/TranscriptMessageList.test.ts
+  h_9630b74bdac540 6-7
+packages/protocol/src/sessionHandoffDraft.ts
+  h_9630b74bdac540 1-34
+src/browser-gateway/browserGatewayAskAgentSessionStore.test.ts
+  h_9630b74bdac540 6
+packages/protocol/src/findReplacePreview.test.ts
+  h_9630b74bdac540 1-74
+src/agent/webview/components/MessageBubble.tsx
+  h_9630b74bdac540 3-4,25,35,138
+packages/protocol/src/sessionHandoffDraft.test.ts
+  h_9630b74bdac540 1-73
+src/tools/getCompletions.test.ts
+  h_9630b74bdac540 3
+src/agent/agentToolCompletionStrategies.ts
+  h_9630b74bdac540 3
+src/tools/readFile.ts
+  h_9630b74bdac540 30
+src/agent/webview/components/ChatTabConfirmation.tsx
+  h_9630b74bdac540 1
+src/telemetry/SessionOutcomeTelemetry.test.ts
+  h_9630b74bdac540 49-72,128-132
+src/tools/editReviewResult.ts
+  h_9630b74bdac540 7
+src/agent/webview/components/CondenseRow.tsx
+  h_9630b74bdac540 2-3
+src/core/capabilities/language.ts
+  h_9630b74bdac540 1
+src/tools/closeTerminals.ts
+  h_9630b74bdac540 2
+src/agent/SessionStore.test.ts
+  h_9630b74bdac540 5-6
+src/agent/webview/chatTabActions.test.ts
+  h_9630b74bdac540 3
+src/core/modelRuntime.ts
+  h_9630b74bdac540 12,14-15,245-246,303,318,335-337
+packages/protocol/src/chatCatalog.test.ts
+  h_9630b74bdac540 1-64
+src/findReplace/webview/components/DiffBlock.tsx
+  h_9630b74bdac540 1
+packages/protocol/src/workspaceProject.test.ts
+  h_9630b74bdac540 1-84
+src/tools/autonomousMemory.ts
+  h_9630b74bdac540 5-6,8-9
+src/tools/sendFeedback.ts
+  h_9630b74bdac540 3-4
+src/agent/ProjectCustomizationRegistry.test.ts
+  h_9630b74bdac540 5
+src/findReplace/webview/types.ts
+  h_9630b74bdac540 1-7
+src/agent/McpClientHub.ts
+  h_9630b74bdac540 32-33,43,48,56
+src/core/mcpToolNames.test.ts
+  h_9630b74bdac540 2
+src/agent/chatTabProtocol.test.ts
+  h_9630b74bdac540 1-5,11-14,16,18-27
+packages/protocol/src/contextLedger.test.ts
+  h_9630b74bdac540 1-182
+src/adapters/vscode/worktreeAgentLaunchCapabilities.ts
+  h_9630b74bdac540 1
+src/adapters/vscode/workspaceProjectCapabilities.test.ts
+  h_9630b74bdac540 3
+src/browser-gateway/webview/components/BrowserDiffViewer.tsx
+  h_9630b74bdac540 5
+src/agent/webview/components/TodoBlock.tsx
+  h_9630b74bdac540 1
+src/agent/webview/components/StreamingStatusBar.tsx
+  h_9630b74bdac540 1
+src/core/model/providers/anthropic/streamParser.ts
+  h_9630b74bdac540 56,75-80,356-358
+src/agent/sessionHandoff.ts
+  h_9630b74bdac540 2,6-9,11-15
+src/browser-gateway/testing/ownerDataPlaneLoadFixture.ts
+  h_9630b74bdac540 14-15
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_9630b74bdac540 2,6-14,23-24,32-34,86,90-92,94,99,103,108,120,123,125-127,606-613,1786-1789,1793-1794,1796-1806,1808-1811,1813-1815,1817-1824,4487,4633,4741,4787-4809,4835,6253-6260,6262,6264-6265,6267,6269-6273,6279-6282,6284,6321-6323,6326-6329,6331,6333
+packages/protocol/src/diffSnapshot.ts
+  h_9630b74bdac540 1-19
+src/tools/listFiles.ts
+  h_9630b74bdac540 26
+src/agent/AgentPluginCatalog.test.ts
+  h_9630b74bdac540 10
+src/browser-gateway/browserGatewayPolicyWiring.test.ts
+  h_9630b74bdac540 3
+src/terminal/hostTerminalBlocks.ts
+  h_9630b74bdac540 2-7,15-22
+src/tools/findAndReplace.ts
+  h_9630b74bdac540 13-14
+src/agent/webview/components/ChatView.test.tsx
+  h_9630b74bdac540 14
+src/agent/mcpToolNames.ts
+  h_9630b74bdac540 1
+src/agent/browserForegroundSnapshot.ts
+  h_9630b74bdac540 2-3
+scripts/report-session-outcomes.test.mjs
+  h_9630b74bdac540 49-76,227-345
+packages/protocol/src/sessionHydration.test.ts
+  h_9630b74bdac540 1-52
+packages/protocol/src/builtinCommandForwarding.ts
+  h_9630b74bdac540 1-44
+src/agent/webview/App.tsx
+  h_9630b74bdac540 3,5,10-11,15-16,22-23,37,79,83,87-88,105-106,108,116-117,126,466-469,473-480,696-697,708-746,805-815,855-859,913-954,966-1043,1176-1181,1288-1295,1323,3508
+src/agent/AgentSessionManager.ts
+  h_9630b74bdac540 30-31,36-37,39,98-99,118-119,141-147,152,195-198,209-213,233,240,243-244,257,474-488,508,512-523,526-528,546,971,1884-1891,1907,1917-1923,1925-1928,1934-1942,1946-1960,1962,1965-1967,1971-1987,3382-3385,3458-3473,3512,6897-6898,6900-6904,6944-6945,6948-6961,6966,6968-6972,7146-7154,8719,10319-10329,10396,10719,10723,12586,12688,12870,12872,12905,13026-13031
+src/agent/backgroundModelRouter.test.ts
+  h_9630b74bdac540 739,754-759,763-785,791,807
+src/tools/codeActions.ts
+  h_9630b74bdac540 7
+packages/protocol/src/inlineApproval.test.ts
+  h_9630b74bdac540 1-49
+src/terminal/native/NativeAgentTerminalCoordinator.ts
+  h_9630b74bdac540 23
+src/agent/webview/components/slashCommandOrdering.test.ts
+  h_9630b74bdac540 7
+src/storage/retrieval/LanceDbMemoryRepository.ts
+  h_9630b74bdac540 15-18,53-69,94,96,161-244,584-609
+packages/protocol/build-cjs.mjs
+  h_9630b74bdac540 1-235
+src/browser-gateway/dataPlane/ownerProjectionAdapter.test.ts
+  h_9630b74bdac540 3,463
+packages/protocol/src/browserGatewayTheme.test.ts
+  h_9630b74bdac540 1-52
+packages/protocol/src/agentErrorPresentation.test.ts
+  h_9630b74bdac540 1-28
+src/browser-gateway/dataPlane/ownerProjectionAdapter.ts
+  h_9630b74bdac540 5-6
+src/findReplace/FindReplacePreviewPanel.ts
+  h_9630b74bdac540 6-8
+packages/protocol/src/chatSessionHistory.test.ts
+  h_9630b74bdac540 1-44
+src/core/capabilities/sessionControl.ts
+  h_9630b74bdac540 1-17
+src/browser-gateway/testing/phase3MobileBrowserFixture.ts
+  h_9630b74bdac540 20
+packages/protocol/src/chatPaneTransport.ts
+  h_9630b74bdac540 1-104
+src/agent/webview/components/activityPresentation.test.ts
+  h_9630b74bdac540 3
+packages/protocol/src/chatPaneTransport.test.ts
+  h_9630b74bdac540 1-100
+src/terminal/TerminalSessionService.ts
+  h_9630b74bdac540 6
+src/tools/deleteFeedback.ts
+  h_9630b74bdac540 1
+packages/protocol/src/questionDetection.ts
+  h_9630b74bdac540 1-149
+packages/protocol/src/mcpToolIdentity.ts
+  h_9630b74bdac540 1-18
+packages/protocol/src/inlineApproval.ts
+  h_9630b74bdac540 1-76
+packages/protocol/src/chatCatalog.ts
+  h_9630b74bdac540 1-65
+resources/builtin-skills/documentation/references/customization.md
+  h_9630b74bdac540 73,75
+src/adapters/vscode/chatWebviewShell.ts
+  h_9630b74bdac540 3
+src/agent/toolAdapter.ts
+  h_9630b74bdac540 55,62,65,70,82,185,189,198,215-216,668,673,678,1288-1289,1291,1953,1966,2030,2033,3199
+src/agent/persistenceContracts.ts
+  h_9630b74bdac540 10,13,16,18,20,85-86,252,254
+packages/protocol/src/chatSessionHistory.ts
+  h_9630b74bdac540 1-15
+packages/protocol/watch.mjs
+  h_9630b74bdac540 1-323
+src/browser-gateway/helper/browserGatewayAskAgentMemoryContext.ts
+  h_9630b74bdac540 6
+src/terminal/webview/App.test.tsx
+  h_9630b74bdac540 16
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_9630b74bdac540 10,86-87,96,122-123,156-157,159,186,196,198,205,254,259,402-405,5358-5375,5381
+src/shared/questionDetection.test.ts
+  h_9630b74bdac540 6-15
+src/terminal/sandbox/SandboxHelperClient.ts
+  h_9630b74bdac540 1
+why-agentlink.md
+  h_9630b74bdac540 3,16,30,87
+packages/protocol/src/mcpToolIdentity.test.ts
+  h_9630b74bdac540 1-44
+src/shared/ui/SessionHandoffPanel.test.tsx
+  h_9630b74bdac540 6
+src/tools/getModuleNeighbors.ts
+  h_9630b74bdac540 13
+src/agent/ProjectMcpHubRegistry.test.ts
+  h_9630b74bdac540 3
+src/core/capabilities/mcp.ts
+  h_9630b74bdac540 1
+packages/protocol/src/terminalSurface.test.ts
+  h_9630b74bdac540 1-125
+src/shared/builtinCommandForwarding.test.ts
+  h_9630b74bdac540 1,4-11
+src/terminal/HostTerminalSurfaceController.ts
+  h_9630b74bdac540 1
+packages/protocol/src/toolResult.test.ts
+  h_9630b74bdac540 1-149
+src/agent/AgentSession.test.ts
+  h_9630b74bdac540 10,18-19
+src/agent/webview/components/SlashCommandPopup.tsx
+  h_9630b74bdac540 3
+packages/protocol/src/chatTranscript.test.ts
+  h_9630b74bdac540 1-186,188-200,202-229
+src/agent/webview/components/InputArea.slashClose.test.ts
+  h_9630b74bdac540 7
+src/approvals/actionApprovalReview.ts
+  h_9630b74bdac540 10
+src/agent/compose/composeRuntime.ts
+  h_9630b74bdac540 18-19
+src/browser-gateway/testing/stateEquivalenceOracle.ts
+  h_9630b74bdac540 5-7
+src/tools/getFeedback.ts
+  h_9630b74bdac540 4
+src/shared/autoContinueTabState.test.ts
+  h_9630b74bdac540 1-45
+src/agent/mcpToolResult.ts
+  h_9630b74bdac540 5
+src/agent/ChatPaneConnection.ts
+  h_9630b74bdac540 5
+src/agent/webview/components/ReasoningEffortSelector.tsx
+  h_9630b74bdac540 2-4
+src/shared/chatProjection.ts
+  h_9630b74bdac540 1,3,5,10-17,21-25,27,33-35,39
+src/core/terminalProtocol.ts
+  h_9630b74bdac540 1
+src/tools/diagnoseActivity.ts
+  h_9630b74bdac540 6
+src/agent/ChatPaneAuthorityController.ts
+  h_9630b74bdac540 1-4,6-9
+src/agent/compose/composeScope.ts
+  h_9630b74bdac540 7
+src/storage/retrieval/sharedMemoryStorePaths.test.ts
+  h_9630b74bdac540 1-45
+src/terminal/shellIntegration.ts
+  h_9630b74bdac540 2,9
+src/agent/webview/slashCommandInput.ts
+  h_9630b74bdac540 1
+src/core/workspaceProjects.test.ts
+  h_9630b74bdac540 1,11-12,14,18-32
+src/core/model/providers/openaiCompatible/completionFacade.test.ts
+  h_9630b74bdac540 610-612,638-641
+resources/builtin-skills/documentation/references/mcp.md
+  h_9630b74bdac540 73
+src/storage/retrieval/sharedMemoryStorePaths.ts
+  h_9630b74bdac540 1-37
+src/agent/webview/components/ToolCallGroup.test.tsx
+  h_9630b74bdac540 12
+src/storage/retrieval/sharedMemoryConfig.ts
+  h_9630b74bdac540 1-192
+src/shared/agentErrors.test.ts
+  h_9630b74bdac540 1-4,16,111-117
+src/agent/mcpToolNames.test.ts
+  h_9630b74bdac540 2
+src/terminal/terminalOutputFilter.ts
+  h_9630b74bdac540 1-2
+src/approvals/ApprovalManager.ts
+  h_9630b74bdac540 6-8
+src/browser-gateway/browserGatewayAskAgentSessionStore.ts
+  h_9630b74bdac540 17,22,24-25,28-32,38,40,43,101
+scripts/report-session-outcomes.mjs
+  h_9630b74bdac540 179-195,247-249,254-340,367,378,398-446,534-538,603-604,674-701,765-817,936-938,955-962,974-975
+src/storage/retrieval/AutonomousMemoryToolProvider.test.ts
+  h_9630b74bdac540 10,54,63-85,278,299,302,305,307,309-311
+src/telemetry/ContextJumpTracker.ts
+  h_9630b74bdac540 2,41-44,50,119-122
+resources/builtin-skills/documentation/references/settings.md
+  h_9630b74bdac540 25
+packages/protocol/src/terminal.ts
+  h_9630b74bdac540 1-251
+src/agent/webview/components/ModeSelector.tsx
+  h_9630b74bdac540 7
+src/agent/ChatTabController.test.ts
+  h_9630b74bdac540 1,4,7,10-13,41-45
+src/agent/webview/components/ModelSelector.tsx
+  h_9630b74bdac540 7
+src/agent/webview/components/InputArea.tsx
+  h_9630b74bdac540 7-11,42,54
+src/storage/retrieval/sharedMemoryConfig.test.ts
+  h_9630b74bdac540 1-205
+src/core/capabilities/editReview.ts
+  h_9630b74bdac540 2-3
+src/agent/AgentPluginManagerHost.test.ts
+  h_9630b74bdac540 14-15
+src/agent/webview/components/QuestionCard.test.ts
+  h_9630b74bdac540 11
+src/core/memory/legacyMemoryImport.ts
+  h_9630b74bdac540 6
+src/agent/McpPolicyMutationProvider.ts
+  h_9630b74bdac540 4,9
+src/browser-gateway/testing/stateEquivalenceOracle.test.ts
+  h_9630b74bdac540 3-4
+src/agent/webview/components/ModelSelector.test.tsx
+  h_9630b74bdac540 7
+src/terminal/LiveHostTerminalSurfaceController.ts
+  h_9630b74bdac540 11
+src/agent/McpPolicyMutationProvider.test.ts
+  h_9630b74bdac540 4,10
+src/terminal/AgentTerminalViewProvider.test.ts
+  h_9630b74bdac540 10
+src/approvals/commandApprovalReview.ts
+  h_9630b74bdac540 5,12-16
+src/tools/startWorktreeAgent.ts
+  h_9630b74bdac540 10-13
+src/terminal/HostTerminalRuntime.ts
+  h_9630b74bdac540 7-10,44
+src/agent/condense.test.ts
+  h_9630b74bdac540 937-943,952-955,963,978-989
+src/agent/turnOutcomeStats.ts
+  h_9630b74bdac540 2-6,27,70,78
+src/terminal/HostTerminalSurfaceController.test.ts
+  h_9630b74bdac540 3
+src/browser-gateway/testing/phase3ShadowParityGate.ts
+  h_9630b74bdac540 1-2
+src/agent/webview/components/SlashCommandPopup.test.ts
+  h_9630b74bdac540 5
+src/browser-gateway/helper/BrowserGatewayAutonomousMemoryRuntime.test.ts
+  h_9630b74bdac540 1-2,13-18,32-34,86,88-89,91-92,94,97-98,102-103,106-108,112-113,116-118,124,148-149,179,181-183,193-263,268-279,281,284,293,296-297,315-319,324,327-329,331
+src/agent/webview/components/MessageBubble.test.tsx
+  h_9630b74bdac540 13
+src/browser-gateway/helper/BrowserGatewayDerivedSessionRuntime.ts
+  h_9630b74bdac540 10-11,21,50-51,58-59,62,64-65,71-78,89,93-94,101-102,112-113,121-122,130-131,136,140-141,144-150,153-162,164-166,168-173,175,177-180,182-183,188,194,197,200,207
+src/tools/languageNavigation.test.ts
+  h_9630b74bdac540 3
+src/telemetry/ContextUsageTelemetry.ts
+  h_9630b74bdac540 4,23-26,32
+src/core/mcpToolNames.ts
+  h_9630b74bdac540 1
+src/core/session/DerivedSessionRetrievalService.test.ts
+  h_9630b74bdac540 431-485,514-517,520,522,526
+src/core/contextLedger.ts
+  h_9630b74bdac540 1
+packages/protocol/src/browserGatewayTheme.ts
+  h_9630b74bdac540 1-20
+src/terminal/hostTerminalBlocks.test.ts
+  h_9630b74bdac540 3
+src/terminal/webview/xtermRenderer.test.ts
+  h_9630b74bdac540 27
+src/agent/AgentPluginManagerHost.ts
+  h_9630b74bdac540 18-21
+src/browser-gateway/dataPlane/ownerProjectionSources.ts
+  h_9630b74bdac540 4,9,13-16,18
+src/agent/systemPrompt.test.ts
+  h_9630b74bdac540 365-375,383,385-389,393-394,396,399,402,480-483,486
+src/agent/AgentSession.ts
+  h_9630b74bdac540 1,8,12,26,31-32,67-68,893,1082-1083
+src/storage/retrieval/sharedMemoryStoreMigration.test.ts
+  h_9630b74bdac540 1-160
+src/browser-gateway/DiffSnapshotHub.ts
+  h_9630b74bdac540 3,5-8
+src/browser-gateway/helper/AskAgentController.ts
+  h_9630b74bdac540 5-6,15
+src/agent/webview/components/ApiRequestBlock.tsx
+  h_9630b74bdac540 1-2
+src/browser-gateway/browserGatewayRegistry.ts
+  h_9630b74bdac540 7
+packages/protocol/src/autonomousMemory.test.ts
+  h_9630b74bdac540 1-74
+src/agent/AgentUiPublisher.ts
+  h_9630b74bdac540 3-7,9-10,68
+src/agent/webview/components/useSlashCommandPopup.ts
+  h_9630b74bdac540 2-5
+src/tools/executeCommand.ts
+  h_9630b74bdac540 20,55,120,1440-1523,2920-2925,2928
+src/agent/agentPluginProjectDeclarations.test.ts
+  h_9630b74bdac540 13
+src/tools/getTerminalOutput.ts
+  h_9630b74bdac540 1-2,4
+src/browser-gateway/webview/index.tsx
+  h_9630b74bdac540 6
+src/browser-gateway/webview/browserGatewayNotifications.ts
+  h_9630b74bdac540 2-3
+packages/protocol/src/terminalSurface.ts
+  h_9630b74bdac540 1-588
+src/agent/webview/index.tsx
+  h_9630b74bdac540 5-6
+src/core/workspaceProjects.ts
+  h_9630b74bdac540 1-5,7,9
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  h_9630b74bdac540 12-13,27
+src/terminal/vscodeTerminalConfiguration.ts
+  h_9630b74bdac540 12
+src/agent/AgentSessionManagerHost.ts
+  h_9630b74bdac540 48-49,53-54,83,187
+src/tools/memoryProposalNode.ts
+  h_9630b74bdac540 5
+src/tools/codeActions.test.ts
+  h_9630b74bdac540 4
+src/tools/presentImages.ts
+  h_9630b74bdac540 2
+src/agent/webview/components/StreamingStatusBar.test.tsx
+  h_9630b74bdac540 4,6
+src/browser-gateway/helper/BrowserGatewayDerivedSessionRuntime.test.ts
+  h_9630b74bdac540 1-2,6-8,10-11,85-94,97-98,101-105,107-112,114-122,126,162-171,195,197,199,202,206,212-215,217,230,232,234,237,243-253
+packages/protocol/src/backgroundResult.test.ts
+  h_9630b74bdac540 1-246
+resources/builtin-skills/documentation/references/capabilities.md
+  h_9630b74bdac540 61,85
+src/core/tools/providerToolNames.ts
+  h_9630b74bdac540 1-6
+packages/protocol/src/terminal.test.ts
+  h_9630b74bdac540 1-279
+src/agent/FleetWorkflows.ts
+  h_9630b74bdac540 6-7,69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "359a9efcb9562f7e25f5fe3fea8eaa1d9c6ac3ec",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
