@@ -1,0 +1,80 @@
+src/agent/AgentSessionManager.test.ts
+  h_9630b74bdac540 3248-3352
+src/sidebar/webview/types.ts
+  h_9630b74bdac540 1-8,11-13,15-16
+src/agent/webview/components/ToolCallBlock.test.ts
+  h_9630b74bdac540 85-137
+src/sidebar/SidebarProvider.ts
+  h_9630b74bdac540 17
+src/agent/toolAdapter.test.ts
+  h_9630b74bdac540 4367,4380-4381,4387-4389,4392,4398
+src/sidebar/webview/components/FeedbackList.tsx
+  h_9630b74bdac540 4-5
+src/sidebar/webview/App.tsx
+  h_9630b74bdac540 8
+packages/protocol/src/sidebarTransport.test.ts
+  h_9630b74bdac540 1-122
+src/agent/AgentSessionManager.ts
+  h_9630b74bdac540 485-507,6839-6856,7955,7961,7973-7975,8002,8004-8005,8031-8033,8035,8038
+packages/protocol/src/index.ts
+  h_9630b74bdac540 45-46
+src/sidebar/webview/components/TrustedPaths.tsx
+  h_9630b74bdac540 3-4
+src/sidebar/webview/components/ActiveToolCalls.tsx
+  h_9630b74bdac540 3-4,74-76,94-98
+src/protocolPackageBoundary.test.ts
+  h_9630b74bdac540 362,427-468,1353-1385
+src/sidebar/webview/components/WriteApproval.tsx
+  h_9630b74bdac540 4-5
+src/sidebar/webview/components/ActivityShortcuts.tsx
+  h_9630b74bdac540 2
+src/agent/AgentToolCallTracker.test.ts
+  h_9630b74bdac540 138-183,280-296,442-460
+src/tools/executeCommand.test.ts
+  h_9630b74bdac540 4325,4375-4378,4380,4383,4389,4395-4409,4412,4423-4429,4436,4443,4457-4458,4463,5511,5530-5544,5549-5551,5565-5566
+src/tools/executeCommand.ts
+  h_9630b74bdac540 3438-3442,3448
+src/sidebar/webview/components/IndexStatus.tsx
+  h_9630b74bdac540 3-4
+packages/protocol/src/sidebarTransport.ts
+  h_9630b74bdac540 1-221
+src/agent/toolAdapter.ts
+  h_9630b74bdac540 4051-4053,4057
+src/sidebar/webview/components/FeedbackList.test.tsx
+  h_9630b74bdac540 5-6
+src/tools/getTerminalOutput.test.ts
+  h_9630b74bdac540 43-97
+packages/protocol/watch.mjs
+  h_9630b74bdac540 220-230,309
+src/agent/webview/components/ToolCallBlock.tsx
+  h_9630b74bdac540 728,730-732,739-741,744-746,759,775-776,805,831,852-869,946
+src/tools/getTerminalOutput.ts
+  h_9630b74bdac540 18-21,82,104,112-115,140-157,226
+src/agent/AgentToolCallTracker.ts
+  h_9630b74bdac540 49,53-57,121,126,129,131,137,140,243-245,247-252,332,347-349,393,395-398
+packages/protocol/package.json
+  h_9630b74bdac540 660-673
+packages/protocol/build-cjs.mjs
+  h_9630b74bdac540 50,219-224
+CHANGELOG.md
+  h_9630b74bdac540 42
+src/agent/agentToolCompletionStrategies.ts
+  h_9630b74bdac540 4-7,9-14,17,20,24,64-90,92,96-98,102,104-107,112-113,116-134,136,139,141-142,163
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_9630b74bdac540 1905-1906,1943-1945,1979-1980
+src/sidebar/webview/components/common/RuleList.tsx
+  h_9630b74bdac540 7
+src/sidebar/webview/components/TrustedCommands.tsx
+  h_9630b74bdac540 3-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "01895efa001cfdf87e9f842a2e5d63a263695f3c",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
