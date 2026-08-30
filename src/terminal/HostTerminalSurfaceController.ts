@@ -1,4 +1,4 @@
-import { EMPTY_HOST_TERMINAL_STATE } from "../core/terminalProtocol.js";
+import { EMPTY_HOST_TERMINAL_STATE } from "@agentlink/protocol/terminal";
 import {
   TERMINAL_SURFACE_PROTOCOL_VERSION,
   type TerminalSurfaceConfiguration,

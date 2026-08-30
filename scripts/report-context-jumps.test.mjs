@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { afterEach, test } from "node:test";
-import { readEvents, summarize } from "./report-context-jumps.mjs";
+import { parseArgs, readEvents, summarize } from "./report-context-jumps.mjs";
 
 import assert from "node:assert/strict";
 
@@ -64,7 +64,45 @@ test("summarizes dedicated request attribution without double-counting jump deta
       requestId: "request-1",
       requestKind: "agent",
       model: "model-a",
+      providerId: "provider-a",
+      mode: "code",
+      promptProfile: "reasoning",
+      background: false,
       estimatedInputTokens: 50_000,
+      contextLedger: {
+        allocatedInputTokens: 50_000,
+        overflowTokens: 500,
+        layers: [
+          {
+            layer: "system_prompt",
+            requestedTokens: 1_000,
+            allocatedTokens: 1_000,
+            omittedTokens: 0,
+            required: true,
+          },
+          {
+            layer: "mode_instructions",
+            requestedTokens: 200,
+            allocatedTokens: 200,
+            omittedTokens: 0,
+            required: true,
+          },
+          {
+            layer: "tool_definitions",
+            requestedTokens: 2_000,
+            allocatedTokens: 2_000,
+            omittedTokens: 0,
+            required: true,
+          },
+          {
+            layer: "retrieved_context",
+            requestedTokens: 100,
+            allocatedTokens: 60,
+            omittedTokens: 40,
+            required: false,
+          },
+        ],
+      },
       toolResultAttributions: [
         {
           toolCallId: "call-read-1",
@@ -177,6 +215,72 @@ test("summarizes dedicated request attribution without double-counting jump deta
       { toolName: "search_files", count: 1, bytes: 400, estimatedTokens: 50 },
     ],
   });
+  assert.deepEqual(summary.harnessContext, {
+    agentProviderAttempts: 1,
+    condenseProviderAttempts: 1,
+    ledgerAttempts: 1,
+    ledgerCoverage: 1,
+    estimatedStaticFloor: {
+      samples: 1,
+      p50: 3_200,
+      p90: 3_200,
+      max: 3_200,
+      tokenSends: 3_200,
+      weightedShare: 3_200 / 50_000,
+    },
+    boundedContext: {
+      requestedTokens: 100,
+      allocatedTokens: 60,
+      omittedTokens: 40,
+      attemptsRequestingContext: 1,
+      attemptsWithOmission: 1,
+      omissionIncidence: 1,
+      eligibleRequestOmissionRate: 1,
+      tokenOmissionRate: 0.4,
+    },
+    overflow: { tokens: 500, attempts: 1, requestRate: 1 },
+    layers: {
+      system_prompt: {
+        requestedTokens: 1_000,
+        allocatedTokens: 1_000,
+        omittedTokens: 0,
+        samples: 1,
+        requiredSamples: 1,
+        optionalSamples: 0,
+      },
+      mode_instructions: {
+        requestedTokens: 200,
+        allocatedTokens: 200,
+        omittedTokens: 0,
+        samples: 1,
+        requiredSamples: 1,
+        optionalSamples: 0,
+      },
+      tool_definitions: {
+        requestedTokens: 2_000,
+        allocatedTokens: 2_000,
+        omittedTokens: 0,
+        samples: 1,
+        requiredSamples: 1,
+        optionalSamples: 0,
+      },
+      retrieved_context: {
+        requestedTokens: 100,
+        allocatedTokens: 60,
+        omittedTokens: 40,
+        samples: 1,
+        requiredSamples: 0,
+        optionalSamples: 1,
+      },
+    },
+  });
+  assert.equal(summary.harnessContextByCohort.length, 2);
+  assert.equal(
+    summary.harnessContextByCohort.find(
+      (cohort) => cohort.agentProviderAttempts === 1,
+    )?.cohort,
+    "unknown | foreground | provider-a | model-a | code | reasoning",
+  );
   assert.deepEqual(summary.postCondenseEstimateGapTokens, {
     p50: 5,
     p90: 9,
@@ -194,4 +298,49 @@ test("summarizes dedicated request attribution without double-counting jump deta
   assert.equal(summary.topJumps[0].deltaTokens, 40_000);
   assert.equal(summary.topPostCondense.length, 1);
   assert.equal(summary.topPostCondense[0].estimateGapTokens, 10);
+});
+
+test("filters context telemetry by date/version and keeps --json boolean", () => {
+  const inputPath = path.join(makeTempDirectory(), "context-usage.jsonl");
+  writeJsonLines(inputPath, [
+    {
+      version: 1,
+      type: "context_usage_event",
+      recordedAt: "2026-08-01T00:00:00.000Z",
+      extensionVersion: "1.0.0",
+      event: { kind: "condense", sessionId: "old", model: "m" },
+    },
+    {
+      version: 1,
+      type: "context_usage_event",
+      recordedAt: "2026-08-02T00:00:00.000Z",
+      extensionVersion: "2.0.0",
+      event: { kind: "condense", sessionId: "new", model: "m" },
+    },
+  ]);
+
+  const filtered = readEvents(inputPath, {
+    since: new Date("2026-08-02T00:00:00.000Z"),
+    versions: ["2.0.0"],
+  });
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].sessionId, "new");
+
+  const withoutTimestamp = contextUsageEvent({
+    kind: "condense",
+    sessionId: "legacy-no-time",
+    model: "m",
+  });
+  delete withoutTimestamp.recordedAt;
+  writeJsonLines(inputPath, [withoutTimestamp]);
+  assert.equal(readEvents(inputPath).length, 1);
+  assert.equal(
+    readEvents(inputPath, { since: new Date("2026-08-01T00:00:00.000Z") })
+      .length,
+    0,
+  );
+
+  assert.equal(parseArgs(["--json", "--version", "2.0.0"]).json, true);
+  assert.equal(parseArgs(["-h"]).help, true);
+  assert.throws(() => parseArgs(["--json", "output.json"]));
 });

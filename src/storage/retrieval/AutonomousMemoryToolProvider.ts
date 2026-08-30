@@ -8,26 +8,36 @@ import type {
   MemoryProvenance,
   MemoryScope,
   RecordMemoryImportFailureRequest,
-} from "../../core/memory/contracts.js";
+} from "@agentlink/protocol/autonomous-memory";
+import type {
+  MemoryInspectionProvider,
+  MemoryToolProvider,
+} from "../../core/capabilities/memory.js";
 import type {
   ManageMemoryToolRequest,
   MemoryActivityRequest,
   MemoryInspectionDetailRequest,
   MemoryInspectionMutationContext,
-  MemoryInspectionProvider,
   MemoryInspectionQueryRequest,
-  MemoryToolProvider,
   MemoryToolScope,
   RecallMemoryToolRequest,
-} from "../../core/capabilities/memory.js";
+} from "@agentlink/protocol/autonomous-memory";
 import { sameMemoryScope } from "../../core/memory/memoryPolicy.js";
 import { LanceDbMemoryRepository } from "./LanceDbMemoryRepository.js";
 
 export type AutonomousMemoryMode = "off" | "autonomous";
 
+export interface AutonomousMemoryModeSnapshot {
+  mode: AutonomousMemoryMode;
+  reason?: "config_invalid" | "config_unreadable";
+}
+
 export interface AutonomousMemoryToolProviderOptions {
   root: string;
-  getMode: () => AutonomousMemoryMode;
+  getMode: () =>
+    | AutonomousMemoryMode
+    | AutonomousMemoryModeSnapshot
+    | Promise<AutonomousMemoryMode | AutonomousMemoryModeSnapshot>;
   isInitializing?: () => boolean;
 }
 
@@ -43,12 +53,12 @@ export class AutonomousMemoryToolProvider
   }
 
   async importRecords(request: ImportMemoryRecordsRequest) {
-    this.assertModeEnabled();
+    await this.assertModeEnabled();
     return await this.service.importRecords(request);
   }
 
   async recordImportFailure(request: RecordMemoryImportFailureRequest) {
-    this.assertModeEnabled();
+    await this.assertModeEnabled();
     return await this.service.recordImportFailure(request);
   }
 
@@ -100,10 +110,9 @@ export class AutonomousMemoryToolProvider
   }
 
   async health(): Promise<MemoryHealthSnapshot> {
-    if (this.options.getMode() !== "autonomous") {
-      return unavailableHealth(
-        'Autonomous memory is disabled. Set agentlink.memory.mode to "autonomous" to dogfood manage_memory and recall_memory.',
-      );
+    const mode = await this.getModeSnapshot();
+    if (mode.mode !== "autonomous") {
+      return unavailableHealth(mode.reason ?? "disabled");
     }
     if (this.options.isInitializing?.()) {
       return unavailableHealth(
@@ -112,7 +121,13 @@ export class AutonomousMemoryToolProvider
     }
     try {
       await this.assertReady();
-      return await this.service.health();
+      const health = await this.service.health();
+      const blocked = latestBlockedImport(
+        await this.repository.listImportCheckpoints(),
+      );
+      return blocked
+        ? { ...health, status: "degraded", reason: "migration_blocked" }
+        : health;
     } catch (error) {
       const base = await this.service.health().catch(() => undefined);
       return unavailableHealth(
@@ -248,31 +263,28 @@ export class AutonomousMemoryToolProvider
     return { result, health: await this.service.health() };
   }
 
-  private assertModeEnabled(): void {
-    if (this.options.getMode() !== "autonomous") {
+  private async assertModeEnabled(): Promise<void> {
+    const mode = await this.getModeSnapshot();
+    if (mode.mode !== "autonomous") {
       throw new Error(
-        'Autonomous memory is disabled. Set agentlink.memory.mode to "autonomous" to dogfood manage_memory and recall_memory.',
+        mode.reason ??
+          'Autonomous memory is disabled. Set agentlink.memory.mode to "autonomous".',
       );
     }
   }
 
+  private async getModeSnapshot(): Promise<AutonomousMemoryModeSnapshot> {
+    const mode = await this.options.getMode();
+    return typeof mode === "string" ? { mode } : mode;
+  }
+
   private async assertReady(): Promise<void> {
-    this.assertModeEnabled();
+    await this.assertModeEnabled();
     if (this.options.isInitializing?.()) {
       throw new Error(
         "Autonomous memory is unavailable while legacy memory migration is running.",
       );
     }
-    const blocked = latestBlockedImport(
-      await this.repository.listImportCheckpoints(),
-    );
-    if (!blocked) return;
-    const detail = blocked.error
-      ? `${blocked.error.code}: ${blocked.error.message}`
-      : `legacy memory import is ${blocked.status}`;
-    throw new Error(
-      `Autonomous memory is unavailable until legacy import is repaired or retried (${blocked.sourceKey}): ${detail}`,
-    );
   }
 }
 
@@ -308,13 +320,9 @@ function latestBlockedImport(
       latestBySource.set(checkpoint.sourceKey, checkpoint);
     }
   }
-  return [...latestBySource.values()]
-    .filter((checkpoint) => checkpoint.status !== "complete")
-    .sort(
-      (left, right) =>
-        right.updatedAt.localeCompare(left.updatedAt) ||
-        right.id.localeCompare(left.id),
-    )[0];
+  return [...latestBySource.values()].find(
+    (checkpoint) => checkpoint.status !== "complete",
+  );
 }
 
 function provenance(request: ManageMemoryToolRequest): MemoryProvenance {

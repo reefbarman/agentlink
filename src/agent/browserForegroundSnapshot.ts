@@ -1,6 +1,6 @@
 import type { AppState } from "../shared/chatProjection.js";
-import type { ChatMessage } from "./webview/types.js";
-import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
+import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 
 export interface BrowserForegroundSnapshot {
   sessionId: string;

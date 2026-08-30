@@ -3,7 +3,7 @@ import {
   type HostTerminalEvent,
   type HostTerminalTab,
   type TerminalDimensions,
-} from "../core/terminalProtocol.js";
+} from "@agentlink/protocol/terminal";
 import type { ResolvedHostShellProfile } from "./shellProfileResolver.js";
 import { Utf8TailBuffer } from "./Utf8TailBuffer.js";
 

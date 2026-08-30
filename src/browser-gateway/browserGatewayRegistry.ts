@@ -4,7 +4,7 @@ import * as path from "path";
 
 import type { BrowserGatewayDataPlaneMode } from "./browserGatewayDataPlaneMode.js";
 import type { BrowserGatewayDiscoveryRecord } from "./browserGatewayDiscovery.js";
-import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
+import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import { sleep } from "../util/sleep.js";
 
 const REGISTRY_DIR = path.join(os.homedir(), ".agentlink");

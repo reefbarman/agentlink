@@ -1,9 +1,9 @@
 /** @vitest-environment jsdom */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
-import type { ChatMessage } from "../types";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import { StreamingStatusBar } from "./StreamingStatusBar";
 
 const assistantMessage = (blocks: ChatMessage["blocks"]): ChatMessage => ({

@@ -4,6 +4,15 @@ import type {
   ManagedNetworkRequest,
   TerminalExecutionSecuritySummary,
 } from "../../core/capabilities/terminal.js";
+import type {
+  MemoryScope,
+  MemoryTier,
+} from "@agentlink/protocol/inline-approval";
+
+export type {
+  MemoryScope,
+  MemoryTier,
+} from "@agentlink/protocol/inline-approval";
 
 export type CommandTierLevel = "safe" | "sensitive" | "dangerous";
 
@@ -62,8 +71,6 @@ export interface CommandRecoveryAttempt {
   mayHaveSideEffects: boolean | "unknown";
 }
 
-export type MemoryTier = "instructions" | "skill" | "command" | "memory";
-export type MemoryScope = "global" | "project";
 export type MemoryOperation = "add" | "update" | "remove";
 
 export interface ApprovalProjectContext {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 import type { McpConnectOptions } from "./McpClientHub.js";
 import type { McpServerConfig } from "./mcpConfig.js";
 import {

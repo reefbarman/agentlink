@@ -9,7 +9,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
-import type { ContentBlock } from "../types";
+import type { ContentBlock } from "@agentlink/protocol/chat-transcript";
 import type { ToolCallData } from "./ToolCallBlock";
 
 afterEach(() => {

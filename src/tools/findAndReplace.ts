@@ -10,11 +10,8 @@ import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.j
 import { isAgentInstructionReadPath } from "../approvals/protectedPaths.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 
-import {
-  errorResult,
-  type ToolResult,
-  type OnApprovalRequest,
-} from "../shared/types.js";
+import { errorResult, type ToolResult } from "@agentlink/protocol/tool-result";
+import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
 import type {
   EditReviewParams,
   MultiFileEditMatch,

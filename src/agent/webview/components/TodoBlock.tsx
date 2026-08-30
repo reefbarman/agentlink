@@ -1,4 +1,4 @@
-import type { TodoItem } from "../types";
+import type { TodoItem } from "@agentlink/protocol/chat-transcript";
 
 interface TodoBlockProps {
   todos: TodoItem[];

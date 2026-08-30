@@ -2,7 +2,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { SlashCommandInfo } from "../types";
+import type { ChatSlashCommandInfo as SlashCommandInfo } from "@agentlink/protocol/chat-catalog";
 import { SlashCommandPopup } from "./SlashCommandPopup";
 import { h } from "preact";
 import { render } from "@testing-library/preact";

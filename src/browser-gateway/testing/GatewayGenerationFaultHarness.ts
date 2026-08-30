@@ -1,5 +1,5 @@
-import type { CoreModelAuthLease } from "../../core/modelAuth.js";
-import type { CoreSessionScopeDto } from "../../core/sessionProtocol.js";
+import type { CoreModelAuthLease } from "@agentlink/protocol/model-auth";
+import type { CoreSessionScopeDto } from "@agentlink/protocol/session";
 import {
   BrowserGatewayCoreOwnerRegistry,
   type BrowserGatewayCoreOwnerRegistration,

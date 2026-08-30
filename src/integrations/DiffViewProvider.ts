@@ -18,7 +18,7 @@ import {
 import { classifyEditDurability } from "../core/editDurability.js";
 import { commitAndVerifyEdit } from "./editDurability.js";
 import { DIFF_VIEW_URI_SCHEME } from "./diffViewContentProvider.js";
-import type { OnApprovalRequest } from "../shared/types.js";
+import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
 import { diffSnapshotHub } from "../browser-gateway/DiffSnapshotHub.js";
 import { randomUUID } from "crypto";
 import { sleep } from "../util/sleep.js";
@@ -549,13 +549,10 @@ export class DiffViewProvider {
               rejectionReason,
               // Map trust scopes from the WriteCard decision
               ...(typeof raw !== "string" && {
-                trustScope: (raw as Record<string, unknown>)
-                  .trustScope as WriteApprovalResponse["trustScope"],
-                rulePattern: (raw as Record<string, unknown>).rulePattern as
-                  | string
-                  | undefined,
-                ruleMode: (raw as Record<string, unknown>)
-                  .ruleMode as WriteApprovalResponse["ruleMode"],
+                trustScope:
+                  raw.trustScope as WriteApprovalResponse["trustScope"],
+                rulePattern: raw.rulePattern,
+                ruleMode: raw.ruleMode as WriteApprovalResponse["ruleMode"],
               }),
             };
             finish((decision as DiffDecision) ?? "reject");

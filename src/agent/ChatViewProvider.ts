@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { randomUUID } from "crypto";
-import { isCoreReasoningEffort } from "../core/modelCatalog.js";
+import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import {
   normalizeCoreWebAccessSettings,
   type CoreWebAccessSettings,
@@ -15,15 +15,17 @@ import {
 } from "./providers/types.js";
 import type {
   BtwBudget,
-  ChatMessage,
   ExtensionMessage,
-  ProjectInfo,
   ProviderUsageCardData,
-  SessionSummary as WebviewSessionSummary,
-  SlashCommandInfo,
-  WebviewModelInfo,
   WorktreeSetupConfig,
 } from "./webview/types.js";
+import type { ChatSessionHistorySummary as WebviewSessionSummary } from "@agentlink/protocol/chat-session-history";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
+import type {
+  ChatModelInfo as WebviewModelInfo,
+  ChatProjectInfo as ProjectInfo,
+  ChatSlashCommandInfo as SlashCommandInfo,
+} from "@agentlink/protocol/chat-catalog";
 import { getConfiguredBaseThresholdForModel } from "./modelCondenseThresholds.js";
 import { getModeModelPreferences } from "./modeModelPreferences.js";
 import { getModeReasoningEffortPreferences } from "./modeReasoningEffortPreferences.js";
@@ -34,11 +36,7 @@ import type {
   SessionApprovalMode,
 } from "./AgentSessionManager.js";
 import type { AgentSession } from "./AgentSession.js";
-import type {
-  ChatTab,
-  ChatTabActionAddress,
-  ChatTabController,
-} from "./ChatTabController.js";
+import type { ChatTabController } from "./ChatTabController.js";
 import { ChatTabHostCoordinator } from "./ChatTabHostCoordinator.js";
 import type { ChatPaneConnection } from "./ChatPaneConnection.js";
 import type { ChatPaneLease } from "./ChatPaneAuthorityController.js";
@@ -47,11 +45,13 @@ import {
   createChatWorkspaceViewSnapshot,
   parseChatTabActionAddress,
   selectedWorkspaceSessionId,
+  type ChatTab,
+  type ChatTabActionAddress,
   type ChatTabActionConfirmationRequest,
   type ChatTabActionFailure,
   type ChatTabActionRejection,
   type ChatWorkspaceViewSnapshot,
-} from "./chatTabProtocol.js";
+} from "@agentlink/protocol/chat-workspace";
 import {
   SessionApprovalPolicyCoordinator,
   type AgentWriteApprovalSelection,
@@ -63,17 +63,23 @@ import type {
   PendingQuestionRecoveryState,
   RevertRecoveryState,
 } from "./persistenceContracts.js";
-import type { AgentErrorActions, AgentEvent } from "./types.js";
-import type { ComposeTrace } from "../shared/composeTypes.js";
+import type { AgentErrorActions } from "@agentlink/protocol/agent-error-presentation";
+import type { AgentEvent } from "./types.js";
+import type { ComposeTrace } from "@agentlink/protocol/compose";
+import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import type {
-  BrowserGatewayThemeSnapshot,
   BackgroundCompletionResult,
-  CondenseMetadata,
-  McpApprovalPromotionMeta,
-  RequestContextBreakdown,
+  InFlightAssistantBlock,
   RevertRecoveryNotice,
+} from "@agentlink/protocol/session-hydration";
+import type {
+  CondenseMetadata,
+  RequestContextBreakdown,
+} from "@agentlink/protocol/context-diagnostics";
+import type {
+  McpApprovalPromotionMeta,
   ToolResult,
-} from "../shared/types.js";
+} from "@agentlink/protocol/tool-result";
 import type {
   McpConfigBatchMutation,
   McpConfigMutationResult,
@@ -83,18 +89,18 @@ import type {
   McpManagerServerDraft,
   McpManagerView,
   McpServerConnectionOutcome,
-} from "../shared/mcpManagerTypes.js";
-import type { McpUrlElicitationRequest } from "../shared/mcpUrlElicitation.js";
+} from "@agentlink/protocol/mcp-manager";
+import type { McpUrlElicitationRequest } from "@agentlink/protocol/mcp-url-elicitation";
 import type {
   McpFormElicitationRequest,
   McpFormElicitationResponse,
-} from "../shared/mcpElicitation.js";
+} from "@agentlink/protocol/mcp-elicitation";
 import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 import type { InstructionBlock } from "./configLoader.js";
 import {
   getFinalMessageContinueAction,
   type FinalMessageMarker,
-} from "../shared/finalStatus.js";
+} from "@agentlink/protocol/final-status";
 import { buildFileSearchPattern } from "./fileMentionSearch.js";
 import { getLatestTodoState, type TodoItem } from "./todoTool.js";
 import {
@@ -108,7 +114,7 @@ import type {
   AgentPluginInstallTarget,
   AgentPluginManagerHost,
 } from "./AgentPluginManagerHost.js";
-import type { AgentPluginManagerAction } from "../shared/agentPluginManagerTypes.js";
+import type { AgentPluginManagerAction } from "@agentlink/protocol/agent-plugin-manager";
 import type { AgentPluginInstallCandidate } from "./AgentPluginInstaller.js";
 import { parsePluginCommandArgs } from "./agentPluginSources.js";
 import { getSkillDiscoveryRoots } from "./skillLoader.js";
@@ -202,7 +208,7 @@ import {
 } from "./promptPolish.js";
 import { getApprovalResultAnnotation } from "./approvalResultAnnotation.js";
 import { detectQuestionFromAssistantText } from "./webview/questionDetection.js";
-import type { DetectedQuestion } from "../shared/questionDetection.js";
+import type { DetectedQuestion } from "@agentlink/protocol/question-detection";
 import {
   agentMessagesToChatMessages,
   reducer,
@@ -216,25 +222,23 @@ import {
   commandApprovalPolicyFromLegacyTier,
   isCommandApprovalPolicy,
   type CommandApprovalPolicy,
-} from "../approvals/commandApprovalPolicy.js";
+} from "@agentlink/protocol/command-approval-policy";
 import {
   createSessionProjectScope,
-  createWorkspaceProjectId,
   isProjectlessSessionScope,
   type SessionProjectScope,
-} from "../core/workspaceProjects.js";
-import { normalizeUserQuestionAttachments } from "../core/capabilities/sessionControl.js";
+} from "@agentlink/protocol/workspace-project";
+import { createWorkspaceProjectId } from "../core/workspaceProjects.js";
+import { normalizeUserQuestionAttachments } from "@agentlink/protocol/structured-question";
+import type { MemoryInspectionProvider } from "../core/capabilities/memory.js";
 import type {
   ManageMemoryToolInput,
-  MemoryInspectionProvider,
+  MemoryArchiveV1,
   MemoryInspectionQueryRequest,
   MemoryPanelSnapshot,
-  MemoryToolScope,
-} from "../core/capabilities/memory.js";
-import type {
-  MemoryArchiveV1,
   MemoryRecordDetail,
-} from "../core/memory/contracts.js";
+  MemoryToolScope,
+} from "@agentlink/protocol/autonomous-memory";
 import { buildContextDoctorReport } from "./contextDoctor.js";
 import {
   INITIAL_CONTEXT_HEALTH,
@@ -243,8 +247,8 @@ import {
   projectRetrievalHealth,
   type ContextHealthSnapshot,
   type ContextIndexHealthInput,
-} from "../shared/contextHealth.js";
-import type { MemoryHealthSnapshot } from "../core/memory/contracts.js";
+} from "@agentlink/protocol/context-health";
+import type { MemoryHealthSnapshot } from "@agentlink/protocol/autonomous-memory";
 import type { RetrievalHealthSnapshot } from "../core/retrieval/contracts.js";
 import {
   createGitHubReviewWorktreeDraft,
@@ -557,7 +561,7 @@ export type ExtensionToWebview =
       requestId: string;
       messageId: string;
       detected:
-        | import("../shared/questionDetection.js").DetectedQuestion
+        | import("@agentlink/protocol/question-detection").DetectedQuestion
         | null;
       fallback: boolean;
     }
@@ -622,7 +626,7 @@ export type ExtensionToWebview =
   | {
       type: "agentPluginManagerSnapshot";
       open?: boolean;
-      snapshot: import("../shared/agentPluginManagerTypes.js").AgentPluginManagerSnapshot;
+      snapshot: import("@agentlink/protocol/agent-plugin-manager").AgentPluginManagerSnapshot;
     }
   | {
       type: "agentMemoryPanelUpdate";
@@ -654,7 +658,7 @@ export type ExtensionToWebview =
       id: string;
       toolCallId?: string;
       context: string;
-      questions: import("./webview/types.js").Question[];
+      questions: import("@agentlink/protocol/structured-question").UserQuestion[];
       backgroundTask?: string;
     }
   | { type: "agentQuestionCleared"; sessionId?: string; id: string }
@@ -737,7 +741,7 @@ export type ExtensionToWebview =
       /** True when this came from automatic startup restore rather than explicit user action. */
       restored?: boolean;
       /** Live tail: blocks of the model response currently streaming (not yet persisted). */
-      inFlight?: import("../shared/types.js").InFlightAssistantBlock[];
+      inFlight?: InFlightAssistantBlock[];
       /** Whether the session's turn is still running at snapshot time. */
       streaming?: boolean;
       /** Whether the session has an interrupted run to resume (persisted runState). */
@@ -779,7 +783,7 @@ export type ExtensionToWebview =
     }
   | {
       type: "agentBgSessionsUpdate";
-      sessions: import("../shared/types.js").BgSessionInfo[];
+      sessions: import("@agentlink/protocol/background-result").BgSessionInfo[];
     }
   | { type: "agentBgThinkingStart"; sessionId: string; thinkingId: string }
   | {
@@ -1049,39 +1053,8 @@ export type ExtensionToWebview =
     }
   | { type: "agentProviderUsage"; data: ProviderUsageCardData };
 
-export interface ChatState {
-  sessionId: string | null;
-  projects?: ProjectInfo[];
-  defaultProjectId?: string | null;
-  project?: ProjectInfo | null;
-  mode: string;
-  model: string;
-  streaming: boolean;
-  interrupted?: boolean;
-  thinkingEnabled?: boolean;
-  reasoningEffort?: import("./providers/types.js").ReasoningEffort;
-  condenseThreshold?: number;
-  contextBudget?: {
-    contextWindow: number;
-    maxInputTokens: number;
-    usedInputTokens: number;
-    outputReservation: number;
-    safetyBufferTokens: number;
-    softThresholdBudget: number;
-    hardBudget: number;
-  };
-  contextHealth?: ContextHealthSnapshot | null;
-  agentWriteApproval?: "prompt" | "session" | "project" | "global";
-  commandApprovalPolicy?: CommandApprovalPolicy;
-  approvalPolicy?: SessionApprovalMode["approvalPolicy"];
-  approvalReviewer?: SessionApprovalMode["approvalReviewer"];
-  executionPreset?: SessionApprovalMode["executionPreset"];
-  configuredCommandApprovalPolicy?: Exclude<
-    CommandApprovalPolicy,
-    "approve-for-me"
-  >;
-  revertRecoveryNotice?: RevertRecoveryNotice | null;
-}
+export type ChatState =
+  import("@agentlink/protocol/chat-state").ChatStateSnapshot;
 
 type ContextBudget = NonNullable<ChatState["contextBudget"]>;
 
@@ -1196,8 +1169,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             rulePattern?: string;
             ruleMode?: string;
             editedContent?: string;
-            memoryTier?: import("../approvals/webview/types.js").MemoryTier;
-            memoryScope?: import("../approvals/webview/types.js").MemoryScope;
+            memoryTier?: import("@agentlink/protocol/inline-approval").MemoryTier;
+            memoryScope?: import("@agentlink/protocol/inline-approval").MemoryScope;
             memoryName?: string;
           },
     ) => void
@@ -1244,7 +1217,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private pendingQuestions = new Map<
     string,
     (
-      response: import("../core/capabilities/sessionControl.js").UserQuestionResponse,
+      response: import("@agentlink/protocol/structured-question").UserQuestionResponse,
     ) => void
   >();
   /** Tracks which pending-question IDs belong to each session, for scoped cancellation on stop */
@@ -1307,7 +1280,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     | import("../browser-gateway/helper/BrowserGatewayHelperAdminClient.js").BrowserGatewayHelperAdminClient
     | undefined;
   private browserGatewayModelAuthProvider:
-    | import("../core/modelAuth.js").CoreModelAuthProvider
+    | import("../core/modelAuthProvider.js").CoreModelAuthProvider
     | undefined;
   private pairingPollTimers = new Map<string, ReturnType<typeof setInterval>>();
   private specialBlockPanel: vscode.WebviewPanel | undefined;
@@ -2226,7 +2199,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   setBrowserGatewayModelAuthProvider(
-    provider: import("../core/modelAuth.js").CoreModelAuthProvider,
+    provider: import("../core/modelAuthProvider.js").CoreModelAuthProvider,
   ): void {
     this.browserGatewayModelAuthProvider = provider;
   }
@@ -2302,7 +2275,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   getBrowserGatewayModelAuthProvider():
-    | import("../core/modelAuth.js").CoreModelAuthProvider
+    | import("../core/modelAuthProvider.js").CoreModelAuthProvider
     | undefined {
     return this.browserGatewayModelAuthProvider;
   }
@@ -3588,8 +3561,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         rulePattern?: string;
         ruleMode?: string;
         editedContent?: string;
-        memoryTier?: import("../approvals/webview/types.js").MemoryTier;
-        memoryScope?: import("../approvals/webview/types.js").MemoryScope;
+        memoryTier?: import("@agentlink/protocol/inline-approval").MemoryTier;
+        memoryScope?: import("@agentlink/protocol/inline-approval").MemoryScope;
         memoryName?: string;
       }
   > {
@@ -3877,7 +3850,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public requestQuestion(
     context: string,
-    questions: import("./webview/types.js").Question[],
+    questions: import("@agentlink/protocol/structured-question").UserQuestion[],
     sessionId: string,
     backgroundTask?: string,
     pendingQuestionRecovery?: import("../core/tools/types.js").PendingQuestionRecoveryContext,
@@ -4007,8 +3980,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }>;
     trustScope?: string;
     editedContent?: string;
-    memoryTier?: import("../approvals/webview/types.js").MemoryTier;
-    memoryScope?: import("../approvals/webview/types.js").MemoryScope;
+    memoryTier?: import("@agentlink/protocol/inline-approval").MemoryTier;
+    memoryScope?: import("@agentlink/protocol/inline-approval").MemoryScope;
     memoryName?: string;
     followUp?: string;
   }): boolean {
@@ -4064,7 +4037,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     id: string;
     answers: Record<string, string | string[] | number | boolean | undefined>;
     notes?: Record<string, string>;
-    attachments?: import("../core/capabilities/sessionControl.js").UserQuestionResponse["attachments"];
+    attachments?: import("@agentlink/protocol/structured-question").UserQuestionResponse["attachments"];
     sessionId?: string;
   }): Promise<boolean> {
     const normalizedAttachments = normalizeUserQuestionAttachments(
@@ -8857,10 +8830,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           trustScope: msg.trustScope as string | undefined,
           editedContent: msg.editedContent as string | undefined,
           memoryTier: msg.memoryTier as
-            | import("../approvals/webview/types.js").MemoryTier
+            | import("@agentlink/protocol/inline-approval").MemoryTier
             | undefined,
           memoryScope: msg.memoryScope as
-            | import("../approvals/webview/types.js").MemoryScope
+            | import("@agentlink/protocol/inline-approval").MemoryScope
             | undefined,
           memoryName: msg.memoryName as string | undefined,
           followUp: msg.followUp as string | undefined,
@@ -8905,7 +8878,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           >,
           notes: (msg.notes as Record<string, string>) ?? {},
           attachments:
-            msg.attachments as import("../core/capabilities/sessionControl.js").UserQuestionResponse["attachments"],
+            msg.attachments as import("@agentlink/protocol/structured-question").UserQuestionResponse["attachments"],
           sessionId: sourceSessionId,
         });
         break;
@@ -10677,6 +10650,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           requestId: event.requestId,
           requestKind: event.requestKind,
           model: event.model,
+          providerId: event.providerId,
+          mode: event.mode,
+          promptProfile: event.promptProfile,
+          background: event.background,
           estimatedInputTokens: event.estimatedInputTokens,
           toolResultAttributions: event.toolResultContextAttributions,
           omittedToolResultAttributions:

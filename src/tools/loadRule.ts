@@ -1,7 +1,7 @@
 import type { AdvertisedArtifactProvider } from "../core/capabilities/readSearch.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import type { ToolResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { loadAdvertisedFile } from "./loadAdvertisedFile.js";
 
 export interface AllowedRule {

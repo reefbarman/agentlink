@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   validateCoreModelAuthLease,
   type CoreModelAuthLease,
+  type CoreModelAuthProvider,
 } from "./modelAuth.js";
 
 const baseLease: CoreModelAuthLease = {
@@ -18,7 +19,13 @@ const baseLease: CoreModelAuthLease = {
   auditId: "audit-1",
 };
 
-describe("core model auth leases", () => {
+describe("core model auth protocol compatibility facade", () => {
+  it("preserves the core-only provider seam alongside package lease exports", () => {
+    expectTypeOf<
+      CoreModelAuthProvider["requestLease"]
+    >().returns.resolves.toEqualTypeOf<CoreModelAuthLease | null>();
+  });
+
   it("accepts a non-expired lease for the granted owner, helper generation, and scope", () => {
     expect(
       validateCoreModelAuthLease({

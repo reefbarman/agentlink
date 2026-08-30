@@ -3,8 +3,9 @@
 import type {
   MemoryArchiveV1,
   MemoryAuditEvent,
+  MemoryPanelSnapshot,
   MemoryRecord,
-} from "../../core/memory/contracts.js";
+} from "@agentlink/protocol/autonomous-memory";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -15,7 +16,6 @@ import {
 } from "@testing-library/preact";
 
 import { MemoryPanel } from "./MemoryPanel.js";
-import type { MemoryPanelSnapshot } from "../../core/capabilities/memory.js";
 
 afterEach(cleanup);
 

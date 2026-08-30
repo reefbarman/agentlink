@@ -5,25 +5,27 @@ import {
   getChatTabViewStatus,
   isChatTabSessionBusy,
   type ChatWorkspaceViewSnapshot,
-} from "../agent/chatTabProtocol.js";
+} from "@agentlink/protocol/chat-workspace";
 import { getLatestTodoState } from "../agent/todoTool.js";
 import type { AgentMessage, SessionInfo } from "../agent/types.js";
 
 import type {
+  StructuredQuestionProgress,
+  StructuredQuestionRequest,
+} from "@agentlink/protocol/structured-question";
+import type { ChatStateSnapshot as ChatState } from "@agentlink/protocol/chat-state";
+import type { ChatProjectInfo } from "@agentlink/protocol/chat-catalog";
+import type { ChatSessionHistorySummary as SessionSummary } from "@agentlink/protocol/chat-session-history";
+import type {
   ChatMessage,
-  ChatState,
-  Question,
-  SessionSummary,
-} from "../agent/webview/types.js";
-import type { TodoItem } from "../agent/webview/types.js";
+  TodoItem,
+} from "@agentlink/protocol/chat-transcript";
 import {
   agentMessagesToChatMessages,
   type AppState,
 } from "../shared/chatProjection.js";
-import type {
-  BgSessionInfo,
-  BrowserGatewayThemeSnapshot,
-} from "../shared/types.js";
+import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
+import type { BgSessionInfo } from "@agentlink/protocol/background-result";
 import {
   getDevelopmentStreamingBaselineMetrics,
   type StreamingBaselineMetrics,
@@ -33,8 +35,8 @@ import {
 import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
 import type { BrowserGatewayInstanceStatusSummary } from "./protocol.js";
 import type { BrowserGatewayChatWorkspaceSummary } from "./dataPlane/protocol.js";
-import type { McpFormElicitationRequest } from "../shared/mcpElicitation.js";
-import type { McpUrlElicitationRequest } from "../shared/mcpUrlElicitation.js";
+import type { McpFormElicitationRequest } from "@agentlink/protocol/mcp-elicitation";
+import type { McpUrlElicitationRequest } from "@agentlink/protocol/mcp-url-elicitation";
 import type {
   AgentUiEvent,
   ReadableAgentUiEventHub,
@@ -42,7 +44,7 @@ import type {
 } from "../agent/AgentUiPublisher.js";
 
 import type { ApprovalRequest } from "../approvals/webview/types.js";
-import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
+import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 
 import {
   diffSnapshotHub,
@@ -69,25 +71,11 @@ interface BrowserGatewayServiceTimerOptions {
   clearTimeout?: (timer: ReturnType<typeof setTimeout>) => void;
 }
 
-export interface QuestionProgressState {
-  id: string;
-  step: number;
-  answers: Record<string, string | string[] | number | boolean | undefined>;
-  notes: Record<string, string>;
-  origin: string;
-}
+export type QuestionProgressState = StructuredQuestionProgress;
 
 export interface BrowserGatewayUiState {
   approval: ApprovalRequest | undefined;
-  question:
-    | {
-        id: string;
-        toolCallId?: string;
-        context: string;
-        questions: Question[];
-        backgroundTask?: string;
-      }
-    | undefined;
+  question: StructuredQuestionRequest | undefined;
   questionProgress: QuestionProgressState | undefined;
   formElicitation: McpFormElicitationRequest | undefined;
   urlElicitation: McpUrlElicitationRequest | undefined;
@@ -96,13 +84,7 @@ export interface BrowserGatewayUiState {
 
 export interface BrowserGatewayWireState {
   approval: ApprovalRequest | null;
-  question: {
-    id: string;
-    toolCallId?: string;
-    context: string;
-    questions: Question[];
-    backgroundTask?: string;
-  } | null;
+  question: StructuredQuestionRequest | null;
   questionProgress: QuestionProgressState | null;
   formElicitation: McpFormElicitationRequest | null;
   urlElicitation: McpUrlElicitationRequest | null;
@@ -110,11 +92,7 @@ export interface BrowserGatewayWireState {
   mcpStatusInfos: ReturnType<ChatViewProvider["getBrowserMcpStatusInfos"]>;
 }
 
-export interface BrowserGatewayProjectInfo {
-  projectId: string;
-  displayName: string;
-  availability: "available" | "unavailable";
-}
+export type BrowserGatewayProjectInfo = ChatProjectInfo;
 
 export interface BrowserGatewaySessionState {
   projects: BrowserGatewayProjectInfo[];
@@ -144,13 +122,7 @@ export interface BrowserGatewaySessionState {
         lastCacheReadTokens: number;
         estimatedTotalUsed: number;
         messageQueue: AppState["messageQueue"];
-        questionRequest: {
-          id: string;
-          toolCallId?: string;
-          context: string;
-          questions: Question[];
-          backgroundTask?: string;
-        } | null;
+        questionRequest: StructuredQuestionRequest | null;
         detectedQuestion: AppState["detectedQuestion"];
         todos: TodoItem[];
         debugInfo: AppState["debugInfo"];
@@ -199,13 +171,7 @@ export interface BrowserGatewayWireSessionState {
     lastCacheReadTokens: number;
     estimatedTotalUsed: number;
     messageQueue: AppState["messageQueue"];
-    questionRequest: {
-      id: string;
-      toolCallId?: string;
-      context: string;
-      questions: Question[];
-      backgroundTask?: string;
-    } | null;
+    questionRequest: StructuredQuestionRequest | null;
     detectedQuestion: AppState["detectedQuestion"];
     todos: TodoItem[];
     debugInfo: AppState["debugInfo"];
@@ -236,13 +202,7 @@ export interface BrowserGatewayDetachedSessionSelection {
 
 export interface BrowserGatewayDetachedSessionUiState {
   approval: ApprovalRequest | null;
-  question: {
-    id: string;
-    toolCallId?: string;
-    context: string;
-    questions: Question[];
-    backgroundTask?: string;
-  } | null;
+  question: StructuredQuestionRequest | null;
   questionProgress: QuestionProgressState | null;
   formElicitation: McpFormElicitationRequest | null;
   urlElicitation: McpUrlElicitationRequest | null;
@@ -300,15 +260,7 @@ export class BrowserGatewayService implements vscode.Disposable {
   private hasActiveClientsProbe: (() => boolean) | undefined;
   private approval: ApprovalRequest | undefined;
   private approvalSessionId: string | undefined;
-  private question:
-    | {
-        id: string;
-        toolCallId?: string;
-        context: string;
-        questions: Question[];
-        backgroundTask?: string;
-      }
-    | undefined;
+  private question: StructuredQuestionRequest | undefined;
   private questionSessionId: string | undefined;
   private questionProgress: QuestionProgressState | undefined;
   private formElicitation: McpFormElicitationRequest | undefined;

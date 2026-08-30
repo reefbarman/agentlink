@@ -1,7 +1,5 @@
-import {
-  type ChatPaneLease,
-  ChatPaneAuthorityController,
-} from "./ChatPaneAuthorityController.js";
+import { ChatPaneAuthorityController } from "./ChatPaneAuthorityController.js";
+import type { ChatPaneLease } from "@agentlink/protocol/chat-pane-transport";
 
 export interface ChatTabPanelHandle {
   reveal(): void;

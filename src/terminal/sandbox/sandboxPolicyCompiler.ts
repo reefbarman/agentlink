@@ -5,7 +5,7 @@ import {
   validateCheckpointBSandboxCapabilityRequest,
   type SandboxLaunchAuthorization,
 } from "../../core/sandboxPolicy.js";
-import type { TerminalDimensions } from "../../core/terminalProtocol.js";
+import type { TerminalDimensions } from "@agentlink/protocol/terminal";
 import {
   isSandboxHelperControlFrame,
   SANDBOX_HELPER_PROTOCOL_VERSION,

@@ -1,17 +1,17 @@
 import * as http from "http";
 import type * as vscode from "vscode";
 
-import { isCoreReasoningEffort } from "../core/modelCatalog.js";
+import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import type {
   McpFormElicitationResponse,
   McpElicitationValues,
-} from "../shared/mcpElicitation.js";
+} from "@agentlink/protocol/mcp-elicitation";
 import type {
   McpConfigBatchMutation,
   McpManagerProfile,
   McpManagerScope,
   McpManagerServerDraft,
-} from "../shared/mcpManagerTypes.js";
+} from "@agentlink/protocol/mcp-manager";
 import {
   clearBrowserGatewayDiscovery,
   writeBrowserGatewayDiscovery,
@@ -35,9 +35,9 @@ import type {
   BrowserGatewaySnapshotPublication,
 } from "./BrowserGatewayService.js";
 import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
-import { parseChatTabActionAddress } from "../agent/chatTabProtocol.js";
+import { parseChatTabActionAddress } from "@agentlink/protocol/chat-workspace";
 import type { DecisionMessage } from "../approvals/webview/types.js";
-import { isCommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
+import { isCommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
 import { writeBrowserGatewayThemeCache } from "./browserGatewayThemeCache.js";
 import {
@@ -975,7 +975,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
         string | string[] | number | boolean | undefined
       >;
       notes?: Record<string, string>;
-      attachments?: import("../core/capabilities/sessionControl.js").UserQuestionResponse["attachments"];
+      attachments?: import("@agentlink/protocol/structured-question").UserQuestionResponse["attachments"];
     };
     if (
       typeof body?.id !== "string" ||

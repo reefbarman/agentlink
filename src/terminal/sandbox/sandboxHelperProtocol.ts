@@ -3,7 +3,7 @@ import type {
   SandboxViolation,
 } from "../../core/sandboxPolicy.js";
 
-import type { TerminalDimensions } from "../../core/terminalProtocol.js";
+import type { TerminalDimensions } from "@agentlink/protocol/terminal";
 
 export const SANDBOX_HELPER_PROTOCOL_VERSION = 3;
 export const MAX_SANDBOX_HELPER_FRAME_BYTES = 1024 * 1024;

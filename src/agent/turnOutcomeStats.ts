@@ -1,4 +1,9 @@
 import type { AgentEvent } from "./types.js";
+import {
+  applyHarnessEfficiencyEvent,
+  createHarnessEfficiencyStats,
+  type HarnessEfficiencyStats,
+} from "./harnessEfficiencyStats.js";
 
 /**
  * Per-turn wall-clock and behavior accumulator for session-outcome telemetry.
@@ -19,6 +24,7 @@ export interface TurnOutcomeStats {
   spawnedBeforeFirstAction: boolean;
   inputTokens: number;
   outputTokens: number;
+  efficiency: HarnessEfficiencyStats;
 }
 
 /** Tools whose duration is a blocking wait on background agents, not work. */
@@ -61,6 +67,7 @@ export function createTurnOutcomeStats(now = Date.now()): TurnOutcomeStats {
     spawnedBeforeFirstAction: false,
     inputTokens: 0,
     outputTokens: 0,
+    efficiency: createHarnessEfficiencyStats(),
   };
 }
 
@@ -68,6 +75,7 @@ export function applyTurnOutcomeEvent(
   stats: TurnOutcomeStats,
   event: AgentEvent,
 ): void {
+  applyHarnessEfficiencyEvent(stats.efficiency, event);
   if (event.type === "api_request") {
     if (Number.isFinite(event.durationMs))
       stats.streamingMs += event.durationMs;

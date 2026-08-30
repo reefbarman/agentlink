@@ -4,7 +4,7 @@ import {
   errorResult,
   successResult,
   type ToolResult,
-} from "../shared/types.js";
+} from "@agentlink/protocol/tool-result";
 
 export interface AcceptedEditReviewResult {
   accepted: true;

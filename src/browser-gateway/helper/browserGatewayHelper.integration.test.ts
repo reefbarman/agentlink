@@ -8,7 +8,7 @@ import * as path from "path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ChatMessage } from "../../agent/webview/types.js";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import type { AskAgentControllerPublication } from "./AskAgentController.js";
 import {
   BrowserGatewayHelper,
@@ -40,7 +40,7 @@ import type {
   MemoryInspectionProvider,
   MemoryToolProvider,
 } from "../../core/capabilities/memory.js";
-import type { MemoryHealthSnapshot } from "../../core/memory/contracts.js";
+import type { MemoryHealthSnapshot } from "@agentlink/protocol/autonomous-memory";
 import { BrowserGatewayAutonomousMemoryRuntime } from "./BrowserGatewayAutonomousMemoryRuntime.js";
 import {
   BrowserGatewayDerivedSessionRuntime,
@@ -48,6 +48,7 @@ import {
 } from "./BrowserGatewayDerivedSessionRuntime.js";
 import { InMemoryRetrievalRepository } from "../../core/retrieval/InMemoryRetrievalRepository.js";
 import { DerivedSessionRetrievalService } from "../../core/session/DerivedSessionRetrievalService.js";
+import { getSharedMemoryStoreRoot } from "../../storage/retrieval/sharedMemoryStorePaths.js";
 import type { BrowserGatewayMemoryRuntimeDescriptor } from "../protocol.js";
 import {
   BROWSER_GATEWAY_CLIENT_ORIGIN_HEADER,
@@ -4260,7 +4261,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     });
     expect(createProvider).toHaveBeenCalledWith({
       mode: "off",
-      retrievalStoreRoot: path.join(storeDir, "shared-retrieval"),
+      retrievalStoreRoot: getSharedMemoryStoreRoot(),
     });
 
     await service.publish({
@@ -5724,7 +5725,9 @@ describe("BrowserGatewayHelper proxy routing", () => {
       },
       health: healthSnapshot,
     }));
+    let configMode: "off" | "autonomous" = "autonomous";
     const runtime = new BrowserGatewayAutonomousMemoryRuntime({
+      configStore: { read: async () => ({ mode: configMode }) },
       createProvider: () => ({
         manage,
         recall,
@@ -6230,17 +6233,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       ]),
     );
 
-    const discovery = JSON.parse(
-      await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
-    ) as { clientSharedSecret: string; helperGenerationId: string };
-    await provisionAskAgentModelForTest({
-      helperBase: harness.helperBase,
-      discovery,
-      ownerId: "descriptor-less-owner",
-      ownerGenerationId: "descriptor-less-generation",
-      instanceId: "descriptor-less-instance",
-      grantCredential: false,
-    });
+    configMode = "off";
     const unavailableHealth = await fetch(
       `${harness.helperBase}/api/ask-agent/autonomous-memory/health`,
       { headers: { Cookie: harness.cookie } },
@@ -6249,7 +6242,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       ok: true,
       health: {
         status: "unavailable",
-        reason: "missing-owner-descriptor",
+        reason: "disabled",
       },
     });
   });
@@ -7924,6 +7917,32 @@ describe("BrowserGatewayHelper proxy routing", () => {
                 description: "Call an MCP tool through main-agent policy.",
                 input_schema: { type: "object", properties: {} },
               },
+              {
+                name: "linear__list_issues",
+                description: "List issues directly.",
+                input_schema: { type: "object", properties: {} },
+              },
+              {
+                name: "Home Assistant__ha_get_app",
+                description: "Contains a provider-invalid space.",
+                input_schema: { type: "object", properties: {} },
+              },
+              {
+                name: "fixture__invalid.tool",
+                description: "Contains provider-invalid punctuation.",
+                input_schema: { type: "object", properties: {} },
+              },
+              {
+                name: `${"a".repeat(57)}__search`,
+                description: "Exceeds the portable provider name limit.",
+                input_schema: { type: "object", properties: {} },
+              },
+            ],
+            parallelSafeToolNames: [
+              "linear__list_issues",
+              "Home Assistant__ha_get_app",
+              "fixture__invalid.tool",
+              `${"a".repeat(57)}__search`,
             ],
           }),
         );
@@ -8113,6 +8132,10 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(send.ok).toBe(true);
     expect(assistant?.content).toContain("MCP result received.");
     expect(modelToolNames[0]).toContain("call_mcp_tool");
+    expect(modelToolNames[0]).toContain("linear__list_issues");
+    expect(modelToolNames[0]).not.toContain("Home Assistant__ha_get_app");
+    expect(modelToolNames[0]).not.toContain("fixture__invalid.tool");
+    expect(modelToolNames[0]).not.toContain(`${"a".repeat(57)}__search`);
     expect(JSON.stringify(receivedToolMessages[1])).toContain("LIN-1");
     expect(upstreamRequests).toEqual(
       expect.arrayContaining([

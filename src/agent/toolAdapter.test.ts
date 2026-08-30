@@ -25,7 +25,7 @@ import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
 import { BUILT_IN_MODES } from "./modes.js";
 import { TODO_TOOL_NAME } from "./todoTool.js";
 import type { ToolDefinition } from "./providers/types.js";
-import type { ToolResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 import type { MemoryToolProvider } from "../core/capabilities/memory.js";
 import { getWorkspaceRoots, resolveAndValidatePath } from "../util/paths.js";
 import { handleLoadRule } from "../tools/loadRule.js";
@@ -997,6 +997,40 @@ describe("getAgentTools", () => {
 
     expect(firstMcp?.input_schema).toBe(firstMcpSchema);
     expect(secondMcp?.input_schema).toBe(secondMcpSchema);
+  });
+
+  it("never emits provider-invalid MCP tool names directly", () => {
+    const validName = `${"a".repeat(56)}__search`;
+    const overlongName = `${"a".repeat(57)}__search`;
+    const names = getAgentTools(BUILT_IN_MODES[0], [
+      {
+        name: "Home Assistant__ha_get_app",
+        description: "Contains a space",
+        input_schema: { type: "object", properties: {} },
+      },
+      {
+        name: "fixture__invalid.tool",
+        description: "Contains punctuation",
+        input_schema: { type: "object", properties: {} },
+      },
+      {
+        name: validName,
+        description: "Exactly 64 characters",
+        input_schema: { type: "object", properties: {} },
+      },
+      {
+        name: overlongName,
+        description: "Longer than 64 characters",
+        input_schema: { type: "object", properties: {} },
+      },
+    ]).map((tool) => tool.name);
+
+    expect(names).toContain(validName);
+    expect(names).not.toContain("Home Assistant__ha_get_app");
+    expect(names).not.toContain("fixture__invalid.tool");
+    expect(names).not.toContain(overlongName);
+    expect(names).toContain("find_mcp_tools");
+    expect(names).toContain("call_mcp_tool");
   });
 
   it("does not emit duplicate tool names", () => {

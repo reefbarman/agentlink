@@ -4,7 +4,7 @@ import {
 } from "../../../shared/ui/ToolbarSelector";
 import { useEffect, useRef, useState } from "preact/hooks";
 
-import type { ModeInfo } from "../types";
+import type { ChatModeInfo as ModeInfo } from "@agentlink/protocol/chat-catalog";
 
 interface ModeSelectorProps {
   currentMode: string;

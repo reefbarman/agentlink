@@ -6,7 +6,7 @@ import type {
 } from "../../../modelRuntime.js";
 import type { CoreHostedToolDefinition } from "../../../webAccess.js";
 
-import type { CoreReasoningEffort } from "../../../modelCatalog.js";
+import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import type { Reasoning } from "openai/resources/shared";
 import {
   CODEX_DEFAULT_MODEL,

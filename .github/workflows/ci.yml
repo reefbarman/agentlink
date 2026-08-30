@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+      - name: Verify VSIX package inventory
+        env:
+          AGENTLINK_VSCE_TARGET: linux-x64
+        run: |
+          npx --yes @vscode/vsce@3.9.2 ls \
+            --no-dependencies \
+            | node scripts/verify-retrieval-package.mjs \
+                --target "$AGENTLINK_VSCE_TARGET"

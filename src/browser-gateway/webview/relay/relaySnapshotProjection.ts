@@ -8,10 +8,10 @@ import type {
 import type {
   ChatMessage,
   ContentBlock,
-  ProjectInfo,
-} from "../../../agent/webview/types";
+} from "@agentlink/protocol/chat-transcript";
+import type { ChatProjectInfo as ProjectInfo } from "@agentlink/protocol/chat-catalog";
 
-import type { BgSessionInfo } from "../../../shared/types";
+import type { BgSessionInfo } from "@agentlink/protocol/background-result";
 import {
   parseBrowserGatewayOwnerInteractionPayload,
   type BrowserGatewayOwnerInteractionPayload,

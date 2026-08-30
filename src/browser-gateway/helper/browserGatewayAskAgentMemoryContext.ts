@@ -3,7 +3,7 @@ import type {
   BrowserGatewayAskAgentSessionMemory,
 } from "../browserGatewayAskAgentMemory.js";
 
-import type { ChatMessage } from "../../agent/webview/types.js";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 
 export const ASK_AGENT_MEMORY_CONTEXT_MAX_CHARS = 6_000;
 export const ASK_AGENT_MEMORY_INDEX_CONTEXT_MAX_CHARS = 6_000;

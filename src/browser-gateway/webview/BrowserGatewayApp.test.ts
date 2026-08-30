@@ -8,9 +8,9 @@ import {
 } from "./BrowserGatewayApp";
 import type {
   ChatMessage,
-  ProjectInfo,
   TodoItem,
-} from "../../agent/webview/types";
+} from "@agentlink/protocol/chat-transcript";
+import type { ChatProjectInfo as ProjectInfo } from "@agentlink/protocol/chat-catalog";
 import {
   act,
   cleanup,
@@ -24,7 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppState } from "../../shared/chatProjection";
 import type { ApprovalRequest } from "../../approvals/webview/types";
 import { BROWSER_GATEWAY_ASK_AGENT_OWNER_ID } from "../browserGatewayAskAgentIdentity";
-import type { BgSessionInfo } from "../../shared/types";
+import type { BgSessionInfo } from "@agentlink/protocol/background-result";
 import type { BrowserGatewayChatWorkspaceSummary } from "../dataPlane/protocol";
 import { h, type ComponentChildren } from "preact";
 import { within } from "@testing-library/preact";

@@ -4,7 +4,7 @@ import type {
 } from "./SandboxTerminalCoordinator.js";
 
 import type { SandboxTerminalSessionSnapshot } from "./SandboxTerminalSession.js";
-import type { TerminalDimensions } from "../../core/terminalProtocol.js";
+import type { TerminalDimensions } from "@agentlink/protocol/terminal";
 import type { TerminalExecuteOptions } from "../../core/capabilities/terminal.js";
 
 export interface SandboxTerminalChannelHubDisposable {

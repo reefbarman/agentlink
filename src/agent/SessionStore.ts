@@ -43,7 +43,7 @@ import {
 import {
   SESSION_PROJECT_SCOPE_SCHEMA_VERSION,
   type SessionProjectScope,
-} from "../core/workspaceProjects.js";
+} from "@agentlink/protocol/workspace-project";
 import {
   findFirstUserMessage,
   getTailChunkByUserTurns,
@@ -159,12 +159,12 @@ interface MetadataFile {
   mode: string;
   model: string;
   initialArchitectReviewPending?: boolean;
-  promptProfile?: import("../core/promptProfile.js").PromptProfileResolution;
-  contextLedger?: import("../core/contextLedger.js").ContextLedgerSnapshot;
-  commandApprovalPolicy?: import("../core/capabilities/terminal.js").TerminalCommandApprovalPolicySnapshot;
-  approvalPolicy?: import("../core/capabilities/terminal.js").TerminalApprovalPolicy;
-  approvalReviewer?: import("../core/capabilities/terminal.js").TerminalApprovalReviewer;
-  executionPreset?: import("../core/capabilities/terminal.js").TerminalExecutionPreset;
+  promptProfile?: import("@agentlink/protocol/prompt-profile").PromptProfileResolution;
+  contextLedger?: import("@agentlink/protocol/context-ledger").ContextLedgerSnapshot;
+  commandApprovalPolicy?: import("@agentlink/protocol/terminal").TerminalCommandApprovalPolicySnapshot;
+  approvalPolicy?: import("@agentlink/protocol/terminal").TerminalApprovalPolicy;
+  approvalReviewer?: import("@agentlink/protocol/terminal").TerminalApprovalReviewer;
+  executionPreset?: import("@agentlink/protocol/terminal").TerminalExecutionPreset;
   totalInputTokens: number;
   totalOutputTokens: number;
   totalCacheReadTokens?: number;
@@ -741,8 +741,8 @@ export class SessionStore implements SessionPersistenceProvider {
     id: string;
     mode: string;
     model: string;
-    promptProfile?: import("../core/promptProfile.js").PromptProfileResolution;
-    contextLedger?: import("../core/contextLedger.js").ContextLedgerSnapshot;
+    promptProfile?: import("@agentlink/protocol/prompt-profile").PromptProfileResolution;
+    contextLedger?: import("@agentlink/protocol/context-ledger").ContextLedgerSnapshot;
     title: string;
     createdAt: number;
     lastActiveAt: number;
@@ -753,10 +753,10 @@ export class SessionStore implements SessionPersistenceProvider {
     lastInputTokens: number;
     lastCacheReadTokens: number;
     reasoningEffort?: import("./providers/types.js").ReasoningEffort;
-    commandApprovalPolicy?: import("../core/capabilities/terminal.js").TerminalCommandApprovalPolicySnapshot;
-    approvalPolicy?: import("../core/capabilities/terminal.js").TerminalApprovalPolicy;
-    approvalReviewer?: import("../core/capabilities/terminal.js").TerminalApprovalReviewer;
-    executionPreset?: import("../core/capabilities/terminal.js").TerminalExecutionPreset;
+    commandApprovalPolicy?: import("@agentlink/protocol/terminal").TerminalCommandApprovalPolicySnapshot;
+    approvalPolicy?: import("@agentlink/protocol/terminal").TerminalApprovalPolicy;
+    approvalReviewer?: import("@agentlink/protocol/terminal").TerminalApprovalReviewer;
+    executionPreset?: import("@agentlink/protocol/terminal").TerminalExecutionPreset;
     background?: boolean;
     projectScope?: SessionProjectScope;
     activeContextResourceUri?: string;

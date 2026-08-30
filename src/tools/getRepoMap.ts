@@ -15,7 +15,7 @@ import {
   handleToolError,
   jsonResult,
   type ToolResult,
-} from "../shared/types.js";
+} from "@agentlink/protocol/tool-result";
 
 export interface GetRepoMapParams {
   path?: string;

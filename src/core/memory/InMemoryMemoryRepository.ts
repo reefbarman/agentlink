@@ -5,11 +5,13 @@ import type {
   MemoryLexicalCandidate,
   MemoryLexicalSearchRequest,
   MemoryRecord,
-  MemoryRepository,
-  MemoryRepositoryTransaction,
   MemoryRevision,
   MemoryScope,
   MemoryStoreSnapshot,
+} from "@agentlink/protocol/autonomous-memory";
+import type {
+  MemoryRepository,
+  MemoryRepositoryTransaction,
 } from "./contracts.js";
 import { memoryLexicalScore, sameMemoryScope } from "./memoryPolicy.js";
 

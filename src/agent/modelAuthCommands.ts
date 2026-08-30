@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-import type { SemanticReadinessReason } from "../shared/semanticReadiness.js";
+import type { SemanticReadinessReason } from "@agentlink/protocol/semantic-readiness";
 
 interface OpenAiApiKeyStore {
   storeApiKey(

@@ -1,29 +1,34 @@
 import type {
   ManageMemoryToolRequest,
   MemoryActivityRequest,
+  RecallMemoryToolRequest,
+} from "@agentlink/protocol/autonomous-memory";
+import type {
   MemoryInspectionProvider,
   MemoryToolProvider,
-  RecallMemoryToolRequest,
 } from "../../core/capabilities/memory.js";
+import {
+  getSharedMemoryConfigPath,
+  getSharedMemoryStoreRoot,
+} from "../../storage/retrieval/sharedMemoryStorePaths.js";
 
 import { AutonomousMemoryToolProvider } from "../../storage/retrieval/AutonomousMemoryToolProvider.js";
 import type { BrowserGatewayMemoryRuntimeDescriptor } from "../protocol.js";
-import type { MemoryHealthSnapshot } from "../../core/memory/contracts.js";
+import type { MemoryHealthSnapshot } from "@agentlink/protocol/autonomous-memory";
+import type { SharedMemoryConfigSnapshot } from "../../storage/retrieval/sharedMemoryConfig.js";
+import { SharedMemoryConfigStore } from "../../storage/retrieval/sharedMemoryConfig.js";
+import { isSharedMemoryMigrationPending } from "../../storage/retrieval/sharedMemoryMigrationState.js";
 
-export interface BrowserGatewayMemoryRuntimeOwner {
-  ownerId: string;
-  mode?: BrowserGatewayMemoryRuntimeDescriptor["mode"];
-  retrievalStoreRoot?: string;
-}
+export type BrowserGatewayMemoryRuntimeReason =
+  | "disabled"
+  | "config_invalid"
+  | "config_unreadable"
+  | "migration_pending";
 
 export interface BrowserGatewayMemoryRuntimeResolution {
   mode: BrowserGatewayMemoryRuntimeDescriptor["mode"];
-  retrievalStoreRoot?: string;
-  reason?:
-    | "no-connected-owner"
-    | "missing-owner-descriptor"
-    | "disabled-by-owner"
-    | "conflicting-store-roots";
+  retrievalStoreRoot: string;
+  reason?: BrowserGatewayMemoryRuntimeReason;
 }
 
 interface DisposableMemoryToolProvider
@@ -32,25 +37,38 @@ interface DisposableMemoryToolProvider
 }
 
 export interface BrowserGatewayAutonomousMemoryRuntimeOptions {
+  homeDir?: string;
+  configStore?: Pick<SharedMemoryConfigStore, "read">;
+  isMigrationPending?: () => Promise<boolean>;
   createProvider?: (
     descriptor: BrowserGatewayMemoryRuntimeDescriptor,
   ) => DisposableMemoryToolProvider;
 }
 
 export class BrowserGatewayAutonomousMemoryRuntime implements DisposableMemoryToolProvider {
-  private owners: readonly BrowserGatewayMemoryRuntimeOwner[] = [];
-  private resolution: BrowserGatewayMemoryRuntimeResolution = {
-    mode: "off",
-    reason: "no-connected-owner",
-  };
+  private readonly retrievalStoreRoot: string;
+  private readonly configStore: Pick<SharedMemoryConfigStore, "read">;
+  private readonly isMigrationPending: () => Promise<boolean>;
+  private resolution: BrowserGatewayMemoryRuntimeResolution;
   private provider: DisposableMemoryToolProvider | undefined;
-  private providerRoot: string | undefined;
   private operationQueue: Promise<void> = Promise.resolve();
   private readonly createProvider: (
     descriptor: BrowserGatewayMemoryRuntimeDescriptor,
   ) => DisposableMemoryToolProvider;
 
   constructor(options: BrowserGatewayAutonomousMemoryRuntimeOptions = {}) {
+    this.retrievalStoreRoot = getSharedMemoryStoreRoot(options.homeDir);
+    this.configStore =
+      options.configStore ??
+      new SharedMemoryConfigStore(getSharedMemoryConfigPath(options.homeDir));
+    this.isMigrationPending =
+      options.isMigrationPending ??
+      (() => isSharedMemoryMigrationPending(options.homeDir));
+    this.resolution = {
+      mode: "off",
+      retrievalStoreRoot: this.retrievalStoreRoot,
+      reason: "disabled",
+    };
     this.createProvider =
       options.createProvider ??
       ((descriptor) =>
@@ -60,97 +78,79 @@ export class BrowserGatewayAutonomousMemoryRuntime implements DisposableMemoryTo
         }));
   }
 
-  async setOwners(
-    owners: readonly BrowserGatewayMemoryRuntimeOwner[],
-  ): Promise<BrowserGatewayMemoryRuntimeResolution> {
-    const copiedOwners = owners.map((owner) => ({ ...owner }));
-    return await this.runExclusive(async () => {
-      this.owners = copiedOwners;
-      const next = resolveBrowserGatewayMemoryRuntime(this.owners);
-      if (
-        this.provider &&
-        (next.mode !== "autonomous" ||
-          next.retrievalStoreRoot !== this.providerRoot)
-      ) {
-        await this.provider.dispose();
-        this.provider = undefined;
-        this.providerRoot = undefined;
-      }
-      this.resolution = next;
-      return this.getResolution();
-    });
-  }
-
   getResolution(): BrowserGatewayMemoryRuntimeResolution {
     return { ...this.resolution };
   }
 
   async manage(request: ManageMemoryToolRequest) {
-    return await this.runExclusive(() =>
-      this.requireProvider().manage(request),
+    return await this.runExclusive(async () =>
+      (await this.requireProvider()).manage(request),
     );
   }
 
   async recall(request: RecallMemoryToolRequest) {
-    return await this.runExclusive(() =>
-      this.requireProvider().recall(request),
+    return await this.runExclusive(async () =>
+      (await this.requireProvider()).recall(request),
     );
   }
 
   async health(): Promise<MemoryHealthSnapshot> {
     return await this.runExclusive(async () => {
+      await this.refreshResolution();
       if (this.resolution.mode !== "autonomous") {
         return unavailableHealth(this.resolution.reason);
       }
-      return await this.requireProvider().health();
+      return await (await this.requireProvider()).health();
     });
   }
 
   async activity(request: MemoryActivityRequest) {
-    return await this.runExclusive(() =>
-      this.requireProvider().activity(request),
+    return await this.runExclusive(async () =>
+      (await this.requireProvider()).activity(request),
     );
   }
 
   async query(...args: Parameters<MemoryInspectionProvider["query"]>) {
-    return await this.runExclusive(() => this.requireProvider().query(...args));
+    return await this.runExclusive(async () =>
+      (await this.requireProvider()).query(...args),
+    );
   }
 
   async detail(...args: Parameters<MemoryInspectionProvider["detail"]>) {
-    return await this.runExclusive(() =>
-      this.requireProvider().detail(...args),
+    return await this.runExclusive(async () =>
+      (await this.requireProvider()).detail(...args),
     );
   }
 
   async manageAsUser(
     ...args: Parameters<MemoryInspectionProvider["manageAsUser"]>
   ) {
-    return await this.runExclusive(() =>
-      this.requireProvider().manageAsUser(...args),
+    return await this.runExclusive(async () =>
+      (await this.requireProvider()).manageAsUser(...args),
     );
   }
 
   async clearScope(
     ...args: Parameters<MemoryInspectionProvider["clearScope"]>
   ) {
-    return await this.runExclusive(() =>
-      this.requireProvider().clearScope(...args),
+    return await this.runExclusive(async () =>
+      (await this.requireProvider()).clearScope(...args),
     );
   }
 
   async exportArchive(
     ...args: Parameters<MemoryInspectionProvider["exportArchive"]>
   ) {
-    return await this.runExclusive(() =>
-      this.requireProvider().exportArchive(...args),
+    return await this.runExclusive(async () =>
+      (await this.requireProvider()).exportArchive(...args),
     );
   }
 
   async importArchive(
     ...args: Parameters<MemoryInspectionProvider["importArchive"]>
   ) {
-    return await this.runExclusive(() =>
-      this.requireProvider().importArchive(...args),
+    return await this.runExclusive(async () =>
+      (await this.requireProvider()).importArchive(...args),
     );
   }
 
@@ -158,7 +158,6 @@ export class BrowserGatewayAutonomousMemoryRuntime implements DisposableMemoryTo
     await this.runExclusive(async () => {
       const provider = this.provider;
       this.provider = undefined;
-      this.providerRoot = undefined;
       if (provider) await provider.dispose();
     });
   }
@@ -172,55 +171,48 @@ export class BrowserGatewayAutonomousMemoryRuntime implements DisposableMemoryTo
     return result;
   }
 
-  private requireProvider(): DisposableMemoryToolProvider {
-    if (
-      this.resolution.mode !== "autonomous" ||
-      !this.resolution.retrievalStoreRoot
-    ) {
+  private async refreshResolution(): Promise<void> {
+    const snapshot = await this.configStore.read();
+    const next = (await this.isMigrationPending())
+      ? {
+          mode: "off" as const,
+          retrievalStoreRoot: this.retrievalStoreRoot,
+          reason: "migration_pending" as const,
+        }
+      : resolveBrowserGatewayMemoryRuntime(snapshot, this.retrievalStoreRoot);
+    if (this.provider && next.mode !== "autonomous") {
+      await this.provider.dispose();
+      this.provider = undefined;
+    }
+    this.resolution = next;
+  }
+
+  private async requireProvider(): Promise<DisposableMemoryToolProvider> {
+    await this.refreshResolution();
+    if (this.resolution.mode !== "autonomous") {
       throw new Error(
         `Autonomous memory is unavailable in Browser Ask Agent: ${this.resolution.reason ?? "disabled"}.`,
       );
     }
-    if (!this.provider) {
-      this.provider = this.createProvider({
-        mode: "autonomous",
-        retrievalStoreRoot: this.resolution.retrievalStoreRoot,
-      });
-      this.providerRoot = this.resolution.retrievalStoreRoot;
-    }
+    this.provider ??= this.createProvider({
+      mode: "autonomous",
+      retrievalStoreRoot: this.retrievalStoreRoot,
+    });
     return this.provider;
   }
 }
 
 export function resolveBrowserGatewayMemoryRuntime(
-  owners: readonly BrowserGatewayMemoryRuntimeOwner[],
+  snapshot: SharedMemoryConfigSnapshot,
+  retrievalStoreRoot: string,
 ): BrowserGatewayMemoryRuntimeResolution {
-  if (owners.length === 0) {
-    return { mode: "off", reason: "no-connected-owner" };
-  }
-
-  if (
-    owners.some(
-      (owner) => owner.mode === undefined || !owner.retrievalStoreRoot,
-    )
-  ) {
-    return { mode: "off", reason: "missing-owner-descriptor" };
-  }
-
-  const roots = new Set(owners.map((owner) => owner.retrievalStoreRoot));
-  if (roots.size !== 1) {
-    return { mode: "off", reason: "conflicting-store-roots" };
-  }
-
-  const retrievalStoreRoot = owners[0]!.retrievalStoreRoot!;
-  if (owners.some((owner) => owner.mode !== "autonomous")) {
+  if (snapshot.mode !== "autonomous") {
     return {
       mode: "off",
       retrievalStoreRoot,
-      reason: "disabled-by-owner",
+      reason: snapshot.reason ?? "disabled",
     };
   }
-
   return { mode: "autonomous", retrievalStoreRoot };
 }
 

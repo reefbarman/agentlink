@@ -1,4 +1,4 @@
-import type { CoreModelAuthMethod } from "../core/modelAuth.js";
+import type { CoreModelAuthMethod } from "@agentlink/protocol/model-auth";
 import { normalizeBrowserGatewayModelCredentialProviderId } from "./browserGatewayModelProviderIds.js";
 
 export type BrowserGatewayModelCredentialStatus =

@@ -1,5 +1,9 @@
-import type { ChatMessage, ContentBlock, ReasoningEffort } from "../types";
-import type { CommandApprovalPolicy } from "../../../approvals/commandApprovalPolicy";
+import type {
+  ChatMessage,
+  ContentBlock,
+} from "@agentlink/protocol/chat-transcript";
+import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
+import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import { CheckpointRow } from "./CheckpointRow";
@@ -33,7 +37,7 @@ interface TranscriptMessageListProps {
   onPromoteMcpToolApproval?: (promotion: {
     serverName: string;
     bareToolName: string;
-    mutationTarget?: import("../../../shared/types").McpApprovalPromotionMeta["mutationTarget"];
+    mutationTarget?: import("@agentlink/protocol/tool-result").McpApprovalPromotionMeta["mutationTarget"];
     scope: "session" | "project" | "global";
   }) => void;
   onOpenSpecialBlockPanel?: (block: {

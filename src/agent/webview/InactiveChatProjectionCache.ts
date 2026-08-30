@@ -1,4 +1,5 @@
 import type { ExtensionMessage } from "./types.js";
+import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 
 type SessionExtensionMessage = ExtensionMessage & { sessionId: string };
 
@@ -36,6 +37,20 @@ export class InactiveChatProjectionCache {
     // append() already cloned these events, and deleting the entry transfers
     // ownership to the active session replay path.
     return events;
+  }
+
+  updateLatestFinalMarker(
+    sessionId: string,
+    update: (marker: FinalMessageMarker) => FinalMessageMarker,
+  ): void {
+    const events = this.bySession.get(sessionId);
+    if (!events) return;
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      if (event.type !== "agentFinalMarker" || !event.marker) continue;
+      events[index] = { ...event, marker: update(event.marker) };
+      return;
+    }
   }
 
   retainSessions(sessionIds: ReadonlySet<string>): void {

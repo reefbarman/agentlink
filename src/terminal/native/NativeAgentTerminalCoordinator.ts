@@ -20,7 +20,7 @@ import {
   TerminalListRequest,
   TerminalCloseRequest,
 } from "../../core/capabilities/terminal.js";
-import type { TerminalDimensions } from "../../core/terminalProtocol.js";
+import type { TerminalDimensions } from "@agentlink/protocol/terminal";
 import { buildAgentExecutionEnv } from "../../process/agentExecutionPolicy.js";
 import {
   cleanTerminalOutput,

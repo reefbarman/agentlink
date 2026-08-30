@@ -3,7 +3,7 @@ import {
   errorResult,
   successResult,
   type ToolResult,
-} from "../shared/types.js";
+} from "@agentlink/protocol/tool-result";
 
 export function handleDiagnoseActivity(
   params: Record<string, unknown>,

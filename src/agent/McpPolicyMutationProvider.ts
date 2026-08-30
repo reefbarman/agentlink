@@ -1,12 +1,12 @@
 import * as os from "node:os";
 import * as path from "node:path";
 
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 import type {
   McpConfigBatchMutation,
   McpConfigMutationResult,
   McpConfigMutationTarget,
-} from "../shared/mcpManagerTypes.js";
+} from "@agentlink/protocol/mcp-manager";
 import {
   AgentPluginManagerError,
   AgentPluginManagerHost,

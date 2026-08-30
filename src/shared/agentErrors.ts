@@ -1,15 +1,9 @@
-export interface AgentErrorActions {
-  signIn?: boolean;
-  signInAnotherAccount?: boolean;
-  condense?: boolean;
-}
+import type { AgentErrorActions } from "@agentlink/protocol/agent-error-presentation";
 
-export interface AgentRuntimeErrorPresentation {
-  message: string;
-  retryable: boolean;
-  code?: string;
-  actions?: AgentErrorActions;
-}
+export type {
+  AgentErrorActions,
+  AgentRuntimeErrorPresentation,
+} from "@agentlink/protocol/agent-error-presentation";
 
 export type AgentRetryCategory =
   | "rate_limit"

@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-import type { ChatWebviewBootstrap } from "../../agent/chatPaneProtocol.js";
+import type { ChatWebviewBootstrap } from "@agentlink/protocol/chat-pane-transport";
 import { renderWebviewShell } from "./webviewShell.js";
 
 export function renderChatWebviewShell(

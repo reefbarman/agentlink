@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 
-import type { ContentBlock } from "../types";
+import type { ContentBlock } from "@agentlink/protocol/chat-transcript";
 
 type PairingCodeData = ContentBlock & { type: "pairing_code" };
 

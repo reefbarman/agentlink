@@ -11,12 +11,10 @@ import type {
   BrowserGatewayOpenAiCompatibleRuntimeProfiles,
   BrowserGatewayPromptProfileResolutions,
 } from "../protocol.js";
-import type {
-  CoreModelAuthLease,
-  CoreModelAuthProvider,
-} from "../../core/modelAuth.js";
 
-import type { CoreModelCatalogEntry } from "../../core/modelCatalog.js";
+import type { CoreModelAuthLease } from "@agentlink/protocol/model-auth";
+import type { CoreModelAuthProvider } from "../../core/modelAuthProvider.js";
+import type { CoreModelCatalogEntry } from "@agentlink/protocol/model-catalog";
 
 export interface BrowserGatewayResolvedModelAuthMetadata {
   method: BrowserGatewayModelAuthLeaseRequest["method"];

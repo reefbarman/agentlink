@@ -23,6 +23,7 @@ import type {
   TextBlock,
   ModelProvider,
   MessageParam,
+  CompleteResult,
 } from "./providers/types.js";
 import { getProviderAuxiliaryModel } from "./providers/types.js";
 import {
@@ -30,11 +31,9 @@ import {
   CODEX_CONDENSE_MODEL_FALLBACKS,
 } from "./providers/index.js";
 
-import type {
-  AgentErrorActions,
-  AgentMessage,
-  PreservedRuntimeContext,
-} from "./types.js";
+import type { AgentErrorActions } from "@agentlink/protocol/agent-error-presentation";
+
+import type { AgentMessage, PreservedRuntimeContext } from "./types.js";
 import {
   initTreeSitter,
   treeSitterChunkFile,
@@ -50,7 +49,7 @@ import {
   type CondenseRecallAnchors,
 } from "./condensePrompt.js";
 import { getLatestTodoState } from "./todoTool.js";
-import type { CondenseForensicMetadata } from "../shared/types.js";
+import type { CondenseForensicMetadata } from "@agentlink/protocol/context-diagnostics";
 
 export { renderDeterministicSections } from "./condensePrompt.js";
 
@@ -590,6 +589,10 @@ export interface SummarizeOptions {
     requestId: string;
     model: string;
     estimatedInputTokens: number;
+  }) => void;
+  onProviderRequestComplete?: (request: {
+    requestId: string;
+    usage: CompleteResult["usage"];
   }) => void;
 }
 
@@ -1205,6 +1208,7 @@ export async function summarizeConversation(
             systemPrompt: CONDENSE_SYSTEM_PROMPT,
             messages: requestMessages,
           });
+          let requestId: string | undefined;
           const result = await provider.complete({
             model,
             systemPrompt: CONDENSE_SYSTEM_PROMPT,
@@ -1214,13 +1218,20 @@ export async function summarizeConversation(
             reasoningEffort: "low",
             signal: controller.signal,
             onProviderRequestAttempt: ({ model: effectiveModel }) => {
+              requestId = randomUUID();
               options.onProviderRequest?.({
-                requestId: randomUUID(),
+                requestId,
                 model: effectiveModel,
                 estimatedInputTokens,
               });
             },
           });
+          if (requestId) {
+            options.onProviderRequestComplete?.({
+              requestId,
+              usage: result.usage,
+            });
+          }
           selectedModel = model;
           return { text: result.text };
         } finally {

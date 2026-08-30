@@ -1,7 +1,7 @@
 import {
   isCoreReasoningEffort,
   type CoreReasoningEffort,
-} from "../../../core/modelCatalog.js";
+} from "@agentlink/protocol/model-catalog";
 import type { CoreModelCapabilities } from "../../../core/modelRuntime.js";
 import type {
   OpenAiCompatibleModelFamily,

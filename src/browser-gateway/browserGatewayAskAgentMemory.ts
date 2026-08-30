@@ -4,7 +4,7 @@ import * as path from "path";
 
 import { createHash, randomUUID } from "crypto";
 
-import type { ChatMessage } from "../agent/webview/types.js";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import { sleep } from "../util/sleep.js";
 
 export const BROWSER_GATEWAY_ASK_AGENT_MEMORY_SCHEMA_VERSION = 1;

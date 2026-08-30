@@ -9,7 +9,7 @@ import type { HostTerminalDisposable } from "./Phase1HostTerminalCoordinator.js"
 import {
   isTerminalSurfaceRequest,
   type TerminalSurfaceRequest,
-} from "./terminalSurfaceProtocol.js";
+} from "@agentlink/protocol/terminal-surface";
 import { randomUUID } from "node:crypto";
 
 export interface AgentTerminalViewProviderOptions {

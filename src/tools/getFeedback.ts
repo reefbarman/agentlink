@@ -1,7 +1,7 @@
 import { readFeedback } from "../util/feedbackStore.js";
 
 import { type FeedbackPriority } from "../util/feedbackStore.js";
-import { type ToolResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 export async function handleGetFeedback(params: {
   tool_name?: string;

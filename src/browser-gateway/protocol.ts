@@ -3,18 +3,18 @@ import type {
   CoreHostKind,
   CoreOwnerRegistrationDto,
   CoreSessionScopeDto,
-} from "../core/sessionProtocol.js";
+} from "@agentlink/protocol/session";
 import type {
   CoreModelAuthLease,
   CoreModelAuthLeaseValidationResult,
   CoreModelAuthMethod,
-} from "../core/modelAuth.js";
+} from "@agentlink/protocol/model-auth";
 
 import type { BrowserGatewayCoreOwnerRegistrationResolution } from "./coreOwnerRegistry.js";
 import type { BrowserGatewayDataPlaneMode } from "./browserGatewayDataPlaneMode.js";
-import type { CoreModelCatalogEntry } from "../core/modelCatalog.js";
+import type { CoreModelCatalogEntry } from "@agentlink/protocol/model-catalog";
 import type { OpenAiCompatibleRuntimeProfile } from "../core/model/providers/openaiCompatible/types.js";
-import type { PromptProfileResolution } from "../core/promptProfile.js";
+import type { PromptProfileResolution } from "@agentlink/protocol/prompt-profile";
 
 export const BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION = 2;
 export const BROWSER_GATEWAY_DATA_PLANE_FEATURES = [
@@ -81,6 +81,7 @@ export interface BrowserGatewayInstanceStatusSummary {
   sessionTitle?: string;
 }
 
+/** @deprecated Accepted only as a mixed-version rollout bridge. */
 export interface BrowserGatewayMemoryRuntimeDescriptor {
   mode: "off" | "autonomous";
   retrievalStoreRoot: string;
@@ -93,6 +94,7 @@ export interface BrowserGatewayCoreOwnerLeaseRegistration {
   scope: CoreSessionScopeDto;
   ownerGenerationId: string;
   capabilities?: CoreCapabilityStatusDto[];
+  /** @deprecated Ignored by current helpers; retained for older helpers. */
   memoryRuntime?: BrowserGatewayMemoryRuntimeDescriptor;
   instanceId?: string;
   processId?: number;
@@ -102,6 +104,7 @@ export interface BrowserGatewayCoreOwnerHeartbeatRequest {
   ownerId: string;
   ownerGenerationId: string;
   capabilities?: CoreCapabilityStatusDto[];
+  /** @deprecated Ignored by current helpers; retained for older helpers. */
   memoryRuntime?: BrowserGatewayMemoryRuntimeDescriptor;
 }
 

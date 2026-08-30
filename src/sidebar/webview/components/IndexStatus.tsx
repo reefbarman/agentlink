@@ -1,7 +1,7 @@
 import type { PostCommand, SidebarState } from "../types.js";
 
 import { CollapsibleSection } from "./common/CollapsibleSection.js";
-import type { SemanticReadinessReason } from "../../../shared/semanticReadiness.js";
+import type { SemanticReadinessReason } from "@agentlink/protocol/semantic-readiness";
 
 interface Props {
   state: SidebarState;

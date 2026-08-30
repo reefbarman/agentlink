@@ -31,7 +31,7 @@ import type {
   CoreWebToolKind,
 } from "../../core/webAccess.js";
 
-import type { CoreReasoningEffort } from "../../core/modelCatalog.js";
+import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import { toCoreModelImageMediaType } from "../../core/modelRuntime.js";
 
 export type ContentBlock = CoreModelContentBlock;

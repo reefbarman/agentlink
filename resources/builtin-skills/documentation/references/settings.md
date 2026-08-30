@@ -22,7 +22,7 @@ All settings live under the `agentlink.*` namespace and are set in VS Code Setti
 
 ## Autonomous memory
 
-- `memory.mode` — typed autonomous low-authority memory (`autonomous`, the default) or explicitly disable its tools (`off`). Autonomous writes are scope-bound, secret-scanned, quota-bound, revisioned, auditable, and treated as evidence rather than instructions; authoritative instructions, skills, and commands retain reviewed proposal flow. `/memory` opens the no-model inspection/audit/undo/import/export manager. VS Code exposes global and current-project scopes; projectless Browser Ask Agent exposes global scope only.
+- `memory.mode` — typed autonomous low-authority memory (`autonomous`, the default) or explicitly disable its tools (`off`). The setting seeds a machine-local canonical config under `~/.agentlink/`; explicit setting changes update it, while Browser Ask Agent reads the same config and shared helper-owned store without requiring a connected VS Code window. Autonomous writes are scope-bound, secret-scanned, quota-bound, revisioned, auditable, and treated as evidence rather than instructions; authoritative instructions, skills, and commands retain reviewed proposal flow. `/memory` opens the no-model inspection/audit/undo/import/export manager. VS Code exposes global and current-project scopes; projectless Browser Ask Agent exposes global scope only.
 
 ## Approvals and safety
 

@@ -330,9 +330,57 @@ export async function* parseOpenAiCompatibleStreamEvents(
   const reportedOutputTokens = nonNegativeInteger(
     reportedUsage?.completion_tokens,
   );
+  const inputDetails = reportedUsage?.input_tokens_details;
+  const promptDetails = reportedUsage?.prompt_tokens_details;
+  const inputTokenBreakdownReported = Boolean(
+    (inputDetails &&
+      (Object.hasOwn(inputDetails, "cached_tokens") ||
+        Object.hasOwn(inputDetails, "cache_creation_tokens") ||
+        Object.hasOwn(inputDetails, "cache_write_tokens"))) ||
+    (promptDetails &&
+      (Object.hasOwn(promptDetails, "cached_tokens") ||
+        Object.hasOwn(promptDetails, "cache_creation_tokens") ||
+        Object.hasOwn(promptDetails, "cache_write_tokens"))) ||
+    (reportedUsage &&
+      (Object.hasOwn(reportedUsage, "cache_read_input_tokens") ||
+        Object.hasOwn(reportedUsage, "cache_creation_input_tokens") ||
+        Object.hasOwn(reportedUsage, "cache_write_input_tokens") ||
+        Object.hasOwn(reportedUsage, "cache_write_tokens"))),
+  );
+  const cacheReadTokens = inputTokenBreakdownReported
+    ? (nonNegativeInteger(inputDetails?.cached_tokens) ??
+      nonNegativeInteger(promptDetails?.cached_tokens) ??
+      nonNegativeInteger(reportedUsage?.cache_read_input_tokens) ??
+      0)
+    : undefined;
+  const detailedCacheCreationTokens =
+    nonNegativeInteger(inputDetails?.cache_creation_tokens) ??
+    nonNegativeInteger(inputDetails?.cache_write_tokens) ??
+    nonNegativeInteger(promptDetails?.cache_creation_tokens) ??
+    nonNegativeInteger(promptDetails?.cache_write_tokens);
+  const cacheCreationTokens = inputTokenBreakdownReported
+    ? (detailedCacheCreationTokens ??
+      nonNegativeInteger(reportedUsage?.cache_creation_input_tokens) ??
+      nonNegativeInteger(reportedUsage?.cache_write_input_tokens) ??
+      nonNegativeInteger(reportedUsage?.cache_write_tokens) ??
+      0)
+    : undefined;
   const finalUsage: CoreModelUsage = {
-    inputTokens: reportedInputTokens ?? options.estimatedInputTokens,
+    inputTokens:
+      reportedInputTokens === undefined
+        ? options.estimatedInputTokens
+        : Math.max(
+            0,
+            reportedInputTokens -
+              (cacheReadTokens ?? 0) -
+              (detailedCacheCreationTokens ?? 0),
+          ),
     outputTokens: reportedOutputTokens ?? estimateTokens(outputCharacters),
+    ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+    ...(cacheCreationTokens !== undefined ? { cacheCreationTokens } : {}),
+    ...(inputTokenBreakdownReported
+      ? { inputTokenBreakdownReported: true }
+      : {}),
     ...(reportedInputTokens === undefined || reportedOutputTokens === undefined
       ? { estimated: true }
       : {}),
@@ -342,6 +390,15 @@ export async function* parseOpenAiCompatibleStreamEvents(
     type: "usage",
     inputTokens: finalUsage.inputTokens,
     outputTokens: finalUsage.outputTokens,
+    ...(finalUsage.cacheReadTokens !== undefined
+      ? { cacheReadTokens: finalUsage.cacheReadTokens }
+      : {}),
+    ...(finalUsage.cacheCreationTokens !== undefined
+      ? { cacheCreationTokens: finalUsage.cacheCreationTokens }
+      : {}),
+    ...(finalUsage.inputTokenBreakdownReported
+      ? { inputTokenBreakdownReported: true }
+      : {}),
     ...(finalUsage.estimated ? { estimated: true } : {}),
     ...(providerResponseId ? { providerResponseId } : {}),
   };

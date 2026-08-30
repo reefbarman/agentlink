@@ -20,11 +20,11 @@ import type {
 import type {
   SemanticReadinessReason,
   SemanticReadinessSnapshot,
-} from "../shared/semanticReadiness.js";
+} from "@agentlink/protocol/semantic-readiness";
 import {
   classifySemanticReadiness,
   getSemanticReadinessMessage,
-} from "../shared/semanticReadiness.js";
+} from "@agentlink/protocol/semantic-readiness";
 import { getWorkspaceRootForPath, getWorkspaceRoots } from "../util/paths.js";
 import { classifyRetrievalFingerprint } from "../core/retrieval/fingerprint.js";
 import {

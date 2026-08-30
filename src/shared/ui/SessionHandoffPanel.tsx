@@ -1,6 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 
-import type { SessionHandoffDraft } from "../../agent/sessionHandoff.js";
+import type { SessionHandoffDraft } from "@agentlink/protocol/session-handoff-draft";
 
 export function SessionHandoffPanel({
   draft,

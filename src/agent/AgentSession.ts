@@ -1,15 +1,15 @@
+import type { AgentRuntimeErrorPresentation } from "@agentlink/protocol/agent-error-presentation";
 import type {
   AgentConfig,
   AgentEvent,
   AgentMessage,
-  AgentRuntimeError,
   SessionStatus,
 } from "./types.js";
-import type { InFlightAssistantBlock } from "../shared/types.js";
+import type { InFlightAssistantBlock } from "@agentlink/protocol/session-hydration";
 import type {
   RequestContextBreakdown,
   ToolResultContextAttribution,
-} from "../shared/types.js";
+} from "@agentlink/protocol/context-diagnostics";
 import type {
   ContentBlock,
   ReasoningEffort,
@@ -23,13 +23,13 @@ import {
 
 import type { AgentMode } from "./modes.js";
 import { BUILT_IN_MODES } from "./modes.js";
-import type { FinalMessageMarker } from "../shared/finalStatus.js";
+import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import {
   normalizePromptProfileOverrides,
-  resolvePromptProfile,
   type PromptProfile,
   type PromptProfileResolution,
-} from "../core/promptProfile.js";
+} from "@agentlink/protocol/prompt-profile";
+import { resolvePromptProfile } from "../core/promptProfilePolicy.js";
 import {
   composeSkillCapabilityPolicy,
   type SkillCapabilityPolicySnapshot,
@@ -62,10 +62,10 @@ import { randomUUID } from "crypto";
 import { pathToFileURL } from "url";
 import {
   createSessionProjectScope,
-  createWorkspaceProjectId,
   isProjectlessSessionScope,
   type SessionProjectScope,
-} from "../core/workspaceProjects.js";
+} from "@agentlink/protocol/workspace-project";
+import { createWorkspaceProjectId } from "../core/workspaceProjects.js";
 
 export type SessionProjectAvailabilityStatus =
   | "available"
@@ -890,7 +890,7 @@ export class AgentSession {
     this.lastActiveAt = Date.now();
   }
 
-  appendRuntimeError(error: AgentRuntimeError): void {
+  appendRuntimeError(error: AgentRuntimeErrorPresentation): void {
     const last = this.messages[this.messages.length - 1];
     if (last?.runtimeError?.message === error.message) {
       last.runtimeError.retryable = error.retryable;
@@ -1079,8 +1079,8 @@ export class AgentSession {
       type: "tool_result";
       tool_use_id: string;
       content: string | ContentBlock[];
-      mcpApprovalPromotion?: import("../shared/types.js").McpApprovalPromotionMeta;
-      composeTrace?: import("../shared/composeTypes.js").ComposeTrace;
+      mcpApprovalPromotion?: import("@agentlink/protocol/tool-result").McpApprovalPromotionMeta;
+      composeTrace?: import("@agentlink/protocol/compose").ComposeTrace;
     }>,
   ): void {
     this.messagesRevision++;

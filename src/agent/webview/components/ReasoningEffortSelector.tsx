@@ -1,4 +1,7 @@
-import type { ReasoningEffort, WebviewModelInfo } from "../types";
+import type {
+  ChatReasoningEffort as ReasoningEffort,
+  ChatModelInfo as WebviewModelInfo,
+} from "@agentlink/protocol/chat-catalog";
 import {
   ToolbarControlButton,
   ToolbarSelector,

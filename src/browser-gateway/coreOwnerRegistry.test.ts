@@ -4,7 +4,7 @@ import {
 } from "./coreOwnerRegistry.js";
 import { describe, expect, it } from "vitest";
 
-import type { CoreSessionScopeDto } from "../core/sessionProtocol.js";
+import type { CoreSessionScopeDto } from "@agentlink/protocol/session";
 
 const projectlessScope: CoreSessionScopeDto = {
   kind: "projectless",

@@ -46,6 +46,34 @@ function event(overrides) {
   };
 }
 
+function efficiency(overrides = {}) {
+  return {
+    ordinaryAgentProviderAttempts: 2,
+    condenseProviderAttempts: 1,
+    completedApiTurns: 1,
+    usageEstimatedApiTurns: 0,
+    uncachedInputTokens: 20,
+    cacheReadTokens: 70,
+    cacheCreationTokens: 10,
+    outputTokens: 5,
+    cacheBreakdownApiTurns: 1,
+    cacheBreakdownInputTokens: 100,
+    cacheBreakdownReadTokens: 70,
+    cacheBreakdownCreationTokens: 10,
+    staticFloorSamples: 2,
+    staticFloorTokenSends: 50,
+    contextLedgerSamples: 2,
+    boundedContextRequestedTokens: 10,
+    boundedContextOmittedTokens: 5,
+    requestsRequestingBoundedContext: 1,
+    requestsWithContextOmission: 1,
+    contextOverflowTokens: 0,
+    requestsWithContextOverflow: 0,
+    toolCalls: 4,
+    ...overrides,
+  };
+}
+
 function writeEvents(filePath, events) {
   fs.writeFileSync(
     filePath,
@@ -194,6 +222,127 @@ test("aggregates turns, tasks, and background lifecycles into indicators", () =>
   assert.equal(indicators.taskCompletionRate, 0.5);
   assert.equal(indicators.completedTaskP50Ms, 700_000);
   assert.equal(indicators.autoContinuesPerTurn, 0.5);
+});
+
+test("reports cache and self-reported completion efficiency with coverage", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "events.jsonl");
+  writeEvents(inputPath, [
+    event({
+      type: "turn_completed",
+      sessionId: "s1",
+      background: false,
+      model: "model-a",
+      runtimeKind: "builtin",
+      turnDurationMs: 1_000,
+      efficiency: efficiency(),
+    }),
+    event({
+      type: "task_completed",
+      sessionId: "s1",
+      background: false,
+      model: "model-a",
+      runtimeKind: "builtin",
+      status: "completed",
+      taskDurationMs: 2_000,
+      agentActiveMs: 1_500,
+      mixedProviderOrModel: false,
+      efficiency: efficiency(),
+    }),
+    event({
+      type: "task_completed",
+      sessionId: "legacy",
+      background: false,
+      status: "completed",
+      taskDurationMs: 3_000,
+    }),
+    event({
+      type: "task_completed",
+      sessionId: "builtin-missing",
+      background: false,
+      runtimeKind: "builtin",
+      status: "completed",
+      taskDurationMs: 3_500,
+    }),
+    event({
+      type: "task_completed",
+      sessionId: "unknown-runtime",
+      background: false,
+      runtimeKind: "unknown",
+      status: "completed",
+      taskDurationMs: 3_750,
+    }),
+    event({
+      type: "task_completed",
+      sessionId: "acp",
+      background: true,
+      runtimeKind: "acp",
+      status: "completed",
+      taskDurationMs: 4_000,
+    }),
+  ]);
+
+  const report = readSessionOutcomes(inputPath);
+  assert.equal(report.cacheEfficiency.cacheReadShare, 0.7);
+  assert.equal(report.cacheEfficiency.cacheBreakdownCoverage, 1);
+  assert.equal(report.cacheEfficiency.ordinaryAgentProviderAttempts, 2);
+  assert.equal(report.cacheEfficiency.condenseProviderAttempts, 1);
+  assert.equal(report.completionEfficiency.samples, 1);
+  assert.equal(report.completionEfficiency.legacyMissing, 1);
+  assert.equal(report.completionEfficiency.builtinMissingEfficiency, 1);
+  assert.equal(report.completionEfficiency.unknownRuntimeMissingEfficiency, 1);
+  assert.equal(report.completionEfficiency.unsupportedRuntime, 1);
+  assert.deepEqual(report.completionEfficiency.byRuntimeKind, {
+    builtin: 2,
+    "legacy-missing": 1,
+    unknown: 1,
+    acp: 1,
+  });
+  assert.deepEqual(report.completionEfficiency.elapsedMs, [2_000]);
+  assert.deepEqual(report.completionEfficiency.agentActiveMs, [1_500]);
+  assert.equal(report.completionEfficiency.efficiency.cacheReadShare, 0.7);
+  assert.equal(report.byVersion["1.18.21"].completionEfficiencySamples, 1);
+  assert.equal(report.byVersion["1.18.21"].completionUncachedInputTokens, 20);
+});
+
+test("keeps cache share unavailable when no input partition is reported", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "events.jsonl");
+  writeEvents(inputPath, [
+    event({
+      type: "turn_completed",
+      sessionId: "s1",
+      background: false,
+      turnDurationMs: 1,
+      efficiency: efficiency({
+        cacheBreakdownApiTurns: 0,
+        cacheBreakdownInputTokens: 0,
+        cacheBreakdownReadTokens: 0,
+        cacheBreakdownCreationTokens: 0,
+      }),
+    }),
+  ]);
+
+  const report = readSessionOutcomes(inputPath);
+  assert.equal(report.cacheEfficiency.cacheReadShare, undefined);
+  assert.equal(report.cacheEfficiency.cacheBreakdownCoverage, 0);
+});
+
+test("does not count array-shaped efficiency payloads as snapshots", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "events.jsonl");
+  writeEvents(inputPath, [
+    event({
+      type: "turn_completed",
+      sessionId: "malformed",
+      background: false,
+      turnDurationMs: 1,
+      efficiency: [],
+    }),
+  ]);
+
+  const report = readSessionOutcomes(inputPath);
+  assert.equal(report.cacheEfficiency.snapshots, 0);
 });
 
 test("emptyDiff reviews are not counted as empty reviews", () => {

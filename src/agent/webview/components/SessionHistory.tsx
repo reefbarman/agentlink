@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "preact/hooks";
 
-import type { SessionSummary } from "../types";
+import type { ChatSessionHistorySummary as SessionSummary } from "@agentlink/protocol/chat-session-history";
 
 function relativeTime(ts: number): string {
   const diff = Date.now() - ts;

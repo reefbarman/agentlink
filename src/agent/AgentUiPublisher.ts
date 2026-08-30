@@ -1,9 +1,13 @@
 import * as vscode from "vscode";
 
+import type {
+  UserQuestion as Question,
+  StructuredQuestionProgress,
+} from "@agentlink/protocol/structured-question";
+
 import type { ApprovalRequest } from "../approvals/webview/types.js";
-import type { McpFormElicitationRequest } from "../shared/mcpElicitation.js";
-import type { McpUrlElicitationRequest } from "../shared/mcpUrlElicitation.js";
-import type { Question } from "./webview/types.js";
+import type { McpFormElicitationRequest } from "@agentlink/protocol/mcp-elicitation";
+import type { McpUrlElicitationRequest } from "@agentlink/protocol/mcp-url-elicitation";
 
 export type AgentUiEvent =
   | { type: "showApproval"; request: ApprovalRequest }
@@ -61,13 +65,7 @@ export interface AgentUiPublisher {
   publishQuestionCleared(sessionId: string, id: string): void;
   publishQuestionProgress(
     sessionId: string,
-    progress: {
-      id: string;
-      step: number;
-      answers: Record<string, string | string[] | number | boolean | undefined>;
-      notes: Record<string, string>;
-      origin: string;
-    },
+    progress: StructuredQuestionProgress,
   ): void;
   publishFormElicitationRequest(
     sessionId: string,

@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 import {
   isCoreReasoningEffort,
   type CoreReasoningEffort,
-} from "../core/modelCatalog.js";
+} from "@agentlink/protocol/model-catalog";
 
 export const FALLBACK_REASONING_EFFORT: CoreReasoningEffort = "high";
 

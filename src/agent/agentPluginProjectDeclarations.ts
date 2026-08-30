@@ -5,7 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { resolveContainedPath } from "../core/agentPlugins/pathPolicy.js";
 import { parseStrictJson } from "../core/agentPlugins/strictJson.js";
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 import { createNodePluginPackageFileSystem } from "./agentPluginFileSystem.js";
 import {
   parseAgentPluginSource,

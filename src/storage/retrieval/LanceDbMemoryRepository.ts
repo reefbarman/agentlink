@@ -9,11 +9,13 @@ import type {
   MemoryLexicalCandidate,
   MemoryLexicalSearchRequest,
   MemoryRecord,
-  MemoryRepository,
-  MemoryRepositoryTransaction,
   MemoryRevision,
   MemoryScope,
   MemoryStoreSnapshot,
+} from "@agentlink/protocol/autonomous-memory";
+import type {
+  MemoryRepository,
+  MemoryRepositoryTransaction,
 } from "../../core/memory/contracts.js";
 import { RETRIEVAL_TABLES, memoryEntrySchema } from "./lanceDbSchemas.js";
 import {
@@ -48,6 +50,23 @@ interface MemoryState {
   snapshots: Map<string, MemoryStoreSnapshot>;
 }
 
+export interface MemoryRepositoryStateExport {
+  records: MemoryRecord[];
+  revisions: MemoryRevision[];
+  audits: MemoryAuditEvent[];
+  importCheckpoints: MemoryImportCheckpoint[];
+  snapshots: MemoryStoreSnapshot[];
+}
+
+export interface MemoryRepositoryMergeResult {
+  recordsAdded: number;
+  recordsUpdated: number;
+  revisionsAdded: number;
+  auditsAdded: number;
+  importCheckpointsAdded: number;
+  snapshotsAdded: number;
+}
+
 export interface LanceDbMemoryRepositoryOptions {
   root: string;
 }
@@ -72,7 +91,9 @@ export class LanceDbMemoryRepository implements MemoryRepository {
       const state = await readState(table);
       const staged = cloneState(state);
       const result = await operation(transactionView(staged));
-      await this.writeState(table, staged);
+      if (!memoryStatesEqual(state, staged)) {
+        await this.writeState(table, staged);
+      }
       return result;
     });
   }
@@ -135,6 +156,92 @@ export class LanceDbMemoryRepository implements MemoryRepository {
 
   async listSnapshots(): Promise<MemoryStoreSnapshot[]> {
     return await this.read(listSnapshots);
+  }
+
+  async exportState(): Promise<MemoryRepositoryStateExport> {
+    return await this.read((state) => exportMemoryState(state));
+  }
+
+  async mergeState(
+    exported: MemoryRepositoryStateExport,
+    options: { legacySourceKeyPrefix?: string } = {},
+  ): Promise<MemoryRepositoryMergeResult> {
+    return await this.transaction(async (transaction) => {
+      const result: MemoryRepositoryMergeResult = {
+        recordsAdded: 0,
+        recordsUpdated: 0,
+        revisionsAdded: 0,
+        auditsAdded: 0,
+        importCheckpointsAdded: 0,
+        snapshotsAdded: 0,
+      };
+      for (const record of exported.records) {
+        const current = await transaction.get(record.id);
+        if (!current) {
+          await transaction.put(record);
+          result.recordsAdded += 1;
+        } else if (compareMemoryRecords(record, current) > 0) {
+          await transaction.put(record);
+          result.recordsUpdated += 1;
+        }
+      }
+      for (const revision of exported.revisions) {
+        const current = await transaction.listRevisions(revision.recordId);
+        if (!current.some((item) => item.revision === revision.revision)) {
+          await transaction.appendRevision(revision);
+          result.revisionsAdded += 1;
+        }
+      }
+      const currentAuditIds = new Set(
+        (await transaction.listAudit()).map((event) => event.id),
+      );
+      for (const audit of exported.audits) {
+        if (currentAuditIds.has(audit.id)) continue;
+        await transaction.appendAudit(audit);
+        currentAuditIds.add(audit.id);
+        result.auditsAdded += 1;
+      }
+      const snapshotIdPrefix = options.legacySourceKeyPrefix
+        ? `${options.legacySourceKeyPrefix}:snapshot:`
+        : "";
+      const checkpointIdPrefix = options.legacySourceKeyPrefix
+        ? `${options.legacySourceKeyPrefix}:checkpoint:`
+        : "";
+      const currentSnapshotIds = new Set(
+        (await transaction.listSnapshots()).map((snapshot) => snapshot.id),
+      );
+      for (const snapshot of exported.snapshots) {
+        const migrated = snapshotIdPrefix
+          ? { ...snapshot, id: `${snapshotIdPrefix}${snapshot.id}` }
+          : snapshot;
+        if (currentSnapshotIds.has(migrated.id)) continue;
+        await transaction.putSnapshot(migrated);
+        currentSnapshotIds.add(migrated.id);
+        result.snapshotsAdded += 1;
+      }
+      const currentCheckpointIds = new Set(
+        (await transaction.listImportCheckpoints()).map(
+          (checkpoint) => checkpoint.id,
+        ),
+      );
+      for (const checkpoint of exported.importCheckpoints) {
+        const migrated = options.legacySourceKeyPrefix
+          ? {
+              ...checkpoint,
+              id: `${checkpointIdPrefix}${checkpoint.id}`,
+              sourceKey: `${options.legacySourceKeyPrefix}:${checkpoint.sourceKey}`,
+              ...(checkpoint.snapshotId
+                ? { snapshotId: `${snapshotIdPrefix}${checkpoint.snapshotId}` }
+                : {}),
+            }
+          : checkpoint;
+        if (currentCheckpointIds.has(migrated.id)) continue;
+        await transaction.putImportCheckpoint(migrated);
+        currentCheckpointIds.add(migrated.id);
+        result.importCheckpointsAdded += 1;
+      }
+      return result;
+    });
   }
 
   async health(): Promise<MemoryHealthSnapshot> {
@@ -472,6 +579,34 @@ function stateRows(state: MemoryState): MemoryEntryRow[] {
     });
   }
   return rows;
+}
+
+function exportMemoryState(state: MemoryState): MemoryRepositoryStateExport {
+  return {
+    records: listRecords(state),
+    revisions: [...state.revisions.values()]
+      .flat()
+      .sort(
+        (left, right) =>
+          left.recordId.localeCompare(right.recordId) ||
+          left.revision - right.revision,
+      )
+      .map(clone),
+    audits: listAudit(state),
+    importCheckpoints: listImportCheckpoints(state),
+    snapshots: listSnapshots(state),
+  };
+}
+
+function compareMemoryRecords(left: MemoryRecord, right: MemoryRecord): number {
+  return (
+    left.revision - right.revision ||
+    left.updatedAt.localeCompare(right.updatedAt)
+  );
+}
+
+function memoryStatesEqual(left: MemoryState, right: MemoryState): boolean {
+  return JSON.stringify(stateRows(left)) === JSON.stringify(stateRows(right));
 }
 
 function listRecords(state: MemoryState, scope?: MemoryScope): MemoryRecord[] {

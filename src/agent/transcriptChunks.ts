@@ -1,6 +1,6 @@
 import type { AgentMessage } from "./types.js";
 import { agentMessagesToChatMessages } from "../shared/chatProjection.js";
-import { getVisibleUserMessageIndexes } from "../shared/todoContinuation.js";
+import { getVisibleUserMessageIndexes } from "@agentlink/protocol/todo-continuation";
 
 /** User turns included in a restore hydration tail (and the persisted tail snapshot). */
 export const RESTORE_TAIL_TURNS = 8;

@@ -2,15 +2,18 @@ import * as path from "path";
 
 import {
   createSessionProjectScope,
-  createWorkspaceProjectId,
   type NewSessionProjectSelectionInput,
   type NewSessionProjectSelectionResult,
   type NewSessionProjectSelectionSource,
-  type ProjectScopeResolver,
   type SessionProjectResolution,
   type SessionProjectScope,
   type WorkspaceProject,
   type WorkspaceProjectCatalogSnapshot,
+} from "@agentlink/protocol/workspace-project";
+
+import {
+  createWorkspaceProjectId,
+  type ProjectScopeResolver,
 } from "../../core/workspaceProjects.js";
 
 export interface WorkspaceProjectUriInput {

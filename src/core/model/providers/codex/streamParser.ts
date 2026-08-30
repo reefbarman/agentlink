@@ -64,6 +64,7 @@ export async function* parseCodexResponseStreamEvents(
   let outputTokens = 0;
   let cacheReadTokens = 0;
   let cacheCreationTokens = 0;
+  let inputTokenBreakdownReported: boolean | undefined;
   let providerResponseId: string | undefined;
 
   for await (const event of events) {
@@ -343,6 +344,20 @@ export async function* parseCodexResponseStreamEvents(
         const promptDetails = usage.prompt_tokens_details as
           | Record<string, unknown>
           | undefined;
+        const hasCacheBreakdown =
+          (inputDetails !== undefined &&
+            (Object.hasOwn(inputDetails, "cached_tokens") ||
+              Object.hasOwn(inputDetails, "cache_creation_tokens") ||
+              Object.hasOwn(inputDetails, "cache_write_tokens"))) ||
+          (promptDetails !== undefined &&
+            (Object.hasOwn(promptDetails, "cached_tokens") ||
+              Object.hasOwn(promptDetails, "cache_creation_tokens") ||
+              Object.hasOwn(promptDetails, "cache_write_tokens"))) ||
+          Object.hasOwn(usage, "cache_read_input_tokens") ||
+          Object.hasOwn(usage, "cache_creation_input_tokens") ||
+          Object.hasOwn(usage, "cache_write_input_tokens") ||
+          Object.hasOwn(usage, "cache_write_tokens");
+        if (hasCacheBreakdown) inputTokenBreakdownReported = true;
         cacheReadTokens =
           (inputDetails?.cached_tokens as number) ??
           (promptDetails?.cached_tokens as number) ??
@@ -486,8 +501,17 @@ export async function* parseCodexResponseStreamEvents(
     type: "usage",
     inputTokens,
     outputTokens,
-    cacheReadTokens: cacheReadTokens || undefined,
-    cacheCreationTokens: cacheCreationTokens || undefined,
+    cacheReadTokens:
+      inputTokenBreakdownReported || cacheReadTokens > 0
+        ? cacheReadTokens
+        : undefined,
+    cacheCreationTokens:
+      inputTokenBreakdownReported || cacheCreationTokens > 0
+        ? cacheCreationTokens
+        : undefined,
+    ...(inputTokenBreakdownReported !== undefined
+      ? { inputTokenBreakdownReported }
+      : {}),
     providerResponseId,
     ...(serverToolUsage ? { serverToolUsage } : {}),
   };

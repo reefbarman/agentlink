@@ -1,7 +1,8 @@
-import type { TerminalProvider } from "../core/capabilities/terminal.js";
-import { type ToolResult } from "../shared/types.js";
-import { detectInteractivePrompt } from "../terminal/interactivePromptDetector.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
+
+import type { TerminalProvider } from "../core/capabilities/terminal.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
+import { detectInteractivePrompt } from "../terminal/interactivePromptDetector.js";
 import { sleep } from "../util/sleep.js";
 
 function formatBytes(bytes: number): string {

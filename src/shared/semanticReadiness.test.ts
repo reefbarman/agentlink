@@ -1,9 +1,11 @@
+import { describe, expect, expectTypeOf, it } from "vitest";
+
 import {
   classifySemanticReadiness,
   getSemanticReadinessMessage,
+  type SemanticReadinessReason,
   type SemanticReadinessSnapshot,
 } from "./semanticReadiness.js";
-import { describe, expect, it } from "vitest";
 
 const ready: SemanticReadinessSnapshot = {
   semanticEnabled: true,
@@ -12,24 +14,23 @@ const ready: SemanticReadinessSnapshot = {
   hasIndex: true,
 };
 
-describe("semantic readiness", () => {
-  it.each([
-    [{ ...ready, semanticEnabled: false }, "disabled"],
-    [{ ...ready, hasWorkspace: false }, "no_workspace"],
-    [{ ...ready, retrievalStoreAvailable: false }, "store_unavailable"],
-    [{ ...ready, hasIndex: false }, "missing_index"],
-    [ready, "ready"],
-  ] as const)("classifies readiness precedence", (snapshot, expected) => {
-    expect(classifySemanticReadiness(snapshot)).toBe(expected);
-  });
-
-  it("keeps shared store-unavailable messaging provider-neutral", () => {
+describe("semantic readiness protocol compatibility shim", () => {
+  it("preserves the legacy type, classification, and presentation contracts", () => {
+    expectTypeOf<SemanticReadinessReason>().toEqualTypeOf<
+      | "missing_embeddings_auth"
+      | "missing_index"
+      | "store_unavailable"
+      | "no_workspace"
+      | "disabled"
+      | "generic_error"
+    >();
+    expect(classifySemanticReadiness(ready)).toBe("ready");
+    expect(
+      classifySemanticReadiness({ ...ready, retrievalStoreAvailable: false }),
+    ).toBe("store_unavailable");
     expect(getSemanticReadinessMessage("store_unavailable")).toBe(
       "The retrieval store is unavailable.",
     );
-  });
-
-  it("describes missing embedding auth as optional vector degradation", () => {
     expect(getSemanticReadinessMessage("missing_embeddings_auth")).toContain(
       "Lexical indexing and search remain available",
     );

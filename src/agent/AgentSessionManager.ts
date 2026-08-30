@@ -27,18 +27,16 @@ import {
 } from "../core/nativeWebTools.js";
 import { hostFlightRecorder } from "../core/hostLiveness.js";
 import { runWatchedProviderStream } from "../core/providerStreamWatchdog.js";
-import {
-  normalizePromptProfileOverrides,
-  resolvePromptProfile,
-} from "../core/promptProfile.js";
+import { normalizePromptProfileOverrides } from "@agentlink/protocol/prompt-profile";
+import { resolvePromptProfile } from "../core/promptProfilePolicy.js";
 import type {
   BackgroundAgentBudgetUsage,
-  BackgroundAgentResultContent,
   BackgroundAgentRuntimePhase,
   BackgroundResultState,
-} from "../core/capabilities/background.js";
+} from "@agentlink/protocol/background-result";
+import type { BackgroundAgentResultContent } from "../core/capabilities/background.js";
 import type { NativeWebToolExecutionRequest } from "../core/capabilities/web.js";
-import type { AutomaticMemoryContext } from "../core/capabilities/memory.js";
+import type { AutomaticMemoryContext } from "@agentlink/protocol/autonomous-memory";
 import type {
   PendingQuestionRecoveryState,
   PersistDurability,
@@ -97,8 +95,8 @@ import {
   type ModelProvider,
   type ReasoningEffort,
 } from "./providers/types.js";
-import type { Question } from "./webview/types.js";
-import { getConfirmationOptions } from "../shared/questionConfirmation.js";
+import type { UserQuestion as Question } from "@agentlink/protocol/structured-question";
+import { getConfirmationOptions } from "@agentlink/protocol/question-confirmation";
 import {
   buildAskUserToolResult,
   createGuardianOutsideReadOptions,
@@ -117,10 +115,8 @@ import type {
   SessionSummary,
   SessionTailSnapshot,
 } from "./SessionStore.js";
-import type {
-  BackgroundCompletionResult,
-  BgSessionInfo,
-} from "../shared/types.js";
+import type { BackgroundCompletionResult } from "@agentlink/protocol/session-hydration";
+import type { BgSessionInfo } from "@agentlink/protocol/background-result";
 import type { Checkpoint, RevertPreview } from "./CheckpointManager.js";
 import type {
   PromptResponse,
@@ -143,10 +139,17 @@ import {
 } from "./background/backgroundConcurrency.js";
 import { resolveBackgroundBackendRoute } from "./background/backgroundBackendRouter.js";
 import {
+  getAutomaticBackgroundBudget,
+  inferReviewTier,
+  isAutomaticallyBudgetedTaskClass,
+  isResearchTaskClass,
+} from "./background/backgroundBudgetPolicy.js";
+import { isReviewTaskClass } from "./background/reviewTaskClass.js";
+import {
   isForegroundOnlyModel,
   resolveBackgroundRoute,
 } from "./backgroundModelRouter.js";
-import { parseMcpToolName } from "./mcpToolNames.js";
+import { parseMcpToolName } from "@agentlink/protocol/mcp-tool-identity";
 import {
   partitionMcpToolsForDisclosure,
   type McpToolDisclosurePartition,
@@ -185,12 +188,14 @@ import { FleetAdmissionError, FleetScheduler } from "./FleetScheduler.js";
 import {
   createProjectlessSessionScope,
   createSessionProjectScope,
-  createWorkspaceProjectId,
   isProjectlessSessionScope,
-  type ProjectScopeResolver,
   type SessionProjectResolution,
   type SessionProjectScope,
   type WorkspaceProject,
+} from "@agentlink/protocol/workspace-project";
+import {
+  createWorkspaceProjectId,
+  type ProjectScopeResolver,
 } from "../core/workspaceProjects.js";
 import { selectNewSessionProject } from "../adapters/vscode/workspaceProjectCapabilities.js";
 import {
@@ -200,6 +205,12 @@ import {
 import { BackgroundSummaryScheduler } from "./BackgroundSummaryScheduler.js";
 import { captureReviewScope } from "./reviewScopeSnapshot.js";
 import { type SessionOutcomeTelemetry } from "../telemetry/SessionOutcomeTelemetry.js";
+import {
+  applyHarnessEfficiencyEvent,
+  createHarnessEfficiencyStats,
+  snapshotHarnessEfficiencyStats,
+  type HarnessEfficiencyStats,
+} from "./harnessEfficiencyStats.js";
 import {
   applyTurnOutcomeEvent,
   createTurnOutcomeStats,
@@ -219,17 +230,18 @@ import { WorktreeFleetExchangeStore } from "../worktree/WorktreeFleetExchangeSto
 import {
   isCommandApprovalPolicy,
   type CommandApprovalPolicy,
-} from "../approvals/commandApprovalPolicy.js";
+} from "@agentlink/protocol/command-approval-policy";
 import { SessionApprovalPolicyCoordinator } from "./sessionApprovalPolicy.js";
 import type {
   TerminalApprovalModeSnapshot,
   TerminalApprovalPolicy,
   TerminalApprovalReviewer,
   TerminalExecutionPreset,
-} from "../core/capabilities/terminal.js";
+} from "@agentlink/protocol/terminal";
 import { convertAcpContentBlock } from "./acpContent.js";
 import type { WorktreeAgentLaunchRequest } from "../core/capabilities/worktree.js";
-import type { InlineApprovalRequest, ToolResult } from "../shared/types.js";
+import type { InlineApprovalRequest } from "@agentlink/protocol/inline-approval";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 import type { ApprovalPreflightResult } from "../approvals/ApprovalPanelProvider.js";
 import type { ApprovalRequest } from "../approvals/webview/types.js";
 import { isMemoryProtectedPath } from "../approvals/protectedPaths.js";
@@ -242,7 +254,7 @@ import {
   getVisibleUserMessageIndexes,
   migrateLegacyTodoContinuationTurnIndex,
   TODO_AUTO_CONTINUE_PROMPT,
-} from "../shared/todoContinuation.js";
+} from "@agentlink/protocol/todo-continuation";
 import type { HookRuntime } from "../core/hooks/HookRuntime.js";
 import {
   buildDeterministicSessionHandoffMarkdown,
@@ -459,6 +471,23 @@ interface ActiveInteractiveExecution {
   phase: InteractiveExecutionPhase;
 }
 
+interface SessionTaskTracking {
+  startedAt: number;
+  turns: number;
+  agentActiveMs: number;
+  currentTurnStartedAt: number;
+  currentTurnUserWaitBaselineMs: number;
+  efficiency: HarnessEfficiencyStats;
+  providerIds: Set<string>;
+  models: Set<string>;
+}
+
+function startsTrackedTask(event: AgentEvent): boolean {
+  return (
+    event.type === "user_interjection" || event.type === "api_request_start"
+  );
+}
+
 function deepFreeze<T>(value: T): Readonly<T> {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
     for (const nested of Object.values(value as Record<string, unknown>)) {
@@ -476,16 +505,27 @@ function getEngineHardLimit(limit: number | undefined): number | undefined {
 }
 
 function resolveBackgroundBudget(
-  isReviewTask: boolean,
+  taskClass: string,
   defaultBudget: AgentBudget | undefined,
   requestedBudget: AgentBudget | undefined,
 ): AgentBudget | undefined {
-  if (!isReviewTask) return requestedBudget ?? defaultBudget;
+  if (isResearchTaskClass(taskClass)) {
+    const researchBudget: AgentBudget = { ...defaultBudget };
+    for (const [key, value] of Object.entries(requestedBudget ?? {})) {
+      if (value !== undefined) {
+        (researchBudget as Record<string, unknown>)[key] = value;
+      }
+    }
+    return Object.values(researchBudget).some((value) => value !== undefined)
+      ? researchBudget
+      : undefined;
+  }
+  if (!isReviewTaskClass(taskClass)) return requestedBudget;
 
   // Review input size is not a useful proxy for progress: a captured diff can
-  // consume a token cap before the agent has inspected any surrounding code.
-  // Keep reviews bounded by committed work units and wall-clock time instead.
-  const reviewBudget: AgentBudget = {
+  // consume a token cap before the agent has inspected surrounding code. Keep
+  // reviews bounded by committed work units and wall-clock time instead.
+  const workUnitBudget: AgentBudget = {
     ...defaultBudget,
     ...(requestedBudget?.maxToolCalls !== undefined
       ? { maxToolCalls: requestedBudget.maxToolCalls }
@@ -503,7 +543,7 @@ function resolveBackgroundBudget(
       ? { scope: requestedBudget.scope }
       : {}),
   };
-  return Object.keys(reviewBudget).length > 0 ? reviewBudget : undefined;
+  return Object.keys(workUnitBudget).length > 0 ? workUnitBudget : undefined;
 }
 
 /** Human-readable label for a budget check kind (e.g. "tool_calls" → "tool call"). */
@@ -928,10 +968,7 @@ export class AgentSessionManager {
   /** Cumulative ms waiters spent blocked on each background session's result. */
   private bgResultWaitMs = new Map<string, number>();
   /** Task-duration tracking per foreground session, cleared on terminal status. */
-  private sessionTaskTracking = new Map<
-    string,
-    { startedAt: number; turns: number }
-  >();
+  private sessionTaskTracking = new Map<string, SessionTaskTracking>();
   private sessionOutcomeTelemetry?: SessionOutcomeTelemetry;
 
   private fleetVisibilityExpiryTimer?: ReturnType<
@@ -1844,6 +1881,14 @@ export class AgentSessionManager {
         background: session.background === true,
         mode: session.mode,
         model: session.model,
+        providerId: session.providerId,
+        promptProfile: session.promptProfile.profile,
+        runtimeKind:
+          session.providerId === "acp"
+            ? "acp"
+            : session.providerId
+              ? "builtin"
+              : "unknown",
         turnDurationMs: Date.now() - stats.startedAt,
         streamingMs: stats.streamingMs,
         toolMs: stats.toolMs,
@@ -1859,6 +1904,7 @@ export class AgentSessionManager {
         autoContinues,
         inputTokens: stats.inputTokens,
         outputTokens: stats.outputTokens,
+        efficiency: snapshotHarnessEfficiencyStats(stats.efficiency),
       });
     } catch (err) {
       this.log?.(`[session-outcome] turn record failed: ${String(err)}`);
@@ -1866,26 +1912,79 @@ export class AgentSessionManager {
   }
 
   /** Emit a task_completed event when set_task_status reports a status. */
-  private recordTaskOutcome(session: AgentSession, input: unknown): void {
+  private recordTaskOutcome(
+    session: AgentSession,
+    input: unknown,
+    tracking: SessionTaskTracking | undefined,
+    turnStats: TurnOutcomeStats,
+  ): boolean {
+    const status = (input as { status?: unknown } | undefined)?.status;
+    if (typeof status !== "string" || !status.trim()) return false;
+    const terminal = status === "completed" || status === "cancelled";
     try {
-      const status = (input as { status?: unknown } | undefined)?.status;
-      if (typeof status !== "string" || !status.trim()) return;
-      const tracking = this.sessionTaskTracking.get(session.id);
+      if (tracking) {
+        if (session.providerId) tracking.providerIds.add(session.providerId);
+        tracking.models.add(session.model);
+      }
       this.sessionOutcomeTelemetry?.record({
         type: "task_completed",
         sessionId: session.id,
         background: session.background === true,
         mode: session.mode,
+        model: session.model,
+        providerId: session.providerId,
+        promptProfile: session.promptProfile.profile,
+        runtimeKind:
+          session.providerId === "acp"
+            ? "acp"
+            : session.providerId
+              ? "builtin"
+              : "unknown",
         status,
         taskDurationMs: tracking ? Date.now() - tracking.startedAt : undefined,
         turns: tracking?.turns,
+        agentActiveMs: tracking
+          ? tracking.agentActiveMs +
+            Math.max(
+              0,
+              Date.now() -
+                tracking.currentTurnStartedAt -
+                (turnStats.userWaitMs - tracking.currentTurnUserWaitBaselineMs),
+            )
+          : undefined,
+        mixedProviderOrModel: tracking
+          ? tracking.providerIds.size > 1 || tracking.models.size > 1
+          : undefined,
+        efficiency: tracking
+          ? snapshotHarnessEfficiencyStats(tracking.efficiency)
+          : undefined,
       });
-      if (status === "completed" || status === "cancelled") {
-        this.sessionTaskTracking.delete(session.id);
-      }
+      return terminal;
     } catch (err) {
       this.log?.(`[session-outcome] task record failed: ${String(err)}`);
+      return terminal;
+    } finally {
+      if (terminal) this.sessionTaskTracking.delete(session.id);
     }
+  }
+
+  private createTaskTracking(
+    session: AgentSession,
+    turnStats: TurnOutcomeStats,
+  ): SessionTaskTracking {
+    const now = Date.now();
+    const tracking: SessionTaskTracking = {
+      startedAt: now,
+      turns: 1,
+      agentActiveMs: 0,
+      currentTurnStartedAt: now,
+      currentTurnUserWaitBaselineMs: turnStats.userWaitMs,
+      efficiency: createHarnessEfficiencyStats(),
+      providerIds: new Set(session.providerId ? [session.providerId] : []),
+      models: new Set([session.model]),
+    };
+    this.sessionTaskTracking.set(session.id, tracking);
+    return tracking;
   }
 
   /**
@@ -3280,9 +3379,10 @@ export class AgentSessionManager {
 
   /**
    * Read-only decision ladder for tool kinds outside the read-only allowlist:
-   * user deny rule → static read-only classifier → guardian review → user
-   * escalation only when the guardian is unavailable. Mutating tool kinds are
-   * denied outright — that is the read-only delegation contract.
+   * user deny rule → user allow rule → static read-only classifier → guardian
+   * review → user escalation only when the guardian is unavailable. An Allow
+   * rule is explicit command authority and runs without a workspace write lease.
+   * Mutating tool kinds are denied outright by the read-only delegation contract.
    */
   private async resolveReadOnlyAcpPermission(args: {
     session: AgentSession;
@@ -3355,6 +3455,22 @@ export class AgentSessionManager {
     if (ruleEvaluation?.decision === "forbidden") {
       return deny("user_rule", `user command rule forbids: ${command}`);
     }
+    if (ruleEvaluation?.allSegmentsExplicitlyAllowed) {
+      this.appendPolicyAudit(args.session, {
+        decision: "allowed",
+        operation: "acp:execute",
+        reason: `user command rule allows: ${command}`.slice(0, 240),
+      });
+      this.recordAcpPermissionTelemetry({
+        requestContext: args.requestContext,
+        readonlyOnly: true,
+        toolKind,
+        outcome: "ok",
+        tier: "user_rule",
+        command,
+      });
+      return { outcome: { outcome: "selected", optionId: allowOptionId } };
+    }
 
     const staticOption = this.getReadonlyAcpCommandOption(args);
     if (staticOption) {
@@ -3392,9 +3508,8 @@ export class AgentSessionManager {
         workspaceRoots,
         task: args.task,
         staticDenialReason,
-        userRuleDecision: ruleEvaluation?.allSegmentsApprovedByRule
-          ? "allow"
-          : "none",
+        userRuleDecision:
+          ruleEvaluation?.decision === "allow" ? "allow" : "none",
         rawInput: args.request.toolCall.rawInput,
         signal: args.session.abortSignal,
       });
@@ -6779,12 +6894,14 @@ export class AgentSessionManager {
           let lastTodos: TodoItem[] = [];
 
           const turnStats = createTurnOutcomeStats();
-          const taskTracking = this.sessionTaskTracking.get(session.id) ?? {
-            startedAt: Date.now(),
-            turns: 0,
-          };
-          taskTracking.turns += 1;
-          this.sessionTaskTracking.set(session.id, taskTracking);
+          let taskTracking = this.sessionTaskTracking.get(session.id);
+          if (taskTracking) {
+            taskTracking.turns += 1;
+            taskTracking.currentTurnStartedAt = turnStats.startedAt;
+            taskTracking.currentTurnUserWaitBaselineMs = 0;
+          } else {
+            taskTracking = this.createTaskTracking(session, turnStats);
+          }
 
           let resolveRunSettled!: () => void;
           const runSettled = new Promise<void>((resolve) => {
@@ -6824,12 +6941,35 @@ export class AgentSessionManager {
                 ) {
                   break;
                 }
+                if (!taskTracking && startsTrackedTask(event)) {
+                  taskTracking = this.createTaskTracking(session, turnStats);
+                }
                 applyTurnOutcomeEvent(turnStats, event);
+                if (taskTracking) {
+                  applyHarnessEfficiencyEvent(taskTracking.efficiency, event);
+                  if (
+                    event.type === "request_context_attribution" &&
+                    event.requestKind === "agent"
+                  ) {
+                    if (event.providerId) {
+                      taskTracking.providerIds.add(event.providerId);
+                    }
+                    taskTracking.models.add(event.model);
+                  } else if (event.type === "api_request") {
+                    taskTracking.models.add(event.model);
+                  }
+                }
                 if (
                   event.type === "tool_result" &&
                   event.toolName === "set_task_status"
                 ) {
-                  this.recordTaskOutcome(session, event.input);
+                  const terminal = this.recordTaskOutcome(
+                    session,
+                    event.input,
+                    taskTracking,
+                    turnStats,
+                  );
+                  if (terminal) taskTracking = undefined;
                 }
                 if (event.type === "todo_update") {
                   lastTodos = event.todos;
@@ -7002,6 +7142,16 @@ export class AgentSessionManager {
             persistIfHistoryChanged();
             if (this.sessionRunSettled.get(session.id) === runSettled) {
               this.sessionRunSettled.delete(session.id);
+            }
+            const trackedAtTurnEnd = this.sessionTaskTracking.get(session.id);
+            if (taskTracking && trackedAtTurnEnd === taskTracking) {
+              taskTracking.agentActiveMs += Math.max(
+                0,
+                Date.now() -
+                  taskTracking.currentTurnStartedAt -
+                  (turnStats.userWaitMs -
+                    taskTracking.currentTurnUserWaitBaselineMs),
+              );
             }
             this.recordTurnOutcome(
               session,
@@ -8566,7 +8716,7 @@ export class AgentSessionManager {
     session: AgentSession,
     metadata: {
       model: string;
-      contextLedger?: import("../core/contextLedger.js").ContextLedgerSnapshot;
+      contextLedger?: import("@agentlink/protocol/context-ledger").ContextLedgerSnapshot;
     },
   ): void {
     if (!metadata.contextLedger || metadata.model !== session.model) return;
@@ -10108,7 +10258,6 @@ export class AgentSessionManager {
     if (!admission.ok) {
       throw new FleetAdmissionError(admission);
     }
-    this.ensureChildBudgetAdmission(parent, request);
     this.ensureSharedWorkspaceScopeAvailable(request);
     let reviewScopeBytes: number | undefined;
     let executionMessage = message;
@@ -10167,7 +10316,17 @@ export class AgentSessionManager {
           ? "\n\n<harness-policy>You are running as a read-only review agent. Shell commands are approved only when they are unambiguously read-only; commands that could modify files, repository state, packages, or external state will be denied. Prefer your dedicated file-read and search tools over shell commands for reading files, and do not attempt writes, installs, builds, or git mutations. If a shell command is denied, do not retry it verbatim — rephrase the work as one or more simpler, plainly read-only commands or use your file tools instead.</harness-policy>"
           : "");
       const resolvedMode = request.mode?.trim() || "review";
-      const taskClass = request.taskClass?.trim() || "review";
+      const taskClass = request.taskClass?.trim() || "general";
+      const modelTier =
+        request.modelTier ??
+        inferReviewTier({ ...request, taskClass }) ??
+        "balanced";
+      const effectiveBudget = resolveBackgroundBudget(
+        taskClass,
+        getAutomaticBackgroundBudget(taskClass, modelTier),
+        request.budget,
+      );
+      this.ensureChildBudgetAdmission(parent, effectiveBudget);
       const acpRoutingReason =
         backendRoute.reason === "explicit_provider"
           ? `explicit ACP provider override (${backendRoute.reference})`
@@ -10234,7 +10393,7 @@ export class AgentSessionManager {
           permissionProfile: request.permissionProfile,
           expectedResult: request.expectedResult,
         },
-        budget: request.budget,
+        budget: effectiveBudget,
         goalId: request.goalId,
         workflowId: request.workflowId,
         skillAuthority: inheritedSkillAuthoritySnapshot
@@ -10557,10 +10716,11 @@ export class AgentSessionManager {
     const effectiveExpectedResult =
       request.expectedResult ?? (isReviewTask ? "review_findings" : undefined);
     const effectiveBudget = resolveBackgroundBudget(
-      isReviewTask,
+      route.taskClass,
       route.defaultBudget,
       request.budget,
     );
+    this.ensureChildBudgetAdmission(parent, effectiveBudget);
     const effectiveToolProfile =
       effectivePermissionProfile === "review-only"
         ? "review"
@@ -12423,7 +12583,7 @@ export class AgentSessionManager {
     session: AgentSession,
     resolution: {
       resultText: string;
-      structuredResult: import("./FleetWorkflows.js").FleetResultEnvelope;
+      structuredResult: import("@agentlink/protocol/fleet-result").FleetResultEnvelope;
       resultState: BackgroundResultState;
       terminalReason?: string;
       partialResult?: string;
@@ -12525,7 +12685,7 @@ export class AgentSessionManager {
     },
   ): {
     resultText: string;
-    structuredResult: import("./FleetWorkflows.js").FleetResultEnvelope;
+    structuredResult: import("@agentlink/protocol/fleet-result").FleetResultEnvelope;
     resultState: BackgroundResultState;
     terminalReason?: string;
     partialResult?: string;
@@ -12707,9 +12867,9 @@ export class AgentSessionManager {
 
   private ensureChildBudgetAdmission(
     parent: AgentSession | undefined,
-    request: SpawnBackgroundRequest,
+    effectiveBudget: AgentBudget | undefined,
   ): void {
-    if (!parent || !request.budget) return;
+    if (!parent || !effectiveBudget) return;
     let owner: AgentSession | undefined = parent;
     while (
       owner &&
@@ -12742,7 +12902,7 @@ export class AgentSessionManager {
     ];
     for (const [field, label] of fields) {
       const limit = envelope[field];
-      const requested = request.budget[field];
+      const requested = effectiveBudget[field];
       if (typeof limit !== "number" || typeof requested !== "number") continue;
       const reserved = activeMembers.reduce((sum, member) => {
         const value = member.fleetMetadata?.budget?.[field];
@@ -12863,6 +13023,12 @@ export class AgentSessionManager {
       return false;
     }
     const members = Array.from(this.sessions.values()).filter((candidate) => {
+      if (
+        candidate.id !== owner.id &&
+        !isAutomaticallyBudgetedTaskClass(candidate.fleetMetadata?.taskClass)
+      ) {
+        return false;
+      }
       if (budget.scope === "goal") {
         return (
           Boolean(fleet.goalId) &&

@@ -1,6 +1,6 @@
 import { FileLockTimeoutError } from "../util/fileLock.js";
-import type { ToolResult } from "../shared/types.js";
-import { errorResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
+import { errorResult } from "@agentlink/protocol/tool-result";
 
 export function handlePendingEditLockError(
   err: unknown,

@@ -1,9 +1,9 @@
 import type { CoreModelContentBlock } from "../modelRuntime.js";
-import type { FinalMessageMarker } from "../../shared/finalStatus.js";
+import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import type { NativeToolDisclosureSnapshot } from "./nativeToolDisclosure.js";
 import type { SessionTranscriptSnapshot } from "../sessionTranscriptRecall.js";
 import type { ToolCallBudget } from "./toolCallBudget.js";
-import type { ToolResult } from "../../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 export type McpToolDisclosureMode = "inline" | "deferred" | "auto";
 

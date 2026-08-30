@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { AutonomousMemoryService } from "../../core/memory/AutonomousMemoryService.js";
 import { LanceDbMemoryRepository } from "./LanceDbMemoryRepository.js";
-import type { MemoryProvenance } from "../../core/memory/contracts.js";
+import type { MemoryProvenance } from "@agentlink/protocol/autonomous-memory";
 import { describeMemoryServiceContract } from "../../test/memoryServiceContract.js";
 
 const scope = { kind: "workspace" as const, id: "workspace-persistence" };
@@ -102,6 +102,110 @@ describe("LanceDbMemoryRepository persistence", () => {
         await reopenedRepository.close();
       }
     });
+  });
+
+  it("merges full legacy state exactly and idempotently", async () => {
+    const sourceRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-lancedb-memory-source-"),
+    );
+    const destinationRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-lancedb-memory-destination-"),
+    );
+    const source = new LanceDbMemoryRepository({ root: sourceRoot });
+    const destination = new LanceDbMemoryRepository({ root: destinationRoot });
+    const service = new AutonomousMemoryService(source, {
+      now: () => new Date("2026-07-25T01:00:00.000Z"),
+      createId: createSequentialId(),
+    });
+    try {
+      const created = await service.manage({
+        operation: "remember",
+        scope,
+        kind: "preference",
+        statement: "Use Australian prices.",
+        provenance,
+      });
+      await service.manage({
+        operation: "forget",
+        scope,
+        targetId: created.record!.id,
+        expectedRevision: created.record!.revision,
+        provenance,
+      });
+      await source.transaction(async (transaction) => {
+        await transaction.putImportCheckpoint({
+          id: "legacy-checkpoint",
+          sourceKey: "legacy-memory.md",
+          sourceRevision: "revision-one",
+          importerSchemaVersion: 1,
+          status: "complete",
+          startedAt: "2026-07-25T00:00:00.000Z",
+          updatedAt: "2026-07-25T00:01:00.000Z",
+          completedAt: "2026-07-25T00:01:00.000Z",
+        });
+        await transaction.putSnapshot({
+          id: "legacy-snapshot",
+          tag: "before-import",
+          createdAt: "2026-07-25T00:00:00.000Z",
+          records: [],
+          revisions: [],
+          audits: [],
+          importCheckpoints: [],
+        });
+      });
+
+      const exported = await source.exportState();
+      await expect(
+        destination.mergeState(exported, {
+          legacySourceKeyPrefix: "legacy-store:stable",
+        }),
+      ).resolves.toEqual({
+        recordsAdded: 1,
+        recordsUpdated: 0,
+        revisionsAdded: 2,
+        auditsAdded: 2,
+        importCheckpointsAdded: 1,
+        snapshotsAdded: 1,
+      });
+      await expect(
+        destination.mergeState(exported, {
+          legacySourceKeyPrefix: "legacy-store:stable",
+        }),
+      ).resolves.toEqual({
+        recordsAdded: 0,
+        recordsUpdated: 0,
+        revisionsAdded: 0,
+        auditsAdded: 0,
+        importCheckpointsAdded: 0,
+        snapshotsAdded: 0,
+      });
+
+      const migrated = await destination.exportState();
+      expect(migrated.records).toEqual(exported.records);
+      expect(migrated.revisions).toEqual(exported.revisions);
+      expect(migrated.audits).toEqual(exported.audits);
+      expect(migrated.records[0]).toMatchObject({
+        status: "forgotten",
+        revision: 2,
+      });
+      expect(migrated.importCheckpoints).toEqual([
+        expect.objectContaining({
+          id: "legacy-store:stable:checkpoint:legacy-checkpoint",
+          sourceKey: "legacy-store:stable:legacy-memory.md",
+        }),
+      ]);
+      expect(migrated.snapshots).toEqual([
+        expect.objectContaining({
+          id: "legacy-store:stable:snapshot:legacy-snapshot",
+        }),
+      ]);
+    } finally {
+      await Promise.all([source.close(), destination.close()]);
+      await Promise.all([
+        fs.rm(sourceRoot, { recursive: true, force: true }),
+        fs.rm(destinationRoot, { recursive: true, force: true }),
+      ]);
+    }
   });
 
   it("serializes concurrent repositories sharing one retrieval root", async () => {

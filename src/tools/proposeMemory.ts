@@ -24,8 +24,12 @@ import {
   resolveMemoryProposalTarget,
   type MemoryProposalTarget,
 } from "./memoryProposalNode.js";
-import type { OnApprovalRequest, ToolResult } from "../shared/types.js";
-import { errorResult, successResult } from "../shared/types.js";
+import {
+  errorResult,
+  successResult,
+  type ToolResult,
+} from "@agentlink/protocol/tool-result";
+import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
 
 import { tryGetFirstWorkspaceRoot } from "../util/paths.js";
 import { getConfiguredDiagnosticDelay } from "../adapters/vscode/agentLinkConfig.js";

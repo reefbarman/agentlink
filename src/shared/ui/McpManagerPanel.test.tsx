@@ -4,7 +4,7 @@ import type {
   McpConfigBatchMutation,
   McpConfigMutationResult,
   McpConfigSnapshot,
-} from "../mcpManagerTypes";
+} from "@agentlink/protocol/mcp-manager";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,

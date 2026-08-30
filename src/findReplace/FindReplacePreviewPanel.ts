@@ -1,10 +1,11 @@
 import * as vscode from "vscode";
-import { randomUUID } from "crypto";
 
 import type {
   FindReplacePreviewData,
   PreviewWebviewMessage,
-} from "./webview/types.js";
+} from "@agentlink/protocol/find-replace-preview";
+
+import { randomUUID } from "crypto";
 
 export class FindReplacePreviewPanel implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;

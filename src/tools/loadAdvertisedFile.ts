@@ -4,7 +4,11 @@ import * as fsp from "fs/promises";
 import * as path from "path";
 
 import type { AdvertisedArtifactProvider } from "../core/capabilities/readSearch.js";
-import { errorResult, jsonResult, type ToolResult } from "../shared/types.js";
+import {
+  errorResult,
+  jsonResult,
+  type ToolResult,
+} from "@agentlink/protocol/tool-result";
 import { resolveAndValidatePath } from "../util/paths.js";
 
 function normalizeExistingPath(filePath: string): string {

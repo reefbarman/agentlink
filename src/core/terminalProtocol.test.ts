@@ -3,9 +3,10 @@ import {
   isHostTerminalRequest,
   isValidTerminalDimensions,
   reduceHostTerminalState,
+  type HostTerminalState,
   type HostTerminalTab,
 } from "./terminalProtocol.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 function terminal(id: string): HostTerminalTab {
   return {
@@ -18,7 +19,16 @@ function terminal(id: string): HostTerminalTab {
   };
 }
 
-describe("host terminal protocol", () => {
+describe("host terminal protocol compatibility shim", () => {
+  it("preserves the terminal state and reducer exports", () => {
+    expectTypeOf<
+      typeof EMPTY_HOST_TERMINAL_STATE
+    >().toEqualTypeOf<HostTerminalState>();
+    expectTypeOf(
+      reduceHostTerminalState,
+    ).returns.toEqualTypeOf<HostTerminalState>();
+  });
+
   it("validates positive integer dimensions", () => {
     expect(isValidTerminalDimensions({ columns: 80, rows: 24 })).toBe(true);
     expect(isValidTerminalDimensions({ columns: 0, rows: 24 })).toBe(false);

@@ -1,6 +1,5 @@
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { deleteFeedback } from "../util/feedbackStore.js";
-
-import { type ToolResult } from "../shared/types.js";
 
 export async function handleDeleteFeedback(params: {
   ids?: string[];

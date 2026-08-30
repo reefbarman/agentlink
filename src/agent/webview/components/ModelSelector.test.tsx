@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
 import { ModelSelector } from "./ModelSelector";
-import type { WebviewModelInfo } from "../types";
+import type { ChatModelInfo as WebviewModelInfo } from "@agentlink/protocol/chat-catalog";
 
 const models: WebviewModelInfo[] = [
   {

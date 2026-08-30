@@ -1,0 +1,30 @@
+{
+  "name": "@agentlink/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portable AgentLink conversational engine and host contracts",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "lint": "tsc -p tsconfig.json --noEmit && oxlint src --import-plugin --report-unused-disable-directives --deny-warnings",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@agentlink/protocol": "0.1.0"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

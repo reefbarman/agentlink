@@ -27,7 +27,10 @@ import {
   buildAgentExecutionEnv,
   inheritProcessEnv,
 } from "../process/agentExecutionPolicy.js";
-import { isMcpToolName, parseMcpToolName } from "./mcpToolNames.js";
+import {
+  isMcpToolName,
+  parseMcpToolName,
+} from "@agentlink/protocol/mcp-tool-identity";
 import { agentLinkLongPollingFetch } from "../util/httpDispatcher.js";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -37,12 +40,12 @@ import { resolveMcpRequestTimeout } from "../shared/mcpTimeout.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { ToolResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import {
   validateMcpElicitationUrl,
   type McpUrlElicitationRequest,
-} from "../shared/mcpUrlElicitation.js";
+} from "@agentlink/protocol/mcp-url-elicitation";
 import { normalizeMcpToolResult } from "./mcpToolResult.js";
 import { createAgentPluginMcpFetch } from "./agentPluginHttpFetch.js";
 import { buildAgentPluginStdioEnvironment } from "./agentPluginMcpRuntime.js";
@@ -50,7 +53,7 @@ import { AgentPluginSseClientTransport } from "./AgentPluginSseClientTransport.j
 import {
   normalizeMcpElicitationSchema,
   type McpFormElicitationInput,
-} from "../shared/mcpElicitation.js";
+} from "@agentlink/protocol/mcp-elicitation";
 
 export type McpServerStatus =
   | "connecting"

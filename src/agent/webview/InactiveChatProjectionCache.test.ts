@@ -100,6 +100,37 @@ describe("InactiveChatProjectionCache", () => {
     ]);
   });
 
+  it("updates the latest buffered final marker for inactive-session UI state", () => {
+    const cache = new InactiveChatProjectionCache();
+    cache.append({
+      type: "agentFinalMarker",
+      sessionId: "session-1",
+      marker: {
+        status: "completed",
+        source: "tool",
+        continueAction: { label: "Continue", prompt: "Keep going" },
+      },
+    });
+    cache.append({
+      type: "agentDone",
+      sessionId: "session-1",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+    });
+
+    cache.updateLatestFinalMarker("session-1", (marker) => ({
+      ...marker,
+      continueActionConsumed: true,
+    }));
+
+    expect(cache.take("session-1")[0]).toMatchObject({
+      type: "agentFinalMarker",
+      marker: { continueActionConsumed: true },
+    });
+  });
+
   it("retains terminal events in order and clears only closed-tab entries", () => {
     const cache = new InactiveChatProjectionCache();
     cache.append({

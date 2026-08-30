@@ -1,6 +1,5 @@
+import type { ContentBlock } from "@agentlink/protocol/chat-transcript";
 import { useState } from "preact/hooks";
-
-import type { ContentBlock } from "../types";
 
 type SkillLoadData = ContentBlock & { type: "skill_load" };
 

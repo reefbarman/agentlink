@@ -6,7 +6,7 @@ import {
   type McpElicitationFieldErrors,
   type McpElicitationValues,
   type McpFormElicitationRequest,
-} from "../../../shared/mcpElicitation";
+} from "@agentlink/protocol/mcp-elicitation";
 import { McpElicitationFormControls } from "../../../shared/ui/McpElicitationFormControls";
 
 interface ElicitationModalProps {

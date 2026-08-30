@@ -25,7 +25,7 @@ import {
   handleToolError,
   jsonResult,
   type ToolResult,
-} from "../shared/types.js";
+} from "@agentlink/protocol/tool-result";
 import type { SemanticQueryOptions } from "../services/semanticSearch.js";
 
 export interface SearchFilesProviders {

@@ -13,31 +13,34 @@ import {
 } from "./browserGatewayAskAgentIdentity.js";
 import type {
   ChatMessage,
-  QuestionRequest,
-  ReasoningEffort,
-  SessionSummary,
   TodoItem,
-  WebviewModelInfo,
-} from "../agent/webview/types.js";
+} from "@agentlink/protocol/chat-transcript";
 import type {
   CoreCapabilityStatusDto,
   CoreOwnerRegistrationDto,
   CoreSessionSummaryDto,
-} from "../core/sessionProtocol.js";
+} from "@agentlink/protocol/session";
 import type {
+  StructuredQuestionRequest as QuestionRequest,
+  StructuredQuestionProgress,
   UserQuestionAttachment,
   UserQuestionResponse,
-} from "../core/capabilities/sessionControl.js";
+} from "@agentlink/protocol/structured-question";
+import type {
+  ChatReasoningEffort as ReasoningEffort,
+  ChatModelInfo as WebviewModelInfo,
+} from "@agentlink/protocol/chat-catalog";
 
 import type { ApprovalRequest } from "../approvals/webview/types.js";
 import type { BrowserGatewayAskAgentPreferencesSnapshot } from "./browserGatewayAskAgentPreferences.js";
 import type { BrowserGatewayCoreOwnerRegistry } from "./coreOwnerRegistry.js";
 import type { BrowserGatewayModelCredentialStatus } from "./browserGatewayModelCredentialCache.js";
-import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
+import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import type { CoreModelMessage } from "../core/modelRuntime.js";
-import type { FinalMessageMarker } from "../shared/finalStatus.js";
+import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import type { MemoryCandidateKind } from "../shared/memoryCandidates.js";
 import type { SessionImageReference } from "../core/tools/types.js";
+import type { ChatSessionHistorySummary as SessionSummary } from "@agentlink/protocol/chat-session-history";
 import { completeTodos } from "../agent/todoTool.js";
 import { normalizeBrowserGatewayModelCredentialProviderId } from "./browserGatewayModelProviderIds.js";
 import { randomUUID } from "crypto";
@@ -95,13 +98,7 @@ export interface BrowserGatewayAskAgentMemoryCandidateNudge {
   content: string;
 }
 
-export interface BrowserGatewayAskAgentQuestionProgress {
-  id: string;
-  step: number;
-  answers: Record<string, string | string[] | number | boolean | undefined>;
-  notes: Record<string, string>;
-  origin: string;
-}
+export type BrowserGatewayAskAgentQuestionProgress = StructuredQuestionProgress;
 
 export interface BrowserGatewayAskAgentQuestionAnswerResult {
   messageId: string;

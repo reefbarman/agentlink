@@ -1,11 +1,9 @@
+import type { AlternateScreenTransition } from "@agentlink/protocol/terminal-surface";
+
+export type { AlternateScreenTransition } from "@agentlink/protocol/terminal-surface";
+
 const ALTERNATE_SCREEN_MODES = new Set([47, 1047, 1049]);
 const MAX_CSI_PARAMETER_BYTES = 128;
-
-/** `modes` is the DECSET/DECRST delta that crossed overall active state,
- * not the complete set of currently active alternate-screen modes. */
-export type AlternateScreenTransition =
-  | { type: "enter"; modes: readonly number[] }
-  | { type: "exit"; modes: readonly number[] };
 
 export interface AlternateScreenScanResult {
   readonly data: string;

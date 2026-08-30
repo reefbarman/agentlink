@@ -1,4 +1,7 @@
-import type { ChatMessage, ContentBlock } from "../types";
+import type {
+  ChatMessage,
+  ContentBlock,
+} from "@agentlink/protocol/chat-transcript";
 import {
   ImagePreview,
   imageDownloadName,
@@ -19,7 +22,7 @@ import { BgAgentResultBlock } from "./BgAgentResultBlock";
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import type { DetectedQuestion } from "../questionDetection";
 import { ErrorBlock } from "./ErrorBlock";
-import type { FinalMarkerToolCall } from "../../../shared/finalStatus";
+import type { FinalMarkerToolCall } from "@agentlink/protocol/final-status";
 import { Fragment } from "preact";
 import { LiveLinkIndicator } from "./LiveLinkIndicator";
 import { PairingCodeBlock } from "./PairingCodeBlock";
@@ -29,7 +32,7 @@ import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ThinkingContent } from "./ThinkingContent";
 import { ToolCallBlock } from "./ToolCallBlock";
-import { getFinalMessageContinueAction } from "../../../shared/finalStatus";
+import { getFinalMessageContinueAction } from "@agentlink/protocol/final-status";
 import { getStreamingActivity } from "./activityPresentation";
 import { normalizeProjectedToolName } from "../../../shared/chatProjection";
 import { recordFileLinkClick } from "./fileLinkFeedback";
@@ -132,7 +135,7 @@ interface MessageBubbleProps {
   onPromoteMcpToolApproval?: (promotion: {
     serverName: string;
     bareToolName: string;
-    mutationTarget?: import("../../../shared/types").McpApprovalPromotionMeta["mutationTarget"];
+    mutationTarget?: import("@agentlink/protocol/tool-result").McpApprovalPromotionMeta["mutationTarget"];
     scope: "session" | "project" | "global";
   }) => void;
   onOpenSpecialBlockPanel?: (block: {

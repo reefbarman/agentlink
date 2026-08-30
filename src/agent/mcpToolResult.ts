@@ -2,7 +2,7 @@ import type {
   McpContentAnnotations,
   McpResultContentMeta,
   ToolResult,
-} from "../shared/types.js";
+} from "@agentlink/protocol/tool-result";
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 

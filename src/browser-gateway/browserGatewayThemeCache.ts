@@ -2,7 +2,10 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 
-import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
+import {
+  isBrowserGatewayThemeSnapshot,
+  type BrowserGatewayThemeSnapshot,
+} from "@agentlink/protocol/browser-gateway-theme";
 import { randomUUID } from "crypto";
 
 const CACHE_DIR = path.join(os.homedir(), ".agentlink");
@@ -85,20 +88,6 @@ export const BAKED_BROWSER_GATEWAY_THEME: BrowserGatewayThemeSnapshot = {
 
 export function getBrowserGatewayThemeCachePath(): string {
   return THEME_CACHE_PATH;
-}
-
-export function isBrowserGatewayThemeSnapshot(
-  value: unknown,
-): value is BrowserGatewayThemeSnapshot {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<BrowserGatewayThemeSnapshot>;
-  if (!candidate.cssVariables || typeof candidate.cssVariables !== "object") {
-    return false;
-  }
-  return Object.entries(candidate.cssVariables).every(
-    ([key, val]) =>
-      /^--vscode-[A-Za-z0-9_.-]+$/.test(key) && typeof val === "string",
-  );
 }
 
 export async function readBrowserGatewayThemeCache(): Promise<BrowserGatewayThemeSnapshot | null> {

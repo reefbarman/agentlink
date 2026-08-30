@@ -1,14 +1,14 @@
-import type {
-  BrowserGatewayDerivedSessionProvider,
-  BrowserGatewayDerivedSessionRuntimeResolution,
-} from "./BrowserGatewayDerivedSessionRuntime.js";
-import {
-  BrowserGatewayDerivedSessionRuntime,
-  resolveBrowserGatewayDerivedSessionRuntime,
-} from "./BrowserGatewayDerivedSessionRuntime.js";
+import * as path from "path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import type { BrowserGatewayAskAgentMemoryMigrationResult } from "./browserGatewayAskAgentMemoryMigration.js";
+import type { BrowserGatewayDerivedSessionProvider } from "./BrowserGatewayDerivedSessionRuntime.js";
+import { BrowserGatewayDerivedSessionRuntime } from "./BrowserGatewayDerivedSessionRuntime.js";
+import { getSharedMemoryStoreRoot } from "../../storage/retrieval/sharedMemoryStorePaths.js";
+
+const homeDir = path.join("tmp", "agentlink-home");
+const canonicalRoot = getSharedMemoryStoreRoot(homeDir);
 
 function migration(
   status: "missing" | "imported" | "already-complete" = "imported",
@@ -82,62 +82,50 @@ function fakeProvider(
 }
 
 describe("BrowserGatewayDerivedSessionRuntime", () => {
-  it.each<{
-    name: string;
-    owners: Parameters<typeof resolveBrowserGatewayDerivedSessionRuntime>[0];
-    expected: BrowserGatewayDerivedSessionRuntimeResolution;
-  }>([
-    {
-      name: "no connected owners",
-      owners: [],
-      expected: { status: "unavailable", reason: "no-connected-owner" },
-    },
-    {
-      name: "missing descriptor",
-      owners: [{ ownerId: "owner-one" }],
-      expected: { status: "unavailable", reason: "missing-owner-descriptor" },
-    },
-    {
-      name: "conflicting roots",
-      owners: [
-        { ownerId: "owner-one", retrievalStoreRoot: "/store/one" },
-        { ownerId: "owner-two", retrievalStoreRoot: "/store/two" },
-      ],
-      expected: { status: "unavailable", reason: "conflicting-store-roots" },
-    },
-    {
-      name: "unanimous root",
-      owners: [
-        { ownerId: "owner-one", retrievalStoreRoot: "/store/shared" },
-        { ownerId: "owner-two", retrievalStoreRoot: "/store/shared" },
-      ],
-      expected: { status: "ready", retrievalStoreRoot: "/store/shared" },
-    },
-  ])("resolves $name", ({ owners, expected }) => {
-    expect(resolveBrowserGatewayDerivedSessionRuntime(owners)).toEqual(
-      expected,
-    );
+  it("is ready on the canonical root without connected VS Code owners", () => {
+    const runtime = new BrowserGatewayDerivedSessionRuntime({
+      homeDir,
+      createProvider: () => fakeProvider(),
+    });
+
+    expect(runtime.getResolution()).toEqual({
+      status: "ready",
+      retrievalStoreRoot: canonicalRoot,
+    });
   });
 
-  it("initializes before readiness and delegates typed operations", async () => {
+  it("fails closed while shared memory migration is pending", async () => {
+    let pending = true;
     const provider = fakeProvider();
     const createProvider = vi.fn(() => provider);
-    const runtime = new BrowserGatewayDerivedSessionRuntime({ createProvider });
+    const runtime = new BrowserGatewayDerivedSessionRuntime({
+      homeDir,
+      isMigrationPending: async () => pending,
+      createProvider,
+    });
 
-    await expect(
-      runtime.setOwners([
-        { ownerId: "owner", retrievalStoreRoot: "/store/shared" },
-      ]),
-    ).resolves.toMatchObject({
-      status: "ready",
-      retrievalStoreRoot: "/store/shared",
-      migration: { status: "imported" },
+    await expect(runtime.inspect()).rejects.toThrow(
+      "shared memory migration is running",
+    );
+    expect(runtime.getResolution()).toMatchObject({
+      status: "unavailable",
+      reason: "migration-pending",
     });
-    expect(createProvider).toHaveBeenCalledWith({
-      mode: "off",
-      retrievalStoreRoot: "/store/shared",
+    expect(createProvider).not.toHaveBeenCalled();
+
+    pending = false;
+    await expect(runtime.inspect()).resolves.toMatchObject({ sessionCount: 0 });
+    expect(createProvider).toHaveBeenCalledOnce();
+    expect(provider.calls).toEqual(["initialize", "inspect"]);
+  });
+
+  it("initializes on the canonical root before delegating typed operations", async () => {
+    const provider = fakeProvider();
+    const createProvider = vi.fn(() => provider);
+    const runtime = new BrowserGatewayDerivedSessionRuntime({
+      homeDir,
+      createProvider,
     });
-    expect(provider.calls).toEqual(["initialize"]);
 
     await runtime.publish({
       session: {
@@ -171,6 +159,17 @@ describe("BrowserGatewayDerivedSessionRuntime", () => {
     await runtime.clearScope({
       scope: { kind: "global", id: "agentlink-user" },
     });
+
+    expect(createProvider).toHaveBeenCalledOnce();
+    expect(createProvider).toHaveBeenCalledWith({
+      mode: "off",
+      retrievalStoreRoot: canonicalRoot,
+    });
+    expect(runtime.getResolution()).toMatchObject({
+      status: "ready",
+      retrievalStoreRoot: canonicalRoot,
+      migration: { status: "imported" },
+    });
     expect(provider.calls).toEqual([
       "initialize",
       "publish",
@@ -179,29 +178,6 @@ describe("BrowserGatewayDerivedSessionRuntime", () => {
       "deleteSession",
       "clearScope",
     ]);
-  });
-
-  it("disposes and reinitializes when the authoritative root changes", async () => {
-    const providers = [fakeProvider(), fakeProvider()];
-    const createProvider = vi
-      .fn()
-      .mockImplementationOnce(() => providers[0])
-      .mockImplementationOnce(() => providers[1]);
-    const runtime = new BrowserGatewayDerivedSessionRuntime({ createProvider });
-
-    await runtime.setOwners([
-      { ownerId: "owner", retrievalStoreRoot: "/store/one" },
-    ]);
-    await runtime.setOwners([
-      { ownerId: "owner", retrievalStoreRoot: "/store/two" },
-    ]);
-
-    expect(providers[0]!.calls).toEqual(["initialize", "dispose"]);
-    expect(providers[1]!.calls).toEqual(["initialize"]);
-    expect(runtime.getResolution()).toMatchObject({
-      status: "ready",
-      retrievalStoreRoot: "/store/two",
-    });
   });
 
   it("fails closed on migration failure and retries with a fresh provider", async () => {
@@ -215,30 +191,32 @@ describe("BrowserGatewayDerivedSessionRuntime", () => {
       .fn()
       .mockImplementationOnce(() => failed)
       .mockImplementationOnce(() => repaired);
-    const runtime = new BrowserGatewayDerivedSessionRuntime({ createProvider });
-    const owners = [{ ownerId: "owner", retrievalStoreRoot: "/store/shared" }];
+    const runtime = new BrowserGatewayDerivedSessionRuntime({
+      homeDir,
+      createProvider,
+    });
 
-    await expect(runtime.setOwners(owners)).rejects.toThrow(
-      "legacy source corrupt",
-    );
+    await expect(runtime.initialize()).rejects.toThrow("legacy source corrupt");
     expect(runtime.getResolution()).toMatchObject({
       status: "unavailable",
+      retrievalStoreRoot: canonicalRoot,
       reason: "migration-failed",
       detail: "legacy source corrupt",
     });
+
     await expect(
       runtime.recall({
         query: "memory",
         scopes: [{ kind: "global", id: "agentlink-user" }],
       }),
-    ).rejects.toThrow("migration-failed");
-
-    await expect(runtime.setOwners(owners)).resolves.toMatchObject({
+    ).resolves.toEqual([]);
+    expect(failed.calls).toEqual(["initialize", "dispose"]);
+    expect(repaired.calls).toEqual(["initialize", "recall"]);
+    expect(runtime.getResolution()).toMatchObject({
       status: "ready",
+      retrievalStoreRoot: canonicalRoot,
       migration: { status: "imported" },
     });
-    expect(failed.calls).toEqual(["initialize", "dispose"]);
-    expect(repaired.calls).toEqual(["initialize"]);
   });
 
   it("retries a previously missing source without replacing the provider", async () => {
@@ -248,18 +226,30 @@ describe("BrowserGatewayDerivedSessionRuntime", () => {
         migration(++attempt === 1 ? "missing" : "imported"),
     });
     const createProvider = vi.fn(() => provider);
-    const runtime = new BrowserGatewayDerivedSessionRuntime({ createProvider });
-    const owners = [{ ownerId: "owner", retrievalStoreRoot: "/store/shared" }];
-
-    await expect(runtime.setOwners(owners)).resolves.toMatchObject({
-      status: "ready",
-      migration: { status: "missing" },
+    const runtime = new BrowserGatewayDerivedSessionRuntime({
+      homeDir,
+      createProvider,
     });
-    await expect(runtime.setOwners(owners)).resolves.toMatchObject({
-      status: "ready",
-      migration: { status: "imported" },
+
+    await expect(runtime.initialize()).resolves.toMatchObject({
+      status: "missing",
+    });
+    await expect(runtime.initialize()).resolves.toMatchObject({
+      status: "imported",
     });
     expect(createProvider).toHaveBeenCalledTimes(1);
     expect(provider.calls).toEqual(["initialize", "initialize"]);
+  });
+
+  it("disposes the provider", async () => {
+    const provider = fakeProvider();
+    const runtime = new BrowserGatewayDerivedSessionRuntime({
+      homeDir,
+      createProvider: () => provider,
+    });
+
+    await runtime.initialize();
+    await runtime.dispose();
+    expect(provider.calls).toEqual(["initialize", "dispose"]);
   });
 });

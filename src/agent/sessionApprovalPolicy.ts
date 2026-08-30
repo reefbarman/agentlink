@@ -1,4 +1,4 @@
-import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
+import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 
 export type AgentWriteApprovalSelection =
   | "prompt"

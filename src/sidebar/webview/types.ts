@@ -1,8 +1,8 @@
 // Shared types between extension and webview.
 // Imported by both SidebarProvider.ts (Node) and webview components (browser).
 
-import type { ContextHealthSnapshot } from "../../shared/contextHealth.js";
-import type { SemanticReadinessReason } from "../../shared/semanticReadiness.js";
+import type { ContextHealthSnapshot } from "@agentlink/protocol/context-health";
+import type { SemanticReadinessReason } from "@agentlink/protocol/semantic-readiness";
 
 export interface CommandRule {
   pattern: string;

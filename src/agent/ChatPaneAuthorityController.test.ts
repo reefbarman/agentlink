@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  ChatPaneAuthorityController,
-  type ChatPaneLease,
-} from "./ChatPaneAuthorityController.js";
+import { ChatPaneAuthorityController } from "./ChatPaneAuthorityController.js";
+import type { ChatPaneLease } from "@agentlink/protocol/chat-pane-transport";
 
 function createAuthority(tabIds: string[] = ["tab-1", "tab-2"]) {
   const knownTabs = new Set(tabIds);

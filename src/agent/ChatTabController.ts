@@ -1,23 +1,23 @@
 import { randomUUID } from "crypto";
+import {
+  CHAT_TAB_LAYOUT_VERSION,
+  type ChatTab,
+  type ChatTabActionAddress,
+  type ChatTabLayout,
+  type ChatTabPlacement,
+  type ChatTabWorkspaceSnapshot,
+} from "@agentlink/protocol/chat-workspace";
+
+export {
+  CHAT_TAB_LAYOUT_VERSION,
+  type ChatTab,
+  type ChatTabActionAddress,
+  type ChatTabLayout,
+  type ChatTabPlacement,
+  type ChatTabWorkspaceSnapshot,
+} from "@agentlink/protocol/chat-workspace";
 
 export const CHAT_TAB_LAYOUT_WORKSPACE_KEY = "agentLink.chatTabs.v1";
-export const CHAT_TAB_LAYOUT_VERSION = 1;
-
-export type ChatTabPlacement = "docked" | "popped";
-
-export interface ChatTab {
-  id: string;
-  displayNumber: number;
-  sessionId: string | null;
-  placement: ChatTabPlacement;
-  terminalGeneration: number;
-}
-
-export interface ChatTabLayout {
-  version: typeof CHAT_TAB_LAYOUT_VERSION;
-  tabs: ChatTab[];
-  nextDisplayNumber: number;
-}
 
 export interface ChatTabWorkspaceState {
   get<T>(key: string): T | undefined;
@@ -28,18 +28,6 @@ export interface ChatTabControllerOptions {
   createId?: () => string;
   createControllerEpoch?: () => string;
   log?: (message: string) => void;
-}
-
-export interface ChatTabActionAddress {
-  controllerEpoch: string;
-  tabId: string;
-  sessionId: string | null;
-}
-
-export interface ChatTabWorkspaceSnapshot {
-  controllerEpoch: string;
-  focusedTabId: string;
-  layout: ChatTabLayout;
 }
 
 export type ChatTabActionValidationResult =

@@ -22,7 +22,7 @@ import {
 } from "../util/feedbackStore.js";
 
 import type { CommandRuleDecision } from "../approvals/CommandRuleStore.js";
-import type { ContextHealthSnapshot } from "../shared/contextHealth.js";
+import type { ContextHealthSnapshot } from "@agentlink/protocol/context-health";
 import { editRuleViaQuickPick } from "./editRuleQuickPick.js";
 import { getConfiguredMasterBypass } from "../adapters/vscode/agentLinkConfig.js";
 import { renderWebviewShell } from "../adapters/vscode/webviewShell.js";

@@ -1,6 +1,6 @@
 import type { ApprovalRequest } from "../../approvals/webview/types";
-import type { BgSessionInfo } from "../../shared/types";
-import type { ChatMessage } from "../../agent/webview/types";
+import type { BgSessionInfo } from "@agentlink/protocol/background-result";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 
 export const BROWSER_GATEWAY_NOTIFICATION_PREFERENCE_KEY =
   "agentlink.browserGateway.notifications.v1";

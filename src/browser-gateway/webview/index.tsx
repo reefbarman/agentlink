@@ -3,7 +3,7 @@ import "./styles.css";
 
 import { BrowserGatewayApp } from "./BrowserGatewayApp";
 import type { BrowserGatewayDataPlaneMode } from "../browserGatewayDataPlaneMode";
-import type { BrowserGatewayThemeSnapshot } from "../../shared/types";
+import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import { ErrorBoundary } from "../../shared/ui/ErrorBoundary";
 import { installClipboardShim } from "./installClipboardShim";
 import { render } from "preact";

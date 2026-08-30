@@ -1,7 +1,7 @@
 import {
   MAX_TERMINAL_CWD_BYTES,
   MAX_TERMINAL_INPUT_BYTES,
-} from "./terminalSurfaceProtocol.js";
+} from "@agentlink/protocol/terminal-surface";
 import { isAbsolute, relative, resolve } from "node:path";
 
 import { Buffer } from "node:buffer";

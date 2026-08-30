@@ -9,7 +9,7 @@ import {
   buildQuestionDetectionMessages,
   parseQuestionDetectionJson,
   type DetectedQuestion,
-} from "../shared/questionDetection.js";
+} from "@agentlink/protocol/question-detection";
 import {
   callOpenAiCompatibleChat,
   getOpenAiCompatibleEndpoint,

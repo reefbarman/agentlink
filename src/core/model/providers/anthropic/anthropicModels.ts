@@ -2,7 +2,7 @@ import type {
   AnthropicModelCapabilities,
   StaticModelEntry,
 } from "./anthropicModelCatalog.js";
-import type { CoreReasoningEffort } from "../../../modelCatalog.js";
+import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import type { CoreHostedWebCapabilities } from "../../../webAccess.js";
 
 const CLAUDE_REASONING_EFFORTS = [

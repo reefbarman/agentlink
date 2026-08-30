@@ -8,7 +8,7 @@ import {
   type HostTerminalEvent,
   type HostTerminalState,
   type TerminalDimensions,
-} from "../core/terminalProtocol.js";
+} from "@agentlink/protocol/terminal";
 import type { CustomTerminalHost } from "./customTerminalSupport.js";
 import {
   loadNodePtyForHostShellPlan,

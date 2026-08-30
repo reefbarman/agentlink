@@ -7,7 +7,7 @@ import type {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentTerminalViewProvider } from "./AgentTerminalViewProvider.js";
-import { TERMINAL_SURFACE_PROTOCOL_VERSION } from "./terminalSurfaceProtocol.js";
+import { TERMINAL_SURFACE_PROTOCOL_VERSION } from "@agentlink/protocol/terminal-surface";
 
 function harness(
   options: {

@@ -2,7 +2,7 @@ import type {
   ContextBreakdownItem,
   RequestContextBreakdown,
   ToolResultContextAttribution,
-} from "../shared/types.js";
+} from "@agentlink/protocol/context-diagnostics";
 
 import type { AgentMessage } from "./types.js";
 import type { ContentBlock } from "./providers/types.js";

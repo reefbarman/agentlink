@@ -1,0 +1,699 @@
+{
+  "name": "@agentlink/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser-safe AgentLink session and control protocol contracts",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.cjs",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.cts"
+  ],
+  "exports": {
+    ".": {
+      "browser": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.cts",
+        "default": "./dist/cjs/index.cjs"
+      }
+    },
+    "./autonomous-memory": {
+      "browser": {
+        "types": "./dist/autonomousMemory.d.ts",
+        "default": "./dist/autonomousMemory.js"
+      },
+      "import": {
+        "types": "./dist/autonomousMemory.d.ts",
+        "default": "./dist/autonomousMemory.js"
+      },
+      "require": {
+        "types": "./dist/cjs/autonomousMemory.d.cts",
+        "default": "./dist/cjs/autonomousMemory.cjs"
+      }
+    },
+    "./agent-error-presentation": {
+      "browser": {
+        "types": "./dist/agentErrorPresentation.d.ts",
+        "default": "./dist/agentErrorPresentation.js"
+      },
+      "import": {
+        "types": "./dist/agentErrorPresentation.d.ts",
+        "default": "./dist/agentErrorPresentation.js"
+      },
+      "require": {
+        "types": "./dist/cjs/agentErrorPresentation.d.cts",
+        "default": "./dist/cjs/agentErrorPresentation.cjs"
+      }
+    },
+    "./browser-gateway-theme": {
+      "browser": {
+        "types": "./dist/browserGatewayTheme.d.ts",
+        "default": "./dist/browserGatewayTheme.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayTheme.d.ts",
+        "default": "./dist/browserGatewayTheme.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayTheme.d.cts",
+        "default": "./dist/cjs/browserGatewayTheme.cjs"
+      }
+    },
+    "./chat-catalog": {
+      "browser": {
+        "types": "./dist/chatCatalog.d.ts",
+        "default": "./dist/chatCatalog.js"
+      },
+      "import": {
+        "types": "./dist/chatCatalog.d.ts",
+        "default": "./dist/chatCatalog.js"
+      },
+      "require": {
+        "types": "./dist/cjs/chatCatalog.d.cts",
+        "default": "./dist/cjs/chatCatalog.cjs"
+      }
+    },
+    "./chat-session-history": {
+      "browser": {
+        "types": "./dist/chatSessionHistory.d.ts",
+        "default": "./dist/chatSessionHistory.js"
+      },
+      "import": {
+        "types": "./dist/chatSessionHistory.d.ts",
+        "default": "./dist/chatSessionHistory.js"
+      },
+      "require": {
+        "types": "./dist/cjs/chatSessionHistory.d.cts",
+        "default": "./dist/cjs/chatSessionHistory.cjs"
+      }
+    },
+    "./chat-state": {
+      "browser": {
+        "types": "./dist/chatState.d.ts",
+        "default": "./dist/chatState.js"
+      },
+      "import": {
+        "types": "./dist/chatState.d.ts",
+        "default": "./dist/chatState.js"
+      },
+      "require": {
+        "types": "./dist/cjs/chatState.d.cts",
+        "default": "./dist/cjs/chatState.cjs"
+      }
+    },
+    "./chat-pane-transport": {
+      "browser": {
+        "types": "./dist/chatPaneTransport.d.ts",
+        "default": "./dist/chatPaneTransport.js"
+      },
+      "import": {
+        "types": "./dist/chatPaneTransport.d.ts",
+        "default": "./dist/chatPaneTransport.js"
+      },
+      "require": {
+        "types": "./dist/cjs/chatPaneTransport.d.cts",
+        "default": "./dist/cjs/chatPaneTransport.cjs"
+      }
+    },
+    "./chat-transcript": {
+      "browser": {
+        "types": "./dist/chatTranscript.d.ts",
+        "default": "./dist/chatTranscript.js"
+      },
+      "import": {
+        "types": "./dist/chatTranscript.d.ts",
+        "default": "./dist/chatTranscript.js"
+      },
+      "require": {
+        "types": "./dist/cjs/chatTranscript.d.cts",
+        "default": "./dist/cjs/chatTranscript.cjs"
+      }
+    },
+    "./builtin-command-forwarding": {
+      "browser": {
+        "types": "./dist/builtinCommandForwarding.d.ts",
+        "default": "./dist/builtinCommandForwarding.js"
+      },
+      "import": {
+        "types": "./dist/builtinCommandForwarding.d.ts",
+        "default": "./dist/builtinCommandForwarding.js"
+      },
+      "require": {
+        "types": "./dist/cjs/builtinCommandForwarding.d.cts",
+        "default": "./dist/cjs/builtinCommandForwarding.cjs"
+      }
+    },
+    "./chat-workspace": {
+      "browser": {
+        "types": "./dist/chatWorkspace.d.ts",
+        "default": "./dist/chatWorkspace.js"
+      },
+      "import": {
+        "types": "./dist/chatWorkspace.d.ts",
+        "default": "./dist/chatWorkspace.js"
+      },
+      "require": {
+        "types": "./dist/cjs/chatWorkspace.d.cts",
+        "default": "./dist/cjs/chatWorkspace.cjs"
+      }
+    },
+    "./background-result": {
+      "browser": {
+        "types": "./dist/backgroundResult.d.ts",
+        "default": "./dist/backgroundResult.js"
+      },
+      "import": {
+        "types": "./dist/backgroundResult.d.ts",
+        "default": "./dist/backgroundResult.js"
+      },
+      "require": {
+        "types": "./dist/cjs/backgroundResult.d.cts",
+        "default": "./dist/cjs/backgroundResult.cjs"
+      }
+    },
+    "./tool-result": {
+      "browser": {
+        "types": "./dist/toolResult.d.ts",
+        "default": "./dist/toolResult.js"
+      },
+      "import": {
+        "types": "./dist/toolResult.d.ts",
+        "default": "./dist/toolResult.js"
+      },
+      "require": {
+        "types": "./dist/cjs/toolResult.d.cts",
+        "default": "./dist/cjs/toolResult.cjs"
+      }
+    },
+    "./session-hydration": {
+      "browser": {
+        "types": "./dist/sessionHydration.d.ts",
+        "default": "./dist/sessionHydration.js"
+      },
+      "import": {
+        "types": "./dist/sessionHydration.d.ts",
+        "default": "./dist/sessionHydration.js"
+      },
+      "require": {
+        "types": "./dist/cjs/sessionHydration.d.cts",
+        "default": "./dist/cjs/sessionHydration.cjs"
+      }
+    },
+    "./session-handoff-draft": {
+      "browser": {
+        "types": "./dist/sessionHandoffDraft.d.ts",
+        "default": "./dist/sessionHandoffDraft.js"
+      },
+      "import": {
+        "types": "./dist/sessionHandoffDraft.d.ts",
+        "default": "./dist/sessionHandoffDraft.js"
+      },
+      "require": {
+        "types": "./dist/cjs/sessionHandoffDraft.d.cts",
+        "default": "./dist/cjs/sessionHandoffDraft.cjs"
+      }
+    },
+    "./structured-question": {
+      "browser": {
+        "types": "./dist/structuredQuestion.d.ts",
+        "default": "./dist/structuredQuestion.js"
+      },
+      "import": {
+        "types": "./dist/structuredQuestion.d.ts",
+        "default": "./dist/structuredQuestion.js"
+      },
+      "require": {
+        "types": "./dist/cjs/structuredQuestion.d.cts",
+        "default": "./dist/cjs/structuredQuestion.cjs"
+      }
+    },
+    "./session": {
+      "browser": {
+        "types": "./dist/session.d.ts",
+        "default": "./dist/session.js"
+      },
+      "import": {
+        "types": "./dist/session.d.ts",
+        "default": "./dist/session.js"
+      },
+      "require": {
+        "types": "./dist/cjs/session.d.cts",
+        "default": "./dist/cjs/session.cjs"
+      }
+    },
+    "./compose": {
+      "browser": {
+        "types": "./dist/compose.d.ts",
+        "default": "./dist/compose.js"
+      },
+      "import": {
+        "types": "./dist/compose.d.ts",
+        "default": "./dist/compose.js"
+      },
+      "require": {
+        "types": "./dist/cjs/compose.d.cts",
+        "default": "./dist/cjs/compose.cjs"
+      }
+    },
+    "./agent-plugin-manager": {
+      "browser": {
+        "types": "./dist/agentPluginManager.d.ts",
+        "default": "./dist/agentPluginManager.js"
+      },
+      "import": {
+        "types": "./dist/agentPluginManager.d.ts",
+        "default": "./dist/agentPluginManager.js"
+      },
+      "require": {
+        "types": "./dist/cjs/agentPluginManager.d.cts",
+        "default": "./dist/cjs/agentPluginManager.cjs"
+      }
+    },
+    "./mcp-manager": {
+      "browser": {
+        "types": "./dist/mcpManager.d.ts",
+        "default": "./dist/mcpManager.js"
+      },
+      "import": {
+        "types": "./dist/mcpManager.d.ts",
+        "default": "./dist/mcpManager.js"
+      },
+      "require": {
+        "types": "./dist/cjs/mcpManager.d.cts",
+        "default": "./dist/cjs/mcpManager.cjs"
+      }
+    },
+    "./mcp-config-validation": {
+      "browser": {
+        "types": "./dist/mcpConfigValidation.d.ts",
+        "default": "./dist/mcpConfigValidation.js"
+      },
+      "import": {
+        "types": "./dist/mcpConfigValidation.d.ts",
+        "default": "./dist/mcpConfigValidation.js"
+      },
+      "require": {
+        "types": "./dist/cjs/mcpConfigValidation.d.cts",
+        "default": "./dist/cjs/mcpConfigValidation.cjs"
+      }
+    },
+    "./mcp-config-import": {
+      "browser": {
+        "types": "./dist/mcpConfigImport.d.ts",
+        "default": "./dist/mcpConfigImport.js"
+      },
+      "import": {
+        "types": "./dist/mcpConfigImport.d.ts",
+        "default": "./dist/mcpConfigImport.js"
+      },
+      "require": {
+        "types": "./dist/cjs/mcpConfigImport.d.cts",
+        "default": "./dist/cjs/mcpConfigImport.cjs"
+      }
+    },
+    "./jsonc": {
+      "browser": {
+        "types": "./dist/jsonc.d.ts",
+        "default": "./dist/jsonc.js"
+      },
+      "import": {
+        "types": "./dist/jsonc.d.ts",
+        "default": "./dist/jsonc.js"
+      },
+      "require": {
+        "types": "./dist/cjs/jsonc.d.cts",
+        "default": "./dist/cjs/jsonc.cjs"
+      }
+    },
+    "./inline-approval": {
+      "browser": {
+        "types": "./dist/inlineApproval.d.ts",
+        "default": "./dist/inlineApproval.js"
+      },
+      "import": {
+        "types": "./dist/inlineApproval.d.ts",
+        "default": "./dist/inlineApproval.js"
+      },
+      "require": {
+        "types": "./dist/cjs/inlineApproval.d.cts",
+        "default": "./dist/cjs/inlineApproval.cjs"
+      }
+    },
+    "./model-auth": {
+      "browser": {
+        "types": "./dist/modelAuth.d.ts",
+        "default": "./dist/modelAuth.js"
+      },
+      "import": {
+        "types": "./dist/modelAuth.d.ts",
+        "default": "./dist/modelAuth.js"
+      },
+      "require": {
+        "types": "./dist/cjs/modelAuth.d.cts",
+        "default": "./dist/cjs/modelAuth.cjs"
+      }
+    },
+    "./model-catalog": {
+      "browser": {
+        "types": "./dist/modelCatalog.d.ts",
+        "default": "./dist/modelCatalog.js"
+      },
+      "import": {
+        "types": "./dist/modelCatalog.d.ts",
+        "default": "./dist/modelCatalog.js"
+      },
+      "require": {
+        "types": "./dist/cjs/modelCatalog.d.cts",
+        "default": "./dist/cjs/modelCatalog.cjs"
+      }
+    },
+    "./selection-commands": {
+      "browser": {
+        "types": "./dist/selectionCommands.d.ts",
+        "default": "./dist/selectionCommands.js"
+      },
+      "import": {
+        "types": "./dist/selectionCommands.d.ts",
+        "default": "./dist/selectionCommands.js"
+      },
+      "require": {
+        "types": "./dist/cjs/selectionCommands.d.cts",
+        "default": "./dist/cjs/selectionCommands.cjs"
+      }
+    },
+    "./model-setup": {
+      "browser": {
+        "types": "./dist/modelSetup.d.ts",
+        "default": "./dist/modelSetup.js"
+      },
+      "import": {
+        "types": "./dist/modelSetup.d.ts",
+        "default": "./dist/modelSetup.js"
+      },
+      "require": {
+        "types": "./dist/cjs/modelSetup.d.cts",
+        "default": "./dist/cjs/modelSetup.cjs"
+      }
+    },
+    "./mcp-tool-identity": {
+      "browser": {
+        "types": "./dist/mcpToolIdentity.d.ts",
+        "default": "./dist/mcpToolIdentity.js"
+      },
+      "import": {
+        "types": "./dist/mcpToolIdentity.d.ts",
+        "default": "./dist/mcpToolIdentity.js"
+      },
+      "require": {
+        "types": "./dist/cjs/mcpToolIdentity.d.cts",
+        "default": "./dist/cjs/mcpToolIdentity.cjs"
+      }
+    },
+    "./mcp-elicitation": {
+      "browser": {
+        "types": "./dist/mcpElicitation.d.ts",
+        "default": "./dist/mcpElicitation.js"
+      },
+      "import": {
+        "types": "./dist/mcpElicitation.d.ts",
+        "default": "./dist/mcpElicitation.js"
+      },
+      "require": {
+        "types": "./dist/cjs/mcpElicitation.d.cts",
+        "default": "./dist/cjs/mcpElicitation.cjs"
+      }
+    },
+    "./mcp-url-elicitation": {
+      "browser": {
+        "types": "./dist/mcpUrlElicitation.d.ts",
+        "default": "./dist/mcpUrlElicitation.js"
+      },
+      "import": {
+        "types": "./dist/mcpUrlElicitation.d.ts",
+        "default": "./dist/mcpUrlElicitation.js"
+      },
+      "require": {
+        "types": "./dist/cjs/mcpUrlElicitation.d.cts",
+        "default": "./dist/cjs/mcpUrlElicitation.cjs"
+      }
+    },
+    "./question-detection": {
+      "browser": {
+        "types": "./dist/questionDetection.d.ts",
+        "default": "./dist/questionDetection.js"
+      },
+      "import": {
+        "types": "./dist/questionDetection.d.ts",
+        "default": "./dist/questionDetection.js"
+      },
+      "require": {
+        "types": "./dist/cjs/questionDetection.d.cts",
+        "default": "./dist/cjs/questionDetection.cjs"
+      }
+    },
+    "./prompt-profile": {
+      "browser": {
+        "types": "./dist/promptProfile.d.ts",
+        "default": "./dist/promptProfile.js"
+      },
+      "import": {
+        "types": "./dist/promptProfile.d.ts",
+        "default": "./dist/promptProfile.js"
+      },
+      "require": {
+        "types": "./dist/cjs/promptProfile.d.cts",
+        "default": "./dist/cjs/promptProfile.cjs"
+      }
+    },
+    "./question-confirmation": {
+      "browser": {
+        "types": "./dist/questionConfirmation.d.ts",
+        "default": "./dist/questionConfirmation.js"
+      },
+      "import": {
+        "types": "./dist/questionConfirmation.d.ts",
+        "default": "./dist/questionConfirmation.js"
+      },
+      "require": {
+        "types": "./dist/cjs/questionConfirmation.d.cts",
+        "default": "./dist/cjs/questionConfirmation.cjs"
+      }
+    },
+    "./fleet-result": {
+      "browser": {
+        "types": "./dist/fleetResult.d.ts",
+        "default": "./dist/fleetResult.js"
+      },
+      "import": {
+        "types": "./dist/fleetResult.d.ts",
+        "default": "./dist/fleetResult.js"
+      },
+      "require": {
+        "types": "./dist/cjs/fleetResult.d.cts",
+        "default": "./dist/cjs/fleetResult.cjs"
+      }
+    },
+    "./diff-snapshot": {
+      "browser": {
+        "types": "./dist/diffSnapshot.d.ts",
+        "default": "./dist/diffSnapshot.js"
+      },
+      "import": {
+        "types": "./dist/diffSnapshot.d.ts",
+        "default": "./dist/diffSnapshot.js"
+      },
+      "require": {
+        "types": "./dist/cjs/diffSnapshot.d.cts",
+        "default": "./dist/cjs/diffSnapshot.cjs"
+      }
+    },
+    "./final-status": {
+      "browser": {
+        "types": "./dist/finalStatus.d.ts",
+        "default": "./dist/finalStatus.js"
+      },
+      "import": {
+        "types": "./dist/finalStatus.d.ts",
+        "default": "./dist/finalStatus.js"
+      },
+      "require": {
+        "types": "./dist/cjs/finalStatus.d.cts",
+        "default": "./dist/cjs/finalStatus.cjs"
+      }
+    },
+    "./find-replace-preview": {
+      "browser": {
+        "types": "./dist/findReplacePreview.d.ts",
+        "default": "./dist/findReplacePreview.js"
+      },
+      "import": {
+        "types": "./dist/findReplacePreview.d.ts",
+        "default": "./dist/findReplacePreview.js"
+      },
+      "require": {
+        "types": "./dist/cjs/findReplacePreview.d.cts",
+        "default": "./dist/cjs/findReplacePreview.cjs"
+      }
+    },
+    "./auto-continue-progress": {
+      "browser": {
+        "types": "./dist/autoContinueProgress.d.ts",
+        "default": "./dist/autoContinueProgress.js"
+      },
+      "import": {
+        "types": "./dist/autoContinueProgress.d.ts",
+        "default": "./dist/autoContinueProgress.js"
+      },
+      "require": {
+        "types": "./dist/cjs/autoContinueProgress.d.cts",
+        "default": "./dist/cjs/autoContinueProgress.cjs"
+      }
+    },
+    "./todo-continuation": {
+      "browser": {
+        "types": "./dist/todoContinuation.d.ts",
+        "default": "./dist/todoContinuation.js"
+      },
+      "import": {
+        "types": "./dist/todoContinuation.d.ts",
+        "default": "./dist/todoContinuation.js"
+      },
+      "require": {
+        "types": "./dist/cjs/todoContinuation.d.cts",
+        "default": "./dist/cjs/todoContinuation.cjs"
+      }
+    },
+    "./command-approval-policy": {
+      "browser": {
+        "types": "./dist/commandApprovalPolicy.d.ts",
+        "default": "./dist/commandApprovalPolicy.js"
+      },
+      "import": {
+        "types": "./dist/commandApprovalPolicy.d.ts",
+        "default": "./dist/commandApprovalPolicy.js"
+      },
+      "require": {
+        "types": "./dist/cjs/commandApprovalPolicy.d.cts",
+        "default": "./dist/cjs/commandApprovalPolicy.cjs"
+      }
+    },
+    "./context-diagnostics": {
+      "browser": {
+        "types": "./dist/contextDiagnostics.d.ts",
+        "default": "./dist/contextDiagnostics.js"
+      },
+      "import": {
+        "types": "./dist/contextDiagnostics.d.ts",
+        "default": "./dist/contextDiagnostics.js"
+      },
+      "require": {
+        "types": "./dist/cjs/contextDiagnostics.d.cts",
+        "default": "./dist/cjs/contextDiagnostics.cjs"
+      }
+    },
+    "./context-health": {
+      "browser": {
+        "types": "./dist/contextHealth.d.ts",
+        "default": "./dist/contextHealth.js"
+      },
+      "import": {
+        "types": "./dist/contextHealth.d.ts",
+        "default": "./dist/contextHealth.js"
+      },
+      "require": {
+        "types": "./dist/cjs/contextHealth.d.cts",
+        "default": "./dist/cjs/contextHealth.cjs"
+      }
+    },
+    "./context-ledger": {
+      "browser": {
+        "types": "./dist/contextLedger.d.ts",
+        "default": "./dist/contextLedger.js"
+      },
+      "import": {
+        "types": "./dist/contextLedger.d.ts",
+        "default": "./dist/contextLedger.js"
+      },
+      "require": {
+        "types": "./dist/cjs/contextLedger.d.cts",
+        "default": "./dist/cjs/contextLedger.cjs"
+      }
+    },
+    "./terminal": {
+      "browser": {
+        "types": "./dist/terminal.d.ts",
+        "default": "./dist/terminal.js"
+      },
+      "import": {
+        "types": "./dist/terminal.d.ts",
+        "default": "./dist/terminal.js"
+      },
+      "require": {
+        "types": "./dist/cjs/terminal.d.cts",
+        "default": "./dist/cjs/terminal.cjs"
+      }
+    },
+    "./terminal-surface": {
+      "browser": {
+        "types": "./dist/terminalSurface.d.ts",
+        "default": "./dist/terminalSurface.js"
+      },
+      "import": {
+        "types": "./dist/terminalSurface.d.ts",
+        "default": "./dist/terminalSurface.js"
+      },
+      "require": {
+        "types": "./dist/cjs/terminalSurface.d.cts",
+        "default": "./dist/cjs/terminalSurface.cjs"
+      }
+    },
+    "./workspace-project": {
+      "browser": {
+        "types": "./dist/workspaceProject.d.ts",
+        "default": "./dist/workspaceProject.js"
+      },
+      "import": {
+        "types": "./dist/workspaceProject.d.ts",
+        "default": "./dist/workspaceProject.js"
+      },
+      "require": {
+        "types": "./dist/cjs/workspaceProject.d.cts",
+        "default": "./dist/cjs/workspaceProject.cjs"
+      }
+    },
+    "./semantic-readiness": {
+      "browser": {
+        "types": "./dist/semanticReadiness.d.ts",
+        "default": "./dist/semanticReadiness.js"
+      },
+      "import": {
+        "types": "./dist/semanticReadiness.d.ts",
+        "default": "./dist/semanticReadiness.js"
+      },
+      "require": {
+        "types": "./dist/cjs/semanticReadiness.d.cts",
+        "default": "./dist/cjs/semanticReadiness.cjs"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && npm run build:cjs",
+    "build:cjs": "node build-cjs.mjs",
+    "watch": "node watch.mjs",
+    "lint": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json && oxlint src --import-plugin --report-unused-disable-directives --deny-warnings",
+    "test": "vitest run --passWithNoTests"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

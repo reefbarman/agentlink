@@ -1,4 +1,4 @@
-import type { CoreReasoningEffort } from "../../../modelCatalog.js";
+import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import type {
   CoreModelContentBlock,
   CoreModelMessage,
@@ -84,6 +84,11 @@ export async function collectCodexCompletionResult(
         outputTokens: event.outputTokens,
         cacheReadTokens: event.cacheReadTokens,
         cacheCreationTokens: event.cacheCreationTokens,
+        ...(event.inputTokenBreakdownReported !== undefined
+          ? {
+              inputTokenBreakdownReported: event.inputTokenBreakdownReported,
+            }
+          : {}),
         ...(event.serverToolUsage
           ? { serverToolUsage: event.serverToolUsage }
           : {}),

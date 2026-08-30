@@ -128,6 +128,8 @@ function textPayload(result: {
 describe("handleExecuteCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    terminalProvider.listTerminals.mockReset();
+    terminalProvider.listTerminals.mockReturnValue([]);
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) => {
         if (key === "masterBypass") return true;
@@ -5690,6 +5692,176 @@ describe("handleExecuteCommand", () => {
     const payload = textPayload(result);
     expect(payload.output).toBe("two\nthree");
     expect(payload.terminal_raw_output).toBeUndefined();
+  });
+
+  it("prompts the agent to clean up after reaching five inactive terminals", async () => {
+    terminalProvider.listTerminals.mockReturnValue([
+      { id: "term_1", name: "AgentLink", busy: false },
+      { id: "term_2", name: "Tests", busy: false },
+      { id: "term_3", name: "Build", busy: false },
+      { id: "term_4", name: "Lint", busy: false },
+      { id: "term_5", name: "Scratch", busy: false },
+      { id: "term_6", name: "Dev server", busy: true },
+    ]);
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "printf done" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-terminal-cleanup",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(textPayload(result).terminal_cleanup).toEqual({
+      warning:
+        "There are 5 inactive managed terminals. Close terminals you no longer need before opening more; use close_terminals when it is available in the current mode.",
+      inactive_count: 5,
+      threshold: 5,
+      terminals: [
+        { id: "term_1", name: "AgentLink" },
+        { id: "term_2", name: "Tests" },
+        { id: "term_3", name: "Build" },
+        { id: "term_4", name: "Lint" },
+        { id: "term_5", name: "Scratch" },
+      ],
+    });
+  });
+
+  it("warns once per threshold crossing and re-arms below the threshold", async () => {
+    const owner = {
+      scopeId: "tab-terminal-cleanup",
+      displayLabel: "Cleanup",
+      generation: 1,
+      authoritySessionId: "session-terminal-cleanup-crossing",
+    };
+    const fiveInactive = [
+      { id: "term_1", name: "AgentLink", busy: false, owner },
+      { id: "term_2", name: "Tests", busy: false, owner },
+      { id: "term_3", name: "Build", busy: false, owner },
+      { id: "term_4", name: "Lint", busy: false, owner },
+      { id: "term_5", name: "Scratch", busy: false, owner },
+    ];
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const run = (sessionId = "session-terminal-cleanup-crossing") =>
+      handleExecuteCommand(
+        { command: "printf done" },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        sessionId,
+        undefined,
+        { terminalProvider: { ...terminalProvider } },
+      );
+
+    terminalProvider.listTerminals.mockReturnValue(fiveInactive.slice(0, 4));
+    expect(textPayload(await run()).terminal_cleanup).toBeUndefined();
+
+    terminalProvider.listTerminals.mockReturnValue(fiveInactive);
+    expect(textPayload(await run()).terminal_cleanup).toBeDefined();
+    expect(textPayload(await run()).terminal_cleanup).toBeUndefined();
+    expect(
+      textPayload(await run("session-terminal-cleanup-child")).terminal_cleanup,
+    ).toBeUndefined();
+
+    terminalProvider.listTerminals.mockReturnValue([]);
+    expect(textPayload(await run()).terminal_cleanup).toBeUndefined();
+
+    terminalProvider.listTerminals.mockReturnValue(fiveInactive);
+    expect(textPayload(await run()).terminal_cleanup).toBeDefined();
+  });
+
+  it("caps terminal cleanup details while preserving the inactive count", async () => {
+    terminalProvider.listTerminals.mockReturnValue(
+      Array.from({ length: 21 }, (_, index) => ({
+        id: `term_${index + 1}`,
+        name: `Terminal ${index + 1}`,
+        busy: false,
+      })),
+    );
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "printf done" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-terminal-cleanup-cap",
+      undefined,
+      { terminalProvider },
+    );
+
+    const cleanup = textPayload(result).terminal_cleanup;
+    expect(cleanup).toMatchObject({
+      inactive_count: 21,
+      terminals_omitted: 1,
+    });
+    expect(cleanup.terminals).toHaveLength(20);
+  });
+
+  it("removes stale provider cleanup data from the model-facing result", async () => {
+    executeCommand.mockResolvedValue({
+      exit_code: 0,
+      output: "ok",
+      output_captured: true,
+      terminal_id: "term_1",
+      command_sent: true,
+      terminal_cleanup: { warning: "provider supplied" },
+    } as never);
+    terminalProvider.listTerminals.mockReturnValue([]);
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "printf done" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-terminal-cleanup-stale",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(textPayload(result).terminal_cleanup).toBeUndefined();
+  });
+
+  it("does not prompt for cleanup below five inactive terminals", async () => {
+    terminalProvider.listTerminals.mockReturnValue([
+      { id: "term_1", name: "AgentLink", busy: false },
+      { id: "term_2", name: "Tests", busy: false },
+      { id: "term_3", name: "Build", busy: false },
+      { id: "term_4", name: "Lint", busy: false },
+      { id: "term_5", name: "Dev server", busy: true },
+    ]);
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "printf done" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-terminal-cleanup-below-threshold",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(textPayload(result).terminal_cleanup).toBeUndefined();
+  });
+
+  it("preserves command results when terminal cleanup inspection fails", async () => {
+    terminalProvider.listTerminals.mockImplementation(() => {
+      throw new Error("terminal provider unavailable");
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "printf done" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-terminal-cleanup-inspection-failure",
+      undefined,
+      { terminalProvider },
+    );
+
+    const payload = textPayload(result);
+    expect(payload).toMatchObject({ exit_code: 0, output: "ok" });
+    expect(payload.terminal_cleanup).toBeUndefined();
   });
 
   it("reports line counts as retained while output is not finalized", async () => {

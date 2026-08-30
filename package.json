@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.19.14",
+  "version": "1.20.0",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -10,6 +10,10 @@
   },
   "icon": "media/icon.png",
   "license": "MIT",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "engines": {
     "node": ">=22.19.0",
     "vscode": "^1.109.0"
@@ -1129,8 +1133,9 @@
     }
   },
   "scripts": {
-    "build": "node scripts/generate-documentation-package-contract.mjs && node esbuild.mjs",
-    "watch": "node scripts/generate-documentation-package-contract.mjs && node esbuild.mjs --watch",
+    "build": "npm run build:workspaces && node scripts/generate-documentation-package-contract.mjs && node esbuild.mjs",
+    "build:workspaces": "tsc -b packages/* && npm run build:cjs --workspace packages/protocol",
+    "watch": "npm run build:workspaces && node scripts/generate-documentation-package-contract.mjs && node scripts/watch-workspaces.mjs",
     "docs:generate": "node scripts/generate-documentation-package-contract.mjs",
     "docs:check": "node scripts/generate-documentation-package-contract.mjs --check",
     "package": "node scripts/package-vsix.mjs",
@@ -1147,9 +1152,11 @@
     "telemetry:mcp-auth": "node scripts/report-mcp-auth-telemetry.mjs",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
-    "lint": "bash -c 'e=0; npm run docs:check || e=1; oxfmt --check || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
-    "test": "vitest run && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-mcp-auth-telemetry.test.mjs scripts/report-session-outcomes.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/verify-retrieval-package.test.mjs",
-    "test:watch": "vitest",
+    "lint": "bash -c 'e=0; npm run docs:check || e=1; oxfmt --check || e=1; npm run build:workspaces || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; npm run lint:workspaces || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
+    "lint:workspaces": "npm run lint --workspaces --if-present",
+    "test": "npm run build:workspaces && vitest run && npm run test:workspaces && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-mcp-auth-telemetry.test.mjs scripts/report-session-outcomes.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/verify-retrieval-package.test.mjs scripts/workspace-bundle-closure.test.mjs",
+    "test:workspaces": "npm run test --workspaces --if-present",
+    "test:watch": "npm run build:workspaces && node scripts/watch-workspaces.mjs --test",
     "test:browser-gateway-security-gate": "node scripts/run-browser-gateway-security-gate.mjs",
     "test:browser-gateway-phase0-gate": "npm run test:browser-gateway-security-gate && BROWSER_GATEWAY_RUN_LOAD_GATE=1 vitest run src/browser-gateway/testing/stateEquivalenceOracle.test.ts src/browser-gateway/testing/ownerDataPlaneLoadFixture.test.ts",
     "test:browser-gateway-phase3-gate": "node scripts/run-browser-gateway-phase3-gate.mjs",
@@ -1160,6 +1167,9 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.1.0",
+    "@agentlink/core": "0.1.0",
+    "@agentlink/node-host": "0.1.0",
+    "@agentlink/protocol": "0.1.0",
     "@anthropic-ai/sdk": "^0.111.0",
     "@iarna/toml": "^3.0.0",
     "@jitl/quickjs-wasmfile-release-asyncify": "0.32.0",

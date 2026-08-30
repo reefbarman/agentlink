@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import type {
   ManageMemoryToolRequest,
   RecallMemoryToolRequest,
-} from "../../core/capabilities/memory.js";
+} from "@agentlink/protocol/autonomous-memory";
 import {
   AutonomousMemoryToolProvider,
   type AutonomousMemoryMode,
@@ -51,9 +51,7 @@ describe("AutonomousMemoryToolProvider", () => {
         status: "unavailable",
         retrieval: "unavailable",
         crud: false,
-        reason: expect.stringContaining(
-          'Set agentlink.memory.mode to "autonomous"',
-        ),
+        reason: "disabled",
       });
       await expect(provider.activity({ scope: "global" })).rejects.toThrow(
         'Set agentlink.memory.mode to "autonomous"',
@@ -61,6 +59,29 @@ describe("AutonomousMemoryToolProvider", () => {
       expect(await fs.readdir(root)).toEqual([]);
     });
   });
+
+  it.each(["config_invalid", "config_unreadable"] as const)(
+    "preserves the bounded %s health reason",
+    async (reason) => {
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), "agentlink-autonomous-memory-provider-"),
+      );
+      const provider = new AutonomousMemoryToolProvider({
+        root,
+        getMode: async () => ({ mode: "off", reason }),
+      });
+      try {
+        await expect(provider.health()).resolves.toMatchObject({
+          status: "unavailable",
+          reason,
+        });
+        await expect(provider.recall({} as never)).rejects.toThrow(reason);
+      } finally {
+        await provider.dispose();
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("translates scopes and foreground/background provenance", async () => {
     await withProvider("autonomous", async (provider) => {
@@ -254,7 +275,7 @@ describe("AutonomousMemoryToolProvider", () => {
     });
   });
 
-  it("fails closed after a legacy import failure while exposing health", async () => {
+  it("quarantines a failed legacy source without blocking canonical memory", async () => {
     await withProvider("autonomous", async (provider) => {
       await provider.recordImportFailure({
         checkpointId: "legacy-memory-import:failed",
@@ -275,21 +296,19 @@ describe("AutonomousMemoryToolProvider", () => {
             scope: "global",
             source_evidence: "Current session.",
             kind: "preference",
-            statement: "This must not bypass failed migration.",
+            statement: "Canonical memory remains available.",
           }),
         ),
-      ).rejects.toThrow("EACCES: Legacy memory source is not readable");
+      ).resolves.toMatchObject({ result: { disposition: "created" } });
       await expect(
         provider.recall(
-          recallRequest({ query: "failed migration", scope: "global" }),
+          recallRequest({ query: "canonical memory", scope: "global" }),
         ),
-      ).rejects.toThrow("until legacy import is repaired or retried");
+      ).resolves.toMatchObject({ result: { memories: expect.any(Array) } });
       await expect(provider.health()).resolves.toMatchObject({
-        status: "unavailable",
-        crud: false,
-        reason: expect.stringContaining(
-          "EACCES: Legacy memory source is not readable",
-        ),
+        status: "degraded",
+        crud: true,
+        reason: "migration_blocked",
       });
     });
   });

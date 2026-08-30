@@ -6,25 +6,28 @@ import type {
   InlineCommandFilePreview,
   SubCommandEntry,
 } from "../../approvals/webview/types.js";
-import type { Question, QuestionRequest } from "../../agent/webview/types.js";
+import type {
+  StructuredQuestionProgress,
+  StructuredQuestionRequest as QuestionRequest,
+  UserQuestion as Question,
+} from "@agentlink/protocol/structured-question";
 import type { TerminalExecutionSecuritySummary } from "../../core/capabilities/terminal.js";
 import type {
   McpElicitationField,
   McpElicitationOption,
   McpFormElicitationRequest,
-} from "../../shared/mcpElicitation.js";
-import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation.js";
+} from "@agentlink/protocol/mcp-elicitation";
+import type { McpUrlElicitationRequest } from "@agentlink/protocol/mcp-url-elicitation";
 
-export interface BrowserGatewayOwnerQuestionProgressPayload {
-  id: string;
-  step: number;
+export type BrowserGatewayOwnerQuestionProgressPayload = Omit<
+  StructuredQuestionProgress,
+  "answers"
+> & {
   answers: Record<
     string,
     string | readonly string[] | number | boolean | undefined
   >;
-  notes: Record<string, string>;
-  origin: string;
-}
+};
 
 /**
  * Full browser interaction state attached to one primary interaction summary.
@@ -432,6 +435,7 @@ function questionRequest(value: unknown): QuestionRequest {
     context: stringValue(source.context),
     questions: arrayValue(source.questions, question),
   };
+  copyOptional(result, "toolCallId", source.toolCallId, stringValue);
   copyOptional(result, "backgroundTask", source.backgroundTask, stringValue);
   return result;
 }

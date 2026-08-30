@@ -10,7 +10,7 @@ import {
   handleToolError,
   successResult,
   type ToolResult,
-} from "../shared/types.js";
+} from "@agentlink/protocol/tool-result";
 
 export interface GetModuleNeighborsParams {
   path: string;

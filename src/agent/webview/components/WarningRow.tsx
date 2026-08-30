@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 
-import type { ChatMessage } from "../types";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import { ErrorNotice } from "./ErrorNotice";
 
 interface WarningRowProps {

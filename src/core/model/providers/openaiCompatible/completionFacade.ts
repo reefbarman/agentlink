@@ -213,6 +213,11 @@ export async function collectOpenAiCompatibleCompletion(
         ...(event.cacheCreationTokens !== undefined
           ? { cacheCreationTokens: event.cacheCreationTokens }
           : {}),
+        ...(event.inputTokenBreakdownReported !== undefined
+          ? {
+              inputTokenBreakdownReported: event.inputTokenBreakdownReported,
+            }
+          : {}),
         ...(event.serverToolUsage
           ? { serverToolUsage: event.serverToolUsage }
           : {}),

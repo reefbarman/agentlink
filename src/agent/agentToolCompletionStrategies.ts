@@ -1,6 +1,6 @@
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import type { TrackedCall } from "./AgentToolCallTracker.js";
-import { successResult } from "../shared/types.js";
+import { successResult } from "@agentlink/protocol/tool-result";
 
 export type AgentToolCompletionStrategy = (
   call: TrackedCall,

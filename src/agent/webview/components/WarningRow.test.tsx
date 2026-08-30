@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/preact";
 
-import type { ChatMessage } from "../types";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import { WarningRow } from "./WarningRow";
 
 afterEach(() => {

@@ -176,6 +176,23 @@ function createEmptyReport() {
       durationsMsByStatus: {},
       turns: 0,
     },
+    cacheEfficiency: createEfficiencyAggregate(),
+    completionEfficiency: {
+      samples: 0,
+      legacyMissing: 0,
+      builtinMissingEfficiency: 0,
+      unknownRuntimeMissingEfficiency: 0,
+      unsupportedRuntime: 0,
+      mixedProviderOrModel: 0,
+      byRuntimeKind: {},
+      elapsedMs: [],
+      agentActiveMs: [],
+      apiTurns: [],
+      providerAttempts: [],
+      toolCalls: [],
+      uncachedInputTokens: [],
+      efficiency: createEfficiencyAggregate(),
+    },
     background: {
       count: 0,
       byTaskClass: {},
@@ -227,8 +244,100 @@ function versionBucket(report, record) {
     emptyReviews: 0,
     reviews: 0,
     approvalInterruptions: 0,
+    cacheEfficiency: createEfficiencyAggregate(),
+    completionEfficiencySamples: 0,
+    completionUncachedInputTokens: 0,
   };
   return report.byVersion[version];
+}
+
+function createEfficiencyAggregate() {
+  return {
+    snapshots: 0,
+    ordinaryAgentProviderAttempts: 0,
+    condenseProviderAttempts: 0,
+    completedApiTurns: 0,
+    usageEstimatedApiTurns: 0,
+    uncachedInputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    outputTokens: 0,
+    cacheBreakdownApiTurns: 0,
+    cacheBreakdownInputTokens: 0,
+    cacheBreakdownReadTokens: 0,
+    cacheBreakdownCreationTokens: 0,
+    staticFloorSamples: 0,
+    staticFloorTokenSends: 0,
+    contextLedgerSamples: 0,
+    boundedContextRequestedTokens: 0,
+    boundedContextOmittedTokens: 0,
+    requestsRequestingBoundedContext: 0,
+    requestsWithContextOmission: 0,
+    contextOverflowTokens: 0,
+    requestsWithContextOverflow: 0,
+    toolCalls: 0,
+  };
+}
+
+const EFFICIENCY_FIELDS = [
+  "ordinaryAgentProviderAttempts",
+  "condenseProviderAttempts",
+  "completedApiTurns",
+  "usageEstimatedApiTurns",
+  "uncachedInputTokens",
+  "cacheReadTokens",
+  "cacheCreationTokens",
+  "outputTokens",
+  "cacheBreakdownApiTurns",
+  "cacheBreakdownInputTokens",
+  "cacheBreakdownReadTokens",
+  "cacheBreakdownCreationTokens",
+  "staticFloorSamples",
+  "staticFloorTokenSends",
+  "contextLedgerSamples",
+  "boundedContextRequestedTokens",
+  "boundedContextOmittedTokens",
+  "requestsRequestingBoundedContext",
+  "requestsWithContextOmission",
+  "contextOverflowTokens",
+  "requestsWithContextOverflow",
+  "toolCalls",
+];
+
+function mergeEfficiency(target, efficiency) {
+  if (
+    !efficiency ||
+    typeof efficiency !== "object" ||
+    Array.isArray(efficiency)
+  ) {
+    return false;
+  }
+  target.snapshots += 1;
+  for (const field of EFFICIENCY_FIELDS) {
+    target[field] += asCount(efficiency[field]);
+  }
+  return true;
+}
+
+function finalizeEfficiency(aggregate) {
+  const ratio = (numerator, denominator) =>
+    denominator > 0 ? numerator / denominator : undefined;
+  aggregate.cacheReadShare = ratio(
+    aggregate.cacheBreakdownReadTokens,
+    aggregate.cacheBreakdownInputTokens,
+  );
+  aggregate.freshInputShare = ratio(
+    aggregate.cacheBreakdownInputTokens - aggregate.cacheBreakdownReadTokens,
+    aggregate.cacheBreakdownInputTokens,
+  );
+  aggregate.cacheBreakdownCoverage = ratio(
+    aggregate.cacheBreakdownApiTurns,
+    aggregate.completedApiTurns,
+  );
+  aggregate.ledgerCoverage = ratio(
+    aggregate.contextLedgerSamples,
+    aggregate.ordinaryAgentProviderAttempts,
+  );
 }
 
 function mergeTurn(report, record) {
@@ -255,6 +364,7 @@ function mergeTurn(report, record) {
   turns.inputTokens += asCount(record.inputTokens);
   turns.outputTokens += asCount(record.outputTokens);
   turns.durationsMs.push(asCount(record.turnDurationMs));
+  mergeEfficiency(report.cacheEfficiency, record.efficiency);
 
   const version = versionBucket(report, record);
   version.turns += 1;
@@ -265,6 +375,7 @@ function mergeTurn(report, record) {
   if (record.spawnedBeforeFirstAction === true) {
     version.spawnedBeforeFirstAction += 1;
   }
+  mergeEfficiency(version.cacheEfficiency, record.efficiency);
 }
 
 function mergeTask(report, record) {
@@ -284,6 +395,55 @@ function mergeTask(report, record) {
   if (status === "completed") {
     version.tasksCompleted += 1;
     version.taskMs += asCount(record.taskDurationMs);
+    const runtimeKind =
+      typeof record.runtimeKind === "string" ? record.runtimeKind : undefined;
+    const runtimeBucket = runtimeKind ?? "legacy-missing";
+    report.completionEfficiency.byRuntimeKind[runtimeBucket] =
+      (report.completionEfficiency.byRuntimeKind[runtimeBucket] ?? 0) + 1;
+    if (
+      record.efficiency &&
+      typeof record.efficiency === "object" &&
+      !Array.isArray(record.efficiency)
+    ) {
+      report.completionEfficiency.samples += 1;
+      version.completionEfficiencySamples += 1;
+      report.completionEfficiency.elapsedMs.push(
+        asCount(record.taskDurationMs),
+      );
+      report.completionEfficiency.agentActiveMs.push(
+        asCount(record.agentActiveMs),
+      );
+      report.completionEfficiency.apiTurns.push(
+        asCount(record.efficiency.completedApiTurns),
+      );
+      report.completionEfficiency.providerAttempts.push(
+        asCount(record.efficiency.ordinaryAgentProviderAttempts),
+      );
+      report.completionEfficiency.toolCalls.push(
+        asCount(record.efficiency.toolCalls),
+      );
+      report.completionEfficiency.uncachedInputTokens.push(
+        asCount(record.efficiency.uncachedInputTokens),
+      );
+      version.completionUncachedInputTokens += asCount(
+        record.efficiency.uncachedInputTokens,
+      );
+      mergeEfficiency(
+        report.completionEfficiency.efficiency,
+        record.efficiency,
+      );
+      if (record.mixedProviderOrModel === true) {
+        report.completionEfficiency.mixedProviderOrModel += 1;
+      }
+    } else if (!runtimeKind) {
+      report.completionEfficiency.legacyMissing += 1;
+    } else if (runtimeKind === "builtin") {
+      report.completionEfficiency.builtinMissingEfficiency += 1;
+    } else if (runtimeKind === "unknown") {
+      report.completionEfficiency.unknownRuntimeMissingEfficiency += 1;
+    } else {
+      report.completionEfficiency.unsupportedRuntime += 1;
+    }
   }
 }
 
@@ -371,6 +531,11 @@ function asCount(value) {
 export function finalizeReport(report) {
   report.sessionCount = report.sessions.size;
   report.sessions = undefined;
+  finalizeEfficiency(report.cacheEfficiency);
+  finalizeEfficiency(report.completionEfficiency.efficiency);
+  for (const bucket of Object.values(report.byVersion)) {
+    finalizeEfficiency(bucket.cacheEfficiency);
+  }
   report.indicators = buildIndicators(report);
 }
 
@@ -433,6 +598,10 @@ function formatMinutes(ms) {
 
 function formatPercent(ratio) {
   return `${formatNumber(ratio * 100)}%`;
+}
+
+function formatOptionalPercent(ratio) {
+  return Number.isFinite(ratio) ? formatPercent(ratio) : "N/A";
 }
 
 function formatNumber(value) {
@@ -502,6 +671,34 @@ function printSummary(report, inputPath, top) {
     );
   }
 
+  const cache = report.cacheEfficiency;
+  if (cache.snapshots > 0) {
+    console.log("");
+    console.log("Cache efficiency (provider-reported input partitions)");
+    printTable(
+      ["metric", "value"],
+      [
+        ["completed API turns", cache.completedApiTurns],
+        ["cache-breakdown turns", cache.cacheBreakdownApiTurns],
+        [
+          "breakdown coverage",
+          formatOptionalPercent(cache.cacheBreakdownCoverage),
+        ],
+        ["cache-read share", formatOptionalPercent(cache.cacheReadShare)],
+        ["fresh-input share", formatOptionalPercent(cache.freshInputShare)],
+        ["uncached input tokens", cache.uncachedInputTokens],
+        [
+          "cache read / creation",
+          `${cache.cacheReadTokens} / ${cache.cacheCreationTokens}`,
+        ],
+        [
+          "ordinary / condense attempts",
+          `${cache.ordinaryAgentProviderAttempts} / ${cache.condenseProviderAttempts}`,
+        ],
+      ],
+    );
+  }
+
   const interruptions = report.approvalInterruptions;
   if (interruptions.count > 0) {
     console.log("");
@@ -562,6 +759,62 @@ function printSummary(report, inputPath, top) {
             percentile(report.tasks.durationsMsByStatus[status] ?? [], 0.9),
           ),
         ]),
+    );
+  }
+
+  const completion = report.completionEfficiency;
+  if (
+    completion.samples > 0 ||
+    completion.legacyMissing > 0 ||
+    completion.builtinMissingEfficiency > 0 ||
+    completion.unknownRuntimeMissingEfficiency > 0 ||
+    completion.unsupportedRuntime > 0
+  ) {
+    const efficiency = completion.efficiency;
+    console.log("");
+    console.log("Self-reported completion efficiency");
+    printTable(
+      ["metric", "value"],
+      [
+        ["measured completions", completion.samples],
+        ["legacy missing", completion.legacyMissing],
+        ["builtin missing efficiency", completion.builtinMissingEfficiency],
+        [
+          "unknown runtime missing efficiency",
+          completion.unknownRuntimeMissingEfficiency,
+        ],
+        ["unsupported runtime", completion.unsupportedRuntime],
+        ["mixed provider/model", completion.mixedProviderOrModel],
+        [
+          "elapsed p50 / p90 (idle-inclusive)",
+          `${formatMinutes(percentile(completion.elapsedMs, 0.5))} / ${formatMinutes(percentile(completion.elapsedMs, 0.9))}`,
+        ],
+        [
+          "agent-active p50 / p90",
+          `${formatMinutes(percentile(completion.agentActiveMs, 0.5))} / ${formatMinutes(percentile(completion.agentActiveMs, 0.9))}`,
+        ],
+        [
+          "uncached input p50 / p90",
+          `${percentile(completion.uncachedInputTokens, 0.5)} / ${percentile(completion.uncachedInputTokens, 0.9)}`,
+        ],
+        [
+          "provider completions p50 / p90",
+          `${percentile(completion.apiTurns, 0.5)} / ${percentile(completion.apiTurns, 0.9)}`,
+        ],
+        [
+          "ordinary attempts p50 / p90",
+          `${percentile(completion.providerAttempts, 0.5)} / ${percentile(completion.providerAttempts, 0.9)}`,
+        ],
+        [
+          "tool calls p50 / p90",
+          `${percentile(completion.toolCalls, 0.5)} / ${percentile(completion.toolCalls, 0.9)}`,
+        ],
+        ["cache-read share", formatOptionalPercent(efficiency.cacheReadShare)],
+        [
+          "cache-breakdown coverage",
+          formatOptionalPercent(efficiency.cacheBreakdownCoverage),
+        ],
+      ],
     );
   }
 
@@ -680,6 +933,9 @@ function printSummary(report, inputPath, top) {
         "approval_cards",
         "tasks_done",
         "avg_task",
+        "cache_share",
+        "cache_coverage",
+        "uncached/completion",
       ],
       versions.map(([version, bucket]) => [
         version,
@@ -696,6 +952,14 @@ function printSummary(report, inputPath, top) {
         formatMinutes(
           bucket.tasksCompleted > 0 ? bucket.taskMs / bucket.tasksCompleted : 0,
         ),
+        formatOptionalPercent(bucket.cacheEfficiency.cacheReadShare),
+        formatOptionalPercent(bucket.cacheEfficiency.cacheBreakdownCoverage),
+        bucket.completionEfficiencySamples > 0
+          ? formatNumber(
+              bucket.completionUncachedInputTokens /
+                bucket.completionEfficiencySamples,
+            )
+          : "N/A",
       ]),
     );
   }
@@ -707,8 +971,8 @@ function printHelp() {
 Reads AgentLink's local session-outcome telemetry JSONL (turn_completed,
 task_completed, background_lifecycle, approval_interruption events) and prints
 goal-level metrics: where turn wall-clock went, time-to-goal per task status,
-background agent cost/benefit, Approve for Me interruptions, and named sanity
-indicators for delegation behavior.
+background agent cost/benefit, Approve for Me interruptions, cache efficiency,
+self-reported completion efficiency, and named sanity indicators.
 
 Options:
   --input <path>     Telemetry JSONL path

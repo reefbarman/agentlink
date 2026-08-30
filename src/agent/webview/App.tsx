@@ -1,25 +1,26 @@
 import {
   AUTO_CONTINUE_NO_PROGRESS_REASON,
+  isProgressToolName,
   turnMadeProgress,
-} from "../../shared/autoContinueProgress.js";
+} from "@agentlink/protocol/auto-continue-progress";
 import type {
   ApprovalRequest,
   DecisionMessage,
 } from "../../approvals/webview/types";
+import type { WorktreeSetupState } from "./types";
+import type { ChatSessionHistorySummary as SessionSummary } from "@agentlink/protocol/chat-session-history";
 import type {
   ChatMessage,
-  ReasoningEffort,
-  SessionSummary,
   TodoItem,
-  WorktreeSetupState,
-} from "./types";
+} from "@agentlink/protocol/chat-transcript";
+import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
 import type {
   McpConfigBatchMutation,
   McpConfigMutationResult,
   McpConfigSnapshot,
   McpManagerScope,
-} from "../../shared/mcpManagerTypes";
-import type { AgentPluginManagerSnapshot } from "../../shared/agentPluginManagerTypes";
+} from "@agentlink/protocol/mcp-manager";
+import type { AgentPluginManagerSnapshot } from "@agentlink/protocol/agent-plugin-manager";
 import {
   agentMessagesToChatMessages,
   initialState,
@@ -33,7 +34,7 @@ import {
   getFinalMessageContinueAction,
   getLatestAutoContinueAction,
   getLatestFinalMessageMarker,
-} from "../../shared/finalStatus.js";
+} from "@agentlink/protocol/final-status";
 import {
   useCallback,
   useEffect,
@@ -75,16 +76,16 @@ import { MemoryPanel } from "../../shared/ui/MemoryPanel";
 import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
 import type {
   ManageMemoryToolInput,
+  MemoryArchiveV1,
   MemoryInspectionQueryRequest,
   MemoryPanelSnapshot,
   MemoryToolScope,
-} from "../../core/capabilities/memory.js";
-import type { MemoryArchiveV1 } from "../../core/memory/contracts.js";
+} from "@agentlink/protocol/autonomous-memory";
 import type {
   McpElicitationValues,
   McpFormElicitationRequest,
-} from "../../shared/mcpElicitation";
-import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation";
+} from "@agentlink/protocol/mcp-elicitation";
+import type { McpUrlElicitationRequest } from "@agentlink/protocol/mcp-url-elicitation";
 import {
   MessageQueuePanel,
   type MessageQueueItem,
@@ -101,9 +102,10 @@ import { TranscriptView } from "./components/TranscriptView";
 import { UrlElicitationModal } from "./components/UrlElicitationModal";
 import { detectQuestionFromAssistantText } from "./questionDetection";
 import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBaselineMetrics";
-import { isForwardedBuiltinCommand } from "../../shared/builtinCommandForwarding";
-import { deriveModelSetupState } from "../../shared/modelSetup";
+import { isForwardedBuiltinCommand } from "@agentlink/protocol/builtin-command-forwarding";
+import { deriveModelSetupState } from "@agentlink/protocol/model-setup";
 import { randomId } from "../../shared/randomId";
+import { AutoContinueTabStateCache } from "../../shared/autoContinueTabState";
 import {
   resolveOpenFileRequest,
   trackOpenFileRequest,
@@ -111,8 +113,8 @@ import {
 import {
   toVsCodeSelectionMessage,
   type WriteApprovalSelection,
-} from "../../shared/selectionCommands";
-import type { CommandApprovalPolicy } from "../../approvals/commandApprovalPolicy";
+} from "@agentlink/protocol/selection-commands";
+import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 import {
   addressChatPaneMessage,
   type ChatWebviewBootstrap,
@@ -121,7 +123,7 @@ import {
   selectedWorkspaceSessionId,
   type ChatTabActionConfirmationRequest,
   type ChatWorkspaceViewSnapshot,
-} from "../chatTabProtocol";
+} from "@agentlink/protocol/chat-workspace";
 import { InactiveChatProjectionCache } from "./InactiveChatProjectionCache";
 import { ChatProjectionStateCache } from "./ChatProjectionStateCache";
 import { addressChatWebviewMessage } from "./chatTabActions";
@@ -461,9 +463,21 @@ export function App({
   const [injection, setInjection] = useState<Injection | null>(null);
   const [autoContinueEnabled, setAutoContinueEnabled] = useState(false);
   const [autoContinueStatus, setAutoContinueStatus] = useState("");
+  const autoContinueEnabledRef = useRef(autoContinueEnabled);
+  const autoContinueStatusRef = useRef(autoContinueStatus);
+  autoContinueEnabledRef.current = autoContinueEnabled;
+  autoContinueStatusRef.current = autoContinueStatus;
   const autoContinuedMessageIdsRef = useRef<Set<string>>(new Set());
   const autoContinueCountRef = useRef(0);
   const pendingAutoContinueUserMessageIdRef = useRef<string | null>(null);
+  const autoContinueTabKeyRef = useRef<string | null>(null);
+  const autoContinueTabStateCacheRef = useRef(new AutoContinueTabStateCache());
+  const inactiveAutoContinueMarkerRef = useRef(
+    new Map<
+      string,
+      import("@agentlink/protocol/final-status").FinalMessageMarker
+    >(),
+  );
   const autoContinueSessionIdRef = useRef<string | null>(
     state.chatState.sessionId,
   );
@@ -679,6 +693,8 @@ export function App({
         acceptedTranscriptRevisionsRef.current.clear();
         inactiveProjectionCacheRef.current.clear();
         projectionStateCacheRef.current.clear();
+        autoContinueTabStateCacheRef.current.clear();
+        inactiveAutoContinueMarkerRef.current.clear();
         restoredCachedSessionRef.current = null;
         hydratedSessionsRef.current.clear();
         optimisticFirstSendRef.current = null;
@@ -689,6 +705,45 @@ export function App({
         pinnedTabId ?? previousSnapshot?.focusedTabId;
       const nextSelectedTabId = pinnedTabId ?? snapshot.focusedTabId;
       const selectedTabChanged = previousSelectedTabId !== nextSelectedTabId;
+      const selectedSessionChanged = previousSessionId !== nextSessionId;
+      if (
+        selectedTabChanged ||
+        selectedSessionChanged ||
+        controllerEpochChanged
+      ) {
+        if (!controllerEpochChanged) {
+          autoContinueTabStateCacheRef.current.save(
+            autoContinueTabKeyRef.current,
+            {
+              enabled: autoContinueEnabledRef.current,
+              status: autoContinueStatusRef.current,
+              sessionId: autoContinueSessionIdRef.current,
+              mode: stateRef.current.mode,
+              reasoningEffort: reasoningEffortRef.current,
+              continuedMessageIds: autoContinuedMessageIdsRef.current,
+              count: autoContinueCountRef.current,
+              pendingUserMessageId: pendingAutoContinueUserMessageIdRef.current,
+            },
+          );
+        }
+        const nextTabKey = nextSelectedTabId ?? null;
+        const restoredAutoContinue =
+          autoContinueTabStateCacheRef.current.restore(
+            nextTabKey,
+            nextSessionId,
+          );
+        autoContinueTabKeyRef.current = nextTabKey;
+        autoContinueSessionIdRef.current = nextSessionId;
+        autoContinueEnabledRef.current = restoredAutoContinue.enabled;
+        autoContinueStatusRef.current = restoredAutoContinue.status;
+        autoContinuedMessageIdsRef.current =
+          restoredAutoContinue.continuedMessageIds;
+        autoContinueCountRef.current = restoredAutoContinue.count;
+        pendingAutoContinueUserMessageIdRef.current =
+          restoredAutoContinue.pendingUserMessageId;
+        setAutoContinueEnabled(restoredAutoContinue.enabled);
+        setAutoContinueStatus(restoredAutoContinue.status);
+      }
       const optimisticFirstSend = optimisticFirstSendRef.current;
       const boundSelectedTabToSession = Boolean(
         !controllerEpochChanged &&
@@ -747,6 +802,17 @@ export function App({
           // load arrived) would poison the cache with an empty transcript that
           // later gets trusted.
           const outgoing = fullStateRef.current;
+          if (previousSessionId) {
+            const latestFinalMarker = getLatestFinalMessageMarker(
+              outgoing.messages,
+            );
+            if (latestFinalMarker) {
+              inactiveAutoContinueMarkerRef.current.set(
+                previousSessionId,
+                latestFinalMarker.marker,
+              );
+            }
+          }
           const outgoingHasSubstance =
             outgoing.messages.length > 0 ||
             outgoing.messageQueue.length > 0 ||
@@ -786,6 +852,11 @@ export function App({
       }
       inactiveProjectionCacheRef.current.retainSessions(openSessionIds);
       projectionStateCacheRef.current.retainSessions(openSessionIds);
+      for (const sessionId of inactiveAutoContinueMarkerRef.current.keys()) {
+        if (!openSessionIds.has(sessionId)) {
+          inactiveAutoContinueMarkerRef.current.delete(sessionId);
+        }
+      }
       for (const sessionId of acceptedTranscriptRevisionsRef.current.keys()) {
         if (!openSessionIds.has(sessionId)) {
           acceptedTranscriptRevisionsRef.current.delete(sessionId);
@@ -839,9 +910,48 @@ export function App({
     },
     onInactiveSessionMessage: (msg) => {
       if (msg.type === "agentSessionLoaded") return;
-      if (msg.type === "agentDone" && msg.transcriptRevision !== undefined) {
-        const controllerEpoch =
-          workspaceSnapshotRef.current?.controllerEpoch ?? null;
+      inactiveProjectionCacheRef.current.append(msg);
+
+      const workspace = workspaceSnapshotRef.current;
+      const tab = workspace?.tabs.find(
+        (candidate) => candidate.sessionId === msg.sessionId,
+      );
+      if (!workspace || !tab) return;
+      const autoContinueState = autoContinueTabStateCacheRef.current.get(
+        tab.tabId,
+      );
+      if (!autoContinueState || autoContinueState.sessionId !== msg.sessionId) {
+        return;
+      }
+
+      if (msg.type === "agentFinalMarker") {
+        if (msg.marker) {
+          inactiveAutoContinueMarkerRef.current.set(msg.sessionId, msg.marker);
+        } else {
+          inactiveAutoContinueMarkerRef.current.delete(msg.sessionId);
+        }
+        return;
+      }
+      if (
+        msg.type === "agentToolComplete" &&
+        autoContinueState.pendingUserMessageId &&
+        isProgressToolName(msg.toolName)
+      ) {
+        autoContinueState.pendingUserMessageId = null;
+        autoContinueTabStateCacheRef.current.save(tab.tabId, autoContinueState);
+        return;
+      }
+      if (msg.type === "agentError") {
+        autoContinueState.enabled = false;
+        autoContinueState.status = "Auto Continue paused after an agent error.";
+        autoContinueTabStateCacheRef.current.save(tab.tabId, autoContinueState);
+        inactiveAutoContinueMarkerRef.current.delete(msg.sessionId);
+        return;
+      }
+      if (msg.type !== "agentDone") return;
+
+      if (msg.transcriptRevision !== undefined) {
+        const controllerEpoch = workspace.controllerEpoch;
         const accepted = acceptedTranscriptRevisionsRef.current.get(
           msg.sessionId,
         );
@@ -853,7 +963,84 @@ export function App({
               : msg.transcriptRevision,
         });
       }
-      inactiveProjectionCacheRef.current.append(msg);
+
+      const marker = inactiveAutoContinueMarkerRef.current.get(msg.sessionId);
+      inactiveAutoContinueMarkerRef.current.delete(msg.sessionId);
+      if (!autoContinueState.enabled || !marker) return;
+
+      const action = getFinalMessageContinueAction(marker);
+      if (!action) {
+        const reason =
+          marker.status === "waiting_for_user"
+            ? "Auto Continue stopped because the agent is waiting for input."
+            : `Auto Continue stopped because the task status is ${marker.status.replaceAll("_", " ")}.`;
+        autoContinueState.enabled = false;
+        autoContinueState.status = reason;
+        autoContinueTabStateCacheRef.current.save(tab.tabId, autoContinueState);
+        return;
+      }
+      if (autoContinueState.pendingUserMessageId) {
+        autoContinueState.enabled = false;
+        autoContinueState.status = AUTO_CONTINUE_NO_PROGRESS_REASON;
+        autoContinueState.pendingUserMessageId = null;
+        autoContinueTabStateCacheRef.current.save(tab.tabId, autoContinueState);
+        return;
+      }
+      if (autoContinueState.count >= AUTO_CONTINUE_MAX_TURNS) {
+        autoContinueState.enabled = false;
+        autoContinueState.status = `Auto Continue stopped after ${AUTO_CONTINUE_MAX_TURNS} turns to avoid an infinite loop.`;
+        autoContinueTabStateCacheRef.current.save(tab.tabId, autoContinueState);
+        return;
+      }
+
+      const userMessageId = randomId();
+      const cachedMessages = projectionStateCacheRef.current.restore(
+        msg.sessionId,
+        {
+          modes: fullStateRef.current.modes,
+          availableModels: fullStateRef.current.availableModels,
+          slashCommands: fullStateRef.current.slashCommands,
+        },
+      ).messages;
+      const completedAssistant = [...cachedMessages]
+        .reverse()
+        .find((message) => message.role === "assistant");
+      if (completedAssistant) {
+        autoContinueState.continuedMessageIds.add(completedAssistant.id);
+      }
+      inactiveProjectionCacheRef.current.updateLatestFinalMarker(
+        msg.sessionId,
+        (bufferedMarker) => ({
+          ...bufferedMarker,
+          continueActionConsumed: true,
+        }),
+      );
+      autoContinueState.count += 1;
+      autoContinueState.pendingUserMessageId = userMessageId;
+      autoContinueState.status = `Auto Continue sent ${autoContinueState.count}/${AUTO_CONTINUE_MAX_TURNS}.`;
+      autoContinueTabStateCacheRef.current.save(tab.tabId, autoContinueState);
+      inactiveProjectionCacheRef.current.append({
+        type: "agentCommittedUserMessage",
+        sessionId: msg.sessionId,
+        id: userMessageId,
+        text: action.prompt,
+        displayText: action.prompt,
+        origin: "vscode",
+      });
+      vscodeApi.postMessage({
+        command: "agentSend",
+        text: action.prompt,
+        displayText: action.prompt,
+        controllerEpoch: workspace.controllerEpoch,
+        tabId: tab.tabId,
+        sessionId: msg.sessionId,
+        mode: autoContinueState.mode ?? undefined,
+        reasoningEffort: autoContinueState.reasoningEffort ?? undefined,
+        thinkingEnabled:
+          autoContinueState.reasoningEffort == null
+            ? undefined
+            : autoContinueState.reasoningEffort !== "none",
+      });
     },
     onMessage: (msg, controls) => {
       const { dropIfNotStreaming, flushDeltasNow } = controls;
@@ -986,6 +1173,12 @@ export function App({
           break;
         case "agentToolComplete":
           if (dropIfNotStreaming()) break;
+          if (
+            pendingAutoContinueUserMessageIdRef.current &&
+            isProgressToolName(msg.toolName)
+          ) {
+            pendingAutoContinueUserMessageIdRef.current = null;
+          }
           streamingBaselineMetrics?.record({
             type: "delta",
             surface: "vscode-webview",
@@ -1092,6 +1285,14 @@ export function App({
             kind: "semantic",
             chars: 0,
           });
+          if (msg.marker) {
+            inactiveAutoContinueMarkerRef.current.set(
+              msg.sessionId,
+              msg.marker,
+            );
+          } else {
+            inactiveAutoContinueMarkerRef.current.delete(msg.sessionId);
+          }
           dispatch({
             type: "SET_FINAL_MARKER",
             marker: msg.marker,
@@ -1119,6 +1320,7 @@ export function App({
                   : msg.transcriptRevision,
             });
           }
+          inactiveAutoContinueMarkerRef.current.delete(msg.sessionId);
           streamingRef.current = false;
           dispatch({ type: "DONE" });
           const queue = queuedMessagesReadyToDrain(
@@ -2579,11 +2781,7 @@ export function App({
     autoContinuedMessageIdsRef.current.clear();
     autoContinueCountRef.current = 0;
     pendingAutoContinueUserMessageIdRef.current = null;
-    if (autoContinueEnabled) {
-      setAutoContinueEnabled(false);
-      setAutoContinueStatus("Auto Continue paused after session change.");
-    }
-  }, [autoContinueEnabled, state.chatState.sessionId]);
+  }, [state.chatState.sessionId]);
 
   // Keep the extension informed of how many locally queued (non-browser)
   // messages are waiting so the agent can skip the todo auto-continue and let
@@ -3307,7 +3505,7 @@ export function App({
     (promotion: {
       serverName: string;
       bareToolName: string;
-      mutationTarget?: import("../../shared/types").McpApprovalPromotionMeta["mutationTarget"];
+      mutationTarget?: import("@agentlink/protocol/tool-result").McpApprovalPromotionMeta["mutationTarget"];
       scope: "session" | "project" | "global";
     }) => {
       const sessionId = stateRef.current.sessionId;

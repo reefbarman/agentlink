@@ -14,7 +14,7 @@ vi.mock("../util/paths.js", () => ({
 }));
 
 import { openAiCodexAuthManager } from "../agent/providers/codex/OpenAiCodexAuthManager.js";
-import type { OnApprovalRequest } from "../shared/types.js";
+import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
 import {
   codexImageGenerationErrorMetadata,
   createCodexImageGenerationResultError,

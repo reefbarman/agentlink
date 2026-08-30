@@ -1,15 +1,13 @@
 import type {
   ManageMemoryToolInput,
-  MemoryInspectionQueryRequest,
-  MemoryPanelSnapshot,
-  MemoryToolScope,
-} from "../../core/capabilities/memory.js";
-import type {
   MemoryArchiveV1,
   MemoryAuditEvent,
+  MemoryInspectionQueryRequest,
   MemoryKind,
+  MemoryPanelSnapshot,
   MemoryStatus,
-} from "../../core/memory/contracts.js";
+  MemoryToolScope,
+} from "@agentlink/protocol/autonomous-memory";
 import { useMemo, useRef, useState } from "preact/hooks";
 
 const KINDS: MemoryKind[] = [

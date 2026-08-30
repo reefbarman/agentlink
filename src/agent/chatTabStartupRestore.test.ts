@@ -4,7 +4,7 @@ import {
   CHAT_TAB_LAYOUT_VERSION,
   type ChatTab,
   type ChatTabLayout,
-} from "./ChatTabController.js";
+} from "@agentlink/protocol/chat-workspace";
 import {
   restoreChatTabStartup,
   type ChatTabStartupRestoreHost,

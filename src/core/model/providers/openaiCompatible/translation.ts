@@ -14,7 +14,7 @@ import type {
 } from "./types.js";
 
 import type { CoreJsonValue } from "../../../webAccess.js";
-import type { CoreReasoningEffort } from "../../../modelCatalog.js";
+import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 
 export class OpenAiCompatibleCapabilityError extends Error {
   constructor(message: string) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isMcpToolName, parseMcpToolName } from "./mcpToolNames.js";
+import { isMcpToolName, parseMcpToolName } from "../core/mcpToolNames.js";
 
 describe("core MCP tool name parsing", () => {
   it("parses server and bare tool names from the first separator", () => {

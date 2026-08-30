@@ -1,6 +1,6 @@
-import { useState } from "preact/hooks";
-import type { FindReplaceFileGroup } from "../types.js";
 import { DiffBlock } from "./DiffBlock.js";
+import type { FindReplaceFileGroup } from "@agentlink/protocol/find-replace-preview";
+import { useState } from "preact/hooks";
 
 interface FileSectionProps {
   group: FindReplaceFileGroup;

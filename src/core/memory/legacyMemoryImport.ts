@@ -3,7 +3,7 @@ import type {
   ImportMemoryRecordsRequest,
   MemoryKind,
   MemoryScope,
-} from "./contracts.js";
+} from "@agentlink/protocol/autonomous-memory";
 
 import { createHash } from "node:crypto";
 

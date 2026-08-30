@@ -23,7 +23,7 @@ import {
   handleToolError,
   jsonResult,
   type ToolResult,
-} from "../shared/types.js";
+} from "@agentlink/protocol/tool-result";
 
 const MAX_ENTRIES = 500;
 

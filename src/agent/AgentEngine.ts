@@ -31,10 +31,11 @@ import {
   getContextLedgerLayer,
   ORDINARY_TURN_RETRIEVED_MEMORY_TOKEN_BUDGET,
   type ContextLedgerSnapshot,
-} from "../core/contextLedger.js";
+} from "@agentlink/protocol/context-ledger";
 import { BUILT_IN_MODES, buildUnionAgentMode } from "./modes.js";
+import { parseMcpToolName } from "@agentlink/protocol/mcp-tool-identity";
+
 import { buildToolContextBreakdown } from "./contextBreakdown.js";
-import { parseMcpToolName } from "./mcpToolNames.js";
 import { partitionMcpToolsForDisclosure } from "./mcpToolDisclosure.js";
 import type { CoreResolvedWebAccessPolicy } from "../core/webAccess.js";
 import {
@@ -42,13 +43,13 @@ import {
   CORE_NATIVE_WEB_MAX_PAUSE_TURNS,
   CORE_NATIVE_WEB_TOOL_DEFINITIONS,
 } from "../core/nativeWebTools.js";
-import type { FinalMessageMarker } from "../shared/finalStatus.js";
-import { handleToolError } from "../shared/types.js";
-import type {
-  McpApprovalPromotionMeta,
-  PostCondenseProjection,
-  ToolResult,
-} from "../shared/types.js";
+import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
+import {
+  handleToolError,
+  type McpApprovalPromotionMeta,
+  type ToolResult,
+} from "@agentlink/protocol/tool-result";
+import type { PostCondenseProjection } from "@agentlink/protocol/context-diagnostics";
 import {
   TODO_TOOL_NAME,
   todoTool,
@@ -94,7 +95,7 @@ import type {
 } from "../core/sessionTranscriptRecall.js";
 import { truncateMiddle } from "../util/truncateMiddle.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
-import type { AutomaticMemoryContext } from "../core/capabilities/memory.js";
+import type { AutomaticMemoryContext } from "@agentlink/protocol/autonomous-memory";
 import { getAgentLinkHttpDiagnostics } from "../util/httpDispatcher.js";
 import { collectSessionImages } from "./sessionImages.js";
 import { resolveProjectAttachments } from "./attachmentResolver.js";
@@ -690,7 +691,7 @@ interface ToolCallResult {
   historyContent?: CoreModelToolResultBlock["content"];
   durationMs: number;
   mcpApprovalPromotion?: McpApprovalPromotionMeta;
-  composeTrace?: import("../shared/composeTypes.js").ComposeTrace;
+  composeTrace?: import("@agentlink/protocol/compose").ComposeTrace;
 }
 
 function parseToolResultPayload(
@@ -1513,6 +1514,7 @@ export class AgentEngine {
         let outputTokens = 0;
         let cacheReadTokens = 0;
         let cacheCreationTokens = 0;
+        let inputTokenBreakdownReported: boolean | undefined;
         let usageEstimated: boolean | undefined;
         let providerResponseId: string | undefined;
         let assistantMessage: CoreModelMessage | undefined;
@@ -1723,6 +1725,10 @@ export class AgentEngine {
                 requestId: randomUUID(),
                 requestKind: "agent",
                 model,
+                providerId: provider.id,
+                mode: session.mode,
+                promptProfile: session.promptProfile.profile,
+                background: session.background,
                 estimatedInputTokens,
                 toolResultContextAttributions,
                 omittedToolResultContextAttributions,
@@ -1859,6 +1865,8 @@ export class AgentEngine {
                   outputTokens = event.outputTokens;
                   cacheReadTokens = event.cacheReadTokens ?? 0;
                   cacheCreationTokens = event.cacheCreationTokens ?? 0;
+                  inputTokenBreakdownReported =
+                    event.inputTokenBreakdownReported;
                   usageEstimated = event.estimated;
                   providerResponseId = event.providerResponseId;
                   break;
@@ -2138,6 +2146,9 @@ export class AgentEngine {
           outputTokens,
           cacheReadTokens,
           cacheCreationTokens,
+          ...(inputTokenBreakdownReported !== undefined
+            ? { inputTokenBreakdownReported }
+            : {}),
           ...(usageEstimated !== undefined ? { usageEstimated } : {}),
           durationMs,
           timeToFirstToken,
@@ -3411,6 +3422,10 @@ export class AgentEngine {
               requestId: request.requestId,
               requestKind: "condense",
               model: request.model,
+              providerId: resolvedProvider.id,
+              mode: session.mode,
+              promptProfile: session.promptProfile.profile,
+              background: session.background,
               estimatedInputTokens: request.estimatedInputTokens,
               // Condense converts tool carriers into bounded summary-source text,
               // so original call-level detail would not describe this request exactly.
@@ -3419,6 +3434,32 @@ export class AgentEngine {
               pinnedMemoryTokens: 0,
               retrievedMemoryTokens: 0,
             });
+          },
+          onProviderRequestComplete: ({ requestId, usage }) => {
+            if (!usage) return;
+            const request = requestAttributionEvents.find(
+              (event) => event.requestId === requestId,
+            );
+            if (!request) return;
+            const cacheReadTokens = usage.cacheReadTokens ?? 0;
+            const cacheCreationTokens = usage.cacheCreationTokens ?? 0;
+            request.completedUsage = {
+              inputTokens:
+                usage.inputTokens + cacheReadTokens + cacheCreationTokens,
+              uncachedInputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+              cacheReadTokens,
+              cacheCreationTokens,
+              ...(usage.inputTokenBreakdownReported !== undefined
+                ? {
+                    inputTokenBreakdownReported:
+                      usage.inputTokenBreakdownReported,
+                  }
+                : {}),
+              ...(usage.estimated !== undefined
+                ? { usageEstimated: usage.estimated }
+                : {}),
+            };
           },
         },
         prevInputTokens,

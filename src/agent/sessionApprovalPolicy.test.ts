@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
+import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 import {
   SessionApprovalPolicyCoordinator,
   type AgentWriteApprovalSelection,

@@ -1,4 +1,4 @@
-import type { CoreReasoningEffort } from "../../../modelCatalog.js";
+import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import type { CoreModelCapabilities } from "../../../modelRuntime.js";
 
 export type CodexAuthMethod = "oauth" | "apiKey";

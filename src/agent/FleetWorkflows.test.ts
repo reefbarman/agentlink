@@ -62,7 +62,7 @@ describe("fleet workflows", () => {
     );
   });
 
-  it("creates goal-scoped budgets and parses structured evidence", () => {
+  it("keeps writable persistent goals uncapped and parses structured evidence", () => {
     const plan = planFleetWorkflow({
       kind: "persistent_goal",
       task: "Goal",
@@ -70,7 +70,7 @@ describe("fleet workflows", () => {
       budget: { maxTokens: 1000 },
     });
     expect(plan.goalId).toMatch(/^goal:/);
-    expect(plan.delegations[0].budget?.scope).toBe("goal");
+    expect(plan.delegations[0].budget).toBeUndefined();
     expect(
       parseFleetResultEnvelope(
         "verification",

@@ -7,7 +7,7 @@ import {
 } from "./systemPrompt.js";
 
 import { AgentSession } from "./AgentSession.js";
-import { buildContextLedger } from "../core/contextLedger.js";
+import { buildContextLedger } from "@agentlink/protocol/context-ledger";
 import type { ContentBlock } from "./providers/types.js";
 import type { PersistedActiveSkillState } from "./persistenceContracts.js";
 import type { SkillEntry } from "./skillLoader.js";
@@ -15,8 +15,8 @@ import type { SkillCatalogProjection } from "./skillCatalogProjection.js";
 import {
   createProjectlessSessionScope,
   type SessionProjectScope,
-} from "../core/workspaceProjects.js";
-import type { PromptProfileResolution } from "../core/promptProfile.js";
+} from "@agentlink/protocol/workspace-project";
+import type { PromptProfileResolution } from "@agentlink/protocol/prompt-profile";
 
 function makeSkillCatalogProjection(
   revision: string,

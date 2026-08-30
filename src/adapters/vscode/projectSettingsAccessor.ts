@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 import type {
   SessionProjectScope,
   WorkspaceProject,
-} from "../../core/workspaceProjects.js";
+} from "@agentlink/protocol/workspace-project";
 
 export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
   "masterBypass",

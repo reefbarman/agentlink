@@ -1,22 +1,12 @@
+import type { TerminalOutputPolicyDecision } from "@agentlink/protocol/terminal-surface";
+
+export type {
+  TerminalOutputPolicyAction,
+  TerminalOutputPolicyDecision,
+  TerminalOutputPolicyReason,
+} from "@agentlink/protocol/terminal-surface";
+
 const MAX_OSC_CHARACTERS = 8_192;
-
-export type TerminalOutputPolicyAction = "allow" | "suppress";
-
-export type TerminalOutputPolicyReason =
-  | "terminal-control"
-  | "clipboard"
-  | "notification"
-  | "proprietary-host-integration"
-  | "private-shell-integration"
-  | "incomplete"
-  | "oversized";
-
-export interface TerminalOutputPolicyDecision {
-  readonly type: "osc";
-  readonly command: number | null;
-  readonly recommendedAction: TerminalOutputPolicyAction;
-  readonly reason: TerminalOutputPolicyReason;
-}
 
 export interface TerminalOutputPolicyScanResult {
   /** Exact input bytes decoded as text; no recommendation is enforced here. */

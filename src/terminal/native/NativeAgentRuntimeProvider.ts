@@ -9,7 +9,7 @@ import type {
 
 import type { ResolvedHostShellProfile } from "../shellProfileResolver.js";
 import type { SandboxCommandIdentity } from "../sandbox/sandboxHelperProtocol.js";
-import type { TerminalDimensions } from "../../core/terminalProtocol.js";
+import type { TerminalDimensions } from "@agentlink/protocol/terminal";
 import { createShellIntegrationParser } from "../shellIntegration.js";
 
 const PROMPT_IDLE_READY_DELAY_MS = 25;

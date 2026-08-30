@@ -3,7 +3,7 @@ import type {
   PathAccessProvider,
   WorkspaceFileProvider,
 } from "../core/capabilities/readSearch.js";
-import { errorResult, type ToolResult } from "../shared/types.js";
+import { errorResult, type ToolResult } from "@agentlink/protocol/tool-result";
 
 export interface OpenFileParams {
   path: string;

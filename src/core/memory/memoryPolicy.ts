@@ -2,7 +2,7 @@ import type {
   MemoryProvenanceSource,
   MemoryRecord,
   MemoryScope,
-} from "./contracts.js";
+} from "@agentlink/protocol/autonomous-memory";
 
 const SENSITIVE_PATTERNS: Array<{ finding: string; pattern: RegExp }> = [
   {

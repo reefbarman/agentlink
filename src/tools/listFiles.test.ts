@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import type { ToolResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 const {
   statMock,

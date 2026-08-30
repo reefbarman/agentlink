@@ -6,7 +6,7 @@ import type {
 } from "../approvals/ApprovalManager.js";
 
 import type { DiffDecision } from "../integrations/DiffViewProvider.js";
-import type { OnApprovalRequest } from "../shared/types.js";
+import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
 import type { WriteApprovalResponse } from "../approvals/ApprovalPanelProvider.js";
 
 export type WriteApprovalScopeChoice =

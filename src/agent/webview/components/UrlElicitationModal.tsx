@@ -1,4 +1,4 @@
-import type { McpUrlElicitationRequest } from "../../../shared/mcpUrlElicitation";
+import type { McpUrlElicitationRequest } from "@agentlink/protocol/mcp-url-elicitation";
 
 interface UrlElicitationModalProps {
   request: McpUrlElicitationRequest;

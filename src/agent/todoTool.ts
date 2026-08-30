@@ -1,5 +1,7 @@
 import type { MessageParam, ToolDefinition } from "./providers/types.js";
 
+import type { TodoItem } from "@agentlink/protocol/chat-transcript";
+
 /**
  * Agent-internal todo tracking tool.
  * Not exposed via MCP — handled directly in the AgentEngine execution loop.
@@ -7,14 +9,7 @@ import type { MessageParam, ToolDefinition } from "./providers/types.js";
 
 // ── Types ──
 
-export interface TodoItem {
-  id: string;
-  content: string;
-  /** Present participle form shown when in_progress (e.g. "Running tests") */
-  activeForm: string;
-  status: "pending" | "in_progress" | "completed";
-  children?: TodoItem[];
-}
+export type { TodoItem } from "@agentlink/protocol/chat-transcript";
 
 // ── Tool definition for Claude SDK ──
 

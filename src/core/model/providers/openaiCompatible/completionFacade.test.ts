@@ -607,6 +607,9 @@ describe("completion collection", () => {
         type: "usage",
         inputTokens: 4,
         outputTokens: 2,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        inputTokenBreakdownReported: true,
         providerResponseId: "response-1",
       };
       yield {
@@ -630,7 +633,13 @@ describe("completion collection", () => {
     expect(await collectOpenAiCompatibleCompletion(events())).toEqual({
       text: "",
       toolCalls: [{ id: "call_1", name: "lookup", input: { q: "x" } }],
-      usage: { inputTokens: 4, outputTokens: 2 },
+      usage: {
+        inputTokens: 4,
+        outputTokens: 2,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        inputTokenBreakdownReported: true,
+      },
       providerResponseId: "response-1",
       assistantMessage: {
         role: "assistant",

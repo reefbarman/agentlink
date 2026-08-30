@@ -7,7 +7,7 @@ import type {
 } from "./sandboxHelperProtocol.js";
 
 import type { SandboxViolation } from "../../core/sandboxPolicy.js";
-import type { TerminalDimensions } from "../../core/terminalProtocol.js";
+import type { TerminalDimensions } from "@agentlink/protocol/terminal";
 
 export class SandboxPreCommandLaunchError extends Error {
   readonly code = "sandbox_environment_too_large" as const;

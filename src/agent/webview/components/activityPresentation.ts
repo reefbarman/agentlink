@@ -1,4 +1,4 @@
-import type { ContentBlock } from "../types";
+import type { ContentBlock } from "@agentlink/protocol/chat-transcript";
 
 export type ActivityMotion = "moving" | "attention" | "static";
 

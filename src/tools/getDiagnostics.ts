@@ -2,7 +2,7 @@ import type {
   DiagnosticsParams,
   DiagnosticsProvider,
 } from "../core/capabilities/language.js";
-import { errorResult, type ToolResult } from "../shared/types.js";
+import { errorResult, type ToolResult } from "@agentlink/protocol/tool-result";
 
 export interface GetDiagnosticsProviders {
   diagnosticsProvider?: DiagnosticsProvider;

@@ -4,11 +4,11 @@ import {
   ImageAttachmentChip,
 } from "./AttachmentChip";
 import type {
-  ModeInfo,
-  ReasoningEffort,
-  SlashCommandInfo,
-  WebviewModelInfo,
-} from "../types";
+  ChatModeInfo as ModeInfo,
+  ChatReasoningEffort as ReasoningEffort,
+  ChatSlashCommandInfo as SlashCommandInfo,
+  ChatModelInfo as WebviewModelInfo,
+} from "@agentlink/protocol/chat-catalog";
 import {
   autosizeTextarea,
   canSubmitComposer,
@@ -39,7 +39,7 @@ import {
   withSlashCommandDisplayName,
 } from "./useSlashCommandPopup";
 
-import type { CommandApprovalPolicy } from "../../../approvals/commandApprovalPolicy";
+import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 import type { ComponentChildren } from "preact";
 import { ComposerBox } from "../../../shared/ui/ComposerBox";
 import { EmojiPopup } from "./EmojiPopup";
@@ -51,7 +51,7 @@ import type { QuestionAttachmentDraft } from "./QuestionCard";
 import { ReasoningEffortSelector } from "./ReasoningEffortSelector";
 import { SlashCommandPopup } from "./SlashCommandPopup";
 import { ToolbarControlButton } from "../../../shared/ui/ToolbarSelector";
-import type { WriteApprovalSelection } from "../../../shared/selectionCommands";
+import type { WriteApprovalSelection } from "@agentlink/protocol/selection-commands";
 import { WriteApprovalSelector } from "./WriteApprovalSelector";
 import { randomId } from "../../../shared/randomId";
 import { useEmojiPopup } from "./useEmojiPopup";

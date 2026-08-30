@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ContentBlock } from "../types";
+import type { ContentBlock } from "@agentlink/protocol/chat-transcript";
 import { getStreamingActivity } from "./activityPresentation";
 
 function activityFor(blocks: ContentBlock[]) {

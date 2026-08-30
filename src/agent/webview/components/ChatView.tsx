@@ -12,7 +12,7 @@ import {
 } from "preact/hooks";
 
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
-import type { ChatMessage } from "../types";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import type { ComponentChildren } from "preact";
 import type { DetectedQuestion } from "../questionDetection";
 import type { OpenImageInEditor } from "./ImagePreview";
@@ -36,7 +36,7 @@ interface ChatViewProps {
   onPromoteMcpToolApproval?: (promotion: {
     serverName: string;
     bareToolName: string;
-    mutationTarget?: import("../../../shared/types").McpApprovalPromotionMeta["mutationTarget"];
+    mutationTarget?: import("@agentlink/protocol/tool-result").McpApprovalPromotionMeta["mutationTarget"];
     scope: "session" | "project" | "global";
   }) => void;
   onOpenSpecialBlockPanel?: (block: {

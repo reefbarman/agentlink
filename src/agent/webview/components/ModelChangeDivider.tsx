@@ -1,6 +1,6 @@
-import type { CommandApprovalPolicy } from "../../../approvals/commandApprovalPolicy";
+import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 import { Fragment } from "preact";
-import type { ReasoningEffort } from "../types";
+import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
 
 interface ModelChangeDividerProps {
   modelChange?: {

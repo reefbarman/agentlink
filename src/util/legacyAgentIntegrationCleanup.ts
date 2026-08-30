@@ -2,7 +2,7 @@ import { createHash } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 
-import { parseJsonWithComments } from "./jsonc.js";
+import { parseJsonWithComments } from "@agentlink/protocol/jsonc";
 
 export const LEGACY_AGENT_INTEGRATION_CLEANUP_STATE_KEY =
   "legacyAgentIntegrationCleanup.v1";

@@ -1,7 +1,7 @@
 import type {
   ChatTabViewStatus,
   ChatWorkspaceViewSnapshot,
-} from "../../chatTabProtocol.js";
+} from "@agentlink/protocol/chat-workspace";
 import type { ComponentChildren, JSX } from "preact";
 
 import { useState } from "preact/hooks";

@@ -736,7 +736,7 @@ describe("resolveBackgroundRoute", () => {
     expect(route.toolProfile).toBeUndefined();
   });
 
-  it("uses ask mode with the readonly research tool profile", async () => {
+  it("uses ask mode with the readonly research tool profile and an automatic budget", async () => {
     const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
     const registry = makeRegistry([makeProvider("anthropic", [anthModel])]);
 
@@ -751,18 +751,44 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.resolvedMode).toBe("ask");
-    expect("maxToolCalls" in route).toBe(false);
-    expect("maxApiTurns" in route).toBe(false);
+    expect(route.defaultBudget).toEqual({
+      maxToolCalls: 48,
+      maxApiTurns: 16,
+      maxElapsedMs: 600_000,
+      warningThresholdRatio: 0.8,
+    });
     expect(route.toolProfile).toBe("readonly-research");
   });
 
+  it("applies the automatic budget to research tasks", async () => {
+    const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
+    const registry = makeRegistry([makeProvider("anthropic", [anthModel])]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      {
+        task: "Research behavior",
+        message: "Investigate the background runtime",
+        taskClass: "research",
+      },
+      { mode: "code", model: "claude-sonnet-4-6" },
+    );
+
+    expect(route.resolvedMode).toBe("ask");
+    expect(route.defaultBudget).toEqual({
+      maxToolCalls: 48,
+      maxApiTurns: 16,
+      maxElapsedMs: 600_000,
+      warningThresholdRatio: 0.8,
+    });
+  });
+
   it.each([
-    ["research", "ask"],
     ["explore", "architect"],
     ["debug", "debug"],
     ["design", "architect"],
   ] as const)(
-    "returns mode without turn or tool limits for %s task class",
+    "returns mode without a budget for %s task class",
     async (taskClass, expectedMode) => {
       const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
       const registry = makeRegistry([makeProvider("anthropic", [anthModel])]);
@@ -778,8 +804,7 @@ describe("resolveBackgroundRoute", () => {
       );
 
       expect(route.resolvedMode).toBe(expectedMode);
-      expect("maxToolCalls" in route).toBe(false);
-      expect("maxApiTurns" in route).toBe(false);
+      expect(route.defaultBudget).toBeUndefined();
       expect(route.toolProfile).toBeUndefined();
     },
   );

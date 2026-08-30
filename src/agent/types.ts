@@ -1,15 +1,21 @@
 import type {
+  AgentErrorActions,
+  AgentRuntimeErrorPresentation,
+} from "@agentlink/protocol/agent-error-presentation";
+import type {
   CondenseMetadata,
-  McpApprovalPromotionMeta,
   RequestContextBreakdown,
-  ToolResult,
   ToolResultContextAttribution,
-} from "../shared/types.js";
+} from "@agentlink/protocol/context-diagnostics";
+import type {
+  McpApprovalPromotionMeta,
+  ToolResult,
+} from "@agentlink/protocol/tool-result";
 import type { MessageParam, ReasoningEffort } from "./providers/types.js";
 
 import type { CoreModelToolResultBlock } from "../core/modelRuntime.js";
-import type { FinalMessageMarker } from "../shared/finalStatus.js";
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 import type { TodoItem } from "./todoTool.js";
 
 // --- Agent Message (conversation history with condense metadata) ---
@@ -21,18 +27,8 @@ import type { TodoItem } from "./todoTool.js";
  * - condenseParent: UUID of the summary that replaced this message
  *   (messages with condenseParent are filtered from API history when their summary exists)
  */
-export interface AgentErrorActions {
-  signIn?: boolean;
-  signInAnotherAccount?: boolean;
-  condense?: boolean;
-}
-
-export interface AgentRuntimeError {
-  message: string;
-  retryable: boolean;
-  code?: string;
-  actions?: AgentErrorActions;
-}
+export type { AgentErrorActions } from "@agentlink/protocol/agent-error-presentation";
+export type AgentRuntimeError = AgentRuntimeErrorPresentation;
 
 export interface PreservedRuntimeContext {
   toolNames: string[];
@@ -131,7 +127,7 @@ export type AgentEvent =
       input?: unknown;
       parentCallId?: string;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
-      composeTrace?: import("../shared/composeTypes.js").ComposeTrace;
+      composeTrace?: import("@agentlink/protocol/compose").ComposeTrace;
     }
   | { type: "todo_update"; todos: TodoItem[] }
   | { type: "final_marker"; marker: FinalMessageMarker | null }
@@ -177,12 +173,25 @@ export type AgentEvent =
       requestId: string;
       requestKind: "agent" | "condense";
       model: string;
+      providerId?: string;
+      mode?: string;
+      promptProfile?: string;
+      background?: boolean;
       estimatedInputTokens: number;
       toolResultContextAttributions: ToolResultContextAttribution[];
       omittedToolResultContextAttributions: number;
       pinnedMemoryTokens: number;
       retrievedMemoryTokens: number;
-      contextLedger?: import("../core/contextLedger.js").ContextLedgerSnapshot;
+      contextLedger?: import("@agentlink/protocol/context-ledger").ContextLedgerSnapshot;
+      completedUsage?: {
+        inputTokens: number;
+        uncachedInputTokens: number;
+        outputTokens: number;
+        cacheReadTokens: number;
+        cacheCreationTokens: number;
+        inputTokenBreakdownReported?: boolean;
+        usageEstimated?: boolean;
+      };
     }
   | {
       type: "api_request";
@@ -194,6 +203,7 @@ export type AgentEvent =
       outputTokens: number;
       cacheReadTokens: number;
       cacheCreationTokens: number;
+      inputTokenBreakdownReported?: boolean;
       usageEstimated?: boolean;
       durationMs: number;
       timeToFirstToken: number;
@@ -305,7 +315,7 @@ export interface AgentConfig {
   /** Exact model-ID prompt profile overrides from reviewed configuration. */
   promptProfileOverrides?: Record<
     string,
-    import("../core/promptProfile.js").PromptProfile
+    import("@agentlink/protocol/prompt-profile").PromptProfile
   >;
   /** Exact canonical skill IDs disabled by reviewed workspace configuration. */
   disabledSkillIds?: string[];

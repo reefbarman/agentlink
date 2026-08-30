@@ -6,14 +6,13 @@ import type {
   CoreWebCitation,
 } from "./webAccess.js";
 import type {
-  CoreModelAuthMethod,
-  CoreModelAuthProvider,
-} from "./modelAuth.js";
-import type {
   CoreModelCatalogEntry,
   CoreModelCatalogSnapshot,
   CoreReasoningEffort,
-} from "./modelCatalog.js";
+} from "@agentlink/protocol/model-catalog";
+
+import type { CoreModelAuthMethod } from "@agentlink/protocol/model-auth";
+import type { CoreModelAuthProvider } from "./modelAuthProvider.js";
 
 export type CoreModelContentBlock =
   | CoreModelTextBlock
@@ -243,6 +242,8 @@ export interface CoreModelUsage {
   outputTokens: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
+  /** True only when the provider reported enough detail to partition fresh and cached input. */
+  inputTokenBreakdownReported?: boolean;
   serverToolUsage?: CoreModelServerToolUsage;
   /** True when usage was estimated locally because the provider omitted it. */
   estimated?: boolean;
@@ -299,6 +300,7 @@ export async function collectCoreModelCompleteResult(
   let outputTokens = 0;
   let cacheReadTokens = 0;
   let cacheCreationTokens = 0;
+  let inputTokenBreakdownReported: boolean | undefined;
   let serverToolUsage: CoreModelServerToolUsage | undefined;
   let estimated: boolean | undefined;
   let providerResponseId: string | undefined;
@@ -313,6 +315,7 @@ export async function collectCoreModelCompleteResult(
       outputTokens = event.outputTokens;
       cacheReadTokens = event.cacheReadTokens ?? 0;
       cacheCreationTokens = event.cacheCreationTokens ?? 0;
+      inputTokenBreakdownReported = event.inputTokenBreakdownReported;
       serverToolUsage = event.serverToolUsage;
       estimated = event.estimated;
       providerResponseId = event.providerResponseId;
@@ -329,6 +332,9 @@ export async function collectCoreModelCompleteResult(
       outputTokens,
       cacheReadTokens,
       cacheCreationTokens,
+      ...(inputTokenBreakdownReported !== undefined
+        ? { inputTokenBreakdownReported }
+        : {}),
       ...(serverToolUsage ? { serverToolUsage } : {}),
       ...(estimated !== undefined ? { estimated } : {}),
     },

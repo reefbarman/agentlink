@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
-import type { SessionHandoffDraft } from "../../agent/sessionHandoff";
+import type { SessionHandoffDraft } from "@agentlink/protocol/session-handoff-draft";
 import { SessionHandoffPanel } from "./SessionHandoffPanel";
 
 afterEach(cleanup);

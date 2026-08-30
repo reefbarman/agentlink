@@ -14,14 +14,14 @@ import type {
   McpManagerServerDraft,
   McpManagerServerWriteDraft,
   McpSecretRecordMutation,
-} from "../shared/mcpManagerTypes.js";
+} from "@agentlink/protocol/mcp-manager";
 import {
   canonicalDraftToWriteDraft,
   validateMcpServerDraft,
-} from "../shared/mcpConfigValidation.js";
+} from "@agentlink/protocol/mcp-config-validation";
 import { createHash, randomUUID } from "crypto";
 
-import { parseJsonWithComments } from "../util/jsonc.js";
+import { parseJsonWithComments } from "@agentlink/protocol/jsonc";
 
 export type McpConfigProvenance =
   | {

@@ -15,8 +15,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { SandboxTerminalChannelHub } from "./sandbox/SandboxTerminalChannelHub.js";
 import type { SandboxTerminalSessionSnapshot } from "./sandbox/SandboxTerminalSession.js";
-import { TERMINAL_SURFACE_PROTOCOL_VERSION } from "./terminalSurfaceProtocol.js";
-import type { TerminalSurfaceEvent } from "./terminalSurfaceProtocol.js";
+import { TERMINAL_SURFACE_PROTOCOL_VERSION } from "@agentlink/protocol/terminal-surface";
+import type { TerminalSurfaceEvent } from "@agentlink/protocol/terminal-surface";
 import type { VscodeTerminalConfigurationSnapshot } from "./vscodeTerminalProfileAdapter.js";
 import { encodeShellIntegrationValue } from "./shellIntegration.js";
 

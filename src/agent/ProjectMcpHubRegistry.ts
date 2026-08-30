@@ -1,4 +1,4 @@
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 import { McpClientHub, type McpConnectOptions } from "./McpClientHub.js";
 import { loadMcpConfigs, type McpServerConfig } from "./mcpConfig.js";
 

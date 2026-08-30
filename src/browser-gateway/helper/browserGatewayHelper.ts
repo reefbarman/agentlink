@@ -7,6 +7,7 @@ import * as path from "path";
 import { PassThrough, Writable } from "stream";
 import { randomUUID } from "crypto";
 import { z } from "zod";
+import type { AgentRuntimeErrorPresentation } from "@agentlink/protocol/agent-error-presentation";
 import {
   buildAgentErrorMessage,
   getAgentErrorActions,
@@ -14,7 +15,6 @@ import {
   hasAgentRetryableErrorFlag,
   isAgentAuthErrorMessage,
   isAgentRetryableErrorMessage,
-  type AgentRuntimeErrorPresentation,
 } from "../../shared/agentErrors.js";
 
 import {
@@ -83,10 +83,8 @@ import {
   type BrowserGatewayPairingCreateResponse,
   type BrowserGatewayPairingStatusResponse,
 } from "../protocol.js";
-import type {
-  BrowserGatewayThemeSnapshot,
-  ToolResult,
-} from "../../shared/types.js";
+import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 import {
   getStructuredSecretRedactionMetadata,
   isStructuredConfigPath,
@@ -95,7 +93,7 @@ import {
 import {
   getConfirmationOptions,
   isConfirmationOptions,
-} from "../../shared/questionConfirmation.js";
+} from "@agentlink/protocol/question-confirmation";
 import {
   clearBrowserGatewayHelperDiscovery,
   writeBrowserGatewayHelperDiscovery,
@@ -121,7 +119,8 @@ import {
   type BrowserGatewayAskAgentWebPolicyCache,
 } from "../browserGatewayAskAgentPreferences.js";
 import { BrowserGatewayAskAgentHistoryStore } from "../browserGatewayAskAgentHistory.js";
-import type { ChatMessage, Question } from "../../agent/webview/types.js";
+import type { UserQuestion as Question } from "@agentlink/protocol/structured-question";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import type {
   ApprovalRequest,
   DecisionMessage,
@@ -153,11 +152,11 @@ import {
 import type { OpenAiCompatibleRuntimeProfile } from "../../core/model/providers/openaiCompatible/types.js";
 import {
   isCurrentPromptProfileResolution,
-  resolvePromptProfile,
   type PromptProfileResolution,
-} from "../../core/promptProfile.js";
+} from "@agentlink/protocol/prompt-profile";
+import { resolvePromptProfile } from "../../core/promptProfilePolicy.js";
 import { getCodexModelCapabilities } from "../../core/model/providers/codex/models.js";
-import { normalizeUserQuestionAttachments } from "../../core/capabilities/sessionControl.js";
+import { normalizeUserQuestionAttachments } from "@agentlink/protocol/structured-question";
 import { ANTHROPIC_HOSTED_WEB_CAPABILITIES } from "../../core/model/providers/anthropic/anthropicModels.js";
 import {
   normalizeCoreWebAccessSettings,
@@ -184,7 +183,7 @@ import {
 import type {
   FinalMessageMarker,
   FinalMessageStatus,
-} from "../../shared/finalStatus.js";
+} from "@agentlink/protocol/final-status";
 import { handleTodoWrite, type TodoToolInput } from "../../agent/todoTool.js";
 import { handlePresentImages } from "../../tools/presentImages.js";
 import {
@@ -193,18 +192,17 @@ import {
 } from "../../tools/autonomousMemory.js";
 import type {
   ManageMemoryToolInput,
-  RecallMemoryToolInput,
-} from "../../core/capabilities/memory.js";
-import type {
   MemoryArchiveV1,
+  RecallMemoryToolInput,
   MemoryHealthSnapshot,
-} from "../../core/memory/contracts.js";
+} from "@agentlink/protocol/autonomous-memory";
 import {
   callNativeToolSchema,
   findNativeToolsSchema,
   manageMemorySchema,
 } from "../../shared/toolSchemas.js";
 import { MCP_TOOL_BRIDGE_TOOL_NAMES } from "../../shared/mcpToolDefinitions.js";
+import { isProviderSafeToolName } from "../../core/tools/providerToolNames.js";
 import {
   ASK_AGENT_NATIVE_DISCLOSURE_BRIDGE_TOOLS,
   ASK_AGENT_SAFE_PROJECTLESS_TOOLS,
@@ -253,12 +251,12 @@ import type {
   CoreCapabilityStatusDto,
   CoreHostKind,
   CoreSessionScopeDto,
-} from "../../core/sessionProtocol.js";
+} from "@agentlink/protocol/session";
 import {
   isCoreReasoningEffort,
   type CoreModelCatalogEntry,
   type CoreModelCatalogSnapshot,
-} from "../../core/modelCatalog.js";
+} from "@agentlink/protocol/model-catalog";
 import { readBoundedBody, readJsonBody } from "../nodeHttpPrimitives.js";
 import {
   SseHub,
@@ -400,11 +398,11 @@ const ASK_AGENT_AUTONOMOUS_MEMORY_CLEAR_SCHEMA = z.object({
   confirm: z.literal(true),
 });
 const PUBLIC_AUTONOMOUS_MEMORY_REASONS = new Set([
-  "no-connected-owner",
-  "missing-owner-descriptor",
-  "disabled-by-owner",
-  "conflicting-store-roots",
   "disabled",
+  "config_invalid",
+  "config_unreadable",
+  "migration_pending",
+  "migration_blocked",
 ]);
 
 function sanitizeAutonomousMemoryHealth(
@@ -982,10 +980,6 @@ export class BrowserGatewayHelper {
     | undefined;
   private readonly askAgentDerivedSessionRuntime: BrowserGatewayDerivedSessionRuntime;
   private readonly askAgentAutonomousMemoryRuntime: BrowserGatewayAutonomousMemoryRuntime;
-  private readonly askAgentMemoryRuntimeByOwner = new Map<
-    string,
-    BrowserGatewayMemoryRuntimeDescriptor
-  >();
   private readonly askAgentMemoryProposalBridge: BrowserGatewayAskAgentMemoryProposalBridge;
   private readonly askAgentSummarizer: BrowserGatewayAskAgentSummarizer;
   private readonly askAgentMemorySummaryDebounceMs: number;
@@ -2606,24 +2600,6 @@ export class BrowserGatewayHelper {
     );
   }
 
-  private async refreshAskAgentDerivedSessionRuntime(): Promise<void> {
-    const connected = this.coreOwnerRegistry
-      .list(Date.now())
-      .filter(
-        (registration) =>
-          registration.status === "connected" &&
-          registration.owner.ownerId !== BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
-      )
-      .map((registration) => {
-        const ownerId = registration.owner.ownerId;
-        const descriptor = this.askAgentMemoryRuntimeByOwner.get(ownerId);
-        return descriptor
-          ? { ownerId, retrievalStoreRoot: descriptor.retrievalStoreRoot }
-          : { ownerId };
-      });
-    await this.askAgentDerivedSessionRuntime.setOwners(connected);
-  }
-
   private async getAskAgentDerivedSession(
     sessionId: string,
   ): Promise<DerivedSessionSummary | undefined> {
@@ -2639,7 +2615,6 @@ export class BrowserGatewayHelper {
           }
         : undefined;
     }
-    await this.refreshAskAgentDerivedSessionRuntime();
     return (
       await this.askAgentDerivedSessionRuntime.inspect({
         scopes: [{ kind: "global", id: "agentlink-user" }],
@@ -2671,7 +2646,6 @@ export class BrowserGatewayHelper {
       });
       return;
     }
-    await this.refreshAskAgentDerivedSessionRuntime();
     await this.askAgentDerivedSessionRuntime.publish({
       session,
       chunks: [chunk],
@@ -2691,7 +2665,6 @@ export class BrowserGatewayHelper {
         limit: params.limit,
       });
     }
-    await this.refreshAskAgentDerivedSessionRuntime();
     return await this.askAgentDerivedSessionRuntime.recall({
       query: params.query,
       scopes: [{ kind: "global", id: "agentlink-user" }],
@@ -2713,7 +2686,6 @@ export class BrowserGatewayHelper {
         chunkCount: snapshot.chunks.length,
       };
     }
-    await this.refreshAskAgentDerivedSessionRuntime();
     const inspection = await this.askAgentDerivedSessionRuntime.inspect({
       scopes: [{ kind: "global", id: "agentlink-user" }],
       surfaces: ["browser-ask-agent"],
@@ -2731,7 +2703,6 @@ export class BrowserGatewayHelper {
       await this.askAgentMemoryStore.deleteSessionMemory(sessionId);
       return;
     }
-    await this.refreshAskAgentDerivedSessionRuntime();
     await this.askAgentDerivedSessionRuntime.deleteSession({
       sessionId,
       surface: "browser-ask-agent",
@@ -2744,7 +2715,6 @@ export class BrowserGatewayHelper {
       await this.askAgentMemoryStore.clear();
       return;
     }
-    await this.refreshAskAgentDerivedSessionRuntime();
     await this.askAgentDerivedSessionRuntime.clearScope({
       scope: { kind: "global", id: "agentlink-user" },
       surface: "browser-ask-agent",
@@ -3856,7 +3826,6 @@ export class BrowserGatewayHelper {
   private async handleAskAgentAutonomousMemoryHealthRequest(
     res: http.ServerResponse,
   ): Promise<void> {
-    await this.refreshAskAgentAutonomousMemoryRuntime();
     const health = await this.askAgentAutonomousMemoryRuntime.health();
     writeJson(res, 200, {
       ok: true,
@@ -3867,7 +3836,6 @@ export class BrowserGatewayHelper {
   private async handleAskAgentAutonomousMemoryActivityRequest(
     res: http.ServerResponse,
   ): Promise<void> {
-    await this.refreshAskAgentAutonomousMemoryRuntime();
     const health = await this.askAgentAutonomousMemoryRuntime.health();
     if (health.status === "unavailable") {
       writeJson(res, 200, {
@@ -3899,7 +3867,6 @@ export class BrowserGatewayHelper {
         writeJson(res, 400, { error: "invalid_request" });
         return;
       }
-      await this.refreshAskAgentAutonomousMemoryRuntime();
       const result = await this.askAgentAutonomousMemoryRuntime.query({
         scope: "global",
         ...parsed.data,
@@ -3933,7 +3900,6 @@ export class BrowserGatewayHelper {
         writeJson(res, 400, { error: "invalid_request" });
         return;
       }
-      await this.refreshAskAgentAutonomousMemoryRuntime();
       const result = await this.askAgentAutonomousMemoryRuntime.detail({
         recordId: parsed.data.recordId,
         scope: "global",
@@ -3978,7 +3944,6 @@ export class BrowserGatewayHelper {
         scope: "global",
         source_evidence: sourceEvidence,
       };
-      await this.refreshAskAgentAutonomousMemoryRuntime();
       const result = await this.askAgentAutonomousMemoryRuntime.manageAsUser(
         input,
         {
@@ -4034,7 +3999,6 @@ export class BrowserGatewayHelper {
         writeJson(res, 400, { error: "confirmation_required" });
         return;
       }
-      await this.refreshAskAgentAutonomousMemoryRuntime();
       const result = await this.askAgentAutonomousMemoryRuntime.clearScope({
         scope: "global",
         observedAt: new Date().toISOString(),
@@ -4061,7 +4025,6 @@ export class BrowserGatewayHelper {
     res: http.ServerResponse,
   ): Promise<void> {
     try {
-      await this.refreshAskAgentAutonomousMemoryRuntime();
       const result = await this.askAgentAutonomousMemoryRuntime.exportArchive({
         scope: "global",
       });
@@ -4090,7 +4053,6 @@ export class BrowserGatewayHelper {
         writeJson(res, 400, { error: "invalid_request" });
         return;
       }
-      await this.refreshAskAgentAutonomousMemoryRuntime();
       const result = await this.askAgentAutonomousMemoryRuntime.importArchive(
         parsed.data.archive as MemoryArchiveV1,
         {
@@ -5393,11 +5355,30 @@ export class BrowserGatewayHelper {
         parallelSafeToolNames?: string[];
         parallelSafeServerNames?: string[];
       };
+      const tools = Array.isArray(body.tools)
+        ? body.tools.filter((tool): tool is CoreModelToolDefinition =>
+            Boolean(
+              tool &&
+              typeof tool.name === "string" &&
+              isProviderSafeToolName(tool.name),
+            ),
+          )
+        : [];
+      const droppedToolCount =
+        (Array.isArray(body.tools) ? body.tools.length : 0) - tools.length;
+      if (droppedToolCount > 0) {
+        this.logAskAgentEvent("ask-agent.tool.mcp_tools_filtered", {
+          ok: true,
+          droppedToolCount,
+        });
+      }
+      const toolNames = new Set(tools.map((tool) => tool.name));
       return {
-        tools: Array.isArray(body.tools) ? body.tools : [],
+        tools,
         parallelSafeToolNames: Array.isArray(body.parallelSafeToolNames)
           ? body.parallelSafeToolNames.filter(
-              (name): name is string => typeof name === "string",
+              (name): name is string =>
+                typeof name === "string" && toolNames.has(name),
             )
           : [],
         parallelSafeServerNames: Array.isArray(body.parallelSafeServerNames)
@@ -6128,7 +6109,6 @@ export class BrowserGatewayHelper {
   private async executeAskAgentAutonomousMemoryTool(
     toolCall: BrowserGatewayAskAgentToolCall,
   ): Promise<AskAgentToolExecutionResult> {
-    await this.refreshAskAgentAutonomousMemoryRuntime();
     const context = {
       sessionId: this.askAgentSessionStore.getActiveSessionId(),
       isBackground: false,
@@ -6162,22 +6142,6 @@ export class BrowserGatewayHelper {
         media.modelContent,
       ),
     };
-  }
-
-  private async refreshAskAgentAutonomousMemoryRuntime(): Promise<void> {
-    const connected = this.coreOwnerRegistry
-      .list(Date.now())
-      .filter(
-        (registration) =>
-          registration.status === "connected" &&
-          registration.owner.ownerId !== BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
-      )
-      .map((registration) => {
-        const ownerId = registration.owner.ownerId;
-        const descriptor = this.askAgentMemoryRuntimeByOwner.get(ownerId);
-        return descriptor ? { ownerId, ...descriptor } : { ownerId };
-      });
-    await this.askAgentAutonomousMemoryRuntime.setOwners(connected);
   }
 
   private async resolveAskAgentGrantedPath(inputPath: unknown): Promise<{
@@ -7828,7 +7792,6 @@ export class BrowserGatewayHelper {
           ownerRegistration = this.coreOwnerRegistry.markDisconnected(
             body.ownerId.trim(),
           );
-          this.askAgentMemoryRuntimeByOwner.delete(body.ownerId.trim());
         }
       }
       this.lastLeaseActivityAtMs = Date.now();
@@ -7868,14 +7831,6 @@ export class BrowserGatewayHelper {
         processId: body.processId,
         now,
       });
-      if (body.memoryRuntime) {
-        this.askAgentMemoryRuntimeByOwner.set(
-          registration.effectiveOwnerId,
-          body.memoryRuntime,
-        );
-      } else {
-        this.askAgentMemoryRuntimeByOwner.delete(registration.effectiveOwnerId);
-      }
       this.dataPlaneRoutes.ownerRegistered(
         registration.effectiveOwnerId,
         registration.registration.ownerGenerationId,
@@ -7942,14 +7897,6 @@ export class BrowserGatewayHelper {
       if (!ownerRegistration) {
         writeJson(res, 404, { error: "owner_not_registered" });
         return;
-      }
-      if (body.memoryRuntime) {
-        this.askAgentMemoryRuntimeByOwner.set(
-          body.ownerId.trim(),
-          body.memoryRuntime,
-        );
-      } else {
-        this.askAgentMemoryRuntimeByOwner.delete(body.ownerId.trim());
       }
       this.relayRoutes.ownerCatalogChanged();
       writeJson(res, 200, { ok: true, ownerRegistration });

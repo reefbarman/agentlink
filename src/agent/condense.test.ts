@@ -934,6 +934,13 @@ User wants to fix the condense resume bug for Codex after summarization.
 9. **Current Work**: Inspecting condense behavior.
 10. **Optional Next Step**: Continue.
 </summary>`,
+        usage: {
+          inputTokens: 40,
+          outputTokens: 5,
+          cacheReadTokens: 60,
+          cacheCreationTokens: 0,
+          inputTokenBreakdownReported: true,
+        },
       };
     });
 
@@ -942,6 +949,10 @@ User wants to fix the condense resume bug for Codex after summarization.
       model: string;
       estimatedInputTokens: number;
     }> = [];
+    const completedRequests: Array<{
+      requestId: string;
+      usage: CompleteResult["usage"];
+    }> = [];
     const result = await summarizeConversation({
       messages: makeMessages(),
       provider,
@@ -949,6 +960,7 @@ User wants to fix the condense resume bug for Codex after summarization.
       systemPrompt: "system prompt",
       isAutomatic: true,
       onProviderRequest: (request) => providerRequests.push(request),
+      onProviderRequestComplete: (request) => completedRequests.push(request),
     });
 
     expect(result.error).toBeUndefined();
@@ -963,6 +975,18 @@ User wants to fix the condense resume bug for Codex after summarization.
     expect(
       providerRequests.every((request) => request.estimatedInputTokens > 0),
     ).toBe(true);
+    expect(completedRequests).toEqual([
+      {
+        requestId: providerRequests[1].requestId,
+        usage: {
+          inputTokens: 40,
+          outputTokens: 5,
+          cacheReadTokens: 60,
+          cacheCreationTokens: 0,
+          inputTokenBreakdownReported: true,
+        },
+      },
+    ]);
     // Cheap model fails, then falls through to gpt-5.4 (active model), then
     // remaining fallbacks. The first non-cheap candidate that succeeds wins.
     expect(complete).toHaveBeenCalledTimes(2);

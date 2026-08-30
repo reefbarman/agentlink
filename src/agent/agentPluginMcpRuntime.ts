@@ -10,7 +10,7 @@ import {
   type McpServerConfig,
   type WorkspaceMcpProject,
 } from "./mcpConfig.js";
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 import { createHash } from "node:crypto";
 import {
   resolvePackagePath,

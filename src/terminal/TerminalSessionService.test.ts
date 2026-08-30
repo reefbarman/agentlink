@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { HostTerminalEvent } from "../core/terminalProtocol.js";
+import type { HostTerminalEvent } from "@agentlink/protocol/terminal";
 import type { ResolvedHostShellProfile } from "./shellProfileResolver.js";
 import {
   TerminalSessionService,

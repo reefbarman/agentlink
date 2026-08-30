@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
-import { appendFeedback } from "../util/feedbackStore.js";
 
-import { type ToolResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
+import { appendFeedback } from "../util/feedbackStore.js";
 
 export async function handleSendFeedback(
   params: {

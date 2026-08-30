@@ -1,12 +1,9 @@
 import "./styles/chat.css";
 
-import {
-  createSerializedChatPanelState,
-  parseChatWebviewBootstrap,
-} from "../chatPaneProtocol";
-
 import { App } from "./App";
 import { ErrorBoundary } from "../../shared/ui/ErrorBoundary";
+import { createSerializedChatPanelState } from "../chatPaneProtocol";
+import { parseChatWebviewBootstrap } from "@agentlink/protocol/chat-pane-transport";
 import { render } from "preact";
 
 const vscodeApi = acquireVsCodeApi();

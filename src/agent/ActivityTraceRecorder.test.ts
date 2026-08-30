@@ -146,6 +146,7 @@ describe("ActivityTraceRecorder", () => {
         outputTokens: 20,
         cacheReadTokens: 10,
         cacheCreationTokens: 5,
+        inputTokenBreakdownReported: true,
         durationMs: 50,
         timeToFirstToken: 12,
       },
@@ -161,7 +162,10 @@ describe("ActivityTraceRecorder", () => {
       kind: "tool_result",
       summary: "Completed tool read_file",
     });
-    expect(events[1]?.payload).toMatchObject({ reasoningEffort: "high" });
+    expect(events[1]?.payload).toMatchObject({
+      reasoningEffort: "high",
+      inputTokenBreakdownReported: true,
+    });
 
     const summary = recorder.loadSummary("session-1");
     expect(summary).toMatchObject({

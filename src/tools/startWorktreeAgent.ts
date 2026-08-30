@@ -6,11 +6,11 @@ import { randomUUID } from "crypto";
 import * as vscode from "vscode";
 
 import {
-  type OnApprovalRequest,
-  type ToolResult,
-  successResult,
   errorResult,
-} from "../shared/types.js";
+  successResult,
+  type ToolResult,
+} from "@agentlink/protocol/tool-result";
+import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
 import type { WorktreeAgentLaunchRequest } from "../core/capabilities/worktree.js";
 import { WorktreeAgentIntentStore } from "../worktree/WorktreeAgentIntentStore.js";
 

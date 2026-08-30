@@ -1,9 +1,7 @@
 import type * as OpenAIResponses from "openai/resources/responses/responses";
 
-import type {
-  ChatMessage,
-  ReasoningEffort,
-} from "../../agent/webview/types.js";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
+import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
 import {
   executeAnthropicResolvedCompletion,
   type AnthropicMessagesStreamClient,
@@ -39,7 +37,7 @@ import type {
 } from "../../core/webAccess.js";
 import type { CoreNativeWebToolResult } from "../../core/nativeWebTools.js";
 import type { BrowserGatewayModelCredentialRecord } from "../browserGatewayModelCredentialCache.js";
-import type { PromptProfile } from "../../core/promptProfile.js";
+import type { PromptProfile } from "@agentlink/protocol/prompt-profile";
 import { MCP_TOOL_BRIDGE_TOOL_NAMES } from "../../shared/mcpToolDefinitions.js";
 import { TOOL_REGISTRY } from "../../shared/toolRegistry.js";
 import {

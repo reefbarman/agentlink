@@ -1,13 +1,11 @@
 import type { AgentSession } from "./AgentSession.js";
-import {
-  type ChatTab,
-  type ChatTabActionAddress,
-  ChatTabController,
-} from "./ChatTabController.js";
+import { ChatTabController } from "./ChatTabController.js";
 import {
   isChatTabSessionBusy,
+  type ChatTab,
+  type ChatTabActionAddress,
   type ChatTabDestructiveAction,
-} from "./chatTabProtocol.js";
+} from "@agentlink/protocol/chat-workspace";
 import type { SessionInfo } from "./types.js";
 
 export type ChatTabHostActionResult =

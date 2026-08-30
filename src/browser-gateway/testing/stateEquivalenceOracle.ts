@@ -2,9 +2,9 @@ import type {
   ChatMessage,
   ContentBlock,
   TodoItem,
-} from "../../agent/webview/types.js";
-import type { CoreReasoningEffort } from "../../core/modelCatalog.js";
-import type { ContextHealthSnapshot } from "../../shared/contextHealth.js";
+} from "@agentlink/protocol/chat-transcript";
+import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
+import type { ContextHealthSnapshot } from "@agentlink/protocol/context-health";
 import type { BrowserGatewaySnapshotState } from "../BrowserGatewayService.js";
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "../dataPlane/limits.js";
 import { isBrowserGatewaySafeThemeVariable } from "../dataPlane/protocol.js";

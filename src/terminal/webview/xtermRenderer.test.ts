@@ -24,7 +24,7 @@ import {
   XTERM_CORE_OSC_HANDLERS,
   xtermRendererFactory,
 } from "./xtermRenderer.js";
-import { MAX_TERMINAL_LINK_BYTES } from "../terminalSurfaceProtocol.js";
+import { MAX_TERMINAL_LINK_BYTES } from "@agentlink/protocol/terminal-surface";
 
 function bufferLine(
   cells: readonly { characters: string; width?: number }[],

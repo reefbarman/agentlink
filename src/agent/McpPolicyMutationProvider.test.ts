@@ -1,13 +1,13 @@
 import type {
   McpConfigBatchMutation,
   McpConfigMutationTarget,
-} from "../shared/mcpManagerTypes.js";
+} from "@agentlink/protocol/mcp-manager";
 import { describe, expect, it, vi } from "vitest";
 
 import { AgentPluginStoreError } from "./AgentPluginStore.js";
 import { DefaultMcpPolicyMutationProvider } from "./McpPolicyMutationProvider.js";
 import type { McpConfigProvenance } from "./mcpConfig.js";
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 
 const scope: SessionProjectScope = {
   schemaVersion: 1,

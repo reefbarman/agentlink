@@ -21,7 +21,7 @@ import {
   type HostTerminalBlockBoundary,
   MAX_TERMINAL_LINK_BYTES,
   type TerminalSurfaceConfiguration,
-} from "../terminalSurfaceProtocol.js";
+} from "@agentlink/protocol/terminal-surface";
 
 function cssColor(name: string): string | undefined {
   return (

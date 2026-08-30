@@ -1,7 +1,10 @@
 import { EventEmitter } from "events";
 
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
-import { successResult, type ToolResult } from "../shared/types.js";
+import {
+  successResult,
+  type ToolResult,
+} from "@agentlink/protocol/tool-result";
 import { getAgentToolCompletionStrategy } from "./agentToolCompletionStrategies.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────

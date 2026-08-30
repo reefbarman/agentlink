@@ -162,6 +162,7 @@ describe("parseAnthropicStreamEvents", () => {
       outputTokens: 6,
       cacheReadTokens: 4,
       cacheCreationTokens: 2,
+      inputTokenBreakdownReported: true,
       providerResponseId: "msg_search",
       serverToolUsage: { webSearchRequests: 1 },
     });
@@ -239,6 +240,32 @@ describe("parseAnthropicStreamEvents", () => {
           serializedBytes: expect.any(Number),
         },
       },
+    });
+  });
+
+  it("keeps cache breakdown unavailable when Anthropic omits cache counters", async () => {
+    const events = await collect([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_uncached_unknown",
+          usage: { input_tokens: 10, output_tokens: 0 },
+        },
+      },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { output_tokens: 1 },
+      },
+    ]);
+
+    expect(events).toContainEqual({
+      type: "usage",
+      inputTokens: 10,
+      outputTokens: 1,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      providerResponseId: "msg_uncached_unknown",
     });
   });
 

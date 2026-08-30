@@ -1,7 +1,7 @@
 import type {
   HostTerminalTab,
   TerminalDimensions,
-} from "../../core/terminalProtocol.js";
+} from "@agentlink/protocol/terminal";
 import { randomId } from "../../shared/randomId.js";
 import {
   MAX_TERMINAL_DIMENSION,

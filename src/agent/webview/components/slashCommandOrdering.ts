@@ -1,4 +1,4 @@
-import type { SlashCommandInfo } from "../types";
+import type { ChatSlashCommandInfo as SlashCommandInfo } from "@agentlink/protocol/chat-catalog";
 
 export const SLASH_COMMAND_SECTIONS: ReadonlyArray<{
   source: SlashCommandInfo["source"];

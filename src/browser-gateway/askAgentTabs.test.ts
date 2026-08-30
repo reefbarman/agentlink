@@ -6,8 +6,8 @@ import {
 } from "./askAgentTabs.js";
 import { describe, expect, it } from "vitest";
 
-import type { CoreSessionSummaryDto } from "../core/sessionProtocol.js";
-import { createProjectlessSessionOwner } from "../core/sessionProtocol.js";
+import type { CoreSessionSummaryDto } from "@agentlink/protocol/session";
+import { createProjectlessSessionOwner } from "@agentlink/protocol/session";
 
 function makeAskSession(
   overrides: Partial<CoreSessionSummaryDto> = {},

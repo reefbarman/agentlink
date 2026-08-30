@@ -11,7 +11,7 @@ import { xtermRendererFactory } from "./xtermRenderer.js";
 import type {
   HostTerminalSurfaceAction,
   HostTerminalSurfaceCommandSummary,
-} from "../terminalSurfaceProtocol.js";
+} from "@agentlink/protocol/terminal-surface";
 
 export interface AppProps {
   vscodeApi: VsCodeApi;

@@ -1,9 +1,10 @@
 /** @vitest-environment jsdom */
 
-import type { ChatMessage, ReasoningEffort } from "../types";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 import { describe, expect, it, vi } from "vitest";
 
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
+import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
 import { StreamingBaselineRecorder } from "../../../shared/streamingBaselineMetrics";
 import { TranscriptMessageList } from "./TranscriptMessageList";
 import { h } from "preact";

@@ -12,6 +12,37 @@ import { randomUUID } from "crypto";
  * blocked waits), and whether background agents earned their overhead.
  */
 
+export type HarnessRuntimeKind =
+  | "builtin"
+  | "acp"
+  | "browser-helper"
+  | "unknown";
+
+export interface HarnessEfficiencySnapshot {
+  ordinaryAgentProviderAttempts: number;
+  condenseProviderAttempts: number;
+  completedApiTurns: number;
+  usageEstimatedApiTurns: number;
+  uncachedInputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  outputTokens: number;
+  cacheBreakdownApiTurns: number;
+  cacheBreakdownInputTokens: number;
+  cacheBreakdownReadTokens: number;
+  cacheBreakdownCreationTokens: number;
+  staticFloorSamples: number;
+  staticFloorTokenSends: number;
+  contextLedgerSamples: number;
+  boundedContextRequestedTokens: number;
+  boundedContextOmittedTokens: number;
+  requestsRequestingBoundedContext: number;
+  requestsWithContextOmission: number;
+  contextOverflowTokens: number;
+  requestsWithContextOverflow: number;
+  toolCalls: number;
+}
+
 /** Wall-clock decomposition and behavior counters for one completed turn. */
 export interface TurnCompletedEvent {
   type: "turn_completed";
@@ -19,6 +50,9 @@ export interface TurnCompletedEvent {
   background: boolean;
   mode?: string;
   model?: string;
+  providerId?: string;
+  promptProfile?: string;
+  runtimeKind?: HarnessRuntimeKind;
   projectId?: string;
   /** End-to-end turn duration from user message to terminal session status. */
   turnDurationMs: number;
@@ -42,6 +76,7 @@ export interface TurnCompletedEvent {
   autoContinues?: number;
   inputTokens?: number;
   outputTokens?: number;
+  efficiency?: HarnessEfficiencySnapshot;
 }
 
 /** Terminal task status reported through set_task_status. */
@@ -50,12 +85,20 @@ export interface TaskCompletedEvent {
   sessionId: string;
   background: boolean;
   mode?: string;
+  model?: string;
+  providerId?: string;
+  promptProfile?: string;
+  runtimeKind?: HarnessRuntimeKind;
   projectId?: string;
   status: string;
   /** Elapsed time since the user message that started the current task. */
   taskDurationMs?: number;
   /** Turns consumed since the current task started. */
   turns?: number;
+  /** Agent-active time excluding ask_user waits and idle time between turns. */
+  agentActiveMs?: number;
+  mixedProviderOrModel?: boolean;
+  efficiency?: HarnessEfficiencySnapshot;
 }
 
 /** One record per background agent reaching a terminal state. */

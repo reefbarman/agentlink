@@ -1,12 +1,9 @@
-import type {
-  ChatMessage,
-  ReasoningEffort,
-} from "../../agent/webview/types.js";
-
 import { BrowserGatewayAskAgentModelClient } from "./askAgentModelClient.js";
 import type { BrowserGatewayModelCredentialRecord } from "../browserGatewayModelCredentialCache.js";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import type OpenAI from "openai";
 import type { OpenAiCompatibleRuntimeProfile } from "../../core/model/providers/openaiCompatible/types.js";
+import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
 
 const ASK_AGENT_MEMORY_SUMMARIZER_PROMPT = `You summarize AgentLink Browser Ask Agent conversations for a local derived memory index.
 Return only valid JSON. Do not wrap it in Markdown.

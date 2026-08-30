@@ -2,7 +2,7 @@ import type {
   AgentPluginManagerAction,
   AgentPluginManagerRow,
   AgentPluginManagerSnapshot,
-} from "../agentPluginManagerTypes";
+} from "@agentlink/protocol/agent-plugin-manager";
 import { useEffect, useMemo, useState } from "preact/hooks";
 
 export interface AgentPluginManagerPanelProps {

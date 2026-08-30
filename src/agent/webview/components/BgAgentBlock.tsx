@@ -1,5 +1,5 @@
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
-import type { ReasoningEffort } from "../types";
+import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
 import { useState } from "preact/hooks";
 
 interface BgAgentBlockProps {

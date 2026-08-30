@@ -52,22 +52,22 @@ import {
 import type { AgentMode } from "./modes.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
+import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 import type { CommandApprovalReviewer } from "../approvals/commandApprovalReview.js";
 import type { NetworkApprovalReviewer } from "../approvals/networkApprovalReview.js";
 import type {
   ActionApprovalReviewer,
   OutsideReadOperation,
 } from "../approvals/actionApprovalReview.js";
-import type { FinalMessageMarker } from "../shared/finalStatus.js";
+import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import { isTeaserOnlyFinalSummary } from "../shared/finalSummaryHeuristics.js";
 import { McpClientHub } from "./McpClientHub.js";
-import type { Question } from "./webview/types.js";
+import type { UserQuestion as Question } from "@agentlink/protocol/structured-question";
 import { IS_DEV_BUILD } from "../shared/buildFlags.js";
 import {
   getConfirmationOptions,
   isConfirmationOptions,
-} from "../shared/questionConfirmation.js";
+} from "@agentlink/protocol/question-confirmation";
 import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
 import {
   CALL_MCP_TOOL_DEFINITION,
@@ -79,7 +79,7 @@ import {
   handleToolError,
   jsonResult,
   type ToolResult,
-} from "../shared/types.js";
+} from "@agentlink/protocol/tool-result";
 import { getToolsForMode } from "./toolPermissions.js";
 import { handleApplyDiff } from "../tools/applyDiff.js";
 import { handleCloseTerminals } from "../tools/closeTerminals.js";
@@ -182,11 +182,11 @@ import type {
   SemanticSearchProvider,
   SemanticSearchResult,
 } from "../core/capabilities/readSearch.js";
+import type { MemoryToolProvider } from "../core/capabilities/memory.js";
 import type {
   ManageMemoryToolInput,
-  MemoryToolProvider,
   RecallMemoryToolInput,
-} from "../core/capabilities/memory.js";
+} from "@agentlink/protocol/autonomous-memory";
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import type { WorktreeAgentLaunchProvider } from "../core/capabilities/worktree.js";
 
@@ -195,11 +195,11 @@ import type {
   BackgroundAgentResultContent,
 } from "../core/capabilities/background.js";
 import type { NativeWebToolExecutionProvider } from "../core/capabilities/web.js";
+import type { UserQuestionResponse } from "@agentlink/protocol/structured-question";
 import type {
   ModeSwitchProvider,
   SessionStatusProvider,
   UserQuestionProvider,
-  UserQuestionResponse,
 } from "../core/capabilities/sessionControl.js";
 import type {
   McpResourcePromptProvider,
@@ -212,7 +212,8 @@ import type {
   ToolUsageMetrics,
   ToolUsageTelemetry,
 } from "../telemetry/ToolUsageTelemetry.js";
-import { parseMcpToolName } from "./mcpToolNames.js";
+import { parseMcpToolName } from "@agentlink/protocol/mcp-tool-identity";
+import { isProviderSafeToolName } from "../core/tools/providerToolNames.js";
 import { randomUUID } from "crypto";
 import * as os from "os";
 import * as path from "path";
@@ -664,17 +665,17 @@ const RESPOND_TO_BACKGROUND_QUESTION_TOOL: ToolDefinition = {
 const AGENT_BUDGET_SCHEMA = {
   type: "object",
   description:
-    "Optional soft resource-cap overrides. Review task classes always receive an automatic complexity-based tool-call, API-turn, and elapsed-time budget; defined work-unit overrides are merged into it, while token and cost caps are ignored for reviews so large captured inputs do not consume the exploration budget. Other task classes remain uncapped unless a budget is supplied. Reaching a cap asks the agent to finish promptly without blocking necessary tools; work is force-stopped only when observed usage reaches the 3x safety backstop.",
+    "Optional soft resource-cap overrides for review and research task classes. Review and research agents receive automatic complexity-based tool-call, API-turn, and elapsed-time budgets; writable build, debug, design, verification, and general tasks run uncapped even if a budget is supplied. Review overrides merge only work-unit limits because token and cost caps are ignored when captured input can be large. Research overrides may also use token and cost caps. Reaching a cap asks the agent to finish promptly without blocking necessary tools; work is force-stopped only when observed usage reaches the 3x safety backstop.",
   properties: {
     maxTokens: {
       type: "number",
       description:
-        "Cap on uncached input + output tokens summed across all API turns. Ignored for review task classes because captured review input can be large before any exploration occurs.",
+        "Cap on uncached input + output tokens summed across all API turns. Available for research tasks and ignored for review and writable task classes.",
     },
     maxToolCalls: {
       type: "number",
       description:
-        "Soft cap on successfully committed tool invocations. Interrupted/provisional tool streams are not charged. Automatic review budgets allow substantially more tool calls than API turns so codebase inspection is weighted less aggressively.",
+        "Soft cap on successfully committed tool invocations. Interrupted/provisional tool streams are not charged. Automatic review and research budgets allow substantially more tool calls than API turns so exploration is weighted less aggressively.",
     },
     maxApiTurns: {
       type: "number",
@@ -1283,11 +1284,13 @@ export function getAgentTools(
     (!profileAllowlist && (!mode || mode.toolGroups.includes("mcp")));
   const allowedMcpTools =
     canUseMcpTools && mcpToolDefs
-      ? skillAllowlist
-        ? mcpToolDefs.filter((tool) =>
-            skillAllowlistAllowsMcpTool(skillAllowlist, tool.name),
+      ? mcpToolDefs
+          .filter((tool) => isProviderSafeToolName(tool.name))
+          .filter(
+            (tool) =>
+              !skillAllowlist ||
+              skillAllowlistAllowsMcpTool(skillAllowlist, tool.name),
           )
-        : mcpToolDefs
       : [];
   const skillAllowsMcpTargets = skillAllowlistHasMcpTargets(
     skillAllowlist,
@@ -1947,7 +1950,7 @@ export interface ToolDispatchContext {
   waitForPendingInterjection?: (timeoutMs: number) => Promise<boolean>;
   /** Immutable project identity captured for this request's tool runtime. */
   projectScope?: Readonly<
-    import("../core/workspaceProjects.js").SessionProjectScope
+    import("@agentlink/protocol/workspace-project").SessionProjectScope
   >;
   /** Available local root captured with projectScope; absent for projectless runtimes. */
   projectRoot?: string;
@@ -1960,7 +1963,7 @@ export interface ToolDispatchContext {
   /** Resolves the independent host-owned approval mode at dispatch time. */
   getCommandApprovalMode?: (
     sessionId: string,
-  ) => import("../core/capabilities/terminal.js").TerminalApprovalModeSnapshot;
+  ) => import("@agentlink/protocol/terminal").TerminalApprovalModeSnapshot;
   /** Restricts execute_command independently of user approval settings. */
   commandExecutionPolicy?: import("../core/capabilities/terminal.js").CommandExecutionPolicy;
   /** Immutable lifecycle hook runtime captured for this logical turn. */
@@ -2024,10 +2027,10 @@ export interface ToolDispatchContext {
     followUp?: string;
     rejectionReason?: string;
   }>;
-  onApprovalRequest?: import("../shared/types.js").OnApprovalRequest;
+  onApprovalRequest?: import("@agentlink/protocol/inline-approval").OnApprovalRequest;
   onQuestion?: (
     context: string,
-    questions: import("../agent/webview/types.js").Question[],
+    questions: import("@agentlink/protocol/structured-question").UserQuestion[],
     sessionId: string,
     /**
      * When set, indicates the question is from a background agent with this
@@ -3193,7 +3196,7 @@ export async function dispatchToolCall(
       approvalManager.isMcpApproved(sessionId, toolName);
 
     let promotionMeta:
-      | import("../shared/types.js").McpApprovalPromotionMeta
+      | import("@agentlink/protocol/tool-result").McpApprovalPromotionMeta
       | undefined;
 
     let approvalFollowUp: string | undefined;

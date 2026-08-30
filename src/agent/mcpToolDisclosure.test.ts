@@ -119,6 +119,45 @@ describe("partitionMcpToolsForDisclosure", () => {
     ]);
   });
 
+  it("defers provider-invalid MCP names even when configured or forced inline", () => {
+    const partition = partitionMcpToolsForDisclosure(
+      [
+        tool("Home Assistant__ha_get_app"),
+        tool("fixture__valid_tool"),
+        tool("fixture__invalid.tool"),
+      ],
+      {
+        perServerTokenThreshold: 10_000,
+        serverConfigs: [
+          { serverName: "Home Assistant", mode: "inline" },
+          { serverName: "fixture", mode: "inline" },
+        ],
+        forceInlineToolNames: [
+          "Home Assistant__ha_get_app",
+          "fixture__valid_tool",
+          "fixture__invalid.tool",
+        ],
+      },
+    );
+
+    expect(partition.inlineTools).toHaveLength(0);
+    expect(partition.deferredTools.map((entry) => entry.name)).toEqual([
+      "fixture__valid_tool",
+      "fixture__invalid.tool",
+      "Home Assistant__ha_get_app",
+    ]);
+    expect(partition.catalog).toEqual([
+      expect.objectContaining({
+        serverName: "fixture",
+        deferred: true,
+      }),
+      expect.objectContaining({
+        serverName: "Home Assistant",
+        deferred: true,
+      }),
+    ]);
+  });
+
   it("keeps non-MCP tool names inline", () => {
     const partition = partitionMcpToolsForDisclosure([tool("read_file")], {
       perServerTokenThreshold: 1,

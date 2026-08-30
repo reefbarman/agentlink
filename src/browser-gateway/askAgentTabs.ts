@@ -1,4 +1,4 @@
-import type { CoreSessionSummaryDto } from "../core/sessionProtocol.js";
+import type { CoreSessionSummaryDto } from "@agentlink/protocol/session";
 
 export const BROWSER_GATEWAY_ASK_AGENT_TAB_ID = "ask-agent";
 export const BROWSER_GATEWAY_ASK_AGENT_TAB_TITLE = "Ask Agent";

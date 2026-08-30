@@ -1,4 +1,4 @@
-import type { TerminalDimensions } from "../../core/terminalProtocol.js";
+import type { TerminalDimensions } from "@agentlink/protocol/terminal";
 import {
   encodeSandboxHelperFrame,
   parseSandboxHelperEventLine,

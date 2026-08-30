@@ -1,9 +1,9 @@
 /** @vitest-environment jsdom */
 
-import { cleanup, render, screen } from "@testing-library/preact";
 import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, render, screen } from "@testing-library/preact";
 
-import type { TodoItem } from "../types";
+import type { TodoItem } from "@agentlink/protocol/chat-transcript";
 import { TodoPanel } from "./TodoPanel";
 
 function makeTodos(activeIndex: number): TodoItem[] {

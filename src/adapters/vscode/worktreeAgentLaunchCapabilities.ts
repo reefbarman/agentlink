@@ -1,4 +1,4 @@
-import type { OnApprovalRequest } from "../../shared/types.js";
+import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
 import type { WorktreeAgentLaunchProvider } from "../../core/capabilities/worktree.js";
 import { handleStartWorktreeAgent } from "../../tools/startWorktreeAgent.js";
 

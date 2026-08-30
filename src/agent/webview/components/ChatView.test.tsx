@@ -11,7 +11,7 @@ import {
 
 import { BgAgentBlock } from "./BgAgentBlock";
 import { BgAgentResultBlock } from "./BgAgentResultBlock";
-import type { ChatMessage } from "../types";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import { ChatView } from "./ChatView";
 import { TranscriptView } from "./TranscriptView";
 import { h } from "preact";

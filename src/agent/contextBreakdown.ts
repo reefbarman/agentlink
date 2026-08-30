@@ -1,11 +1,11 @@
 import type {
   ContextBreakdownItem,
   ToolContextBreakdown,
-} from "../shared/types.js";
+} from "@agentlink/protocol/context-diagnostics";
 
 import type { ToolDefinition } from "./providers/types.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
-import { parseMcpToolName } from "./mcpToolNames.js";
+import { parseMcpToolName } from "@agentlink/protocol/mcp-tool-identity";
 
 export function measureContextItem(
   label: string,

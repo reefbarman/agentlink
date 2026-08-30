@@ -1,10 +1,12 @@
-export type ChatPaneSurface = "sidebar" | "editor";
+import type {
+  ChatPaneLease,
+  ChatPaneSurface,
+} from "@agentlink/protocol/chat-pane-transport";
 
-export interface ChatPaneLease {
-  tabId: string;
-  surface: ChatPaneSurface;
-  epoch: number;
-}
+export type {
+  ChatPaneLease,
+  ChatPaneSurface,
+} from "@agentlink/protocol/chat-pane-transport";
 
 export interface ChatPaneAuthoritySnapshot {
   active: ChatPaneLease | null;

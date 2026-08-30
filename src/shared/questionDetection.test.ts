@@ -3,8 +3,16 @@ import {
   buildQuestionDetectionMessages,
   coerceDetectedQuestion,
   parseQuestionDetectionJson,
-} from "./questionDetection";
-import { describe, expect, it } from "vitest";
+  type DetectedQuestion,
+} from "../shared/questionDetection.js";
+import { describe, expect, expectTypeOf, it } from "vitest";
+
+it("preserves question detection exports through the compatibility shim", () => {
+  expectTypeOf<DetectedQuestion["kind"]>().toEqualTypeOf<
+    "yes_no" | "single_choice"
+  >();
+  expect(QUESTION_DETECTION_JSON_SCHEMA.name).toBe("question_detection");
+});
 
 describe("buildQuestionDetectionMessages", () => {
   it("returns a system message and trimmed user message", () => {

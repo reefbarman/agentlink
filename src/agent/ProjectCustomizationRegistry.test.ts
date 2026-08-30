@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { AgentMode } from "./modes.js";
 import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 import type { SlashCommand } from "./SlashCommandRegistry.js";
 
 function scope(

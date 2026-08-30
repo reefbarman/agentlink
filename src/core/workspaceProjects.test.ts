@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   createProjectlessSessionScope,
@@ -8,10 +8,28 @@ import {
   PROJECTLESS_SESSION_PROJECT_ID,
   PROJECTLESS_SESSION_URI,
   SESSION_PROJECT_SCOPE_SCHEMA_VERSION,
+  type SessionProjectResolution,
+  type SessionProjectScope,
   type WorkspaceProject,
+  type WorkspaceProjectCatalogSnapshot,
 } from "./workspaceProjects.js";
 
 describe("workspace project values", () => {
+  it("preserves package-owned DTOs through the core compatibility facade", () => {
+    expectTypeOf<SessionProjectScope>().toEqualTypeOf<
+      import("@agentlink/protocol/workspace-project").SessionProjectScope
+    >();
+    expectTypeOf<WorkspaceProject>().toEqualTypeOf<
+      import("@agentlink/protocol/workspace-project").WorkspaceProject
+    >();
+    expectTypeOf<WorkspaceProjectCatalogSnapshot>().toEqualTypeOf<
+      import("@agentlink/protocol/workspace-project").WorkspaceProjectCatalogSnapshot
+    >();
+    expectTypeOf<SessionProjectResolution>().toEqualTypeOf<
+      import("@agentlink/protocol/workspace-project").SessionProjectResolution
+    >();
+  });
+
   it("derives stable opaque IDs from normalized full URIs", () => {
     const uri = "file:///workspace/api";
 

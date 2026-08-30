@@ -7,7 +7,7 @@ import type {
   TerminalApprovalReviewer,
   TerminalCommandApprovalPolicySnapshot,
   TerminalExecutionPreset,
-} from "../core/capabilities/terminal.js";
+} from "@agentlink/protocol/terminal";
 import type { CommandReviewContextEntry } from "./commandApprovalReview.js";
 import {
   runGuardianReview,

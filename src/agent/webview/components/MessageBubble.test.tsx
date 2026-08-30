@@ -10,7 +10,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { agentMessagesToChatMessages, initialState, reducer } from "../App";
 
-import type { ChatMessage } from "../types";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import { MessageBubble } from "./MessageBubble";
 
 const TOOL_GROUP_SETTLE_MS_FOR_TEST = 350;

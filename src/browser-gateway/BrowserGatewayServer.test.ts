@@ -6,7 +6,7 @@ import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "./dataPlane/limits.js";
 import type { BrowserGatewayInstanceRecord } from "./browserGatewayRegistry.js";
 import { BrowserGatewayServer } from "./BrowserGatewayServer.js";
 import { BrowserGatewayService } from "./BrowserGatewayService.js";
-import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
+import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import { InMemoryAgentUiEventHub } from "../agent/AgentUiPublisher.js";
 import type { SessionApprovalMode } from "../agent/AgentSessionManager.js";
 import { StreamingBaselineRecorder } from "../shared/streamingBaselineMetrics.js";

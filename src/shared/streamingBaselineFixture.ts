@@ -1,4 +1,4 @@
-import type { ChatMessage } from "../agent/webview/types.js";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import {
   StreamingBaselineRecorder,
   type StreamingBaselineSummary,

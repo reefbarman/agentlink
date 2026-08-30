@@ -3,7 +3,7 @@ import {
   errorResult,
   handleToolError,
   type ToolResult,
-} from "../shared/types.js";
+} from "@agentlink/protocol/tool-result";
 
 export interface LanguageToolOptions<
   TProvider,

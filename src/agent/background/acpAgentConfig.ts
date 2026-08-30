@@ -1,7 +1,7 @@
 import {
   isCoreReasoningEffort,
   type CoreReasoningEffort,
-} from "../../core/modelCatalog.js";
+} from "@agentlink/protocol/model-catalog";
 
 export const NATIVE_BACKGROUND_AGENT = "native:auto";
 export const ACP_AGENT_PREFIX = "acp:";

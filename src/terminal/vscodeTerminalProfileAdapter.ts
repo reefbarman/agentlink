@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { TerminalSurfaceConfiguration } from "./terminalSurfaceProtocol.js";
+import type { TerminalSurfaceConfiguration } from "@agentlink/protocol/terminal-surface";
 import {
   resolveHostShellProfile,
   type HostShellProfileConfiguration,

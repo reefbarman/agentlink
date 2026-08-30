@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { AutonomousMemoryToolProvider } from "../storage/retrieval/AutonomousMemoryToolProvider.js";
-import type { WorkspaceProject } from "../core/workspaceProjects.js";
+import type { WorkspaceProject } from "@agentlink/protocol/workspace-project";
 import { migrateLegacyMemoryFiles } from "./legacyMemoryMigration.js";
 
 interface Fixture {
@@ -77,7 +77,7 @@ describe("legacy memory migration", () => {
     });
   });
 
-  it("records malformed source failure and blocks memory without modifying the file", async () => {
+  it("records malformed source failure without blocking memory or modifying the file", async () => {
     await withFixture(async (fixture) => {
       const globalPath = path.join(fixture.home, ".agentlink", "memory.md");
       const content = "A fact.\n<!-- added yesterday -->\n";
@@ -93,9 +93,10 @@ describe("legacy memory migration", () => {
         ).rejects.toThrow("Malformed legacy memory added date");
         expect(await fs.readFile(globalPath, "utf8")).toBe(content);
         await expect(provider.health()).resolves.toMatchObject({
-          status: "unavailable",
-          crud: false,
-          reason: expect.stringContaining("Malformed legacy memory added date"),
+          status: "degraded",
+          crud: true,
+          recordCount: 0,
+          reason: "migration_blocked",
         });
       } finally {
         await provider.dispose();
@@ -123,9 +124,10 @@ describe("legacy memory migration", () => {
           }),
         ).rejects.toThrow("Malformed legacy memory added date");
         await expect(provider.health()).resolves.toMatchObject({
-          status: "unavailable",
+          status: "degraded",
+          crud: true,
           recordCount: 1,
-          reason: expect.stringContaining("Malformed legacy memory added date"),
+          reason: "migration_blocked",
         });
       } finally {
         await provider.dispose();

@@ -1,10 +1,10 @@
+import type { StructuredQuestionRequest as QuestionRequest } from "@agentlink/protocol/structured-question";
 import type {
   ChatMessage,
-  QuestionRequest,
   TodoItem,
-} from "../../agent/webview/types.js";
+} from "@agentlink/protocol/chat-transcript";
 import type { ApprovalRequest } from "../../approvals/webview/types.js";
-import type { CoreCapabilityStatusDto } from "../../core/sessionProtocol.js";
+import type { CoreCapabilityStatusDto } from "@agentlink/protocol/session";
 import { BROWSER_GATEWAY_ASK_AGENT_OWNER_ID } from "../browserGatewayAskAgentSessionStore.js";
 import type { BrowserGatewayCoreOwnerRegistry } from "../coreOwnerRegistry.js";
 import {

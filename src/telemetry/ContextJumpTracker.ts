@@ -1,5 +1,5 @@
 import type { ContextUsageRecord } from "./ContextUsageTelemetry.js";
-import type { ToolResultContextAttribution } from "../shared/types.js";
+import type { ToolResultContextAttribution } from "@agentlink/protocol/context-diagnostics";
 
 /**
  * Watches per-session context-window usage across API responses and condenses,
@@ -38,12 +38,16 @@ export interface RequestContextAttributionInfo {
   requestId: string;
   requestKind: "agent" | "condense";
   model: string;
+  providerId?: string;
+  mode?: string;
+  promptProfile?: string;
+  background?: boolean;
   estimatedInputTokens: number;
   toolResultAttributions?: ToolResultContextAttribution[];
   omittedToolResultAttributions?: number;
   pinnedMemoryTokens?: number;
   retrievedMemoryTokens?: number;
-  contextLedger?: import("../core/contextLedger.js").ContextLedgerSnapshot;
+  contextLedger?: import("@agentlink/protocol/context-ledger").ContextLedgerSnapshot;
 }
 
 export interface ContextJumpCondenseInfo {
@@ -112,6 +116,10 @@ export class ContextJumpTracker {
       requestId: info.requestId,
       requestKind: info.requestKind,
       model: info.model,
+      ...(info.providerId ? { providerId: info.providerId } : {}),
+      ...(info.mode ? { mode: info.mode } : {}),
+      ...(info.promptProfile ? { promptProfile: info.promptProfile } : {}),
+      ...(info.background !== undefined ? { background: info.background } : {}),
       estimatedInputTokens: info.estimatedInputTokens,
       toolResultAttributions: info.toolResultAttributions ?? [],
       omittedToolResultAttributions: info.omittedToolResultAttributions ?? 0,

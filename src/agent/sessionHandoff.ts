@@ -1,10 +1,18 @@
 import type { AgentMessage } from "./types.js";
-import type { FinalMessageMarker } from "../shared/finalStatus.js";
+import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import type { TodoItem } from "./todoTool.js";
 import { scanMemoryText } from "../core/memory/memoryPolicy.js";
 import { truncateMiddle } from "../util/truncateMiddle.js";
+import {
+  SESSION_HANDOFF_SCHEMA_VERSION,
+  type SessionHandoffDraft,
+} from "@agentlink/protocol/session-handoff-draft";
 
-export const SESSION_HANDOFF_SCHEMA_VERSION = 1 as const;
+export {
+  SESSION_HANDOFF_SCHEMA_VERSION,
+  type SessionHandoffDraft,
+  type SessionHandoffSections,
+} from "@agentlink/protocol/session-handoff-draft";
 export const SESSION_HANDOFF_SOURCE_PACK_MAX_CHARS = 48_000;
 export const SESSION_HANDOFF_MARKDOWN_MAX_CHARS = 16_000;
 
@@ -16,39 +24,6 @@ const MAX_RECENT_SOURCE_TURN_CHARS = 2_000;
 const MAX_OLDER_DECISIONS = 8;
 const MAX_OLDER_DECISION_CHARS = 1_000;
 const MAX_TODO_CHARS = 8_000;
-
-export interface SessionHandoffSections {
-  objective: string;
-  completedWork: string[];
-  decisions: Array<{ decision: string; rationale?: string }>;
-  workspaceState: string[];
-  verification: string[];
-  unresolved: string[];
-  constraints: string[];
-  nextActions: string[];
-}
-
-export interface SessionHandoffDraft {
-  schemaVersion: typeof SESSION_HANDOFF_SCHEMA_VERSION;
-  id: string;
-  sourceSessionId: string;
-  sourceProjectId: string;
-  sourceTitle: string;
-  /** CAS revision captured after the source session was durably flushed. */
-  sourcePersistenceRevision: string;
-  /** SHA-256 revision of the canonical source transcript snapshot. */
-  sourceSnapshotRevision: string;
-  /** In-process fast freshness check; not durable identity. */
-  sourceRuntimeTranscriptRevision: number;
-  createdAt: number;
-  generatedBy: {
-    providerId: string;
-    model: string;
-    fallbackUsed: boolean;
-  };
-  sections: SessionHandoffSections;
-  markdown: string;
-}
 
 export interface PersistedSessionHandoff {
   schemaVersion: typeof SESSION_HANDOFF_SCHEMA_VERSION;

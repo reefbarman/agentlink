@@ -2,7 +2,7 @@ import {
   parseChatPaneMessageAddress,
   sameChatPaneAddress,
   type ChatPaneAddress,
-} from "./chatPaneProtocol.js";
+} from "@agentlink/protocol/chat-pane-transport";
 
 export interface ChatPaneWebview {
   postMessage(message: unknown): Thenable<boolean>;

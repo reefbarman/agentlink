@@ -4,7 +4,7 @@ import {
 } from "../../../shared/ui/ToolbarSelector";
 import { useEffect, useRef, useState } from "preact/hooks";
 
-import type { WriteApprovalSelection } from "../../../shared/selectionCommands";
+import type { WriteApprovalSelection } from "@agentlink/protocol/selection-commands";
 
 const WRITE_APPROVAL_OPTIONS = [
   { value: "prompt", label: "Prompt", icon: "shield" },

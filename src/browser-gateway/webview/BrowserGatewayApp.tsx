@@ -1,15 +1,17 @@
 import { Fragment, type JSX } from "preact";
+import type { ChatSessionHistorySummary as SessionSummary } from "@agentlink/protocol/chat-session-history";
 import type {
   ChatMessage,
-  ModeInfo,
-  Question,
-  ReasoningEffort,
-  ProjectInfo,
-  SessionSummary,
-  SlashCommandInfo,
   TodoItem,
-  WebviewModelInfo,
-} from "../../agent/webview/types";
+} from "@agentlink/protocol/chat-transcript";
+import type {
+  ChatModeInfo as ModeInfo,
+  ChatModelInfo as WebviewModelInfo,
+  ChatProjectInfo as ProjectInfo,
+  ChatReasoningEffort as ReasoningEffort,
+  ChatSlashCommandInfo as SlashCommandInfo,
+} from "@agentlink/protocol/chat-catalog";
+import type { UserQuestion as Question } from "@agentlink/protocol/structured-question";
 
 import {
   createMcpElicitationInitialValues,
@@ -18,8 +20,8 @@ import {
   type McpElicitationValues,
   type McpFormElicitationRequest,
   type McpFormElicitationResponse,
-} from "../../shared/mcpElicitation";
-import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation";
+} from "@agentlink/protocol/mcp-elicitation";
+import type { McpUrlElicitationRequest } from "@agentlink/protocol/mcp-url-elicitation";
 import type {
   McpConfigBatchMutation,
   McpConfigMutationResult,
@@ -27,9 +29,9 @@ import type {
   McpManagerScope,
   McpManagerServerDraft,
   McpManagerView,
-} from "../../shared/mcpManagerTypes";
-import type { AgentPluginManagerSnapshot } from "../../shared/agentPluginManagerTypes";
-import type { DetectedQuestion } from "../../shared/questionDetection";
+} from "@agentlink/protocol/mcp-manager";
+import type { AgentPluginManagerSnapshot } from "@agentlink/protocol/agent-plugin-manager";
+import type { DetectedQuestion } from "@agentlink/protocol/question-detection";
 import {
   useCallback,
   useEffect,
@@ -81,28 +83,29 @@ import {
   getFinalMessageContinueAction,
   getLatestAutoContinueAction,
   getLatestFinalMessageMarker,
-} from "../../shared/finalStatus";
+} from "@agentlink/protocol/final-status";
 import {
   AUTO_CONTINUE_NO_PROGRESS_REASON,
   turnMadeProgress,
-} from "../../shared/autoContinueProgress";
-import { isForwardedBuiltinCommand } from "../../shared/builtinCommandForwarding";
-import { deriveModelSetupState } from "../../shared/modelSetup";
+} from "@agentlink/protocol/auto-continue-progress";
+import { isForwardedBuiltinCommand } from "@agentlink/protocol/builtin-command-forwarding";
+import { deriveModelSetupState } from "@agentlink/protocol/model-setup";
 import { randomId } from "../../shared/randomId";
+import { AutoContinueTabStateCache } from "../../shared/autoContinueTabState";
 import {
   isWriteApprovalSelection,
   toHttpSelectionRequest,
   type WriteApprovalSelection,
-} from "../../shared/selectionCommands";
+} from "@agentlink/protocol/selection-commands";
 import {
   isCommandApprovalPolicy,
   type CommandApprovalPolicy,
-} from "../../approvals/commandApprovalPolicy";
+} from "@agentlink/protocol/command-approval-policy";
 import type {
   TerminalApprovalPolicy,
   TerminalApprovalReviewer,
   TerminalExecutionPreset,
-} from "../../core/capabilities/terminal";
+} from "@agentlink/protocol/terminal";
 import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBaselineMetrics";
 
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
@@ -114,16 +117,14 @@ import { MemoryPanel } from "../../shared/ui/MemoryPanel";
 import { McpElicitationFormControls } from "../../shared/ui/McpElicitationFormControls";
 import type {
   ManageMemoryToolInput,
+  MemoryArchiveV1,
   MemoryInspectionQueryRequest,
   MemoryPanelSnapshot,
-} from "../../core/capabilities/memory";
-import type { MemoryArchiveV1 } from "../../core/memory/contracts";
+} from "@agentlink/protocol/autonomous-memory";
 
-import type {
-  BgSessionInfo,
-  BrowserGatewayThemeSnapshot,
-  RevertRecoveryNotice,
-} from "../../shared/types";
+import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
+import type { RevertRecoveryNotice } from "@agentlink/protocol/session-hydration";
+import type { BgSessionInfo } from "@agentlink/protocol/background-result";
 import {
   normalizeBrowserGatewayDataPlaneMode,
   type BrowserGatewayDataPlaneMode,
@@ -599,6 +600,14 @@ function logicalTabSelectionKey(selection: BrowserLogicalTabSelection): string {
     selection.controllerEpoch,
     selection.tabId,
     selection.sessionId,
+  ].join("\u0000");
+}
+
+function autoContinueTabKey(selection: BrowserLogicalTabSelection): string {
+  return [
+    selection.instanceId,
+    selection.controllerEpoch,
+    selection.tabId,
   ].join("\u0000");
 }
 
@@ -1774,10 +1783,45 @@ export function BrowserGatewayApp({
   >(() => new Map());
   const [autoContinueEnabled, setAutoContinueEnabled] = useState(false);
   const [autoContinueStatus, setAutoContinueStatus] = useState("");
+  const autoContinueEnabledRef = useRef(autoContinueEnabled);
+  const autoContinueStatusRef = useRef(autoContinueStatus);
+  autoContinueEnabledRef.current = autoContinueEnabled;
+  autoContinueStatusRef.current = autoContinueStatus;
   const autoContinuedMessageIdsRef = useRef<Set<string>>(new Set());
   const autoContinueCountRef = useRef(0);
   const pendingAutoContinueUserMessageIdRef = useRef<string | null>(null);
+  const autoContinueTabKeyRef = useRef<string | null>(null);
+  const autoContinueTabStateCacheRef = useRef(new AutoContinueTabStateCache());
   const autoContinueSessionIdRef = useRef<string | null>(null);
+  const autoContinueGenerationRef = useRef(0);
+  const switchAutoContinueState = useCallback(
+    (tabKey: string, sessionId: string | null): void => {
+      autoContinueTabStateCacheRef.current.save(autoContinueTabKeyRef.current, {
+        enabled: autoContinueEnabledRef.current,
+        status: autoContinueStatusRef.current,
+        sessionId: autoContinueSessionIdRef.current,
+        continuedMessageIds: autoContinuedMessageIdsRef.current,
+        count: autoContinueCountRef.current,
+        pendingUserMessageId: pendingAutoContinueUserMessageIdRef.current,
+      });
+      const restored = autoContinueTabStateCacheRef.current.restore(
+        tabKey,
+        sessionId,
+      );
+      autoContinueTabKeyRef.current = tabKey;
+      autoContinueSessionIdRef.current = sessionId;
+      autoContinueEnabledRef.current = restored.enabled;
+      autoContinueStatusRef.current = restored.status;
+      autoContinuedMessageIdsRef.current = restored.continuedMessageIds;
+      autoContinueCountRef.current = restored.count;
+      pendingAutoContinueUserMessageIdRef.current =
+        restored.pendingUserMessageId;
+      autoContinueGenerationRef.current += 1;
+      setAutoContinueEnabled(restored.enabled);
+      setAutoContinueStatus(restored.status);
+    },
+    [],
+  );
   const [approvalPanelHeight, setApprovalPanelHeight] = useState(
     DEFAULT_APPROVAL_PANEL_HEIGHT,
   );
@@ -4440,6 +4484,7 @@ export function BrowserGatewayApp({
       return;
     }
     logicalSelectionGenerationRef.current += 1;
+    autoContinueGenerationRef.current += 1;
     selectedLogicalTabRef.current = next;
     setSelectedLogicalTab(next);
     persistStoredBrowserSelection(storedWorkspaceSelection(instanceId, next));
@@ -4585,6 +4630,7 @@ export function BrowserGatewayApp({
   } {
     const sessionId = `${BROWSER_GATEWAY_ASK_AGENT_SESSION_ID_PREFIX}${randomId()}`;
     askAgentSessionTargetRef.current = sessionId;
+    autoContinueGenerationRef.current += 1;
     logAskAgentBrowserEvent("session.new.start", { sessionId });
     // Optimistically clear the transcript. The commit guard now rejects any
     // snapshot for a different session, so a stale stream update cannot bring
@@ -4692,6 +4738,7 @@ export function BrowserGatewayApp({
   ): Promise<GatewaySnapshot | null> {
     try {
       const selection = selectedLogicalTabRef.current;
+      autoContinueGenerationRef.current += 1;
       const response = await fetch(buildApiPath("/api/session/new"), {
         method: "POST",
         credentials: "same-origin",
@@ -4737,6 +4784,29 @@ export function BrowserGatewayApp({
         return null;
       }
       if (body.snapshot) {
+        const nextSessionId = body.snapshot.session.foreground?.sessionId;
+        const nextWorkspace = body.snapshot.session.chatWorkspace;
+        const nextTab = nextWorkspace?.tabs.find(
+          (tab) =>
+            tab.tabId === selection?.tabId && tab.sessionId === nextSessionId,
+        );
+        const nextSelection =
+          selection && nextWorkspace && nextTab
+            ? logicalTabSelection(selection.instanceId, nextWorkspace, nextTab)
+            : null;
+        if (nextSelection) {
+          logicalSelectionByInstanceRef.current.set(
+            nextSelection.instanceId,
+            nextSelection,
+          );
+          selectedLogicalTabRef.current = nextSelection;
+          logicalSelectionGenerationRef.current += 1;
+          setSelectedLogicalTab(nextSelection);
+          switchAutoContinueState(
+            autoContinueTabKey(nextSelection),
+            nextSelection.sessionId,
+          );
+        }
         setSnapshot(body.snapshot);
       } else if (
         selection &&
@@ -4762,6 +4832,7 @@ export function BrowserGatewayApp({
           setOwnerSnapshotRevision((revision) => revision + 1);
         }
         setSelectedLogicalTab(next);
+        switchAutoContinueState(autoContinueTabKey(next), next.sessionId);
         setSnapshot(null);
       }
       setShowHistory(false);
@@ -6178,20 +6249,39 @@ export function BrowserGatewayApp({
   const statusOverride = foreground?.statusOverride ?? null;
 
   useEffect(() => {
-    const sessionId = foreground?.sessionId ?? null;
-    if (autoContinueSessionIdRef.current === sessionId) return;
-    autoContinueSessionIdRef.current = sessionId;
-    autoContinuedMessageIdsRef.current.clear();
-    autoContinueCountRef.current = 0;
-    pendingAutoContinueUserMessageIdRef.current = null;
-    if (autoContinueEnabled) {
-      setAutoContinueEnabled(false);
-      setAutoContinueStatus("Auto Continue paused after session change.");
+    const sessionId =
+      !isAskAgentSelected && selectedLogicalTab
+        ? selectedLogicalTab.sessionId
+        : (foreground?.sessionId ?? null);
+    const tabKey = isAskAgentSelected
+      ? BROWSER_GATEWAY_ASK_AGENT_TAB_ID
+      : selectedLogicalTab
+        ? autoContinueTabKey(selectedLogicalTab)
+        : selectedTabId;
+    if (
+      autoContinueTabKeyRef.current === tabKey &&
+      autoContinueSessionIdRef.current === sessionId
+    ) {
+      return;
     }
-  }, [autoContinueEnabled, foreground?.sessionId]);
+    switchAutoContinueState(tabKey, sessionId);
+  }, [
+    foreground?.sessionId,
+    isAskAgentSelected,
+    selectedLogicalTab,
+    selectedTabId,
+    switchAutoContinueState,
+  ]);
 
   useEffect(() => {
-    if (!autoContinueEnabled || !foreground) return;
+    if (
+      !autoContinueEnabled ||
+      !autoContinueEnabledRef.current ||
+      !foreground ||
+      autoContinueSessionIdRef.current !== foreground.sessionId
+    ) {
+      return;
+    }
     if (pendingApproval || pendingQuestion) return;
     if (
       foreground.streaming ||
@@ -6228,8 +6318,19 @@ export function BrowserGatewayApp({
     }
     if (autoContinuedMessageIdsRef.current.has(action.messageId)) return;
 
+    const scheduledTabKey = autoContinueTabKeyRef.current;
+    const scheduledSessionId = foreground.sessionId;
+    const scheduledGeneration = autoContinueGenerationRef.current;
     const timer = window.setTimeout(() => {
-      if (autoContinuedMessageIdsRef.current.has(action.messageId)) return;
+      if (
+        !autoContinueEnabledRef.current ||
+        autoContinueGenerationRef.current !== scheduledGeneration ||
+        autoContinueTabKeyRef.current !== scheduledTabKey ||
+        autoContinueSessionIdRef.current !== scheduledSessionId ||
+        autoContinuedMessageIdsRef.current.has(action.messageId)
+      ) {
+        return;
+      }
 
       const pendingAutoContinueUserMessageId =
         pendingAutoContinueUserMessageIdRef.current;

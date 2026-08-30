@@ -1,7 +1,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 
-import { parseJsonWithComments } from "../util/jsonc.js";
+import { parseJsonWithComments } from "@agentlink/protocol/jsonc";
 
 export interface AgentMode {
   slug: string;

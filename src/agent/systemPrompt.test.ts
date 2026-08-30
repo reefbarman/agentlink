@@ -362,20 +362,44 @@ describe("buildSystemPrompt", () => {
     const result = await buildSystemPrompt("code", tmpDir);
     expect(result).toContain("Code mode");
     expect(result).toContain(
+      "Do not repeatedly rerun an expensive full-project gate after every fix",
+    );
+    expect(result).toContain(
+      "treat unrelated timeouts, environment failures, and already-passing suites as retained evidence",
+    );
+    expect(result).toContain(
+      "Rerun the full gate only when the subsequent fix changes production or shared behavior beyond the failed area",
+    );
+    expect(result).toContain(
+      "Otherwise report the broad run plus focused follow-up results honestly",
+    );
+    expect(result).toContain(
       "Spawn one primary background review agent only for a substantial body of work",
     );
     expect(result).toContain(
       "passing tests plus your own self-review are the completion bar",
     );
     expect(result).toContain(
-      "A review is a checkpoint for a completed body of work, not a step to repeat after every edit",
+      "A review is one checkpoint for a completed substantial body of work, not a recurring phase after every edit",
+    );
+    expect(result).toContain(
+      "when their likely value is marginal or uncertain, skip them and proceed confidently",
+    );
+    expect(result).toContain(
+      "Do not add a review TODO merely because the task changes code",
     );
     expect(result).toContain("actively self-review the same change set");
     expect(result).toContain(
-      "Do **not** automatically spawn another review just because you changed files in response to review findings",
+      "Treat the primary review as the review budget for that body of work",
     );
     expect(result).toContain(
-      "Request a follow-up review only when the fixes or subsequent work are substantial enough to form a new body of work",
+      "Addressing its findings does **not** reset the budget, even when the fixes touch several files or many lines",
+    );
+    expect(result).toContain(
+      "A merely non-trivial fix, residual uncertainty, or the possibility of more feedback is not sufficient",
+    );
+    expect(result).toContain(
+      "trust the validation and your technical judgment rather than creating a review/fix/re-review loop",
     );
   });
 
@@ -452,9 +476,14 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain(
       "your own critical self-review is the completion bar",
     );
-    expect(result).toContain("Do not re-review each revision");
     expect(result).toContain(
-      "Do not automatically review the review-driven revisions",
+      "Treat that as the review budget for the plan; incorporating feedback does not reset it",
+    );
+    expect(result).toContain(
+      "When uncertain whether that threshold is met, skip the follow-up and proceed",
+    );
+    expect(result).toContain(
+      "Do not automatically review the review-driven revisions, regardless of revision size",
     );
     expect(result).toContain(
       "Spawn the primary review agent immediately after drafting the plan",

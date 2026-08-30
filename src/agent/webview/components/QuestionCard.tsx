@@ -1,8 +1,9 @@
-import type { ModeInfo, Question } from "../types";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
+import type { ChatModeInfo as ModeInfo } from "@agentlink/protocol/chat-catalog";
+import type { UserQuestion as Question } from "@agentlink/protocol/structured-question";
 import { StreamingText } from "./StreamingText";
-import { getConfirmationOptions } from "../../../shared/questionConfirmation";
+import { getConfirmationOptions } from "@agentlink/protocol/question-confirmation";
 
 export interface QuestionProgress {
   step: number;

@@ -3,11 +3,9 @@ import * as path from "path";
 import * as vscode from "vscode";
 import picomatch from "picomatch";
 
-import { parseMcpToolName } from "../agent/mcpToolNames.js";
-import {
-  createWorkspaceProjectId,
-  type SessionProjectScope,
-} from "../core/workspaceProjects.js";
+import { parseMcpToolName } from "@agentlink/protocol/mcp-tool-identity";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
+import { createWorkspaceProjectId } from "../core/workspaceProjects.js";
 import type { WriteAuthorizationDecision } from "../core/capabilities/editReview.js";
 import type { ConfigStore } from "./ConfigStore.js";
 import { CommandRuleStore, type CommandRule } from "./CommandRuleStore.js";

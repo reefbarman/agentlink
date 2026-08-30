@@ -1,8 +1,5 @@
-import {
-  errorResult,
-  type OnApprovalRequest,
-  type ToolResult,
-} from "../shared/types.js";
+import { errorResult, type ToolResult } from "@agentlink/protocol/tool-result";
+import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
 
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import type { RenameSymbolProvider } from "../core/capabilities/editReview.js";

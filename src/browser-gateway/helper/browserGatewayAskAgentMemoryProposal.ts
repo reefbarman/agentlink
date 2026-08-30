@@ -4,10 +4,13 @@ import * as path from "path";
 import { randomUUID } from "crypto";
 
 import type {
-  ApprovalRequest,
-  DecisionMessage,
   MemoryScope,
   MemoryTier,
+} from "@agentlink/protocol/inline-approval";
+
+import type {
+  ApprovalRequest,
+  DecisionMessage,
 } from "../../approvals/webview/types.js";
 import {
   applyMemoryProposal,

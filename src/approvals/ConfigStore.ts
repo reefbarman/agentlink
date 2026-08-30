@@ -6,7 +6,7 @@ import * as vscode from "vscode";
 import type { CommandRule } from "./CommandRuleStore.js";
 import type { NetworkRule } from "./NetworkRuleStore.js";
 import type { PathRule } from "./PathRuleStore.js";
-import { parseJsonWithComments } from "../util/jsonc.js";
+import { parseJsonWithComments } from "@agentlink/protocol/jsonc";
 import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 
 export interface HookTrustState {

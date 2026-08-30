@@ -1,73 +1,30 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   isWriteApprovalSelection,
-  type SelectionCommand,
   toHttpSelectionRequest,
   toVsCodeSelectionMessage,
+  type WriteApprovalSelection,
 } from "./selectionCommands.js";
 
-const vectors: Array<{
-  command: SelectionCommand;
-  vscode: Record<string, string>;
-  http: { path: string; body: Record<string, string> };
-}> = [
-  {
-    command: { type: "mode", mode: "architect" },
-    vscode: { command: "agentSwitchMode", mode: "architect" },
-    http: { path: "/api/mode", body: { mode: "architect" } },
-  },
-  {
-    command: { type: "model", model: "gpt-5.3-codex" },
-    vscode: { command: "agentSetModel", model: "gpt-5.3-codex" },
-    http: { path: "/api/model", body: { model: "gpt-5.3-codex" } },
-  },
-  {
-    command: { type: "reasoningEffort", effort: "high" },
-    vscode: { command: "agentSetReasoningEffort", effort: "high" },
-    http: { path: "/api/thinking", body: { effort: "high" } },
-  },
-  {
-    command: { type: "writeApproval", mode: "project" },
-    vscode: { command: "agentSetWriteApproval", mode: "project" },
-    http: { path: "/api/write-approval", body: { mode: "project" } },
-  },
-  {
-    command: {
-      type: "commandApprovalPolicy",
-      policy: "approve-for-me",
-    },
-    vscode: {
+describe("selection commands protocol compatibility shim", () => {
+  it("preserves write-approval validation and both transport adapters", () => {
+    expectTypeOf<WriteApprovalSelection>().toEqualTypeOf<
+      "prompt" | "session" | "project" | "global"
+    >();
+    expect(isWriteApprovalSelection("project")).toBe(true);
+    expect(isWriteApprovalSelection("workspace")).toBe(false);
+    expect(
+      toVsCodeSelectionMessage({
+        type: "commandApprovalPolicy",
+        policy: "approve-for-me",
+      }),
+    ).toEqual({
       command: "agentSetCommandApprovalPolicy",
       policy: "approve-for-me",
-    },
-    http: {
-      path: "/api/command-approval-policy",
-      body: { policy: "approve-for-me" },
-    },
-  },
-];
-
-describe("selection command adapters", () => {
-  it.each(["prompt", "session", "project", "global"])(
-    "accepts the %s write-approval selection",
-    (value) => {
-      expect(isWriteApprovalSelection(value)).toBe(true);
-    },
-  );
-
-  it.each(["", "always", "workspace", undefined, null])(
-    "rejects the unsupported write-approval selection %s",
-    (value) => {
-      expect(isWriteApprovalSelection(value)).toBe(false);
-    },
-  );
-
-  it.each(vectors)("adapts $command.type with equivalent values", (vector) => {
-    expect(toVsCodeSelectionMessage(vector.command)).toEqual(vector.vscode);
-    expect(toHttpSelectionRequest(vector.command)).toEqual(vector.http);
-    expect(Object.values(vector.vscode).at(-1)).toBe(
-      Object.values(vector.http.body)[0],
-    );
+    });
+    expect(
+      toHttpSelectionRequest({ type: "reasoningEffort", effort: "high" }),
+    ).toEqual({ path: "/api/thinking", body: { effort: "high" } });
   });
 });

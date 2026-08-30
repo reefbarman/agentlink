@@ -1,5 +1,5 @@
 import type { SessionImageReference } from "../core/tools/types.js";
-import type { ToolResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { toSupportedImageMediaType } from "../agent/providers/types.js";
 
 const DEFAULT_RECENT_IMAGE_COUNT = 1;

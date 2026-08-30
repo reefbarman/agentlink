@@ -1,6 +1,6 @@
-import type { OnApprovalRequest, ToolResult } from "../../shared/types.js";
-
 import type { EditDurabilityEvidence } from "../editDurability.js";
+import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 export { normalizeEditorText } from "../editDurability.js";
 

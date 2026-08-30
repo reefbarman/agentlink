@@ -114,6 +114,7 @@ describe("parseCodexResponseStreamEvents", () => {
         outputTokens: 4,
         cacheReadTokens: 7,
         cacheCreationTokens: 3,
+        inputTokenBreakdownReported: true,
         providerResponseId: "resp_123",
       },
       {
@@ -169,8 +170,9 @@ describe("parseCodexResponseStreamEvents", () => {
       type: "usage",
       inputTokens: 20,
       outputTokens: 4,
-      cacheReadTokens: undefined,
+      cacheReadTokens: 0,
       cacheCreationTokens: 3,
+      inputTokenBreakdownReported: true,
       providerResponseId: "resp_compat",
     });
   });

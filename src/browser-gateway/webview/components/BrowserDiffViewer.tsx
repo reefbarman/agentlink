@@ -2,7 +2,7 @@ import type * as MonacoApi from "./browserMonaco";
 
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
-import type { BrowserGatewayThemeSnapshot } from "../../../shared/types";
+import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 
 interface DiffDetail {
   requestId: string;

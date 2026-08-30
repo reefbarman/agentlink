@@ -4,7 +4,7 @@ import * as path from "path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { parseJsonWithComments } from "./jsonc.js";
+import { parseJsonWithComments } from "@agentlink/protocol/jsonc";
 import {
   LEGACY_AGENT_INTEGRATION_CLEANUP_STATE_KEY,
   runLegacyAgentIntegrationCleanup,

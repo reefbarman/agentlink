@@ -1,9 +1,8 @@
+import type { ApprovalRequest, DecisionMessage } from "../types.js";
 import type {
-  ApprovalRequest,
-  DecisionMessage,
   MemoryScope,
   MemoryTier,
-} from "../types.js";
+} from "@agentlink/protocol/inline-approval";
 import { useCallback, useMemo, useState } from "preact/hooks";
 
 import { ApprovalLayout } from "./ApprovalLayout.js";

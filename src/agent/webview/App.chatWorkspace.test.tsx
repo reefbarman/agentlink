@@ -10,7 +10,7 @@ import {
 } from "@testing-library/preact";
 
 import { App } from "./App.js";
-import type { ChatWorkspaceViewSnapshot } from "../chatTabProtocol.js";
+import type { ChatWorkspaceViewSnapshot } from "@agentlink/protocol/chat-workspace";
 import { act } from "preact/test-utils";
 
 beforeAll(() => {
@@ -143,6 +143,138 @@ describe("App chat workspace integration", () => {
         sessionId: "session-1",
       },
     ]);
+  });
+
+  it("restores Auto Continue independently for each tab", async () => {
+    const vscodeApi = createVsCodeApi();
+    const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: "session-1",
+        mode: "code",
+        model: "claude-opus-5",
+        streaming: true,
+        projects: [{ projectId: "project-1", displayName: "Project" }],
+      },
+    });
+
+    const autoContinue = screen.getByRole("button", { name: "Auto Continue" });
+    fireEvent.click(autoContinue);
+    expect(autoContinue.getAttribute("aria-pressed")).toBe("true");
+
+    const tabSelectors =
+      container.querySelectorAll<HTMLButtonElement>(".chat-tab-select");
+    fireEvent.click(tabSelectors[1]!);
+    expect(autoContinue.getAttribute("aria-pressed")).toBe("true");
+
+    deliver({
+      type: "chatWorkspaceUpdate",
+      snapshot: createSnapshot("tab-2"),
+    });
+    expect(autoContinue.getAttribute("aria-pressed")).toBe("false");
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: "session-2",
+        mode: "code",
+        model: "claude-opus-5",
+        streaming: false,
+        projects: [{ projectId: "project-1", displayName: "Project" }],
+      },
+    });
+    deliver({
+      type: "chatWorkspaceUpdate",
+      snapshot: createSnapshot("tab-1"),
+    });
+
+    await waitFor(() => {
+      expect(autoContinue.getAttribute("aria-pressed")).toBe("true");
+    });
+  });
+
+  it("auto-continues a tab that completes while another tab is selected", async () => {
+    const vscodeApi = createVsCodeApi();
+    const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: "session-1",
+        mode: "code",
+        model: "claude-opus-5",
+        reasoningEffort: "high",
+        streaming: true,
+        projects: [{ projectId: "project-1", displayName: "Project" }],
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Auto Continue" }));
+    deliver({
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "Ready for another slice.",
+    });
+    deliver({
+      type: "agentFinalMarker",
+      sessionId: "session-1",
+      marker: {
+        status: "completed",
+        source: "tool",
+        summary: "Ready for another slice.",
+        continueAction: {
+          label: "Continue",
+          prompt: "Continue the inactive tab.",
+        },
+      },
+    });
+
+    const tabSelectors =
+      container.querySelectorAll<HTMLButtonElement>(".chat-tab-select");
+    fireEvent.click(tabSelectors[1]!);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: "session-2",
+        mode: "code",
+        model: "claude-opus-5",
+        streaming: false,
+        projects: [{ projectId: "project-1", displayName: "Project" }],
+      },
+    });
+    deliver({
+      type: "agentDone",
+      sessionId: "session-1",
+      transcriptRevision: 2,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+    });
+
+    await waitFor(() => {
+      expect(postedCommands(vscodeApi.postMessage, "agentSend")).toContainEqual(
+        expect.objectContaining({
+          text: "Continue the inactive tab.",
+          controllerEpoch: "epoch-1",
+          tabId: "tab-1",
+          sessionId: "session-1",
+          mode: "code",
+          reasoningEffort: "high",
+        }),
+      );
+    });
+    expect(postedCommands(vscodeApi.postMessage, "chatTabFocus")).toHaveLength(
+      1,
+    );
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    await waitFor(() => {
+      expect(postedCommands(vscodeApi.postMessage, "agentSend")).toHaveLength(
+        1,
+      );
+    });
   });
 
   it("keeps the model catalog after closing a restored tab", async () => {

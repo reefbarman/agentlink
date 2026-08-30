@@ -5,7 +5,7 @@ import {
   type McpFormElicitationInput,
   type McpFormElicitationRequest,
   type McpFormElicitationResponse,
-} from "../shared/mcpElicitation.js";
+} from "@agentlink/protocol/mcp-elicitation";
 import { randomId } from "../shared/randomId.js";
 
 interface PendingFormElicitation {

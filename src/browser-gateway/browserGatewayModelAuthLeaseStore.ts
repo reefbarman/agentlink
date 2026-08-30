@@ -1,12 +1,12 @@
-import type {
-  CoreModelAuthLease,
-  CoreModelAuthLeaseValidationResult,
-  CoreModelAuthMethod,
-} from "../core/modelAuth.js";
+import {
+  validateCoreModelAuthLease,
+  type CoreModelAuthLease,
+  type CoreModelAuthLeaseValidationResult,
+  type CoreModelAuthMethod,
+} from "@agentlink/protocol/model-auth";
 
 import type { BrowserGatewayCoreOwnerRegistry } from "./coreOwnerRegistry.js";
 import { randomUUID } from "crypto";
-import { validateCoreModelAuthLease } from "../core/modelAuth.js";
 import { normalizeBrowserGatewayModelCredentialProviderId } from "./browserGatewayModelProviderIds.js";
 
 export interface BrowserGatewayModelAuthLeaseRequest {

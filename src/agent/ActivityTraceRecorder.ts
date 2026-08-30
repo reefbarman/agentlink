@@ -8,7 +8,7 @@ import type {
 } from "../core/sessionActivityDiagnostics.js";
 
 import type { AgentEvent } from "./types.js";
-import type { ToolResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { randomUUID } from "crypto";
 
 export type ActivityTraceSource =
@@ -511,6 +511,7 @@ export class ActivityTraceRecorder {
             outputTokens: event.outputTokens,
             cacheReadTokens: event.cacheReadTokens,
             cacheCreationTokens: event.cacheCreationTokens,
+            inputTokenBreakdownReported: event.inputTokenBreakdownReported,
             durationMs: event.durationMs,
             timeToFirstToken: event.timeToFirstToken,
             providerQueueWaitMs: event.providerQueueWaitMs,

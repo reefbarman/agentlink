@@ -7,7 +7,7 @@ import {
 } from "../core/sessionTranscriptRecall.js";
 
 import type { SessionTranscriptSnapshot } from "../core/sessionTranscriptRecall.js";
-import type { ToolResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 export async function handleSearchSessionHistory(
   params: Record<string, unknown>,

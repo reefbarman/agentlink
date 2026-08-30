@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
 import { ElicitationModal } from "./ElicitationModal";
-import type { McpFormElicitationRequest } from "../../../shared/mcpElicitation";
+import type { McpFormElicitationRequest } from "@agentlink/protocol/mcp-elicitation";
 
 const request: McpFormElicitationRequest = {
   id: "request-1",

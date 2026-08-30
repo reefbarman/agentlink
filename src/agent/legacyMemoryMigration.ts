@@ -8,7 +8,7 @@ import type {
   MemoryImportCheckpoint,
   MemoryScope,
   RecordMemoryImportFailureRequest,
-} from "../core/memory/contracts.js";
+} from "@agentlink/protocol/autonomous-memory";
 import {
   LEGACY_MEMORY_IMPORTER_SCHEMA_VERSION,
   buildLegacyMemoryImportRequest,

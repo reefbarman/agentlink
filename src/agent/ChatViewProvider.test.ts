@@ -6,8 +6,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentMessage } from "./types.js";
 import type { AppAction } from "../shared/chatProjection.js";
-import type { ChatState } from "./webview/types.js";
-import type { ChatTab } from "./ChatTabController.js";
+import type { ChatStateSnapshot as ChatState } from "@agentlink/protocol/chat-state";
+import type { ChatTab } from "@agentlink/protocol/chat-workspace";
 
 type Listener<T> = (value: T) => void;
 
@@ -6043,6 +6043,10 @@ describe("ChatViewProvider session state sync", () => {
       requestId: "request-1",
       requestKind: "agent",
       model: "claude-sonnet-4-6",
+      providerId: "anthropic",
+      mode: "architect",
+      promptProfile: "reasoning",
+      background: false,
       estimatedInputTokens: 99,
       toolResultContextAttributions: [
         {
@@ -6109,6 +6113,10 @@ describe("ChatViewProvider session state sync", () => {
       requestId: "request-1",
       requestKind: "agent",
       model: "claude-sonnet-4-6",
+      providerId: "anthropic",
+      mode: "architect",
+      promptProfile: "reasoning",
+      background: false,
       estimatedInputTokens: 99,
       toolResultAttributions: [
         {

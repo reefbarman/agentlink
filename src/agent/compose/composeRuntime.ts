@@ -15,8 +15,8 @@ import {
 import type {
   ComposeTrace,
   ComposeTraceChild,
-} from "../../shared/composeTypes.js";
-import type { ToolResult } from "../../shared/types.js";
+} from "@agentlink/protocol/compose";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 import type { ComposeExecutionScope } from "./composeScope.js";
 
 export const COMPOSE_MAX_CHILD_CALLS = 64;

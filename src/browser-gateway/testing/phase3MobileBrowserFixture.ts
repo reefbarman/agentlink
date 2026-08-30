@@ -17,7 +17,7 @@ import type {
 import type { BrowserGatewayHelper } from "../helper/browserGatewayHelper.js";
 import type { BrowserGatewayInstanceRecord } from "../browserGatewayRegistry.js";
 import type { BrowserGatewayOwnerRuntime } from "../dataPlane/BrowserGatewayOwnerRuntime.js";
-import type { ChatMessage } from "../../agent/webview/types.js";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import {
   evaluatePhase3MobilePaintGate,
   type Phase3MobilePaintCategory,

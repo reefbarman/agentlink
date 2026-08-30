@@ -1,16 +1,17 @@
 import * as vscode from "vscode";
 
 import { renderChatWebviewShell } from "../adapters/vscode/chatWebviewShell.js";
-import {
-  ChatPaneAuthorityController,
-  type ChatPaneLease,
-} from "./ChatPaneAuthorityController.js";
+import type {
+  ChatPaneAddress,
+  ChatPaneLease,
+} from "@agentlink/protocol/chat-pane-transport";
+import { createChatPaneAddress } from "@agentlink/protocol/chat-pane-transport";
+
+import { ChatPaneAuthorityController } from "./ChatPaneAuthorityController.js";
 import { ChatPaneConnection } from "./ChatPaneConnection.js";
 import {
   CHAT_PANEL_VIEW_TYPE,
-  createChatPaneAddress,
   parseSerializedChatPanelState,
-  type ChatPaneAddress,
 } from "./chatPaneProtocol.js";
 import type { ChatTabController } from "./ChatTabController.js";
 import {

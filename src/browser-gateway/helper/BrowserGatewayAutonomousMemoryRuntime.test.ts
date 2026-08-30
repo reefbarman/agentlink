@@ -1,3 +1,5 @@
+import * as path from "path";
+
 import {
   BrowserGatewayAutonomousMemoryRuntime,
   resolveBrowserGatewayMemoryRuntime,
@@ -8,7 +10,12 @@ import type {
 } from "../../core/capabilities/memory.js";
 import { describe, expect, it, vi } from "vitest";
 
-import type { MemoryHealthSnapshot } from "../../core/memory/contracts.js";
+import type { MemoryHealthSnapshot } from "@agentlink/protocol/autonomous-memory";
+import type { SharedMemoryConfigSnapshot } from "../../storage/retrieval/sharedMemoryConfig.js";
+import { getSharedMemoryStoreRoot } from "../../storage/retrieval/sharedMemoryStorePaths.js";
+
+const homeDir = path.join("tmp", "agentlink-home");
+const canonicalRoot = getSharedMemoryStoreRoot(homeDir);
 
 const readyHealth: MemoryHealthSnapshot = {
   status: "ready",
@@ -21,6 +28,10 @@ const readyHealth: MemoryHealthSnapshot = {
   activeRecordCount: 1,
   auditEventCount: 1,
 };
+
+function configStore(snapshot: () => SharedMemoryConfigSnapshot) {
+  return { read: vi.fn(async () => snapshot()) };
+}
 
 function inspectionStubs(): Omit<
   MemoryInspectionProvider,
@@ -72,47 +83,45 @@ function inspectionStubs(): Omit<
 }
 
 describe("resolveBrowserGatewayMemoryRuntime", () => {
-  it("fails closed without a unanimous autonomous shared root", () => {
-    expect(resolveBrowserGatewayMemoryRuntime([])).toEqual({
-      mode: "off",
-      reason: "no-connected-owner",
-    });
+  it("enables autonomous mode on the canonical root", () => {
     expect(
-      resolveBrowserGatewayMemoryRuntime([
-        owner("left", "autonomous", "/shared/root"),
-        { ownerId: "descriptor-less" },
-      ]),
-    ).toEqual({ mode: "off", reason: "missing-owner-descriptor" });
-    expect(
-      resolveBrowserGatewayMemoryRuntime([
-        owner("left", "autonomous", "/shared/root"),
-        owner("right", "off", "/shared/root"),
-      ]),
-    ).toEqual({
-      mode: "off",
-      retrievalStoreRoot: "/shared/root",
-      reason: "disabled-by-owner",
-    });
-    expect(
-      resolveBrowserGatewayMemoryRuntime([
-        owner("left", "autonomous", "/left/root"),
-        owner("right", "autonomous", "/right/root"),
-      ]),
-    ).toEqual({ mode: "off", reason: "conflicting-store-roots" });
+      resolveBrowserGatewayMemoryRuntime({ mode: "autonomous" }, canonicalRoot),
+    ).toEqual({ mode: "autonomous", retrievalStoreRoot: canonicalRoot });
   });
 
-  it("enables only unanimous autonomous owners on one shared root", () => {
+  it("fails closed with the config-provided reason", () => {
     expect(
-      resolveBrowserGatewayMemoryRuntime([
-        owner("left", "autonomous", "/shared/root"),
-        owner("right", "autonomous", "/shared/root"),
-      ]),
-    ).toEqual({ mode: "autonomous", retrievalStoreRoot: "/shared/root" });
+      resolveBrowserGatewayMemoryRuntime({ mode: "off" }, canonicalRoot),
+    ).toEqual({
+      mode: "off",
+      retrievalStoreRoot: canonicalRoot,
+      reason: "disabled",
+    });
+    expect(
+      resolveBrowserGatewayMemoryRuntime(
+        { mode: "off", reason: "config_invalid" },
+        canonicalRoot,
+      ),
+    ).toEqual({
+      mode: "off",
+      retrievalStoreRoot: canonicalRoot,
+      reason: "config_invalid",
+    });
+    expect(
+      resolveBrowserGatewayMemoryRuntime(
+        { mode: "off", reason: "config_unreadable" },
+        canonicalRoot,
+      ),
+    ).toEqual({
+      mode: "off",
+      retrievalStoreRoot: canonicalRoot,
+      reason: "config_unreadable",
+    });
   });
 });
 
 describe("BrowserGatewayAutonomousMemoryRuntime", () => {
-  it("reuses one provider and forwards requests exactly", async () => {
+  it("creates one provider on the canonical root and forwards requests exactly", async () => {
     const manage = vi.fn<MemoryToolProvider["manage"]>().mockResolvedValue({
       result: {
         disposition: "created",
@@ -136,9 +145,10 @@ describe("BrowserGatewayAutonomousMemoryRuntime", () => {
       dispose,
     }));
     const runtime = new BrowserGatewayAutonomousMemoryRuntime({
+      homeDir,
+      configStore: configStore(() => ({ mode: "autonomous" })),
       createProvider,
     });
-    await runtime.setOwners([owner("one", "autonomous", "/shared/root")]);
     const manageRequest = {
       input: {
         operation: "remember" as const,
@@ -166,7 +176,11 @@ describe("BrowserGatewayAutonomousMemoryRuntime", () => {
     expect(createProvider).toHaveBeenCalledOnce();
     expect(createProvider).toHaveBeenCalledWith({
       mode: "autonomous",
-      retrievalStoreRoot: "/shared/root",
+      retrievalStoreRoot: canonicalRoot,
+    });
+    expect(runtime.getResolution()).toEqual({
+      mode: "autonomous",
+      retrievalStoreRoot: canonicalRoot,
     });
     expect(manage).toHaveBeenCalledWith(manageRequest);
     expect(recall).toHaveBeenCalledWith(recallRequest);
@@ -176,7 +190,98 @@ describe("BrowserGatewayAutonomousMemoryRuntime", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
-  it("waits for active operations before disposing on an owner change", async () => {
+  it("fails closed while shared memory migration is pending", async () => {
+    let pending = true;
+    const createProvider = vi.fn(() => ({
+      manage: vi.fn(),
+      recall: vi.fn(),
+      health: vi.fn(async () => readyHealth),
+      activity: vi.fn(async () => ({ events: [], health: readyHealth })),
+      ...inspectionStubs(),
+      dispose: vi.fn(async () => undefined),
+    }));
+    const runtime = new BrowserGatewayAutonomousMemoryRuntime({
+      homeDir,
+      configStore: configStore(() => ({ mode: "autonomous" })),
+      isMigrationPending: async () => pending,
+      createProvider,
+    });
+
+    await expect(runtime.health()).resolves.toMatchObject({
+      status: "unavailable",
+      reason: "migration_pending",
+    });
+    await expect(runtime.recall({} as never)).rejects.toThrow(
+      "migration_pending",
+    );
+    expect(createProvider).not.toHaveBeenCalled();
+
+    pending = false;
+    await expect(runtime.health()).resolves.toMatchObject({ status: "ready" });
+    expect(createProvider).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["disabled config", { mode: "off" } as const, "disabled"],
+    [
+      "invalid config",
+      { mode: "off", reason: "config_invalid" } as const,
+      "config_invalid",
+    ],
+    [
+      "unreadable config",
+      { mode: "off", reason: "config_unreadable" } as const,
+      "config_unreadable",
+    ],
+  ])("fails closed on %s", async (_name, snapshot, reason) => {
+    const createProvider = vi.fn();
+    const runtime = new BrowserGatewayAutonomousMemoryRuntime({
+      homeDir,
+      configStore: configStore(() => snapshot),
+      createProvider,
+    });
+
+    await expect(runtime.recall({} as never)).rejects.toThrow(reason);
+    await expect(runtime.health()).resolves.toMatchObject({
+      status: "unavailable",
+      reason,
+    });
+    expect(createProvider).not.toHaveBeenCalled();
+    expect(runtime.getResolution()).toEqual({
+      mode: "off",
+      retrievalStoreRoot: canonicalRoot,
+      reason,
+    });
+  });
+
+  it("disposes the active provider when the config turns memory off", async () => {
+    let mode: SharedMemoryConfigSnapshot["mode"] = "autonomous";
+    const dispose = vi.fn(async () => undefined);
+    const runtime = new BrowserGatewayAutonomousMemoryRuntime({
+      homeDir,
+      configStore: configStore(() => ({ mode })),
+      createProvider: () => ({
+        manage: vi.fn(),
+        recall: vi.fn(),
+        health: vi.fn(async () => readyHealth),
+        activity: vi.fn(async () => ({ events: [], health: readyHealth })),
+        ...inspectionStubs(),
+        dispose,
+      }),
+    });
+
+    await runtime.health();
+    expect(dispose).not.toHaveBeenCalled();
+
+    mode = "off";
+    await expect(runtime.query({ scope: "global" })).rejects.toThrow(
+      "disabled",
+    );
+    expect(dispose).toHaveBeenCalledOnce();
+    await runtime.dispose();
+  });
+
+  it("waits for active operations before reacting to a config change", async () => {
     let releaseQuery!: () => void;
     let queryStarted!: () => void;
     const started = new Promise<void>((resolve) => {
@@ -185,8 +290,11 @@ describe("BrowserGatewayAutonomousMemoryRuntime", () => {
     const held = new Promise<void>((resolve) => {
       releaseQuery = resolve;
     });
+    let mode: SharedMemoryConfigSnapshot["mode"] = "autonomous";
     const dispose = vi.fn(async () => undefined);
     const runtime = new BrowserGatewayAutonomousMemoryRuntime({
+      homeDir,
+      configStore: configStore(() => ({ mode })),
       createProvider: () => ({
         manage: vi.fn(),
         recall: vi.fn(),
@@ -201,66 +309,25 @@ describe("BrowserGatewayAutonomousMemoryRuntime", () => {
         dispose,
       }),
     });
-    await runtime.setOwners([owner("one", "autonomous", "/shared/root")]);
 
     const query = runtime.query({ scope: "global" });
     await started;
-    let ownerChangeSettled = false;
-    const ownerChange = runtime
-      .setOwners([owner("one", "off", "/shared/root")])
-      .then(() => {
-        ownerChangeSettled = true;
-      });
+    mode = "off";
+    let followUpSettled = false;
+    const followUp = runtime.health().then((health) => {
+      followUpSettled = true;
+      return health;
+    });
     await Promise.resolve();
 
     expect(dispose).not.toHaveBeenCalled();
-    expect(ownerChangeSettled).toBe(false);
+    expect(followUpSettled).toBe(false);
     releaseQuery();
     await query;
-    await ownerChange;
-    expect(dispose).toHaveBeenCalledOnce();
-    await expect(runtime.query({ scope: "global" })).rejects.toThrow(
-      "disabled-by-owner",
-    );
-  });
-
-  it("disposes the active provider when mode or root changes", async () => {
-    const disposals: Array<ReturnType<typeof vi.fn>> = [];
-    const runtime = new BrowserGatewayAutonomousMemoryRuntime({
-      createProvider: () => {
-        const dispose = vi.fn(async () => undefined);
-        disposals.push(dispose);
-        return {
-          manage: vi.fn(),
-          recall: vi.fn(),
-          health: vi.fn(async () => readyHealth),
-          activity: vi.fn(async () => ({ events: [], health: readyHealth })),
-          ...inspectionStubs(),
-          dispose,
-        };
-      },
+    await expect(followUp).resolves.toMatchObject({
+      status: "unavailable",
+      reason: "disabled",
     });
-
-    await runtime.setOwners([owner("one", "autonomous", "/first/root")]);
-    await runtime.health();
-    await runtime.setOwners([owner("one", "off", "/first/root")]);
-    expect(disposals[0]).toHaveBeenCalledOnce();
-    await expect(runtime.recall({} as never)).rejects.toThrow(
-      "disabled-by-owner",
-    );
-
-    await runtime.setOwners([owner("one", "autonomous", "/second/root")]);
-    await runtime.health();
-    await runtime.setOwners([owner("one", "autonomous", "/third/root")]);
-    expect(disposals[1]).toHaveBeenCalledOnce();
-    await runtime.dispose();
+    expect(dispose).toHaveBeenCalledOnce();
   });
 });
-
-function owner(
-  ownerId: string,
-  mode: "off" | "autonomous",
-  retrievalStoreRoot: string,
-) {
-  return { ownerId, mode, retrievalStoreRoot };
-}

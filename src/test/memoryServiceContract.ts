@@ -3,12 +3,14 @@ import * as path from "node:path";
 
 import type {
   AutonomousMemoryServiceOptions,
+  MemoryRepository,
+} from "../core/memory/contracts.js";
+import type {
   MemoryImportCheckpoint,
   MemoryProvenance,
-  MemoryRepository,
   MemoryScope,
   MemoryStoreSnapshot,
-} from "../core/memory/contracts.js";
+} from "@agentlink/protocol/autonomous-memory";
 import { describe, expect, it } from "vitest";
 
 import { AutonomousMemoryService } from "../core/memory/AutonomousMemoryService.js";

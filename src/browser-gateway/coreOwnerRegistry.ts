@@ -4,7 +4,7 @@ import type {
   CoreOwnerRegistrationDto,
   CoreSessionOwnerDto,
   CoreSessionScopeDto,
-} from "../core/sessionProtocol.js";
+} from "@agentlink/protocol/session";
 
 export type BrowserGatewayCoreOwnerStatus = CoreOwnerRegistrationDto["status"];
 

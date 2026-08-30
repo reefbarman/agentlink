@@ -1,4 +1,4 @@
-import type { ChatMessage } from "../types";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import { LiveLinkIndicator } from "./LiveLinkIndicator";
 import { ThinkingContent } from "./ThinkingContent";
 import { getStreamingActivity } from "./activityPresentation";

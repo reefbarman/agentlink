@@ -7,17 +7,17 @@ import type {
   TerminalApprovalReviewer,
   TerminalCommandApprovalPolicySnapshot,
   TerminalExecutionPreset,
-} from "../core/capabilities/terminal.js";
+} from "@agentlink/protocol/terminal";
 
 import type { AgentMessage } from "./types.js";
-import type { BackgroundResultState } from "../core/capabilities/background.js";
+import type { BackgroundResultState } from "@agentlink/protocol/background-result";
 import type { Checkpoint } from "./CheckpointManager.js";
 import type { CoreModelToolResultBlock } from "../core/modelRuntime.js";
-import type { FleetResultEnvelope } from "./FleetWorkflows.js";
+import type { FleetResultEnvelope } from "@agentlink/protocol/fleet-result";
 import type { PersistedSessionLineage } from "./sessionHandoff.js";
-import type { Question } from "./webview/types.js";
+import type { UserQuestion as Question } from "@agentlink/protocol/structured-question";
 import type { ReasoningEffort } from "./providers/types.js";
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 import type { SessionSummary } from "./SessionStore.js";
 import type { SkillCapabilityPolicySnapshot } from "./skillLoader.js";
 
@@ -82,8 +82,8 @@ export interface PendingQuestionRecoveryState extends PendingQuestionRecoveryCon
 }
 
 export interface PersistedPendingToolResult extends CoreModelToolResultBlock {
-  mcpApprovalPromotion?: import("../shared/types.js").McpApprovalPromotionMeta;
-  composeTrace?: import("../shared/composeTypes.js").ComposeTrace;
+  mcpApprovalPromotion?: import("@agentlink/protocol/tool-result").McpApprovalPromotionMeta;
+  composeTrace?: import("@agentlink/protocol/compose").ComposeTrace;
 }
 
 export interface PersistedPendingToolTurn {
@@ -249,9 +249,9 @@ export interface PersistedSessionMetadata {
   /** One-time human review boundary for sessions that began in Architect mode. */
   initialArchitectReviewPending?: boolean;
   /** Rendered profile evidence for audit/debug only; current policy is recomputed on restore. */
-  promptProfile?: import("../core/promptProfile.js").PromptProfileResolution;
+  promptProfile?: import("@agentlink/protocol/prompt-profile").PromptProfileResolution;
   /** Latest completed request ledger for read-only context diagnostics. */
-  contextLedger?: import("../core/contextLedger.js").ContextLedgerSnapshot;
+  contextLedger?: import("@agentlink/protocol/context-ledger").ContextLedgerSnapshot;
   /** Legacy bundled mode retained for backward compatibility and UI migration. */
   commandApprovalPolicy?: TerminalCommandApprovalPolicySnapshot;
   /** Independent Codex-style approval policy dimension. */

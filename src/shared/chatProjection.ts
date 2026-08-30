@@ -1,37 +1,42 @@
-import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
+import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 import type { ApprovalRequest } from "../approvals/webview/types.js";
-import { isCoreReasoningEffort } from "../core/modelCatalog.js";
+import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import type { CoreWebActivity, CoreWebCitation } from "../core/webAccess.js";
+import type { ChatStateSnapshot as ChatState } from "@agentlink/protocol/chat-state";
 import type {
   ChatMessage,
-  ChatState,
   ContentBlock,
-  ModeInfo,
-  Question,
-  ReasoningEffort,
-  SlashCommandInfo,
   TodoItem,
-  WebviewModelInfo,
-} from "../agent/webview/types.js";
+} from "@agentlink/protocol/chat-transcript";
+import type {
+  ChatModeInfo as ModeInfo,
+  ChatModelInfo as WebviewModelInfo,
+  ChatReasoningEffort as ReasoningEffort,
+  ChatSlashCommandInfo as SlashCommandInfo,
+} from "@agentlink/protocol/chat-catalog";
+import type { UserQuestion as Question } from "@agentlink/protocol/structured-question";
 
-import type { ComposeChildStatus, ComposeTrace } from "./composeTypes.js";
-import type { BackgroundResultState } from "../core/capabilities/background.js";
-import type { ContextHealthSnapshot } from "./contextHealth.js";
-import type { DetectedQuestion } from "./questionDetection.js";
+import type {
+  ComposeChildStatus,
+  ComposeTrace,
+} from "@agentlink/protocol/compose";
+import type { BackgroundResultState } from "@agentlink/protocol/background-result";
+import type { ContextHealthSnapshot } from "@agentlink/protocol/context-health";
+import type { DetectedQuestion } from "@agentlink/protocol/question-detection";
 import { randomId } from "./randomId.js";
-import { getHiddenUserMessageIndexes } from "./todoContinuation.js";
+import { getHiddenUserMessageIndexes } from "@agentlink/protocol/todo-continuation";
 import { getToolCapabilityMetadata } from "../core/tools/toolCapabilities.js";
 import type {
   BackgroundCompletionResult,
   InFlightAssistantBlock,
-  McpApprovalPromotionMeta,
-  RequestContextBreakdown,
   RevertRecoveryNotice,
-} from "./types.js";
+} from "@agentlink/protocol/session-hydration";
+import type { McpApprovalPromotionMeta } from "@agentlink/protocol/tool-result";
+import type { RequestContextBreakdown } from "@agentlink/protocol/context-diagnostics";
 import {
   getFinalMessageContinueAction,
   type FinalMessageMarker,
-} from "./finalStatus.js";
+} from "@agentlink/protocol/final-status";
 
 type DisplayMedia = NonNullable<ChatMessage["displayMedia"]>;
 type RawImageMedia = { name: string; mimeType: string; base64: string };

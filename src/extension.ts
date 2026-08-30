@@ -51,6 +51,13 @@ import { AutonomousMemoryToolProvider } from "./storage/retrieval/AutonomousMemo
 import { LanceDbRetrievalRepository } from "./storage/retrieval/LanceDbRetrievalRepository.js";
 import { RetrievalSkillCatalogFallbackProvider } from "./storage/retrieval/RetrievalSkillCatalogFallbackProvider.js";
 import { getRetrievalStoreRoot } from "./storage/retrieval/retrievalStorePaths.js";
+import { SharedMemoryConfigStore } from "./storage/retrieval/sharedMemoryConfig.js";
+import {
+  getSharedMemoryConfigPath,
+  getSharedMemoryStoreRoot,
+} from "./storage/retrieval/sharedMemoryStorePaths.js";
+import { beginSharedMemoryMigration } from "./storage/retrieval/sharedMemoryMigrationState.js";
+import { migrateSharedMemoryStore } from "./storage/retrieval/sharedMemoryStoreMigration.js";
 import { cleanupLegacyCodeRetrievalStore } from "./storage/retrieval/legacyCodeRetrievalCleanup.js";
 import { cleanupSupersededCodeIndexGenerations } from "./storage/retrieval/supersededCodeIndexGenerationCleanup.js";
 import { CODE_INDEX_STORAGE_GENERATION } from "./indexer/codeRetrievalIdentity.js";
@@ -60,9 +67,12 @@ import { appendJsonlLinesWithLock } from "./telemetry/jsonlAppend.js";
 import { migrateLegacyMemoryFiles } from "./agent/legacyMemoryMigration.js";
 import { ChatViewProvider } from "./agent/ChatViewProvider.js";
 import { AgentSessionManager } from "./agent/AgentSessionManager.js";
-import { ChatTabController, type ChatTab } from "./agent/ChatTabController.js";
+import { ChatTabController } from "./agent/ChatTabController.js";
 import { ChatTabPanelHost } from "./agent/ChatTabPanelHost.js";
-import { createChatWorkspaceViewSnapshot } from "./agent/chatTabProtocol.js";
+import {
+  createChatWorkspaceViewSnapshot,
+  type ChatTab,
+} from "@agentlink/protocol/chat-workspace";
 import { createForegroundChatTabSync } from "./agent/chatTabForegroundSync.js";
 import { restoreChatTabStartup } from "./agent/chatTabStartupRestore.js";
 import { TabTerminalProviderRegistry } from "./agent/TabTerminalProviderRegistry.js";
@@ -80,10 +90,8 @@ import {
 } from "./agent/modeModelPreferences.js";
 import { SessionStore } from "./agent/SessionStore.js";
 import type { AgentConfig } from "./agent/types.js";
-import {
-  normalizePromptProfileOverrides,
-  resolvePromptProfile,
-} from "./core/promptProfile.js";
+import { normalizePromptProfileOverrides } from "@agentlink/protocol/prompt-profile";
+import { resolvePromptProfile } from "./core/promptProfilePolicy.js";
 import { registerEditorContextCommands } from "./agent/editorContextCommands.js";
 import { registerModelAuthCommands } from "./agent/modelAuthCommands.js";
 import { AnthropicProvider } from "./agent/providers/anthropic/index.js";
@@ -121,7 +129,7 @@ import { BrowserGatewayHelperAdminClient } from "./browser-gateway/helper/Browse
 import { BrowserGatewayHelperLeaseClient } from "./browser-gateway/helper/BrowserGatewayHelperLeaseClient.js";
 import { BrowserGatewayHelperModelAuthLeaseClient } from "./browser-gateway/helper/BrowserGatewayHelperModelAuthLeaseClient.js";
 import type { BrowserGatewayCoreOwnerLeaseRegistration } from "./browser-gateway/protocol.js";
-import type { CoreModelCatalogEntry } from "./core/modelCatalog.js";
+import type { CoreModelCatalogEntry } from "@agentlink/protocol/model-catalog";
 import { normalizeMaxConcurrentModelRequests } from "./core/modelRequestScheduler.js";
 import { normalizeBrowserGatewayModelCredentialProviderId } from "./browser-gateway/browserGatewayModelProviderIds.js";
 import { setBrowserGatewayRegistryLogger } from "./browser-gateway/browserGatewayRegistry.js";
@@ -146,10 +154,8 @@ import {
   migrateWorkspaceHistory,
   type WorkspaceHistoryShape,
 } from "./agent/workspaceHistoryMigration.js";
-import {
-  createSessionProjectScope,
-  type ProjectScopeResolver,
-} from "./core/workspaceProjects.js";
+import { createSessionProjectScope } from "@agentlink/protocol/workspace-project";
+import type { ProjectScopeResolver } from "./core/workspaceProjects.js";
 import {
   createWorkspaceProjectCatalog,
   selectNewSessionProject,
@@ -1152,15 +1158,35 @@ export async function activate(
     "browserGatewayInstanceId",
     browserGatewayWorkspaceInstanceId,
   );
-  const getAutonomousMemoryMode = () =>
-    vscode.workspace
-      .getConfiguration("agentlink")
-      .get<"off" | "autonomous">("memory.mode", "autonomous");
+  const memoryConfiguration = vscode.workspace.getConfiguration("agentlink");
+  const getConfiguredAutonomousMemoryMode = () =>
+    memoryConfiguration.get<"off" | "autonomous">("memory.mode", "autonomous");
+  const configuredMemoryMode = memoryConfiguration.inspect<
+    "off" | "autonomous"
+  >("memory.mode");
+  const initialConfiguredMemoryMode = [
+    configuredMemoryMode?.workspaceFolderValue,
+    configuredMemoryMode?.workspaceValue,
+    configuredMemoryMode?.globalValue,
+  ].includes("off")
+    ? "off"
+    : getConfiguredAutonomousMemoryMode();
+  const sharedMemoryConfigStore = new SharedMemoryConfigStore(
+    getSharedMemoryConfigPath(),
+  );
+  if (initialConfiguredMemoryMode === "off") {
+    await sharedMemoryConfigStore.write("off");
+  } else {
+    await sharedMemoryConfigStore.seed(initialConfiguredMemoryMode);
+  }
+  let currentAutonomousMemoryMode = (await sharedMemoryConfigStore.read()).mode;
+  const getAutonomousMemoryMode = () => sharedMemoryConfigStore.read();
   let autonomousMemoryMigrationsPending = 0;
   let autonomousMemoryMigrationTail = Promise.resolve();
   const retrievalStoreRoot = getRetrievalStoreRoot(
     context.globalStorageUri.fsPath,
   );
+  const sharedMemoryStoreRoot = getSharedMemoryStoreRoot();
   try {
     const result = await cleanupLegacyCodeRetrievalStore(retrievalStoreRoot);
     log(
@@ -1186,7 +1212,7 @@ export async function activate(
       log(`[retrieval] Superseded code-index cleanup failed: ${String(error)}`);
     });
   const autonomousMemoryToolProvider = new AutonomousMemoryToolProvider({
-    root: retrievalStoreRoot,
+    root: sharedMemoryStoreRoot,
     getMode: getAutonomousMemoryMode,
     isInitializing: () => autonomousMemoryMigrationsPending > 0,
   });
@@ -1211,22 +1237,39 @@ export async function activate(
     },
   });
   const runLegacyMemoryMigration = (): Promise<void> => {
-    if (getAutonomousMemoryMode() !== "autonomous") {
-      return Promise.resolve();
-    }
     autonomousMemoryMigrationsPending += 1;
+    const migrationLease = beginSharedMemoryMigration();
     const run = autonomousMemoryMigrationTail.then(async () => {
-      if (getAutonomousMemoryMode() !== "autonomous") return;
+      const lease = await migrationLease;
       try {
-        const result = await migrateLegacyMemoryFiles({
-          provider: autonomousMemoryToolProvider,
-          projectCatalog: createCurrentProjectCatalog(),
-        });
-        log(
-          `[memory] Legacy migration complete imported=${result.imported.length} missing=${result.skippedMissing.length}`,
-        );
-      } catch (error) {
-        log(`[memory] Legacy migration failed: ${String(error)}`);
+        currentAutonomousMemoryMode = (await getAutonomousMemoryMode()).mode;
+        if (currentAutonomousMemoryMode !== "autonomous") return;
+        try {
+          const result = await migrateSharedMemoryStore({
+            legacyRoot: retrievalStoreRoot,
+            canonicalRoot: sharedMemoryStoreRoot,
+          });
+          log(
+            `[memory] Retrieval-store migration source=${result.sourceKey} recordsAdded=${result.autonomousMemory.recordsAdded} ` +
+              `recordsUpdated=${result.autonomousMemory.recordsUpdated} derivedSessions=${result.derivedSessions.sessionCount} ` +
+              `derivedStatus=${result.derivedSessions.status}`,
+          );
+        } catch (error) {
+          log(`[memory] Retrieval-store migration failed: ${String(error)}`);
+        }
+        try {
+          const result = await migrateLegacyMemoryFiles({
+            provider: autonomousMemoryToolProvider,
+            projectCatalog: createCurrentProjectCatalog(),
+          });
+          log(
+            `[memory] Legacy file migration complete imported=${result.imported.length} missing=${result.skippedMissing.length}`,
+          );
+        } catch (error) {
+          log(`[memory] Legacy file migration failed: ${String(error)}`);
+        }
+      } finally {
+        await lease.dispose();
       }
     });
     const settled = run.finally(() => {
@@ -2202,10 +2245,8 @@ export async function activate(
       mode:
         autonomousMemoryMigrationsPending > 0
           ? "off"
-          : getAutonomousMemoryMode(),
-      retrievalStoreRoot: getRetrievalStoreRoot(
-        context.globalStorageUri.fsPath,
-      ),
+          : currentAutonomousMemoryMode,
+      retrievalStoreRoot: sharedMemoryStoreRoot,
     },
     capabilities: isBrowserGatewayOwnerPublicationEnabled(
       browserGatewayDataPlaneMode,
@@ -2221,9 +2262,7 @@ export async function activate(
   const refreshMemoryRuntimeAfterMigration = (): void => {
     helperCoreOwner.memoryRuntime = {
       mode: "off",
-      retrievalStoreRoot: getRetrievalStoreRoot(
-        context.globalStorageUri.fsPath,
-      ),
+      retrievalStoreRoot: sharedMemoryStoreRoot,
     };
     void browserGatewayHelperLeaseClient?.refresh();
     void runLegacyMemoryMigration().finally(() => {
@@ -2231,10 +2270,8 @@ export async function activate(
         mode:
           autonomousMemoryMigrationsPending > 0
             ? "off"
-            : getAutonomousMemoryMode(),
-        retrievalStoreRoot: getRetrievalStoreRoot(
-          context.globalStorageUri.fsPath,
-        ),
+            : currentAutonomousMemoryMode,
+        retrievalStoreRoot: sharedMemoryStoreRoot,
       };
       void browserGatewayHelperLeaseClient?.refresh();
       void chatViewProvider.refreshContextHealth();
@@ -2243,23 +2280,37 @@ export async function activate(
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (!event.affectsConfiguration("agentlink.memory.mode")) return;
-      if (getAutonomousMemoryMode() === "off") {
-        helperCoreOwner.memoryRuntime = {
-          mode: "off",
-          retrievalStoreRoot: getRetrievalStoreRoot(
-            context.globalStorageUri.fsPath,
-          ),
-        };
-        void browserGatewayHelperLeaseClient?.refresh();
-        void chatViewProvider.refreshContextHealth();
-        return;
-      }
-      refreshMemoryRuntimeAfterMigration();
+      void (async () => {
+        const nextMode = getConfiguredAutonomousMemoryMode();
+        try {
+          await sharedMemoryConfigStore.write(nextMode);
+        } catch (error) {
+          log(`[memory] Failed to update shared memory mode: ${String(error)}`);
+          void chatViewProvider.refreshContextHealth();
+          return;
+        }
+        currentAutonomousMemoryMode = nextMode;
+        if (currentAutonomousMemoryMode === "off") {
+          helperCoreOwner.memoryRuntime = {
+            mode: "off",
+            retrievalStoreRoot: sharedMemoryStoreRoot,
+          };
+          void browserGatewayHelperLeaseClient?.refresh();
+          void chatViewProvider.refreshContextHealth();
+          return;
+        }
+        refreshMemoryRuntimeAfterMigration();
+      })().catch((error) => {
+        log(`[memory] Failed to apply memory mode change: ${String(error)}`);
+      });
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
-      if (getAutonomousMemoryMode() === "autonomous") {
-        refreshMemoryRuntimeAfterMigration();
-      }
+      void getAutonomousMemoryMode().then((snapshot) => {
+        currentAutonomousMemoryMode = snapshot.mode;
+        if (snapshot.mode === "autonomous") {
+          refreshMemoryRuntimeAfterMigration();
+        }
+      });
     }),
   );
 
@@ -2757,10 +2808,8 @@ export async function activate(
         mode:
           autonomousMemoryMigrationsPending > 0
             ? "off"
-            : getAutonomousMemoryMode(),
-        retrievalStoreRoot: getRetrievalStoreRoot(
-          context.globalStorageUri.fsPath,
-        ),
+            : currentAutonomousMemoryMode,
+        retrievalStoreRoot: sharedMemoryStoreRoot,
       };
       void chatViewProvider.refreshContextHealth();
       return ensureBrowserGatewayRuntimeReady();

@@ -2,8 +2,8 @@ import type {
   ApprovalRequest,
   DecisionMessage,
 } from "../../approvals/webview/types.js";
-import type { ChatMessage } from "../../agent/webview/types.js";
-import type { BrowserGatewayThemeSnapshot } from "../../shared/types.js";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
+import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import type { BrowserGatewayAskAgentPreferencesSnapshot } from "../browserGatewayAskAgentPreferences.js";
 import type {
   BrowserGatewayAskAgentHistorySnapshot,
@@ -12,7 +12,7 @@ import type {
 } from "../browserGatewayAskAgentSessionStore.js";
 import { BrowserGatewayAskAgentSessionStore } from "../browserGatewayAskAgentSessionStore.js";
 import type { BrowserGatewayModelCredentialStatus } from "../browserGatewayModelCredentialCache.js";
-import type { CoreCapabilityStatusDto } from "../../core/sessionProtocol.js";
+import type { CoreCapabilityStatusDto } from "@agentlink/protocol/session";
 import type { MemoryCandidateKind } from "../../shared/memoryCandidates.js";
 import type { BrowserGatewayCoreOwnerRegistry } from "../coreOwnerRegistry.js";
 import {

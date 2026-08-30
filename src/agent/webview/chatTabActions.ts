@@ -1,5 +1,5 @@
 import type { ChatPaneAddress } from "../chatPaneProtocol.js";
-import type { ChatWorkspaceViewSnapshot } from "../chatTabProtocol.js";
+import type { ChatWorkspaceViewSnapshot } from "@agentlink/protocol/chat-workspace";
 
 export function addressChatWebviewMessage(
   message: unknown,

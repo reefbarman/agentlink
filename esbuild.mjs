@@ -17,6 +17,7 @@ import {
 import { resolveBrowserGatewayDevBuild } from "./scripts/browser-gateway-build-env.mjs";
 import { stageRetrievalRuntime } from "./scripts/package-retrieval-runtime.mjs";
 import { stageSandboxRuntime } from "./scripts/package-sandbox-runtime.mjs";
+import { workspacePackageClosurePlugin } from "./scripts/workspace-bundle-closure.mjs";
 
 const watch = process.argv.includes("--watch");
 const browserGatewayReportArgument = process.argv.find((argument) =>
@@ -49,6 +50,8 @@ const extensionOptions = {
   target: "node22",
   sourcemap: true,
   minify: false,
+  metafile: true,
+  plugins: [workspacePackageClosurePlugin],
   define: {
     __DEV_BUILD__: JSON.stringify(devBuild),
   },
@@ -65,6 +68,8 @@ const composeRuntimeOptions = {
   target: "node22",
   sourcemap: true,
   minify: false,
+  metafile: true,
+  plugins: [workspacePackageClosurePlugin],
 };
 
 /** @type {esbuild.BuildOptions} */
@@ -78,6 +83,8 @@ const webviewBase = {
   keepNames: true,
   minify: true,
   assetNames: "[name]",
+  metafile: true,
+  plugins: [workspacePackageClosurePlugin],
   loader: {
     ".ttf": "file",
   },
@@ -144,7 +151,7 @@ const browserGatewayOptions = {
   chunkNames: "browser-gateway-chunks/[name]-[hash]",
   splitting: true,
   metafile: true,
-  plugins: [browserMonacoExternalPlugin],
+  plugins: [browserMonacoExternalPlugin, workspacePackageClosurePlugin],
 };
 
 const browserGatewayMonacoOptions = {
@@ -195,6 +202,8 @@ const monacoWorkerOptions = {
   target: "es2022",
   sourcemap: true,
   minify: true,
+  metafile: true,
+  plugins: [workspacePackageClosurePlugin],
 };
 
 /** @type {esbuild.BuildOptions} */
@@ -208,6 +217,8 @@ const indexerOptions = {
   target: "node22",
   sourcemap: true,
   minify: false,
+  metafile: true,
+  plugins: [workspacePackageClosurePlugin],
   define: {
     __DEV_BUILD__: JSON.stringify(devBuild),
   },
@@ -231,6 +242,8 @@ const browserGatewayHelperOptions = {
   target: "node22",
   sourcemap: true,
   minify: false,
+  metafile: true,
+  plugins: [workspacePackageClosurePlugin],
   define: {
     __DEV_BUILD__: JSON.stringify(devBuild),
   },

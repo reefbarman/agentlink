@@ -3,7 +3,7 @@
 import { waitFor } from "@testing-library/preact";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { HostTerminalTab } from "../../core/terminalProtocol.js";
+import type { HostTerminalTab } from "@agentlink/protocol/terminal";
 import {
   TERMINAL_SURFACE_PROTOCOL_VERSION,
   type HostTerminalReplaySnapshot,

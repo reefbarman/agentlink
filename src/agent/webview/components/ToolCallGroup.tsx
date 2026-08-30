@@ -1,6 +1,6 @@
 import { useMemo, useState } from "preact/hooks";
 
-import type { ContentBlock } from "../types";
+import type { ContentBlock } from "@agentlink/protocol/chat-transcript";
 import { normalizeProjectedToolName } from "../../../shared/chatProjection";
 import {
   ToolCallBlock,
@@ -30,7 +30,7 @@ interface ToolCallGroupProps {
   onPromoteMcpToolApproval?: (promotion: {
     serverName: string;
     bareToolName: string;
-    mutationTarget?: import("../../../shared/types").McpApprovalPromotionMeta["mutationTarget"];
+    mutationTarget?: import("@agentlink/protocol/tool-result").McpApprovalPromotionMeta["mutationTarget"];
     scope: "session" | "project" | "global";
   }) => void;
 }

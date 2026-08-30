@@ -1,5 +1,5 @@
-import type { ReasoningEffort } from "../types.js";
-import type { RequestContextBreakdown } from "../../../shared/types.js";
+import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
+import type { RequestContextBreakdown } from "@agentlink/protocol/context-diagnostics";
 import { useState } from "preact/hooks";
 
 interface ApiRequestBlockProps {

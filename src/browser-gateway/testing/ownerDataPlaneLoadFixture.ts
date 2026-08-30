@@ -9,7 +9,10 @@ import type {
   BrowserGatewayOwnerProjectionSourceKind,
   BrowserGatewayOwnerProjectionSources,
 } from "../dataPlane/ownerProjectionSources.js";
-import type { ChatMessage, ContentBlock } from "../../agent/webview/types.js";
+import type {
+  ChatMessage,
+  ContentBlock,
+} from "@agentlink/protocol/chat-transcript";
 import {
   HttpBrowserGatewayOwnerTransport,
   isBrowserGatewayOwnerImmediateEvent,

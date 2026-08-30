@@ -8,7 +8,7 @@ import {
   type SkillEntry,
 } from "./skillLoader.js";
 import type { AgentPluginCatalogProvider } from "./AgentPluginCatalog.js";
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 
 export interface SlashCommand {
   name: string;

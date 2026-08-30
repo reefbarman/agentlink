@@ -7,7 +7,7 @@ import type { SandboxViolation } from "../../core/sandboxPolicy.js";
 import {
   isValidTerminalDimensions,
   type TerminalDimensions,
-} from "../../core/terminalProtocol.js";
+} from "@agentlink/protocol/terminal";
 import { Utf8TailBuffer } from "../Utf8TailBuffer.js";
 import type {
   SandboxCommandDisposable,

@@ -11,8 +11,8 @@ import type {
 import type { AgentPluginCatalogProvider } from "./AgentPluginCatalog.js";
 import type { ConfigStore } from "../approvals/ConfigStore.js";
 import { HookRuntime } from "../core/hooks/HookRuntime.js";
-import type { OnApprovalRequest } from "../shared/types.js";
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 import { parseHookSources } from "../core/hooks/hookConfig.js";
 
 const HOOK_NAMESPACES = [".agents", ".claude", ".codex", ".agentlink"] as const;

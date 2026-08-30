@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "preact/hooks";
-import type { TodoItem } from "../types";
+
+import type { TodoItem } from "@agentlink/protocol/chat-transcript";
 
 interface TodoPanelProps {
   todos: TodoItem[];

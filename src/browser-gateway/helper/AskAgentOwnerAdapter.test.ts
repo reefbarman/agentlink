@@ -1,7 +1,7 @@
 /** @vitest-environment node */
 
-import type { ChatMessage } from "../../agent/webview/types.js";
-import type { BrowserGatewayThemeSnapshot } from "../../shared/types.js";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
+import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import { BROWSER_GATEWAY_ASK_AGENT_OWNER_ID } from "../browserGatewayAskAgentSessionStore.js";
 import { BrowserGatewayCoreOwnerRegistry } from "../coreOwnerRegistry.js";
 import {

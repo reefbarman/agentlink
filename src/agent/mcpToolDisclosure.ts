@@ -1,7 +1,8 @@
 import type { McpToolDisclosureMode } from "../core/tools/types.js";
 import type { ToolDefinition } from "./providers/types.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
-import { parseMcpToolName } from "./mcpToolNames.js";
+import { isProviderSafeToolName } from "../core/tools/providerToolNames.js";
+import { parseMcpToolName } from "@agentlink/protocol/mcp-tool-identity";
 
 export type { McpToolDisclosureMode };
 
@@ -190,12 +191,21 @@ export function partitionMcpToolsForDisclosure(
       mode === "deferred" ||
       (mode === "auto" &&
         measurement.estimatedTokens >= perServerTokenThreshold);
-    const forcedInlineTools = normallyDeferred
-      ? serverTools.filter((tool) => forceInlineToolNames.has(tool.name))
-      : [];
-    const remainingDeferredTools = normallyDeferred
-      ? serverTools.filter((tool) => !forceInlineToolNames.has(tool.name))
-      : [];
+    // Provider APIs reject function names outside this portable character set.
+    // Keep those MCP tools usable through find_mcp_tools/call_mcp_tool instead
+    // of allowing one invalid server or tool name to poison the whole request.
+    const hasProviderUnsafeTool = serverTools.some(
+      (tool) => !isProviderSafeToolName(tool.name),
+    );
+    const forcedInlineTools =
+      normallyDeferred && !hasProviderUnsafeTool
+        ? serverTools.filter((tool) => forceInlineToolNames.has(tool.name))
+        : [];
+    const remainingDeferredTools = hasProviderUnsafeTool
+      ? serverTools
+      : normallyDeferred
+        ? serverTools.filter((tool) => !forceInlineToolNames.has(tool.name))
+        : [];
 
     const allBareToolNames = serverTools
       .map((tool) => parseMcpToolName(tool.name)?.bareToolName ?? tool.name)
@@ -215,7 +225,7 @@ export function partitionMcpToolsForDisclosure(
       deferred: remainingDeferredTools.length > 0,
     });
 
-    if (!normallyDeferred) {
+    if (!normallyDeferred && !hasProviderUnsafeTool) {
       inlineTools.push(...serverTools);
       continue;
     }

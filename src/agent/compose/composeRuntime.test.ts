@@ -21,7 +21,7 @@ import {
   ComposeScopeError,
   type ComposeExecutionScope,
 } from "./composeScope.js";
-import type { ToolResult } from "../../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 const wasmPath =
   require.resolve("@jitl/quickjs-wasmfile-release-asyncify/wasm");

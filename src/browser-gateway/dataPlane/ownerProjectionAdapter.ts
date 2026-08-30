@@ -2,8 +2,8 @@ import type {
   ChatMessage,
   ContentBlock,
   TodoItem,
-} from "../../agent/webview/types.js";
-import { isCoreReasoningEffort } from "../../core/modelCatalog.js";
+} from "@agentlink/protocol/chat-transcript";
+import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import { utf8ByteLength } from "../../shared/streamingBaselineMetrics.js";
 import {
   BROWSER_GATEWAY_COMMAND_IDEMPOTENCY,

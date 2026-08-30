@@ -1,8 +1,9 @@
 import type {
-  MemoryOperation,
   MemoryScope,
   MemoryTier,
-} from "../approvals/webview/types.js";
+} from "@agentlink/protocol/inline-approval";
+
+import type { MemoryOperation } from "../approvals/webview/types.js";
 
 const MEMORY_NAME_RE = /^[a-z0-9](?:[a-z0-9]|-(?!-)){0,62}[a-z0-9]$/;
 

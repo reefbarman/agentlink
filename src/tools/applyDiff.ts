@@ -6,11 +6,11 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 
 import {
-  type ToolResult,
-  type OnApprovalRequest,
   errorResult,
   successResult,
-} from "../shared/types.js";
+  type ToolResult,
+} from "@agentlink/protocol/tool-result";
+import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
 import { classifyEditDurability } from "../core/editDurability.js";
 import {
   APPLY_DIFF_INPUT_GRAMMAR,

@@ -1,0 +1,31 @@
+{
+  "name": "@agentlink/node-host",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Default Node.js host capabilities for AgentLink core",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "lint": "tsc -p tsconfig.json --noEmit && oxlint src --import-plugin --report-unused-disable-directives --deny-warnings",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@agentlink/core": "0.1.0",
+    "@agentlink/protocol": "0.1.0"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

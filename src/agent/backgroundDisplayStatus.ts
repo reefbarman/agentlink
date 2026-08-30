@@ -1,4 +1,4 @@
-import type { BgSessionInfo } from "../shared/types.js";
+import type { BgSessionInfo } from "@agentlink/protocol/background-result";
 
 type BackgroundStatus = BgSessionInfo["status"];
 

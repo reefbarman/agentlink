@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleApplyCodeAction, handleGetCodeActions } from "./codeActions.js";
 
-import type { ToolResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 function textPayload(result: ToolResult) {
   return JSON.parse((result.content[0] as { type: "text"; text: string }).text);

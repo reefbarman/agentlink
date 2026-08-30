@@ -7,7 +7,7 @@ import {
 import {
   addressChatPaneMessage,
   type ChatPaneAddress,
-} from "./chatPaneProtocol.js";
+} from "@agentlink/protocol/chat-pane-transport";
 
 const address: ChatPaneAddress = {
   controllerEpoch: "controller-1",

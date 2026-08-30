@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render } from "@testing-library/preact";
 
-import type { SlashCommandInfo } from "../types";
+import type { ChatSlashCommandInfo as SlashCommandInfo } from "@agentlink/protocol/chat-catalog";
 import { useRef } from "preact/hooks";
 import { useSlashCommandPopup } from "./useSlashCommandPopup";
 

@@ -29,7 +29,7 @@ import {
 import type {
   FindReplaceFileGroup,
   FindReplacePreviewData,
-} from "../../findReplace/webview/types.js";
+} from "@agentlink/protocol/find-replace-preview";
 import { isMemoryProtectedPath } from "../../approvals/protectedPaths.js";
 import { classifyGuardianPathRisk } from "../../approvals/actionApprovalReview.js";
 import {
@@ -49,7 +49,7 @@ import { canonicalizePath, getRelativePath } from "../../util/paths.js";
 import { resolveAndValidatePath } from "../../util/paths.js";
 import { withFileLock, withFileLocks } from "../../util/fileLock.js";
 import { withPrimaryEditorColumn } from "../../util/editorPlacement.js";
-import { errorResult, type ToolResult } from "../../shared/types.js";
+import { errorResult, type ToolResult } from "@agentlink/protocol/tool-result";
 
 interface ClassifiedWriteTarget {
   absolutePath: string;
@@ -58,7 +58,7 @@ interface ClassifiedWriteTarget {
 
 function isApproveForMePolicy(
   policy:
-    | import("../../core/capabilities/terminal.js").TerminalApprovalModeSnapshot
+    | import("@agentlink/protocol/terminal").TerminalApprovalModeSnapshot
     | undefined,
 ): boolean {
   return (
@@ -1357,7 +1357,7 @@ export function createVscodeWriteApprovalPolicyProvider(
   approvalManager: ApprovalManager,
   getApprovalMode?: (
     sessionId: string,
-  ) => import("../../core/capabilities/terminal.js").TerminalApprovalModeSnapshot,
+  ) => import("@agentlink/protocol/terminal").TerminalApprovalModeSnapshot,
 ): WriteApprovalPolicyProvider {
   const getAuthorization = (query: WriteApprovalQuery) => {
     const masterBypass = getConfiguredMasterBypass();

@@ -4,7 +4,7 @@ import type {
   McpElicitationMultiSelectField,
   McpElicitationStringField,
   McpElicitationValues,
-} from "../mcpElicitation.js";
+} from "@agentlink/protocol/mcp-elicitation";
 
 export interface McpElicitationFormControlsProps {
   fields: readonly McpElicitationField[];

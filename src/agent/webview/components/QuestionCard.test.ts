@@ -8,7 +8,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
-import type { Question } from "../types";
+import type { UserQuestion as Question } from "@agentlink/protocol/structured-question";
 import { h } from "preact";
 
 afterEach(() => {

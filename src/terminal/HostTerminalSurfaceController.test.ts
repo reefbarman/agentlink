@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { TERMINAL_SURFACE_PROTOCOL_VERSION } from "./terminalSurfaceProtocol.js";
+import { TERMINAL_SURFACE_PROTOCOL_VERSION } from "@agentlink/protocol/terminal-surface";
 import { createInertHostTerminalSurfaceController } from "./HostTerminalSurfaceController.js";
 
 describe("inert host terminal surface controller", () => {

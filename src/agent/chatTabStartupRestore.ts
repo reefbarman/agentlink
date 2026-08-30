@@ -2,7 +2,7 @@ import type {
   ChatTab,
   ChatTabLayout,
   ChatTabPlacement,
-} from "./ChatTabController.js";
+} from "@agentlink/protocol/chat-workspace";
 
 interface RestoredSession {
   id: string;

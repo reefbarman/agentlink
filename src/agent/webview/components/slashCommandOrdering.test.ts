@@ -4,7 +4,7 @@ import {
   orderSlashCommandsForPicker,
 } from "./slashCommandOrdering";
 
-import type { SlashCommandInfo } from "../types";
+import type { ChatSlashCommandInfo as SlashCommandInfo } from "@agentlink/protocol/chat-catalog";
 
 const commands: SlashCommandInfo[] = [
   {

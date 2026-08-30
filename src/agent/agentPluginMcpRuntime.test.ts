@@ -17,7 +17,7 @@ import {
   loadAgentPluginStdioMcpConfigs,
 } from "./agentPluginMcpRuntime.js";
 
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 
 function projectScope(
   projectId: string,

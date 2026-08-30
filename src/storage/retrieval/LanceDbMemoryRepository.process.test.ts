@@ -80,15 +80,23 @@ describe("LanceDbMemoryRepository process resilience", () => {
       children.push(reader.child);
       expect(await reader.waitFor("ready")).toMatchObject({ role: "reader" });
 
-      for (const role of ["writer-a", "writer-b"] as const) {
+      const writers = (["writer-a", "writer-b"] as const).map((role) => {
         const writer = startFixture(root, role);
         children.push(writer.child);
-        expect(await writer.waitFor("committed")).toMatchObject({
-          role,
-          result: { disposition: "created" },
-        });
-        await waitForExit(writer.child);
-      }
+        return { role, writer };
+      });
+      const commits = await Promise.all(
+        writers.map(async ({ role, writer }) => {
+          const committed = await writer.waitFor("committed");
+          expect(committed).toMatchObject({
+            role,
+            result: { disposition: "created" },
+          });
+          await waitForExit(writer.child);
+          return committed;
+        }),
+      );
+      expect(commits).toHaveLength(2);
 
       reader.child.send({ type: "inspect" });
       const beforeCrash = await reader.waitFor("inspection");

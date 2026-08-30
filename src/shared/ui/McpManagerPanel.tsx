@@ -11,15 +11,15 @@ import type {
   McpManagerView,
   McpSecretMutationMode,
   McpSecretRecordMutation,
-} from "../mcpManagerTypes";
+} from "@agentlink/protocol/mcp-manager";
 import {
   canonicalDraftToWriteDraft,
   validateMcpServerDraft,
-} from "../mcpConfigValidation";
+} from "@agentlink/protocol/mcp-config-validation";
 import { useEffect, useMemo, useState } from "preact/hooks";
 
 import type { ComponentChildren } from "preact";
-import { parseMcpConfigImport } from "../mcpConfigImport";
+import { parseMcpConfigImport } from "@agentlink/protocol/mcp-config-import";
 import { randomId } from "../randomId";
 
 type PanelView = "overview" | "sources" | "guided" | "import";

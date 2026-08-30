@@ -1,8 +1,8 @@
+import type { HostTerminalBlockState } from "@agentlink/protocol/terminal-surface";
 import {
   createHostTerminalBlockState,
   reduceHostTerminalBlocks,
   type HostTerminalBlockAction,
-  type HostTerminalBlockState,
 } from "./hostTerminalBlocks.js";
 import {
   createHostTerminalPresentationState,

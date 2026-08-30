@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from "preact/hooks";
-import type { FindReplacePreviewData } from "./types.js";
+import { useCallback, useEffect, useState } from "preact/hooks";
+
 import { FileSection } from "./components/FileSection.js";
+import type { FindReplacePreviewData } from "@agentlink/protocol/find-replace-preview";
 
 interface AppProps {
   vscodeApi: ReturnType<typeof acquireVsCodeApi>;

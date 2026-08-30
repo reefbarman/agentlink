@@ -4,7 +4,7 @@ import {
 } from "../../../shared/ui/ToolbarSelector";
 import { useEffect, useRef, useState } from "preact/hooks";
 
-import type { WebviewModelInfo } from "../types";
+import type { ChatModelInfo as WebviewModelInfo } from "@agentlink/protocol/chat-catalog";
 
 interface ModelSelectorProps {
   currentModel: string;

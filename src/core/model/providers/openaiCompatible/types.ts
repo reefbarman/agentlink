@@ -4,7 +4,7 @@ import type {
 } from "../../../modelRuntime.js";
 
 import type { CoreJsonValue } from "../../../webAccess.js";
-import type { CoreReasoningEffort } from "../../../modelCatalog.js";
+import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 
 export type OpenAiCompatibleProfileKind = "generic" | "openrouter";
 
@@ -120,6 +120,18 @@ export interface OpenAiCompatibleUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
+  input_tokens_details?: OpenAiCompatibleInputTokenDetails;
+  prompt_tokens_details?: OpenAiCompatibleInputTokenDetails;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_write_input_tokens?: number;
+  cache_write_tokens?: number;
+}
+
+export interface OpenAiCompatibleInputTokenDetails {
+  cached_tokens?: number;
+  cache_creation_tokens?: number;
+  cache_write_tokens?: number;
 }
 
 export interface OpenAiCompatibleDeltaToolCall {

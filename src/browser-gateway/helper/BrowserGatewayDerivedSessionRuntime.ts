@@ -7,25 +7,18 @@ import type {
 } from "../../core/session/DerivedSessionRetrievalService.js";
 import { DerivedSessionRetrievalService } from "../../core/session/DerivedSessionRetrievalService.js";
 import { LanceDbRetrievalRepository } from "../../storage/retrieval/LanceDbRetrievalRepository.js";
+import { isSharedMemoryMigrationPending } from "../../storage/retrieval/sharedMemoryMigrationState.js";
+import { getSharedMemoryStoreRoot } from "../../storage/retrieval/sharedMemoryStorePaths.js";
 import type { BrowserGatewayMemoryRuntimeDescriptor } from "../protocol.js";
 import {
   migrateBrowserGatewayAskAgentMemory,
   type BrowserGatewayAskAgentMemoryMigrationResult,
 } from "./browserGatewayAskAgentMemoryMigration.js";
 
-export interface BrowserGatewayDerivedSessionOwner {
-  ownerId: string;
-  retrievalStoreRoot?: string;
-}
-
 export interface BrowserGatewayDerivedSessionRuntimeResolution {
   status: "ready" | "unavailable";
-  retrievalStoreRoot?: string;
-  reason?:
-    | "no-connected-owner"
-    | "missing-owner-descriptor"
-    | "conflicting-store-roots"
-    | "migration-failed";
+  retrievalStoreRoot: string;
+  reason?: "migration-failed" | "migration-pending";
   detail?: string;
   migration?: BrowserGatewayAskAgentMemoryMigrationResult;
 }
@@ -54,49 +47,38 @@ export interface BrowserGatewayDerivedSessionProvider {
 }
 
 export interface BrowserGatewayDerivedSessionRuntimeOptions {
+  homeDir?: string;
+  isMigrationPending?: () => Promise<boolean>;
   createProvider?: (
     descriptor: BrowserGatewayMemoryRuntimeDescriptor,
   ) => BrowserGatewayDerivedSessionProvider;
 }
 
 export class BrowserGatewayDerivedSessionRuntime implements BrowserGatewayDerivedSessionProvider {
-  private resolution: BrowserGatewayDerivedSessionRuntimeResolution = {
-    status: "unavailable",
-    reason: "no-connected-owner",
-  };
+  private readonly retrievalStoreRoot: string;
+  private resolution: BrowserGatewayDerivedSessionRuntimeResolution;
   private provider: BrowserGatewayDerivedSessionProvider | undefined;
-  private providerRoot: string | undefined;
-  private initialization: Promise<void> | undefined;
+  private initialization:
+    | Promise<BrowserGatewayAskAgentMemoryMigrationResult>
+    | undefined;
+  private operationQueue: Promise<void> = Promise.resolve();
+  private readonly isMigrationPending: () => Promise<boolean>;
   private readonly createProvider: (
     descriptor: BrowserGatewayMemoryRuntimeDescriptor,
   ) => BrowserGatewayDerivedSessionProvider;
 
   constructor(options: BrowserGatewayDerivedSessionRuntimeOptions = {}) {
+    this.retrievalStoreRoot = getSharedMemoryStoreRoot(options.homeDir);
+    this.resolution = {
+      status: "ready",
+      retrievalStoreRoot: this.retrievalStoreRoot,
+    };
+    this.isMigrationPending =
+      options.isMigrationPending ??
+      (() => isSharedMemoryMigrationPending(options.homeDir));
     this.createProvider =
       options.createProvider ??
       ((descriptor) => new LanceDbDerivedSessionProvider(descriptor));
-  }
-
-  async setOwners(
-    owners: readonly BrowserGatewayDerivedSessionOwner[],
-  ): Promise<BrowserGatewayDerivedSessionRuntimeResolution> {
-    const next = resolveBrowserGatewayDerivedSessionRuntime(owners);
-    if (
-      this.provider &&
-      (next.status !== "ready" ||
-        next.retrievalStoreRoot !== this.providerRoot ||
-        this.resolution.reason === "migration-failed")
-    ) {
-      await this.provider.dispose();
-      this.provider = undefined;
-      this.providerRoot = undefined;
-      this.initialization = undefined;
-    }
-    this.resolution = next;
-    if (next.status === "ready" && next.retrievalStoreRoot) {
-      await this.ensureInitialized(next.retrievalStoreRoot);
-    }
-    return this.getResolution();
   }
 
   getResolution(): BrowserGatewayDerivedSessionRuntimeResolution {
@@ -104,18 +86,21 @@ export class BrowserGatewayDerivedSessionRuntime implements BrowserGatewayDerive
   }
 
   async initialize(): Promise<BrowserGatewayAskAgentMemoryMigrationResult> {
-    const provider = await this.requireProvider();
-    return await provider.initialize();
+    return await this.runExclusive(() => this.ensureInitialized());
   }
 
   async publish(request: PublishDerivedSessionRequest): Promise<void> {
-    await (await this.requireProvider()).publish(request);
+    await this.runExclusive(async () =>
+      (await this.requireProvider()).publish(request),
+    );
   }
 
   async recall(
     request: DerivedSessionRecallRequest,
   ): Promise<DerivedSessionRecallResult[]> {
-    return await (await this.requireProvider()).recall(request);
+    return await this.runExclusive(async () =>
+      (await this.requireProvider()).recall(request),
+    );
   }
 
   async deleteSession(request: {
@@ -124,96 +109,108 @@ export class BrowserGatewayDerivedSessionRuntime implements BrowserGatewayDerive
     scope: DerivedSessionScope;
     expectedRevision?: string;
   }): Promise<"deleted" | "stale_source" | "not_found"> {
-    return await (await this.requireProvider()).deleteSession(request);
+    return await this.runExclusive(async () =>
+      (await this.requireProvider()).deleteSession(request),
+    );
   }
 
   async clearScope(request: {
     scope: DerivedSessionScope;
     surface?: string;
   }): Promise<{ sourcesDeleted: number; recordsRemoved: number }> {
-    return await (await this.requireProvider()).clearScope(request);
+    return await this.runExclusive(async () =>
+      (await this.requireProvider()).clearScope(request),
+    );
   }
 
   async inspect(request?: {
     scopes?: DerivedSessionScope[];
     surfaces?: string[];
   }): Promise<DerivedSessionInspection> {
-    return await (await this.requireProvider()).inspect(request);
+    return await this.runExclusive(async () =>
+      (await this.requireProvider()).inspect(request),
+    );
   }
 
   async dispose(): Promise<void> {
-    const provider = this.provider;
-    this.provider = undefined;
-    this.providerRoot = undefined;
-    this.initialization = undefined;
-    if (provider) await provider.dispose();
+    await this.runExclusive(async () => {
+      const provider = this.provider;
+      this.provider = undefined;
+      this.initialization = undefined;
+      if (provider) await provider.dispose();
+    });
   }
 
-  private async ensureInitialized(root: string): Promise<void> {
-    if (!this.provider) {
-      this.provider = this.createProvider({
-        mode: "off",
-        retrievalStoreRoot: root,
-      });
-      this.providerRoot = root;
+  private runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operationQueue.then(operation, operation);
+    this.operationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  private async ensureInitialized(): Promise<BrowserGatewayAskAgentMemoryMigrationResult> {
+    if (await this.isMigrationPending()) {
+      this.resolution = {
+        status: "unavailable",
+        retrievalStoreRoot: this.retrievalStoreRoot,
+        reason: "migration-pending",
+      };
+      throw new Error(
+        "Derived session retrieval is unavailable while shared memory migration is running.",
+      );
     }
+    if (
+      this.resolution.reason === "migration-failed" ||
+      this.resolution.reason === "migration-pending"
+    ) {
+      const failedProvider = this.provider;
+      this.provider = undefined;
+      this.initialization = undefined;
+      this.resolution = {
+        status: "ready",
+        retrievalStoreRoot: this.retrievalStoreRoot,
+      };
+      if (failedProvider) await failedProvider.dispose();
+    }
+    this.provider ??= this.createProvider({
+      mode: "off",
+      retrievalStoreRoot: this.retrievalStoreRoot,
+    });
     if (!this.initialization) {
-      this.initialization = this.provider
+      const provider = this.provider;
+      this.initialization = provider
         .initialize()
         .then((migration) => {
           this.resolution = {
             status: "ready",
-            retrievalStoreRoot: root,
+            retrievalStoreRoot: this.retrievalStoreRoot,
             migration,
           };
           if (migration.status === "missing") {
             this.initialization = undefined;
           }
+          return migration;
         })
         .catch((error) => {
+          this.initialization = undefined;
           this.resolution = {
             status: "unavailable",
-            retrievalStoreRoot: root,
+            retrievalStoreRoot: this.retrievalStoreRoot,
             reason: "migration-failed",
             detail: error instanceof Error ? error.message : String(error),
           };
           throw error;
         });
     }
-    await this.initialization;
+    return await this.initialization;
   }
 
   private async requireProvider(): Promise<BrowserGatewayDerivedSessionProvider> {
-    if (
-      this.resolution.status !== "ready" ||
-      !this.resolution.retrievalStoreRoot
-    ) {
-      throw new Error(
-        `Derived session retrieval is unavailable in Browser Ask Agent: ${this.resolution.reason ?? "unavailable"}${this.resolution.detail ? ` (${this.resolution.detail})` : ""}.`,
-      );
-    }
-    await this.ensureInitialized(this.resolution.retrievalStoreRoot);
+    await this.ensureInitialized();
     return this.provider!;
   }
-}
-
-export function resolveBrowserGatewayDerivedSessionRuntime(
-  owners: readonly BrowserGatewayDerivedSessionOwner[],
-): BrowserGatewayDerivedSessionRuntimeResolution {
-  if (owners.length === 0) {
-    return { status: "unavailable", reason: "no-connected-owner" };
-  }
-  if (owners.some((owner) => !owner.retrievalStoreRoot?.trim())) {
-    return { status: "unavailable", reason: "missing-owner-descriptor" };
-  }
-  const roots = new Set(owners.map((owner) => owner.retrievalStoreRoot));
-  if (roots.size !== 1) {
-    return { status: "unavailable", reason: "conflicting-store-roots" };
-  }
-  return {
-    status: "ready",
-    retrievalStoreRoot: owners[0]!.retrievalStoreRoot!,
-  };
 }
 
 class LanceDbDerivedSessionProvider implements BrowserGatewayDerivedSessionProvider {

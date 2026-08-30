@@ -46,6 +46,30 @@ describe("SessionOutcomeTelemetry", () => {
       spawns: 2,
       reviewSpawns: 1,
       spawnedBeforeFirstAction: true,
+      efficiency: {
+        ordinaryAgentProviderAttempts: 2,
+        condenseProviderAttempts: 1,
+        completedApiTurns: 1,
+        usageEstimatedApiTurns: 0,
+        uncachedInputTokens: 20,
+        cacheReadTokens: 70,
+        cacheCreationTokens: 10,
+        outputTokens: 5,
+        cacheBreakdownApiTurns: 1,
+        cacheBreakdownInputTokens: 100,
+        cacheBreakdownReadTokens: 70,
+        cacheBreakdownCreationTokens: 10,
+        staticFloorSamples: 2,
+        staticFloorTokenSends: 50,
+        contextLedgerSamples: 2,
+        boundedContextRequestedTokens: 10,
+        boundedContextOmittedTokens: 5,
+        requestsRequestingBoundedContext: 1,
+        requestsWithContextOmission: 1,
+        contextOverflowTokens: 0,
+        requestsWithContextOverflow: 0,
+        toolCalls: 4,
+      },
     });
     telemetry.record({
       type: "task_completed",
@@ -101,6 +125,11 @@ describe("SessionOutcomeTelemetry", () => {
       turnDurationMs: 120_001,
       backgroundWaitMs: 60_000,
       spawnedBeforeFirstAction: true,
+      efficiency: {
+        ordinaryAgentProviderAttempts: 2,
+        cacheBreakdownReadTokens: 70,
+        toolCalls: 4,
+      },
     });
     expect(records[1]).toMatchObject({
       type: "task_completed",

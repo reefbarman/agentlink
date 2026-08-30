@@ -4,7 +4,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 
 import { InputArea } from "./InputArea";
-import type { SlashCommandInfo } from "../types";
+import type { ChatSlashCommandInfo as SlashCommandInfo } from "@agentlink/protocol/chat-catalog";
 
 class ImmediateFileReader {
   public result: string | ArrayBuffer | null = null;

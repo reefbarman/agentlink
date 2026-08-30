@@ -1,6 +1,6 @@
 import { AutonomousMemoryService } from "../../../core/memory/AutonomousMemoryService.js";
 import { LanceDbMemoryRepository } from "../LanceDbMemoryRepository.js";
-import type { MemoryProvenance } from "../../../core/memory/contracts.js";
+import type { MemoryProvenance } from "@agentlink/protocol/autonomous-memory";
 import { withRetrievalStoreLock } from "../retrievalStoreLock.js";
 
 const root = requireEnvironment("MEMORY_FIXTURE_ROOT");

@@ -1,7 +1,9 @@
-import type { BackgroundResultState } from "../../../core/capabilities/background";
-import type { ReasoningEffort } from "../types";
+import {
+  getBackgroundResultPresentation,
+  type BackgroundResultState,
+} from "@agentlink/protocol/background-result";
+import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
 import { StreamingText } from "./StreamingText";
-import { getBackgroundResultPresentation } from "../../../shared/backgroundResultPresentation";
 
 interface BgAgentResultBlockProps {
   sessionId: string;

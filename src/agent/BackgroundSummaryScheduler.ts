@@ -1,5 +1,5 @@
 import type { AgentEvent } from "./types.js";
-import type { BgSessionInfo } from "../shared/types.js";
+import type { BgSessionInfo } from "@agentlink/protocol/background-result";
 import { inferBackgroundDisplayStatus } from "./backgroundDisplayStatus.js";
 
 export type BackgroundSummaryTrigger =

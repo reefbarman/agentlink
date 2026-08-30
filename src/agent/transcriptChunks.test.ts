@@ -2,7 +2,7 @@ import {
   TODO_AUTO_CONTINUE_PROMPT,
   getLegacyTodoContinuationIndexes,
   migrateLegacyTodoContinuationTurnIndex,
-} from "../shared/todoContinuation.js";
+} from "@agentlink/protocol/todo-continuation";
 import { describe, expect, it } from "vitest";
 import {
   getPreviousChunkByUserTurns,

@@ -4,7 +4,7 @@ import { ChatSessionPane, ChatWorkspace } from "./ChatWorkspace";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
-import type { ChatWorkspaceViewSnapshot } from "../../chatTabProtocol.js";
+import type { ChatWorkspaceViewSnapshot } from "@agentlink/protocol/chat-workspace";
 
 const snapshot: ChatWorkspaceViewSnapshot = {
   controllerEpoch: "epoch-1",

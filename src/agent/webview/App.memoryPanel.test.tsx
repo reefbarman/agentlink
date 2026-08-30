@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 
+import type {
+  MemoryPanelSnapshot,
+  MemoryRecord,
+} from "@agentlink/protocol/autonomous-memory";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
 import { App } from "./App.js";
-import type { MemoryPanelSnapshot } from "../../core/capabilities/memory.js";
-import type { MemoryRecord } from "../../core/memory/contracts.js";
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();

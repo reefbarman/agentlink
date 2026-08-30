@@ -6317,6 +6317,16 @@ describe("AgentEngine", () => {
           model: "mock-fast",
           estimatedInputTokens: 11_000,
         });
+        options.onProviderRequestComplete?.({
+          requestId: "condense-request-1",
+          usage: {
+            inputTokens: 40,
+            outputTokens: 5,
+            cacheReadTokens: 60,
+            cacheCreationTokens: 0,
+            inputTokenBreakdownReported: true,
+          },
+        });
         return {
           messages: [{ role: "user", content: "summary", isSummary: true }],
           summary: "summary",
@@ -6344,12 +6354,24 @@ describe("AgentEngine", () => {
         type: "request_context_attribution",
         requestId: "condense-request-1",
         requestKind: "condense",
+        providerId: "mock",
         model: "mock-fast",
+        mode: "code",
+        promptProfile: "compatibility",
+        background: false,
         estimatedInputTokens: 11_000,
         toolResultContextAttributions: [],
         omittedToolResultContextAttributions: 0,
         pinnedMemoryTokens: 0,
         retrievedMemoryTokens: 0,
+        completedUsage: {
+          inputTokens: 100,
+          uncachedInputTokens: 40,
+          outputTokens: 5,
+          cacheReadTokens: 60,
+          cacheCreationTokens: 0,
+          inputTokenBreakdownReported: true,
+        },
       });
       const condense = events.find(
         (event): event is Extract<AgentEvent, { type: "condense" }> =>

@@ -1,3 +1,7 @@
+import type {
+  AgentErrorActions,
+  AgentRuntimeErrorPresentation,
+} from "./agentErrors.js";
 import {
   buildAgentErrorMessage,
   getAgentErrorActions,
@@ -9,7 +13,7 @@ import {
   isAgentRetryableErrorMessage,
   summarizeHtmlErrorText,
 } from "./agentErrors.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { createOpenAiCompatibleHttpError } from "../core/model/providers/openaiCompatible/errors.js";
 
@@ -102,6 +106,15 @@ describe("agentErrors", () => {
       ),
     ).toBe(true);
     expect(isAgentRetryableErrorMessage("validation failed")).toBe(false);
+  });
+
+  it("preserves package-owned presentation DTOs through the compatibility module", () => {
+    expectTypeOf<AgentErrorActions>().toEqualTypeOf<
+      import("@agentlink/protocol/agent-error-presentation").AgentErrorActions
+    >();
+    expectTypeOf<AgentRuntimeErrorPresentation>().toEqualTypeOf<
+      import("@agentlink/protocol/agent-error-presentation").AgentRuntimeErrorPresentation
+    >();
   });
 
   it("extracts optional runtime error code, actions, and retryable flag", () => {

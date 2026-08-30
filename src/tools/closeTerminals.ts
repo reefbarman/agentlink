@@ -1,5 +1,5 @@
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
-import { type ToolResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 export interface CloseTerminalsProviders {
   terminalProvider?: TerminalProvider;

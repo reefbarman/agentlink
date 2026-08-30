@@ -1,4 +1,8 @@
-import type { ModeInfo, SlashCommandInfo, WebviewModelInfo } from "../types";
+import type {
+  ChatModeInfo as ModeInfo,
+  ChatSlashCommandInfo as SlashCommandInfo,
+  ChatModelInfo as WebviewModelInfo,
+} from "@agentlink/protocol/chat-catalog";
 import {
   useCallback,
   useEffect,

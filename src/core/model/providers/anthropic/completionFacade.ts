@@ -1,4 +1,4 @@
-import type { CoreReasoningEffort } from "../../../modelCatalog.js";
+import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import type {
   CoreModelMessage,
   CoreModelProviderRequestAttempt,

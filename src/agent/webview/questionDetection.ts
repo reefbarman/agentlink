@@ -1,7 +1,7 @@
 import type {
   DetectedQuestion,
   DetectedQuestionOption,
-} from "../../shared/questionDetection";
+} from "@agentlink/protocol/question-detection";
 
 export type { DetectedQuestion, DetectedQuestionOption };
 

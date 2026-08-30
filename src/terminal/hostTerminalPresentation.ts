@@ -1,10 +1,9 @@
 import type {
+  AlternateScreenTransition,
   HostTerminalBlock,
   HostTerminalBlockState,
-} from "./hostTerminalBlocks.js";
-
-import type { AlternateScreenTransition } from "./alternateScreenTracker.js";
-import type { HostTerminalSurfaceCommandSummary } from "./terminalSurfaceProtocol.js";
+  HostTerminalSurfaceCommandSummary,
+} from "@agentlink/protocol/terminal-surface";
 
 export const MAX_SURFACE_COMMAND_LINE_CHARS = 300;
 

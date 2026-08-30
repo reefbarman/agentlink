@@ -1,7 +1,5 @@
-import {
-  evaluateTerminalOsc,
-  type TerminalOutputPolicyDecision,
-} from "./terminalOutputPolicy.js";
+import type { TerminalOutputPolicyDecision } from "@agentlink/protocol/terminal-surface";
+import { evaluateTerminalOsc } from "./terminalOutputPolicy.js";
 
 const DEFAULT_MAX_OSC_CHARACTERS = 8_192;
 

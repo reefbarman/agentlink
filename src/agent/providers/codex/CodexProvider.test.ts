@@ -370,6 +370,7 @@ describe("CodexProvider.complete", () => {
         outputTokens: 40,
         cacheReadTokens: 1024,
         cacheCreationTokens: 0,
+        inputTokenBreakdownReported: true,
       },
       providerResponseId: "resp_123",
       assistantMessage: {
@@ -423,6 +424,7 @@ describe("CodexProvider.complete", () => {
         outputTokens: 5,
         cacheReadTokens: 150,
         cacheCreationTokens: 0,
+        inputTokenBreakdownReported: true,
       },
       providerResponseId: undefined,
       assistantMessage: {
@@ -477,6 +479,7 @@ describe("CodexProvider.complete", () => {
         outputTokens: 10,
         cacheReadTokens: 120,
         cacheCreationTokens: 30,
+        inputTokenBreakdownReported: true,
       },
       providerResponseId: undefined,
       assistantMessage: {

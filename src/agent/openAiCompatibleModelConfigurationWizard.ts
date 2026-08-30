@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-import type { CoreReasoningEffort } from "../core/modelCatalog.js";
+import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import type {
   OpenAiCompatibleProfileKind,
   OpenAiCompatibleReasoningEffortMode,

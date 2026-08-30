@@ -3,9 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "./AgentSession.js";
 import {
   ChatTabController,
-  type ChatTabActionAddress,
   type ChatTabWorkspaceState,
 } from "./ChatTabController.js";
+import type { ChatTabActionAddress } from "@agentlink/protocol/chat-workspace";
 import { ChatTabHostCoordinator } from "./ChatTabHostCoordinator.js";
 import type { SessionInfo } from "./types.js";
 

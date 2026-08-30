@@ -1,7 +1,7 @@
 import * as os from "os";
 import * as path from "path";
 
-import type { ToolResultContextAttribution } from "../shared/types.js";
+import type { ToolResultContextAttribution } from "@agentlink/protocol/context-diagnostics";
 import { appendJsonlLinesWithLock } from "./jsonlAppend.js";
 import { randomUUID } from "crypto";
 
@@ -20,12 +20,16 @@ export type ContextUsageRecord =
       requestId: string;
       requestKind: "agent" | "condense";
       model: string;
+      providerId?: string;
+      mode?: string;
+      promptProfile?: string;
+      background?: boolean;
       estimatedInputTokens: number;
       toolResultAttributions: ToolResultContextAttribution[];
       omittedToolResultAttributions: number;
       pinnedMemoryTokens: number;
       retrievedMemoryTokens: number;
-      contextLedger?: import("../core/contextLedger.js").ContextLedgerSnapshot;
+      contextLedger?: import("@agentlink/protocol/context-ledger").ContextLedgerSnapshot;
     }
   | {
       /** A condense completed: usage dropped from prev to the post-condense estimate. */

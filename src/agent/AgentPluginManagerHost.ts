@@ -15,12 +15,10 @@ import type {
   AgentPluginManagerRow,
   AgentPluginManagerSnapshot as SharedAgentPluginManagerSnapshot,
   AgentPluginManagerSourceSummary,
-} from "../shared/agentPluginManagerTypes.js";
-import type { McpConfigMutationTarget } from "../shared/mcpManagerTypes.js";
-import type {
-  ProjectScopeResolver,
-  SessionProjectScope,
-} from "../core/workspaceProjects.js";
+} from "@agentlink/protocol/agent-plugin-manager";
+import type { McpConfigMutationTarget } from "@agentlink/protocol/mcp-manager";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
+import type { ProjectScopeResolver } from "../core/workspaceProjects.js";
 import {
   AgentPluginInstaller,
   type AcquiredAgentPluginSource,

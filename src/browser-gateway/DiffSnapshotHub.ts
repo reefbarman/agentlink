@@ -1,24 +1,11 @@
 import * as vscode from "vscode";
 
-export interface DiffSnapshot {
-  requestId: string;
-  filePath: string;
-  operation: "create" | "modify";
-  originalContent: string;
-  proposedContent: string;
-  outsideWorkspace: boolean;
-  createdAt: number;
-}
+import type { DiffSnapshot } from "@agentlink/protocol/diff-snapshot";
 
-export interface DiffSnapshotPreview {
-  requestId: string;
-  filePath: string;
-  operation: "create" | "modify";
-  originalPreview: string;
-  proposedPreview: string;
-  outsideWorkspace: boolean;
-  createdAt: number;
-}
+export type {
+  DiffSnapshot,
+  DiffSnapshotPreview,
+} from "@agentlink/protocol/diff-snapshot";
 
 class DiffSnapshotHub implements vscode.Disposable {
   private readonly snapshots = new Map<string, DiffSnapshot>();

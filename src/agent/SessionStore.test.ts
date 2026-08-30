@@ -2,8 +2,8 @@ import * as fs from "fs";
 import os from "os";
 import path from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildContextLedger } from "../core/contextLedger.js";
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import { buildContextLedger } from "@agentlink/protocol/context-ledger";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 import type { AgentMessage } from "./types.js";
 import { SessionStore, type SessionSummary } from "./SessionStore.js";
 import type {

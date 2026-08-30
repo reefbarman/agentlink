@@ -45,15 +45,13 @@ import { createProjectSettingsAccessor } from "../adapters/vscode/projectSetting
 import type { AgentEvent } from "./types.js";
 import type { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
 import type { ProjectMcpHubRegistry } from "./ProjectMcpHubRegistry.js";
-import type {
-  ProjectScopeResolver,
-  SessionProjectScope,
-} from "../core/workspaceProjects.js";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
+import type { ProjectScopeResolver } from "../core/workspaceProjects.js";
 import { WorkspaceMutationCoordinator } from "./WorkspaceMutationCoordinator.js";
 import type { SkillCatalogFallbackProvider } from "./skillCatalogFallbackProvider.js";
 import type { AgentPluginCatalogProvider } from "./AgentPluginCatalog.js";
-import { normalizePromptProfileOverrides } from "../core/promptProfile.js";
-import { commandApprovalPolicyFromLegacyTier } from "../approvals/commandApprovalPolicy.js";
+import { normalizePromptProfileOverrides } from "@agentlink/protocol/prompt-profile";
+import { commandApprovalPolicyFromLegacyTier } from "@agentlink/protocol/command-approval-policy";
 
 export interface AgentWorkspaceHost {
   getWorkspaceFolders(): WorkspaceFolderInfo[];
@@ -82,7 +80,7 @@ export interface AgentSessionConfigHost {
   getCommandApprovalPolicy?(
     scope?: Readonly<SessionProjectScope>,
   ): Exclude<
-    import("../approvals/commandApprovalPolicy.js").CommandApprovalPolicy,
+    import("@agentlink/protocol/command-approval-policy").CommandApprovalPolicy,
     "approve-for-me"
   >;
   getBgSummaryMode(scope?: Readonly<SessionProjectScope>): BgSummaryMode;
@@ -186,7 +184,7 @@ export interface AgentSessionManagerOptions {
   /** Fail-closed activation gate used when workspace execution state is unresolved. */
   executionUnavailableReason?: string;
   /** Activation-time primary project used only for pre-scope session records. */
-  legacyProjectScope?: import("../core/workspaceProjects.js").SessionProjectScope;
+  legacyProjectScope?: import("@agentlink/protocol/workspace-project").SessionProjectScope;
   /** Exact history directory shared by session persistence and activity traces. */
   historyDirectory?: string;
   /** Resolves the tab-owned terminal provider for a session and its attached fleet root. */

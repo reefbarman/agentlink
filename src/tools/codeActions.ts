@@ -4,7 +4,7 @@ import type {
   LanguageCodeActionsProvider,
 } from "../core/capabilities/language.js";
 
-import { type ToolResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { createLanguageToolHandler } from "./languageToolFactory.js";
 
 // --- Get code actions ---

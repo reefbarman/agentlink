@@ -1,4 +1,7 @@
-import type { ChatMessage, TodoItem } from "../types";
+import type {
+  ChatMessage,
+  TodoItem,
+} from "@agentlink/protocol/chat-transcript";
 import { EmptyState, PaneHeader } from "../../../shared/ui/Panes";
 
 import type { BackgroundRuntimeStatus } from "./backgroundRuntimeStatus";

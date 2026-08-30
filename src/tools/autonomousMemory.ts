@@ -1,12 +1,12 @@
 import type {
   ManageMemoryToolInput,
   MemoryToolExecutionContext,
-  MemoryToolProvider,
   RecallMemoryToolInput,
-} from "../core/capabilities/memory.js";
-import { errorResult, jsonResult } from "../shared/types.js";
+} from "@agentlink/protocol/autonomous-memory";
+import { errorResult, jsonResult } from "@agentlink/protocol/tool-result";
 
-import type { ToolResult } from "../shared/types.js";
+import type { MemoryToolProvider } from "../core/capabilities/memory.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 export async function handleManageMemory(
   input: ManageMemoryToolInput,

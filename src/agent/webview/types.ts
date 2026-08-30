@@ -1,102 +1,56 @@
 import type {
   BackgroundCompletionResult,
-  McpApprovalPromotionMeta,
-  RequestContextBreakdown,
-  RevertRecoveryNotice,
-} from "../../shared/types.js";
+  InFlightAssistantBlock,
+} from "@agentlink/protocol/session-hydration";
+import type {
+  ChatModeInfo,
+  ChatModelInfo,
+  ChatProjectInfo,
+  ChatReasoningEffort,
+  ChatSlashCommandInfo,
+} from "@agentlink/protocol/chat-catalog";
 import type {
   ChatTabActionConfirmationRequest,
   ChatTabActionFailure,
   ChatTabActionRejection,
   ChatWorkspaceViewSnapshot,
-} from "../chatTabProtocol.js";
+} from "@agentlink/protocol/chat-workspace";
 import type {
   McpConfigMutationResult,
   McpConfigSnapshot,
   McpManagerView,
-} from "../../shared/mcpManagerTypes.js";
+} from "@agentlink/protocol/mcp-manager";
 import type {
   MemoryPanelSnapshot,
   MemoryToolScope,
-} from "../../core/capabilities/memory.js";
+} from "@agentlink/protocol/autonomous-memory";
 import type {
-  TerminalApprovalPolicy,
-  TerminalApprovalReviewer,
-  TerminalExecutionPreset,
-} from "../../core/capabilities/terminal.js";
+  ChatMessage as ProtocolChatMessage,
+  ContentBlock as ProtocolContentBlock,
+  TodoItem as ProtocolTodoItem,
+} from "@agentlink/protocol/chat-transcript";
+import type {
+  StructuredQuestionRequest,
+  UserQuestion,
+} from "@agentlink/protocol/structured-question";
 
-import type { AgentPluginManagerSnapshot } from "../../shared/agentPluginManagerTypes.js";
-import type { CommandApprovalPolicy } from "../../approvals/commandApprovalPolicy.js";
-import type { ComposeTrace } from "../../shared/composeTypes.js";
-import type { ContextHealthSnapshot } from "../../shared/contextHealth.js";
+import type { AgentPluginManagerSnapshot } from "@agentlink/protocol/agent-plugin-manager";
+import type { ChatSessionHistorySummary } from "@agentlink/protocol/chat-session-history";
+import type { ChatStateSnapshot } from "@agentlink/protocol/chat-state";
+import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
+import type { ComposeTrace } from "@agentlink/protocol/compose";
 import type { LoadedInstructionDebugInfo } from "../../shared/chatProjection.js";
-import type { McpFormElicitationRequest } from "../../shared/mcpElicitation.js";
-import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation.js";
-import type { MemoryRecordDetail } from "../../core/memory/contracts.js";
+import type { McpApprovalPromotionMeta } from "@agentlink/protocol/tool-result";
+import type { McpFormElicitationRequest } from "@agentlink/protocol/mcp-elicitation";
+import type { McpUrlElicitationRequest } from "@agentlink/protocol/mcp-url-elicitation";
+import type { MemoryRecordDetail } from "@agentlink/protocol/autonomous-memory";
+import type { RequestContextBreakdown } from "@agentlink/protocol/context-diagnostics";
 
-export interface ProjectInfo {
-  projectId: string;
-  displayName: string;
-  availability: "available" | "unavailable";
-}
-
-/** A mode available for selection */
-export interface ModeInfo {
-  slug: string;
-  name: string;
-  icon: string;
-}
-
-/** Model info sent from the extension via agentModelsUpdate. */
-export type ReasoningEffort =
-  | "none"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max";
-
-export interface WebviewModelInfo {
-  id: string;
-  displayName: string;
-  provider: string;
-  providerDisplayName?: string;
-  supportsToolUse?: boolean;
-  supportsImages?: boolean;
-  contextWindow: number;
-  maxInputTokens?: number;
-  maxOutputTokens?: number;
-  reasoningEfforts?: ReasoningEffort[];
-  defaultReasoningEffort?: ReasoningEffort;
-  authenticated: boolean;
-  condenseThreshold?: number;
-}
-
-/** A slash command available for autocomplete */
-export interface SlashCommandInfo {
-  name: string;
-  /** Optional presentation/search alias. `name` remains the canonical command id. */
-  displayName?: string;
-  description: string;
-  source: "builtin" | "project" | "global" | "agentlink" | "skill";
-  /** True if this is a built-in command that executes immediately */
-  builtin: boolean;
-  /** Body to inject into input (for file-based commands) */
-  body?: string;
-  /** Absolute SKILL.md path for generated skill commands. */
-  skillPath?: string;
-  /** Exact canonical identity for generated skill commands. */
-  skillId?: string;
-  /** SHA-256 content revision advertised with the generated skill command. */
-  skillRevision?: string;
-  /** Codicon name to show next to the command */
-  icon?: string;
-  /** Value shown right-aligned (e.g. current model name) */
-  rightLabel?: string;
-  /** Show a checkmark — used in sub-pickers for current selection */
-  isCurrent?: boolean;
-}
+export type ProjectInfo = ChatProjectInfo;
+export type ModeInfo = ChatModeInfo;
+export type ReasoningEffort = ChatReasoningEffort;
+export type WebviewModelInfo = ChatModelInfo;
+export type SlashCommandInfo = ChatSlashCommandInfo;
 
 export interface ProviderUsageCardData {
   providers: Array<{
@@ -121,48 +75,9 @@ export interface ProviderUsageCardData {
   queriedAt: number;
 }
 
-/** A question posed by the agent via the ask_user tool */
-export interface QuestionRequest {
-  id: string;
-  /** Provider ask_user tool-call ID when it differs from the UI request ID. */
-  toolCallId?: string;
-  /** Visible explanation shown above structured questions. */
-  context: string;
-  questions: Question[];
-  /** When set, the question is from a background agent with this task name. */
-  backgroundTask?: string;
-}
-
-export interface Question {
-  id: string;
-  type:
-    | "multiple_choice"
-    | "multiple_select"
-    | "yes_no"
-    | "text"
-    | "scale"
-    | "confirmation";
-  question: string;
-  /** Visible explanation shown with this specific question. */
-  context?: string;
-  options?: string[];
-  /** The option value the agent recommends (must match one of the options strings) */
-  recommended?: string;
-  /** Allows submitting a blank text answer. Only applies to text questions. */
-  allowBlank?: boolean;
-  scale_min?: number;
-  scale_max?: number;
-  scale_min_label?: string;
-  scale_max_label?: string;
-  /**
-   * Maps answer values to agent mode slugs. When the user picks an answer
-   * with a mapped mode, the agent switches to that mode as part of the
-   * answer submission — no separate switch_mode approval is shown.
-   * Only supported on `multiple_choice` questions. At most one question per
-   * ask_user call may carry modeSwitch.
-   */
-  modeSwitch?: Record<string, string>;
-}
+/** A question posed by the agent via the ask_user tool. */
+export type Question = UserQuestion;
+export type QuestionRequest = StructuredQuestionRequest;
 
 /** Consumption vs. limits for a /btw side question, shown as a visible budget. */
 export interface BtwBudget {
@@ -332,7 +247,9 @@ export type ExtensionMessage =
   | {
       type: "agentFinalMarker";
       sessionId: string;
-      marker: import("../../shared/finalStatus.js").FinalMessageMarker | null;
+      marker:
+        | import("@agentlink/protocol/final-status").FinalMessageMarker
+        | null;
     }
   | {
       type: "agentCheckpointCreated";
@@ -411,7 +328,7 @@ export type ExtensionMessage =
       requestId: string;
       messageId: string;
       detected:
-        | import("../../shared/questionDetection").DetectedQuestion
+        | import("@agentlink/protocol/question-detection").DetectedQuestion
         | null;
       fallback: boolean;
     }
@@ -531,7 +448,7 @@ export type ExtensionMessage =
       /** True when this came from automatic startup restore rather than explicit user action. */
       restored?: boolean;
       /** Live tail: blocks of the model response currently streaming (not yet persisted). */
-      inFlight?: import("../../shared/types.js").InFlightAssistantBlock[];
+      inFlight?: InFlightAssistantBlock[];
       /** Whether the session's turn is still running at snapshot time. */
       streaming?: boolean;
       /** Whether the session has an interrupted run to resume (persisted runState). */
@@ -747,7 +664,9 @@ export type ExtensionMessage =
   | {
       type: "agentBgFinalMarker";
       sessionId: string;
-      marker: import("../../shared/finalStatus.js").FinalMessageMarker | null;
+      marker:
+        | import("@agentlink/protocol/final-status").FinalMessageMarker
+        | null;
     }
   | {
       type: "agentBgCondenseStart";
@@ -898,39 +817,7 @@ export type ShowBgTranscriptMessage = {
   todos: TodoItem[];
 };
 
-export interface ChatState {
-  sessionId: string | null;
-  projects?: ProjectInfo[];
-  defaultProjectId?: string | null;
-  project?: ProjectInfo | null;
-  mode: string;
-  model: string;
-  streaming: boolean;
-  interrupted?: boolean;
-  thinkingEnabled?: boolean;
-  reasoningEffort?: ReasoningEffort;
-  condenseThreshold?: number;
-  contextBudget?: {
-    contextWindow: number;
-    maxInputTokens: number;
-    usedInputTokens: number;
-    outputReservation: number;
-    safetyBufferTokens: number;
-    softThresholdBudget: number;
-    hardBudget: number;
-  };
-  contextHealth?: ContextHealthSnapshot | null;
-  agentWriteApproval?: "prompt" | "session" | "project" | "global";
-  commandApprovalPolicy?: CommandApprovalPolicy;
-  approvalPolicy?: TerminalApprovalPolicy;
-  approvalReviewer?: TerminalApprovalReviewer;
-  executionPreset?: TerminalExecutionPreset;
-  configuredCommandApprovalPolicy?: Exclude<
-    CommandApprovalPolicy,
-    "approve-for-me"
-  >;
-  revertRecoveryNotice?: RevertRecoveryNotice | null;
-}
+export type ChatState = ChatStateSnapshot;
 
 export interface SessionInfo {
   id: string;
@@ -952,239 +839,14 @@ export interface SessionInfo {
   lastActiveAt: number;
 }
 
-/** Persisted session summary from the SessionStore */
-export interface SessionSummary {
-  id: string;
-  project?: ProjectInfo;
-  mode: string;
-  model: string;
-  title: string;
-  messageCount: number;
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  createdAt: number;
-  lastActiveAt: number;
-}
+/** Persisted session summary projected for chat history surfaces. */
+export type SessionSummary = ChatSessionHistorySummary;
 
 // ── Ordered content blocks ──
 
-export type ContentBlock =
-  | { type: "thinking"; id: string; text: string; complete: boolean }
-  | { type: "text"; text: string }
-  | {
-      type: "tool_call";
-      id: string;
-      name: string;
-      inputJson: string;
-      result: string;
-      resultImages?: Array<{ mimeType: string; data: string }>;
-      resultDocuments?: Array<{
-        name: string;
-        mimeType: string;
-        data: string;
-      }>;
-      complete: boolean;
-      durationMs?: number;
-      startedAt?: number;
-      mcpApprovalPromotion?: McpApprovalPromotionMeta;
-      composeTrace?: ComposeTrace;
-    }
-  | {
-      type: "skill_load";
-      id: string;
-      inputJson: string;
-      result: string;
-      complete: boolean;
-      skillName?: string;
-      path?: string;
-      content?: string;
-      durationMs?: number;
-    }
-  | {
-      type: "bg_agent";
-      /** The background session ID */
-      sessionId: string;
-      /** Short task label */
-      task: string;
-      /** The full message/prompt sent to the background agent */
-      message?: string;
-      /** Resolved model used by the background agent */
-      resolvedModel?: string;
-      /** Resolved provider */
-      resolvedProvider?: string;
-      /** Thinking level selected for the background agent */
-      reasoningEffort?: ReasoningEffort;
-      /** Resolved mode */
-      resolvedMode?: string;
-      /** Task class used for routing */
-      taskClass?: string;
-      /** Routing decision reason */
-      routingReason?: string;
-    }
-  | {
-      type: "bg_agent_result";
-      /** The background session ID */
-      sessionId: string;
-      /** Short task label */
-      task: string;
-      /** Compatibility status for legacy transcript blocks. */
-      status: "completed" | "error" | "cancelled";
-      /** Authoritative terminal state for current transcript blocks. */
-      resultState?: import("../../core/capabilities/background.js").BackgroundResultState;
-      terminalReason?: string;
-      /** The formatted successful result text from the background agent. */
-      resultText?: string;
-      /** Useful output preserved for non-success terminal states. */
-      partialOutput?: string;
-      /** Optional concise summary for collapsed rendering */
-      summary?: string;
-      retrySafe?: boolean;
-      agentRetryable?: boolean;
-      /** Internal projection authority used to make live/replay merge order deterministic. */
-      sourceAuthority?: "canonical" | "tool" | "legacy";
-    }
-  | {
-      type: "question_answer";
-      /** Correlates live submissions with the eventual ask_user tool result. */
-      toolCallId?: string;
-      /** Array of Q&A pairs from the ask_user tool */
-      items: Array<{
-        question: string;
-        answer: string | string[] | number | boolean | null;
-        note?: string;
-      }>;
-    }
-  | {
-      type: "pairing_code";
-      pairingId: string;
-      code: string;
-      /** Milliseconds-since-epoch expiry for the pending pairing. */
-      expiresAt: number;
-      /** Candidate URLs to hand to the new device (mDNS first, then LAN IPs). */
-      pairingUrls: string[];
-      status: "pending" | "consumed" | "expired" | "cancelled";
-      /** Populated when status === "consumed". */
-      deviceLabel?: string;
-    };
+export type ContentBlock = ProtocolContentBlock;
 
-/** A chat message in the webview state */
-export interface ChatMessage {
-  id: string;
-  role: "user" | "assistant" | "condense" | "warning";
-  /** User messages: plain text. Assistant messages: empty (use blocks). */
-  content: string;
-  timestamp: number;
-  /** Ordered content blocks — preserves interleaving of thinking/text/tool_call */
-  blocks: ContentBlock[];
-  /** Badge shown on approval follow-up and rejection annotation messages */
-  badge?: "follow-up" | "rejection";
-  /** True when this message includes a slash command invocation */
-  isSlashCommand?: boolean;
-  /** Slash command label shown in compact command chip rendering */
-  slashCommandLabel?: string;
-  /** Set when the user message originated from a remote browser client */
-  origin?: "vscode" | "browser";
-  /** Compact presentation metadata for a linked fresh-session handoff turn. */
-  handoff?: {
-    sourceSessionId: string;
-    sourceTitle: string;
-    handoffId: string;
-  };
-  /** Display-only previews for pasted or dropped media attached to a user turn. */
-  displayMedia?: {
-    images: Array<{ name: string; mimeType: string; src: string }>;
-    documents: Array<{ name: string; mimeType: string }>;
-  };
-  /** Raw user-provided media retained server-side for model input; stripped from browser snapshots. */
-  media?: {
-    images?: Array<{ name: string; mimeType: string; base64: string }>;
-    documents?: Array<{ name: string; mimeType: string; base64: string }>;
-  };
-  /**
-   * Checkpoint ID rendered on the user message immediately preceding that
-   * checkpoint snapshot.
-   */
-  checkpointId?: string;
-  /** Final-turn status marker rendered on the last assistant response. */
-  finalMarker?: import("../../shared/finalStatus.js").FinalMessageMarker;
-  /** Explicit user-facing control change rendered at the point it occurred. */
-  surfaceChange?: {
-    model?: { previousModel: string; model: string };
-    reasoning?: {
-      previousReasoningEffort: ReasoningEffort;
-      reasoningEffort: ReasoningEffort;
-    };
-    mode?: { previousMode: string; mode: string };
-  };
-  error?: {
-    message: string;
-    retryable: boolean;
-    code?: string;
-    actions?: {
-      signIn?: boolean;
-      signInAnotherAccount?: boolean;
-      condense?: boolean;
-    };
-  };
-  /** Display-only metadata for Ask Agent local conversation memory injected into a turn. */
-  memoryDisclosure?: {
-    status: "used";
-    summaryCount: number;
-    transcriptExcerptCount: number;
-    sources: Array<{
-      label: string;
-      title?: string;
-      score?: number;
-      kind: "summary" | "transcript";
-    }>;
-  };
-  apiRequest?: {
-    requestId: string;
-    model: string;
-    reasoningEffort?: ReasoningEffort;
-    /** Session mode slug active for this request; drives mode-change dividers. */
-    mode?: string;
-    /** Command approval policy active for this request; drives Approve for Me dividers. */
-    commandApprovalPolicy?: CommandApprovalPolicy;
-    inputTokens: number;
-    uncachedInputTokens?: number;
-    cacheReadTokens?: number;
-    cacheCreationTokens?: number;
-    outputTokens: number;
-    usageEstimated?: boolean;
-    durationMs: number;
-    timeToFirstToken: number;
-    usedPreviousResponseId?: boolean;
-    previousResponseIdFallback?: boolean;
-    promptCacheKey?: string;
-    promptCacheRetention?: "in_memory" | "24h";
-    storeResponseState?: boolean;
-    providerResponseId?: string;
-    contextBreakdown?: RequestContextBreakdown;
-  };
-  /** Set when role === "condense" */
-  condenseInfo?: {
-    prevInputTokens: number;
-    newInputTokens: number;
-    durationMs?: number;
-    errorMessage?: string;
-    condensing?: boolean;
-    validationWarnings?: string[];
-  };
-  /** Set when role === "warning" */
-  warningMessage?: string;
-  warningRetry?: {
-    retryDelayMs?: number;
-    retryAt?: number;
-    retryAttempt?: number;
-    retryMaxAttempts?: number;
-  };
-}
+/** A chat message in the webview state. */
+export type ChatMessage = ProtocolChatMessage;
 
-export interface TodoItem {
-  id: string;
-  content: string;
-  activeForm: string;
-  status: "pending" | "in_progress" | "completed";
-  children?: TodoItem[];
-}
+export type TodoItem = ProtocolTodoItem;

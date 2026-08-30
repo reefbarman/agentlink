@@ -3,11 +3,11 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 
 import {
-  type ToolResult,
-  type OnApprovalRequest,
   errorResult,
   successResult,
-} from "../shared/types.js";
+  type ToolResult,
+} from "@agentlink/protocol/tool-result";
+import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
 import type {
   EditReviewProvider,
   EditReviewParams,

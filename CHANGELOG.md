@@ -22,6 +22,9 @@
 
 ### Changed
 
+- `execute_command` now warns the agent once when the current chat crosses five inactive managed terminals, re-arming after the count drops below five. The structured `terminal_cleanup` response lists inactive terminal IDs/names, excludes busy terminals, shares warning state with related child sessions, and recommends `close_terminals` only when it is available in the current mode. Cleanup inspection cannot change the command result.
+- Moved autonomous and derived-session memory to one canonical helper-owned store under `~/.agentlink/`, shared by VS Code and Browser Ask Agent. Browser memory no longer depends on connected VS Code owner descriptors; prior per-profile retrieval stores migrate idempotently with records, revisions, audit history, forgotten/superseded state, and derived summaries preserved for rollback. The machine-local memory mode config is shared across surfaces, and malformed or unreadable config fails closed with bounded diagnostics.
+
 - `/usage` and **Show Codex Subscription Usage** now read subscription limits and token activity directly with AgentLink's active ChatGPT/Codex OAuth account. They no longer require, invoke, or use the local Codex CLI account.
 - Made the helper-owned browser relay/data plane the dogfood default through `agentlink.browserGateway.dataPlane`; `shadow` retains dual publication with legacy browser traffic, and `off` preserves complete snapshot/proxy rollback while semantic parity work continues.
 - Hide the Agent Fleet panel after every background agent finishes, while keeping paused work visible and adding `/fleet` to reveal completed results again in VS Code or the browser remote.

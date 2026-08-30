@@ -1,4 +1,4 @@
-import type { ToolResult } from "../../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 export interface McpConnectedToolDefinition {
   name: string;

@@ -1730,9 +1730,10 @@ describe("AgentSessionManager background agents", () => {
 
     const spawned = await mgr.spawnBackground(
       {
-        task: "external review",
-        message: "review this",
+        task: "external implementation",
+        message: "build this",
         provider: "acp:claude",
+        budget: { maxToolCalls: 10, maxApiTurns: 10, maxTokens: 100 },
       },
       parent.id,
     );
@@ -1751,6 +1752,12 @@ describe("AgentSessionManager background agents", () => {
       tokenUsage: 42,
     });
     const session = (mgr as any).sessions.get(spawned.sessionId);
+    expect(session.fleetMetadata.taskClass).toBe("general");
+    expect(session.fleetMetadata.budget).toEqual({
+      maxToolCalls: 10,
+      maxApiTurns: 10,
+      maxTokens: 100,
+    });
     expect(session.totalInputTokens).toBe(30);
     expect(session.totalOutputTokens).toBe(12);
     expect(session.totalCacheReadTokens).toBe(5);
@@ -1822,6 +1829,13 @@ describe("AgentSessionManager background agents", () => {
       routingReason: "configured adversarial review ACP agent (acp:claude)",
     });
     expect(acpBackgroundRunner.run).toHaveBeenCalledOnce();
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    expect(session.fleetMetadata.budget).toEqual({
+      maxToolCalls: 48,
+      maxApiTurns: 16,
+      maxElapsedMs: 600_000,
+      warningThresholdRatio: 0.8,
+    });
     expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
   });
 
@@ -3511,6 +3525,130 @@ describe("AgentSessionManager background agents", () => {
     expect(acpReadOnlyCommandReviewer.review).toHaveBeenCalledTimes(3);
   });
 
+  it("accepts a matching command allow rule without guardian review or manual approval", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      defaultAgent: "acp:claude",
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    const acpReadOnlyCommandReviewer = {
+      review: vi.fn(
+        async () =>
+          ({
+            outcome: "deny",
+            risk: "high",
+            userAuthorization: "unknown",
+            rationale: "Read-only command review timed out",
+            model: "guardian-model",
+            status: "timed_out",
+          }) as const,
+      ),
+    };
+    const onApprovalRequest = vi.fn(async () => "allow");
+    const permissionOutcomes: unknown[] = [];
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        permissionOutcomes.push(
+          await request.onRequestPermission({
+            toolCall: {
+              toolCallId: "tc-allowed-command",
+              kind: "execute",
+              title: "Run allowed build",
+              rawInput: {
+                command: "npm run build",
+                run_in_background: true,
+              },
+            },
+            options: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              { optionId: "reject", name: "Reject", kind: "reject_once" },
+            ],
+          }),
+        );
+      }),
+    };
+    const evaluateCommandRules = vi.fn(() => ({
+      decision: "allow" as const,
+      segments: [
+        {
+          command: "npm run build",
+          decision: "allow" as const,
+          matches: [
+            {
+              scope: "session" as const,
+              rule: {
+                pattern: "npm run build",
+                mode: "exact" as const,
+                decision: "allow" as const,
+              },
+            },
+          ],
+          explicitlyAllowed: true,
+        },
+      ],
+      allSegmentsExplicitlyAllowed: true,
+      allSegmentsApprovedByRule: true,
+    }));
+    const telemetryRecord = vi.fn();
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      {
+        host: {
+          config: configHost,
+          acpBackgroundRunner,
+          acpReadOnlyCommandReviewer,
+        },
+      },
+    );
+    mgr.setToolContext({
+      ...toolCtx,
+      approvalManager: {
+        bindSessionProject: vi.fn(),
+        evaluateCommandRules,
+      } as any,
+      toolUsageTelemetry: { record: telemetryRecord } as any,
+      onApprovalRequest,
+    });
+
+    const spawned = await mgr.spawnBackground({
+      task: "external review",
+      message: "review this",
+    });
+    await mgr.waitForBackground(spawned.sessionId);
+
+    expect(permissionOutcomes).toEqual([
+      { outcome: { outcome: "selected", optionId: "allow" } },
+    ]);
+    expect(evaluateCommandRules).toHaveBeenCalledWith(
+      spawned.sessionId,
+      "npm run build",
+      "/tmp",
+    );
+    expect(acpReadOnlyCommandReviewer.review).not.toHaveBeenCalled();
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+    expect(telemetryRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "acp_permission_request",
+        outcome: "ok",
+        metrics: expect.objectContaining({ tier: "user_rule" }),
+      }),
+    );
+    expect(
+      mgr.getSession(spawned.sessionId)?.fleetMetadata?.policyAudit,
+    ).toEqual([
+      expect.objectContaining({
+        decision: "allowed",
+        operation: "acp:execute",
+        reason: expect.stringContaining("user command rule allows"),
+      }),
+    ]);
+  });
+
   it("escalates to the user only when the guardian is unavailable", async () => {
     configHost.getBackgroundAgentSettings.mockReturnValue({
       defaultAgent: "acp:claude",
@@ -3734,6 +3872,7 @@ describe("AgentSessionManager background agents", () => {
     const spawned = await mgr.spawnBackground({
       task: "bounded task",
       message: "run",
+      taskClass: "research",
       budget: { maxToolCalls: 2 },
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -3797,6 +3936,7 @@ describe("AgentSessionManager background agents", () => {
     const spawned = await mgr.spawnBackground({
       task: "bounded external task",
       message: "run",
+      taskClass: "research",
       budget: { maxToolCalls: 2 },
     });
     const session = (mgr as any).sessions.get(spawned.sessionId);
@@ -3832,6 +3972,7 @@ describe("AgentSessionManager background agents", () => {
     const spawned = await mgr.spawnBackground({
       task: "bounded task",
       message: "run",
+      taskClass: "research",
       budget: { maxToolCalls: 2 },
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -3925,6 +4066,7 @@ describe("AgentSessionManager background agents", () => {
     await mgr.spawnBackground({
       task: "capped",
       message: "run",
+      taskClass: "research",
       budget: { maxToolCalls: 5, maxApiTurns: 7 },
     });
     await waitFor(
@@ -3945,6 +4087,7 @@ describe("AgentSessionManager background agents", () => {
     await mgr.spawnBackground({
       task: "subtree owner",
       message: "run",
+      taskClass: "research",
       budget: { maxToolCalls: 5, maxApiTurns: 7, scope: "subtree" },
     });
     await waitFor(
@@ -4006,6 +4149,7 @@ describe("AgentSessionManager background agents", () => {
     const spawned = await mgr.spawnBackground({
       task: "acp context",
       message: "run",
+      taskClass: "research",
       budget: { maxTokens: 100_000 },
     });
     const session = (mgr as any).sessions.get(spawned.sessionId);
@@ -4048,6 +4192,7 @@ describe("AgentSessionManager background agents", () => {
     const parent = await mgr.spawnBackground({
       task: "budget owner",
       message: "coordinate",
+      taskClass: "research",
       permissionProfile: "review-only",
       budget: { maxTokens: 100, scope: "subtree" },
     });
@@ -4055,6 +4200,7 @@ describe("AgentSessionManager background agents", () => {
       {
         task: "first child",
         message: "work",
+        taskClass: "research",
         budget: { maxTokens: 60 },
       },
       parent.sessionId,
@@ -4065,6 +4211,7 @@ describe("AgentSessionManager background agents", () => {
         {
           task: "second child",
           message: "work",
+          taskClass: "research",
           budget: { maxTokens: 50 },
         },
         parent.sessionId,
@@ -4090,6 +4237,7 @@ describe("AgentSessionManager background agents", () => {
     const spawned = await mgr.spawnBackground({
       task: "warning",
       message: "work",
+      taskClass: "research",
       budget: { maxTokens: 100, warningThresholdRatio: 0.8 },
     });
     const session = (mgr as any).sessions.get(spawned.sessionId);
@@ -6913,6 +7061,36 @@ describe("AgentSessionManager background agents", () => {
       expect.objectContaining({
         sessionId: spawned.sessionId,
         commandExecutionPolicy: "read-only",
+      }),
+    );
+  });
+
+  it("preserves explicit caller budgets for writable background tasks", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "finish implementation",
+      message: "build and validate the feature",
+      taskClass: "general",
+      budget: { maxToolCalls: 1, maxApiTurns: 1, maxTokens: 1 },
+    });
+
+    await waitFor(
+      () => mocks.runArgs.mock.calls.length,
+      (calls) => calls === 1,
+    );
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    expect(session.fleetMetadata.budget).toEqual({
+      maxToolCalls: 1,
+      maxApiTurns: 1,
+      maxTokens: 1,
+    });
+    expect(mocks.runArgs).toHaveBeenCalledWith(
+      session,
+      expect.objectContaining({
+        maxToolCalls: 3,
+        maxApiTurns: 3,
       }),
     );
   });

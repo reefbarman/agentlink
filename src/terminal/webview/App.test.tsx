@@ -13,7 +13,7 @@ vi.mock("./xtermRenderer.js", () => ({
   xtermRendererFactory: { create: vi.fn() },
 }));
 
-import { TERMINAL_SURFACE_PROTOCOL_VERSION } from "../terminalSurfaceProtocol.js";
+import { TERMINAL_SURFACE_PROTOCOL_VERSION } from "@agentlink/protocol/terminal-surface";
 import { App } from "./App.js";
 import {
   TerminalWebviewController,

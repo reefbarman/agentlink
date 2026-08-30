@@ -6,7 +6,7 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 
 import { ToolCallBudget } from "../../core/tools/toolCallBudget.js";
-import type { ToolResult } from "../../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { createComposeExecutionScope } from "./composeScope.js";
 import { createNativeToolDisclosureSnapshot } from "../../core/tools/nativeToolDisclosure.js";
 

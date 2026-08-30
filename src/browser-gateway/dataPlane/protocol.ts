@@ -1,9 +1,10 @@
-import type { BackgroundResultState } from "../../core/capabilities/background.js";
+import type { BackgroundResultState } from "@agentlink/protocol/background-result";
 import {
   CORE_REASONING_EFFORTS,
   type CoreReasoningEffort,
-} from "../../core/modelCatalog.js";
-import type { ContextHealthSnapshot } from "../../shared/contextHealth.js";
+} from "@agentlink/protocol/model-catalog";
+import type { ContextHealthSnapshot } from "@agentlink/protocol/context-health";
+import type { RevertRecoveryNotice } from "@agentlink/protocol/session-hydration";
 import { utf8ByteLength } from "../../shared/streamingBaselineMetrics.js";
 import {
   BROWSER_GATEWAY_DATA_PLANE_LIMITS,
@@ -115,15 +116,7 @@ export interface BrowserGatewayContextBudget {
   hardBudget: number;
 }
 
-export interface BrowserGatewayRevertRecoveryNotice {
-  projectId: string;
-  checkpointId: string;
-  sessionRevision: string;
-  workspaceRevision?: string;
-  startedAt: number;
-  title: string;
-  message: string;
-}
+export type BrowserGatewayRevertRecoveryNotice = RevertRecoveryNotice;
 
 export interface BrowserGatewayForegroundControlState {
   sessionId: string;

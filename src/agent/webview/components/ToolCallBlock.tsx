@@ -1,10 +1,10 @@
 import { useCallback, useMemo, useState } from "preact/hooks";
 
-import type { ContentBlock } from "../types";
+import type { ContentBlock } from "@agentlink/protocol/chat-transcript";
 import { ImagePreview, type OpenImageInEditor } from "./ImagePreview";
 import { InlineDiff } from "./InlineDiff";
 import { JsonHighlight } from "../../../shared/ui/JsonHighlight";
-import type { McpApprovalPromotionMeta } from "../../../shared/types";
+import type { McpApprovalPromotionMeta } from "@agentlink/protocol/tool-result";
 import { matchFilePaths } from "./filePathLinks";
 import { recordFileLinkClick } from "./fileLinkFeedback";
 

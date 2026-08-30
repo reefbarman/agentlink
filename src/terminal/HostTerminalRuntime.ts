@@ -4,11 +4,13 @@ import {
   createAlternateScreenTracker,
   type AlternateScreenTracker,
 } from "./alternateScreenTracker.js";
+import type {
+  HostTerminalBlock,
+  HostTerminalBlockState,
+} from "@agentlink/protocol/terminal-surface";
 import {
   createHostTerminalBlockState,
   reduceHostTerminalBlocks,
-  type HostTerminalBlock,
-  type HostTerminalBlockState,
   type HostTerminalBlockStateOptions,
 } from "./hostTerminalBlocks.js";
 import {
@@ -39,7 +41,7 @@ import {
   type HostTerminalSurfaceAction,
   type HostTerminalSurfaceBlockPresentation,
   type HostTerminalSurfacePresentation,
-} from "./terminalSurfaceProtocol.js";
+} from "@agentlink/protocol/terminal-surface";
 
 const DEFAULT_MAX_RENDER_REPLAY_BYTES = 1024 * 1024;
 const DEFAULT_RENDER_HIGH_WATER_BYTES = 256 * 1024;

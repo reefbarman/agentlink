@@ -13,7 +13,7 @@ import { loadAgentPluginPackage } from "../core/agentPlugins/validation.js";
 import {
   isProjectlessSessionScope,
   type SessionProjectScope,
-} from "../core/workspaceProjects.js";
+} from "@agentlink/protocol/workspace-project";
 import { createNodePluginPackageFileSystem } from "./agentPluginFileSystem.js";
 import {
   AgentPluginStore,

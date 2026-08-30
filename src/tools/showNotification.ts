@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-import { type ToolResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 export async function handleShowNotification(params: {
   message: string;

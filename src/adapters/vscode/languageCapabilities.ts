@@ -35,7 +35,7 @@ import {
   errorResult,
   jsonResult,
   type ToolResult,
-} from "../../shared/types.js";
+} from "@agentlink/protocol/tool-result";
 import {
   canonicalizePath,
   getRelativePath,

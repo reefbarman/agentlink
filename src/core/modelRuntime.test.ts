@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { CoreModelCatalogEntry } from "./modelCatalog.js";
+import type { CoreModelCatalogEntry } from "@agentlink/protocol/model-catalog";
 import {
   collectCoreModelCompleteResult,
   CoreModelBackendRegistry,
@@ -105,12 +105,14 @@ describe("collectCoreModelCompleteResult", () => {
             outputTokens: 2,
             cacheReadTokens: 3,
             cacheCreationTokens: 4,
+            inputTokenBreakdownReported: true,
             providerResponseId: "resp_1",
           },
           {
             type: "usage",
             inputTokens: 5,
             outputTokens: 6,
+            inputTokenBreakdownReported: false,
             providerResponseId: "resp_2",
           },
           { type: "done" },
@@ -123,6 +125,7 @@ describe("collectCoreModelCompleteResult", () => {
         outputTokens: 6,
         cacheReadTokens: 0,
         cacheCreationTokens: 0,
+        inputTokenBreakdownReported: false,
       },
       providerResponseId: "resp_2",
     });

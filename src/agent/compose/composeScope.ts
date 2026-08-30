@@ -4,7 +4,7 @@ import type {
 } from "../../core/tools/types.js";
 
 import { COMPOSABLE_TOOLS } from "../../core/tools/toolCapabilities.js";
-import type { ToolResult } from "../../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { randomUUID } from "crypto";
 
 export type ComposeScopeErrorKind =

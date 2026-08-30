@@ -1,7 +1,7 @@
 import type {
   ModelSetupModel,
   ModelSetupState,
-} from "../../../shared/modelSetup";
+} from "@agentlink/protocol/model-setup";
 
 export type ModelSetupAction =
   | "codex"

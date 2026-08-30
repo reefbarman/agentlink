@@ -1,5 +1,1 @@
-export {
-  isMcpToolName,
-  parseMcpToolName,
-  type ParsedMcpToolName,
-} from "../core/mcpToolNames.js";
+export * from "@agentlink/protocol/mcp-tool-identity";

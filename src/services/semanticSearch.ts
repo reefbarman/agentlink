@@ -29,8 +29,8 @@ import type { RetrievalHealthReason } from "../core/retrieval/contracts.js";
 import { LanceDbRetrievalRepository } from "../storage/retrieval/LanceDbRetrievalRepository.js";
 import { canonicalizePath } from "../util/canonicalPath.js";
 
-import { type ToolResult } from "../shared/types.js";
-import { getSemanticReadinessMessage } from "../shared/semanticReadiness.js";
+import { type ToolResult } from "@agentlink/protocol/tool-result";
+import { getSemanticReadinessMessage } from "@agentlink/protocol/semantic-readiness";
 import { expandQuery, extractKeywords } from "./semanticQueryEnhancement.js";
 
 export { expandQuery, extractKeywords } from "./semanticQueryEnhancement.js";

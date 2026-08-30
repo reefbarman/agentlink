@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
+import type { HostTerminalBlockState } from "@agentlink/protocol/terminal-surface";
 import {
   createHostTerminalBlockState,
   reduceHostTerminalBlocks,
   reduceHostTerminalParseResult,
   type HostTerminalBlockAction,
-  type HostTerminalBlockState,
 } from "./hostTerminalBlocks.js";
 import {
   createShellIntegrationParser,

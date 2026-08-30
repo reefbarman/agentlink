@@ -53,6 +53,7 @@ export async function* parseAnthropicStreamEvents(
   let outputTokens = 0;
   let cacheReadTokens = 0;
   let cacheCreationTokens = 0;
+  let inputTokenBreakdownReported: boolean | undefined;
   let providerResponseId: string | undefined;
   let stopReason: CoreModelStopReason = "end_turn";
   let webSearchRequests = 0;
@@ -71,6 +72,12 @@ export async function* parseAnthropicStreamEvents(
         outputTokens = numberOrZero(usage.output_tokens);
         cacheReadTokens = numberOrZero(usage.cache_read_input_tokens);
         cacheCreationTokens = numberOrZero(usage.cache_creation_input_tokens);
+        if (
+          Object.hasOwn(usage, "cache_read_input_tokens") ||
+          Object.hasOwn(usage, "cache_creation_input_tokens")
+        ) {
+          inputTokenBreakdownReported = true;
+        }
         ({ webSearchRequests, webFetchRequests } = readServerToolUsage(
           usage,
           webSearchRequests,
@@ -346,6 +353,9 @@ export async function* parseAnthropicStreamEvents(
     outputTokens,
     cacheReadTokens,
     cacheCreationTokens,
+    ...(inputTokenBreakdownReported !== undefined
+      ? { inputTokenBreakdownReported }
+      : {}),
     ...(providerResponseId ? { providerResponseId } : {}),
     ...(serverToolUsage ? { serverToolUsage } : {}),
   };

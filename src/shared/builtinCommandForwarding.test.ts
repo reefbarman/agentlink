@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
-import { isForwardedBuiltinCommand } from "./builtinCommandForwarding";
+import {
+  isForwardedBuiltinCommand,
+  type BuiltinCommandSurface,
+} from "../shared/builtinCommandForwarding.js";
+
+it("preserves built-in command forwarding through the compatibility shim", () => {
+  expectTypeOf<BuiltinCommandSurface>().toEqualTypeOf<"vscode" | "browser">();
+  expect(isForwardedBuiltinCommand("vscode", "skills")).toBe(true);
+});
 
 describe("isForwardedBuiltinCommand", () => {
   it.each([

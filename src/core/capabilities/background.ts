@@ -1,4 +1,16 @@
-import type { CoreReasoningEffort } from "../modelCatalog.js";
+import type {
+  BackgroundAgentBudgetUsage,
+  BackgroundAgentRuntimePhase,
+  BackgroundResultState,
+} from "@agentlink/protocol/background-result";
+
+import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
+
+export type {
+  BackgroundAgentBudgetUsage,
+  BackgroundAgentRuntimePhase,
+  BackgroundResultState,
+} from "@agentlink/protocol/background-result";
 
 export interface AgentBudget {
   maxTokens?: number;
@@ -79,36 +91,6 @@ export interface SpawnBackgroundResult {
   taskClass: string;
   routingReason: string;
   fallbackUsed: boolean;
-}
-
-export type BackgroundResultState =
-  | "running"
-  | "completed"
-  | "incomplete_expected_result"
-  | "failed"
-  | "cancelled"
-  | "budget_exhausted"
-  | "interrupted"
-  | "authorization_lost";
-
-export type BackgroundAgentRuntimePhase =
-  | "queued"
-  | "waiting_for_provider"
-  | "thinking"
-  | "responding"
-  | "executing_tool"
-  | "awaiting_approval"
-  | "awaiting_coordinator"
-  | "retrying_provider"
-  | "completed"
-  | "failed"
-  | "cancelled";
-
-export interface BackgroundAgentBudgetUsage {
-  tokens: number;
-  toolCalls: number;
-  apiTurns: number;
-  elapsedMs: number;
 }
 
 export interface BackgroundAgentStatusResult {

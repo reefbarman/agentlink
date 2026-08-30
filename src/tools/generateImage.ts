@@ -17,11 +17,8 @@ import {
 } from "../core/model/providers/codex/imageGeneration.js";
 import type { SessionImageReference } from "../agent/toolAdapter.js";
 import { toSupportedImageMediaType } from "../agent/providers/types.js";
-import {
-  errorResult,
-  type OnApprovalRequest,
-  type ToolResult,
-} from "../shared/types.js";
+import { errorResult, type ToolResult } from "@agentlink/protocol/tool-result";
+import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
 import { getRelativePath, resolveAndValidatePath } from "../util/paths.js";
 
 const MAX_COUNT = CODEX_IMAGE_GENERATION_MAX_COUNT;

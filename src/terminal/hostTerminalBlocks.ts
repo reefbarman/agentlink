@@ -1,10 +1,24 @@
 import type {
+  HostTerminalBlock,
+  HostTerminalBlockState,
+  HostTerminalCommandBlock,
+  HostTerminalPromptBlock,
+  HostTerminalRawBlock,
+} from "@agentlink/protocol/terminal-surface";
+import type {
   ShellIntegrationEvent,
-  ShellIntegrationMode,
   ShellIntegrationParseResult,
 } from "./shellIntegration.js";
 
 import { Buffer } from "node:buffer";
+
+export type {
+  HostTerminalBlock,
+  HostTerminalBlockState,
+  HostTerminalCommandBlock,
+  HostTerminalPromptBlock,
+  HostTerminalRawBlock,
+} from "@agentlink/protocol/terminal-surface";
 
 const DEFAULT_MAX_BLOCK_OUTPUT_BYTES = 256 * 1024;
 const DEFAULT_MAX_BLOCKS = 200;
@@ -13,45 +27,6 @@ interface HostTerminalBlockOutput {
   readonly output: string;
   readonly outputBytes: number;
   readonly droppedOutputBytes: number;
-}
-
-export interface HostTerminalRawBlock extends HostTerminalBlockOutput {
-  readonly id: string;
-  readonly kind: "raw";
-  readonly cwd: string;
-}
-
-export interface HostTerminalPromptBlock extends HostTerminalBlockOutput {
-  readonly id: string;
-  readonly kind: "prompt";
-  readonly cwd: string;
-  readonly status: "open" | "closed";
-}
-
-export interface HostTerminalCommandBlock extends HostTerminalBlockOutput {
-  readonly id: string;
-  readonly kind: "command";
-  readonly cwd: string;
-  readonly command: string;
-  readonly status: "running" | "exited";
-  readonly exitCode?: number;
-}
-
-export type HostTerminalBlock =
-  | HostTerminalRawBlock
-  | HostTerminalPromptBlock
-  | HostTerminalCommandBlock;
-
-export interface HostTerminalBlockState {
-  readonly blocks: readonly HostTerminalBlock[];
-  readonly currentCwd: string;
-  readonly mode: ShellIntegrationMode;
-  readonly activePromptBlockId?: string;
-  readonly activeCommandBlockId?: string;
-  readonly droppedBlocks: number;
-  readonly nextBlockNumber: number;
-  readonly maxBlockOutputBytes: number;
-  readonly maxBlocks: number;
 }
 
 export interface HostTerminalBlockStateOptions {

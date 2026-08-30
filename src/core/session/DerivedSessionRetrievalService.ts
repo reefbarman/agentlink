@@ -302,13 +302,34 @@ export class DerivedSessionRetrievalService {
   }> {
     validateImportIdentity(request);
     const current = await this.getImportCheckpoint(request.sourceKey);
-    if (current?.status === "complete") {
+    if (
+      current?.status === "complete" &&
+      current.sourceRevision === request.sourceRevision
+    ) {
       return { status: "already-complete", checkpoint: current };
     }
 
-    // Validate and materialize every session publication before creating the
-    // rollback snapshot or preparing any durable mutation.
-    const sessionPublications = request.sessions.map((session) =>
+    // Canonical sessions may advance while an older profile remains open.
+    // Skip legacy projections that are not newer instead of rejecting the
+    // entire atomic import batch as stale.
+    const importableSessions: PublishDerivedSessionRequest[] = [];
+    for (const session of request.sessions) {
+      const active = await this.repository.inspectSource(
+        getDerivedSessionSourceId(session.session),
+      );
+      if (active) {
+        const current = parseStoredProjection(active).session;
+        if (
+          current.updatedAt > session.session.updatedAt ||
+          (current.updatedAt === session.session.updatedAt &&
+            current.sourceRevision >= session.session.sourceRevision)
+        ) {
+          continue;
+        }
+      }
+      importableSessions.push(session);
+    }
+    const sessionPublications = importableSessions.map((session) =>
       this.buildPublication(session),
     );
     const snapshotOutcome = await this.repository.createSnapshot(
@@ -324,7 +345,7 @@ export class DerivedSessionRetrievalService {
       status: "complete",
       updatedAt: request.observedAt,
       snapshot: snapshotOutcome.snapshot,
-      importedSessionIds: request.sessions
+      importedSessionIds: importableSessions
         .map(({ session }) => session.sessionId)
         .sort(),
     };
@@ -542,6 +563,26 @@ export class DerivedSessionRetrievalService {
         this.repository.abortPublication(publicationId).catch(() => undefined),
       ),
     );
+  }
+
+  async exportSessions(): Promise<PublishDerivedSessionRequest[]> {
+    const sources = await this.repository.listSources({
+      namespaces: ["session"],
+      sourceKinds: ["session"],
+      metadata: { domain: DERIVED_SESSION_DOMAIN },
+    });
+    return deduplicateSources(sources)
+      .map((source) => {
+        const projection = parseStoredProjection(source);
+        return { session: projection.session, chunks: projection.chunks };
+      })
+      .sort(
+        (left, right) =>
+          left.session.surface.localeCompare(right.session.surface) ||
+          left.session.scope.kind.localeCompare(right.session.scope.kind) ||
+          left.session.scope.id.localeCompare(right.session.scope.id) ||
+          left.session.sessionId.localeCompare(right.session.sessionId),
+      );
   }
 
   async inspect(

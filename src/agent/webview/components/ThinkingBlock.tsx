@@ -1,6 +1,6 @@
-import { useState } from "preact/hooks";
-import type { ContentBlock } from "../types";
+import type { ContentBlock } from "@agentlink/protocol/chat-transcript";
 import { ThinkingContent } from "./ThinkingContent";
+import { useState } from "preact/hooks";
 
 type ThinkingData = ContentBlock & { type: "thinking" };
 

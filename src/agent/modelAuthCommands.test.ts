@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("vscode", async () => await import("../__mocks__/vscode.js"));
 
 import * as vscode from "vscode";
-import type { SemanticReadinessReason } from "../shared/semanticReadiness.js";
+import type { SemanticReadinessReason } from "@agentlink/protocol/semantic-readiness";
 import {
   getSemanticSetupDetail,
   getSemanticSetupTitle,

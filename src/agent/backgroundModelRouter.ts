@@ -1,14 +1,17 @@
+import {
+  BASE_REVIEW_TASK_CLASS,
+  isReviewTaskClass,
+} from "./background/reviewTaskClass.js";
 import type {
-  AgentBudget,
   BackgroundRouteResolution,
   ModelTier,
   ProviderStrategy,
   SpawnBackgroundRequest,
 } from "./backgroundTypes.js";
 import {
-  BASE_REVIEW_TASK_CLASS,
-  isReviewTaskClass,
-} from "./background/reviewTaskClass.js";
+  getAutomaticBackgroundBudget,
+  inferReviewTier,
+} from "./background/backgroundBudgetPolicy.js";
 
 import { CODEX_DEFAULT_MODEL } from "../core/model/providers/codex/models.js";
 import type { ModelInfo } from "./providers/types.js";
@@ -26,31 +29,6 @@ export function isForegroundOnlyModel(modelId: string): boolean {
     pattern.test(modelId),
   );
 }
-
-const REVIEW_BUDGETS: Record<ModelTier, AgentBudget> = {
-  // Review budgets intentionally track work units rather than tokens. A captured
-  // diff can dominate token usage before the reviewer has had a chance to
-  // inspect any surrounding code, while committed tool calls and API turns are
-  // much better signals for whether useful exploration is still happening.
-  cheap: {
-    maxToolCalls: 24,
-    maxApiTurns: 10,
-    maxElapsedMs: 360_000,
-    warningThresholdRatio: 0.8,
-  },
-  balanced: {
-    maxToolCalls: 48,
-    maxApiTurns: 16,
-    maxElapsedMs: 600_000,
-    warningThresholdRatio: 0.8,
-  },
-  deep_reasoning: {
-    maxToolCalls: 72,
-    maxApiTurns: 24,
-    maxElapsedMs: 900_000,
-    warningThresholdRatio: 0.8,
-  },
-};
 
 interface TaskRouteRule {
   preferredMode?: string;
@@ -110,38 +88,6 @@ function pickMode(
   rule: TaskRouteRule,
 ): string {
   return request.mode?.trim() || rule.preferredMode || foregroundMode || "code";
-}
-
-function inferReviewTier(
-  request: SpawnBackgroundRequest,
-): ModelTier | undefined {
-  if (!isReviewTaskClass(request.taskClass)) return undefined;
-
-  const text = `${request.task}\n${request.message}`.toLowerCase();
-  const deepSignals = [
-    /\bcomplex\b/,
-    /\bcritical\b/,
-    /\bsecurity\b/,
-    /\brisky?\b/,
-    /\bdeep\s+review\b/,
-    /\barchitecture\b/,
-    /\bprincipal[-\s]engineer\b/,
-    /\bcross[- ](cutting|system|module)\b/,
-    /\bdata integrity\b/,
-    /\bproduction\b/,
-  ];
-
-  return deepSignals.some((pattern) => pattern.test(text))
-    ? "deep_reasoning"
-    : "balanced";
-}
-
-function getDefaultReviewBudget(
-  taskClass: string,
-  tier: ModelTier,
-): AgentBudget | undefined {
-  if (!isReviewTaskClass(taskClass)) return undefined;
-  return { ...REVIEW_BUDGETS[tier] };
 }
 
 function pickPreferredReviewModel(
@@ -265,7 +211,7 @@ export async function resolveBackgroundRoute(
     inferReviewTier(request) ??
     rule.modelTier ??
     "balanced";
-  const defaultBudget = getDefaultReviewBudget(taskClass, modelTier);
+  const defaultBudget = getAutomaticBackgroundBudget(taskClass, modelTier);
 
   // Per-task-class overrides forwarded to the caller
   const ruleOverrides = {

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "preact/hooks";
 
-import type { SlashCommandInfo } from "../types.js";
+import type { ChatSlashCommandInfo as SlashCommandInfo } from "@agentlink/protocol/chat-catalog";
 import { forwardRef } from "preact/compat";
 import { groupSlashCommandsForPicker } from "./slashCommandOrdering";
 

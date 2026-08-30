@@ -2,7 +2,7 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 
-import type { MemoryTier } from "../approvals/webview/types.js";
+import type { MemoryTier } from "@agentlink/protocol/inline-approval";
 import {
   validateMemoryProposalName,
   type MemoryProposalParams,

@@ -10,7 +10,7 @@ import {
   resolveAcpBackgroundAgent,
 } from "./acpAgentConfig.js";
 
-import type { CoreReasoningEffort } from "../../core/modelCatalog.js";
+import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import type { SpawnBackgroundRequest } from "../backgroundTypes.js";
 import { isReviewTaskClass } from "./reviewTaskClass.js";
 

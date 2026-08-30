@@ -3,7 +3,7 @@
 import type {
   McpElicitationField,
   McpElicitationValues,
-} from "../mcpElicitation.js";
+} from "@agentlink/protocol/mcp-elicitation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 

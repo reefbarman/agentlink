@@ -18,11 +18,9 @@ import type {
   PersistedSessionRunState,
 } from "./persistenceContracts.js";
 import { ProviderRegistry } from "./providers/index.js";
-import { buildContextLedger } from "../core/contextLedger.js";
-import {
-  createWorkspaceProjectId,
-  isProjectlessSessionScope,
-} from "../core/workspaceProjects.js";
+import { buildContextLedger } from "@agentlink/protocol/context-ledger";
+import { isProjectlessSessionScope } from "@agentlink/protocol/workspace-project";
+import { createWorkspaceProjectId } from "../core/workspaceProjects.js";
 
 const mocks = vi.hoisted(() => {
   let skillCatalogProjection: any;
@@ -2148,6 +2146,81 @@ describe("AgentSessionManager host injection", () => {
       setToolRuntime: vi.fn(),
       run: vi.fn(async function* () {
         yield {
+          type: "request_context_attribution",
+          requestId: "attempt-1",
+          requestKind: "agent",
+          model: "model-a",
+          providerId: "test",
+          mode: "code",
+          promptProfile: "compatibility",
+          background: false,
+          estimatedInputTokens: 100,
+          toolResultContextAttributions: [],
+          omittedToolResultContextAttributions: 0,
+          pinnedMemoryTokens: 0,
+          retrievedMemoryTokens: 0,
+          contextLedger: {
+            contextWindowTokens: 200_000,
+            maxInputTokens: 191_808,
+            outputReservationTokens: 8_192,
+            safetyBufferTokens: 9_590,
+            hardInputLimitTokens: 182_218,
+            requestedInputTokens: 100,
+            allocatedInputTokens: 100,
+            remainingInputTokens: 182_118,
+            overflowTokens: 0,
+            layers: [
+              {
+                layer: "system_prompt",
+                requestedTokens: 20,
+                budgetTokens: 20,
+                allocatedTokens: 20,
+                omittedTokens: 0,
+                required: true,
+              },
+              {
+                layer: "mode_instructions",
+                requestedTokens: 5,
+                budgetTokens: 5,
+                allocatedTokens: 5,
+                omittedTokens: 0,
+                required: true,
+              },
+              {
+                layer: "tool_definitions",
+                requestedTokens: 25,
+                budgetTokens: 25,
+                allocatedTokens: 25,
+                omittedTokens: 0,
+                required: true,
+              },
+              {
+                layer: "retrieved_context",
+                requestedTokens: 10,
+                budgetTokens: 10,
+                allocatedTokens: 5,
+                omittedTokens: 5,
+                required: false,
+              },
+            ],
+          },
+        };
+        yield {
+          type: "request_context_attribution",
+          requestId: "condense-1",
+          requestKind: "condense",
+          model: "model-condense",
+          providerId: "test",
+          mode: "code",
+          promptProfile: "compatibility",
+          background: false,
+          estimatedInputTokens: 50,
+          toolResultContextAttributions: [],
+          omittedToolResultContextAttributions: 0,
+          pinnedMemoryTokens: 0,
+          retrievedMemoryTokens: 0,
+        };
+        yield {
           type: "api_request",
           requestId: "r1",
           model: "model-a",
@@ -2155,8 +2228,9 @@ describe("AgentSessionManager host injection", () => {
           inputTokens: 100,
           uncachedInputTokens: 80,
           outputTokens: 40,
-          cacheReadTokens: 0,
-          cacheCreationTokens: 0,
+          cacheReadTokens: 15,
+          cacheCreationTokens: 5,
+          inputTokenBreakdownReported: true,
           durationMs: 1_000,
           timeToFirstToken: 10,
         };
@@ -2234,6 +2308,34 @@ describe("AgentSessionManager host injection", () => {
       sessionId: session.id,
       status: "completed",
       turns: 1,
+      model: "model-a",
+      providerId: "test",
+      runtimeKind: "builtin",
+      mixedProviderOrModel: false,
+      efficiency: {
+        ordinaryAgentProviderAttempts: 1,
+        condenseProviderAttempts: 1,
+        completedApiTurns: 1,
+        usageEstimatedApiTurns: 0,
+        uncachedInputTokens: 80,
+        cacheReadTokens: 15,
+        cacheCreationTokens: 5,
+        outputTokens: 40,
+        cacheBreakdownApiTurns: 1,
+        cacheBreakdownInputTokens: 100,
+        cacheBreakdownReadTokens: 15,
+        cacheBreakdownCreationTokens: 5,
+        staticFloorSamples: 1,
+        staticFloorTokenSends: 50,
+        contextLedgerSamples: 1,
+        boundedContextRequestedTokens: 10,
+        boundedContextOmittedTokens: 5,
+        requestsRequestingBoundedContext: 1,
+        requestsWithContextOmission: 1,
+        contextOverflowTokens: 0,
+        requestsWithContextOverflow: 0,
+        toolCalls: 4,
+      },
     });
     expect(task.taskDurationMs).toBeGreaterThanOrEqual(0);
     const turn = events.find((event) => event.type === "turn_completed");
@@ -2244,6 +2346,16 @@ describe("AgentSessionManager host injection", () => {
       apiTurns: 1,
       inputTokens: 80,
       outputTokens: 40,
+      providerId: "test",
+      runtimeKind: "builtin",
+      efficiency: expect.objectContaining({
+        ordinaryAgentProviderAttempts: 1,
+        completedApiTurns: 1,
+        cacheBreakdownApiTurns: 1,
+        staticFloorTokenSends: 50,
+        requestsWithContextOmission: 1,
+        toolCalls: 4,
+      }),
       toolCalls: 4,
       toolMs: 255,
       backgroundWaitMs: 5_000,

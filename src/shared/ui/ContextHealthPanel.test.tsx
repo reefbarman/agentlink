@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
 import { ContextHealthPanel } from "./ContextHealthPanel";
-import type { ContextHealthSnapshot } from "../contextHealth";
+import type { ContextHealthSnapshot } from "@agentlink/protocol/context-health";
 
 afterEach(cleanup);
 

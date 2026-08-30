@@ -4,7 +4,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 
 import { App } from "./App.js";
-import type { ChatWorkspaceViewSnapshot } from "../chatTabProtocol.js";
+import type { ChatWorkspaceViewSnapshot } from "@agentlink/protocol/chat-workspace";
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();

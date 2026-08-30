@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 import { wireBrowserGatewayApprovalPolicies } from "./browserGatewayPolicyWiring.js";
 
 describe("wireBrowserGatewayApprovalPolicies", () => {

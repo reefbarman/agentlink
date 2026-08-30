@@ -6,8 +6,8 @@ import {
 import { describe, expect, it } from "vitest";
 
 import type { AppState } from "./chatProjection.js";
-import type { ChatMessage } from "../agent/webview/types.js";
-import { TODO_AUTO_CONTINUE_PROMPT } from "./todoContinuation.js";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
+import { TODO_AUTO_CONTINUE_PROMPT } from "@agentlink/protocol/todo-continuation";
 
 describe("user-message chat projection", () => {
   it("omits explicitly hidden internal user turns", () => {

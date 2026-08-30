@@ -428,7 +428,61 @@ describe("DerivedSessionRetrievalService", () => {
     });
   });
 
-  it("does not expose any imported session when an atomic import member is stale", async () => {
+  it("exports complete stored projections for migration", async () => {
+    const { service: derivedSessions } = service();
+    const first = publication();
+    const second = publication({
+      sessionId: "session-two",
+      surface: "vscode",
+      sourceRevision: "revision-two",
+      updatedAt: 3_000,
+    });
+    await derivedSessions.publishBatch([second, first]);
+
+    await expect(derivedSessions.exportSessions()).resolves.toEqual([
+      first,
+      second,
+    ]);
+  });
+
+  it("reimports a completed source when its revision changes", async () => {
+    const { service: derivedSessions } = service();
+    const sourceKey = "legacy-retrieval-store:stable";
+    const initial = publication({
+      sourceRevision: "revision-one",
+      summary: "Initial legacy summary.",
+    });
+    await expect(
+      derivedSessions.importSessions({
+        sourceKey,
+        sourceRevision: "digest-one",
+        importerSchemaVersion: 1,
+        observedAt: "2026-07-26T00:00:00.000Z",
+        sessions: [initial],
+      }),
+    ).resolves.toMatchObject({ status: "imported" });
+
+    const updated = publication({
+      sourceRevision: "revision-two",
+      summary: "Updated legacy summary.",
+      updatedAt: 3_000,
+    });
+    await expect(
+      derivedSessions.importSessions({
+        sourceKey,
+        sourceRevision: "digest-two",
+        importerSchemaVersion: 1,
+        observedAt: "2026-07-26T00:01:00.000Z",
+        sessions: [updated],
+      }),
+    ).resolves.toMatchObject({
+      status: "imported",
+      checkpoint: { sourceRevision: "digest-two" },
+    });
+    await expect(derivedSessions.exportSessions()).resolves.toEqual([updated]);
+  });
+
+  it("skips stale imported sessions while committing newer members", async () => {
     const { service: derivedSessions } = service();
     await derivedSessions.publish(
       publication({
@@ -457,15 +511,19 @@ describe("DerivedSessionRetrievalService", () => {
           }),
         ],
       }),
-    ).rejects.toThrow("import batch was rejected");
+    ).resolves.toMatchObject({
+      status: "imported",
+      checkpoint: { importedSessionIds: ["session-new"] },
+    });
 
     const inspection = await derivedSessions.inspect();
-    expect(inspection.sessions.map((entry) => entry.sessionId)).toEqual([
+    expect(inspection.sessions.map((entry) => entry.sessionId).sort()).toEqual([
       "session-current",
+      "session-new",
     ]);
     await expect(
       derivedSessions.getImportCheckpoint("legacy-browser-json"),
-    ).resolves.toBeNull();
+    ).resolves.toMatchObject({ status: "complete" });
   });
 
   it("persists and replaces explicit missing and failed import states", async () => {

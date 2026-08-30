@@ -9,10 +9,10 @@ import {
   AGENT_PLUGIN_MCP_SCHEMA_ID,
 } from "../core/agentPlugins/schemaRegistry.js";
 import type {
-  ProjectScopeResolver,
   SessionProjectScope,
   WorkspaceProject,
-} from "../core/workspaceProjects.js";
+} from "@agentlink/protocol/workspace-project";
+import type { ProjectScopeResolver } from "../core/workspaceProjects.js";
 import { AgentPluginInstaller } from "./AgentPluginInstaller.js";
 import { AgentPluginManagerHost } from "./AgentPluginManagerHost.js";
 import { readAgentPluginProjectDeclarations } from "./agentPluginProjectDeclarations.js";

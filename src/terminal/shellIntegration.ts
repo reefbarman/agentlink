@@ -1,11 +1,12 @@
 import { Buffer } from "node:buffer";
+import type { ShellIntegrationMode } from "@agentlink/protocol/terminal-surface";
 
 const OSC_NAMESPACE = "697;AgentLink";
 const DEFAULT_MAX_FRAME_BYTES = 64 * 1024;
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
 
 export type ShellIntegrationKind = "bash" | "zsh";
-export type ShellIntegrationMode = "raw" | "integrated";
+export type { ShellIntegrationMode } from "@agentlink/protocol/terminal-surface";
 
 export type ShellIntegrationEvent =
   | { type: "prompt-start" }

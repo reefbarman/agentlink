@@ -1,23 +1,21 @@
 import type {
-  BrowserGatewayThemeSnapshot,
-  RevertRecoveryNotice,
-} from "../../shared/types.js";
-import type {
   ChatMessage,
-  ChatState,
   TodoItem,
-} from "../../agent/webview/types.js";
+} from "@agentlink/protocol/chat-transcript";
 import type {
   TerminalApprovalPolicy,
   TerminalApprovalReviewer,
   TerminalExecutionPreset,
-} from "../../core/capabilities/terminal.js";
+} from "@agentlink/protocol/terminal";
 
 import type { BrowserGatewayOwnerInteractionPayload } from "./interactionPayload.js";
 import type { BrowserGatewayRepositoryInfo } from "../BrowserGatewayRepositoryObserver.js";
-import type { CommandApprovalPolicy } from "../../approvals/commandApprovalPolicy.js";
-import type { ContextHealthSnapshot } from "../../shared/contextHealth.js";
+import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
+import type { ChatStateSnapshot as ChatState } from "@agentlink/protocol/chat-state";
+import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
+import type { ContextHealthSnapshot } from "@agentlink/protocol/context-health";
 import type { ReasoningEffort } from "../../agent/providers/types.js";
+import type { RevertRecoveryNotice } from "@agentlink/protocol/session-hydration";
 
 export type BrowserGatewayOwnerProjectionSourceKind =
   | "foreground"

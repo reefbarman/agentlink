@@ -4,29 +4,27 @@ import type {
   SandboxLaunchAuthorization,
   SandboxViolation,
 } from "../sandboxPolicy.js";
+import type {
+  TerminalApprovalPolicy,
+  TerminalApprovalReviewer,
+  TerminalCommandApprovalPolicySnapshot,
+  TerminalExecutionPreset,
+} from "@agentlink/protocol/terminal";
 
 export type CommandExecutionPolicy = "read-only";
 
-export type TerminalCommandApprovalPolicySnapshot =
-  | "manual"
-  | "safe"
-  | "sensitive"
-  | "approve-for-me";
-
-export type TerminalApprovalPolicy = "on-request";
-export type TerminalApprovalReviewer = "user" | "auto-review";
-export type TerminalExecutionPreset = "native-manual" | "workspace-write";
+export type {
+  TerminalApprovalModeSnapshot,
+  TerminalApprovalPolicy,
+  TerminalApprovalReviewer,
+  TerminalCommandApprovalPolicySnapshot,
+  TerminalExecutionPreset,
+} from "@agentlink/protocol/terminal";
 export type AgentTerminalExecutionAuthority = "native-agent" | "sandbox";
 export type TerminalSandboxPermissionIntent =
   | "default"
   | "additional-permissions"
   | "native-escalation";
-export interface TerminalApprovalModeSnapshot {
-  readonly commandApprovalPolicy: TerminalCommandApprovalPolicySnapshot;
-  readonly approvalPolicy: TerminalApprovalPolicy;
-  readonly approvalReviewer: TerminalApprovalReviewer;
-  readonly executionPreset: TerminalExecutionPreset;
-}
 
 export type TerminalExecutionApprovalRequirement =
   | "policy"

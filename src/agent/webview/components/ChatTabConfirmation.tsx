@@ -1,4 +1,4 @@
-import type { ChatTabActionConfirmationRequest } from "../../chatTabProtocol.js";
+import type { ChatTabActionConfirmationRequest } from "@agentlink/protocol/chat-workspace";
 
 const LABELS = {
   close: {

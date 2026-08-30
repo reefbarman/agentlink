@@ -27,7 +27,7 @@ import { SYMBOL_KIND_NAMES } from "./languageFeatures.js";
 import { Semaphore } from "../util/Semaphore.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 
-import { type ToolResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 import {
   semanticFileQuery,
   type SemanticQueryOptions,

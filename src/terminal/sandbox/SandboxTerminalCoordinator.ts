@@ -24,7 +24,7 @@ import type {
   SandboxExecutionMetadata,
   SandboxPolicy,
 } from "../../core/sandboxPolicy.js";
-import type { TerminalDimensions } from "../../core/terminalProtocol.js";
+import type { TerminalDimensions } from "@agentlink/protocol/terminal";
 import {
   clearInteractivePromptWatchdog,
   createInteractivePromptWatchdog,

@@ -10,7 +10,7 @@
  */
 
 import type { CoreModelCapabilities } from "../../../modelRuntime.js";
-import type { CoreReasoningEffort } from "../../../modelCatalog.js";
+import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 
 export interface AnthropicModelInfo {
   id: string;

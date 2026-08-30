@@ -1,5 +1,9 @@
 import type {
   AutonomousMemoryServiceOptions,
+  MemoryRepository,
+  MemoryRepositoryTransaction,
+} from "./contracts.js";
+import type {
   ClearMemoryScopeRequest,
   ClearMemoryScopeResult,
   ImportMemoryArchiveRequest,
@@ -15,8 +19,6 @@ import type {
   MemoryImportCheckpoint,
   MemoryRecord,
   MemoryRecordDetail,
-  MemoryRepository,
-  MemoryRepositoryTransaction,
   MemoryRevision,
   MemoryScope,
   MemoryStoreSnapshot,
@@ -25,7 +27,7 @@ import type {
   RecallMemoryRequest,
   RecallMemoryResult,
   RecordMemoryImportFailureRequest,
-} from "./contracts.js";
+} from "@agentlink/protocol/autonomous-memory";
 import {
   memoryAuthority,
   memoryIsExpired,

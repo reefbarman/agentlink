@@ -18,14 +18,16 @@ vi.mock("vscode", () => ({
 }));
 
 import { ChatTabPanelHost } from "./ChatTabPanelHost.js";
-import type { ChatPaneAddress } from "./chatPaneProtocol.js";
+import type { ChatPaneAddress } from "@agentlink/protocol/chat-pane-transport";
 import {
-  CHAT_TAB_LAYOUT_VERSION,
   CHAT_TAB_LAYOUT_WORKSPACE_KEY,
   ChatTabController,
-  type ChatTabLayout,
   type ChatTabWorkspaceState,
 } from "./ChatTabController.js";
+import {
+  CHAT_TAB_LAYOUT_VERSION,
+  type ChatTabLayout,
+} from "@agentlink/protocol/chat-workspace";
 
 class FakeWebview {
   options: unknown;

@@ -6,13 +6,13 @@ import picomatch from "picomatch";
 import type {
   ContextBreakdownItem,
   RequestContextBreakdown,
-} from "../shared/types.js";
+} from "@agentlink/protocol/context-diagnostics";
 import {
   promptProfileResolutionsEqual,
-  resolvePromptProfile,
   type PromptProfile,
   type PromptProfileResolution,
-} from "../core/promptProfile.js";
+} from "@agentlink/protocol/prompt-profile";
+import { resolvePromptProfile } from "../core/promptProfilePolicy.js";
 import { measureContextItem } from "./contextBreakdown.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 import {
@@ -29,7 +29,7 @@ import {
   type SkillEntry,
 } from "./skillLoader.js";
 import type { AgentPluginCatalogProvider } from "./AgentPluginCatalog.js";
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 import {
   projectSkillCatalog,
   resolveSkillCatalogBudgetChars,
@@ -406,6 +406,8 @@ ${TASK_ALIGNMENT_SECTION}
 ### Testing & Validation
 
 - Run the existing project gates relevant to the change (build, lint, focused tests). Add or update tests only where the project's conventions expect them or the logic is genuinely subtle.
+- Do not repeatedly rerun an expensive full-project gate after every fix. Once a full run has established broad coverage, fix narrow, well-understood failures and rerun the affected tests or checks only; treat unrelated timeouts, environment failures, and already-passing suites as retained evidence rather than starting over.
+- Rerun the full gate only when the subsequent fix changes production or shared behavior beyond the failed area, alters global test/build configuration, the failures suggest a systemic regression, or repository instructions explicitly require a fresh final pass. Otherwise report the broad run plus focused follow-up results honestly.
 - Do not stand up new verification machinery — browser-automation runs, synthetic data harnesses, smoke-test scripts, exhaustive edge-case suites — to prove a routine change. Prefer handing the user something working to try, with a note on what to check; propose heavier verification only when the risk genuinely warrants it.
 
 ### When Fixing Bugs
@@ -449,9 +451,9 @@ Bias toward staying in \`code\` mode unless there is a concrete reason that plan
 
 ### Self-Review with Background Agents
 
-Spawn one primary background review agent only for a substantial body of work where a second pass could realistically catch defects the test suite cannot: multi-file changes to critical-path or shared logic, significant refactors, security/approval/data-integrity surfaces, or changes with non-obvious cross-module interactions.
+Spawn one primary background review agent only for a substantial body of work where a second pass could realistically catch important defects the test suite and your own inspection may miss: multi-file changes to critical-path or shared logic, significant refactors, security/approval/data-integrity surfaces, or changes with non-obvious cross-module interactions. Reviews consume meaningful time, so when their likely value is marginal or uncertain, skip them and proceed confidently from tests plus self-review.
 
-Skip the review — passing tests plus your own self-review are the completion bar — for single-file fixes, pattern-following changes, renames, test-only or docs-only edits, and any change whose blast radius the existing test suite fully covers. A review is a checkpoint for a completed body of work, not a step to repeat after every edit, and never a substitute for running the tests yourself.
+Skip the review — passing tests plus your own self-review are the completion bar — for single-file fixes, pattern-following changes, renames, test-only or docs-only edits, and any change whose blast radius the existing test suite fully covers. A review is one checkpoint for a completed substantial body of work, not a recurring phase after every edit, and never a substitute for running the tests yourself. Do not add a review TODO merely because the task changes code; first establish the concrete risk that makes another agent's pass worth delaying completion.
 
 Use:
 
@@ -469,10 +471,11 @@ spawn_background_agent({
 1. Spawn the primary review agent after completing the main implementation
 2. While it runs, actively self-review the same change set and continue independent validation or documentation work — do not merely wait
 3. Call \`get_background_result\` to collect the review
-4. If the review finds genuine issues, fix them, self-review those fixes, and note them to the user
-5. Do **not** automatically spawn another review just because you changed files in response to review findings; that creates review/fix loops
-6. Request a follow-up review only when the fixes or subsequent work are substantial enough to form a new body of work (for example, a major redesign, broad cross-module edits, or new critical-path logic). Prefer a targeted follow-up scoped only to that substantial delta
-7. If the review raises non-issues, you may disregard them — use your judgement
+4. If the review finds genuine issues, fix them, run the relevant validation, self-review those fixes, and note them to the user
+5. Treat the primary review as the review budget for that body of work. Addressing its findings does **not** reset the budget, even when the fixes touch several files or many lines; normally proceed to completion without another review
+6. Request a follow-up only when the review-driven fixes independently introduce a new high-risk body of work — for example, a major redesign, a changed public or security contract, broad new cross-module behavior, or new critical-path logic — and tests plus focused self-review do not provide enough confidence. A merely non-trivial fix, residual uncertainty, or the possibility of more feedback is not sufficient
+7. If that exceptional threshold is met, review only the new high-risk delta. Otherwise trust the validation and your technical judgment rather than creating a review/fix/re-review loop
+8. If the review raises non-issues, you may disregard them — use your judgement
 
 ### Parallel Work with Background Agents
 
@@ -536,7 +539,7 @@ ${ARCHITECT_STANDARD_REVIEW_FLOW}
 
 Spawn one primary background review agent only for plans that are genuinely large or risky: spanning multiple systems, introducing architectural trade-offs, or committing substantial implementation effort. For everything else — simple, local, or pattern-following plans — skip it; your own critical self-review is the completion bar.
 
-Review once. Do not re-review each revision; request a follow-up only after a substantial redesign or major scope expansion.
+Review once. Treat that as the review budget for the plan; incorporating feedback does not reset it. Re-review only when the revision independently becomes a new high-risk plan through a substantial redesign or major scope expansion and self-review is not enough. When uncertain whether that threshold is met, skip the follow-up and proceed.
 
 Use:
 
@@ -552,7 +555,7 @@ spawn_background_agent({
 2. While waiting, critically self-review the plan and prepare your summary for the user
 3. Call \`get_background_result\` to collect the review
 4. Incorporate valid feedback into the plan and self-review those revisions before presenting to the user
-5. Do not automatically review the review-driven revisions; use a targeted follow-up only if they substantially redesign or expand the plan
+5. Do not automatically review the review-driven revisions, regardless of revision size. Use a targeted follow-up only if they create a new high-risk plan through substantial redesign or scope expansion and leave risks that focused self-review cannot resolve
 6. When presenting the plan, note that it has been self-reviewed and mention any significant changes made based on the review
 
 ### Parallel Research and Design Lanes

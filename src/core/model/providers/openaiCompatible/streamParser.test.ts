@@ -86,6 +86,49 @@ describe("parseOpenAiCompatibleStreamEvents", () => {
     ]);
   });
 
+  it("splits provider-reported cached input and preserves explicit zeros", async () => {
+    const cached = await collect([
+      {
+        choices: [],
+        usage: {
+          prompt_tokens: 20,
+          completion_tokens: 4,
+          prompt_tokens_details: {
+            cached_tokens: 7,
+            cache_creation_tokens: 3,
+          },
+        },
+      },
+    ]);
+    expect(cached).toContainEqual({
+      type: "usage",
+      inputTokens: 10,
+      outputTokens: 4,
+      cacheReadTokens: 7,
+      cacheCreationTokens: 3,
+      inputTokenBreakdownReported: true,
+    });
+
+    const explicitZero = await collect([
+      {
+        choices: [],
+        usage: {
+          prompt_tokens: 20,
+          completion_tokens: 4,
+          prompt_tokens_details: { cached_tokens: 0 },
+        },
+      },
+    ]);
+    expect(explicitZero).toContainEqual({
+      type: "usage",
+      inputTokens: 20,
+      outputTokens: 4,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      inputTokenBreakdownReported: true,
+    });
+  });
+
   it("parses OpenRouter reasoning aliases/details into visible thinking and exact replay", async () => {
     const events = await collect([
       {

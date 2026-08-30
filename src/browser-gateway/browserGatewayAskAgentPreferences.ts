@@ -2,8 +2,8 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 
-import type { ReasoningEffort } from "../agent/webview/types.js";
-import { isCoreReasoningEffort } from "../core/modelCatalog.js";
+import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
+import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import {
   normalizeCoreWebAccessSettings,
   type CoreWebAccessSettings,

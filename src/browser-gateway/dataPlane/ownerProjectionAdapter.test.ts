@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ChatMessage } from "../../agent/webview/types.js";
+import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import type { BrowserGatewayOwnerInteractionPayload } from "./interactionPayload.js";
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "./limits.js";
 import { BrowserGatewayProtocolError } from "./protocol.js";
@@ -460,6 +460,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
       },
       question: {
         id: "question-1",
+        toolCallId: "tool-question-1",
         context: "Choose whether to continue.",
         questions: [{ id: "continue", type: "yes_no", question: "Continue?" }],
       },

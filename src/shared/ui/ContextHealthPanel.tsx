@@ -1,7 +1,7 @@
 import type {
   ContextHealthSnapshot,
   ContextHealthStatus,
-} from "../contextHealth";
+} from "@agentlink/protocol/context-health";
 
 import type { ComponentChildren } from "preact";
 

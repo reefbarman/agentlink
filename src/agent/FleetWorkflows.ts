@@ -3,6 +3,8 @@ import type {
   SpawnBackgroundRequest,
 } from "../core/capabilities/background.js";
 
+import type { FleetResultEnvelope } from "@agentlink/protocol/fleet-result";
+
 export type FleetWorkflowKind =
   | "structured_diff_review"
   | "browser_verification"
@@ -52,7 +54,6 @@ export function planFleetWorkflow(
     task: request.task,
     message: request.message,
     goalId,
-    budget: request.budget,
   };
   if (request.kind === "structured_diff_review") {
     return {
@@ -65,6 +66,7 @@ export function planFleetWorkflow(
           taskClass: "review_code",
           permissionProfile: "review-only",
           expectedResult: "review_findings",
+          budget: request.budget,
         },
       ],
     };
@@ -110,37 +112,10 @@ export function planFleetWorkflow(
         mode: "code",
         taskClass: "general",
         permissionProfile: "workspace-safe",
-        budget: request.budget
-          ? { ...request.budget, scope: "goal" }
-          : undefined,
       },
     ],
   };
 }
-
-export type FleetResultEnvelope =
-  | { type: "text"; text: string }
-  | {
-      type: "review_findings";
-      findings: Array<{
-        severity: "critical" | "high" | "medium" | "low";
-        message: string;
-        path?: string;
-        line?: number;
-      }>;
-      /** What was actually reviewed, e.g. a commit range or file list. */
-      reviewedScope?: string;
-      /** True when the requested diff was empty or missing, so an empty findings list is not a clean review. */
-      emptyDiff?: boolean;
-    }
-  | { type: "patch"; summary: string; files: string[]; verification?: string }
-  | {
-      type: "verification";
-      passed: boolean;
-      summary: string;
-      screenshots?: string[];
-      logs?: string[];
-    };
 
 const MAX_FLEET_RESULT_FENCES = 32;
 const MAX_FLEET_RESULT_FENCE_BODY_CHARS = 1_000_000;

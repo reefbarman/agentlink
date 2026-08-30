@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { BrowserGatewayAskAgentSessionStore } from "./browserGatewayAskAgentSessionStore.js";
 import { BrowserGatewayCoreOwnerRegistry } from "./coreOwnerRegistry.js";
 import type { BrowserGatewayModelCredentialStatus } from "./browserGatewayModelCredentialCache.js";
-import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
+import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 
 const theme: BrowserGatewayThemeSnapshot = {
   cssVariables: {},

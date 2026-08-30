@@ -20,27 +20,62 @@ const DEFAULT_INPUT = path.join(
 );
 const DEFAULT_TOP = 20;
 
-function parseArgs(argv) {
-  const args = { input: DEFAULT_INPUT, top: DEFAULT_TOP, json: false };
-  for (let i = 2; i < argv.length; i += 1) {
+export function parseArgs(argv, now = new Date()) {
+  const args = {
+    input: DEFAULT_INPUT,
+    top: DEFAULT_TOP,
+    json: false,
+    since: undefined,
+    until: undefined,
+    versions: [],
+    help: false,
+  };
+  const start = argv[0]?.startsWith("-") ? 0 : 2;
+  for (let i = start; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === "--input") args.input = argv[++i];
-    else if (arg === "--top") args.top = Number(argv[++i]) || DEFAULT_TOP;
-    else if (arg === "--json") args.json = true;
-    else if (arg === "--help" || arg === "-h") {
-      console.log(
-        "Usage: node scripts/report-context-jumps.mjs [--top N] [--input <path>] [--json]",
-      );
-      process.exit(0);
-    } else {
-      console.error(`Unknown argument: ${arg}`);
-      process.exit(1);
-    }
+    if (arg === "--input") args.input = requireValue(argv, ++i, arg);
+    else if (arg === "--top") {
+      args.top = Number(requireValue(argv, ++i, arg)) || DEFAULT_TOP;
+    } else if (arg === "--json") args.json = true;
+    else if (arg === "--since") {
+      args.since = parseSince(requireValue(argv, ++i, arg), now);
+    } else if (arg === "--until") {
+      args.until = parseDate(requireValue(argv, ++i, arg), arg, true);
+    } else if (arg === "--version") {
+      args.versions.push(requireValue(argv, ++i, arg));
+    } else if (arg === "--help" || arg === "-h") args.help = true;
+    else throw new Error(`Unknown argument: ${arg}`);
   }
   return args;
 }
 
-export function readEvents(inputPath) {
+function requireValue(argv, index, flag) {
+  const value = argv[index];
+  if (!value || value.startsWith("--"))
+    throw new Error(`${flag} requires a value`);
+  return value;
+}
+
+function parseSince(value, now) {
+  const relative = /^(\d+)([dhm])$/.exec(value);
+  if (!relative) return parseDate(value, "--since");
+  const unitMs = { d: 86_400_000, h: 3_600_000, m: 60_000 }[relative[2]];
+  return new Date(now.getTime() - Number(relative[1]) * unitMs);
+}
+
+function parseDate(value, flag, endOfDay = false) {
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.test(value);
+  const timestamp = Date.parse(
+    dateOnly
+      ? `${value}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}Z`
+      : value,
+  );
+  if (!Number.isFinite(timestamp))
+    throw new Error(`${flag} requires a valid ISO date`);
+  return new Date(timestamp);
+}
+
+export function readEvents(inputPath, filters = {}) {
   if (!fs.existsSync(inputPath)) {
     throw new Error(`No telemetry file at ${inputPath}`);
   }
@@ -51,7 +86,23 @@ export function readEvents(inputPath) {
     try {
       const record = JSON.parse(trimmed);
       if (record?.type === "context_usage_event" && record.event) {
-        events.push({ recordedAt: record.recordedAt, ...record.event });
+        const recordedAt = Date.parse(record.recordedAt);
+        if (filters.since || filters.until) {
+          if (!Number.isFinite(recordedAt)) continue;
+          if (filters.since && recordedAt < filters.since.getTime()) continue;
+          if (filters.until && recordedAt > filters.until.getTime()) continue;
+        }
+        if (
+          filters.versions?.length > 0 &&
+          !filters.versions.includes(record.extensionVersion)
+        ) {
+          continue;
+        }
+        events.push({
+          recordedAt: record.recordedAt,
+          extensionVersion: record.extensionVersion ?? "unknown",
+          ...record.event,
+        });
       }
     } catch {
       // Skip malformed lines (partial writes).
@@ -72,6 +123,151 @@ function percentile(sorted, p) {
   return sorted[idx];
 }
 
+function nonNegative(value) {
+  return Number.isFinite(value) ? Math.max(0, Number(value)) : 0;
+}
+
+function requestCohort(request) {
+  return [
+    request.extensionVersion ?? "unknown",
+    request.background === true
+      ? "background"
+      : request.background === false
+        ? "foreground"
+        : "unknown",
+    request.providerId ?? "unknown",
+    request.model ?? "unknown",
+    request.mode ?? "unknown",
+    request.promptProfile ?? "unknown",
+  ].join(" | ");
+}
+
+function createHarnessContextAggregate() {
+  return {
+    agentProviderAttempts: 0,
+    condenseProviderAttempts: 0,
+    ledgerAttempts: 0,
+    staticFloorSamples: [],
+    staticFloorTokenSends: 0,
+    allocatedInputTokens: 0,
+    boundedRequestedTokens: 0,
+    boundedAllocatedTokens: 0,
+    boundedOmittedTokens: 0,
+    attemptsRequestingBoundedContext: 0,
+    attemptsWithOmission: 0,
+    overflowTokens: 0,
+    attemptsWithOverflow: 0,
+    layers: {},
+  };
+}
+
+function mergeHarnessContextRequest(aggregate, request) {
+  if (request.requestKind === "condense") {
+    aggregate.condenseProviderAttempts += 1;
+    return;
+  }
+  aggregate.agentProviderAttempts += 1;
+  const ledger = request.contextLedger;
+  if (!ledger) return;
+  aggregate.ledgerAttempts += 1;
+  aggregate.allocatedInputTokens += nonNegative(ledger.allocatedInputTokens);
+  aggregate.overflowTokens += nonNegative(ledger.overflowTokens);
+  if (nonNegative(ledger.overflowTokens) > 0)
+    aggregate.attemptsWithOverflow += 1;
+
+  let staticFloor = 0;
+  let boundedRequested = 0;
+  let boundedOmitted = 0;
+  for (const layer of ledger.layers ?? []) {
+    const current = (aggregate.layers[layer.layer] ??= {
+      requestedTokens: 0,
+      allocatedTokens: 0,
+      omittedTokens: 0,
+      samples: 0,
+      requiredSamples: 0,
+      optionalSamples: 0,
+    });
+    current.requestedTokens += nonNegative(layer.requestedTokens);
+    current.allocatedTokens += nonNegative(layer.allocatedTokens);
+    current.omittedTokens += nonNegative(layer.omittedTokens);
+    current.samples += 1;
+    if (layer.required === true) current.requiredSamples += 1;
+    else current.optionalSamples += 1;
+    if (
+      layer.layer === "system_prompt" ||
+      layer.layer === "mode_instructions" ||
+      layer.layer === "tool_definitions"
+    ) {
+      staticFloor += nonNegative(layer.allocatedTokens);
+    }
+    if (layer.required !== true) {
+      boundedRequested += nonNegative(layer.requestedTokens);
+      boundedOmitted += nonNegative(layer.omittedTokens);
+      aggregate.boundedAllocatedTokens += nonNegative(layer.allocatedTokens);
+    }
+  }
+  aggregate.staticFloorSamples.push(staticFloor);
+  aggregate.staticFloorTokenSends += staticFloor;
+  aggregate.boundedRequestedTokens += boundedRequested;
+  aggregate.boundedOmittedTokens += boundedOmitted;
+  if (boundedRequested > 0) aggregate.attemptsRequestingBoundedContext += 1;
+  if (boundedOmitted > 0) aggregate.attemptsWithOmission += 1;
+}
+
+function finalizeHarnessContextAggregate(aggregate) {
+  const floors = [...aggregate.staticFloorSamples].sort((a, b) => a - b);
+  const ratio = (numerator, denominator) =>
+    denominator > 0 ? numerator / denominator : undefined;
+  return {
+    agentProviderAttempts: aggregate.agentProviderAttempts,
+    condenseProviderAttempts: aggregate.condenseProviderAttempts,
+    ledgerAttempts: aggregate.ledgerAttempts,
+    ledgerCoverage: ratio(
+      aggregate.ledgerAttempts,
+      aggregate.agentProviderAttempts,
+    ),
+    estimatedStaticFloor: {
+      samples: floors.length,
+      p50: percentile(floors, 50),
+      p90: percentile(floors, 90),
+      max: floors.at(-1),
+      tokenSends: aggregate.staticFloorTokenSends,
+      weightedShare: ratio(
+        aggregate.staticFloorTokenSends,
+        aggregate.allocatedInputTokens,
+      ),
+    },
+    boundedContext: {
+      requestedTokens: aggregate.boundedRequestedTokens,
+      allocatedTokens: aggregate.boundedAllocatedTokens,
+      omittedTokens: aggregate.boundedOmittedTokens,
+      attemptsRequestingContext: aggregate.attemptsRequestingBoundedContext,
+      attemptsWithOmission: aggregate.attemptsWithOmission,
+      omissionIncidence: ratio(
+        aggregate.attemptsWithOmission,
+        aggregate.ledgerAttempts,
+      ),
+      eligibleRequestOmissionRate: ratio(
+        aggregate.attemptsWithOmission,
+        aggregate.attemptsRequestingBoundedContext,
+      ),
+      tokenOmissionRate: ratio(
+        aggregate.boundedOmittedTokens,
+        aggregate.boundedRequestedTokens,
+      ),
+    },
+    overflow: {
+      tokens: aggregate.overflowTokens,
+      attempts: aggregate.attemptsWithOverflow,
+      requestRate: ratio(
+        aggregate.attemptsWithOverflow,
+        aggregate.ledgerAttempts,
+      ),
+    },
+    layers: aggregate.layers,
+  };
+}
+
 export function summarize(events, top) {
   const jumps = events.filter((e) => e.kind === "context_jump");
   const postCondense = events.filter(
@@ -83,6 +279,8 @@ export function summarize(events, top) {
   );
 
   const toolAttributionTotals = new Map();
+  const harnessContext = createHarnessContextAggregate();
+  const harnessContextByCohort = new Map();
   let attributedToolResultBytes = 0;
   let attributedToolResultTokens = 0;
   let attributedToolResultCount = 0;
@@ -90,6 +288,12 @@ export function summarize(events, top) {
   let pinnedMemoryTokens = 0;
   let retrievedMemoryTokens = 0;
   for (const request of requestAttributions) {
+    mergeHarnessContextRequest(harnessContext, request);
+    const cohort = requestCohort(request);
+    const cohortAggregate =
+      harnessContextByCohort.get(cohort) ?? createHarnessContextAggregate();
+    mergeHarnessContextRequest(cohortAggregate, request);
+    harnessContextByCohort.set(cohort, cohortAggregate);
     omittedToolResultAttributions += request.omittedToolResultAttributions ?? 0;
     pinnedMemoryTokens += request.pinnedMemoryTokens ?? 0;
     retrievedMemoryTokens += request.retrievedMemoryTokens ?? 0;
@@ -176,6 +380,17 @@ export function summarize(events, top) {
           a.toolName.localeCompare(b.toolName),
       ),
     },
+    harnessContext: finalizeHarnessContextAggregate(harnessContext),
+    harnessContextByCohort: [...harnessContextByCohort.entries()]
+      .map(([cohort, aggregate]) => ({
+        cohort,
+        ...finalizeHarnessContextAggregate(aggregate),
+      }))
+      .sort(
+        (left, right) =>
+          right.agentProviderAttempts - left.agentProviderAttempts ||
+          left.cohort.localeCompare(right.cohort),
+      ),
     postCondenseEstimateGapTokens: {
       p50: percentile(gaps, 50),
       p90: percentile(gaps, 90),
@@ -193,7 +408,10 @@ export function summarize(events, top) {
   };
 }
 
-function printReport(summary) {
+const percent = (value) =>
+  value === undefined ? "N/A" : `${(value * 100).toFixed(1)}%`;
+
+function printReport(summary, top) {
   const { totals, postCondenseEstimateGapTokens: gap } = summary;
   console.log("Context usage telemetry");
   console.log(
@@ -221,6 +439,51 @@ function printReport(summary) {
     console.log(
       `  ${tool.toolName.padEnd(32)} count=${fmt(tool.count).padStart(6)} ` +
         `bytes=${fmt(tool.bytes).padStart(12)} tokens=${fmt(tool.estimatedTokens).padStart(10)}`,
+    );
+  }
+
+  const harness = summary.harnessContext;
+  console.log("\nEstimated static request floor (ordinary agent attempts):");
+  console.log(
+    `  attempts=${fmt(harness.agentProviderAttempts)} condense-attempts=${fmt(harness.condenseProviderAttempts)} ` +
+      `ledger-coverage=${percent(harness.ledgerCoverage)} samples=${fmt(harness.estimatedStaticFloor.samples)}`,
+  );
+  console.log(
+    `  p50=${fmt(harness.estimatedStaticFloor.p50)} p90=${fmt(harness.estimatedStaticFloor.p90)} ` +
+      `max=${fmt(harness.estimatedStaticFloor.max)} token-sends=${fmt(harness.estimatedStaticFloor.tokenSends)} ` +
+      `weighted-share=${percent(harness.estimatedStaticFloor.weightedShare)}`,
+  );
+
+  console.log("\nRetrieved-context omission and envelope overflow:");
+  console.log(
+    `  bounded requested=${fmt(harness.boundedContext.requestedTokens)} ` +
+      `allocated=${fmt(harness.boundedContext.allocatedTokens)} omitted=${fmt(harness.boundedContext.omittedTokens)}`,
+  );
+  console.log(
+    `  omission-incidence=${percent(harness.boundedContext.omissionIncidence)} ` +
+      `eligible-request-rate=${percent(harness.boundedContext.eligibleRequestOmissionRate)} ` +
+      `token-rate=${percent(harness.boundedContext.tokenOmissionRate)}`,
+  );
+  console.log(
+    `  overflow-attempts=${fmt(harness.overflow.attempts)} overflow-tokens=${fmt(harness.overflow.tokens)} ` +
+      `overflow-rate=${percent(harness.overflow.requestRate)}`,
+  );
+  for (const [layer, totals] of Object.entries(harness.layers)) {
+    const note =
+      layer === "workspace_instructions" || layer === "pinned_memory"
+        ? " (not separately instrumented)"
+        : "";
+    console.log(
+      `  ${layer.padEnd(24)} requested=${fmt(totals.requestedTokens).padStart(10)} ` +
+        `allocated=${fmt(totals.allocatedTokens).padStart(10)} omitted=${fmt(totals.omittedTokens).padStart(10)}${note}`,
+    );
+  }
+
+  console.log("\nTop harness-context cohorts:");
+  for (const cohort of summary.harnessContextByCohort.slice(0, top)) {
+    console.log(
+      `  ${cohort.cohort} attempts=${fmt(cohort.agentProviderAttempts)} ` +
+        `floor-p50=${fmt(cohort.estimatedStaticFloor.p50)} floor-share-of-allocated-input=${percent(cohort.estimatedStaticFloor.weightedShare)}`,
     );
   }
 
@@ -266,12 +529,22 @@ function printReport(summary) {
 
 export function main(argv = process.argv) {
   const args = parseArgs(argv);
-  const events = readEvents(args.input);
+  if (args.help) {
+    console.log(
+      "Usage: node scripts/report-context-jumps.mjs [--top N] [--input <path>] [--since <date|Nd|Nh|Nm>] [--until <date>] [--version <version>] [--json]",
+    );
+    return;
+  }
+  const events = readEvents(args.input, {
+    since: args.since,
+    until: args.until,
+    versions: args.versions,
+  });
   const summary = summarize(events, args.top);
   if (args.json) {
     console.log(JSON.stringify(summary, null, 2));
   } else {
-    printReport(summary);
+    printReport(summary, args.top);
   }
 }
 

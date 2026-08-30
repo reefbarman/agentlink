@@ -1,5 +1,5 @@
-import type { WebviewModelInfo } from "../types";
 import { ContextBar } from "./ContextBar";
+import type { ChatModelInfo as WebviewModelInfo } from "@agentlink/protocol/chat-catalog";
 
 export function ContextUsageRow({
   inputTokens,

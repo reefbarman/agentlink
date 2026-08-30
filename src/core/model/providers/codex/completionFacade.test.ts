@@ -131,6 +131,7 @@ describe("executeCodexResolvedCompletion", () => {
           outputTokens: 7,
           cacheReadTokens: 3,
           cacheCreationTokens: 0,
+          inputTokenBreakdownReported: true,
           providerResponseId: "resp_123",
         },
       ]),
@@ -145,6 +146,7 @@ describe("executeCodexResolvedCompletion", () => {
         outputTokens: 7,
         cacheReadTokens: 3,
         cacheCreationTokens: 0,
+        inputTokenBreakdownReported: true,
       },
       providerResponseId: "resp_123",
       assistantMessage: {

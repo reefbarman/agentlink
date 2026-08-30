@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createProjectlessSessionScope,
   type SessionProjectScope,
-} from "../core/workspaceProjects.js";
+} from "@agentlink/protocol/workspace-project";
 import { AGENT_PLUGIN_MANIFEST_SCHEMA_ID } from "../core/agentPlugins/schemaRegistry.js";
 import { AgentPluginCatalog } from "./AgentPluginCatalog.js";
 import {

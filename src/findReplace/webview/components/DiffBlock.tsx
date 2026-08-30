@@ -1,4 +1,4 @@
-import type { FindReplaceMatch } from "../types.js";
+import type { FindReplaceMatch } from "@agentlink/protocol/find-replace-preview";
 
 interface DiffBlockProps {
   match: FindReplaceMatch;

@@ -1,12 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
+  CHAT_TAB_LAYOUT_VERSION as COMPATIBILITY_CHAT_TAB_LAYOUT_VERSION,
   CHAT_TAB_LAYOUT_WORKSPACE_KEY,
-  CHAT_TAB_LAYOUT_VERSION,
   ChatTabController,
-  type ChatTabLayout,
+  type ChatTabLayout as CompatibilityChatTabLayout,
   type ChatTabWorkspaceState,
 } from "./ChatTabController.js";
+import {
+  CHAT_TAB_LAYOUT_VERSION,
+  type ChatTabLayout,
+} from "@agentlink/protocol/chat-workspace";
 
 function createWorkspaceState(initial?: unknown): {
   state: ChatTabWorkspaceState;
@@ -34,6 +38,11 @@ function createIds(...ids: string[]): () => string {
 }
 
 describe("ChatTabController", () => {
+  it("re-exports package-owned chat workspace layout contracts", () => {
+    expect(COMPATIBILITY_CHAT_TAB_LAYOUT_VERSION).toBe(CHAT_TAB_LAYOUT_VERSION);
+    expectTypeOf<CompatibilityChatTabLayout>().toEqualTypeOf<ChatTabLayout>();
+  });
+
   it("creates and persists one docked T1 tab for an empty workspace", async () => {
     const workspace = createWorkspaceState();
     const controller = new ChatTabController(workspace.state, {

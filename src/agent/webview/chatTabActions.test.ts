@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ChatWorkspaceViewSnapshot } from "../chatTabProtocol.js";
+import type { ChatWorkspaceViewSnapshot } from "@agentlink/protocol/chat-workspace";
 import { addressChatWebviewMessage } from "./chatTabActions.js";
 
 const snapshot: ChatWorkspaceViewSnapshot = {

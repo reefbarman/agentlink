@@ -9,7 +9,6 @@ import type {
   CommandExecutionPolicy,
   ManagedNetworkRequest,
   PreparedTerminalExecution,
-  TerminalApprovalModeSnapshot,
   TerminalCommandResult,
   TerminalExecutionAttemptSummary,
   TerminalExecutionAuditEvent,
@@ -18,6 +17,7 @@ import type {
   TerminalExecuteOptions,
   TerminalProvider,
 } from "../core/capabilities/terminal.js";
+import type { TerminalApprovalModeSnapshot } from "@agentlink/protocol/terminal";
 
 import type { SandboxViolation } from "../core/sandboxPolicy.js";
 import { SandboxCapabilityLaunchError } from "../core/capabilities/SandboxCapabilityLaunchError.js";
@@ -52,7 +52,7 @@ import {
   type CommandRiskCode,
   type CommandTier,
 } from "../approvals/commandTierClassifier.js";
-import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
+import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 import {
   commandReviewActionKey,
   getCommandAutoApprovalEligibility,
@@ -117,7 +117,7 @@ type CommandApprovalAudit =
   | { by: "human" }
   | { by: "human_edited" };
 
-import { type ToolResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 export interface ExecuteCommandProviders {
   terminalProvider?: TerminalProvider;
@@ -1435,6 +1435,90 @@ async function protectedGitMetadataRetryResult(input: {
       },
     ],
   };
+}
+
+const INACTIVE_TERMINAL_CLEANUP_THRESHOLD = 5;
+const MAX_TERMINAL_CLEANUP_DETAILS = 20;
+const MAX_TRACKED_TERMINAL_CLEANUP_SCOPES = 256;
+const terminalCleanupWarningScopes = new Set<string>();
+const terminalCleanupScopeBySession = new Map<string, string>();
+
+type ExecuteCommandResult = TerminalCommandResult & {
+  terminal_cleanup?: {
+    warning: string;
+    inactive_count: number;
+    threshold: number;
+    terminals: Array<{ id: string; name: string }>;
+    terminals_omitted?: number;
+  };
+};
+
+function attachTerminalCleanupWarning(
+  result: ExecuteCommandResult,
+  terminalProvider: TerminalProvider,
+  sessionId: string,
+): void {
+  delete result.terminal_cleanup;
+  try {
+    const terminals = terminalProvider.listTerminals({ owner: undefined });
+    if (!Array.isArray(terminals)) return;
+
+    const owner =
+      terminals.find((terminal) => terminal.id === result.terminal_id)?.owner ??
+      terminals.find((terminal) => terminal.owner)?.owner;
+    const observedScopeKey = owner
+      ? `${owner.scopeId}\0${owner.generation}`
+      : undefined;
+    if (observedScopeKey) {
+      terminalCleanupScopeBySession.delete(sessionId);
+      terminalCleanupScopeBySession.set(sessionId, observedScopeKey);
+      if (
+        terminalCleanupScopeBySession.size > MAX_TRACKED_TERMINAL_CLEANUP_SCOPES
+      ) {
+        const oldestSessionId = terminalCleanupScopeBySession
+          .keys()
+          .next().value;
+        if (oldestSessionId !== undefined) {
+          terminalCleanupScopeBySession.delete(oldestSessionId);
+        }
+      }
+    }
+    const scopeKey =
+      observedScopeKey ??
+      terminalCleanupScopeBySession.get(sessionId) ??
+      `session:${sessionId}`;
+    const inactive = terminals.filter((terminal) => !terminal.busy);
+    if (inactive.length < INACTIVE_TERMINAL_CLEANUP_THRESHOLD) {
+      terminalCleanupWarningScopes.delete(scopeKey);
+      return;
+    }
+    if (terminalCleanupWarningScopes.has(scopeKey)) return;
+    if (
+      terminalCleanupWarningScopes.size >= MAX_TRACKED_TERMINAL_CLEANUP_SCOPES
+    ) {
+      const oldestScopeKey = terminalCleanupWarningScopes.values().next().value;
+      if (oldestScopeKey !== undefined) {
+        terminalCleanupWarningScopes.delete(oldestScopeKey);
+      }
+    }
+    terminalCleanupWarningScopes.add(scopeKey);
+
+    result.terminal_cleanup = {
+      warning: `There are ${inactive.length} inactive managed terminals. Close terminals you no longer need before opening more; use close_terminals when it is available in the current mode.`,
+      inactive_count: inactive.length,
+      threshold: INACTIVE_TERMINAL_CLEANUP_THRESHOLD,
+      terminals: inactive
+        .slice(0, MAX_TERMINAL_CLEANUP_DETAILS)
+        .map(({ id, name }) => ({ id, name })),
+      ...(inactive.length > MAX_TERMINAL_CLEANUP_DETAILS
+        ? {
+            terminals_omitted: inactive.length - MAX_TERMINAL_CLEANUP_DETAILS,
+          }
+        : {}),
+    };
+  } catch {
+    // Terminal cleanup is advisory and must never change the command result.
+  }
 }
 
 function unavailableExecuteCommandResult(command: string): ToolResult {
@@ -2833,8 +2917,15 @@ export async function handleExecuteCommand(
         result.follow_up = approvalFollowUp;
       }
 
+      const modelResult = { ...result } as ExecuteCommandResult;
+      attachTerminalCleanupWarning(
+        modelResult,
+        providers.terminalProvider,
+        sessionId,
+      );
+
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(modelResult, null, 2) }],
       };
     } finally {
       preparedExecution?.dispose();

@@ -9,7 +9,7 @@ import type {
 import type {
   TerminalSurfaceConfiguration,
   TerminalSurfaceRequest,
-} from "./terminalSurfaceProtocol.js";
+} from "@agentlink/protocol/terminal-surface";
 
 import type { HostShellProfileConfiguration } from "./shellProfileResolver.js";
 

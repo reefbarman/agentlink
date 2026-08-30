@@ -1,15 +1,15 @@
 import * as vscode from "vscode";
 
-import { resolveAndValidatePath, getRelativePath } from "../util/paths.js";
+import { getRelativePath, resolveAndValidatePath } from "../util/paths.js";
+
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { isAgentInstructionReadPath } from "../approvals/protectedPaths.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
+import { isAgentInstructionReadPath } from "../approvals/protectedPaths.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 
 // --- Types ---
-
-import { type ToolResult } from "../shared/types.js";
 
 export interface ResolvedDocument {
   uri: vscode.Uri;

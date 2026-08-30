@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ToolResult } from "../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { handleGoToDefinition } from "./goToDefinition.js";
 import { handleGoToImplementation } from "./goToImplementation.js";
 import { handleGoToTypeDefinition } from "./goToTypeDefinition.js";

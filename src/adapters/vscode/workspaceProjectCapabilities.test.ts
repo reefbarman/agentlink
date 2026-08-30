@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createSessionProjectScope } from "../../core/workspaceProjects.js";
+import { createSessionProjectScope } from "@agentlink/protocol/workspace-project";
 import {
   createWorkspaceProjectCatalog,
   normalizeWorkspaceProjectUri,

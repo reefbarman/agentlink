@@ -2,13 +2,18 @@ import type {
   ClassifiedCommand,
   CommandRiskCode,
 } from "./commandTierClassifier.js";
+
 import type { CommandReviewEvidence } from "./commandReviewEvidence.js";
 import type { InlineCommandFilePreview } from "../util/commandInlineFiles.js";
 import type { MessageParam } from "../agent/providers/types.js";
 import type { ModelProvider } from "../agent/providers/types.js";
 import type { TerminalExecutionSecuritySummary } from "../core/capabilities/terminal.js";
 
-export const DEFAULT_COMMAND_REVIEW_TIMEOUT_MS = 20_000;
+// Keep interactive command review responsive, but allow enough time for the
+// selected provider to start and finish a small completion during brief load.
+// This matches the read-only command Guardian deadline; network and action
+// reviews retain their longer 90-second deadline.
+export const DEFAULT_COMMAND_REVIEW_TIMEOUT_MS = 45_000;
 export const MAX_COMMAND_REVIEW_ATTEMPTS = 3;
 const MAX_REASON_LENGTH = 500;
 const MAX_CONTEXT_ENTRIES = 12;

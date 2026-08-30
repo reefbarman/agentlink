@@ -8,7 +8,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { Buffer } from "node:buffer";
-import { MAX_TERMINAL_INPUT_BYTES } from "./terminalSurfaceProtocol.js";
+import { MAX_TERMINAL_INPUT_BYTES } from "@agentlink/protocol/terminal-surface";
 
 describe("hostTerminalTasks", () => {
   it("parses valid tasks and skips invalid entries", () => {

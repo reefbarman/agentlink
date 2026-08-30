@@ -3,9 +3,9 @@ import type {
   TerminalApprovalReviewer,
   TerminalCommandApprovalPolicySnapshot,
   TerminalExecutionPreset,
-} from "./terminal.js";
+} from "@agentlink/protocol/terminal";
 
-import type { ToolResult } from "../../shared/types.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 export interface WorktreeAgentLaunchRequest {
   task: string;
