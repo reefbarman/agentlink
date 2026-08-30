@@ -4322,7 +4322,7 @@ describe("handleExecuteCommand", () => {
     },
   );
 
-  it("forces fresh review and forwards exact local-binding capability", async () => {
+  it("uses an explicit Allow rule for disposable-HOME and local-binding capabilities without Guardian review", async () => {
     const execute = vi.fn(async () => ({
       exit_code: 0,
       output: "listening",
@@ -4372,28 +4372,44 @@ describe("handleExecuteCommand", () => {
       dispose: vi.fn(),
     }));
     const review = vi.fn(async () => ({
-      outcome: "allow" as const,
-      risk: "medium" as const,
-      userAuthorization: "high" as const,
-      rationale:
-        "The test server is required and outbound access remains confined.",
+      outcome: "deny" as const,
+      risk: "high" as const,
+      userAuthorization: "unknown" as const,
+      rationale: "Command review timed out",
       model: "review-model",
-      status: "reviewed" as const,
+      status: "timed_out" as const,
     }));
     const enqueueCommandApproval = vi.fn();
+    const clearRetainedDenial = vi.fn();
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
     const result = await handleExecuteCommand(
       {
         command: "npm test",
+        temporary_home: true,
         sandbox_permissions: "with_additional_permissions",
         additional_permissions: { network: { allow_local_binding: true } },
         reason: "Start the test listener.",
       },
       {
+        evaluateCommandRules: (_sessionId: string, command: string) =>
+          evaluateCommandRulePolicy(
+            {
+              session: [],
+              project: [
+                {
+                  pattern: "npm test",
+                  mode: "prefix",
+                  decision: "allow",
+                },
+              ],
+              global: [],
+            },
+            command,
+          ),
         isCommandApproved: () => true,
         findMatchingCommandRule: vi.fn(() => ({
-          rule: { pattern: "npm test", mode: "exact", decision: "allow" },
+          rule: { pattern: "npm test", mode: "prefix", decision: "allow" },
           scope: "project",
         })),
       } as never,
@@ -4404,19 +4420,27 @@ describe("handleExecuteCommand", () => {
         terminalProvider: { ...terminalProvider, prepareExecution },
         getCommandApprovalPolicy: () => "approve-for-me",
         commandApprovalReviewer: { review },
+        retainedCommandReviewDenials: {
+          has: () => true,
+          retain: vi.fn(),
+          clear: clearRetainedDenial,
+          clearSession: vi.fn(),
+          list: () => [],
+        },
         isSessionActive: () => true,
       },
     );
 
     expect(classifyPredictableGitMetadataWriter).toHaveBeenCalledWith({
       command: "npm test",
-      hasEnvironmentOverrides: false,
+      hasEnvironmentOverrides: true,
       hasInlineFiles: false,
     });
     expect(resolveBaselineProtectedGitMetadataForCwd).not.toHaveBeenCalled();
     expect(prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({
         command: "npm test",
+        temporaryHome: true,
         sandboxCapabilityRequest: {
           unrestrictedPublicNetwork: true,
           allowLocalBinding: true,
@@ -4430,12 +4454,13 @@ describe("handleExecuteCommand", () => {
         authorityReason: "explicit-rule",
       }),
     );
-    expect(review).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
+    expect(clearRetainedDenial).toHaveBeenCalledOnce();
     expect(enqueueCommandApproval).not.toHaveBeenCalled();
     expect(execute).toHaveBeenCalledOnce();
     expect(textPayload(result)).toMatchObject({
       exit_code: 0,
-      approval: { by: "model_reviewer" },
+      approval: { by: "explicit_rule" },
       security: {
         permissionIntent: "additional-permissions",
         sandbox: {
@@ -5483,7 +5508,7 @@ describe("handleExecuteCommand", () => {
     expect(fs.existsSync(tempPath!)).toBe(false);
   });
 
-  it("prompts inline-file commands even when tier auto-approval is enabled", async () => {
+  it("lets an explicit Allow rule authorize inline-file payloads", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) => {
         if (key === "masterBypass") return false;
@@ -5502,10 +5527,29 @@ describe("handleExecuteCommand", () => {
         files: [{ name: "body", content: "hello" }],
       },
       {
+        evaluateCommandRules: (_sessionId: string, command: string) =>
+          evaluateCommandRulePolicy(
+            {
+              session: [
+                {
+                  pattern: "git status --short --porcelain=v1 $AL_FILE(body)",
+                  mode: "exact",
+                  decision: "allow",
+                },
+              ],
+              project: [],
+              global: [],
+            },
+            command,
+          ),
         isCommandApproved: () => true,
         findMatchingCommandRule: () =>
           ({
-            rule: { pattern: "git", mode: "prefix" },
+            rule: {
+              pattern: "git status --short --porcelain=v1 $AL_FILE(body)",
+              mode: "exact",
+              decision: "allow",
+            },
             scope: "session",
           }) as never,
       } as never,
@@ -5518,18 +5562,8 @@ describe("handleExecuteCommand", () => {
       { terminalProvider },
     );
 
-    expect(enqueueCommandApproval).toHaveBeenCalledTimes(1);
-    const approvalCall = enqueueCommandApproval.mock.calls[0] as unknown[];
-    expect(approvalCall[0]).toMatch(
-      /^git status --short --porcelain=v1 '\/.*\/body'$/,
-    );
-    expect(approvalCall[1]).toBe(
-      "git status --short --porcelain=v1 $AL_FILE(body)",
-    );
-    expect(
-      (approvalCall[2] as { inlineFiles?: unknown[] }).inlineFiles,
-    ).toMatchObject([{ name: "body", bytes: 5, preview: "hello" }]);
-    expect(textPayload(result).approval).toEqual({ by: "human" });
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
+    expect(textPayload(result).approval).toEqual({ by: "explicit_rule" });
   });
 
   it("lets the reviewer approve a bounded inline-file copy in a verified sandbox", async () => {

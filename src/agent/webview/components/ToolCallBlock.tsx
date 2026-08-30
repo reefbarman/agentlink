@@ -725,15 +725,25 @@ export function ToolCallBlock({
   }, [expanded, input, toolCall.inputJson]);
 
   const isCommand = toolCall.name === "execute_command";
+  const isTerminalOutput = toolCall.name === "get_terminal_output";
   const isRunningCommand = isCommand && !complete;
+  const terminalId = isTerminalOutput
+    ? String(input?.terminal_id ?? "").trim()
+    : "";
   const command = isCommand ? String(input?.command ?? "").trim() : "";
   const commandReason = isRunningCommand
     ? String(input?.reason ?? "").trim()
     : "";
-  const displayName = isCommand ? "Command" : toolCall.name;
+  const displayName = isCommand
+    ? "Command"
+    : isTerminalOutput
+      ? "Terminal output"
+      : toolCall.name;
   const visibleSummaryParts = isCommand
     ? summaryParts.filter((part) => part.type === "badge")
-    : summaryParts;
+    : isTerminalOutput && !complete && terminalId
+      ? []
+      : summaryParts;
   const hasSummary = visibleSummaryParts.some(
     (p) =>
       p.type === "file" || p.type === "badge" || (p.type === "text" && p.text),
@@ -746,6 +756,7 @@ export function ToolCallBlock({
     ) ?? [];
   const canContinueInBackground =
     toolCall.name === "execute_command" ||
+    toolCall.name === "get_terminal_output" ||
     toolCall.name === "get_background_result";
   const showRunningActions =
     !complete &&
@@ -761,7 +772,8 @@ export function ToolCallBlock({
       : toolCall.result;
   const revealsRunningTerminal =
     !complete &&
-    toolCall.name === "execute_command" &&
+    (toolCall.name === "execute_command" ||
+      (isTerminalOutput && !!terminalId)) &&
     !!onRevealToolCallTerminal;
   const handleHeaderClick = useCallback(() => {
     if (revealsRunningTerminal) {
@@ -790,7 +802,7 @@ export function ToolCallBlock({
 
   return (
     <div
-      class={`tool-call-block ${statusClass}${isRunningCommand ? " tool-running-command" : ""}`}
+      class={`tool-call-block ${statusClass}${isRunningCommand || (isTerminalOutput && !complete) ? " tool-running-command" : ""}`}
     >
       <div
         class={`tool-call-row${showRunningActions ? " tool-call-row-with-actions" : ""}`}
@@ -816,7 +828,7 @@ export function ToolCallBlock({
             <i class={`codicon tool-call-status-icon ${statusIconClass}`} />
             <span class="tool-call-name">{toolCall.name}</span>
           </button>
-          {isCommand && !complete && (
+          {(isCommand || isTerminalOutput) && !complete && (
             <span class="tool-command-state">Running</span>
           )}
           {isCommand && command && (
@@ -835,6 +847,26 @@ export function ToolCallBlock({
               }}
             >
               {command}
+            </button>
+          )}
+          {isTerminalOutput && !complete && terminalId && (
+            <button
+              class="tool-command-preview"
+              type="button"
+              title={
+                revealsRunningTerminal
+                  ? "Show the running terminal"
+                  : terminalId
+              }
+              aria-label={
+                revealsRunningTerminal ? "Show the running terminal" : undefined
+              }
+              onClick={(event: MouseEvent) => {
+                event.stopPropagation();
+                handleHeaderClick();
+              }}
+            >
+              {terminalId}
             </button>
           )}
           {cmdExitBadge !== null && (
@@ -911,7 +943,7 @@ export function ToolCallBlock({
                 title={
                   toolCall.name === "get_background_result"
                     ? "Return control to the agent while the background agent keeps running"
-                    : "Return control to the agent while the command keeps running"
+                    : "Return control to the agent while the terminal command keeps running"
                 }
                 onClick={() => onContinueToolCallInBackground(toolCall.id)}
               >

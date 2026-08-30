@@ -14,7 +14,7 @@ import type {
   IndexStatusInfo,
   SidebarState,
   WebviewCommand,
-} from "./webview/types.js";
+} from "@agentlink/protocol/sidebar-transport";
 import {
   deleteFeedback,
   readFeedback,

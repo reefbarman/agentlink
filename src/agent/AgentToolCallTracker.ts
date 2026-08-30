@@ -46,7 +46,13 @@ export interface TrackedCallInfo {
 const COMPLETED_TTL_MS = 8_000;
 const BACKGROUND_CONTINUABLE_TOOLS = new Set([
   "execute_command",
+  "get_terminal_output",
   "get_background_result",
+]);
+
+const TERMINAL_REVEAL_TOOLS = new Set([
+  "execute_command",
+  "get_terminal_output",
 ]);
 
 function canContinueInBackground(toolName: string): boolean {
@@ -112,26 +118,26 @@ export class AgentToolCallTracker extends EventEmitter {
       );
       if (call.backgroundRequested) void this.detachExecuteCommand(call);
       if (call.revealTerminalRequested) {
-        void this.revealExecuteCommandTerminal(call);
+        void this.revealToolCallTerminal(call);
       }
     }
   }
 
-  /** Reveal the managed terminal backing a running execute_command call. */
+  /** Reveal the managed terminal backing a running terminal tool call. */
   revealTerminal(id: string): void {
     const call = this.activeCalls.get(id);
-    if (!call || call.toolName !== "execute_command") {
+    if (!call || !TERMINAL_REVEAL_TOOLS.has(call.toolName)) {
       this.log(
-        `REVEAL_TERMINAL_MISS (${id.slice(0, 8)}) — no active execute_command tool`,
+        `REVEAL_TERMINAL_MISS (${id.slice(0, 8)}) — no active terminal tool`,
       );
       return;
     }
 
     call.revealTerminalRequested = true;
-    if (call.terminalId) void this.revealExecuteCommandTerminal(call);
+    if (call.terminalId) void this.revealToolCallTerminal(call);
   }
 
-  private async revealExecuteCommandTerminal(call: TrackedCall): Promise<void> {
+  private async revealToolCallTerminal(call: TrackedCall): Promise<void> {
     if (!call.terminalId) return;
     const revealed =
       call.terminalProvider?.revealTerminal?.({
@@ -234,6 +240,19 @@ export class AgentToolCallTracker extends EventEmitter {
       return;
     }
 
+    if (call.toolName === "get_terminal_output") {
+      this.log(
+        `BACKGROUND_RETURN ${call.toolName} (${id.slice(0, 8)}), terminalId=${call.terminalId ?? call.displayArgs}`,
+      );
+      void getAgentToolCompletionStrategy(call.toolName)({
+        call,
+        log: this.log,
+        terminalProvider: call.terminalProvider,
+        status: "continued-in-background",
+      });
+      return;
+    }
+
     if (call.toolName === "get_background_result") {
       let backgroundSessionId: string | undefined;
       try {
@@ -310,7 +329,7 @@ export class AgentToolCallTracker extends EventEmitter {
     for (const descendantId of descendantIds) {
       if (descendantId === id) continue;
       const descendant = this.activeCalls.get(descendantId);
-      if (descendant?.terminalId) {
+      if (descendant?.terminalId && descendant.toolName === "execute_command") {
         descendant.terminalProvider?.interruptTerminal({
           owner: undefined,
           terminalId: descendant.terminalId,
@@ -325,8 +344,9 @@ export class AgentToolCallTracker extends EventEmitter {
       );
     }
 
-    // Kill the running terminal process if applicable
-    if (call.terminalId) {
+    // Only execute_command owns the process. Cancelling get_terminal_output stops
+    // the observation wait without interrupting the command being observed.
+    if (call.terminalId && call.toolName === "execute_command") {
       this.log(`CANCEL_INTERRUPT terminal ${call.terminalId}`);
       const interrupted =
         call.terminalProvider?.interruptTerminal({
@@ -370,6 +390,11 @@ export class AgentToolCallTracker extends EventEmitter {
     this.log(`COMPLETE_AGENT ${call.toolName} (${id.slice(0, 8)})`);
 
     const strategy = getAgentToolCompletionStrategy(call.toolName);
-    await strategy(call, this.log, call.terminalProvider);
+    await strategy({
+      call,
+      log: this.log,
+      terminalProvider: call.terminalProvider,
+      status: undefined,
+    });
   }
 }

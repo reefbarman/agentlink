@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 
-import type { FeedbackEntry, PostCommand } from "../types.js";
+import type {
+  FeedbackEntry,
+  PostCommand,
+} from "@agentlink/protocol/sidebar-transport";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,

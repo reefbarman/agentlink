@@ -3245,6 +3245,111 @@ describe("AgentSessionManager condense thresholds", () => {
       ),
     );
   });
+
+  it("defers terminal-turn condensing until a real continuation is accepted", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    mgr.setToolContext({
+      approvalManager: { bindSessionProject: vi.fn() } as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: {} as any,
+    });
+    const session = await mgr.createSession("code");
+    const messages: AgentMessage[] = [
+      { role: "user", content: "finish the task" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Done." }],
+        uiHint: {
+          finalMarker: { status: "completed", source: "tool" },
+        },
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "call-final",
+            content: '{"ok":true}',
+          },
+        ],
+      },
+    ];
+    const order: string[] = [];
+    const sendAbortController = new AbortController();
+    Object.assign(session, {
+      loadedSkills: new Set<string>(),
+      createAbortController: vi.fn(() => sendAbortController),
+      abortSignal: sendAbortController.signal,
+      getAllMessages: vi.fn(() => messages),
+      addUserMessage: vi.fn((text: string, options?: unknown) => {
+        order.push("add-user");
+        messages.push({ role: "user", content: text } as AgentMessage);
+        return options;
+      }),
+      consumePendingInterjection: vi.fn(() => null),
+      consumePendingModeResume: vi.fn(() => null),
+      autoTitle: vi.fn(),
+      messageCount: messages.length,
+      lastActiveAt: 1,
+      isAborted: false,
+    });
+    const engine = {
+      setToolRuntime: vi.fn(),
+      isOverCondenseThreshold: vi.fn(() => true),
+      condenseSession: vi.fn(async function* () {
+        expect(session.status).toBe("streaming");
+        order.push("condense");
+        yield { type: "condense_start", isAutomatic: true };
+        yield {
+          type: "condense",
+          summary: "summary",
+          prevInputTokens: 173_000,
+          newInputTokens: 20_000,
+        };
+      }),
+      run: vi.fn(async function* () {
+        order.push("run");
+        yield {
+          type: "done",
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalCacheCreationTokens: 0,
+        };
+      }),
+    };
+    (mgr as any).host.createEngine = vi.fn(() => engine);
+
+    await mgr.maybeAutoCondenseSession(session.id);
+    expect(engine.isOverCondenseThreshold).not.toHaveBeenCalled();
+    expect(engine.condenseSession).not.toHaveBeenCalled();
+
+    const image = {
+      name: "follow-up.png",
+      mimeType: "image/png",
+      base64: "abc",
+    };
+    await mgr.sendMessage(session.id, "inspect this screenshot", session.mode, {
+      images: [image],
+    });
+
+    expect(order).toEqual(["condense", "add-user", "run"]);
+    expect(session.addUserMessage).toHaveBeenCalledWith(
+      "inspect this screenshot",
+      expect.objectContaining({ images: [image] }),
+    );
+    expect(engine.condenseSession).toHaveBeenCalledWith(
+      session,
+      true,
+      undefined,
+      expect.any(Object),
+      session.model,
+      expect.objectContaining({ signal: sendAbortController.signal }),
+    );
+    expect(session.status).toBe("streaming");
+    expect((mgr as any).activeRequestToolContexts.size).toBe(0);
+  });
 });
 
 describe("AgentSessionManager manual condense", () => {

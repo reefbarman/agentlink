@@ -1,5 +1,5 @@
 import { CollapsibleSection } from "./common/CollapsibleSection.js";
-import type { PostCommand } from "../types.js";
+import type { PostCommand } from "@agentlink/protocol/sidebar-transport";
 
 interface Props {
   postCommand: PostCommand;

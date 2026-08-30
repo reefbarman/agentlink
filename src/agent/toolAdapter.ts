@@ -4048,9 +4048,13 @@ export async function dispatchToolCall(
         },
       );
     case "get_terminal_output":
+      if (typeof params.terminal_id === "string" && params.terminal_id.trim()) {
+        trackerCtx?.setTerminalId(params.terminal_id);
+      }
       return handleGetTerminalOutput(params, {
         terminalProvider: ctx.terminalProvider,
         waitForPendingInterjection: ctx.waitForPendingInterjection,
+        toolAbortSignal,
       });
     case "close_terminals":
       return handleCloseTerminals(params, {

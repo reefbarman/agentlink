@@ -82,6 +82,59 @@ describe("ToolCallBlock", () => {
     expect(onRevealToolCallTerminal).toHaveBeenCalledTimes(2);
   });
 
+  it("reveals and controls the terminal observed by get_terminal_output", () => {
+    const onRevealToolCallTerminal = vi.fn();
+    const onContinueToolCallInBackground = vi.fn();
+    const onCompleteToolCall = vi.fn();
+    const onCancelToolCall = vi.fn();
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "running-terminal-output",
+          name: "get_terminal_output",
+          inputJson: JSON.stringify({
+            terminal_id: "term-server",
+            wait_seconds: 30,
+          }),
+          result: "",
+          complete: false,
+        },
+        onRevealToolCallTerminal,
+        onContinueToolCallInBackground,
+        onCompleteToolCall,
+        onCancelToolCall,
+      }),
+    );
+
+    expect(screen.getByText("Running")).toBeTruthy();
+    const terminalButton = screen.getByRole("button", {
+      name: "Show the running terminal",
+    });
+    expect(terminalButton.textContent).toBe("term-server");
+    fireEvent.click(terminalButton);
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Continue Terminal output in background",
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Complete Terminal output" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Cancel Terminal output" }),
+    );
+
+    expect(onRevealToolCallTerminal).toHaveBeenCalledWith(
+      "running-terminal-output",
+    );
+    expect(onContinueToolCallInBackground).toHaveBeenCalledWith(
+      "running-terminal-output",
+    );
+    expect(onCompleteToolCall).toHaveBeenCalledWith("running-terminal-output");
+    expect(onCancelToolCall).toHaveBeenCalledWith("running-terminal-output");
+  });
+
   it("shows command approval and route provenance beside a completed command", () => {
     render(
       h(ToolCallBlock, {

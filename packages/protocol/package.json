@@ -657,6 +657,20 @@
         "default": "./dist/cjs/terminalSurface.cjs"
       }
     },
+    "./sidebar-transport": {
+      "browser": {
+        "types": "./dist/sidebarTransport.d.ts",
+        "default": "./dist/sidebarTransport.js"
+      },
+      "import": {
+        "types": "./dist/sidebarTransport.d.ts",
+        "default": "./dist/sidebarTransport.js"
+      },
+      "require": {
+        "types": "./dist/cjs/sidebarTransport.d.cts",
+        "default": "./dist/cjs/sidebarTransport.cjs"
+      }
+    },
     "./workspace-project": {
       "browser": {
         "types": "./dist/workspaceProject.d.ts",

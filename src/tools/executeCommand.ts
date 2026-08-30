@@ -3435,14 +3435,17 @@ async function approveSubCommands(
         "Command execution is forbidden by an applicable command policy rule.",
     };
   }
+  // A full explicit Allow rule is standing user authority for the command and
+  // its requested route, capabilities, environment, and inline payloads. It
+  // therefore outranks Guardian freshness/retained-denial and human-only hints.
+  // Callers may disable this only when the same command is being re-executed
+  // after launch and needs a distinct one-shot recovery decision.
   const allApproved =
     options?.ruleFastPathAllowed !== false &&
     rulePolicy.decision !== "prompt" &&
-    !options?.requireHumanApproval &&
-    !options?.requireFreshReview &&
-    !retainedDenial &&
     rulePolicy.allSegmentsExplicitlyAllowed;
   if (allApproved) {
+    reviewProviders?.retainedCommandReviewDenials?.clear(sessionId, actionKey);
     return { approved: true, approval: { by: "explicit_rule" } };
   }
 

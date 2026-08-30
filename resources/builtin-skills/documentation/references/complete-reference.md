@@ -1902,6 +1902,8 @@ AgentLink automatically suppresses common `.agentlink` runtime artifacts from se
 
 Get retained output and status for a background, detached, timed-out, completed, or recently closed command. Use after `execute_command` with `background: true`, after a foreground command that timed out (`timed_out: true`), or after the terminal UI was closed before you retrieved its final result.
 
+While `get_terminal_output` is waiting, its chat activity card links to the observed terminal and offers the same intervention controls as a running command. **Continue in background** and **Complete** return the retained output seen so far and give control back to the agent without stopping the terminal command. **Cancel** cancels only the output wait; it does not interrupt the observed command. Use `kill: true` when you intend to send Ctrl+C to that command.
+
 If you pass `kill: true`, AgentLink sends Ctrl+C to the terminal and reports whether the process was killed or had already exited.
 
 | Parameter             | Type     | Description                                                               |
@@ -1938,9 +1940,9 @@ The extension provides two webview panels:
 
 Built-in agent tool calls are tracked from start to finish. The Activity view's Tool Calls section lets you intervene in long-running operations:
 
-- **Continue in background** — For `execute_command`: returns control while the terminal command keeps running. For `get_background_result`: stops waiting while the background agent continues running, so the foreground agent can do other work and check again later.
-- **Complete** — For `execute_command`: captures current terminal output, sends Ctrl+C, and returns partial results. For `write_file`/`apply_diff`: auto-accepts the pending diff view. For other tools: force-resolves immediately.
-- **Cancel** — Sends Ctrl+C to any linked terminal, rejects any pending diff view, and returns a cancellation result.
+- **Continue in background** — For `execute_command`: returns control while the terminal command keeps running. For `get_terminal_output`: returns retained output so far and stops waiting without interrupting the observed command. For `get_background_result`: stops waiting while the background agent continues running, so the foreground agent can do other work and check again later.
+- **Complete** — For `execute_command`: captures current terminal output, sends Ctrl+C, and returns partial results. For `get_terminal_output`: returns retained output so far without interrupting the observed command. For `write_file`/`apply_diff`: auto-accepts the pending diff view. For other tools: force-resolves immediately.
+- **Cancel** — Cancels `get_terminal_output` without interrupting the observed command. For an owning `execute_command`, sends Ctrl+C to the linked terminal; it also rejects any pending diff view and returns a cancellation result.
 
 ## Approval System
 
@@ -1973,6 +1975,8 @@ When an agent runs a command, the approval panel shows the command in a terminal
 #### Per-Sub-Command Rules
 
 For compound commands (e.g. `npm install && npm test`), the approval panel splits the command into individual sub-commands, each with its own rule row.
+
+A fully matching **Allow** rule is standing user authority and runs without Guardian or manual command approval for the requested route, sandbox capabilities, environment values, and inline payloads. Command validation and **Forbidden** rules still apply; unseen managed-network destinations and one-shot post-launch native retries keep their separate approval gates.
 
 The custom-regex action uses the selected provider's fast model with bounded project and recent-session context. It derives must-match variants for clear independent selectors—such as environment values and the language/environment suffix in task names—so a command like `TARGET=tertiary make test-go` can generalize both `TARGET=...` and `test-...` without broadening the fixed command structure.
 

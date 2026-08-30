@@ -4,7 +4,7 @@ import type {
   PostCommand,
   RuleEditCommand,
   RuleRemoveCommand,
-} from "../../types.js";
+} from "@agentlink/protocol/sidebar-transport";
 
 interface Props {
   rules: (CommandRule | PathRule)[];

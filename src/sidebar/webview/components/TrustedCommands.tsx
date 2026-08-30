@@ -1,4 +1,7 @@
-import type { PostCommand, SidebarState } from "../types.js";
+import type {
+  PostCommand,
+  SidebarState,
+} from "@agentlink/protocol/sidebar-transport";
 
 import { CollapsibleSection } from "./common/CollapsibleSection.js";
 import { RuleList } from "./common/RuleList.js";

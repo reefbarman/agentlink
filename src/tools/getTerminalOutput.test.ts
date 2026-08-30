@@ -40,6 +40,61 @@ describe("handleGetTerminalOutput", () => {
     });
   });
 
+  it("stops a running wait when the tool call is externally completed", async () => {
+    const controller = new AbortController();
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      is_running: true,
+      state: "running",
+      exit_code: null,
+      output_captured: true,
+      output: "still running",
+    });
+    const waitForPendingInterjection = vi.fn(async () => {
+      controller.abort();
+      return false;
+    });
+
+    const result = await handleGetTerminalOutput(
+      { terminal_id: "term_running", wait_seconds: 30 },
+      {
+        terminalProvider,
+        waitForPendingInterjection,
+        toolAbortSignal: controller.signal,
+      },
+    );
+
+    expect(waitForPendingInterjection).toHaveBeenCalledOnce();
+    expect(textPayload(result)).toMatchObject({
+      terminal_id: "term_running",
+      is_running: true,
+      output: "still running",
+    });
+  });
+
+  it("does not honor kill after the wait is externally aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      is_running: true,
+      state: "running",
+      exit_code: null,
+      output_captured: true,
+      output: "still running",
+    });
+
+    const result = await handleGetTerminalOutput(
+      { terminal_id: "term_running", wait_seconds: 30, kill: true },
+      { terminalProvider, toolAbortSignal: controller.signal },
+    );
+
+    expect(terminalProvider.interruptTerminal).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      terminal_id: "term_running",
+      is_running: true,
+    });
+    expect(textPayload(result).killed).toBeUndefined();
+  });
+
   it("returns terminal recovery metadata when terminal id is missing", async () => {
     vi.mocked(terminalProvider.getBackgroundState).mockReturnValue(undefined);
     vi.mocked(terminalProvider.getRecentlyClosedTerminals).mockReturnValue([

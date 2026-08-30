@@ -1,4 +1,8 @@
-import type { FeedbackEntry, FeedbackPriority, PostCommand } from "../types.js";
+import type {
+  FeedbackEntry,
+  FeedbackPriority,
+  PostCommand,
+} from "@agentlink/protocol/sidebar-transport";
 import { useMemo, useState } from "preact/hooks";
 
 import { CollapsibleSection } from "./common/CollapsibleSection.js";

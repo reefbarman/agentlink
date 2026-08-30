@@ -47,6 +47,7 @@ await build({
     "src/selectionCommands.ts",
     "src/semanticReadiness.ts",
     "src/sessionHydration.ts",
+    "src/sidebarTransport.ts",
     "src/terminal.ts",
     "src/terminalSurface.ts",
     "src/todoContinuation.ts",
@@ -213,6 +214,14 @@ await Promise.all([
     writeFile(
       "dist/cjs/sessionHydration.d.cts",
       content.replaceAll('"./backgroundResult.js"', '"./backgroundResult.cjs"'),
+    ),
+  ),
+  readFile("dist/sidebarTransport.d.ts", "utf8").then((content) =>
+    writeFile(
+      "dist/cjs/sidebarTransport.d.cts",
+      content
+        .replaceAll('"./contextHealth.js"', '"./contextHealth.cjs"')
+        .replaceAll('"./semanticReadiness.js"', '"./semanticReadiness.cjs"'),
     ),
   ),
   copyFile("dist/terminal.d.ts", "dist/cjs/terminal.d.cts"),

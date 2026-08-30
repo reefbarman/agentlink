@@ -1,4 +1,7 @@
-import type { PostCommand, TrackedCallInfo } from "../types.js";
+import type {
+  PostCommand,
+  TrackedCallInfo,
+} from "@agentlink/protocol/sidebar-transport";
 import { useEffect, useState } from "preact/hooks";
 
 import { CollapsibleSection } from "./common/CollapsibleSection.js";
@@ -68,7 +71,9 @@ export function ActiveToolCalls({ calls, postCommand }: Props) {
                 title={
                   c.toolName === "get_background_result"
                     ? "Return control to the agent while the background agent keeps running"
-                    : "Return control to the agent while the command keeps running"
+                    : c.toolName === "get_terminal_output"
+                      ? "Return control to the agent without interrupting the terminal command"
+                      : "Return control to the agent while the command keeps running"
                 }
                 onClick={() =>
                   postCommand("continueToolCallInBackground", { id: c.id })
@@ -86,7 +91,11 @@ export function ActiveToolCalls({ calls, postCommand }: Props) {
             </button>
             <button
               class="btn btn-cancel"
-              title="Stop this tool call and report its cancellation to the agent"
+              title={
+                c.toolName === "get_terminal_output"
+                  ? "Cancel the output wait without interrupting the terminal command"
+                  : "Stop this tool call and report its cancellation to the agent"
+              }
               onClick={() => postCommand("cancelToolCall", { id: c.id })}
             >
               Cancel

@@ -5,7 +5,7 @@ import type {
   PostCommand,
   SidebarState,
   TrackedCallInfo,
-} from "./types.js";
+} from "@agentlink/protocol/sidebar-transport";
 import { useEffect, useReducer } from "preact/hooks";
 
 import { ActiveToolCalls } from "./components/ActiveToolCalls.js";

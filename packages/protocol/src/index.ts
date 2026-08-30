@@ -42,6 +42,8 @@ export * from "./session.js";
 export * from "./sessionHandoffDraft.js";
 export * from "./structuredQuestion.js";
 export * from "./sessionHydration.js";
+// `sidebarTransport` is subpath-only: its `ExtensionMessage` and command names
+// are intentionally scoped to one product surface and are collision-prone.
 export * from "./terminal.js";
 export * from "./terminalSurface.js";
 export * from "./todoContinuation.js";

@@ -4364,6 +4364,7 @@ describe("dispatchToolCall", () => {
       {
         terminalProvider: undefined,
         waitForPendingInterjection: undefined,
+        toolAbortSignal: undefined,
       },
     );
     expect(handleCloseTerminals).toHaveBeenLastCalledWith(
@@ -4376,16 +4377,25 @@ describe("dispatchToolCall", () => {
     const { handleGetTerminalOutput } =
       await import("../tools/getTerminalOutput.js");
     const waitForPendingInterjection = vi.fn();
+    const setTerminalId = vi.fn();
+    const toolAbortSignal = new AbortController().signal;
     await dispatchToolCall(
       "get_terminal_output",
       { terminal_id: "t1" },
-      { ...mockCtx, waitForPendingInterjection },
+      {
+        ...mockCtx,
+        waitForPendingInterjection,
+        trackerCtx: { toolCallId: "get-output-call", setTerminalId },
+        toolAbortSignal,
+      },
     );
+    expect(setTerminalId).toHaveBeenCalledWith("t1");
     expect(handleGetTerminalOutput).toHaveBeenCalledWith(
       { terminal_id: "t1" },
       {
         terminalProvider: mockCtx.terminalProvider,
         waitForPendingInterjection,
+        toolAbortSignal,
       },
     );
   });

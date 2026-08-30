@@ -482,6 +482,29 @@ interface SessionTaskTracking {
   models: Set<string>;
 }
 
+function isToolResultCarrierMessage(message: AgentMessage): boolean {
+  return (
+    message.role === "user" &&
+    Array.isArray(message.content) &&
+    message.content.some((block) => block.type === "tool_result")
+  );
+}
+
+function isSessionFinalized(session: AgentSession): boolean {
+  const messages = session.getAllMessages();
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!;
+    if (message.diagnosticOnly || message.isSummary) continue;
+    if (message.role === "assistant" && message.uiHint?.finalMarker) {
+      return true;
+    }
+    if (message.role === "user" && !isToolResultCarrierMessage(message)) {
+      return false;
+    }
+  }
+  return false;
+}
+
 function startsTrackedTask(event: AgentEvent): boolean {
   return (
     event.type === "user_interjection" || event.type === "api_request_start"
@@ -6813,6 +6836,25 @@ export class AgentSessionManager {
           );
           if (messagesToAdd.length === 0 && !opts?.skipUserMessage) return;
 
+          // A terminal task status should leave the completed chat intact even
+          // when its tool result crosses the threshold. Once an accepted user
+          // prompt actually continues that chat, condense the old history before
+          // appending the new text/media so the continuation remains verbatim.
+          if (
+            !opts?.skipUserMessage &&
+            !opts?.internalInterjection &&
+            isSessionFinalized(session) &&
+            engine.isOverCondenseThreshold(session)
+          ) {
+            await this.condenseSessionWithEngine(
+              session,
+              true,
+              engine,
+              requestToolContext,
+            );
+            if (session.isAborted) return;
+          }
+
           const previousMessageCount = session.messageCount;
           for (const [messageIndex, message] of messagesToAdd.entries()) {
             const memoryNudge =
@@ -7910,11 +7952,13 @@ export class AgentSessionManager {
     session: AgentSession,
     isAutomatic: boolean,
     engine: AgentEngine,
+    boundToolContext?: Readonly<ToolDispatchContext>,
   ): Promise<void> {
     if (!isProjectlessSessionScope(session.projectScope)) {
       this.requireSessionExecution(session);
     }
-    const requestToolContext = this.bindEngineToSession(engine, session);
+    const requestToolContext =
+      boundToolContext ?? this.bindEngineToSession(engine, session);
     const provider = this.host.providers.tryResolveProvider(session.model);
     const webAccessPolicy = await this.resolveWebAccessPolicy(
       session,
@@ -7925,7 +7969,10 @@ export class AgentSessionManager {
       requestToolContext,
       webAccessPolicy.enabledKinds,
     );
-    const signal = session.createAbortController().signal;
+    const signal =
+      boundToolContext && session.abortSignal
+        ? session.abortSignal
+        : session.createAbortController().signal;
     session.status = "streaming";
     this.notifySessionsChanged();
 
@@ -7952,8 +7999,10 @@ export class AgentSessionManager {
         this.recordAndEmitEvent(session.id, { type: "condense_error", error });
       }
     } finally {
-      this.releaseSessionToolContext(session.id, requestToolContext);
-      session.status = "idle";
+      if (!boundToolContext) {
+        this.releaseSessionToolContext(session.id, requestToolContext);
+        session.status = "idle";
+      }
       this.notifySessionsChanged();
     }
   }
@@ -7976,9 +8025,17 @@ export class AgentSessionManager {
 
   async maybeAutoCondenseSession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
-    if (!session || session.background || session.status !== "idle") return;
+    if (
+      !session ||
+      session.background ||
+      session.status !== "idle" ||
+      isSessionFinalized(session)
+    ) {
+      return;
+    }
     await this.withSessionSendQueue(session.id, () =>
       this.withInteractiveEngine(session.id, async (engine) => {
+        if (session.status !== "idle" || isSessionFinalized(session)) return;
         if (!engine.isOverCondenseThreshold(session)) return;
         await this.condenseSessionWithEngine(session, true, engine);
       }),

@@ -135,6 +135,52 @@ describe("AgentToolCallTracker continueInBackground", () => {
     });
   });
 
+  it("returns control from get_terminal_output without stopping the terminal command", async () => {
+    mocks.getBackgroundState.mockReturnValue({
+      is_running: true,
+      exit_code: null,
+      output_captured: true,
+      output: "booting\nserver ready",
+    });
+    const tracker = createTracker();
+    const forceResolve = vi.fn();
+    const context = tracker.registerAgentCall(
+      "call-terminal-output",
+      "get_terminal_output",
+      "term-server",
+      "session-1",
+      forceResolve,
+      JSON.stringify({
+        terminal_id: "term-server",
+        wait_seconds: 30,
+        output_tail: 1,
+      }),
+    );
+    context.setTerminalId("term-server");
+
+    expect(tracker.getActiveCalls()[0]).toMatchObject({
+      canContinueInBackground: true,
+    });
+
+    tracker.continueInBackground("call-terminal-output");
+
+    await vi.waitFor(() => expect(forceResolve).toHaveBeenCalledOnce());
+    expect(mocks.detachTerminal).not.toHaveBeenCalled();
+    expect(mocks.interruptTerminal).not.toHaveBeenCalled();
+    expect(
+      JSON.parse(forceResolve.mock.calls[0][0].content[0].text),
+    ).toMatchObject({
+      terminal_id: "term-server",
+      is_running: true,
+      exit_code: null,
+      output_captured: true,
+      output: "server ready",
+      status: "continued-in-background",
+      message:
+        "Returned control to the agent without interrupting the terminal command. Use get_terminal_output when ready to inspect or wait again.",
+    });
+  });
+
   it("returns control from get_background_result without stopping the background agent", () => {
     const tracker = createTracker();
     const forceResolve = vi.fn();
@@ -227,6 +273,27 @@ describe("AgentToolCallTracker revealTerminal", () => {
       expect(mocks.revealTerminal).toHaveBeenCalledWith({
         owner: undefined,
         terminalId: "term_pending_reveal",
+      });
+    });
+  });
+
+  it("reveals the terminal observed by get_terminal_output", async () => {
+    const tracker = createTracker();
+    const context = tracker.registerAgentCall(
+      "call-output-reveal",
+      "get_terminal_output",
+      "term_output",
+      "session-1",
+      vi.fn(),
+    );
+    context.setTerminalId("term_output");
+
+    tracker.revealTerminal("call-output-reveal");
+
+    await vi.waitFor(() => {
+      expect(mocks.revealTerminal).toHaveBeenCalledWith({
+        owner: undefined,
+        terminalId: "term_output",
       });
     });
   });
@@ -368,6 +435,29 @@ describe("AgentToolCallTracker lifecycle", () => {
     expect(JSON.parse(forceResolve.mock.calls[0][0].content[0].text)).toEqual({
       status: "cancelled",
       tool: "execute_command",
+      message: "Cancelled by user from VS Code",
+    });
+  });
+
+  it("cancels get_terminal_output without interrupting the observed command", () => {
+    const tracker = createTracker();
+    const forceResolve = vi.fn();
+    const context = tracker.registerAgentCall(
+      "call-output-cancel",
+      "get_terminal_output",
+      "term-observed",
+      "session-a",
+      forceResolve,
+    );
+    context.setTerminalId("term-observed");
+
+    tracker.cancelCall("call-output-cancel");
+
+    expect(mocks.interruptTerminal).not.toHaveBeenCalled();
+    expect(forceResolve).toHaveBeenCalledOnce();
+    expect(JSON.parse(forceResolve.mock.calls[0][0].content[0].text)).toEqual({
+      status: "cancelled",
+      tool: "get_terminal_output",
       message: "Cancelled by user from VS Code",
     });
   });

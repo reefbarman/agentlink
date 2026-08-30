@@ -359,6 +359,7 @@ describe("protocol package boundary", () => {
         path.join(PROTOCOL_SOURCE, "sessionHandoffDraft.ts"),
         path.join(PROTOCOL_SOURCE, "structuredQuestion.ts"),
         path.join(PROTOCOL_SOURCE, "sessionHydration.ts"),
+        path.join(PROTOCOL_SOURCE, "sidebarTransport.ts"),
         path.join(PROTOCOL_SOURCE, "terminal.ts"),
         path.join(PROTOCOL_SOURCE, "terminalSurface.ts"),
         path.join(PROTOCOL_SOURCE, "todoContinuation.ts"),
@@ -420,6 +421,48 @@ describe("protocol package boundary", () => {
         '"dist/cjs/sessionHandoffDraft.d.cts"',
       );
       expect(source, buildScript).toContain('"./sessionHandoffDraft.cjs"');
+    }
+  });
+
+  it("wires sidebar-transport through every public package build surface", () => {
+    const packageManifest = JSON.parse(
+      fs.readFileSync(
+        path.join(ROOT, "packages", "protocol", "package.json"),
+        "utf8",
+      ),
+    ) as { exports?: Record<string, unknown> };
+    expect(packageManifest.exports?.["./sidebar-transport"]).toEqual({
+      browser: {
+        types: "./dist/sidebarTransport.d.ts",
+        default: "./dist/sidebarTransport.js",
+      },
+      import: {
+        types: "./dist/sidebarTransport.d.ts",
+        default: "./dist/sidebarTransport.js",
+      },
+      require: {
+        types: "./dist/cjs/sidebarTransport.d.cts",
+        default: "./dist/cjs/sidebarTransport.cjs",
+      },
+    });
+
+    const indexSource = fs.readFileSync(
+      path.join(PROTOCOL_SOURCE, "index.ts"),
+      "utf8",
+    );
+    expect(indexSource).toContain("`sidebarTransport` is subpath-only");
+    expect(indexSource).not.toContain('export * from "./sidebarTransport.js";');
+
+    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
+      const source = fs.readFileSync(
+        path.join(ROOT, "packages", "protocol", buildScript),
+        "utf8",
+      );
+      expect(source, buildScript).toContain('"src/sidebarTransport.ts"');
+      expect(source, buildScript).toContain(
+        '"dist/cjs/sidebarTransport.d.cts"',
+      );
+      expect(source, buildScript).not.toContain('"./sidebarTransport.cjs"');
     }
   });
 
@@ -1305,6 +1348,41 @@ describe("protocol package boundary", () => {
         importers.push(path.relative(ROOT, filePath));
     }
     expect(importers).toEqual([]);
+  });
+
+  it("keeps sidebar-transport compatibility package-owned and unused", () => {
+    const compatibilityPath = path.join(ROOT, "src/sidebar/webview/types.ts");
+    expect(fs.readFileSync(compatibilityPath, "utf8")).toBe(
+      [
+        "export type {",
+        "  CommandRule,",
+        "  ExtensionMessage,",
+        "  FeedbackEntry,",
+        "  FeedbackPriority,",
+        "  IndexStatusInfo,",
+        "  PathRule,",
+        "  PostCommand,",
+        "  RuleEditCommand,",
+        "  RuleRemoveCommand,",
+        "  SessionInfo,",
+        "  SidebarState,",
+        "  TrackedCallInfo,",
+        "  WebviewCommand,",
+        "  WriteApprovalMode,",
+        '} from "@agentlink/protocol/sidebar-transport";',
+        "",
+      ].join("\n"),
+    );
+
+    const sourceFiles = walkTypeScriptFiles(path.join(ROOT, "src")).map(
+      (filePath) => ({
+        filePath,
+        source: fs.readFileSync(filePath, "utf8"),
+      }),
+    );
+    expect(
+      findCompatibilityImporters({ compatibilityPath, sourceFiles }),
+    ).toEqual([]);
   });
 
   it("keeps terminal-surface compatibility package-owned with bounded importers", () => {

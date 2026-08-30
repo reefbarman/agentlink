@@ -15,6 +15,10 @@ export interface GetTerminalOutputProviders {
   terminalProvider?: TerminalProvider;
   /** Resolves when a user message arrives while the tool is polling. */
   waitForPendingInterjection?: (timeoutMs: number) => Promise<boolean>;
+  /** Stops an in-progress wait when the tool call is completed or cancelled. */
+  toolAbortSignal?: AbortSignal;
+  /** Allows the completion control to recover output after management state is gone. */
+  allowDirectOutputFallback?: boolean;
 }
 
 function unavailableTerminalOutputResult(params: {
@@ -75,6 +79,7 @@ export async function handleGetTerminalOutput(
     );
 
     while (Date.now() < deadline) {
+      if (providers.toolAbortSignal?.aborted) break;
       const current = terminalProvider.getBackgroundState({
         owner: undefined,
         terminalId: params.terminal_id,
@@ -96,6 +101,7 @@ export async function handleGetTerminalOutput(
         waitInterrupted = true;
         break;
       }
+      if (providers.toolAbortSignal?.aborted) break;
     }
 
     log?.(
@@ -103,8 +109,10 @@ export async function handleGetTerminalOutput(
     );
   }
 
-  // Kill the running process if requested
-  if (params.kill) {
+  // Kill only when the tool is still executing normally. Completing, cancelling,
+  // or handing the wait back to the agent aborts this tool call but must not
+  // interrupt the command being observed.
+  if (params.kill && !providers.toolAbortSignal?.aborted) {
     log?.(`[get_terminal_output] KILL terminal_id=${params.terminal_id}`);
     terminalProvider.interruptTerminal({
       owner: undefined,
@@ -128,6 +136,25 @@ export async function handleGetTerminalOutput(
     (terminal) => terminal.id === params.terminal_id,
   );
   state ??= closedState;
+
+  if (!state && providers.allowDirectOutputFallback) {
+    const directOutput = terminalProvider.getCurrentOutput?.({
+      owner: undefined,
+      terminalId: params.terminal_id,
+      force: true,
+    });
+    if (directOutput !== undefined) {
+      state = {
+        is_running: false,
+        state: "unknown_termination",
+        exit_code: null,
+        output: directOutput,
+        output_captured: true,
+        output_complete: true,
+        output_finalized: true,
+      };
+    }
+  }
 
   if (!state) {
     const recent = recentlyClosed.slice(0, 5).map((terminal) => ({
@@ -196,7 +223,7 @@ export async function handleGetTerminalOutput(
     ...(state.interactive_prompt
       ? { interactive_prompt: { ...state.interactive_prompt } }
       : {}),
-    ...(params.kill && { killed: true }),
+    ...(params.kill && !providers.toolAbortSignal?.aborted && { killed: true }),
     ...(waitInterrupted &&
       state.is_running &&
       !params.kill && {
