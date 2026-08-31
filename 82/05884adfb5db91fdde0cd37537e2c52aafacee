@@ -1,0 +1,480 @@
+src/core/capabilities/terminal.ts
+  h_9630b74bdac540 2-3,7-11,13,23-35
+src/indexer/codeRetrievalHealth.ts
+  h_9630b74bdac540 10,12
+packages/protocol/src/browserGatewayTheme.test.ts
+  h_9630b74bdac540 4-5,7,9,13-40,50-54,58,75-86,98-99,103-105
+packages/protocol/src/browserGatewayAskAgentIdentity.ts
+  h_9630b74bdac540 1-24
+packages/protocol/src/browserGatewayRepositoryState.test.ts
+  h_9630b74bdac540 1-12
+src/terminal/sandbox/SandboxTerminalSession.ts
+  h_9630b74bdac540 6
+src/approvals/webview/components/MemoryCard.test.tsx
+  h_9630b74bdac540 6
+packages/protocol/src/browserGatewayCapabilityStatus.test.ts
+  h_9630b74bdac540 1-32
+src/agent/AgentSessionManager.ts
+  h_9630b74bdac540 246
+src/agent/toolAdapter.ts
+  h_9630b74bdac540 244-247,1260,1973
+src/indexer/structuralRelationProjection.ts
+  h_9630b74bdac540 1-2
+packages/protocol/src/terminalSecurity.test.ts
+  h_9630b74bdac540 1-215
+src/approvals/ApprovalPanelProvider.ts
+  h_9630b74bdac540 17,21
+src/browser-gateway/browserGatewayModelProviderIds.ts
+  h_9630b74bdac540 1
+src/approvals/webview/App.tsx
+  h_9630b74bdac540 5
+src/approvals/webview/components/WorktreeCard.test.tsx
+  h_9630b74bdac540 4,6,8
+src/core/retrieval/revisionOrder.test.ts
+  h_9630b74bdac540 7
+src/browser-gateway/webview/browserGatewayNotifications.ts
+  h_9630b74bdac540 1
+packages/protocol/src/browserGatewayOperationState.ts
+  h_9630b74bdac540 1-21
+packages/protocol/src/browserGatewayTheme.ts
+  h_9630b74bdac540 1-19,22,24-35,41-47,50-57,61,66-72
+src/approvals/networkApprovalReview.ts
+  h_9630b74bdac540 9
+packages/protocol/src/browserGatewayOwnerControlMetadata.ts
+  h_9630b74bdac540 1-22
+src/agent/editorContextCommands.test.ts
+  h_9630b74bdac540 3-7,9-14,36-38,41-42,44-52,83-84,126-158,185-209,211-227,229,269
+src/approvals/webview/components/CommandCard.test.tsx
+  h_9630b74bdac540 6
+src/core/retrieval/fingerprint.ts
+  h_9630b74bdac540 4
+packages/protocol/src/browserGatewayInstanceStatus.ts
+  h_9630b74bdac540 1-13
+src/terminal/sandbox/AgentTerminalProviderRouter.ts
+  h_9630b74bdac540 19-23
+src/core/session/DerivedSessionRetrievalService.ts
+  h_9630b74bdac540 1-4,9-10
+src/indexer/types.ts
+  h_9630b74bdac540 1
+src/services/semanticSearch.ts
+  h_9630b74bdac540 28
+src/browser-gateway/helper/AskAgentController.ts
+  h_9630b74bdac540 4
+packages/protocol/src/retrievalFingerprint.ts
+  h_9630b74bdac540 1-23
+packages/protocol/src/browserGatewayDataPlaneMode.ts
+  h_9630b74bdac540 1-68
+src/approvals/webview/components/ModeSwitchCard.tsx
+  h_9630b74bdac540 3-4
+packages/protocol/src/webAccessPolicy.test.ts
+  h_9630b74bdac540 1-147
+src/core/retrieval/InMemoryRetrievalRepository.ts
+  h_9630b74bdac540 7-8,12-13,18-21,23-26,31-32,35-36,40-41,47-49
+src/agent/TabTerminalProviderRegistry.ts
+  h_9630b74bdac540 12
+packages/protocol/watch.mjs
+  h_9630b74bdac540 22,28-38,65-207,213-256,333-340,397-399,408-479,504-507,520-525,544-550,569,573-592,594-597,630,633-640,644,647,651-652
+src/browser-gateway/helper/AskAgentOwnerAdapter.ts
+  h_9630b74bdac540 6
+packages/protocol/src/browserGatewayHelperLifecycle.test.ts
+  h_9630b74bdac540 1-61
+src/agent/providers/codex/CodexProvider.ts
+  h_9630b74bdac540 78-79
+packages/protocol/src/browserGatewayModelProviderIdentity.ts
+  h_9630b74bdac540 1-10
+src/approvals/webview/components/CommandCard.tsx
+  h_9630b74bdac540 4-5
+packages/protocol/src/browserGatewayInteractionSummary.test.ts
+  h_9630b74bdac540 1-59
+src/approvals/webview/components/MemoryCard.tsx
+  h_9630b74bdac540 3-4
+src/protocolPackageBoundary.test.ts
+  h_9630b74bdac540 7,11-12,287,289-296,299,301-302,307,313-314,325-341,344-409,415,419-438,440-443,472,475-482,488,492,496-497,517,524,526-527,530-531,534-535,543-546,553,555,557,561,568,570-571,574-575,578-579,587,594,596-604,607-621,624,631,633-634,637-638,641-642,650,657-661,663-677,680,687,689-690,693-694,697-698,706,713-717,719-733,736,743,745-746,749-750,753-754,762,769,771-781,784-805,808,815,817-818,821-822,825-826,834,841,843-846,851,858-871,877,884-890,892-914,917,924-939,945-947,955-968,971-995,998,1005-1018,1024,1031-1045,1049-1071,1075,1077-1095,1099-1122,1125,1127-1142,1147-1170,1173,1175-1178,1180-1185,1273-3288,4171-4675,4710-5370,5372-5376,5379-5390,5393-5412,5415-5418,5420-5421,5423,5426-5459,5462,5465-5477,5479-5483,5486,5489,5492,5494,5497,5500-5519,5521-5524,5526-5531,5533-5536,5539-5580,5583-5584,5586,5588-5599,5601-5613,5615-5628,5630-5631,5633-5634,5636,5638-5639,5641-5646,5648-5662,5664-5673,5676-5713,5715-5719,5722,5725,5728,5731-5757,5760-5772,5775-5776,5779-5785,5794-5798,5802-5863,6392,6395-6396,6398,6400,6438-6440,6442-6455,6463,6474-6495
+src/test/retrievalRepositoryContract.ts
+  h_9630b74bdac540 3-7
+src/shared/chatProjection.ts
+  h_9630b74bdac540 2
+packages/protocol/src/index.ts
+  h_9630b74bdac540 2-3,9-28,30-33,63,66-73,79,84,88-89
+packages/protocol/src/browserGatewayTodoItem.ts
+  h_9630b74bdac540 1-14
+src/agent/webview/components/MessageQueuePanel.test.tsx
+  h_9630b74bdac540 11-46
+packages/protocol/src/browserGatewayTranscriptText.test.ts
+  h_9630b74bdac540 1-15
+src/browser-gateway/BrowserGatewayService.ts
+  h_9630b74bdac540 46
+packages/protocol/src/browserGatewayTranscriptMessage.ts
+  h_9630b74bdac540 1-92
+packages/protocol/src/approvalTransport.ts
+  h_9630b74bdac540 1-245
+packages/protocol/src/webActivity.ts
+  h_9630b74bdac540 1-23
+src/approvals/webview/components/WorktreeCard.tsx
+  h_9630b74bdac540 2-4,7-8
+packages/protocol/src/retrievalQuery.ts
+  h_9630b74bdac540 1-88
+src/core/retrieval/publicationDigests.ts
+  h_9630b74bdac540 1
+src/browser-gateway/browserGatewayDataPlaneMode.ts
+  h_9630b74bdac540 1
+packages/protocol/src/contextHealth.test.ts
+  h_9630b74bdac540 3-6,23-25
+packages/protocol/build-cjs.mjs
+  h_9630b74bdac540 9,13-32,34-37,70,73-80,84,87,91-92,107,113-119,141-276,281-319,382-386,424,430-479,498-500,511-516,532-535,538
+packages/protocol/src/retrievalDeletion.test.ts
+  h_9630b74bdac540 1-58
+packages/protocol/src/browserGatewayOwnerEventMetadata.test.ts
+  h_9630b74bdac540 1-53
+packages/protocol/src/retrievalStructuralSnapshot.ts
+  h_9630b74bdac540 1-27
+packages/protocol/src/browserGatewayTodoItem.test.ts
+  h_9630b74bdac540 1-32
+packages/protocol/src/providerReplay.test.ts
+  h_9630b74bdac540 1-46
+src/extension.ts
+  h_9630b74bdac540 19
+src/browser-gateway/dataPlane/limits.ts
+  h_9630b74bdac540 1
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  h_9630b74bdac540 25,2886-2887,2890,2892-2896,2898,2924,2949-2970,2974,2978,2981,2983-2987,3015,3042-3084,3088,3095,3135-3139
+src/indexer/codeRetrievalHealth.test.ts
+  h_9630b74bdac540 8
+src/core/retrieval/ranking.ts
+  h_9630b74bdac540 6-8,10
+src/browser-gateway/browserGatewayAskAgentIdentity.ts
+  h_9630b74bdac540 1
+src/approvals/webview/components/WriteCard.tsx
+  h_9630b74bdac540 3-4
+src/browser-gateway/dataPlane/interactionPayload.ts
+  h_9630b74bdac540 8,14,364,373-386,432-492,753-765
+packages/protocol/src/browserGatewayInteractionState.ts
+  h_9630b74bdac540 1-11
+src/indexer/journaledRepositoryPublication.ts
+  h_9630b74bdac540 6,14
+src/storage/retrieval/legacyCodeRetrievalCleanup.test.ts
+  h_9630b74bdac540 12
+packages/protocol/src/retrievalStructuralSnapshot.test.ts
+  h_9630b74bdac540 1-75
+src/agent/AgentEngine.ts
+  h_9630b74bdac540 40
+src/browser-gateway/browserGatewayAskAgentPreferences.ts
+  h_9630b74bdac540 5,8
+packages/protocol/src/browserGatewayDataPlaneIdentity.ts
+  h_9630b74bdac540 1-24
+src/core/model/providers/anthropic/streamParser.ts
+  h_9630b74bdac540 12-16
+src/storage/retrieval/fixtures/lanceDbRetrievalProcessFixture.ts
+  h_9630b74bdac540 4-5
+src/agent/AgentUiPublisher.ts
+  h_9630b74bdac540 8
+src/core/catalog/SkillCatalogRetrievalService.test.ts
+  h_9630b74bdac540 3
+src/tools/executeCommand.ts
+  h_9630b74bdac540 18-23,72
+src/core/model/providers/codex/translation.test.ts
+  h_9630b74bdac540 16
+src/agent/providers/types.ts
+  h_9630b74bdac540 31-32
+packages/protocol/src/retrievalRecords.ts
+  h_9630b74bdac540 1-61
+src/terminal/sandbox/SandboxRuntimeProvider.ts
+  h_9630b74bdac540 9
+src/browser-gateway/coreOwnerRegistry.ts
+  h_9630b74bdac540 2-7,12-18
+packages/protocol/src/retrievalRecords.test.ts
+  h_9630b74bdac540 1-108
+packages/protocol/src/approvalTransport.test.ts
+  h_9630b74bdac540 1-217
+src/core/model/providers/openaiCompatible/types.ts
+  h_9630b74bdac540 6
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_9630b74bdac540 127
+src/terminal/native/NativeAgentTerminalCoordinator.ts
+  h_9630b74bdac540 23
+src/storage/retrieval/retrievalSearchText.ts
+  h_9630b74bdac540 5
+src/approvals/webview/components/HookCard.test.tsx
+  h_9630b74bdac540 6
+src/indexer/journaledRepositoryDeletion.ts
+  h_9630b74bdac540 7-8
+src/agent/AgentSessionManagerHost.ts
+  h_9630b74bdac540 35
+src/storage/retrieval/LanceDbCodeIndexStagingRepository.ts
+  h_9630b74bdac540 5,13
+src/indexer/workerFixture.test.ts
+  h_9630b74bdac540 21
+src/indexer/retrievalFingerprint.ts
+  h_9630b74bdac540 9
+src/agent/ChatViewProvider.test.ts
+  h_9630b74bdac540 8210
+src/core/model/providers/codex/streamParser.ts
+  h_9630b74bdac540 11-15
+src/core/model/providers/codex/standaloneWeb.ts
+  h_9630b74bdac540 8-10,12
+src/approvals/webview/components/NetworkCard.tsx
+  h_9630b74bdac540 3-4
+src/core/modelRuntime.ts
+  h_9630b74bdac540 4,10-13,17
+src/core/model/providers/codex/completionFacade.ts
+  h_9630b74bdac540 11
+packages/protocol/src/browserGatewayAskAgentIdentity.test.ts
+  h_9630b74bdac540 1-59
+src/approvals/webview/components/WriteCard.test.tsx
+  h_9630b74bdac540 5-6
+packages/protocol/src/retrievalFingerprint.test.ts
+  h_9630b74bdac540 1-50
+packages/protocol/src/browserGatewayCoreOwnerRegistration.ts
+  h_9630b74bdac540 1-47
+packages/protocol/src/browserGatewayContextBudget.test.ts
+  h_9630b74bdac540 1-15
+src/storage/retrieval/LanceDbRetrievalRepository.contract.test.ts
+  h_9630b74bdac540 17-19
+src/browser-gateway/helper/askAgentModelClient.ts
+  h_9630b74bdac540 34-35,39
+packages/protocol/src/browserGatewayCoreOwnerRegistration.test.ts
+  h_9630b74bdac540 1-80
+packages/protocol/src/browserGatewayInteractionState.test.ts
+  h_9630b74bdac540 1-16
+packages/protocol/src/browserGatewayModelProviderIdentity.test.ts
+  h_9630b74bdac540 1-36
+packages/protocol/src/browserGatewayTranscriptText.ts
+  h_9630b74bdac540 1-9
+src/browser-gateway/helper/commandRoutes.ts
+  h_9630b74bdac540 3-7,195,510-512,520-523,534,536,577
+packages/protocol/src/browserGatewayDataPlaneMode.test.ts
+  h_9630b74bdac540 1-72
+packages/protocol/src/retrievalHealth.test.ts
+  h_9630b74bdac540 1-72
+packages/protocol/src/webActivity.test.ts
+  h_9630b74bdac540 1-56
+src/approvals/webview/components/PathCard.tsx
+  h_9630b74bdac540 3-4
+src/browser-gateway/browserGatewayAskAgentSessionStore.ts
+  h_9630b74bdac540 34
+src/terminal/native/NativeAgentTerminalCoordinator.test.ts
+  h_9630b74bdac540 19-20
+src/core/model/providers/openaiCompatible/translation.ts
+  h_9630b74bdac540 16
+src/approvals/webview/components/ApprovalLayout.tsx
+  h_9630b74bdac540 3
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_9630b74bdac540 46,1658-1664,2261-2319,2325-2327,2333,2345,2365-2400,4142-4143,4285,4288,4294-4329,4444-4455,4490,8312
+src/agent/webview/types.ts
+  h_9630b74bdac540 394
+packages/protocol/src/browserGatewayOwnerCommandMetadata.ts
+  h_9630b74bdac540 1-42
+src/indexer/journaledRepositoryDeletion.test.ts
+  h_9630b74bdac540 13
+src/browser-gateway/dataPlane/ownerProjectionAdapter.test.ts
+  h_9630b74bdac540 4-6,461-480,547-645
+src/indexer/retrievalPublicationTranslation.test.ts
+  h_9630b74bdac540 3
+src/core/retrieval/contracts.ts
+  h_9630b74bdac540 1-111
+src/approvals/webview/components/NetworkCard.test.tsx
+  h_9630b74bdac540 6
+src/approvals/commandApprovalReview.ts
+  h_9630b74bdac540 10
+packages/protocol/src/browserGatewayOwnerEventMetadata.ts
+  h_9630b74bdac540 1-23
+src/browser-gateway/BrowserGatewayServer.ts
+  h_9630b74bdac540 39
+src/core/catalog/SkillCatalogRetrievalService.ts
+  h_9630b74bdac540 4-7
+src/core/retrieval/InMemoryRetrievalRepository.test.ts
+  h_9630b74bdac540 8-10
+src/storage/retrieval/retrievalSearchText.test.ts
+  h_9630b74bdac540 9
+src/core/surfaceModelMessages.ts
+  h_9630b74bdac540 1-6,11-14
+src/core/retrieval/fingerprint.test.ts
+  h_9630b74bdac540 8
+src/storage/retrieval/LanceDbCodeIndexActivator.ts
+  h_9630b74bdac540 5
+packages/protocol/src/browserGatewayBackgroundSummary.test.ts
+  h_9630b74bdac540 1-12
+packages/protocol/src/providerReplay.ts
+  h_9630b74bdac540 1-16
+src/indexer/journaledStagedRepositoryPublication.ts
+  h_9630b74bdac540 10,21,23
+src/approvals/webview/components/RenameCard.tsx
+  h_9630b74bdac540 3-4
+src/core/model/providers/openaiCompatible/streamParser.ts
+  h_9630b74bdac540 12
+packages/protocol/src/browserGatewayDiffPreview.test.ts
+  h_9630b74bdac540 1-15
+packages/protocol/src/surfaceModelMessage.ts
+  h_9630b74bdac540 1-24
+src/browser-gateway/dataPlane/protocol.ts
+  h_9630b74bdac540 2-58,67,72-115,415,682,692,695,1129,2765,2770,2789,2805,2920,2947,2984
+packages/protocol/src/contextHealth.ts
+  h_9630b74bdac540 1-4,6,21
+packages/protocol/src/retrievalDeletion.ts
+  h_9630b74bdac540 1-23
+packages/protocol/src/browserGatewayContextBudget.ts
+  h_9630b74bdac540 1-9
+packages/protocol/src/browserGatewayDiffPreview.ts
+  h_9630b74bdac540 1-10
+src/terminal/sandbox/SandboxTerminalCoordinator.ts
+  h_9630b74bdac540 21-22,24,26-27
+packages/protocol/src/browserGatewayInstanceStatus.test.ts
+  h_9630b74bdac540 1-22
+packages/protocol/src/retrievalMaintenance.test.ts
+  h_9630b74bdac540 1-110
+packages/protocol/src/browserGatewayHelperLifecycle.ts
+  h_9630b74bdac540 1-52
+src/core/sandboxPolicy.test.ts
+  h_9630b74bdac540 9
+src/approvals/webview/components/RuleRow.tsx
+  h_9630b74bdac540 3-4
+packages/protocol/src/browserGatewayDataPlaneIdentity.test.ts
+  h_9630b74bdac540 1-49
+src/core/nativeWebTools.ts
+  h_9630b74bdac540 11
+src/storage/retrieval/LanceDbCodeIndexStagingRepository.test.ts
+  h_9630b74bdac540 7,12
+src/approvals/ApprovalPanelProvider.test.ts
+  h_9630b74bdac540 5-6,10
+src/browser-gateway/helper/browserGatewayAskAgentMemoryProposal.ts
+  h_9630b74bdac540 14
+src/approvals/webview/components/McpCard.test.tsx
+  h_9630b74bdac540 4,6,8
+src/core/model/providers/anthropic/translation.ts
+  h_9630b74bdac540 7-8
+src/indexer/retrievalPublicationTranslation.ts
+  h_9630b74bdac540 7-8
+packages/protocol/src/browserGatewayCapabilityStatus.ts
+  h_9630b74bdac540 1-15
+packages/protocol/src/retrievalPublication.test.ts
+  h_9630b74bdac540 1-144
+packages/protocol/src/retrievalMaintenance.ts
+  h_9630b74bdac540 1-52
+src/approvals/webview/components/McpCard.tsx
+  h_9630b74bdac540 3-5
+src/approvals/webview/components/HookCard.tsx
+  h_9630b74bdac540 3-4
+packages/protocol/src/browserGatewayQueueItem.test.ts
+  h_9630b74bdac540 1-33
+src/indexer/retrievalPublicationPort.ts
+  h_9630b74bdac540 4-6
+src/core/retrieval/ranking.test.ts
+  h_9630b74bdac540 3-4
+src/core/model/providers/anthropic/translation.test.ts
+  h_9630b74bdac540 7
+src/agent/toolAdapter.test.ts
+  h_9630b74bdac540 1079-1106,1728-1729,3478-3532
+src/approvals/webview/types.ts
+  h_9630b74bdac540 2-11,14-18
+src/browser-gateway/dataPlane/ownerProjectionSources.ts
+  h_9630b74bdac540 11,132
+packages/protocol/src/browserGatewayOwnerControlMetadata.test.ts
+  h_9630b74bdac540 1-53
+src/browser-gateway/dataPlane/protocol.test.ts
+  h_9630b74bdac540 1-17,22,420-437,514-870,1008-1019,1758-1766,1824-1837
+src/agent/editorContextCommands.ts
+  h_9630b74bdac540 30-32,34-56
+packages/protocol/src/browserGatewayOperationState.test.ts
+  h_9630b74bdac540 1-37
+packages/protocol/src/retrievalHealth.ts
+  h_9630b74bdac540 1-41
+packages/protocol/src/browserGatewayTranscriptBlock.ts
+  h_9630b74bdac540 1-74
+resources/builtin-skills/documentation/references/customization.md
+  h_9630b74bdac540 41-42
+src/agent/webview/components/ApprovalPanelEmbed.tsx
+  h_9630b74bdac540 4
+packages/protocol/src/browserGatewayInteractionSummary.ts
+  h_9630b74bdac540 1-30
+src/agent/webview/components/MessageQueuePanel.tsx
+  h_9630b74bdac540 2,8,16,85-87,91,93,95,103-105,111,113,115,124-126,130,132,146-148,153,156,158
+src/agent/webview/App.tsx
+  h_9630b74bdac540 9
+src/agent/ChatViewProvider.ts
+  h_9630b74bdac540 181
+packages/protocol/src/webAccessPolicy.ts
+  h_9630b74bdac540 1-94
+src/core/capabilities/web.ts
+  h_9630b74bdac540 1
+src/terminal/sandbox/SandboxTerminalCoordinator.test.ts
+  h_9630b74bdac540 2-3
+packages/protocol/src/browserGatewayTranscriptMessage.test.ts
+  h_9630b74bdac540 1-101
+src/approvals/webview/components/CommandExecutionContext.tsx
+  h_9630b74bdac540 3-4,6
+src/core/model/providers/codex/translation.ts
+  h_9630b74bdac540 7
+src/core/sandboxPolicy.ts
+  h_9630b74bdac540 1-16
+src/terminal/sandbox/sandboxHelperProtocol.ts
+  h_9630b74bdac540 1-2
+packages/protocol/src/terminalSecurity.ts
+  h_9630b74bdac540 1-203
+src/indexer/structuralRelationTranslation.ts
+  h_9630b74bdac540 8
+src/storage/retrieval/LanceDbRetrievalRepository.ts
+  h_9630b74bdac540 8,14-21,27-33,38-39,43-45,49-53
+packages/protocol/src/retrievalQuery.test.ts
+  h_9630b74bdac540 1-117
+src/core/retrieval/InMemoryRetrievalRepository.contract.test.ts
+  h_9630b74bdac540 2
+packages/protocol/src/browserGatewayRepositoryState.ts
+  h_9630b74bdac540 1-6
+packages/protocol/src/browserGatewayBackgroundSummary.ts
+  h_9630b74bdac540 1-6
+packages/protocol/src/surfaceModelMessage.test.ts
+  h_9630b74bdac540 1-54
+src/storage/retrieval/LanceDbCodeIndexActivator.test.ts
+  h_9630b74bdac540 7,12
+src/indexer/journaledRepositoryPublication.test.ts
+  h_9630b74bdac540 19
+src/terminal/sandbox/BaselineSandboxLaunchAuthorizer.ts
+  h_9630b74bdac540 13
+packages/protocol/src/browserGatewayDataPlaneLimits.ts
+  h_9630b74bdac540 1-94
+packages/protocol/src/browserGatewayOwnerCommandMetadata.test.ts
+  h_9630b74bdac540 1-95
+src/core/webAccess.ts
+  h_9630b74bdac540 1-48
+src/core/model/providers/anthropic/completionFacade.ts
+  h_9630b74bdac540 10
+packages/protocol/src/browserGatewayDataPlaneLimits.test.ts
+  h_9630b74bdac540 1-50
+packages/protocol/src/browserGatewayQueueItem.ts
+  h_9630b74bdac540 1-15
+src/shared/memoryProposalEngine.ts
+  h_9630b74bdac540 6
+packages/protocol/src/retrievalPublication.ts
+  h_9630b74bdac540 1-93
+packages/protocol/src/browserGatewayTranscriptBlock.test.ts
+  h_9630b74bdac540 1-80
+src/browser-gateway/protocol.ts
+  h_9630b74bdac540 14,19-22,25-27,29-32
+src/indexer/structuralRelationProjection.test.ts
+  h_9630b74bdac540 3-4
+src/core/retrieval/revisionOrder.ts
+  h_9630b74bdac540 1
+src/terminal/sandbox/AgentTerminalProviderRouter.test.ts
+  h_9630b74bdac540 1-2
+src/agent/webview/components/ApprovalPanelEmbed.test.tsx
+  h_9630b74bdac540 10
+src/core/model/providers/anthropic/anthropicModels.ts
+  h_9630b74bdac540 6
+packages/protocol/package.json
+  h_9630b74bdac540 44-57,72-239,254-421,814-827,996-1009,1038-1051,1066-1093,1108-1219
+src/core/tools/types.ts
+  h_9630b74bdac540 164
+src/indexer/journaledStagedRepositoryPublication.test.ts
+  h_9630b74bdac540 6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "8205884adfb5db91fdde0cd37537e2c52aafacee",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
