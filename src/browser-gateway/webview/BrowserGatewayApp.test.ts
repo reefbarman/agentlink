@@ -22,7 +22,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppState } from "../../shared/chatProjection";
-import type { ApprovalRequest } from "../../approvals/webview/types";
+import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import { BROWSER_GATEWAY_ASK_AGENT_OWNER_ID } from "../browserGatewayAskAgentIdentity";
 import type { BgSessionInfo } from "@agentlink/protocol/background-result";
 import type { BrowserGatewayChatWorkspaceSummary } from "../dataPlane/protocol";
@@ -2883,35 +2883,46 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
   });
 
-  it("shows queued status for queued browser sends", async () => {
+  it("reconciles a queued send when its transcript turn skips the queue snapshot", async () => {
+    let queuedMessageId = "";
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
-    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/send"))
-        return jsonResponse({ ok: true, queued: true });
-      if (url.includes("/api/ui-state")) return jsonResponse(createSnapshot());
-      if (url.includes("/api/instances")) {
-        return jsonResponse({
-          currentInstanceId: "instance-1",
-          instances: [
-            {
-              instanceId: "instance-1",
-              workspaceName: "Workspace",
-              workspacePath: "/workspace",
-              url: "http://127.0.0.1:3333",
-              status: { kind: "idle", label: "Idle" },
-            },
-          ],
-        });
-      }
-      if (url.includes("/api/slash-commands"))
-        return jsonResponse({ commands: [] });
-      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
-      if (url.includes("/api/models")) return jsonResponse({ models: [] });
-      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
-      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
-      return jsonResponse({ error: "not_found" }, 404);
-    });
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/send")) {
+          const request = JSON.parse(String(init?.body ?? "{}")) as {
+            id?: string;
+          };
+          queuedMessageId = request.id ?? "";
+          return jsonResponse({ ok: true, queued: true });
+        }
+        if (url.includes("/api/ui-state"))
+          return jsonResponse(createSnapshot());
+        if (url.includes("/api/instances")) {
+          return jsonResponse({
+            currentInstanceId: "instance-1",
+            instances: [
+              {
+                instanceId: "instance-1",
+                workspaceName: "Workspace",
+                workspacePath: "/workspace",
+                url: "http://127.0.0.1:3333",
+                status: { kind: "idle", label: "Idle" },
+              },
+            ],
+          });
+        }
+        if (url.includes("/api/slash-commands"))
+          return jsonResponse({ commands: [] });
+        if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+        if (url.includes("/api/models")) return jsonResponse({ models: [] });
+        if (url.includes("/api/sessions"))
+          return jsonResponse({ sessions: [] });
+        if (url.includes("/api/debug/refresh"))
+          return jsonResponse({ ok: true });
+        return jsonResponse({ error: "not_found" }, 404);
+      },
+    );
 
     render(
       h(BrowserGatewayApp, {
@@ -2935,19 +2946,153 @@ describe("BrowserGatewayApp /mcp behavior", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Queued.")).toBeTruthy();
+      expect(screen.getAllByText("Ship it")).toHaveLength(1);
+      expect(screen.getByText("Queued (1)")).toBeTruthy();
+    });
+
+    const committedSnapshot = createSnapshot();
+    committedSnapshot.session.foreground.projectedMessages = [
+      {
+        id: queuedMessageId,
+        role: "user",
+        content: "Ship it",
+        timestamp: Date.now(),
+        blocks: [{ type: "text", text: "Ship it" }],
+      },
+    ];
+    await act(async () => {
+      MockEventSource.instances.at(-1)?.emit("snapshot", committedSnapshot);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Queued (1)")).toBeNull();
+      expect(document.querySelectorAll(".message.user-message")).toHaveLength(
+        1,
+      );
     });
   });
 
-  it("marks a message from the browser composer as an interjection", async () => {
+  it("keeps an interjection queued until its different-id transcript turn arrives", async () => {
+    const snapshot = createSnapshot();
+    snapshot.session.foreground.status = "streaming";
+    snapshot.session.foreground.streaming = true;
+    let interjectionMessageId = "";
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/send")) {
+          const request = JSON.parse(String(init?.body ?? "{}")) as {
+            id?: string;
+          };
+          interjectionMessageId = request.id ?? "";
+          return jsonResponse({ ok: true, queued: true, interjected: true });
+        }
+        if (url.includes("/api/ui-state")) return jsonResponse(snapshot);
+        if (url.includes("/api/instances")) {
+          return jsonResponse({
+            currentInstanceId: "instance-1",
+            instances: [
+              {
+                instanceId: "instance-1",
+                workspaceName: "Workspace",
+                workspacePath: "/workspace",
+                url: "http://127.0.0.1:3333",
+                status: { kind: "streaming", label: "Streaming" },
+              },
+            ],
+          });
+        }
+        if (url.includes("/api/slash-commands")) {
+          return jsonResponse({ commands: [] });
+        }
+        if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+        if (url.includes("/api/models")) return jsonResponse({ models: [] });
+        if (url.includes("/api/sessions"))
+          return jsonResponse({ sessions: [] });
+        if (url.includes("/api/debug/refresh"))
+          return jsonResponse({ ok: true });
+        return jsonResponse({ error: "not_found" }, 404);
+      },
+    );
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    await screen.findByText("Working…");
+    fireEvent.click(await screen.findByTestId("trigger-interject"));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input, init]) => {
+          if (!String(input).includes("/api/send")) return false;
+          const body = JSON.parse(String((init as RequestInit).body ?? "{}"));
+          return body.text === "Change course" && body.interject === true;
+        }),
+      ).toBe(true);
+      expect(
+        screen.getByText("Ready to interject at the next break."),
+      ).toBeTruthy();
+      expect(screen.getAllByText("Change course")).toHaveLength(1);
+      expect(screen.getByText("Queued (1)")).toBeTruthy();
+    });
+
+    const queuedSnapshot = structuredClone(snapshot);
+    queuedSnapshot.session.foreground.messageQueue = [
+      {
+        id: interjectionMessageId,
+        text: "Change course",
+        fullText: "Change course",
+        source: "browser",
+        interjectionReady: true,
+      },
+    ];
+    await act(async () => {
+      MockEventSource.instances.at(-1)?.emit("snapshot", queuedSnapshot);
+    });
+    await waitFor(() => {
+      expect(screen.getAllByText("Change course")).toHaveLength(1);
+      expect(screen.getByText("Queued (1)")).toBeTruthy();
+    });
+
+    const committedSnapshot = structuredClone(snapshot);
+    committedSnapshot.session.foreground.status = "streaming";
+    committedSnapshot.session.foreground.streaming = true;
+    committedSnapshot.session.foreground.projectedMessages = [
+      {
+        id: "committed-interjection-id",
+        role: "user",
+        content: "Change course",
+        // Simulate the remote browser clock being ahead of the VS Code host.
+        timestamp: 1,
+        blocks: [{ type: "text", text: "Change course" }],
+      },
+    ];
+    await act(async () => {
+      MockEventSource.instances.at(-1)?.emit("snapshot", committedSnapshot);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Queued (1)")).toBeNull();
+      expect(document.querySelectorAll(".message.user-message")).toHaveLength(
+        1,
+      );
+    });
+  });
+
+  it("moves an interjection to the transcript when the turn ends mid-request", async () => {
     const snapshot = createSnapshot();
     snapshot.session.foreground.status = "streaming";
     snapshot.session.foreground.streaming = true;
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/api/send")) {
-        return jsonResponse({ ok: true, queued: true, interjected: true });
-      }
+      if (url.includes("/api/send")) return jsonResponse({ ok: true });
       if (url.includes("/api/ui-state")) return jsonResponse(snapshot);
       if (url.includes("/api/instances")) {
         return jsonResponse({
@@ -2987,16 +3132,11 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     fireEvent.click(await screen.findByTestId("trigger-interject"));
 
     await waitFor(() => {
-      expect(
-        fetchMock.mock.calls.some(([input, init]) => {
-          if (!String(input).includes("/api/send")) return false;
-          const body = JSON.parse(String((init as RequestInit).body ?? "{}"));
-          return body.text === "Change course" && body.interject === true;
-        }),
-      ).toBe(true);
-      expect(
-        screen.getByText("Ready to interject at the next break."),
-      ).toBeTruthy();
+      expect(screen.getByText("Sent")).toBeTruthy();
+      expect(screen.queryByText("Queued (1)")).toBeNull();
+      expect(document.querySelectorAll(".message.user-message")).toHaveLength(
+        1,
+      );
     });
   });
 

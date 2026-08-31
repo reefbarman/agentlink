@@ -1,11 +1,11 @@
-import { useState } from "preact/hooks";
-
 import type { AppState } from "../../../shared/chatProjection";
+import { useState } from "preact/hooks";
 
 export type MessageQueueItem = AppState["messageQueue"][number];
 
 export function MessageQueuePanel({
   queue,
+  pendingIds,
   onSteer,
   onInterject,
   onEdit,
@@ -13,6 +13,7 @@ export function MessageQueuePanel({
   onRemove,
 }: {
   queue: MessageQueueItem[];
+  pendingIds?: ReadonlySet<string>;
   onSteer: (item: MessageQueueItem) => void;
   onInterject: (item: MessageQueueItem) => void;
   onEdit?: (item: MessageQueueItem, text: string) => void;
@@ -81,13 +82,17 @@ export function MessageQueuePanel({
             <button
               class="icon-button queue-item-steer"
               title={
-                editingQueueId === item.id
-                  ? "Finish editing before steering"
-                  : "Steer now"
+                pendingIds?.has(item.id)
+                  ? "Waiting for queue confirmation"
+                  : editingQueueId === item.id
+                    ? "Finish editing before steering"
+                    : "Steer now"
               }
-              disabled={editingQueueId === item.id}
+              disabled={pendingIds?.has(item.id) || editingQueueId === item.id}
               onClick={() => {
-                if (editingQueueId !== item.id) onSteer(item);
+                if (!pendingIds?.has(item.id) && editingQueueId !== item.id) {
+                  onSteer(item);
+                }
               }}
             >
               <i class="codicon codicon-compass-active" />
@@ -95,15 +100,19 @@ export function MessageQueuePanel({
             <button
               class={`icon-button queue-item-interject${item.interjectionReady ? " active" : ""}`}
               title={
-                editingQueueId === item.id
-                  ? "Finish editing before interjecting"
-                  : item.interjectionReady
-                    ? "Ready to interject at next break"
-                    : "Interject at next break"
+                pendingIds?.has(item.id)
+                  ? "Waiting for queue confirmation"
+                  : editingQueueId === item.id
+                    ? "Finish editing before interjecting"
+                    : item.interjectionReady
+                      ? "Ready to interject at next break"
+                      : "Interject at next break"
               }
-              disabled={editingQueueId === item.id}
+              disabled={pendingIds?.has(item.id) || editingQueueId === item.id}
               onClick={() => {
-                if (editingQueueId !== item.id) onInterject(item);
+                if (!pendingIds?.has(item.id) && editingQueueId !== item.id) {
+                  onInterject(item);
+                }
               }}
             >
               <i class="codicon codicon-reply" />
@@ -112,11 +121,16 @@ export function MessageQueuePanel({
               <button
                 class="icon-button queue-item-edit"
                 title={
-                  editingQueueId === null ? "Edit" : "Finish current edit first"
+                  pendingIds?.has(item.id)
+                    ? "Waiting for queue confirmation"
+                    : editingQueueId === null
+                      ? "Edit"
+                      : "Finish current edit first"
                 }
-                disabled={editingQueueId !== null}
+                disabled={pendingIds?.has(item.id) || editingQueueId !== null}
                 onClick={() => {
-                  if (editingQueueId !== null) return;
+                  if (pendingIds?.has(item.id) || editingQueueId !== null)
+                    return;
                   setEditingQueueText(item.text);
                   setEditingQueueId(item.id);
                   onEditingChange?.(item, true);
@@ -129,13 +143,19 @@ export function MessageQueuePanel({
               <button
                 class="icon-button queue-item-remove"
                 title={
-                  editingQueueId === item.id
-                    ? "Finish editing before removing"
-                    : "Remove"
+                  pendingIds?.has(item.id)
+                    ? "Waiting for queue confirmation"
+                    : editingQueueId === item.id
+                      ? "Finish editing before removing"
+                      : "Remove"
                 }
-                disabled={editingQueueId === item.id}
+                disabled={
+                  pendingIds?.has(item.id) || editingQueueId === item.id
+                }
                 onClick={() => {
-                  if (editingQueueId !== item.id) onRemove(item);
+                  if (!pendingIds?.has(item.id) && editingQueueId !== item.id) {
+                    onRemove(item);
+                  }
                 }}
               >
                 <i class="codicon codicon-close" />

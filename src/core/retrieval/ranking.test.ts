@@ -1,4 +1,7 @@
-import type { RetrievalQuery, RetrievalQueryCandidate } from "./contracts.js";
+import type {
+  RetrievalQuery,
+  RetrievalQueryCandidate,
+} from "@agentlink/protocol/retrieval-query";
 import {
   compareRetrievalCandidates,
   diversifyRetrievalCandidates,

@@ -1,4 +1,4 @@
-import type { ApprovalRequest } from "../../approvals/webview/types";
+import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import type { BgSessionInfo } from "@agentlink/protocol/background-result";
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 

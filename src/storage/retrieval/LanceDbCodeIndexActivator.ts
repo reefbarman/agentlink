@@ -2,7 +2,7 @@ import { connect, makeArrowTable } from "@lancedb/lancedb";
 import type { Connection, Table } from "@lancedb/lancedb";
 import type { Schema } from "apache-arrow";
 
-import type { RetrievalSourceDocument } from "../../core/retrieval/contracts.js";
+import type { RetrievalSourceDocument } from "@agentlink/protocol/retrieval-records";
 import { createRetrievalSourcePayloadDigest } from "../../core/retrieval/publicationDigests.js";
 import { compareRetrievalSourceRevisions } from "../../core/retrieval/revisionOrder.js";
 import type { CodeIndexWriterLease } from "../../indexer/codeIndexWriterLease.js";

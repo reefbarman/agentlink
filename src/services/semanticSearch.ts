@@ -25,7 +25,7 @@ import {
   getCodeSourceId,
   getCodeWorkspaceScopeId,
 } from "../indexer/codeRetrievalIdentity.js";
-import type { RetrievalHealthReason } from "../core/retrieval/contracts.js";
+import type { RetrievalHealthReason } from "@agentlink/protocol/retrieval-health";
 import { LanceDbRetrievalRepository } from "../storage/retrieval/LanceDbRetrievalRepository.js";
 import { canonicalizePath } from "../util/canonicalPath.js";
 

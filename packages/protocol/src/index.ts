@@ -1,10 +1,36 @@
 export * from "./agentErrorPresentation.js";
+// `approvalTransport` is subpath-only: its surface-generic message names stay
+// scoped to the approval surface and avoid present or future barrel collisions.
 export * from "./agentPluginManager.js";
 export * from "./autoContinueProgress.js";
 // `autonomousMemory` is subpath-only: its record `MemoryScope` conflicts with
 // the inline-approval target `MemoryScope` already exported by this barrel.
 export * from "./backgroundResult.js";
+export * from "./browserGatewayAskAgentIdentity.js";
+export * from "./browserGatewayBackgroundSummary.js";
+export * from "./browserGatewayCapabilityStatus.js";
+export * from "./browserGatewayCoreOwnerRegistration.js";
+export * from "./browserGatewayContextBudget.js";
+export * from "./browserGatewayDataPlaneIdentity.js";
+export * from "./browserGatewayDataPlaneLimits.js";
+export * from "./browserGatewayDataPlaneMode.js";
+export * from "./browserGatewayDiffPreview.js";
+export * from "./browserGatewayHelperLifecycle.js";
+export * from "./browserGatewayInstanceStatus.js";
+export * from "./browserGatewayInteractionState.js";
+export * from "./browserGatewayInteractionSummary.js";
+export * from "./browserGatewayModelProviderIdentity.js";
+export * from "./browserGatewayOperationState.js";
+export * from "./browserGatewayOwnerCommandMetadata.js";
+export * from "./browserGatewayOwnerControlMetadata.js";
+export * from "./browserGatewayOwnerEventMetadata.js";
+export * from "./browserGatewayQueueItem.js";
+export * from "./browserGatewayRepositoryState.js";
 export * from "./browserGatewayTheme.js";
+export * from "./browserGatewayTodoItem.js";
+export * from "./browserGatewayTranscriptBlock.js";
+export * from "./browserGatewayTranscriptMessage.js";
+export * from "./browserGatewayTranscriptText.js";
 export * from "./builtinCommandForwarding.js";
 export * from "./chatCatalog.js";
 export * from "./chatPaneTransport.js";
@@ -34,18 +60,31 @@ export * from "./modelAuth.js";
 export * from "./modelCatalog.js";
 export * from "./modelSetup.js";
 export * from "./promptProfile.js";
+export * from "./providerReplay.js";
 export * from "./questionConfirmation.js";
 export * from "./questionDetection.js";
+export * from "./retrievalDeletion.js";
+export * from "./retrievalFingerprint.js";
+export * from "./retrievalMaintenance.js";
+export * from "./retrievalStructuralSnapshot.js";
+export * from "./retrievalHealth.js";
+export * from "./retrievalPublication.js";
+export * from "./retrievalQuery.js";
+export * from "./retrievalRecords.js";
 export * from "./selectionCommands.js";
 export * from "./semanticReadiness.js";
 export * from "./session.js";
 export * from "./sessionHandoffDraft.js";
 export * from "./structuredQuestion.js";
+export * from "./surfaceModelMessage.js";
 export * from "./sessionHydration.js";
 // `sidebarTransport` is subpath-only: its `ExtensionMessage` and command names
 // are intentionally scoped to one product surface and are collision-prone.
 export * from "./terminal.js";
+export * from "./terminalSecurity.js";
 export * from "./terminalSurface.js";
 export * from "./todoContinuation.js";
 export * from "./toolResult.js";
+export * from "./webAccessPolicy.js";
+export * from "./webActivity.js";
 export * from "./workspaceProject.js";

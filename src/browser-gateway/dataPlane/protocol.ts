@@ -1,4 +1,61 @@
 import type { BackgroundResultState } from "@agentlink/protocol/background-result";
+import type { BrowserGatewayBackgroundSummary } from "@agentlink/protocol/browser-gateway-background-summary";
+import {
+  BROWSER_GATEWAY_CAPABILITY_STATES,
+  type BrowserGatewayCapabilityStatus,
+} from "@agentlink/protocol/browser-gateway-capability-status";
+import type { BrowserGatewayContextBudget } from "@agentlink/protocol/browser-gateway-context-budget";
+import type { BrowserGatewayDiffPreview } from "@agentlink/protocol/browser-gateway-diff-preview";
+import type { BrowserGatewayInteractionState } from "@agentlink/protocol/browser-gateway-interaction-state";
+import {
+  BROWSER_GATEWAY_INTERACTION_KINDS,
+  BROWSER_GATEWAY_INTERACTION_SUMMARY_STATES,
+  type BrowserGatewayInteractionSummary,
+} from "@agentlink/protocol/browser-gateway-interaction-summary";
+import {
+  BROWSER_GATEWAY_OPERATION_STATUSES,
+  type BrowserGatewayOperationState,
+} from "@agentlink/protocol/browser-gateway-operation-state";
+import {
+  BROWSER_GATEWAY_OWNER_CONTROL_KINDS,
+  BROWSER_GATEWAY_RELAY_RESET_REASONS,
+  type BrowserGatewayOwnerControlKind,
+  type BrowserGatewayRelayResetReason,
+} from "@agentlink/protocol/browser-gateway-owner-control-metadata";
+import {
+  BROWSER_GATEWAY_OWNER_EVENT_KINDS,
+  type BrowserGatewayOwnerEventKind,
+} from "@agentlink/protocol/browser-gateway-owner-event-metadata";
+import {
+  BROWSER_GATEWAY_COMMAND_DEADLINE_CLASSES,
+  BROWSER_GATEWAY_COMMAND_IDEMPOTENCIES,
+  BROWSER_GATEWAY_COMMAND_IDEMPOTENCY,
+  BROWSER_GATEWAY_OWNER_COMMAND_KINDS,
+  type BrowserGatewayCommandDeadlineClass,
+  type BrowserGatewayCommandIdempotency,
+  type BrowserGatewayOwnerCommandKind,
+} from "@agentlink/protocol/browser-gateway-owner-command-metadata";
+import {
+  BROWSER_GATEWAY_QUEUE_ITEM_STATES,
+  type BrowserGatewayQueueItem,
+} from "@agentlink/protocol/browser-gateway-queue-item";
+import type { BrowserGatewayRepositoryState } from "@agentlink/protocol/browser-gateway-repository-state";
+import type { BrowserGatewayTranscriptBlock } from "@agentlink/protocol/browser-gateway-transcript-block";
+import type { BrowserGatewayTranscriptMessage } from "@agentlink/protocol/browser-gateway-transcript-message";
+import type { BrowserGatewayTranscriptText } from "@agentlink/protocol/browser-gateway-transcript-text";
+import {
+  BROWSER_GATEWAY_TODO_ITEM_STATES,
+  type BrowserGatewayTodoItem,
+} from "@agentlink/protocol/browser-gateway-todo-item";
+import {
+  BROWSER_GATEWAY_COLOR_SCHEMES,
+  type BrowserGatewayThemeState,
+} from "@agentlink/protocol/browser-gateway-theme";
+import {
+  BROWSER_GATEWAY_DETAIL_HANDLE_KINDS,
+  type BrowserGatewayDataPlaneIdentity,
+  type BrowserGatewayDetailHandle,
+} from "@agentlink/protocol/browser-gateway-data-plane-identity";
 import {
   CORE_REASONING_EFFORTS,
   type CoreReasoningEffort,
@@ -7,114 +64,57 @@ import type { ContextHealthSnapshot } from "@agentlink/protocol/context-health";
 import type { RevertRecoveryNotice } from "@agentlink/protocol/session-hydration";
 import { utf8ByteLength } from "../../shared/streamingBaselineMetrics.js";
 import {
+  BROWSER_GATEWAY_COMMAND_DEADLINE_MS_BY_CLASS,
   BROWSER_GATEWAY_DATA_PLANE_LIMITS,
   browserGatewayDetailResponseByteLimit,
 } from "./limits.js";
 
+export type { BrowserGatewayBackgroundSummary } from "@agentlink/protocol/browser-gateway-background-summary";
+export type { BrowserGatewayCapabilityStatus } from "@agentlink/protocol/browser-gateway-capability-status";
+export type { BrowserGatewayContextBudget } from "@agentlink/protocol/browser-gateway-context-budget";
+export type { BrowserGatewayDiffPreview } from "@agentlink/protocol/browser-gateway-diff-preview";
+export type { BrowserGatewayInteractionState } from "@agentlink/protocol/browser-gateway-interaction-state";
+export type { BrowserGatewayInteractionSummary } from "@agentlink/protocol/browser-gateway-interaction-summary";
+export {
+  BROWSER_GATEWAY_OPERATION_STATUSES,
+  type BrowserGatewayOperationState,
+  type BrowserGatewayOperationStatus,
+} from "@agentlink/protocol/browser-gateway-operation-state";
+export {
+  BROWSER_GATEWAY_OWNER_CONTROL_KINDS,
+  BROWSER_GATEWAY_RELAY_RESET_REASONS,
+  type BrowserGatewayOwnerControlKind,
+  type BrowserGatewayRelayResetReason,
+} from "@agentlink/protocol/browser-gateway-owner-control-metadata";
+export {
+  BROWSER_GATEWAY_OWNER_EVENT_KINDS,
+  type BrowserGatewayOwnerEventKind,
+} from "@agentlink/protocol/browser-gateway-owner-event-metadata";
+export {
+  BROWSER_GATEWAY_COMMAND_DEADLINE_CLASSES,
+  BROWSER_GATEWAY_COMMAND_IDEMPOTENCIES,
+  BROWSER_GATEWAY_COMMAND_IDEMPOTENCY,
+  BROWSER_GATEWAY_OWNER_COMMAND_KINDS,
+  type BrowserGatewayCommandDeadlineClass,
+  type BrowserGatewayCommandIdempotency,
+  type BrowserGatewayOwnerCommandKind,
+} from "@agentlink/protocol/browser-gateway-owner-command-metadata";
+export type { BrowserGatewayQueueItem } from "@agentlink/protocol/browser-gateway-queue-item";
+export type { BrowserGatewayRepositoryState } from "@agentlink/protocol/browser-gateway-repository-state";
+export type { BrowserGatewayTranscriptBlock } from "@agentlink/protocol/browser-gateway-transcript-block";
+export type { BrowserGatewayTranscriptMessage } from "@agentlink/protocol/browser-gateway-transcript-message";
+export type { BrowserGatewayTranscriptText } from "@agentlink/protocol/browser-gateway-transcript-text";
+export type { BrowserGatewayTodoItem } from "@agentlink/protocol/browser-gateway-todo-item";
+export type {
+  BrowserGatewayThemeState,
+  BrowserGatewayThemeVariable,
+} from "@agentlink/protocol/browser-gateway-theme";
+export type {
+  BrowserGatewayDataPlaneIdentity,
+  BrowserGatewayDetailHandle,
+} from "@agentlink/protocol/browser-gateway-data-plane-identity";
+
 export const BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION = "1";
-
-export const BROWSER_GATEWAY_OWNER_EVENT_KINDS = [
-  "foreground.control.updated",
-  "session.catalog.updated",
-  "transcript.message.appended",
-  "transcript.message.upserted",
-  "transcript.block.delta",
-  "transcript.history.prepended",
-  "interaction.updated",
-  "queue.updated",
-  "todo.updated",
-  "background.updated",
-  "fleet.updated",
-  "diff.preview.updated",
-  "repository.updated",
-  "theme.updated",
-  "model_catalog.revision.updated",
-  "plugin_catalog.revision.updated",
-  "owner.capabilities.updated",
-  "operation.updated",
-] as const;
-
-export type BrowserGatewayOwnerEventKind =
-  (typeof BROWSER_GATEWAY_OWNER_EVENT_KINDS)[number];
-
-export const BROWSER_GATEWAY_OWNER_COMMAND_KINDS = [
-  "session.select",
-  "session.detail",
-  "session.send",
-  "session.stop",
-  "approval.respond",
-  "question.respond",
-  "history.load",
-  "diff.detail",
-] as const;
-
-export type BrowserGatewayOwnerCommandKind =
-  (typeof BROWSER_GATEWAY_OWNER_COMMAND_KINDS)[number];
-
-export type BrowserGatewayCommandIdempotency = "idempotent" | "non_idempotent";
-export type BrowserGatewayCommandDeadlineClass = "default" | "long";
-
-export const BROWSER_GATEWAY_COMMAND_IDEMPOTENCY = Object.freeze({
-  "session.select": "idempotent",
-  "session.detail": "idempotent",
-  "session.send": "non_idempotent",
-  "session.stop": "idempotent",
-  "approval.respond": "non_idempotent",
-  "question.respond": "non_idempotent",
-  "history.load": "idempotent",
-  "diff.detail": "idempotent",
-} as const satisfies Readonly<
-  Record<BrowserGatewayOwnerCommandKind, BrowserGatewayCommandIdempotency>
->);
-
-export const BROWSER_GATEWAY_OWNER_CONTROL_KINDS = [
-  "hello",
-  "demand.changed",
-  "checkpoint.requested",
-  "command.cancelled",
-  "drain",
-] as const;
-
-export type BrowserGatewayOwnerControlKind =
-  (typeof BROWSER_GATEWAY_OWNER_CONTROL_KINDS)[number];
-
-export type BrowserGatewayRelayResetReason =
-  | "helper_generation_changed"
-  | "owner_generation_changed"
-  | "sequence_gap"
-  | "stale_replay_cursor"
-  | "subscription_changed"
-  | "checkpoint_required";
-
-export interface BrowserGatewayDataPlaneIdentity {
-  helperGenerationId: string;
-  ownerId: string;
-  ownerGenerationId: string;
-}
-
-export interface BrowserGatewayDetailHandle extends BrowserGatewayDataPlaneIdentity {
-  handleId: string;
-  kind: "message" | "diff" | "media" | "interaction" | "session";
-  byteLength: number;
-  expiresAt: number;
-  mediaType?: string;
-}
-
-export interface BrowserGatewayCapabilityStatus {
-  capabilityId: string;
-  state: "enabled" | "disabled" | "requires_approval" | "unavailable";
-  reason?: string;
-}
-
-export interface BrowserGatewayContextBudget {
-  contextWindow: number;
-  maxInputTokens: number;
-  usedInputTokens: number;
-  outputReservation: number;
-  safetyBufferTokens: number;
-  softThresholdBudget: number;
-  hardBudget: number;
-}
 
 export type BrowserGatewayRevertRecoveryNotice = RevertRecoveryNotice;
 
@@ -219,250 +219,10 @@ export interface BrowserGatewayChatTabSelection {
   sessionId: string | null;
 }
 
-export type BrowserGatewayTranscriptText =
-  | { kind: "inline"; text: string }
-  | {
-      kind: "detail";
-      preview: string;
-      detailHandle: BrowserGatewayDetailHandle;
-    };
-
-export type BrowserGatewayTranscriptBlock =
-  | {
-      type: "thinking";
-      blockId: string;
-      text: BrowserGatewayTranscriptText;
-      complete: boolean;
-    }
-  | {
-      type: "text";
-      blockId: string;
-      text: BrowserGatewayTranscriptText;
-    }
-  | {
-      type: "tool_call";
-      blockId: string;
-      toolCallId: string;
-      name: string;
-      complete: boolean;
-      durationMs?: number;
-      startedAt?: number;
-    }
-  | {
-      type: "skill_load";
-      blockId: string;
-      skillName?: string;
-      complete: boolean;
-      durationMs?: number;
-    }
-  | {
-      type: "bg_agent";
-      blockId: string;
-      sessionId: string;
-      task: string;
-      resolvedModel?: string;
-      resolvedProvider?: string;
-      reasoningEffort?: CoreReasoningEffort;
-      resolvedMode?: string;
-      taskClass?: string;
-    }
-  | {
-      type: "bg_agent_result";
-      blockId: string;
-      sessionId: string;
-      task: string;
-      status: "completed" | "error" | "cancelled";
-      resultState?: BackgroundResultState;
-      terminalReason?: string;
-      result?: BrowserGatewayTranscriptText;
-      partialOutput?: BrowserGatewayTranscriptText;
-      summary?: string;
-      retrySafe?: boolean;
-      agentRetryable?: boolean;
-    }
-  | {
-      type: "question_answer";
-      blockId: string;
-      toolCallId?: string;
-      items: Array<{
-        question: string;
-        answer: string | string[] | number | boolean | null;
-        note?: string;
-      }>;
-    }
-  | {
-      type: "pairing_status";
-      blockId: string;
-      status: "pending" | "consumed" | "expired" | "cancelled";
-      expiresAt: number;
-      deviceLabel?: string;
-    };
-
-export interface BrowserGatewayTranscriptMessage {
-  messageId: string;
-  role: "user" | "assistant" | "condense" | "warning";
-  revision: number;
-  createdAt: number;
-  content: BrowserGatewayTranscriptText;
-  blocks: BrowserGatewayTranscriptBlock[];
-  badge?: "follow-up" | "rejection";
-  isSlashCommand?: boolean;
-  slashCommandLabel?: string;
-  origin?: "vscode" | "browser";
-  checkpointId?: string;
-  finalMarker?: {
-    status: "completed" | "waiting_for_user" | "blocked" | "cancelled";
-    summary?: string;
-    source: "tool" | "engine";
-    continueAction?: { label: string; prompt: string };
-    continueActionConsumed?: boolean;
-    autoContinueStopReason?: string;
-  };
-  surfaceChange?: {
-    model?: { previousModel: string; model: string };
-    reasoning?: {
-      previousReasoningEffort:
-        | "none"
-        | "minimal"
-        | "low"
-        | "medium"
-        | "high"
-        | "xhigh"
-        | "max";
-      reasoningEffort:
-        | "none"
-        | "minimal"
-        | "low"
-        | "medium"
-        | "high"
-        | "xhigh"
-        | "max";
-    };
-    mode?: { previousMode: string; mode: string };
-  };
-  error?: {
-    message: string;
-    retryable: boolean;
-    code?: string;
-    actions?: {
-      signIn?: boolean;
-      signInAnotherAccount?: boolean;
-      condense?: boolean;
-    };
-  };
-  apiRequest?: {
-    requestId: string;
-    model: string;
-    reasoningEffort?:
-      | "none"
-      | "minimal"
-      | "low"
-      | "medium"
-      | "high"
-      | "xhigh"
-      | "max";
-    mode?: string;
-    commandApprovalPolicy?: "manual" | "safe" | "approve-for-me" | "sensitive";
-    inputTokens: number;
-    uncachedInputTokens?: number;
-    cacheReadTokens?: number;
-    cacheCreationTokens?: number;
-    outputTokens: number;
-    durationMs: number;
-    timeToFirstToken: number;
-  };
-  condenseInfo?: {
-    prevInputTokens: number;
-    newInputTokens: number;
-    durationMs?: number;
-    errorMessage?: string;
-    condensing?: boolean;
-    validationWarnings?: string[];
-  };
-  warningMessage?: string;
-  warningRetry?: {
-    retryDelayMs?: number;
-    retryAt?: number;
-    retryAttempt?: number;
-    retryMaxAttempts?: number;
-  };
-}
-
 export interface BrowserGatewayTranscriptWindow {
   messages: BrowserGatewayTranscriptMessage[];
   earlierCursor: string | null;
   hasEarlier: boolean;
-}
-
-export interface BrowserGatewayInteractionSummary {
-  requestId: string;
-  kind: "approval" | "question" | "form" | "url";
-  state: "pending" | "progressed" | "cleared";
-  summary: string;
-  step?: number;
-  totalSteps?: number;
-  detailHandle?: BrowserGatewayDetailHandle;
-}
-
-export interface BrowserGatewayQueueItem {
-  itemId: string;
-  summary: string;
-  state: "queued" | "running" | "completed" | "failed";
-}
-
-export interface BrowserGatewayTodoItem {
-  itemId: string;
-  text: string;
-  state: "pending" | "in_progress" | "completed";
-}
-
-export interface BrowserGatewayBackgroundSummary {
-  sessionId: string;
-  title: string;
-  status: string;
-  updatedAt: number;
-}
-
-export interface BrowserGatewayDiffPreview {
-  requestId: string;
-  filePath: string;
-  operation: string;
-  outsideWorkspace: boolean;
-  createdAt: number;
-  detailHandle?: BrowserGatewayDetailHandle;
-}
-
-export interface BrowserGatewayRepositoryState {
-  revision: string;
-  branch: string | null;
-  dirty: boolean;
-  rootLabel?: string;
-}
-
-export interface BrowserGatewayThemeVariable {
-  name: string;
-  value: string;
-}
-
-export interface BrowserGatewayThemeState {
-  revision: string;
-  colorScheme: "light" | "dark" | "hc" | "hc-light";
-  variables: BrowserGatewayThemeVariable[];
-}
-
-export interface BrowserGatewayOperationState {
-  operationId: string;
-  kind: BrowserGatewayOwnerCommandKind;
-  state: "accepted" | "completed" | "failed" | "uncertain";
-  message?: string;
-  detailHandle?: BrowserGatewayDetailHandle;
-}
-
-export interface BrowserGatewayInteractionState {
-  interaction: BrowserGatewayInteractionSummary | null;
-  queue: BrowserGatewayQueueItem[];
-  todos: BrowserGatewayTodoItem[];
-  operations: BrowserGatewayOperationState[];
 }
 
 export interface BrowserGatewayOwnerCheckpoint extends BrowserGatewayDataPlaneIdentity {
@@ -652,14 +412,7 @@ export class BrowserGatewayProtocolError extends Error {
 const EVENT_KINDS = new Set<string>(BROWSER_GATEWAY_OWNER_EVENT_KINDS);
 const COMMAND_KINDS = new Set<string>(BROWSER_GATEWAY_OWNER_COMMAND_KINDS);
 const CONTROL_KINDS = new Set<string>(BROWSER_GATEWAY_OWNER_CONTROL_KINDS);
-const RESET_REASONS = new Set<string>([
-  "helper_generation_changed",
-  "owner_generation_changed",
-  "sequence_gap",
-  "stale_replay_cursor",
-  "subscription_changed",
-  "checkpoint_required",
-]);
+const RESET_REASONS = new Set<string>(BROWSER_GATEWAY_RELAY_RESET_REASONS);
 
 export function parseBrowserGatewayOwnerCheckpoint(
   value: unknown,
@@ -926,7 +679,7 @@ export function parseBrowserGatewayOwnerCommand(
   const idempotency = enumValue(
     object.idempotency,
     "$.idempotency",
-    new Set(["idempotent", "non_idempotent"]),
+    new Set(BROWSER_GATEWAY_COMMAND_IDEMPOTENCIES),
   ) as BrowserGatewayCommandIdempotency;
   if (idempotency !== BROWSER_GATEWAY_COMMAND_IDEMPOTENCY[command.kind]) {
     fail("invalid_value", "$.idempotency", `does not match ${command.kind}`);
@@ -936,12 +689,10 @@ export function parseBrowserGatewayOwnerCommand(
   const deadlineClass = enumValue(
     object.deadlineClass,
     "$.deadlineClass",
-    new Set(["default", "long"]),
+    new Set(BROWSER_GATEWAY_COMMAND_DEADLINE_CLASSES),
   ) as BrowserGatewayCommandDeadlineClass;
   const maximumDuration =
-    deadlineClass === "default"
-      ? BROWSER_GATEWAY_DATA_PLANE_LIMITS.commandDeadlineMs
-      : BROWSER_GATEWAY_DATA_PLANE_LIMITS.maximumLongCommandDeadlineMs;
+    BROWSER_GATEWAY_COMMAND_DEADLINE_MS_BY_CLASS[deadlineClass];
   const duration = deadlineAt - emittedAt;
   if (duration <= 0 || duration > maximumDuration) {
     fail(
@@ -1375,7 +1126,7 @@ function parseDetailHandle(
   const kind = enumValue(
     object.kind,
     `${path}.kind`,
-    new Set(["message", "diff", "media", "interaction", "session"]),
+    new Set(BROWSER_GATEWAY_DETAIL_HANDLE_KINDS),
   ) as BrowserGatewayDetailHandle["kind"];
   const byteLength = positiveSafeInteger(
     object.byteLength,
@@ -3011,12 +2762,12 @@ function parseInteraction(
     kind: enumValue(
       object.kind,
       `${path}.kind`,
-      new Set(["approval", "question", "form", "url"]),
+      new Set(BROWSER_GATEWAY_INTERACTION_KINDS),
     ) as BrowserGatewayInteractionSummary["kind"],
     state: enumValue(
       object.state,
       `${path}.state`,
-      new Set(["pending", "progressed", "cleared"]),
+      new Set(BROWSER_GATEWAY_INTERACTION_SUMMARY_STATES),
     ) as BrowserGatewayInteractionSummary["state"],
     summary: boundedString(object.summary, `${path}.summary`, 4_000),
     ...(step !== undefined ? { step } : {}),
@@ -3035,7 +2786,7 @@ function parseQueue(value: unknown, path: string): BrowserGatewayQueueItem[] {
       state: enumValue(
         object.state,
         `${itemPath}.state`,
-        new Set(["queued", "running", "completed", "failed"]),
+        new Set(BROWSER_GATEWAY_QUEUE_ITEM_STATES),
       ) as BrowserGatewayQueueItem["state"],
     };
   });
@@ -3051,7 +2802,7 @@ function parseTodos(value: unknown, path: string): BrowserGatewayTodoItem[] {
       state: enumValue(
         object.state,
         `${itemPath}.state`,
-        new Set(["pending", "in_progress", "completed"]),
+        new Set(BROWSER_GATEWAY_TODO_ITEM_STATES),
       ) as BrowserGatewayTodoItem["state"],
     };
   });
@@ -3166,7 +2917,7 @@ function parseTheme(value: unknown, path: string): BrowserGatewayThemeState {
     colorScheme: enumValue(
       object.colorScheme,
       `${path}.colorScheme`,
-      new Set(["light", "dark", "hc", "hc-light"]),
+      new Set(BROWSER_GATEWAY_COLOR_SCHEMES),
     ) as BrowserGatewayThemeState["colorScheme"],
     variables,
   };
@@ -3193,7 +2944,7 @@ function parseCapabilities(
       state: enumValue(
         object.state,
         `${itemPath}.state`,
-        new Set(["enabled", "disabled", "requires_approval", "unavailable"]),
+        new Set(BROWSER_GATEWAY_CAPABILITY_STATES),
       ) as BrowserGatewayCapabilityStatus["state"],
       ...(reason ? { reason } : {}),
     };
@@ -3230,7 +2981,7 @@ function parseOperation(
     state: enumValue(
       object.state,
       `${path}.state`,
-      new Set(["accepted", "completed", "failed", "uncertain"]),
+      new Set(BROWSER_GATEWAY_OPERATION_STATUSES),
     ) as BrowserGatewayOperationState["state"],
     ...(message ? { message } : {}),
     ...(detailHandle ? { detailHandle } : {}),

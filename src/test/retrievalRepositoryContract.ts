@@ -1,11 +1,10 @@
-import type {
-  RetrievalFingerprint,
-  RetrievalPublicationRequest,
-  RetrievalRepository,
-  RetrievalSourceDocument,
-  RetrievalSourceFreshness,
-} from "../core/retrieval/contracts.js";
 import { describe, expect, it } from "vitest";
+
+import type { RetrievalFingerprint } from "@agentlink/protocol/retrieval-fingerprint";
+import type { RetrievalPublicationRequest } from "@agentlink/protocol/retrieval-publication";
+import type { RetrievalRepository } from "../core/retrieval/contracts.js";
+import type { RetrievalSourceDocument } from "@agentlink/protocol/retrieval-records";
+import type { RetrievalSourceFreshness } from "@agentlink/protocol/retrieval-query";
 
 export interface RetrievalRepositoryContractController {
   setSourceFreshness(

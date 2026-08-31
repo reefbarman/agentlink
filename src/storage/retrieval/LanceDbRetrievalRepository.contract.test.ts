@@ -6,11 +6,6 @@ import {
   CODE_INDEX_WRITER_FENCED_ERROR,
   acquireCodeIndexWriterLease,
 } from "../../indexer/codeIndexWriterLease.js";
-import type {
-  RetrievalFingerprint,
-  RetrievalPublicationRequest,
-  RetrievalSourceFreshness,
-} from "../../core/retrieval/contracts.js";
 import { connect, makeArrowTable } from "@lancedb/lancedb";
 import { describe, expect, it } from "vitest";
 import {
@@ -19,6 +14,9 @@ import {
 } from "./lanceDbSchemas.js";
 
 import { LanceDbRetrievalRepository } from "./LanceDbRetrievalRepository.js";
+import type { RetrievalFingerprint } from "@agentlink/protocol/retrieval-fingerprint";
+import type { RetrievalPublicationRequest } from "@agentlink/protocol/retrieval-publication";
+import type { RetrievalSourceFreshness } from "@agentlink/protocol/retrieval-query";
 import { describeRetrievalRepositoryContract } from "../../test/retrievalRepositoryContract.js";
 import { withRetrievalStoreLock } from "./retrievalStoreLock.js";
 

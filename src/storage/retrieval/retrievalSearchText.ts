@@ -2,7 +2,7 @@ import type {
   RetrievalChunkRecord,
   RetrievalRelationRecord,
   RetrievalSourceDocument,
-} from "../../core/retrieval/contracts.js";
+} from "@agentlink/protocol/retrieval-records";
 
 export const MAX_RETRIEVAL_CHUNK_METADATA_SEARCH_CHARS = 16_384;
 

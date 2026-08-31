@@ -36,7 +36,7 @@ import type {
 } from "./BrowserGatewayService.js";
 import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
 import { parseChatTabActionAddress } from "@agentlink/protocol/chat-workspace";
-import type { DecisionMessage } from "../approvals/webview/types.js";
+import type { DecisionMessage } from "@agentlink/protocol/approval-transport";
 import { isCommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
 import { writeBrowserGatewayThemeCache } from "./browserGatewayThemeCache.js";

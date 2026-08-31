@@ -31,10 +31,12 @@ import type {
 import type {
   CoreHostedToolDefinition,
   CoreWebAccessSettings,
+} from "@agentlink/protocol/web-access-policy";
+import type {
   CoreWebActivity,
   CoreWebCitation,
   CoreWebToolKind,
-} from "../../core/webAccess.js";
+} from "@agentlink/protocol/web-activity";
 import type { CoreNativeWebToolResult } from "../../core/nativeWebTools.js";
 import type { BrowserGatewayModelCredentialRecord } from "../browserGatewayModelCredentialCache.js";
 import type { PromptProfile } from "@agentlink/protocol/prompt-profile";

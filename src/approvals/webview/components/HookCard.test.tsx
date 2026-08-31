@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
-import type { ApprovalRequest } from "../types.js";
+import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import { HookCard } from "./HookCard.js";
 
 const request: ApprovalRequest = {

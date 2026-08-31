@@ -2,22 +2,21 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
+import {
+  REMOVED_FILE_DELETE_BATCH_SIZE,
+  executeJournaledRepositoryDeletions,
+  recoverJournaledRepositoryDeletions,
+} from "./journaledRepositoryDeletion.js";
+import type {
+  RetrievalDeleteSourceOutcome,
+  RetrievalDeleteSourceRequest,
+} from "@agentlink/protocol/retrieval-deletion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emptyFileIndexJournal,
   loadFileIndexJournal,
   writeFileIndexJournal,
 } from "./fileIndexJournal.js";
-import {
-  REMOVED_FILE_DELETE_BATCH_SIZE,
-  executeJournaledRepositoryDeletions,
-  recoverJournaledRepositoryDeletions,
-} from "./journaledRepositoryDeletion.js";
-
-import type {
-  RetrievalDeleteSourceOutcome,
-  RetrievalDeleteSourceRequest,
-} from "../core/retrieval/contracts.js";
 
 async function runFenced<T>(operation: () => Promise<T>): Promise<T> {
   return operation();

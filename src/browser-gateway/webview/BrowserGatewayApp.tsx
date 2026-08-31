@@ -43,7 +43,7 @@ import {
 import type {
   ApprovalRequest,
   DecisionMessage,
-} from "../../approvals/webview/types";
+} from "@agentlink/protocol/approval-transport";
 import {
   ApprovalPanelEmbed,
   DEFAULT_APPROVAL_PANEL_HEIGHT,
@@ -1655,6 +1655,13 @@ export function BrowserGatewayApp({
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<
     Array<{ sessionId: string; message: ChatMessage }>
   >([]);
+  const [optimisticQueuedMessages, setOptimisticQueuedMessages] = useState<
+    Array<{
+      sessionId: string;
+      message: AppState["messageQueue"][number];
+      baselineUserMessageIds: ReadonlySet<string>;
+    }>
+  >([]);
   const [handoffDraft, setHandoffDraft] = useState<SessionHandoffDraft | null>(
     null,
   );
@@ -2251,16 +2258,79 @@ export function BrowserGatewayApp({
 
   const foreground = snapshot?.session.foreground ?? null;
   const foregroundProjectedMessages = foreground?.projectedMessages;
+  const foregroundMessageQueue = foreground?.messageQueue;
+  const messageQueue = useMemo<AppState["messageQueue"]>(() => {
+    const confirmedMessages = foregroundMessageQueue ?? [];
+    const confirmedIds = new Set(
+      confirmedMessages.map((message) => message.id),
+    );
+    const committedUserMessages = (foregroundProjectedMessages ?? []).filter(
+      (message) => message.role === "user",
+    );
+    const matchedCommittedIds = new Set<string>();
+    const optimisticMessages = optimisticQueuedMessages.filter(
+      ({ sessionId, message, baselineUserMessageIds }) => {
+        if (
+          sessionId !== foreground?.sessionId ||
+          confirmedIds.has(message.id)
+        ) {
+          return false;
+        }
+        const committed = committedUserMessages.find(
+          (candidate) =>
+            !matchedCommittedIds.has(candidate.id) &&
+            !baselineUserMessageIds.has(candidate.id) &&
+            (candidate.id === message.id || candidate.content === message.text),
+        );
+        if (!committed) return true;
+        matchedCommittedIds.add(committed.id);
+        return false;
+      },
+    );
+    return [
+      ...confirmedMessages,
+      ...optimisticMessages.map(({ message }) => message),
+    ];
+  }, [
+    foreground?.sessionId,
+    foregroundMessageQueue,
+    foregroundProjectedMessages,
+    optimisticQueuedMessages,
+  ]);
+  const pendingMessageQueueIds = useMemo(() => {
+    const confirmedIds = new Set(
+      (foregroundMessageQueue ?? []).map((message) => message.id),
+    );
+    return new Set(
+      optimisticQueuedMessages
+        .filter(
+          ({ sessionId, message }) =>
+            sessionId === foreground?.sessionId &&
+            !confirmedIds.has(message.id) &&
+            messageQueue.some((queued) => queued.id === message.id),
+        )
+        .map(({ message }) => message.id),
+    );
+  }, [
+    foreground?.sessionId,
+    foregroundMessageQueue,
+    messageQueue,
+    optimisticQueuedMessages,
+  ]);
   const messages = useMemo<ChatMessage[]>(() => {
     const confirmedMessages = foregroundProjectedMessages ?? [];
     const confirmedIds = new Set(
       confirmedMessages.map((message) => message.id),
+    );
+    const queuedIds = new Set(
+      (foregroundMessageQueue ?? []).map((message) => message.id),
     );
     const pendingMessages = optimisticUserMessages
       .filter(
         ({ sessionId, message }) =>
           sessionId === foreground?.sessionId &&
           !confirmedIds.has(message.id) &&
+          !queuedIds.has(message.id) &&
           optimisticUserMessageIdsRef.current.has(message.id),
       )
       .map(({ message }) => message);
@@ -2272,6 +2342,7 @@ export function BrowserGatewayApp({
   }, [
     autoContinueStopReasons,
     foreground?.sessionId,
+    foregroundMessageQueue,
     foregroundProjectedMessages,
     hiddenFinalContinueMessageIds,
     optimisticUserMessages,
@@ -2291,7 +2362,42 @@ export function BrowserGatewayApp({
       );
       return next.length === current.length ? current : next;
     });
-  }, [foregroundProjectedMessages]);
+  }, [foregroundProjectedMessages, optimisticUserMessages]);
+
+  useEffect(() => {
+    if (!foregroundMessageQueue || !foregroundProjectedMessages) return;
+    const confirmedIds = new Set(
+      foregroundMessageQueue.map((message) => message.id),
+    );
+    const committedUserMessages = foregroundProjectedMessages.filter(
+      (message) => message.role === "user",
+    );
+    setOptimisticQueuedMessages((current) => {
+      const matchedCommittedIds = new Set<string>();
+      const next = current.filter(
+        ({ sessionId, message, baselineUserMessageIds }) => {
+          if (sessionId !== foreground?.sessionId) return false;
+          if (confirmedIds.has(message.id)) return false;
+          const committed = committedUserMessages.find(
+            (candidate) =>
+              !matchedCommittedIds.has(candidate.id) &&
+              !baselineUserMessageIds.has(candidate.id) &&
+              (candidate.id === message.id ||
+                candidate.content === message.text),
+          );
+          if (!committed) return true;
+          matchedCommittedIds.add(committed.id);
+          return false;
+        },
+      );
+      return next.length === current.length ? current : next;
+    });
+  }, [
+    foreground?.sessionId,
+    foregroundMessageQueue,
+    foregroundProjectedMessages,
+    optimisticQueuedMessages,
+  ]);
 
   const reasoningEffort: ReasoningEffort = foreground
     ? (foreground.reasoningEffort ??
@@ -4033,6 +4139,11 @@ export function BrowserGatewayApp({
         current.filter(({ message }) => message.id !== userMessageId),
       );
     };
+    const removeOptimisticQueuedMessage = () => {
+      setOptimisticQueuedMessages((current) =>
+        current.filter(({ message }) => message.id !== userMessageId),
+      );
+    };
     if (origin === "autoContinue") {
       pendingAutoContinueUserMessageIdRef.current = userMessageId;
     } else {
@@ -4171,14 +4282,51 @@ export function BrowserGatewayApp({
             }
           : {}),
       };
-      optimisticUserMessageIdsRef.current.add(userMessageId);
-      setOptimisticUserMessages((current) => [
-        ...current,
-        {
-          sessionId: sendForeground.sessionId,
-          message: optimisticUserMessage,
-        },
-      ]);
+      const addOptimisticUserMessage = () => {
+        optimisticUserMessageIdsRef.current.add(userMessageId);
+        setOptimisticUserMessages((current) => [
+          ...current.filter(({ message }) => message.id !== userMessageId),
+          {
+            sessionId: sendForeground.sessionId,
+            message: optimisticUserMessage,
+          },
+        ]);
+      };
+      const addOptimisticQueuedMessage = (interjectionReady: boolean) => {
+        const queuedMessage: AppState["messageQueue"][number] = {
+          id: userMessageId,
+          text: displayWithMedia,
+          ...(displayWithMedia !== fullText ? { fullText } : {}),
+          ...(slashCommandLabel
+            ? { isSlashCommand: true, slashCommandLabel }
+            : {}),
+          ...(attachments.length > 0 ? { attachments } : {}),
+          ...(images.length > 0 ? { images } : {}),
+          ...(documents.length > 0 ? { documents } : {}),
+          ...(optimisticUserMessage.displayMedia
+            ? { displayMedia: optimisticUserMessage.displayMedia }
+            : {}),
+          source: "browser",
+          ...(interjectionReady ? { interjectionReady: true } : {}),
+        };
+        setOptimisticQueuedMessages((current) => [
+          ...current.filter(({ message }) => message.id !== userMessageId),
+          {
+            sessionId: sendForeground.sessionId,
+            message: queuedMessage,
+            baselineUserMessageIds: new Set(
+              sendForeground.projectedMessages
+                .filter((message) => message.role === "user")
+                .map((message) => message.id),
+            ),
+          },
+        ]);
+      };
+      // Interjections belong in the queue until the agent accepts them. Their
+      // eventual transcript turn receives a different id, so an optimistic
+      // transcript row cannot reconcile and would remain duplicated at the end.
+      if (interject) addOptimisticQueuedMessage(true);
+      else addOptimisticUserMessage();
       setSendStatus("Sending…");
       logAskAgentBrowserEvent("send.start", {
         askAgentSelected: isAskAgentSelected,
@@ -4293,7 +4441,19 @@ export function BrowserGatewayApp({
           );
         }
       }
-      if (!body.ok) removeOptimisticUserMessage();
+      if (!body.ok) {
+        removeOptimisticUserMessage();
+        removeOptimisticQueuedMessage();
+      } else if (body.queued) {
+        removeOptimisticUserMessage();
+        addOptimisticQueuedMessage(Boolean(body.interjected));
+      } else {
+        removeOptimisticQueuedMessage();
+        // The turn may have ended while an interjection request was in flight.
+        // In that case the server committed a normal turn using this id, so a
+        // late optimistic transcript row is safe to reconcile with it.
+        if (interject) addOptimisticUserMessage();
+      }
       if (body.ok && detachedSendTarget) {
         refreshDetachedSelection(detachedSendTarget);
       }
@@ -4327,6 +4487,7 @@ export function BrowserGatewayApp({
         error: String(err),
       });
       removeOptimisticUserMessage();
+      removeOptimisticQueuedMessage();
       setSendStatus(`Send error: ${String(err)}`);
       return false;
     }
@@ -8145,10 +8306,11 @@ export function BrowserGatewayApp({
                 )}
                 {!isAskAgentSelected &&
                   foreground &&
-                  foreground.messageQueue.length > 0 &&
+                  messageQueue.length > 0 &&
                   !mobileReviewOpen && (
                     <MessageQueuePanel
-                      queue={foreground.messageQueue.map((item) => {
+                      pendingIds={pendingMessageQueueIds}
+                      queue={messageQueue.map((item) => {
                         const override = queueInterjectionOverrides.get(
                           `${foreground.sessionId}:${item.id}`,
                         );

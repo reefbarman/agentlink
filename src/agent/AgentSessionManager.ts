@@ -243,7 +243,7 @@ import type { WorktreeAgentLaunchRequest } from "../core/capabilities/worktree.j
 import type { InlineApprovalRequest } from "@agentlink/protocol/inline-approval";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 import type { ApprovalPreflightResult } from "../approvals/ApprovalPanelProvider.js";
-import type { ApprovalRequest } from "../approvals/webview/types.js";
+import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import { isMemoryProtectedPath } from "../approvals/protectedPaths.js";
 import { canonicalizePath, isPathWithinRoot } from "../util/paths.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";

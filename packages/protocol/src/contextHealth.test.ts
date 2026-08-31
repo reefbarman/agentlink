@@ -1,5 +1,9 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
+import type {
+  RetrievalHealthReason,
+  RetrievalHealthSnapshot,
+} from "./retrievalHealth.js";
 import {
   INITIAL_CONTEXT_HEALTH,
   projectIndexHealth,
@@ -15,6 +19,10 @@ describe("context health protocol", () => {
   it("keeps projection inputs and snapshots browser-safe and structural", () => {
     expectTypeOf<ContextMemoryHealthInput["retrieval"]>().toEqualTypeOf<
       "lexical-only" | "hybrid" | "unavailable"
+    >();
+    expectTypeOf<ContextRetrievalHealthInput>().toEqualTypeOf<RetrievalHealthSnapshot>();
+    expectTypeOf<ContextRetrievalHealthInput["reason"]>().toEqualTypeOf<
+      RetrievalHealthReason | undefined
     >();
     expectTypeOf<ContextRetrievalHealthInput["vector"]>().toEqualTypeOf<
       "ready" | "unavailable" | "not_configured"

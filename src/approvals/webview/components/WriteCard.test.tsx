@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 
-import type { ApprovalRequest, DecisionMessage } from "../types.js";
+import type {
+  ApprovalRequest,
+  DecisionMessage,
+} from "@agentlink/protocol/approval-transport";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 

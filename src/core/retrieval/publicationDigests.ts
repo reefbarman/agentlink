@@ -1,4 +1,4 @@
-import type { RetrievalSourceDocument } from "./contracts.js";
+import type { RetrievalSourceDocument } from "@agentlink/protocol/retrieval-records";
 import { createHash } from "node:crypto";
 
 export function createRetrievalRecordIdDigest(ids: readonly string[]): string {

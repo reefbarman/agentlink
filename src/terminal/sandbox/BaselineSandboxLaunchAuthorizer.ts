@@ -7,10 +7,10 @@ import {
   CURRENT_SANDBOX_POLICY_VERSION,
   validateCheckpointBSandboxCapabilityRequest,
   type ApprovedSandboxCapabilityGrant,
-  type SandboxExecutionMetadata,
   type SandboxLaunchAuthorization,
   type SandboxLaunchBindingInput,
 } from "../../core/sandboxPolicy.js";
+import type { SandboxExecutionMetadata } from "@agentlink/protocol/terminal-security";
 import { SandboxCapabilityLaunchError } from "../../core/capabilities/SandboxCapabilityLaunchError.js";
 import type { TerminalExecuteOptions } from "../../core/capabilities/terminal.js";
 import { buildAgentExecutionEnv } from "../../process/agentExecutionPolicy.js";

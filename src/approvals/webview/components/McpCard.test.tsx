@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 
-import { h } from "preact";
-import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
-import type { ApprovalRequest } from "../types";
+import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import { McpCard } from "./McpCard";
+import { h } from "preact";
 
 afterEach(() => {
   cleanup();

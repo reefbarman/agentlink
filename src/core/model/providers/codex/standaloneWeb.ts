@@ -4,10 +4,12 @@ import { agentLinkFetch } from "../../../../util/httpDispatcher.js";
 import type { CoreNativeWebToolResult } from "../../../nativeWebTools.js";
 import type {
   CoreWebAccessSettings,
-  CoreWebCitation,
   CoreWebSearchMode,
+} from "@agentlink/protocol/web-access-policy";
+import type {
+  CoreWebCitation,
   CoreWebToolKind,
-} from "../../../webAccess.js";
+} from "@agentlink/protocol/web-activity";
 import {
   CODEX_API_BASE_URL,
   getCodexEndpointConfig,

@@ -1,8 +1,9 @@
 import type {
   RetrievalChunkRecord,
-  RetrievalPublicationRequest,
   RetrievalSourceDocument,
-} from "../core/retrieval/contracts.js";
+} from "@agentlink/protocol/retrieval-records";
+
+import type { RetrievalPublicationRequest } from "@agentlink/protocol/retrieval-publication";
 
 export type RetrievalRecordId = string;
 

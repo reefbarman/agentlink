@@ -391,7 +391,7 @@ export type ExtensionMessage =
   | {
       type: "showApproval";
       sessionId?: string;
-      request: import("../../approvals/webview/types").ApprovalRequest;
+      request: import("@agentlink/protocol/approval-transport").ApprovalRequest;
     }
   | { type: "idle"; sessionId?: string; id: string }
   | {

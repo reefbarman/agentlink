@@ -178,7 +178,7 @@ import { loadAllInstructionBlocks } from "./configLoader.js";
 import type {
   ApprovalRequest,
   DecisionMessage,
-} from "../approvals/webview/types.js";
+} from "@agentlink/protocol/approval-transport";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import { classifyGuardianPathRisk } from "../approvals/actionApprovalReview.js";
 import { isMemoryProtectedPath } from "../approvals/protectedPaths.js";

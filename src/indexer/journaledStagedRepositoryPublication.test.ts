@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RetrievalStagedPublicationInspection } from "../core/retrieval/contracts.js";
+import type { RetrievalStagedPublicationInspection } from "@agentlink/protocol/retrieval-publication";
 import {
   emptyFileIndexJournal,
   loadFileIndexJournal,

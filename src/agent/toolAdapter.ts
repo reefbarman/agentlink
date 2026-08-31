@@ -241,6 +241,10 @@ const NATIVE_DISCOVERY_BRIDGE_TOOLS = new Set([
   "find_native_tools",
   "call_native_tool",
 ]);
+const SKILL_SESSION_CONTEXT_TOOLS = new Set([
+  "search_session_history",
+  "read_session_excerpt",
+]);
 const ALWAYS_AVAILABLE_DEV_TOOLS = new Set(["send_feedback"]);
 
 const EXCLUDED_TOOLS = new Set([
@@ -1253,6 +1257,7 @@ export function getAgentTools(
         !skillAllowlist ||
         skillAllowlist.has(name) ||
         NATIVE_DISCOVERY_BRIDGE_TOOLS.has(name) ||
+        SKILL_SESSION_CONTEXT_TOOLS.has(name) ||
         ALWAYS_AVAILABLE_DEV_TOOLS.has(name),
     );
   const composableChildNames = nativeToolEntries
@@ -1965,7 +1970,7 @@ export interface ToolDispatchContext {
     sessionId: string,
   ) => import("@agentlink/protocol/terminal").TerminalApprovalModeSnapshot;
   /** Restricts execute_command independently of user approval settings. */
-  commandExecutionPolicy?: import("../core/capabilities/terminal.js").CommandExecutionPolicy;
+  commandExecutionPolicy?: import("@agentlink/protocol/terminal-security").CommandExecutionPolicy;
   /** Immutable lifecycle hook runtime captured for this logical turn. */
   hookRuntime?: import("../core/hooks/HookRuntime.js").HookRuntime;
   hookTurnId?: string;

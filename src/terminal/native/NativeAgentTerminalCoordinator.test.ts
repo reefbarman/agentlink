@@ -10,16 +10,14 @@ import type {
   SandboxCommandProcess,
   SandboxCommandReady,
 } from "../sandbox/SandboxRuntimeProvider.js";
-import type {
-  TerminalExecutionOwner,
-  TerminalExecutionSecuritySummary,
-} from "../../core/capabilities/terminal.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { INTERACTIVE_PROMPT_GRACE_MS } from "../interactivePromptWatchdog.js";
 import type { MaterializedHostShellBootstrap } from "../hostShellBootstrap.js";
 import { NativeAgentTerminalCoordinator } from "./NativeAgentTerminalCoordinator.js";
 import type { NodePtyModuleLoader } from "../deferredNodePtyLoader.js";
+import type { TerminalExecutionOwner } from "../../core/capabilities/terminal.js";
+import type { TerminalExecutionSecuritySummary } from "@agentlink/protocol/terminal-security";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

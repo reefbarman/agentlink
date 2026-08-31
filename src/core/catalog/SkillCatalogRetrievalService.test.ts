@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { RetrievalFingerprint } from "../retrieval/contracts.js";
+import type { RetrievalFingerprint } from "@agentlink/protocol/retrieval-fingerprint";
 import { InMemoryRetrievalRepository } from "../retrieval/InMemoryRetrievalRepository.js";
 import {
   SkillCatalogRetrievalService,

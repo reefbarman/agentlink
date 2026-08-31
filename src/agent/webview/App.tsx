@@ -6,7 +6,7 @@ import {
 import type {
   ApprovalRequest,
   DecisionMessage,
-} from "../../approvals/webview/types";
+} from "@agentlink/protocol/approval-transport";
 import type { WorktreeSetupState } from "./types";
 import type { ChatSessionHistorySummary as SessionSummary } from "@agentlink/protocol/chat-session-history";
 import type {

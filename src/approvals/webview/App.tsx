@@ -2,7 +2,7 @@ import type {
   ApprovalRequest,
   DecisionMessage,
   ExtensionMessage,
-} from "./types.js";
+} from "@agentlink/protocol/approval-transport";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 import { CommandCard } from "./components/CommandCard.js";

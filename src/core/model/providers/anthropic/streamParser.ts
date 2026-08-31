@@ -8,10 +8,12 @@ import type {
 import {
   CORE_WEB_ACCESS_DEFAULT_MAX_REPLAY_BYTES_PER_TURN,
   createCoreProviderReplayEnvelope,
-  type CoreJsonValue,
-  type CoreWebActivity,
-  type CoreWebCitation,
 } from "../../../webAccess.js";
+import type { CoreJsonValue } from "@agentlink/protocol/provider-replay";
+import type {
+  CoreWebActivity,
+  CoreWebCitation,
+} from "@agentlink/protocol/web-activity";
 import type { AnthropicJsonObject } from "./translation.js";
 
 export interface AnthropicStreamParserState {

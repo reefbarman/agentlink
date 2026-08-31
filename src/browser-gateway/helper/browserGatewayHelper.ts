@@ -124,7 +124,7 @@ import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import type {
   ApprovalRequest,
   DecisionMessage,
-} from "../../approvals/webview/types.js";
+} from "@agentlink/protocol/approval-transport";
 import {
   BrowserGatewayModelCredentialCache,
   type BrowserGatewayModelCredentialRecord,

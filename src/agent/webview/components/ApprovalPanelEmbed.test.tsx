@@ -7,7 +7,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/preact";
 
-import type { ApprovalRequest } from "../../../approvals/webview/types";
+import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import { h } from "preact";
 
 afterEach(cleanup);

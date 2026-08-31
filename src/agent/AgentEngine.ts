@@ -37,7 +37,7 @@ import { parseMcpToolName } from "@agentlink/protocol/mcp-tool-identity";
 
 import { buildToolContextBreakdown } from "./contextBreakdown.js";
 import { partitionMcpToolsForDisclosure } from "./mcpToolDisclosure.js";
-import type { CoreResolvedWebAccessPolicy } from "../core/webAccess.js";
+import type { CoreResolvedWebAccessPolicy } from "@agentlink/protocol/web-access-policy";
 import {
   appendNativeWebToolPreference,
   CORE_NATIVE_WEB_MAX_PAUSE_TURNS,

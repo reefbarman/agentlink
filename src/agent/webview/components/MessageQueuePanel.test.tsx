@@ -8,6 +8,42 @@ import { MessageQueuePanel, type MessageQueueItem } from "./MessageQueuePanel";
 afterEach(() => cleanup());
 
 describe("MessageQueuePanel editing", () => {
+  it("disables actions for queue items awaiting server confirmation", () => {
+    const item: MessageQueueItem = {
+      id: "queue-pending",
+      text: "pending message",
+      source: "browser",
+      interjectionReady: true,
+    };
+    const onSteer = vi.fn();
+    const onInterject = vi.fn();
+    const onEdit = vi.fn();
+    const onRemove = vi.fn();
+    const { getAllByRole } = render(
+      <MessageQueuePanel
+        queue={[item]}
+        pendingIds={new Set([item.id])}
+        onSteer={onSteer}
+        onInterject={onInterject}
+        onEdit={onEdit}
+        onRemove={onRemove}
+      />,
+    );
+
+    const actions = getAllByRole("button", {
+      name: "Waiting for queue confirmation",
+    }) as HTMLButtonElement[];
+    expect(actions).toHaveLength(4);
+    for (const action of actions) {
+      expect(action.disabled).toBe(true);
+      fireEvent.click(action);
+    }
+    expect(onSteer).not.toHaveBeenCalled();
+    expect(onInterject).not.toHaveBeenCalled();
+    expect(onEdit).not.toHaveBeenCalled();
+    expect(onRemove).not.toHaveBeenCalled();
+  });
+
   it("prevents steer and interject actions until editing finishes", () => {
     const item: MessageQueueItem = {
       id: "queue-1",

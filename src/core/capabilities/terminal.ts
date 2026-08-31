@@ -1,17 +1,16 @@
 import type {
+  ManagedNetworkDecision,
+  ManagedNetworkRequest,
   SandboxCapabilityRequest,
   SandboxExecutionMetadata,
-  SandboxLaunchAuthorization,
   SandboxViolation,
-} from "../sandboxPolicy.js";
-import type {
-  TerminalApprovalPolicy,
-  TerminalApprovalReviewer,
-  TerminalCommandApprovalPolicySnapshot,
-  TerminalExecutionPreset,
-} from "@agentlink/protocol/terminal";
+  TerminalExecutionRouteContext,
+  TerminalExecutionRouteReason,
+  TerminalExecutionSecurityFailure,
+  TerminalExecutionSecuritySummary,
+} from "@agentlink/protocol/terminal-security";
 
-export type CommandExecutionPolicy = "read-only";
+import type { SandboxLaunchAuthorization } from "../sandboxPolicy.js";
 
 export type {
   TerminalApprovalModeSnapshot,
@@ -20,98 +19,20 @@ export type {
   TerminalCommandApprovalPolicySnapshot,
   TerminalExecutionPreset,
 } from "@agentlink/protocol/terminal";
-export type AgentTerminalExecutionAuthority = "native-agent" | "sandbox";
-export type TerminalSandboxPermissionIntent =
-  | "default"
-  | "additional-permissions"
-  | "native-escalation";
-
-export type TerminalExecutionApprovalRequirement =
-  | "policy"
-  | "explicit-permissions"
-  | "explicit-escalation";
-export type TerminalExecutionAuthorityReason =
-  | "approval-policy"
-  | "additional-permissions"
-  | "explicit-escalation"
-  | "explicit-rule";
-
-/** Immutable host-owned authority and policy input for terminal preparation. */
-export interface TerminalExecutionRouteContext {
-  readonly approvalPolicySnapshot: TerminalApprovalPolicy;
-  readonly approvalReviewerSnapshot: TerminalApprovalReviewer;
-  readonly executionPresetSnapshot: TerminalExecutionPreset;
-  readonly requiredAuthority: AgentTerminalExecutionAuthority;
-  readonly permissionIntent: TerminalSandboxPermissionIntent;
-  readonly approvalRequirement: TerminalExecutionApprovalRequirement;
-  readonly authorityReason: TerminalExecutionAuthorityReason;
-  /** Raw AgentLink mode retained for persistence compatibility and drift detection. */
-  readonly commandApprovalPolicySnapshot: TerminalCommandApprovalPolicySnapshot;
-  readonly commandExecutionPolicySnapshot?: CommandExecutionPolicy;
-}
-
-export type TerminalExecutionRouteReason =
-  | "verified-local-macos"
-  | "feature-disabled"
-  | "unsupported-host"
-  | "remote-host"
-  | "runtime-unavailable";
-
-export type TerminalExecutionSecurityFailure =
-  | "untrusted_workspace"
-  | "policy_drift"
-  | "host_target"
-  | "wrong_authority"
-  | "ambiguous_name"
-  | "not_found"
-  | "native_runtime_unavailable"
-  | "required_sandbox_unavailable"
-  | "attestation_failed"
-  | "lease_revoked"
-  | "stale_generation"
-  | "attestation_changed"
-  | "runtime_identity_changed"
-  | "terminal_target_changed"
-  | "provider_retired"
-  | "launch_failed"
-  | "cleanup_failed";
-
-export interface TerminalSandboxAttestationSummary {
-  attestationId: string;
-  attestationVersion: string;
-  policyVersion: string;
-  profileId: string;
-  backend: "seatbelt";
-  architecture: "arm64" | "x64";
-  capabilities: SandboxExecutionMetadata["capabilities"];
-  grant?: SandboxExecutionMetadata["grant"];
-  environmentPolicy?: SandboxExecutionMetadata["environmentPolicy"];
-  capabilityRequest?: SandboxExecutionMetadata["capabilityRequest"];
-}
-
-/** Token-free host-owned evidence shown to approval and result surfaces. */
-export interface TerminalExecutionSecuritySummary {
-  auditId: string;
-  route: "sandbox" | "native";
-  executionSurface:
-    | "verified-sandbox"
-    | "agentlink-native"
-    | "vscode-compatibility";
-  confinement: "verified-baseline" | "native-unsandboxed";
-  routeReason: TerminalExecutionRouteReason;
-  approvalPolicySnapshot: TerminalApprovalPolicy;
-  approvalReviewerSnapshot: TerminalApprovalReviewer;
-  executionPresetSnapshot: TerminalExecutionPreset;
-  requiredAuthority: AgentTerminalExecutionAuthority;
-  permissionIntent: TerminalSandboxPermissionIntent;
-  approvalRequirement: TerminalExecutionApprovalRequirement;
-  authorityReason: TerminalExecutionAuthorityReason;
-  commandApprovalPolicySnapshot: TerminalCommandApprovalPolicySnapshot;
-  commandExecutionPolicySnapshot?: CommandExecutionPolicy;
-  executionPolicy: "sandbox-baseline-v2" | "native-legacy-v1";
-  preparedAt: number;
-  sandbox?: TerminalSandboxAttestationSummary;
-}
+export type {
+  AgentTerminalExecutionAuthority,
+  CommandExecutionPolicy,
+  ManagedNetworkDecision,
+  ManagedNetworkRequest,
+  TerminalExecutionApprovalRequirement,
+  TerminalExecutionAuthorityReason,
+  TerminalExecutionRouteContext,
+  TerminalExecutionRouteReason,
+  TerminalExecutionSecurityFailure,
+  TerminalExecutionSecuritySummary,
+  TerminalSandboxAttestationSummary,
+  TerminalSandboxPermissionIntent,
+} from "@agentlink/protocol/terminal-security";
 
 /** Opaque one-use authority over an immutable execution descriptor. */
 export type TerminalExecutionAuditEventType =
@@ -281,27 +202,6 @@ export interface TerminalCommandResult {
   security?: TerminalExecutionSecuritySummary;
   security_failure?: TerminalExecutionSecurityFailure;
 }
-
-export interface ManagedNetworkRequest {
-  requestId: string;
-  sessionId: string;
-  auditId: string;
-  terminalId: string;
-  commandId: string;
-  generation: number;
-  command: string;
-  cwd: string;
-  reason?: string;
-  host: string;
-  protocol: "http" | "https" | "tcp";
-  port: number;
-  address: string;
-  family: 4 | 6;
-  dnsAnswers: Array<{ address: string; family: 4 | 6 }>;
-  destinationClass: "public";
-}
-
-export type ManagedNetworkDecision = "allow-once" | "reject";
 
 export interface TerminalExecutionOwner {
   /** Opaque stable pool scope; VS Code composition maps this to a chat tab ID. */

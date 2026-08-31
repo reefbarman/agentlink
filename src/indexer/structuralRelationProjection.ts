@@ -1,7 +1,5 @@
-import type {
-  RetrievalActiveSource,
-  RetrievalRelationRecord,
-} from "../core/retrieval/contracts.js";
+import type { RetrievalRelationRecord } from "@agentlink/protocol/retrieval-records";
+import type { RetrievalActiveSource } from "@agentlink/protocol/retrieval-structural-snapshot";
 import {
   STRUCTURAL_GRAPH_CACHE_VERSION,
   type StructuralExport,

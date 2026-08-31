@@ -1,38 +1,54 @@
 import type {
   RetrievalAbortPublicationOutcome,
-  RetrievalActiveSource,
-  RetrievalAggregateMetrics,
-  RetrievalChunkRecord,
-  RetrievalDeleteScopeOutcome,
-  RetrievalDeleteScopeRequest,
-  RetrievalDeleteSourceOutcome,
-  RetrievalDeleteSourceRequest,
-  RetrievalFingerprint,
-  RetrievalFingerprintDisposition,
-  RetrievalHealthReason,
-  RetrievalHealthSnapshot,
-  RetrievalLexicalReadiness,
-  RetrievalMigrationOutcome,
-  RetrievalOptimizeOutcome,
   RetrievalPublicationBatchOutcome,
   RetrievalPublicationOutcome,
   RetrievalPublicationPreparation,
   RetrievalPublicationRequest,
+} from "@agentlink/protocol/retrieval-publication";
+import type {
+  RetrievalActiveSource,
+  RetrievalStructuralSnapshot,
+  RetrievalStructuralSnapshotRequest,
+} from "@agentlink/protocol/retrieval-structural-snapshot";
+import type {
+  RetrievalAggregateMetrics,
+  RetrievalMigrationOutcome,
+  RetrievalOptimizeOutcome,
+  RetrievalRepairOutcome,
+  RetrievalSnapshot,
+  RetrievalSnapshotOutcome,
+} from "@agentlink/protocol/retrieval-maintenance";
+import type {
+  RetrievalChunkRecord,
+  RetrievalRelationRecord,
+  RetrievalSourceDocument,
+} from "@agentlink/protocol/retrieval-records";
+import type {
+  RetrievalDeleteScopeOutcome,
+  RetrievalDeleteScopeRequest,
+  RetrievalDeleteSourceOutcome,
+  RetrievalDeleteSourceRequest,
+} from "@agentlink/protocol/retrieval-deletion";
+import type {
+  RetrievalFingerprint,
+  RetrievalFingerprintDisposition,
+} from "@agentlink/protocol/retrieval-fingerprint";
+import type {
+  RetrievalHealthReason,
+  RetrievalHealthSnapshot,
+  RetrievalLexicalReadiness,
+} from "@agentlink/protocol/retrieval-health";
+import type {
   RetrievalQuery,
   RetrievalQueryCandidate,
   RetrievalQueryFilter,
   RetrievalQueryFreshnessSummary,
   RetrievalQueryResult,
-  RetrievalRelationRecord,
-  RetrievalRepairOutcome,
-  RetrievalRepository,
-  RetrievalSnapshot,
-  RetrievalSnapshotOutcome,
-  RetrievalSourceDocument,
-  RetrievalSourceFreshnessVerifier,
   RetrievalStaleSource,
-  RetrievalStructuralSnapshot,
-  RetrievalStructuralSnapshotRequest,
+} from "@agentlink/protocol/retrieval-query";
+import type {
+  RetrievalRepository,
+  RetrievalSourceFreshnessVerifier,
 } from "./contracts.js";
 import {
   compareRetrievalCandidates,

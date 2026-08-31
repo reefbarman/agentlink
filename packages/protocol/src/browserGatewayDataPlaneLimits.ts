@@ -1,0 +1,94 @@
+import type { BrowserGatewayDetailHandleKind } from "./browserGatewayDataPlaneIdentity.js";
+import type { BrowserGatewayCommandDeadlineClass } from "./browserGatewayOwnerCommandMetadata.js";
+
+export const BROWSER_GATEWAY_DATA_PLANE_LIMITS = Object.freeze({
+  ownerEventPayloadBytes: 256 * 1024,
+  ownerPublicationBatchBytes: 512 * 1024,
+  ownerPublicationRequestBytes: (2 * 1024 + 512) * 1024,
+  ownerPublicationBatchWindowMs: 50,
+  ownerPublicationQueueBytes: 480 * 1024,
+  ownerCommandBytes: 512 * 1024,
+  ownerCommandTextBytes: 256 * 1024,
+  ownerInlineTranscriptTextBytes: 64 * 1024,
+  ownerTranscriptDetailTtlMs: 5 * 60 * 1000,
+  selectedOwnerCheckpointBytes: 2 * 1024 * 1024,
+  selectedOwnerCheckpointUserTurns: 20,
+  selectedOwnerCheckpointMessages: 200,
+  authenticatedDetailResponseBytes: 8 * 1024 * 1024,
+  authenticatedSessionDetailResponseBytes: 32 * 1024 * 1024,
+  authenticatedDetailStoreBytes: 32 * 1024 * 1024,
+  retainedReplayBytesPerOwnerGeneration: 512 * 1024,
+  retainedReplayEventsPerOwnerGeneration: 64,
+  retainedReplayAgeMs: 5 * 60 * 1000,
+  aggregateHelperReplayBytes: 4 * 1024 * 1024,
+  browserQueuedSseBytes: 1024 * 1024,
+  backpressureStallDeadlineMs: 10_000,
+  cachedBrowserOwners: 4,
+  cachedBrowserOwnerBytes: 16 * 1024 * 1024,
+  pendingCommandsPerOwner: 32,
+  pendingCommandsPerHelper: 128,
+  commandDeadlineMs: 15_000,
+  maximumLongCommandDeadlineMs: 60_000,
+  operationDedupeRecords: 1_000,
+  operationDedupeAgeMs: 15 * 60 * 1000,
+  browserCommandsPerSecond: 10,
+  browserCommandBurst: 20,
+  selectionChangesPerSecond: 5,
+  checkpointRequestsPerSecond: 2,
+} as const);
+
+export type BrowserGatewayDataPlaneLimitName =
+  keyof typeof BROWSER_GATEWAY_DATA_PLANE_LIMITS;
+
+export const BROWSER_GATEWAY_COMMAND_DEADLINE_MS_BY_CLASS = Object.freeze({
+  default: BROWSER_GATEWAY_DATA_PLANE_LIMITS.commandDeadlineMs,
+  long: BROWSER_GATEWAY_DATA_PLANE_LIMITS.maximumLongCommandDeadlineMs,
+} as const satisfies Readonly<
+  Record<BrowserGatewayCommandDeadlineClass, number>
+>);
+
+export const BROWSER_GATEWAY_DATA_PLANE_LIMIT_OWNERS = Object.freeze({
+  ownerEventPayloadBytes: "owner-adapter-and-helper-ingest",
+  ownerPublicationBatchBytes: "owner-transport",
+  ownerPublicationRequestBytes: "owner-transport-and-helper-ingest",
+  ownerPublicationBatchWindowMs: "owner-transport",
+  ownerPublicationQueueBytes: "owner-transport",
+  ownerCommandBytes: "owner-command-router",
+  ownerCommandTextBytes: "owner-command-router",
+  ownerInlineTranscriptTextBytes: "owner-adapter",
+  ownerTranscriptDetailTtlMs: "owner-adapter-and-helper-detail-store",
+  selectedOwnerCheckpointBytes: "owner-adapter-and-helper-ingest",
+  selectedOwnerCheckpointUserTurns: "owner-adapter",
+  selectedOwnerCheckpointMessages: "owner-adapter",
+  authenticatedDetailResponseBytes: "helper-detail-store",
+  authenticatedSessionDetailResponseBytes: "helper-session-detail-store",
+  authenticatedDetailStoreBytes: "helper-detail-store",
+  retainedReplayBytesPerOwnerGeneration: "helper-relay-store",
+  retainedReplayEventsPerOwnerGeneration: "helper-relay-store",
+  retainedReplayAgeMs: "helper-relay-store",
+  aggregateHelperReplayBytes: "helper-relay-store",
+  browserQueuedSseBytes: "helper-relay-client-queue",
+  backpressureStallDeadlineMs: "helper-relay-client-queue",
+  cachedBrowserOwners: "browser-owner-store",
+  cachedBrowserOwnerBytes: "browser-owner-store",
+  pendingCommandsPerOwner: "helper-command-router",
+  pendingCommandsPerHelper: "helper-command-router",
+  commandDeadlineMs: "helper-command-router",
+  maximumLongCommandDeadlineMs: "helper-command-router",
+  operationDedupeRecords: "helper-command-router",
+  operationDedupeAgeMs: "helper-command-router",
+  browserCommandsPerSecond: "helper-command-router",
+  browserCommandBurst: "helper-command-router",
+  selectionChangesPerSecond: "helper-relay-subscription-router",
+  checkpointRequestsPerSecond: "helper-relay-subscription-router",
+} as const satisfies Readonly<
+  Record<BrowserGatewayDataPlaneLimitName, string>
+>);
+
+export function browserGatewayDetailResponseByteLimit(
+  kind: BrowserGatewayDetailHandleKind,
+): number {
+  return kind === "session"
+    ? BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedSessionDetailResponseBytes
+    : BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes;
+}

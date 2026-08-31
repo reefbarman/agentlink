@@ -5,7 +5,7 @@ import {
   getCodeSymbolId,
 } from "./codeRetrievalIdentity.js";
 
-import type { RetrievalRelationRecord } from "../core/retrieval/contracts.js";
+import type { RetrievalRelationRecord } from "@agentlink/protocol/retrieval-records";
 import type { StructuralFileEntry } from "./structuralGraph.js";
 
 export function translateStructuralEntryToRelations(input: {

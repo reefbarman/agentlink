@@ -1,8 +1,3 @@
-import type {
-  RetrievalFingerprint,
-  RetrievalPublicationRequest,
-  RetrievalSourceDocument,
-} from "./contracts.js";
 import {
   canonicalizeRetrievalFingerprint,
   classifyRetrievalFingerprint,
@@ -10,6 +5,9 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { InMemoryRetrievalRepository } from "./InMemoryRetrievalRepository.js";
+import type { RetrievalFingerprint } from "@agentlink/protocol/retrieval-fingerprint";
+import type { RetrievalPublicationRequest } from "@agentlink/protocol/retrieval-publication";
+import type { RetrievalSourceDocument } from "@agentlink/protocol/retrieval-records";
 
 const fingerprint: RetrievalFingerprint = {
   schemaVersion: 1,

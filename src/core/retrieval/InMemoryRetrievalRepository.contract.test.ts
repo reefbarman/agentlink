@@ -1,5 +1,5 @@
 import { InMemoryRetrievalRepository } from "./InMemoryRetrievalRepository.js";
-import type { RetrievalSourceFreshness } from "./contracts.js";
+import type { RetrievalSourceFreshness } from "@agentlink/protocol/retrieval-query";
 import { describeRetrievalRepositoryContract } from "../../test/retrievalRepositoryContract.js";
 
 describeRetrievalRepositoryContract("InMemoryRetrievalRepository", () => {

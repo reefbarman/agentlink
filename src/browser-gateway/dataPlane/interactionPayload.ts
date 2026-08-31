@@ -5,13 +5,13 @@ import type {
   CommandReviewSummary,
   InlineCommandFilePreview,
   SubCommandEntry,
-} from "../../approvals/webview/types.js";
+} from "@agentlink/protocol/approval-transport";
 import type {
   StructuredQuestionProgress,
   StructuredQuestionRequest as QuestionRequest,
   UserQuestion as Question,
 } from "@agentlink/protocol/structured-question";
-import type { TerminalExecutionSecuritySummary } from "../../core/capabilities/terminal.js";
+import type { TerminalExecutionSecuritySummary } from "@agentlink/protocol/terminal-security";
 import type {
   McpElicitationField,
   McpElicitationOption,
@@ -361,7 +361,7 @@ function terminalSecurity(value: unknown): TerminalExecutionSecuritySummary {
   );
   copyOptional(result, "sandbox", source.sandbox, (item) => {
     const sandbox = recordValue(item);
-    return {
+    const result: NonNullable<TerminalExecutionSecuritySummary["sandbox"]> = {
       attestationId: stringValue(sandbox.attestationId),
       attestationVersion: stringValue(sandbox.attestationVersion),
       policyVersion: stringValue(sandbox.policyVersion),
@@ -370,6 +370,20 @@ function terminalSecurity(value: unknown): TerminalExecutionSecuritySummary {
       architecture: enumValue(sandbox.architecture, ["arm64", "x64"] as const),
       capabilities: sandboxCapabilities(sandbox.capabilities),
     };
+    copyOptionalValid(result, "grant", sandbox.grant, sandboxGrant);
+    copyOptionalValid(
+      result,
+      "environmentPolicy",
+      sandbox.environmentPolicy,
+      sandboxEnvironmentPolicy,
+    );
+    copyOptionalValid(
+      result,
+      "capabilityRequest",
+      sandbox.capabilityRequest,
+      sandboxCapabilityRequest,
+    );
+    return result;
   });
   return result;
 }
@@ -412,6 +426,70 @@ function sandboxCapabilities(
     warnings: arrayValue(source.warnings, stringValue),
   };
   copyOptional(result, "backendVersion", source.backendVersion, stringValue);
+  return result;
+}
+
+function sandboxGrant(
+  value: unknown,
+): NonNullable<
+  NonNullable<TerminalExecutionSecuritySummary["sandbox"]>["grant"]
+> {
+  const source = recordValue(value);
+  return {
+    grantId: stringValue(source.grantId),
+    auditId: stringValue(source.auditId),
+  };
+}
+
+function sandboxEnvironmentPolicy(
+  value: unknown,
+): NonNullable<
+  NonNullable<TerminalExecutionSecuritySummary["sandbox"]>["environmentPolicy"]
+> {
+  const source = recordValue(value);
+  return {
+    inherit: enumValue(source.inherit, ["all", "core", "none"] as const),
+    ignoreDefaultExcludes: booleanValue(source.ignoreDefaultExcludes),
+    exclude: arrayValue(source.exclude, stringValue),
+    setKeys: arrayValue(source.setKeys, stringValue),
+    includeOnly: arrayValue(source.includeOnly, stringValue),
+    useProfile: booleanValue(source.useProfile),
+  };
+}
+
+function sandboxCapabilityRequest(
+  value: unknown,
+): NonNullable<
+  NonNullable<TerminalExecutionSecuritySummary["sandbox"]>["capabilityRequest"]
+> {
+  const source = recordValue(value);
+  const result: NonNullable<
+    NonNullable<
+      TerminalExecutionSecuritySummary["sandbox"]
+    >["capabilityRequest"]
+  > = {};
+  for (const key of [
+    "readPaths",
+    "writePaths",
+    "networkDomains",
+    "privateNetworkTargets",
+  ] as const) {
+    copyOptional(result, key, source[key], (item) =>
+      arrayValue(item, stringValue),
+    );
+  }
+  copyOptional(
+    result,
+    "unrestrictedPublicNetwork",
+    source.unrestrictedPublicNetwork,
+    booleanValue,
+  );
+  copyOptional(
+    result,
+    "allowLocalBinding",
+    source.allowLocalBinding,
+    booleanValue,
+  );
   return result;
 }
 
@@ -670,6 +748,21 @@ function stringRecord(value: unknown): Record<string, string> {
       stringValue(entry),
     ]),
   );
+}
+
+function copyOptionalValid<T extends object>(
+  target: T,
+  key: string,
+  value: unknown,
+  parse: (candidate: unknown) => unknown,
+): void {
+  if (value === undefined) return;
+  try {
+    (target as Record<string, unknown>)[key] = parse(value);
+  } catch {
+    // Optional token-free evidence from an older/newer peer must not discard
+    // the primary interaction payload when only that evidence is malformed.
+  }
 }
 
 function copyOptional<T extends object>(

@@ -16,7 +16,7 @@ import {
 import type { CachedFileEntry } from "./types.js";
 import type { FileReplacementStore } from "./journaledRepositoryPublication.js";
 import { InMemoryRetrievalRepository } from "../core/retrieval/InMemoryRetrievalRepository.js";
-import type { RetrievalPublicationRequest } from "../core/retrieval/contracts.js";
+import type { RetrievalPublicationRequest } from "@agentlink/protocol/retrieval-publication";
 import type { StructuralFileEntry } from "./structuralGraph.js";
 
 const sourceId = "code:workspace:test:src/index.ts";

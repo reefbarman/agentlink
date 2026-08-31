@@ -1,4 +1,4 @@
-import type { RetrievalSourceRevision } from "./contracts.js";
+import type { RetrievalSourceRevision } from "@agentlink/protocol/retrieval-records";
 
 export function validateRetrievalSourceRevision(
   revision: RetrievalSourceRevision,

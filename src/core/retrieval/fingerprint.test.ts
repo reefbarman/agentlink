@@ -5,7 +5,7 @@ import {
 } from "./fingerprint.js";
 import { describe, expect, it } from "vitest";
 
-import type { RetrievalFingerprint } from "./contracts.js";
+import type { RetrievalFingerprint } from "@agentlink/protocol/retrieval-fingerprint";
 
 const fingerprint: RetrievalFingerprint = {
   schemaVersion: 1,

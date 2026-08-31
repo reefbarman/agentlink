@@ -1,4 +1,4 @@
-import type { RetrievalFingerprint } from "../core/retrieval/contracts.js";
+import type { RetrievalFingerprint } from "@agentlink/protocol/retrieval-fingerprint";
 
 // Shared IPC protocol types between extension host and child process.
 // IMPORTANT: No `vscode` imports — this must be usable from both sides.

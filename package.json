@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.20.1",
+  "version": "1.20.2",
   "publisher": "agentlink",
   "repository": {
     "type": "git",

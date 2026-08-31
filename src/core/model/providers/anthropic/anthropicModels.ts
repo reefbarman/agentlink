@@ -3,7 +3,7 @@ import type {
   StaticModelEntry,
 } from "./anthropicModelCatalog.js";
 import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
-import type { CoreHostedWebCapabilities } from "../../../webAccess.js";
+import type { CoreHostedWebCapabilities } from "@agentlink/protocol/web-access-policy";
 
 const CLAUDE_REASONING_EFFORTS = [
   "none",

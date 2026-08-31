@@ -1,9 +1,12 @@
-import type { ApprovalRequest, DecisionMessage } from "../types.js";
+import type {
+  ApprovalRequest,
+  DecisionMessage,
+} from "@agentlink/protocol/approval-transport";
+import { useCallback, useEffect, useState } from "preact/hooks";
 
 import { ApprovalLayout } from "./ApprovalLayout.js";
 import { JsonHighlight } from "../../../shared/ui/JsonHighlight.js";
 import type { RefObject } from "preact";
-import { useCallback, useEffect, useState } from "preact/hooks";
 
 const TARGETS = ["tool", "server"] as const;
 const SCOPES = ["session", "project", "global", "skip"] as const;

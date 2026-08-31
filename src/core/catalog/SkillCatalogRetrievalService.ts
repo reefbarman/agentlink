@@ -1,9 +1,10 @@
 import type {
-  RetrievalHealthReason,
   RetrievalPublicationOutcome,
   RetrievalPublicationRequest,
-  RetrievalRepository,
-} from "../retrieval/contracts.js";
+} from "@agentlink/protocol/retrieval-publication";
+
+import type { RetrievalHealthReason } from "@agentlink/protocol/retrieval-health";
+import type { RetrievalRepository } from "../retrieval/contracts.js";
 
 const SKILL_CATALOG_DOMAIN = "skill-catalog";
 const SKILL_CATALOG_SCHEMA_VERSION = 1;

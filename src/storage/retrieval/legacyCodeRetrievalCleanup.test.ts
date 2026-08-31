@@ -9,7 +9,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { LanceDbRetrievalRepository } from "./LanceDbRetrievalRepository.js";
-import type { RetrievalPublicationRequest } from "../../core/retrieval/contracts.js";
+import type { RetrievalPublicationRequest } from "@agentlink/protocol/retrieval-publication";
 
 const roots: string[] = [];
 

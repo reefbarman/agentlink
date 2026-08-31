@@ -1,6 +1,10 @@
 import type { BrowserGatewayCoreOwnerRegistry } from "../coreOwnerRegistry.js";
-import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "../dataPlane/limits.js";
 import {
+  BROWSER_GATEWAY_COMMAND_DEADLINE_MS_BY_CLASS,
+  BROWSER_GATEWAY_DATA_PLANE_LIMITS,
+} from "../dataPlane/limits.js";
+import {
+  BROWSER_GATEWAY_COMMAND_DEADLINE_CLASSES,
   BROWSER_GATEWAY_COMMAND_IDEMPOTENCY,
   BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
   BrowserGatewayProtocolError,
@@ -188,9 +192,7 @@ export class BrowserGatewayCommandRoutes {
     }
 
     const duration =
-      request.deadlineClass === "long"
-        ? BROWSER_GATEWAY_DATA_PLANE_LIMITS.maximumLongCommandDeadlineMs
-        : BROWSER_GATEWAY_DATA_PLANE_LIMITS.commandDeadlineMs;
+      BROWSER_GATEWAY_COMMAND_DEADLINE_MS_BY_CLASS[request.deadlineClass];
     const command = parseBrowserGatewayOwnerCommand({
       protocolVersion: BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
       helperGenerationId: this.options.helperGenerationId,
@@ -504,17 +506,21 @@ function parseBrowserCommandRequest(
       );
     }
   }
-  if (record.deadlineClass !== "default" && record.deadlineClass !== "long") {
+  if (
+    !new Set<string>(BROWSER_GATEWAY_COMMAND_DEADLINE_CLASSES).has(
+      record.deadlineClass as string,
+    )
+  ) {
     throw new BrowserGatewayProtocolError(
       "invalid_value",
       "$.deadlineClass",
       "unsupported deadline class",
     );
   }
-  const duration =
-    record.deadlineClass === "long"
-      ? BROWSER_GATEWAY_DATA_PLANE_LIMITS.maximumLongCommandDeadlineMs
-      : BROWSER_GATEWAY_DATA_PLANE_LIMITS.commandDeadlineMs;
+  const deadlineClass =
+    record.deadlineClass as BrowserGatewayCommandDeadlineClass;
+  const duration = BROWSER_GATEWAY_COMMAND_DEADLINE_MS_BY_CLASS[deadlineClass];
+  const kind = commandKind(record.command);
   const parsed = parseBrowserGatewayOwnerCommand({
     protocolVersion: BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
     helperGenerationId,
@@ -523,11 +529,11 @@ function parseBrowserCommandRequest(
     operationId: (record.operationId as string).trim(),
     emittedAt: now,
     deadlineAt: now + duration,
-    deadlineClass: record.deadlineClass,
+    deadlineClass,
     idempotency:
-      commandKind(record.command) === undefined
+      kind === undefined
         ? "idempotent"
-        : BROWSER_GATEWAY_COMMAND_IDEMPOTENCY[commandKind(record.command)!],
+        : BROWSER_GATEWAY_COMMAND_IDEMPOTENCY[kind],
     command: record.command,
   });
   return {
@@ -567,7 +573,8 @@ function commandKind(
   if (!value || typeof value !== "object" || Array.isArray(value))
     return undefined;
   const kind = (value as Record<string, unknown>).kind;
-  return typeof kind === "string" && kind in BROWSER_GATEWAY_COMMAND_IDEMPOTENCY
+  return typeof kind === "string" &&
+    Object.hasOwn(BROWSER_GATEWAY_COMMAND_IDEMPOTENCY, kind)
     ? (kind as keyof typeof BROWSER_GATEWAY_COMMAND_IDEMPOTENCY)
     : undefined;
 }

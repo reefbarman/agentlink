@@ -14,11 +14,11 @@ import type {
   NetworkReviewSummary,
   RuleEntry,
   SubCommandEntry,
-} from "./webview/types.js";
+} from "@agentlink/protocol/approval-transport";
 import type {
   ManagedNetworkRequest,
   TerminalExecutionSecuritySummary,
-} from "../core/capabilities/terminal.js";
+} from "@agentlink/protocol/terminal-security";
 
 import type { StatusBarManager } from "../util/StatusBarManager.js";
 import { isMemoryProtectedPath } from "./protectedPaths.js";

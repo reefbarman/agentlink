@@ -1,13 +1,13 @@
+import type { RetrievalRepository } from "../retrieval/contracts.js";
+import type { RetrievalDeleteSourceOutcome } from "@agentlink/protocol/retrieval-deletion";
+import type { RetrievalSnapshot } from "@agentlink/protocol/retrieval-maintenance";
+import type { RetrievalActiveSource } from "@agentlink/protocol/retrieval-structural-snapshot";
 import type {
-  RetrievalActiveSource,
-  RetrievalDeleteSourceOutcome,
   RetrievalPublicationBatchOutcome,
   RetrievalPublicationOutcome,
   RetrievalPublicationRequest,
-  RetrievalQueryCandidate,
-  RetrievalRepository,
-  RetrievalSnapshot,
-} from "../retrieval/contracts.js";
+} from "@agentlink/protocol/retrieval-publication";
+import type { RetrievalQueryCandidate } from "@agentlink/protocol/retrieval-query";
 import { scanMemoryText } from "../memory/memoryPolicy.js";
 
 const DERIVED_SESSION_DOMAIN = "derived-session";

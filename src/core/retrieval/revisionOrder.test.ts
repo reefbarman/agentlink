@@ -4,7 +4,7 @@ import {
 } from "./revisionOrder.js";
 import { describe, expect, it } from "vitest";
 
-import type { RetrievalSourceRevision } from "./contracts.js";
+import type { RetrievalSourceRevision } from "@agentlink/protocol/retrieval-records";
 
 function revision(
   id: string,

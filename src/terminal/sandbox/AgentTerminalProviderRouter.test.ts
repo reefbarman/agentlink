@@ -1,7 +1,5 @@
-import type {
-  ConfinementPreparingTerminalProvider,
-  TerminalExecutionRouteContext,
-} from "../../core/capabilities/terminal.js";
+import type { ConfinementPreparingTerminalProvider } from "../../core/capabilities/terminal.js";
+import type { TerminalExecutionRouteContext } from "@agentlink/protocol/terminal-security";
 import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 

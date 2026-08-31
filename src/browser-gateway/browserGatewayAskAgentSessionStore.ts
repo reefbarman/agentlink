@@ -31,7 +31,7 @@ import type {
   ChatModelInfo as WebviewModelInfo,
 } from "@agentlink/protocol/chat-catalog";
 
-import type { ApprovalRequest } from "../approvals/webview/types.js";
+import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import type { BrowserGatewayAskAgentPreferencesSnapshot } from "./browserGatewayAskAgentPreferences.js";
 import type { BrowserGatewayCoreOwnerRegistry } from "./coreOwnerRegistry.js";
 import type { BrowserGatewayModelCredentialStatus } from "./browserGatewayModelCredentialCache.js";

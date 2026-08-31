@@ -6,20 +6,21 @@ import { getConfiguredMasterBypass } from "../adapters/vscode/agentLinkConfig.js
 
 import { getWorkspaceRoots, tryGetFirstWorkspaceRoot } from "../util/paths.js";
 import type {
-  CommandExecutionPolicy,
-  ManagedNetworkRequest,
   PreparedTerminalExecution,
   TerminalCommandResult,
   TerminalExecutionAttemptSummary,
   TerminalExecutionAuditEvent,
-  TerminalExecutionRouteContext,
-  TerminalExecutionSecuritySummary,
   TerminalExecuteOptions,
   TerminalProvider,
 } from "../core/capabilities/terminal.js";
 import type { TerminalApprovalModeSnapshot } from "@agentlink/protocol/terminal";
-
-import type { SandboxViolation } from "../core/sandboxPolicy.js";
+import type {
+  CommandExecutionPolicy,
+  ManagedNetworkRequest,
+  SandboxViolation,
+  TerminalExecutionRouteContext,
+  TerminalExecutionSecuritySummary,
+} from "@agentlink/protocol/terminal-security";
 import { SandboxCapabilityLaunchError } from "../core/capabilities/SandboxCapabilityLaunchError.js";
 import { TerminalAdmissionCancelledError } from "../terminal/terminalAdmissionQueue.js";
 import {
@@ -68,7 +69,7 @@ import type {
   CommandReviewSummary,
   NetworkReviewSummary,
   SubCommandEntry,
-} from "../approvals/webview/types.js";
+} from "@agentlink/protocol/approval-transport";
 import type { NetworkApprovalReviewer } from "../approvals/networkApprovalReview.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 import { validateCommand } from "../util/pipeValidator.js";

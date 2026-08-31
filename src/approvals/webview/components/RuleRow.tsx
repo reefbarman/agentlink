@@ -1,4 +1,7 @@
-import type { RuleEntry, SubCommandEntry } from "../types.js";
+import type {
+  RuleEntry,
+  SubCommandEntry,
+} from "@agentlink/protocol/approval-transport";
 
 import { isBannedCommandRulePrefixSuggestion } from "../../commandRulePolicy.js";
 

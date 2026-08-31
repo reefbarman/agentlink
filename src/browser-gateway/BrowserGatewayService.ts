@@ -43,7 +43,7 @@ import type {
   SessionUiEvent,
 } from "../agent/AgentUiPublisher.js";
 
-import type { ApprovalRequest } from "../approvals/webview/types.js";
+import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 
 import {

@@ -1,10 +1,9 @@
 import type {
-  RetrievalActiveSource,
   RetrievalPublicationBatchOutcome,
   RetrievalPublicationOutcome,
   RetrievalPublicationPreparation,
   RetrievalPublicationRequest,
-} from "../core/retrieval/contracts.js";
+} from "@agentlink/protocol/retrieval-publication";
 import {
   emptyFileIndexJournal,
   loadFileIndexJournal,
@@ -12,6 +11,7 @@ import {
 } from "./fileIndexJournal.js";
 
 import type { CachedFileEntry } from "./types.js";
+import type { RetrievalActiveSource } from "@agentlink/protocol/retrieval-structural-snapshot";
 import type { StructuralFileEntry } from "./structuralGraph.js";
 
 export interface FileReplacementStore {

@@ -6,7 +6,6 @@ import {
   TerminalBackgroundState,
   TerminalCloseResult,
   TerminalCommandResult,
-  TerminalExecutionSecuritySummary,
   TerminalExecuteOptions,
   TerminalExecutionOwner,
   TerminalInteractivePromptDetection,
@@ -21,6 +20,7 @@ import {
   TerminalCloseRequest,
 } from "../../core/capabilities/terminal.js";
 import type { TerminalDimensions } from "@agentlink/protocol/terminal";
+import type { TerminalExecutionSecuritySummary } from "@agentlink/protocol/terminal-security";
 import { buildAgentExecutionEnv } from "../../process/agentExecutionPolicy.js";
 import {
   cleanTerminalOutput,

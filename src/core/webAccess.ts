@@ -1,35 +1,55 @@
+export type {
+  CoreJsonValue,
+  CoreProviderReplayEnvelope,
+} from "@agentlink/protocol/provider-replay";
+export type {
+  CoreWebAccessBackend,
+  CoreWebActivity,
+  CoreWebActivityStatus,
+  CoreWebCitation,
+  CoreWebToolKind,
+} from "@agentlink/protocol/web-activity";
+export type {
+  CoreHostedToolDefinition,
+  CoreHostedWebCapabilities,
+  CoreHostedWebFetchDefinition,
+  CoreHostedWebSearchDefinition,
+  CoreHostedWebToolCapability,
+  CoreResolveWebAccessPolicyInput,
+  CoreResolvedWebAccessPolicy,
+  CoreResolvedWebAccessRoute,
+  CoreWebAccessResolutionReason,
+  CoreWebAccessSelection,
+  CoreWebAccessSettings,
+  CoreWebAccessSettingsInput,
+  CoreWebSearchMode,
+} from "@agentlink/protocol/web-access-policy";
+
+import type {
+  CoreHostedToolDefinition,
+  CoreHostedWebCapabilities,
+  CoreResolveWebAccessPolicyInput,
+  CoreResolvedWebAccessPolicy,
+  CoreResolvedWebAccessRoute,
+  CoreWebAccessResolutionReason,
+  CoreWebAccessSelection,
+  CoreWebAccessSettings,
+  CoreWebAccessSettingsInput,
+  CoreWebSearchMode,
+} from "@agentlink/protocol/web-access-policy";
+import type {
+  CoreJsonValue,
+  CoreProviderReplayEnvelope,
+} from "@agentlink/protocol/provider-replay";
+import type {
+  CoreWebAccessBackend,
+  CoreWebToolKind,
+} from "@agentlink/protocol/web-activity";
+
 export const CORE_WEB_ACCESS_DEFAULT_MAX_SEARCH_USES_PER_TURN = 5;
 export const CORE_WEB_ACCESS_DEFAULT_MAX_FETCH_USES_PER_TURN = 3;
 export const CORE_WEB_ACCESS_DEFAULT_MAX_FETCH_CONTENT_TOKENS = 25_000;
 export const CORE_WEB_ACCESS_DEFAULT_MAX_REPLAY_BYTES_PER_TURN = 5_242_880;
-
-export type CoreJsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | CoreJsonValue[]
-  | { [key: string]: CoreJsonValue };
-
-export type CoreWebAccessSelection = "native" | "mcp" | "disabled";
-export type CoreWebSearchMode = "cached" | "indexed" | "live";
-
-export type CoreWebAccessBackend = "provider" | "mcp" | "mixed" | "disabled";
-export type CoreWebToolKind = "search" | "fetch";
-
-export interface CoreWebAccessSettings {
-  searchBackend: CoreWebAccessSelection;
-  fetchBackend: CoreWebAccessSelection;
-  nativeSearchMode: CoreWebSearchMode;
-  allowedDomains: string[];
-  blockedDomains: string[];
-  maxSearchUsesPerTurn: number;
-  maxFetchUsesPerTurn: number;
-  maxFetchContentTokens: number;
-  maxReplayBytesPerTurn: number;
-}
-
-export type CoreWebAccessSettingsInput = Partial<CoreWebAccessSettings>;
 
 export const DEFAULT_CORE_WEB_ACCESS_SETTINGS: Readonly<CoreWebAccessSettings> =
   Object.freeze({
@@ -43,112 +63,6 @@ export const DEFAULT_CORE_WEB_ACCESS_SETTINGS: Readonly<CoreWebAccessSettings> =
     maxFetchContentTokens: CORE_WEB_ACCESS_DEFAULT_MAX_FETCH_CONTENT_TOKENS,
     maxReplayBytesPerTurn: CORE_WEB_ACCESS_DEFAULT_MAX_REPLAY_BYTES_PER_TURN,
   });
-
-export interface CoreHostedWebToolCapability {
-  supported: boolean;
-  supportsDomainRestrictions?: boolean;
-  supportsMaxUses?: boolean;
-  supportsContentTokenLimit?: boolean;
-  supportsCitations?: boolean;
-  /** The hosted search tool can open a caller-supplied URL for delegated fetch. */
-  supportsPageAccess?: boolean;
-}
-
-export interface CoreHostedWebCapabilities {
-  search?: CoreHostedWebToolCapability;
-  fetch?: CoreHostedWebToolCapability;
-}
-
-export interface CoreHostedWebSearchDefinition {
-  type: "web_search";
-  allowedDomains?: string[];
-  blockedDomains?: string[];
-  maxUses?: number;
-}
-
-export interface CoreHostedWebFetchDefinition {
-  type: "web_fetch";
-  allowedDomains?: string[];
-  blockedDomains?: string[];
-  maxUses?: number;
-  maxContentTokens?: number;
-  citationsEnabled: boolean;
-}
-
-export type CoreHostedToolDefinition =
-  | CoreHostedWebSearchDefinition
-  | CoreHostedWebFetchDefinition;
-
-export interface CoreWebCitation {
-  url: string;
-  title?: string;
-  citedText?: string;
-  startIndex?: number;
-  endIndex?: number;
-}
-
-export type CoreWebActivityStatus = "started" | "completed" | "failed";
-
-export interface CoreWebActivity {
-  id: string;
-  kind: CoreWebToolKind;
-  status: CoreWebActivityStatus;
-  backend: Exclude<CoreWebAccessBackend, "disabled">;
-  query?: string;
-  url?: string;
-  citations?: CoreWebCitation[];
-  error?: string;
-}
-
-export interface CoreProviderReplayEnvelope {
-  providerId: string;
-  codecVersion: number;
-  payload: CoreJsonValue;
-  serializedBytes: number;
-  degraded?: boolean;
-  degradedReason?: "size_limit" | "unsupported_payload";
-}
-
-export type CoreWebAccessResolutionReason =
-  | "disabled"
-  | "native_selected"
-  | "native_unsupported"
-  | "native_restrictions_unsupported"
-  | "mcp_selected";
-
-export interface CoreResolvedWebAccessRoute {
-  kind: CoreWebToolKind;
-  backend: Exclude<CoreWebAccessBackend, "mixed">;
-  available: boolean;
-  reason: CoreWebAccessResolutionReason;
-  hostedTool?: CoreHostedToolDefinition;
-}
-
-export interface CoreResolvedWebAccessPolicy {
-  backend: CoreWebAccessBackend;
-  available: boolean;
-  routes: {
-    search: CoreResolvedWebAccessRoute;
-    fetch: CoreResolvedWebAccessRoute;
-  };
-  settings: CoreWebAccessSettings;
-  /** Provider definitions used only by delegated wrapper execution. */
-  hostedTools: CoreHostedToolDefinition[];
-  enabledKinds: CoreWebToolKind[];
-  diagnostics: {
-    providerSearchSupported: boolean;
-    providerFetchSupported: boolean;
-    domainRestrictionsRequested: boolean;
-    maxSearchUsesEnforced: boolean;
-    maxFetchUsesEnforced: boolean;
-    maxFetchContentTokensEnforced: boolean;
-  };
-}
-
-export interface CoreResolveWebAccessPolicyInput {
-  settings?: CoreWebAccessSettingsInput;
-  providerCapabilities?: CoreHostedWebCapabilities;
-}
 
 export function normalizeCoreWebAccessSettings(
   value: CoreWebAccessSettingsInput = {},

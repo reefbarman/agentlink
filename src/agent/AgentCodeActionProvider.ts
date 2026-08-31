@@ -26,7 +26,6 @@ export class AgentCodeActionProvider implements vscode.CodeActionProvider {
       fix.command = {
         command: "agentlink.fixWithAgent",
         title: "Fix with AgentLink",
-        arguments: [document.uri, range, context.diagnostics],
       };
       fix.isPreferred = false;
       actions.push(fix);
@@ -41,7 +40,6 @@ export class AgentCodeActionProvider implements vscode.CodeActionProvider {
       explain.command = {
         command: "agentlink.explainWithAgent",
         title: "Explain with AgentLink",
-        arguments: [document.uri, range],
       };
       actions.push(explain);
     }

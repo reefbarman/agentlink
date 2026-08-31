@@ -7,7 +7,7 @@ import type { CommandReviewEvidence } from "./commandReviewEvidence.js";
 import type { InlineCommandFilePreview } from "../util/commandInlineFiles.js";
 import type { MessageParam } from "../agent/providers/types.js";
 import type { ModelProvider } from "../agent/providers/types.js";
-import type { TerminalExecutionSecuritySummary } from "../core/capabilities/terminal.js";
+import type { TerminalExecutionSecuritySummary } from "@agentlink/protocol/terminal-security";
 
 // Keep interactive command review responsive, but allow enough time for the
 // selected provider to start and finish a small completion during brief load.

@@ -13,7 +13,7 @@ import {
 } from "./translation.js";
 import { describe, expect, it } from "vitest";
 
-import type { CoreJsonValue } from "../../../webAccess.js";
+import type { CoreJsonValue } from "@agentlink/protocol/provider-replay";
 
 const LONG_TOOL_CALL_ID = `tool call:${"x".repeat(80)}`;
 

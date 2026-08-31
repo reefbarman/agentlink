@@ -1,9 +1,7 @@
-import type {
-  RetrievalActiveSource,
-  RetrievalRelationRecord,
-} from "../core/retrieval/contracts.js";
 import { describe, expect, it } from "vitest";
 
+import type { RetrievalActiveSource } from "@agentlink/protocol/retrieval-structural-snapshot";
+import type { RetrievalRelationRecord } from "@agentlink/protocol/retrieval-records";
 import { projectStructuralRelations } from "./structuralRelationProjection.js";
 
 function activeSource(input: {

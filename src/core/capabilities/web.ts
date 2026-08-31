@@ -1,4 +1,4 @@
-import type { CoreWebToolKind } from "../webAccess.js";
+import type { CoreWebToolKind } from "@agentlink/protocol/web-activity";
 
 export interface NativeWebToolExecutionRequest {
   kind: CoreWebToolKind;

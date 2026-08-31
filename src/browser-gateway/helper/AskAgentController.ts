@@ -1,7 +1,7 @@
 import type {
   ApprovalRequest,
   DecisionMessage,
-} from "../../approvals/webview/types.js";
+} from "@agentlink/protocol/approval-transport";
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import type { BrowserGatewayAskAgentPreferencesSnapshot } from "../browserGatewayAskAgentPreferences.js";

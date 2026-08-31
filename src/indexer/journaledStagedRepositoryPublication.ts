@@ -7,7 +7,7 @@ import type {
   RetrievalPublicationRequest,
   RetrievalStagedPublicationBundle,
   RetrievalStagedPublicationInspection,
-} from "../core/retrieval/contracts.js";
+} from "@agentlink/protocol/retrieval-publication";
 import {
   createRetrievalRecordContentDigest,
   createRetrievalRecordIdDigest,
@@ -18,8 +18,9 @@ import {
   loadFileIndexJournal,
   writeFileIndexJournal,
 } from "./fileIndexJournal.js";
-import type { StructuralFileEntry } from "./structuralGraph.js";
+
 import type { CachedFileEntry } from "./types.js";
+import type { StructuralFileEntry } from "./structuralGraph.js";
 
 export interface StagedRepositoryPublicationPort {
   readonly fenceToken: string;

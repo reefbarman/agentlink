@@ -13,7 +13,7 @@ import type {
   OpenAiCompatibleWireTool,
 } from "./types.js";
 
-import type { CoreJsonValue } from "../../../webAccess.js";
+import type { CoreJsonValue } from "@agentlink/protocol/provider-replay";
 import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 
 export class OpenAiCompatibleCapabilityError extends Error {

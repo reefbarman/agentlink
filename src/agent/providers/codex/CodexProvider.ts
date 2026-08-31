@@ -75,10 +75,8 @@ import {
   canUseCodexStandaloneWeb,
   executeCodexStandaloneWeb,
 } from "../../../core/model/providers/codex/standaloneWeb.js";
-import type {
-  CoreWebAccessSettings,
-  CoreWebToolKind,
-} from "../../../core/webAccess.js";
+import type { CoreWebAccessSettings } from "@agentlink/protocol/web-access-policy";
+import type { CoreWebToolKind } from "@agentlink/protocol/web-activity";
 
 /**
  * Absolute per-request ceiling on OAuth refresh retries. The per-account dedup

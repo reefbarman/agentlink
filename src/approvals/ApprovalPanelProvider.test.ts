@@ -1,10 +1,13 @@
 import * as vscode from "vscode";
 
-import type { ApprovalRequest, DecisionMessage } from "./webview/types.js";
+import type {
+  ApprovalRequest,
+  DecisionMessage,
+} from "@agentlink/protocol/approval-transport";
 import { describe, expect, it, vi } from "vitest";
 
 import { ApprovalPanelProvider } from "./ApprovalPanelProvider.js";
-import type { TerminalExecutionSecuritySummary } from "../core/capabilities/terminal.js";
+import type { TerminalExecutionSecuritySummary } from "@agentlink/protocol/terminal-security";
 
 const { configuration, getConfiguration } = vi.hoisted(() => {
   const configuration = {

@@ -5,7 +5,7 @@ import type {
   StructuredQuestionProgress,
 } from "@agentlink/protocol/structured-question";
 
-import type { ApprovalRequest } from "../approvals/webview/types.js";
+import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import type { McpFormElicitationRequest } from "@agentlink/protocol/mcp-elicitation";
 import type { McpUrlElicitationRequest } from "@agentlink/protocol/mcp-url-elicitation";
 

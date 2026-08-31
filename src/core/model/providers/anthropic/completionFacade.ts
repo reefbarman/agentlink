@@ -7,7 +7,7 @@ import type {
   CoreModelToolDefinition,
   CoreModelTransportActivity,
 } from "../../../modelRuntime.js";
-import type { CoreHostedToolDefinition } from "../../../webAccess.js";
+import type { CoreHostedToolDefinition } from "@agentlink/protocol/web-access-policy";
 import { parseAnthropicStreamEvents } from "./streamParser.js";
 import {
   translateAnthropicMessages,

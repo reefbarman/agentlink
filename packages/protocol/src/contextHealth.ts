@@ -1,16 +1,9 @@
-export type ContextRetrievalHealthReason =
-  | "disabled"
-  | "no_workspace"
-  | "missing_index"
-  | "store_unavailable"
-  | "rebuild_required"
-  | "lexical_index_unavailable"
-  | "scalar_index_unavailable"
-  | "vector_index_unavailable"
-  | "structural_index_unavailable"
-  | "missing_embeddings_auth"
-  | "repair_required"
-  | "generic_error";
+import type {
+  RetrievalHealthReason,
+  RetrievalHealthSnapshot,
+} from "./retrievalHealth.js";
+
+export type ContextRetrievalHealthReason = RetrievalHealthReason;
 
 export interface ContextMemoryHealthInput {
   status: "ready" | "degraded" | "unavailable";
@@ -25,23 +18,7 @@ export interface ContextMemoryHealthInput {
   reason?: string;
 }
 
-export interface ContextRetrievalHealthInput {
-  status: "ready" | "degraded" | "unavailable" | "disabled";
-  lexical: "ready" | "unavailable";
-  scalar: "ready" | "unavailable";
-  vector: "ready" | "unavailable" | "not_configured";
-  structural: "ready" | "unavailable";
-  embeddingCredentials: "available" | "missing" | "not_required";
-  reason?: ContextRetrievalHealthReason;
-  reasons: ContextRetrievalHealthReason[];
-  details?: Partial<Record<ContextRetrievalHealthReason, string>>;
-  fingerprintDisposition: "compatible" | "initialize" | "rebuild_required";
-  pendingPublications: number;
-  sourceCount: number;
-  chunkCount: number;
-  relationCount: number;
-  staleSourceCount: number;
-}
+export type ContextRetrievalHealthInput = RetrievalHealthSnapshot;
 
 export interface ContextIndexHealthInput {
   state: "idle" | "discovering" | "indexing" | "error";

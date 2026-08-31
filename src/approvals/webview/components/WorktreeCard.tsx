@@ -1,8 +1,11 @@
+import type {
+  ApprovalRequest,
+  DecisionMessage,
+} from "@agentlink/protocol/approval-transport";
+
+import { ApprovalLayout } from "./ApprovalLayout.js";
 import type { RefObject } from "preact";
 import { useCallback } from "preact/hooks";
-
-import type { ApprovalRequest, DecisionMessage } from "../types.js";
-import { ApprovalLayout } from "./ApprovalLayout.js";
 
 interface WorktreeCardProps {
   request: ApprovalRequest;

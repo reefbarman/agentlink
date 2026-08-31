@@ -8,17 +8,19 @@ import type {
   TerminalExecuteOptions,
   TerminalExecutionAuditEvent,
   TerminalExecutionOwner,
-  TerminalExecutionRouteContext,
-  TerminalExecutionSecuritySummary,
   TerminalListRequest,
   TerminalOutputRequest,
   TerminalProvider,
   TerminalRecentlyClosedRequest,
   TerminalRetainedOutput,
   TerminalRetainedOutputLease,
-  TerminalSandboxAttestationSummary,
   TerminalTargetRequest,
 } from "../../core/capabilities/terminal.js";
+import type {
+  TerminalExecutionRouteContext,
+  TerminalExecutionSecuritySummary,
+  TerminalSandboxAttestationSummary,
+} from "@agentlink/protocol/terminal-security";
 
 import { randomUUID } from "node:crypto";
 import {

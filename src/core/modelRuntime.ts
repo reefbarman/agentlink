@@ -1,18 +1,20 @@
 import type {
   CoreHostedToolDefinition,
   CoreHostedWebCapabilities,
-  CoreProviderReplayEnvelope,
-  CoreWebActivity,
-  CoreWebCitation,
-} from "./webAccess.js";
+} from "@agentlink/protocol/web-access-policy";
 import type {
   CoreModelCatalogEntry,
   CoreModelCatalogSnapshot,
   CoreReasoningEffort,
 } from "@agentlink/protocol/model-catalog";
+import type {
+  CoreWebActivity,
+  CoreWebCitation,
+} from "@agentlink/protocol/web-activity";
 
 import type { CoreModelAuthMethod } from "@agentlink/protocol/model-auth";
 import type { CoreModelAuthProvider } from "./modelAuthProvider.js";
+import type { CoreProviderReplayEnvelope } from "@agentlink/protocol/provider-replay";
 
 export type CoreModelContentBlock =
   | CoreModelTextBlock

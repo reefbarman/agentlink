@@ -1,12 +1,11 @@
-import type {
-  RetrievalDeleteSourceOutcome,
-  RetrievalRepository,
-} from "../core/retrieval/contracts.js";
 import {
   emptyFileIndexJournal,
   loadFileIndexJournal,
   writeFileIndexJournal,
 } from "./fileIndexJournal.js";
+
+import type { RetrievalDeleteSourceOutcome } from "@agentlink/protocol/retrieval-deletion";
+import type { RetrievalRepository } from "../core/retrieval/contracts.js";
 
 /**
  * Files deleted per repository call and journal checkpoint. Removals are

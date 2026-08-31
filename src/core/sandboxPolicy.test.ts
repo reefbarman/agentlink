@@ -2,11 +2,11 @@ import {
   CURRENT_SANDBOX_POLICY_VERSION,
   serializeSandboxLaunchBinding,
   type ApprovedSandboxCapabilityGrant,
-  type SandboxCapabilityRequest,
   type SandboxLaunchBindingInput,
   validateCheckpointBSandboxCapabilityRequest,
   validateSandboxCapabilityGrant,
 } from "./sandboxPolicy.js";
+import type { SandboxCapabilityRequest } from "@agentlink/protocol/terminal-security";
 import { describe, expect, it } from "vitest";
 
 const grant: ApprovedSandboxCapabilityGrant = {

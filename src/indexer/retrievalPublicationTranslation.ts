@@ -1,13 +1,11 @@
-import type {
-  RetrievalChunkRecord,
-  RetrievalPublicationRequest,
-} from "../core/retrieval/contracts.js";
 import {
   getCodeSourceId,
   getCodeWorkspaceScopeId,
 } from "./codeRetrievalIdentity.js";
 
 import type { Chunk } from "./types.js";
+import type { RetrievalChunkRecord } from "@agentlink/protocol/retrieval-records";
+import type { RetrievalPublicationRequest } from "@agentlink/protocol/retrieval-publication";
 import type { StructuralFileEntry } from "./structuralGraph.js";
 import { requireCanonicalPortableCodeIndexPath } from "./codeIndexPaths.js";
 import { translateStructuralEntryToRelations } from "./structuralRelationTranslation.js";

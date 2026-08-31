@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
-import { h } from "preact";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
-import type { ApprovalRequest } from "../types";
+import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import { WorktreeCard } from "./WorktreeCard";
+import { h } from "preact";
 
 afterEach(cleanup);
 

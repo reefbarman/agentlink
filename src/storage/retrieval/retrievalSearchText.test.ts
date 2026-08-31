@@ -6,7 +6,7 @@ import type {
   RetrievalChunkRecord,
   RetrievalRelationRecord,
   RetrievalSourceDocument,
-} from "../../core/retrieval/contracts.js";
+} from "@agentlink/protocol/retrieval-records";
 import { describe, expect, it } from "vitest";
 
 const chunk: RetrievalChunkRecord = {

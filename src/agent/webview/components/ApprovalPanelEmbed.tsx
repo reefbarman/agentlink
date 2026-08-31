@@ -1,7 +1,7 @@
 import type {
   ApprovalRequest,
   DecisionMessage,
-} from "../../../approvals/webview/types";
+} from "@agentlink/protocol/approval-transport";
 import type { ComponentChildren, RefObject } from "preact";
 
 import { CommandCard } from "../../../approvals/webview/components/CommandCard";

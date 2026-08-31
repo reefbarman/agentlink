@@ -26,12 +26,10 @@ import type {
   CoreModelToolResultBlock,
   CoreModelToolUseBlock,
 } from "../../core/modelRuntime.js";
-import type {
-  CoreWebAccessSettings,
-  CoreWebToolKind,
-} from "../../core/webAccess.js";
 
 import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
+import type { CoreWebAccessSettings } from "@agentlink/protocol/web-access-policy";
+import type { CoreWebToolKind } from "@agentlink/protocol/web-activity";
 import { toCoreModelImageMediaType } from "../../core/modelRuntime.js";
 
 export type ContentBlock = CoreModelContentBlock;

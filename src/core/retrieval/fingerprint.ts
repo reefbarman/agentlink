@@ -1,7 +1,7 @@
 import type {
   RetrievalFingerprint,
   RetrievalFingerprintDisposition,
-} from "./contracts.js";
+} from "@agentlink/protocol/retrieval-fingerprint";
 
 export function canonicalizeRetrievalFingerprint(
   fingerprint: RetrievalFingerprint,

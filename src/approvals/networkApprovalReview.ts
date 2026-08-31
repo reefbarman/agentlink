@@ -6,7 +6,7 @@ import type {
   CommandReviewUserAuthorization,
 } from "./commandApprovalReview.js";
 
-import type { ManagedNetworkRequest } from "../core/capabilities/terminal.js";
+import type { ManagedNetworkRequest } from "@agentlink/protocol/terminal-security";
 import type { ModelProvider } from "../agent/providers/types.js";
 
 export const DEFAULT_NETWORK_REVIEW_TIMEOUT_MS = 90_000;

@@ -5,11 +5,11 @@ import {
   RETRIEVAL_STORE_MARKER,
 } from "../storage/retrieval/LanceDbRetrievalRepository.js";
 import type {
-  RetrievalFingerprintDisposition,
   RetrievalHealthReason,
   RetrievalHealthSnapshot,
-} from "../core/retrieval/contracts.js";
+} from "@agentlink/protocol/retrieval-health";
 
+import type { RetrievalFingerprintDisposition } from "@agentlink/protocol/retrieval-fingerprint";
 import { getCodeRetrievalStoreRoot } from "./codeRetrievalIdentity.js";
 
 export interface CodeRetrievalHealthProviderOptions {

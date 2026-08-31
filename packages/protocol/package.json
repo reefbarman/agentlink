@@ -41,6 +41,20 @@
         "default": "./dist/cjs/autonomousMemory.cjs"
       }
     },
+    "./approval-transport": {
+      "browser": {
+        "types": "./dist/approvalTransport.d.ts",
+        "default": "./dist/approvalTransport.js"
+      },
+      "import": {
+        "types": "./dist/approvalTransport.d.ts",
+        "default": "./dist/approvalTransport.js"
+      },
+      "require": {
+        "types": "./dist/cjs/approvalTransport.d.cts",
+        "default": "./dist/cjs/approvalTransport.cjs"
+      }
+    },
     "./agent-error-presentation": {
       "browser": {
         "types": "./dist/agentErrorPresentation.d.ts",
@@ -55,6 +69,174 @@
         "default": "./dist/cjs/agentErrorPresentation.cjs"
       }
     },
+    "./browser-gateway-todo-item": {
+      "browser": {
+        "types": "./dist/browserGatewayTodoItem.d.ts",
+        "default": "./dist/browserGatewayTodoItem.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayTodoItem.d.ts",
+        "default": "./dist/browserGatewayTodoItem.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayTodoItem.d.cts",
+        "default": "./dist/cjs/browserGatewayTodoItem.cjs"
+      }
+    },
+    "./browser-gateway-transcript-block": {
+      "browser": {
+        "types": "./dist/browserGatewayTranscriptBlock.d.ts",
+        "default": "./dist/browserGatewayTranscriptBlock.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayTranscriptBlock.d.ts",
+        "default": "./dist/browserGatewayTranscriptBlock.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayTranscriptBlock.d.cts",
+        "default": "./dist/cjs/browserGatewayTranscriptBlock.cjs"
+      }
+    },
+    "./browser-gateway-transcript-message": {
+      "browser": {
+        "types": "./dist/browserGatewayTranscriptMessage.d.ts",
+        "default": "./dist/browserGatewayTranscriptMessage.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayTranscriptMessage.d.ts",
+        "default": "./dist/browserGatewayTranscriptMessage.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayTranscriptMessage.d.cts",
+        "default": "./dist/cjs/browserGatewayTranscriptMessage.cjs"
+      }
+    },
+    "./browser-gateway-transcript-text": {
+      "browser": {
+        "types": "./dist/browserGatewayTranscriptText.d.ts",
+        "default": "./dist/browserGatewayTranscriptText.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayTranscriptText.d.ts",
+        "default": "./dist/browserGatewayTranscriptText.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayTranscriptText.d.cts",
+        "default": "./dist/cjs/browserGatewayTranscriptText.cjs"
+      }
+    },
+    "./browser-gateway-background-summary": {
+      "browser": {
+        "types": "./dist/browserGatewayBackgroundSummary.d.ts",
+        "default": "./dist/browserGatewayBackgroundSummary.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayBackgroundSummary.d.ts",
+        "default": "./dist/browserGatewayBackgroundSummary.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayBackgroundSummary.d.cts",
+        "default": "./dist/cjs/browserGatewayBackgroundSummary.cjs"
+      }
+    },
+    "./browser-gateway-diff-preview": {
+      "browser": {
+        "types": "./dist/browserGatewayDiffPreview.d.ts",
+        "default": "./dist/browserGatewayDiffPreview.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayDiffPreview.d.ts",
+        "default": "./dist/browserGatewayDiffPreview.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayDiffPreview.d.cts",
+        "default": "./dist/cjs/browserGatewayDiffPreview.cjs"
+      }
+    },
+    "./browser-gateway-interaction-state": {
+      "browser": {
+        "types": "./dist/browserGatewayInteractionState.d.ts",
+        "default": "./dist/browserGatewayInteractionState.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayInteractionState.d.ts",
+        "default": "./dist/browserGatewayInteractionState.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayInteractionState.d.cts",
+        "default": "./dist/cjs/browserGatewayInteractionState.cjs"
+      }
+    },
+    "./browser-gateway-interaction-summary": {
+      "browser": {
+        "types": "./dist/browserGatewayInteractionSummary.d.ts",
+        "default": "./dist/browserGatewayInteractionSummary.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayInteractionSummary.d.ts",
+        "default": "./dist/browserGatewayInteractionSummary.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayInteractionSummary.d.cts",
+        "default": "./dist/cjs/browserGatewayInteractionSummary.cjs"
+      }
+    },
+    "./browser-gateway-operation-state": {
+      "browser": {
+        "types": "./dist/browserGatewayOperationState.d.ts",
+        "default": "./dist/browserGatewayOperationState.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayOperationState.d.ts",
+        "default": "./dist/browserGatewayOperationState.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayOperationState.d.cts",
+        "default": "./dist/cjs/browserGatewayOperationState.cjs"
+      }
+    },
+    "./browser-gateway-owner-command-metadata": {
+      "browser": {
+        "types": "./dist/browserGatewayOwnerCommandMetadata.d.ts",
+        "default": "./dist/browserGatewayOwnerCommandMetadata.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayOwnerCommandMetadata.d.ts",
+        "default": "./dist/browserGatewayOwnerCommandMetadata.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayOwnerCommandMetadata.d.cts",
+        "default": "./dist/cjs/browserGatewayOwnerCommandMetadata.cjs"
+      }
+    },
+    "./browser-gateway-owner-control-metadata": {
+      "browser": {
+        "types": "./dist/browserGatewayOwnerControlMetadata.d.ts",
+        "default": "./dist/browserGatewayOwnerControlMetadata.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayOwnerControlMetadata.d.ts",
+        "default": "./dist/browserGatewayOwnerControlMetadata.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayOwnerControlMetadata.d.cts",
+        "default": "./dist/cjs/browserGatewayOwnerControlMetadata.cjs"
+      }
+    },
+    "./browser-gateway-owner-event-metadata": {
+      "browser": {
+        "types": "./dist/browserGatewayOwnerEventMetadata.d.ts",
+        "default": "./dist/browserGatewayOwnerEventMetadata.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayOwnerEventMetadata.d.ts",
+        "default": "./dist/browserGatewayOwnerEventMetadata.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayOwnerEventMetadata.d.cts",
+        "default": "./dist/cjs/browserGatewayOwnerEventMetadata.cjs"
+      }
+    },
     "./browser-gateway-theme": {
       "browser": {
         "types": "./dist/browserGatewayTheme.d.ts",
@@ -67,6 +249,174 @@
       "require": {
         "types": "./dist/cjs/browserGatewayTheme.d.cts",
         "default": "./dist/cjs/browserGatewayTheme.cjs"
+      }
+    },
+    "./browser-gateway-capability-status": {
+      "browser": {
+        "types": "./dist/browserGatewayCapabilityStatus.d.ts",
+        "default": "./dist/browserGatewayCapabilityStatus.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayCapabilityStatus.d.ts",
+        "default": "./dist/browserGatewayCapabilityStatus.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayCapabilityStatus.d.cts",
+        "default": "./dist/cjs/browserGatewayCapabilityStatus.cjs"
+      }
+    },
+    "./browser-gateway-context-budget": {
+      "browser": {
+        "types": "./dist/browserGatewayContextBudget.d.ts",
+        "default": "./dist/browserGatewayContextBudget.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayContextBudget.d.ts",
+        "default": "./dist/browserGatewayContextBudget.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayContextBudget.d.cts",
+        "default": "./dist/cjs/browserGatewayContextBudget.cjs"
+      }
+    },
+    "./browser-gateway-core-owner-registration": {
+      "browser": {
+        "types": "./dist/browserGatewayCoreOwnerRegistration.d.ts",
+        "default": "./dist/browserGatewayCoreOwnerRegistration.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayCoreOwnerRegistration.d.ts",
+        "default": "./dist/browserGatewayCoreOwnerRegistration.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayCoreOwnerRegistration.d.cts",
+        "default": "./dist/cjs/browserGatewayCoreOwnerRegistration.cjs"
+      }
+    },
+    "./browser-gateway-ask-agent-identity": {
+      "browser": {
+        "types": "./dist/browserGatewayAskAgentIdentity.d.ts",
+        "default": "./dist/browserGatewayAskAgentIdentity.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayAskAgentIdentity.d.ts",
+        "default": "./dist/browserGatewayAskAgentIdentity.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayAskAgentIdentity.d.cts",
+        "default": "./dist/cjs/browserGatewayAskAgentIdentity.cjs"
+      }
+    },
+    "./browser-gateway-helper-lifecycle": {
+      "browser": {
+        "types": "./dist/browserGatewayHelperLifecycle.d.ts",
+        "default": "./dist/browserGatewayHelperLifecycle.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayHelperLifecycle.d.ts",
+        "default": "./dist/browserGatewayHelperLifecycle.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayHelperLifecycle.d.cts",
+        "default": "./dist/cjs/browserGatewayHelperLifecycle.cjs"
+      }
+    },
+    "./browser-gateway-instance-status": {
+      "browser": {
+        "types": "./dist/browserGatewayInstanceStatus.d.ts",
+        "default": "./dist/browserGatewayInstanceStatus.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayInstanceStatus.d.ts",
+        "default": "./dist/browserGatewayInstanceStatus.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayInstanceStatus.d.cts",
+        "default": "./dist/cjs/browserGatewayInstanceStatus.cjs"
+      }
+    },
+    "./browser-gateway-queue-item": {
+      "browser": {
+        "types": "./dist/browserGatewayQueueItem.d.ts",
+        "default": "./dist/browserGatewayQueueItem.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayQueueItem.d.ts",
+        "default": "./dist/browserGatewayQueueItem.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayQueueItem.d.cts",
+        "default": "./dist/cjs/browserGatewayQueueItem.cjs"
+      }
+    },
+    "./browser-gateway-repository-state": {
+      "browser": {
+        "types": "./dist/browserGatewayRepositoryState.d.ts",
+        "default": "./dist/browserGatewayRepositoryState.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayRepositoryState.d.ts",
+        "default": "./dist/browserGatewayRepositoryState.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayRepositoryState.d.cts",
+        "default": "./dist/cjs/browserGatewayRepositoryState.cjs"
+      }
+    },
+    "./browser-gateway-model-provider-identity": {
+      "browser": {
+        "types": "./dist/browserGatewayModelProviderIdentity.d.ts",
+        "default": "./dist/browserGatewayModelProviderIdentity.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayModelProviderIdentity.d.ts",
+        "default": "./dist/browserGatewayModelProviderIdentity.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayModelProviderIdentity.d.cts",
+        "default": "./dist/cjs/browserGatewayModelProviderIdentity.cjs"
+      }
+    },
+    "./browser-gateway-data-plane-mode": {
+      "browser": {
+        "types": "./dist/browserGatewayDataPlaneMode.d.ts",
+        "default": "./dist/browserGatewayDataPlaneMode.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayDataPlaneMode.d.ts",
+        "default": "./dist/browserGatewayDataPlaneMode.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayDataPlaneMode.d.cts",
+        "default": "./dist/cjs/browserGatewayDataPlaneMode.cjs"
+      }
+    },
+    "./browser-gateway-data-plane-identity": {
+      "browser": {
+        "types": "./dist/browserGatewayDataPlaneIdentity.d.ts",
+        "default": "./dist/browserGatewayDataPlaneIdentity.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayDataPlaneIdentity.d.ts",
+        "default": "./dist/browserGatewayDataPlaneIdentity.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayDataPlaneIdentity.d.cts",
+        "default": "./dist/cjs/browserGatewayDataPlaneIdentity.cjs"
+      }
+    },
+    "./browser-gateway-data-plane-limits": {
+      "browser": {
+        "types": "./dist/browserGatewayDataPlaneLimits.d.ts",
+        "default": "./dist/browserGatewayDataPlaneLimits.js"
+      },
+      "import": {
+        "types": "./dist/browserGatewayDataPlaneLimits.d.ts",
+        "default": "./dist/browserGatewayDataPlaneLimits.js"
+      },
+      "require": {
+        "types": "./dist/cjs/browserGatewayDataPlaneLimits.d.cts",
+        "default": "./dist/cjs/browserGatewayDataPlaneLimits.cjs"
       }
     },
     "./chat-catalog": {
@@ -461,6 +811,20 @@
         "default": "./dist/cjs/questionDetection.cjs"
       }
     },
+    "./provider-replay": {
+      "browser": {
+        "types": "./dist/providerReplay.d.ts",
+        "default": "./dist/providerReplay.js"
+      },
+      "import": {
+        "types": "./dist/providerReplay.d.ts",
+        "default": "./dist/providerReplay.js"
+      },
+      "require": {
+        "types": "./dist/cjs/providerReplay.d.cts",
+        "default": "./dist/cjs/providerReplay.cjs"
+      }
+    },
     "./prompt-profile": {
       "browser": {
         "types": "./dist/promptProfile.d.ts",
@@ -629,6 +993,20 @@
         "default": "./dist/cjs/contextLedger.cjs"
       }
     },
+    "./surface-model-message": {
+      "browser": {
+        "types": "./dist/surfaceModelMessage.d.ts",
+        "default": "./dist/surfaceModelMessage.js"
+      },
+      "import": {
+        "types": "./dist/surfaceModelMessage.d.ts",
+        "default": "./dist/surfaceModelMessage.js"
+      },
+      "require": {
+        "types": "./dist/cjs/surfaceModelMessage.d.cts",
+        "default": "./dist/cjs/surfaceModelMessage.cjs"
+      }
+    },
     "./terminal": {
       "browser": {
         "types": "./dist/terminal.d.ts",
@@ -657,6 +1035,20 @@
         "default": "./dist/cjs/terminalSurface.cjs"
       }
     },
+    "./terminal-security": {
+      "browser": {
+        "types": "./dist/terminalSecurity.d.ts",
+        "default": "./dist/terminalSecurity.js"
+      },
+      "import": {
+        "types": "./dist/terminalSecurity.d.ts",
+        "default": "./dist/terminalSecurity.js"
+      },
+      "require": {
+        "types": "./dist/cjs/terminalSecurity.d.cts",
+        "default": "./dist/cjs/terminalSecurity.cjs"
+      }
+    },
     "./sidebar-transport": {
       "browser": {
         "types": "./dist/sidebarTransport.d.ts",
@@ -671,6 +1063,34 @@
         "default": "./dist/cjs/sidebarTransport.cjs"
       }
     },
+    "./web-access-policy": {
+      "browser": {
+        "types": "./dist/webAccessPolicy.d.ts",
+        "default": "./dist/webAccessPolicy.js"
+      },
+      "import": {
+        "types": "./dist/webAccessPolicy.d.ts",
+        "default": "./dist/webAccessPolicy.js"
+      },
+      "require": {
+        "types": "./dist/cjs/webAccessPolicy.d.cts",
+        "default": "./dist/cjs/webAccessPolicy.cjs"
+      }
+    },
+    "./web-activity": {
+      "browser": {
+        "types": "./dist/webActivity.d.ts",
+        "default": "./dist/webActivity.js"
+      },
+      "import": {
+        "types": "./dist/webActivity.d.ts",
+        "default": "./dist/webActivity.js"
+      },
+      "require": {
+        "types": "./dist/cjs/webActivity.d.cts",
+        "default": "./dist/cjs/webActivity.cjs"
+      }
+    },
     "./workspace-project": {
       "browser": {
         "types": "./dist/workspaceProject.d.ts",
@@ -683,6 +1103,118 @@
       "require": {
         "types": "./dist/cjs/workspaceProject.d.cts",
         "default": "./dist/cjs/workspaceProject.cjs"
+      }
+    },
+    "./retrieval-deletion": {
+      "browser": {
+        "types": "./dist/retrievalDeletion.d.ts",
+        "default": "./dist/retrievalDeletion.js"
+      },
+      "import": {
+        "types": "./dist/retrievalDeletion.d.ts",
+        "default": "./dist/retrievalDeletion.js"
+      },
+      "require": {
+        "types": "./dist/cjs/retrievalDeletion.d.cts",
+        "default": "./dist/cjs/retrievalDeletion.cjs"
+      }
+    },
+    "./retrieval-fingerprint": {
+      "browser": {
+        "types": "./dist/retrievalFingerprint.d.ts",
+        "default": "./dist/retrievalFingerprint.js"
+      },
+      "import": {
+        "types": "./dist/retrievalFingerprint.d.ts",
+        "default": "./dist/retrievalFingerprint.js"
+      },
+      "require": {
+        "types": "./dist/cjs/retrievalFingerprint.d.cts",
+        "default": "./dist/cjs/retrievalFingerprint.cjs"
+      }
+    },
+    "./retrieval-maintenance": {
+      "browser": {
+        "types": "./dist/retrievalMaintenance.d.ts",
+        "default": "./dist/retrievalMaintenance.js"
+      },
+      "import": {
+        "types": "./dist/retrievalMaintenance.d.ts",
+        "default": "./dist/retrievalMaintenance.js"
+      },
+      "require": {
+        "types": "./dist/cjs/retrievalMaintenance.d.cts",
+        "default": "./dist/cjs/retrievalMaintenance.cjs"
+      }
+    },
+    "./retrieval-structural-snapshot": {
+      "browser": {
+        "types": "./dist/retrievalStructuralSnapshot.d.ts",
+        "default": "./dist/retrievalStructuralSnapshot.js"
+      },
+      "import": {
+        "types": "./dist/retrievalStructuralSnapshot.d.ts",
+        "default": "./dist/retrievalStructuralSnapshot.js"
+      },
+      "require": {
+        "types": "./dist/cjs/retrievalStructuralSnapshot.d.cts",
+        "default": "./dist/cjs/retrievalStructuralSnapshot.cjs"
+      }
+    },
+    "./retrieval-health": {
+      "browser": {
+        "types": "./dist/retrievalHealth.d.ts",
+        "default": "./dist/retrievalHealth.js"
+      },
+      "import": {
+        "types": "./dist/retrievalHealth.d.ts",
+        "default": "./dist/retrievalHealth.js"
+      },
+      "require": {
+        "types": "./dist/cjs/retrievalHealth.d.cts",
+        "default": "./dist/cjs/retrievalHealth.cjs"
+      }
+    },
+    "./retrieval-records": {
+      "browser": {
+        "types": "./dist/retrievalRecords.d.ts",
+        "default": "./dist/retrievalRecords.js"
+      },
+      "import": {
+        "types": "./dist/retrievalRecords.d.ts",
+        "default": "./dist/retrievalRecords.js"
+      },
+      "require": {
+        "types": "./dist/cjs/retrievalRecords.d.cts",
+        "default": "./dist/cjs/retrievalRecords.cjs"
+      }
+    },
+    "./retrieval-publication": {
+      "browser": {
+        "types": "./dist/retrievalPublication.d.ts",
+        "default": "./dist/retrievalPublication.js"
+      },
+      "import": {
+        "types": "./dist/retrievalPublication.d.ts",
+        "default": "./dist/retrievalPublication.js"
+      },
+      "require": {
+        "types": "./dist/cjs/retrievalPublication.d.cts",
+        "default": "./dist/cjs/retrievalPublication.cjs"
+      }
+    },
+    "./retrieval-query": {
+      "browser": {
+        "types": "./dist/retrievalQuery.d.ts",
+        "default": "./dist/retrievalQuery.js"
+      },
+      "import": {
+        "types": "./dist/retrievalQuery.d.ts",
+        "default": "./dist/retrievalQuery.js"
+      },
+      "require": {
+        "types": "./dist/cjs/retrievalQuery.d.cts",
+        "default": "./dist/cjs/retrievalQuery.cjs"
       }
     },
     "./semantic-readiness": {

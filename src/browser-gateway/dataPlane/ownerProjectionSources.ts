@@ -8,6 +8,7 @@ import type {
   TerminalExecutionPreset,
 } from "@agentlink/protocol/terminal";
 
+import type { BrowserGatewayInteractionKind } from "@agentlink/protocol/browser-gateway-interaction-summary";
 import type { BrowserGatewayOwnerInteractionPayload } from "./interactionPayload.js";
 import type { BrowserGatewayRepositoryInfo } from "../BrowserGatewayRepositoryObserver.js";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
@@ -128,7 +129,7 @@ export interface BrowserGatewayOwnerForegroundSource {
 
 export interface BrowserGatewayOwnerInteractionSource {
   requestId: string;
-  kind: "approval" | "question" | "form" | "url";
+  kind: BrowserGatewayInteractionKind;
   payload?: BrowserGatewayOwnerInteractionPayload;
   backgroundTask?: string;
   step?: number;

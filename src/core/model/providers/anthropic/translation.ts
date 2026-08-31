@@ -1,12 +1,11 @@
 import type {
-  CoreHostedToolDefinition,
-  CoreJsonValue,
-} from "../../../webAccess.js";
-import type {
   CoreModelContentBlock,
   CoreModelMessage,
   CoreModelToolDefinition,
 } from "../../../modelRuntime.js";
+
+import type { CoreHostedToolDefinition } from "@agentlink/protocol/web-access-policy";
+import type { CoreJsonValue } from "@agentlink/protocol/provider-replay";
 
 export type AnthropicJsonObject = { [key: string]: CoreJsonValue };
 

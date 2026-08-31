@@ -32,7 +32,7 @@ import {
 } from "./toolAdapter.js";
 import type { SessionStore } from "./SessionStore.js";
 import type { AgentToolRuntime } from "../core/tools/types.js";
-import type { CoreWebAccessSettings } from "../core/webAccess.js";
+import type { CoreWebAccessSettings } from "@agentlink/protocol/web-access-policy";
 import {
   createVscodeEditorRevealProvider,
   createVscodeEditReviewProvider,

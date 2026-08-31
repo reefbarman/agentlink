@@ -6,7 +6,7 @@ import type {
   SandboxStructuralProtectionFailureDetails,
 } from "./sandboxHelperProtocol.js";
 
-import type { SandboxViolation } from "../../core/sandboxPolicy.js";
+import type { SandboxViolation } from "@agentlink/protocol/terminal-security";
 import type { TerminalDimensions } from "@agentlink/protocol/terminal";
 
 export class SandboxPreCommandLaunchError extends Error {

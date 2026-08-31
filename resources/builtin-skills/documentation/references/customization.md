@@ -38,6 +38,8 @@ Directories containing a `SKILL.md` with single-line YAML frontmatter (`name`, `
 - appear in the slash-command picker as `/skill:<name>`
 - can be listed with `/skills` (shows resolved `SKILL.md` paths for the current mode)
 
+The optional `allowed-tools` field narrows ordinary tool access while the skill is active. Session continuity controls stay available: the agent can still load another skill, ask the user, finish the task, and use `search_session_history` or `read_session_excerpt` for the current session. A fresh-session handoff may also read only its host-linked direct predecessor with `scope: handoff_source` and the exact source session identity returned by search.
+
 The bundled `skill-writing` skill documents the authoring spec and AgentLink's frontmatter parser constraints.
 
 ## Lifecycle hooks

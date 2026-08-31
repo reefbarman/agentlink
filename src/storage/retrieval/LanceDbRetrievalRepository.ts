@@ -5,38 +5,52 @@ import { connect, Index, makeArrowTable } from "@lancedb/lancedb";
 import type { Connection, Table } from "@lancedb/lancedb";
 import type { Schema } from "apache-arrow";
 
+import type { RetrievalRepository } from "../../core/retrieval/contracts.js";
 import type {
-  RetrievalAbortPublicationOutcome,
-  RetrievalActiveSource,
-  RetrievalAggregateMetrics,
-  RetrievalChunkRecord,
   RetrievalDeleteScopeOutcome,
   RetrievalDeleteScopeRequest,
   RetrievalDeleteSourceOutcome,
   RetrievalDeleteSourceRequest,
-  RetrievalFingerprint,
-  RetrievalFingerprintDisposition,
-  RetrievalHealthSnapshot,
-  RetrievalLexicalReadiness,
+} from "@agentlink/protocol/retrieval-deletion";
+import type {
+  RetrievalActiveSource,
+  RetrievalStructuralSnapshot,
+  RetrievalStructuralSnapshotRequest,
+} from "@agentlink/protocol/retrieval-structural-snapshot";
+import type {
+  RetrievalAggregateMetrics,
   RetrievalMigrationOutcome,
   RetrievalOptimizeOutcome,
+  RetrievalRepairOutcome,
+  RetrievalSnapshot,
+  RetrievalSnapshotOutcome,
+} from "@agentlink/protocol/retrieval-maintenance";
+import type {
+  RetrievalFingerprint,
+  RetrievalFingerprintDisposition,
+} from "@agentlink/protocol/retrieval-fingerprint";
+import type {
+  RetrievalAbortPublicationOutcome,
   RetrievalPublicationBatchOutcome,
   RetrievalPublicationOutcome,
   RetrievalPublicationPreparation,
   RetrievalPublicationRequest,
+} from "@agentlink/protocol/retrieval-publication";
+import type {
   RetrievalQuery,
   RetrievalQueryFilter,
   RetrievalQueryResult,
+} from "@agentlink/protocol/retrieval-query";
+import type {
+  RetrievalChunkRecord,
   RetrievalRelationRecord,
-  RetrievalRepairOutcome,
-  RetrievalRepository,
-  RetrievalSnapshot,
-  RetrievalSnapshotOutcome,
   RetrievalSourceDocument,
   RetrievalSourceRevision,
-  RetrievalStructuralSnapshot,
-  RetrievalStructuralSnapshotRequest,
-} from "../../core/retrieval/contracts.js";
+} from "@agentlink/protocol/retrieval-records";
+import type {
+  RetrievalHealthSnapshot,
+  RetrievalLexicalReadiness,
+} from "@agentlink/protocol/retrieval-health";
 import { classifyRetrievalFingerprint } from "../../core/retrieval/fingerprint.js";
 import {
   diversifyRetrievalCandidates,

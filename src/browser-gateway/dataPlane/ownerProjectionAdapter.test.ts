@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
-import type { BrowserGatewayOwnerInteractionPayload } from "./interactionPayload.js";
+import {
+  projectBrowserGatewayOwnerInteractionPayload,
+  type BrowserGatewayOwnerInteractionPayload,
+} from "./interactionPayload.js";
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "./limits.js";
 import { BrowserGatewayProtocolError } from "./protocol.js";
 import {
@@ -455,6 +458,26 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
               resourceLimits: "partial",
               warnings: ["Listener binding is blocked."],
             },
+            grant: {
+              grantId: "grant-1",
+              auditId: "grant-audit-1",
+            },
+            environmentPolicy: {
+              inherit: "core",
+              ignoreDefaultExcludes: false,
+              exclude: ["SECRET"],
+              setKeys: ["PATH"],
+              includeOnly: [],
+              useProfile: false,
+            },
+            capabilityRequest: {
+              readPaths: ["/workspace/readable"],
+              writePaths: ["/workspace/writable"],
+              networkDomains: ["example.com"],
+              unrestrictedPublicNetwork: true,
+              privateNetworkTargets: ["127.0.0.1"],
+              allowLocalBinding: true,
+            },
           },
         },
       },
@@ -519,6 +542,107 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
       payload,
     );
     adapter.dispose();
+  });
+
+  it("preserves valid optional sandbox evidence and omits absent or malformed evidence", () => {
+    const payload = (sandbox: Record<string, unknown>) => ({
+      approval: {
+        id: "approval-optional-evidence",
+        kind: "command" as const,
+        security: {
+          auditId: "audit-optional-evidence",
+          route: "sandbox" as const,
+          executionSurface: "verified-sandbox" as const,
+          confinement: "verified-baseline" as const,
+          routeReason: "verified-local-macos" as const,
+          approvalPolicySnapshot: "on-request" as const,
+          approvalReviewerSnapshot: "auto-review" as const,
+          executionPresetSnapshot: "workspace-write" as const,
+          requiredAuthority: "sandbox" as const,
+          permissionIntent: "default" as const,
+          approvalRequirement: "policy" as const,
+          authorityReason: "approval-policy" as const,
+          commandApprovalPolicySnapshot: "approve-for-me" as const,
+          executionPolicy: "sandbox-baseline-v2" as const,
+          preparedAt: 900,
+          sandbox: {
+            attestationId: "attestation-optional-evidence",
+            attestationVersion: "sandbox-behavior-v3",
+            policyVersion: "2026-07.sandbox.v4",
+            profileId: "workspace-write",
+            backend: "seatbelt" as const,
+            architecture: "arm64" as const,
+            capabilities: {
+              backend: "seatbelt",
+              processTree: true,
+              filesystemRead: "host-visible" as const,
+              filesystemWrite: "strict" as const,
+              network: "loopback" as const,
+              privateHome: false,
+              privateTmp: false,
+              hostIpcBlocked: false,
+              resourceLimits: "partial" as const,
+              warnings: [],
+            },
+            ...sandbox,
+          },
+        },
+      },
+      question: null,
+      questionProgress: null,
+      formElicitation: null,
+      urlElicitation: null,
+    });
+    const valid = projectBrowserGatewayOwnerInteractionPayload(
+      payload({
+        grant: { grantId: "grant-1", auditId: "grant-audit-1" },
+        environmentPolicy: {
+          inherit: "core",
+          ignoreDefaultExcludes: false,
+          exclude: ["SECRET"],
+          setKeys: ["PATH"],
+          includeOnly: [],
+          useProfile: false,
+        },
+        capabilityRequest: {
+          unrestrictedPublicNetwork: true,
+          allowLocalBinding: true,
+        },
+      }),
+    );
+    expect(valid?.approval?.security?.sandbox).toMatchObject({
+      grant: { grantId: "grant-1", auditId: "grant-audit-1" },
+      environmentPolicy: { inherit: "core", exclude: ["SECRET"] },
+      capabilityRequest: {
+        unrestrictedPublicNetwork: true,
+        allowLocalBinding: true,
+      },
+    });
+
+    const absent = projectBrowserGatewayOwnerInteractionPayload(payload({}));
+    expect(absent?.approval?.security?.sandbox).not.toHaveProperty("grant");
+    expect(absent?.approval?.security?.sandbox).not.toHaveProperty(
+      "environmentPolicy",
+    );
+    expect(absent?.approval?.security?.sandbox).not.toHaveProperty(
+      "capabilityRequest",
+    );
+
+    const malformed = projectBrowserGatewayOwnerInteractionPayload(
+      payload({
+        grant: { grantId: 1, auditId: false },
+        environmentPolicy: { inherit: "future" },
+        capabilityRequest: { allowLocalBinding: "yes" },
+      }),
+    );
+    expect(malformed?.approval?.id).toBe("approval-optional-evidence");
+    expect(malformed?.approval?.security?.sandbox).not.toHaveProperty("grant");
+    expect(malformed?.approval?.security?.sandbox).not.toHaveProperty(
+      "environmentPolicy",
+    );
+    expect(malformed?.approval?.security?.sandbox).not.toHaveProperty(
+      "capabilityRequest",
+    );
   });
 
   it("projects lifecycle hook approvals with their exact decisions", () => {

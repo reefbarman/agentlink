@@ -3,7 +3,7 @@ import type {
   ChatMessage,
   TodoItem,
 } from "@agentlink/protocol/chat-transcript";
-import type { ApprovalRequest } from "../../approvals/webview/types.js";
+import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import type { CoreCapabilityStatusDto } from "@agentlink/protocol/session";
 import { BROWSER_GATEWAY_ASK_AGENT_OWNER_ID } from "../browserGatewayAskAgentSessionStore.js";
 import type { BrowserGatewayCoreOwnerRegistry } from "../coreOwnerRegistry.js";

@@ -1,4 +1,8 @@
-import type { ApprovalRequest, DecisionMessage, RuleEntry } from "../types.js";
+import type {
+  ApprovalRequest,
+  DecisionMessage,
+  RuleEntry,
+} from "@agentlink/protocol/approval-transport";
 import {
   autosizeTextarea,
   observeTextareaAutosize,

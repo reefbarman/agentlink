@@ -1076,6 +1076,34 @@ describe("getAgentTools", () => {
     }
   });
 
+  it("keeps session transcript recall through skill allowlists without overriding mode policy", () => {
+    const skillRestrictedNames = getAgentTools(
+      undefined,
+      undefined,
+      false,
+      undefined,
+      ["read_file"],
+    ).map((tool) => tool.name);
+    const noReadMode = {
+      slug: "edit-only",
+      name: "Edit Only",
+      icon: "edit",
+      toolGroups: ["edit"],
+    };
+    const modeRestrictedNames = getAgentTools(
+      noReadMode,
+      undefined,
+      false,
+      undefined,
+      ["read_file"],
+    ).map((tool) => tool.name);
+
+    expect(skillRestrictedNames).toContain("search_session_history");
+    expect(skillRestrictedNames).toContain("read_session_excerpt");
+    expect(modeRestrictedNames).not.toContain("search_session_history");
+    expect(modeRestrictedNames).not.toContain("read_session_excerpt");
+  });
+
   it("keeps send_feedback available through restrictive profiles and skill allowlists", () => {
     const profileNames = getAgentTools(
       undefined,
@@ -1697,6 +1725,8 @@ describe("getAgentTools", () => {
     expect(names).not.toContain("execute_command");
     expect(names).not.toContain("find_mcp_tools");
     expect(names).not.toContain("call_mcp_tool");
+    expect(names).toContain("search_session_history");
+    expect(names).toContain("read_session_excerpt");
     expect(names).toContain("load_skill");
     expect(names).toContain("ask_user");
     expect(names).toContain("set_task_status");
@@ -3443,6 +3473,63 @@ describe("dispatchToolCall", () => {
     });
     expect(handleGetContext).not.toHaveBeenCalled();
     expect(mockOnApprovalRequest).not.toHaveBeenCalled();
+  });
+
+  it("executes deferred transcript recall from a skill-restricted request catalog", async () => {
+    const runtime = createAgentToolRuntime(mockCtx);
+    const restrictedTools = getAgentTools(
+      BUILT_IN_MODES[0],
+      undefined,
+      false,
+      undefined,
+      ["read_file"],
+    );
+    const nativeToolDisclosure =
+      createNativeToolDisclosureSnapshot(restrictedTools);
+    const availableToolNames = new Set(
+      nativeToolDisclosure.inlineTools.map((tool) => tool.name),
+    );
+    const modeAllowedToolNames = new Set(
+      restrictedTools.map((tool) => tool.name),
+    );
+    const getSessionTranscript = vi.fn(() => ({
+      messages: [
+        {
+          sourceIndex: 0,
+          role: "user" as const,
+          sourceKind: "source" as const,
+          condensed: false,
+          content: "skill restricted evidence",
+        },
+      ],
+    }));
+
+    expect(nativeToolDisclosure.deferredTools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining([
+        "search_session_history",
+        "read_session_excerpt",
+      ]),
+    );
+    const result = await runtime.executeTool({
+      name: "call_native_tool",
+      input: {
+        name: "search_session_history",
+        input: { query: "restricted evidence" },
+      },
+      context: {
+        sessionId: "runtime-session",
+        mode: "code",
+        availableToolNames,
+        modeAllowedToolNames,
+        nativeToolDisclosure,
+        skillAllowedTools: ["read_file"],
+        getSessionTranscript,
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(getSessionTranscript).toHaveBeenCalledTimes(1);
+    expect(parseRecallPayload(result).total_matches).toBe(1);
   });
 
   it("forwards the execution-scoped transcript getter through the tool runtime", async () => {

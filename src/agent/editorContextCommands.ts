@@ -27,12 +27,33 @@ export function registerEditorContextCommands(
     vscode.commands.registerCommand(
       "agentlink.fixWithAgent",
       (
-        uri: vscode.Uri,
-        _range: vscode.Range,
-        diagnostics: vscode.Diagnostic[],
+        uri?: vscode.Uri,
+        range?: vscode.Range,
+        diagnostics?: vscode.Diagnostic[],
       ) => {
-        const relPath = vscode.workspace.asRelativePath(uri);
-        const diagText = diagnostics
+        const editor = vscode.window.activeTextEditor;
+        const targetUri = uri ?? editor?.document.uri;
+        if (!targetUri) return;
+        const targetRange = range ?? editor?.selection;
+        const targetDiagnostics =
+          diagnostics ??
+          vscode.languages.getDiagnostics(targetUri).filter((diagnostic) => {
+            if (!targetRange) return true;
+            if (!targetRange.isEmpty)
+              return diagnostic.range.intersection(targetRange);
+            return (
+              diagnostic.range.start.line <= targetRange.start.line &&
+              diagnostic.range.end.line >= targetRange.start.line
+            );
+          });
+        if (targetDiagnostics.length === 0) {
+          void vscode.window.showInformationMessage(
+            "No diagnostics found at the current position.",
+          );
+          return;
+        }
+        const relPath = vscode.workspace.asRelativePath(targetUri);
+        const diagText = targetDiagnostics
           .map(
             (diagnostic) =>
               `[${diagnostic.source ?? ""}] ${diagnostic.message} (line ${diagnostic.range.start.line + 1})`,

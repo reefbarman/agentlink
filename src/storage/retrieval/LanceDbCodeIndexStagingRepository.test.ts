@@ -4,12 +4,12 @@ import * as path from "node:path";
 
 import { connect } from "@lancedb/lancedb";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { RetrievalStagedPublicationManifest } from "@agentlink/protocol/retrieval-publication";
 import type {
   RetrievalChunkRecord,
   RetrievalRelationRecord,
   RetrievalSourceDocument,
-  RetrievalStagedPublicationManifest,
-} from "../../core/retrieval/contracts.js";
+} from "@agentlink/protocol/retrieval-records";
 import {
   createRetrievalRecordContentDigest,
   createRetrievalRecordIdDigest,

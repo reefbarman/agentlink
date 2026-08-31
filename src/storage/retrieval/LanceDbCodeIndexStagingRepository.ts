@@ -2,6 +2,7 @@ import { connect, makeArrowTable } from "@lancedb/lancedb";
 import type { Table } from "@lancedb/lancedb";
 import type { Schema } from "apache-arrow";
 
+import type { StagedRetrievalPublicationRepository } from "../../core/retrieval/contracts.js";
 import type {
   RetrievalPublicationPreparation,
   RetrievalStagedChunkBatch,
@@ -9,8 +10,7 @@ import type {
   RetrievalStagedPublicationInspection,
   RetrievalStagedPublicationManifest,
   RetrievalStagedRelationBatch,
-  StagedRetrievalPublicationRepository,
-} from "../../core/retrieval/contracts.js";
+} from "@agentlink/protocol/retrieval-publication";
 import {
   createRetrievalRecordContentDigest,
   createRetrievalRecordIdDigest,

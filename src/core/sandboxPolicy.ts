@@ -1,3 +1,19 @@
+import type {
+  SandboxCapabilityRequest,
+  SandboxEnvironmentPolicySummary,
+} from "@agentlink/protocol/terminal-security";
+
+export type {
+  SandboxBackendCapabilities,
+  SandboxCapabilityRequest,
+  SandboxEnvironmentBudgetMetadata,
+  SandboxEnvironmentInheritance,
+  SandboxEnvironmentPolicySummary,
+  SandboxExecutionMetadata,
+  SandboxViolation,
+  SandboxViolationOperation,
+} from "@agentlink/protocol/terminal-security";
+
 export const CURRENT_SANDBOX_POLICY_VERSION = "2026-07.sandbox.v4";
 
 export type SandboxNetworkPolicy =
@@ -14,28 +30,10 @@ export type SandboxNetworkPolicy =
       allowLocalBinding?: true;
     };
 
-export type SandboxEnvironmentInheritance = "all" | "core" | "none";
-
-export interface SandboxEnvironmentPolicySummary {
-  inherit: SandboxEnvironmentInheritance;
-  ignoreDefaultExcludes: boolean;
-  exclude: string[];
-  setKeys: string[];
-  includeOnly: string[];
-  useProfile: boolean;
-}
-
 export interface SandboxEnvironmentPolicy {
   inheritHost: false;
   values: Record<string, string>;
   summary?: SandboxEnvironmentPolicySummary;
-}
-
-export interface SandboxEnvironmentBudgetMetadata {
-  limitBytes: number;
-  estimatedBytes: number;
-  protectedBytes: number;
-  dropped: Array<{ name: string; bytes: number }>;
 }
 
 export interface SandboxResourceLimits {
@@ -62,16 +60,6 @@ export interface SandboxPolicy {
   environment: SandboxEnvironmentPolicy;
   allowedUnixSockets: string[];
   resourceLimits?: SandboxResourceLimits;
-}
-
-export interface SandboxCapabilityRequest {
-  readPaths?: string[];
-  writePaths?: string[];
-  networkDomains?: string[];
-  unrestrictedPublicNetwork?: boolean;
-  privateNetworkTargets?: string[];
-  /** Permit TCP listeners. On macOS Seatbelt this necessarily allows wildcard local binds. */
-  allowLocalBinding?: boolean;
 }
 
 export interface ApprovedSandboxCapabilityGrant {
@@ -230,64 +218,9 @@ export function validateSandboxCapabilityGrant(
   return { ok: true };
 }
 
-export interface SandboxBackendCapabilities {
-  backend: string;
-  backendVersion?: string;
-  processTree: boolean;
-  filesystemRead: "isolated" | "policy-denied" | "host-visible";
-  filesystemWrite: "strict" | "partial" | "none";
-  network:
-    | "blocked"
-    | "loopback"
-    | "loopback-listener"
-    | "proxy-only"
-    | "partial"
-    | "unrestricted";
-  privateHome: boolean;
-  privateTmp: boolean;
-  hostIpcBlocked: boolean;
-  resourceLimits: "enforced" | "partial" | "none";
-  warnings: string[];
-}
-
-export type SandboxViolationOperation =
-  | "file-read"
-  | "file-write"
-  | "network-connect"
-  | "ipc-connect"
-  | "process-control"
-  | "resource-limit";
-
-export interface SandboxViolation {
-  operation: SandboxViolationOperation;
-  target?: string;
-  reason: string;
-  occurredAt: number;
-}
-
 export interface SandboxLaunchAuthorization {
   policy: SandboxPolicy;
   bindingDigest: string;
   capabilityRequest?: SandboxCapabilityRequest;
   grant?: ApprovedSandboxCapabilityGrant;
-}
-
-export interface SandboxExecutionMetadata {
-  policyVersion: string;
-  profileId: string;
-  backend: string;
-  backendVersion?: string;
-  capabilities: SandboxBackendCapabilities;
-  /** Whether an additional capability grant was minted at preparation or launch. */
-  grantTiming?: "preparation" | "launch";
-  grant?: {
-    grantId: string;
-    auditId: string;
-  };
-  environmentPolicy?: SandboxEnvironmentPolicySummary;
-  /** Token-free conservative environment sizing and deterministic host-entry eviction. */
-  environmentBudget?: SandboxEnvironmentBudgetMetadata;
-  /** Exact token-free additional capability delta bound to this launch. */
-  capabilityRequest?: SandboxCapabilityRequest;
-  violations?: SandboxViolation[];
 }

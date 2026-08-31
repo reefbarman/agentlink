@@ -11,7 +11,7 @@ import type {
 import type {
   ApprovalRequest,
   DecisionMessage,
-} from "../../approvals/webview/types.js";
+} from "@agentlink/protocol/approval-transport";
 import {
   applyMemoryProposal,
   retargetMemoryProposal,

@@ -1,11 +1,13 @@
 import type {
   RetrievalCandidateScores,
-  RetrievalChunkRecord,
   RetrievalQuery,
   RetrievalQueryCandidate,
   RetrievalQueryResult,
+} from "@agentlink/protocol/retrieval-query";
+import type {
+  RetrievalChunkRecord,
   RetrievalSourceDocument,
-} from "./contracts.js";
+} from "@agentlink/protocol/retrieval-records";
 
 export interface RetrievalRankingWeights {
   exact: number;

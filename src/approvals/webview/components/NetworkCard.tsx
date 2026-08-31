@@ -1,4 +1,7 @@
-import type { ApprovalRequest, DecisionMessage } from "../types.js";
+import type {
+  ApprovalRequest,
+  DecisionMessage,
+} from "@agentlink/protocol/approval-transport";
 import { useCallback, useEffect, useState } from "preact/hooks";
 
 import { ApprovalLayout } from "./ApprovalLayout.js";

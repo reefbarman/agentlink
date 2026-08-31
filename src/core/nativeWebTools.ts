@@ -8,7 +8,7 @@ import type {
   CoreWebActivity,
   CoreWebCitation,
   CoreWebToolKind,
-} from "./webAccess.js";
+} from "@agentlink/protocol/web-activity";
 
 export const CORE_NATIVE_WEB_MAX_PAUSE_TURNS = 8;
 

@@ -1,6 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("vscode", async () => await import("../__mocks__/vscode.js"));
+vi.mock("vscode", async () => ({
+  ...(await import("../__mocks__/vscode.js")),
+  CodeAction: class {
+    command?: vscode.Command;
+    isPreferred?: boolean;
+
+    constructor(
+      public title: string,
+      public kind?: vscode.CodeActionKind,
+    ) {}
+  },
+}));
 
 import * as vscode from "vscode";
 import {
@@ -19,11 +30,26 @@ function createTarget(): EditorContextCommandTarget {
   };
 }
 
-function range(startLine: number, endLine: number, isEmpty = false) {
+function range(
+  startLine: number,
+  endLine: number,
+  isEmpty = false,
+  startCharacter = 0,
+  endCharacter = startCharacter,
+) {
   return {
-    start: { line: startLine },
-    end: { line: endLine },
+    start: { line: startLine, character: startCharacter },
+    end: { line: endLine, character: endCharacter },
     isEmpty,
+    intersection(other: vscode.Range) {
+      const startsAfterOther =
+        startLine > other.end.line ||
+        (startLine === other.end.line && startCharacter > other.end.character);
+      const endsBeforeOther =
+        endLine < other.start.line ||
+        (endLine === other.start.line && endCharacter < other.start.character);
+      return startsAfterOther || endsBeforeOther ? undefined : this;
+    },
   } as vscode.Range;
 }
 
@@ -53,7 +79,10 @@ describe("registerEditorContextCommands", () => {
     vi.restoreAllMocks();
     commandHandlers.clear();
     registerCodeActionsProvider.mockClear();
-    Object.assign(vscode.languages, { registerCodeActionsProvider });
+    Object.assign(vscode.languages, {
+      getDiagnostics: vi.fn(() => []),
+      registerCodeActionsProvider,
+    });
     Object.assign(vscode.workspace, {
       asRelativePath: vi.fn((uri: { fsPath: string }) =>
         uri.fsPath.replace("/workspace/", ""),
@@ -94,6 +123,41 @@ describe("registerEditorContextCommands", () => {
     expect(disposables).toHaveLength(5);
   });
 
+  it("uses stable command IDs for code actions", () => {
+    registerEditorContextCommands(createTarget());
+    const provider = (
+      registerCodeActionsProvider.mock.calls as unknown[][]
+    )[0]?.[1] as vscode.CodeActionProvider | undefined;
+    const diagnostics = [
+      {
+        message: "Type mismatch",
+        range: range(4, 4),
+      },
+    ] as vscode.Diagnostic[];
+
+    const actions = provider?.provideCodeActions?.(
+      editor().document,
+      range(4, 4),
+      {
+        diagnostics,
+        only: undefined,
+        triggerKind: vscode.CodeActionTriggerKind.Invoke,
+      },
+      {} as vscode.CancellationToken,
+    ) as vscode.CodeAction[];
+
+    expect(actions.map((action) => action.command)).toEqual([
+      {
+        command: "agentlink.fixWithAgent",
+        title: "Fix with AgentLink",
+      },
+      {
+        command: "agentlink.explainWithAgent",
+        title: "Explain with AgentLink",
+      },
+    ]);
+  });
+
   it("formats diagnostics for the fix command", async () => {
     const target = createTarget();
     registerEditorContextCommands(target);
@@ -116,6 +180,53 @@ describe("registerEditorContextCommands", () => {
       "Fix the following issue(s) in `src/file.ts`:\n\n[ts] Type mismatch (line 5)\n[] Missing semicolon (line 9)",
       ["src/file.ts"],
     );
+  });
+
+  it("resolves the active diagnostic when the fix command has no arguments", async () => {
+    const target = createTarget();
+    const activeEditor = editor({ selection: range(4, 4, true, 2, 2) });
+    const diagnostics = [
+      {
+        source: "ts",
+        message: "Type mismatch",
+        range: range(4, 4, false, 10, 20),
+      },
+      {
+        source: "ts",
+        message: "Unrelated issue",
+        range: range(8, 8),
+      },
+    ] as vscode.Diagnostic[];
+    Object.assign(vscode.window, { activeTextEditor: activeEditor });
+    const getDiagnostics = vi.fn(() => diagnostics);
+    Object.assign(vscode.languages, { getDiagnostics });
+    registerEditorContextCommands(target);
+
+    await invoke("agentlink.fixWithAgent");
+
+    expect(getDiagnostics).toHaveBeenCalledWith(activeEditor.document.uri);
+    expect(target.injectPrompt).toHaveBeenCalledWith(
+      "Fix the following issue(s) in `src/file.ts`:\n\n[ts] Type mismatch (line 5)",
+      ["src/file.ts"],
+    );
+  });
+
+  it("reports when no diagnostic is available for the fix command", async () => {
+    const target = createTarget();
+    const showInformationMessage = vi
+      .spyOn(vscode.window, "showInformationMessage")
+      .mockResolvedValue(undefined);
+    Object.assign(vscode.window, {
+      activeTextEditor: editor({ selection: range(4, 4, true) }),
+    });
+    registerEditorContextCommands(target);
+
+    await invoke("agentlink.fixWithAgent");
+
+    expect(showInformationMessage).toHaveBeenCalledWith(
+      "No diagnostics found at the current position.",
+    );
+    expect(target.injectPrompt).not.toHaveBeenCalled();
   });
 
   it("uses explicit explain arguments and submits the prompt", async () => {
@@ -155,6 +266,7 @@ describe("registerEditorContextCommands", () => {
     const target = createTarget();
     registerEditorContextCommands(target);
 
+    await invoke("agentlink.fixWithAgent");
     await invoke("agentlink.explainWithAgent");
     await invoke("agentlink.addFileToChat");
     await invoke("agentlink.addSelectionToChat");

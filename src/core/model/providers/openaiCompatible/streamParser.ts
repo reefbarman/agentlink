@@ -8,8 +8,8 @@ import type {
 import {
   CORE_WEB_ACCESS_DEFAULT_MAX_REPLAY_BYTES_PER_TURN,
   createCoreProviderReplayEnvelope,
-  type CoreJsonValue,
 } from "../../../webAccess.js";
+import type { CoreJsonValue } from "@agentlink/protocol/provider-replay";
 import { createOpenAiCompatibleInBandError } from "./errors.js";
 import type {
   OpenAiCompatibleChatChunk,

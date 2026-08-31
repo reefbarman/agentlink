@@ -1,6 +1,6 @@
 import type { ComponentChildren, RefObject } from "preact";
 
-import type { ApprovalProjectContext } from "../types";
+import type { ApprovalProjectContext } from "@agentlink/protocol/approval-transport";
 import { useState } from "preact/hooks";
 
 export interface ApprovalLayoutProps {

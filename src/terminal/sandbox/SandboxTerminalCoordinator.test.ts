@@ -1,8 +1,6 @@
 import type { TerminalExecutionOwner } from "../../core/capabilities/terminal.js";
-import {
-  CURRENT_SANDBOX_POLICY_VERSION,
-  type SandboxExecutionMetadata,
-} from "../../core/sandboxPolicy.js";
+import { CURRENT_SANDBOX_POLICY_VERSION } from "../../core/sandboxPolicy.js";
+import type { SandboxExecutionMetadata } from "@agentlink/protocol/terminal-security";
 import { createHash } from "node:crypto";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";

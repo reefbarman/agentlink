@@ -161,7 +161,7 @@ export interface AgentToolExecutionContext {
     result: ToolResult;
     durationMs: number;
   }) => void;
-  commandExecutionPolicy?: import("../capabilities/terminal.js").CommandExecutionPolicy;
+  commandExecutionPolicy?: import("@agentlink/protocol/terminal-security").CommandExecutionPolicy;
   trackerCtx?: unknown;
   toolAbortSignal?: AbortSignal;
   getAdvertisedSkills?: () => AdvertisedSkillReference[];

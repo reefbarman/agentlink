@@ -1,6 +1,9 @@
-import type { CommandRecoveryAttempt, CommandReviewSummary } from "../types.js";
+import type {
+  CommandRecoveryAttempt,
+  CommandReviewSummary,
+} from "@agentlink/protocol/approval-transport";
 
-import type { TerminalExecutionSecuritySummary } from "../../../core/capabilities/terminal.js";
+import type { TerminalExecutionSecuritySummary } from "@agentlink/protocol/terminal-security";
 
 interface CommandExecutionContextProps {
   security?: TerminalExecutionSecuritySummary;

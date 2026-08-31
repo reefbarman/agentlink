@@ -8207,7 +8207,7 @@ describe("ChatViewProvider session state sync", () => {
     const respond = vi
       .fn<
         (
-          message: import("../approvals/webview/types.js").DecisionMessage,
+          message: import("@agentlink/protocol/approval-transport").DecisionMessage,
         ) => boolean
       >()
       .mockReturnValueOnce(false)

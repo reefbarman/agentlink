@@ -5,11 +5,11 @@ import type {
   TerminalCommandResult,
   TerminalExecuteOptions,
   TerminalExecutionOwner,
-  TerminalExecutionRouteContext,
   TerminalMetadata,
   TerminalProvider,
   TerminalTargetRequest,
 } from "../core/capabilities/terminal.js";
+import type { TerminalExecutionRouteContext } from "@agentlink/protocol/terminal-security";
 import {
   TerminalTargetRecoveryError,
   type TerminalTargetCandidate,

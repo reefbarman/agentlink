@@ -2,12 +2,10 @@ import {
   sameTerminalOwnerScope,
   type ClosedTerminalSnapshot,
   type ConfinementPreparingTerminalProvider,
-  type ManagedNetworkRequest,
   type PreparedTerminalExecution,
   type TerminalBackgroundState,
   type TerminalCloseResult,
   type TerminalCommandResult,
-  type TerminalExecutionSecuritySummary,
   type TerminalExecuteOptions,
   type TerminalExecutionOwner,
   type TerminalInteractivePromptDetection,
@@ -20,11 +18,13 @@ import {
   type TerminalListRequest,
   type TerminalCloseRequest,
 } from "../../core/capabilities/terminal.js";
-import type {
-  SandboxExecutionMetadata,
-  SandboxPolicy,
-} from "../../core/sandboxPolicy.js";
+import type { SandboxPolicy } from "../../core/sandboxPolicy.js";
 import type { TerminalDimensions } from "@agentlink/protocol/terminal";
+import type {
+  ManagedNetworkRequest,
+  SandboxExecutionMetadata,
+  TerminalExecutionSecuritySummary,
+} from "@agentlink/protocol/terminal-security";
 import {
   clearInteractivePromptWatchdog,
   createInteractivePromptWatchdog,

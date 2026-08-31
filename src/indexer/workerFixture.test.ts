@@ -18,7 +18,7 @@ import type {
   IndexStats,
   WorkerToExtensionMessage,
 } from "./types.js";
-import type { RetrievalPublicationRequest } from "../core/retrieval/contracts.js";
+import type { RetrievalPublicationRequest } from "@agentlink/protocol/retrieval-publication";
 import {
   getCodeSourceId,
   getCodeWorkspaceScopeId,

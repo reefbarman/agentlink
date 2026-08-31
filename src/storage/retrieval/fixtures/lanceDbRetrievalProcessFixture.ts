@@ -1,11 +1,8 @@
 import * as fs from "node:fs/promises";
 
-import type {
-  RetrievalFingerprint,
-  RetrievalPublicationRequest,
-} from "../../../core/retrieval/contracts.js";
-
 import { LanceDbRetrievalRepository } from "../LanceDbRetrievalRepository.js";
+import type { RetrievalFingerprint } from "@agentlink/protocol/retrieval-fingerprint";
+import type { RetrievalPublicationRequest } from "@agentlink/protocol/retrieval-publication";
 
 const root = requireEnvironment("RETRIEVAL_FIXTURE_ROOT");
 const role = requireEnvironment("RETRIEVAL_FIXTURE_ROLE");

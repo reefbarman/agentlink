@@ -1,8 +1,5 @@
-import type {
-  SandboxNetworkPolicy,
-  SandboxViolation,
-} from "../../core/sandboxPolicy.js";
-
+import type { SandboxNetworkPolicy } from "../../core/sandboxPolicy.js";
+import type { SandboxViolation } from "@agentlink/protocol/terminal-security";
 import type { TerminalDimensions } from "@agentlink/protocol/terminal";
 
 export const SANDBOX_HELPER_PROTOCOL_VERSION = 3;

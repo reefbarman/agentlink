@@ -1,13 +1,29 @@
+import { BROWSER_GATEWAY_CAPABILITY_STATES } from "@agentlink/protocol/browser-gateway-capability-status";
+import { BROWSER_GATEWAY_DETAIL_HANDLE_KINDS } from "@agentlink/protocol/browser-gateway-data-plane-identity";
+import {
+  BROWSER_GATEWAY_INTERACTION_KINDS,
+  BROWSER_GATEWAY_INTERACTION_SUMMARY_STATES,
+} from "@agentlink/protocol/browser-gateway-interaction-summary";
+import { BROWSER_GATEWAY_OPERATION_STATUSES } from "@agentlink/protocol/browser-gateway-operation-state";
+import {
+  BROWSER_GATEWAY_COMMAND_DEADLINE_CLASSES,
+  BROWSER_GATEWAY_COMMAND_IDEMPOTENCIES,
+  BROWSER_GATEWAY_COMMAND_IDEMPOTENCY,
+  BROWSER_GATEWAY_OWNER_COMMAND_KINDS,
+  type BrowserGatewayOwnerCommandKind,
+} from "@agentlink/protocol/browser-gateway-owner-command-metadata";
+import { BROWSER_GATEWAY_QUEUE_ITEM_STATES } from "@agentlink/protocol/browser-gateway-queue-item";
+import { BROWSER_GATEWAY_COLOR_SCHEMES } from "@agentlink/protocol/browser-gateway-theme";
+import { BROWSER_GATEWAY_TODO_ITEM_STATES } from "@agentlink/protocol/browser-gateway-todo-item";
 import { describe, expect, it } from "vitest";
 
 import {
-  BROWSER_GATEWAY_COMMAND_IDEMPOTENCY,
   BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
+  BROWSER_GATEWAY_OWNER_CONTROL_KINDS,
   BROWSER_GATEWAY_OWNER_EVENT_KINDS,
   BrowserGatewayProtocolError,
   type BrowserGatewayDetailHandle,
   type BrowserGatewayOwnerCheckpoint,
-  type BrowserGatewayOwnerCommandKind,
   type BrowserGatewayOwnerEventKind,
   parseBrowserGatewayChatTabSelection,
   parseBrowserGatewayDetailHandle,
@@ -401,6 +417,24 @@ function expectProtocolError(
 }
 
 describe("browser gateway data-plane limits", () => {
+  it("accepts every package-owned detail-handle kind", () => {
+    expect(
+      BROWSER_GATEWAY_DETAIL_HANDLE_KINDS.map(
+        (kind) =>
+          parseBrowserGatewayDetailHandle({ ...detailHandle, kind }).kind,
+      ),
+    ).toEqual(BROWSER_GATEWAY_DETAIL_HANDLE_KINDS);
+  });
+
+  it("rejects detail-handle kinds outside the frozen package registry", () => {
+    expect(Object.isFrozen(BROWSER_GATEWAY_DETAIL_HANDLE_KINDS)).toBe(true);
+    expectProtocolError(
+      () => parseBrowserGatewayDetailHandle({ ...detailHandle, kind: "other" }),
+      "invalid_value",
+      "$.kind",
+    );
+  });
+
   it("allows larger bounded session details without relaxing ordinary detail limits", () => {
     const betweenLimits =
       BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes + 1;
@@ -477,6 +511,363 @@ describe("browser gateway data-plane limits", () => {
 });
 
 describe("browser gateway owner protocol", () => {
+  it("keeps exported immutable owner registries frozen", () => {
+    for (const registry of [
+      BROWSER_GATEWAY_OWNER_EVENT_KINDS,
+      BROWSER_GATEWAY_OWNER_COMMAND_KINDS,
+    ]) {
+      expect(Object.isFrozen(registry)).toBe(true);
+      expect(() => (registry as unknown as string[]).push("other")).toThrow(
+        TypeError,
+      );
+    }
+    expect(Object.isFrozen(BROWSER_GATEWAY_OWNER_CONTROL_KINDS)).toBe(false);
+  });
+
+  it("accepts every package-owned relay color scheme", () => {
+    for (const colorScheme of BROWSER_GATEWAY_COLOR_SCHEMES) {
+      expect(
+        parseBrowserGatewayOwnerEvent(
+          event("theme.updated", {
+            theme: {
+              revision: `theme-${colorScheme}`,
+              colorScheme,
+              variables: [],
+            },
+          }),
+        ).payload,
+      ).toEqual({
+        theme: { revision: `theme-${colorScheme}`, colorScheme, variables: [] },
+      });
+    }
+  });
+
+  it("rejects color schemes outside the frozen package registry", () => {
+    expect(Object.isFrozen(BROWSER_GATEWAY_COLOR_SCHEMES)).toBe(true);
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayOwnerEvent(
+          event("theme.updated", {
+            theme: {
+              revision: "theme-other",
+              colorScheme: "other",
+              variables: [],
+            },
+          }),
+        ),
+      "invalid_value",
+      "$.payload.theme.colorScheme",
+    );
+  });
+
+  it("accepts every package-owned operation status", () => {
+    for (const state of BROWSER_GATEWAY_OPERATION_STATUSES) {
+      const operation = {
+        operationId: `operation-${state}`,
+        kind: "session.select" as const,
+        state,
+      };
+      expect(
+        parseBrowserGatewayOwnerEvent(event("operation.updated", { operation }))
+          .payload,
+      ).toEqual({ operation });
+    }
+  });
+
+  it("rejects operation statuses outside the frozen package registry", () => {
+    expect(Object.isFrozen(BROWSER_GATEWAY_OPERATION_STATUSES)).toBe(true);
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayOwnerEvent(
+          event("operation.updated", {
+            operation: {
+              operationId: "operation-other",
+              kind: "session.select",
+              state: "waiting",
+            },
+          }),
+        ),
+      "invalid_value",
+      "$.payload.operation.state",
+    );
+  });
+
+  it("accepts every package-owned queue-item state", () => {
+    const queue = BROWSER_GATEWAY_QUEUE_ITEM_STATES.map((state) => ({
+      itemId: `queue-${state}`,
+      summary: `Queue item ${state}`,
+      state,
+    }));
+    expect(
+      parseBrowserGatewayOwnerEvent(event("queue.updated", { queue })).payload,
+    ).toEqual({ queue });
+  });
+
+  it("rejects queue-item states outside the frozen package registry", () => {
+    expect(Object.isFrozen(BROWSER_GATEWAY_QUEUE_ITEM_STATES)).toBe(true);
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayOwnerEvent(
+          event("queue.updated", {
+            queue: [
+              { itemId: "queue-other", summary: "Other", state: "other" },
+            ],
+          }),
+        ),
+      "invalid_value",
+      "$.payload.queue[0].state",
+    );
+  });
+
+  it("accepts every package-owned todo-item state", () => {
+    const todos = BROWSER_GATEWAY_TODO_ITEM_STATES.map((state) => ({
+      itemId: `todo-${state}`,
+      text: `Todo item ${state}`,
+      state,
+    }));
+    expect(
+      parseBrowserGatewayOwnerEvent(event("todo.updated", { todos })).payload,
+    ).toEqual({ todos });
+  });
+
+  it("rejects todo-item states outside the frozen package registry", () => {
+    expect(Object.isFrozen(BROWSER_GATEWAY_TODO_ITEM_STATES)).toBe(true);
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayOwnerEvent(
+          event("todo.updated", {
+            todos: [{ itemId: "todo-other", text: "Other", state: "other" }],
+          }),
+        ),
+      "invalid_value",
+      "$.payload.todos[0].state",
+    );
+  });
+
+  it.each(["background.updated", "fleet.updated"] as const)(
+    "parses bounded %s summaries",
+    (kind) => {
+      const sessions = [
+        {
+          sessionId: "background-1",
+          title: "Review",
+          status: "running",
+          updatedAt: 1_000,
+        },
+      ];
+      expect(
+        parseBrowserGatewayOwnerEvent(event(kind, { sessions })).payload,
+      ).toEqual({ sessions });
+    },
+  );
+
+  it("rejects invalid background-summary timestamps", () => {
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayOwnerEvent(
+          event("background.updated", {
+            sessions: [
+              {
+                sessionId: "background-1",
+                title: "Review",
+                status: "running",
+                updatedAt: -1,
+              },
+            ],
+          }),
+        ),
+      "invalid_value",
+      "$.payload.sessions[0].updatedAt",
+    );
+  });
+
+  it("accepts every package-owned interaction kind and summary state", () => {
+    for (const kind of BROWSER_GATEWAY_INTERACTION_KINDS) {
+      for (const state of BROWSER_GATEWAY_INTERACTION_SUMMARY_STATES) {
+        const interaction = {
+          requestId: `${kind}-${state}`,
+          kind,
+          state,
+          summary: `${kind} ${state}`,
+        };
+        expect(
+          parseBrowserGatewayOwnerEvent(
+            event("interaction.updated", { interaction }),
+          ).payload,
+        ).toEqual({ interaction });
+      }
+    }
+  });
+
+  it("parses bounded interaction summaries with progress and detail handles", () => {
+    const interaction = {
+      requestId: "question-1",
+      kind: "question" as const,
+      state: "progressed" as const,
+      summary: "Answer the question",
+      step: 1,
+      totalSteps: 2,
+      detailHandle: {
+        ...detailHandle,
+        handleId: "interaction-handle",
+        kind: "interaction" as const,
+      },
+    };
+    expect(
+      parseBrowserGatewayOwnerEvent(
+        event("interaction.updated", { interaction }),
+      ).payload,
+    ).toEqual({ interaction });
+  });
+
+  it("rejects interaction-summary kinds outside the frozen package registry", () => {
+    expect(Object.isFrozen(BROWSER_GATEWAY_INTERACTION_KINDS)).toBe(true);
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayOwnerEvent(
+          event("interaction.updated", {
+            interaction: {
+              requestId: "question-1",
+              kind: "prompt",
+              state: "pending",
+              summary: "Question",
+            },
+          }),
+        ),
+      "invalid_value",
+      "$.payload.interaction.kind",
+    );
+  });
+
+  it("rejects interaction-summary states outside the frozen package registry", () => {
+    expect(Object.isFrozen(BROWSER_GATEWAY_INTERACTION_SUMMARY_STATES)).toBe(
+      true,
+    );
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayOwnerEvent(
+          event("interaction.updated", {
+            interaction: {
+              requestId: "question-1",
+              kind: "question",
+              state: "waiting",
+              summary: "Question",
+            },
+          }),
+        ),
+      "invalid_value",
+      "$.payload.interaction.state",
+    );
+  });
+
+  it("rejects negative interaction-summary progress", () => {
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayOwnerEvent(
+          event("interaction.updated", {
+            interaction: {
+              requestId: "question-1",
+              kind: "question",
+              state: "progressed",
+              summary: "Question",
+              step: -1,
+            },
+          }),
+        ),
+      "invalid_value",
+      "$.payload.interaction.step",
+    );
+  });
+
+  it("parses bounded diff previews with optional detail handles", () => {
+    const diffs = [
+      {
+        requestId: "diff-1",
+        filePath: "src/file.ts",
+        operation: "modify",
+        outsideWorkspace: false,
+        createdAt: 1_000,
+        detailHandle: {
+          ...detailHandle,
+          handleId: "diff-handle",
+          kind: "diff" as const,
+        },
+      },
+    ];
+    expect(
+      parseBrowserGatewayOwnerEvent(event("diff.preview.updated", { diffs }))
+        .payload,
+    ).toEqual({ diffs });
+  });
+
+  it("rejects invalid diff-preview timestamps", () => {
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayOwnerEvent(
+          event("diff.preview.updated", {
+            diffs: [
+              {
+                requestId: "diff-1",
+                filePath: "src/file.ts",
+                operation: "modify",
+                outsideWorkspace: false,
+                createdAt: -1,
+              },
+            ],
+          }),
+        ),
+      "invalid_value",
+      "$.payload.diffs[0].createdAt",
+    );
+  });
+
+  it("rejects invalid diff-preview workspace flags", () => {
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayOwnerEvent(
+          event("diff.preview.updated", {
+            diffs: [
+              {
+                requestId: "diff-1",
+                filePath: "src/file.ts",
+                operation: "modify",
+                outsideWorkspace: "false",
+                createdAt: 1_000,
+              },
+            ],
+          }),
+        ),
+      "invalid_type",
+      "$.payload.diffs[0].outsideWorkspace",
+    );
+  });
+
+  it("accepts every package-owned capability state", () => {
+    const capabilities = BROWSER_GATEWAY_CAPABILITY_STATES.map((state) => ({
+      capabilityId: `capability-${state}`,
+      state,
+    }));
+    expect(
+      parseBrowserGatewayOwnerEvent(
+        event("owner.capabilities.updated", { capabilities }),
+      ).payload,
+    ).toEqual({ capabilities });
+  });
+
+  it("rejects capability states outside the frozen package registry", () => {
+    expect(Object.isFrozen(BROWSER_GATEWAY_CAPABILITY_STATES)).toBe(true);
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayOwnerEvent(
+          event("owner.capabilities.updated", {
+            capabilities: [{ capabilityId: "session.send", state: "other" }],
+          }),
+        ),
+      "invalid_value",
+      "$.payload.capabilities[0].state",
+    );
+  });
+
   it("accepts legacy and typed background result blocks", () => {
     const legacy = checkpoint();
     legacy.transcript.messages[0].blocks = [
@@ -611,6 +1002,18 @@ describe("browser gateway owner protocol", () => {
       () => parseBrowserGatewayOwnerCheckpoint(value),
       "invalid_value",
       "$.catalog.chatWorkspace.tabs[0].status",
+    );
+  });
+
+  it("rejects unknown interaction-state fields", () => {
+    const value = checkpoint();
+    (
+      value.ui as BrowserGatewayOwnerCheckpoint["ui"] & { rawState: unknown }
+    ).rawState = { privatePrompt: "must-not-cross-wire" };
+    expectProtocolError(
+      () => parseBrowserGatewayOwnerCheckpoint(value),
+      "unknown_field",
+      "$.ui.rawState",
     );
   });
 
@@ -1352,6 +1755,15 @@ describe("browser gateway owner protocol", () => {
     );
   });
 
+  it("covers every package-owned command idempotency value", () => {
+    const accepted = new Set(
+      BROWSER_GATEWAY_OWNER_COMMAND_KINDS.map(
+        (kind) => BROWSER_GATEWAY_COMMAND_IDEMPOTENCY[kind],
+      ),
+    );
+    expect(accepted).toEqual(new Set(BROWSER_GATEWAY_COMMAND_IDEMPOTENCIES));
+  });
+
   it.each(
     Object.keys(
       BROWSER_GATEWAY_COMMAND_IDEMPOTENCY,
@@ -1407,6 +1819,22 @@ describe("browser gateway owner protocol", () => {
       "unknown_field",
       "$.command.foreground",
     );
+  });
+
+  it("accepts every package-owned command deadline class", () => {
+    for (const deadlineClass of BROWSER_GATEWAY_COMMAND_DEADLINE_CLASSES) {
+      const maximumDuration =
+        deadlineClass === "default"
+          ? BROWSER_GATEWAY_DATA_PLANE_LIMITS.commandDeadlineMs
+          : BROWSER_GATEWAY_DATA_PLANE_LIMITS.maximumLongCommandDeadlineMs;
+      expect(
+        parseBrowserGatewayOwnerCommand({
+          ...command("session.select"),
+          deadlineClass,
+          deadlineAt: 1_000 + maximumDuration,
+        }),
+      ).toMatchObject({ deadlineClass });
+    }
   });
 
   it("enforces declared deadline classes at their exact boundaries", () => {

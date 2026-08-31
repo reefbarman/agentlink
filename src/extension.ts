@@ -16,7 +16,7 @@ import { registerDiffViewContentProvider } from "./integrations/diffViewContentP
 import { SidebarProvider } from "./sidebar/SidebarProvider.js";
 import { ApprovalManager } from "./approvals/ApprovalManager.js";
 import { ApprovalPanelProvider } from "./approvals/ApprovalPanelProvider.js";
-import type { ApprovalProjectContext } from "./approvals/webview/types.js";
+import type { ApprovalProjectContext } from "@agentlink/protocol/approval-transport";
 import { ConfigStore } from "./approvals/ConfigStore.js";
 import {
   buildCommandReviewContext,

@@ -3,7 +3,7 @@ import type {
   CoreModelStreamRequest,
 } from "../../../modelRuntime.js";
 
-import type { CoreJsonValue } from "../../../webAccess.js";
+import type { CoreJsonValue } from "@agentlink/protocol/provider-replay";
 import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 
 export type OpenAiCompatibleProfileKind = "generic" | "openrouter";

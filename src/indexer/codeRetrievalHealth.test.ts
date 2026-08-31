@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RETRIEVAL_STORE_MARKER } from "../storage/retrieval/LanceDbRetrievalRepository.js";
-import type { RetrievalHealthSnapshot } from "../core/retrieval/contracts.js";
+import type { RetrievalHealthSnapshot } from "@agentlink/protocol/retrieval-health";
 import { createCodeRetrievalHealthProvider } from "./codeRetrievalHealth.js";
 import { getCodeRetrievalStoreRoot } from "./codeRetrievalIdentity.js";
 

@@ -4,7 +4,7 @@ import {
   translateAnthropicTools,
 } from "./translation.js";
 
-import type { CoreJsonValue } from "../../../webAccess.js";
+import type { CoreJsonValue } from "@agentlink/protocol/provider-replay";
 
 describe("translateAnthropicTools", () => {
   it("translates client and baseline hosted tools without disguising hosted tools as functions", () => {

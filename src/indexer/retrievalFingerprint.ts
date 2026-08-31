@@ -6,7 +6,7 @@ import {
 
 import { CODE_INDEX_PATH_IDENTITY_VERSION } from "./codeIndexPaths.js";
 import type { ChunkGranularity } from "./types.js";
-import type { RetrievalFingerprint } from "../core/retrieval/contracts.js";
+import type { RetrievalFingerprint } from "@agentlink/protocol/retrieval-fingerprint";
 import { createHash } from "crypto";
 
 export { MAX_CODE_INDEX_EMBEDDING_CHARS } from "./chunkQuality.js";

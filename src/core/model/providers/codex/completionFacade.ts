@@ -8,7 +8,7 @@ import type {
   CoreModelToolDefinition,
   CoreModelUsage,
 } from "../../../modelRuntime.js";
-import type { CoreHostedToolDefinition } from "../../../webAccess.js";
+import type { CoreHostedToolDefinition } from "@agentlink/protocol/web-access-policy";
 import type { CodexAuthMethod } from "./models.js";
 import { toCodexRequestError } from "./errors.js";
 import {
