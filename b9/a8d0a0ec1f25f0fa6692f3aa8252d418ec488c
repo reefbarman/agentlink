@@ -1,0 +1,112 @@
+CHANGELOG.md
+  h_9630b74bdac540 46
+packages/node-host/src/instructionCatalog.test.ts
+  h_9630b74bdac540 1-172
+packages/node-host/src/commandTools.ts
+  h_9630b74bdac540 1-348
+packages/core/src/mcpCredentials.test.ts
+  h_9630b74bdac540 1-142
+resources/builtin-skills/documentation/README.md
+  h_9630b74bdac540 17
+packages/node-host/src/readTools.ts
+  h_9630b74bdac540 1-505
+packages/core/build-cjs.mjs
+  h_9630b74bdac540 10-11
+src/terminal/AgentTerminalViewProvider.ts
+  h_9630b74bdac540 35,37,40-44,88-119
+src/integrations/TerminalManager.test.ts
+  h_9630b74bdac540 5,26,134,138-141,174-286
+src/terminal/LiveHostTerminalSurfaceController.ts
+  h_9630b74bdac540 175-177,990,994-995,1004
+packages/node-host/src/mcpConnectionCache.test.ts
+  h_9630b74bdac540 1-79
+packages/core/CHANGELOG.md
+  h_9630b74bdac540 1-13
+resources/builtin-skills/documentation/SKILL.md
+  h_9630b74bdac540 29
+packages/node-host/src/index.ts
+  h_9630b74bdac540 1-10
+packages/core/src/index.ts
+  h_9630b74bdac540 5-6
+packages/node-host/src/mcpConnectionCache.ts
+  h_9630b74bdac540 1-189
+scripts/verify-retrieval-package.test.mjs
+  h_9630b74bdac540 27,86-99
+resources/builtin-skills/documentation/references/capabilities.md
+  h_9630b74bdac540 112
+packages/node-host/src/nodeHostAgent.ts
+  h_9630b74bdac540 1-143
+packages/core/src/mcpCredentials.ts
+  h_9630b74bdac540 1-358
+src/extension.ts
+  h_9630b74bdac540 632-633
+resources/builtin-skills/documentation/references/embedding-agentlink.md
+  h_9630b74bdac540 1-207
+src/__mocks__/vscode.ts
+  h_9630b74bdac540 27,58
+src/terminal/AgentTerminalViewProvider.test.ts
+  h_9630b74bdac540 91-94,168-234
+packages/node-host/src/mcpOAuthCallback.ts
+  h_9630b74bdac540 1-113
+packages/node-host/src/mcpStdioTools.ts
+  h_9630b74bdac540 1-422
+packages/node-host/src/writeTools.ts
+  h_9630b74bdac540 1-687
+src/browser-gateway/webview/relay/RelayConnectionManager.test.ts
+  h_9630b74bdac540 170-180,488,596,695,767,859
+packages/node-host/src/readTools.test.ts
+  h_9630b74bdac540 1-156
+packages/node-host/src/fileStateRepository.test.ts
+  h_9630b74bdac540 1-224
+packages/node-host/src/nodeHostAgent.test.ts
+  h_9630b74bdac540 1-211
+packages/core/README.md
+  h_9630b74bdac540 1-200
+packages/node-host/src/mcpOAuthCallback.test.ts
+  h_9630b74bdac540 1-105
+scripts/run-core-sdk-consumer-gate.mjs
+  h_9630b74bdac540 53-54,57-60,260,263-276
+packages/node-host/src/mcpRemoteTools.ts
+  h_9630b74bdac540 1-358
+src/integrations/TerminalManager.ts
+  h_9630b74bdac540 168,461-463,474-475,504,569-589,771-776,785,1693,1836
+src/terminal/LiveHostTerminalSurfaceController.test.ts
+  h_9630b74bdac540 765-767,843-845,888-890
+packages/node-host/README.md
+  h_9630b74bdac540 1-168
+packages/node-host/src/fileStateRepository.ts
+  h_9630b74bdac540 1-763
+packages/core/package.json
+  h_9630b74bdac540 10-15,78-101
+packages/node-host/src/mcpRemoteTools.test.ts
+  h_9630b74bdac540 1-180
+packages/node-host/src/instructionCatalog.ts
+  h_9630b74bdac540 1-528
+packages/node-host/src/writeTools.test.ts
+  h_9630b74bdac540 1-504
+scripts/verify-retrieval-package.mjs
+  h_9630b74bdac540 30
+fixtures/core-sdk-consumer/README.md
+  h_9630b74bdac540 25,27-35,37
+packages/core/src/multiFileTransactions.ts
+  h_9630b74bdac540 1-82
+packages/node-host/src/commandTools.test.ts
+  h_9630b74bdac540 1-185
+packages/node-host/src/mcpComposition.test.ts
+  h_9630b74bdac540 1-414
+packages/node-host/package.json
+  h_9630b74bdac540 10-14,30-31
+packages/node-host/src/mcpStdioTools.test.ts
+  h_9630b74bdac540 1-246
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b9a8d0a0ec1f25f0fa6692f3aa8252d418ec488c",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
