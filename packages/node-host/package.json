@@ -7,7 +7,11 @@
   "type": "module",
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist/**/*.js",
+    "dist/**/*.cjs",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.cts",
+    "README.md"
   ],
   "exports": {
     ".": {
@@ -23,7 +27,8 @@
   },
   "dependencies": {
     "@agentlink/core": "0.1.0",
-    "@agentlink/protocol": "0.1.0"
+    "@agentlink/protocol": "0.1.0",
+    "@modelcontextprotocol/sdk": "1.29.0"
   },
   "engines": {
     "node": ">=22.19.0"

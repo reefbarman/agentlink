@@ -32,9 +32,17 @@ export class AgentTerminalViewProvider
   private connection: HostTerminalSurfaceConnection | undefined;
   private messageSubscription: vscode.Disposable | undefined;
   private viewDisposeSubscription: vscode.Disposable | undefined;
+  private readonly windowStateSubscription: vscode.Disposable;
   private view: vscode.WebviewView | undefined;
+  private pendingAutomaticReveal = false;
 
-  constructor(private readonly options: AgentTerminalViewProviderOptions) {}
+  constructor(private readonly options: AgentTerminalViewProviderOptions) {
+    this.windowStateSubscription = vscode.window.onDidChangeWindowState(
+      (state) => {
+        if (state.focused) this.flushPendingAutomaticReveal();
+      },
+    );
+  }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.detach();
@@ -77,7 +85,38 @@ export class AgentTerminalViewProvider
     return this.view?.visible === true;
   }
 
-  revealPreservingFocus(): boolean {
+  revealPreservingFocus(options?: {
+    deferWhenWindowUnfocused?: boolean;
+  }): boolean {
+    // VS Code's preserveFocus flag only preserves keyboard focus inside the
+    // workbench. On macOS, opening a view in a background window can still
+    // activate that OS window, so defer automatic reveals until it is focused.
+    // Explicit user reveals remain immediate.
+    if (options?.deferWhenWindowUnfocused && !vscode.window.state.focused) {
+      this.pendingAutomaticReveal = true;
+      // Close the race where focus changes between the first check and assignment.
+      if (vscode.window.state.focused) this.flushPendingAutomaticReveal();
+      return true;
+    }
+    this.pendingAutomaticReveal = false;
+    this.revealNow();
+    return true;
+  }
+
+  dispose(): void {
+    this.pendingAutomaticReveal = false;
+    this.windowStateSubscription.dispose();
+    this.detach();
+    this.view = undefined;
+  }
+
+  private flushPendingAutomaticReveal(): void {
+    if (!this.pendingAutomaticReveal) return;
+    this.pendingAutomaticReveal = false;
+    this.revealNow();
+  }
+
+  private revealNow(): void {
     void vscode.commands
       .executeCommand(`${AgentTerminalViewProvider.viewType}.open`, {
         preserveFocus: true,
@@ -87,12 +126,6 @@ export class AgentTerminalViewProvider
           `Unable to reveal AgentLink Terminal: ${error instanceof Error ? error.message : String(error)}`,
         ),
       );
-    return true;
-  }
-
-  dispose(): void {
-    this.detach();
-    this.view = undefined;
   }
 
   private async handleCreateRequest(

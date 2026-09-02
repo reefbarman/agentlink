@@ -50,10 +50,14 @@ async function packPackage(packageName, packDirectory) {
     { cwd: ROOT },
   );
   const parsed = JSON.parse(stdout);
-  const filename = parsed[0]?.filename;
+  const artifact = parsed[0];
+  const filename = artifact?.filename;
   if (!filename)
     throw new Error(`npm pack returned no ${packageName} artifact`);
-  return join(packDirectory, filename);
+  return {
+    tarball: join(packDirectory, filename),
+    files: new Set((artifact.files ?? []).map((file) => file.path)),
+  };
 }
 
 async function pathExists(path) {
@@ -253,9 +257,23 @@ async function main() {
     ]);
     await assertIsolatedConsumer(consumerDirectory);
 
-    const [protocolTarball, coreTarball] = await Promise.all(
+    const [protocolArtifact, coreArtifact] = await Promise.all(
       PACKAGES.map((packageName) => packPackage(packageName, packDirectory)),
     );
+    for (const requiredConsumerArtifact of ["README.md", "CHANGELOG.md"]) {
+      if (!coreArtifact.files.has(requiredConsumerArtifact)) {
+        throw new Error(
+          `Core package tarball must include ${requiredConsumerArtifact}`,
+        );
+      }
+    }
+    if ([...coreArtifact.files].some((file) => file.endsWith(".tsbuildinfo"))) {
+      throw new Error(
+        "Core package tarball must not include TypeScript build metadata",
+      );
+    }
+    const { tarball: protocolTarball } = protocolArtifact;
+    const { tarball: coreTarball } = coreArtifact;
     const [rootPack, rootLock, protocolPack, corePack] = await Promise.all([
       readFile(join(ROOT, "package.json"), "utf8").then(JSON.parse),
       readFile(join(ROOT, "package-lock.json"), "utf8").then(JSON.parse),

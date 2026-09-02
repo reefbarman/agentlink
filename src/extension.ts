@@ -629,8 +629,8 @@ export async function activate(
         openTasksFile: (projectRoot, template) =>
           tasksFileAdapter.open(projectRoot, template),
         sandboxChannelHub: sandboxTerminalChannelHub,
-        requestTerminalViewReveal: () => {
-          agentTerminalViewProvider?.revealPreservingFocus();
+        requestTerminalViewReveal: (options) => {
+          agentTerminalViewProvider?.revealPreservingFocus(options);
         },
         log,
       });

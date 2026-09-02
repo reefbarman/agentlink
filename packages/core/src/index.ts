@@ -2,6 +2,8 @@ export * from "./agentEngine.js";
 export * from "./agentToolLoop.js";
 export * from "./hostAdapterContracts.js";
 export * from "./hostTools.js";
+export * from "./mcpCredentials.js";
+export * from "./multiFileTransactions.js";
 export * from "./modelAuthProvider.js";
 export * from "./modelRequestScheduler.js";
 export * from "./modelRuntime.js";

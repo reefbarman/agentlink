@@ -109,7 +109,7 @@ The default-on `codebase_search` tool is backed by AgentLink's embedded local La
 
 ## AgentLink Terminal
 
-Sandbox-backed terminals on supported local macOS hosts (`agentlink.terminal.enabled`, `agentlink.terminal.nodePath`). Foreground sandbox commands that end in a high-confidence interactive prompt are terminated after a short inactivity grace and return structured `interactive_prompt` termination evidence without native retry. Background commands remain observation-only and expose prompt hints through `get_terminal_output`. Requirements: [AgentLink Terminal](complete-reference.md#agentlink-terminal).
+Sandbox-backed terminals on supported local macOS hosts (`agentlink.terminal.enabled`, `agentlink.terminal.nodePath`). When an agent command starts, AgentLink selects its terminal immediately if that VS Code window is focused; otherwise it waits until the window regains focus, avoiding an unsolicited OS-level window activation. Explicit terminal-open actions remain immediate. Foreground sandbox commands that end in a high-confidence interactive prompt are terminated after a short inactivity grace and return structured `interactive_prompt` termination evidence without native retry. Background commands remain observation-only and expose prompt hints through `get_terminal_output`. Requirements: [AgentLink Terminal](complete-reference.md#agentlink-terminal).
 
 ## Editor entry points
 

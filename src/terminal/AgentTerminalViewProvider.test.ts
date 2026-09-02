@@ -88,7 +88,10 @@ function harness(
 }
 
 describe("AgentTerminalViewProvider", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Object.assign(vscode.window.state, { focused: true, active: true });
+  });
 
   it("uses the stable terminal view ID", () => {
     expect(AgentTerminalViewProvider.viewType).toBe("agentLink.terminalView");
@@ -160,6 +163,75 @@ describe("AgentTerminalViewProvider", () => {
       preserveFocus: true,
     });
     expect(test.view.show).not.toHaveBeenCalled();
+  });
+
+  it("defers an automatic reveal until the VS Code window regains focus", () => {
+    let onWindowStateChanged:
+      | ((state: vscode.WindowState) => unknown)
+      | undefined;
+    const windowStateSubscription = { dispose: vi.fn() };
+    vi.spyOn(vscode.window, "onDidChangeWindowState").mockImplementation(
+      (listener) => {
+        onWindowStateChanged = listener;
+        return windowStateSubscription;
+      },
+    );
+    const executeCommand = vi
+      .spyOn(vscode.commands, "executeCommand")
+      .mockResolvedValue(undefined);
+    Object.assign(vscode.window.state, { focused: false, active: false });
+    const test = harness();
+
+    expect(
+      test.provider.revealPreservingFocus({ deferWhenWindowUnfocused: true }),
+    ).toBe(true);
+    expect(executeCommand).not.toHaveBeenCalled();
+
+    Object.assign(vscode.window.state, { focused: true, active: true });
+    onWindowStateChanged?.({ focused: true, active: true });
+
+    expect(executeCommand).toHaveBeenCalledOnce();
+    expect(executeCommand).toHaveBeenCalledWith("agentLink.terminalView.open", {
+      preserveFocus: true,
+    });
+
+    test.provider.dispose();
+    expect(windowStateSubscription.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("does not replay a deferred reveal after disposal", () => {
+    let onWindowStateChanged:
+      | ((state: vscode.WindowState) => unknown)
+      | undefined;
+    vi.spyOn(vscode.window, "onDidChangeWindowState").mockImplementation(
+      (listener) => {
+        onWindowStateChanged = listener;
+        return { dispose: vi.fn() };
+      },
+    );
+    const executeCommand = vi
+      .spyOn(vscode.commands, "executeCommand")
+      .mockResolvedValue(undefined);
+    Object.assign(vscode.window.state, { focused: false, active: false });
+    const test = harness();
+
+    test.provider.revealPreservingFocus({ deferWhenWindowUnfocused: true });
+    test.provider.dispose();
+    Object.assign(vscode.window.state, { focused: true, active: true });
+    onWindowStateChanged?.({ focused: true, active: true });
+
+    expect(executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("reveals immediately when explicitly requested from a background window", () => {
+    const executeCommand = vi
+      .spyOn(vscode.commands, "executeCommand")
+      .mockResolvedValue(undefined);
+    Object.assign(vscode.window.state, { focused: false, active: false });
+    const test = harness();
+
+    expect(test.provider.revealPreservingFocus()).toBe(true);
+    expect(executeCommand).toHaveBeenCalledOnce();
   });
 
   it("opens an unresolved terminal view through its generated view command", () => {

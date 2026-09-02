@@ -2,7 +2,7 @@ import type {
   TerminalExecuteOptions,
   TerminalExecutionOwner,
 } from "../core/capabilities/terminal.js";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as vscode from "vscode";
 
 import {
@@ -23,6 +23,7 @@ type MockVscodeTerminal = {
 };
 
 type MockVscodeWindow = {
+  state: { focused: boolean; active: boolean };
   terminals?: MockVscodeTerminal[];
 };
 
@@ -130,7 +131,12 @@ describe("escapeHistoryExpansion", () => {
 describe("TerminalManager terminal selection", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    Object.assign(vscode.window.state, { focused: true, active: true });
     Reflect.deleteProperty(vscode.window as object, "terminals");
+  });
+
+  afterEach(() => {
+    Object.assign(vscode.window.state, { focused: true, active: true });
   });
 
   it("reveals and focuses a managed terminal by id", () => {
@@ -163,6 +169,121 @@ describe("TerminalManager terminal selection", () => {
     expect(
       manager.revealTerminal({ owner: undefined, terminalId: "term_missing" }),
     ).toBe(false);
+  });
+
+  it("defers automatic terminal selection until the window regains focus", async () => {
+    let onWindowStateChanged:
+      | ((state: vscode.WindowState) => unknown)
+      | undefined;
+    vi.spyOn(vscode.window, "onDidChangeWindowState").mockImplementation(
+      (listener) => {
+        onWindowStateChanged = listener;
+        return { dispose: vi.fn() };
+      },
+    );
+    const manager = new TerminalManager();
+    const show = vi.fn();
+    const managed = {
+      id: "term_background_window",
+      name: "AgentLink",
+      cwd: "/workspace",
+      busy: false,
+      backgroundRunning: false,
+      lastCommandEndedAt: 0,
+      outputBuffer: "",
+      backgroundExitCode: null,
+      backgroundOutputCaptured: false,
+      backgroundDisposables: [],
+      terminal: {
+        show,
+        sendText: vi.fn(),
+        dispose: vi.fn(),
+      },
+    } satisfies MockManagedTerminal;
+    vi.spyOn(
+      manager as unknown as {
+        resolveTerminal: () => Promise<MockManagedTerminal>;
+      },
+      "resolveTerminal",
+    ).mockResolvedValue(managed);
+    vi.spyOn(
+      manager as unknown as {
+        waitForShellIntegration: () => Promise<boolean>;
+      },
+      "waitForShellIntegration",
+    ).mockResolvedValue(false);
+    (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+      managed,
+    ];
+    Object.assign(vscode.window.state, { focused: false, active: false });
+
+    await manager.executeCommand({
+      owner: undefined,
+      command: "echo deferred",
+      cwd: "/workspace",
+    });
+
+    expect(show).not.toHaveBeenCalled();
+    Object.assign(vscode.window.state, { focused: true, active: true });
+    onWindowStateChanged?.({ focused: true, active: true });
+    expect(show).toHaveBeenCalledOnce();
+    expect(show).toHaveBeenCalledWith(true);
+  });
+
+  it("does not focus or split terminals while the VS Code window is backgrounded", async () => {
+    const manager = new TerminalManager();
+    const parentShow = vi.fn();
+    const childShow = vi.fn();
+    const childDispose = vi.fn();
+    const parent = {
+      id: "term_parent",
+      name: "Parent",
+      cwd: "/workspace",
+      busy: false,
+      backgroundRunning: false,
+      lastCommandEndedAt: 0,
+      outputBuffer: "",
+      backgroundExitCode: null,
+      backgroundOutputCaptured: false,
+      backgroundDisposables: [],
+      terminal: {
+        show: parentShow,
+        sendText: vi.fn(),
+        dispose: vi.fn(),
+      },
+    } satisfies MockManagedTerminal;
+    const child = {
+      ...parent,
+      id: "term_child",
+      name: "Child",
+      terminal: {
+        show: childShow,
+        sendText: vi.fn(),
+        dispose: childDispose,
+      },
+    } satisfies MockManagedTerminal;
+    (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+      parent,
+      child,
+    ];
+    const executeCommand = vi.spyOn(vscode.commands, "executeCommand");
+    Object.assign(vscode.window.state, { focused: false, active: false });
+
+    await (
+      manager as unknown as {
+        splitTerminalBeside(
+          child: MockManagedTerminal,
+          splitFrom: string,
+          owner: TerminalExecutionOwner | undefined,
+        ): Promise<void>;
+      }
+    ).splitTerminalBeside(child, parent.id, undefined);
+
+    expect(parentShow).not.toHaveBeenCalled();
+    expect(childShow).not.toHaveBeenCalled();
+    expect(childDispose).not.toHaveBeenCalled();
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(child.terminal.dispose).toBe(childDispose);
   });
 
   it("refreshes descendant attribution on reuse and isolates the next owner generation", async () => {

@@ -165,6 +165,7 @@ export class TerminalManager {
   private recentlyClosed: ClosedTerminalSnapshot[] = [];
   /** Terminal objects requested for disposal but still visible in vscode.window.terminals. */
   private readonly pendingDisposals = new Set<vscode.Terminal>();
+  private pendingAutomaticReveal: vscode.Terminal | undefined;
   private readonly eventListeners = new Map<
     ManagedTerminalEventName,
     Set<ManagedTerminalListener<ManagedTerminalEventName>>
@@ -457,6 +458,9 @@ export class TerminalManager {
         if (!this.getOpenVscodeTerminals()?.includes(closedTerminal)) {
           this.pendingDisposals.delete(closedTerminal);
         }
+        if (this.pendingAutomaticReveal === closedTerminal) {
+          this.pendingAutomaticReveal = undefined;
+        }
         const closing = this.terminals.filter(
           (t) => t.terminal === closedTerminal,
         );
@@ -466,6 +470,9 @@ export class TerminalManager {
         this.terminals = this.terminals.filter(
           (t) => t.terminal !== closedTerminal,
         );
+      }),
+      vscode.window.onDidChangeWindowState((state) => {
+        if (state.focused) this.flushPendingAutomaticReveal();
       }),
     );
   }
@@ -494,8 +501,7 @@ export class TerminalManager {
     options.onTerminalAssigned?.(managed.id);
 
     try {
-      // Show the terminal so the user can see it
-      managed.terminal.show(true); // preserveFocus = true
+      this.requestAutomaticReveal(managed);
 
       // Wait for shell integration, unless the user asks to continue in the
       // background first. In that case start immediately using the best mode
@@ -558,6 +564,29 @@ export class TerminalManager {
       managed.busy = false;
       this.emitTerminalEvent("state", this.terminalMetadataEvent(managed));
     }
+  }
+
+  private requestAutomaticReveal(managed: ManagedTerminal): void {
+    // Selecting a terminal in an inactive VS Code window can activate that OS
+    // window even with preserveFocus. Defer until this window regains focus.
+    if (vscode.window.state.focused) {
+      this.pendingAutomaticReveal = undefined;
+      managed.terminal.show(true);
+      return;
+    }
+    this.pendingAutomaticReveal = managed.terminal;
+    // Close the race where focus changes between the first check and assignment.
+    if (vscode.window.state.focused) this.flushPendingAutomaticReveal();
+  }
+
+  private flushPendingAutomaticReveal(): void {
+    const pending = this.pendingAutomaticReveal;
+    this.pendingAutomaticReveal = undefined;
+    if (!pending) return;
+    const managed = this.terminals.find(
+      (candidate) => candidate.terminal === pending,
+    );
+    if (managed) pending.show(true);
   }
 
   private async resolveTerminal(
@@ -739,6 +768,12 @@ export class TerminalManager {
 
     this.log?.(`split_from: splitting beside "${parent.name}" (${parent.id})`);
 
+    // VS Code's split command targets the active terminal and has no terminal
+    // argument. Avoid invoking it from a background window because selecting
+    // the parent can activate that OS window; use the already-created child
+    // terminal instead and let normal automatic reveal deferral select it later.
+    if (!vscode.window.state.focused) return;
+
     // Dispose the child terminal we just created — we'll replace it with
     // the split terminal that VS Code creates from the parent.
     // Detach the old terminal reference first so onDidCloseTerminal doesn't
@@ -747,9 +782,8 @@ export class TerminalManager {
     child.terminal = undefined as unknown as vscode.Terminal;
     oldTerminal.dispose();
 
-    // Focus the parent terminal so the split command acts on it
+    // Focus the parent terminal so the split command acts on it.
     parent.terminal.show(false);
-    // Small delay to ensure the parent terminal is focused
     await new Promise((r) => setTimeout(r, 150));
 
     // Listen for the new terminal that the split command will create.
@@ -1656,6 +1690,7 @@ export class TerminalManager {
   revealTerminal(request: TerminalTargetRequest): boolean {
     const managed = this.findOwnedTerminal(request.terminalId, request.owner);
     if (!managed) return false;
+    this.pendingAutomaticReveal = undefined;
     managed.terminal.show(false);
     return true;
   }
@@ -1798,6 +1833,7 @@ export class TerminalManager {
     }
     this.disposables = [];
     this.pendingDisposals.clear();
+    this.pendingAutomaticReveal = undefined;
     // Don't close terminals — let the user keep them
   }
 }

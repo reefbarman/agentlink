@@ -172,7 +172,9 @@ export interface LiveHostTerminalSurfaceControllerOptions {
   ensureRuntimeRoot?(): Promise<void>;
   materializeBootstrap?: typeof materializeHostShellBootstrap;
   sandboxChannelHub?: SandboxTerminalChannelHub;
-  requestTerminalViewReveal?(): void;
+  requestTerminalViewReveal?(options?: {
+    deferWhenWindowUnfocused?: boolean;
+  }): void;
   log?(message: string): void;
 }
 
@@ -985,10 +987,13 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     void this.postSandboxLifecycle(terminal, activityEvent);
     if (this.terminalViewFocused && this.activeUserTerminalThatMayBeBusy())
       return;
-    this.activateAgentTerminal(terminal);
+    this.activateAgentTerminal(terminal, true);
   }
 
-  private activateAgentTerminal(terminal: ManagedSandboxSurfaceTerminal): void {
+  private activateAgentTerminal(
+    terminal: ManagedSandboxSurfaceTerminal,
+    deferWhenWindowUnfocused = false,
+  ): void {
     const activated: HostTerminalEvent = {
       type: "host-terminal/activated",
       terminalId: terminal.terminalId,
@@ -996,7 +1001,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     this.state = reduceHostTerminalState(this.state, activated);
     void this.postSandboxLifecycle(terminal, activated);
     try {
-      this.options.requestTerminalViewReveal?.();
+      this.options.requestTerminalViewReveal?.({ deferWhenWindowUnfocused });
     } catch (error) {
       this.options.log?.(
         `Unable to reveal AgentLink Terminal: ${error instanceof Error ? error.message : String(error)}`,

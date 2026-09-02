@@ -7,6 +7,8 @@ const modules = [
   "agentToolLoop",
   "hostAdapterContracts",
   "hostTools",
+  "mcpCredentials",
+  "multiFileTransactions",
   "modelAuthProvider",
   "modelRequestScheduler",
   "modelRuntime",

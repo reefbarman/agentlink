@@ -762,6 +762,9 @@ describe("LiveHostTerminalSurfaceController", () => {
       ]),
     );
     expect(test.requestTerminalViewReveal).toHaveBeenCalledOnce();
+    expect(test.requestTerminalViewReveal).toHaveBeenCalledWith({
+      deferWhenWindowUnfocused: true,
+    });
   });
 
   it("keeps a focused uncertain raw user terminal selected but switches after terminal focus leaves", async () => {
@@ -837,6 +840,9 @@ describe("LiveHostTerminalSurfaceController", () => {
       }),
     );
     expect(test.requestTerminalViewReveal).toHaveBeenCalledOnce();
+    expect(test.requestTerminalViewReveal).toHaveBeenCalledWith({
+      deferWhenWindowUnfocused: true,
+    });
     expect(userOpened.terminalId).not.toBe("native-agent-1");
   });
 
@@ -879,6 +885,9 @@ describe("LiveHostTerminalSurfaceController", () => {
       }),
     );
     expect(test.requestTerminalViewReveal).toHaveBeenCalledOnce();
+    expect(test.requestTerminalViewReveal).toHaveBeenCalledWith({
+      deferWhenWindowUnfocused: false,
+    });
   });
 
   it("isolates terminal view reveal failures after selecting the agent terminal", async () => {

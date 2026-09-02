@@ -24,6 +24,7 @@ export const workspace = {
 };
 
 export const window = {
+  state: { focused: true, active: true },
   showTextDocument: async () => ({}),
   showInformationMessage: async () => undefined,
   showWarningMessage: async () => undefined,
@@ -54,6 +55,7 @@ export const window = {
   onDidStartTerminalShellExecution: () => ({ dispose: () => {} }),
   onDidEndTerminalShellExecution: () => ({ dispose: () => {} }),
   onDidOpenTerminal: () => ({ dispose: () => {} }),
+  onDidChangeWindowState: () => ({ dispose: () => {} }),
   tabGroups: { all: [] },
 };
 

@@ -167,6 +167,17 @@ async function flushPromises(): Promise<void> {
   await Promise.resolve();
 }
 
+async function waitForSubscription(
+  manager: RelayConnectionManager,
+  owner: { ownerId: string; ownerGenerationId: string },
+): Promise<void> {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    if (manager.isSubscribedTo(owner)) return;
+    await flushPromises();
+  }
+  expect(manager.isSubscribedTo(owner)).toBe(true);
+}
+
 describe("RelayConnectionManager", () => {
   beforeEach(() => vi.useRealTimers());
 
@@ -474,7 +485,7 @@ describe("RelayConnectionManager", () => {
     manager.selectOwner({ ownerId, ownerGenerationId });
     manager.start();
     sources[0]!.emit("hello", hello());
-    await flushPromises();
+    await waitForSubscription(manager, { ownerId, ownerGenerationId });
 
     const detailPromise = manager.requestSessionDetail({
       instanceId: "instance-1",
@@ -582,7 +593,7 @@ describe("RelayConnectionManager", () => {
     manager.selectOwner({ ownerId, ownerGenerationId });
     manager.start();
     sources[0]!.emit("hello", hello());
-    await flushPromises();
+    await waitForSubscription(manager, { ownerId, ownerGenerationId });
 
     const sendPromise = manager.sendCommand({
       operationId: "browser-send-1",
@@ -681,7 +692,7 @@ describe("RelayConnectionManager", () => {
     manager.selectOwner({ ownerId, ownerGenerationId });
     manager.start();
     sources[0]!.emit("hello", hello());
-    await flushPromises();
+    await waitForSubscription(manager, { ownerId, ownerGenerationId });
     const detailPromise = manager.requestSessionDetail({
       instanceId: "instance-1",
       controllerEpoch: "controller-1",
@@ -753,7 +764,7 @@ describe("RelayConnectionManager", () => {
     manager.selectOwner({ ownerId, ownerGenerationId });
     manager.start();
     sources[0]!.emit("hello", hello());
-    await flushPromises();
+    await waitForSubscription(manager, { ownerId, ownerGenerationId });
     await manager.sendCommand({
       operationId: "send-rollover",
       command: {
@@ -845,13 +856,10 @@ describe("RelayConnectionManager", () => {
         csrfNonce: `nonce-${connectionId}`,
         emittedAt: cycle,
       });
-      await flushPromises();
-      expect(
-        manager.isSubscribedTo({
-          ownerId,
-          ownerGenerationId: selectedOwnerGenerationId,
-        }),
-      ).toBe(true);
+      await waitForSubscription(manager, {
+        ownerId,
+        ownerGenerationId: selectedOwnerGenerationId,
+      });
 
       const relaySequence = cycle * 10;
       const accepted = checkpoint({

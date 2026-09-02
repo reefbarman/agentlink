@@ -7,7 +7,12 @@
   "type": "module",
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist/**/*.js",
+    "dist/**/*.cjs",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.cts",
+    "CHANGELOG.md",
+    "README.md"
   ],
   "exports": {
     ".": {
@@ -68,6 +73,30 @@
       "require": {
         "types": "./dist/cjs/hostTools.d.cts",
         "default": "./dist/cjs/hostTools.cjs"
+      }
+    },
+    "./mcp-credentials": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/mcpCredentials.d.ts",
+        "default": "./dist/mcpCredentials.js"
+      },
+      "require": {
+        "types": "./dist/cjs/mcpCredentials.d.cts",
+        "default": "./dist/cjs/mcpCredentials.cjs"
+      }
+    },
+    "./multi-file-transactions": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/multiFileTransactions.d.ts",
+        "default": "./dist/multiFileTransactions.js"
+      },
+      "require": {
+        "types": "./dist/cjs/multiFileTransactions.d.cts",
+        "default": "./dist/cjs/multiFileTransactions.cjs"
       }
     },
     "./model-auth-provider": {

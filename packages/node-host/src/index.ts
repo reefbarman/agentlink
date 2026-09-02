@@ -1,2 +1,10 @@
-// Public Node host exports will be added in Phase C.
-export {};
+export * from "./commandTools.js";
+export * from "./fileStateRepository.js";
+export * from "./instructionCatalog.js";
+export * from "./mcpConnectionCache.js";
+export * from "./mcpOAuthCallback.js";
+export * from "./mcpRemoteTools.js";
+export * from "./mcpStdioTools.js";
+export * from "./nodeHostAgent.js";
+export * from "./readTools.js";
+export * from "./writeTools.js";
