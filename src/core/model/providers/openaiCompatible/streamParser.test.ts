@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import type { CoreModelStreamEvent } from "../../../modelRuntime.js";
-import { OpenAiCompatibleRequestError } from "./errors.js";
+import type { CoreModelStreamEvent } from "@agentlink/core/model-runtime";
+import { OpenAiCompatibleRequestError } from "@agentlink/core/openai-compatible";
 import {
   OpenAiCompatibleStreamError,
   parseOpenAiCompatibleStreamEvents,
-} from "./streamParser.js";
-import type { OpenAiCompatibleChatChunk } from "./types.js";
+} from "@agentlink/core/openai-compatible";
+import type { OpenAiCompatibleChatChunk } from "@agentlink/core/openai-compatible";
 
 async function* chunks(
   values: OpenAiCompatibleChatChunk[],

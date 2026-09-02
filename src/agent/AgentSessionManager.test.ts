@@ -660,7 +660,6 @@ describe("AgentSessionManager host injection", () => {
           config: {
             resolveModelForMode: () => "claude-sonnet-4-6",
             getCondenseThresholdForModel: () => 0.9,
-            getBgSummaryMode: () => "heuristic",
             getBackgroundAgentSettings: () => ({}),
           },
         },
@@ -764,7 +763,6 @@ describe("AgentSessionManager host injection", () => {
           config: {
             resolveModelForMode,
             getCondenseThresholdForModel: () => 0.9,
-            getBgSummaryMode: () => "heuristic",
             getBackgroundAgentSettings: () => ({}),
           },
           createCheckpointManager,
@@ -1023,7 +1021,6 @@ describe("AgentSessionManager host injection", () => {
             resolveModelForMode,
             resolveReasoningEffortForMode: resolveReasoningEffortForMode as any,
             getCondenseThresholdForModel,
-            getBgSummaryMode: () => "heuristic",
             getBackgroundAgentSettings: () => ({}),
           },
         },
@@ -1832,7 +1829,6 @@ describe("AgentSessionManager host injection", () => {
           config: {
             resolveModelForMode: () => "host-model",
             getCondenseThresholdForModel: () => 0.42,
-            getBgSummaryMode: () => "heuristic",
             getBackgroundAgentSettings: () => ({}),
           },
           providers,
@@ -1914,7 +1910,6 @@ describe("AgentSessionManager host injection", () => {
           config: {
             resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
             getCondenseThresholdForModel: () => 0.9,
-            getBgSummaryMode: () => "heuristic",
             getBackgroundAgentSettings: () => ({}),
           },
         },
@@ -1976,7 +1971,6 @@ describe("AgentSessionManager host injection", () => {
           config: {
             resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
             getCondenseThresholdForModel: () => 0.9,
-            getBgSummaryMode: () => "heuristic",
             getBackgroundAgentSettings: () => ({}),
           },
         },
@@ -2087,7 +2081,6 @@ describe("AgentSessionManager host injection", () => {
           config: {
             resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
             getCondenseThresholdForModel: () => 0.9,
-            getBgSummaryMode: () => "heuristic",
             getBackgroundAgentSettings: () => ({}),
           },
         },
@@ -2290,7 +2283,6 @@ describe("AgentSessionManager host injection", () => {
           config: {
             resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
             getCondenseThresholdForModel: () => 0.9,
-            getBgSummaryMode: () => "heuristic",
             getBackgroundAgentSettings: () => ({}),
           },
         },
@@ -2414,7 +2406,6 @@ describe("AgentSessionManager host injection", () => {
             resolveReasoningEffortForMode: (mode) =>
               mode === "architect" ? "xhigh" : "high",
             getCondenseThresholdForModel: () => 0.9,
-            getBgSummaryMode: () => "heuristic",
             getBackgroundAgentSettings: () => ({}),
           },
         },
@@ -2883,7 +2874,6 @@ describe("AgentSessionManager host injection", () => {
           config: {
             resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
             getCondenseThresholdForModel: () => 0.9,
-            getBgSummaryMode: () => "heuristic",
             getBackgroundAgentSettings: () => ({}),
             getWebAccessSettings: () => ({
               searchBackend: "native",
@@ -2946,7 +2936,6 @@ describe("AgentSessionManager host injection", () => {
           config: {
             resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
             getCondenseThresholdForModel: () => 0.9,
-            getBgSummaryMode: () => "heuristic",
             getBackgroundAgentSettings: () => ({}),
             getWebAccessSettings: () => ({
               searchBackend: "native",
@@ -3438,7 +3427,6 @@ describe("AgentSessionManager manual condense", () => {
           config: {
             resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
             getCondenseThresholdForModel: () => 0.9,
-            getBgSummaryMode: () => "heuristic",
             getBackgroundAgentSettings: () => ({}),
             getWebAccessSettings: () => ({
               searchBackend: "native",

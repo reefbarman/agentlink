@@ -246,6 +246,7 @@ export async function resolveBackgroundRoute(
       resolvedModel: modelInfo.id,
       resolvedProvider: modelInfo.provider,
       taskClass,
+      modelTier,
       routingReason: providerMismatch
         ? `explicit model override (${modelInfo.id}) ignored requested provider (${requestedProvider})`
         : `explicit model override (${modelInfo.id})`,
@@ -275,6 +276,7 @@ export async function resolveBackgroundRoute(
       resolvedModel: foregroundModelInfo.id,
       resolvedProvider: foregroundModelInfo.provider,
       taskClass,
+      modelTier,
       routingReason: "defaulted to foreground model",
       fallbackUsed: false,
       ...(defaultBudget ? { defaultBudget } : {}),
@@ -373,6 +375,7 @@ export async function resolveBackgroundRoute(
       resolvedModel: picked.id,
       resolvedProvider: picked.provider,
       taskClass,
+      modelTier,
       routingReason,
       fallbackUsed,
       ...(defaultBudget ? { defaultBudget } : {}),
@@ -387,6 +390,7 @@ export async function resolveBackgroundRoute(
     resolvedModel: fallbackModel.id,
     resolvedProvider: fallbackModel.provider,
     taskClass,
+    modelTier,
     routingReason:
       authenticatedModels.length > 0
         ? "no preferred/authenticated candidates available; using first authenticated model"

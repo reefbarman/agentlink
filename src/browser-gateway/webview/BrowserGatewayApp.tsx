@@ -5916,8 +5916,19 @@ export function BrowserGatewayApp({
     };
   };
 
-  const handleSignIn = (_provider: string): void => {
-    setModeStatus("Sign-in is available in the VS Code extension.");
+  const handleSignIn = (
+    _provider: string,
+    action?: import("@agentlink/protocol/model-catalog").CoreModelCatalogAuthAction,
+  ): void => {
+    setModeStatus(
+      action?.kind === "configure_provider"
+        ? "Provider configuration is available in the VS Code extension."
+        : action?.kind === "api_key"
+          ? "Add the API key in the VS Code extension. Credentials stay on that host."
+          : action?.kind === "oauth"
+            ? "Sign in from the VS Code extension. Credentials stay on that host."
+            : "This model is unavailable on the selected host.",
+    );
   };
 
   const handleRetry = (): void => {
@@ -6577,7 +6588,9 @@ export function BrowserGatewayApp({
   const browserSendBlockedReason =
     !isAskAgentSelected && modelSetupState.kind === "checking"
       ? "Checking model setup before AgentLink can send a message."
-      : !isAskAgentSelected && modelSetupState.kind === "credentials_required"
+      : !isAskAgentSelected &&
+          (modelSetupState.kind === "credentials_required" ||
+            modelSetupState.kind === "configuration_required")
         ? `Finish setup in the AgentLink VS Code window before sending with ${modelSetupState.model.providerDisplayName ?? modelSetupState.model.provider}.`
         : !isAskAgentSelected && modelSetupState.kind === "model_unavailable"
           ? "Choose an available model in the AgentLink VS Code window before sending a message."

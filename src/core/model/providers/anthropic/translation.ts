@@ -2,7 +2,7 @@ import type {
   CoreModelContentBlock,
   CoreModelMessage,
   CoreModelToolDefinition,
-} from "../../../modelRuntime.js";
+} from "@agentlink/core/model-runtime";
 
 import type { CoreHostedToolDefinition } from "@agentlink/protocol/web-access-policy";
 import type { CoreJsonValue } from "@agentlink/protocol/provider-replay";

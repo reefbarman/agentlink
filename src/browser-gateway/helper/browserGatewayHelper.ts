@@ -148,7 +148,7 @@ import {
   type CoreModelMessage,
   type CoreModelToolDefinition,
   type CoreModelUsage,
-} from "../../core/modelRuntime.js";
+} from "@agentlink/core/model-runtime";
 import type { OpenAiCompatibleRuntimeProfile } from "../../core/model/providers/openaiCompatible/types.js";
 import {
   isCurrentPromptProfileResolution,
@@ -173,7 +173,7 @@ import {
   mergeNativeWebUsage,
   type CoreNativeWebToolResult,
 } from "../../core/nativeWebTools.js";
-import { runAgentToolLoop } from "../../core/agentToolLoop.js";
+import { runAgentToolLoop } from "@agentlink/core/agent-tool-loop";
 import {
   createNativeToolDisclosureSnapshot,
   discoverNativeTools,
@@ -257,6 +257,7 @@ import {
   type CoreModelCatalogEntry,
   type CoreModelCatalogSnapshot,
 } from "@agentlink/protocol/model-catalog";
+import { projectCoreModelCatalogToChatModels } from "@agentlink/protocol/chat-catalog";
 import { readBoundedBody, readJsonBody } from "../nodeHttpPrimitives.js";
 import {
   SseHub,
@@ -3274,23 +3275,7 @@ export class BrowserGatewayHelper {
     if (resolvedOwnerId) this.askAgentModelOwnerId = resolvedOwnerId;
     const snapshot = this.getModelCatalogSnapshot(resolvedOwnerId);
     this.askAgentSessionStore.updateAvailableModels(
-      snapshot
-        ? snapshot.models.map((model) => ({
-            id: model.id,
-            displayName: model.displayName,
-            provider: model.providerId,
-            providerDisplayName: model.providerDisplayName,
-            supportsToolUse: model.supportsToolUse,
-            supportsImages: model.supportsImages,
-            contextWindow: model.contextWindow,
-            maxInputTokens: model.maxInputTokens,
-            maxOutputTokens: model.maxOutputTokens,
-            reasoningEfforts: model.reasoningEfforts,
-            defaultReasoningEffort: model.defaultReasoningEffort,
-            authenticated: model.authenticated,
-            condenseThreshold: model.condenseThreshold,
-          }))
-        : [],
+      snapshot ? projectCoreModelCatalogToChatModels(snapshot) : [],
     );
     return snapshot;
   }
@@ -3491,21 +3476,7 @@ export class BrowserGatewayHelper {
       ?.trim();
     const publishedCatalog = this.getModelCatalogSnapshot(requestedOwnerId);
     const models = publishedCatalog
-      ? publishedCatalog.models.map((model) => ({
-          id: model.id,
-          displayName: model.displayName,
-          provider: model.providerId,
-          providerDisplayName: model.providerDisplayName,
-          supportsToolUse: model.supportsToolUse,
-          supportsImages: model.supportsImages,
-          contextWindow: model.contextWindow,
-          maxInputTokens: model.maxInputTokens,
-          maxOutputTokens: model.maxOutputTokens,
-          reasoningEfforts: model.reasoningEfforts,
-          defaultReasoningEffort: model.defaultReasoningEffort,
-          authenticated: model.authenticated,
-          condenseThreshold: model.condenseThreshold,
-        }))
+      ? projectCoreModelCatalogToChatModels(publishedCatalog)
       : this.askAgentSessionStore.getFallbackModels();
     writeJson(res, 200, {
       models,
@@ -8123,11 +8094,46 @@ export class BrowserGatewayHelper {
       Number.isFinite(model.contextWindow) &&
       model.contextWindow > 0 &&
       typeof model.authenticated === "boolean" &&
+      this.isValidModelCatalogReadiness(model) &&
       (model.reasoningEfforts === undefined ||
         (Array.isArray(model.reasoningEfforts) &&
           model.reasoningEfforts.every(isCoreReasoningEffort))) &&
       (model.defaultReasoningEffort === undefined ||
         isCoreReasoningEffort(model.defaultReasoningEffort)),
+    );
+  }
+
+  private isValidModelCatalogReadiness(
+    model: Partial<CoreModelCatalogEntry>,
+  ): boolean {
+    const readiness = model.readiness;
+    if (readiness === undefined) return true;
+    if (!readiness || typeof readiness !== "object") return false;
+    if (readiness.status === "ready" || readiness.status === "checking") {
+      return true;
+    }
+    if (readiness.status === "unavailable") {
+      return (
+        readiness.reason === undefined || typeof readiness.reason === "string"
+      );
+    }
+    const action = readiness.action;
+    if (readiness.status === "configuration_required") {
+      return Boolean(
+        action?.kind === "configure_provider" &&
+        typeof action.providerId === "string" &&
+        action.providerId.trim() === model.providerId?.trim(),
+      );
+    }
+    if (readiness.status !== "credentials_required") return false;
+    return Boolean(
+      (action === undefined ||
+        ((action.kind === "oauth" ||
+          action.kind === "api_key" ||
+          action.kind === "configure_provider") &&
+          typeof action.providerId === "string" &&
+          action.providerId.trim() === model.providerId?.trim())) &&
+      (readiness.reason === undefined || typeof readiness.reason === "string"),
     );
   }
 

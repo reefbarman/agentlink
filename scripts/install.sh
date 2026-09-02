@@ -5,6 +5,12 @@ REPO="reefbarman/agentlink"
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
+if ! command -v code >/dev/null 2>&1; then
+  echo "Error: Could not find the VS Code 'code' command." >&2
+  echo "Install it from VS Code's Command Palette: Shell Command: Install 'code' command in PATH." >&2
+  exit 1
+fi
+
 if [ -n "${AGENTLINK_VSCE_TARGET:-}" ]; then
   TARGET="$AGENTLINK_VSCE_TARGET"
 else
@@ -50,7 +56,7 @@ case "$TARGET" in
 esac
 
 echo "Fetching latest $TARGET release from $REPO..."
-RELEASE_JSON=$(curl -sL "https://api.github.com/repos/$REPO/releases/latest")
+RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest")
 ASSET_URL=$(echo "$RELEASE_JSON" \
   | grep "\"browser_download_url\".*-${TARGET}\\.vsix\"" \
   | head -1 \
@@ -64,7 +70,7 @@ fi
 
 FILENAME=$(basename "$ASSET_URL")
 echo "Downloading $FILENAME..."
-curl -sL "$ASSET_URL" -o "$TMPDIR/$FILENAME"
+curl -fsSL "$ASSET_URL" -o "$TMPDIR/$FILENAME"
 
 echo "Installing extension..."
 code --install-extension "$TMPDIR/$FILENAME" --force

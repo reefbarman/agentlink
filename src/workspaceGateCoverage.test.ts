@@ -49,6 +49,12 @@ describe("workspace gate coverage", () => {
     expect(rootManifest.scripts?.["build:workspaces"]).toContain(
       "tsc -b packages/*",
     );
+    expect(rootManifest.scripts?.["build:workspaces"]).toContain(
+      "npm run build:cjs --workspace packages/protocol",
+    );
+    expect(rootManifest.scripts?.["build:workspaces"]).toContain(
+      "npm run build:cjs --workspace packages/core",
+    );
     expect(rootManifest.scripts?.watch).toContain("npm run build:workspaces");
     expect(rootManifest.scripts?.lint).toContain("npm run lint:workspaces");
     expect(rootManifest.scripts?.test).toContain("npm run test:workspaces");

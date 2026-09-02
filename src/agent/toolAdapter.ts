@@ -555,7 +555,7 @@ function getSetTaskStatusTool(
     review_findings: {
       type: "object",
       description:
-        "Resolve the exact requested change set before reviewing. Set emptyDiff=true when it is empty or unavailable; never use an empty findings list to imply a clean review unless the scope was actually found and reviewed.",
+        "Review the delegated target. Set emptyDiff=true when the requested live diff or range is empty or unavailable; the runtime attributes the normalized target automatically.",
       properties: {
         type: { type: "string", enum: ["review_findings"] },
         findings: {
@@ -578,11 +578,11 @@ function getSetTaskStatusTool(
         reviewedScope: {
           type: "string",
           description:
-            "The exact commit range, diff, or file list that was actually reviewed, or what was checked when no change set could be found.",
+            "Optional override when the reviewed scope materially differs from the runtime target.",
         },
         emptyDiff: { type: "boolean" },
       },
-      required: ["type", "findings", "reviewedScope", "emptyDiff"],
+      required: ["type", "findings", "emptyDiff"],
       additionalProperties: false,
     },
     patch: {
@@ -669,7 +669,7 @@ const RESPOND_TO_BACKGROUND_QUESTION_TOOL: ToolDefinition = {
 const AGENT_BUDGET_SCHEMA = {
   type: "object",
   description:
-    "Optional soft resource-cap overrides for review and research task classes. Review and research agents receive automatic complexity-based tool-call, API-turn, and elapsed-time budgets; writable build, debug, design, verification, and general tasks run uncapped even if a budget is supplied. Review overrides merge only work-unit limits because token and cost caps are ignored when captured input can be large. Research overrides may also use token and cost caps. Reaching a cap asks the agent to finish promptly without blocking necessary tools; work is force-stopped only when observed usage reaches the 3x safety backstop.",
+    "Optional resource-cap overrides for review and research task classes. Review agents receive generous tiered safety ceilings with an 80% wrap-up warning and a 1.5x emergency backstop; research agents retain broader soft budgets with a 3x hard backstop. Writable build, debug, design, verification, and general tasks run uncapped. Review token and cost caps remain ignored because explicit diffs may still be large; research callers may override all supported caps.",
   properties: {
     maxTokens: {
       type: "number",
@@ -679,7 +679,7 @@ const AGENT_BUDGET_SCHEMA = {
     maxToolCalls: {
       type: "number",
       description:
-        "Soft cap on successfully committed tool invocations. Interrupted/provisional tool streams are not charged. Automatic review and research budgets allow substantially more tool calls than API turns so exploration is weighted less aggressively.",
+        "Soft cap on successfully committed tool invocations. Interrupted/provisional tool streams are not charged. Research budgets allow substantially more tool calls than API turns; review budgets keep the two allowances closer together.",
     },
     maxApiTurns: {
       type: "number",
@@ -699,7 +699,7 @@ const AGENT_BUDGET_SCHEMA = {
     warningThresholdRatio: {
       type: "number",
       description:
-        "Usage ratio (default 0.8) at which the agent is nudged to start wrapping up.",
+        "Usage ratio at which the agent is nudged to start wrapping up. Automatic review and research budgets default to 0.8.",
     },
     scope: { type: "string", enum: ["session", "subtree", "goal"] },
   },
@@ -789,7 +789,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         message: {
           type: "string",
           description:
-            "Full instruction for the background agent. Be specific and self-contained. For writable work, include explicit owned files/directories, files to avoid, allowed commands/tests, and how to report conflicts. For review work, use reviewScope to have the runtime capture the working tree, exact files, a commit range, or supplied diff at spawn time.",
+            "Full instruction for the background agent. Be specific and self-contained. For writable work, include explicit owned files/directories, files to avoid, allowed commands/tests, and how to report conflicts. For review work, keep this to a concise intent/risk summary and use reviewScope for the live working tree, current files, or a commit range; use kind=diff only for small exact hunks that must remain immutable.",
         },
         mode: {
           type: "string",
@@ -812,7 +812,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         modelTier: {
           type: "string",
           description:
-            'Optional routing tier override ("cheap", "balanced", or "deep_reasoning"). For review tasks, omit this to let the router infer complexity from the request.',
+            'Optional routing tier override ("cheap", "balanced", or "deep_reasoning"). Reviews default to balanced; select deep_reasoning explicitly only when the actual risk justifies the higher-cost reviewer.',
         },
         ownedPaths: {
           type: "array",
@@ -842,7 +842,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         },
         reviewScope: {
           description:
-            "Structured review target captured into an immutable snapshot when the background agent is spawned. Relative paths resolve from the executing project; absolute paths inside any open workspace root are accepted. working_tree defaults to unstaged tracked changes plus untracked files; Git scopes must stay within one root — in multi-root workspaces pass root (absolute path or folder name) to pick which one. files captures exact current files and may span roots, including non-Git workspaces. commit_range resolves Git diff output immediately. diff accepts already captured content. excludePaths is pushed into Git before output buffering and drops matching root-relative prefixes. Binary Git changes are captured as bounded metadata rather than binary patch payloads; oversized exact files are also recorded as metadata with content omitted.",
+            "Structured review target. working_tree, files, and commit_range are compact live selectors: the reviewer inspects the current workspace when it starts, so concurrent unrelated work may be visible and should be triaged by the foreground coordinator. Relative paths resolve from the executing project; absolute paths inside open workspace roots are accepted. Git selectors stay within one root, chosen with root in multi-root workspaces; files may span roots. excludePaths tells the live reviewer what to omit. Use diff only as an explicit immutable escape hatch for bounded caller-supplied hunks.",
           oneOf: [
             {
               type: "object",
@@ -900,7 +900,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
           type: "string",
           enum: ["text", "review_findings", "patch", "verification"],
           description:
-            "Structured result envelope the agent must return. review_findings envelopes report reviewedScope (what was actually reviewed) and emptyDiff (true when the requested change set was empty or missing) — check emptyDiff before treating an empty findings list as a clean review.",
+            "Structured result envelope the agent must return. review_findings reports emptyDiff when a live diff/range is empty or unavailable; the runtime attributes the normalized target automatically and accepts reviewedScope only as an optional override.",
         },
         budget: AGENT_BUDGET_SCHEMA,
         goalId: { type: "string" },
@@ -927,7 +927,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "get_background_result",
     description:
-      "Wait for a background agent to finish and return its final response. Successful runs return the expected response; failed, interrupted, cancelled, unauthorized, or incomplete expected-result runs return structured JSON with status, terminalReason, retrySafe, agentRetryable, and preserved partialOutput when available. Use this for explicit pull/wait flows; skip it when a completion result was already pushed into context. Waiting releases your own background concurrency slot, so it is safe to block on a spawned agent that is still queued. If a user or steering message arrives for your own session while you wait, the call returns early with status wait_interrupted; the background agent keeps running untouched — handle the user's message first, then call get_background_result again.",
+      "Wait for a background agent for a bounded interval and return its final response if it finishes. You must provide wait_seconds from 1 to 60. If the wait expires, the background agent keeps running and the tool returns status=still_running with current progress, partial output when available, retryAfterMs, and guidance to continue independent foreground work before checking again. Successful runs return the expected response; failed, interrupted, cancelled, unauthorized, or incomplete expected-result runs return structured JSON with status, terminalReason, retrySafe, agentRetryable, and preserved partialOutput when available. Skip this when a completion result was already pushed into context. Waiting releases your own background concurrency slot. If a user or steering message arrives for your session, the call returns early with status=wait_interrupted; handle that message before waiting again.",
     input_schema: {
       type: "object",
       properties: {
@@ -936,8 +936,15 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
           description:
             "The exact sessionId returned by spawn_background_agent — copy it verbatim, a single dropped or altered character targets a different session",
         },
+        wait_seconds: {
+          type: "integer",
+          minimum: 1,
+          maximum: 60,
+          description:
+            "Maximum seconds to wait for completion before returning status=still_running. Use a short bounded synchronization point and continue independent foreground work after a timeout.",
+        },
       },
-      required: ["sessionId"],
+      required: ["sessionId", "wait_seconds"],
     },
   },
   {
@@ -1095,7 +1102,7 @@ export type BgStatusResult = BackgroundAgentStatusResult;
  * Named tool profiles that restrict the tool set for specific background task types.
  * Each profile is an allowlist of tool names from the native tool registry.
  */
-const MCP_ENABLED_TOOL_PROFILES = new Set(["review", "readonly-research"]);
+const MCP_ENABLED_TOOL_PROFILES = new Set(["readonly-research"]);
 
 const MCP_APPROVAL_DETAIL_MAX_CHARS = 20_000;
 
@@ -1107,25 +1114,15 @@ const READ_ONLY_COMMAND_PROFILES = new Set([
 
 const TOOL_PROFILES: Record<string, Set<string>> = {
   review: new Set([
-    "read_file",
     "get_context",
+    "read_file",
+    "search_files",
     "get_repo_map",
     "get_module_neighbors",
-    "search_files",
-    "codebase_search",
-    "list_files",
-    "get_diagnostics",
-    "get_hover",
-    "get_symbols",
     "get_references",
     "go_to_definition",
-    "go_to_implementation",
-    "get_type_hierarchy",
+    "get_diagnostics",
     "execute_command",
-    "search_session_history",
-    "read_session_excerpt",
-    "diagnose_activity",
-    "recall_memory",
   ]),
   "readonly-research": new Set([
     "read_file",
@@ -2081,10 +2078,11 @@ export interface ToolDispatchContext {
     callerSessionId: string,
     sessionId: string,
   ) => BgStatusResult;
-  /** Wait for a background session to finish and return its last assistant message. */
+  /** Wait for a background session for a bounded interval and return its result or progress. */
   onGetBackgroundResult?: (
     callerSessionId: string,
     sessionId: string,
+    waitSeconds: number,
   ) => Promise<string | BackgroundAgentResultContent>;
   /** Kill a running background agent and return its partial output. */
   onKillBackground?: (
@@ -3514,8 +3512,7 @@ export async function dispatchToolCall(
           structuredResult.type !== expectedResult ||
           (expectedResult === "review_findings" &&
             structuredResult.type === "review_findings" &&
-            (typeof structuredResult.reviewedScope !== "string" ||
-              typeof structuredResult.emptyDiff !== "boolean"))
+            typeof structuredResult.emptyDiff !== "boolean")
         ) {
           return {
             content: [
@@ -4843,11 +4840,11 @@ export async function dispatchToolCall(
 
     case "get_background_result": {
       const getBackgroundResult = ctx.backgroundAgentProvider
-        ? (sessionId: string) =>
-            ctx.backgroundAgentProvider!.getResult(sessionId)
+        ? (sessionId: string, waitSeconds: number) =>
+            ctx.backgroundAgentProvider!.getResult(sessionId, waitSeconds)
         : ctx.onGetBackgroundResult
-          ? (sessionId: string) =>
-              ctx.onGetBackgroundResult!(ctx.sessionId, sessionId)
+          ? (sessionId: string, waitSeconds: number) =>
+              ctx.onGetBackgroundResult!(ctx.sessionId, sessionId, waitSeconds)
           : undefined;
       if (!getBackgroundResult) {
         return {
@@ -4863,6 +4860,7 @@ export async function dispatchToolCall(
       }
       const bgResult = await getBackgroundResult(
         String(params.sessionId ?? ""),
+        Number(params.wait_seconds),
       );
       if (typeof bgResult !== "string") {
         return {

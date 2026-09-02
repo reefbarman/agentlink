@@ -30,8 +30,15 @@ class FakeProvider implements ModelProvider {
   routable: string[] = ["fake-a"];
   migrations: Record<string, string> = {};
 
+  authenticated = true;
+  authAction: ReturnType<NonNullable<ModelProvider["getCatalogAuthAction"]>>;
+
   async isAuthenticated(): Promise<boolean> {
-    return true;
+    return this.authenticated;
+  }
+
+  getCatalogAuthAction() {
+    return this.authAction;
   }
 
   getCapabilities(): ModelCapabilities {
@@ -94,6 +101,46 @@ describe("ProviderRegistry.refreshIndex", () => {
 
     expect(registry.isProviderEnabled("fake")).toBe(true);
     expect(registry.tryResolveProvider("fake-a")).toBe(first);
+  });
+
+  it("builds one shared picker snapshot with truthful auth actions", async () => {
+    const registry = new ProviderRegistry();
+    const ready = new FakeProvider();
+    const keyed = new FakeProvider();
+    Object.defineProperty(keyed, "id", { value: "keyed" });
+    keyed.visible = ["keyed-a"];
+    keyed.authenticated = false;
+    keyed.authAction = { kind: "api_key", providerId: "keyed" };
+    const unavailable = new FakeProvider();
+    Object.defineProperty(unavailable, "id", { value: "unavailable" });
+    unavailable.visible = ["unavailable-a"];
+    unavailable.authenticated = false;
+    registry.reconcile([ready, keyed, unavailable]);
+
+    const snapshot = await registry.getModelCatalogSnapshot({
+      publishedByOwnerId: "owner",
+      publishedAt: 123,
+      condenseThreshold: () => 0.8,
+    });
+
+    expect(snapshot).toMatchObject({
+      publishedByOwnerId: "owner",
+      publishedAt: 123,
+      models: [
+        { authenticated: true, readiness: { status: "ready" } },
+        {
+          authenticated: false,
+          readiness: {
+            status: "credentials_required",
+            action: { kind: "api_key", providerId: "keyed" },
+          },
+        },
+        {
+          authenticated: false,
+          readiness: { status: "credentials_required" },
+        },
+      ],
+    });
   });
 
   it("routes newly added models and keeps routing-floor IDs resolvable", () => {

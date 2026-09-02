@@ -181,17 +181,6 @@ describe("background result protocol", () => {
       streamingText: "Reviewing",
       errorMessage: "none",
       completedAt: 25,
-      resultSummary: "No findings",
-      summaryMeta: {
-        inFlight: false,
-        generatedAt: 26,
-        sourceModel: "gpt-5.6-sol",
-        fallbackUsed: false,
-        confidence: 1,
-        lastAttemptAt: 27,
-        lastFailureAt: 28,
-        lastFailureReason: "transient",
-      },
     } satisfies BgSessionInfo;
 
     expect(JSON.parse(JSON.stringify(snapshot))).toEqual(snapshot);

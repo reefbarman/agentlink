@@ -1,4 +1,4 @@
-import type { OpenAiCompatibleRuntimeProfile } from "../../../core/model/providers/openaiCompatible/types.js";
+import type { OpenAiCompatibleRuntimeProfile } from "@agentlink/core/openai-compatible";
 import type { ModelProvider } from "../types.js";
 import type { ProviderRegistry } from "../index.js";
 import {
@@ -6,7 +6,7 @@ import {
   type NormalizedOpenAiCompatibleConnection,
   type NormalizeOpenAiCompatibleConnectionsResult,
   type OpenAiCompatibleConfigIssue,
-} from "./config.js";
+} from "@agentlink/core/openai-compatible";
 import {
   OpenAiCompatibleProvider,
   type OpenAiCompatibleSecretResolver,

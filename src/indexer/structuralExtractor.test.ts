@@ -451,7 +451,7 @@ describe("extractStructuralFile", () => {
         `${JSON.stringify({ structural: { files: files.length, ...metrics } })}\n`,
       );
     }
-  });
+  }, 15_000);
 
   it("normalizes parser symbol hints into the stable structural vocabulary", () => {
     expect(

@@ -6,14 +6,36 @@ import type {
 export type ModelSetupAction =
   | "codex"
   | "openai-api-key"
+  | "openai-compatible-api-key"
   | "anthropic-api-key"
   | "configure-provider";
+
+function setupActionFor(model: ModelSetupModel): ModelSetupAction | undefined {
+  switch (model.authAction?.kind) {
+    case "oauth":
+      return "codex";
+    case "configure_provider":
+      return "configure-provider";
+    case "api_key":
+      return model.provider === "anthropic"
+        ? "anthropic-api-key"
+        : model.provider.startsWith("openai-compatible:")
+          ? "openai-compatible-api-key"
+          : undefined;
+  }
+  if (model.readiness?.status !== "credentials_required") return undefined;
+  return model.provider === "anthropic"
+    ? "anthropic-api-key"
+    : model.provider.startsWith("openai-compatible:")
+      ? "openai-compatible-api-key"
+      : "codex";
+}
 
 interface ModelSetupCardProps {
   setupState: ModelSetupState;
   hasWorkspace: boolean;
   surface: "vscode" | "browser";
-  onSetupAction?: (action: ModelSetupAction) => void;
+  onSetupAction?: (action: ModelSetupAction, provider?: string) => void;
   onOpenFolder?: () => void;
 }
 
@@ -46,7 +68,7 @@ export function ModelSetupCard({
         <i class="codicon codicon-warning model-setup-card-icon" />
         <div>
           <strong>Selected model is unavailable</strong>
-          <p>Choose another model to start a chat.</p>
+          <p>{setupState.reason ?? "Choose another model to start a chat."}</p>
         </div>
       </div>
     );
@@ -86,19 +108,16 @@ export function ModelSetupCard({
     );
   }
 
-  const selectedProvider = setupState.model.provider.toLowerCase();
-  const primaryAction: ModelSetupAction =
-    selectedProvider === "anthropic"
-      ? "anthropic-api-key"
-      : selectedProvider.startsWith("openai-compatible:")
-        ? "configure-provider"
-        : "codex";
+  const primaryAction = setupActionFor(setupState.model);
   const primaryLabel =
     primaryAction === "anthropic-api-key"
       ? "Use Anthropic API key"
-      : primaryAction === "configure-provider"
-        ? "Configure another provider"
-        : "Continue with ChatGPT/Codex";
+      : primaryAction === "openai-api-key" ||
+          primaryAction === "openai-compatible-api-key"
+        ? "Add API key"
+        : primaryAction === "configure-provider"
+          ? "Configure provider"
+          : "Continue with ChatGPT/Codex";
   const browserMessage =
     "Finish model setup in the AgentLink VS Code window. Credentials stay on that host.";
 
@@ -112,47 +131,24 @@ export function ModelSetupCard({
             ? browserMessage
             : `${providerLabel(setupState.model)} needs credentials before it can respond.`}
         </p>
-        {surface === "vscode" && onSetupAction && (
+        {surface === "vscode" && onSetupAction && primaryAction && (
           <div class="model-setup-card-actions">
             <button
               class="model-setup-card-primary-action"
               type="button"
-              onClick={() => onSetupAction(primaryAction)}
+              onClick={() =>
+                onSetupAction(primaryAction, setupState.model.provider)
+              }
             >
               {primaryLabel}
             </button>
-            {primaryAction !== "codex" && (
+            {primaryAction === "codex" && (
               <button
                 class="model-setup-card-secondary-action"
                 type="button"
-                onClick={() => onSetupAction("codex")}
+                onClick={() => onSetupAction("openai-api-key")}
               >
-                Continue with ChatGPT/Codex
-              </button>
-            )}
-            <button
-              class="model-setup-card-secondary-action"
-              type="button"
-              onClick={() => onSetupAction("openai-api-key")}
-            >
-              Use OpenAI API key
-            </button>
-            {primaryAction !== "anthropic-api-key" && (
-              <button
-                class="model-setup-card-secondary-action"
-                type="button"
-                onClick={() => onSetupAction("anthropic-api-key")}
-              >
-                Use Anthropic API key
-              </button>
-            )}
-            {primaryAction !== "configure-provider" && (
-              <button
-                class="model-setup-card-link-action"
-                type="button"
-                onClick={() => onSetupAction("configure-provider")}
-              >
-                Configure another provider
+                Use OpenAI API key
               </button>
             )}
           </div>

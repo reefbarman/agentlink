@@ -65,10 +65,10 @@
         "claude-opus-4-8"
       ],
       "balanced": [
-        "claude-opus-5",
-        "claude-opus-4-8",
+        "claude-sonnet-5",
         "claude-sonnet-4-6",
-        "claude-sonnet-5"
+        "claude-opus-5",
+        "claude-opus-4-8"
       ],
       "deep_reasoning": [
         "claude-opus-5",

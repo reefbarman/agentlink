@@ -2,6 +2,7 @@
 
 import {
   ThinkingContent,
+  getLatestThinkingSummary,
   normalizeThinkingText,
   parseThinkingSteps,
 } from "./ThinkingContent";
@@ -46,6 +47,22 @@ describe("ThinkingContent", () => {
     );
   });
 
+  it("recognizes the latest OpenAI summary from the first completed fragment", () => {
+    expect(getLatestThinkingSummary("**Inspecting state**")).toBe(
+      "Inspecting state",
+    );
+    expect(
+      getLatestThinkingSummary("**Inspecting state****Planning the fix**"),
+    ).toBe("Planning the fix");
+    expect(
+      getLatestThinkingSummary("**Inspecting state****Planning the fix"),
+    ).toBe("Inspecting state");
+    expect(getLatestThinkingSummary("**Inspecting state****")).toBe(
+      "Inspecting state",
+    );
+    expect(getLatestThinkingSummary("Inspecting **ordinary** text")).toBeNull();
+  });
+
   it("recognizes escaped and raw adjacent OpenAI summary shapes", () => {
     expect(
       parseThinkingSteps(
@@ -73,6 +90,16 @@ describe("ThinkingContent", () => {
         "Prose before **First\\*\\*\\*\\*Second** and prose after.",
       ),
     ).toBe(null);
+  });
+
+  it("renders a single OpenAI summary without markdown delimiters", () => {
+    const { container } = render(
+      <ThinkingContent text="**Inspecting state**" />,
+    );
+
+    expect(container.querySelector("pre")?.textContent).toBe(
+      "Inspecting state",
+    );
   });
 
   it("renders raw adjacent summaries as a readable step list", () => {

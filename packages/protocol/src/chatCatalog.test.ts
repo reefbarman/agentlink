@@ -1,10 +1,11 @@
-import type {
-  ChatModeInfo,
-  ChatModelInfo,
-  ChatProjectInfo,
-  ChatReasoningEffort,
-  ChatSlashCommandInfo,
-  ChatSlashCommandSource,
+import {
+  projectCoreModelCatalogToChatModels,
+  type ChatModeInfo,
+  type ChatModelInfo,
+  type ChatProjectInfo,
+  type ChatReasoningEffort,
+  type ChatSlashCommandInfo,
+  type ChatSlashCommandSource,
 } from "./chatCatalog.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 
@@ -51,6 +52,55 @@ describe("chat catalog protocol", () => {
       model,
       command,
     });
+  });
+
+  it("projects readiness and truthful actions from one shared catalog snapshot", () => {
+    const models = projectCoreModelCatalogToChatModels({
+      models: [
+        {
+          id: "ready",
+          displayName: "Ready",
+          providerId: "ready-provider",
+          contextWindow: 100,
+          authenticated: false,
+          readiness: { status: "ready" },
+        },
+        {
+          id: "keyed",
+          displayName: "Keyed",
+          providerId: "key-provider",
+          contextWindow: 100,
+          authenticated: true,
+          readiness: {
+            status: "credentials_required",
+            action: { kind: "api_key", providerId: "key-provider" },
+            reason: "Missing key",
+          },
+        },
+        {
+          id: "down",
+          displayName: "Down",
+          providerId: "down-provider",
+          contextWindow: 100,
+          authenticated: false,
+          readiness: { status: "unavailable", reason: "Offline" },
+        },
+      ],
+    });
+
+    expect(models).toEqual([
+      expect.objectContaining({ authenticated: true, authAction: undefined }),
+      expect.objectContaining({
+        authenticated: false,
+        authAction: { kind: "api_key", providerId: "key-provider" },
+        unavailableReason: "Missing key",
+      }),
+      expect.objectContaining({
+        authenticated: false,
+        authAction: undefined,
+        unavailableReason: "Offline",
+      }),
+    ]);
   });
 
   it("keeps reasoning efforts and command sources closed", () => {

@@ -25,6 +25,10 @@ const REQUIRED_PATHS = [
   "dist/node_modules/apache-arrow/package.json",
   "resources/builtin-skills/documentation/SKILL.md",
   "resources/builtin-skills/documentation/README.md",
+  "resources/builtin-skills/documentation/references/capabilities.md",
+  "resources/builtin-skills/documentation/references/getting-started.md",
+  "resources/builtin-skills/documentation/references/tools.md",
+  "resources/builtin-skills/documentation/references/troubleshooting.md",
   "resources/builtin-skills/documentation/references/complete-reference.md",
   "resources/builtin-skills/documentation/references/package-contract.md",
   "resources/builtin-skills/documentation/references/release-notes.md",
@@ -37,10 +41,11 @@ const REQUIRED_PATHS = [
 ];
 
 function normalizePackagePath(value) {
-  return value
+  const normalized = value
     .trim()
     .replaceAll("\\", "/")
     .replace(/^extension\//, "");
+  return normalized === "readme.md" ? "README.md" : normalized;
 }
 
 export function verifyRetrievalPackageFiles(fileList, target) {

@@ -76,14 +76,31 @@ describe("ModelSelector", () => {
     expect(screen.getByRole("slider")).toBeTruthy();
   });
 
-  it("routes an unauthenticated model to sign-in", () => {
+  it("routes an unauthenticated model through its explicit auth action", () => {
     const onSelect = vi.fn();
     const onSignIn = vi.fn();
     render(
       <ModelSelector
         currentModel="gpt-5.6-sol"
         currentCondenseThreshold={0.9}
-        models={[models[0]!, { ...models[1]!, authenticated: false }]}
+        models={[
+          models[0]!,
+          {
+            ...models[1]!,
+            authenticated: false,
+            readiness: {
+              status: "credentials_required",
+              action: {
+                kind: "api_key",
+                providerId: "openai-compatible:openrouter-moonshotai-kimi-k3",
+              },
+            },
+            authAction: {
+              kind: "api_key",
+              providerId: "openai-compatible:openrouter-moonshotai-kimi-k3",
+            },
+          },
+        ]}
         onSelect={onSelect}
         onSignIn={onSignIn}
       />,
@@ -95,7 +112,57 @@ describe("ModelSelector", () => {
     expect(onSelect).not.toHaveBeenCalled();
     expect(onSignIn).toHaveBeenCalledWith(
       "openai-compatible:openrouter-moonshotai-kimi-k3",
+      {
+        kind: "api_key",
+        providerId: "openai-compatible:openrouter-moonshotai-kimi-k3",
+      },
     );
+  });
+
+  it("preserves setup routing for a legacy unauthenticated model", () => {
+    const onSignIn = vi.fn();
+    render(
+      <ModelSelector
+        currentModel="gpt-5.6-sol"
+        models={[models[0]!, { ...models[1]!, authenticated: false }]}
+        onSelect={vi.fn()}
+        onSignIn={onSignIn}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle(/Model: GPT-5\.6 Sol/));
+    const legacy = screen.getByRole("button", { name: /Kimi K3/ });
+    expect(legacy.textContent).toContain("Set up");
+    fireEvent.click(legacy);
+    expect(onSignIn).toHaveBeenCalledWith(
+      "openai-compatible:openrouter-moonshotai-kimi-k3",
+      undefined,
+    );
+  });
+
+  it("does not offer sign-in for a model with no truthful action", () => {
+    const onSignIn = vi.fn();
+    render(
+      <ModelSelector
+        currentModel="gpt-5.6-sol"
+        models={[
+          models[0]!,
+          {
+            ...models[1]!,
+            authenticated: false,
+            readiness: { status: "unavailable", reason: "Host offline" },
+          },
+        ]}
+        onSelect={vi.fn()}
+        onSignIn={onSignIn}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle(/Model: GPT-5\.6 Sol/));
+    const unavailable = screen.getByRole("button", { name: /Kimi K3/ });
+    expect(unavailable.textContent).toContain("Unavailable");
+    fireEvent.click(unavailable);
+    expect(onSignIn).not.toHaveBeenCalled();
   });
 
   it("groups multiple OpenRouter models together under a single OpenRouter header", () => {

@@ -11,18 +11,268 @@
   ],
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.cts",
+        "default": "./dist/cjs/index.cjs"
+      }
+    },
+    "./agent-engine": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/agentEngine.d.ts",
+        "default": "./dist/agentEngine.js"
+      },
+      "require": {
+        "types": "./dist/cjs/agentEngine.d.cts",
+        "default": "./dist/cjs/agentEngine.cjs"
+      }
+    },
+    "./agent-tool-loop": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/agentToolLoop.d.ts",
+        "default": "./dist/agentToolLoop.js"
+      },
+      "require": {
+        "types": "./dist/cjs/agentToolLoop.d.cts",
+        "default": "./dist/cjs/agentToolLoop.cjs"
+      }
+    },
+    "./host-adapter-contracts": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/hostAdapterContracts.d.ts",
+        "default": "./dist/hostAdapterContracts.js"
+      },
+      "require": {
+        "types": "./dist/cjs/hostAdapterContracts.d.cts",
+        "default": "./dist/cjs/hostAdapterContracts.cjs"
+      }
+    },
+    "./host-tools": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/hostTools.d.ts",
+        "default": "./dist/hostTools.js"
+      },
+      "require": {
+        "types": "./dist/cjs/hostTools.d.cts",
+        "default": "./dist/cjs/hostTools.cjs"
+      }
+    },
+    "./model-auth-provider": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/modelAuthProvider.d.ts",
+        "default": "./dist/modelAuthProvider.js"
+      },
+      "require": {
+        "types": "./dist/cjs/modelAuthProvider.d.cts",
+        "default": "./dist/cjs/modelAuthProvider.cjs"
+      }
+    },
+    "./model-request-scheduler": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/modelRequestScheduler.d.ts",
+        "default": "./dist/modelRequestScheduler.js"
+      },
+      "require": {
+        "types": "./dist/cjs/modelRequestScheduler.d.cts",
+        "default": "./dist/cjs/modelRequestScheduler.cjs"
+      }
+    },
+    "./model-runtime": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/modelRuntime.d.ts",
+        "default": "./dist/modelRuntime.js"
+      },
+      "require": {
+        "types": "./dist/cjs/modelRuntime.d.cts",
+        "default": "./dist/cjs/modelRuntime.cjs"
+      }
+    },
+    "./native-web-tools": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/nativeWebTools.d.ts",
+        "default": "./dist/nativeWebTools.js"
+      },
+      "require": {
+        "types": "./dist/cjs/nativeWebTools.d.cts",
+        "default": "./dist/cjs/nativeWebTools.cjs"
+      }
+    },
+    "./openai-compatible": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/openAiCompatible.d.ts",
+        "default": "./dist/openAiCompatible.js"
+      },
+      "require": {
+        "types": "./dist/cjs/openAiCompatible.d.cts",
+        "default": "./dist/cjs/openAiCompatible.cjs"
+      }
+    },
+    "./provider-stream-watchdog": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/providerStreamWatchdog.d.ts",
+        "default": "./dist/providerStreamWatchdog.js"
+      },
+      "require": {
+        "types": "./dist/cjs/providerStreamWatchdog.d.cts",
+        "default": "./dist/cjs/providerStreamWatchdog.cjs"
+      }
+    },
+    "./session-repository": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/sessionRepository.d.ts",
+        "default": "./dist/sessionRepository.js"
+      },
+      "require": {
+        "types": "./dist/cjs/sessionRepository.d.cts",
+        "default": "./dist/cjs/sessionRepository.cjs"
+      }
+    },
+    "./session-transcript-recall": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/sessionTranscriptRecall.d.ts",
+        "default": "./dist/sessionTranscriptRecall.js"
+      },
+      "require": {
+        "types": "./dist/cjs/sessionTranscriptRecall.d.cts",
+        "default": "./dist/cjs/sessionTranscriptRecall.cjs"
+      }
+    },
+    "./surface-model-messages": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/surfaceModelMessages.d.ts",
+        "default": "./dist/surfaceModelMessages.js"
+      },
+      "require": {
+        "types": "./dist/cjs/surfaceModelMessages.d.cts",
+        "default": "./dist/cjs/surfaceModelMessages.cjs"
+      }
+    },
+    "./tool-call-budget": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/toolCallBudget.d.ts",
+        "default": "./dist/toolCallBudget.js"
+      },
+      "require": {
+        "types": "./dist/cjs/toolCallBudget.d.cts",
+        "default": "./dist/cjs/toolCallBudget.cjs"
+      }
+    },
+    "./turn-contracts": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/turnContracts.d.ts",
+        "default": "./dist/turnContracts.js"
+      },
+      "require": {
+        "types": "./dist/cjs/turnContracts.d.cts",
+        "default": "./dist/cjs/turnContracts.cjs"
+      }
+    },
+    "./turn-execution": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/turnExecution.d.ts",
+        "default": "./dist/turnExecution.js"
+      },
+      "require": {
+        "types": "./dist/cjs/turnExecution.d.cts",
+        "default": "./dist/cjs/turnExecution.cjs"
+      }
+    },
+    "./turn-interactions": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/turnInteractions.d.ts",
+        "default": "./dist/turnInteractions.js"
+      },
+      "require": {
+        "types": "./dist/cjs/turnInteractions.d.cts",
+        "default": "./dist/cjs/turnInteractions.cjs"
+      }
+    },
+    "./turn-kernel": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/turnKernel.d.ts",
+        "default": "./dist/turnKernel.js"
+      },
+      "require": {
+        "types": "./dist/cjs/turnKernel.d.cts",
+        "default": "./dist/cjs/turnKernel.cjs"
+      }
+    },
+    "./turn-leases": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/turnLeases.d.ts",
+        "default": "./dist/turnLeases.js"
+      },
+      "require": {
+        "types": "./dist/cjs/turnLeases.d.cts",
+        "default": "./dist/cjs/turnLeases.cjs"
+      }
+    },
+    "./web-access": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/webAccess.d.ts",
+        "default": "./dist/webAccess.js"
+      },
+      "require": {
+        "types": "./dist/cjs/webAccess.d.cts",
+        "default": "./dist/cjs/webAccess.cjs"
+      }
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "watch": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "build": "tsc -p tsconfig.json && npm run build:cjs",
+    "build:cjs": "node build-cjs.mjs",
+    "watch": "node watch.mjs",
     "lint": "tsc -p tsconfig.json --noEmit && oxlint src --import-plugin --report-unused-disable-directives --deny-warnings",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@agentlink/protocol": "0.1.0"
+    "@agentlink/protocol": "0.1.0",
+    "ajv": "8.18.0"
   },
   "engines": {
     "node": ">=22.19.0"

@@ -27,7 +27,12 @@ describe("model setup projection", () => {
       | { kind: "checking"; selectedModelId: string }
       | { kind: "ready"; model: ModelSetupModel }
       | { kind: "credentials_required"; model: ModelSetupModel }
-      | { kind: "model_unavailable"; selectedModelId: string }
+      | { kind: "configuration_required"; model: ModelSetupModel }
+      | {
+          kind: "model_unavailable";
+          selectedModelId: string;
+          reason?: string;
+        }
     >();
   });
 

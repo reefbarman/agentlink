@@ -108,6 +108,8 @@ export type AgentEvent =
       type: "tool_start";
       toolCallId: string;
       toolName: string;
+      /** Tool call belongs to structured-result packaging, not review work. */
+      finalizationOnly?: boolean;
       parentCallId?: string;
       input?: unknown;
     }
@@ -196,6 +198,8 @@ export type AgentEvent =
   | {
       type: "api_request";
       requestId: string;
+      /** Final structured-result packaging after review work has stopped. */
+      finalizationOnly?: boolean;
       model: string;
       reasoningEffort: ReasoningEffort;
       inputTokens: number;

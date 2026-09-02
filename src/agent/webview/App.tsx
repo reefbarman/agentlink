@@ -100,7 +100,6 @@ import { StreamingStatusBar } from "./components/StreamingStatusBar";
 import { TodoPanel } from "./components/TodoPanel";
 import { TranscriptView } from "./components/TranscriptView";
 import { UrlElicitationModal } from "./components/UrlElicitationModal";
-import { detectQuestionFromAssistantText } from "./questionDetection";
 import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBaselineMetrics";
 import { isForwardedBuiltinCommand } from "@agentlink/protocol/builtin-command-forwarding";
 import { deriveModelSetupState } from "@agentlink/protocol/model-setup";
@@ -2417,15 +2416,10 @@ export function App({
             break;
           }
 
-          let detected = msg.detected;
-          if (msg.fallback) {
-            detected = detectQuestionFromAssistantText(active.assistantText);
-          }
-
           dispatch({
             type: "SET_DETECTED_QUESTION",
-            detectedQuestion: detected
-              ? { ...detected, messageId: active.messageId }
+            detectedQuestion: msg.detected
+              ? { ...msg.detected, messageId: active.messageId }
               : null,
           });
           break;
@@ -3054,8 +3048,10 @@ export function App({
       action:
         | "codex"
         | "openai-api-key"
+        | "openai-compatible-api-key"
         | "anthropic-api-key"
         | "configure-provider",
+      provider?: string,
     ) => {
       switch (action) {
         case "codex":
@@ -3068,6 +3064,12 @@ export function App({
           vscodeApi.postMessage({
             command: "agentCodexSignIn",
             method: "apiKey",
+          });
+          break;
+        case "openai-compatible-api-key":
+          vscodeApi.postMessage({
+            command: "agentOpenAiCompatibleSignIn",
+            provider,
           });
           break;
         case "anthropic-api-key":
@@ -3084,19 +3086,37 @@ export function App({
   );
 
   const handleSignIn = useCallback(
-    (provider: string) => {
-      if (
-        provider.toLowerCase() === "codex" ||
-        provider.toLowerCase() === "openai"
-      ) {
-        vscodeApi.postMessage({ command: "agentCodexSignIn" });
-      } else if (provider.toLowerCase() === "anthropic") {
+    (
+      provider: string,
+      action?: import("@agentlink/protocol/model-catalog").CoreModelCatalogAuthAction,
+    ) => {
+      if (action?.kind === "configure_provider") {
+        vscodeApi.postMessage({
+          command: "agentConfigureOpenAiCompatibleModel",
+        });
+      } else if (action?.kind === "api_key" && provider === "anthropic") {
         vscodeApi.postMessage({ command: "agentAnthropicSignIn" });
-      } else if (provider.toLowerCase().startsWith("openai-compatible:")) {
+      } else if (
+        action?.kind === "api_key" &&
+        provider.startsWith("openai-compatible:")
+      ) {
         vscodeApi.postMessage({
           command: "agentOpenAiCompatibleSignIn",
-          provider,
+          provider: action.providerId,
         });
+      } else if (action?.kind === "oauth") {
+        vscodeApi.postMessage({ command: "agentCodexSignIn", method: "oauth" });
+      } else if (!action) {
+        if (provider === "anthropic") {
+          vscodeApi.postMessage({ command: "agentAnthropicSignIn" });
+        } else if (provider.startsWith("openai-compatible:")) {
+          vscodeApi.postMessage({
+            command: "agentOpenAiCompatibleSignIn",
+            provider,
+          });
+        } else {
+          vscodeApi.postMessage({ command: "agentCodexSignIn" });
+        }
       }
     },
     [vscodeApi],
@@ -4801,7 +4821,8 @@ export function App({
               sendBlockedReason={
                 modelSetupState.kind === "checking"
                   ? "Checking model setup before AgentLink can send a message."
-                  : modelSetupState.kind === "credentials_required"
+                  : modelSetupState.kind === "credentials_required" ||
+                      modelSetupState.kind === "configuration_required"
                     ? `Set up ${modelSetupState.model.providerDisplayName ?? modelSetupState.model.provider} before sending a message.`
                     : modelSetupState.kind === "model_unavailable"
                       ? "Choose an available model before sending a message."

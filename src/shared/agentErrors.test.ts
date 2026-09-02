@@ -15,7 +15,7 @@ import {
 } from "./agentErrors.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import { createOpenAiCompatibleHttpError } from "../core/model/providers/openaiCompatible/errors.js";
+import { createOpenAiCompatibleHttpError } from "@agentlink/core/openai-compatible";
 
 // Trimmed Cloudflare 5xx page: the SVG path digits ("10.4013") historically
 // tripped the "401" auth-message classifier.

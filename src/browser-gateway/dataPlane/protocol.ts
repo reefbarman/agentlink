@@ -4,8 +4,17 @@ import {
   BROWSER_GATEWAY_CAPABILITY_STATES,
   type BrowserGatewayCapabilityStatus,
 } from "@agentlink/protocol/browser-gateway-capability-status";
+import type {
+  BrowserGatewayChatTabStatus,
+  BrowserGatewayChatTabSummary,
+  BrowserGatewayChatWorkspaceSummary,
+} from "@agentlink/protocol/browser-gateway-chat-workspace-summary";
 import type { BrowserGatewayContextBudget } from "@agentlink/protocol/browser-gateway-context-budget";
 import type { BrowserGatewayDiffPreview } from "@agentlink/protocol/browser-gateway-diff-preview";
+import type {
+  BrowserGatewayForegroundControlState,
+  BrowserGatewayRevertRecoveryNotice,
+} from "@agentlink/protocol/browser-gateway-foreground-control-state";
 import type { BrowserGatewayInteractionState } from "@agentlink/protocol/browser-gateway-interaction-state";
 import {
   BROWSER_GATEWAY_INTERACTION_KINDS,
@@ -16,16 +25,10 @@ import {
   BROWSER_GATEWAY_OPERATION_STATUSES,
   type BrowserGatewayOperationState,
 } from "@agentlink/protocol/browser-gateway-operation-state";
-import {
-  BROWSER_GATEWAY_OWNER_CONTROL_KINDS,
-  BROWSER_GATEWAY_RELAY_RESET_REASONS,
-  type BrowserGatewayOwnerControlKind,
-  type BrowserGatewayRelayResetReason,
-} from "@agentlink/protocol/browser-gateway-owner-control-metadata";
-import {
-  BROWSER_GATEWAY_OWNER_EVENT_KINDS,
-  type BrowserGatewayOwnerEventKind,
-} from "@agentlink/protocol/browser-gateway-owner-event-metadata";
+import type { BrowserGatewayOwnerCheckpoint } from "@agentlink/protocol/browser-gateway-owner-checkpoint";
+import type { BrowserGatewayOwnerCommand } from "@agentlink/protocol/browser-gateway-owner-command";
+import type { BrowserGatewayOwnerCommandAck } from "@agentlink/protocol/browser-gateway-owner-command-ack";
+import type { BrowserGatewayOwnerCommandBody } from "@agentlink/protocol/browser-gateway-owner-command-body";
 import {
   BROWSER_GATEWAY_COMMAND_DEADLINE_CLASSES,
   BROWSER_GATEWAY_COMMAND_IDEMPOTENCIES,
@@ -35,14 +38,42 @@ import {
   type BrowserGatewayCommandIdempotency,
   type BrowserGatewayOwnerCommandKind,
 } from "@agentlink/protocol/browser-gateway-owner-command-metadata";
+import type { BrowserGatewayOwnerControl } from "@agentlink/protocol/browser-gateway-owner-control";
+import {
+  BROWSER_GATEWAY_OWNER_CONTROL_KINDS,
+  BROWSER_GATEWAY_RELAY_RESET_REASONS,
+  type BrowserGatewayOwnerControlKind,
+  type BrowserGatewayRelayResetReason,
+} from "@agentlink/protocol/browser-gateway-owner-control-metadata";
+import type {
+  BrowserGatewayOwnerEvent,
+  BrowserGatewayOwnerEventPayload,
+} from "@agentlink/protocol/browser-gateway-owner-event";
+import {
+  BROWSER_GATEWAY_OWNER_EVENT_KINDS,
+  type BrowserGatewayOwnerEventKind,
+} from "@agentlink/protocol/browser-gateway-owner-event-metadata";
+import type { BrowserGatewayOwnerPublicationBatch } from "@agentlink/protocol/browser-gateway-owner-publication-batch";
 import {
   BROWSER_GATEWAY_QUEUE_ITEM_STATES,
   type BrowserGatewayQueueItem,
 } from "@agentlink/protocol/browser-gateway-queue-item";
 import type { BrowserGatewayRepositoryState } from "@agentlink/protocol/browser-gateway-repository-state";
+import type {
+  BrowserGatewayProjectSummary,
+  BrowserGatewaySessionCatalog,
+  BrowserGatewaySessionSummary,
+} from "@agentlink/protocol/browser-gateway-session-catalog";
+import type {
+  BrowserGatewayChatTabSelection,
+  BrowserGatewayOwnerRegistration,
+  BrowserGatewayRelayReset,
+} from "@agentlink/protocol/browser-gateway-data-plane-transport";
+import { BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION } from "@agentlink/protocol/browser-gateway-data-plane-version";
 import type { BrowserGatewayTranscriptBlock } from "@agentlink/protocol/browser-gateway-transcript-block";
 import type { BrowserGatewayTranscriptMessage } from "@agentlink/protocol/browser-gateway-transcript-message";
 import type { BrowserGatewayTranscriptText } from "@agentlink/protocol/browser-gateway-transcript-text";
+import type { BrowserGatewayTranscriptWindow } from "@agentlink/protocol/browser-gateway-transcript-window";
 import {
   BROWSER_GATEWAY_TODO_ITEM_STATES,
   type BrowserGatewayTodoItem,
@@ -60,8 +91,11 @@ import {
   CORE_REASONING_EFFORTS,
   type CoreReasoningEffort,
 } from "@agentlink/protocol/model-catalog";
+import {
+  BrowserGatewayProtocolError,
+  type BrowserGatewayProtocolErrorCode,
+} from "@agentlink/protocol/browser-gateway-protocol-error";
 import type { ContextHealthSnapshot } from "@agentlink/protocol/context-health";
-import type { RevertRecoveryNotice } from "@agentlink/protocol/session-hydration";
 import { utf8ByteLength } from "../../shared/streamingBaselineMetrics.js";
 import {
   BROWSER_GATEWAY_COMMAND_DEADLINE_MS_BY_CLASS,
@@ -71,8 +105,17 @@ import {
 
 export type { BrowserGatewayBackgroundSummary } from "@agentlink/protocol/browser-gateway-background-summary";
 export type { BrowserGatewayCapabilityStatus } from "@agentlink/protocol/browser-gateway-capability-status";
+export type {
+  BrowserGatewayChatTabStatus,
+  BrowserGatewayChatTabSummary,
+  BrowserGatewayChatWorkspaceSummary,
+} from "@agentlink/protocol/browser-gateway-chat-workspace-summary";
 export type { BrowserGatewayContextBudget } from "@agentlink/protocol/browser-gateway-context-budget";
 export type { BrowserGatewayDiffPreview } from "@agentlink/protocol/browser-gateway-diff-preview";
+export type {
+  BrowserGatewayForegroundControlState,
+  BrowserGatewayRevertRecoveryNotice,
+} from "@agentlink/protocol/browser-gateway-foreground-control-state";
 export type { BrowserGatewayInteractionState } from "@agentlink/protocol/browser-gateway-interaction-state";
 export type { BrowserGatewayInteractionSummary } from "@agentlink/protocol/browser-gateway-interaction-summary";
 export {
@@ -80,16 +123,26 @@ export {
   type BrowserGatewayOperationState,
   type BrowserGatewayOperationStatus,
 } from "@agentlink/protocol/browser-gateway-operation-state";
+export type { BrowserGatewayOwnerControl } from "@agentlink/protocol/browser-gateway-owner-control";
 export {
   BROWSER_GATEWAY_OWNER_CONTROL_KINDS,
   BROWSER_GATEWAY_RELAY_RESET_REASONS,
   type BrowserGatewayOwnerControlKind,
   type BrowserGatewayRelayResetReason,
 } from "@agentlink/protocol/browser-gateway-owner-control-metadata";
+export type {
+  BrowserGatewayOwnerEvent,
+  BrowserGatewayOwnerEventPayload,
+} from "@agentlink/protocol/browser-gateway-owner-event";
 export {
   BROWSER_GATEWAY_OWNER_EVENT_KINDS,
   type BrowserGatewayOwnerEventKind,
 } from "@agentlink/protocol/browser-gateway-owner-event-metadata";
+export type { BrowserGatewayOwnerPublicationBatch } from "@agentlink/protocol/browser-gateway-owner-publication-batch";
+export type { BrowserGatewayOwnerCheckpoint } from "@agentlink/protocol/browser-gateway-owner-checkpoint";
+export type { BrowserGatewayOwnerCommand } from "@agentlink/protocol/browser-gateway-owner-command";
+export type { BrowserGatewayOwnerCommandAck } from "@agentlink/protocol/browser-gateway-owner-command-ack";
+export type { BrowserGatewayOwnerCommandBody } from "@agentlink/protocol/browser-gateway-owner-command-body";
 export {
   BROWSER_GATEWAY_COMMAND_DEADLINE_CLASSES,
   BROWSER_GATEWAY_COMMAND_IDEMPOTENCIES,
@@ -101,9 +154,21 @@ export {
 } from "@agentlink/protocol/browser-gateway-owner-command-metadata";
 export type { BrowserGatewayQueueItem } from "@agentlink/protocol/browser-gateway-queue-item";
 export type { BrowserGatewayRepositoryState } from "@agentlink/protocol/browser-gateway-repository-state";
+export type {
+  BrowserGatewayProjectSummary,
+  BrowserGatewaySessionCatalog,
+  BrowserGatewaySessionSummary,
+} from "@agentlink/protocol/browser-gateway-session-catalog";
+export type {
+  BrowserGatewayChatTabSelection,
+  BrowserGatewayOwnerRegistration,
+  BrowserGatewayRelayReset,
+} from "@agentlink/protocol/browser-gateway-data-plane-transport";
+export { BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION } from "@agentlink/protocol/browser-gateway-data-plane-version";
 export type { BrowserGatewayTranscriptBlock } from "@agentlink/protocol/browser-gateway-transcript-block";
 export type { BrowserGatewayTranscriptMessage } from "@agentlink/protocol/browser-gateway-transcript-message";
 export type { BrowserGatewayTranscriptText } from "@agentlink/protocol/browser-gateway-transcript-text";
+export type { BrowserGatewayTranscriptWindow } from "@agentlink/protocol/browser-gateway-transcript-window";
 export type { BrowserGatewayTodoItem } from "@agentlink/protocol/browser-gateway-todo-item";
 export type {
   BrowserGatewayThemeState,
@@ -113,301 +178,10 @@ export type {
   BrowserGatewayDataPlaneIdentity,
   BrowserGatewayDetailHandle,
 } from "@agentlink/protocol/browser-gateway-data-plane-identity";
-
-export const BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION = "1";
-
-export type BrowserGatewayRevertRecoveryNotice = RevertRecoveryNotice;
-
-export interface BrowserGatewayForegroundControlState {
-  sessionId: string;
-  title: string;
-  originalPrompt?: string;
-  mode: string;
-  model: string;
-  status: string;
-  interactiveExecutionPhase?: import("../../agent/types.js").InteractiveExecutionPhase;
-  streaming: boolean;
-  interrupted?: boolean;
-  estimatedTokens?: number;
-  maximumTokens?: number;
-  statusOverride?: string | null;
-  thinkingEnabled?: boolean;
-  reasoningEffort?:
-    | "none"
-    | "minimal"
-    | "low"
-    | "medium"
-    | "high"
-    | "xhigh"
-    | "max";
-  lastInputTokens?: number;
-  lastOutputTokens?: number;
-  lastCacheReadTokens?: number;
-  contextBudget?: BrowserGatewayContextBudget;
-  contextHealth?: ContextHealthSnapshot | null;
-  condenseThreshold?: number;
-  agentWriteApproval?: "prompt" | "session" | "project" | "global";
-  commandApprovalPolicy?: "manual" | "safe" | "approve-for-me" | "sensitive";
-  approvalPolicy?: "on-request";
-  approvalReviewer?: "user" | "auto-review";
-  executionPreset?: "native-manual" | "workspace-write";
-  configuredCommandApprovalPolicy?: "manual" | "safe" | "sensitive";
-  restoringSession?: boolean;
-  revertRecoveryNotice?: BrowserGatewayRevertRecoveryNotice | null;
-}
-
-export interface BrowserGatewayProjectSummary {
-  projectId: string;
-  displayName: string;
-  availability: "available" | "unavailable";
-}
-
-export interface BrowserGatewaySessionSummary {
-  sessionId: string;
-  projectId: string | null;
-  title: string;
-  mode: string;
-  model: string;
-  messageCount: number;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export type BrowserGatewayChatTabStatus =
-  | "idle"
-  | "streaming"
-  | "queued_for_provider"
-  | "queued_for_workspace_write"
-  | "needs_input"
-  | "failed"
-  | "completed";
-
-export interface BrowserGatewayChatTabSummary {
-  tabId: string;
-  displayNumber: number;
-  label: string;
-  sessionId: string | null;
-  placement: "docked" | "popped";
-  title?: string;
-  status: BrowserGatewayChatTabStatus;
-  busy: boolean;
-  needsAttention?: boolean;
-  mode?: string;
-  model?: string;
-  interactiveExecutionPhase?: import("../../agent/types.js").InteractiveExecutionPhase;
-  estimatedTokens?: number;
-  maximumTokens?: number;
-}
-
-export interface BrowserGatewayChatWorkspaceSummary {
-  controllerEpoch: string;
-  focusedTabId: string;
-  tabs: BrowserGatewayChatTabSummary[];
-}
-
-export interface BrowserGatewaySessionCatalog {
-  projects: BrowserGatewayProjectSummary[];
-  sessions: BrowserGatewaySessionSummary[];
-  defaultProjectId: string | null;
-  foregroundSessionId: string | null;
-  chatWorkspace?: BrowserGatewayChatWorkspaceSummary | null;
-}
-
-export interface BrowserGatewayChatTabSelection {
-  instanceId: string;
-  tabId: string;
-  sessionId: string | null;
-}
-
-export interface BrowserGatewayTranscriptWindow {
-  messages: BrowserGatewayTranscriptMessage[];
-  earlierCursor: string | null;
-  hasEarlier: boolean;
-}
-
-export interface BrowserGatewayOwnerCheckpoint extends BrowserGatewayDataPlaneIdentity {
-  protocolVersion: typeof BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION;
-  checkpointId: string;
-  checkpointSequence: number;
-  emittedAt: number;
-  foreground: BrowserGatewayForegroundControlState | null;
-  catalog: BrowserGatewaySessionCatalog;
-  transcript: BrowserGatewayTranscriptWindow;
-  ui: BrowserGatewayInteractionState;
-  background: BrowserGatewayBackgroundSummary[];
-  fleet: BrowserGatewayBackgroundSummary[];
-  diffs: BrowserGatewayDiffPreview[];
-  repository: BrowserGatewayRepositoryState | null;
-  theme: BrowserGatewayThemeState;
-  modelCatalogRevision: string;
-  pluginCatalogRevision?: string;
-  capabilities: BrowserGatewayCapabilityStatus[];
-}
-
-export type BrowserGatewayOwnerEventPayload =
-  | { foreground: BrowserGatewayForegroundControlState | null }
-  | { catalog: BrowserGatewaySessionCatalog }
-  | { message: BrowserGatewayTranscriptMessage }
-  | {
-      messageId: string;
-      blockId: string;
-      field: "text" | "thinking";
-      delta: string;
-      revision: number;
-    }
-  | BrowserGatewayTranscriptWindow
-  | { interaction: BrowserGatewayInteractionSummary | null }
-  | { queue: BrowserGatewayQueueItem[] }
-  | { todos: BrowserGatewayTodoItem[] }
-  | { sessions: BrowserGatewayBackgroundSummary[] }
-  | { diffs: BrowserGatewayDiffPreview[] }
-  | { repository: BrowserGatewayRepositoryState | null }
-  | { theme: BrowserGatewayThemeState }
-  | { revision: string }
-  | { capabilities: BrowserGatewayCapabilityStatus[] }
-  | { operation: BrowserGatewayOperationState };
-
-export interface BrowserGatewayOwnerEvent extends BrowserGatewayDataPlaneIdentity {
-  protocolVersion: typeof BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION;
-  ownerSequence: number;
-  eventId: string;
-  kind: BrowserGatewayOwnerEventKind;
-  emittedAt: number;
-  payload: BrowserGatewayOwnerEventPayload;
-}
-
-export interface BrowserGatewayOwnerPublicationBatch extends BrowserGatewayDataPlaneIdentity {
-  protocolVersion: typeof BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION;
-  batchId: string;
-  firstSequence: number;
-  lastSequence: number;
-  checkpoint: BrowserGatewayOwnerCheckpoint | null;
-  events: BrowserGatewayOwnerEvent[];
-}
-
-export type BrowserGatewayOwnerCommandBody =
-  | { kind: "session.select"; sessionId: string }
-  | {
-      kind: "session.detail";
-      instanceId: string;
-      controllerEpoch: string;
-      tabId: string;
-      sessionId: string;
-    }
-  | {
-      kind: "session.send";
-      sessionId: string;
-      text: string;
-      detailHandles: BrowserGatewayDetailHandle[];
-    }
-  | { kind: "session.stop"; sessionId: string }
-  | {
-      kind: "approval.respond";
-      requestId: string;
-      decision: "approve" | "reject";
-    }
-  | {
-      kind: "question.respond";
-      requestId: string;
-      responseHandle: BrowserGatewayDetailHandle;
-    }
-  | { kind: "history.load"; cursor: string; count: number }
-  | { kind: "diff.detail"; requestId: string };
-
-interface BrowserGatewayOwnerControlBase extends BrowserGatewayDataPlaneIdentity {
-  protocolVersion: typeof BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION;
-  emittedAt: number;
-}
-
-export type BrowserGatewayOwnerControl =
-  | (BrowserGatewayOwnerControlBase & {
-      kind: "hello";
-      payload: { publicationCursor: number; subscriberCount: number };
-    })
-  | (BrowserGatewayOwnerControlBase & {
-      kind: "demand.changed";
-      payload: { subscriberCount: number };
-    })
-  | (BrowserGatewayOwnerControlBase & {
-      kind: "checkpoint.requested";
-      payload: {
-        reason: Extract<
-          BrowserGatewayRelayResetReason,
-          "sequence_gap" | "subscription_changed" | "checkpoint_required"
-        >;
-        latestSequence: number;
-      };
-    })
-  | (BrowserGatewayOwnerControlBase & {
-      kind: "command.cancelled";
-      payload: { operationId: string };
-    })
-  | (BrowserGatewayOwnerControlBase & {
-      kind: "drain";
-      payload: { deadlineAt: number };
-    });
-
-export interface BrowserGatewayOwnerCommand extends BrowserGatewayDataPlaneIdentity {
-  protocolVersion: typeof BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION;
-  operationId: string;
-  emittedAt: number;
-  deadlineAt: number;
-  deadlineClass: BrowserGatewayCommandDeadlineClass;
-  idempotency: BrowserGatewayCommandIdempotency;
-  command: BrowserGatewayOwnerCommandBody;
-}
-
-export interface BrowserGatewayOwnerCommandAck extends BrowserGatewayDataPlaneIdentity {
-  protocolVersion: typeof BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION;
-  operation: BrowserGatewayOperationState;
-  acknowledgedAt: number;
-}
-
-export interface BrowserGatewayOwnerRegistration extends BrowserGatewayDataPlaneIdentity {
-  protocolVersion: typeof BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION;
-  requestedOwnerId: string;
-  displayName: string;
-  ownerKind:
-    | "vscode"
-    | "browser-gateway"
-    | "cli"
-    | "desktop"
-    | "server"
-    | "test";
-  scope:
-    | { kind: "workspace"; workspaceId: string; displayName: string }
-    | { kind: "projectless"; scopeId: string; displayName: string };
-  capabilities: BrowserGatewayCapabilityStatus[];
-  registeredAt: number;
-}
-
-export interface BrowserGatewayRelayReset extends BrowserGatewayDataPlaneIdentity {
-  protocolVersion: typeof BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION;
-  reason: BrowserGatewayRelayResetReason;
-  latestSequence: number;
-  subscriptionId?: string;
-}
-
-export type BrowserGatewayProtocolErrorCode =
-  | "invalid_type"
-  | "invalid_value"
-  | "unknown_field"
-  | "unsupported_version"
-  | "unsupported_kind"
-  | "resource_limit"
-  | "sequence_mismatch"
-  | "identity_mismatch";
-
-export class BrowserGatewayProtocolError extends Error {
-  constructor(
-    readonly code: BrowserGatewayProtocolErrorCode,
-    readonly path: string,
-    message: string,
-  ) {
-    super(`${path}: ${message}`);
-    this.name = "BrowserGatewayProtocolError";
-  }
-}
+export {
+  BrowserGatewayProtocolError,
+  type BrowserGatewayProtocolErrorCode,
+} from "@agentlink/protocol/browser-gateway-protocol-error";
 
 const EVENT_KINDS = new Set<string>(BROWSER_GATEWAY_OWNER_EVENT_KINDS);
 const COMMAND_KINDS = new Set<string>(BROWSER_GATEWAY_OWNER_COMMAND_KINDS);

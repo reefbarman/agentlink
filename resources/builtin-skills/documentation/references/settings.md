@@ -49,7 +49,7 @@ MCP servers are configured in `mcp.json` files, not VS Code settings — see `re
 - `background.reviewTarget` — machine-scoped provider map for review backends. Each foreground-provider entry (`codex`, `openai-compatible:<connection-id>`, …), plus optional `default`, requires `{ target, effort? }`; target is `native:auto`, `acp:<id>`, or deterministic `model:<local-model-id>`, and effort is checked against the resolved model. ACP targets control their own effort. Unmapped providers use `default`, then legacy `background.reviewAgent`. An explicit spawn `model`/`provider` still wins
 - `background.acpAgents` — ACP-compatible stdio agent definitions
 - `background.maxConcurrent` — concurrent background agent cap
-- `bgSummary.mode` — how background-agent status strings are summarized
+- Background-agent status strings are inferred locally from terminal state, the active tool, and bounded streamed text; they do not make separate model requests.
 
 ## Providers
 
@@ -67,14 +67,13 @@ MCP servers are configured in `mcp.json` files, not VS Code settings — see `re
 - `semanticSearchEnabled`, `semanticEmbeddingsEnabled`, `autoIndex`, `indexExclusions`, `chunkGranularity`
 - Embedded local LanceDB stores support lexical and structural indexing/search without credentials and are enabled by default. `semanticEmbeddingsEnabled` remains off until explicitly set to `true`; only then can AgentLink send indexed source chunks and search queries to OpenAI for vector and hybrid ranking. Configuring credentials alone never enables embeddings. Each canonical project/workspace-folder root has a reusable code store, isolating unrelated projects while allowing windows that reference the same project to share its index. Current production retrieval does not require Qdrant; legacy Qdrant data and code rows in the former global store require a per-project rebuild rather than in-place migration.
 
-## OpenAI-compatible connections and helper endpoint
+## OpenAI-compatible connections
 
 - Use **AgentLink: Configure OpenAI-compatible Model** for guided add-only setup. It can query OpenRouter or generic `/models` catalogs, uses editable conservative defaults when metadata is unavailable, and creates one model backed by one connection. Edit/remove entries and advanced multi-model/headers/auxiliary configuration remain in User Settings JSON.
 - `openaiCompatible.connections` — machine-scoped named Chat Completions-compatible connections with nested models. Connections own endpoint/auth/profile behavior, including the bounded `reasoningEffortMode` request mapping (`none`, `reasoning_effort`, `reasoning.effort`, or `output_config.effort`); models own stable local IDs, opaque wire IDs, context/output limits, declared tool/thinking/image capabilities, and optional `modelFamily` prompt behavior (`anthropic` or `openai`) for proxy-hosted vendor models.
 - The wizard can select or create a named SecretStorage credential; maintain credentials separately with **AgentLink: Set OpenAI-compatible API Key** and **AgentLink: Clear OpenAI-compatible API Key**. Settings hold only non-secret `authKey` names; values remain in VS Code SecretStorage.
 - Authenticated endpoints must use HTTPS or loopback HTTP unless `allowInsecureHttp` is explicitly enabled. AgentLink rejects redirects and unsafe static headers.
-- `openaiCompatible.baseUrl`, `.model`, `.apiKey`, and `.timeoutMs` are separate, window-scoped helper configuration for question detection/background summaries (for example LM Studio). The plaintext `.apiKey` is not used by configured chat connections.
-- `questionDetection.mode` — heuristic vs LLM question detection
+- Choice-prompt buttons use local regex detection and do not make separate model requests.
 
 ## Codex / OpenAI provider
 

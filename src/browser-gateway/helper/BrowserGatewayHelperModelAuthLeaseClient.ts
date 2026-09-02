@@ -13,7 +13,7 @@ import type {
 } from "../protocol.js";
 
 import type { CoreModelAuthLease } from "@agentlink/protocol/model-auth";
-import type { CoreModelAuthProvider } from "../../core/modelAuthProvider.js";
+import type { CoreModelAuthProvider } from "@agentlink/core/model-auth-provider";
 import type { CoreModelCatalogEntry } from "@agentlink/protocol/model-catalog";
 
 export interface BrowserGatewayResolvedModelAuthMetadata {

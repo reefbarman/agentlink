@@ -8,7 +8,7 @@ import type {
 } from "./browserGatewayAskAgentSessionStore.js";
 
 import { CORE_WEB_ACCESS_DEFAULT_MAX_REPLAY_BYTES_PER_TURN } from "../core/webAccess.js";
-import type { CoreModelMessage } from "../core/modelRuntime.js";
+import type { CoreModelMessage } from "@agentlink/core/model-runtime";
 import { writeTextFileAtomic } from "./atomicFile.js";
 
 const HISTORY_DIR = path.join(os.homedir(), ".agentlink");

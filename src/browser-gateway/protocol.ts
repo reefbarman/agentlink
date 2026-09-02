@@ -13,7 +13,7 @@ import type {
 import type { BrowserGatewayCoreOwnerRegistrationResolution } from "./coreOwnerRegistry.js";
 import type { BrowserGatewayDataPlaneFeature } from "@agentlink/protocol/browser-gateway-helper-lifecycle";
 import type { CoreModelCatalogEntry } from "@agentlink/protocol/model-catalog";
-import type { OpenAiCompatibleRuntimeProfile } from "../core/model/providers/openaiCompatible/types.js";
+import type { OpenAiCompatibleRuntimeProfile } from "@agentlink/core/openai-compatible";
 import type { PromptProfileResolution } from "@agentlink/protocol/prompt-profile";
 
 export {

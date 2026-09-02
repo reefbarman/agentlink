@@ -5,8 +5,8 @@ import {
 } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER } from "@agentlink/core/model-request-scheduler";
 import { createServer } from "http";
-import { MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER } from "../core/modelRequestScheduler.js";
 
 describe("installAgentLinkHttpDispatcher integration", () => {
   const originalDispatcher = getGlobalDispatcher();

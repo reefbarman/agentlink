@@ -10,8 +10,8 @@ import {
   type OpenAiCompatibleModelConfigurationWizardDependencies,
 } from "./openAiCompatibleModelConfigurationWizard.js";
 import { getOpenAiCompatibleSecretKey } from "./openAiCompatibleSecrets.js";
-import { normalizeOpenAiCompatibleConnections } from "./providers/openaiCompatible/config.js";
-import type { DiscoveredOpenAiCompatibleModel } from "./providers/openaiCompatible/modelDiscovery.js";
+import { normalizeOpenAiCompatibleConnections } from "@agentlink/core/openai-compatible";
+import type { DiscoveredOpenAiCompatibleModel } from "@agentlink/core/openai-compatible";
 
 const {
   showQuickPick,

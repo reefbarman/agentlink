@@ -129,7 +129,7 @@ import { BrowserGatewayHelperAdminClient } from "./browser-gateway/helper/Browse
 import { BrowserGatewayHelperLeaseClient } from "./browser-gateway/helper/BrowserGatewayHelperLeaseClient.js";
 import { BrowserGatewayHelperModelAuthLeaseClient } from "./browser-gateway/helper/BrowserGatewayHelperModelAuthLeaseClient.js";
 import type { BrowserGatewayCoreOwnerLeaseRegistration } from "./browser-gateway/protocol.js";
-import type { CoreModelCatalogEntry } from "@agentlink/protocol/model-catalog";
+
 import { normalizeMaxConcurrentModelRequests } from "./core/modelRequestScheduler.js";
 import { normalizeBrowserGatewayModelCredentialProviderId } from "./browser-gateway/browserGatewayModelProviderIds.js";
 import { setBrowserGatewayRegistryLogger } from "./browser-gateway/browserGatewayRegistry.js";
@@ -1578,23 +1578,8 @@ export async function activate(
       const client = browserGatewayHelperModelAuthLeaseClient;
       if (!discovery?.helperGenerationId || !client) return false;
       try {
-        const models = (await chatViewProvider.getBrowserModels()).map(
-          (model): CoreModelCatalogEntry => ({
-            id: model.id,
-            displayName: model.displayName,
-            providerId: model.provider,
-            contextWindow: model.contextWindow,
-            maxInputTokens: model.maxInputTokens,
-            maxOutputTokens: model.maxOutputTokens,
-            reasoningEfforts: model.reasoningEfforts,
-            defaultReasoningEffort: model.defaultReasoningEffort,
-            providerDisplayName: model.providerDisplayName,
-            supportsToolUse: model.supportsToolUse,
-            supportsImages: model.supportsImages,
-            authenticated: model.authenticated,
-            condenseThreshold: model.condenseThreshold,
-          }),
-        );
+        const { models } =
+          await chatViewProvider.getBrowserModelCatalogSnapshot();
         const activeScope =
           agentSessionManager.getForegroundSession()?.projectScope ??
           agentSessionManager.getDefaultProjectScope();
@@ -2950,10 +2935,11 @@ export async function activate(
         callerSessionId,
         sessionId,
       ),
-    onGetBackgroundResult: (callerSessionId, sessionId) =>
+    onGetBackgroundResult: (callerSessionId, sessionId, waitSeconds) =>
       agentSessionManager.waitForAuthorizedBackgroundContent(
         callerSessionId,
         sessionId,
+        waitSeconds,
       ),
     onKillBackground: (callerSessionId, sessionId, reason) =>
       agentSessionManager.killAuthorizedBackground(

@@ -11,91 +11,6 @@ export interface BackgroundDisplayStatusInput {
   statusDetail?: string;
 }
 
-export interface BackgroundStatusSummary {
-  shortStatus?: string;
-  generatedAt?: number;
-  inFlight: boolean;
-}
-
-export interface PickBackgroundDisplayStatusInput {
-  status: BackgroundStatus;
-  heuristicStatus: string;
-  summary: BackgroundStatusSummary;
-  now?: number;
-}
-
-export interface PickedBackgroundDisplayStatus {
-  displayStatus: string;
-  displayStatusSource: "terminal" | "model" | "heuristic";
-}
-
-export function normalizeBackgroundStatusPhrase(status: string): string {
-  const raw = status.trim();
-  if (!raw) return "";
-
-  const normalized = raw
-    .toLowerCase()
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  const directMap: Record<string, string> = {
-    "streaming active": "Thinking…",
-    streaming: "Thinking…",
-    "streaming thinking": "Thinking…",
-    "streaming file analysis": "Reviewing code",
-    "streaming file list": "Scanning files",
-    "file analysis": "Reviewing code",
-    "file list": "Scanning files",
-    analysis: "Reviewing code",
-    reviewing: "Reviewing code",
-    "tool call": "Running tool",
-    "tool calls": "Running tools",
-    "tool execution": "Running tool",
-    executing: "Running tool",
-    done: "Done",
-    complete: "Done",
-    completed: "Done",
-    finished: "Done",
-    cancel: "Cancelled",
-    cancelled: "Cancelled",
-    canceled: "Cancelled",
-    error: "Error",
-    failed: "Error",
-    waiting: "Awaiting input",
-    "awaiting approval": "Awaiting approval",
-    approval: "Awaiting approval",
-  };
-
-  if (directMap[normalized]) return directMap[normalized];
-
-  if (normalized.startsWith("streaming ")) {
-    const rest = normalized.replace(/^streaming\s+/, "");
-    if (rest.includes("file") && rest.includes("analysis")) {
-      return "Reviewing code";
-    }
-    if (rest.includes("file") && rest.includes("list")) {
-      return "Scanning files";
-    }
-    if (rest.includes("tool")) {
-      return "Running tool";
-    }
-    if (
-      rest.includes("search") ||
-      rest.includes("inspect") ||
-      rest.includes("analy")
-    ) {
-      return "Reviewing code";
-    }
-    return "Thinking…";
-  }
-
-  return normalized
-    .split(" ")
-    .map((word) => (word ? word[0].toUpperCase() + word.slice(1) : word))
-    .join(" ");
-}
-
 export function inferBackgroundDisplayStatus(
   args: BackgroundDisplayStatusInput,
 ): string {
@@ -115,8 +30,11 @@ export function inferBackgroundDisplayStatus(
   if (args.status === "cancelled") return "Cancelled";
   if (args.status === "error") return "Error";
 
-  if (args.statusDetail?.trim()) {
-    return args.statusDetail;
+  const statusDetail = args.statusDetail?.trim();
+  if (statusDetail) {
+    return statusDetail.length > 80
+      ? `${statusDetail.slice(0, 79).trimEnd()}…`
+      : statusDetail;
   }
 
   const isTestCommand =
@@ -201,50 +119,4 @@ export function inferBackgroundDisplayStatus(
   }
 
   return "Thinking…";
-}
-
-export function pickBackgroundDisplayStatus(
-  args: PickBackgroundDisplayStatusInput,
-): PickedBackgroundDisplayStatus {
-  if (args.status === "idle") {
-    return { displayStatus: "Done", displayStatusSource: "terminal" };
-  }
-  if (args.status === "error") {
-    return { displayStatus: "Error", displayStatusSource: "terminal" };
-  }
-  if (args.status === "cancelled") {
-    return { displayStatus: "Cancelled", displayStatusSource: "terminal" };
-  }
-
-  if (args.summary.shortStatus && args.summary.generatedAt) {
-    const ageMs = (args.now ?? Date.now()) - args.summary.generatedAt;
-    if (ageMs <= 60_000) {
-      const normalizedModelStatus = normalizeBackgroundStatusPhrase(
-        args.summary.shortStatus,
-      );
-      const normalized = normalizedModelStatus.toLowerCase();
-      const looksTerminal =
-        normalized === "done" ||
-        normalized === "cancelled" ||
-        normalized === "error";
-      const prefersHeuristicWhileToolActive =
-        normalized === "thinking…" && args.heuristicStatus !== "Thinking…";
-
-      if (
-        !looksTerminal &&
-        normalizedModelStatus &&
-        !prefersHeuristicWhileToolActive
-      ) {
-        return {
-          displayStatus: normalizedModelStatus,
-          displayStatusSource: "model",
-        };
-      }
-    }
-  }
-
-  return {
-    displayStatus: args.heuristicStatus,
-    displayStatusSource: "heuristic",
-  };
 }

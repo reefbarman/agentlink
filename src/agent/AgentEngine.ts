@@ -153,6 +153,7 @@ const TRANSIENT_RETRY_CATEGORIES: ReadonlySet<AgentRetryCategory> = new Set([
   "server",
 ]);
 const MAX_EMPTY_RESPONSE_RETRIES = 2;
+const MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS = 3;
 
 const buildErrorMessage = buildAgentErrorMessage;
 
@@ -1152,7 +1153,7 @@ export class AgentEngine {
     const MAX_WRAP_UP_ATTEMPTS = 2;
     let pendingFinalMarker: FinalMessageMarker | null = null;
     let finalMarkerApplied = false;
-    let finalStatusNudgeAttempted = false;
+    let finalStatusNudgeAttempts = 0;
     let pendingFinalStatusNudge = false;
     let pendingCompletedTodoUpdate: TodoItem[] | null = null;
     let currentTodos: TodoItem[] = getLatestTodoState(session.getAllMessages());
@@ -1328,10 +1329,18 @@ export class AgentEngine {
             ] as const;
           }),
         );
+        const structuredReviewFinalization =
+          backgroundExpectedResult === "review_findings" &&
+          finalStatusNudgeAttempts > 0;
         const rawTools =
           advertisedTools && inlineToolNames
             ? advertisedTools
-                .filter((tool) => inlineToolNames.has(tool.name))
+                .filter(
+                  (tool) =>
+                    inlineToolNames.has(tool.name) &&
+                    (!structuredReviewFinalization ||
+                      tool.name === "set_task_status"),
+                )
                 .map((tool) => {
                   const nativeWebDescription = nativeWebDescriptions.get(
                     tool.name,
@@ -1575,10 +1584,13 @@ export class AgentEngine {
             });
           }
           if (pendingFinalStatusNudge) {
+            const structuredReviewReminder =
+              backgroundExpectedResult === "review_findings"
+                ? `The review work is over. Do not inspect more files, call any other tool, or add more review prose. Call set_task_status now with status="completed" and the required review_findings result using the evidence you already have. This is finalization attempt ${finalStatusNudgeAttempts} of ${MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS}.`
+                : "You ended the turn without calling set_task_status. Do not redo completed work. If the user's ask is complete, call set_task_status now with the real user-facing summary. Otherwise use waiting_for_user, blocked, or cancelled when that is the true state. This is your one final-status reminder for this turn.";
             apiMessages.push({
               role: "user",
-              content:
-                "You ended the turn without calling set_task_status. Do not redo completed work. If the user's ask is complete, call set_task_status now with the real user-facing summary. Otherwise use waiting_for_user, blocked, or cancelled when that is the true state. This is your one final-status reminder for this turn.",
+              content: structuredReviewReminder,
             });
           }
 
@@ -2139,6 +2151,7 @@ export class AgentEngine {
         yield {
           type: "api_request",
           requestId,
+          ...(structuredReviewFinalization ? { finalizationOnly: true } : {}),
           model: activeModel,
           reasoningEffort,
           inputTokens: totalInputTokens,
@@ -2240,9 +2253,21 @@ export class AgentEngine {
 
         // Enforce maxApiTurns: when the limit is reached and the model wants
         // more tool calls, inject a "wrap up" message to force a final response.
-        if (maxApiTurns > 0 && apiTurnCount >= maxApiTurns) {
-          const hasToolCalls = contentBlocks.some((b) => b.type === "tool_use");
-          if (hasToolCalls) {
+        if (
+          !structuredReviewFinalization &&
+          maxApiTurns > 0 &&
+          apiTurnCount >= maxApiTurns
+        ) {
+          const requestedToolCalls = contentBlocks.filter(
+            (block): block is ToolUseBlock => block.type === "tool_use",
+          );
+          const hasToolCalls = requestedToolCalls.length > 0;
+          const onlyFinalStatus =
+            hasToolCalls &&
+            requestedToolCalls.every(
+              (block) => block.name === "set_task_status",
+            );
+          if (hasToolCalls && !onlyFinalStatus) {
             wrapUpAttempts++;
             // Hard stop after too many wrap-up attempts to prevent infinite loops
             if (wrapUpAttempts > MAX_WRAP_UP_ATTEMPTS) {
@@ -2278,6 +2303,53 @@ export class AgentEngine {
         }
 
         if (!hasVisibleOrActionableOutput(contentBlocks)) {
+          const warnedStructuredReview =
+            backgroundExpectedResult === "review_findings" &&
+            session.fleetMetadata?.budgetWarning !== undefined;
+          if (
+            warnedStructuredReview &&
+            finalStatusNudgeAttempts === 0 &&
+            emptyResponseRetryCount === 0
+          ) {
+            emptyResponseRetryCount = 1;
+            yield {
+              type: "warning",
+              message: "Provider returned an empty response — retrying…",
+              visible: false,
+            };
+            session.status = "streaming";
+            continue;
+          }
+          if (
+            backgroundExpectedResult === "review_findings" &&
+            (finalStatusNudgeAttempts > 0 || warnedStructuredReview)
+          ) {
+            if (finalStatusNudgeAttempts === 0) {
+              finalStatusNudgeAttempts = 1;
+              pendingFinalStatusNudge = true;
+              session.status = "streaming";
+              this.log?.(
+                `[agent] warned structured review returned empty response after retry; requesting finalization (${finalStatusNudgeAttempts}/${MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS})`,
+              );
+              continue;
+            }
+            if (
+              finalStatusNudgeAttempts <
+              MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS
+            ) {
+              finalStatusNudgeAttempts++;
+              pendingFinalStatusNudge = true;
+              session.status = "streaming";
+              this.log?.(
+                `[agent] structured review finalization returned empty response; retrying (${finalStatusNudgeAttempts}/${MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS})`,
+              );
+              continue;
+            }
+            this.log?.(
+              "[agent] structured review finalization exhausted after empty responses",
+            );
+            break;
+          }
           if (emptyResponseRetryCount < MAX_EMPTY_RESPONSE_RETRIES) {
             emptyResponseRetryCount++;
             if (emptyResponseRetryCount === 1) {
@@ -2364,25 +2436,34 @@ export class AgentEngine {
           appendCommittedAssistantMessage();
           opts?.onAssistantTurnCommitted?.();
 
+          const maxFinalStatusNudgeAttempts =
+            backgroundExpectedResult === "review_findings"
+              ? MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS
+              : 1;
           const canNudgeFinalStatus =
             !finalMarkerApplied &&
-            !finalStatusNudgeAttempted &&
-            !hasPendingTodos(currentTodos) &&
+            finalStatusNudgeAttempts < maxFinalStatusNudgeAttempts &&
+            (backgroundExpectedResult === "review_findings" ||
+              !hasPendingTodos(currentTodos)) &&
             !session.hasPendingInterjections &&
             !session.hasQueuedUiMessages &&
             rawTools?.some((tool) => tool.name === "set_task_status") === true;
           if (canNudgeFinalStatus) {
-            finalStatusNudgeAttempted = true;
+            finalStatusNudgeAttempts++;
             pendingFinalStatusNudge = true;
             session.status = "streaming";
             this.log?.(
-              "[agent] final-status nudge: natural stop without set_task_status",
+              backgroundExpectedResult === "review_findings"
+                ? `[agent] structured review finalization requested (${finalStatusNudgeAttempts}/${MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS})`
+                : "[agent] final-status nudge: natural stop without set_task_status",
             );
             continue;
           }
-          if (finalStatusNudgeAttempted && !finalMarkerApplied) {
+          if (finalStatusNudgeAttempts > 0 && !finalMarkerApplied) {
             this.log?.(
-              "[agent] final-status nudge ignored: accepting unmarked turn",
+              backgroundExpectedResult === "review_findings"
+                ? "[agent] structured review finalization exhausted: accepting incomplete expected result"
+                : "[agent] final-status nudge ignored: accepting unmarked turn",
             );
           }
           break;
@@ -2395,9 +2476,12 @@ export class AgentEngine {
           break;
         }
 
-        // Enforce maxToolCalls: count only dispatch-eligible tools (exclude todo_write).
+        // Structured-review finalization is packaging, not additional review
+        // work, so its sole status call remains available after the work budget.
         const dispatchableToolCount = toolUseBlocks.filter(
-          (b) => b.name !== TODO_TOOL_NAME,
+          (b) =>
+            b.name !== TODO_TOOL_NAME &&
+            (!structuredReviewFinalization || b.name !== "set_task_status"),
         ).length;
         const toolCallReservation =
           dispatchableToolCount > 0
@@ -2544,6 +2628,7 @@ export class AgentEngine {
             type: "tool_start",
             toolCallId: block.id,
             toolName: block.name,
+            ...(structuredReviewFinalization ? { finalizationOnly: true } : {}),
             input: block.input,
           };
           if (block.providerName === block.name) {
@@ -2820,9 +2905,11 @@ export class AgentEngine {
         if (finalMarkerForTurn) {
           session.applyFinalMarker(finalMarkerForTurn);
           finalMarkerApplied = true;
-          if (finalStatusNudgeAttempted) {
+          if (finalStatusNudgeAttempts > 0) {
             this.log?.(
-              "[agent] final-status nudge recovered with set_task_status",
+              backgroundExpectedResult === "review_findings"
+                ? "[agent] structured review finalization recovered with set_task_status"
+                : "[agent] final-status nudge recovered with set_task_status",
             );
           }
           yield { type: "final_marker", marker: finalMarkerForTurn };
@@ -2882,6 +2969,24 @@ export class AgentEngine {
           successfulFinalMarker &&
           (signal.aborted || !session.hasPendingInterjections)
         ) {
+          break;
+        }
+        if (structuredReviewFinalization && !successfulFinalMarker) {
+          if (
+            finalStatusNudgeAttempts <
+            MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS
+          ) {
+            finalStatusNudgeAttempts++;
+            pendingFinalStatusNudge = true;
+            session.status = "streaming";
+            this.log?.(
+              `[agent] structured review finalization rejected; retrying (${finalStatusNudgeAttempts}/${MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS})`,
+            );
+            continue;
+          }
+          this.log?.(
+            "[agent] structured review finalization exhausted after invalid set_task_status results",
+          );
           break;
         }
         if (successfulModeSwitch) {

@@ -30,6 +30,9 @@ const ACTIVE_STATUSES = new Set<BgSessionInfoProps["status"]>([
   "awaiting_approval",
 ]);
 
+const WRAP_UP_MESSAGE =
+  "Stop using tools and return your best findings now. Do not investigate further; package the evidence you already have and complete the task.";
+
 function formatElapsed(startMs: number, now: number): string {
   const secs = Math.floor((now - startMs) / 1000);
   const m = Math.floor(secs / 60);
@@ -455,27 +458,11 @@ export function BackgroundSessionStrip({
                   s.displayStatusSource
                     ? `source: ${s.displayStatusSource}`
                     : null,
-                  s.summaryMeta?.sourceModel
-                    ? `model: ${s.summaryMeta.sourceModel}`
-                    : null,
-                  s.summaryMeta?.generatedAt
-                    ? `age: ${Math.max(0, Math.round((Date.now() - s.summaryMeta.generatedAt) / 1000))}s`
-                    : null,
-                  s.summaryMeta?.lastFailureReason
-                    ? `last error: ${s.summaryMeta.lastFailureReason}`
-                    : null,
                 ]
                   .filter((v): v is string => Boolean(v))
                   .join("\n")}
               >
                 {statusText(s.status, s.currentTool, s.displayStatus, s, now)}
-                {s.summaryMeta?.inFlight && (
-                  <i
-                    class="codicon codicon-sync codicon-modifier-spin"
-                    style="margin-left:6px; opacity:0.8;"
-                    title="Refreshing summary"
-                  />
-                )}
               </span>
               {ACTIVE_STATUSES.has(s.status) && startedAt.has(s.id) && (
                 <span class="bg-session-timer">
@@ -498,18 +485,29 @@ export function BackgroundSessionStrip({
                   s.status === "tool_executing" ||
                   s.status === "awaiting_approval")) &&
                 onSteer && (
-                  <button
-                    type="button"
-                    class="icon-button bg-session-action"
-                    onClick={() => {
-                      const message = window.prompt("Steer this agent:");
-                      if (message?.trim()) onSteer(s.id, message.trim());
-                    }}
-                    title="Send new instructions to this running agent"
-                    aria-label="Send new instructions to this running agent"
-                  >
-                    <i class="codicon codicon-debug-step-over" />
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      class="icon-button bg-session-action"
+                      onClick={() => onSteer(s.id, WRAP_UP_MESSAGE)}
+                      title="Ask this agent to wrap up with its current findings"
+                      aria-label="Ask this agent to wrap up with its current findings"
+                    >
+                      <i class="codicon codicon-send" />
+                    </button>
+                    <button
+                      type="button"
+                      class="icon-button bg-session-action"
+                      onClick={() => {
+                        const message = window.prompt("Steer this agent:");
+                        if (message?.trim()) onSteer(s.id, message.trim());
+                      }}
+                      title="Send custom instructions to this running agent"
+                      aria-label="Send custom instructions to this running agent"
+                    >
+                      <i class="codicon codicon-debug-step-over" />
+                    </button>
+                  </>
                 )}
               {ACTIVE_STATUSES.has(s.status) && onPause && (
                 <button

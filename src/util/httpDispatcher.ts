@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER } from "../core/modelRequestScheduler.js";
+import { MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER } from "@agentlink/core/model-request-scheduler";
 import {
   Agent,
   EnvHttpProxyAgent,

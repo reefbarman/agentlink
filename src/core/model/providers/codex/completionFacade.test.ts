@@ -7,7 +7,7 @@ import {
   executeCodexResolvedCompletion,
 } from "./completionFacade.js";
 import { CodexRequestError } from "./errors.js";
-import type { CoreModelStreamEvent } from "../../../modelRuntime.js";
+import type { CoreModelStreamEvent } from "@agentlink/core/model-runtime";
 import type { CodexResponsesClient } from "./responsesStream.js";
 
 async function* toAsyncIterable(

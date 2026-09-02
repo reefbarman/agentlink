@@ -19,7 +19,7 @@ const declarationsPlugin = {
           await Promise.all([
             writeFile(
               "dist/cjs/index.d.cts",
-              'export * from "./agentErrorPresentation.cjs";\nexport * from "./agentPluginManager.cjs";\nexport * from "./autoContinueProgress.cjs";\nexport * from "./backgroundResult.cjs";\nexport * from "./browserGatewayAskAgentIdentity.cjs";\nexport * from "./browserGatewayBackgroundSummary.cjs";\nexport * from "./browserGatewayCapabilityStatus.cjs";\nexport * from "./browserGatewayContextBudget.cjs";\nexport * from "./browserGatewayCoreOwnerRegistration.cjs";\nexport * from "./browserGatewayDataPlaneIdentity.cjs";\nexport * from "./browserGatewayDataPlaneLimits.cjs";\nexport * from "./browserGatewayDataPlaneMode.cjs";\nexport * from "./browserGatewayDiffPreview.cjs";\nexport * from "./browserGatewayHelperLifecycle.cjs";\nexport * from "./browserGatewayInstanceStatus.cjs";\nexport * from "./browserGatewayInteractionState.cjs";\nexport * from "./browserGatewayInteractionSummary.cjs";\nexport * from "./browserGatewayModelProviderIdentity.cjs";\nexport * from "./browserGatewayOperationState.cjs";\nexport * from "./browserGatewayOwnerCommandMetadata.cjs";\nexport * from "./browserGatewayOwnerControlMetadata.cjs";\nexport * from "./browserGatewayOwnerEventMetadata.cjs";\nexport * from "./browserGatewayQueueItem.cjs";\nexport * from "./browserGatewayRepositoryState.cjs";\nexport * from "./browserGatewayTheme.cjs";\nexport * from "./browserGatewayTodoItem.cjs";\nexport * from "./browserGatewayTranscriptBlock.cjs";\nexport * from "./browserGatewayTranscriptMessage.cjs";\nexport * from "./browserGatewayTranscriptText.cjs";\nexport * from "./builtinCommandForwarding.cjs";\nexport * from "./chatCatalog.cjs";\nexport * from "./chatPaneTransport.cjs";\nexport * from "./chatSessionHistory.cjs";\nexport * from "./chatState.cjs";\nexport * from "./chatTranscript.cjs";\nexport * from "./chatWorkspace.cjs";\nexport * from "./commandApprovalPolicy.cjs";\nexport * from "./compose.cjs";\nexport * from "./contextDiagnostics.cjs";\nexport * from "./contextHealth.cjs";\nexport * from "./contextLedger.cjs";\nexport * from "./diffSnapshot.cjs";\nexport * from "./finalStatus.cjs";\nexport * from "./fleetResult.cjs";\nexport * from "./inlineApproval.cjs";\nexport * from "./jsonc.cjs";\nexport * from "./mcpConfigImport.cjs";\nexport * from "./mcpConfigValidation.cjs";\nexport * from "./mcpElicitation.cjs";\nexport * from "./mcpManager.cjs";\nexport * from "./mcpToolIdentity.cjs";\nexport * from "./mcpUrlElicitation.cjs";\nexport * from "./modelAuth.cjs";\nexport * from "./modelCatalog.cjs";\nexport * from "./modelSetup.cjs";\nexport * from "./promptProfile.cjs";\nexport * from "./providerReplay.cjs";\nexport * from "./questionConfirmation.cjs";\nexport * from "./questionDetection.cjs";\nexport * from "./retrievalDeletion.cjs";\nexport * from "./retrievalFingerprint.cjs";\nexport * from "./retrievalMaintenance.cjs";\nexport * from "./retrievalStructuralSnapshot.cjs";\nexport * from "./retrievalHealth.cjs";\nexport * from "./retrievalPublication.cjs";\nexport * from "./retrievalQuery.cjs";\nexport * from "./retrievalRecords.cjs";\nexport * from "./selectionCommands.cjs";\nexport * from "./semanticReadiness.cjs";\nexport * from "./session.cjs";\nexport * from "./sessionHandoffDraft.cjs";\nexport * from "./structuredQuestion.cjs";\nexport * from "./surfaceModelMessage.cjs";\nexport * from "./sessionHydration.cjs";\nexport * from "./terminal.cjs";\nexport * from "./terminalSecurity.cjs";\nexport * from "./terminalSurface.cjs";\nexport * from "./todoContinuation.cjs";\nexport * from "./toolResult.cjs";\nexport * from "./webAccessPolicy.cjs";\nexport * from "./webActivity.cjs";\nexport * from "./workspaceProject.cjs";\n',
+              'export * from "./agentErrorPresentation.cjs";\nexport * from "./agentPluginManager.cjs";\nexport * from "./autoContinueProgress.cjs";\nexport * from "./backgroundResult.cjs";\nexport * from "./browserGatewayAskAgentIdentity.cjs";\nexport * from "./browserGatewayBackgroundSummary.cjs";\nexport * from "./browserGatewayCapabilityStatus.cjs";\nexport * from "./browserGatewayChatWorkspaceSummary.cjs";\nexport * from "./browserGatewayContextBudget.cjs";\nexport * from "./browserGatewayCoreOwnerRegistration.cjs";\nexport * from "./browserGatewayDataPlaneIdentity.cjs";\nexport * from "./browserGatewayDataPlaneLimits.cjs";\nexport * from "./browserGatewayDataPlaneMode.cjs";\nexport * from "./browserGatewayDataPlaneTransport.cjs";\nexport * from "./browserGatewayDataPlaneVersion.cjs";\nexport * from "./browserGatewayDetachedSessionSelection.cjs";\nexport * from "./browserGatewayDiffPreview.cjs";\nexport * from "./browserGatewayForegroundControlState.cjs";\nexport * from "./browserGatewayHelperLifecycle.cjs";\nexport * from "./browserGatewayInstanceStatus.cjs";\nexport * from "./browserGatewayInteractionState.cjs";\nexport * from "./browserGatewayInteractionSummary.cjs";\nexport * from "./browserGatewayModelProviderIdentity.cjs";\nexport * from "./browserGatewayOperationState.cjs";\nexport * from "./browserGatewayOwnerCheckpoint.cjs";\nexport * from "./browserGatewayOwnerCommand.cjs";\nexport * from "./browserGatewayOwnerCommandAck.cjs";\nexport * from "./browserGatewayOwnerCommandBody.cjs";\nexport * from "./browserGatewayOwnerCommandMetadata.cjs";\nexport * from "./browserGatewayOwnerControl.cjs";\nexport * from "./browserGatewayOwnerControlMetadata.cjs";\nexport * from "./browserGatewayOwnerEvent.cjs";\nexport * from "./browserGatewayOwnerEventMetadata.cjs";\nexport * from "./browserGatewayOwnerInteractionPayload.cjs";\nexport * from "./browserGatewayOwnerPublicationBatch.cjs";\nexport * from "./browserGatewayProtocolError.cjs";\nexport * from "./browserGatewayQueueItem.cjs";\nexport * from "./browserGatewayRepositoryState.cjs";\nexport * from "./browserGatewaySessionCatalog.cjs";\nexport * from "./browserGatewayTheme.cjs";\nexport * from "./browserGatewayTodoItem.cjs";\nexport * from "./browserGatewayTranscriptBlock.cjs";\nexport * from "./browserGatewayTranscriptMessage.cjs";\nexport * from "./browserGatewayTranscriptText.cjs";\nexport * from "./browserGatewayTranscriptWindow.cjs";\nexport * from "./builtinCommandForwarding.cjs";\nexport * from "./chatCatalog.cjs";\nexport * from "./chatPaneTransport.cjs";\nexport * from "./chatSessionHistory.cjs";\nexport * from "./chatState.cjs";\nexport * from "./chatTranscript.cjs";\nexport * from "./chatWorkspace.cjs";\nexport * from "./commandApprovalPolicy.cjs";\nexport * from "./compose.cjs";\nexport * from "./contextDiagnostics.cjs";\nexport * from "./contextHealth.cjs";\nexport * from "./contextLedger.cjs";\nexport * from "./diffSnapshot.cjs";\nexport * from "./finalStatus.cjs";\nexport * from "./fleetResult.cjs";\nexport * from "./inlineApproval.cjs";\nexport * from "./jsonc.cjs";\nexport * from "./mcpConfigImport.cjs";\nexport * from "./mcpConfigValidation.cjs";\nexport * from "./mcpElicitation.cjs";\nexport * from "./mcpManager.cjs";\nexport * from "./mcpToolIdentity.cjs";\nexport * from "./mcpUrlElicitation.cjs";\nexport * from "./modelAuth.cjs";\nexport * from "./modelCatalog.cjs";\nexport * from "./modelSetup.cjs";\nexport * from "./promptProfile.cjs";\nexport * from "./providerReplay.cjs";\nexport * from "./questionConfirmation.cjs";\nexport * from "./questionDetection.cjs";\nexport * from "./retrievalDeletion.cjs";\nexport * from "./retrievalFingerprint.cjs";\nexport * from "./retrievalMaintenance.cjs";\nexport * from "./retrievalStructuralSnapshot.cjs";\nexport * from "./retrievalHealth.cjs";\nexport * from "./retrievalPublication.cjs";\nexport * from "./retrievalQuery.cjs";\nexport * from "./retrievalRecords.cjs";\nexport * from "./selectionCommands.cjs";\nexport * from "./semanticReadiness.cjs";\nexport * from "./session.cjs";\nexport * from "./sessionHandoffDraft.cjs";\nexport * from "./structuredQuestion.cjs";\nexport * from "./surfaceModelMessage.cjs";\nexport * from "./sessionHydration.cjs";\nexport * from "./terminal.cjs";\nexport * from "./terminalSecurity.cjs";\nexport * from "./terminalSurface.cjs";\nexport * from "./todoContinuation.cjs";\nexport * from "./toolResult.cjs";\nexport * from "./webAccessPolicy.cjs";\nexport * from "./webActivity.cjs";\nexport * from "./workspaceProject.cjs";\n',
             ),
             copyFile(
               "dist/agentErrorPresentation.d.ts",
@@ -73,6 +73,18 @@ const declarationsPlugin = {
               "dist/browserGatewayCapabilityStatus.d.ts",
               "dist/cjs/browserGatewayCapabilityStatus.d.cts",
             ),
+            readFile(
+              "dist/browserGatewayChatWorkspaceSummary.d.ts",
+              "utf8",
+            ).then((content) =>
+              writeFile(
+                "dist/cjs/browserGatewayChatWorkspaceSummary.d.cts",
+                content.replaceAll(
+                  '"./chatWorkspace.js"',
+                  '"./chatWorkspace.cjs"',
+                ),
+              ),
+            ),
             copyFile(
               "dist/browserGatewayContextBudget.d.ts",
               "dist/cjs/browserGatewayContextBudget.d.cts",
@@ -109,6 +121,37 @@ const declarationsPlugin = {
               "dist/browserGatewayDataPlaneMode.d.ts",
               "dist/cjs/browserGatewayDataPlaneMode.d.cts",
             ),
+            readFile("dist/browserGatewayDataPlaneTransport.d.ts", "utf8").then(
+              (content) =>
+                writeFile(
+                  "dist/cjs/browserGatewayDataPlaneTransport.d.cts",
+                  content
+                    .replaceAll(
+                      '"./browserGatewayCapabilityStatus.js"',
+                      '"./browserGatewayCapabilityStatus.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayDataPlaneIdentity.js"',
+                      '"./browserGatewayDataPlaneIdentity.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayOwnerControlMetadata.js"',
+                      '"./browserGatewayOwnerControlMetadata.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayDataPlaneVersion.js"',
+                      '"./browserGatewayDataPlaneVersion.cjs"',
+                    ),
+                ),
+            ),
+            copyFile(
+              "dist/browserGatewayDataPlaneVersion.d.ts",
+              "dist/cjs/browserGatewayDataPlaneVersion.d.cts",
+            ),
+            copyFile(
+              "dist/browserGatewayDetachedSessionSelection.d.ts",
+              "dist/cjs/browserGatewayDetachedSessionSelection.d.cts",
+            ),
             readFile("dist/browserGatewayDiffPreview.d.ts", "utf8").then(
               (content) =>
                 writeFile(
@@ -118,6 +161,31 @@ const declarationsPlugin = {
                     '"./browserGatewayDataPlaneIdentity.cjs"',
                   ),
                 ),
+            ),
+            readFile(
+              "dist/browserGatewayForegroundControlState.d.ts",
+              "utf8",
+            ).then((content) =>
+              writeFile(
+                "dist/cjs/browserGatewayForegroundControlState.d.cts",
+                content
+                  .replaceAll('"./terminal.js"', '"./terminal.cjs"')
+                  .replaceAll(
+                    '"./browserGatewayContextBudget.js"',
+                    '"./browserGatewayContextBudget.cjs"',
+                  )
+                  .replaceAll('"./chatWorkspace.js"', '"./chatWorkspace.cjs"')
+                  .replaceAll(
+                    '"./commandApprovalPolicy.js"',
+                    '"./commandApprovalPolicy.cjs"',
+                  )
+                  .replaceAll('"./contextHealth.js"', '"./contextHealth.cjs"')
+                  .replaceAll('"./modelCatalog.js"', '"./modelCatalog.cjs"')
+                  .replaceAll(
+                    '"./sessionHydration.js"',
+                    '"./sessionHydration.cjs"',
+                  ),
+              ),
             ),
             readFile("dist/browserGatewayHelperLifecycle.d.ts", "utf8").then(
               (content) =>
@@ -185,17 +253,261 @@ const declarationsPlugin = {
                     ),
                 ),
             ),
+            readFile("dist/browserGatewayOwnerCheckpoint.d.ts", "utf8").then(
+              (content) =>
+                writeFile(
+                  "dist/cjs/browserGatewayOwnerCheckpoint.d.cts",
+                  content
+                    .replaceAll(
+                      '"./browserGatewayBackgroundSummary.js"',
+                      '"./browserGatewayBackgroundSummary.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayCapabilityStatus.js"',
+                      '"./browserGatewayCapabilityStatus.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayDataPlaneIdentity.js"',
+                      '"./browserGatewayDataPlaneIdentity.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayDataPlaneVersion.js"',
+                      '"./browserGatewayDataPlaneVersion.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayDiffPreview.js"',
+                      '"./browserGatewayDiffPreview.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayForegroundControlState.js"',
+                      '"./browserGatewayForegroundControlState.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayInteractionState.js"',
+                      '"./browserGatewayInteractionState.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayRepositoryState.js"',
+                      '"./browserGatewayRepositoryState.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewaySessionCatalog.js"',
+                      '"./browserGatewaySessionCatalog.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayTheme.js"',
+                      '"./browserGatewayTheme.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayTranscriptWindow.js"',
+                      '"./browserGatewayTranscriptWindow.cjs"',
+                    ),
+                ),
+            ),
+            readFile("dist/browserGatewayOwnerCommand.d.ts", "utf8").then(
+              (content) =>
+                writeFile(
+                  "dist/cjs/browserGatewayOwnerCommand.d.cts",
+                  content
+                    .replaceAll(
+                      '"./browserGatewayDataPlaneIdentity.js"',
+                      '"./browserGatewayDataPlaneIdentity.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayDataPlaneVersion.js"',
+                      '"./browserGatewayDataPlaneVersion.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayOwnerCommandBody.js"',
+                      '"./browserGatewayOwnerCommandBody.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayOwnerCommandMetadata.js"',
+                      '"./browserGatewayOwnerCommandMetadata.cjs"',
+                    ),
+                ),
+            ),
+            readFile("dist/browserGatewayOwnerCommandAck.d.ts", "utf8").then(
+              (content) =>
+                writeFile(
+                  "dist/cjs/browserGatewayOwnerCommandAck.d.cts",
+                  content
+                    .replaceAll(
+                      '"./browserGatewayDataPlaneIdentity.js"',
+                      '"./browserGatewayDataPlaneIdentity.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayDataPlaneVersion.js"',
+                      '"./browserGatewayDataPlaneVersion.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayOperationState.js"',
+                      '"./browserGatewayOperationState.cjs"',
+                    ),
+                ),
+            ),
+            readFile("dist/browserGatewayOwnerCommandBody.d.ts", "utf8").then(
+              (content) =>
+                writeFile(
+                  "dist/cjs/browserGatewayOwnerCommandBody.d.cts",
+                  content.replaceAll(
+                    '"./browserGatewayDataPlaneIdentity.js"',
+                    '"./browserGatewayDataPlaneIdentity.cjs"',
+                  ),
+                ),
+            ),
             copyFile(
               "dist/browserGatewayOwnerCommandMetadata.d.ts",
               "dist/cjs/browserGatewayOwnerCommandMetadata.d.cts",
+            ),
+            readFile("dist/browserGatewayOwnerControl.d.ts", "utf8").then(
+              (content) =>
+                writeFile(
+                  "dist/cjs/browserGatewayOwnerControl.d.cts",
+                  content
+                    .replaceAll(
+                      '"./browserGatewayDataPlaneIdentity.js"',
+                      '"./browserGatewayDataPlaneIdentity.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayDataPlaneVersion.js"',
+                      '"./browserGatewayDataPlaneVersion.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayOwnerControlMetadata.js"',
+                      '"./browserGatewayOwnerControlMetadata.cjs"',
+                    ),
+                ),
             ),
             copyFile(
               "dist/browserGatewayOwnerControlMetadata.d.ts",
               "dist/cjs/browserGatewayOwnerControlMetadata.d.cts",
             ),
+            readFile("dist/browserGatewayOwnerEvent.d.ts", "utf8").then(
+              (content) =>
+                writeFile(
+                  "dist/cjs/browserGatewayOwnerEvent.d.cts",
+                  content
+                    .replaceAll(
+                      '"./browserGatewayBackgroundSummary.js"',
+                      '"./browserGatewayBackgroundSummary.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayCapabilityStatus.js"',
+                      '"./browserGatewayCapabilityStatus.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayDataPlaneIdentity.js"',
+                      '"./browserGatewayDataPlaneIdentity.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayDataPlaneVersion.js"',
+                      '"./browserGatewayDataPlaneVersion.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayDiffPreview.js"',
+                      '"./browserGatewayDiffPreview.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayForegroundControlState.js"',
+                      '"./browserGatewayForegroundControlState.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayInteractionSummary.js"',
+                      '"./browserGatewayInteractionSummary.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayOperationState.js"',
+                      '"./browserGatewayOperationState.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayOwnerEventMetadata.js"',
+                      '"./browserGatewayOwnerEventMetadata.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayQueueItem.js"',
+                      '"./browserGatewayQueueItem.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayRepositoryState.js"',
+                      '"./browserGatewayRepositoryState.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewaySessionCatalog.js"',
+                      '"./browserGatewaySessionCatalog.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayTheme.js"',
+                      '"./browserGatewayTheme.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayTodoItem.js"',
+                      '"./browserGatewayTodoItem.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayTranscriptMessage.js"',
+                      '"./browserGatewayTranscriptMessage.cjs"',
+                    )
+                    .replaceAll(
+                      '"./browserGatewayTranscriptWindow.js"',
+                      '"./browserGatewayTranscriptWindow.cjs"',
+                    ),
+                ),
+            ),
             copyFile(
               "dist/browserGatewayOwnerEventMetadata.d.ts",
               "dist/cjs/browserGatewayOwnerEventMetadata.d.cts",
+            ),
+            readFile(
+              "dist/browserGatewayOwnerInteractionPayload.d.ts",
+              "utf8",
+            ).then((content) =>
+              writeFile(
+                "dist/cjs/browserGatewayOwnerInteractionPayload.d.cts",
+                content
+                  .replaceAll(
+                    '"./approvalTransport.js"',
+                    '"./approvalTransport.cjs"',
+                  )
+                  .replaceAll('"./mcpElicitation.js"', '"./mcpElicitation.cjs"')
+                  .replaceAll(
+                    '"./mcpUrlElicitation.js"',
+                    '"./mcpUrlElicitation.cjs"',
+                  )
+                  .replaceAll(
+                    '"./structuredQuestion.js"',
+                    '"./structuredQuestion.cjs"',
+                  ),
+              ),
+            ),
+            readFile(
+              "dist/browserGatewayOwnerPublicationBatch.d.ts",
+              "utf8",
+            ).then((content) =>
+              writeFile(
+                "dist/cjs/browserGatewayOwnerPublicationBatch.d.cts",
+                content
+                  .replaceAll(
+                    '"./browserGatewayDataPlaneIdentity.js"',
+                    '"./browserGatewayDataPlaneIdentity.cjs"',
+                  )
+                  .replaceAll(
+                    '"./browserGatewayDataPlaneVersion.js"',
+                    '"./browserGatewayDataPlaneVersion.cjs"',
+                  )
+                  .replaceAll(
+                    '"./browserGatewayOwnerCheckpoint.js"',
+                    '"./browserGatewayOwnerCheckpoint.cjs"',
+                  )
+                  .replaceAll(
+                    '"./browserGatewayOwnerEvent.js"',
+                    '"./browserGatewayOwnerEvent.cjs"',
+                  ),
+              ),
+            ),
+            copyFile(
+              "dist/browserGatewayProtocolError.d.ts",
+              "dist/cjs/browserGatewayProtocolError.d.cts",
             ),
             copyFile(
               "dist/browserGatewayQueueItem.d.ts",
@@ -204,6 +516,16 @@ const declarationsPlugin = {
             copyFile(
               "dist/browserGatewayRepositoryState.d.ts",
               "dist/cjs/browserGatewayRepositoryState.d.cts",
+            ),
+            readFile("dist/browserGatewaySessionCatalog.d.ts", "utf8").then(
+              (content) =>
+                writeFile(
+                  "dist/cjs/browserGatewaySessionCatalog.d.cts",
+                  content.replaceAll(
+                    '"./browserGatewayChatWorkspaceSummary.js"',
+                    '"./browserGatewayChatWorkspaceSummary.cjs"',
+                  ),
+                ),
             ),
             copyFile(
               "dist/browserGatewayTheme.d.ts",
@@ -251,6 +573,16 @@ const declarationsPlugin = {
                   content.replaceAll(
                     '"./browserGatewayDataPlaneIdentity.js"',
                     '"./browserGatewayDataPlaneIdentity.cjs"',
+                  ),
+                ),
+            ),
+            readFile("dist/browserGatewayTranscriptWindow.d.ts", "utf8").then(
+              (content) =>
+                writeFile(
+                  "dist/cjs/browserGatewayTranscriptWindow.d.cts",
+                  content.replaceAll(
+                    '"./browserGatewayTranscriptMessage.js"',
+                    '"./browserGatewayTranscriptMessage.cjs"',
                   ),
                 ),
             ),
@@ -573,28 +905,44 @@ const cjs = await context({
     "src/browserGatewayAskAgentIdentity.ts",
     "src/browserGatewayBackgroundSummary.ts",
     "src/browserGatewayCapabilityStatus.ts",
+    "src/browserGatewayChatWorkspaceSummary.ts",
     "src/browserGatewayContextBudget.ts",
     "src/browserGatewayCoreOwnerRegistration.ts",
     "src/browserGatewayDataPlaneIdentity.ts",
     "src/browserGatewayDataPlaneLimits.ts",
     "src/browserGatewayDataPlaneMode.ts",
+    "src/browserGatewayDataPlaneTransport.ts",
+    "src/browserGatewayDataPlaneVersion.ts",
+    "src/browserGatewayDetachedSessionSelection.ts",
     "src/browserGatewayDiffPreview.ts",
+    "src/browserGatewayForegroundControlState.ts",
     "src/browserGatewayHelperLifecycle.ts",
     "src/browserGatewayInstanceStatus.ts",
     "src/browserGatewayInteractionState.ts",
     "src/browserGatewayInteractionSummary.ts",
     "src/browserGatewayModelProviderIdentity.ts",
     "src/browserGatewayOperationState.ts",
+    "src/browserGatewayOwnerCheckpoint.ts",
+    "src/browserGatewayOwnerCommand.ts",
+    "src/browserGatewayOwnerCommandAck.ts",
+    "src/browserGatewayOwnerCommandBody.ts",
     "src/browserGatewayOwnerCommandMetadata.ts",
+    "src/browserGatewayOwnerControl.ts",
     "src/browserGatewayOwnerControlMetadata.ts",
+    "src/browserGatewayOwnerEvent.ts",
     "src/browserGatewayOwnerEventMetadata.ts",
+    "src/browserGatewayOwnerInteractionPayload.ts",
+    "src/browserGatewayOwnerPublicationBatch.ts",
+    "src/browserGatewayProtocolError.ts",
     "src/browserGatewayQueueItem.ts",
     "src/browserGatewayRepositoryState.ts",
+    "src/browserGatewaySessionCatalog.ts",
     "src/browserGatewayTheme.ts",
     "src/browserGatewayTodoItem.ts",
     "src/browserGatewayTranscriptBlock.ts",
     "src/browserGatewayTranscriptMessage.ts",
     "src/browserGatewayTranscriptText.ts",
+    "src/browserGatewayTranscriptWindow.ts",
     "src/builtinCommandForwarding.ts",
     "src/chatCatalog.ts",
     "src/chatPaneTransport.ts",

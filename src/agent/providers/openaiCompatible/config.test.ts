@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeOpenAiCompatibleConnections,
   validateOpenAiCompatibleBaseUrl,
-} from "./config.js";
+} from "@agentlink/core/openai-compatible";
 
 function model(
   overrides: Record<string, unknown> = {},

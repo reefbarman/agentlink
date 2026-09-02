@@ -22,6 +22,10 @@ function inventory(...extraPaths) {
     "dist/node_modules/apache-arrow/package.json",
     "resources/builtin-skills/documentation/SKILL.md",
     "resources/builtin-skills/documentation/README.md",
+    "resources/builtin-skills/documentation/references/capabilities.md",
+    "resources/builtin-skills/documentation/references/getting-started.md",
+    "resources/builtin-skills/documentation/references/tools.md",
+    "resources/builtin-skills/documentation/references/troubleshooting.md",
     "resources/builtin-skills/documentation/references/complete-reference.md",
     "resources/builtin-skills/documentation/references/package-contract.md",
     "resources/builtin-skills/documentation/references/release-notes.md",
@@ -47,6 +51,35 @@ test("accepts the required assets and one matching LanceDB native addon", () => 
   assert.equal(result.target, "darwin-arm64");
   assert.equal(result.nativePackage, "@lancedb/lancedb-darwin-arm64");
   assert.match(result.nativeAddon, /lancedb\.darwin-arm64\.node$/u);
+});
+
+test("accepts VSIX archive paths with a lowercased extension readme", () => {
+  const result = verifyRetrievalPackageFiles(
+    inventory(
+      "dist/node_modules/@lancedb/lancedb-darwin-arm64/package.json",
+      "dist/node_modules/@lancedb/lancedb-darwin-arm64/lancedb.darwin-arm64.node",
+    ).replace("README.md\n", "extension/readme.md\n"),
+    "darwin-arm64",
+  );
+
+  assert.equal(result.target, "darwin-arm64");
+});
+
+test("rejects an inventory without the focused getting-started guide", () => {
+  assert.throws(
+    () =>
+      verifyRetrievalPackageFiles(
+        inventory(
+          "dist/node_modules/@lancedb/lancedb-darwin-arm64/package.json",
+          "dist/node_modules/@lancedb/lancedb-darwin-arm64/lancedb.darwin-arm64.node",
+        ).replace(
+          "resources/builtin-skills/documentation/references/getting-started.md\n",
+          "",
+        ),
+        "darwin-arm64",
+      ),
+    /missing required paths: resources\/builtin-skills\/documentation\/references\/getting-started\.md/u,
+  );
 });
 
 test("rejects an inventory without the bundled package contract", () => {

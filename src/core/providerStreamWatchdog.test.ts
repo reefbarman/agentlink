@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
 import {
   ProviderStreamActivityMonitor,
   ProviderStreamTimeoutError,
   runWatchedProviderStream,
-} from "./providerStreamWatchdog.js";
+} from "@agentlink/core/provider-stream-watchdog";
+import { describe, expect, it } from "vitest";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

@@ -3,7 +3,7 @@ import type {
   CoreModelMessage,
   CoreModelStreamEvent,
   CoreModelThinkingBlock,
-} from "../../../modelRuntime.js";
+} from "@agentlink/core/model-runtime";
 import {
   CORE_WEB_ACCESS_DEFAULT_MAX_REPLAY_BYTES_PER_TURN,
   createCoreProviderReplayEnvelope,

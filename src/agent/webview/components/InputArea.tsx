@@ -46,7 +46,7 @@ import { EmojiPopup } from "./EmojiPopup";
 import { FilePicker } from "./FilePicker";
 import type { Injection } from "../App";
 import { ModeSelector } from "./ModeSelector";
-import { ModelSelector } from "./ModelSelector";
+import { ModelSelector, type ModelSelectorProps } from "./ModelSelector";
 import type { QuestionAttachmentDraft } from "./QuestionCard";
 import { ReasoningEffortSelector } from "./ReasoningEffortSelector";
 import { SlashCommandPopup } from "./SlashCommandPopup";
@@ -209,7 +209,7 @@ interface InputAreaProps {
   availableModels?: WebviewModelInfo[];
   onSelectModel?: (modelId: string) => void;
   onSetCondenseThreshold?: (threshold: number) => void;
-  onSignIn?: (provider: string) => void;
+  onSignIn?: ModelSelectorProps["onSignIn"];
   agentWriteApproval?: WriteApprovalSelection;
   onSetAgentWriteApproval?: (mode: WriteApprovalSelection) => void;
   commandApprovalPolicy?: CommandApprovalPolicy;

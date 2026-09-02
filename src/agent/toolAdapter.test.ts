@@ -1392,13 +1392,19 @@ describe("getAgentTools", () => {
       expect(byMode.get(mode)?.has("manage_memory"), mode).toBe(false);
     }
 
-    for (const profile of ["review", "readonly-research"]) {
-      const names = getAgentTools(undefined, undefined, true, profile).map(
-        (tool) => tool.name,
-      );
-      expect(names).toContain("recall_memory");
-      expect(names).not.toContain("manage_memory");
-    }
+    const reviewNames = getAgentTools(undefined, undefined, true, "review").map(
+      (tool) => tool.name,
+    );
+    expect(reviewNames).not.toContain("recall_memory");
+    expect(reviewNames).not.toContain("manage_memory");
+    const researchNames = getAgentTools(
+      undefined,
+      undefined,
+      true,
+      "readonly-research",
+    ).map((tool) => tool.name);
+    expect(researchNames).toContain("recall_memory");
+    expect(researchNames).not.toContain("manage_memory");
     expect(TOOL_CAPABILITIES.manage_memory).toMatchObject({
       cluster: "memory",
       sideEffect: "write",
@@ -1508,14 +1514,16 @@ describe("getAgentTools", () => {
     expect(names).toContain("get_repo_map");
     expect(names).toContain("get_module_neighbors");
     expect(names).toContain("search_files");
-    expect(names).toContain("codebase_search");
     expect(names).toContain("get_diagnostics");
-    expect(names).toContain("get_hover");
-    expect(names).toContain("get_symbols");
     expect(names).toContain("get_references");
+    expect(names).toContain("go_to_definition");
     expect(names).toContain("execute_command");
-    expect(names).toContain("search_session_history");
-    expect(names).toContain("read_session_excerpt");
+    expect(names).not.toContain("codebase_search");
+    expect(names).not.toContain("get_hover");
+    expect(names).not.toContain("get_symbols");
+    expect(names).not.toContain("search_session_history");
+    expect(names).not.toContain("read_session_excerpt");
+    expect(names).not.toContain("recall_memory");
     const executeCommand = reviewTools.find(
       (tool) => tool.name === "execute_command",
     );
@@ -1540,11 +1548,11 @@ describe("getAgentTools", () => {
       "background",
     );
     expect(executeCommand?.input_schema.properties).not.toHaveProperty("env");
-    // Should include MCP discovery/call tools and directly exposed ddg tools.
-    expect(names).toContain("find_mcp_tools");
-    expect(names).toContain("call_mcp_tool");
-    expect(names).toContain("ddg-search__search");
-    expect(names).toContain("ddg-search__fetch_content");
+    // Bounded reviews do not expose MCP discovery or external MCP tools.
+    expect(names).not.toContain("find_mcp_tools");
+    expect(names).not.toContain("call_mcp_tool");
+    expect(names).not.toContain("ddg-search__search");
+    expect(names).not.toContain("ddg-search__fetch_content");
 
     // Should NOT include write tools or foreground-only helpers.
     expect(names).not.toContain("write_file");
@@ -2535,7 +2543,6 @@ describe("spawn_background_agent tool", () => {
       done: false,
       displayStatus: "Reading code",
       streamingPreview: "inspecting tests",
-      progressSummary: "Reading code",
       resultState: "running",
       taskClass: "readonly-research",
       toolCalls: 1,
@@ -2577,6 +2584,19 @@ describe("spawn_background_agent tool", () => {
     });
   });
 
+  it("requires a bounded wait for get_background_result", () => {
+    const definition = getAgentTools().find(
+      (tool) => tool.name === "get_background_result",
+    );
+
+    expect(definition?.input_schema).toMatchObject({
+      required: ["sessionId", "wait_seconds"],
+      properties: {
+        wait_seconds: { type: "integer", minimum: 1, maximum: 60 },
+      },
+    });
+  });
+
   it("dispatches get_background_result through backgroundAgentProvider", async () => {
     const backgroundAgentProvider = {
       spawn: vi.fn(),
@@ -2587,11 +2607,14 @@ describe("spawn_background_agent tool", () => {
 
     const result = await dispatchToolCall(
       "get_background_result",
-      { sessionId: "bg-789" },
+      { sessionId: "bg-789", wait_seconds: 30 },
       { ...mockCtx, backgroundAgentProvider },
     );
 
-    expect(backgroundAgentProvider.getResult).toHaveBeenCalledWith("bg-789");
+    expect(backgroundAgentProvider.getResult).toHaveBeenCalledWith(
+      "bg-789",
+      30,
+    );
     expect(result.content[0]).toMatchObject({
       type: "text",
       text: "done output",
@@ -2609,13 +2632,14 @@ describe("spawn_background_agent tool", () => {
 
     const result = await dispatchToolCall(
       "get_background_result",
-      { sessionId: "bg-images" },
+      { sessionId: "bg-images", wait_seconds: 12 },
       { ...mockCtx, onGetBackgroundResult },
     );
 
     expect(onGetBackgroundResult).toHaveBeenCalledWith(
       "test-session",
       "bg-images",
+      12,
     );
     expect(result.content).toEqual([
       { type: "text", text: "Generated two images" },
@@ -2641,7 +2665,7 @@ describe("spawn_background_agent tool", () => {
 
     const result = await dispatchToolCall(
       "get_background_result",
-      { sessionId: "bg-failed" },
+      { sessionId: "bg-failed", wait_seconds: 60 },
       { ...mockCtx, backgroundAgentProvider },
     );
 

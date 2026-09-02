@@ -8,7 +8,7 @@ import {
   parseRetryAfterMs,
   parseShouldRetry,
   toOpenAiCompatibleRequestError,
-} from "./errors.js";
+} from "@agentlink/core/openai-compatible";
 
 describe("OpenAI-compatible errors", () => {
   it.each([

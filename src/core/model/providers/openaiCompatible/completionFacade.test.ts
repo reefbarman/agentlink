@@ -4,21 +4,21 @@ import type {
   CoreModelCompleteRequest,
   CoreModelStreamEvent,
   CoreModelStreamRequest,
-} from "../../../modelRuntime.js";
+} from "@agentlink/core/model-runtime";
 import {
   collectOpenAiCompatibleCompletion,
   completeOpenAiCompatibleCompletion,
   streamOpenAiCompatibleCompletion,
-} from "./completionFacade.js";
+} from "@agentlink/core/openai-compatible";
 import {
   OpenAiCompatibleAbortError,
   OpenAiCompatibleRequestError,
   OpenAiCompatibleTimeoutError,
-} from "./errors.js";
+} from "@agentlink/core/openai-compatible";
 import type {
   OpenAiCompatibleFetch,
   OpenAiCompatibleRuntimeProfile,
-} from "./types.js";
+} from "@agentlink/core/openai-compatible";
 
 const encoder = new TextEncoder();
 

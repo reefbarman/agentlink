@@ -12,6 +12,8 @@ import { describe, expect, it } from "vitest";
 
 import { execFileSync } from "node:child_process";
 
+const posixShell = process.env.SHELL ?? "/bin/sh";
+
 function expectInlineError(fn: () => unknown, code: string): void {
   expect(fn).toThrow(InlineCommandFileError);
   try {
@@ -70,7 +72,7 @@ describe("commandInlineFiles", () => {
 
     try {
       expect(
-        execFileSync("/bin/zsh", ["-c", run.command], { encoding: "utf8" }),
+        execFileSync(posixShell, ["-c", run.command], { encoding: "utf8" }),
       ).toBe("exact content");
       expect(run.command).not.toContain("$AL_FILE(");
     } finally {
@@ -267,7 +269,7 @@ describe("commandInlineFiles", () => {
         if (!run) throw new Error("expected inline run");
         try {
           const output = execFileSync(
-            "/bin/zsh",
+            posixShell,
             ["-c", `${run.command}; test ! -e ${quotePosixShellArg(sentinel)}`],
             { encoding: "utf8" },
           );

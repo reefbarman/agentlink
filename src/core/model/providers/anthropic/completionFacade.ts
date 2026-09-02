@@ -6,7 +6,7 @@ import type {
   CoreModelStreamEvent,
   CoreModelToolDefinition,
   CoreModelTransportActivity,
-} from "../../../modelRuntime.js";
+} from "@agentlink/core/model-runtime";
 import type { CoreHostedToolDefinition } from "@agentlink/protocol/web-access-policy";
 import { parseAnthropicStreamEvents } from "./streamParser.js";
 import {

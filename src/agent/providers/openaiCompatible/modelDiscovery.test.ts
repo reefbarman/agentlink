@@ -2,10 +2,10 @@ import {
   OpenAiCompatibleAbortError,
   OpenAiCompatibleRequestError,
   OpenAiCompatibleTimeoutError,
-} from "../../../core/model/providers/openaiCompatible/errors.js";
+} from "@agentlink/core/openai-compatible";
 import { describe, expect, it, vi } from "vitest";
 
-import { discoverOpenAiCompatibleModels } from "./modelDiscovery.js";
+import { discoverOpenAiCompatibleModels } from "@agentlink/core/openai-compatible";
 
 function jsonResponse(value: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(value), {

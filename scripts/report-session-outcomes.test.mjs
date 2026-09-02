@@ -141,7 +141,13 @@ test("aggregates turns, tasks, and background lifecycles into indicators", () =>
       parentBlockedMs: 120_000,
       reviewFindings: { high: 0, low: 0 },
       reviewEmptyDiff: false,
-      reviewScopeBytes: 1_000,
+      backend: "native",
+      reviewTargetKind: "working_tree",
+      reviewHandoffBytes: 1_000,
+      reviewInlineBytes: 0,
+      usedToolCalls: 5,
+      usedApiTurns: 3,
+      reportedInputTokens: 2_000,
     }),
     event({
       type: "background_lifecycle",
@@ -195,6 +201,13 @@ test("aggregates turns, tasks, and background lifecycles into indicators", () =>
   // Zero findings on a non-empty diff counts as an empty review.
   assert.equal(report.background.emptyReviews, 1);
   assert.equal(report.background.smallScopeReviews, 1);
+  assert.deepEqual(report.background.reviewByBackend, { native: 1 });
+  assert.deepEqual(report.background.reviewByTargetKind, { working_tree: 1 });
+  assert.deepEqual(report.background.reviewHandoffBytes, [1_000]);
+  assert.deepEqual(report.background.reviewInlineBytes, [0]);
+  assert.deepEqual(report.background.reviewToolCalls, [5]);
+  assert.deepEqual(report.background.reviewApiTurns, [3]);
+  assert.deepEqual(report.background.reviewInputTokens, [2_000]);
 
   assert.equal(report.approvalInterruptions.count, 2);
   assert.equal(report.approvalInterruptions.backgroundCount, 1);

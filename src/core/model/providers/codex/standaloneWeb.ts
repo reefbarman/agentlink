@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 
 import { agentLinkFetch } from "../../../../util/httpDispatcher.js";
-import type { CoreNativeWebToolResult } from "../../../nativeWebTools.js";
+import type { CoreNativeWebToolResult } from "@agentlink/core/native-web-tools";
 import type {
   CoreWebAccessSettings,
   CoreWebSearchMode,

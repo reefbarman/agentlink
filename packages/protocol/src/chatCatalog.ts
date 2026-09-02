@@ -1,4 +1,12 @@
-import type { CoreReasoningEffort } from "./modelCatalog.js";
+import type {
+  CoreModelCatalogAuthAction,
+  CoreModelCatalogEntry,
+  CoreModelCatalogReadiness,
+  CoreModelCatalogSnapshot,
+  CoreReasoningEffort,
+} from "./modelCatalog.js";
+
+import { resolveCoreModelCatalogReadiness } from "./modelCatalog.js";
 
 export interface ChatProjectInfo {
   projectId: string;
@@ -29,7 +37,47 @@ export interface ChatModelInfo {
   reasoningEfforts?: ChatReasoningEffort[];
   defaultReasoningEffort?: ChatReasoningEffort;
   authenticated: boolean;
+  readiness?: CoreModelCatalogReadiness;
+  authAction?: CoreModelCatalogAuthAction;
+  unavailableReason?: string;
   condenseThreshold?: number;
+}
+
+/** Project the shared catalog snapshot into the model DTO used by chat surfaces. */
+export function projectCoreModelCatalogToChatModels(
+  snapshot: Pick<CoreModelCatalogSnapshot, "models">,
+): ChatModelInfo[] {
+  return snapshot.models.map(projectCoreModelCatalogEntryToChatModel);
+}
+
+export function projectCoreModelCatalogEntryToChatModel(
+  model: CoreModelCatalogEntry,
+): ChatModelInfo {
+  const readiness = resolveCoreModelCatalogReadiness(model);
+  const blocked =
+    readiness.status === "credentials_required" ||
+    readiness.status === "configuration_required";
+  return {
+    id: model.id,
+    displayName: model.displayName,
+    provider: model.providerId,
+    providerDisplayName: model.providerDisplayName,
+    supportsToolUse: model.supportsToolUse,
+    supportsImages: model.supportsImages,
+    contextWindow: model.contextWindow,
+    maxInputTokens: model.maxInputTokens,
+    maxOutputTokens: model.maxOutputTokens,
+    reasoningEfforts: model.reasoningEfforts,
+    defaultReasoningEffort: model.defaultReasoningEffort,
+    authenticated: readiness.status === "ready",
+    readiness,
+    authAction: blocked ? readiness.action : undefined,
+    unavailableReason:
+      readiness.status === "ready" || readiness.status === "checking"
+        ? undefined
+        : readiness.reason,
+    condenseThreshold: model.condenseThreshold,
+  };
 }
 
 export type ChatSlashCommandSource =

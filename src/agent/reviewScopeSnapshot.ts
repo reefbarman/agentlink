@@ -1,19 +1,26 @@
-import * as crypto from "crypto";
-import * as fs from "fs/promises";
+import * as fs from "node:fs";
 import * as path from "path";
 
 import { canonicalizePath, isPathWithinRoot } from "../util/paths.js";
 
 import type { ReviewScope } from "../core/capabilities/background.js";
-import { execFile } from "child_process";
-import { isUtf8 } from "buffer";
-import { promisify } from "util";
 
-const execFileAsync = promisify(execFile);
-const MAX_REVIEW_SNAPSHOT_BYTES = 1_000_000;
+const MAX_INLINE_REVIEW_DIFF_BYTES = 1_000_000;
 
 export interface CaptureReviewScopeOptions {
   workspaceRoots?: readonly string[];
+}
+
+export interface ReviewScopeHandoff {
+  /** Compact target instructions appended to the delegated review message. */
+  content: string;
+  /** Stable scope description used when the reviewer omits reviewedScope. */
+  summary: string;
+  kind: ReviewScope["kind"];
+  /** Bytes of caller-supplied code embedded in the handoff. Live targets are zero. */
+  inlineBytes: number;
+  /** Internal absolute file targets revalidated when queued work starts. */
+  liveFilePaths?: string[];
 }
 
 interface ResolvedReviewPath {
@@ -22,30 +29,37 @@ interface ResolvedReviewPath {
   root: string;
 }
 
-function normalizePaths(
+function comparisonKey(value: string): string {
+  return process.platform === "win32" ? value.toLowerCase() : value;
+}
+
+function normalizeRoots(
   cwd: string,
-  paths: string[] | undefined,
   options: CaptureReviewScopeOptions,
-): ResolvedReviewPath[] {
-  const comparisonKey = (value: string): string =>
-    process.platform === "win32" ? value.toLowerCase() : value;
-  const isWithinRoot = (filePath: string, root: string): boolean =>
-    isPathWithinRoot(comparisonKey(filePath), comparisonKey(root));
-  const seenRoots = new Set<string>();
-  const roots = (
-    options.workspaceRoots?.length ? options.workspaceRoots : [cwd]
-  )
+): Array<{ rawRoot: string; canonicalRoot: string }> {
+  const seen = new Set<string>();
+  return (options.workspaceRoots?.length ? options.workspaceRoots : [cwd])
     .map((root) => ({
       rawRoot: path.resolve(root),
       canonicalRoot: canonicalizePath(root),
     }))
     .filter(({ canonicalRoot }) => {
       const key = comparisonKey(canonicalRoot);
-      if (seenRoots.has(key)) return false;
-      seenRoots.add(key);
+      if (seen.has(key)) return false;
+      seen.add(key);
       return true;
     })
     .sort((left, right) => right.rawRoot.length - left.rawRoot.length);
+}
+
+function normalizePaths(
+  cwd: string,
+  paths: string[] | undefined,
+  options: CaptureReviewScopeOptions,
+): ResolvedReviewPath[] {
+  const roots = normalizeRoots(cwd, options);
+  const within = (filePath: string, root: string): boolean =>
+    isPathWithinRoot(comparisonKey(filePath), comparisonKey(root));
   return (paths ?? []).map((input) => {
     const trimmed = input.trim();
     if (!trimmed) throw new Error("Review scope paths cannot be empty.");
@@ -54,22 +68,16 @@ function normalizePaths(
     );
     const canonicalPath = canonicalizePath(rawAbsolutePath);
     const canonicalOwner = roots.find(({ canonicalRoot }) =>
-      isWithinRoot(canonicalPath, canonicalRoot),
+      within(canonicalPath, canonicalRoot),
     );
     const lexicalOwner = canonicalOwner
       ? undefined
-      : roots.find(({ rawRoot }) => isWithinRoot(rawAbsolutePath, rawRoot));
+      : roots.find(({ rawRoot }) => within(rawAbsolutePath, rawRoot));
     const root = canonicalOwner ?? lexicalOwner;
     if (!root) {
       const allowedRoots = roots.map(({ canonicalRoot }) => canonicalRoot);
-      const acceptedExample = path.join(
-        allowedRoots[0] ?? cwd,
-        "path",
-        "to",
-        "file.ts",
-      );
       throw new Error(
-        `Review scope path is outside the open workspace roots: ${input}. Allowed roots: ${allowedRoots.join(", ") || cwd}. Accepted example: ${acceptedExample}`,
+        `Review scope path is outside the open workspace roots: ${input}. Allowed roots: ${allowedRoots.join(", ") || cwd}. Accepted example: ${path.join(allowedRoots[0] ?? cwd, "path", "to", "file.ts")}`,
       );
     }
     const absolutePath = canonicalOwner
@@ -88,35 +96,6 @@ function normalizePaths(
     };
   });
 }
-
-async function git(cwd: string, args: string[]): Promise<string> {
-  try {
-    const { stdout } = await execFileAsync("git", args, {
-      cwd,
-      encoding: "utf8",
-      env: { ...process.env },
-      maxBuffer: MAX_REVIEW_SNAPSHOT_BYTES * 2,
-    });
-    return stdout;
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `Unable to capture review scope with Git: ${detail}. If this workspace is not a Git repository, use reviewScope kind "files" with explicit paths.`,
-    );
-  }
-}
-
-function fenced(content: string, language: string): string {
-  const longestRun = Math.max(
-    0,
-    ...Array.from(content.matchAll(/`+/g), (match) => match[0].length),
-  );
-  const fence = "`".repeat(Math.max(3, longestRun + 1));
-  return `${fence}${language}\n${content.trimEnd()}\n${fence}`;
-}
-
-/** Per-item byte sizes collected so cap-overflow errors can name offenders. */
-type SizeHints = Array<{ path: string; bytes: number }>;
 
 function normalizeExcludePrefix(value: string): string {
   return value
@@ -138,178 +117,6 @@ function pathMatchesExclude(
   );
 }
 
-/**
- * Build explicit long-form pathspecs so user paths remain literal while excludes
- * are applied by Git before stdout is buffered. A directory literal pathspec also
- * matches descendants, matching reviewScope.excludePaths prefix semantics.
- */
-function gitPathArgs(
-  includePaths: readonly string[],
-  excludePrefixes: readonly string[],
-): string[] {
-  const pathspecs = [
-    ...includePaths.map((entry) => `:(top,literal)${entry}`),
-    ...excludePrefixes.map((entry) => `:(top,exclude,literal)${entry}`),
-  ];
-  return pathspecs.length > 0 ? ["--", ...pathspecs] : [];
-}
-
-/**
- * Split a unified git diff into per-file sections so excludes and size
- * attribution can operate on file granularity.
- */
-function splitDiffSections(
-  diff: string,
-): Array<{ paths: string[]; text: string }> {
-  const lines = diff.split("\n");
-  const sections: Array<{ paths: string[]; text: string }> = [];
-  let current: { paths: string[]; buffer: string[] } | undefined;
-  const flush = () => {
-    if (current) {
-      sections.push({ paths: current.paths, text: current.buffer.join("\n") });
-      current = undefined;
-    }
-  };
-  for (const line of lines) {
-    const header = line.match(/^diff --git (?:"?a\/(.+?)"?) (?:"?b\/(.+?)"?)$/);
-    if (header) {
-      flush();
-      current = {
-        paths: [...new Set([header[1], header[2]])],
-        buffer: [line],
-      };
-      continue;
-    }
-    if (current) current.buffer.push(line);
-  }
-  flush();
-  return sections;
-}
-
-function filterDiffByExcludes(
-  diff: string,
-  excludePrefixes: readonly string[],
-  sizeHints?: SizeHints,
-): { diff: string; excluded: string[] } {
-  const sections = splitDiffSections(diff);
-  if (sections.length === 0) {
-    if (diff.trim() && sizeHints) {
-      sizeHints.push({ path: "(diff)", bytes: Buffer.byteLength(diff) });
-    }
-    return { diff, excluded: [] };
-  }
-  const kept: string[] = [];
-  const excluded: string[] = [];
-  for (const section of sections) {
-    if (
-      excludePrefixes.length > 0 &&
-      section.paths.some((sectionPath) =>
-        pathMatchesExclude(sectionPath, excludePrefixes),
-      )
-    ) {
-      excluded.push(...section.paths);
-      continue;
-    }
-    sizeHints?.push({
-      path: section.paths[0] ?? "(diff)",
-      bytes: Buffer.byteLength(section.text),
-    });
-    kept.push(section.text);
-  }
-  return { diff: kept.join("\n"), excluded: [...new Set(excluded)] };
-}
-
-async function captureFiles(
-  paths: ResolvedReviewPath[],
-  sizeHints?: SizeHints,
-): Promise<string> {
-  const sections: string[] = [];
-  const spansMultipleRoots = new Set(paths.map((entry) => entry.root)).size > 1;
-  for (const { absolutePath, relativePath } of paths) {
-    const displayPath = spansMultipleRoots ? absolutePath : relativePath;
-    let stat;
-    try {
-      stat = await fs.lstat(absolutePath);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") {
-        sections.push(`File ${JSON.stringify(displayPath)} is missing.`);
-        continue;
-      }
-      throw error;
-    }
-
-    if (stat.isSymbolicLink()) {
-      const target = await fs.readlink(absolutePath);
-      sections.push(
-        `File ${JSON.stringify(displayPath)} is a symbolic link to ${JSON.stringify(target)}.`,
-      );
-      continue;
-    }
-    if (!stat.isFile()) {
-      throw new Error(`Review scope path is not a file: ${displayPath}`);
-    }
-    if (stat.size > MAX_REVIEW_SNAPSHOT_BYTES) {
-      // Keep the rest of the capture usable: record the oversized file's
-      // metadata with an explicit warning instead of rejecting the spawn.
-      sections.push(
-        `Oversized file ${JSON.stringify(displayPath)} (${stat.size} bytes, modified ${stat.mtime.toISOString()}) exceeds the ${MAX_REVIEW_SNAPSHOT_BYTES}-byte per-file capture limit; content omitted. Use excludePaths to silence this entry.`,
-      );
-      continue;
-    }
-
-    const content = await fs.readFile(absolutePath);
-    if (content.includes(0) || !isUtf8(content)) {
-      sections.push(
-        `Binary file ${JSON.stringify(displayPath)} (${content.byteLength} bytes, sha256:${crypto.createHash("sha256").update(content).digest("hex")}).`,
-      );
-      continue;
-    }
-    sizeHints?.push({ path: displayPath, bytes: content.byteLength });
-    sections.push(
-      `File: ${displayPath}\n${fenced(content.toString("utf8"), "text")}`,
-    );
-  }
-  return sections.join("\n\n");
-}
-
-function assertSnapshotSize(snapshot: string, sizeHints?: SizeHints): void {
-  const bytes = Buffer.byteLength(snapshot);
-  if (bytes > MAX_REVIEW_SNAPSHOT_BYTES) {
-    const largest = (sizeHints ?? [])
-      .slice()
-      .sort((left, right) => right.bytes - left.bytes)
-      .slice(0, 5)
-      .map((hint) => `${hint.path} (${hint.bytes} bytes)`);
-    throw new Error(
-      `Captured review scope is ${bytes} bytes, above the ${MAX_REVIEW_SNAPSHOT_BYTES}-byte limit. Provide a narrower review scope, for example with reviewScope.paths or excludePaths.${
-        largest.length > 0
-          ? ` Largest captured items: ${largest.join(", ")}.`
-          : ""
-      }`,
-    );
-  }
-}
-
-function wrapSnapshot(
-  kind: ReviewScope["kind"],
-  body: string,
-  sizeHints?: SizeHints,
-): string {
-  const content = body.trim();
-  const snapshot = [
-    "## Runtime-captured review scope",
-    "",
-    `Kind: ${kind}`,
-    "This immutable scope was captured when the background agent was spawned. Review it as supplied; do not rediscover the change set from the live workspace.",
-    "",
-    content || "The requested review scope was empty when captured.",
-  ].join("\n");
-  assertSnapshotSize(snapshot, sizeHints);
-  return snapshot;
-}
-
-/** Resolve a `root` selector (absolute path or folder basename) to one open workspace root. */
 function resolveScopeRoot(
   cwd: string,
   requestedRoot: string | undefined,
@@ -317,15 +124,9 @@ function resolveScopeRoot(
 ): string | undefined {
   const requested = requestedRoot?.trim();
   if (!requested) return undefined;
-  const comparisonKey = (value: string): string =>
-    process.platform === "win32" ? value.toLowerCase() : value;
-  const roots = [
-    ...new Set(
-      (options.workspaceRoots?.length ? options.workspaceRoots : [cwd]).map(
-        (root) => canonicalizePath(root),
-      ),
-    ),
-  ];
+  const roots = normalizeRoots(cwd, options).map(
+    ({ canonicalRoot }) => canonicalRoot,
+  );
   const canonicalRequested = path.isAbsolute(requested)
     ? canonicalizePath(requested)
     : undefined;
@@ -346,43 +147,118 @@ function resolveScopeRoot(
   );
 }
 
-/** Resolve a structured review target into an immutable prompt snapshot. */
-export async function captureReviewScope(
+function fenced(content: string, language: string): string {
+  const longestRun = Math.max(
+    0,
+    ...Array.from(content.matchAll(/`+/g), (match) => match[0].length),
+  );
+  const fence = "`".repeat(Math.max(3, longestRun + 1));
+  return `${fence}${language}\n${content.trimEnd()}\n${fence}`;
+}
+
+function wrapLiveTarget(body: string): string {
+  return [
+    "## Live review target",
+    "",
+    "Inspect this target from the current workspace state when the review begins. Concurrent or unrelated work may be present; prioritize the stated change intent and paths. Do not spend work proving snapshot consistency. Report a material out-of-scope issue as such instead of broadening the review.",
+    "",
+    body,
+  ].join("\n");
+}
+
+function renderList(
+  label: string,
+  values: readonly string[],
+): string | undefined {
+  return values.length > 0 ? `${label}: ${values.join(", ")}` : undefined;
+}
+
+/**
+ * Validate a structured review target and render a compact live handoff.
+ * Workspace-backed scopes intentionally contain selectors only; `diff` is the
+ * explicit immutable escape hatch and is the only kind that embeds code.
+ */
+export function captureReviewScope(
   cwd: string,
   scope: ReviewScope,
   options: CaptureReviewScopeOptions = {},
-): Promise<string> {
+): ReviewScopeHandoff {
   if (scope.kind === "diff") {
+    const bytes = Buffer.byteLength(scope.content);
+    if (bytes > MAX_INLINE_REVIEW_DIFF_BYTES) {
+      throw new Error(
+        `Inline review diff is ${bytes} bytes, above the ${MAX_INLINE_REVIEW_DIFF_BYTES}-byte limit. Provide only the relevant hunks or use a live working_tree, files, or commit_range scope.`,
+      );
+    }
     const label = scope.label?.trim() || "Provided diff";
-    return wrapSnapshot(
-      scope.kind,
-      `${label}:\n${fenced(scope.content, "diff")}`,
-    );
+    return {
+      kind: scope.kind,
+      inlineBytes: bytes,
+      summary: label,
+      content: [
+        "## Explicit review diff",
+        "",
+        "This caller-supplied diff is the exact review target. Read current workspace files only when needed to validate a concrete risk.",
+        "",
+        `${label}:`,
+        fenced(scope.content, "diff"),
+      ].join("\n"),
+    };
   }
 
   const excludePrefixes = (scope.excludePaths ?? [])
     .map(normalizeExcludePrefix)
     .filter(Boolean);
-  const sizeHints: SizeHints = [];
-  const allExcluded: string[] = [...excludePrefixes];
 
   if (scope.kind === "files") {
-    const paths = normalizePaths(cwd, scope.paths, options).filter((entry) => {
-      const excluded = pathMatchesExclude(entry.relativePath, excludePrefixes);
-      if (excluded) allExcluded.push(entry.relativePath);
-      return !excluded;
-    });
-    if (paths.length === 0 && allExcluded.length === 0) {
-      throw new Error("reviewScope.files requires at least one path.");
-    }
-    const body = await captureFiles(paths, sizeHints);
-    return wrapSnapshot(
-      scope.kind,
-      allExcluded.length > 0
-        ? `Excluded paths: ${allExcluded.join(", ")}\n\n${body}`
-        : body,
-      sizeHints,
+    const resolved = normalizePaths(cwd, scope.paths, options).filter(
+      (entry) => !pathMatchesExclude(entry.relativePath, excludePrefixes),
     );
+    if (resolved.length === 0) {
+      throw new Error(
+        "reviewScope.files requires at least one non-excluded path.",
+      );
+    }
+    for (const entry of resolved) {
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(entry.absolutePath);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") {
+          throw new Error(
+            `Live review file target is unavailable: ${entry.relativePath}. Refresh the scope or use kind "diff" with explicit hunks.`,
+          );
+        }
+        throw error;
+      }
+      if (!stat.isFile()) {
+        throw new Error(
+          `Live review file target is not a file: ${entry.relativePath}.`,
+        );
+      }
+    }
+    const spansRoots = new Set(resolved.map((entry) => entry.root)).size > 1;
+    const displayPaths = resolved.map((entry) =>
+      spansRoots ? entry.absolutePath : entry.relativePath,
+    );
+    const summary = `current files: ${displayPaths.join(", ")}`;
+    return {
+      kind: scope.kind,
+      inlineBytes: 0,
+      liveFilePaths: resolved.map((entry) => entry.absolutePath),
+      summary,
+      content: wrapLiveTarget(
+        [
+          "Kind: files",
+          renderList("Paths", displayPaths),
+          renderList("Excluded paths", excludePrefixes),
+          "Read the current contents of these files. Read directly affected callers or tests only when a concrete review hypothesis requires it.",
+        ]
+          .filter((line): line is string => Boolean(line))
+          .join("\n"),
+      ),
+    };
   }
 
   const selectedRoot = resolveScopeRoot(cwd, scope.root, options);
@@ -390,120 +266,91 @@ export async function captureReviewScope(
   const pathOptions = selectedRoot
     ? { workspaceRoots: [selectedRoot] }
     : options;
-  const paths = normalizePaths(pathBase, scope.paths, pathOptions);
-
-  const pathRoots = [...new Set(paths.map((entry) => entry.root))];
+  const resolvedPaths = normalizePaths(pathBase, scope.paths, pathOptions);
+  const pathRoots = [...new Set(resolvedPaths.map((entry) => entry.root))];
   if (pathRoots.length > 1) {
     throw new Error(
-      `Git review scopes cannot span multiple workspace roots: ${pathRoots.join(", ")}. Use reviewScope kind "files" for an exact cross-root snapshot, or reviewScope.root to pick one root.`,
+      `Git review scopes cannot span multiple workspace roots: ${pathRoots.join(", ")}. Use reviewScope kind "files" for a cross-root live target, or reviewScope.root to pick one root.`,
     );
   }
   const gitRoot = selectedRoot ?? pathRoots[0] ?? canonicalizePath(cwd);
-  const gitPaths = paths.map((entry) => entry.relativePath);
-  const pathArgs = gitPathArgs(gitPaths, excludePrefixes);
-  const applyExcludes = (diff: string): string => {
-    const filtered = filterDiffByExcludes(diff, excludePrefixes, sizeHints);
-    allExcluded.push(...filtered.excluded);
-    return filtered.diff.trim() ? filtered.diff : "";
-  };
+  const gitPaths = resolvedPaths
+    .filter((entry) => !pathMatchesExclude(entry.relativePath, excludePrefixes))
+    .map((entry) => entry.relativePath);
+  if (resolvedPaths.length > 0 && gitPaths.length === 0) {
+    throw new Error(
+      `reviewScope.${scope.kind} requires at least one non-excluded path.`,
+    );
+  }
 
   if (scope.kind === "commit_range") {
     const range = scope.range.trim();
     if (!range || range.startsWith("-")) {
       throw new Error("reviewScope.commit_range requires a valid Git range.");
     }
-    const diff = applyExcludes(
-      await git(gitRoot, [
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-color",
-        range,
-        ...pathArgs,
-      ]),
-    );
-    return wrapSnapshot(
-      scope.kind,
+    const summary = `current Git range ${range}${gitPaths.length ? ` for ${gitPaths.join(", ")}` : ""}`;
+    return {
+      kind: scope.kind,
+      inlineBytes: 0,
+      summary,
+      content: wrapLiveTarget(
+        [
+          "Kind: commit_range",
+          `Git root: ${gitRoot}`,
+          `Git range: ${range}`,
+          renderList("Paths", gitPaths),
+          renderList("Excluded paths", excludePrefixes),
+          "Inspect this range with a scoped read-only Git diff. Use current files only for surrounding context needed to validate a concrete finding.",
+        ]
+          .filter((line): line is string => Boolean(line))
+          .join("\n"),
+      ),
+    };
+  }
+
+  const include = scope.include?.length
+    ? [...new Set(scope.include)]
+    : ["unstaged", "untracked"];
+  const pathDescription = gitPaths.length ? gitPaths.join(", ") : "all paths";
+  const summary = `current working tree (${include.join(", ")}) for ${pathDescription}`;
+  return {
+    kind: scope.kind,
+    inlineBytes: 0,
+    summary,
+    content: wrapLiveTarget(
       [
+        "Kind: working_tree",
         `Git root: ${gitRoot}`,
-        `Git range: ${range}`,
-        gitPaths.length ? `Paths: ${gitPaths.join(", ")}` : undefined,
-        allExcluded.length
-          ? `Excluded paths: ${[...new Set(allExcluded)].join(", ")}`
-          : undefined,
-        "",
-        fenced(diff, "diff"),
+        `Included states: ${include.join(", ")}`,
+        `Paths: ${pathDescription}`,
+        renderList("Excluded paths", excludePrefixes),
+        "Inspect the scoped current status/diff once, including current untracked file contents when requested. Then follow only directly affected callers or tests needed to validate concrete risks.",
       ]
-        .filter((line): line is string => line !== undefined)
+        .filter((line): line is string => Boolean(line))
         .join("\n"),
-      sizeHints,
-    );
-  }
+    ),
+  };
+}
 
-  const include = new Set(
-    scope.include?.length ? scope.include : ["unstaged", "untracked"],
-  );
-  const sections: string[] = [];
-
-  if (include.has("staged")) {
-    const diff = applyExcludes(
-      await git(gitRoot, [
-        "diff",
-        "--cached",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-color",
-        ...pathArgs,
-      ]),
-    );
-    if (diff) sections.push(`Staged changes:\n${fenced(diff, "diff")}`);
-  }
-  if (include.has("unstaged")) {
-    const diff = applyExcludes(
-      await git(gitRoot, [
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-color",
-        ...pathArgs,
-      ]),
-    );
-    if (diff)
-      sections.push(`Unstaged tracked changes:\n${fenced(diff, "diff")}`);
-  }
-  if (include.has("untracked")) {
-    const output = await git(gitRoot, [
-      "ls-files",
-      "--others",
-      "--exclude-standard",
-      "-z",
-      ...pathArgs,
-    ]);
-    const untracked = output.split("\0").filter(Boolean);
-    const keptUntracked = untracked.filter((entry) => {
-      const excluded = pathMatchesExclude(entry, excludePrefixes);
-      if (excluded) allExcluded.push(entry);
-      return !excluded;
-    });
-    if (keptUntracked.length > 0) {
-      const untrackedPaths = normalizePaths(gitRoot, keptUntracked, {
-        workspaceRoots: [gitRoot],
-      });
-      sections.push(
-        `Untracked files:\n${await captureFiles(untrackedPaths, sizeHints)}`,
+/** Fail queued live-file reviews before provider work if their target disappeared. */
+export function assertReviewScopeAvailable(handoff: ReviewScopeHandoff): void {
+  for (const filePath of handoff.liveFilePaths ?? []) {
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(filePath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        throw new Error(
+          `Live review file target became unavailable before the review started: ${filePath}. Refresh the scope and retry.`,
+        );
+      }
+      throw error;
+    }
+    if (!stat.isFile()) {
+      throw new Error(
+        `Live review file target is no longer a file: ${filePath}. Refresh the scope and retry.`,
       );
     }
   }
-
-  const manifest = [
-    `Git root: ${gitRoot}`,
-    `Included states: ${[...include].join(", ")}`,
-    gitPaths.length ? `Paths: ${gitPaths.join(", ")}` : "Paths: all",
-    ...(allExcluded.length
-      ? [`Excluded paths: ${[...new Set(allExcluded)].join(", ")}`]
-      : []),
-    "",
-    ...sections,
-  ].join("\n");
-  return wrapSnapshot(scope.kind, manifest, sizeHints);
 }

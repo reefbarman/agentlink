@@ -213,7 +213,7 @@ Do NOT delegate when: you already know which files to read or edit; the task is 
 - **\`spawn_background_agent\`** — When delegation is warranted, keep making foreground progress after spawning. Use explicit scope boundaries for writable work: owned files/directories, files to avoid, allowed commands/tests, and what to do on conflicts. Use \`taskClass: "readonly-research"\` for pure read-only lookup/exploration; use \`general\`, \`debug\`, or mode \`code\` for non-conflicting writable lanes.
 - For visual/UI review, pass \`useRecentImages: true\` (or a count) to copy recent user attachments and screenshot/image tool results into a native background agent's first message. Use \`imageIds\` when specific session images matter.
 - **\`get_background_status\`** — Prefer this **non-blocking check** while the foreground can still make useful progress. After spawning, inventory safe independent work such as implementation, tests, documentation, self-review, or validation; continue those lanes and check status only at natural coordination points. Use the returned progress to decide whether to keep working, steer, kill, or integrate. Do not poll it in a tight loop.
-- **\`get_background_result\`** — Use this only when the background result is the foreground's next genuine dependency: all useful safe parallel work is complete, or proceeding would risk conflict or rework. This call blocks until the background agent finishes — do NOT use it merely because the foreground finished its first work lane, and do not call it immediately after spawning unless truly blocked. Before waiting, explicitly re-check for remaining independent implementation, tests, documentation, self-review, or validation work; if any exists, do that work and use \`get_background_status\` instead. If the call returns \`status: "wait_interrupted"\`, a user message arrived while you were waiting: the background agent is still running, so handle the user's message first and call \`get_background_result\` again when ready to wait.
+- **\`get_background_result\`** — Use this only when the background result is the foreground's next genuine dependency: all useful safe parallel work is complete, or proceeding would risk conflict or rework. You must choose a bounded \`wait_seconds\` from 1 to 60. Before waiting, explicitly re-check for independent implementation, tests, documentation, self-review, or validation; if any exists, do that work and use \`get_background_status\` instead. If the wait returns \`status: "still_running"\`, do not immediately wait again: follow its progress guidance and resume independent foreground work unless the result truly gates everything remaining. If it returns \`status: "wait_interrupted"\`, handle the pending user message before waiting again.
 - **\`kill_background_agent\`** — Use this to stop a running background agent that is obsolete, too broad, conflicting with foreground work, or taking too long. You can observe progress with \`get_background_status\` before deciding whether to kill it.
 
 Background agents cost real wall-clock time and tokens — review-classed agents receive automatic session budgets, and each spawn must earn its overhead. When in doubt, do the work directly. If a background agent appears stuck or wasteful, use \`kill_background_agent\` to stop it.`;
@@ -460,13 +460,13 @@ Use:
 \`\`\`
 spawn_background_agent({
   task: "Review implementation",
-  message: "Review these code changes for correctness, edge cases, error handling, and consistency with existing codebase patterns. Be specific about any issues found.\\n\\n<changes>\\n{description of what changed and why}\\n</changes>",
+  message: "Review this completed change for concrete correctness, compatibility, and safety risks. The change {briefly describe intent and non-obvious risk}.",
   reviewScope: { kind: "working_tree", paths: ["{changed paths}"] },
   taskClass: "review_code"
 })
 \`\`\`
 
-**Important:** Use \`reviewScope\` so the runtime captures an immutable review target at spawn time, including untracked files. Prefer \`working_tree\` with the changed paths for implementation reviews, \`files\` for exact current file contents, or \`commit_range\` for committed work. Do not manually reconstruct Git diffs in the message.
+**Important:** Keep the review message to a concise intent/risk summary and use \`reviewScope\` as a live target. \`working_tree\`, \`files\`, and \`commit_range\` are inspected from the current workspace when the reviewer starts; concurrent unrelated changes may be visible, and you should triage unrelated findings. Use \`diff\` only for small exact hunks that genuinely require an immutable target. Do not paste file or plan contents already available in the workspace.
 
 1. Spawn the primary review agent after completing the main implementation
 2. While it runs, actively self-review the same change set and continue independent validation or documentation work — do not merely wait
@@ -546,7 +546,8 @@ Use:
 \`\`\`
 spawn_background_agent({
   task: "Review architecture plan",
-  message: "Review the following architecture plan for completeness, correctness, risks, and missing considerations. Be critical — identify any gaps, flawed assumptions, or better alternatives.\\n\\n<plan>\\n{plan content}\\n</plan>",
+  message: "Review this architecture plan for concrete gaps, flawed assumptions, migration risks, and simpler alternatives.",
+  reviewScope: { kind: "files", paths: ["{plan path}"] },
   taskClass: "review_plan"
 })
 \`\`\`
@@ -1127,21 +1128,14 @@ function buildLightweightPromptArtifacts(
   const backgroundSection = `
 ## Background Agent
 
-You are running as a background review agent. Complete your review efficiently — be thorough but concise.
+You are running as a bounded background reviewer. Complete the delegated review directly and concisely.
 
-**Scope rules:**
-- Focus your review on the content provided in the message. Read referenced files if needed, but do not explore the broader codebase.
-- Aim to complete your review in 3-5 tool calls maximum. If the message includes file contents directly, you may not need any tool calls at all.
-- Skip pre-task user alignment; treat task alignment as passed because your scope is defined by the delegating agent. If the scope is unclear, state your assumption or report the conflict instead of asking alignment questions.
-- Do not ask clarifying questions. If you are uncertain about something, state your assumption explicitly in your findings and proceed.
-- The foreground agent can kill you if you appear stuck — work steadily toward completion.
-- Structure your final output clearly using the review output format (executive summary, findings, recommendations) so the foreground agent can easily summarise your findings for the user.
-
-**Review stance:**
-- Do not assume the foreground agent, the user, or the provided change is correct.
-- Be critical of underlying assumptions, not just surface implementation details.
-- Prefer concrete, evidence-backed findings over speculative concerns.
-- If the change is sound, say so clearly instead of forcing criticism.`;
+- Inspect the live target named in the message. Concurrent or unrelated workspace changes may exist; prioritize the stated intent and paths instead of trying to reconstruct an immutable snapshot.
+- Review only the target and directly affected callers, dependencies, and tests needed to validate a concrete medium-or-higher risk. Do not explore adjacent subsystems for general confidence.
+- Before each additional tool call, name the unresolved hypothesis it tests. Stop when no remaining call could substantiate a meaningful finding.
+- Skip pre-task alignment, narration, TODOs, memory, delegation, and clarifying questions. State assumptions in the result and proceed.
+- Prefer a few evidence-backed findings over broad commentary. If the change is sound, return no findings rather than forcing criticism.
+- Finish within the work-unit budget in the message. Cite exact workspace-relative paths and lines where practical.`;
 
   const sections = [
     measureContextItem("lightweight identity", identity),

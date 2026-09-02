@@ -99,6 +99,10 @@ export class AnthropicProvider implements ModelProvider {
     return hasAnthropicApiKey();
   }
 
+  getCatalogAuthAction() {
+    return { kind: "api_key" as const, providerId: this.id };
+  }
+
   getCapabilities(model: string): ModelCapabilities {
     const capabilities = this.dynamicCapabilitiesEnabled
       ? (this.catalog.getCapabilities(model) ??

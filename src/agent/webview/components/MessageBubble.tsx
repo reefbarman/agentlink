@@ -30,7 +30,7 @@ import { QuestionAnswerBlock } from "./QuestionAnswerBlock";
 import { SkillLoadBlock } from "./SkillLoadBlock";
 import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
-import { ThinkingContent } from "./ThinkingContent";
+import { getLatestThinkingSummary, ThinkingContent } from "./ThinkingContent";
 import { ToolCallBlock } from "./ToolCallBlock";
 import { getFinalMessageContinueAction } from "@agentlink/protocol/final-status";
 import { getStreamingActivity } from "./activityPresentation";
@@ -219,6 +219,10 @@ export function MessageBubble({
     activeThinking.text.trim().length > 0;
   const activeThinkingId =
     activeThinking?.type === "thinking" ? activeThinking.id : null;
+  const latestThinkingSummary =
+    activeThinking?.type === "thinking"
+      ? getLatestThinkingSummary(activeThinking.text)
+      : null;
 
   useEffect(() => {
     setThinkingExpanded(false);
@@ -571,11 +575,24 @@ export function MessageBubble({
                   class="streaming-indicator-summary"
                   type="button"
                   aria-expanded={thinkingExpanded}
+                  aria-label={
+                    latestThinkingSummary
+                      ? `${streamingActivity.label} ${latestThinkingSummary}`
+                      : streamingActivity.label
+                  }
                   onClick={() => setThinkingExpanded((expanded) => !expanded)}
                 >
                   <LiveLinkIndicator motion={streamingActivity.motion} />
-                  <span class="streaming-activity-label">
-                    {streamingActivity.label}
+                  <span class="streaming-thinking-status-copy">
+                    <span class="streaming-activity-label">
+                      {streamingActivity.label}
+                    </span>
+                    {latestThinkingSummary && (
+                      <span class="streaming-thinking-status-detail">
+                        <span aria-hidden="true">↳</span>
+                        <span>{latestThinkingSummary}</span>
+                      </span>
+                    )}
                   </span>
                   <i
                     class={`codicon codicon-chevron-${thinkingExpanded ? "down" : "right"} streaming-indicator-chevron`}

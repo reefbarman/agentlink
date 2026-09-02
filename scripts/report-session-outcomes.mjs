@@ -208,6 +208,14 @@ function createEmptyReport() {
       reviewScopeBytes: 0,
       reviewScopeSamples: 0,
       smallScopeReviews: 0,
+      reviewHandoffBytes: [],
+      reviewInlineBytes: [],
+      reviewToolCalls: [],
+      reviewApiTurns: [],
+      reviewInputTokens: [],
+      reviewByBackend: {},
+      reviewByTargetKind: {},
+      reviewBudgetExhausted: 0,
       runDurationsMs: [],
       parentBlockedDurationsMs: [],
     },
@@ -483,12 +491,43 @@ function mergeBackground(report, record) {
       bg.emptyReviews += 1;
       version.emptyReviews += 1;
     }
-    if (Number.isFinite(record.reviewScopeBytes)) {
-      bg.reviewScopeBytes += record.reviewScopeBytes;
+    const handoffBytes = Number.isFinite(record.reviewHandoffBytes)
+      ? record.reviewHandoffBytes
+      : record.reviewScopeBytes;
+    if (Number.isFinite(handoffBytes)) {
+      bg.reviewScopeBytes += handoffBytes;
       bg.reviewScopeSamples += 1;
-      if (record.reviewScopeBytes < SMALL_REVIEW_SCOPE_BYTES) {
+      bg.reviewHandoffBytes.push(handoffBytes);
+      if (handoffBytes < SMALL_REVIEW_SCOPE_BYTES) {
         bg.smallScopeReviews += 1;
       }
+    }
+    if (Number.isFinite(record.reviewInlineBytes)) {
+      bg.reviewInlineBytes.push(record.reviewInlineBytes);
+    }
+    if (Number.isFinite(record.usedToolCalls)) {
+      bg.reviewToolCalls.push(record.usedToolCalls);
+    }
+    if (Number.isFinite(record.usedApiTurns)) {
+      bg.reviewApiTurns.push(record.usedApiTurns);
+    }
+    if (Number.isFinite(record.reportedInputTokens)) {
+      bg.reviewInputTokens.push(record.reportedInputTokens);
+    }
+    const backend =
+      typeof record.backend === "string" ? record.backend : "unknown";
+    bg.reviewByBackend[backend] = (bg.reviewByBackend[backend] ?? 0) + 1;
+    const targetKind =
+      typeof record.reviewTargetKind === "string"
+        ? record.reviewTargetKind
+        : "unknown";
+    bg.reviewByTargetKind[targetKind] =
+      (bg.reviewByTargetKind[targetKind] ?? 0) + 1;
+    if (
+      record.terminal === "budget_exhausted" ||
+      String(record.terminalReason ?? "").startsWith("budget_exhausted:")
+    ) {
+      bg.reviewBudgetExhausted += 1;
     }
   }
 }
@@ -849,6 +888,37 @@ function printSummary(report, inputPath, top) {
         ],
         ["killed / steered", `${bg.killed} / ${bg.steered}`],
         [
+          "reviews by backend",
+          Object.entries(bg.reviewByBackend)
+            .sort(([, a], [, b]) => b - a)
+            .map(([backend, count]) => `${backend}:${count}`)
+            .join(" ") || "none",
+        ],
+        [
+          "review target kinds",
+          Object.entries(bg.reviewByTargetKind)
+            .sort(([, a], [, b]) => b - a)
+            .map(([kind, count]) => `${kind}:${count}`)
+            .join(" ") || "none",
+        ],
+        [
+          "review handoff p50 / p90",
+          `${percentile(bg.reviewHandoffBytes, 0.5) ?? 0}B / ${percentile(bg.reviewHandoffBytes, 0.9) ?? 0}B`,
+        ],
+        [
+          "review inline p50 / p90",
+          `${percentile(bg.reviewInlineBytes, 0.5) ?? 0}B / ${percentile(bg.reviewInlineBytes, 0.9) ?? 0}B`,
+        ],
+        [
+          "review tools p50 / p90",
+          `${percentile(bg.reviewToolCalls, 0.5) ?? 0} / ${percentile(bg.reviewToolCalls, 0.9) ?? 0}`,
+        ],
+        [
+          "review reported input p50 / p90",
+          `${percentile(bg.reviewInputTokens, 0.5) ?? 0} / ${percentile(bg.reviewInputTokens, 0.9) ?? 0}`,
+        ],
+        ["review budget exhausted", bg.reviewBudgetExhausted],
+        [
           "review findings",
           Object.entries(bg.reviewFindings)
             .map(([severity, count]) => `${severity}:${count}`)
@@ -880,9 +950,9 @@ function printSummary(report, inputPath, top) {
         "of spawning turns, delegated before any direct action",
       ],
       [
-        "small-scope review rate",
+        "small-handoff review rate",
         formatPercent(indicators.smallScopeReviewRate),
-        `reviews with scope < ${SMALL_REVIEW_SCOPE_BYTES}B captured`,
+        `reviews with handoff < ${SMALL_REVIEW_SCOPE_BYTES}B`,
       ],
       [
         "empty review rate",

@@ -3,7 +3,7 @@ import type * as OpenAIResponses from "openai/resources/responses/responses";
 import type {
   CoreModelMessage,
   CoreModelToolDefinition,
-} from "../../../modelRuntime.js";
+} from "@agentlink/core/model-runtime";
 import type { CoreHostedToolDefinition } from "@agentlink/protocol/web-access-policy";
 
 import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";

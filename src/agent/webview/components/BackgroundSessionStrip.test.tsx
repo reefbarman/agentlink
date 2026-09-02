@@ -284,7 +284,10 @@ describe("BackgroundSessionStrip defaults", () => {
       screen.getByTitle("Stop this agent and keep its partial output"),
     ).toBeTruthy();
     expect(
-      screen.getByTitle("Send new instructions to this running agent"),
+      screen.getByTitle("Ask this agent to wrap up with its current findings"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTitle("Send custom instructions to this running agent"),
     ).toBeTruthy();
     expect(
       screen.getByTitle("Pause this agent so it can be resumed later"),
@@ -295,6 +298,40 @@ describe("BackgroundSessionStrip defaults", () => {
       ),
     ).toBeTruthy();
     expect(screen.getByTitle("Open this agent's full transcript")).toBeTruthy();
+  });
+
+  it("sends a one-click wrap-up instruction without opening a prompt", () => {
+    const onSteer = vi.fn();
+    const prompt = vi.spyOn(window, "prompt");
+    render(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          {
+            id: "active",
+            task: "Long review",
+            status: "streaming",
+            canSteer: true,
+          },
+        ],
+        onStop: vi.fn(),
+        onSteer,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Agent Fleet/ }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Ask this agent to wrap up with its current findings",
+      }),
+    );
+
+    expect(prompt).not.toHaveBeenCalled();
+    expect(onSteer).toHaveBeenCalledWith(
+      "active",
+      expect.stringContaining(
+        "Stop using tools and return your best findings now",
+      ),
+    );
   });
 
   it("explains finished and paused agent actions", () => {

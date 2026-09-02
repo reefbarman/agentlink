@@ -30,7 +30,7 @@ export type ReviewScope =
       include?: Array<"staged" | "unstaged" | "untracked">;
       /** Optional root-relative or absolute path filter inside an open workspace root. */
       paths?: string[];
-      /** Optional root-relative path prefixes to drop from the capture. */
+      /** Optional root-relative path prefixes the live reviewer should exclude. */
       excludePaths?: string[];
       /** Workspace root selector (absolute path or folder name) for multi-root workspaces. */
       root?: string;
@@ -39,7 +39,7 @@ export type ReviewScope =
       kind: "files";
       /** Root-relative or absolute files inside open workspace roots. May span roots. */
       paths: string[];
-      /** Optional root-relative path prefixes to drop from the capture. */
+      /** Optional root-relative path prefixes the live reviewer should exclude. */
       excludePaths?: string[];
     }
   | {
@@ -48,14 +48,14 @@ export type ReviewScope =
       range: string;
       /** Optional root-relative or absolute path filter inside one open Git root. */
       paths?: string[];
-      /** Optional root-relative path prefixes to drop from the capture. */
+      /** Optional root-relative path prefixes the live reviewer should exclude. */
       excludePaths?: string[];
       /** Workspace root selector (absolute path or folder name) for multi-root workspaces. */
       root?: string;
     }
   | {
       kind: "diff";
-      /** Already captured diff content. */
+      /** Explicit immutable diff content. Prefer live workspace-backed kinds. */
       content: string;
       label?: string;
     };
@@ -73,7 +73,7 @@ export interface SpawnBackgroundRequest {
   permissionProfile?: "review-only" | "workspace-safe" | "interactive";
   /** Resolved session images copied into the background agent's first user turn. */
   images?: Array<{ name: string; mimeType: string; base64: string }>;
-  /** Review target captured by the runtime when the background agent is spawned. */
+  /** Live workspace target, or an explicit immutable diff, for review work. */
   reviewScope?: ReviewScope;
   expectedResult?: "text" | "review_findings" | "patch" | "verification";
   budget?: AgentBudget;
@@ -105,7 +105,6 @@ export interface BackgroundAgentStatusResult {
   currentTool?: string;
   displayStatus?: string;
   streamingPreview?: string;
-  progressSummary?: string;
   resolvedMode?: string;
   resolvedModel?: string;
   resolvedProvider?: string;
@@ -161,6 +160,9 @@ export interface BackgroundAgentResultContent {
 export interface BackgroundAgentProvider {
   spawn(request: SpawnBackgroundRequest): Promise<SpawnBackgroundResult>;
   getStatus(sessionId: string): BackgroundAgentStatusResult;
-  getResult(sessionId: string): Promise<string | BackgroundAgentResultContent>;
+  getResult(
+    sessionId: string,
+    waitSeconds: number,
+  ): Promise<string | BackgroundAgentResultContent>;
   kill(sessionId: string, reason?: string): BackgroundAgentKillResult;
 }

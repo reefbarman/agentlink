@@ -1,6 +1,6 @@
-import type { SessionImageReference } from "../core/tools/types.js";
-import type { CoreModelContentBlock } from "../core/modelRuntime.js";
 import type { AgentMessage } from "./types.js";
+import type { CoreModelContentBlock } from "@agentlink/core/model-runtime";
+import type { SessionImageReference } from "../core/tools/types.js";
 
 function extensionForMimeType(mimeType: string): string {
   switch (mimeType) {

@@ -167,6 +167,8 @@ export interface PersistedFleetMetadata {
     permissionProfile?: string;
     worktree?: "shared" | "isolated";
     expectedResult?: string;
+    /** Runtime-normalized live target used to attribute review results. */
+    reviewScopeSummary?: string;
   };
   budget?: {
     maxTokens?: number;

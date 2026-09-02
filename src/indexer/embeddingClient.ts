@@ -1,5 +1,5 @@
 import { createEmbeddingRequest } from "./embeddingConfig.js";
-import { parseRetryAfterMs } from "../core/model/providers/openaiCompatible/errors.js";
+import { parseRetryAfterMs } from "@agentlink/core/openai-compatible";
 import { sleep } from "../util/sleep.js";
 
 const EMBEDDING_URL = "https://api.openai.com/v1/embeddings";

@@ -1,6 +1,6 @@
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import { LiveLinkIndicator } from "./LiveLinkIndicator";
-import { ThinkingContent } from "./ThinkingContent";
+import { getLatestThinkingSummary, ThinkingContent } from "./ThinkingContent";
 import { getStreamingActivity } from "./activityPresentation";
 import {
   formatBackgroundRuntimeStatus,
@@ -54,6 +54,10 @@ export function StreamingStatusBar({
     activeThinking.text.trim().length > 0;
   const activeThinkingId =
     activeThinking?.type === "thinking" ? activeThinking.id : null;
+  const latestThinkingSummary =
+    activeThinking?.type === "thinking"
+      ? getLatestThinkingSummary(activeThinking.text)
+      : null;
   useEffect(() => {
     setThinkingExpanded(false);
   }, [activeThinkingId]);
@@ -68,10 +72,23 @@ export function StreamingStatusBar({
             class="streaming-status-summary"
             type="button"
             aria-expanded={thinkingExpanded}
+            aria-label={
+              latestThinkingSummary
+                ? `${status} ${latestThinkingSummary}`
+                : status
+            }
             onClick={() => setThinkingExpanded((expanded) => !expanded)}
           >
             <LiveLinkIndicator motion={motion} />
-            <span>{status}</span>
+            <span class="streaming-thinking-status-copy">
+              <span>{status}</span>
+              {latestThinkingSummary && (
+                <span class="streaming-thinking-status-detail">
+                  <span aria-hidden="true">↳</span>
+                  <span>{latestThinkingSummary}</span>
+                </span>
+              )}
+            </span>
             <i
               class={`codicon codicon-chevron-${thinkingExpanded ? "down" : "right"} streaming-status-chevron`}
             />

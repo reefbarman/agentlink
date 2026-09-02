@@ -275,7 +275,6 @@ describe("AgentSessionManager background agents", () => {
     resolveModelForMode: vi.fn(
       (_mode: string, fallbackModel: string) => fallbackModel,
     ),
-    getBgSummaryMode: vi.fn(() => "heuristic" as const),
     getBackgroundAgentSettings: vi.fn(() => ({})),
     getWebAccessSettings: vi.fn(() => ({
       searchBackend: "disabled" as const,
@@ -663,6 +662,12 @@ describe("AgentSessionManager background agents", () => {
     expect(mgr.getBackgroundStatus(spawned.sessionId)).toEqual(
       expect.objectContaining({ status: "queued", done: false }),
     );
+    expect(
+      mgr.getBgSessionInfos().find((info) => info.id === spawned.sessionId),
+    ).toMatchObject({
+      displayStatus: "Queued",
+      displayStatusSource: "terminal",
+    });
   });
 
   it("allows a parent to have eight outstanding background children", async () => {
@@ -933,6 +938,53 @@ describe("AgentSessionManager background agents", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     releaseBackground?.();
     await expect(resumedWait).resolves.toBe("background result");
+  });
+
+  it("returns still_running after a bounded result wait expires", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.runBehavior.mockReturnValueOnce(
+        (async function* () {
+          await new Promise<never>(() => undefined);
+          yield { type: "done" };
+        })(),
+      );
+      const mgr = new AgentSessionManager(config, "/tmp");
+      mgr.setToolContext(toolCtx);
+      const foreground = await mgr.createSession("code");
+      const spawned = await mgr.spawnBackground(
+        { task: "slow lane", message: "keep working" },
+        foreground.id,
+      );
+
+      const waitPromise = mgr.waitForAuthorizedBackground(
+        foreground.id,
+        spawned.sessionId,
+        1,
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const timedOut = JSON.parse(await waitPromise);
+      expect(timedOut).toMatchObject({
+        status: "still_running",
+        done: false,
+        sessionId: spawned.sessionId,
+        retryAfterMs: 5_000,
+        retrySafe: true,
+      });
+      expect(timedOut.message).toContain(
+        "Continue any independent foreground implementation, tests, documentation, validation, or self-review",
+      );
+      expect(mgr.getBackgroundStatus(spawned.sessionId).done).toBe(false);
+      expect((mgr as any).bgResultWaiters.get(spawned.sessionId) ?? []).toEqual(
+        [],
+      );
+      expect((mgr as any).bgSafetyTimers.get(spawned.sessionId) ?? []).toEqual(
+        [],
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns wait_interrupted immediately when an interjection is already pending", async () => {
@@ -1787,7 +1839,14 @@ describe("AgentSessionManager background agents", () => {
           type: "update",
           update: {
             sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: "Adversarial ACP review" },
+            content: {
+              type: "text",
+              text: JSON.stringify({
+                type: "review_findings",
+                findings: [],
+                emptyDiff: false,
+              }),
+            },
           },
         });
         request.onEvent({
@@ -1816,12 +1875,16 @@ describe("AgentSessionManager background agents", () => {
         task: "adversarial review",
         message: "review this",
         taskClass: "review_code",
+        reviewScope: { kind: "working_tree", paths: ["src/review.ts"] },
       },
       parent.id,
     );
     const result = await mgr.waitForBackground(spawned.sessionId);
 
-    expect(result).toBe("Adversarial ACP review");
+    expect(result).toContain("**Review found no issues.**");
+    expect(result).toContain(
+      "current working tree (unstaged, untracked) for src/review.ts",
+    );
     expect(spawned).toMatchObject({
       resolvedProvider: "acp",
       resolvedModel: "acp:claude",
@@ -1829,12 +1892,36 @@ describe("AgentSessionManager background agents", () => {
       routingReason: "configured adversarial review ACP agent (acp:claude)",
     });
     expect(acpBackgroundRunner.run).toHaveBeenCalledOnce();
+    expect(acpBackgroundRunner.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("## Live review target"),
+      }),
+    );
+    const acpPrompt = acpBackgroundRunner.run.mock.calls[0]?.[0].prompt;
+    expect(acpPrompt).toContain("Paths: src/review.ts");
+    expect(acpPrompt).toContain('"type":"review_findings"');
+    expect(acpPrompt).toContain(
+      "Planned budget: 100 tool calls, 50 model turns, 30 minutes",
+    );
     const session = (mgr as any).sessions.get(spawned.sessionId);
     expect(session.fleetMetadata.budget).toEqual({
-      maxToolCalls: 48,
-      maxApiTurns: 16,
-      maxElapsedMs: 600_000,
+      maxToolCalls: 100,
+      maxApiTurns: 50,
+      maxElapsedMs: 1_800_000,
       warningThresholdRatio: 0.8,
+    });
+    expect(session.fleetMetadata.delegation).toMatchObject({
+      permissionProfile: "review-only",
+      expectedResult: "review_findings",
+      reviewScopeSummary:
+        "current working tree (unstaged, untracked) for src/review.ts",
+    });
+    expect(session.fleetMetadata.readonlyOnly).toBe(true);
+    expect((mgr as any).bgMeta.get(spawned.sessionId)).toMatchObject({
+      reviewScopeBytes: Buffer.byteLength(
+        session.addUserMessage.mock.calls[0]?.[0],
+      ),
+      modelTier: "balanced",
     });
     expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
   });
@@ -1889,9 +1976,10 @@ describe("AgentSessionManager background agents", () => {
     expect(acpBackgroundRunner.run).not.toHaveBeenCalled();
     expect(mocks.resolveBackgroundRoute).toHaveBeenCalledOnce();
     const session = (mgr as any).sessions.get(spawned.sessionId);
-    expect(session.addUserMessage).toHaveBeenCalledWith("review this image", {
-      images,
-    });
+    expect(session.addUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("## Review goal\n\nreview this image"),
+      { images },
+    );
   });
 
   it("forwards a provider-mapped review model target to native background routing", async () => {
@@ -2155,7 +2243,7 @@ describe("AgentSessionManager background agents", () => {
       },
     ]);
     await expect(
-      mgr.waitForAuthorizedBackgroundContent(parent.id, spawned.sessionId),
+      mgr.waitForAuthorizedBackgroundContent(parent.id, spawned.sessionId, 30),
     ).resolves.toEqual({
       text: "Here are the images.",
       images: [
@@ -3095,7 +3183,14 @@ describe("AgentSessionManager background agents", () => {
             type: "update",
             update: {
               sessionUpdate: "agent_message_chunk",
-              content: { type: "text", text: "First ACP review" },
+              content: {
+                type: "text",
+                text: JSON.stringify({
+                  type: "review_findings",
+                  findings: [],
+                  emptyDiff: false,
+                }),
+              },
             },
           });
           throw successError;
@@ -3105,7 +3200,14 @@ describe("AgentSessionManager background agents", () => {
             type: "update",
             update: {
               sessionUpdate: "agent_message_chunk",
-              content: { type: "text", text: "Second ACP review" },
+              content: {
+                type: "text",
+                text: JSON.stringify({
+                  type: "review_findings",
+                  findings: [],
+                  emptyDiff: false,
+                }),
+              },
             },
           });
           request.onEvent({
@@ -3137,8 +3239,8 @@ describe("AgentSessionManager background agents", () => {
       parent.id,
     );
     expect(first.resolvedProvider).toBe("acp");
-    expect(await mgr.waitForBackground(first.sessionId)).toBe(
-      "First ACP review",
+    expect(await mgr.waitForBackground(first.sessionId)).toContain(
+      "**Review found no issues.**",
     );
     expect(mgr.getBackgroundStatus(first.sessionId)).toMatchObject({
       status: "idle",
@@ -3159,8 +3261,8 @@ describe("AgentSessionManager background agents", () => {
       resolvedModel: "acp:claude",
       fallbackUsed: false,
     });
-    expect(await mgr.waitForBackground(second.sessionId)).toBe(
-      "Second ACP review",
+    expect(await mgr.waitForBackground(second.sessionId)).toContain(
+      "**Review found no issues.**",
     );
     expect(acpBackgroundRunner.run).toHaveBeenCalledTimes(2);
     expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
@@ -3858,6 +3960,48 @@ describe("AgentSessionManager background agents", () => {
     expect(info.errorMessage).toBeUndefined();
   });
 
+  it("does not charge finalization-only requests or tools against work budgets", async () => {
+    mocks.runBehavior.mockReturnValue(
+      (async function* () {
+        yield {
+          type: "tool_start",
+          toolCallId: "review-final-status",
+          toolName: "set_task_status",
+          finalizationOnly: true,
+        };
+        yield {
+          type: "api_request",
+          requestId: "review-finalization",
+          finalizationOnly: true,
+          model: "claude-sonnet-4-6",
+          inputTokens: 500,
+          uncachedInputTokens: 400,
+          outputTokens: 100,
+          cacheReadTokens: 0,
+          cacheCreationTokens: 0,
+          durationMs: 10,
+          timeToFirstToken: 2,
+        };
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "finalize review",
+      message: "return findings",
+      taskClass: "review_code",
+      budget: { maxApiTurns: 1 },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const meta = (mgr as any).bgMeta.get(spawned.sessionId);
+    expect(meta.apiTurns).toBe(0);
+    expect(meta.toolCalls).toBe(0);
+    expect(meta.tokenUsage).toBe(500);
+  });
+
   it("requests a wrap-up at the budget limit and lets the agent deliver findings", async () => {
     mocks.runBehavior.mockReturnValue(
       (async function* () {
@@ -3986,6 +4130,30 @@ describe("AgentSessionManager background agents", () => {
         budgetUsage: expect.objectContaining({ toolCalls: 6 }),
       }),
     );
+  });
+
+  it("lets native structured-review engines own work-unit hard stops for finalization", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const spawned = await mgr.spawnBackground({
+      task: "finalize bounded review",
+      message: "review and finalize",
+      taskClass: "review_code",
+      expectedResult: "review_findings",
+      budget: { maxToolCalls: 2, maxApiTurns: 2 },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    const meta = (mgr as any).bgMeta.get(spawned.sessionId);
+    session.fleetMetadata.lifecycle = "running";
+    session.fleetMetadata.terminalReason = undefined;
+    meta.toolCalls = 3;
+    meta.apiTurns = 3;
+
+    expect((mgr as any).enforceBudgetOwner(session)).toBe(false);
+    expect(session.abort).not.toHaveBeenCalled();
+    expect(session.fleetMetadata.terminalReason).toBeUndefined();
   });
 
   it("allows a full additional elapsed-time window before the hard stop", async () => {
@@ -4223,6 +4391,49 @@ describe("AgentSessionManager background agents", () => {
       }),
     });
     mgr.stopSession(parent.sessionId);
+  });
+
+  it("warns automatic review agents late in the generous safety allowance", async () => {
+    mocks.runBehavior.mockReturnValue(
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
+    mocks.resolveBackgroundRoute.mockResolvedValueOnce({
+      resolvedMode: "review",
+      resolvedModel: "claude-sonnet-4-6",
+      resolvedProvider: "anthropic",
+      taskClass: "review_code",
+      routingReason: "balanced bounded review",
+      fallbackUsed: false,
+      defaultBudget: {
+        maxToolCalls: 100,
+        maxApiTurns: 50,
+        maxElapsedMs: 1_800_000,
+        warningThresholdRatio: 0.8,
+      },
+    });
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const spawned = await mgr.spawnBackground({
+      task: "review warning",
+      message: "review the change",
+      taskClass: "review_code",
+    });
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    const meta = (mgr as any).bgMeta.get(spawned.sessionId);
+    meta.apiTurns = 40;
+
+    expect((mgr as any).enforceBackgroundBudget(session)).toBe(false);
+    expect(session.fleetMetadata.budgetWarning).toEqual(
+      expect.objectContaining({ kind: "api_turns", ratio: 0.8 }),
+    );
+    expect(session.setPendingInterjection).toHaveBeenCalledWith(
+      expect.stringContaining("80% of the API turn budget"),
+      expect.any(String),
+    );
+    mgr.stopSession(spawned.sessionId);
   });
 
   it("emits a durable warning and nudges the agent before a session budget is exhausted", async () => {
@@ -5056,8 +5267,12 @@ describe("AgentSessionManager background agents", () => {
         mgr.spawnBackground(request, callerSessionId, skillAuthority),
       onGetBackgroundStatus: (callerSessionId, sessionId) =>
         mgr.getAuthorizedBackgroundStatus(callerSessionId, sessionId),
-      onGetBackgroundResult: (callerSessionId, sessionId) =>
-        mgr.waitForAuthorizedBackground(callerSessionId, sessionId),
+      onGetBackgroundResult: (callerSessionId, sessionId, waitSeconds) =>
+        mgr.waitForAuthorizedBackground(
+          callerSessionId,
+          sessionId,
+          waitSeconds,
+        ),
       onKillBackground: (callerSessionId, sessionId, reason) =>
         mgr.killAuthorizedBackground(callerSessionId, sessionId, reason),
     });
@@ -5081,7 +5296,14 @@ describe("AgentSessionManager background agents", () => {
     });
     const childId = JSON.parse(result.content[0].text).sessionId;
     const child = (mgr as any).sessions.get(childId);
+    const waitForResult = vi.spyOn(mgr, "waitForAuthorizedBackground");
+    await parentRuntime.executeTool({
+      name: "get_background_result",
+      input: { sessionId: childId, wait_seconds: 17 },
+      context: { sessionId: parent.sessionId },
+    });
 
+    expect(waitForResult).toHaveBeenCalledWith(parent.sessionId, childId, 17);
     expect(child.fleetMetadata).toEqual(
       expect.objectContaining({
         parentSessionId: parent.sessionId,
@@ -5600,18 +5822,19 @@ describe("AgentSessionManager background agents", () => {
     mgr.stopSession(foreground.id);
   });
 
-  it("creates native review agents with the full prompt path", async () => {
+  it("creates native review agents with the lightweight bounded prompt path", async () => {
     mocks.resolveBackgroundRoute.mockResolvedValueOnce({
       resolvedMode: "review",
       resolvedModel: "claude-sonnet-4-6",
       resolvedProvider: "anthropic",
       taskClass: "review_code",
+      modelTier: "deep_reasoning",
       routingReason: "balanced bounded review",
       fallbackUsed: false,
       defaultBudget: {
-        maxToolCalls: 48,
-        maxApiTurns: 16,
-        maxElapsedMs: 600_000,
+        maxToolCalls: 100,
+        maxApiTurns: 50,
+        maxElapsedMs: 1_800_000,
         warningThresholdRatio: 0.8,
       },
     });
@@ -5632,21 +5855,30 @@ describe("AgentSessionManager background agents", () => {
         isBackground: true,
       }),
     );
-    expect(mocks.createSession.mock.calls.at(-1)?.[0]).not.toHaveProperty(
-      "lightweight",
-    );
+    expect(mocks.createSession.mock.calls.at(-1)?.[0]).toMatchObject({
+      lightweight: true,
+    });
     const session = Array.from((mgr as any).sessions.values()).at(-1) as any;
-    expect(session.addUserMessage).toHaveBeenCalledWith("review thoroughly");
+    expect(session.addUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("## Review goal\n\nreview thoroughly"),
+    );
+    expect((mgr as any).bgMeta.get(session.id)).toMatchObject({
+      reviewScopeBytes: Buffer.byteLength(
+        session.addUserMessage.mock.calls[0]?.[0],
+      ),
+      modelTier: "deep_reasoning",
+    });
     expect(session.fleetMetadata).toEqual(
       expect.objectContaining({
         delegation: expect.objectContaining({
           permissionProfile: "review-only",
           expectedResult: "review_findings",
+          reviewScopeSummary: "review thoroughly",
         }),
         budget: {
-          maxToolCalls: 48,
-          maxApiTurns: 16,
-          maxElapsedMs: 600_000,
+          maxToolCalls: 100,
+          maxApiTurns: 50,
+          maxElapsedMs: 1_800_000,
           warningThresholdRatio: 0.8,
         },
       }),
@@ -5655,8 +5887,8 @@ describe("AgentSessionManager background agents", () => {
       session,
       expect.objectContaining({
         toolProfile: "review",
-        maxToolCalls: 144,
-        maxApiTurns: 48,
+        maxToolCalls: 150,
+        maxApiTurns: 75,
       }),
     );
     expect(createToolRuntime).toHaveBeenCalledWith(
@@ -5676,7 +5908,7 @@ describe("AgentSessionManager background agents", () => {
     });
   });
 
-  it("hands a runtime-captured review scope to the background agent", async () => {
+  it("hands an explicit immutable diff to the bounded review brief", async () => {
     mocks.resolveBackgroundRoute.mockResolvedValueOnce({
       resolvedMode: "review",
       resolvedModel: "claude-sonnet-4-6",
@@ -5702,7 +5934,7 @@ describe("AgentSessionManager background agents", () => {
     const handedOff = session.addUserMessage.mock.calls[0][0];
 
     expect(handedOff).toContain("Review this implementation.");
-    expect(handedOff).toContain("Runtime-captured review scope");
+    expect(handedOff).toContain("Explicit review diff");
     expect(handedOff).toContain("Foreground changes");
     expect(handedOff).toContain("+const value = 2;");
   });
@@ -5750,8 +5982,8 @@ describe("AgentSessionManager background agents", () => {
     expect(mocks.runArgs).toHaveBeenCalledWith(
       session,
       expect.objectContaining({
-        maxToolCalls: 144,
-        maxApiTurns: 48,
+        maxToolCalls: 72,
+        maxApiTurns: 24,
       }),
     );
   });
@@ -5802,8 +6034,8 @@ describe("AgentSessionManager background agents", () => {
       session,
       expect.objectContaining({
         toolProfile: undefined,
-        maxToolCalls: 60,
-        maxApiTurns: 33,
+        maxToolCalls: 30,
+        maxApiTurns: 17,
       }),
     );
   });
@@ -6040,6 +6272,36 @@ describe("AgentSessionManager background agents", () => {
         }),
       ],
       reviewedScope: "working tree",
+      emptyDiff: false,
+    });
+  });
+
+  it("attributes final-marker review results to the runtime target", () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const resolved = (mgr as any).resolveBackgroundResult(
+      {
+        getLastFinalMarker: () => ({
+          status: "completed",
+          result: {
+            type: "review_findings",
+            findings: [],
+            emptyDiff: false,
+          },
+        }),
+        getLastAssistantText: () => undefined,
+        fleetMetadata: {
+          delegation: {
+            expectedResult: "review_findings",
+            reviewScopeSummary: "current files: src/review.ts",
+          },
+        },
+      },
+      "fallback",
+    );
+
+    expect(resolved.structuredResult).toMatchObject({
+      type: "review_findings",
+      reviewedScope: "current files: src/review.ts",
       emptyDiff: false,
     });
   });
@@ -7242,6 +7504,12 @@ describe("AgentSessionManager background agents", () => {
     });
     const session = (mgr as any).sessions.get(result.sessionId);
     session.status = "awaiting_approval";
+    expect(
+      mgr.getBgSessionInfos().find((info) => info.id === result.sessionId),
+    ).toMatchObject({
+      displayStatus: "Awaiting approval",
+      displayStatusSource: "terminal",
+    });
 
     const killResult = mgr.killBackground(result.sessionId, "approval stuck");
     expect(killResult.killed).toBe(true);
@@ -7356,43 +7624,6 @@ describe("AgentSessionManager background agents", () => {
     expect(info!.displayStatusSource).toBe("heuristic");
   });
 
-  it("normalizes model summary statuses to user-facing labels", async () => {
-    mocks.runBehavior.mockReturnValue(
-      (async function* () {
-        yield { type: "tool_start", toolCallId: "tc-1", toolName: "read_file" };
-        yield { type: "done" };
-      })(),
-    );
-
-    const mgr = new AgentSessionManager(config, "/tmp");
-    mgr.setToolContext(toolCtx);
-
-    const spawned = await mgr.spawnBackground({
-      task: "status normalization",
-      message: "run",
-    });
-
-    const summary = (mgr as any).getOrInitBgSummary(spawned.sessionId);
-    summary.shortStatus = "Streaming file analysis";
-    summary.generatedAt = Date.now();
-
-    const info = mgr
-      .getBgSessionInfos()
-      .find((s: any) => s.id === spawned.sessionId);
-    expect(info).toBeDefined();
-
-    // Force a non-terminal state to verify model-summary normalization path.
-    const session = (mgr as any).sessions.get(spawned.sessionId);
-    session.status = "streaming";
-
-    const liveInfo = mgr
-      .getBgSessionInfos()
-      .find((s: any) => s.id === spawned.sessionId);
-    expect(liveInfo).toBeDefined();
-    expect(liveInfo!.displayStatus).toBe("Reviewing code");
-    expect(liveInfo!.displayStatusSource).toBe("model");
-  });
-
   it("getBackgroundStatus returns running progress metadata without waiting", async () => {
     let release: (() => void) | undefined;
     mocks.resolveBackgroundRoute.mockResolvedValueOnce({
@@ -7451,7 +7682,6 @@ describe("AgentSessionManager background agents", () => {
     const status = mgr.getBackgroundStatus(spawned.sessionId);
     expect(status.done).toBe(false);
     expect(status.streamingPreview).toContain("likely test files");
-    expect(status.progressSummary).toBeDefined();
     expect(status.resolvedMode).toBe("ask");
     expect(status.resolvedModel).toBe("claude-sonnet-4-6");
     expect(status.resolvedProvider).toBe("anthropic");
@@ -7507,46 +7737,6 @@ describe("AgentSessionManager background agents", () => {
     nowSpy.mockRestore();
 
     release?.();
-  });
-
-  it("prefers heuristic over generic model thinking while tool activity is visible", async () => {
-    mocks.runBehavior.mockReturnValue(
-      (async function* () {
-        yield {
-          type: "tool_start",
-          toolCallId: "tc-1",
-          toolName: "execute_command",
-        };
-        yield { type: "text_delta", text: "running npm test" };
-        yield { type: "done" };
-      })(),
-    );
-
-    const mgr = new AgentSessionManager(config, "/tmp");
-    mgr.setToolContext(toolCtx);
-
-    const spawned = await mgr.spawnBackground({
-      task: "generic fallback",
-      message: "run tests",
-    });
-
-    const summary = (mgr as any).getOrInitBgSummary(spawned.sessionId);
-    summary.shortStatus = "Streaming active";
-    summary.generatedAt = Date.now();
-
-    const session = (mgr as any).sessions.get(spawned.sessionId);
-    session.status = "streaming";
-    session.currentTool = "execute_command";
-
-    const info = mgr
-      .getBgSessionInfos()
-      .find((s: any) => s.id === spawned.sessionId);
-    expect(info).toBeDefined();
-    expect(info!.displayStatus).toBe("Running command");
-    expect(info!.displayStatusSource).toBe("heuristic");
-
-    const statusInfo = mgr.getBackgroundStatus(spawned.sessionId);
-    expect(statusInfo.displayStatus).toBe("Running command");
   });
 
   it("does not resume an idle foreground session when a background result returns", async () => {

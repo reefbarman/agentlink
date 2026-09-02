@@ -1,196 +1,111 @@
+<p align="center">
+  <img src="media/icon.png" alt="AgentLink" width="128">
+</p>
+
 # AgentLink
 
-**AgentLink is an AI coding-agent harness built into VS Code.** It gives an agent the editor's language intelligence, visible integrated-terminal execution, reviewable diffs, granular approvals, background reviewers, MCP integrations, and browser-based remote supervision.
+> **A coding-agent harness built into VS Code.**
 
-It is for people who want capable coding agents without giving up the ability to steer, inspect, approve, and undo their work.
+Run frontier coding agents with the editor's intelligence, visible execution, reviewable changes, and as much—or as little—supervision as the task needs.
+
+[Get started](#get-started) · [Documentation](resources/builtin-skills/documentation/README.md) · [Why AgentLink](why-agentlink.md) · [Releases](https://github.com/reefbarman/agentlink/releases)
 
 ## Why AgentLink
 
-Most coding agents work at the filesystem boundary. AgentLink works through VS Code instead:
+A capable model is only part of a capable coding agent. It also needs a good working environment: editor intelligence instead of text guesses, fast feedback instead of a surprise broken build, and a way for you to supervise or redirect work without taking the controls away.
 
-- **Editor-native context** — language-server navigation, diagnostics, symbols, references, code actions, and renames give the agent the same code understanding available in your editor.
-- **Reviewable changes** — file edits open in VS Code diff views. Accept, reject, or adjust the change yourself; your edits become feedback for the agent.
-- **Visible execution** — commands run in VS Code's integrated terminal, not an unseen subprocess.
-- **Control at every level** — use granular approval rules, checkpoints, activity visibility, background-agent coordination, and the browser remote to supervise work without losing momentum.
-- **Useful context without a cloud index** — AgentLink builds a local codebase index for lexical and structural retrieval; optional embeddings require explicit consent before they add vector and hybrid ranking.
-- **An open integration boundary** — connect MCP servers for the capabilities your workflow already uses.
+AgentLink works _through_ VS Code. It gives an agent language-server navigation and diagnostics, opens edits in native diff views, runs commands in the terminal you can see, and keeps activity, decisions, and recovery close to the work.
 
-Read [why AgentLink](why-agentlink.md) for the longer product perspective.
+That is the product bet: better context, better feedback, and better control make agents more useful on real codebases—not just more autonomous in a demo. Read the concise [case for AgentLink](why-agentlink.md).
 
-## Install
+## What makes it different
+
+### The editor is the runtime
+
+Give the agent the same semantic understanding you use: definitions, references, symbols, type information, code actions, diagnostics, and workspace-aware rename. Proposed edits arrive as diffs you can accept, reject, or adjust yourself.
+
+### Autonomy is a dial, not a switch
+
+Review every action when the task is risky, or let familiar work move faster with focused rules and **Approve for Me**. Commands remain visible, approvals carry your feedback back to the agent, and checkpoints make experimentation reversible.
+
+### Nothing happens in the dark
+
+Tool calls, progress, questions, approvals, queued work, and background agents stay visible in the chat and Activity Shelf. Use the browser remote to check a session, answer a question, or inspect a read-only diff without taking over the editor.
+
+### A second opinion from another model provider
+
+Use Anthropic and OpenAI/Codex models in the same workflow. AgentLink can route review to the other provider, giving important work an independent set of model blind spots.
+
+### Context for the code, not the harness
+
+AgentLink keeps local lexical and structural codebase retrieval on your machine, progressively discloses tools, bounds noisy terminal output, and condenses long sessions without losing the active task.
+
+## What you can do
+
+| Work                      | AgentLink gives you                                                                                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Build in the editor**   | VS Code chat, language intelligence, diagnostics, diff review, integrated terminals, and modes for coding, planning, debugging, review, and questions. |
+| **Stay in control**       | Inline approvals, editable command requests, audit context, checkpoints/revert, structured questions, and visible task status.                         |
+| **Work in parallel**      | Background research and review, cross-provider review, Fleet progress, steering, and bounded results.                                                  |
+| **Connect your workflow** | MCP tools, resources, and prompts; `AGENTS.md`/`CLAUDE.md`; skills, custom modes, slash commands, hooks, and Agent Plugins.                            |
+| **Use your accounts**     | ChatGPT/Codex, OpenAI, Anthropic, and compatible providers on your own accounts. Local retrieval and telemetry stay local by default.                  |
+
+## Get started
 
 ### Install the latest release
 
-The install script selects the target for the VS Code extension host on this machine:
+The installer selects the target for the VS Code extension host on this machine:
 
 ```sh
-curl -sL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash
 ```
 
-For a remote or emulated extension host, specify its target explicitly:
+For a remote or emulated extension host, set its target explicitly:
 
 ```sh
-curl -sL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh \
   | AGENTLINK_VSCE_TARGET=linux-x64 bash
 ```
 
-You can also download a target-specific `.vsix` from the [latest release](https://github.com/reefbarman/agentlink/releases/latest) and install it with:
+You can also download a matching `.vsix` from the [latest release](https://github.com/reefbarman/agentlink/releases/latest):
 
 ```sh
 code --install-extension agentlink-*.vsix --force
 ```
 
-See the [getting started guide](resources/builtin-skills/documentation/references/complete-reference.md#installation) for source builds, platform details, and AgentLink Terminal requirements.
+### Start your first session
 
-## First run
+1. Reload VS Code and open the folder you want to work in.
+2. Open **AgentLink** from the Activity Bar, then choose **Agent**.
+3. Use the empty-chat card to sign in with ChatGPT/Codex, add an OpenAI or Anthropic API key, or configure another compatible provider.
+4. Start with a bounded request:
 
-1. **Reload VS Code**, then open the folder you want to work in. Without a folder, AgentLink remains available as a deliberately limited Ask-only chat with no workspace, terminal, MCP, or approval tools.
-2. Open the **AgentLink** activity-bar icon and choose the **Agent** view.
-3. The empty chat explains whether the selected model is ready. On a fresh install, click **Continue with ChatGPT/Codex** to start the recommended sign-in path directly. You can instead choose an OpenAI or Anthropic API key, or configure an OpenAI-compatible provider.
-4. AgentLink keeps any draft you type while setup is incomplete and enables sending as soon as credentials are configured. It does not verify provider connectivity until the first request, so normal provider errors such as quota or revoked credentials still appear if applicable.
-5. Let AgentLink build or refresh your local codebase index. Local lexical retrieval works without credentials; vector/hybrid ranking requires an explicit embedding-consent setting, even if credentials already exist. See [codebase indexing](resources/builtin-skills/documentation/references/complete-reference.md#semantic-codebase-search-setup) for controls.
-6. Give the agent a bounded first task, such as:
+   > Read this project, explain its main module boundaries, and identify the safest place to add `<feature>`.
 
-   > Read this project, explain the main module boundaries, and identify the safest place to add a new `<feature>`.
+5. Review diffs and approve commands as needed. Use `/checkpoint` before risky work and `/revert` if you want to undo it.
 
-7. Review proposed edits in the diff view and approve commands or other boundaries when AgentLink asks. Use `/checkpoint` before risky work and `/revert` if you need to undo it.
+The [getting started guide](resources/builtin-skills/documentation/references/getting-started.md) covers source builds, platform details, first-run behavior, and next steps.
 
-## Highlights
+## Bring your own models and workflow
 
-| Area                  | What it gives you                                                                                  |
-| --------------------- | -------------------------------------------------------------------------------------------------- |
-| **Modes**             | Focused code, planning, debug, review, and Ask workflows without losing the session.               |
-| **Approvals**         | Inline review for edits, commands, renames, MCP, paths, and high-risk boundaries.                  |
-| **Background agents** | Parallel research and review with visible Fleet status, work-unit budgets, and results.            |
-| **Browser remote**    | Check on sessions, answer questions, review diffs, and supervise work from a paired browser.       |
-| **MCP**               | Layered user/project MCP configuration and progressively disclosed tools, resources, and prompts.  |
-| **Customization**     | `AGENTS.md`/`CLAUDE.md`, rules, skills, custom modes, slash commands, hooks, and auditable memory. |
-| **Agent Plugins**     | Review-gated managed imports from Git, URLs, directories, manifests, ZIPs, and TAR archives.       |
+Choose ChatGPT/Codex, OpenAI, Anthropic, or an OpenAI-compatible provider. Connect the tools and services you already use through [MCP](resources/builtin-skills/documentation/references/mcp.md). Keep existing instructions, skills, commands, and compatible hooks in the conventions your projects already understand.
 
-## Lifecycle hooks
+## What AgentLink is not
 
-AgentLink supports local lifecycle hooks through the widely used `hooks.json` shape, including compatibility with Codex/Claude-style command hooks. Hook sources are additive and load in this order: global `~/.agents`, `~/.claude`, `~/.codex`, `~/.agentlink`, then the same four directories in the current project, followed by enabled Agent Plugin hooks. Each source uses:
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "execute_command|Bash",
-        "hooks": [
-          { "type": "command", "command": "python3 .agentlink/hooks/check.py" }
-        ]
-      }
-    ]
-  }
-}
-```
-
-Supported events are `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`, `SubagentStart`, `SubagentStop`, `Stop`, and `Interrupt`. Commands receive compact JSON on stdin, run concurrently when several handlers match, and can use standard matcher, timeout, async, exit-code, and JSON-output conventions. `mcp_tool`, `prompt`, and `agent` handlers are recognized but currently skipped with diagnostics.
-
-**Hook commands execute local code outside AgentLink's command sandbox.** Manual hook definitions are therefore hash-trusted: the first attempted execution shows the exact command, source, and definition hash; changing the event, matcher, or handler invalidates trust and requires review again. Plugin hook commands are shown during install/update review and execute only from the enabled immutable package generation. Hook decisions never grant AgentLink command, write, network, native-tool, or MCP-tool authority: rewrites still pass through normal validation and approval, while `PermissionRequest` hooks are deny-only in AgentLink.
-
-Tool matchers use AgentLink's canonical names and compatibility aliases for common command/edit hooks (`Bash`, `Shell`, `shell_command`, `apply_patch`, `Edit`, `Write`). AgentLink owns in-process tool lifecycle hooks, including `todo_write` and nested tool calls. External ACP agents own their own tool execution, so AgentLink emits their subagent lifecycle events but does not claim `PreToolUse`/`PostToolUse` interception for tools executed inside the external process.
-
-## Agent Plugins
-
-AgentLink supports standards-compliant Agent Plugins 1.0.0 on macOS and Linux. A plugin can contribute Agent Skills, lifecycle hooks, and MCP servers using `stdio`, Streamable HTTP, or legacy SSE. Windows plugin loading is currently disabled. Packages that use another harness's plugin format without the canonical Agent Plugins 1.0.0 schema are not treated as Agent Plugins; their individual skills may still be discovered through AgentLink's normal skill directories.
-
-Install from the **AgentLink: Manage Agent Plugins** panel, **AgentLink: Install Agent Plugin From Source**, or `/plugin`. Running `/plugin` without arguments opens the manager in the Chat Activity Shelf with usage help. Accepted sources include Git HTTPS/SSH/SCP remotes, HTTP(S) ZIP/TAR archives, file URLs, local directories, direct `plugin.json` paths, and local ZIP/TAR-family archives. Repositories and archives may contain one plugin or a collection; AgentLink validates the candidates and asks which one to install.
-
-```text
-/plugin install <source> [--ref <branch-or-tag>]
-/plugin install-declared <name>
-/plugin list
-/plugin enable <install-id-or-name>
-/plugin disable <install-id-or-name>
-/plugin update <install-id-or-name>
-/plugin uninstall <install-id-or-name>
-/plugin purge
-```
-
-Acquisition is staged and bounded. Archives reject traversal, absolute or case-colliding paths, symlinks, special files, excessive counts/sizes, and unsafe compression ratios. Git acquisition restricts protocols and arguments, does not initialize submodules or run dependency/setup hooks, and materializes only the selected commit. Before installation or update, a modal review shows source, digest, manifest metadata, skills, every lifecycle hook command, and every MCP command or remote URL. Choose **Install and Enable** or **Install Disabled**. Plugin metadata and project declarations never grant command, write, network, native-tool, or MCP-tool approval.
-
-Enabled plugin skills join the current project's skill and slash-command catalog. Plugin MCP servers join the same discovery, connection, policy, and tool-approval flows as native MCP configuration, but keep plugin provenance and independent failure isolation. **A plugin `stdio` server executes a local process outside AgentLink's command sandbox.** Review its command, arguments, working directory, and environment before enabling it; ordinary MCP tool approvals still apply after connection. Configured HTTP headers are restricted to the reviewed MCP origin and are not forwarded into OAuth or cross-origin redirect traffic.
-
-Installed packages are immutable managed copies under `~/.agentlink/plugins/packages/`; source directories and downloads are never executed in place. The coordinated registry is `~/.agentlink/plugins/registry.json`, while persistent component data lives separately under `~/.agentlink/plugin-data/`. Updates atomically select a new verified generation, retain the previous generation for rollback, preserve plugin data, and refresh affected skills and MCP connections across open windows. Local absolute source paths are deliberately not persisted, so replacing a local-directory/archive install requires `/plugin install <source>` again. Uninstall leaves immutable bytes until `/plugin purge` can remove unreferenced generations on a later safe startup after all AgentLink windows close; data removal is a separate explicit action.
-
-Installs can be global or project-scoped. In a project, an enabled project plugin shadows an enabled global plugin with the same manifest name. Shareable project sources are recorded in `<workspace>/.agentlink/plugins.json` as either a workspace-relative directory or a pinned Git commit. This declaration contains no trust, enablement, policy, credentials, absolute local path, or package bytes; a fresh clone shows it as declared but still requires local acquisition and the full review flow. Sources outside the workspace and archives remain machine-local rather than being written into the declaration.
-
-The VS Code manager can install, inspect diagnostics, enable/disable, update, select the previous rollback generation, uninstall, and edit plugin MCP policy. The browser remote can inspect the same bounded manager state for a project, but all plugin mutation remains explicitly VS Code-only. Projectless sessions load no plugin components.
-
-## Background review and research budgets
-
-Review and research agents are bounded by useful work rather than input size. Automatic tiered budgets count committed tool calls, successful model API turns, and elapsed time. Token and estimated-cost caps are ignored for review task classes so a large captured diff cannot exhaust the budget before the reviewer explores surrounding code; research tasks may use those caps. Immutable Git review captures omit binary patch payloads, represent binary changes with bounded metadata, and push `excludePaths` into Git before buffering so large excluded diffs cannot fail capture first. Writable build, debug, design, verification, and general background tasks always run uncapped, even when a caller supplies a budget, so implementation cannot be stopped mid-change. Soft limits request wrap-up, with a 3× hard safety backstop for runs that do not finish.
-
-Image handoff remains native-only. If a configured default or review ACP backend is selected automatically for a spawn with images, AgentLink transparently falls back to native and reports that routing reason; an explicit `provider: "acp:<id>"` stays authoritative and rejects images. OpenAI-compatible streams that close before any provider event are treated as safe stream reconnects under the existing bounded retry budget instead of immediately failing the background review.
-
-## Tool reliability
-
-AgentLink's structured read and terminal tools report uncertainty instead of silently fabricating success: exact-file search counts preserve ripgrep's single-file output, recursive listings retain usable results with bounded broken-path warnings, `read_file`/`get_context` refresh VS Code Git status before reporting `clean`, and Native Agent timeouts distinguish a confirmed running process from a command that never reached the shell start marker. Unnamed native commands may reuse an idle logical terminal, but each command runs in an isolated shell scope so aliases, exports, PATH changes, `cd`, and `exit` cannot leak into the next unrelated command; named and explicitly targeted terminals retain intentional persistent-shell state, and explicitly targeting a formerly pooled terminal removes it from later unnamed reuse. Foreground prompt termination interrupts only the active command and preserves that persistent shell. When a chat crosses five inactive managed terminals, the next launched `execute_command` result adds a structured `terminal_cleanup` warning with the inactive count and up to 20 terminal IDs/names so the agent can close unneeded terminals before creating more; larger sets report how many details were omitted; busy terminals do not count, related child sessions share the chat's warning state, and the warning re-arms only after the count drops below five. The warning recommends `close_terminals` only when that tool is available in the current mode. `execute_command` returns structured `native_shell_startup_timeout`, `pnpm_store_mismatch`, and `managed_network_proxy_unaware_dns` recovery guidance for recognized failures without automatic native replay or destructive dependency cleanup. Store paths are bounded evidence for an explicit pnpm configuration/reinstall choice, never an automatic `.npmrc` pin; managed-DNS guidance is limited to direct Node commands with undici-style `fetch failed` plus ENOTFOUND/EAI_AGAIN evidence. `execute_command` also accepts correctly terminated quoted heredocs during syntax validation while keeping approval classification and inline-file rewriting fail-closed. Cleaned command output strips complete ECMA-48 control sequences and keeps only the final redraw after a lone carriage return, while `terminal_raw_output` retains terminal-renderable controls. Foreground sandbox and Native Agent commands that stop at a high-confidence prompt — including `Yes/No/All` choice lists — are terminated after the same short inactivity grace with structured prompt evidence; background commands remain observation-only. If sandbox launch finds a symlink, hard link, or unsupported node inside a protected tree, `sandbox_structural_protection` reports the protected or unexpected path and node kind, then asks for trusted-host inspection and cleanup without weakening or bypassing protection. Invalid root instruction aliases are ignored consistently by instruction loading and sandbox protection, reported as sandbox metadata warnings, and no longer block unrelated commands. See the [complete tool reference](resources/builtin-skills/documentation/references/complete-reference.md#tools-reference) for response details and recovery codes.
-
-## Write tools
-
-AgentLink's single-file write tools use the same reviewed save boundary. After an approved edit is saved, AgentLink reads the file from disk and compares it with the approved editor content. A successful result includes `durability.status: "durable"`, an `exact` or `transformed` outcome, and `post_edit_content_hash` (SHA-256 of the final disk content). Reverted edits, editor/disk divergence, unreadable or missing files, and transformations of exact-preservation formats return canonical errors; AgentLink reports the observed state rather than overwriting it automatically.
-
-With **Approve for Me** active, `write_file` and `apply_diff` may write directly under the operating system's canonical temporary roots (including the per-user temp root and `/tmp` aliases on macOS) without a separate outside-workspace approval. This narrow exception does not apply in manual approval modes or to protected instruction/memory files, `.env*` files, credential stores, authenticated CLI configuration, unresolved paths, or symlink escapes.
-
-### `write_file`
-
-Create a file or replace its complete content.
-
-| Parameter                 | Type     | Description                                                                     |
-| ------------------------- | -------- | ------------------------------------------------------------------------------- |
-| `path`                    | string   | Workspace-relative or absolute path.                                            |
-| `content`                 | string   | Complete proposed file content.                                                 |
-| `save_without_formatting` | boolean? | Save without ordinary participants and require exact disk-content preservation. |
-
-### `apply_diff`
-
-Apply one or more reviewed SEARCH/REPLACE blocks or unified-diff hunks to an existing file.
-
-| Parameter                 | Type      | Description                                                                                                          |
-| ------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------- |
-| `path`                    | string    | Existing file path.                                                                                                  |
-| `diff`                    | string    | SEARCH/REPLACE blocks or unified-diff `@@` hunks.                                                                    |
-| `block_options`           | object[]? | Select a 1-based occurrence or intentionally replace every exact occurrence for a block.                             |
-| `atomic`                  | boolean?  | Require every block to validate before review/write. This validates the proposal; it does not bypass format-on-save. |
-| `save_without_formatting` | boolean?  | Save without ordinary participants and require exact disk-content preservation.                                      |
-
-Canonical SEARCH/REPLACE form (the `diff` string is directly copyable JSON):
-
-```json
-{
-  "diff": "<<<<<<< SEARCH\nexact content to find\n======= DIVIDER =======\nreplacement content\n>>>>>>> REPLACE"
-}
-```
-
-Use the `DIVIDER` form above. A bare `=======` line is literal payload in this mode, so ordinary Git conflict hunks can be edited directly. Marker recognition trims surrounding whitespace, and `<<<<<<< SEARCH>` remains a reserved compatibility spelling. If a search or replacement payload line's trimmed text equals one of the reserved markers (`<<<<<<< SEARCH`, `<<<<<<< SEARCH>`, `======= DIVIDER =======`, or `>>>>>>> REPLACE`), use unified-diff input instead. Every unified hunk-body line must begin with a space, `+`, or `-` (apart from the standard `\ No newline` marker):
-
-```diff
-@@ -1 +1,3 @@
--old
-+<<<<<<< SEARCH
-+======= DIVIDER =======
-+>>>>>>> REPLACE
-```
-
-Malformed input returns `malformed_block_details` with the positional block `index`, 1-based `line`, stable `reason`, the violated marker rule, and copyable recovery guidance. Successful and failed match results retain the existing per-block diagnostics.
-
-If an ordinary save participant transforms the approved content, the write remains accepted with `durability.outcome: "transformed"`, except when valid YAML/JSON becomes unparseable: AgentLink restores the approved content with Save without Formatting or fails closed. For `apply_diff`, proposal-level successful blocks become `unverified_after_transform` and omit positional ranges because those ranges no longer describe final disk content. Re-read the file whenever `durability.requires_reread` is true. Known Unity serialization files (`.meta`, `.asset`, `.unity`, `.mat`, `.prefab`, `.anim`, `.controller`, and `.physicMaterial`) use VS Code's Save without Formatting path automatically.
+- It does not train or sell a proprietary model, and it does not put a cloud middleman between you and your provider account.
+- It is not a VS Code fork—your extensions, marketplace, language tooling, and existing setup remain yours.
+- The browser remote is for supervision: diffs are read-only there and it has no remote shell or write path.
+- Some capabilities are still maturing, including best-of-N and scheduled automations. The [positioning article](why-agentlink.md) keeps the current rough edges explicit.
 
 ## Documentation
 
-Detailed product documentation ships with the extension and is also what the built-in documentation skill uses.
-
-- [Documentation index](resources/builtin-skills/documentation/README.md)
+- [Getting started](resources/builtin-skills/documentation/references/getting-started.md)
+- [Capabilities overview](resources/builtin-skills/documentation/references/capabilities.md)
+- [Tools](resources/builtin-skills/documentation/references/tools.md)
+- [Customization](resources/builtin-skills/documentation/references/customization.md)
+- [MCP](resources/builtin-skills/documentation/references/mcp.md)
+- [Troubleshooting](resources/builtin-skills/documentation/references/troubleshooting.md)
 - [Complete product reference](resources/builtin-skills/documentation/references/complete-reference.md)
-- [Generated package contract](resources/builtin-skills/documentation/references/package-contract.md) — exact commands, views, settings, defaults, scopes, and allowed values
-- [Release notes](resources/builtin-skills/documentation/references/release-notes.md)
-
-The bundled documentation skill is self-contained: it uses these shipped references instead of reading extension source files or local settings to answer product questions.
-
-MCP OAuth browser flows are coordinated across project hubs and open VS Code windows to prevent repeated login-tab bursts. Existing servers stay non-interactive across config reloads, explicit Reauthenticate remains available after an active flow finishes, and maintainers can inspect bounded local diagnostics with `npm run telemetry:mcp-auth` (no tokens, headers, authorization URLs, callback parameters, or raw SDK errors are recorded).
 
 ## Contributing
 
@@ -203,19 +118,8 @@ npm install
 npm run build
 ```
 
-Press **F5** in VS Code to launch an Extension Development Host. Before submitting a production change, run:
-
-```sh
-npm run fmt
-npm run lint
-npm test
-```
-
-The [development reference](resources/builtin-skills/documentation/references/complete-reference.md#development) covers packaging, releases, telemetry, feedback tools, architecture boundaries, and the VSIX allowlist.
+Press **F5** in VS Code to launch an Extension Development Host. Read the [development reference](resources/builtin-skills/documentation/references/complete-reference.md#development) before submitting a production change.
 
 ## Project links
 
-- [Releases](https://github.com/reefbarman/agentlink/releases)
-- [Issues](https://github.com/reefbarman/agentlink/issues)
-- [Changelog](CHANGELOG.md)
-- [License](LICENSE)
+[Releases](https://github.com/reefbarman/agentlink/releases) · [Issues](https://github.com/reefbarman/agentlink/issues) · [Changelog](CHANGELOG.md) · [License](LICENSE)

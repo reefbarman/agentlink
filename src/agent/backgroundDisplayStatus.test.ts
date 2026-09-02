@@ -1,26 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  inferBackgroundDisplayStatus,
-  normalizeBackgroundStatusPhrase,
-  pickBackgroundDisplayStatus,
-} from "./backgroundDisplayStatus.js";
 
-describe("normalizeBackgroundStatusPhrase", () => {
-  it.each([
-    ["Streaming file analysis", "Reviewing code"],
-    ["streaming-file-list", "Scanning files"],
-    ["tool_calls", "Running tools"],
-    ["completed", "Done"],
-    ["canceled", "Cancelled"],
-    ["failed", "Error"],
-    ["awaiting_approval", "Awaiting approval"],
-    ["streaming repository search", "Reviewing code"],
-    ["custom phase label", "Custom Phase Label"],
-    ["   ", ""],
-  ])("normalizes %j to %j", (input, expected) => {
-    expect(normalizeBackgroundStatusPhrase(input)).toBe(expected);
-  });
-});
+import { inferBackgroundDisplayStatus } from "./backgroundDisplayStatus.js";
 
 describe("inferBackgroundDisplayStatus", () => {
   it.each([
@@ -33,7 +13,7 @@ describe("inferBackgroundDisplayStatus", () => {
     expect(inferBackgroundDisplayStatus({ status })).toBe(expected);
   });
 
-  it("prefers a non-empty status detail", () => {
+  it("prefers and bounds a non-empty status detail", () => {
     expect(
       inferBackgroundDisplayStatus({
         status: "streaming",
@@ -41,6 +21,13 @@ describe("inferBackgroundDisplayStatus", () => {
         statusDetail: "Reading src/agent/AgentEngine.ts",
       }),
     ).toBe("Reading src/agent/AgentEngine.ts");
+
+    const bounded = inferBackgroundDisplayStatus({
+      status: "streaming",
+      statusDetail: `ACP tool ${"x".repeat(200)}`,
+    });
+    expect(bounded).toHaveLength(80);
+    expect(bounded.endsWith("…")).toBe(true);
   });
 
   it.each([
@@ -86,87 +73,5 @@ describe("inferBackgroundDisplayStatus", () => {
     expect(
       inferBackgroundDisplayStatus({ status: "streaming", streamingText }),
     ).toBe(expected);
-  });
-});
-
-describe("pickBackgroundDisplayStatus", () => {
-  const now = 100_000;
-
-  it.each([
-    ["idle", "Done"],
-    ["error", "Error"],
-    ["cancelled", "Cancelled"],
-  ] as const)(
-    "gives terminal status %s precedence",
-    (status, displayStatus) => {
-      expect(
-        pickBackgroundDisplayStatus({
-          status,
-          heuristicStatus: "Reading code",
-          summary: {
-            inFlight: false,
-            shortStatus: "Streaming file analysis",
-            generatedAt: now,
-          },
-          now,
-        }),
-      ).toEqual({ displayStatus, displayStatusSource: "terminal" });
-    },
-  );
-
-  it("uses a fresh normalized model summary", () => {
-    expect(
-      pickBackgroundDisplayStatus({
-        status: "streaming",
-        heuristicStatus: "Reading code",
-        summary: {
-          inFlight: false,
-          shortStatus: "Streaming file analysis",
-          generatedAt: now - 60_000,
-        },
-        now,
-      }),
-    ).toEqual({
-      displayStatus: "Reviewing code",
-      displayStatusSource: "model",
-    });
-  });
-
-  it("rejects stale and false-terminal model summaries", () => {
-    for (const summary of [
-      { inFlight: false, shortStatus: "Reviewing", generatedAt: now - 60_001 },
-      { inFlight: false, shortStatus: "Done", generatedAt: now },
-      { inFlight: false, shortStatus: "Error", generatedAt: now },
-    ]) {
-      expect(
-        pickBackgroundDisplayStatus({
-          status: "streaming",
-          heuristicStatus: "Running tests",
-          summary,
-          now,
-        }),
-      ).toEqual({
-        displayStatus: "Running tests",
-        displayStatusSource: "heuristic",
-      });
-    }
-  });
-
-  it("prefers specific heuristic activity over generic model thinking", () => {
-    expect(
-      pickBackgroundDisplayStatus({
-        status: "streaming",
-        heuristicStatus: "Running command",
-        summary: {
-          inFlight: false,
-          shortStatus: "Streaming active",
-          generatedAt: now,
-        },
-        now,
-      }),
-    ).toEqual({
-      displayStatus: "Running command",
-      displayStatusSource: "heuristic",
-    });
   });
 });

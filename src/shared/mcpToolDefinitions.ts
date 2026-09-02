@@ -1,4 +1,4 @@
-import type { CoreModelToolDefinition } from "../core/modelRuntime.js";
+import type { CoreModelToolDefinition } from "@agentlink/core/model-runtime";
 
 export const CALL_MCP_TOOL_DEFINITION: CoreModelToolDefinition = {
   name: "call_mcp_tool",

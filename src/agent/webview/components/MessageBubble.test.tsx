@@ -132,7 +132,9 @@ describe("MessageBubble thinking rendering", () => {
       <MessageBubble message={message} streaming={true} />,
     );
 
-    const summary = screen.getByRole("button", { name: "Thinking…" });
+    const summary = screen.getByRole("button", {
+      name: "Thinking… Planning the fix",
+    });
     expect(container.querySelector(".thinking-block")).toBeNull();
 
     fireEvent.click(summary);

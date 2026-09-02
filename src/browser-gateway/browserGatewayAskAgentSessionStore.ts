@@ -36,7 +36,7 @@ import type { BrowserGatewayAskAgentPreferencesSnapshot } from "./browserGateway
 import type { BrowserGatewayCoreOwnerRegistry } from "./coreOwnerRegistry.js";
 import type { BrowserGatewayModelCredentialStatus } from "./browserGatewayModelCredentialCache.js";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
-import type { CoreModelMessage } from "../core/modelRuntime.js";
+import type { CoreModelMessage } from "@agentlink/core/model-runtime";
 import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import type { MemoryCandidateKind } from "../shared/memoryCandidates.js";
 import type { SessionImageReference } from "../core/tools/types.js";

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER } from "../core/modelRequestScheduler.js";
+import { MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER } from "@agentlink/core/model-request-scheduler";
 
 const PROXY_ENV_KEYS = [
   "HTTPS_PROXY",

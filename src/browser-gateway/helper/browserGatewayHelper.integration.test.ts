@@ -14,7 +14,7 @@ import {
   BrowserGatewayHelper,
   type HelperRuntimeOptions,
 } from "./browserGatewayHelper.js";
-import type { CoreModelMessage } from "../../core/modelRuntime.js";
+import type { CoreModelMessage } from "@agentlink/core/model-runtime";
 import {
   BrowserGatewayAskAgentModelClient,
   type BrowserGatewayAskAgentCompletionParams,
@@ -2793,6 +2793,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
               reasoningEfforts: ["none", "low", "medium", "high"],
               defaultReasoningEffort: "medium",
               authenticated: true,
+              readiness: { status: "ready" },
             },
             {
               id: "gpt-5.3-codex",
@@ -2802,7 +2803,12 @@ describe("BrowserGatewayHelper proxy routing", () => {
               maxInputTokens: 200_000,
               reasoningEfforts: ["none", "minimal", "low", "medium", "high"],
               defaultReasoningEffort: "low",
-              authenticated: true,
+              authenticated: false,
+              readiness: {
+                status: "credentials_required",
+                action: { kind: "oauth", providerId: "openai-codex" },
+                reason: "Sign in required",
+              },
             },
             {
               id: "local-gemma",
@@ -2860,6 +2866,33 @@ describe("BrowserGatewayHelper proxy routing", () => {
       modelCount: 3,
     });
 
+    const mismatchedActionCatalog = await fetch(
+      `${helperBase}/internal/model-catalog`,
+      {
+        method: "POST",
+        headers: internalHeaders,
+        body: JSON.stringify({
+          publishedByOwnerId: "vscode-owner",
+          publishedByOwnerGenerationId: "vscode-generation-1",
+          helperGenerationId: discovery.helperGenerationId,
+          models: [
+            {
+              id: "gpt-5.3-codex",
+              displayName: "GPT-5.3 Codex",
+              providerId: "openai-codex",
+              contextWindow: 200_000,
+              authenticated: false,
+              readiness: {
+                status: "credentials_required",
+                action: { kind: "oauth", providerId: "anthropic" },
+              },
+            },
+          ],
+        }),
+      },
+    );
+    expect(mismatchedActionCatalog.status).toBe(400);
+
     for (const promptProfileResolution of [
       {
         profile: "reasoning",
@@ -2911,7 +2944,13 @@ describe("BrowserGatewayHelper proxy routing", () => {
     });
     expect(modelsResponse.ok).toBe(true);
     const modelsBody = (await modelsResponse.json()) as {
-      models?: Array<{ id: string; provider: string }>;
+      models?: Array<{
+        id: string;
+        provider: string;
+        authenticated: boolean;
+        readiness?: { status: string };
+        authAction?: { kind: string; providerId: string };
+      }>;
       source?: string;
     };
     expect(modelsBody.source).toBe("cached");
@@ -2922,7 +2961,12 @@ describe("BrowserGatewayHelper proxy routing", () => {
     ]);
     expect(
       modelsBody.models?.find((model) => model.id === "gpt-5.3-codex"),
-    ).toMatchObject({ provider: "openai-codex" });
+    ).toMatchObject({
+      provider: "openai-codex",
+      authenticated: false,
+      readiness: { status: "credentials_required" },
+      authAction: { kind: "oauth", providerId: "openai-codex" },
+    });
     expect(
       modelsBody.models?.find((model) => model.id === "local-gemma"),
     ).toMatchObject({

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ToolCallBudget } from "./toolCallBudget.js";
+import { ToolCallBudget } from "@agentlink/core/tool-call-budget";
 
 describe("ToolCallBudget", () => {
   it("reserves calls up to a finite limit", () => {

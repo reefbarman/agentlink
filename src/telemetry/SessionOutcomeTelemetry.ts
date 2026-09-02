@@ -125,10 +125,20 @@ export interface BackgroundLifecycleEvent {
   budgetElapsedMs?: number;
   usedToolCalls?: number;
   usedApiTurns?: number;
+  /** Bounded backend category; ACP internals may not expose provider-turn counts. */
+  backend?: "native" | "acp";
+  modelTier?: "cheap" | "balanced" | "deep_reasoning";
+  reviewTargetKind?: "working_tree" | "files" | "commit_range" | "diff";
+  reviewHandoffBytes?: number;
+  reviewInlineBytes?: number;
+  reportedInputTokens?: number;
+  reportedOutputTokens?: number;
+  reportedCacheReadTokens?: number;
+  reportedCacheCreationTokens?: number;
   /** Review-classed agents: parsed result envelope shape. */
   reviewFindings?: Record<string, number>;
   reviewEmptyDiff?: boolean;
-  /** Bytes of the immutable review scope captured at spawn. */
+  /** Legacy field retained while old telemetry rows age out. */
   reviewScopeBytes?: number;
 }
 

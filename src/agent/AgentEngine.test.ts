@@ -1980,6 +1980,320 @@ describe("AgentEngine", () => {
       );
     });
 
+    it("finalizes a warned structured review after it ends with an empty response", async () => {
+      const requests: StreamRequest[] = [];
+      let callCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        callCount += 1;
+        if (callCount <= 2) {
+          yield { type: "content_blocks", blocks: [] };
+          yield { type: "usage", inputTokens: 20, outputTokens: 0 };
+          yield { type: "done" };
+          return;
+        }
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "tool_use",
+              id: "call_review_final",
+              name: "set_task_status",
+              input: {
+                status: "completed",
+                result: {
+                  type: "review_findings",
+                  findings: [],
+                  emptyDiff: false,
+                },
+              },
+            },
+          ],
+        };
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("review it");
+      session.fleetMetadata = {
+        delegation: { expectedResult: "review_findings" },
+        budgetWarning: { kind: "api_turns", ratio: 0.5, emittedAt: 1 },
+      } as NonNullable<typeof session.fleetMetadata>;
+      const engine = new AgentEngine(makeRegistry(provider));
+      setEngineToolContext(
+        engine,
+        {
+          approvalManager: {} as ToolDispatchContext["approvalManager"],
+          approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+          sessionId: "review-session",
+          extensionUri: {} as ToolDispatchContext["extensionUri"],
+        },
+        async (request: AgentToolExecutionRequest) => {
+          if (request.name === "set_task_status") {
+            request.context.onFinalStatus?.({
+              status: "completed",
+              source: "tool",
+              result: {
+                type: "review_findings",
+                findings: [],
+                emptyDiff: false,
+              },
+            });
+          }
+          return {
+            content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+          };
+        },
+      );
+
+      const events = await collectEvents(
+        engine.run(session, {
+          isBackground: true,
+          maxApiTurns: 1,
+          maxToolCalls: 1,
+        }),
+      );
+
+      expect(requests).toHaveLength(3);
+      expect(requests[2].messages.at(-1)).toEqual({
+        role: "user",
+        content: expect.stringContaining(
+          "The review work is over. Do not inspect more files",
+        ),
+      });
+      expect(requests[2].tools?.map((tool) => tool.name)).toEqual([
+        "set_task_status",
+      ]);
+      expect(
+        events
+          .filter((event) => event.type === "api_request")
+          .map((event) => event.finalizationOnly ?? false),
+      ).toEqual([false, false, true]);
+      expect(
+        events.find((event) => event.type === "final_marker"),
+      ).toMatchObject({
+        marker: {
+          status: "completed",
+          result: { type: "review_findings", findings: [] },
+        },
+      });
+    });
+
+    it("stops after three empty structured-review finalization attempts", async () => {
+      const requests: StreamRequest[] = [];
+      const logs: string[] = [];
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        yield { type: "content_blocks", blocks: [] };
+        yield { type: "usage", inputTokens: 20, outputTokens: 0 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("review it");
+      session.fleetMetadata = {
+        delegation: { expectedResult: "review_findings" },
+        budgetWarning: { kind: "tool_calls", ratio: 0.5, emittedAt: 1 },
+      } as NonNullable<typeof session.fleetMetadata>;
+      const engine = new AgentEngine(makeRegistry(provider), (message) =>
+        logs.push(message),
+      );
+      setEngineToolContext(engine, {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "review-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      });
+
+      const events = await collectEvents(
+        engine.run(session, { isBackground: true, maxApiTurns: 1 }),
+      );
+
+      expect(requests).toHaveLength(5);
+      expect(requests[1].tools?.map((tool) => tool.name)).toContain(
+        "set_task_status",
+      );
+      expect(
+        requests.slice(2).map((request) => request.tools?.map((t) => t.name)),
+      ).toEqual([
+        ["set_task_status"],
+        ["set_task_status"],
+        ["set_task_status"],
+      ]);
+      expect(
+        events.filter(
+          (event) => event.type === "api_request" && event.finalizationOnly,
+        ),
+      ).toHaveLength(3);
+      expect(
+        events.find((event) => event.type === "final_marker"),
+      ).toBeUndefined();
+      expect(logs).toContain(
+        "[agent] structured review finalization exhausted after empty responses",
+      );
+    });
+
+    it("finalizes structured reviews even when their todo state is stale", async () => {
+      const requests: StreamRequest[] = [];
+      let callCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        callCount += 1;
+        if (callCount === 1) {
+          yield* makeProviderStream({ text: "Review complete." });
+          return;
+        }
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "tool_use",
+              id: "call_review_final",
+              name: "set_task_status",
+              input: {
+                status: "completed",
+                result: {
+                  type: "review_findings",
+                  findings: [],
+                  emptyDiff: false,
+                },
+              },
+            },
+          ],
+        };
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("review it");
+      session.appendAssistantTurn([
+        {
+          type: "tool_use",
+          id: "call_todos",
+          name: "todo_write",
+          input: {
+            todos: [
+              {
+                id: "review",
+                content: "Finish review",
+                activeForm: "Finishing review",
+                status: "in_progress",
+              },
+            ],
+          },
+        },
+      ]);
+      session.appendToolResults([
+        {
+          type: "tool_result",
+          tool_use_id: "call_todos",
+          content: "ok",
+        },
+      ]);
+      session.fleetMetadata = {
+        delegation: { expectedResult: "review_findings" },
+      } as NonNullable<typeof session.fleetMetadata>;
+      const engine = new AgentEngine(makeRegistry(provider));
+      setEngineToolContext(
+        engine,
+        {
+          approvalManager: {} as ToolDispatchContext["approvalManager"],
+          approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+          sessionId: "review-session",
+          extensionUri: {} as ToolDispatchContext["extensionUri"],
+        },
+        async (request: AgentToolExecutionRequest) => {
+          if (request.name === "set_task_status") {
+            request.context.onFinalStatus?.({
+              status: "completed",
+              source: "tool",
+              result: {
+                type: "review_findings",
+                findings: [],
+                emptyDiff: false,
+              },
+            });
+          }
+          return {
+            content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+          };
+        },
+      );
+
+      const events = await collectEvents(
+        engine.run(session, { isBackground: true }),
+      );
+
+      expect(requests).toHaveLength(2);
+      expect(requests[1].tools?.map((tool) => tool.name)).toEqual([
+        "set_task_status",
+      ]);
+      expect(
+        events.find((event) => event.type === "final_marker"),
+      ).toBeDefined();
+    });
+
+    it("bounds unexpected tools during structured-review finalization", async () => {
+      const requests: StreamRequest[] = [];
+      let callCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        callCount += 1;
+        if (callCount === 1) {
+          yield* makeProviderStream({ text: "Review complete." });
+          return;
+        }
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "tool_use",
+              id: `call_unexpected_${callCount}`,
+              name: "read_file",
+              input: { path: "src/late.ts" },
+            },
+          ],
+        };
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("review it");
+      session.fleetMetadata = {
+        delegation: { expectedResult: "review_findings" },
+      } as NonNullable<typeof session.fleetMetadata>;
+      const engine = new AgentEngine(makeRegistry(provider));
+      setEngineToolContext(engine, {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "review-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      });
+
+      const events = await collectEvents(
+        engine.run(session, { isBackground: true, maxApiTurns: 1 }),
+      );
+
+      expect(requests).toHaveLength(4);
+      expect(
+        requests.slice(1).map((request) => request.tools?.map((t) => t.name)),
+      ).toEqual([
+        ["set_task_status"],
+        ["set_task_status"],
+        ["set_task_status"],
+      ]);
+      expect(
+        events.find((event) => event.type === "final_marker"),
+      ).toBeUndefined();
+    });
+
     it("accepts an unmarked turn when the one final-status nudge is ignored", async () => {
       const logs: string[] = [];
       let callCount = 0;

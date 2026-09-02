@@ -89,6 +89,12 @@ describe("SessionOutcomeTelemetry", () => {
       parentBlockedMs: 45_000,
       reviewFindings: { high: 1, low: 2.4 },
       reviewEmptyDiff: false,
+      backend: "native",
+      modelTier: "balanced",
+      reviewTargetKind: "working_tree",
+      reviewHandoffBytes: 1_234,
+      reviewInlineBytes: 0,
+      reportedInputTokens: 4_321,
       reviewScopeBytes: 1_234,
     });
     telemetry.record({
@@ -142,6 +148,12 @@ describe("SessionOutcomeTelemetry", () => {
       parentBlockedMs: 45_000,
       reviewFindings: { high: 1, low: 2 },
       reviewEmptyDiff: false,
+      backend: "native",
+      modelTier: "balanced",
+      reviewTargetKind: "working_tree",
+      reviewHandoffBytes: 1_234,
+      reviewInlineBytes: 0,
+      reportedInputTokens: 4_321,
     });
     expect(records[3]).toMatchObject({
       type: "approval_interruption",

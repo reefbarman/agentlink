@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { NormalizedOpenAiCompatibleConnection } from "./config.js";
+import type { NormalizedOpenAiCompatibleConnection } from "@agentlink/core/openai-compatible";
 import { OpenAiCompatibleProvider } from "./OpenAiCompatibleProvider.js";
-import { collectOpenAiCompatibleCompletion } from "../../../core/model/providers/openaiCompatible/completionFacade.js";
+import { collectOpenAiCompatibleCompletion } from "@agentlink/core/openai-compatible";
 import { getOpenAiCompatibleSecretKey } from "../../openAiCompatibleSecrets.js";
 
 function connection(

@@ -1,6 +1,6 @@
 # Configuring MCP Servers in AgentLink
 
-Full detail lives in the shipped README section `### Connect the built-in agent to MCP servers`; this is the working summary.
+This is the owning guide for configuring and using MCP servers. See [Tools](tools.md) for agent-facing MCP tool families and the [complete reference](complete-reference.md#connect-the-built-in-agent-to-mcp-servers) for compatibility detail.
 
 ## UI entry points
 

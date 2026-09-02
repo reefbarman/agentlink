@@ -10,7 +10,7 @@ import {
 } from "./askAgentModelClient.js";
 import { createNativeToolDisclosureSnapshot } from "../../core/tools/nativeToolDisclosure.js";
 import type { BrowserGatewayModelCredentialRecord } from "../browserGatewayModelCredentialCache.js";
-import { normalizeCoreWebAccessSettings } from "../../core/webAccess.js";
+import { normalizeCoreWebAccessSettings } from "@agentlink/core/web-access";
 
 describe("BrowserGatewayAskAgentModelClient", () => {
   it("keeps TODO compaction guidance in parity with the main agent", () => {

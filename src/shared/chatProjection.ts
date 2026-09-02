@@ -1,7 +1,10 @@
 import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
-import type { CoreWebActivity, CoreWebCitation } from "../core/webAccess.js";
+import type {
+  CoreWebActivity,
+  CoreWebCitation,
+} from "@agentlink/core/web-access";
 import type { ChatStateSnapshot as ChatState } from "@agentlink/protocol/chat-state";
 import type {
   ChatMessage,

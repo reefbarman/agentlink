@@ -2,7 +2,7 @@ import type {
   CoreModelProviderRequestAttempt,
   CoreModelStreamEvent,
   CoreModelTransportActivity,
-} from "../../../modelRuntime.js";
+} from "@agentlink/core/model-runtime";
 import { withAgentLinkHttpActivity } from "../../../../util/httpDispatcher.js";
 import {
   parseCodexResponseStreamEvents,

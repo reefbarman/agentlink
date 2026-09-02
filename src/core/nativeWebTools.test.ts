@@ -4,7 +4,10 @@ import {
   collectNativeWebToolResult,
   continueNativeWebProviderStream,
 } from "./nativeWebTools.js";
-import type { CoreModelMessage, CoreModelStreamEvent } from "./modelRuntime.js";
+import type {
+  CoreModelMessage,
+  CoreModelStreamEvent,
+} from "@agentlink/core/model-runtime";
 import { describe, expect, it } from "vitest";
 
 describe("native web tool definitions", () => {

@@ -3226,7 +3226,7 @@ body.chat-activity-shelf-resizing * {
 .streaming-status-summary {
   display: flex;
   width: 100%;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   padding: 3px 12px;
   border: 0;
@@ -3251,8 +3251,38 @@ body.chat-activity-shelf-resizing * {
 }
 
 .streaming-status-chevron {
+  margin-top: 1px;
   margin-left: auto;
   opacity: 0.7;
+}
+
+.streaming-thinking-status-copy {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.streaming-status-summary .streaming-thinking-status-copy {
+  flex-grow: 1;
+}
+
+.streaming-thinking-status-detail {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 4px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  line-height: 1.35;
+  opacity: 0.62;
+}
+
+.streaming-thinking-status-detail > :last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .streaming-thinking-content {
@@ -3461,7 +3491,7 @@ body.chat-activity-shelf-resizing * {
 .streaming-indicator-summary {
   display: flex;
   width: 100%;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   padding: 0;
   border: 0;
@@ -3482,6 +3512,7 @@ body.chat-activity-shelf-resizing * {
 }
 
 .streaming-indicator-chevron {
+  margin-top: 1px;
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
   opacity: 0.55;

@@ -45,10 +45,10 @@ export interface BgSessionInfo {
     | "cancelled";
   /** Most recently started tool name (while streaming). */
   currentTool?: string;
-  /** UI-ready status label selected from terminal/model/heuristic layers. */
+  /** UI-ready status label selected from terminal or heuristic state. */
   displayStatus?: string;
   /** Source for displayStatus selection. */
-  displayStatusSource?: "terminal" | "model" | "heuristic";
+  displayStatusSource?: "terminal" | "heuristic";
   /** Resolved execution mode after route selection. */
   resolvedMode?: string;
   /** Resolved model id after route selection. */
@@ -170,19 +170,6 @@ export interface BgSessionInfo {
   errorMessage?: string;
   /** Timestamp when the agent finished (for auto-dismiss timing). */
   completedAt?: number;
-  /** Concise summary for collapsed completion/result rendering. */
-  resultSummary?: string;
-  /** Model-summary metadata for strip/debug surfaces. */
-  summaryMeta?: {
-    inFlight: boolean;
-    generatedAt?: number;
-    sourceModel?: string;
-    fallbackUsed?: boolean;
-    confidence?: number;
-    lastAttemptAt?: number;
-    lastFailureAt?: number;
-    lastFailureReason?: string;
-  };
 }
 
 export type BackgroundResultVisualFamily =

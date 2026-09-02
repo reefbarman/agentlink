@@ -65,6 +65,7 @@ describe("foreground/background capability parity contract", () => {
     ).map((tool) => tool.name);
     expect(unrestricted).toContain("write_file");
     expect(reviewOnly).not.toContain("write_file");
-    expect(reviewOnly).toContain("example__lookup");
+    expect(reviewOnly).not.toContain("example__lookup");
+    expect(reviewOnly).toContain("get_context");
   });
 });

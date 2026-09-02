@@ -4146,7 +4146,7 @@ describe("ChatViewProvider session state sync", () => {
     expect(blocks.some((block) => block.type === "question_answer")).toBe(true);
   });
 
-  it("uses async detect result for projected detected question in browser state", async () => {
+  it("projects regex-detected questions into browser state", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
     const provider = new ChatViewProvider(
@@ -4212,38 +4212,11 @@ describe("ChatViewProvider session state sync", () => {
       hasMoreBefore: false,
     });
 
-    const projectedDetectRequest = (
-      provider as unknown as {
-        projectedDetectRequest: {
-          requestId: string;
-          messageId: string;
-          assistantText: string;
-        } | null;
-      }
-    ).projectedDetectRequest;
-
-    expect(projectedDetectRequest).not.toBeNull();
-
-    projectExtensionMessage({
-      type: "agentDetectQuestionResult",
-      requestId: projectedDetectRequest!.requestId,
-      messageId: projectedDetectRequest!.messageId,
-      detected: {
-        kind: "single_choice",
-        prompt: "Use strict mode or permissive mode?",
-        options: [
-          { label: "Strict", payload: "Use strict mode" },
-          { label: "Permissive", payload: "Use permissive mode" },
-        ],
-      },
-      fallback: false,
-    });
-
     const projected = provider.getBrowserProjectedForegroundState();
-    expect(projected?.detectedQuestion?.prompt).toBe(
-      "Use strict mode or permissive mode?",
-    );
     expect(projected?.detectedQuestion?.kind).toBe("single_choice");
+    expect(
+      projected?.detectedQuestion?.options.map((option) => option.label),
+    ).toEqual(["Option A", "Option B"]);
   });
 
   it("does not request projected detected question for final messages with Continue", async () => {
@@ -4468,7 +4441,7 @@ describe("ChatViewProvider session state sync", () => {
     ).toBeNull();
   });
 
-  it("uses heuristic fallback for projected detected question when async detection falls back", async () => {
+  it("applies a regex-detected projected question result", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
     const provider = new ChatViewProvider(
@@ -4534,29 +4507,9 @@ describe("ChatViewProvider session state sync", () => {
       hasMoreBefore: false,
     });
 
-    const projectedDetectRequest = (
-      provider as unknown as {
-        projectedDetectRequest: {
-          requestId: string;
-          messageId: string;
-          assistantText: string;
-        } | null;
-      }
-    ).projectedDetectRequest;
-
-    expect(projectedDetectRequest).not.toBeNull();
-
-    projectExtensionMessage({
-      type: "agentDetectQuestionResult",
-      requestId: projectedDetectRequest!.requestId,
-      messageId: projectedDetectRequest!.messageId,
-      detected: null,
-      fallback: true,
-    });
-
     const projected = provider.getBrowserProjectedForegroundState();
     expect(projected?.detectedQuestion?.kind).toBe("yes_no");
-    expect(projected?.detectedQuestion?.prompt).toContain("Should I proceed");
+    expect(projected?.detectedQuestion?.prompt).toBe("Should I proceed?");
   });
 
   it("opens /memory locally and derives project scope in the host", async () => {

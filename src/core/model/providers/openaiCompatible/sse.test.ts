@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseOpenAiCompatibleSse } from "./sse.js";
+import { parseOpenAiCompatibleSse } from "@agentlink/core/openai-compatible";
 
 async function* chunks(
   values: Array<string | Uint8Array>,

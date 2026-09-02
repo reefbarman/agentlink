@@ -4,16 +4,17 @@ import {
 } from "../../../shared/ui/ToolbarSelector";
 import { useEffect, useRef, useState } from "preact/hooks";
 
+import type { CoreModelCatalogAuthAction } from "@agentlink/protocol/model-catalog";
 import type { ChatModelInfo as WebviewModelInfo } from "@agentlink/protocol/chat-catalog";
 
-interface ModelSelectorProps {
+export interface ModelSelectorProps {
   currentModel: string;
   currentCondenseThreshold?: number;
   models: WebviewModelInfo[];
   disabled?: boolean;
   onSelect: (modelId: string) => void;
   onSetCondenseThreshold?: (threshold: number) => void;
-  onSignIn?: (provider: string) => void;
+  onSignIn?: (provider: string, action?: CoreModelCatalogAuthAction) => void;
 }
 
 function thresholdLabel(threshold?: number): string {
@@ -187,13 +188,17 @@ export function ModelSelector({
             return (
               <div key={m.id} class="model-selector-option-wrap">
                 <button
-                  class={`toolbar-selector-option ${isCurrent ? "active" : ""} ${!m.authenticated ? "disabled" : ""}`}
+                  class={`toolbar-selector-option ${isCurrent ? "active" : ""} ${m.readiness?.status !== "ready" && !m.authenticated ? "disabled" : ""}`}
                   onClick={() => {
-                    if (m.authenticated) {
+                    if (m.readiness?.status === "ready" || m.authenticated) {
                       handleSelect(m.id);
-                    } else if (onSignIn) {
+                    } else if (
+                      (m.readiness?.status === "credentials_required" ||
+                        (!m.readiness && !m.authenticated)) &&
+                      onSignIn
+                    ) {
                       setOpen(false);
-                      onSignIn(m.provider);
+                      onSignIn(m.provider, m.authAction);
                     }
                   }}
                   type="button"
@@ -227,9 +232,22 @@ export function ModelSelector({
                   {isCurrent && (
                     <i class="codicon codicon-check toolbar-selector-check" />
                   )}
-                  {!m.authenticated && (
-                    <span class="toolbar-selector-sign-in">Sign in</span>
-                  )}
+                  {m.readiness?.status === "checking" ? (
+                    <span class="toolbar-selector-sign-in">Checking…</span>
+                  ) : !m.authenticated ? (
+                    <span class="toolbar-selector-sign-in">
+                      {m.authAction?.kind === "configure_provider"
+                        ? "Configure"
+                        : m.authAction?.kind === "api_key"
+                          ? "Add API key"
+                          : m.authAction?.kind === "oauth"
+                            ? "Sign in"
+                            : m.readiness?.status === "credentials_required" ||
+                                (!m.readiness && !m.authenticated)
+                              ? "Set up"
+                              : "Unavailable"}
+                    </span>
+                  ) : null}
                 </button>
                 {isCurrent && sliderOpen && onSetCondenseThreshold && (
                   <div

@@ -425,7 +425,10 @@ describe("buildSystemPrompt", () => {
       "Use this only when the background result is the foreground's next genuine dependency",
     );
     expect(result).toContain(
-      "Before waiting, explicitly re-check for remaining independent implementation, tests, documentation, self-review, or validation work",
+      "You must choose a bounded `wait_seconds` from 1 to 60",
+    );
+    expect(result).toContain(
+      'If the wait returns `status: "still_running"`, do not immediately wait again',
     );
   });
 
@@ -1550,14 +1553,12 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("Review mode");
     expect(result).toContain("Background Agent");
     expect(result).toContain("background review agent");
-    expect(result).toContain("3-5 tool calls");
-    expect(result).toContain("Review stance:");
-    expect(result).toContain("Skip pre-task user alignment");
+    expect(result).toContain("bounded background reviewer");
+    expect(result).toContain("Inspect the live target");
+    expect(result).toContain("Before each additional tool call");
+    expect(result).toContain("Skip pre-task alignment");
     expect(result).toContain(
-      "Do not assume the foreground agent, the user, or the provided change is correct.",
-    );
-    expect(result).toContain(
-      "If the change is sound, say so clearly instead of forcing criticism.",
+      "If the change is sound, return no findings rather than forcing criticism.",
     );
     // Should NOT include bloated sections
     expect(result).not.toContain("Communication Style");

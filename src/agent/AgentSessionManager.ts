@@ -88,7 +88,6 @@ import {
 import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
 import type { ProjectMcpHubRegistry } from "./ProjectMcpHubRegistry.js";
 import {
-  getProviderAuxiliaryModel,
   type ContentBlock,
   type DocumentBlock,
   type ImageBlock,
@@ -133,6 +132,7 @@ import {
   normalizeBackgroundAgentSettings,
 } from "./background/acpAgentConfig.js";
 import { isAcpSuccessfulStopError } from "./background/acpBackgroundRunner.js";
+import { buildReviewHandoff } from "./background/reviewHandoff.js";
 import {
   DEFAULT_BACKGROUND_MAX_CHILDREN_PER_PARENT,
   DEFAULT_BACKGROUND_MAX_CONCURRENT,
@@ -154,13 +154,8 @@ import {
   partitionMcpToolsForDisclosure,
   type McpToolDisclosurePartition,
 } from "./mcpToolDisclosure.js";
-import { CODEX_CONDENSE_MODEL_FALLBACKS } from "../core/model/providers/codex/models.js";
 import { FALLBACK_AGENT_MODEL } from "./modeModelPreferences.js";
 import { getEffectiveAutoCondenseThreshold } from "./modelCondenseThresholds.js";
-import {
-  callOpenAiCompatibleChat,
-  getOpenAiCompatibleEndpoint,
-} from "./openaiCompatibleClient.js";
 
 import { summarizeTextForPreview } from "../shared/textSummary.js";
 import {
@@ -198,12 +193,11 @@ import {
   type ProjectScopeResolver,
 } from "../core/workspaceProjects.js";
 import { selectNewSessionProject } from "../adapters/vscode/workspaceProjectCapabilities.js";
+import { inferBackgroundDisplayStatus } from "./backgroundDisplayStatus.js";
 import {
-  inferBackgroundDisplayStatus,
-  pickBackgroundDisplayStatus,
-} from "./backgroundDisplayStatus.js";
-import { BackgroundSummaryScheduler } from "./BackgroundSummaryScheduler.js";
-import { captureReviewScope } from "./reviewScopeSnapshot.js";
+  assertReviewScopeAvailable,
+  captureReviewScope,
+} from "./reviewScopeSnapshot.js";
 import { type SessionOutcomeTelemetry } from "../telemetry/SessionOutcomeTelemetry.js";
 import {
   applyHarnessEfficiencyEvent,
@@ -446,7 +440,8 @@ When the configuration is ready, briefly summarize it and end with exactly one m
 Only task and prompt are required. Omit optional JSON properties to use AgentLink defaults. Do not emit the envelope until all necessary user questions have been answered. When asking a question, do not emit the envelope.`;
 
 /** Hard-stop backstop after the nominal budget has triggered a wrap-up. */
-const BUDGET_HARD_LIMIT_RATIO = 3;
+const DEFAULT_BUDGET_HARD_LIMIT_RATIO = 3;
+const REVIEW_BUDGET_HARD_LIMIT_RATIO = 1.5;
 
 interface PreparedTurnExecution {
   context: Readonly<ToolDispatchContext> | undefined;
@@ -521,10 +516,19 @@ function deepFreeze<T>(value: T): Readonly<T> {
   return value;
 }
 
-function getEngineHardLimit(limit: number | undefined): number | undefined {
+function getBudgetHardLimitRatio(taskClass: string | undefined): number {
+  return isReviewTaskClass(taskClass)
+    ? REVIEW_BUDGET_HARD_LIMIT_RATIO
+    : DEFAULT_BUDGET_HARD_LIMIT_RATIO;
+}
+
+function getEngineHardLimit(
+  limit: number | undefined,
+  taskClass: string | undefined,
+): number | undefined {
   return limit === undefined
     ? undefined
-    : Math.ceil(limit * BUDGET_HARD_LIMIT_RATIO);
+    : Math.ceil(limit * getBudgetHardLimitRatio(taskClass));
 }
 
 function resolveBackgroundBudget(
@@ -969,15 +973,18 @@ export class AgentSessionManager {
       lastProgressAt: number;
       /** When the spawn was accepted, before queue admission. */
       enqueuedAt: number;
-      /** Bytes of the immutable review scope captured at spawn, if any. */
+      /** Total compact review handoff bytes; live selectors contain no code. */
       reviewScopeBytes?: number;
+      reviewInlineBytes?: number;
+      reviewTargetKind?: "working_tree" | "files" | "commit_range" | "diff";
+      modelTier?: "cheap" | "balanced" | "deep_reasoning";
       phase: BackgroundAgentRuntimePhase;
       phaseStartedAt?: number;
       requestStartedAt?: number;
       retryAt?: number;
     }
   >();
-  private readonly bgSummaryScheduler = new BackgroundSummaryScheduler();
+
   private bgLaunchQueue: Array<{
     sessionId: string;
     start: () => Promise<void>;
@@ -1002,23 +1009,6 @@ export class AgentSessionManager {
   private readonly fleetScheduler: FleetScheduler;
   /** Originating session ids with a transient /btw side question running. */
   private readonly btwInFlightSessions = new Set<string>();
-  /** Background summary state keyed by session id. */
-  private bgSummary = new Map<
-    string,
-    {
-      inFlight: boolean;
-      generatedAt?: number;
-      sourceModel?: string;
-      fallbackUsed?: boolean;
-      confidence?: number;
-      shortStatus?: string;
-      lastAttemptAt?: number;
-      lastFailureAt?: number;
-      lastFailureReason?: string;
-      lastInputHash?: string;
-      needsRefresh: boolean;
-    }
-  >();
 
   /** Callback invoked with each event from the running agent */
   onEvent?: (sessionId: string, event: AgentEvent) => void;
@@ -2048,6 +2038,15 @@ export class AgentSessionManager {
         budgetElapsedMs: fleet?.budget?.maxElapsedMs,
         usedToolCalls: fleet?.budgetUsage?.toolCalls ?? meta?.toolCalls,
         usedApiTurns: fleet?.budgetUsage?.apiTurns ?? meta?.apiTurns,
+        backend: fleet?.backend === "native" ? "native" : "acp",
+        modelTier: meta?.modelTier,
+        reviewTargetKind: meta?.reviewTargetKind,
+        reviewHandoffBytes: meta?.reviewScopeBytes,
+        reviewInlineBytes: meta?.reviewInlineBytes,
+        reportedInputTokens: session.totalInputTokens,
+        reportedOutputTokens: session.totalOutputTokens,
+        reportedCacheReadTokens: session.totalCacheReadTokens,
+        reportedCacheCreationTokens: session.totalCacheCreationTokens,
         ...(review
           ? {
               reviewFindings,
@@ -8964,7 +8963,6 @@ export class AgentSessionManager {
       this.bgParents.delete(sessionId);
       this.bgMeta.delete(sessionId);
       this.acpCommandGuardState.delete(sessionId);
-      this.bgSummary.delete(sessionId);
       this.restoredBackgroundSessionIds.delete(sessionId);
     }
   }
@@ -9551,7 +9549,8 @@ export class AgentSessionManager {
       if (maxElapsedMs !== undefined && maxElapsedMs > 0) {
         const timers = [
           maxElapsedMs,
-          maxElapsedMs * BUDGET_HARD_LIMIT_RATIO,
+          maxElapsedMs *
+            getBudgetHardLimitRatio(session.fleetMetadata?.taskClass),
         ].map((delayMs) =>
           this.host.timers.setTimeout(() => {
             this.enforceBackgroundBudget(session);
@@ -10316,22 +10315,16 @@ export class AgentSessionManager {
       throw new FleetAdmissionError(admission);
     }
     this.ensureSharedWorkspaceScopeAvailable(request);
-    let reviewScopeBytes: number | undefined;
-    let executionMessage = message;
-    if (request.reviewScope) {
-      const reviewScopeSnapshot = await captureReviewScope(
-        executionRoot,
-        request.reviewScope,
-        {
+    const reviewTarget = request.reviewScope
+      ? captureReviewScope(executionRoot, request.reviewScope, {
           workspaceRoots: this.getWorkspaceFolders().map(
             (folder) => folder.path,
           ),
-        },
-      );
-      reviewScopeBytes = Buffer.byteLength(reviewScopeSnapshot);
-      executionMessage = `${message}\n\n${reviewScopeSnapshot}`;
-    }
-
+        })
+      : undefined;
+    const reviewMessageScopeSummary =
+      summarizeTextForPreview(message, { maxLength: 500 }) ??
+      "delegated review message";
     const fg = this.getForegroundSession();
     parentSessionId = parent?.id;
     const foregroundModel = parent?.model ?? fg?.model ?? this.config.model;
@@ -10354,36 +10347,54 @@ export class AgentSessionManager {
           "ACP background agents cannot inherit active skill tool restrictions; use a native background agent",
         );
       }
-      // An explicit review-only permission profile makes the run read-only at
-      // the ACP permission boundary, so it never contends for the writer lease.
-      const acpEnforcedReadOnly =
-        backendRoute.agent.readonlyOnly ||
-        request.permissionProfile === "review-only";
-      this.ensureParentWriterCanSpawnSharedChild(parent, acpEnforcedReadOnly);
       if (request.images?.length) {
         throw new Error(
           "Image handoff is not supported by ACP background agents; use a native background agent or save the images in the workspace and reference their paths.",
         );
       }
-      // ACP agents do not use AgentLink's set_task_status tool, so keep the
-      // serialized-envelope fallback at that external boundary only.
-      const acpExecutionMessage =
-        withFleetResultInstruction(request.expectedResult, executionMessage) +
-        (acpEnforcedReadOnly
-          ? "\n\n<harness-policy>You are running as a read-only review agent. Shell commands are approved only when they are unambiguously read-only; commands that could modify files, repository state, packages, or external state will be denied. Prefer your dedicated file-read and search tools over shell commands for reading files, and do not attempt writes, installs, builds, or git mutations. If a shell command is denied, do not retry it verbatim — rephrase the work as one or more simpler, plainly read-only commands or use your file tools instead.</harness-policy>"
-          : "");
       const resolvedMode = request.mode?.trim() || "review";
       const taskClass = request.taskClass?.trim() || "general";
       const modelTier =
         request.modelTier ??
         inferReviewTier({ ...request, taskClass }) ??
         "balanced";
+      const isReviewTask = isReviewTaskClass(taskClass);
+      const effectivePermissionProfile =
+        request.permissionProfile ?? (isReviewTask ? "review-only" : undefined);
+      const effectiveExpectedResult =
+        request.expectedResult ??
+        (isReviewTask ? "review_findings" : undefined);
+      // Review tasks are read-only at the ACP permission boundary even when the
+      // configured external agent is otherwise write-capable.
+      const acpEnforcedReadOnly =
+        backendRoute.agent.readonlyOnly ||
+        effectivePermissionProfile === "review-only";
+      this.ensureParentWriterCanSpawnSharedChild(parent, acpEnforcedReadOnly);
       const effectiveBudget = resolveBackgroundBudget(
         taskClass,
         getAutomaticBackgroundBudget(taskClass, modelTier),
         request.budget,
       );
       this.ensureChildBudgetAdmission(parent, effectiveBudget);
+      const executionMessage = isReviewTask
+        ? buildReviewHandoff({
+            message,
+            target: reviewTarget,
+            budget: effectiveBudget,
+          })
+        : reviewTarget
+          ? `${message}\n\n${reviewTarget.content}`
+          : message;
+      // ACP agents do not use AgentLink's set_task_status tool, so keep the
+      // serialized-envelope fallback at that external boundary only.
+      const reviewHandoffBytes = isReviewTask
+        ? Buffer.byteLength(executionMessage)
+        : undefined;
+      const acpExecutionMessage =
+        withFleetResultInstruction(effectiveExpectedResult, executionMessage) +
+        (acpEnforcedReadOnly
+          ? "\n\n<harness-policy>You are running as a read-only review agent. Shell commands are approved only when they are unambiguously read-only; commands that could modify files, repository state, packages, or external state will be denied. Prefer your dedicated file-read and search tools over shell commands for reading files, and do not attempt writes, installs, builds, or git mutations. If a shell command is denied, do not retry it verbatim — rephrase the work as one or more simpler, plainly read-only commands or use your file tools instead.</harness-policy>"
+          : "");
       const acpRoutingReason =
         backendRoute.reason === "explicit_provider"
           ? `explicit ACP provider override (${backendRoute.reference})`
@@ -10429,7 +10440,10 @@ export class AgentSessionManager {
         startedAt: Date.now(),
         lastProgressAt: Date.now(),
         enqueuedAt: Date.now(),
-        reviewScopeBytes,
+        reviewScopeBytes: reviewHandoffBytes,
+        reviewInlineBytes: reviewTarget?.inlineBytes,
+        reviewTargetKind: reviewTarget?.kind,
+        modelTier,
         phase: "queued",
         phaseStartedAt: Date.now(),
       });
@@ -10447,8 +10461,11 @@ export class AgentSessionManager {
         delegation: {
           ownedPaths: request.ownedPaths,
           forbiddenPaths: request.forbiddenPaths,
-          permissionProfile: request.permissionProfile,
-          expectedResult: request.expectedResult,
+          permissionProfile: effectivePermissionProfile,
+          expectedResult: effectiveExpectedResult,
+          reviewScopeSummary:
+            reviewTarget?.summary ??
+            (isReviewTask ? reviewMessageScopeSummary : undefined),
         },
         budget: effectiveBudget,
         goalId: request.goalId,
@@ -10504,6 +10521,7 @@ export class AgentSessionManager {
           () => persistPartialResult("checkpoint"),
         );
         try {
+          if (reviewTarget) assertReviewScopeAvailable(reviewTarget);
           if (mutationLeaseHolder) {
             await this.ensureWorkspaceMutationLease(
               session,
@@ -10536,18 +10554,6 @@ export class AgentSessionManager {
                 session,
                 output: acpOutput,
                 update: event.update,
-              });
-              const { status } = this.getProjectedBgStatus(session);
-              this.maybeScheduleBgSummary({
-                sessionId: session.id,
-                event: {
-                  type: "status_update",
-                  message: session.currentTool ?? status,
-                },
-                status,
-                currentTool: session.currentTool,
-                streamingText: this.bgStreamingText.get(session.id),
-                statusDetail: this.bgStatusDetail.get(session.id),
               });
               this.notifySessionChangeListeners();
             },
@@ -10767,7 +10773,7 @@ export class AgentSessionManager {
         : route.routingReason;
     const backendFallbackUsed =
       Boolean(backendRoute.fallback) || route.fallbackUsed;
-    const isReviewTask = route.taskClass.startsWith("review_");
+    const isReviewTask = isReviewTaskClass(route.taskClass);
     const effectivePermissionProfile =
       request.permissionProfile ?? (isReviewTask ? "review-only" : undefined);
     const effectiveExpectedResult =
@@ -10778,6 +10784,18 @@ export class AgentSessionManager {
       request.budget,
     );
     this.ensureChildBudgetAdmission(parent, effectiveBudget);
+    const executionMessage = isReviewTask
+      ? buildReviewHandoff({
+          message,
+          target: reviewTarget,
+          budget: effectiveBudget,
+        })
+      : reviewTarget
+        ? `${message}\n\n${reviewTarget.content}`
+        : message;
+    const reviewHandoffBytes = isReviewTask
+      ? Buffer.byteLength(executionMessage)
+      : undefined;
     const effectiveToolProfile =
       effectivePermissionProfile === "review-only"
         ? "review"
@@ -10818,6 +10836,7 @@ export class AgentSessionManager {
       devMode: this.devMode,
       background: true,
       isBackground: true,
+      lightweight: isReviewTask,
       providerId,
     });
 
@@ -10855,7 +10874,14 @@ export class AgentSessionManager {
       startedAt: Date.now(),
       lastProgressAt: Date.now(),
       enqueuedAt: Date.now(),
-      reviewScopeBytes,
+      reviewScopeBytes: reviewHandoffBytes,
+      reviewInlineBytes: reviewTarget?.inlineBytes,
+      reviewTargetKind: reviewTarget?.kind,
+      modelTier:
+        route.modelTier ??
+        request.modelTier ??
+        inferReviewTier(request) ??
+        "balanced",
       phase: "queued",
       phaseStartedAt: Date.now(),
     });
@@ -10874,6 +10900,9 @@ export class AgentSessionManager {
         forbiddenPaths: request.forbiddenPaths,
         permissionProfile: effectivePermissionProfile,
         expectedResult: effectiveExpectedResult,
+        reviewScopeSummary:
+          reviewTarget?.summary ??
+          (isReviewTask ? reviewMessageScopeSummary : undefined),
       },
       budget: effectiveBudget,
       goalId: request.goalId,
@@ -10970,6 +10999,7 @@ export class AgentSessionManager {
           ? budget
           : undefined;
       try {
+        if (reviewTarget) assertReviewScopeAvailable(reviewTarget);
         await this.ensurePreparedTurnMutationLease(session, preparedTurn);
         for await (const event of bgEngine.run(session, {
           isBackground: true,
@@ -10979,8 +11009,14 @@ export class AgentSessionManager {
           onAssistantTurnCommitted: () =>
             this.clearInterruptedRunProgress(session),
           toolProfile: effectiveToolProfile,
-          maxToolCalls: getEngineHardLimit(engineBudget?.maxToolCalls),
-          maxApiTurns: getEngineHardLimit(engineBudget?.maxApiTurns),
+          maxToolCalls: getEngineHardLimit(
+            engineBudget?.maxToolCalls,
+            route.taskClass,
+          ),
+          maxApiTurns: getEngineHardLimit(
+            engineBudget?.maxApiTurns,
+            route.taskClass,
+          ),
           webAccessPolicy: preparedTurn.policy,
           mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
           mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
@@ -11015,12 +11051,12 @@ export class AgentSessionManager {
           // Track tool calls and token usage for observability
           const meta = this.bgMeta.get(session.id);
           if (meta) {
-            if (event.type === "tool_start") {
+            if (event.type === "tool_start" && !event.finalizationOnly) {
               meta.toolCalls += 1;
             }
             if (event.type === "api_request") {
               meta.tokenUsage += event.uncachedInputTokens + event.outputTokens;
-              meta.apiTurns += 1;
+              if (!event.finalizationOnly) meta.apiTurns += 1;
             }
           }
 
@@ -11028,21 +11064,6 @@ export class AgentSessionManager {
             this.notifySessionChangeListeners();
             break;
           }
-
-          const { status } = this.getProjectedBgStatus(session);
-          this.maybeScheduleBgSummary({
-            sessionId: session.id,
-            event,
-            status,
-            currentTool: session.currentTool,
-            streamingText: this.bgStreamingText.get(session.id),
-            resultText:
-              session.status === "idle" || session.status === "error"
-                ? session.getLastAssistantText()
-                : undefined,
-            errorMessage: this.bgErrors.get(session.id),
-            statusDetail: this.bgStatusDetail.get(session.id),
-          });
 
           if (event.type === "done") {
             terminalDoneEvent = event;
@@ -11254,315 +11275,6 @@ export class AgentSessionManager {
     return "";
   }
 
-  private getOrInitBgSummary(sessionId: string): {
-    inFlight: boolean;
-    generatedAt?: number;
-    sourceModel?: string;
-    fallbackUsed?: boolean;
-    confidence?: number;
-    shortStatus?: string;
-    lastAttemptAt?: number;
-    lastFailureAt?: number;
-    lastFailureReason?: string;
-    lastInputHash?: string;
-    needsRefresh: boolean;
-  } {
-    const existing = this.bgSummary.get(sessionId);
-    if (existing) return existing;
-    const init = {
-      inFlight: false,
-      needsRefresh: true,
-    };
-    this.bgSummary.set(sessionId, init);
-    return init;
-  }
-
-  private async tryRefreshBgSummary(args: {
-    sessionId: string;
-    trigger: "phase_change" | "important_tool" | "error" | "done";
-    status: BgSessionInfo["status"];
-    currentTool?: string;
-    streamingText?: string;
-    resultText?: string;
-    errorMessage?: string;
-  }): Promise<void> {
-    const mode = this.host.config.getBgSummaryMode(
-      this.sessions.get(args.sessionId)?.projectScope,
-    );
-    if (mode === "heuristic") return;
-
-    const summary = this.getOrInitBgSummary(args.sessionId);
-    const now = Date.now();
-    const cooldownMs = 10_000;
-
-    if (summary.inFlight) return;
-    if (summary.lastAttemptAt && now - summary.lastAttemptAt < cooldownMs)
-      return;
-
-    const contextText = [
-      `status=${args.status}`,
-      args.currentTool ? `tool=${args.currentTool}` : null,
-      args.errorMessage ? `error=${args.errorMessage}` : null,
-      args.streamingText ? `stream=${args.streamingText.slice(-500)}` : null,
-      args.resultText ? `result=${args.resultText.slice(0, 1000)}` : null,
-    ]
-      .filter((v): v is string => Boolean(v))
-      .join("\n");
-
-    const contextHash = `${args.status}|${args.currentTool ?? ""}|${contextText.slice(-400)}`;
-    if (summary.lastInputHash === contextHash && !summary.needsRefresh) return;
-
-    summary.inFlight = true;
-    summary.lastAttemptAt = now;
-    summary.lastInputHash = contextHash;
-    this.notifySessionsChanged();
-
-    try {
-      const session = this.sessions.get(args.sessionId);
-      if (!session) return;
-
-      const systemPrompt = [
-        "Summarize the background agent's current state for a tiny UI status area.",
-        "Return ONLY JSON with shape:",
-        '{"status":"string","confidence":0.0}',
-        "Rules:",
-        "- status must be 1-3 words (hard max 5 words)",
-        "- concise, phase-oriented wording",
-        "- confidence between 0 and 1",
-      ].join("\n");
-
-      const userPayload = [
-        `Trigger: ${args.trigger}`,
-        `Context:\n${contextText}`,
-      ].join("\n\n");
-
-      let text = "";
-      let selectedModel: string | undefined;
-      let fallbackUsed = false;
-      let lastError = "";
-
-      if (mode === "openai") {
-        const endpoint = getOpenAiCompatibleEndpoint();
-        const model = endpoint.model || "openai-compatible";
-        const startedAt = Date.now();
-        this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
-          session.id,
-          session.projectScope.projectId,
-          {
-            type: "start",
-            provider: "openai-compatible",
-            model,
-            startedAt,
-            schedulerQueued: false,
-          },
-        );
-        try {
-          const result = await callOpenAiCompatibleChat({
-            endpoint,
-            systemPrompt,
-            userContent: userPayload,
-            maxTokens: 120,
-            temperature: 0,
-          });
-          text = result.content;
-          selectedModel = model;
-          this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
-            session.id,
-            session.projectScope.projectId,
-            {
-              type: "complete",
-              provider: "openai-compatible",
-              model,
-              startedAt,
-              durationMs: Date.now() - startedAt,
-            },
-          );
-        } catch (err) {
-          lastError = err instanceof Error ? err.message : String(err);
-          this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
-            session.id,
-            session.projectScope.projectId,
-            {
-              type: "error",
-              provider: "openai-compatible",
-              model,
-              startedAt,
-              durationMs: Date.now() - startedAt,
-              error: lastError,
-            },
-          );
-        }
-      } else {
-        const provider = this.host.providers.tryResolveProvider(session.model);
-        if (!provider) {
-          summary.lastFailureAt = Date.now();
-          summary.lastFailureReason = `No provider for model ${session.model}`;
-          summary.needsRefresh = false;
-          return;
-        }
-
-        const modelCandidates =
-          provider.id === "codex"
-            ? [...CODEX_CONDENSE_MODEL_FALLBACKS]
-            : [getProviderAuxiliaryModel(provider, session.model)];
-        const uniqueModels = [...new Set(modelCandidates)];
-
-        for (let i = 0; i < uniqueModels.length; i++) {
-          const model = uniqueModels[i];
-          const startedAt = Date.now();
-          const schedulerQueued =
-            !this.host.providers.requestScheduler.hasCapacity(
-              provider.id,
-              "maintenance",
-            );
-          this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
-            session.id,
-            session.projectScope.projectId,
-            {
-              type: "start",
-              provider: provider.id,
-              model,
-              startedAt,
-              schedulerQueued,
-            },
-          );
-          let providerQueueWaitMs = 0;
-          let permit:
-            | import("../core/modelRequestScheduler.js").ModelRequestPermit
-            | undefined;
-          try {
-            permit = await this.host.providers.requestScheduler.acquire(
-              provider.id,
-              "maintenance",
-              session.abortSignal,
-            );
-            providerQueueWaitMs = permit.waitMs;
-            const result = await provider.complete({
-              model,
-              systemPrompt,
-              messages: [{ role: "user", content: userPayload }],
-              maxTokens: 120,
-              temperature: 0,
-            });
-            selectedModel = model;
-            fallbackUsed = i > 0;
-            text = result.text;
-            this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
-              session.id,
-              session.projectScope.projectId,
-              {
-                type: "complete",
-                provider: provider.id,
-                model,
-                startedAt,
-                schedulerQueued,
-                providerQueueWaitMs,
-                durationMs: Date.now() - startedAt,
-              },
-            );
-            break;
-          } catch (err) {
-            lastError = err instanceof Error ? err.message : String(err);
-            this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
-              session.id,
-              session.projectScope.projectId,
-              {
-                type: "error",
-                provider: provider.id,
-                model,
-                startedAt,
-                schedulerQueued,
-                providerQueueWaitMs,
-                durationMs: Date.now() - startedAt,
-                error: lastError,
-              },
-            );
-          } finally {
-            permit?.release();
-          }
-        }
-      }
-
-      if (!selectedModel || !text.trim()) {
-        summary.lastFailureAt = Date.now();
-        summary.lastFailureReason =
-          lastError || "No model candidate produced a summary";
-        summary.needsRefresh = false;
-        return;
-      }
-
-      let shortStatus = "";
-      let confidence: number | undefined;
-      try {
-        const unfenced = text
-          .trim()
-          .replace(/^```(?:json)?\s*/i, "")
-          .replace(/\s*```$/, "")
-          .trim();
-        const parsed = JSON.parse(unfenced) as {
-          status?: unknown;
-          confidence?: unknown;
-        };
-        shortStatus =
-          typeof parsed.status === "string" ? parsed.status.trim() : "";
-        confidence =
-          typeof parsed.confidence === "number" ? parsed.confidence : undefined;
-      } catch {
-        shortStatus = "";
-      }
-
-      if (!shortStatus) {
-        summary.lastFailureAt = Date.now();
-        summary.lastFailureReason = "Summary response was not valid JSON";
-        summary.needsRefresh = false;
-        return;
-      }
-
-      const wordCount = shortStatus.split(/\s+/).filter(Boolean).length;
-      if (wordCount < 1 || wordCount > 5) {
-        summary.lastFailureAt = Date.now();
-        summary.lastFailureReason = "Summary status violated 1-5 word rule";
-        summary.needsRefresh = false;
-        return;
-      }
-
-      summary.shortStatus = shortStatus;
-      summary.confidence = confidence;
-      summary.generatedAt = Date.now();
-      summary.sourceModel = selectedModel;
-      summary.fallbackUsed = fallbackUsed;
-      summary.lastFailureReason = undefined;
-      summary.needsRefresh = false;
-    } finally {
-      summary.inFlight = false;
-      this.notifySessionsChanged();
-    }
-  }
-
-  private maybeScheduleBgSummary(args: {
-    sessionId: string;
-    event: AgentEvent;
-    status: BgSessionInfo["status"];
-    currentTool?: string;
-    streamingText?: string;
-    resultText?: string;
-    errorMessage?: string;
-    statusDetail?: string;
-  }): void {
-    const trigger = this.bgSummaryScheduler.evaluate(args);
-    if (!trigger) return;
-
-    void this.tryRefreshBgSummary({
-      sessionId: args.sessionId,
-      trigger,
-      status: args.status,
-      currentTool: args.currentTool,
-      streamingText: args.streamingText,
-      resultText: args.resultText,
-      errorMessage: args.errorMessage,
-    });
-  }
-
   private getBackgroundResultState(
     session: AgentSession,
     done: boolean,
@@ -11771,16 +11483,8 @@ export class AgentSessionManager {
       errorMessage: this.bgErrors.get(sessionId),
       statusDetail: this.bgStatusDetail.get(sessionId),
     });
-    const summary = this.getOrInitBgSummary(sessionId);
-    const picked = pickBackgroundDisplayStatus({
-      status: status as BgSessionInfo["status"],
-      heuristicStatus,
-      summary,
-    });
-
     const meta = this.bgMeta.get(sessionId);
     const telemetry = this.getBackgroundRuntimeTelemetry(session);
-    const progressSummary = summary.shortStatus?.trim() || picked.displayStatus;
     const fleet = session.fleetMetadata;
     const partialOutput = done
       ? (fleet?.partialResult ??
@@ -11793,9 +11497,8 @@ export class AgentSessionManager {
       currentTool: session.currentTool,
       done,
       partialOutput,
-      displayStatus: picked.displayStatus,
+      displayStatus: heuristicStatus,
       streamingPreview: streamingText,
-      progressSummary,
       resolvedMode: meta?.resolvedMode,
       resolvedModel: meta?.resolvedModel,
       resolvedProvider: meta?.resolvedProvider,
@@ -11972,6 +11675,7 @@ export class AgentSessionManager {
   waitForAuthorizedBackground(
     callerSessionId: string,
     sessionId: string,
+    waitSeconds?: number,
   ): Promise<string> {
     const targetSessionId = this.resolveBackgroundSessionId(sessionId);
     const denial = this.getBackgroundManagementDenial(
@@ -11993,6 +11697,7 @@ export class AgentSessionManager {
     return this.waitForBackgroundReleasingSlot(
       callerSessionId,
       targetSessionId,
+      waitSeconds,
     );
   }
 
@@ -12006,11 +11711,13 @@ export class AgentSessionManager {
   private waitForBackgroundReleasingSlot(
     callerSessionId: string,
     sessionId: string,
+    waitSeconds?: number,
   ): Promise<string> {
     const caller = this.sessions.get(callerSessionId);
     const target = this.sessions.get(sessionId);
     const waitOptions = {
       interruptOnUserMessageForSessionId: callerSessionId,
+      waitSeconds,
     };
     const willBlock =
       caller?.background === true &&
@@ -12037,11 +11744,13 @@ export class AgentSessionManager {
   async waitForAuthorizedBackgroundContent(
     callerSessionId: string,
     sessionId: string,
+    waitSeconds: number,
   ): Promise<string | BackgroundAgentResultContent> {
     const targetSessionId = this.resolveBackgroundSessionId(sessionId);
     const text = await this.waitForAuthorizedBackground(
       callerSessionId,
       targetSessionId,
+      waitSeconds,
     );
     if (!this.canManageBackground(callerSessionId, targetSessionId)) {
       return text;
@@ -12326,23 +12035,46 @@ export class AgentSessionManager {
       sessionId,
       retrySafe: true,
       message:
-        "Waiting stopped because a user message is pending for your session. The background agent was not interrupted and keeps running. Handle the user's message first, then call get_background_result again when ready to block, or get_background_status for a non-blocking check.",
+        "Waiting stopped because a user message is pending for your session. The background agent was not interrupted and keeps running. Handle the user's message first, then call get_background_result again when ready to wait, or get_background_status for a non-blocking check.",
+    });
+  }
+
+  private buildBackgroundStillRunningResult(sessionId: string): string {
+    const status = this.getBackgroundStatus(sessionId);
+    return JSON.stringify({
+      status: "still_running",
+      done: false,
+      sessionId,
+      phase: status.phase,
+      displayStatus: status.displayStatus,
+      currentTool: status.currentTool,
+      elapsedMs: status.elapsedMs,
+      idleMs: status.idleMs,
+      partialOutput: status.partialOutput,
+      retryAfterMs: 5_000,
+      retrySafe: true,
+      message:
+        "The bounded wait expired and the background agent is still running. Continue any independent foreground implementation, tests, documentation, validation, or self-review before checking again. Use get_background_status for non-blocking progress; call get_background_result again only when integration is genuinely blocked on the final result.",
     });
   }
 
   /**
-   * Async — blocks until the background session finishes.
-   * Returns the last assistant message text.
+   * Wait until the background session finishes or an optional bounded wait expires.
+   * Returns the last assistant message text on completion.
    * Uses a double-check pattern to prevent races between status check and waiter registration.
    *
    * When `interruptOnUserMessageForSessionId` is set, the wait also resolves
    * early with a `wait_interrupted` payload as soon as that session has a
    * pending interjection (user steering), without affecting the background
-   * agent. This lets a blocked caller handle the user's message and re-wait.
+   * agent. When `waitSeconds` is set, expiry returns `still_running` and also
+   * leaves the background agent untouched.
    */
   waitForBackground(
     sessionId: string,
-    options?: { interruptOnUserMessageForSessionId?: string },
+    options?: {
+      interruptOnUserMessageForSessionId?: string;
+      waitSeconds?: number;
+    },
   ): Promise<string> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -12381,6 +12113,7 @@ export class AgentSessionManager {
     return new Promise((resolve) => {
       let settled = false;
       let unsubscribeInterrupt: (() => void) | undefined;
+      let timerId: ReturnType<AgentSessionManagerHost["timers"]["setTimeout"]>;
       const settle = (result: string) => {
         if (settled) return;
         settled = true;
@@ -12404,10 +12137,23 @@ export class AgentSessionManager {
         return;
       }
 
-      // Safety timeout: resolve after 30 minutes as a last resort to prevent
-      // permanently hung waiters (e.g. if the session crashes without cleanup).
-      const safetyMs = 30 * 60 * 1000;
-      const timerId = this.host.timers.setTimeout(() => {
+      // Agent-facing result checks use a short bounded wait. Internal callers
+      // retain the 30-minute safety timeout used to recover abandoned waiters.
+      const timeoutMs =
+        options?.waitSeconds === undefined
+          ? 30 * 60 * 1000
+          : Math.min(60, Math.max(1, options.waitSeconds)) * 1000;
+      timerId = this.host.timers.setTimeout(() => {
+        const waiterList = this.bgResultWaiters.get(sessionId);
+        const waiterIndex = waiterList?.indexOf(settle) ?? -1;
+        if (waiterList && waiterIndex >= 0) waiterList.splice(waiterIndex, 1);
+        const timerList = this.bgSafetyTimers.get(sessionId);
+        const timerIndex = timerList?.indexOf(timerId) ?? -1;
+        if (timerList && timerIndex >= 0) timerList.splice(timerIndex, 1);
+        if (options?.waitSeconds !== undefined) {
+          settle(this.buildBackgroundStillRunningResult(sessionId));
+          return;
+        }
         this.log?.(
           `[background] Result waiter timed out for ${sessionId}; background agent is still allowed to continue running.`,
         );
@@ -12415,7 +12161,7 @@ export class AgentSessionManager {
           session.getLastAssistantText() ??
             "(background agent timed out waiting for result)",
         );
-      }, safetyMs);
+      }, timeoutMs);
       const timers = this.bgSafetyTimers.get(sessionId) ?? [];
       timers.push(timerId);
       this.bgSafetyTimers.set(sessionId, timers);
@@ -12423,8 +12169,8 @@ export class AgentSessionManager {
       if (interruptSession) {
         unsubscribeInterrupt = interruptSession.onPendingInterjectionQueued(
           () => {
-            // Detach this waiter and its safety timer so the eventual
-            // completion does not keep stale entries alive for 30 minutes.
+            // Detach this waiter and its timer so eventual completion does not
+            // retain stale entries.
             const waiterList = this.bgResultWaiters.get(sessionId);
             const waiterIndex = waiterList?.indexOf(settle) ?? -1;
             if (waiterList && waiterIndex >= 0) {
@@ -12754,9 +12500,18 @@ export class AgentSessionManager {
     // evidence but cannot authorize a successful background result.
     const marker = session.getLastFinalMarker?.();
     if (marker?.status === "completed" && marker.result) {
+      const markerResult = structuredClone(marker.result);
+      if (
+        markerResult.type === "review_findings" &&
+        !markerResult.reviewedScope &&
+        session.fleetMetadata?.delegation?.reviewScopeSummary
+      ) {
+        markerResult.reviewedScope =
+          session.fleetMetadata.delegation.reviewScopeSummary;
+      }
       return {
-        resultText: formatFleetResultEnvelope(marker.result),
-        structuredResult: marker.result,
+        resultText: formatFleetResultEnvelope(markerResult),
+        structuredResult: markerResult,
         resultState: "completed",
         retrySafe: true,
         agentRetryable: false,
@@ -12793,6 +12548,14 @@ export class AgentSessionManager {
       workspaceRoots: this.getWorkspaceFolders().map((folder) => folder.path),
     });
     const structuredResult = parsedEnvelope.envelope;
+    if (
+      structuredResult.type === "review_findings" &&
+      !structuredResult.reviewedScope &&
+      session.fleetMetadata?.delegation?.reviewScopeSummary
+    ) {
+      structuredResult.reviewedScope =
+        session.fleetMetadata.delegation.reviewScopeSummary;
+    }
     let resultState: BackgroundResultState =
       (options?.preferDurableMetadata
         ? session.fleetMetadata?.resultState
@@ -13151,11 +12914,20 @@ export class AgentSessionManager {
       this.saveSession(owner.id);
       this.notifySessionsChanged();
     }
+    const hardLimitRatio = getBudgetHardLimitRatio(fleet.taskClass);
+    const nativeSessionReviewEngineOwnsWorkUnitBackstop =
+      fleet.backend === "native" &&
+      isReviewTaskClass(fleet.taskClass) &&
+      (budget.scope === undefined || budget.scope === "session");
     const hardExhausted = checks.find(
-      ([limit, used]) =>
+      ([limit, used, kind]) =>
+        !(
+          nativeSessionReviewEngineOwnsWorkUnitBackstop &&
+          (kind === "tool_calls" || kind === "api_turns")
+        ) &&
         limit !== undefined &&
         limit >= 0 &&
-        used >= limit * BUDGET_HARD_LIMIT_RATIO,
+        used >= limit * hardLimitRatio,
     );
     const exhausted = checks.find(
       ([limit, used]) => limit !== undefined && limit >= 0 && used >= limit,
@@ -13298,9 +13070,6 @@ export class AgentSessionManager {
     const finalSummary = this.getBackgroundResult(sessionId).summary?.trim();
     if (finalSummary) return finalSummary;
 
-    const summary = this.bgSummary.get(sessionId)?.shortStatus?.trim();
-    if (summary) return summary;
-
     const session = this.sessions.get(sessionId);
     if (!session) return undefined;
 
@@ -13435,12 +13204,6 @@ export class AgentSessionManager {
           errorMessage,
           statusDetail: this.bgStatusDetail.get(s.id),
         });
-        const summary = this.getOrInitBgSummary(s.id);
-        const picked = pickBackgroundDisplayStatus({
-          status,
-          heuristicStatus,
-          summary,
-        });
         const events = s.fleetMetadata?.events ?? [];
         const unreadEvents = events.filter((event) => !event.readAt);
         const latestUnread = unreadEvents.at(-1);
@@ -13467,8 +13230,15 @@ export class AgentSessionManager {
           task: s.title,
           status,
           currentTool: s.currentTool,
-          displayStatus: picked.displayStatus,
-          displayStatusSource: picked.displayStatusSource,
+          displayStatus: heuristicStatus,
+          displayStatusSource:
+            status === "queued" ||
+            status === "awaiting_approval" ||
+            status === "idle" ||
+            status === "error" ||
+            status === "cancelled"
+              ? "terminal"
+              : "heuristic",
           resolvedMode: meta?.resolvedMode,
           resolvedModel: meta?.resolvedModel,
           resolvedProvider: meta?.resolvedProvider,
@@ -13567,17 +13337,6 @@ export class AgentSessionManager {
           errorMessage,
           completedAt:
             this.bgCompletedAt.get(s.id) ?? s.fleetMetadata?.completedAt,
-          resultSummary: summary.shortStatus,
-          summaryMeta: {
-            inFlight: summary.inFlight,
-            generatedAt: summary.generatedAt,
-            sourceModel: summary.sourceModel,
-            fallbackUsed: summary.fallbackUsed,
-            confidence: summary.confidence,
-            lastAttemptAt: summary.lastAttemptAt,
-            lastFailureAt: summary.lastFailureAt,
-            lastFailureReason: summary.lastFailureReason,
-          },
         };
       });
 

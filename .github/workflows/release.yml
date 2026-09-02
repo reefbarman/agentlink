@@ -9,6 +9,28 @@ permissions:
   contents: read
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - run: npm ci
+      - name: Verify tag matches package version
+        run: |
+          VERSION=$(node -p 'require("./package.json").version')
+          test "${GITHUB_REF_NAME#v}" = "$VERSION"
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
+      - run: npm run test:core-sdk-consumer
+
   package:
     name: Package ${{ matrix.target }}
     runs-on: ubuntu-latest
@@ -68,6 +90,15 @@ jobs:
             --target "$AGENTLINK_VSCE_TARGET" \
             --out "agentlink-${VERSION}-${AGENTLINK_VSCE_TARGET}.vsix"
 
+      - name: Verify packaged VSIX inventory
+        env:
+          AGENTLINK_VSCE_TARGET: ${{ matrix.target }}
+        run: |
+          VERSION=$(node -p 'require("./package.json").version')
+          unzip -Z1 "agentlink-${VERSION}-${AGENTLINK_VSCE_TARGET}.vsix" \
+            | node scripts/verify-retrieval-package.mjs \
+                --target "$AGENTLINK_VSCE_TARGET"
+
       - uses: actions/upload-artifact@v4
         with:
           name: agentlink-${{ matrix.target }}
@@ -75,7 +106,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: package
+    needs: [verify, package]
     runs-on: ubuntu-latest
     permissions:
       contents: write

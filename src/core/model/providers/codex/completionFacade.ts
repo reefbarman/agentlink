@@ -7,7 +7,7 @@ import type {
   CoreModelStreamEvent,
   CoreModelToolDefinition,
   CoreModelUsage,
-} from "../../../modelRuntime.js";
+} from "@agentlink/core/model-runtime";
 import type { CoreHostedToolDefinition } from "@agentlink/protocol/web-access-policy";
 import type { CodexAuthMethod } from "./models.js";
 import { toCodexRequestError } from "./errors.js";

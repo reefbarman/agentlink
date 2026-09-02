@@ -3,8 +3,8 @@ import {
   runAgentToolLoop,
   type AgentToolLoopCall,
   type AgentToolLoopHandlers,
-} from "./agentToolLoop.js";
-import type { CoreModelMessage } from "./modelRuntime.js";
+} from "@agentlink/core/agent-tool-loop";
+import type { CoreModelMessage } from "@agentlink/core/model-runtime";
 
 type Result = { outcome: string; text: string };
 

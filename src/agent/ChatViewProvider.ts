@@ -7,7 +7,7 @@ import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import {
   normalizeCoreWebAccessSettings,
   type CoreWebAccessSettings,
-} from "../core/webAccess.js";
+} from "@agentlink/core/web-access";
 import { providerRegistry, queryProviderUsage } from "./providers/index.js";
 import {
   getProviderAuxiliaryModel,
@@ -21,10 +21,11 @@ import type {
 } from "./webview/types.js";
 import type { ChatSessionHistorySummary as WebviewSessionSummary } from "@agentlink/protocol/chat-session-history";
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
-import type {
-  ChatModelInfo as WebviewModelInfo,
-  ChatProjectInfo as ProjectInfo,
-  ChatSlashCommandInfo as SlashCommandInfo,
+import {
+  projectCoreModelCatalogToChatModels,
+  type ChatModelInfo as WebviewModelInfo,
+  type ChatProjectInfo as ProjectInfo,
+  type ChatSlashCommandInfo as SlashCommandInfo,
 } from "@agentlink/protocol/chat-catalog";
 import { getConfiguredBaseThresholdForModel } from "./modelCondenseThresholds.js";
 import { getModeModelPreferences } from "./modeModelPreferences.js";
@@ -197,10 +198,6 @@ import {
   isPathWithinRoot,
   resolveAndValidatePath,
 } from "../util/paths.js";
-import {
-  detectQuestion,
-  getQuestionDetectionMode,
-} from "./questionDetectionLlm.js";
 import { buildCommandRegexSuggestionPrompt } from "./commandRegexSuggestion.js";
 import {
   buildPromptPolishPrompt,
@@ -563,7 +560,6 @@ export type ExtensionToWebview =
       detected:
         | import("@agentlink/protocol/question-detection").DetectedQuestion
         | null;
-      fallback: boolean;
     }
   | {
       type: "agentInjectPrompt";
@@ -905,7 +901,6 @@ export type ExtensionToWebview =
       totalCacheReadTokens: number;
       totalCacheCreationTokens: number;
       resultText?: string;
-      resultSummary?: string;
     }
   | {
       type: "agentInterjection";
@@ -1313,10 +1308,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private agentPluginManagerHost: AgentPluginManagerHost | undefined;
   private agentPluginCatalogProvider: AgentPluginCatalogProvider | undefined;
   private mcpPolicyMutationProvider: McpPolicyMutationProvider | undefined;
-  private detectRequestInputs = new Map<
-    string,
-    { messageId: string; assistantText: string; detectKey: string }
-  >();
+  private detectRequestInputs = new Map<string, { detectKey: string }>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -6451,24 +6443,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }));
   }
 
+  public async getBrowserModelCatalogSnapshot() {
+    return await providerRegistry.getModelCatalogSnapshot({
+      publishedByOwnerId: "agentlink-vscode",
+      condenseThreshold: (modelId) =>
+        this.getConfiguredCondenseThreshold(modelId),
+    });
+  }
+
   public async getBrowserModels(): Promise<WebviewModelInfo[]> {
-    const allModels = providerRegistry.listAllModels();
-    const authStatus = await providerRegistry.getAuthStatus();
-    return allModels.map((m) => ({
-      id: m.id,
-      displayName: m.displayName,
-      provider: m.provider,
-      providerDisplayName: m.providerDisplayName,
-      supportsToolUse: m.supportsToolUse ?? m.capabilities.supportsToolUse,
-      supportsImages: m.supportsImages ?? m.capabilities.supportsImages,
-      contextWindow: m.capabilities.contextWindow,
-      maxInputTokens: m.capabilities.maxInputTokens,
-      maxOutputTokens: m.capabilities.maxOutputTokens,
-      reasoningEfforts: m.capabilities.reasoningEfforts,
-      defaultReasoningEffort: m.capabilities.defaultReasoningEffort,
-      authenticated: authStatus[m.provider] ?? false,
-      condenseThreshold: this.getConfiguredCondenseThreshold(m.id),
-    }));
+    return projectCoreModelCatalogToChatModels(
+      await this.getBrowserModelCatalogSnapshot(),
+    );
   }
 
   private setupFileWatchers(
@@ -9423,8 +9409,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           assistantText: text,
         };
         this.detectRequestInputs.set(requestId, {
-          messageId,
-          assistantText: text,
           detectKey: `${messageId}:${text}`,
         });
 
@@ -9815,11 +9799,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       messageId: lastMsg.id,
       assistantText,
     };
-    this.detectRequestInputs.set(requestId, {
-      messageId: lastMsg.id,
-      assistantText,
-      detectKey,
-    });
+    this.detectRequestInputs.set(requestId, { detectKey });
     this.detectQuestionForWebview(requestId, lastMsg.id, assistantText);
   }
 
@@ -9827,7 +9807,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     requestId: string,
     messageId: string,
     detected: DetectedQuestion | null,
-    fallback: boolean,
   ): void {
     const active = this.projectedDetectRequest;
     if (!active || active.requestId !== requestId) return;
@@ -9849,17 +9828,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    let nextDetected = detected;
-    if (fallback) {
-      nextDetected = input
-        ? detectQuestionFromAssistantText(input.assistantText)
-        : null;
-    }
-
     this.applyProjectedAction({
       type: "SET_DETECTED_QUESTION",
-      detectedQuestion: nextDetected
-        ? { ...nextDetected, messageId: currentLast.id }
+      detectedQuestion: detected
+        ? { ...detected, messageId: currentLast.id }
         : null,
     });
   }
@@ -10255,12 +10227,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const requestId = extMsg.requestId;
         const messageId = extMsg.messageId;
         const detected = extMsg.detected;
-        const fallback = extMsg.fallback;
         this.applyProjectedDetectedQuestionResult(
           requestId,
           messageId,
           detected,
-          fallback,
         );
         break;
       }
@@ -10894,11 +10864,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           `[agent] done totalIn=${event.totalInputTokens} totalOut=${event.totalOutputTokens} ` +
             `cacheRead=${event.totalCacheReadTokens} cacheCreate=${event.totalCacheCreationTokens}`,
         );
-        const bgInfo = isBackground
-          ? this.sessionManager
-              ?.getBgSessionInfos()
-              .find((s) => s.id === sessionId)
-          : undefined;
         const parentSessionId = isBackground
           ? this.sessionManager?.getBackgroundParentSessionId(sessionId)
           : undefined;
@@ -10925,7 +10890,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                   ...backgroundCompletion,
                   summary:
                     backgroundCompletion.summary ??
-                    bgInfo?.resultSummary ??
                     this.sessionManager?.getBackgroundResultSummary(sessionId),
                 }
               : undefined,
@@ -12596,40 +12560,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async detectQuestionForWebview(
+  private detectQuestionForWebview(
     requestId: string,
     messageId: string,
     text: string,
-  ): Promise<void> {
-    const mode = getQuestionDetectionMode();
-    let agentContext: { provider: ModelProvider; model: string } | undefined;
-    if (mode === "agent") {
-      const fg = this.sessionManager?.getForegroundSession();
-      const provider = fg
-        ? providerRegistry.tryResolveProvider(fg.model)
-        : undefined;
-      if (provider && fg) {
-        agentContext = {
-          provider,
-          model: getProviderAuxiliaryModel(provider, fg.model),
-        };
-      }
-    }
-    const outcome = await detectQuestion(text, {
-      mode,
-      agent: agentContext,
-    });
-    if (outcome.fallback && outcome.error && mode !== "heuristic") {
-      this.log(
-        `[question-detection] ${mode} failed: ${outcome.error} — falling back to heuristic`,
-      );
-    }
+  ): void {
     this.postMessage({
       type: "agentDetectQuestionResult",
       requestId,
       messageId,
-      detected: outcome.detected,
-      fallback: outcome.fallback,
+      detected: detectQuestionFromAssistantText(text),
     });
   }
 

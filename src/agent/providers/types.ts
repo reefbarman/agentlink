@@ -25,12 +25,15 @@ import type {
   CoreModelToolDefinition,
   CoreModelToolResultBlock,
   CoreModelToolUseBlock,
-} from "../../core/modelRuntime.js";
+} from "@agentlink/core/model-runtime";
+import type {
+  CoreModelCatalogAuthAction,
+  CoreReasoningEffort,
+} from "@agentlink/protocol/model-catalog";
 
-import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import type { CoreWebAccessSettings } from "@agentlink/protocol/web-access-policy";
 import type { CoreWebToolKind } from "@agentlink/protocol/web-activity";
-import { toCoreModelImageMediaType } from "../../core/modelRuntime.js";
+import { toCoreModelImageMediaType } from "@agentlink/core/model-runtime";
 
 export type ContentBlock = CoreModelContentBlock;
 export type TextBlock = CoreModelTextBlock;
@@ -72,6 +75,9 @@ export interface ModelProvider {
 
   /** Async — checks stored credentials, may trigger refresh. */
   isAuthenticated(): Promise<boolean>;
+
+  /** Truthful host action that can supply this provider's missing credentials. */
+  getCatalogAuthAction?(): CoreModelCatalogAuthAction | undefined;
 
   getCapabilities(model: string): ModelCapabilities;
 

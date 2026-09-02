@@ -1,10 +1,7 @@
 import * as vscode from "vscode";
 
 import { ActivityTraceRecorder } from "./ActivityTraceRecorder.js";
-import type {
-  ActivityTraceRecorderOptions,
-  BackgroundSummaryTraceEvent,
-} from "./ActivityTraceRecorder.js";
+import type { ActivityTraceRecorderOptions } from "./ActivityTraceRecorder.js";
 import { AgentEngine } from "./AgentEngine.js";
 import { AgentSession } from "./AgentSession.js";
 import {
@@ -57,8 +54,6 @@ export interface AgentWorkspaceHost {
   getWorkspaceFolders(): WorkspaceFolderInfo[];
 }
 
-export type BgSummaryMode = "agent" | "openai" | "heuristic";
-
 export interface AgentSessionConfigHost {
   resolveAgentConfig?(
     base: import("./types.js").AgentConfig,
@@ -83,7 +78,7 @@ export interface AgentSessionConfigHost {
     import("@agentlink/protocol/command-approval-policy").CommandApprovalPolicy,
     "approve-for-me"
   >;
-  getBgSummaryMode(scope?: Readonly<SessionProjectScope>): BgSummaryMode;
+
   getBackgroundAgentSettings(
     scope?: Readonly<SessionProjectScope>,
   ): RawBackgroundAgentSettings;
@@ -108,11 +103,7 @@ export interface ActivityTraceRecorderLike {
     event: AgentEvent,
     source: "foreground_agent" | "background_agent",
   ): void;
-  appendBackgroundSummaryEvent?(
-    sessionId: string,
-    projectId: string,
-    event: BackgroundSummaryTraceEvent,
-  ): void;
+
   diagnoseSessionActivity?(
     sessionId: string,
     query: import("../core/sessionActivityDiagnostics.js").SessionActivityQuery,
@@ -262,16 +253,7 @@ export function createDefaultAgentSessionManagerHost(args: {
             "commandAutoApproveTier",
           ),
         ),
-      getBgSummaryMode: (scope) => {
-        const value = configurationFor(scope).get<string>(
-          "bgSummary.mode",
-          "heuristic",
-        );
-        if (value === "agent" || value === "openai" || value === "heuristic") {
-          return value;
-        }
-        return "heuristic";
-      },
+
       getBackgroundAgentSettings: (scope) => {
         const config = configurationFor(scope);
         return {

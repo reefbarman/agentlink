@@ -1,2 +1,20 @@
-// Public engine exports will move here in Phase A2.
-export {};
+export * from "./agentEngine.js";
+export * from "./agentToolLoop.js";
+export * from "./hostAdapterContracts.js";
+export * from "./hostTools.js";
+export * from "./modelAuthProvider.js";
+export * from "./modelRequestScheduler.js";
+export * from "./modelRuntime.js";
+export * from "./nativeWebTools.js";
+export * from "./openAiCompatible.js";
+export * from "./providerStreamWatchdog.js";
+export * from "./sessionRepository.js";
+export * from "./sessionTranscriptRecall.js";
+export * from "./surfaceModelMessages.js";
+export * from "./toolCallBudget.js";
+export * from "./turnContracts.js";
+export * from "./turnExecution.js";
+export * from "./turnInteractions.js";
+export * from "./turnKernel.js";
+export * from "./turnLeases.js";
+export * from "./webAccess.js";

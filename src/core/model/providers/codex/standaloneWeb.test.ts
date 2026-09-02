@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-
-import { normalizeCoreWebAccessSettings } from "../../../webAccess.js";
 import {
   executeCodexStandaloneWeb,
   prepareCodexStandaloneWebRequest,
 } from "./standaloneWeb.js";
+
+import { normalizeCoreWebAccessSettings } from "@agentlink/core/web-access";
 
 const auth = {
   method: "oauth" as const,

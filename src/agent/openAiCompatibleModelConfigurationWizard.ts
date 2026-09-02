@@ -4,7 +4,7 @@ import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import type {
   OpenAiCompatibleProfileKind,
   OpenAiCompatibleReasoningEffortMode,
-} from "../core/model/providers/openaiCompatible/types.js";
+} from "@agentlink/core/openai-compatible";
 import {
   OpenAiCompatibleCredentialService,
   normalizeOpenAiCompatibleApiKeyName,
@@ -16,11 +16,11 @@ import {
   type OpenAiCompatibleModelDto,
   type NormalizeOpenAiCompatibleConnectionsResult,
   validateOpenAiCompatibleBaseUrl,
-} from "./providers/openaiCompatible/config.js";
+} from "@agentlink/core/openai-compatible";
 import {
   type DiscoveredOpenAiCompatibleModel,
   discoverOpenAiCompatibleModels,
-} from "./providers/openaiCompatible/modelDiscovery.js";
+} from "@agentlink/core/openai-compatible";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEFAULT_CONTEXT_WINDOW = 32_768;

@@ -330,7 +330,6 @@ export type ExtensionMessage =
       detected:
         | import("@agentlink/protocol/question-detection").DetectedQuestion
         | null;
-      fallback: boolean;
     }
   | {
       type: "agentInjectPrompt";
@@ -551,7 +550,7 @@ export type ExtensionMessage =
           | "cancelled";
         currentTool?: string;
         displayStatus?: string;
-        displayStatusSource?: "terminal" | "model" | "heuristic";
+        displayStatusSource?: "terminal" | "heuristic";
         resolvedMode?: string;
         resolvedModel?: string;
         resolvedProvider?: string;
@@ -562,16 +561,6 @@ export type ExtensionMessage =
         streamingText?: string;
         errorMessage?: string;
         completedAt?: number;
-        summaryMeta?: {
-          inFlight: boolean;
-          generatedAt?: number;
-          sourceModel?: string;
-          fallbackUsed?: boolean;
-          confidence?: number;
-          lastAttemptAt?: number;
-          lastFailureAt?: number;
-          lastFailureReason?: string;
-        };
       }>;
     }
   | {

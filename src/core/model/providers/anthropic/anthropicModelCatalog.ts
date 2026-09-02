@@ -9,7 +9,7 @@
  * Design: plans/target-a-anthropic-dynamic-model-capabilities.md
  */
 
-import type { CoreModelCapabilities } from "../../../modelRuntime.js";
+import type { CoreModelCapabilities } from "@agentlink/core/model-runtime";
 import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 
 export interface AnthropicModelInfo {

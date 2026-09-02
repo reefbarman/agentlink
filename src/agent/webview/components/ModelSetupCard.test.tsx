@@ -12,6 +12,11 @@ const unauthenticatedModel = {
   provider: "codex",
   providerDisplayName: "ChatGPT/Codex",
   authenticated: false,
+  readiness: {
+    status: "credentials_required" as const,
+    action: { kind: "oauth" as const, providerId: "codex" },
+  },
+  authAction: { kind: "oauth" as const, providerId: "codex" },
 };
 
 describe("ModelSetupCard", () => {
@@ -35,12 +40,10 @@ describe("ModelSetupCard", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Continue with ChatGPT/Codex" }),
     );
-    expect(onSetupAction).toHaveBeenCalledWith("codex");
+    expect(onSetupAction).toHaveBeenCalledWith("codex", "codex");
+    expect(screen.getAllByRole("button")).toHaveLength(2);
     expect(
       screen.getByRole("button", { name: "Use OpenAI API key" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Use Anthropic API key" }),
     ).toBeTruthy();
   });
 

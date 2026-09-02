@@ -15,6 +15,8 @@ export interface BackgroundRouteResolution {
   resolvedModel: string;
   resolvedProvider: string;
   taskClass: string;
+  /** Effective routing tier after caller and task-policy resolution. */
+  modelTier?: ModelTier;
   routingReason: string;
   fallbackUsed: boolean;
   /** Override thinking budget for this task class (undefined = inherit foreground). */

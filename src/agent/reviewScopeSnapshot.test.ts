@@ -1,340 +1,246 @@
-import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 
+import {
+  assertReviewScopeAvailable,
+  captureReviewScope,
+} from "./reviewScopeSnapshot.js";
 import { describe, expect, it } from "vitest";
 
-import { captureReviewScope } from "./reviewScopeSnapshot.js";
-import { execFile } from "child_process";
-import { promisify } from "util";
-
-const execFileAsync = promisify(execFile);
-
-async function runGit(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", args, {
-    cwd,
-    encoding: "utf8",
-  });
-  return stdout;
-}
-
-async function createRepository(): Promise<string> {
-  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "review-scope-test-"));
-  await runGit(cwd, ["init"]);
-  await runGit(cwd, ["config", "user.email", "test@example.com"]);
-  await runGit(cwd, ["config", "user.name", "Review Scope Test"]);
-  await fs.writeFile(path.join(cwd, "tracked.ts"), "export const value = 1;\n");
-  await fs.writeFile(path.join(cwd, "staged.ts"), "export const staged = 1;\n");
-  await runGit(cwd, ["add", "tracked.ts", "staged.ts"]);
-  await runGit(cwd, ["commit", "-m", "initial"]);
-  return cwd;
+async function createRoot(prefix: string): Promise<string> {
+  const fs = await import("fs/promises");
+  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
 describe("captureReviewScope", () => {
-  it("captures unstaged tracked changes and untracked file contents by default", async () => {
-    const cwd = await createRepository();
-    await fs.writeFile(
-      path.join(cwd, "tracked.ts"),
-      "export const value = 2;\n",
-    );
-    await fs.writeFile(
-      path.join(cwd, "untracked.ts"),
-      "export const untracked = true;\n",
-    );
-    await fs.writeFile(
-      path.join(cwd, "staged.ts"),
-      "export const staged = 2;\n",
-    );
-    await runGit(cwd, ["add", "staged.ts"]);
-
-    const snapshot = await captureReviewScope(cwd, { kind: "working_tree" });
-
-    expect(snapshot).toContain("Runtime-captured review scope");
-    expect(snapshot).toContain("Unstaged tracked changes");
-    expect(snapshot).toContain("+export const value = 2;");
-    expect(snapshot).toContain("File: untracked.ts");
-    expect(snapshot).toContain("export const untracked = true;");
-    expect(snapshot).not.toContain("export const staged = 2;");
-  });
-
-  it("supports state and path filters for working-tree snapshots", async () => {
-    const cwd = await createRepository();
-    await fs.writeFile(
-      path.join(cwd, "tracked.ts"),
-      "export const value = 2;\n",
-    );
-    await fs.writeFile(
-      path.join(cwd, "staged.ts"),
-      "export const staged = 2;\n",
-    );
-    await runGit(cwd, ["add", "staged.ts"]);
-
-    const snapshot = await captureReviewScope(cwd, {
+  it("renders working-tree selectors without capturing workspace content", async () => {
+    const cwd = await createRoot("review-live-tree-");
+    const handoff = captureReviewScope(cwd, {
       kind: "working_tree",
-      include: ["staged"],
-      paths: ["staged.ts"],
+      include: ["staged", "unstaged", "untracked"],
+      paths: ["src/review.ts"],
+      excludePaths: ["dist"],
     });
 
-    expect(snapshot).toContain("Staged changes");
-    expect(snapshot).toContain("+export const staged = 2;");
-    expect(snapshot).not.toContain("export const value = 2;");
+    expect(handoff).toMatchObject({
+      kind: "working_tree",
+      inlineBytes: 0,
+    });
+    expect(handoff.summary).toContain("current working tree");
+    expect(handoff.content).toContain("Live review target");
+    expect(handoff.content).toContain(
+      `Git root: ${await import("fs/promises").then((fs) => fs.realpath(cwd))}`,
+    );
+    expect(handoff.content).toContain(
+      "Included states: staged, unstaged, untracked",
+    );
+    expect(handoff.content).toContain("Paths: src/review.ts");
+    expect(handoff.content).toContain("Excluded paths: dist");
+    expect(handoff.content).toContain("current workspace state");
   });
 
-  it("captures exact current files without requiring Git state", async () => {
-    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "review-files-test-"));
-    await fs.writeFile(
-      path.join(cwd, "standalone.ts"),
-      "export const ok = true;\n",
-    );
+  it("does not require a Git repository for a live working-tree target", async () => {
+    const cwd = await createRoot("review-live-no-git-");
 
-    const snapshot = await captureReviewScope(cwd, {
+    expect(
+      captureReviewScope(cwd, {
+        kind: "working_tree",
+        paths: ["src/review.ts"],
+      }).content,
+    ).toContain("Kind: working_tree");
+  });
+
+  it("renders available live file paths without reading their contents", async () => {
+    const fs = await import("fs/promises");
+    const cwd = await createRoot("review-live-files-");
+    await fs.mkdir(path.join(cwd, "src"));
+    await fs.writeFile(path.join(cwd, "src/review.ts"), "secret fixture body");
+    await fs.writeFile(path.join(cwd, "README.md"), "readme fixture body");
+    const handoff = captureReviewScope(cwd, {
       kind: "files",
-      paths: ["standalone.ts"],
+      paths: ["src/review.ts", "README.md"],
     });
 
-    expect(snapshot).toContain("Kind: files");
-    expect(snapshot).toContain("File: standalone.ts");
-    expect(snapshot).toContain("export const ok = true;");
+    expect(handoff).toMatchObject({
+      kind: "files",
+      inlineBytes: 0,
+      summary: "current files: src/review.ts, README.md",
+    });
+    expect(handoff.content).toContain("Paths: src/review.ts, README.md");
+    expect(handoff.content).not.toContain("secret fixture body");
   });
 
-  it("captures absolute files across open workspace roots", async () => {
-    const firstRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "review-files-first-"),
+  it("rejects missing and non-file live file targets", async () => {
+    const fs = await import("fs/promises");
+    const cwd = await createRoot("review-live-files-invalid-");
+    await fs.mkdir(path.join(cwd, "directory"));
+
+    expect(() =>
+      captureReviewScope(cwd, {
+        kind: "files",
+        paths: ["missing.ts"],
+      }),
+    ).toThrow(/file target is unavailable: missing\.ts/);
+    expect(() =>
+      captureReviewScope(cwd, {
+        kind: "files",
+        paths: ["directory"],
+      }),
+    ).toThrow(/file target is not a file: directory/);
+  });
+
+  it("revalidates live file targets before queued review work starts", async () => {
+    const fs = await import("fs/promises");
+    const cwd = await createRoot("review-live-files-revalidate-");
+    const filePath = path.join(cwd, "review.ts");
+    await fs.writeFile(filePath, "review fixture");
+    const handoff = captureReviewScope(cwd, {
+      kind: "files",
+      paths: ["review.ts"],
+    });
+
+    expect(() => assertReviewScopeAvailable(handoff)).not.toThrow();
+    await fs.rm(filePath);
+    expect(() => assertReviewScopeAvailable(handoff)).toThrow(
+      /became unavailable before the review started/,
     );
-    const secondRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "review-files-second-"),
-    );
+  });
+
+  it("renders absolute file paths when a live target spans roots", async () => {
+    const firstRoot = await createRoot("review-live-first-");
+    const secondRoot = await createRoot("review-live-second-");
+    const fs = await import("fs/promises");
     const firstFile = path.join(firstRoot, "README.md");
     const secondFile = path.join(secondRoot, "README.md");
-    await fs.writeFile(firstFile, "first root\n");
-    await fs.writeFile(secondFile, "second root\n");
+    await fs.writeFile(firstFile, "first");
+    await fs.writeFile(secondFile, "second");
 
-    const snapshot = await captureReviewScope(
+    const handoff = captureReviewScope(
       firstRoot,
       { kind: "files", paths: [firstFile, secondFile] },
       { workspaceRoots: [firstRoot, secondRoot] },
     );
 
-    expect(snapshot).toContain(`File: ${await fs.realpath(firstFile)}`);
-    expect(snapshot).toContain(`File: ${await fs.realpath(secondFile)}`);
-    expect(snapshot).toContain("first root");
-    expect(snapshot).toContain("second root");
+    expect(handoff.content).toContain(firstFile);
+    expect(handoff.content).toContain(secondFile);
   });
 
-  it("captures an absolute working-tree path from its sibling Git root", async () => {
-    const firstRoot = await createRepository();
-    const secondRoot = await createRepository();
-    const secondFile = path.join(secondRoot, "tracked.ts");
-    await fs.writeFile(secondFile, "export const value = 2;\n");
+  it("rejects paths outside open workspace roots", async () => {
+    const cwd = await createRoot("review-live-contained-");
 
-    const snapshot = await captureReviewScope(
-      firstRoot,
-      { kind: "working_tree", paths: [secondFile] },
-      { workspaceRoots: [firstRoot, secondRoot] },
-    );
-
-    expect(snapshot).toContain("Unstaged tracked changes");
-    expect(snapshot).toContain("+export const value = 2;");
-    expect(snapshot).toContain("Paths: tracked.ts");
-  });
-
-  it("rejects Git path filters spanning workspace roots with a files hint", async () => {
-    const firstRoot = await createRepository();
-    const secondRoot = await createRepository();
-
-    await expect(
-      captureReviewScope(
-        firstRoot,
-        {
-          kind: "working_tree",
-          paths: [
-            path.join(firstRoot, "tracked.ts"),
-            path.join(secondRoot, "tracked.ts"),
-          ],
-        },
-        { workspaceRoots: [firstRoot, secondRoot] },
-      ),
-    ).rejects.toThrow(/cannot span multiple workspace roots.*kind "files"/);
-  });
-
-  it("accepts missing files beneath a symlinked workspace root", async () => {
-    const parent = await fs.mkdtemp(
-      path.join(os.tmpdir(), "review-symlink-root-"),
-    );
-    const realRoot = path.join(parent, "real");
-    const linkedRoot = path.join(parent, "linked");
-    await fs.mkdir(realRoot);
-    await fs.symlink(realRoot, linkedRoot);
-    const missingPath = path.join(linkedRoot, "src", "missing.ts");
-
-    const snapshot = await captureReviewScope(
-      linkedRoot,
-      { kind: "files", paths: [missingPath] },
-      { workspaceRoots: [linkedRoot] },
-    );
-
-    expect(snapshot).toContain('File "src/missing.ts" is missing.');
-  });
-
-  it("rejects file scopes outside open roots with accepted guidance", async () => {
-    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "review-path-test-"));
-
-    await expect(
+    expect(() =>
       captureReviewScope(
         cwd,
         { kind: "files", paths: ["../outside.ts"] },
         { workspaceRoots: [cwd] },
       ),
-    ).rejects.toThrow(/outside the open workspace roots.*Accepted example/);
+    ).toThrow(/outside the open workspace roots.*Accepted example/);
   });
 
-  it("recommends file snapshots when working_tree has no Git repository", async () => {
-    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "review-no-git-test-"));
-    const filePath = path.join(cwd, "standalone.ts");
-    await fs.writeFile(filePath, "export const value = 1;\n");
+  it("rejects Git selectors spanning roots", async () => {
+    const firstRoot = await createRoot("review-live-git-first-");
+    const secondRoot = await createRoot("review-live-git-second-");
 
-    await expect(
+    expect(() =>
+      captureReviewScope(
+        firstRoot,
+        {
+          kind: "working_tree",
+          paths: [
+            path.join(firstRoot, "src/one.ts"),
+            path.join(secondRoot, "src/two.ts"),
+          ],
+        },
+        { workspaceRoots: [firstRoot, secondRoot] },
+      ),
+    ).toThrow(/cannot span multiple workspace roots.*kind "files"/);
+  });
+
+  it("rejects Git path filters when exclusions remove every path", async () => {
+    const cwd = await createRoot("review-live-all-excluded-");
+
+    expect(() =>
       captureReviewScope(cwd, {
         kind: "working_tree",
-        paths: [filePath],
+        paths: ["generated/output.ts"],
+        excludePaths: ["generated"],
       }),
-    ).rejects.toThrow(/not a Git repository.*kind "files"/);
+    ).toThrow(/requires at least one non-excluded path/);
   });
 
-  it("drops excluded paths from working-tree captures with an explicit manifest entry", async () => {
-    const cwd = await createRepository();
-    await fs.writeFile(
-      path.join(cwd, "tracked.ts"),
-      "export const value = 2;\n",
-    );
-    await fs.writeFile(path.join(cwd, "asset.bin"), "binary-ish payload\n");
+  it("selects a named or absolute root for Git selectors", async () => {
+    const firstRoot = await createRoot("review-live-root-first-");
+    const secondRoot = await createRoot("review-live-root-second-");
 
-    const snapshot = await captureReviewScope(cwd, {
-      kind: "working_tree",
-      excludePaths: ["asset.bin"],
-    });
-
-    expect(snapshot).toContain("+export const value = 2;");
-    expect(snapshot).toContain("Excluded paths: asset.bin");
-    expect(snapshot).not.toContain("binary-ish payload");
-  });
-
-  it("captures large binary deletions as bounded Git metadata", async () => {
-    const cwd = await createRepository();
-    const binaryPath = path.join(cwd, "large.wasm");
-    await fs.writeFile(binaryPath, Buffer.alloc(2_500_000, 0));
-    await runGit(cwd, ["add", "large.wasm"]);
-    await runGit(cwd, ["commit", "-m", "add binary"]);
-    await fs.rm(binaryPath);
-
-    const snapshot = await captureReviewScope(cwd, {
-      kind: "working_tree",
-      include: ["unstaged"],
-    });
-
-    expect(snapshot).toContain(
-      "Binary files a/large.wasm and /dev/null differ",
-    );
-    expect(Buffer.byteLength(snapshot)).toBeLessThan(50_000);
-    expect(snapshot).not.toContain("GIT binary patch");
-  });
-
-  it("applies excludes before buffering a large tracked diff", async () => {
-    const cwd = await createRepository();
-    const largePath = path.join(cwd, "generated", "large.txt");
-    await fs.mkdir(path.dirname(largePath));
-    await fs.writeFile(largePath, `${"a".repeat(2_200_000)}\n`);
-    await runGit(cwd, ["add", "generated/large.txt"]);
-    await runGit(cwd, ["commit", "-m", "add generated text"]);
-    await fs.writeFile(largePath, `${"b".repeat(2_200_000)}\n`);
-    await fs.writeFile(
-      path.join(cwd, "tracked.ts"),
-      "export const value = 2;\n",
-    );
-
-    const snapshot = await captureReviewScope(cwd, {
-      kind: "working_tree",
-      include: ["unstaged"],
-      excludePaths: ["generated"],
-    });
-
-    expect(snapshot).toContain("+export const value = 2;");
-    expect(snapshot).toContain("Excluded paths: generated");
-    expect(snapshot).not.toContain("large.txt");
-    expect(Buffer.byteLength(snapshot)).toBeLessThan(50_000);
-  });
-
-  it("records oversized files as metadata instead of rejecting the capture", async () => {
-    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "review-large-test-"));
-    await fs.writeFile(path.join(cwd, "small.ts"), "export const ok = 1;\n");
-    await fs.writeFile(path.join(cwd, "huge.png"), Buffer.alloc(1_100_000, 7));
-
-    const snapshot = await captureReviewScope(cwd, {
-      kind: "files",
-      paths: ["small.ts", "huge.png"],
-    });
-
-    expect(snapshot).toContain("export const ok = 1;");
-    expect(snapshot).toContain("Oversized file");
-    expect(snapshot).toContain("1100000 bytes");
-    expect(snapshot).toContain("content omitted");
-  });
-
-  it("names the largest captured files when the total capture exceeds the limit", async () => {
-    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "review-limit-test-"));
-    await fs.writeFile(path.join(cwd, "big-a.txt"), "a".repeat(600_000) + "\n");
-    await fs.writeFile(path.join(cwd, "big-b.txt"), "b".repeat(600_000) + "\n");
-
-    await expect(
-      captureReviewScope(cwd, {
-        kind: "files",
-        paths: ["big-a.txt", "big-b.txt"],
-      }),
-    ).rejects.toThrow(/Largest captured items: big-[ab]\.txt \(\d+ bytes\)/);
-  });
-
-  it("selects the requested workspace root for multi-root working-tree captures", async () => {
-    const firstRoot = await createRepository();
-    const secondRoot = await createRepository();
-    await fs.writeFile(
-      path.join(secondRoot, "tracked.ts"),
-      "export const value = 42;\n",
-    );
-
-    const snapshot = await captureReviewScope(
+    const handoff = captureReviewScope(
       firstRoot,
       { kind: "working_tree", root: secondRoot },
       { workspaceRoots: [firstRoot, secondRoot] },
     );
 
-    expect(snapshot).toContain("+export const value = 42;");
-    expect(snapshot).toContain(`Git root: ${await fs.realpath(secondRoot)}`);
-
-    await expect(
+    expect(handoff.content).toContain(
+      `Git root: ${await import("fs/promises").then((fs) => fs.realpath(secondRoot))}`,
+    );
+    expect(() =>
       captureReviewScope(
         firstRoot,
         { kind: "working_tree", root: "/nonexistent/root" },
         { workspaceRoots: [firstRoot, secondRoot] },
       ),
-    ).rejects.toThrow(/does not match an open workspace root/);
+    ).toThrow(/does not match an open workspace root/);
   });
 
-  it("resolves commit ranges into diff snapshots", async () => {
-    const cwd = await createRepository();
-    const base = (await runGit(cwd, ["rev-parse", "HEAD"])).trim();
-    await fs.writeFile(
-      path.join(cwd, "tracked.ts"),
-      "export const value = 3;\n",
-    );
-    await runGit(cwd, ["add", "tracked.ts"]);
-    await runGit(cwd, ["commit", "-m", "change"]);
-
-    const snapshot = await captureReviewScope(cwd, {
+  it("renders a live commit range without resolving its diff", async () => {
+    const cwd = await createRoot("review-live-range-");
+    const handoff = captureReviewScope(cwd, {
       kind: "commit_range",
-      range: `${base}..HEAD`,
+      range: "base..HEAD",
+      paths: ["src/review.ts"],
     });
 
-    expect(snapshot).toContain(`Git range: ${base}..HEAD`);
-    expect(snapshot).toContain("+export const value = 3;");
+    expect(handoff).toMatchObject({
+      kind: "commit_range",
+      inlineBytes: 0,
+      summary: "current Git range base..HEAD for src/review.ts",
+    });
+    expect(handoff.content).toContain("Git range: base..HEAD");
+    expect(handoff.content).not.toContain("diff --git");
+  });
+
+  it("rejects invalid commit ranges", async () => {
+    const cwd = await createRoot("review-live-range-invalid-");
+
+    expect(() =>
+      captureReviewScope(cwd, { kind: "commit_range", range: "--stat" }),
+    ).toThrow(/requires a valid Git range/);
+  });
+
+  it("keeps caller-supplied diffs as the explicit immutable escape hatch", async () => {
+    const cwd = await createRoot("review-inline-diff-");
+    const content = "diff --git a/a.ts b/a.ts\n+const value = 2;\n";
+    const handoff = captureReviewScope(cwd, {
+      kind: "diff",
+      label: "Foreground delta",
+      content,
+    });
+
+    expect(handoff).toMatchObject({
+      kind: "diff",
+      inlineBytes: Buffer.byteLength(content),
+      summary: "Foreground delta",
+    });
+    expect(handoff.content).toContain("Explicit review diff");
+    expect(handoff.content).toContain("+const value = 2;");
+  });
+
+  it("bounds explicit inline diffs", async () => {
+    const cwd = await createRoot("review-inline-large-");
+
+    expect(() =>
+      captureReviewScope(cwd, {
+        kind: "diff",
+        content: "x".repeat(1_000_001),
+      }),
+    ).toThrow(/above the 1000000-byte limit.*live working_tree/);
   });
 });

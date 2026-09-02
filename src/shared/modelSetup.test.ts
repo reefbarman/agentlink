@@ -22,4 +22,34 @@ describe("model setup protocol compatibility shim", () => {
       model: models[0],
     });
   });
+
+  it("uses richer readiness instead of the legacy authenticated boolean", () => {
+    expect(
+      deriveModelSetupState("openai/gpt-5", [
+        {
+          ...models[0]!,
+          authenticated: true,
+          readiness: {
+            status: "configuration_required",
+            action: {
+              kind: "configure_provider",
+              providerId: "openai-compatible:custom",
+            },
+          },
+        },
+      ]),
+    ).toMatchObject({ kind: "configuration_required" });
+    expect(
+      deriveModelSetupState("openai/gpt-5", [
+        {
+          ...models[0]!,
+          readiness: { status: "unavailable", reason: "Host offline" },
+        },
+      ]),
+    ).toEqual({
+      kind: "model_unavailable",
+      selectedModelId: "openai/gpt-5",
+      reason: "Host offline",
+    });
+  });
 });

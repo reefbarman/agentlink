@@ -24,9 +24,6 @@ export type ActivityTraceKind =
   | "tool_result"
   | "api_request_start"
   | "api_request"
-  | "background_summary_start"
-  | "background_summary_complete"
-  | "background_summary_error"
   | "condense_start"
   | "condense_complete"
   | "condense_error"
@@ -84,17 +81,6 @@ export interface ActivityTraceRecorderOptions {
   maxPayloadStringChars?: number;
   maxPayloadArrayItems?: number;
   log?: (message: string) => void;
-}
-
-export interface BackgroundSummaryTraceEvent {
-  type: "start" | "complete" | "error";
-  provider: string;
-  model: string;
-  startedAt: number;
-  schedulerQueued?: boolean;
-  providerQueueWaitMs?: number;
-  durationMs?: number;
-  error?: string;
 }
 
 const DEFAULT_MAX_EVENTS_PER_SESSION = 2_000;
@@ -162,41 +148,6 @@ export class ActivityTraceRecorder {
     const draft = this.convertAgentEvent(sessionId, event, source);
     if (!draft) return null;
     return this.append(projectId, draft);
-  }
-
-  appendBackgroundSummaryEvent(
-    sessionId: string,
-    projectId: string,
-    event: BackgroundSummaryTraceEvent,
-  ): ActivityTraceEvent | null {
-    const kind: ActivityTraceKind =
-      event.type === "start"
-        ? "background_summary_start"
-        : event.type === "complete"
-          ? "background_summary_complete"
-          : "background_summary_error";
-    const outcome =
-      event.type === "start"
-        ? "started"
-        : event.type === "complete"
-          ? "completed"
-          : "failed";
-    return this.append(projectId, {
-      sessionId,
-      kind,
-      source: "system",
-      timestamp: event.type === "start" ? event.startedAt : this.now(),
-      summary: `Background status summary ${outcome} with ${event.model}`,
-      payload: {
-        provider: event.provider,
-        model: event.model,
-        startedAt: event.startedAt,
-        schedulerQueued: event.schedulerQueued,
-        providerQueueWaitMs: event.providerQueueWaitMs,
-        durationMs: event.durationMs,
-        error: event.error,
-      },
-    });
   }
 
   append(

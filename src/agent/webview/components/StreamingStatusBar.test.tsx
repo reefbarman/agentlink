@@ -48,8 +48,29 @@ describe("StreamingStatusBar", () => {
     ).toBe(true);
   });
 
-  it("expands live thinking and formats adjacent OpenAI summary fragments as steps", () => {
-    const { container } = render(
+  it("shows the latest OpenAI summary from the first thought and expands all steps", () => {
+    const { container, rerender } = render(
+      <StreamingStatusBar
+        messages={[
+          assistantMessage([
+            {
+              type: "thinking",
+              id: "thinking-1",
+              text: "**Inspecting state**",
+              complete: false,
+            },
+          ]),
+        ]}
+      />,
+    );
+
+    let summary = screen.getByRole("button", {
+      name: "Thinking… Inspecting state",
+    });
+    expect(summary.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".thinking-steps")).toBeNull();
+
+    rerender(
       <StreamingStatusBar
         messages={[
           assistantMessage([
@@ -64,10 +85,9 @@ describe("StreamingStatusBar", () => {
       />,
     );
 
-    const summary = screen.getByRole("button", { name: "Thinking…" });
-    expect(summary.getAttribute("aria-expanded")).toBe("false");
-    expect(container.querySelector(".thinking-steps")).toBeNull();
-
+    summary = screen.getByRole("button", {
+      name: "Thinking… Planning the fix",
+    });
     fireEvent.click(summary);
 
     expect(summary.getAttribute("aria-expanded")).toBe("true");

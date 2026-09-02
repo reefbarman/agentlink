@@ -5,7 +5,7 @@ import type {
 } from "../../core/tools/types.js";
 import { describe, expect, it, vi } from "vitest";
 
-import { ToolCallBudget } from "../../core/tools/toolCallBudget.js";
+import { ToolCallBudget } from "@agentlink/core/tool-call-budget";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { createComposeExecutionScope } from "./composeScope.js";
 import { createNativeToolDisclosureSnapshot } from "../../core/tools/nativeToolDisclosure.js";

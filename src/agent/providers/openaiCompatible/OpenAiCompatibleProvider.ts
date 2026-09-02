@@ -1,3 +1,13 @@
+import {
+  OpenAiCompatibleBackend,
+  type NormalizedOpenAiCompatibleConnection,
+  type OpenAiCompatibleFetch,
+} from "@agentlink/core/openai-compatible";
+import type {
+  CoreModelCredentialResolver,
+  CoreModelRequestContext,
+} from "@agentlink/core/model-runtime";
+
 import type {
   CompleteRequest,
   CompleteResult,
@@ -7,13 +17,6 @@ import type {
   ProviderStreamEvent,
   StreamRequest,
 } from "../types.js";
-import {
-  completeOpenAiCompatibleCompletion,
-  streamOpenAiCompatibleCompletion,
-} from "../../../core/model/providers/openaiCompatible/completionFacade.js";
-
-import type { NormalizedOpenAiCompatibleConnection } from "./config.js";
-import type { OpenAiCompatibleFetch } from "../../../core/model/providers/openaiCompatible/types.js";
 import { getOpenAiCompatibleSecretKey } from "../../openAiCompatibleSecrets.js";
 
 export interface OpenAiCompatibleSecretResolver {
@@ -26,6 +29,15 @@ export interface OpenAiCompatibleProviderOptions {
   fetch?: OpenAiCompatibleFetch;
 }
 
+const EXTENSION_MODEL_PRINCIPAL = {
+  tenantId: "agentlink-extension",
+  subjectId: "local-user",
+} as const;
+const EXTENSION_MODEL_REQUEST_CONTEXT: CoreModelRequestContext = {
+  principal: EXTENSION_MODEL_PRINCIPAL,
+  authContext: undefined,
+};
+
 export class OpenAiCompatibleProvider implements ModelProvider {
   readonly id: string;
   readonly displayName: string;
@@ -33,27 +45,42 @@ export class OpenAiCompatibleProvider implements ModelProvider {
 
   private readonly connection: NormalizedOpenAiCompatibleConnection;
   private readonly secrets: OpenAiCompatibleSecretResolver;
-  private readonly fetch?: OpenAiCompatibleFetch;
-  private readonly modelsById: ReadonlyMap<
-    string,
-    NormalizedOpenAiCompatibleConnection["models"][number]
-  >;
+  private readonly backend: OpenAiCompatibleBackend;
 
   constructor(options: OpenAiCompatibleProviderOptions) {
     this.connection = options.connection;
     this.secrets = options.secrets;
-    this.fetch = options.fetch;
-    this.id = options.connection.providerId;
-    this.displayName = options.connection.displayName;
-    this.condenseModel =
-      options.connection.auxiliaryModel ?? options.connection.models[0]!.id;
-    this.modelsById = new Map(
-      options.connection.models.map((model) => [model.id, model]),
-    );
+    const credentialResolver: CoreModelCredentialResolver = {
+      resolveCredential: async ({ providerId }) => {
+        if (providerId !== options.connection.providerId) return null;
+        const authKey = options.connection.authKey;
+        if (!authKey) return null;
+        const secret = await options.secrets.get(
+          getOpenAiCompatibleSecretKey(authKey),
+        );
+        const trimmed = secret?.trim();
+        return trimmed
+          ? {
+              providerId,
+              method: "apiKey",
+              secret: trimmed,
+            }
+          : null;
+      },
+    };
+    this.backend = new OpenAiCompatibleBackend({
+      connection: options.connection,
+      credentialResolver,
+      credentialPrincipal: EXTENSION_MODEL_PRINCIPAL,
+      fetch: options.fetch,
+    });
+    this.id = this.backend.providerId;
+    this.displayName = this.backend.displayName;
+    this.condenseModel = this.backend.condenseModel;
   }
 
   get runtimeProfile() {
-    return this.connection.runtimeProfile;
+    return this.backend.runtimeProfile;
   }
 
   get authKey(): string | undefined {
@@ -67,62 +94,46 @@ export class OpenAiCompatibleProvider implements ModelProvider {
     );
   }
 
+  getCatalogAuthAction() {
+    return this.authKey
+      ? { kind: "api_key" as const, providerId: this.id }
+      : undefined;
+  }
+
   getAuxiliaryModel(activeModel: string): string {
-    if (this.connection.auxiliaryModel) return this.connection.auxiliaryModel;
-    return this.modelsById.has(activeModel) ? activeModel : this.condenseModel;
+    return this.backend.getAuxiliaryModel(activeModel);
   }
 
   getCapabilities(model: string): ModelCapabilities {
-    const configured = this.modelsById.get(model);
-    if (!configured) {
-      throw new Error(`Unknown model "${model}" for provider "${this.id}"`);
-    }
-    return { ...configured.capabilities };
+    return this.backend.getCapabilities(model);
   }
 
   getModelFamily(model: string): "anthropic" | "openai" | undefined {
-    return this.modelsById.get(model)?.modelFamily;
+    return this.backend.getModelFamily(model);
   }
 
   listModels(): ModelInfo[] {
-    return this.connection.models.map((model) => ({
-      id: model.id,
-      displayName: model.displayName,
-      provider: this.id,
-      providerDisplayName: this.displayName,
-      supportsToolUse: model.capabilities.supportsToolUse,
-      supportsImages: model.capabilities.supportsImages,
-      capabilities: { ...model.capabilities },
-    }));
+    return this.connection.models.map(
+      (model: NormalizedOpenAiCompatibleConnection["models"][number]) => ({
+        id: model.id,
+        displayName: model.displayName,
+        provider: this.id,
+        providerDisplayName: this.displayName,
+        supportsToolUse: model.capabilities.supportsToolUse,
+        supportsImages: model.capabilities.supportsImages,
+        capabilities: { ...model.capabilities },
+      }),
+    );
   }
 
-  async *stream(request: StreamRequest): AsyncGenerator<ProviderStreamEvent> {
-    this.getCapabilities(request.model);
-    const apiKey = await this.resolveApiKey();
-    yield* streamOpenAiCompatibleCompletion({
-      profile: this.runtimeProfile,
-      apiKey,
-      request,
-      fetch: this.fetch,
-    });
+  stream(request: StreamRequest): AsyncGenerator<ProviderStreamEvent> {
+    return this.backend.stream(request, EXTENSION_MODEL_REQUEST_CONTEXT);
   }
 
   async complete(request: CompleteRequest): Promise<CompleteResult> {
-    this.getCapabilities(request.model);
-    const apiKey = await this.resolveApiKey();
-    return await completeOpenAiCompatibleCompletion({
-      profile: this.runtimeProfile,
-      apiKey,
+    return await this.backend.complete(
       request,
-      fetch: this.fetch,
-    });
-  }
-
-  private async resolveApiKey(): Promise<string | undefined> {
-    if (!this.authKey) return undefined;
-    const value = await this.secrets.get(
-      getOpenAiCompatibleSecretKey(this.authKey),
+      EXTENSION_MODEL_REQUEST_CONTEXT,
     );
-    return value?.trim() || undefined;
   }
 }

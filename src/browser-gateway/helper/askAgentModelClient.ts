@@ -26,7 +26,7 @@ import type {
   CoreModelStopReason,
   CoreModelToolDefinition,
   CoreModelUsage,
-} from "../../core/modelRuntime.js";
+} from "@agentlink/core/model-runtime";
 
 import type {
   CoreHostedToolDefinition,

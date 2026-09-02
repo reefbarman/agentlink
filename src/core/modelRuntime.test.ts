@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { CoreModelCatalogEntry } from "@agentlink/protocol/model-catalog";
+import type { AgentPrincipal } from "@agentlink/core/turn-contracts";
 import {
   collectCoreModelCompleteResult,
   CoreModelBackendRegistry,
@@ -10,9 +11,19 @@ import {
   type CoreModelCompleteRequest,
   type CoreModelCompleteResult,
   type CoreModelProviderAuthStatus,
+  type CoreModelRequestContext,
   type CoreModelStreamEvent,
   type CoreModelStreamRequest,
-} from "./modelRuntime.js";
+} from "@agentlink/core/model-runtime";
+
+const PRINCIPAL: AgentPrincipal = {
+  tenantId: "tenant-a",
+  subjectId: "subject-a",
+};
+const REQUEST_CONTEXT: CoreModelRequestContext = {
+  principal: PRINCIPAL,
+  authContext: undefined,
+};
 
 const CAPS: CoreModelCapabilities = {
   supportsThinking: false,
@@ -41,6 +52,7 @@ class FakeBackend implements CoreModelBackend {
   };
   streamRequests: CoreModelStreamRequest[] = [];
   completeRequests: CoreModelCompleteRequest[] = [];
+  contexts: CoreModelRequestContext[] = [];
 
   constructor(
     readonly providerId: string,
@@ -72,22 +84,29 @@ class FakeBackend implements CoreModelBackend {
     return CAPS;
   }
 
-  async getAuthStatus(): Promise<CoreModelProviderAuthStatus> {
+  async getAuthStatus(
+    context: CoreModelRequestContext,
+  ): Promise<CoreModelProviderAuthStatus> {
+    this.contexts.push(context);
     return this.authStatus;
   }
 
   async *stream(
     request: CoreModelStreamRequest,
+    context: CoreModelRequestContext,
   ): AsyncGenerator<CoreModelStreamEvent> {
     this.streamRequests.push(request);
+    this.contexts.push(context);
     yield { type: "text_delta", text: `stream:${request.model}` };
     yield { type: "done" };
   }
 
   async complete(
     request: CoreModelCompleteRequest,
+    context: CoreModelRequestContext,
   ): Promise<CoreModelCompleteResult> {
     this.completeRequests.push(request);
+    this.contexts.push(context);
     return { text: `complete:${request.model}` };
   }
 }
@@ -232,7 +251,7 @@ describe("CoreModelBackendRegistry", () => {
     registry.register(new FakeBackend("fake", ["fake-a", "fake-b"]));
 
     expect(() => registry.resolveModel("missing-model")).toThrow(
-      'Unknown model "missing-model". Available models: fake-a, fake-b',
+      'Unknown model "missing-model". Available models: fake/fake-a, fake/fake-b',
     );
   });
 
@@ -245,15 +264,37 @@ describe("CoreModelBackendRegistry", () => {
     ).toThrow('Duplicate model provider "fake"');
   });
 
-  it("rejects duplicate visible model IDs across providers", () => {
+  it("allows qualified duplicate model IDs and rejects ambiguous legacy lookup", () => {
     const registry = new CoreModelBackendRegistry();
-    registry.register(new FakeBackend("fake-a", ["shared-model"]));
+    const first = new FakeBackend("fake-a", ["shared-model"]);
+    const second = new FakeBackend("fake-b", ["shared-model"]);
+    const third = new FakeBackend("fake-c", ["shared-model"]);
+    registry.register(first);
+    registry.register(second);
+    registry.register(third);
 
-    expect(() =>
-      registry.register(new FakeBackend("fake-b", ["shared-model"])),
-    ).toThrow(
-      'Duplicate model "shared-model" registered by providers "fake-a" and "fake-b"',
+    expect(
+      registry.resolveModel({
+        providerId: "fake-a",
+        modelId: "shared-model",
+      }).provider,
+    ).toBe(first);
+    expect(
+      registry.resolveModel({
+        providerId: "fake-b",
+        modelId: "shared-model",
+      }).provider,
+    ).toBe(second);
+    expect(() => registry.resolveModel("shared-model")).toThrow(
+      'Ambiguous legacy model "shared-model". Use a provider-qualified model reference.',
     );
+    expect(registry.tryResolveModel("shared-model")).toBeUndefined();
+    expect(
+      registry.resolveModel({
+        providerId: "fake-c",
+        modelId: "shared-model",
+      }).provider,
+    ).toBe(third);
   });
 
   it("aggregates catalog snapshots with owner and timestamp metadata", async () => {
@@ -262,29 +303,42 @@ describe("CoreModelBackendRegistry", () => {
     registry.register(new FakeBackend("b", ["b-1", "b-2"]));
 
     await expect(
-      registry.listCatalog({ ownerId: "owner-1", now: 123 }),
+      registry.listCatalog({
+        ...REQUEST_CONTEXT,
+        ownerId: "owner-1",
+        now: 123,
+      }),
     ).resolves.toEqual({
       models: [
-        expect.objectContaining({ id: "a-1", providerId: "a" }),
-        expect.objectContaining({ id: "b-1", providerId: "b" }),
-        expect.objectContaining({ id: "b-2", providerId: "b" }),
+        expect.objectContaining({
+          id: "a-1",
+          providerId: "a",
+          ref: { providerId: "a", modelId: "a-1" },
+        }),
+        expect.objectContaining({
+          id: "b-1",
+          providerId: "b",
+          ref: { providerId: "b", modelId: "b-1" },
+        }),
+        expect.objectContaining({
+          id: "b-2",
+          providerId: "b",
+          ref: { providerId: "b", modelId: "b-2" },
+        }),
       ],
       publishedByOwnerId: "owner-1",
       publishedAt: 123,
     });
   });
 
-  it("keeps the previous index intact when registration collides", () => {
+  it("keeps unique legacy IDs resolvable after another provider registers", () => {
     const registry = new CoreModelBackendRegistry();
-    const first = new FakeBackend("first", ["shared"]);
-    const colliding = new FakeBackend("second", ["shared"]);
+    const first = new FakeBackend("first", ["first-model"]);
     registry.register(first);
+    registry.register(new FakeBackend("second", ["second-model"]));
 
-    expect(() => registry.register(colliding)).toThrow(
-      /Duplicate model "shared" registered by providers "first" and "second"/,
-    );
-    expect(registry.resolveModel("shared").provider).toBe(first);
-    expect(registry.listModels()).toHaveLength(1);
+    expect(registry.resolveModel("first-model").provider).toBe(first);
+    expect(registry.listModels()).toHaveLength(2);
   });
 
   it("aggregates backend auth status", async () => {
@@ -299,7 +353,7 @@ describe("CoreModelBackendRegistry", () => {
     registry.register(ready);
     registry.register(missing);
 
-    await expect(registry.getAuthStatus()).resolves.toEqual({
+    await expect(registry.getAuthStatus(REQUEST_CONTEXT)).resolves.toEqual({
       ready: { authenticated: true, authSource: "host" },
       missing: {
         authenticated: false,
@@ -333,8 +387,13 @@ describe("CoreModelBackendRegistry", () => {
     };
     registry.register(backend);
 
-    await expect(registry.getAuthStatus()).resolves.toEqual({
-      "catalog-only": { authenticated: false, authSource: "unavailable" },
+    await expect(registry.getAuthStatus(REQUEST_CONTEXT)).resolves.toEqual({
+      "catalog-only": {
+        authenticated: false,
+        authSource: "unavailable",
+        unavailableReason:
+          "Provider does not expose request-scoped auth status",
+      },
     });
   });
 });
@@ -348,7 +407,7 @@ describe("DefaultCoreModelRuntime", () => {
       now: () => 456,
     });
 
-    await expect(runtime.listCatalog()).resolves.toMatchObject({
+    await expect(runtime.listCatalog(REQUEST_CONTEXT)).resolves.toMatchObject({
       publishedByOwnerId: "runtime-owner",
       publishedAt: 456,
     });
@@ -361,23 +420,30 @@ describe("DefaultCoreModelRuntime", () => {
       ownerId: "runtime-owner",
     });
 
-    expect(() =>
-      runtime.stream({
-        model: "missing-model",
+    const stream = runtime.stream({
+      ...REQUEST_CONTEXT,
+      model: "missing-model",
+      request: {
         systemPrompt: "system",
         messages: [],
         maxTokens: 10,
-      }),
-    ).toThrow('Unknown model "missing-model". Available models: fake-a');
+      },
+    });
+    await expect(stream.next()).rejects.toThrow(
+      'Unknown model "missing-model". Available models: fake/fake-a',
+    );
     await expect(
       runtime.complete({
+        ...REQUEST_CONTEXT,
         model: "missing-model",
-        systemPrompt: "system",
-        messages: [],
-        maxTokens: 10,
+        request: {
+          systemPrompt: "system",
+          messages: [],
+          maxTokens: 10,
+        },
       }),
     ).rejects.toThrow(
-      'Unknown model "missing-model". Available models: fake-a',
+      'Unknown model "missing-model". Available models: fake/fake-a',
     );
   });
 
@@ -391,18 +457,24 @@ describe("DefaultCoreModelRuntime", () => {
 
     const streamEvents: CoreModelStreamEvent[] = [];
     for await (const event of runtime.stream({
-      model: "fake-a",
-      systemPrompt: "system",
-      messages: [],
-      maxTokens: 10,
+      ...REQUEST_CONTEXT,
+      model: { providerId: "fake", modelId: "fake-a" },
+      request: {
+        systemPrompt: "system",
+        messages: [],
+        maxTokens: 10,
+      },
     })) {
       streamEvents.push(event);
     }
     const completeResult = await runtime.complete({
+      ...REQUEST_CONTEXT,
       model: "fake-a",
-      systemPrompt: "system",
-      messages: [],
-      maxTokens: 10,
+      request: {
+        systemPrompt: "system",
+        messages: [],
+        maxTokens: 10,
+      },
     });
 
     expect(streamEvents).toEqual([
@@ -412,13 +484,14 @@ describe("DefaultCoreModelRuntime", () => {
     expect(completeResult).toEqual({ text: "complete:fake-a" });
     expect(backend.streamRequests).toHaveLength(1);
     expect(backend.completeRequests).toHaveLength(1);
+    expect(backend.contexts).toEqual([REQUEST_CONTEXT, REQUEST_CONTEXT]);
   });
 
   it("refreshes the routing index before returning the refreshed catalog", async () => {
     const registry = new CoreModelBackendRegistry();
     const backend = new FakeBackend("fake", ["fake-a"]);
     registry.register(backend);
-    const refreshIndex = vi.spyOn(registry, "refreshIndex");
+    const refreshCatalog = vi.spyOn(registry, "refreshCatalog");
     const runtime = new DefaultCoreModelRuntime(registry, {
       ownerId: "runtime-owner",
       now: () => 789,
@@ -426,12 +499,20 @@ describe("DefaultCoreModelRuntime", () => {
 
     backend.visible = ["fake-b"];
     backend.routable = ["fake-b", "fake-a"];
-    await expect(runtime.refreshCatalog()).resolves.toMatchObject({
+    await expect(
+      runtime.refreshCatalog(REQUEST_CONTEXT),
+    ).resolves.toMatchObject({
       models: [expect.objectContaining({ id: "fake-b" })],
       publishedAt: 789,
     });
 
-    expect(refreshIndex).toHaveBeenCalledOnce();
-    expect(runtime.resolveModel("fake-a").providerId).toBe("fake");
+    expect(refreshCatalog).toHaveBeenCalledOnce();
+    expect(
+      runtime.resolveModel({
+        principal: PRINCIPAL,
+        authContext: undefined,
+        model: "fake-a",
+      }).providerId,
+    ).toBe("fake");
   });
 });

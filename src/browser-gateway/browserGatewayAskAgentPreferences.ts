@@ -5,7 +5,7 @@ import * as path from "path";
 import type { CoreWebAccessSettings } from "@agentlink/protocol/web-access-policy";
 import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
 import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
-import { normalizeCoreWebAccessSettings } from "../core/webAccess.js";
+import { normalizeCoreWebAccessSettings } from "@agentlink/core/web-access";
 import { writeTextFileAtomic } from "./atomicFile.js";
 
 const PREFERENCES_DIR = path.join(os.homedir(), ".agentlink");

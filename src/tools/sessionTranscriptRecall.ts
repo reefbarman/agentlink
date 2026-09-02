@@ -4,9 +4,9 @@ import {
   formatSessionTranscriptRecallResult,
   readSessionTranscriptExcerpt,
   searchSessionTranscript,
-} from "../core/sessionTranscriptRecall.js";
+} from "@agentlink/core/session-transcript-recall";
 
-import type { SessionTranscriptSnapshot } from "../core/sessionTranscriptRecall.js";
+import type { SessionTranscriptSnapshot } from "@agentlink/core/session-transcript-recall";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 export async function handleSearchSessionHistory(

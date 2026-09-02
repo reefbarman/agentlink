@@ -1,8 +1,8 @@
-import type { CoreModelContentBlock } from "../modelRuntime.js";
+import type { CoreModelContentBlock } from "@agentlink/core/model-runtime";
 import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
 import type { NativeToolDisclosureSnapshot } from "./nativeToolDisclosure.js";
-import type { SessionTranscriptSnapshot } from "../sessionTranscriptRecall.js";
-import type { ToolCallBudget } from "./toolCallBudget.js";
+import type { SessionTranscriptSnapshot } from "@agentlink/core/session-transcript-recall";
+import type { ToolCallBudget } from "@agentlink/core/tool-call-budget";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 export type McpToolDisclosureMode = "inline" | "deferred" | "auto";
@@ -29,7 +29,7 @@ export interface AgentToolListRequest {
   mode?: AgentToolMode;
   mcpToolDefs?: CoreToolDefinition[];
   /** Native AgentLink web tools exposed for this immutable request snapshot. */
-  nativeWebToolKinds?: readonly import("../webAccess.js").CoreWebToolKind[];
+  nativeWebToolKinds?: readonly import("@agentlink/core/web-access").CoreWebToolKind[];
   isBackground?: boolean;
   backgroundExpectedResult?:
     | "text"

@@ -23,7 +23,7 @@ import type {
   ModelCapabilities,
   ModelInfo,
 } from "../types.js";
-import { collectCoreModelCompleteResult } from "../../../core/modelRuntime.js";
+import { collectCoreModelCompleteResult } from "@agentlink/core/model-runtime";
 import {
   openAiCodexAuthManager,
   type OpenAiCodexAuthManager,
@@ -135,6 +135,10 @@ export class CodexProvider implements ModelProvider {
 
   async isAuthenticated(): Promise<boolean> {
     return this.authManager.isAuthenticated();
+  }
+
+  getCatalogAuthAction() {
+    return { kind: "oauth" as const, providerId: this.id };
   }
 
   getCapabilities(model: string): ModelCapabilities {

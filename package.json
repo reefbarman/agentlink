@@ -1,14 +1,39 @@
 {
   "name": "agentlink",
   "displayName": "AgentLink",
-  "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.20.2",
+  "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
+  "version": "1.20.11",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
     "url": "https://github.com/reefbarman/agentlink.git"
   },
+  "homepage": "https://github.com/reefbarman/agentlink#agentlink",
+  "bugs": {
+    "url": "https://github.com/reefbarman/agentlink/issues"
+  },
   "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#4EC9B0",
+    "theme": "dark"
+  },
+  "categories": [
+    "Machine Learning",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "coding agent",
+    "code review",
+    "mcp",
+    "openai",
+    "anthropic",
+    "codex",
+    "llm",
+    "developer tools"
+  ],
+  "pricing": "Free",
   "license": "MIT",
   "workspaces": [
     "packages/*",
@@ -21,9 +46,6 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "*"
-  ],
-  "categories": [
-    "Other"
   ],
   "contributes": {
     "viewsContainers": {
@@ -602,7 +624,7 @@
               },
               "auxiliaryModel": {
                 "type": "string",
-                "description": "Local model ID from this connection used for condense and helper calls. Defaults to the active model."
+                "description": "Local model ID from this connection used for condensing and other selected-provider auxiliary calls. Defaults to the active model."
               },
               "models": {
                 "type": "array",
@@ -698,30 +720,6 @@
             }
           }
         },
-        "agentlink.openaiCompatible.baseUrl": {
-          "scope": "window",
-          "type": "string",
-          "default": "http://127.0.0.1:1234/v1",
-          "description": "OpenAI-compatible base URL used by helper-model features (question detection, background-agent summaries). Examples: LM Studio http://127.0.0.1:1234/v1, OpenAI https://api.openai.com/v1, OpenRouter https://openrouter.ai/api/v1."
-        },
-        "agentlink.openaiCompatible.model": {
-          "scope": "window",
-          "type": "string",
-          "default": "",
-          "description": "Model id for the OpenAI-compatible endpoint. Leave empty to let the server pick (LM Studio uses the loaded model)."
-        },
-        "agentlink.openaiCompatible.apiKey": {
-          "scope": "window",
-          "type": "string",
-          "default": "",
-          "description": "Optional API key sent as Bearer token. LM Studio ignores it; hosted endpoints (OpenAI, OpenRouter, etc.) require it."
-        },
-        "agentlink.openaiCompatible.timeoutMs": {
-          "scope": "window",
-          "type": "number",
-          "default": 5000,
-          "description": "Max milliseconds to wait for the OpenAI-compatible endpoint before falling back."
-        },
         "agentlink.codex.textVerbosity": {
           "scope": "window",
           "type": "string",
@@ -741,38 +739,6 @@
           ],
           "default": "default",
           "description": "Final-message verbosity (text.verbosity) sent to OpenAI Codex models for agent turns. GPT-5.x response length is governed primarily by this API parameter rather than prompt instructions."
-        },
-        "agentlink.questionDetection.mode": {
-          "scope": "window",
-          "type": "string",
-          "enum": [
-            "heuristic",
-            "agent",
-            "openai"
-          ],
-          "enumDescriptions": [
-            "Use the built-in regex heuristic (no LLM call).",
-            "Use the current chat provider's low-tier model (Claude Haiku, gpt-5.6-luna with stable fallback, etc.). Spends your provider quota on every idle turn.",
-            "Use the OpenAI-compatible endpoint configured under agentlink.openaiCompatible.*."
-          ],
-          "default": "heuristic",
-          "description": "How to detect whether the agent is asking a question before it idles, and generate answer buttons."
-        },
-        "agentlink.bgSummary.mode": {
-          "scope": "resource",
-          "type": "string",
-          "enum": [
-            "agent",
-            "openai",
-            "heuristic"
-          ],
-          "enumDescriptions": [
-            "Use the background session's own provider (Haiku / gpt-5.6-luna with stable fallback).",
-            "Use the OpenAI-compatible endpoint configured under agentlink.openaiCompatible.*.",
-            "Skip the LLM call and show only the inferred phase status."
-          ],
-          "default": "heuristic",
-          "description": "How the tiny status string shown for background agents is summarized."
         },
         "agentlink.background.defaultAgent": {
           "scope": "resource",
@@ -1134,7 +1100,7 @@
   },
   "scripts": {
     "build": "npm run build:workspaces && node scripts/generate-documentation-package-contract.mjs && node esbuild.mjs",
-    "build:workspaces": "tsc -b packages/* && npm run build:cjs --workspace packages/protocol",
+    "build:workspaces": "tsc -b packages/* && npm run build:cjs --workspace packages/protocol && npm run build:cjs --workspace packages/core",
     "watch": "npm run build:workspaces && node scripts/generate-documentation-package-contract.mjs && node scripts/watch-workspaces.mjs",
     "docs:generate": "node scripts/generate-documentation-package-contract.mjs",
     "docs:check": "node scripts/generate-documentation-package-contract.mjs --check",
@@ -1156,6 +1122,7 @@
     "lint:workspaces": "npm run lint --workspaces --if-present",
     "test": "npm run build:workspaces && vitest run && npm run test:workspaces && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-mcp-auth-telemetry.test.mjs scripts/report-session-outcomes.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/verify-retrieval-package.test.mjs scripts/workspace-bundle-closure.test.mjs",
     "test:workspaces": "npm run test --workspaces --if-present",
+    "test:core-sdk-consumer": "npm run build:workspaces && node scripts/run-core-sdk-consumer-gate.mjs",
     "test:watch": "npm run build:workspaces && node scripts/watch-workspaces.mjs --test",
     "test:browser-gateway-security-gate": "node scripts/run-browser-gateway-security-gate.mjs",
     "test:browser-gateway-phase0-gate": "npm run test:browser-gateway-security-gate && BROWSER_GATEWAY_RUN_LOAD_GATE=1 vitest run src/browser-gateway/testing/stateEquivalenceOracle.test.ts src/browser-gateway/testing/ownerDataPlaneLoadFixture.test.ts",

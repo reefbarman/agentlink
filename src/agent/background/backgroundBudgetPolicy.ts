@@ -7,7 +7,7 @@ import { isReviewTaskClass, normalizeTaskClass } from "./reviewTaskClass.js";
 
 const RESEARCH_TASK_CLASSES = new Set(["research", "readonly-research"]);
 
-const AUTOMATIC_BUDGETS: Record<ModelTier, AgentBudget> = {
+const RESEARCH_BUDGETS: Record<ModelTier, AgentBudget> = {
   cheap: {
     maxToolCalls: 24,
     maxApiTurns: 10,
@@ -28,6 +28,27 @@ const AUTOMATIC_BUDGETS: Record<ModelTier, AgentBudget> = {
   },
 };
 
+const REVIEW_BUDGETS: Record<ModelTier, AgentBudget> = {
+  cheap: {
+    maxToolCalls: 50,
+    maxApiTurns: 25,
+    maxElapsedMs: 900_000,
+    warningThresholdRatio: 0.8,
+  },
+  balanced: {
+    maxToolCalls: 100,
+    maxApiTurns: 50,
+    maxElapsedMs: 1_800_000,
+    warningThresholdRatio: 0.8,
+  },
+  deep_reasoning: {
+    maxToolCalls: 150,
+    maxApiTurns: 75,
+    maxElapsedMs: 2_700_000,
+    warningThresholdRatio: 0.8,
+  },
+};
+
 export function isResearchTaskClass(taskClass: string | undefined): boolean {
   return RESEARCH_TASK_CLASSES.has(normalizeTaskClass(taskClass));
 }
@@ -38,34 +59,21 @@ export function isAutomaticallyBudgetedTaskClass(
   return isReviewTaskClass(taskClass) || isResearchTaskClass(taskClass);
 }
 
+/**
+ * Review cost tier must be an explicit caller or routing-policy decision.
+ * Task wording is not a reliable reason to silently select a more expensive model.
+ */
 export function inferReviewTier(
-  request: Pick<SpawnBackgroundRequest, "task" | "message" | "taskClass">,
+  request: Pick<SpawnBackgroundRequest, "taskClass">,
 ): ModelTier | undefined {
-  if (!isReviewTaskClass(request.taskClass)) return undefined;
-
-  const text = `${request.task}\n${request.message}`.toLowerCase();
-  const deepSignals = [
-    /\bcomplex\b/,
-    /\bcritical\b/,
-    /\bsecurity\b/,
-    /\brisky?\b/,
-    /\bdeep\s+review\b/,
-    /\barchitecture\b/,
-    /\bprincipal[-\s]engineer\b/,
-    /\bcross[- ](cutting|system|module)\b/,
-    /\bdata integrity\b/,
-    /\bproduction\b/,
-  ];
-
-  return deepSignals.some((pattern) => pattern.test(text))
-    ? "deep_reasoning"
-    : "balanced";
+  return isReviewTaskClass(request.taskClass) ? "balanced" : undefined;
 }
 
 export function getAutomaticBackgroundBudget(
   taskClass: string | undefined,
   tier: ModelTier,
 ): AgentBudget | undefined {
-  if (!isAutomaticallyBudgetedTaskClass(taskClass)) return undefined;
-  return { ...AUTOMATIC_BUDGETS[tier] };
+  if (isReviewTaskClass(taskClass)) return { ...REVIEW_BUDGETS[tier] };
+  if (isResearchTaskClass(taskClass)) return { ...RESEARCH_BUDGETS[tier] };
+  return undefined;
 }

@@ -1,4 +1,4 @@
-import type { CoreModelStreamEvent } from "../../../modelRuntime.js";
+import type { CoreModelStreamEvent } from "@agentlink/core/model-runtime";
 import { describe, expect, it } from "vitest";
 
 import {

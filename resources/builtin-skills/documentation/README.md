@@ -4,18 +4,20 @@ These are the shipped product docs for AgentLink. They are written for people us
 
 ## Start here
 
-- [Project overview](../../../README.md) — what AgentLink is, why it exists, installation, and first-run path.
-- [Complete product reference](references/complete-reference.md) — installation, providers, codebase indexing, approvals, browser remote, tools, MCP, settings, troubleshooting, and development details.
+- [Getting started](references/getting-started.md) — install AgentLink, sign in, and complete a first workspace task.
 - [Capabilities overview](references/capabilities.md) — modes, chat surfaces, context, memory, editor integrations, and major workflows.
+- [Troubleshooting](references/troubleshooting.md) — resolve install, sign-in, terminal, indexing, browser, MCP, and plugin problems.
 
 ## Focused guides
 
+- [Tools](references/tools.md) — built-in tool families, reviewed changes, commands, orchestration, and exact-contract links.
 - [Settings](references/settings.md) — grouped `agentlink.*` settings and their purpose.
 - [MCP](references/mcp.md) — configure and use Model Context Protocol servers, including servers contributed by Agent Plugins.
 - [Customization](references/customization.md) — instructions, rules, modes, slash commands, skills, Agent Plugins, and memory.
+- [Complete product reference](references/complete-reference.md) — the comprehensive compatibility reference while focused guides are being split out.
 - [Package contract](references/package-contract.md) — generated exact commands, views, settings, defaults, scopes, and allowed values.
 - [Release notes](references/release-notes.md) — generated copy of the current release history.
 
 ## Documentation behavior
 
-Each topic page includes the commands, settings, defaults, and limits needed for that subject. The built-in documentation skill answers only from this bundled directory; it does not inspect the installed extension, source code, package metadata, or local settings to fill a documentation gap.
+Each topic page owns one area of product behavior. The built-in documentation skill answers only from this bundled directory; it does not inspect the installed extension, source code, package metadata, or local settings to fill a documentation gap.

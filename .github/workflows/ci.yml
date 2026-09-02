@@ -24,14 +24,17 @@ jobs:
 
       - run: npm ci
       - run: npm run lint
-      - run: npm test
       - run: npm run build
+      - run: npm test
+      - name: Verify packed core SDK consumer
+        run: npm run test:core-sdk-consumer
 
-      - name: Verify VSIX package inventory
+      - name: Package and verify a Linux VSIX
         env:
           AGENTLINK_VSCE_TARGET: linux-x64
         run: |
-          npx --yes @vscode/vsce@3.9.2 ls \
-            --no-dependencies \
+          mkdir -p releases
+          npm run package -- "releases/agentlink-ci-${AGENTLINK_VSCE_TARGET}.vsix"
+          unzip -Z1 "releases/agentlink-ci-${AGENTLINK_VSCE_TARGET}.vsix" \
             | node scripts/verify-retrieval-package.mjs \
                 --target "$AGENTLINK_VSCE_TARGET"

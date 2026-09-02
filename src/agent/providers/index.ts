@@ -52,7 +52,11 @@ export {
 } from "./codex/index.js";
 
 import type { ModelProvider, ModelInfo } from "./types.js";
-import { ModelRequestScheduler } from "../../core/modelRequestScheduler.js";
+import type {
+  CoreModelCatalogEntry,
+  CoreModelCatalogSnapshot,
+} from "@agentlink/protocol/model-catalog";
+import { ModelRequestScheduler } from "@agentlink/core/model-request-scheduler";
 
 export {
   queryProviderUsage,
@@ -262,6 +266,58 @@ export class ProviderRegistry {
       models.push(...provider.listModels());
     }
     return models;
+  }
+
+  /** Build one settled picker snapshot; auth is evaluated once per provider. */
+  async getModelCatalogSnapshot(request: {
+    publishedByOwnerId: string;
+    publishedAt?: number;
+    condenseThreshold?: (modelId: string) => number | undefined;
+  }): Promise<CoreModelCatalogSnapshot> {
+    const models = (
+      await Promise.all(
+        [...this.providers.entries()].map(async ([providerId, provider]) => {
+          if (!this.isProviderEnabled(providerId)) return [];
+          const authenticated = await provider.isAuthenticated();
+          const authAction = authenticated
+            ? undefined
+            : provider.getCatalogAuthAction?.();
+          const readiness = authenticated
+            ? ({ status: "ready" } as const)
+            : authAction
+              ? ({
+                  status: "credentials_required",
+                  action: authAction,
+                } as const)
+              : ({ status: "credentials_required" } as const);
+          return provider.listModels().map(
+            (model): CoreModelCatalogEntry => ({
+              id: model.id,
+              displayName: model.displayName,
+              providerId: model.provider,
+              providerDisplayName: model.providerDisplayName,
+              supportsToolUse:
+                model.supportsToolUse ?? model.capabilities.supportsToolUse,
+              supportsImages:
+                model.supportsImages ?? model.capabilities.supportsImages,
+              contextWindow: model.capabilities.contextWindow,
+              maxInputTokens: model.capabilities.maxInputTokens,
+              maxOutputTokens: model.capabilities.maxOutputTokens,
+              reasoningEfforts: model.capabilities.reasoningEfforts,
+              defaultReasoningEffort: model.capabilities.defaultReasoningEffort,
+              authenticated,
+              readiness,
+              condenseThreshold: request.condenseThreshold?.(model.id),
+            }),
+          );
+        }),
+      )
+    ).flat();
+    return {
+      models,
+      publishedByOwnerId: request.publishedByOwnerId,
+      publishedAt: request.publishedAt ?? Date.now(),
+    };
   }
 
   /**

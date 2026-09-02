@@ -659,7 +659,7 @@ export function withFleetResultInstruction(
   if (!expected || expected === "text") return message;
   const shapes = {
     review_findings:
-      '{"type":"review_findings","findings":[{"severity":"critical|high|medium|low","message":"...","path":"optional","line":1}],"reviewedScope":"what was actually reviewed, e.g. a commit range or file list","emptyDiff":false}',
+      '{"type":"review_findings","findings":[{"severity":"critical|high|medium|low","message":"...","path":"optional","line":1}],"emptyDiff":false}',
     patch:
       '{"type":"patch","summary":"...","files":["..."],"verification":"optional"}',
     verification:
@@ -667,7 +667,7 @@ export function withFleetResultInstruction(
   } as const;
   const guidance =
     expected === "review_findings"
-      ? " Before reviewing, resolve the exact change set you were asked to review and describe it in reviewedScope. If that change set is empty or cannot be found (for example the changes were already committed, stashed, or reverted), set emptyDiff to true and explain what you checked in reviewedScope — never return an empty findings list that is indistinguishable from a clean review."
+      ? " Set emptyDiff=true only when the requested live diff or range is empty or unavailable. The runtime already knows the target, so include reviewedScope only if you materially reviewed something different."
       : "";
-  return `${message}\n\nReturn the final answer as JSON matching this exact result envelope: ${shapes[expected]}${guidance} End your final message with exactly one \`\`\`json fenced block containing only this envelope — no prose after the closing fence, and do not repeat the envelope elsewhere.`;
+  return `${message}\n\nEnd with one JSON object matching this result envelope: ${shapes[expected]}${guidance} Do not repeat it or add prose after it.`;
 }

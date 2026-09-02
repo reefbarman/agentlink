@@ -68,12 +68,18 @@ const removedCompatibilitySettings = [
   "agentlink.questionDetection.model",
   "agentlink.questionDetection.apiKey",
   "agentlink.questionDetection.timeoutMs",
+  "agentlink.questionDetection.mode",
+  "agentlink.bgSummary.mode",
+  "agentlink.openaiCompatible.baseUrl",
+  "agentlink.openaiCompatible.model",
+  "agentlink.openaiCompatible.apiKey",
+  "agentlink.openaiCompatible.timeoutMs",
 ];
 
 describe("extension package contributions", () => {
   it("describes the retained built-in agent product", () => {
     expect(extensionPackage.description).toBe(
-      "AI coding agent for VS Code with browser remote control",
+      "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
     );
   });
 

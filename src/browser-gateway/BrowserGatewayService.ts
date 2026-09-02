@@ -24,6 +24,7 @@ import {
   agentMessagesToChatMessages,
   type AppState,
 } from "../shared/chatProjection.js";
+import type { BrowserGatewayDetachedSessionSelection } from "@agentlink/protocol/browser-gateway-detached-session-selection";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import type { BgSessionInfo } from "@agentlink/protocol/background-result";
 import {
@@ -58,6 +59,7 @@ import type {
 } from "./dataPlane/ownerProjectionSources.js";
 
 export type { BrowserGatewayRepositoryInfo } from "./BrowserGatewayRepositoryObserver.js";
+export type { BrowserGatewayDetachedSessionSelection } from "@agentlink/protocol/browser-gateway-detached-session-selection";
 
 const REPOSITORY_INFO_CACHE_MS = 1_000;
 const DEFAULT_FOREGROUND_PUBLICATION_COALESCE_MS = 150;
@@ -192,12 +194,6 @@ export interface BrowserGatewayWireSessionState {
       "approve-for-me"
     >;
   } | null;
-}
-
-export interface BrowserGatewayDetachedSessionSelection {
-  controllerEpoch: string;
-  tabId: string;
-  sessionId: string;
 }
 
 export interface BrowserGatewayDetachedSessionUiState {

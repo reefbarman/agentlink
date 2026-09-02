@@ -60,30 +60,52 @@ function isSingleTokenFragment(value: string): boolean {
   return value.length > 0 && !/\s/.test(value);
 }
 
+const ADJACENT_BOLD_BOUNDARY = /(?:(?:\\\*){4}|\*{4})/;
+
 /**
  * OpenAI reasoning summaries can arrive as adjacent bold fragments with raw
  * or escaped joins: `**First****Second**` / `**First\*\*\*\*Second**`.
- * Turn only that whole-value shape into readable steps.
+ * Recognize completed fragments even while the next one is still streaming so
+ * the first summary can immediately become a live thinking status.
  */
-export function parseThinkingSteps(text: string): string[] | null {
+function areValidThinkingSummaries(summaries: string[]): boolean {
+  return (
+    summaries.length > 0 &&
+    summaries.every((summary) => summary.length > 0 && !summary.includes("*"))
+  );
+}
+
+function parseThinkingSummaries(text: string): string[] | null {
   const candidate = text.trim();
-  if (
-    /[\r\n]/.test(candidate) ||
-    !candidate.startsWith("**") ||
-    !candidate.endsWith("**")
-  ) {
-    return null;
+  if (/[\r\n]/.test(candidate) || !candidate.startsWith("**")) return null;
+
+  if (candidate.endsWith("**")) {
+    const summaries = candidate
+      .slice(2, -2)
+      .split(ADJACENT_BOLD_BOUNDARY)
+      .map((summary) => summary.trim());
+    if (areValidThinkingSummaries(summaries)) return summaries;
   }
 
-  const inner = candidate.slice(2, -2);
-  const adjacentBoldBoundary = /(?:(?:\\\*){4}|\*{4})/g;
-  if (!adjacentBoldBoundary.test(inner)) return null;
+  const fragments = candidate.slice(2).split(ADJACENT_BOLD_BOUNDARY);
+  if (fragments.length < 2) return null;
+  const completed = fragments.slice(0, -1).map((summary) => summary.trim());
+  return areValidThinkingSummaries(completed) ? completed : null;
+}
 
-  const steps = inner.split(/(?:(?:\\\*){4}|\*{4})/).map((step) => step.trim());
-  return steps.length >= 2 &&
-    steps.every((step) => step.length > 0 && !step.includes("*"))
-    ? steps
-    : null;
+export function getLatestThinkingSummary(text: string): string | null {
+  const normalizedText = /[\r\n]/.test(text)
+    ? normalizeThinkingText(text)
+    : text;
+  return parseThinkingSummaries(normalizedText)?.at(-1) ?? null;
+}
+
+/** Turn a complete multi-summary value into readable steps. */
+export function parseThinkingSteps(text: string): string[] | null {
+  const candidate = text.trim();
+  if (!candidate.endsWith("**")) return null;
+  const summaries = parseThinkingSummaries(candidate);
+  return summaries && summaries.length >= 2 ? summaries : null;
 }
 
 export function ThinkingContent({ text }: ThinkingContentProps) {
@@ -99,5 +121,6 @@ export function ThinkingContent({ text }: ThinkingContentProps) {
     );
   }
 
-  return <pre>{normalizedText}</pre>;
+  const summary = parseThinkingSummaries(normalizedText);
+  return <pre>{summary?.length === 1 ? summary[0] : normalizedText}</pre>;
 }

@@ -1,15 +1,15 @@
 import type {
   CoreModelCapabilities,
   CoreModelMessage,
-} from "../../../modelRuntime.js";
+} from "@agentlink/core/model-runtime";
 import {
   OpenAiCompatibleCapabilityError,
   buildOpenAiCompatibleChatRequest,
   translateOpenAiCompatibleMessages,
-} from "./translation.js";
+} from "@agentlink/core/openai-compatible";
 import { describe, expect, it } from "vitest";
 
-import type { OpenAiCompatibleRuntimeModel } from "./types.js";
+import type { OpenAiCompatibleRuntimeModel } from "@agentlink/core/openai-compatible";
 import { createCoreProviderReplayEnvelope } from "../../../webAccess.js";
 
 const capabilities: CoreModelCapabilities = {

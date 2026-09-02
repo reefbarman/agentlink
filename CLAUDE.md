@@ -13,23 +13,47 @@
 - **Brand color**: `#4EC9B0` (teal) — used in `media/agentlink-terminal.svg` and throughout the chat webview UI (file picker indicator, active states)
 - **Icon**: `media/agentlink.svg` uses `currentColor` (themed by VS Code); `media/agentlink-terminal.svg` uses the hardcoded brand color
 
-## Positioning Article
+## Public Documentation
 
-[why-agentlink.md](why-agentlink.md) is a public-facing article on why AgentLink is a good agent harness. Keep it accurate:
+Public documentation is a product surface. Keep it as current and deliberate as the code. `AGENTS.md` is a symlink to this file; edit `CLAUDE.md` and preserve that symlink.
 
-- When a user-facing capability materially changes (tools, providers/models, supervision/approvals, MCP support, multi-agent features, non-goals, or a roadmap item in its "Where it's heading" section shipping), update the article in the same piece of work and bump its "Last updated" date.
-- Preserve its framing: article style, not a feature matrix or evaluation guide; compare against the field generally, never head-to-head against a named competitor.
-- Emphasis order to maintain: (1) deep editor integration, (2) steering/observing agents with full automation available — including explicit, drill-down-on-demand activity transparency (the "Nothing happens in the dark" section), (3) cross-provider review, (4) agent/context efficiency, (5) leaning into MCP; local-first, BYO-accounts, and ecosystem parity (the "Everything you'd expect" section — conventions like skills, commands, `AGENTS.md`/`CLAUDE.md`) stay present but secondary.
-- Keep claims honest: rough edges stay labeled as such; don't promote maturing features to done.
+| Artifact                                                                                      | Owns                                                                                    | Do not use it for                                                              |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| [README.md](README.md)                                                                        | Product pitch, first impression, install path, broad feature overview, and links        | Tool schemas, release-note detail, internal storage, or recovery-code catalogs |
+| [why-agentlink.md](why-agentlink.md)                                                          | The concise durable argument for why AgentLink is worth using                           | Setup instructions, a feature matrix, tool contracts, or changelog dumping     |
+| [documentation index](resources/builtin-skills/documentation/README.md)                       | Task-oriented navigation for users and the bundled documentation skill                  | Product sales copy or duplicated detailed reference prose                      |
+| Focused bundled references                                                                    | Getting started, capabilities, tools, settings, MCP, customization, and troubleshooting | Details owned by another focused guide                                         |
+| [complete reference](resources/builtin-skills/documentation/references/complete-reference.md) | Compatibility coverage while focused guides are split out                               | The preferred entry point when an owning focused guide exists                  |
+| [CHANGELOG.md](CHANGELOG.md)                                                                  | Release deltas                                                                          | Evergreen product explanation                                                  |
+| Generated references                                                                          | Exact package metadata and release notes                                                | Manual edits                                                                   |
 
-## Built-in Documentation Skill
+### README and positioning rules
 
-[resources/builtin-skills/documentation/](resources/builtin-skills/documentation/) is the self-contained bundled product documentation used by the built-in documentation skill. At runtime the skill must answer only from this directory and must not inspect the extension root, source code, local settings, or build output to fill a documentation gap. Keep it accurate:
+- Keep `README.md` conversion-focused: a clear category statement, user outcome, visual proof when available, a short install/first-run path, and an outcome-led feature overview. Link to focused documentation instead of inlining operational detail.
+- Do not claim Marketplace availability until it has been published and verified from a clean VS Code profile. Keep GitHub VSIX installation documented as a fallback.
+- [why-agentlink.md](why-agentlink.md) remains a first-class public article. Keep it concise, argument-led, and current; update its date when a material differentiator, non-goal, or maturity statement changes.
+- Preserve the emphasis order in the article: (1) deep editor integration, (2) steerable/visible autonomy, (3) cross-provider review, (4) context efficiency, (5) MCP and ecosystem integration. Compare with the field generally, never through named competitor attacks.
+- Keep claims honest. Label rough edges and maturing work rather than promoting them to complete.
 
-- Update the owning topic reference **in the same piece of work** whenever user-facing behavior changes: modes, slash commands, settings, MCP configuration, customization, browser surfaces, or major capabilities. Keep `SKILL.md`'s strict source boundary and topic routing accurate.
+### Bundled documentation rules
+
+[resources/builtin-skills/documentation/](resources/builtin-skills/documentation/) is the self-contained product documentation used by the built-in documentation skill. At runtime the skill must answer only from this directory and must not inspect the extension root, source code, local settings, or build output to fill a documentation gap.
+
+- Update the owning focused reference **in the same piece of work** whenever user-facing behavior changes. Update the README or positioning article only when the change materially affects product story, onboarding, or a stated differentiator.
 - `references/package-contract.md` is generated from `package.json`, and `references/release-notes.md` is generated from `CHANGELOG.md`. Do not edit either manually: run `npm run docs:generate`; `npm run build` and `npm run watch` regenerate them, and `npm run docs:check` detects drift during lint.
-- Keep frontmatter single-line (AgentLink's simple `key: value` parser) and the `description` trigger-rich, per the bundled `skill-writing` skill.
-- Bundled skills under `resources/builtin-skills/` are auto-discovered by `src/agent/skillLoader.ts` and shipped via the `!resources/**` line in `.vscodeignore`. `scripts/verify-retrieval-package.mjs` verifies that the documentation index and generated references are present in release inventories.
+- Keep frontmatter single-line (AgentLink's simple `key: value` parser) and descriptions trigger-rich, per the bundled `skill-writing` skill.
+- A focused page must be self-contained for its topic. Do not make it depend on the repository README for runtime answers. A complete-reference section may become a link-only stub only when its owning page lands in the same change.
+- Bundled skills under `resources/builtin-skills/` are auto-discovered by `src/agent/skillLoader.ts` and shipped via the `!resources/**` line in `.vscodeignore`. Update `scripts/verify-retrieval-package.mjs` and its test whenever a new bundled owner page must ship.
+
+### Update and validation checklist
+
+- User-visible behavior → update the owning focused guide.
+- Exact command, setting, view, default, scope, or allowed value → update the source manifest and regenerate the package contract.
+- Installation or release behavior → update getting started and the README only if the top-level path changes.
+- Release delta → update `CHANGELOG.md` and regenerate release notes.
+- Tool changes → update `references/tools.md`, the owning workflow guide, tests, and the README only if the tool changes the public product story. Do **not** add a full parameter table to the root README.
+- Refresh screenshots when UI changes make them materially misleading. Commit only optimized publication assets; keep raw captures out of the VSIX and measure package-size impact when README media changes.
+- For docs-only work, run appropriate lightweight checks: generated-doc drift, Markdown links/anchors, and VSIX inventory when bundled docs or media change. Keep smoke-test notes concise and checklist-based.
 
 ## Formatting
 
@@ -72,8 +96,8 @@ When adding a new tool or changing tool parameters:
 3. Wire the tool definition and dispatch path in `src/agent/toolAdapter.ts`, following the cross-layer forwarding guidance below
 4. Add or update handler/unit tests for definitions, dispatch, and result behavior. When new callback or request data crosses layers, include a production composition-boundary test that proves the terminal consumer receives it.
 5. Keep the VS Code and browser surfaces in parity when the tool affects shared session state or user-visible events
-6. Update `README.md` — add a full tool section with parameter table and response details
-7. If the change alters what the built-in documentation skill distills (new user-facing capability area, mode, or setting — see [Built-in Documentation Skill](#built-in-documentation-skill)), update that skill too
+6. Update `references/tools.md` plus the owning workflow guide; update `README.md` only when the tool materially changes the public product story
+7. If the change alters what the built-in documentation skill distills (new user-facing capability area, mode, or setting — see [Public Documentation](#public-documentation)), update that skill too
 8. Run `npm run release -- --install` to rebuild and reinstall the extension. (Not when developing the agent, though)
 
 ## Cross-Layer Callback and Request Plumbing
