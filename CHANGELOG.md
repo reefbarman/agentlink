@@ -43,6 +43,7 @@
 
 ### Fixed
 
+- Fixed Native Agent command transport corrupting long or separator-heavy approved commands. Native commands now run from verified private artifacts instead of being retyped through the interactive line editor, one-shot SSH remote commands are distinguished from interactive SSH sessions, and safe workspace-root `git init` chains receive protected-metadata native-retry guidance before launch.
 - Fixed agent-started terminal commands bringing a background VS Code window to the foreground. Automatic terminal selection now waits until that window regains focus, while explicit terminal-open actions remain immediate.
 - Fixed lean background reviews diverging at backend and telemetry boundaries. ACP `review_*` tasks now inherit the same read-only and structured-result defaults as native reviews, handoff telemetry measures the complete shared brief and records the router-resolved tier, scope-less reviews retain coordinator-facing scope attribution, and live `files` targets must exist as files at spawn and again when queued work starts.
 - Fixed running `get_terminal_output` activity cards lacking the terminal navigation and intervention controls available on `execute_command`. The card now opens the observed terminal, can return retained output and control to the agent, and cancels only the output wait unless `kill: true` explicitly requests Ctrl+C.

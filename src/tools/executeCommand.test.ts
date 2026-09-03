@@ -224,6 +224,50 @@ describe("handleExecuteCommand", () => {
     expect(textPayload(result)).not.toHaveProperty("retry_guidance");
   });
 
+  it("returns native escalation guidance for a git init chain against the protected absent marker", async () => {
+    const command =
+      "git init -b main && git remote add origin git@github-personal:owner/repo.git && git status --short --branch";
+    classifyPredictableGitMetadataWriter.mockReturnValue({
+      kind: "predictable_git_metadata_writer",
+      subcommands: ["init", "remote"],
+    });
+    resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+      marker: "/workspace/.git",
+      markerExists: false,
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-git-init-preflight",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(resolveBaselineProtectedGitMetadataForCwd).toHaveBeenCalledWith(
+      "/workspace",
+      ["/workspace"],
+      { includeAbsentWorkspaceMarker: true },
+    );
+    expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      status: "retry_required",
+      command,
+      capability_code: "protected_git_metadata",
+      git_subcommands: ["init", "remote"],
+      protected_path: "/workspace/.git",
+      required_sandbox_permissions: "require_escalated",
+      command_sent: false,
+      process_launched: false,
+      retry_safe: true,
+    });
+  });
+
   it("returns native escalation guidance after resolving a protected Git writer to the sandbox", async () => {
     classifyPredictableGitMetadataWriter.mockReturnValue({
       kind: "predictable_git_metadata_writer",
@@ -254,6 +298,7 @@ describe("handleExecuteCommand", () => {
     expect(resolveBaselineProtectedGitMetadataForCwd).toHaveBeenCalledWith(
       "/workspace",
       ["/workspace"],
+      { includeAbsentWorkspaceMarker: false },
     );
     expect(terminalProvider.prepareExecution).toHaveBeenCalledOnce();
     expect(terminalProvider.executeCommand).not.toHaveBeenCalled();

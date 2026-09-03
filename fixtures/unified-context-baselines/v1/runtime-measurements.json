@@ -10,7 +10,7 @@
       "status": "measured",
       "chars": 37823,
       "estimatedTokens": 9456,
-      "sha256": "a768d665fef5466a6c5064b203d02dc3acbbab4079e6624924ece41f6833fe7d",
+      "sha256": "33f37eb8a0f15aa3ba3256076b8ff2e72029d9606beec900598d4627b44b5afa",
       "sectionLabels": [
         "base",
         "mode:code",
@@ -27,7 +27,7 @@
       "status": "measured",
       "chars": 7607,
       "estimatedTokens": 1902,
-      "sha256": "98e1df85b757df892e435e406eca4b8b22d8639731f3b5d8811db64e6ef2daa5",
+      "sha256": "2d10510c88579ca454544516576ebdbca836317af56e24d0e9e00709b633a1e9",
       "sectionLabels": [
         "base",
         "mode:code",
@@ -44,7 +44,7 @@
       "status": "measured",
       "chars": 40188,
       "estimatedTokens": 10047,
-      "sha256": "3046d5baeaf767b662a5be648283294afb3940d4688c6a75640bb257c5153943",
+      "sha256": "a7c8e038b652c46230b411dd315bc8d53de2c5722b9df4f47f9235900ea3deb1",
       "sectionLabels": [
         "base",
         "mode:code",
@@ -61,7 +61,7 @@
       "status": "measured",
       "chars": 7675,
       "estimatedTokens": 1919,
-      "sha256": "bd5c8f5f0db36e3c1f2986bca94692426c79ade16353123b74046d99795360ce",
+      "sha256": "9efcd055516c18f47135804e17a539407773cf1d4a6292f936cb53eee71acb58",
       "sectionLabels": [
         "base",
         "mode:code",
@@ -78,7 +78,7 @@
       "status": "measured",
       "chars": 34082,
       "estimatedTokens": 8521,
-      "sha256": "eed39df6f1ebb8008405feebd52bea63011133f82ee048b69085eec94f01b2a9",
+      "sha256": "101ebdda0892eaaaa7990b0a5ade648bb995d808f5ec1b5d85de4eb607d76724",
       "sectionLabels": [
         "base",
         "mode:code",
@@ -94,7 +94,7 @@
       "status": "measured",
       "chars": 6867,
       "estimatedTokens": 1717,
-      "sha256": "bdd1aa2c76cfe51bde198624a1a4cd7547b51dfc0dd34b29aaea8b0de7352a68",
+      "sha256": "c5149ba0ce1a8ef2cfe12f229a2faa87bdb29e13021330c4b0a9771d14ea02a8",
       "sectionLabels": [
         "base",
         "mode:code",
@@ -110,7 +110,7 @@
       "status": "measured",
       "chars": 34074,
       "estimatedTokens": 8519,
-      "sha256": "7685f1f06910aba9a603b3f412e639b3105afca29709d53b9237d3dbf78e70c7",
+      "sha256": "8ca00d66a09c58fa70cc848c85528a4f0e0dc4ef144b098b985b6fc0fb670e79",
       "sectionLabels": [
         "base",
         "mode:code",
@@ -126,7 +126,7 @@
       "status": "measured",
       "chars": 6859,
       "estimatedTokens": 1715,
-      "sha256": "2e983f71476fb9e6db5dafc78fb521e12ea7a9c00886624d1f3ce37e2400c51d",
+      "sha256": "ebbff24868f9fb15a4323482997513732f52ed845d7d6d40a9487871c7ccbaf3",
       "sectionLabels": [
         "base",
         "mode:code",
@@ -142,7 +142,7 @@
       "status": "measured",
       "chars": 33802,
       "estimatedTokens": 8451,
-      "sha256": "5b4e7ccd8d0b43e68316afcd41965e4692591c58fd478c89fdb0eb766642cb46",
+      "sha256": "f3c9bec7b502a3d910517ae7bef3e2b1bee06f9f87a78b43b9bb814813d2603a",
       "sectionLabels": [
         "base",
         "mode:architect",
@@ -159,7 +159,7 @@
       "status": "measured",
       "chars": 7650,
       "estimatedTokens": 1913,
-      "sha256": "c59331bb12838cc0faa133bf48d9e2618efeedd32cc209cbe48716223925c060",
+      "sha256": "a5ae38275442d4962c7a73a67d833d82c318dc275aa9272288e5e8dfe7678721",
       "sectionLabels": [
         "base",
         "mode:architect",
@@ -176,7 +176,7 @@
       "status": "measured",
       "chars": 36167,
       "estimatedTokens": 9042,
-      "sha256": "18317a01548aabcfc438b2033ecc7d3c30de3adc75f376232b118b976025f3d8",
+      "sha256": "07e3f7f00f77cbea35521b149646087dfe1b290e9fc4fe334091992fa5d2bc2b",
       "sectionLabels": [
         "base",
         "mode:architect",
@@ -193,7 +193,7 @@
       "status": "measured",
       "chars": 7718,
       "estimatedTokens": 1930,
-      "sha256": "58923c00708be01527992ddc4a5aca952d07cee86ed9715d9f4a5da1f5a32f26",
+      "sha256": "43f7757f9698b2c4bd7b204738f46327299b3611a660bbe3bbdbf44baad9593e",
       "sectionLabels": [
         "base",
         "mode:architect",
@@ -210,7 +210,7 @@
       "status": "measured",
       "chars": 30061,
       "estimatedTokens": 7516,
-      "sha256": "3186f6ce672918f7b49c5525ddb820efe9339a7ad49d787e61dd4f4fa705ec5e",
+      "sha256": "a75178e7d80954a3f5afeae275d9f12954a75e46fd29278809721f26637fd893",
       "sectionLabels": [
         "base",
         "mode:architect",
@@ -226,7 +226,7 @@
       "status": "measured",
       "chars": 6910,
       "estimatedTokens": 1728,
-      "sha256": "e535550be6f8c95469785b455b887bf668bf011da3c9971752a1e12ba8242e38",
+      "sha256": "8296d9ef23f37f08986f88854301863d40572d6cc58366788ec0afad3e6bc985",
       "sectionLabels": [
         "base",
         "mode:architect",
@@ -242,7 +242,7 @@
       "status": "measured",
       "chars": 30053,
       "estimatedTokens": 7514,
-      "sha256": "a8e340b08076f2db738f18da2c10fda70443a084d2747dff10e4b82624b67b5d",
+      "sha256": "c82d9486d928bb9ba47a918bbe883cf0984bfde8a2377ff56867d0db1f25b85e",
       "sectionLabels": [
         "base",
         "mode:architect",
@@ -258,7 +258,7 @@
       "status": "measured",
       "chars": 6902,
       "estimatedTokens": 1726,
-      "sha256": "7089e86d4d1735b26c1d57ccf2772deb6a3d3fba3697c9b4ee8a1bcb626b8ef3",
+      "sha256": "606a192854d2236503a9755c4905ccc0fbd63f34c7a2a1ae16d60912e425beed",
       "sectionLabels": [
         "base",
         "mode:architect",
@@ -274,7 +274,7 @@
       "status": "measured",
       "chars": 27652,
       "estimatedTokens": 6913,
-      "sha256": "f37b144adfa4b66f62aaf6aeff9fee72bffb2d527042df2fb5e8d87ac17f9dce",
+      "sha256": "459314110afc2521b08a726f489423528d908f3c0904afdd9f85117e86400f94",
       "sectionLabels": [
         "base",
         "mode:ask",
@@ -291,7 +291,7 @@
       "status": "measured",
       "chars": 7392,
       "estimatedTokens": 1848,
-      "sha256": "872ef5b5d672b1115367f5d5c3094c83c82849f38807a9bfb7127d6de8678ea8",
+      "sha256": "66b743897130108a9436e4fc1d1fa7d7ddc7c479490220086a8be63507cd5b71",
       "sectionLabels": [
         "base",
         "mode:ask",
@@ -308,7 +308,7 @@
       "status": "measured",
       "chars": 30017,
       "estimatedTokens": 7505,
-      "sha256": "3e0821d40f7fcb198d16463b3f0da7f3b53de7fcffb9d46d6e265b4164c6879e",
+      "sha256": "e0886a7073197b0ccfc3c709f80cedb1709722413364b2413586c3008660fc39",
       "sectionLabels": [
         "base",
         "mode:ask",
@@ -325,7 +325,7 @@
       "status": "measured",
       "chars": 7460,
       "estimatedTokens": 1865,
-      "sha256": "35dc249394ef248d059b3f0377b56a4b2bff1d29d0fe530ff27124b7e9992507",
+      "sha256": "0fb6c9ae143cb295594d3410d35512b138f043e48c9547d4a698f6f88216c3c6",
       "sectionLabels": [
         "base",
         "mode:ask",
@@ -342,7 +342,7 @@
       "status": "measured",
       "chars": 23911,
       "estimatedTokens": 5978,
-      "sha256": "af56330f4f421b8b4118fecf7cd585a3ccdfc3f8111f061535a34a26b7bdd146",
+      "sha256": "fc6a5e40e41e15f28d0c11b6bc29eb9f8cbc1824fdf2118ba42c5e14f41aacab",
       "sectionLabels": [
         "base",
         "mode:ask",
@@ -358,7 +358,7 @@
       "status": "measured",
       "chars": 6652,
       "estimatedTokens": 1663,
-      "sha256": "1057d452907d74b6b48bf10e945be76a42f9c516dd8c98e8932c446a50f49548",
+      "sha256": "6d494ed53cc097b6d49feaccfbbe4404c6d0e1796f0735a84948df2de7ea10de",
       "sectionLabels": [
         "base",
         "mode:ask",
@@ -374,7 +374,7 @@
       "status": "measured",
       "chars": 23903,
       "estimatedTokens": 5976,
-      "sha256": "d1ed121e98dbbc18844159baa914a79be19f5d98d3375ec360496b2304b815f2",
+      "sha256": "b38b55f3fdd3d54af5f839918b1f97e2642fc2687c1a3029bd7cd8153b4381eb",
       "sectionLabels": [
         "base",
         "mode:ask",
@@ -390,7 +390,7 @@
       "status": "measured",
       "chars": 6644,
       "estimatedTokens": 1661,
-      "sha256": "eb5c98601ff81f328e4a13758bdcbfa4123fdb1ade9a53abf1b1b5523637a8b6",
+      "sha256": "236472a45f7959d023fb6d0f7873f9accaf504351bd65f9f29ea72248ca21319",
       "sectionLabels": [
         "base",
         "mode:ask",
@@ -406,7 +406,7 @@
       "status": "measured",
       "chars": 29671,
       "estimatedTokens": 7418,
-      "sha256": "22898fd26bbf57178c2985761225e5533e36a0d4bf3c3ca5ee841e360266d39b",
+      "sha256": "26db16e375901faa5a7e01170eded648a1f9b39c4151f707584621802c4cf74b",
       "sectionLabels": [
         "base",
         "mode:debug",
@@ -423,7 +423,7 @@
       "status": "measured",
       "chars": 7396,
       "estimatedTokens": 1849,
-      "sha256": "11d607ac31b3e34bb8fdc71b609a0891f47ce69b80b2fd3dd249619b65fb954d",
+      "sha256": "8a8f1b4db2ceeafd6964b3f048a39f513602abd2fa766efcf3df57e35c881518",
       "sectionLabels": [
         "base",
         "mode:debug",
@@ -440,7 +440,7 @@
       "status": "measured",
       "chars": 32036,
       "estimatedTokens": 8009,
-      "sha256": "f925deeeba8be166db37ba1670cdfa70f9b93cd4204a14d72e97c33a5bf99f31",
+      "sha256": "5b62ec4de488a2b04348da9bfbae3b44d94a0f587577584aadf5f54a4d166e90",
       "sectionLabels": [
         "base",
         "mode:debug",
@@ -457,7 +457,7 @@
       "status": "measured",
       "chars": 7464,
       "estimatedTokens": 1866,
-      "sha256": "cd3176813fd946e34de558acabe6a0a5f7b2c86cc7d849c2d9dd34415b542c13",
+      "sha256": "37efbccd80566d045f58fe21cf4e4ed60e0749fb9d29a628e34118c4c1f0ceea",
       "sectionLabels": [
         "base",
         "mode:debug",
@@ -474,7 +474,7 @@
       "status": "measured",
       "chars": 25930,
       "estimatedTokens": 6483,
-      "sha256": "034ee256d4717d6ebfbe5382173f85565ecc68cbfd79c6f6192c15a725e83eb3",
+      "sha256": "dd204da657a077221ab64bdc562d68757468a518b3dd62c23b01da1acabb2dd9",
       "sectionLabels": [
         "base",
         "mode:debug",
@@ -490,7 +490,7 @@
       "status": "measured",
       "chars": 6656,
       "estimatedTokens": 1664,
-      "sha256": "2b1bdc5a3e6c5637097237f8d94dadc31c1c8731b2dfd2afc1b31151f8cd9822",
+      "sha256": "a8ca38f132296c268a147620bcc632275ba9174fed58c69cc1d6f6c5d1a5b4ca",
       "sectionLabels": [
         "base",
         "mode:debug",
@@ -506,7 +506,7 @@
       "status": "measured",
       "chars": 25922,
       "estimatedTokens": 6481,
-      "sha256": "be5c15e9da8312cfe1f47430f4cd2bdc1da7e788b29bedfcaf3ffa067a6aa5ae",
+      "sha256": "d9d4bbfd5ed0036b44ded320755ef96bdc7bcaffe014593c5dc05109b68f7342",
       "sectionLabels": [
         "base",
         "mode:debug",
@@ -522,7 +522,7 @@
       "status": "measured",
       "chars": 6648,
       "estimatedTokens": 1662,
-      "sha256": "50e9a9b469f593f5c4789f966ba7733a78e0c2eeab8cf19612db9b028e074d69",
+      "sha256": "57c27315d7cd367119747067ec4cc5f198312dee097b0f08715b07e014ae0a28",
       "sectionLabels": [
         "base",
         "mode:debug",
@@ -538,7 +538,7 @@
       "status": "measured",
       "chars": 28010,
       "estimatedTokens": 7003,
-      "sha256": "99d74b027fa72ea1848522ad115737cc1ea67a751cf31ae5c89423b1cfae7a94",
+      "sha256": "76d5208210b64d261484b939a92493c26d0f57684639d92de92553b2a8fa9a52",
       "sectionLabels": [
         "base",
         "mode:review",
@@ -555,7 +555,7 @@
       "status": "measured",
       "chars": 7438,
       "estimatedTokens": 1860,
-      "sha256": "db18a3e7476d2e146600c8a12b108d51afb5b3226b363106c383c946c4d645ca",
+      "sha256": "be279ed66c1c592c25d3022a510727b99a1eda98ef86d842681b3a025ac3eb50",
       "sectionLabels": [
         "base",
         "mode:review",
@@ -572,7 +572,7 @@
       "status": "measured",
       "chars": 30375,
       "estimatedTokens": 7594,
-      "sha256": "dbfc2ac0275ac5e1eb90d4d2dce9ada202ff7c082bd7d07638b4fa8f93f19164",
+      "sha256": "7134c9888f75e5ccfcba24c0714a043081e892d0a85721e619d0206132743f5e",
       "sectionLabels": [
         "base",
         "mode:review",
@@ -589,7 +589,7 @@
       "status": "measured",
       "chars": 7506,
       "estimatedTokens": 1877,
-      "sha256": "2605c155c31d9afd85f00760318d5a94460554d58ac918ee3d3e5c3cef22583c",
+      "sha256": "635c10c34fe8656163a7ae6658867150d6b50ecf5759c32ee3ccfa39b9dc2561",
       "sectionLabels": [
         "base",
         "mode:review",
@@ -606,7 +606,7 @@
       "status": "measured",
       "chars": 24269,
       "estimatedTokens": 6068,
-      "sha256": "509e6b19d14b34c8d99fd6acf3bd4b837c5aedbabfb26ca23bd28eee57224b93",
+      "sha256": "839b660223bc22ebca74713a9eb843ada6eb6a50ecc740e1982b39c94866326e",
       "sectionLabels": [
         "base",
         "mode:review",
@@ -622,7 +622,7 @@
       "status": "measured",
       "chars": 6698,
       "estimatedTokens": 1675,
-      "sha256": "464855cf5fc763368e40dd96185fdd6533c948af7a57a0a117ebacd6f44da54e",
+      "sha256": "0ab41a472c50feeefd6b684d5ca639904a2f9610c9961734e2aa841e2615d03c",
       "sectionLabels": [
         "base",
         "mode:review",
@@ -638,7 +638,7 @@
       "status": "measured",
       "chars": 24261,
       "estimatedTokens": 6066,
-      "sha256": "b4ea3b5fa532fff013dfeb208d375f5b101d43d93fa0e4f55c84b163cdea97bd",
+      "sha256": "ff247f47ce89b6509982504e79fee29e992ad7652823d23511fbc1f47417a6bd",
       "sectionLabels": [
         "base",
         "mode:review",
@@ -654,7 +654,7 @@
       "status": "measured",
       "chars": 6690,
       "estimatedTokens": 1673,
-      "sha256": "b5e9d2a4b4d78104de0c557170ff8473dfd0cfa50421ebf427219a590647adc6",
+      "sha256": "3048bcb26954d82e1c72db70f1d44c58585498bdae0ba41d120d64d3db0a7d2e",
       "sectionLabels": [
         "base",
         "mode:review",

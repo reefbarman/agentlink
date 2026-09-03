@@ -13,7 +13,10 @@ import {
   type CoreModelStreamEvent,
   type CoreModelStreamRequest,
 } from "./modelRuntime.js";
-import { InMemoryAgentStateRepository } from "./sessionRepository.js";
+import {
+  InMemoryAgentStateRepository,
+  InMemoryAgentTranscriptStore,
+} from "./sessionRepository.js";
 import type { AgentTurnEvent, AgentTurnResult } from "./turnContracts.js";
 import { createTurnInteractionTokenService } from "./turnInteractions.js";
 import {
@@ -43,6 +46,7 @@ class ScriptedBackend implements CoreModelBackend {
       | readonly CoreModelStreamEvent[]
       | (() => AsyncGenerator<CoreModelStreamEvent>)
     >,
+    private readonly capabilities: CoreModelCapabilities = CAPS,
   ) {}
 
   listModels() {
@@ -51,15 +55,15 @@ class ScriptedBackend implements CoreModelBackend {
         id: MODEL.modelId,
         displayName: "Fake model",
         providerId: this.providerId,
-        contextWindow: CAPS.contextWindow,
-        maxOutputTokens: CAPS.maxOutputTokens,
+        contextWindow: this.capabilities.contextWindow,
+        maxOutputTokens: this.capabilities.maxOutputTokens,
         authenticated: true,
       },
     ];
   }
 
   getCapabilities(): CoreModelCapabilities {
-    return CAPS;
+    return this.capabilities;
   }
 
   async *stream(
@@ -220,6 +224,175 @@ describe("public E6 agent engine", () => {
     });
   });
 
+  it("keeps ordinary transcripts ephemeral while preserving conversational history", async () => {
+    const state = new InMemoryAgentStateRepository();
+    const transcripts = new InMemoryAgentTranscriptStore();
+    const backend = new ScriptedBackend([
+      finalTurn("First"),
+      finalTurn("Second"),
+    ]);
+    const agent = engine(backend, state, undefined, {
+      transcriptPolicy: { mode: "ephemeral", store: transcripts },
+    });
+    await agent.sessions.create({ principal: PRINCIPAL });
+
+    await collect(
+      agent.sessions.runTurn({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+        input: { text: "one", attachments: undefined },
+        model: undefined,
+      }),
+    );
+    await collect(
+      agent.sessions.runTurn({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+        input: { text: "two", attachments: undefined },
+        model: undefined,
+      }),
+    );
+
+    expect(backend.requests[1]?.messages).toEqual(
+      expect.arrayContaining([
+        { role: "user", content: "one" },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "First" }],
+        },
+      ]),
+    );
+    await expect(
+      state.readSession({ principal: PRINCIPAL, sessionId: "session-1" }),
+    ).resolves.toMatchObject({ record: { messages: [] } });
+    await expect(
+      agent.sessions.hydrate({ principal: PRINCIPAL, sessionId: "session-1" }),
+    ).resolves.toMatchObject({
+      summary: { sessionId: "session-1", runState: { phase: "idle" } },
+      record: {
+        messages: [
+          { role: "user", content: "one" },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "First" }],
+          },
+          { role: "user", content: "two" },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Second" }],
+          },
+        ],
+      },
+    });
+    await expect(
+      agent.sessions.inspect({ principal: PRINCIPAL, sessionId: "session-1" }),
+    ).resolves.toEqual(
+      expect.not.objectContaining({ record: expect.anything() }),
+    );
+  });
+
+  it("applies turn, session, and runtime reasoning effort precedence", async () => {
+    const backend = new ScriptedBackend(
+      [
+        finalTurn("runtime"),
+        finalTurn("session"),
+        finalTurn("turn"),
+        finalTurn("disabled"),
+      ],
+      {
+        ...CAPS,
+        supportsThinking: true,
+        reasoningEfforts: ["none", "low", "medium", "high"],
+        defaultReasoningEffort: "medium",
+      },
+    );
+    const agent = engine(backend, undefined, undefined, {
+      defaultReasoningEffort: "medium",
+    });
+    await agent.sessions.create({
+      principal: PRINCIPAL,
+      sessionId: "runtime",
+    });
+    await agent.sessions.create({
+      principal: PRINCIPAL,
+      sessionId: "session",
+      reasoningEffort: "low",
+    });
+    await agent.sessions.create({
+      principal: PRINCIPAL,
+      sessionId: "turn",
+      reasoningEffort: "low",
+    });
+    await agent.sessions.create({
+      principal: PRINCIPAL,
+      sessionId: "disabled",
+    });
+
+    for (const [sessionId, reasoningEffort] of [
+      ["runtime", undefined],
+      ["session", undefined],
+      ["turn", "high"],
+      ["disabled", "none"],
+    ] as const) {
+      await collect(
+        agent.sessions.runTurn({
+          principal: PRINCIPAL,
+          sessionId,
+          input: { text: sessionId, attachments: undefined },
+          model: undefined,
+          ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+        }),
+      );
+    }
+
+    expect(backend.requests.map((request) => request.reasoningEffort)).toEqual([
+      "medium",
+      "low",
+      "high",
+      "none",
+    ]);
+  });
+
+  it("updates and clears a session reasoning default with revision checks", async () => {
+    const backend = new ScriptedBackend([]);
+    const agent = engine(backend);
+    const created = await agent.sessions.create({ principal: PRINCIPAL });
+
+    const updated = await agent.sessions.setReasoningEffort({
+      principal: PRINCIPAL,
+      sessionId: "session-1",
+      reasoningEffort: "high",
+      expectedRevision: created.revision,
+    });
+    await expect(
+      agent.sessions.read({ principal: PRINCIPAL, sessionId: "session-1" }),
+    ).resolves.toMatchObject({
+      revision: updated.revision,
+      record: { reasoningEffort: "high" },
+    });
+
+    await expect(
+      agent.sessions.setReasoningEffort({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+        reasoningEffort: undefined,
+        expectedRevision: created.revision,
+      }),
+    ).rejects.toMatchObject({ code: "session_revision_conflict" });
+    const cleared = await agent.sessions.setReasoningEffort({
+      principal: PRINCIPAL,
+      sessionId: "session-1",
+      reasoningEffort: undefined,
+      expectedRevision: updated.revision,
+    });
+    await expect(
+      agent.sessions.read({ principal: PRINCIPAL, sessionId: "session-1" }),
+    ).resolves.toMatchObject({
+      revision: cleared.revision,
+      record: { reasoningEffort: undefined },
+    });
+  });
+
   it("excludes a concurrent engine before either can advance the same session", async () => {
     const state = new InMemoryAgentStateRepository();
     const leases = new InMemoryAgentTurnLeaseProvider();
@@ -308,6 +481,54 @@ describe("public E6 agent engine", () => {
         text: "completed but uncommitted",
         usage: { inputTokens: 7, outputTokens: 2 },
       },
+    });
+  });
+
+  it("cancels an active local turn through the session lifecycle API", async () => {
+    const state = new InMemoryAgentStateRepository();
+    let observedSignal: AbortSignal | undefined;
+    let started!: () => void;
+    const startedPromise = new Promise<void>((resolve) => (started = resolve));
+    const backend = new ScriptedBackend([
+      async function* () {
+        started();
+        while (!observedSignal?.aborted) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 1));
+        }
+        yield { type: "done" };
+      },
+    ]);
+    const originalStream = backend.stream.bind(backend);
+    backend.stream = async function* (request, context) {
+      observedSignal = request.signal;
+      yield* originalStream(request, context);
+    };
+    const agent = engine(backend, state);
+    await agent.sessions.create({ principal: PRINCIPAL });
+    const running = collect(
+      agent.sessions.runTurn({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+        input: { text: "wait", attachments: undefined },
+        model: undefined,
+      }),
+    );
+    await startedPromise;
+
+    await expect(
+      agent.sessions.cancel({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+        reason: "user stopped",
+      }),
+    ).resolves.toEqual({ status: "cancellation_requested", turnId: "turn-1" });
+    await expect(running).resolves.toMatchObject({
+      result: { status: "cancelled" },
+    });
+    await expect(
+      agent.sessions.inspect({ principal: PRINCIPAL, sessionId: "session-1" }),
+    ).resolves.toMatchObject({
+      summary: { runState: { phase: "idle" } },
     });
   });
 
@@ -548,6 +769,223 @@ describe("public E6 agent engine", () => {
         ]),
       },
     });
+  });
+
+  it("resumes a durable approval without persisting ordinary session messages", async () => {
+    const state = new InMemoryAgentStateRepository();
+    const transcripts = new InMemoryAgentTranscriptStore();
+    const leases = new InMemoryAgentTurnLeaseProvider();
+    const backend = new ScriptedBackend([toolTurn(), finalTurn("Updated")]);
+    const write = defineTool({
+      name: "write_record",
+      description: "Update a record",
+      inputSchema: {
+        type: "object",
+        properties: { value: { type: "string" } },
+        required: ["value"],
+        additionalProperties: false,
+      },
+      effect: "write",
+      authorization: "required",
+      handler: async () => ({ modelContent: "updated" }),
+    });
+    const shared = {
+      transcriptPolicy: { mode: "ephemeral" as const, store: transcripts },
+      resolveTools: () => [write],
+    };
+    const first = engine(backend, state, leases, {
+      ...shared,
+      authorizeToolCall: () => ({
+        decision: "require_user",
+        summary: "Approve record update",
+      }),
+    });
+    const second = engine(backend, state, leases, {
+      ...shared,
+      ownerId: "engine-b",
+      authorizeToolCall: () => ({ decision: "allow" }),
+    });
+    await first.sessions.create({ principal: PRINCIPAL });
+
+    const suspended = await collect(
+      first.sessions.runTurn({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+        input: { text: "Update it", attachments: undefined },
+        model: undefined,
+      }),
+    );
+    const required = suspended.events.find(
+      (
+        event,
+      ): event is Extract<AgentTurnEvent, { type: "interaction.required" }> =>
+        event.type === "interaction.required",
+    );
+    expect(required).toBeDefined();
+    await expect(
+      state.readSession({ principal: PRINCIPAL, sessionId: "session-1" }),
+    ).resolves.toMatchObject({
+      record: {
+        messages: [],
+        runState: { phase: "suspended" },
+      },
+    });
+
+    const resumed = await collect(
+      second.sessions.resumeInteraction({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+        turnId: "turn-1",
+        interactionId: required!.interaction.interactionId,
+        interactionRevision: required!.interactionRevision,
+        expectedSessionRevision: required!.sessionRevision,
+        decision: "allow",
+      }),
+    );
+    expect(resumed.result).toMatchObject({
+      status: "completed",
+      text: "Updated",
+    });
+    await expect(
+      state.readSession({ principal: PRINCIPAL, sessionId: "session-1" }),
+    ).resolves.toMatchObject({
+      record: { messages: [], runState: { phase: "idle" } },
+    });
+    await expect(
+      second.sessions.read({ principal: PRINCIPAL, sessionId: "session-1" }),
+    ).resolves.toMatchObject({
+      record: {
+        messages: expect.arrayContaining([
+          { role: "user", content: "Update it" },
+          expect.objectContaining({ role: "assistant" }),
+        ]),
+      },
+    });
+    await expect(
+      state.readInteraction({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+        interactionId: required!.interaction.interactionId,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "consumed" });
+  });
+
+  it("hydrates and cancels a suspended approval without repository access", async () => {
+    const state = new InMemoryAgentStateRepository();
+    const backend = new ScriptedBackend([toolTurn()]);
+    const write = defineTool({
+      name: "write_record",
+      description: "Update a record",
+      inputSchema: {
+        type: "object",
+        properties: { value: { type: "string" } },
+        required: ["value"],
+        additionalProperties: false,
+      },
+      effect: "write",
+      authorization: "required",
+      handler: async () => ({ modelContent: "updated" }),
+    });
+    const agent = engine(backend, state, undefined, {
+      resolveTools: () => [write],
+      authorizeToolCall: () => ({
+        decision: "require_user",
+        summary: "Approve record update",
+        displayContent: { destructive: true },
+      }),
+    });
+    await agent.sessions.create({ principal: PRINCIPAL });
+    await collect(
+      agent.sessions.runTurn({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+        input: { text: "Update it", attachments: undefined },
+        model: undefined,
+      }),
+    );
+
+    const inspection = await agent.sessions.inspect({
+      principal: PRINCIPAL,
+      sessionId: "session-1",
+    });
+    expect(inspection).toMatchObject({
+      summary: { runState: { phase: "suspended" } },
+      pendingInteraction: {
+        request: {
+          summary: "Approve record update",
+          displayContent: { destructive: true },
+        },
+        interactionRevision: "1",
+      },
+    });
+    await expect(
+      agent.sessions.cancel({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+        reason: "approval dismissed",
+      }),
+    ).resolves.toMatchObject({ status: "cancelled", turnId: "turn-1" });
+    const cancelled = await agent.sessions.inspect({
+      principal: PRINCIPAL,
+      sessionId: "session-1",
+    });
+    expect(cancelled.summary).toMatchObject({
+      runState: { phase: "interrupted", reason: "approval dismissed" },
+    });
+    expect(cancelled.summary).not.toHaveProperty("pendingInteractionId");
+    expect(cancelled).not.toHaveProperty("pendingInteraction");
+    await expect(
+      state.readInteraction({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+        interactionId: inspection.pendingInteraction!.request.interactionId,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "consumed" });
+  });
+
+  it("deletes durable control state and process-local transcript together", async () => {
+    const state = new InMemoryAgentStateRepository();
+    const transcripts = new InMemoryAgentTranscriptStore();
+    const agent = engine(
+      new ScriptedBackend([finalTurn("private")]),
+      state,
+      undefined,
+      {
+        transcriptPolicy: { mode: "ephemeral", store: transcripts },
+      },
+    );
+    const created = await agent.sessions.create({ principal: PRINCIPAL });
+    await collect(
+      agent.sessions.runTurn({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+        input: { text: "secret", attachments: undefined },
+        model: undefined,
+      }),
+    );
+    const hydrated = await agent.sessions.hydrate({
+      principal: PRINCIPAL,
+      sessionId: "session-1",
+    });
+    expect(hydrated.record.messages).not.toHaveLength(0);
+
+    await expect(
+      agent.sessions.delete({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+        expectedRevision: hydrated.summary.revision,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      state.readSession({ principal: PRINCIPAL, sessionId: "session-1" }),
+    ).resolves.toEqual({ ok: false, reason: "not_found" });
+    await expect(
+      transcripts.readTranscript({
+        principal: PRINCIPAL,
+        sessionId: "session-1",
+      }),
+    ).resolves.toBeUndefined();
+    expect(created.revision).toBe("1");
   });
 
   it("takes over an expired lease and marks a crashed run interrupted", async () => {

@@ -9,8 +9,10 @@ import type {
   CoreModelUsage,
 } from "@agentlink/core/model-runtime";
 import type { CoreHostedToolDefinition } from "@agentlink/protocol/web-access-policy";
-import type { CodexAuthMethod } from "./models.js";
-import { toCodexRequestError } from "./errors.js";
+import {
+  toCodexRequestError,
+  type CodexAuthMethod,
+} from "@agentlink/core/codex";
 import {
   CodexResponsesAuthError,
   CodexResponsesStreamAbortedError,
@@ -23,7 +25,7 @@ import {
   type CodexInputItem,
   type CodexPromptCacheRetention,
   type CodexResolvedRequestBodyResult,
-} from "./translation.js";
+} from "@agentlink/core/codex";
 
 export { CodexResponsesAuthError, CodexResponsesStreamAbortedError };
 

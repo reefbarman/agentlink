@@ -474,7 +474,10 @@ function checkSingleCommand(command: string): InteractiveViolation | null {
   // ── Check remote connection commands ──────────────────────────
   if (
     REMOTE_COMMANDS.has(cmd) &&
-    !(cmd === "ssh" && isSshConfigInspection(args))
+    !(
+      cmd === "ssh" &&
+      (isSshConfigInspection(args) || isSshRemoteCommand(args))
+    )
   ) {
     return {
       command: cmd,
@@ -581,6 +584,88 @@ function isVscePackageHelpOnly(cmd: string, args: string[]): boolean {
 
 function isSshConfigInspection(args: string[]): boolean {
   return args.length === 2 && args[0] === "-G" && !args[1].startsWith("-");
+}
+
+function isSshRemoteCommand(args: string[]): boolean {
+  const valueOptions = new Set([
+    "-B",
+    "-b",
+    "-c",
+    "-D",
+    "-E",
+    "-e",
+    "-F",
+    "-I",
+    "-i",
+    "-J",
+    "-L",
+    "-l",
+    "-m",
+    "-O",
+    "-o",
+    "-P",
+    "-p",
+    "-Q",
+    "-R",
+    "-S",
+    "-W",
+    "-w",
+  ]);
+  const booleanOptions = new Set([
+    "-4",
+    "-6",
+    "-A",
+    "-a",
+    "-C",
+    "-g",
+    "-K",
+    "-k",
+    "-M",
+    "-n",
+    "-q",
+    "-T",
+    "-V",
+    "-v",
+    "-X",
+    "-x",
+    "-Y",
+    "-y",
+  ]);
+  let index = 0;
+  for (; index < args.length; index++) {
+    const argument = args[index];
+    if (argument === "--") {
+      index++;
+      break;
+    }
+    if (!argument.startsWith("-") || argument === "-") break;
+    if (argument === "-G" || argument.startsWith("-G")) return false;
+    if (
+      argument === "-N" ||
+      argument === "-f" ||
+      argument === "-s" ||
+      argument === "-t" ||
+      argument === "-W" ||
+      argument.startsWith("-W") ||
+      (/^-[46AaCfgKkMNnqstTVvXxYy]+$/.test(argument) &&
+        ["N", "f", "s", "t"].some((option) => argument.includes(option)))
+    ) {
+      return false;
+    }
+    if (
+      booleanOptions.has(argument) ||
+      /^-[46AaCgKkMnqTVvXxYy]+$/.test(argument)
+    ) {
+      continue;
+    }
+    const option = argument.slice(0, 2);
+    if (!valueOptions.has(option)) return false;
+    if (argument.length === 2 && !args[++index]) return false;
+  }
+
+  const host = args[index++];
+  if (!host || host.startsWith("-")) return false;
+  return index < args.length;
 }
 
 function opensGitEditorWithoutMessage(args: string[]): boolean {

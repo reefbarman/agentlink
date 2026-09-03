@@ -11,6 +11,9 @@ import type { ResolvedHostShellProfile } from "../shellProfileResolver.js";
 import type { SandboxCommandIdentity } from "../sandbox/sandboxHelperProtocol.js";
 import type { TerminalDimensions } from "@agentlink/protocol/terminal";
 import { createShellIntegrationParser } from "../shellIntegration.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const PROMPT_IDLE_READY_DELAY_MS = 25;
 
@@ -64,6 +67,50 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
+interface NativeCommandArtifact {
+  dispatchCommand: string;
+  cleanup(): void;
+}
+
+function createNativeCommandArtifact(
+  command: string,
+  root: string,
+): NativeCommandArtifact {
+  const directory = fs.mkdtempSync(
+    path.join(root, "agentlink-native-command-"),
+  );
+  const filePath = path.join(directory, "command.sh");
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    try {
+      fs.rmSync(directory, { recursive: true, force: true });
+    } catch {
+      // Private command artifacts are best-effort cleanup after execution.
+    }
+  };
+  try {
+    fs.chmodSync(directory, 0o700);
+    const content = `builtin eval ${shellQuote(` ${command}`)}\n`;
+    fs.writeFileSync(filePath, content, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    if (fs.readFileSync(filePath, "utf8") !== content) {
+      throw new Error("Native Agent command artifact verification failed");
+    }
+    return {
+      dispatchCommand: `builtin eval "$(<${shellQuote(filePath)})"`,
+      cleanup,
+    };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+}
+
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;
@@ -92,6 +139,7 @@ class PersistentNativeCommandProcess implements SandboxCommandProcess {
     private readonly channel: PersistentNativeChannel,
     identity: SandboxCommandIdentity,
     readonly command: string,
+    private readonly commandArtifact: NativeCommandArtifact,
     private readonly onShellCommandEnd?: () => void,
   ) {
     this.identity = { ...identity };
@@ -150,6 +198,7 @@ class PersistentNativeCommandProcess implements SandboxCommandProcess {
       return;
     }
     this.state = "completed";
+    this.commandArtifact.cleanup();
     this.readyDeferred.resolve({
       pid: this.channel.pid,
       pgid: this.channel.pid,
@@ -193,6 +242,7 @@ class PersistentNativeCommandProcess implements SandboxCommandProcess {
 
   dispose(): void {
     if (this.disposed) return;
+    this.commandArtifact.cleanup();
     this.disposed = true;
     this.listeners.clear();
     this.pendingEvents.length = 0;
@@ -226,6 +276,7 @@ class PersistentNativeChannel {
     private readonly onData: (data: string) => void,
     private readonly onCwd: (cwd: string) => void,
     private readonly onClosed: () => void,
+    private readonly commandFileRoot: string,
     private readonly log?: (message: string) => void,
   ) {
     this.pid = pty.pid ?? 0;
@@ -247,10 +298,18 @@ class PersistentNativeChannel {
     if (!request.command || request.command.includes("\0")) {
       throw new Error("Native Agent command must be non-empty without NUL");
     }
+    const evaluatedCommand = request.isolateShellState
+      ? `(\n${request.command}\n)`
+      : request.command;
+    const commandArtifact = createNativeCommandArtifact(
+      evaluatedCommand,
+      this.commandFileRoot,
+    );
     const process = new PersistentNativeCommandProcess(
       this,
       request,
       request.command,
+      commandArtifact,
       request.onShellCommandEnd,
     );
     this.active = process;
@@ -260,14 +319,17 @@ class PersistentNativeChannel {
       process,
       start: () => {
         if (this.active !== process) {
+          process.dispose();
           throw new Error("Prepared Native Agent command target changed");
         }
         process.start();
-        this.onData(`${request.command}\r\n`);
-        const evaluatedCommand = request.isolateShellState
-          ? `(\n${request.command}\n)`
-          : request.command;
-        this.pty.write(`builtin eval ${shellQuote(` ${evaluatedCommand}`)}\r`);
+        try {
+          this.onData(`${request.command}\r\n`);
+          this.pty.write(`${commandArtifact.dispatchCommand}\r`);
+        } catch (error) {
+          process.dispose();
+          throw error;
+        }
       },
     };
   }
@@ -452,11 +514,13 @@ class PersistentNativeChannel {
 
 export interface NodePtyNativeAgentRuntimeProviderOptions {
   startupTimeoutMs?: number;
+  commandFileRoot?: string;
 }
 
 export class NodePtyNativeAgentRuntimeProvider implements NativeAgentRuntimeProvider {
   private readonly channels = new Map<string, PersistentNativeChannel>();
   private readonly startupTimeoutMs: number;
+  private readonly commandFileRoot: string;
   private disposed = false;
   log?: (message: string) => void;
 
@@ -465,6 +529,7 @@ export class NodePtyNativeAgentRuntimeProvider implements NativeAgentRuntimeProv
     options: NodePtyNativeAgentRuntimeProviderOptions = {},
   ) {
     this.startupTimeoutMs = options.startupTimeoutMs ?? 15_000;
+    this.commandFileRoot = options.commandFileRoot ?? os.tmpdir();
     if (
       !Number.isSafeInteger(this.startupTimeoutMs) ||
       this.startupTimeoutMs <= 0
@@ -510,6 +575,7 @@ export class NodePtyNativeAgentRuntimeProvider implements NativeAgentRuntimeProv
         }
         request.onClosed();
       },
+      this.commandFileRoot,
       this.log,
     );
     this.channels.set(request.channelId, channel);

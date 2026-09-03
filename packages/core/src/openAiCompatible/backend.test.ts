@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   CoreModelBackendRegistry,
+  type CoreModelCapabilities,
   type CoreModelStreamRequest,
 } from "../modelRuntime.js";
 import type { NormalizedOpenAiCompatibleConnection } from "./config.js";
@@ -90,6 +91,65 @@ describe("OpenAiCompatibleBackend", () => {
       }),
     ]);
   });
+
+  it.each([
+    ["reasoning_effort", { reasoning_effort: "high" }],
+    ["reasoning.effort", { reasoning: { effort: "high" } }],
+    ["output_config.effort", { output_config: { effort: "high" } }],
+  ] as const)(
+    "sends engine reasoning effort through the %s wire mode",
+    async (reasoningEffortMode, expected) => {
+      let body: unknown;
+      const base = connection();
+      const reasoningCapabilities: CoreModelCapabilities = {
+        ...base.models[0]!.capabilities,
+        supportsThinking: true,
+        reasoningEfforts: ["low", "medium", "high"],
+        defaultReasoningEffort: "medium",
+      };
+      const reasoningModel = {
+        ...base.models[0]!,
+        capabilities: reasoningCapabilities,
+      };
+      const configured = connection({
+        reasoningEffortMode,
+        models: [reasoningModel],
+        runtimeProfile: {
+          ...base.runtimeProfile,
+          reasoningEffortMode,
+          models: {
+            "local-model": {
+              ...base.runtimeProfile.models["local-model"]!,
+              capabilities: reasoningModel.capabilities,
+            },
+          },
+        },
+      });
+      const backend = new OpenAiCompatibleBackend({
+        connection: {
+          ...configured,
+          authKey: undefined,
+          runtimeProfile: {
+            ...configured.runtimeProfile,
+            authRequired: false,
+          },
+        },
+        fetch: async (_input, init) => {
+          body = JSON.parse(String(init?.body));
+          return response();
+        },
+      });
+
+      for await (const _event of backend.stream(
+        { ...request(), reasoningEffort: "high" },
+        requestContext,
+      )) {
+        // Consume the complete provider stream.
+      }
+
+      expect(body).toMatchObject(expected);
+    },
+  );
 
   it("resolves host credentials for every stream and complete request", async () => {
     const resolveCredential = vi

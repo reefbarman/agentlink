@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
-import { defineTool } from "./hostTools.js";
+import { defineTool, defineZodTool } from "./hostTools.js";
 import type { AgentPrincipal } from "./modelIdentity.js";
 import {
   CoreModelBackendRegistry,
@@ -426,6 +427,93 @@ describe("headless E4 turn kernel", () => {
       code: "interaction_consumed",
     });
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("binds Zod defaults and transforms to approval, durable continuation, and resumed execution", async () => {
+    const turn = toolTurn([{ id: "call-zod", name: "update_record" }]);
+    const requested = turn.events.find((event) => event.type === "tool_done");
+    if (requested?.type === "tool_done") {
+      requested.input = { query: "  account  " };
+    }
+    const backend = new ScriptedBackend([turn, finalTurn("Updated")]);
+    const repository = new InMemoryInteractionRepository();
+    const tokens = createTurnInteractionTokenService({
+      secret: "s".repeat(32),
+      now: () => 100,
+      createResponseId: () => "response-zod",
+    });
+    const handler = vi.fn(async () => ({ modelContent: "updated" }));
+    const authorizeToolCall = vi.fn(async () => ({
+      decision: "require_user" as const,
+      summary: "Approve normalized update?",
+    }));
+    const kernel = createHeadlessTurnKernel({
+      models: createRuntime(backend),
+      resolveTools: async () => [
+        defineZodTool({
+          name: "update_record",
+          description: "Update a tenant record",
+          inputSchema: z.object({
+            query: z.string().transform((value) => `${value.trim()}!`),
+            limit: z.number().int().default(5),
+          }),
+          effect: "write",
+          authorization: "required",
+          displayInput: (input) => input,
+          handler,
+        }),
+      ],
+      authorizeToolCall,
+      interactions: repository,
+      interactionTokens: tokens,
+      createInteractionId: () => "interaction-zod",
+      now: () => 100,
+    });
+
+    const suspended = await collect(kernel.runTurn(prepared()));
+    expect(suspended.result).toMatchObject({
+      status: "suspended",
+      interaction: {
+        displayInput: { query: "account!", limit: 5 },
+      },
+    });
+    expect(authorizeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({ input: { query: "account!", limit: 5 } }),
+    );
+    expect(repository.record?.continuation.pendingToolCalls).toEqual([
+      {
+        id: "call-zod",
+        name: "update_record",
+        input: { query: "account!", limit: 5 },
+      },
+    ]);
+
+    const token = await kernel.issueInteractionResponseToken({
+      interactionId: "interaction-zod",
+      interactionRevision: "interaction-revision-1",
+      principal: { tenantId: "tenant-a", subjectId: "subject-a" },
+      sessionId: "session-1",
+      turnId: "turn-1",
+      expectedSessionRevision: "session-revision-2",
+      decision: "allow",
+    });
+    await collect(
+      kernel.resumeInteraction({
+        interactionId: "interaction-zod",
+        interactionRevision: "interaction-revision-1",
+        principal: { tenantId: "tenant-a", subjectId: "subject-a" },
+        sessionId: "session-1",
+        turnId: "turn-1",
+        expectedSessionRevision: "session-revision-2",
+        decision: "allow",
+        responseToken: token,
+      }),
+    );
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(
+      { query: "account!", limit: 5 },
+      expect.any(Object),
+    );
   });
 
   it("resumes a denied authorization as a bounded model-visible error", async () => {
@@ -894,11 +982,11 @@ describe("headless E4 turn kernel", () => {
       expect.objectContaining({
         type: "tool.failed",
         toolCallId: "call-invalid",
-        error: {
+        error: expect.objectContaining({
           code: "tool_input_invalid",
           retryable: false,
           message: expect.stringContaining("input is invalid"),
-        },
+        }),
       }),
     );
     expect(backend.requests[1]?.request.messages).toContainEqual({
@@ -948,11 +1036,11 @@ describe("headless E4 turn kernel", () => {
       expect.objectContaining({
         type: "tool.failed",
         toolCallId: "call-authorized",
-        error: {
+        error: expect.objectContaining({
           code: "tool_authorization_required",
           retryable: false,
           message: expect.stringContaining("requires authorization"),
-        },
+        }),
       }),
     );
     expect(backend.requests[1]?.request.messages).toContainEqual({
@@ -997,6 +1085,20 @@ describe("headless E4 turn kernel", () => {
         }),
       }),
     );
+  });
+
+  it("rejects unchecked presentation metadata on legacy static tools", () => {
+    const staticTool: HeadlessTurnTool = {
+      ...tool("unsafe_presentation", async () => ({ modelContent: "unused" })),
+      presentation: { title: "x".repeat(301) },
+    };
+
+    expect(() =>
+      createHeadlessTurnKernel({
+        models: createRuntime(new ScriptedBackend([finalTurn()])),
+        tools: [staticTool],
+      }),
+    ).toThrow("presentation metadata is invalid");
   });
 
   it("omits display input when a projector throws", async () => {
@@ -1399,6 +1501,38 @@ describe("headless E4 turn kernel", () => {
     });
     expect(backend.requests.map(({ context }) => context.principal)).toEqual(
       expect.arrayContaining([principalA, principalB]),
+    );
+  });
+
+  it("preserves sanitized provider categories and retryability without provider messages", async () => {
+    class ProviderFailingBackend extends ScriptedBackend {
+      // oxlint-disable-next-line require-yield
+      override async *stream(): AsyncGenerator<CoreModelStreamEvent> {
+        throw Object.assign(new Error("secret provider detail"), {
+          providerCode: "rate_limit_exceeded",
+          status: 429,
+          retryable: true,
+          authentication: false,
+        });
+      }
+    }
+    const kernel = createHeadlessTurnKernel({
+      models: createRuntime(new ProviderFailingBackend([])),
+    });
+
+    const { events, result } = await collect(kernel.runTurn(prepared()));
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: {
+        code: "provider_rate_limited",
+        category: "rate_limit",
+        message: "The model provider rate limit was reached",
+        retryable: true,
+      },
+    });
+    expect(JSON.stringify({ events, result })).not.toContain(
+      "secret provider detail",
     );
   });
 

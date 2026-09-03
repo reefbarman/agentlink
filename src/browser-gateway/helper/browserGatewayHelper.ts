@@ -155,7 +155,7 @@ import {
   type PromptProfileResolution,
 } from "@agentlink/protocol/prompt-profile";
 import { resolvePromptProfile } from "../../core/promptProfilePolicy.js";
-import { getCodexModelCapabilities } from "../../core/model/providers/codex/models.js";
+import { getCodexModelCapabilities } from "@agentlink/core/codex";
 import { normalizeUserQuestionAttachments } from "@agentlink/protocol/structured-question";
 import { ANTHROPIC_HOSTED_WEB_CAPABILITIES } from "../../core/model/providers/anthropic/anthropicModels.js";
 import {

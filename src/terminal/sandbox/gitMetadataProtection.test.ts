@@ -157,7 +157,7 @@ describe("Git metadata protection", () => {
     ).resolves.toMatchObject({ markerExists: true });
   });
 
-  it("does not proactively match an absent workspace marker", async () => {
+  it("matches an absent workspace marker only when explicitly requested", async () => {
     const workspace = await fixture("al-git-no-marker-");
     const cwd = path.join(workspace, "src");
     await mkdir(cwd);
@@ -165,6 +165,42 @@ describe("Git metadata protection", () => {
     await expect(
       resolveBaselineProtectedGitMetadataForCwd(cwd, [workspace]),
     ).resolves.toBeUndefined();
+    await expect(
+      resolveBaselineProtectedGitMetadataForCwd(cwd, [workspace], {
+        includeAbsentWorkspaceMarker: true,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      resolveBaselineProtectedGitMetadataForCwd(workspace, [workspace], {
+        includeAbsentWorkspaceMarker: true,
+      }),
+    ).resolves.toEqual({
+      workspaceRoot: await realpath(workspace),
+      marker: path.join(await realpath(workspace), ".git"),
+      markerExists: false,
+      deniedWrite: [path.join(await realpath(workspace), ".git")],
+      integrity: [],
+      structural: [],
+      readable: [],
+    });
+  });
+
+  it("matches an absent marker at an exact nested workspace root", async () => {
+    const workspace = await fixture("al-git-nested-no-marker-");
+    const nestedRoot = path.join(workspace, "app");
+    await mkdir(nestedRoot);
+
+    await expect(
+      resolveBaselineProtectedGitMetadataForCwd(
+        nestedRoot,
+        [workspace, nestedRoot],
+        { includeAbsentWorkspaceMarker: true },
+      ),
+    ).resolves.toMatchObject({
+      workspaceRoot: await realpath(nestedRoot),
+      marker: path.join(await realpath(nestedRoot), ".git"),
+      markerExists: false,
+    });
   });
 
   it("rejects symbolic-link workspace markers", async () => {

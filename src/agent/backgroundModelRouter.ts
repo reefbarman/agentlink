@@ -13,7 +13,7 @@ import {
   inferReviewTier,
 } from "./background/backgroundBudgetPolicy.js";
 
-import { CODEX_DEFAULT_MODEL } from "../core/model/providers/codex/models.js";
+import { CODEX_DEFAULT_MODEL } from "@agentlink/core/codex";
 import type { ModelInfo } from "./providers/types.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import routingConfigRaw from "./backgroundModelRouting.config.json";

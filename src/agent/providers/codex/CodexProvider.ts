@@ -11,7 +11,10 @@
 
 import * as crypto from "crypto";
 import { randomUUID } from "crypto";
-import { withAgentLinkHttpActivity } from "../../../util/httpDispatcher.js";
+import {
+  agentLinkFetch,
+  withAgentLinkHttpActivity,
+} from "../../../util/httpDispatcher.js";
 
 import OpenAI from "openai";
 import type {
@@ -32,45 +35,38 @@ import {
 } from "./OpenAiCodexAuthManager.js";
 import {
   CODEX_CONDENSE_MODEL,
+  CodexRequestError,
+  CodexStreamError,
+  buildCodexClientCacheKey,
+  buildCodexAuthRequiredError,
+  buildCodexContextWindowExceededError,
+  buildCodexEndpointRequestBody,
+  buildCodexUsageLimitExhaustedError,
+  createCodexRequestError,
+  createOpenAiResponsesClient,
+  getCodexErrorHandlingAction,
   getCodexUnavailableModelFallback,
   getCodexModelCapabilities,
   getCodexModelMigration,
+  getCodexEndpointConfig,
   getEndpointCaps,
+  isCodexModelNotFoundError,
   isCodexModelServedOnChatgptBackend,
+  isCodexTextVerbosityRejectionError,
   listCodexModels,
+  parseCodexResponseStreamEvents,
   resolveCodexEffectiveModel,
   resolveCodexReasoningEffort,
   resolveCodexTextVerbosity,
-} from "../../../core/model/providers/codex/models.js";
-import {
-  buildCodexClientCacheKey,
-  createOpenAiResponsesClient,
-  getCodexEndpointConfig,
-} from "../../../core/model/providers/codex/openaiClient.js";
-import {
-  buildCodexEndpointRequestBody,
   summarizeCodexInput,
   summarizeCodexRequestInput,
+  toCodexRequestError,
   translateCodexMessages,
   translateCodexTools,
-  type CodexRequestBody,
-} from "../../../core/model/providers/codex/translation.js";
-import {
-  CodexStreamError,
-  parseCodexResponseStreamEvents,
-} from "../../../core/model/providers/codex/streamParser.js";
-import {
-  buildCodexAuthRequiredError,
-  buildCodexContextWindowExceededError,
-  buildCodexUsageLimitExhaustedError,
-  CodexRequestError,
-  createCodexRequestError,
-  getCodexErrorHandlingAction,
-  isCodexModelNotFoundError,
-  isCodexTextVerbosityRejectionError,
-  toCodexRequestError,
   type CodexErrorShape,
-} from "../../../core/model/providers/codex/errors.js";
+  type CodexRequestBody,
+} from "@agentlink/core/codex";
+
 import {
   canUseCodexStandaloneWeb,
   executeCodexStandaloneWeb,
@@ -244,7 +240,9 @@ export class CodexProvider implements ModelProvider {
     const existing = this.clients.get(key);
     if (existing) return existing;
 
-    const client = createOpenAiResponsesClient(auth, endpoint);
+    const client = createOpenAiResponsesClient(auth, endpoint, {
+      fetch: agentLinkFetch,
+    });
     this.clients.set(key, client);
     return client;
   }

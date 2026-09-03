@@ -36,6 +36,40 @@ const CORE_MODULES = [
     loadEsm: () => import("@agentlink/core/agent-tool-loop"),
   },
   {
+    exportPath: "codex",
+    fileName: "codex",
+    declarationDependencies: [
+      "codex/clientIdentity",
+      "codex/errors",
+      "codex/models",
+      "codex/openaiClient",
+      "codex/streamParser",
+      "codex/translation",
+    ],
+    identityExports: [
+      "CODEX_DEFAULT_MODEL",
+      "CodexRequestError",
+      "CodexStreamError",
+      "createOpenAiResponsesClient",
+      "getCodexEndpointConfig",
+      "getCodexModelCapabilities",
+      "getCodexOriginator",
+      "parseCodexResponseStreamEvents",
+      "resolveCodexEffectiveModel",
+    ],
+    loadEsm: () => import("@agentlink/core/codex"),
+  },
+  {
+    exportPath: "embedded-agent-web",
+    fileName: "embeddedAgentWeb",
+    declarationDependencies: ["agentEngine", "modelIdentity"],
+    identityExports: [
+      "createEmbeddedAgentWebHandler",
+      "parseEmbeddedAgentRequest",
+    ],
+    loadEsm: () => import("@agentlink/core/embedded-agent-web"),
+  },
+  {
     exportPath: "host-adapter-contracts",
     fileName: "hostAdapterContracts",
     declarationDependencies: [
@@ -50,12 +84,29 @@ const CORE_MODULES = [
     loadEsm: () => import("@agentlink/core/host-adapter-contracts"),
   },
   {
+    exportPath: "host-approval-test-kit",
+    fileName: "hostApprovalTestKit",
+    declarationDependencies: [
+      "modelIdentity",
+      "modelRuntime",
+      "sessionRepository",
+      "turnInteractions",
+      "turnLeases",
+    ],
+    identityExports: [
+      "HostApprovalFixtureModelBackend",
+      "runHostApprovalContract",
+    ],
+    loadEsm: () => import("@agentlink/core/host-approval-test-kit"),
+  },
+  {
     exportPath: "host-tools",
     fileName: "hostTools",
     declarationDependencies: ["modelIdentity", "modelRuntime", "turnContracts"],
     identityExports: [
       "HostToolInputValidationError",
       "defineTool",
+      "defineZodTool",
       "formatHostToolValidationError",
     ],
     loadEsm: () => import("@agentlink/core/host-tools"),
@@ -289,6 +340,49 @@ const CORE_COMPATIBILITY_FACADES = [
     ],
   },
   {
+    path: "src/core/model/providers/codex/models.ts",
+    exportPath: "@agentlink/core/codex",
+    importerBaseline: ["src/core/model/providers/codex/models.test.ts"],
+  },
+  {
+    path: "src/agent/providers/codex/models.ts",
+    exportPath: "@agentlink/core/codex",
+    importerBaseline: ["src/agent/providers/codex/models.test.ts"],
+  },
+  {
+    path: "src/core/model/providers/codex/clientIdentity.ts",
+    exportPath: "@agentlink/core/codex",
+    importerBaseline: ["src/core/model/providers/codex/clientIdentity.test.ts"],
+  },
+  {
+    path: "src/core/model/providers/codex/errors.ts",
+    exportPath: "@agentlink/core/codex",
+    importerBaseline: [
+      "src/core/model/providers/codex/completionFacade.test.ts",
+      "src/core/model/providers/codex/errors.test.ts",
+    ],
+  },
+  {
+    path: "src/core/model/providers/codex/openaiClient.ts",
+    exportPath: "@agentlink/core/codex",
+    importerBaseline: ["src/core/model/providers/codex/openaiClient.test.ts"],
+  },
+  {
+    path: "src/agent/providers/codex/openaiClient.ts",
+    exportPath: "@agentlink/core/codex",
+    importerBaseline: [],
+  },
+  {
+    path: "src/core/model/providers/codex/streamParser.ts",
+    exportPath: "@agentlink/core/codex",
+    importerBaseline: ["src/core/model/providers/codex/streamParser.test.ts"],
+  },
+  {
+    path: "src/core/model/providers/codex/translation.ts",
+    exportPath: "@agentlink/core/codex",
+    importerBaseline: ["src/core/model/providers/codex/translation.test.ts"],
+  },
+  {
     path: "src/core/model/providers/openaiCompatible/completionFacade.ts",
     exportPath: "@agentlink/core/openai-compatible",
     importerBaseline: [],
@@ -381,7 +475,7 @@ const CORE_COMPATIBILITY_FACADES = [
       "src/browser-gateway/browserGatewayAskAgentHistory.ts",
       "src/browser-gateway/helper/browserGatewayHelper.ts",
       "src/core/model/providers/anthropic/streamParser.ts",
-      "src/core/model/providers/codex/streamParser.ts",
+
       "src/core/model/providers/openaiCompatible/streamParser.ts",
       "src/core/model/providers/openaiCompatible/translation.test.ts",
       "src/core/webAccess.test.ts",
@@ -560,6 +654,34 @@ describe("core package boundary", () => {
     expect(cjsSurfaceModelMessagesSource).not.toContain(
       "class CoreModelBackendRegistry",
     );
+
+    for (const module of [
+      "clientIdentity",
+      "errors",
+      "models",
+      "openaiClient",
+      "streamParser",
+      "translation",
+    ]) {
+      for (const suffix of ["d.cts", "d.cts.map"]) {
+        const filePath = `dist/cjs/codex/${module}.${suffix}`;
+        expect(fs.existsSync(path.join(CORE_PACKAGE, filePath)), filePath).toBe(
+          true,
+        );
+      }
+      const declarationMap = JSON.parse(
+        fs.readFileSync(
+          path.join(CORE_PACKAGE, "dist/cjs/codex", `${module}.d.cts.map`),
+          "utf8",
+        ),
+      ) as { sources?: string[] };
+      for (const source of declarationMap.sources ?? []) {
+        expect(
+          fs.existsSync(path.resolve(CORE_PACKAGE, "dist/cjs/codex", source)),
+          `codex/${module}:${source}`,
+        ).toBe(true);
+      }
+    }
 
     for (const module of [
       "backend",

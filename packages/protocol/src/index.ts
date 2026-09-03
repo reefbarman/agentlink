@@ -60,6 +60,8 @@ export * from "./contextDiagnostics.js";
 export * from "./contextHealth.js";
 export * from "./contextLedger.js";
 export * from "./diffSnapshot.js";
+export * from "./embeddedAgentPresentation.js";
+export * from "./embeddedAgentTransport.js";
 export * from "./finalStatus.js";
 // `findReplacePreview` is subpath-only: its generic preview message names would
 // make collisions likely as more surface protocols move into this package.

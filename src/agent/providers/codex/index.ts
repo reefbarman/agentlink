@@ -2,7 +2,7 @@ export { CodexProvider } from "./CodexProvider.js";
 export {
   CODEX_CONDENSE_MODEL,
   CODEX_CONDENSE_MODEL_FALLBACKS,
-} from "../../../core/model/providers/codex/models.js";
+} from "@agentlink/core/codex";
 export {
   CodexOAuthManager,
   codexOAuthManager,

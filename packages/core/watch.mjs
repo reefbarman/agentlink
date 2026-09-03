@@ -30,7 +30,10 @@ const declarationsPlugin = {
 const sharedCoreModuleNames = new Set([
   "agentEngine",
   "agentToolLoop",
+  "codex",
+  "embeddedAgentWeb",
   "hostAdapterContracts",
+  "hostApprovalTestKit",
   "hostTools",
   "modelAuthProvider",
   "modelRequestScheduler",
@@ -65,7 +68,10 @@ const cjs = await context({
   entryPoints: [
     "src/agentEngine.ts",
     "src/agentToolLoop.ts",
+    "src/codex.ts",
+    "src/embeddedAgentWeb.ts",
     "src/hostAdapterContracts.ts",
+    "src/hostApprovalTestKit.ts",
     "src/hostTools.ts",
     "src/modelAuthProvider.ts",
     "src/modelRequestScheduler.ts",

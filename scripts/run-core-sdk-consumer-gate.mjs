@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 const execFileAsync = promisify(execFile);
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURE = join(ROOT, "fixtures", "core-sdk-consumer");
-const PACKAGES = ["protocol", "core"];
+const PACKAGES = ["protocol", "core", "node-host"];
 
 async function run(command, args, options = {}) {
   try {
@@ -36,7 +36,7 @@ async function run(command, args, options = {}) {
   }
 }
 
-async function packPackage(packageName, packDirectory) {
+async function packPackage(packageName, packDirectory, cacheDirectory) {
   const { stdout } = await run(
     "npm",
     [
@@ -47,7 +47,7 @@ async function packPackage(packageName, packDirectory) {
       "--pack-destination",
       packDirectory,
     ],
-    { cwd: ROOT },
+    { cwd: ROOT, env: { npm_config_cache: cacheDirectory } },
   );
   const parsed = JSON.parse(stdout);
   const artifact = parsed[0];
@@ -152,37 +152,48 @@ function exactLockedVersion(lock, packageName) {
 }
 
 async function assertInstalledResolution(consumerDirectory) {
-  const { stdout: esmResolution } = await run(
-    "node",
-    [
-      "--input-type=module",
-      "--eval",
-      'process.stdout.write(import.meta.resolve("@agentlink/core"))',
-    ],
-    { cwd: consumerDirectory },
-  );
-  const { stdout: cjsResolution } = await run(
-    "node",
-    [
-      "--input-type=commonjs",
-      "--eval",
-      'process.stdout.write(require.resolve("@agentlink/core"))',
-    ],
-    { cwd: consumerDirectory },
-  );
+  const resolveInstalled = async (packageName, require = false) => {
+    const { stdout } = await run(
+      "node",
+      require
+        ? [
+            "--input-type=commonjs",
+            "--eval",
+            `process.stdout.write(require.resolve(${JSON.stringify(packageName)}))`,
+          ]
+        : [
+            "--input-type=module",
+            "--eval",
+            `process.stdout.write(import.meta.resolve(${JSON.stringify(packageName)}))`,
+          ],
+      { cwd: consumerDirectory },
+    );
+    const resolvedPath = stdout.startsWith("file:")
+      ? fileURLToPath(stdout)
+      : stdout;
+    return await realpath(resolvedPath);
+  };
   const expectedCoreRoot = await realpath(
     join(consumerDirectory, "node_modules", "@agentlink", "core"),
   );
-  for (const resolvedValue of [esmResolution, cjsResolution]) {
-    const resolvedPath = resolvedValue.startsWith("file:")
-      ? fileURLToPath(resolvedValue)
-      : resolvedValue;
-    const canonical = await realpath(resolvedPath);
+  const expectedNodeHostRoot = await realpath(
+    join(consumerDirectory, "node_modules", "@agentlink", "node-host"),
+  );
+  for (const canonical of [
+    await resolveInstalled("@agentlink/core"),
+    await resolveInstalled("@agentlink/core", true),
+  ]) {
     if (!canonical.startsWith(`${expectedCoreRoot}/`)) {
       throw new Error(
         `Core resolved outside consumer node_modules: ${canonical}`,
       );
     }
+  }
+  const nodeHostResolution = await resolveInstalled("@agentlink/node-host");
+  if (!nodeHostResolution.startsWith(`${expectedNodeHostRoot}/`)) {
+    throw new Error(
+      `Node host resolved outside consumer node_modules: ${nodeHostResolution}`,
+    );
   }
   const protocolRoot = await realpath(
     join(consumerDirectory, "node_modules", "@agentlink", "protocol"),
@@ -190,15 +201,23 @@ async function assertInstalledResolution(consumerDirectory) {
   const protocolPackage = JSON.parse(
     await readFile(join(protocolRoot, "package.json"), "utf8"),
   );
-  if (
-    await pathExists(
-      join(expectedCoreRoot, "node_modules", "@agentlink", "protocol"),
-    )
-  ) {
-    throw new Error("Core installed an unexpected nested protocol copy");
+  for (const [owner, root] of [
+    ["Core", expectedCoreRoot],
+    ["Node host", expectedNodeHostRoot],
+  ]) {
+    for (const dependency of ["core", "protocol"]) {
+      if (
+        await pathExists(join(root, "node_modules", "@agentlink", dependency))
+      ) {
+        throw new Error(
+          `${owner} installed an unexpected nested ${dependency} copy`,
+        );
+      }
+    }
   }
   return {
     expectedCoreRoot,
+    expectedNodeHostRoot,
     protocolRoot,
     protocolVersion: protocolPackage.version,
   };
@@ -251,15 +270,20 @@ async function main() {
   try {
     const packDirectory = join(temporaryRoot, "packs");
     const consumerDirectory = join(temporaryRoot, "consumer");
+    const cacheDirectory = join(temporaryRoot, "npm-cache");
     await Promise.all([
       cp(FIXTURE, consumerDirectory, { recursive: true }),
       mkdir(packDirectory, { recursive: true }),
+      mkdir(cacheDirectory, { recursive: true }),
     ]);
     await assertIsolatedConsumer(consumerDirectory);
 
-    const [protocolArtifact, coreArtifact] = await Promise.all(
-      PACKAGES.map((packageName) => packPackage(packageName, packDirectory)),
-    );
+    const [protocolArtifact, coreArtifact, nodeHostArtifact] =
+      await Promise.all(
+        PACKAGES.map((packageName) =>
+          packPackage(packageName, packDirectory, cacheDirectory),
+        ),
+      );
     for (const requiredConsumerArtifact of ["README.md", "CHANGELOG.md"]) {
       if (!coreArtifact.files.has(requiredConsumerArtifact)) {
         throw new Error(
@@ -272,18 +296,43 @@ async function main() {
         "Core package tarball must not include TypeScript build metadata",
       );
     }
+    if (!nodeHostArtifact.files.has("README.md")) {
+      throw new Error("Node-host package tarball must include README.md");
+    }
+    if (
+      [...nodeHostArtifact.files].some((file) => file.endsWith(".tsbuildinfo"))
+    ) {
+      throw new Error(
+        "Node-host package tarball must not include TypeScript build metadata",
+      );
+    }
     const { tarball: protocolTarball } = protocolArtifact;
     const { tarball: coreTarball } = coreArtifact;
-    const [rootPack, rootLock, protocolPack, corePack] = await Promise.all([
-      readFile(join(ROOT, "package.json"), "utf8").then(JSON.parse),
-      readFile(join(ROOT, "package-lock.json"), "utf8").then(JSON.parse),
-      readFile(join(ROOT, "packages", "protocol", "package.json"), "utf8").then(
-        JSON.parse,
-      ),
-      readFile(join(ROOT, "packages", "core", "package.json"), "utf8").then(
-        JSON.parse,
-      ),
-    ]);
+    const { tarball: nodeHostTarball } = nodeHostArtifact;
+    const [rootPack, rootLock, protocolPack, corePack, nodeHostPack] =
+      await Promise.all([
+        readFile(join(ROOT, "package.json"), "utf8").then(JSON.parse),
+        readFile(join(ROOT, "package-lock.json"), "utf8").then(JSON.parse),
+        readFile(
+          join(ROOT, "packages", "protocol", "package.json"),
+          "utf8",
+        ).then(JSON.parse),
+        readFile(join(ROOT, "packages", "core", "package.json"), "utf8").then(
+          JSON.parse,
+        ),
+        readFile(
+          join(ROOT, "packages", "node-host", "package.json"),
+          "utf8",
+        ).then(JSON.parse),
+      ]);
+    if (
+      nodeHostPack.dependencies["@agentlink/core"] !== corePack.version ||
+      nodeHostPack.dependencies["@agentlink/protocol"] !== protocolPack.version
+    ) {
+      throw new Error(
+        "Node-host must depend on the exact packed core and protocol versions",
+      );
+    }
     for (const [exportPath, conditions] of Object.entries(corePack.exports)) {
       if (conditions.browser !== null || conditions.edge !== null) {
         throw new Error(
@@ -295,6 +344,7 @@ async function main() {
     const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
     packageJson.dependencies = {
       "@agentlink/core": `file:${coreTarball}`,
+      "@agentlink/node-host": `file:${nodeHostTarball}`,
       "@agentlink/protocol": `file:${protocolTarball}`,
     };
     packageJson.devDependencies = Object.fromEntries(
@@ -304,9 +354,13 @@ async function main() {
       ]),
     );
     packageJson.overrides = {
+      "@agentlink/core": `file:${coreTarball}`,
       "@agentlink/protocol": `file:${protocolTarball}`,
     };
     packageJson.engines = { node: corePack.engines.node };
+    if (nodeHostPack.engines.node !== corePack.engines.node) {
+      throw new Error("Core and node-host must declare the same Node engine");
+    }
     packageJson.agentlinkProtocolVersion = protocolPack.version;
     await writeFile(
       packageJsonPath,
@@ -350,7 +404,7 @@ async function main() {
         "--no-fund",
         "--prefer-offline",
       ],
-      { cwd: consumerDirectory },
+      { cwd: consumerDirectory, env: { npm_config_cache: cacheDirectory } },
     );
     const resolution = await assertInstalledResolution(consumerDirectory);
     if (resolution.protocolVersion !== protocolPack.version) {
@@ -365,16 +419,24 @@ async function main() {
     await run(bin("tsc"), ["-p", "tsconfig.json"], {
       cwd: consumerDirectory,
     });
-    const [{ stdout: esmCount }, { stdout: cjsCount }, { stdout }] =
-      await Promise.all([
-        run("node", ["all-exports-esm.mjs"], { cwd: consumerDirectory }),
-        run("node", ["all-exports-cjs.cjs"], { cwd: consumerDirectory }),
-        run("node", ["consumer.mjs"], { cwd: consumerDirectory }),
-      ]);
+    const [
+      { stdout: esmCount },
+      { stdout: cjsCount },
+      { stdout },
+      { stdout: mcpStdout },
+    ] = await Promise.all([
+      run("node", ["all-exports-esm.mjs"], { cwd: consumerDirectory }),
+      run("node", ["all-exports-cjs.cjs"], { cwd: consumerDirectory }),
+      run("node", ["consumer.mjs"], { cwd: consumerDirectory }),
+      run("node", ["node-host-remote-mcp.mjs"], {
+        cwd: consumerDirectory,
+      }),
+    ]);
     if (Number(esmCount) !== exportCount || Number(cjsCount) !== exportCount) {
       throw new Error("Not every packed export loaded under ESM and CommonJS");
     }
     const result = JSON.parse(stdout.trim());
+    const mcpResult = JSON.parse(mcpStdout.trim());
     if (
       result.ok !== true ||
       result.catalogModels !== 1 ||
@@ -386,6 +448,20 @@ async function main() {
     ) {
       throw new Error(
         `Packed consumer returned an invalid result: ${stdout.trim()}`,
+      );
+    }
+    if (
+      mcpResult.ok !== true ||
+      mcpResult.result !== "completed" ||
+      mcpResult.remoteToolCalls !== 1 ||
+      mcpResult.networkAuthorizationCovered !== true ||
+      mcpResult.deniedDestinationFetches !== 0 ||
+      mcpResult.redirectsRejected !== true ||
+      mcpResult.crossPrincipalInvocationBlocked !== true ||
+      mcpResult.toolAuthorization !== "records__lookup"
+    ) {
+      throw new Error(
+        `Packed remote MCP consumer returned an invalid result: ${mcpStdout.trim()}`,
       );
     }
 
@@ -407,19 +483,23 @@ async function main() {
       ),
     );
 
+    const installedNodeModulesRoot = `${await realpath(consumerDirectory)}/node_modules/`;
     process.stdout.write(
       `${JSON.stringify(
         {
           ...result,
           coreVersion: corePack.version,
+          nodeHostVersion: nodeHostPack.version,
           protocolVersion: protocolPack.version,
           exportPaths: exportCount,
+          remoteMcpAcceptance: mcpResult,
           esmAndCjsExportsLoaded: true,
           browserAndEdgeImportsRejected: true,
           protocolBrowserImportAccepted: true,
-          isolatedResolution: resolution.expectedCoreRoot.startsWith(
-            `${await realpath(consumerDirectory)}/node_modules/`,
-          ),
+          isolatedResolution: [
+            resolution.expectedCoreRoot,
+            resolution.expectedNodeHostRoot,
+          ].every((root) => root.startsWith(installedNodeModulesRoot)),
         },
         null,
         2,

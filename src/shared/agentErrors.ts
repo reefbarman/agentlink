@@ -1,8 +1,12 @@
-import type { AgentErrorActions } from "@agentlink/protocol/agent-error-presentation";
+import {
+  summarizeHtmlErrorText,
+  type AgentErrorActions,
+} from "@agentlink/protocol/agent-error-presentation";
 
-export type {
-  AgentErrorActions,
-  AgentRuntimeErrorPresentation,
+export {
+  summarizeHtmlErrorText,
+  type AgentErrorActions,
+  type AgentRuntimeErrorPresentation,
 } from "@agentlink/protocol/agent-error-presentation";
 
 export type AgentRetryCategory =
@@ -32,44 +36,6 @@ export function buildAgentErrorMessage(err: unknown): string {
     e = (e as { cause?: unknown }).cause;
   }
   return [...new Set(parts)].join(": ");
-}
-
-/**
- * Collapse an HTML error document embedded in an error message (e.g. a
- * Cloudflare 5xx page returned instead of JSON) down to its human-readable
- * summary. Raw HTML bodies are unreadable in the UI and their markup digits
- * confuse substring-based error classifiers.
- */
-export function summarizeHtmlErrorText(text: string): string {
-  const htmlStart = text.search(/<!doctype html|<html[\s>]/i);
-  if (htmlStart === -1) return text;
-
-  const prefix = text.slice(0, htmlStart).trim();
-  const html = text.slice(htmlStart);
-  const parts: string[] = [];
-  const heading = extractTagText(html, "h1") ?? extractTagText(html, "title");
-  if (heading) parts.push(heading);
-  for (const match of html.matchAll(/<li[^>]*>([^<]*)<\/li>/gi)) {
-    const item = match[1].replace(/\s+/g, " ").trim();
-    if (/ray id|error reference|cloudflare location/i.test(item)) {
-      parts.push(item);
-    }
-  }
-  const summary =
-    parts.length > 0 ? parts.join("; ") : "[HTML error page body omitted]";
-  return prefix ? `${prefix} ${summary}` : summary;
-}
-
-function extractTagText(html: string, tag: string): string | undefined {
-  const match = html.match(
-    new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i"),
-  );
-  if (!match) return undefined;
-  const text = match[1]
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return text || undefined;
 }
 
 const MAX_ERROR_DATA_CHARS = 600;

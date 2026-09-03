@@ -1,9 +1,12 @@
 import {
   HostToolInputValidationError,
   defineTool,
+  defineZodTool,
   formatHostToolValidationError,
 } from "./hostTools.js";
 import { describe, expect, it, vi } from "vitest";
+
+import { z } from "zod";
 
 const CONTEXT = {
   principal: { tenantId: "tenant-a", subjectId: "subject-a" },
@@ -74,6 +77,122 @@ describe("dynamic host tool contracts", () => {
       ]),
     });
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("defines a typed Zod tool with input JSON Schema and canonical parsed execution", async () => {
+    const handler = vi.fn(async (input: { query: string; limit: number }) => ({
+      modelContent: `${input.query}:${input.limit}`,
+    }));
+    const tool = defineZodTool({
+      name: "zod_lookup",
+      description: "Look up normalized input",
+      inputSchema: z.object({
+        query: z.string().transform((value) => value.trim()),
+        limit: z.coerce.number().int().positive().default(5),
+      }),
+      effect: "read",
+      presentation: {
+        title: "Account lookup",
+        inputLabel: "Query",
+        outputLabel: "Result",
+      },
+      displayInput: (input) => ({ query: input.query, limit: input.limit }),
+      handler,
+    });
+
+    expect(tool.definition.input_schema).toMatchObject({
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        limit: { type: "integer", default: 5 },
+      },
+      required: ["query"],
+    });
+    expect(tool.definition.input_schema).not.toHaveProperty("$schema");
+    expect(tool.presentation).toEqual({
+      title: "Account lookup",
+      inputLabel: "Query",
+      outputLabel: "Result",
+    });
+    const validation = tool.validate({ query: "  wealth  " });
+    expect(validation).toEqual({
+      valid: true,
+      input: { query: "wealth", limit: 5 },
+    });
+    if (!validation.valid) throw new Error("Expected canonical Zod input");
+    expect(tool.displayInput?.(validation.input)).toEqual({
+      query: "wealth",
+      limit: 5,
+    });
+    await expect(
+      tool.executeValidated(validation.input, CONTEXT),
+    ).resolves.toEqual({ modelContent: "wealth:5" });
+    expect(handler).toHaveBeenCalledWith(
+      { query: "wealth", limit: 5 },
+      CONTEXT,
+    );
+  });
+
+  it("rejects canonical Zod outputs that cannot survive durable JSON exactly", () => {
+    const tool = defineZodTool({
+      name: "zod_non_json",
+      description: "Reject non-JSON canonical output",
+      inputSchema: z.object({
+        timestamp: z.string().transform((value) => new Date(value)),
+      }) as unknown as z.ZodType<Record<string, unknown>>,
+      effect: "write",
+      authorization: "required",
+      handler: async () => ({ modelContent: "never" }),
+    });
+
+    expect(tool.validate({ timestamp: "2026-09-02T00:00:00.000Z" })).toEqual({
+      valid: false,
+      issues: [
+        {
+          path: "$.timestamp",
+          keyword: "json",
+          message: "must contain only plain JSON objects",
+        },
+      ],
+    });
+  });
+
+  it("reports bounded Zod issues and requires an object output", () => {
+    const objectTool = defineZodTool({
+      name: "zod_invalid",
+      description: "Reject invalid values",
+      inputSchema: z.object({ query: z.string().min(1) }),
+      effect: "read",
+      handler: async () => ({ modelContent: "ok" }),
+    });
+    expect(objectTool.validate({ query: "" })).toEqual({
+      valid: false,
+      issues: [
+        expect.objectContaining({ path: "$.query", keyword: "too_small" }),
+      ],
+    });
+    expect(() =>
+      defineZodTool({
+        name: "zod_scalar",
+        description: "Reject scalar output",
+        inputSchema: z.string() as never,
+        effect: "read",
+        handler: async () => ({ modelContent: "never" }),
+      }),
+    ).toThrow("top-level input schema must describe an object");
+  });
+
+  it("rejects unsafe presentation metadata", () => {
+    expect(() =>
+      defineTool({
+        name: "unsafe_presentation",
+        description: "Reject unbounded labels",
+        inputSchema: { type: "object" },
+        effect: "read",
+        presentation: { title: "x".repeat(301) },
+        handler: async () => ({ modelContent: "ok" }),
+      }),
+    ).toThrow("presentation metadata is invalid");
   });
 
   it("isolates schema compilation between tools with the same schema id", () => {

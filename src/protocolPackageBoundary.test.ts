@@ -4639,6 +4639,69 @@ describe("protocol package boundary", () => {
     }
   });
 
+  it("wires embedded-agent transport through every public package build surface", () => {
+    const packageManifest = JSON.parse(
+      fs.readFileSync(
+        path.join(ROOT, "packages", "protocol", "package.json"),
+        "utf8",
+      ),
+    ) as { exports?: Record<string, unknown> };
+    expect(packageManifest.exports?.["./embedded-agent-presentation"]).toEqual({
+      browser: {
+        types: "./dist/embeddedAgentPresentation.d.ts",
+        default: "./dist/embeddedAgentPresentation.js",
+      },
+      import: {
+        types: "./dist/embeddedAgentPresentation.d.ts",
+        default: "./dist/embeddedAgentPresentation.js",
+      },
+      require: {
+        types: "./dist/cjs/embeddedAgentPresentation.d.cts",
+        default: "./dist/cjs/embeddedAgentPresentation.cjs",
+      },
+    });
+    expect(packageManifest.exports?.["./embedded-agent-transport"]).toEqual({
+      browser: {
+        types: "./dist/embeddedAgentTransport.d.ts",
+        default: "./dist/embeddedAgentTransport.js",
+      },
+      import: {
+        types: "./dist/embeddedAgentTransport.d.ts",
+        default: "./dist/embeddedAgentTransport.js",
+      },
+      require: {
+        types: "./dist/cjs/embeddedAgentTransport.d.cts",
+        default: "./dist/cjs/embeddedAgentTransport.cjs",
+      },
+    });
+
+    const indexSource = fs.readFileSync(
+      path.join(PROTOCOL_SOURCE, "index.ts"),
+      "utf8",
+    );
+    expect(indexSource).toContain(
+      'export * from "./embeddedAgentPresentation.js";',
+    );
+    expect(indexSource).toContain(
+      'export * from "./embeddedAgentTransport.js";',
+    );
+
+    for (const buildScript of ["build-cjs.mjs", "watch.mjs"]) {
+      const source = fs.readFileSync(
+        path.join(ROOT, "packages", "protocol", buildScript),
+        "utf8",
+      );
+      expect(source, buildScript).toContain(
+        '"src/embeddedAgentPresentation.ts"',
+      );
+      expect(source, buildScript).toContain('"src/embeddedAgentTransport.ts"');
+      expect(source, buildScript).toContain(
+        '"dist/cjs/embeddedAgentTransport.d.cts"',
+      );
+      expect(source, buildScript).toContain('"./embeddedAgentTransport.cjs"');
+    }
+  });
+
   it("wires chat-pane-transport through every public package build surface", () => {
     const packageManifest = JSON.parse(
       fs.readFileSync(

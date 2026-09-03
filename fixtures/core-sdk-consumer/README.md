@@ -1,16 +1,24 @@
-# Packed Core SDK Consumer — E8a v1
+# Packed Core SDK Consumer — E8
 
-Run from the repository root:
+Run the isolated package-boundary proof from the repository root:
 
 ```sh
 npm run test:core-sdk-consumer
 ```
 
+Vendor a matched SDK set into a real consumer with:
+
+```sh
+npm run vendor:core-sdk -- --destination /path/to/consumer/vendor/agentlink
+```
+
+Add `--include-node-host` when needed. The command emits content-addressed tarballs plus `agentlink-sdk-artifacts.json`, validates exact transitive AgentLink versions, and clean-installs/imports the emitted set with a disposable npm cache. Copy the manifest's `packageJsonDependencies` into the consumer manifest and commit the artifacts, manifest, package manifest, and regenerated lockfile together.
+
 ## Automated acceptance checklist
 
-- [x] Build and `npm pack` `@agentlink/protocol` and `@agentlink/core`.
-- [x] Install both tarballs outside the repository and its `node_modules` ancestry.
-- [x] Type-check and runtime-load all 21 packed core export paths under ESM and CommonJS without source aliases.
+- [x] Build and `npm pack` `@agentlink/protocol`, `@agentlink/core`, and `@agentlink/node-host`.
+- [x] Install all three tarballs outside the repository and its `node_modules` ancestry with exact local dependency overrides.
+- [x] Type-check and runtime-load every packed core export path under ESM and CommonJS without source aliases.
 - [x] Run a Node consumer with one provider-qualified catalog model.
 - [x] Exercise hard-coded and catalog-driven model selection.
 - [x] Execute two schema-defined, principal-scoped host tools.
@@ -20,7 +28,9 @@ npm run test:core-sdk-consumer
 - [x] Reject every `@agentlink/core` export under explicit browser and Edge package conditions.
 - [x] Positively bundle `@agentlink/protocol/model-catalog` for the browser.
 - [x] Verify installed package resolution stays inside the isolated consumer's own `node_modules`.
-- [x] Keep MCP absent from the fixture.
+- [x] Run one host-authorized remote Streamable HTTP MCP tool through `@agentlink/node-host` and the core turn loop.
+- [x] Require HTTPS, authorize every transport request, reject redirects, and prove a denied destination performs no underlying fetch.
+- [x] Reject invocation when a discovered remote tool is reused by another principal/session/turn.
 
 ## WealthFlow migration checklist
 
@@ -33,5 +43,6 @@ npm run test:core-sdk-consumer
 - [x] Verify streaming, cancellation, bounded execution, and process-recreated engine requests through focused tests and the production build.
 - [x] Keep WealthFlow web research tools host-owned and MCP client support disabled.
 - [x] Document package-pair rollback in [`packages/core/README.md`](../../packages/core/README.md).
+- [ ] Re-vendor with `npm run vendor:core-sdk`, copy `vendor/agentlink` before dependency installation in every Docker/add-on build, and prove a clean deployment with no pre-existing `node_modules`.
 
-This fixture proves the packed SDK boundary and synthetic non-MCP runtime path. WealthFlow is the completed non-MCP external consumer; E7 remote MCP acceptance remains deferred to Phase C/C3.
+This fixture preserves the E8a synthetic non-MCP runtime proof and completes full E8 with a packed Node-host remote-MCP path. WealthFlow remains an external integration under validation, not yet production proof; its clean packaging, privacy, lifecycle, event handling, and approval integration gates still need to pass.

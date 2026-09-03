@@ -1,10 +1,11 @@
 import { randomUUID } from "crypto";
 
 import {
-  type CodexResolvedAuthForClient,
+  CODEX_DEFAULT_MODEL,
   getCodexEndpointConfig,
-} from "./openaiClient.js";
-import { CODEX_DEFAULT_MODEL, remapToChatgptBackendModel } from "./models.js";
+  remapToChatgptBackendModel,
+  type CodexResolvedAuthForClient,
+} from "@agentlink/core/codex";
 
 export const CODEX_IMAGE_GENERATION_MAX_COUNT = 4;
 export const CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS = 300_000;

@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 
+import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
+import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
+
 import type { HostToolResolver } from "./hostTools.js";
 import type { AgentModelReference, AgentPrincipal } from "./modelIdentity.js";
 import type {
@@ -12,9 +15,11 @@ import type {
   AgentSessionRepository,
   AgentSessionRevision,
   AgentSessionSummary,
+  AgentTranscriptStore,
   ReadAgentSessionResult,
 } from "./sessionRepository.js";
 import type {
+  AgentInteractionRequest,
   AgentTurnDurableState,
   AgentTurnEvent,
   AgentTurnRequest,
@@ -23,6 +28,7 @@ import type {
   AgentTurnStream,
   PreparedAgentTurnRequest,
 } from "./turnContracts.js";
+import { resolveAgentReasoningEffort } from "./turnContracts.js";
 import type {
   AuthorizeToolCall,
   DurableToolInteractionRepository,
@@ -61,6 +67,16 @@ export type ResolveAgentInstructions<
   request: ResolveAgentInstructionsRequest<TPrincipal>,
 ) => string | AgentInstructions | Promise<string | AgentInstructions>;
 
+export type AgentTranscriptPolicy<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+> =
+  | { readonly mode: "durable" }
+  | {
+      readonly mode: "ephemeral";
+      /** Host-owned process-local or otherwise explicitly ephemeral storage. */
+      readonly store: AgentTranscriptStore<TPrincipal>;
+    };
+
 export interface CreateAgentEngineOptions<
   TPrincipal extends AgentPrincipal = AgentPrincipal,
 > {
@@ -71,6 +87,9 @@ export interface CreateAgentEngineOptions<
   readonly interactions?: DurableToolInteractionRepository<TPrincipal>;
   readonly interactionTokens?: TurnInteractionTokenService;
   readonly defaultModel?: AgentModelReference;
+  readonly defaultReasoningEffort?: CoreReasoningEffort;
+  /** Defaults to durable transcript storage in the session repository. */
+  readonly transcriptPolicy?: AgentTranscriptPolicy<TPrincipal>;
   readonly resolveInstructions: ResolveAgentInstructions<TPrincipal>;
   readonly tools?: readonly HeadlessTurnTool<TPrincipal>[];
   readonly resolveTools?: HostToolResolver<TPrincipal>;
@@ -97,6 +116,8 @@ export interface CreateAgentSessionRequest<
   readonly principal: TPrincipal;
   readonly sessionId?: string;
   readonly model?: AgentModelReference;
+  /** Session default; `"none"` explicitly disables the runtime default. */
+  readonly reasoningEffort?: CoreReasoningEffort;
 }
 
 export interface CreateAgentSessionResponse<
@@ -114,6 +135,45 @@ export interface SetAgentSessionModelRequest<
   readonly model: AgentModelReference | undefined;
   readonly expectedRevision: AgentSessionRevision;
 }
+
+export interface SetAgentSessionReasoningEffortRequest<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+> {
+  readonly principal: TPrincipal;
+  readonly sessionId: string;
+  readonly reasoningEffort: CoreReasoningEffort | undefined;
+  readonly expectedRevision: AgentSessionRevision;
+}
+
+export interface AgentPendingInteractionSnapshot {
+  readonly request: AgentInteractionRequest;
+  readonly interactionRevision: string;
+  readonly sessionRevision: string;
+  /** First sequence expected from the resumed interaction stream. */
+  readonly nextSequence: number;
+}
+
+export interface AgentSessionInspection<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+> {
+  readonly summary: AgentSessionSummary<TPrincipal>;
+  readonly pendingInteraction?: AgentPendingInteractionSnapshot;
+}
+
+export interface AgentSessionHydration<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+> extends AgentSessionInspection<TPrincipal> {
+  readonly record: AgentSessionRecord<TPrincipal>;
+}
+
+export type CancelAgentSessionResult =
+  | { readonly status: "cancellation_requested"; readonly turnId: string }
+  | {
+      readonly status: "cancelled";
+      readonly turnId: string;
+      readonly revision: AgentSessionRevision;
+    }
+  | { readonly status: "not_active"; readonly revision: AgentSessionRevision };
 
 export interface ResumeAgentInteractionRequest<
   TPrincipal extends AgentPrincipal = AgentPrincipal,
@@ -140,9 +200,22 @@ export interface AgentSessionOperations<
   list(request: {
     readonly principal: TPrincipal;
   }): Promise<readonly AgentSessionSummary<TPrincipal>[]>;
+  /** Read control state and a display-safe pending interaction without transcript data. */
+  inspect(request: {
+    readonly principal: TPrincipal;
+    readonly sessionId: string;
+  }): Promise<AgentSessionInspection<TPrincipal>>;
+  /** Read the host-visible session record plus pending-interaction state for UI restore. */
+  hydrate(request: {
+    readonly principal: TPrincipal;
+    readonly sessionId: string;
+  }): Promise<AgentSessionHydration<TPrincipal>>;
   setModel(request: SetAgentSessionModelRequest<TPrincipal>): Promise<{
     readonly revision: AgentSessionRevision;
   }>;
+  setReasoningEffort(
+    request: SetAgentSessionReasoningEffortRequest<TPrincipal>,
+  ): Promise<{ readonly revision: AgentSessionRevision }>;
   runTurn(
     request: AgentTurnRequest<TPrincipal>,
     options?: AgentTurnRunOptions,
@@ -151,11 +224,21 @@ export interface AgentSessionOperations<
     request: ResumeAgentInteractionRequest<TPrincipal>,
     options?: AgentTurnRunOptions,
   ): AgentTurnStream;
+  cancel(request: {
+    readonly principal: TPrincipal;
+    readonly sessionId: string;
+    readonly reason?: string;
+  }): Promise<CancelAgentSessionResult>;
   recoverInterrupted(request: {
     readonly principal: TPrincipal;
     readonly sessionId: string;
     readonly reason?: string;
   }): Promise<ReadAgentSessionResult<TPrincipal>>;
+  delete(request: {
+    readonly principal: TPrincipal;
+    readonly sessionId: string;
+    readonly expectedRevision?: AgentSessionRevision;
+  }): Promise<void>;
 }
 
 export interface AgentEngine<
@@ -198,6 +281,12 @@ export function createAgentEngine<
   const now = options.now ?? Date.now;
   const createSessionId = options.createSessionId ?? randomUUID;
   const createTurnId = options.createTurnId ?? randomUUID;
+  const defaultReasoningEffort = optionalReasoningEffort(
+    options.defaultReasoningEffort,
+    "defaultReasoningEffort",
+  );
+  const transcriptPolicy = options.transcriptPolicy ?? { mode: "durable" };
+  const activeTurns = new Map<string, ActiveEngineTurn>();
   const maxOutputTokens = positiveInteger(
     options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
     "maxOutputTokens",
@@ -242,8 +331,18 @@ export function createAgentEngine<
   const read = async (request: {
     readonly principal: TPrincipal;
     readonly sessionId: string;
-  }): Promise<ReadAgentSessionResult<TPrincipal>> =>
-    await options.sessions.readSession(request);
+  }): Promise<ReadAgentSessionResult<TPrincipal>> => {
+    const result = await options.sessions.readSession(request);
+    if (!result.ok || transcriptPolicy.mode === "durable") return result;
+    const messages = await transcriptPolicy.store.readTranscript(request);
+    return {
+      ...result,
+      record: {
+        ...result.record,
+        messages: structuredClone(messages ?? []),
+      },
+    };
+  };
 
   return Object.freeze({
     models: options.models,
@@ -263,6 +362,14 @@ export function createAgentEngine<
           ...(request.model
             ? { selectedModel: structuredClone(request.model) }
             : {}),
+          ...(request.reasoningEffort !== undefined
+            ? {
+                reasoningEffort: optionalReasoningEffort(
+                  request.reasoningEffort,
+                  "reasoningEffort",
+                ),
+              }
+            : {}),
           runState: { phase: "idle" },
         };
         const created = await options.sessions.createSession({ record });
@@ -278,33 +385,52 @@ export function createAgentEngine<
       async list(request: { readonly principal: TPrincipal }) {
         return await options.sessions.listSessions(request);
       },
+      async inspect(request: {
+        readonly principal: TPrincipal;
+        readonly sessionId: string;
+      }) {
+        return await inspectSession(options, request, false, transcriptPolicy);
+      },
+      async hydrate(request: {
+        readonly principal: TPrincipal;
+        readonly sessionId: string;
+      }) {
+        return await inspectSession(options, request, true, transcriptPolicy);
+      },
       async setModel(request: SetAgentSessionModelRequest<TPrincipal>) {
-        const lease = await acquireLease(options.turnLeases, {
+        return await mutateIdleSession(options.sessions, options.turnLeases, {
           principal: request.principal,
           sessionId: request.sessionId,
+          expectedRevision: request.expectedRevision,
           turnId: requiredText(createTurnId(), "turnId"),
           ownerId,
           ttlMs: leaseTtlMs,
+          now,
+          mutate: (record) => ({
+            ...record,
+            selectedModel: request.model
+              ? structuredClone(request.model)
+              : undefined,
+          }),
         });
-        try {
-          const current = await requireSession(options.sessions, request);
-          assertRunnable(current.record);
-          const saved = await options.sessions.saveSession({
-            record: {
-              ...current.record,
-              updatedAt: monotonicTimestamp(current.record.updatedAt, now),
-              selectedModel: request.model
-                ? structuredClone(request.model)
-                : undefined,
-            },
-            expectedRevision: request.expectedRevision,
-            fencingToken: lease.fencingToken,
-          });
-          if (!saved.ok) throwSessionMutation(saved.reason);
-          return { revision: saved.revision };
-        } finally {
-          await releaseLease(options.turnLeases, lease);
-        }
+      },
+      async setReasoningEffort(
+        request: SetAgentSessionReasoningEffortRequest<TPrincipal>,
+      ) {
+        const reasoningEffort = optionalReasoningEffort(
+          request.reasoningEffort,
+          "reasoningEffort",
+        );
+        return await mutateIdleSession(options.sessions, options.turnLeases, {
+          principal: request.principal,
+          sessionId: request.sessionId,
+          expectedRevision: request.expectedRevision,
+          turnId: requiredText(createTurnId(), "turnId"),
+          ownerId,
+          ttlMs: leaseTtlMs,
+          now,
+          mutate: (record) => ({ ...record, reasoningEffort }),
+        });
       },
       runTurn(
         request: AgentTurnRequest<TPrincipal>,
@@ -320,6 +446,7 @@ export function createAgentEngine<
             leaseRenewIntervalMs,
             now,
             runOptions,
+            activeTurns,
             acquire: {
               principal: request.principal,
               sessionId: request.sessionId,
@@ -328,10 +455,15 @@ export function createAgentEngine<
             prepare: async (lease, kernelRunOptions) => {
               const current = await requireSession(options.sessions, request);
               assertRunnable(current.record);
+              const history = await readTranscript(
+                transcriptPolicy,
+                current.record,
+              );
               const running = await options.sessions.saveSession({
                 record: {
                   ...current.record,
                   updatedAt: monotonicTimestamp(current.record.updatedAt, now),
+                  messages: durableSessionMessages(transcriptPolicy, history),
                   lastTurnId: turnId,
                   runState: {
                     phase: "running",
@@ -348,10 +480,18 @@ export function createAgentEngine<
                 session: current.record,
                 turnId,
               });
+              const reasoningSelection = resolveAgentReasoningEffort({
+                turnReasoningEffort: optionalReasoningEffort(
+                  request.reasoningEffort,
+                  "reasoningEffort",
+                ),
+                sessionReasoningEffort: current.record.reasoningEffort,
+                runtimeDefaultReasoningEffort: defaultReasoningEffort,
+              });
               const prepared: PreparedAgentTurnRequest<TPrincipal> = {
                 request: structuredClone(request),
                 turnId,
-                history: structuredClone(current.record.messages),
+                history: structuredClone(history),
                 sessionModel: current.record.selectedModel
                   ? structuredClone(current.record.selectedModel)
                   : undefined,
@@ -360,7 +500,7 @@ export function createAgentEngine<
                   : undefined,
                 systemPrompt: formatInstructions(instructions),
                 maxOutputTokens,
-                reasoningEffort: undefined,
+                reasoningEffort: reasoningSelection?.effort,
                 limits: options.limits,
                 sessionRevision: running.revision,
                 turnFencingToken: lease.fencingToken,
@@ -392,6 +532,7 @@ export function createAgentEngine<
             leaseRenewIntervalMs,
             now,
             runOptions,
+            activeTurns,
             acquire: {
               principal: request.principal,
               sessionId: request.sessionId,
@@ -423,6 +564,29 @@ export function createAgentEngine<
               };
             },
           });
+        });
+      },
+      async cancel(request: {
+        readonly principal: TPrincipal;
+        readonly sessionId: string;
+        readonly reason?: string;
+      }): Promise<CancelAgentSessionResult> {
+        const active = activeTurns.get(
+          activeTurnKey(request.principal, request.sessionId),
+        );
+        if (active) {
+          active.abort.abort(
+            request.reason ?? "Session cancellation requested",
+          );
+          return { status: "cancellation_requested", turnId: active.turnId };
+        }
+        return await cancelInactiveSession({
+          options,
+          ownerId,
+          leaseTtlMs,
+          now,
+          createTurnId,
+          request,
         });
       },
       async recoverInterrupted(request: {
@@ -469,13 +633,303 @@ export function createAgentEngine<
           await releaseLease(options.turnLeases, lease);
         }
       },
+      async delete(request: {
+        readonly principal: TPrincipal;
+        readonly sessionId: string;
+        readonly expectedRevision?: AgentSessionRevision;
+      }) {
+        if (
+          activeTurns.has(activeTurnKey(request.principal, request.sessionId))
+        ) {
+          throw new AgentEngineError(
+            "session_busy",
+            "Session has an active turn",
+          );
+        }
+        const turnId = requiredText(createTurnId(), "turnId");
+        const lease = await acquireLease(options.turnLeases, {
+          ...request,
+          turnId,
+          ownerId,
+          ttlMs: leaseTtlMs,
+        });
+        try {
+          const current = await requireSession(options.sessions, request);
+          if (
+            request.expectedRevision !== undefined &&
+            current.revision !== request.expectedRevision
+          ) {
+            throw new AgentEngineError(
+              "session_revision_conflict",
+              "Session revision is stale",
+              true,
+            );
+          }
+          const deleted = await options.sessions.deleteSession({
+            principal: request.principal,
+            sessionId: request.sessionId,
+            expectedRevision: current.revision,
+            fencingToken: lease.fencingToken,
+          });
+          if (!deleted.ok) throwSessionMutation(deleted.reason);
+          if (transcriptPolicy.mode === "ephemeral") {
+            await transcriptPolicy.store.deleteTranscript(request);
+          }
+        } finally {
+          await releaseLease(options.turnLeases, lease);
+        }
+      },
     }),
   });
+}
+
+interface ActiveEngineTurn {
+  readonly turnId: string;
+  readonly abort: AbortController;
+}
+
+async function inspectSession<TPrincipal extends AgentPrincipal>(
+  options: CreateAgentEngineOptions<TPrincipal>,
+  request: { readonly principal: TPrincipal; readonly sessionId: string },
+  hydrate: false,
+  transcriptPolicy: AgentTranscriptPolicy<TPrincipal>,
+): Promise<AgentSessionInspection<TPrincipal>>;
+async function inspectSession<TPrincipal extends AgentPrincipal>(
+  options: CreateAgentEngineOptions<TPrincipal>,
+  request: { readonly principal: TPrincipal; readonly sessionId: string },
+  hydrate: true,
+  transcriptPolicy: AgentTranscriptPolicy<TPrincipal>,
+): Promise<AgentSessionHydration<TPrincipal>>;
+async function inspectSession<TPrincipal extends AgentPrincipal>(
+  options: CreateAgentEngineOptions<TPrincipal>,
+  request: { readonly principal: TPrincipal; readonly sessionId: string },
+  hydrate: boolean,
+  transcriptPolicy: AgentTranscriptPolicy<TPrincipal>,
+): Promise<
+  AgentSessionInspection<TPrincipal> | AgentSessionHydration<TPrincipal>
+> {
+  const current = await requireSession(options.sessions, request);
+  const summary = toSessionSummary(current);
+  let pendingInteraction: AgentPendingInteractionSnapshot | undefined;
+  if (current.record.pendingInteractionId) {
+    if (!options.interactions) {
+      throw new AgentEngineError(
+        "interaction_not_configured",
+        "Session has a pending interaction but no interaction repository is configured",
+      );
+    }
+    const pending = await options.interactions.readInteraction({
+      ...request,
+      interactionId: current.record.pendingInteractionId,
+    });
+    if (!pending.ok) {
+      throw new AgentEngineError(
+        "interaction_not_found",
+        "Session pending interaction was not found",
+      );
+    }
+    if (pending.sessionRevision !== current.revision) {
+      throw new AgentEngineError(
+        "session_revision_conflict",
+        "Session changed while its pending interaction was inspected",
+        true,
+      );
+    }
+    pendingInteraction = {
+      request: structuredClone(pending.record.request),
+      interactionRevision: pending.interactionRevision,
+      sessionRevision: pending.sessionRevision,
+      nextSequence: pending.record.continuation.nextSequence,
+    };
+  }
+  const inspection: AgentSessionInspection<TPrincipal> = {
+    summary,
+    ...(pendingInteraction ? { pendingInteraction } : {}),
+  };
+  if (!hydrate) return inspection;
+  const messages = await readTranscript(transcriptPolicy, current.record);
+  return {
+    ...inspection,
+    record: {
+      ...structuredClone(current.record),
+      messages: structuredClone(messages),
+    },
+  };
+}
+
+function toSessionSummary<TPrincipal extends AgentPrincipal>(
+  current: Extract<ReadAgentSessionResult<TPrincipal>, { ok: true }>,
+): AgentSessionSummary<TPrincipal> {
+  return {
+    principal: structuredClone(current.record.principal),
+    sessionId: current.record.sessionId,
+    createdAt: current.record.createdAt,
+    updatedAt: current.record.updatedAt,
+    ...(current.record.selectedModel
+      ? { selectedModel: structuredClone(current.record.selectedModel) }
+      : {}),
+    ...(current.record.reasoningEffort !== undefined
+      ? { reasoningEffort: current.record.reasoningEffort }
+      : {}),
+    runState: structuredClone(current.record.runState),
+    ...(current.record.pendingInteractionId
+      ? { pendingInteractionId: current.record.pendingInteractionId }
+      : {}),
+    revision: current.revision,
+  };
+}
+
+async function cancelInactiveSession<TPrincipal extends AgentPrincipal>(args: {
+  readonly options: CreateAgentEngineOptions<TPrincipal>;
+  readonly ownerId: string;
+  readonly leaseTtlMs: number;
+  readonly now: () => number;
+  readonly createTurnId: () => string;
+  readonly request: {
+    readonly principal: TPrincipal;
+    readonly sessionId: string;
+    readonly reason?: string;
+  };
+}): Promise<CancelAgentSessionResult> {
+  const operationTurnId = requiredText(args.createTurnId(), "turnId");
+  const lease = await acquireLease(args.options.turnLeases, {
+    ...args.request,
+    turnId: operationTurnId,
+    ownerId: args.ownerId,
+    ttlMs: args.leaseTtlMs,
+  });
+  try {
+    let current = await requireSession(args.options.sessions, args.request);
+    const activeTurnId =
+      current.record.runState.phase === "idle" ||
+      current.record.runState.phase === "interrupted"
+        ? undefined
+        : current.record.runState.turnId;
+    if (!activeTurnId) {
+      return { status: "not_active", revision: current.revision };
+    }
+
+    if (current.record.runState.phase === "suspended") {
+      if (!args.options.interactions) {
+        throw new AgentEngineError(
+          "interaction_not_configured",
+          "Session has a pending interaction but no interaction repository is configured",
+        );
+      }
+      const pending = await args.options.interactions.readInteraction({
+        principal: args.request.principal,
+        sessionId: args.request.sessionId,
+        interactionId: current.record.runState.interactionId,
+      });
+      if (!pending.ok) {
+        throw new AgentEngineError(
+          "interaction_not_found",
+          "Session pending interaction was not found",
+        );
+      }
+      const consumed = await args.options.interactions.consumeInteraction({
+        principal: args.request.principal,
+        sessionId: args.request.sessionId,
+        interactionId: current.record.runState.interactionId,
+        expectedInteractionRevision: pending.interactionRevision,
+        expectedSessionRevision: pending.sessionRevision,
+        fencingToken: lease.fencingToken,
+        responseId: randomUUID(),
+        decision: "deny",
+        consumedAt: readClock(args.now),
+      });
+      if (!consumed.ok) {
+        if (consumed.reason === "stale_fence") {
+          throw new AgentEngineError(
+            "turn_lease_lost",
+            "Turn lease fencing token is stale",
+            true,
+          );
+        }
+        if (consumed.reason === "not_found") {
+          throw new AgentEngineError(
+            "interaction_not_found",
+            "Session pending interaction was not found",
+          );
+        }
+        throw new AgentEngineError(
+          "session_revision_conflict",
+          "Session or interaction changed while cancellation was applied",
+          true,
+        );
+      }
+      current = await requireSession(args.options.sessions, args.request);
+    }
+
+    const saved = await args.options.sessions.saveSession({
+      record: {
+        ...current.record,
+        updatedAt: monotonicTimestamp(current.record.updatedAt, args.now),
+        pendingInteractionId: undefined,
+        lastTurnId: activeTurnId,
+        runState: {
+          phase: "interrupted",
+          turnId: activeTurnId,
+          interruptedAt: readClock(args.now),
+          reason: boundedReason(args.request.reason ?? "Session cancelled"),
+        },
+      },
+      expectedRevision: current.revision,
+      fencingToken: lease.fencingToken,
+    });
+    if (!saved.ok) throwSessionMutation(saved.reason);
+    return {
+      status: "cancelled",
+      turnId: activeTurnId,
+      revision: saved.revision,
+    };
+  } finally {
+    await releaseLease(args.options.turnLeases, lease);
+  }
+}
+
+function activeTurnKey(principal: AgentPrincipal, sessionId: string): string {
+  return JSON.stringify([principal.tenantId, principal.subjectId, sessionId]);
 }
 
 interface EngineTurnPreparation<TPrincipal extends AgentPrincipal> {
   readonly original: AgentSessionRecord<TPrincipal>;
   readonly stream: AgentTurnStream;
+}
+
+async function mutateIdleSession<TPrincipal extends AgentPrincipal>(
+  sessions: AgentSessionRepository<TPrincipal>,
+  leases: AgentTurnLeaseProvider<TPrincipal>,
+  request: {
+    readonly principal: TPrincipal;
+    readonly sessionId: string;
+    readonly expectedRevision: AgentSessionRevision;
+    readonly turnId: string;
+    readonly ownerId: string;
+    readonly ttlMs: number;
+    readonly now: () => number;
+    readonly mutate: (
+      record: AgentSessionRecord<TPrincipal>,
+    ) => AgentSessionRecord<TPrincipal>;
+  },
+): Promise<{ readonly revision: AgentSessionRevision }> {
+  const lease = await acquireLease(leases, request);
+  try {
+    const current = await requireSession(sessions, request);
+    assertRunnable(current.record);
+    const saved = await sessions.saveSession({
+      record: {
+        ...request.mutate(current.record),
+        updatedAt: monotonicTimestamp(current.record.updatedAt, request.now),
+      },
+      expectedRevision: request.expectedRevision,
+      fencingToken: lease.fencingToken,
+    });
+    if (!saved.ok) throwSessionMutation(saved.reason);
+    return { revision: saved.revision };
+  } finally {
+    await releaseLease(leases, lease);
+  }
 }
 
 function streamDeferredEngineTurn(
@@ -508,6 +962,7 @@ function streamEngineTurn<TPrincipal extends AgentPrincipal>(args: {
   readonly leaseRenewIntervalMs: number;
   readonly now: () => number;
   readonly runOptions: AgentTurnRunOptions;
+  readonly activeTurns: Map<string, ActiveEngineTurn>;
   readonly acquire: {
     readonly principal: TPrincipal;
     readonly sessionId: string;
@@ -525,6 +980,16 @@ function streamEngineTurn<TPrincipal extends AgentPrincipal>(args: {
       ttlMs: args.leaseTtlMs,
     });
     const leaseAbort = new AbortController();
+    const lifecycleAbort = new AbortController();
+    const activeKey = activeTurnKey(
+      args.acquire.principal,
+      args.acquire.sessionId,
+    );
+    const active: ActiveEngineTurn = {
+      turnId: args.acquire.turnId,
+      abort: lifecycleAbort,
+    };
+    args.activeTurns.set(activeKey, active);
     const keeper = keepLeaseAlive(
       args.options.turnLeases,
       lease,
@@ -541,6 +1006,7 @@ function streamEngineTurn<TPrincipal extends AgentPrincipal>(args: {
       prepared = await args.prepare(lease, {
         signal: combineAbortSignals(
           leaseAbort.signal,
+          lifecycleAbort.signal,
           args.runOptions.signal,
           consumerAbort.signal,
         ),
@@ -575,6 +1041,7 @@ function streamEngineTurn<TPrincipal extends AgentPrincipal>(args: {
         await validateLease(args.options.turnLeases, lease);
         committed = await commitTerminal(
           args.options.sessions,
+          args.options.transcriptPolicy ?? { mode: "durable" },
           prepared.original,
           lease,
           terminal,
@@ -598,6 +1065,7 @@ function streamEngineTurn<TPrincipal extends AgentPrincipal>(args: {
           await validateLease(args.options.turnLeases, lease);
           await commitAbandonedTurn(
             args.options.sessions,
+            args.options.transcriptPolicy ?? { mode: "durable" },
             prepared.original,
             lease,
             args.acquire.turnId,
@@ -608,6 +1076,9 @@ function streamEngineTurn<TPrincipal extends AgentPrincipal>(args: {
       }
       keeper.stop();
       await keeper.settled;
+      if (args.activeTurns.get(activeKey) === active) {
+        args.activeTurns.delete(activeKey);
+      }
       await releaseLease(args.options.turnLeases, lease);
     }
   })();
@@ -615,6 +1086,7 @@ function streamEngineTurn<TPrincipal extends AgentPrincipal>(args: {
 
 async function commitAbandonedTurn<TPrincipal extends AgentPrincipal>(
   sessions: AgentSessionRepository<TPrincipal>,
+  transcriptPolicy: AgentTranscriptPolicy<TPrincipal>,
   original: AgentSessionRecord<TPrincipal>,
   lease: AgentTurnLease<TPrincipal>,
   turnId: string,
@@ -625,13 +1097,15 @@ async function commitAbandonedTurn<TPrincipal extends AgentPrincipal>(
     principal: original.principal,
     sessionId: original.sessionId,
   });
+  const messages = structuredClone(
+    durableState?.messages ??
+      (await readTranscript(transcriptPolicy, current.record)),
+  );
   const saved = await sessions.saveSession({
     record: {
       ...current.record,
       updatedAt: monotonicTimestamp(current.record.updatedAt, now),
-      messages: structuredClone(
-        durableState?.messages ?? current.record.messages,
-      ),
+      messages: durableSessionMessages(transcriptPolicy, messages),
       usage: mergeUsage(current.record.usage, durableState?.usage),
       pendingInteractionId: undefined,
       lastTurnId: turnId,
@@ -646,10 +1120,12 @@ async function commitAbandonedTurn<TPrincipal extends AgentPrincipal>(
     fencingToken: lease.fencingToken,
   });
   if (!saved.ok) throwSessionMutation(saved.reason);
+  await writeTranscript(transcriptPolicy, original, messages);
 }
 
 async function commitTerminal<TPrincipal extends AgentPrincipal>(
   sessions: AgentSessionRepository<TPrincipal>,
+  transcriptPolicy: AgentTranscriptPolicy<TPrincipal>,
   original: AgentSessionRecord<TPrincipal>,
   lease: AgentTurnLease<TPrincipal>,
   terminal: AgentTurnResult,
@@ -662,12 +1138,14 @@ async function commitTerminal<TPrincipal extends AgentPrincipal>(
     sessionId: original.sessionId,
   });
   const timestamp = monotonicTimestamp(current.record.updatedAt, now);
+  const messages = structuredClone(
+    durableState?.messages ??
+      (await readTranscript(transcriptPolicy, current.record)),
+  );
   const durableRecord = {
     ...current.record,
     updatedAt: timestamp,
-    messages: structuredClone(
-      durableState?.messages ?? current.record.messages,
-    ),
+    messages: durableSessionMessages(transcriptPolicy, messages),
     usage: mergeUsage(current.record.usage, terminal.usage),
     pendingInteractionId: undefined,
     lastTurnId: terminal.turnId,
@@ -690,7 +1168,41 @@ async function commitTerminal<TPrincipal extends AgentPrincipal>(
     fencingToken: lease.fencingToken,
   });
   if (!saved.ok) throwSessionMutation(saved.reason);
+  await writeTranscript(transcriptPolicy, original, messages);
   return saved.revision;
+}
+
+async function readTranscript<TPrincipal extends AgentPrincipal>(
+  policy: AgentTranscriptPolicy<TPrincipal>,
+  record: AgentSessionRecord<TPrincipal>,
+): Promise<readonly import("./modelRuntime.js").CoreModelMessage[]> {
+  if (policy.mode === "durable") return record.messages;
+  return (
+    (await policy.store.readTranscript({
+      principal: record.principal,
+      sessionId: record.sessionId,
+    })) ?? []
+  );
+}
+
+function durableSessionMessages<TPrincipal extends AgentPrincipal>(
+  policy: AgentTranscriptPolicy<TPrincipal>,
+  messages: readonly import("./modelRuntime.js").CoreModelMessage[],
+): readonly import("./modelRuntime.js").CoreModelMessage[] {
+  return policy.mode === "durable" ? structuredClone(messages) : [];
+}
+
+async function writeTranscript<TPrincipal extends AgentPrincipal>(
+  policy: AgentTranscriptPolicy<TPrincipal>,
+  record: AgentSessionRecord<TPrincipal>,
+  messages: readonly import("./modelRuntime.js").CoreModelMessage[],
+): Promise<void> {
+  if (policy.mode === "durable") return;
+  await policy.store.writeTranscript({
+    principal: record.principal,
+    sessionId: record.sessionId,
+    messages,
+  });
 }
 
 function keepLeaseAlive<TPrincipal extends AgentPrincipal>(
@@ -941,6 +1453,19 @@ function monotonicTimestamp(previous: number, now: () => number): number {
 function boundedReason(reason: string): string {
   const trimmed = reason.trim() || "Turn interrupted";
   return trimmed.length <= 500 ? trimmed : `${trimmed.slice(0, 499)}…`;
+}
+
+function optionalReasoningEffort(
+  value: CoreReasoningEffort | undefined,
+  field: string,
+): CoreReasoningEffort | undefined {
+  if (value !== undefined && !isCoreReasoningEffort(value)) {
+    throw new AgentEngineError(
+      "invalid_engine_configuration",
+      `${field} must be a supported reasoning effort`,
+    );
+  }
+  return value;
 }
 
 function positiveInteger(value: number, field: string): number {

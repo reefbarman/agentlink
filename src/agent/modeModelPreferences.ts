@@ -1,6 +1,6 @@
 import type * as vscode from "vscode";
 
-import { CODEX_DEFAULT_MODEL } from "../core/model/providers/codex/models.js";
+import { CODEX_DEFAULT_MODEL } from "@agentlink/core/codex";
 
 export const FALLBACK_AGENT_MODEL = CODEX_DEFAULT_MODEL;
 

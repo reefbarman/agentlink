@@ -1,9 +1,12 @@
+import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
+
 import {
   createAgentEngine,
   type AgentEngine,
   type AgentModelReference,
   type AgentPrincipal,
   type AgentSessionRepository,
+  type AgentTranscriptPolicy,
   type AgentTurnLeaseProvider,
   type AuthorizeToolCall,
   type CoreModelAuthContext,
@@ -77,6 +80,8 @@ export interface CreateNodeHostAgentOptions<
   readonly tools?: CreateNodeHostToolsOptions<TPrincipal>;
   readonly interactions?: NodeHostInteractions<TPrincipal>;
   readonly defaultModel?: AgentModelReference;
+  readonly defaultReasoningEffort?: CoreReasoningEffort;
+  readonly transcriptPolicy?: AgentTranscriptPolicy<TPrincipal>;
   readonly resolveAuthContext?: (
     request: HeadlessTurnAuthRequest<TPrincipal>,
   ) =>
@@ -116,6 +121,12 @@ export function createNodeHostAgent<
         }
       : {}),
     ...(options.defaultModel ? { defaultModel: options.defaultModel } : {}),
+    ...(options.defaultReasoningEffort !== undefined
+      ? { defaultReasoningEffort: options.defaultReasoningEffort }
+      : {}),
+    ...(options.transcriptPolicy
+      ? { transcriptPolicy: options.transcriptPolicy }
+      : {}),
     resolveInstructions: options.instructions,
     ...(options.tools
       ? { resolveTools: createNodeHostTools(options.tools) }

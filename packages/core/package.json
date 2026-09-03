@@ -51,6 +51,30 @@
         "default": "./dist/cjs/agentToolLoop.cjs"
       }
     },
+    "./codex": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/codex.d.ts",
+        "default": "./dist/codex.js"
+      },
+      "require": {
+        "types": "./dist/cjs/codex.d.cts",
+        "default": "./dist/cjs/codex.cjs"
+      }
+    },
+    "./embedded-agent-web": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/embeddedAgentWeb.d.ts",
+        "default": "./dist/embeddedAgentWeb.js"
+      },
+      "require": {
+        "types": "./dist/cjs/embeddedAgentWeb.d.cts",
+        "default": "./dist/cjs/embeddedAgentWeb.cjs"
+      }
+    },
     "./host-adapter-contracts": {
       "browser": null,
       "edge": null,
@@ -61,6 +85,18 @@
       "require": {
         "types": "./dist/cjs/hostAdapterContracts.d.cts",
         "default": "./dist/cjs/hostAdapterContracts.cjs"
+      }
+    },
+    "./host-approval-test-kit": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/hostApprovalTestKit.d.ts",
+        "default": "./dist/hostApprovalTestKit.js"
+      },
+      "require": {
+        "types": "./dist/cjs/hostApprovalTestKit.d.cts",
+        "default": "./dist/cjs/hostApprovalTestKit.cjs"
       }
     },
     "./host-tools": {
@@ -301,7 +337,11 @@
   },
   "dependencies": {
     "@agentlink/protocol": "0.1.0",
-    "ajv": "8.18.0"
+    "ajv": "8.18.0",
+    "openai": "6.46.0"
+  },
+  "peerDependencies": {
+    "zod": "^4.0.0"
   },
   "engines": {
     "node": ">=22.19.0"

@@ -1,4 +1,9 @@
 import {
+  embeddedAgentErrorCategory,
+  isEmbeddedAgentToolPresentation,
+} from "@agentlink/protocol/embedded-agent-presentation";
+
+import {
   runAgentToolLoop,
   type AgentToolLoopCall,
   type AgentToolLoopModelResult,
@@ -114,6 +119,7 @@ export interface HeadlessTurnTool<
   readonly effect?: HostToolEffect;
   readonly parallelSafe?: boolean;
   readonly authorization?: HostToolAuthorization;
+  readonly presentation?: HostTool<TPrincipal>["presentation"];
   readonly displayInput?: (input: Record<string, unknown>) => unknown;
   /** Present on E5 schema-validated tools; omitted by static E4 compatibility tools. */
   readonly validate?: (input: unknown) => HostToolValidationResult;
@@ -121,6 +127,11 @@ export interface HeadlessTurnTool<
     input: Record<string, unknown>,
     context: HeadlessTurnToolContext<TPrincipal>,
   ): Promise<HeadlessTurnToolResult>;
+  /** Execute the canonical object returned by validate without reparsing. */
+  readonly executeValidated?: (
+    input: Record<string, unknown>,
+    context: HeadlessTurnToolContext<TPrincipal>,
+  ) => Promise<HeadlessTurnToolResult>;
 }
 
 export interface HeadlessTurnAuthRequest<
@@ -190,15 +201,7 @@ export function createHeadlessTurnKernel<
   }
   const tools = new Map<string, HeadlessTurnTool<TPrincipal>>();
   for (const tool of options.tools ?? []) {
-    const name = tool.definition.name;
-    if (!HEADLESS_TURN_TOOL_NAME_PATTERN.test(name)) {
-      throw new Error(
-        "Headless turn tool names must start with a letter and contain at most 64 letters, digits, underscores, or hyphens",
-      );
-    }
-    if (tools.has(name))
-      throw new Error(`Duplicate headless turn tool "${name}"`);
-    tools.set(name, tool);
+    registerHeadlessTurnTool(tools, tool, "static");
   }
 
   return {
@@ -510,14 +513,46 @@ function registerResolvedTool<TPrincipal extends AgentPrincipal>(
   tools: Map<string, HeadlessTurnTool<TPrincipal>>,
   tool: HostTool<TPrincipal>,
 ): void {
+  registerHeadlessTurnTool(tools, tool, "resolved");
+}
+
+function registerHeadlessTurnTool<TPrincipal extends AgentPrincipal>(
+  tools: Map<string, HeadlessTurnTool<TPrincipal>>,
+  tool: HeadlessTurnTool<TPrincipal>,
+  source: "static" | "resolved",
+): void {
   const name = tool.definition.name;
+  if (!HEADLESS_TURN_TOOL_NAME_PATTERN.test(name)) {
+    const message =
+      "Headless turn tool names must start with a letter and contain at most 64 letters, digits, underscores, or hyphens";
+    if (source === "static") throw new Error(message);
+    throw new HeadlessTurnKernelError("invalid_tool_resolution", message);
+  }
+  if (
+    tool.presentation !== undefined &&
+    !isEmbeddedAgentToolPresentation(tool.presentation)
+  ) {
+    const message = `Headless turn tool "${name}" presentation metadata is invalid`;
+    if (source === "static") throw new Error(message);
+    throw new HeadlessTurnKernelError("invalid_tool_resolution", message);
+  }
   if (tools.has(name)) {
+    if (source === "static")
+      throw new Error(`Duplicate headless turn tool "${name}"`);
     throw new HeadlessTurnKernelError(
       "invalid_tool_resolution",
       `Duplicate resolved host tool "${name}"`,
     );
   }
-  tools.set(name, tool);
+  tools.set(
+    name,
+    tool.presentation
+      ? {
+          ...tool,
+          presentation: deepFreeze(structuredClone(tool.presentation)),
+        }
+      : tool,
+  );
 }
 
 async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
@@ -662,10 +697,15 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
           execution = event.snapshot;
           emit({ type: "execution.updated", event });
           if (event.type === "tool_call_started") {
+            const startedTool = tools.get(event.toolName);
             emit({
               type: "tool.started",
               toolCallId: event.callId,
               toolName: event.toolName,
+              effect: startedTool?.effect ?? "unknown",
+              ...(startedTool?.presentation
+                ? { presentation: startedTool.presentation }
+                : {}),
             });
           }
         },
@@ -708,6 +748,10 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
               type: "tool.requested",
               toolCallId: call.id,
               toolName: call.name,
+              effect: tool?.effect ?? "unknown",
+              ...(tool?.presentation
+                ? { presentation: tool.presentation }
+                : {}),
               ...(displayInput !== undefined ? { displayInput } : {}),
             });
           } else if (event.type === "content_blocks") {
@@ -882,6 +926,7 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
   if (!tool) {
     const error = {
       code: "tool_not_found",
+      category: embeddedAgentErrorCategory("tool_not_found"),
       message: `Tool "${call.name}" is not available`,
       retryable: false,
     } satisfies AgentTurnError;
@@ -889,22 +934,49 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
       type: "tool.failed",
       toolCallId: call.id,
       toolName: call.name,
+      effect: "unknown",
       error,
     });
     return toolResult(call.id, error.message, true);
   }
 
+  // A resumed call comes from the server-side durable continuation and was
+  // already canonicalized before the approval was persisted. Parsing it again
+  // could reapply non-idempotent transforms and execute a value the user did
+  // not approve.
+  const resumedDecision = resumedDecisions.get(call.id);
+  if (resumedDecision !== undefined) resumedDecisions.delete(call.id);
+  const validation =
+    resumedDecision === undefined ? tool.validate?.(call.input) : undefined;
+  if (validation && !validation.valid) {
+    const error = new HostToolInputValidationError(
+      call.name,
+      validation.issues,
+    );
+    const publicError = toTurnError(error, "tool_execution_failed");
+    emit({
+      type: "tool.failed",
+      toolCallId: call.id,
+      toolName: call.name,
+      effect: tool.effect ?? "unknown",
+      ...(tool.presentation ? { presentation: tool.presentation } : {}),
+      error: publicError,
+    });
+    return toolResult(call.id, publicError.message, true);
+  }
+  const canonicalInput = validation?.valid ? validation.input : call.input;
+  const canonicalCall =
+    canonicalInput === call.input ? call : { ...call, input: canonicalInput };
+
   if (tool.authorization !== undefined && tool.authorization !== "none") {
-    const resumedDecision = resumedDecisions.get(call.id);
-    resumedDecisions.delete(call.id);
     if (resumedDecision === "deny") {
-      return authorizationDenied(call, emit);
+      return authorizationDenied(call, emit, undefined, tool);
     }
     if (resumedDecision !== "allow" && !authorizedToolCallIds.has(call.id)) {
       if (!options.authorizeToolCall) {
-        return authorizationRequired(call, emit);
+        return authorizationRequired(call, emit, tool);
       }
-      const displayInput = projectDisplayInput(tool, call.input);
+      const displayInput = projectDisplayInput(tool, canonicalInput, true);
       const authorization = await options.authorizeToolCall({
         principal: prepared.request.principal,
         sessionId: prepared.request.sessionId,
@@ -912,17 +984,17 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
         model,
         toolCallId: call.id,
         toolName: call.name,
-        input: call.input,
+        input: canonicalInput,
         ...(displayInput !== undefined ? { displayInput } : {}),
         effect: tool.effect ?? "unknown",
       });
       if (authorization.decision === "deny") {
-        return authorizationDenied(call, emit, authorization.reason);
+        return authorizationDenied(call, emit, authorization.reason, tool);
       }
       if (authorization.decision === "require_user") {
         return await suspendToolAuthorization(
           options,
-          call,
+          canonicalCall,
           context,
           tool,
           prepared,
@@ -943,7 +1015,8 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
   }
 
   try {
-    const result = await tool.execute(call.input, {
+    const execute = tool.executeValidated ?? tool.execute;
+    const result = await execute(canonicalInput, {
       principal: prepared.request.principal,
       sessionId: prepared.request.sessionId,
       turnId: prepared.turnId,
@@ -954,6 +1027,8 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
       type: "tool.completed",
       toolCallId: call.id,
       toolName: call.name,
+      effect: tool.effect ?? "unknown",
+      ...(tool.presentation ? { presentation: tool.presentation } : {}),
       ...(result.displayContent !== undefined
         ? { displayContent: result.displayContent }
         : {}),
@@ -981,6 +1056,8 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
       type: "tool.failed",
       toolCallId: call.id,
       toolName: call.name,
+      effect: tool.effect ?? "unknown",
+      ...(tool.presentation ? { presentation: tool.presentation } : {}),
       error: publicError,
     });
     return toolResult(call.id, publicError.message, true);
@@ -1010,7 +1087,7 @@ async function suspendToolAuthorization<TPrincipal extends AgentPrincipal>(
   emit: (event: AgentTurnEventPayload) => void,
 ): Promise<AgentToolLoopToolResult<"suspended">> {
   if (!options.interactions || !options.interactionTokens) {
-    return authorizationRequired(call, emit);
+    return authorizationRequired(call, emit, tool);
   }
   const interactionId = requiredKernelText(
     (options.createInteractionId ?? globalThis.crypto.randomUUID)(),
@@ -1023,7 +1100,7 @@ async function suspendToolAuthorization<TPrincipal extends AgentPrincipal>(
       "Tool authorization interaction summary must not be empty",
     );
   }
-  const displayInput = projectDisplayInput(tool, call.input);
+  const displayInput = projectDisplayInput(tool, call.input, true);
   const interaction: AgentInteractionRequest = {
     interactionId,
     kind: "tool_authorization" as const,
@@ -1031,6 +1108,7 @@ async function suspendToolAuthorization<TPrincipal extends AgentPrincipal>(
     toolCallId: call.id,
     toolName: call.name,
     effect: tool.effect ?? "unknown",
+    ...(tool.presentation ? { presentation: tool.presentation } : {}),
     ...(displayInput !== undefined ? { displayInput } : {}),
     ...(authorization.displayContent !== undefined
       ? { displayContent: authorization.displayContent }
@@ -1052,8 +1130,12 @@ async function suspendToolAuthorization<TPrincipal extends AgentPrincipal>(
       continuation: {
         prepared: structuredClone(prepared),
         iterationMessages: structuredClone(context.iterationMessages),
-        pendingToolCalls: structuredClone(context.pendingToolCalls),
-        reservedToolCalls: structuredClone(context.reservedToolCalls),
+        pendingToolCalls: structuredClone(
+          replaceToolCall(context.pendingToolCalls, call),
+        ),
+        reservedToolCalls: structuredClone(
+          replaceToolCall(context.reservedToolCalls, call),
+        ),
         authorizedToolCallIds: [...authorizedToolCallIds],
         model,
         execution,
@@ -1099,12 +1181,14 @@ async function suspendToolAuthorization<TPrincipal extends AgentPrincipal>(
   };
 }
 
-function authorizationRequired(
+function authorizationRequired<TPrincipal extends AgentPrincipal>(
   call: AgentToolLoopCall,
   emit: (event: AgentTurnEventPayload) => void,
+  tool?: HeadlessTurnTool<TPrincipal>,
 ): AgentToolLoopToolResult<"suspended"> {
   const error = {
     code: "tool_authorization_required",
+    category: embeddedAgentErrorCategory("tool_authorization_required"),
     message: `Tool "${call.name}" requires authorization that is unavailable`,
     retryable: false,
   } satisfies AgentTurnError;
@@ -1112,19 +1196,23 @@ function authorizationRequired(
     type: "tool.failed",
     toolCallId: call.id,
     toolName: call.name,
+    effect: tool?.effect ?? "unknown",
+    ...(tool?.presentation ? { presentation: tool.presentation } : {}),
     error,
   });
   return toolResult(call.id, error.message, true);
 }
 
-function authorizationDenied(
+function authorizationDenied<TPrincipal extends AgentPrincipal>(
   call: AgentToolLoopCall,
   emit: (event: AgentTurnEventPayload) => void,
   reason?: string,
+  tool?: HeadlessTurnTool<TPrincipal>,
 ): AgentToolLoopToolResult<"suspended"> {
   const safeReason = reason ? boundedInteractionText(reason, 300) : "";
   const error = {
     code: "tool_authorization_denied",
+    category: embeddedAgentErrorCategory("tool_authorization_denied"),
     message: safeReason
       ? `Tool "${call.name}" authorization was denied: ${safeReason}`
       : `Tool "${call.name}" authorization was denied`,
@@ -1134,18 +1222,32 @@ function authorizationDenied(
     type: "tool.failed",
     toolCallId: call.id,
     toolName: call.name,
+    effect: tool?.effect ?? "unknown",
+    ...(tool?.presentation ? { presentation: tool.presentation } : {}),
     error,
   });
   return toolResult(call.id, error.message, true);
 }
 
+function replaceToolCall(
+  calls: readonly AgentToolLoopCall[],
+  replacement: AgentToolLoopCall,
+): readonly AgentToolLoopCall[] {
+  return calls.map((call) => (call.id === replacement.id ? replacement : call));
+}
+
 function projectDisplayInput<TPrincipal extends AgentPrincipal>(
   tool: HeadlessTurnTool<TPrincipal> | undefined,
   input: Record<string, unknown>,
+  validated = false,
 ): unknown {
   if (!tool?.displayInput) return undefined;
   try {
-    if (tool.validate && !tool.validate(input).valid) return undefined;
+    if (!validated && tool.validate) {
+      const validation = tool.validate(input);
+      if (!validation.valid) return undefined;
+      return tool.displayInput(validation.input);
+    }
     return tool.displayInput(input);
   } catch {
     return undefined;
@@ -1253,15 +1355,22 @@ function validateModelCapabilities<TPrincipal extends AgentPrincipal>(
       "The selected model does not support images",
     );
   }
-  if (
-    prepared.reasoningEffort &&
-    capabilities.reasoningEfforts &&
-    !capabilities.reasoningEfforts.includes(prepared.reasoningEffort)
-  ) {
-    throw new HeadlessTurnKernelError(
-      "model_capability_unsupported",
-      `The selected model does not support reasoning effort "${prepared.reasoningEffort}"`,
-    );
+  if (prepared.reasoningEffort && prepared.reasoningEffort !== "none") {
+    if (!capabilities.supportsThinking) {
+      throw new HeadlessTurnKernelError(
+        "model_capability_unsupported",
+        "The selected model does not support reasoning effort",
+      );
+    }
+    if (
+      capabilities.reasoningEfforts &&
+      !capabilities.reasoningEfforts.includes(prepared.reasoningEffort)
+    ) {
+      throw new HeadlessTurnKernelError(
+        "model_capability_unsupported",
+        `The selected model does not support reasoning effort "${prepared.reasoningEffort}"`,
+      );
+    }
   }
 }
 
@@ -1406,25 +1515,77 @@ function toTurnError(
   if (error instanceof TurnExecutionLimitError) {
     return {
       code: error.code,
+      category: embeddedAgentErrorCategory(error.code),
       message: error.message,
       retryable: false,
     };
   }
+  const providerError =
+    fallbackCode === "turn_execution_failed"
+      ? sanitizedProviderTurnError(error)
+      : undefined;
+  if (providerError) return providerError;
   if (
     error instanceof HeadlessTurnKernelError ||
     error instanceof HostToolInputValidationError ||
     error instanceof TurnInteractionResumeError ||
     error instanceof TurnInteractionTokenError
   ) {
-    return { code: error.code, message: error.message, retryable: false };
+    return {
+      code: error.code,
+      category: embeddedAgentErrorCategory(error.code),
+      message: error.message,
+      retryable: false,
+    };
   }
   return {
     code: fallbackCode,
+    category: embeddedAgentErrorCategory(fallbackCode),
     message:
       fallbackCode === "tool_execution_failed"
         ? "Tool execution failed"
         : "Turn execution failed",
     retryable: false,
+  };
+}
+
+function sanitizedProviderTurnError(
+  error: unknown,
+): AgentTurnError | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const candidate = error as {
+    readonly retryable?: unknown;
+    readonly authentication?: unknown;
+    readonly status?: unknown;
+    readonly providerCode?: unknown;
+  };
+  if (typeof candidate.retryable !== "boolean") return undefined;
+  const status =
+    typeof candidate.status === "number" ? candidate.status : undefined;
+  const providerCode =
+    typeof candidate.providerCode === "string"
+      ? candidate.providerCode.toLowerCase()
+      : "";
+  const code =
+    candidate.authentication === true || status === 401 || status === 403
+      ? "provider_authentication_required"
+      : status === 429 || providerCode.includes("rate_limit")
+        ? "provider_rate_limited"
+        : candidate.retryable
+          ? "provider_unavailable"
+          : "provider_request_failed";
+  return {
+    code,
+    category: embeddedAgentErrorCategory(code),
+    message:
+      code === "provider_authentication_required"
+        ? "Provider authentication is required"
+        : code === "provider_rate_limited"
+          ? "The model provider rate limit was reached"
+          : code === "provider_unavailable"
+            ? "The model provider is temporarily unavailable"
+            : "The model provider rejected the request",
+    retryable: candidate.retryable,
   };
 }
 
@@ -1437,6 +1598,13 @@ function abortReason(signal: AbortSignal | undefined): string | undefined {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (!value || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  for (const nested of Object.values(value)) deepFreeze(nested, seen);
+  return Object.freeze(value);
 }
 
 function combineAbortSignals(

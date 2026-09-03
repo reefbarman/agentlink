@@ -1384,6 +1384,10 @@ async function protectedGitMetadataRetryResult(input: {
     protection = await resolveBaselineProtectedGitMetadataForCwd(
       input.cwd,
       input.workspaceRoots,
+      {
+        includeAbsentWorkspaceMarker:
+          classification.subcommands.includes("init"),
+      },
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -9,6 +9,7 @@ import type {
 import {
   agentModelReferenceKey,
   resolveAgentModelSelection,
+  resolveAgentReasoningEffort,
 } from "./turnContracts.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 
@@ -64,11 +65,37 @@ describe("turn contracts", () => {
     ).toBeNull();
   });
 
+  it("resolves turn, session, and runtime reasoning precedence including explicit none", () => {
+    expect(
+      resolveAgentReasoningEffort({
+        turnReasoningEffort: "high",
+        sessionReasoningEffort: "low",
+        runtimeDefaultReasoningEffort: "medium",
+      }),
+    ).toEqual({ effort: "high", source: "turn" });
+    expect(
+      resolveAgentReasoningEffort({
+        turnReasoningEffort: undefined,
+        sessionReasoningEffort: "none",
+        runtimeDefaultReasoningEffort: "medium",
+      }),
+    ).toEqual({ effort: "none", source: "session" });
+    expect(
+      resolveAgentReasoningEffort({
+        turnReasoningEffort: undefined,
+        sessionReasoningEffort: undefined,
+        runtimeDefaultReasoningEffort: "medium",
+      }),
+    ).toEqual({ effort: "medium", source: "runtime" });
+  });
+
   it("keeps serializable intent separate from execution and preparation", () => {
     expectTypeOf<keyof AgentTurnRequest<TestPrincipal>>().toEqualTypeOf<
-      "principal" | "sessionId" | "input" | "model"
+      "principal" | "sessionId" | "input" | "model" | "reasoningEffort"
     >();
-    expectTypeOf<keyof AgentTurnRunOptions>().toEqualTypeOf<"signal">();
+    expectTypeOf<keyof AgentTurnRunOptions>().toEqualTypeOf<
+      "signal" | "onDurableState"
+    >();
     expectTypeOf<keyof PreparedAgentTurnRequest<TestPrincipal>>().toEqualTypeOf<
       | "request"
       | "turnId"
@@ -120,10 +147,20 @@ describe("turn contracts", () => {
     type Resumed = Extract<AgentTurnEvent, { type: "interaction.resumed" }>;
 
     expectTypeOf<keyof Requested>().toEqualTypeOf<
-      EventBaseKeys | "toolCallId" | "toolName" | "displayInput"
+      | EventBaseKeys
+      | "toolCallId"
+      | "toolName"
+      | "effect"
+      | "presentation"
+      | "displayInput"
     >();
     expectTypeOf<keyof Completed>().toEqualTypeOf<
-      EventBaseKeys | "toolCallId" | "toolName" | "displayContent"
+      | EventBaseKeys
+      | "toolCallId"
+      | "toolName"
+      | "effect"
+      | "presentation"
+      | "displayContent"
     >();
     expectTypeOf<keyof Usage>().toEqualTypeOf<
       EventBaseKeys | "model" | "usage"

@@ -1,9 +1,6 @@
 import { randomUUID } from "crypto";
 
-import {
-  getCodexOriginator,
-  getCodexUserAgent,
-} from "../../../core/model/providers/codex/clientIdentity.js";
+import { getCodexOriginator, getCodexUserAgent } from "@agentlink/core/codex";
 import { agentLinkFetch } from "../../../util/httpDispatcher.js";
 import {
   openAiCodexAuthManager,

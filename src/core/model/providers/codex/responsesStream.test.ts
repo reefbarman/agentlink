@@ -6,7 +6,7 @@ import {
   executeCodexResponsesStream,
   type CodexResponsesClient,
 } from "./responsesStream.js";
-import type { CodexRequestBody } from "./translation.js";
+import type { CodexRequestBody } from "@agentlink/core/codex";
 
 async function* toAsyncIterable(
   events: Array<Record<string, unknown>>,

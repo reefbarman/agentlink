@@ -5,7 +5,10 @@ import { build } from "esbuild";
 const modules = [
   "agentEngine",
   "agentToolLoop",
+  "codex",
+  "embeddedAgentWeb",
   "hostAdapterContracts",
+  "hostApprovalTestKit",
   "hostTools",
   "mcpCredentials",
   "multiFileTransactions",

@@ -73,8 +73,15 @@ function reasoningEffortRequest(
   OpenAiCompatibleChatRequest,
   "reasoning_effort" | "reasoning" | "output_config"
 > {
-  if (!effort || effort === "none" || !supportsThinking || mode === "none") {
-    return {};
+  if (!effort || effort === "none") return {};
+  // Provider adapters historically accept a generic host preference even when
+  // this specific model cannot reason. The session engine validates that case;
+  // direct provider callers retain the compatibility behavior of omitting it.
+  if (!supportsThinking) return {};
+  if (mode === "none") {
+    throw new OpenAiCompatibleCapabilityError(
+      "The OpenAI-compatible connection must configure reasoningEffortMode before using reasoning effort",
+    );
   }
   if (mode === "reasoning_effort") return { reasoning_effort: effort };
   if (mode === "reasoning.effort") return { reasoning: { effort } };

@@ -38,7 +38,7 @@ describe("buildOpenAiCompatibleChatRequest", () => {
     const request = buildOpenAiCompatibleChatRequest({
       providerId: "openai-compatible:generic",
       profile: "generic",
-      reasoningEffortMode: "none",
+      reasoningEffortMode: "reasoning_effort",
       model: model(),
       systemPrompt: "system",
       messages: [{ role: "user", content: "hello" }],
@@ -66,6 +66,7 @@ describe("buildOpenAiCompatibleChatRequest", () => {
       ],
       max_tokens: 123,
       stream: true,
+      reasoning_effort: "high",
       tools: [
         {
           type: "function",
@@ -130,26 +131,46 @@ describe("buildOpenAiCompatibleChatRequest", () => {
     expect(request).toMatchObject(expected);
   });
 
-  it.each([
-    ["none", model(), "none is selected"],
-    ["high", model({ supportsThinking: false }), "thinking is unsupported"],
-  ] as const)(
-    "does not send an effort field when %s because %s",
-    (reasoningEffort, runtimeModel, _reason) => {
-      const request = buildOpenAiCompatibleChatRequest({
+  it("does not send an effort field when reasoning is explicitly disabled", () => {
+    const request = buildOpenAiCompatibleChatRequest({
+      providerId: "openai-compatible:configured",
+      profile: "generic",
+      reasoningEffortMode: "reasoning_effort",
+      model: model(),
+      systemPrompt: "system",
+      messages: [],
+      maxTokens: 100,
+      reasoningEffort: "none",
+    });
+
+    expect(request).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("fails closed when an effort cannot be represented on the wire", () => {
+    expect(() =>
+      buildOpenAiCompatibleChatRequest({
         providerId: "openai-compatible:configured",
         profile: "generic",
-        reasoningEffortMode: "reasoning_effort",
-        model: runtimeModel,
+        reasoningEffortMode: "none",
+        model: model(),
         systemPrompt: "system",
         messages: [],
         maxTokens: 100,
-        reasoningEffort,
-      });
-
-      expect(request).not.toHaveProperty("reasoning_effort");
-    },
-  );
+        reasoningEffort: "high",
+      }),
+    ).toThrow(/configure reasoningEffortMode/);
+    const unsupported = buildOpenAiCompatibleChatRequest({
+      providerId: "openai-compatible:configured",
+      profile: "generic",
+      reasoningEffortMode: "reasoning_effort",
+      model: model({ supportsThinking: false }),
+      systemPrompt: "system",
+      messages: [],
+      maxTokens: 100,
+      reasoningEffort: "high",
+    });
+    expect(unsupported).not.toHaveProperty("reasoning_effort");
+  });
 
   it("does not send tools for chat-only models", () => {
     const request = buildOpenAiCompatibleChatRequest({

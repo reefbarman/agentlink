@@ -302,11 +302,34 @@ describe("validateInteractiveCommand", () => {
     });
 
     it.each([
-      "ssh github.com -G",
+      "ssh user@host uptime",
+      "ssh user@host 'ha store reload'",
+      'ssh root@host "printf ready; test -d /addons"',
+      "ssh -o BatchMode=yes user@host uptime",
+      "ssh -oBatchMode=yes -p 2222 user@host uptime",
+      "ssh -v user@host uptime",
+    ])("allows one-shot SSH remote commands: %s", (command) => {
+      expect(validateInteractiveCommand(command)).toBeNull();
+    });
+
+    it.each([
       "ssh -G github.com uptime",
       "ssh -v -G github.com",
       "ssh -vG github.com",
-    ])("rejects ordinary or expanded SSH usage: %s", (command) => {
+      "ssh -o BatchMode=yes user@host",
+      "ssh -o user@host uptime",
+      "ssh -- user@host",
+      "ssh -N user@host ignored",
+      "ssh -vN user@host ignored",
+      "ssh -f user@host ignored",
+      "ssh -vf user@host ignored",
+      "ssh -t user@host ignored",
+      "ssh -tt user@host ignored",
+      "ssh -W target:22 user@host ignored",
+      "ssh -Wtarget:22 user@host ignored",
+      "ssh -s user@host sftp",
+      "ssh -vs user@host sftp",
+    ])("rejects interactive or malformed SSH usage: %s", (command) => {
       expect(validateInteractiveCommand(command)).not.toBeNull();
     });
 

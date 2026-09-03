@@ -17,6 +17,15 @@ function classify(
 }
 
 const positives: Array<[PredictableGitMetadataWriterSubcommand, string[]]> = [
+  [
+    "init",
+    [
+      "git init",
+      "git init -q",
+      "git init -b main",
+      "git init --initial-branch=main --object-format=sha256",
+    ],
+  ],
   ["add", ["git add src/a.ts", "git add -- 'src/a b.ts'", "git add -A"]],
   [
     "commit",
@@ -101,6 +110,7 @@ const positives: Array<[PredictableGitMetadataWriterSubcommand, string[]]> = [
       "git reset -- src/a.ts",
     ],
   ],
+  ["remote", ["git remote add origin git@github-personal:owner/repo.git"]],
   [
     "fetch",
     [
@@ -133,7 +143,14 @@ const negatives = [
   "git stash list",
   "git pull",
   "git push",
+  "git remote -v",
+  "git remote add origin",
+  "git remote remove origin",
   "git clone example",
+  "git init --bare",
+  "git init other-directory",
+  "git init --separate-git-dir=/tmp/repo.git",
+  "git init --help",
   "git clean -fdx",
   "git fetch --dry-run",
   "git fetch --help",
@@ -228,11 +245,23 @@ describe("classifyPredictableGitMetadataWriter", () => {
     ["git add src/a.ts && git commit -m fix", ["add", "commit"]],
     ["git add src/a.ts && git commit -m 'keep && explain'", ["add", "commit"]],
     ["git fetch origin && git rebase main", ["fetch", "rebase"]],
+    [
+      "git init -b main && git remote add origin git@github-personal:owner/repo.git && git status --short --branch",
+      ["init", "remote"],
+    ],
   ] as const)("classifies writer chain: %s", (command, subcommands) => {
     expect(classify(command)).toEqual({
       kind: "predictable_git_metadata_writer",
       subcommands,
     });
+  });
+
+  it.each([
+    "git status --short && git init",
+    "git init && git status --ignored",
+    "git init && git remote -v",
+  ])("rejects unsafe init chain: %s", (command) => {
+    expect(classify(command)).toBeNull();
   });
 
   it.each(negatives)("rejects ineligible command: %s", (command) => {

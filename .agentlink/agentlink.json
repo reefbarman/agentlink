@@ -20,7 +20,8 @@
     },
     {
       "pattern": "npm run fmt",
-      "mode": "prefix"
+      "mode": "prefix",
+      "decision": "allow"
     },
     {
       "pattern": "npx oxfmt",
@@ -45,6 +46,11 @@
     },
     {
       "pattern": "npm run telemetry:context",
+      "mode": "prefix",
+      "decision": "allow"
+    },
+    {
+      "pattern": "npm run test:core-sdk-consumer",
       "mode": "prefix",
       "decision": "allow"
     }

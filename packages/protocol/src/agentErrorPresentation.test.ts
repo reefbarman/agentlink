@@ -2,7 +2,18 @@ import type {
   AgentErrorActions,
   AgentRuntimeErrorPresentation,
 } from "./agentErrorPresentation.js";
-import { expectTypeOf, it } from "vitest";
+import { expect, expectTypeOf, it } from "vitest";
+
+import { summarizeHtmlErrorText } from "./agentErrorPresentation.js";
+
+it("summarizes HTML error pages for shared provider classification", () => {
+  expect(summarizeHtmlErrorText("plain failure")).toBe("plain failure");
+  expect(
+    summarizeHtmlErrorText(
+      "520 <html><body><h1>Unknown error</h1><ul><li>Ray ID: abc</li></ul></body></html>",
+    ),
+  ).toBe("520 Unknown error; Ray ID: abc");
+});
 
 it("keeps agent error presentation as a complete serializable DTO", () => {
   const presentation: AgentRuntimeErrorPresentation = {

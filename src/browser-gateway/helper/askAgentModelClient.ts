@@ -53,10 +53,13 @@ import { z } from "zod";
 import { agentLinkFetch } from "../../util/httpDispatcher.js";
 import { createAnthropicClientFromResolvedCredential } from "../../agent/clientFactory.js";
 import { TODO_COMPACTION_GUIDANCE } from "../../agent/todoTool.js";
-import { getCodexEndpointConfig } from "../../core/model/providers/codex/openaiClient.js";
+
 import { normalizeBrowserGatewayModelCredentialProviderId } from "../browserGatewayModelProviderIds.js";
 import { surfaceMessagesToCoreModelMessages } from "../../core/surfaceModelMessages.js";
-import { translateCodexMessages } from "../../core/model/providers/codex/translation.js";
+import {
+  getCodexEndpointConfig,
+  translateCodexMessages,
+} from "@agentlink/core/codex";
 import {
   canUseCodexStandaloneWeb,
   executeCodexStandaloneWeb,

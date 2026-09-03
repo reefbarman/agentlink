@@ -2,6 +2,7 @@ import {
   CoreModelBackendRegistry,
   DefaultCoreModelRuntime,
   InMemoryAgentStateRepository,
+  InMemoryAgentTranscriptStore,
   InMemoryAgentTurnLeaseProvider,
   defineTool,
   type CoreModelBackend,
@@ -32,6 +33,7 @@ class FixtureBackend implements CoreModelBackend {
   readonly providerId = model.providerId;
   readonly displayName = "Fixture";
   readonly condenseModel = model.modelId;
+  readonly requests: CoreModelStreamRequest[] = [];
 
   listModels() {
     return [
@@ -57,6 +59,7 @@ class FixtureBackend implements CoreModelBackend {
     request: CoreModelStreamRequest,
     _context: CoreModelRequestContext,
   ): AsyncGenerator<CoreModelStreamEvent> {
+    this.requests.push(request);
     const hasToolResult = request.messages.some(
       (message) =>
         Array.isArray(message.content) &&
@@ -107,10 +110,29 @@ class FixtureBackend implements CoreModelBackend {
   }
 }
 
-function createModels() {
+function createModels(
+  backend = new FixtureBackend(),
+  modelCapabilities: CoreModelCapabilities = capabilities,
+) {
   const registry = new CoreModelBackendRegistry();
-  registry.register(new FixtureBackend());
-  return new DefaultCoreModelRuntime(registry, { ownerId: "node-host-test" });
+  registry.register({
+    ...backend,
+    getCapabilities: () => modelCapabilities,
+    listModels: () =>
+      backend.listModels().map((entry) => ({
+        ...entry,
+        reasoningEfforts: modelCapabilities.reasoningEfforts,
+        defaultReasoningEffort: modelCapabilities.defaultReasoningEffort,
+      })),
+    stream: backend.stream.bind(backend),
+    complete: backend.complete.bind(backend),
+  });
+  return {
+    backend,
+    runtime: new DefaultCoreModelRuntime(registry, {
+      ownerId: "node-host-test",
+    }),
+  };
 }
 
 async function collect<T>(stream: AsyncGenerator<T, AgentTurnResult>) {
@@ -131,9 +153,10 @@ describe("node host composition", () => {
       }),
       displayContent: { status: "host evidence loaded" },
     }));
+    const { runtime } = createModels();
     const agent = createNodeHostAgent({
       ownerId: "node-host-test",
-      models: createModels(),
+      models: runtime,
       persistence: {
         sessions: new InMemoryAgentStateRepository<typeof principal>(),
         turnLeases: new InMemoryAgentTurnLeaseProvider<typeof principal>(),
@@ -197,6 +220,81 @@ describe("node host composition", () => {
         }),
       ]),
     );
+  });
+
+  it("forwards an explicit ephemeral transcript policy without persisting messages", async () => {
+    const backend = new FixtureBackend();
+    const { runtime } = createModels(backend);
+    const sessions = new InMemoryAgentStateRepository<typeof principal>();
+    const transcripts = new InMemoryAgentTranscriptStore<typeof principal>();
+    const agent = createNodeHostAgent({
+      ownerId: "node-host-test",
+      models: runtime,
+      persistence: {
+        sessions,
+        turnLeases: new InMemoryAgentTurnLeaseProvider<typeof principal>(),
+      },
+      instructions: () => "Use host tools only.",
+      defaultModel: model,
+      transcriptPolicy: { mode: "ephemeral", store: transcripts },
+      maxOutputTokens: 512,
+    });
+
+    await agent.sessions.create({ principal, sessionId: "ephemeral" });
+    await collect(
+      agent.sessions.runTurn({
+        principal,
+        sessionId: "ephemeral",
+        input: { text: "private message", attachments: undefined },
+        model: undefined,
+      }),
+    );
+
+    await expect(
+      sessions.readSession({ principal, sessionId: "ephemeral" }),
+    ).resolves.toMatchObject({ record: { messages: [] } });
+    await expect(
+      agent.sessions.read({ principal, sessionId: "ephemeral" }),
+    ).resolves.toMatchObject({
+      record: {
+        messages: expect.arrayContaining([
+          { role: "user", content: "private message" },
+        ]),
+      },
+    });
+  });
+
+  it("forwards the runtime reasoning default into the core engine", async () => {
+    const { backend, runtime } = createModels(new FixtureBackend(), {
+      ...capabilities,
+      supportsThinking: true,
+      reasoningEfforts: ["low", "medium", "high"],
+      defaultReasoningEffort: "medium",
+    });
+    const agent = createNodeHostAgent({
+      ownerId: "node-host-test",
+      models: runtime,
+      persistence: {
+        sessions: new InMemoryAgentStateRepository<typeof principal>(),
+        turnLeases: new InMemoryAgentTurnLeaseProvider<typeof principal>(),
+      },
+      instructions: () => "Use host tools only.",
+      defaultModel: model,
+      defaultReasoningEffort: "high",
+      maxOutputTokens: 512,
+    });
+
+    await agent.sessions.create({ principal, sessionId: "reasoning" });
+    await collect(
+      agent.sessions.runTurn({
+        principal,
+        sessionId: "reasoning",
+        input: { text: "reason", attachments: undefined },
+        model: undefined,
+      }),
+    );
+
+    expect(backend.requests[0]?.reasoningEffort).toBe("high");
   });
 
   it("does not create an implicit tool resolver", () => {

@@ -1105,6 +1105,34 @@
         "default": "./dist/cjs/diffSnapshot.cjs"
       }
     },
+    "./embedded-agent-presentation": {
+      "browser": {
+        "types": "./dist/embeddedAgentPresentation.d.ts",
+        "default": "./dist/embeddedAgentPresentation.js"
+      },
+      "import": {
+        "types": "./dist/embeddedAgentPresentation.d.ts",
+        "default": "./dist/embeddedAgentPresentation.js"
+      },
+      "require": {
+        "types": "./dist/cjs/embeddedAgentPresentation.d.cts",
+        "default": "./dist/cjs/embeddedAgentPresentation.cjs"
+      }
+    },
+    "./embedded-agent-transport": {
+      "browser": {
+        "types": "./dist/embeddedAgentTransport.d.ts",
+        "default": "./dist/embeddedAgentTransport.js"
+      },
+      "import": {
+        "types": "./dist/embeddedAgentTransport.d.ts",
+        "default": "./dist/embeddedAgentTransport.js"
+      },
+      "require": {
+        "types": "./dist/cjs/embeddedAgentTransport.d.cts",
+        "default": "./dist/cjs/embeddedAgentTransport.cjs"
+      }
+    },
     "./final-status": {
       "browser": {
         "types": "./dist/finalStatus.d.ts",

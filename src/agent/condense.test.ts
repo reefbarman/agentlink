@@ -18,7 +18,7 @@ import {
 } from "./condense.js";
 
 import type { AgentMessage } from "./types.js";
-import { CODEX_CONDENSE_MODEL } from "../core/model/providers/codex/models.js";
+import { CODEX_CONDENSE_MODEL } from "@agentlink/core/codex";
 
 const TEST_MODEL = "claude-sonnet-4-6";
 

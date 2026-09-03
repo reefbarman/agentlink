@@ -4,7 +4,7 @@ import {
 } from "./modeModelPreferences.js";
 import { describe, expect, it } from "vitest";
 
-import { CODEX_DEFAULT_MODEL } from "../core/model/providers/codex/models.js";
+import { CODEX_DEFAULT_MODEL } from "@agentlink/core/codex";
 
 describe("mode model preferences", () => {
   it("uses the flagship Codex model when no preference is configured", () => {

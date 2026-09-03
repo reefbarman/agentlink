@@ -6,10 +6,10 @@ import type {
 import { withAgentLinkHttpActivity } from "../../../../util/httpDispatcher.js";
 import {
   parseCodexResponseStreamEvents,
+  type CodexRequestBody,
   type CodexStreamParserOptions,
   type CodexStreamParserState,
-} from "./streamParser.js";
-import type { CodexRequestBody } from "./translation.js";
+} from "@agentlink/core/codex";
 
 export interface CodexResponsesClient {
   responses: {

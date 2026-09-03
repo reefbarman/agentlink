@@ -3,8 +3,27 @@ import { describe, expect, it, vi } from "vitest";
 
 import { NodePtyNativeAgentRuntimeProvider } from "./NativeAgentRuntimeProvider.js";
 import type { SandboxCommandEvent } from "../sandbox/SandboxRuntimeProvider.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 const nonce = "native_shell_nonce_1234";
+const artifactDispatch = expect.stringMatching(
+  /^builtin eval "\$\(<'[^']*\/agentlink-native-command-[^/]+\/command\.sh'\)"\r$/,
+);
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function dispatchedArtifactPath(pty: FakeNodePtyProcess): string {
+  const dispatch = pty.writes.at(-1) ?? "";
+  const match = dispatch.match(/^builtin eval "\$\(<'(.+)'\)"\r$/);
+  if (!match?.[1])
+    throw new Error(`Unexpected native command dispatch: ${dispatch}`);
+  return match[1];
+}
 
 function frame(kind: string, value?: string): string {
   return `\x1b]697;AgentLink;${nonce};${kind}${value === undefined ? "" : `;${value}`}\x07`;
@@ -122,9 +141,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     const firstEvents: SandboxCommandEvent[] = [];
     first.process.onEvent((event) => firstEvents.push(event));
     first.start();
-    expect(pty.writes).toEqual([
-      "builtin eval ' typeset -g NATIVE_STATE=ready'\r",
-    ]);
+    expect(pty.writes).toEqual([artifactDispatch]);
     expect(channel.rawData.join("")).toContain(
       "➜  workspace typeset -g NATIVE_STATE=ready\r\n",
     );
@@ -198,9 +215,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     command.process.onEvent(() => undefined);
     command.start();
 
-    expect(pty.writes).toEqual([
-      "builtin eval ' (\nexport NATIVE_STATE=ready\n)'\r",
-    ]);
+    expect(pty.writes).toEqual([artifactDispatch]);
     expect(channel.rawData.join("")).toContain(
       "➜  workspace export NATIVE_STATE=ready\r\n",
     );
@@ -208,6 +223,93 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
       "➜  workspace (\nexport NATIVE_STATE=ready\n)",
     );
   });
+
+  it("dispatches complex commands through a verified private artifact and removes it", async () => {
+    const artifactRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-native-artifact-test-"),
+    );
+    try {
+      const pty = new FakeNodePtyProcess();
+      const runtime = new NodePtyNativeAgentRuntimeProvider(
+        { spawn: vi.fn(() => pty) },
+        { commandFileRoot: artifactRoot },
+      );
+      const channel = launch(runtime);
+      await emitInitialPrompt(pty, channel.ready);
+      const commandText = [
+        "curl -w 'status=%{http_code}\\n' http://127.0.0.1:18888/config; docker inspect service --format '{{.State.Status}}'",
+        "git push --atomic --force-with-lease=refs/heads/main:2a0cb3f120d76fb5fe378c92d50202d4c4de7241 origin refs/heads/main",
+      ].join("\n");
+      const command = runtime.createCommand({
+        channelId: "native-agent-1",
+        commandId: "native-command-complex",
+        generation: 1,
+        command: commandText,
+        isolateShellState: true,
+      });
+      command.process.onEvent(() => undefined);
+      command.start();
+
+      const artifactPath = dispatchedArtifactPath(pty);
+      expect(fs.statSync(path.dirname(artifactPath)).mode & 0o777).toBe(0o700);
+      expect(fs.statSync(artifactPath).mode & 0o777).toBe(0o600);
+      expect(fs.readFileSync(artifactPath, "utf8")).toBe(
+        `builtin eval ${shellQuote(` (\n${commandText}\n)`)}\n`,
+      );
+
+      pty.emitData(
+        `${frame("C", "builtin eval")}${frame("D", "0")}${frame("P", "/workspace")}${frame("A")}${frame("B")}`,
+      );
+      await command.process.completion;
+      expect(fs.existsSync(path.dirname(artifactPath))).toBe(false);
+      runtime.dispose();
+    } finally {
+      fs.rmSync(artifactRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["/bin/bash", "/bin/zsh"])(
+    "preserves top-level eval semantics through the artifact in %s",
+    async (shell) => {
+      const artifactRoot = fs.mkdtempSync(
+        path.join(os.tmpdir(), "agentlink-native-semantics-test-"),
+      );
+      try {
+        const pty = new FakeNodePtyProcess();
+        const runtime = new NodePtyNativeAgentRuntimeProvider(
+          { spawn: vi.fn(() => pty) },
+          { commandFileRoot: artifactRoot },
+        );
+        const channel = launch(runtime);
+        await emitInitialPrompt(pty, channel.ready);
+        const command = runtime.createCommand({
+          channelId: "native-agent-1",
+          commandId: "native-command-semantics",
+          generation: 1,
+          command: "return 0; printf reached",
+          isolateShellState: false,
+        });
+        command.process.onEvent(() => undefined);
+        command.start();
+
+        const direct = spawnSync(
+          shell,
+          ["-c", "builtin eval ' return 0; printf reached'"],
+          { encoding: "utf8" },
+        );
+        const artifact = spawnSync(shell, ["-c", pty.writes.at(-1)!.trim()], {
+          encoding: "utf8",
+        });
+        expect({ status: artifact.status, stdout: artifact.stdout }).toEqual({
+          status: direct.status,
+          stdout: direct.stdout,
+        });
+        runtime.dispose();
+      } finally {
+        fs.rmSync(artifactRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("waits for the zsh prompt-end marker after delayed async prompt segments", async () => {
     vi.useFakeTimers();
@@ -308,9 +410,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     });
     command.process.onEvent(() => undefined);
     command.start();
-    expect(pty.writes).toEqual([
-      "builtin eval ' printf first\\nprintf second'\r",
-    ]);
+    expect(pty.writes).toEqual([artifactDispatch]);
     pty.emitData(
       `${frame("C", "builtin eval")}firstsecond${frame("D", "0")}${frame("P", "/workspace")}${frame("A")}${frame("B")}`,
     );
@@ -396,10 +496,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     pty.emitData(`${frame("B")}${frame("C", "interactive-command")}`);
 
     expect(command.process.terminate()).toBe(true);
-    expect(pty.writes).toEqual([
-      "builtin eval ' interactive-command'\r",
-      "\x03",
-    ]);
+    expect(pty.writes).toEqual([artifactDispatch, "\x03"]);
     expect(pty.kill).not.toHaveBeenCalled();
     expect(channel.closed).not.toHaveBeenCalled();
 
@@ -433,7 +530,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     pty.emitData(`${frame("B")}${frame("C", "sleep 30")}`);
 
     expect(command.process.interrupt()).toBe(true);
-    expect(pty.writes).toEqual(["builtin eval ' sleep 30'\r", "\x03"]);
+    expect(pty.writes).toEqual([artifactDispatch, "\x03"]);
     pty.emitData(
       `^C\r\n${frame("D", "130")}${frame("P", "/workspace")}${frame("A")}${frame("B")}`,
     );

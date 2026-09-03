@@ -1,3 +1,8 @@
+import {
+  isCoreReasoningEffort,
+  type CoreReasoningEffort,
+} from "@agentlink/protocol/model-catalog";
+
 import type { AgentPrincipal, AgentModelReference } from "./modelIdentity.js";
 import type { CoreModelMessage, CoreModelUsage } from "./modelRuntime.js";
 import type {
@@ -14,6 +19,63 @@ import {
 } from "./turnLeases.js";
 
 export type AgentSessionRevision = string;
+
+/** Process-local or host-owned storage for transcripts excluded from durable session records. */
+export interface AgentTranscriptStore<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+> {
+  readTranscript(request: {
+    readonly principal: TPrincipal;
+    readonly sessionId: string;
+  }): Promise<readonly CoreModelMessage[] | undefined>;
+  writeTranscript(request: {
+    readonly principal: TPrincipal;
+    readonly sessionId: string;
+    readonly messages: readonly CoreModelMessage[];
+  }): Promise<void>;
+  deleteTranscript(request: {
+    readonly principal: TPrincipal;
+    readonly sessionId: string;
+  }): Promise<void>;
+}
+
+/** Shared process-local transcript adapter for explicit ephemeral-transcript policies. */
+export class InMemoryAgentTranscriptStore<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+> implements AgentTranscriptStore<TPrincipal> {
+  private readonly transcripts = new Map<string, readonly CoreModelMessage[]>();
+
+  async readTranscript(request: {
+    readonly principal: TPrincipal;
+    readonly sessionId: string;
+  }): Promise<readonly CoreModelMessage[] | undefined> {
+    validateScope(request.principal, request.sessionId);
+    const messages = this.transcripts.get(
+      sessionKey(request.principal, request.sessionId),
+    );
+    return messages ? structuredClone(messages) : undefined;
+  }
+
+  async writeTranscript(request: {
+    readonly principal: TPrincipal;
+    readonly sessionId: string;
+    readonly messages: readonly CoreModelMessage[];
+  }): Promise<void> {
+    validateScope(request.principal, request.sessionId);
+    this.transcripts.set(
+      sessionKey(request.principal, request.sessionId),
+      structuredClone(request.messages),
+    );
+  }
+
+  async deleteTranscript(request: {
+    readonly principal: TPrincipal;
+    readonly sessionId: string;
+  }): Promise<void> {
+    validateScope(request.principal, request.sessionId);
+    this.transcripts.delete(sessionKey(request.principal, request.sessionId));
+  }
+}
 
 export type AgentSessionRunState =
   | { readonly phase: "idle" }
@@ -54,6 +116,8 @@ export interface AgentSessionRecord<
   readonly updatedAt: number;
   readonly messages: readonly CoreModelMessage[];
   readonly selectedModel?: AgentModelReference;
+  /** Session default; `"none"` explicitly disables runtime reasoning defaults. */
+  readonly reasoningEffort?: CoreReasoningEffort;
   readonly usage?: CoreModelUsage;
   readonly runState: AgentSessionRunState;
   readonly pendingInteractionId?: string;
@@ -68,6 +132,7 @@ export interface AgentSessionSummary<
   readonly createdAt: number;
   readonly updatedAt: number;
   readonly selectedModel?: AgentModelReference;
+  readonly reasoningEffort?: CoreReasoningEffort;
   readonly runState: AgentSessionRunState;
   readonly pendingInteractionId?: string;
   readonly revision: AgentSessionRevision;
@@ -140,7 +205,10 @@ interface StoredSession<TPrincipal extends AgentPrincipal> {
 }
 
 interface StoredInteraction<TPrincipal extends AgentPrincipal> {
-  record: DurableToolInteractionRecord<TPrincipal>;
+  record?: DurableToolInteractionRecord<TPrincipal>;
+  readonly principal: TPrincipal;
+  readonly sessionId: string;
+  readonly interactionId: string;
   revisionNumber: number;
   consumed: boolean;
   responseIds: Set<string>;
@@ -209,6 +277,9 @@ export class InMemoryAgentStateRepository<
         ...(stored.record.selectedModel
           ? { selectedModel: structuredClone(stored.record.selectedModel) }
           : {}),
+        ...(stored.record.reasoningEffort !== undefined
+          ? { reasoningEffort: stored.record.reasoningEffort }
+          : {}),
         runState: structuredClone(stored.record.runState),
         ...(stored.record.pendingInteractionId
           ? { pendingInteractionId: stored.record.pendingInteractionId }
@@ -258,8 +329,8 @@ export class InMemoryAgentStateRepository<
     this.sessions.delete(key);
     for (const [interactionKey, interaction] of this.interactions) {
       if (
-        samePrincipal(interaction.record.principal, request.principal) &&
-        interaction.record.sessionId === request.sessionId
+        samePrincipal(interaction.principal, request.principal) &&
+        interaction.sessionId === request.sessionId
       ) {
         this.interactions.delete(interactionKey);
       }
@@ -327,6 +398,9 @@ export class InMemoryAgentStateRepository<
 
     this.interactions.set(key, {
       record: structuredClone(request.record),
+      principal: structuredClone(request.record.principal),
+      sessionId: request.record.sessionId,
+      interactionId: request.record.interactionId,
       revisionNumber: 1,
       consumed: false,
       responseIds: new Set(),
@@ -366,6 +440,7 @@ export class InMemoryAgentStateRepository<
     );
     if (!stored) return { ok: false, reason: "not_found" };
     if (stored.consumed) return { ok: false, reason: "consumed" };
+    if (!stored.record) return { ok: false, reason: "not_found" };
     const session = this.sessions.get(
       sessionKey(request.principal, request.sessionId),
     );
@@ -428,20 +503,23 @@ export class InMemoryAgentStateRepository<
       request.fencingToken,
     );
     if (fenceConflict) return fenceConflict;
+    const interaction = stored.record;
+    if (!interaction) return { ok: false, reason: "not_found" };
 
     stored.consumed = true;
     stored.responseIds.add(request.responseId);
     stored.revisionNumber += 1;
+    stored.record = undefined;
     session.revisionNumber += 1;
     session.record = {
       ...session.record,
       updatedAt: Math.max(session.record.updatedAt, request.consumedAt),
       pendingInteractionId: undefined,
-      lastTurnId: stored.record.turnId,
+      lastTurnId: interaction.turnId,
       runState: {
         phase: "resuming",
-        turnId: stored.record.turnId,
-        interactionId: stored.record.interactionId,
+        turnId: interaction.turnId,
+        interactionId: interaction.interactionId,
         responseId: request.responseId,
         decision: request.decision,
         resumedAt: request.consumedAt,
@@ -527,6 +605,12 @@ function validateSessionRecord(record: AgentSessionRecord): void {
   }
   if (record.schemaVersion !== 1) {
     throw new Error("Session schemaVersion must be 1");
+  }
+  if (
+    record.reasoningEffort !== undefined &&
+    !isCoreReasoningEffort(record.reasoningEffort)
+  ) {
+    throw new Error("Session reasoningEffort must be supported");
   }
 }
 

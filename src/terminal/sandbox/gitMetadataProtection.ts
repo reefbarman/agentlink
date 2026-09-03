@@ -192,6 +192,7 @@ async function nearestGitMarker(
 export async function resolveBaselineProtectedGitMetadataForCwd(
   cwd: string,
   workspaceRoots: readonly string[],
+  options: { includeAbsentWorkspaceMarker?: boolean } = {},
 ): Promise<WorkspaceGitProtection | undefined> {
   const canonicalCwd = await realpath(cwd);
   const canonicalRoots: string[] = [];
@@ -208,11 +209,20 @@ export async function resolveBaselineProtectedGitMetadataForCwd(
   if (containingRoots.length === 0) return undefined;
 
   const marker = await nearestGitMarker(canonicalCwd, containingRoots[0]);
-  if (!marker) return undefined;
+  if (!marker) {
+    const exactWorkspaceRoot = containingRoots.find(
+      (root) => root === canonicalCwd,
+    );
+    return options.includeAbsentWorkspaceMarker && exactWorkspaceRoot
+      ? resolveWorkspaceGitProtection(exactWorkspaceRoot)
+      : undefined;
+  }
   const workspaceRoot = containingRoots.find(
     (root) => marker === path.join(root, ".git"),
   );
   if (!workspaceRoot) return undefined;
   const protection = await resolveWorkspaceGitProtection(workspaceRoot);
-  return protection.markerExists ? protection : undefined;
+  return protection.markerExists || options.includeAbsentWorkspaceMarker
+    ? protection
+    : undefined;
 }

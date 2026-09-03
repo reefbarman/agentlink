@@ -31,7 +31,7 @@ Exact write-tool parameters and marker grammar: [write tools](complete-reference
 - `get_terminal_output` reads retained output or controls an observed command.
 - `close_terminals` closes managed terminals when appropriate.
 
-Command route, network access, shell persistence, and approval behavior depend on policy. Use the structured recovery guidance returned by a failed command instead of guessing at retries.
+Command route, network access, shell persistence, and approval behavior depend on policy. Native Agent commands are dispatched through verified private command artifacts so complex approved shell text is not retyped through the interactive line editor. Bare SSH sessions remain blocked, while a command supplied after the SSH host is treated as one-shot/non-interactive. Safe `git init` chains targeting the workspace root receive protected-metadata native-retry guidance before launch. Use the structured recovery guidance returned by a failed command instead of guessing at retries.
 
 Exact command-tool parameters: [terminal tools](complete-reference.md#execute_command).
 

@@ -14,7 +14,7 @@ import {
   CODEX_API_BASE_URL,
   getCodexEndpointConfig,
   type CodexResolvedAuthForClient,
-} from "./openaiClient.js";
+} from "@agentlink/core/codex";
 
 const CODEX_STANDALONE_WEB_PATH = "alpha/search";
 const DEFAULT_SEARCH_RESULT_LIMIT = 10;

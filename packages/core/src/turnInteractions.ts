@@ -146,6 +146,10 @@ export interface DurableToolInteractionRepository<
     readonly sessionId: string;
     readonly interactionId: string;
   }): Promise<ReadDurableToolInteractionResult<TPrincipal>>;
+  /**
+   * Atomically consume once. After success, durable adapters retain only the
+   * metadata needed to reject replay and discard the private continuation.
+   */
   consumeInteraction(request: {
     readonly principal: TPrincipal;
     readonly sessionId: string;

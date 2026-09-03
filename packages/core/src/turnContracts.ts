@@ -1,3 +1,4 @@
+export type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 export type { AgentModelReference, AgentPrincipal } from "./modelIdentity.js";
 
 import type { AgentModelReference, AgentPrincipal } from "./modelIdentity.js";
@@ -9,6 +10,10 @@ import type {
   CoreModelUsage,
 } from "./modelRuntime.js";
 import type {
+  EmbeddedAgentErrorCategory,
+  EmbeddedAgentToolPresentation,
+} from "@agentlink/protocol/embedded-agent-presentation";
+import type {
   TurnExecutionEvent,
   TurnExecutionLimits,
   TurnExecutionSnapshot,
@@ -17,6 +22,10 @@ import type {
 import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 
 export type AgentModelSelectionSource = "turn" | "session" | "runtime";
+export type AgentReasoningEffortSelectionSource =
+  | "turn"
+  | "session"
+  | "runtime";
 
 export interface AgentResolvedModelSelection {
   readonly model: AgentModelReference;
@@ -27,6 +36,17 @@ export interface ResolveAgentModelSelectionRequest {
   readonly turnModel: AgentModelReference | undefined;
   readonly sessionModel: AgentModelReference | undefined;
   readonly runtimeDefaultModel: AgentModelReference | undefined;
+}
+
+export interface AgentResolvedReasoningEffort {
+  readonly effort: CoreReasoningEffort;
+  readonly source: AgentReasoningEffortSelectionSource;
+}
+
+export interface ResolveAgentReasoningEffortRequest {
+  readonly turnReasoningEffort: CoreReasoningEffort | undefined;
+  readonly sessionReasoningEffort: CoreReasoningEffort | undefined;
+  readonly runtimeDefaultReasoningEffort: CoreReasoningEffort | undefined;
 }
 
 /** Resolve the documented turn > session > runtime model precedence. */
@@ -41,6 +61,22 @@ export function resolveAgentModelSelection(
   }
   if (request.runtimeDefaultModel) {
     return { model: request.runtimeDefaultModel, source: "runtime" };
+  }
+  return null;
+}
+
+/** Resolve the documented turn > session > runtime reasoning precedence. */
+export function resolveAgentReasoningEffort(
+  request: ResolveAgentReasoningEffortRequest,
+): AgentResolvedReasoningEffort | null {
+  if (request.turnReasoningEffort !== undefined) {
+    return { effort: request.turnReasoningEffort, source: "turn" };
+  }
+  if (request.sessionReasoningEffort !== undefined) {
+    return { effort: request.sessionReasoningEffort, source: "session" };
+  }
+  if (request.runtimeDefaultReasoningEffort !== undefined) {
+    return { effort: request.runtimeDefaultReasoningEffort, source: "runtime" };
   }
   return null;
 }
@@ -66,6 +102,8 @@ export interface AgentTurnRequest<
   readonly input: AgentTurnInput;
   /** Optional one-turn override; does not mutate the persisted session model. */
   readonly model: AgentModelReference | undefined;
+  /** Optional one-turn reasoning override; `"none"` explicitly disables it. */
+  readonly reasoningEffort?: CoreReasoningEffort;
 }
 
 /** Ephemeral execution controls passed beside, never persisted within, an intent. */
@@ -113,6 +151,7 @@ export interface AgentInteractionRequest {
   readonly toolCallId: string;
   readonly toolName: string;
   readonly effect: "read" | "write" | "external" | "unknown";
+  readonly presentation?: EmbeddedAgentToolPresentation;
   readonly displayInput?: unknown;
   readonly displayContent?: unknown;
 }
@@ -134,6 +173,7 @@ export interface AgentTurnPublicResultBase {
 
 export interface AgentTurnError {
   readonly code: string;
+  readonly category: EmbeddedAgentErrorCategory;
   readonly message: string;
   readonly retryable: boolean;
 }
@@ -184,23 +224,31 @@ export type AgentTurnEvent =
       readonly type: "tool.requested";
       readonly toolCallId: string;
       readonly toolName: string;
+      readonly effect: "read" | "write" | "external" | "unknown";
+      readonly presentation?: EmbeddedAgentToolPresentation;
       readonly displayInput?: unknown;
     })
   | (AgentTurnEventBase & {
       readonly type: "tool.started";
       readonly toolCallId: string;
       readonly toolName: string;
+      readonly effect: "read" | "write" | "external" | "unknown";
+      readonly presentation?: EmbeddedAgentToolPresentation;
     })
   | (AgentTurnEventBase & {
       readonly type: "tool.completed";
       readonly toolCallId: string;
       readonly toolName: string;
+      readonly effect: "read" | "write" | "external" | "unknown";
+      readonly presentation?: EmbeddedAgentToolPresentation;
       readonly displayContent?: unknown;
     })
   | (AgentTurnEventBase & {
       readonly type: "tool.failed";
       readonly toolCallId: string;
       readonly toolName: string;
+      readonly effect: "read" | "write" | "external" | "unknown";
+      readonly presentation?: EmbeddedAgentToolPresentation;
       readonly error: AgentTurnError;
     })
   | (AgentTurnEventBase & {

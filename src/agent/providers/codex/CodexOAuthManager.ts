@@ -4,13 +4,13 @@
  * Supports multiple signed-in OAuth accounts persisted in VS Code SecretStorage.
  */
 
-import { randomUUID } from "crypto";
 import * as crypto from "crypto";
 import * as http from "http";
-import { URL } from "url";
-import type { ExtensionContext } from "vscode";
 
-import { getCodexOriginator } from "../../../core/model/providers/codex/clientIdentity.js";
+import type { ExtensionContext } from "vscode";
+import { URL } from "url";
+import { getCodexOriginator } from "@agentlink/core/codex";
+import { randomUUID } from "crypto";
 
 // ── OAuth Configuration ──
 

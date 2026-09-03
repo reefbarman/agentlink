@@ -1,6 +1,7 @@
 import { scanShellLexBoundaries, scanShellLexWords } from "./shellLex.js";
 
 export type PredictableGitMetadataWriterSubcommand =
+  | "init"
   | "add"
   | "commit"
   | "rm"
@@ -13,6 +14,7 @@ export type PredictableGitMetadataWriterSubcommand =
   | "merge"
   | "merge-tree"
   | "reset"
+  | "remote"
   | "fetch"
   | "rebase";
 
@@ -28,6 +30,7 @@ export interface PredictableGitMetadataWriterClassification {
 }
 
 const SUBCOMMANDS = new Set<PredictableGitMetadataWriterSubcommand>([
+  "init",
   "add",
   "commit",
   "rm",
@@ -40,6 +43,7 @@ const SUBCOMMANDS = new Set<PredictableGitMetadataWriterSubcommand>([
   "merge",
   "merge-tree",
   "reset",
+  "remote",
   "fetch",
   "rebase",
 ]);
@@ -182,6 +186,15 @@ function hasAny(
   names: readonly string[],
 ): boolean {
   return names.some((name) => options.has(name));
+}
+
+function classifyInit(args: readonly string[]): boolean {
+  const parsed = parseArguments(
+    args,
+    new Set(["-q", "--quiet"]),
+    new Set(["-b", "--initial-branch", "--object-format", "--ref-format"]),
+  );
+  return Boolean(parsed && parsed.operands.length === 0);
 }
 
 function classifyAdd(args: readonly string[]): boolean {
@@ -444,6 +457,17 @@ function classifyReset(args: readonly string[]): boolean {
   );
 }
 
+function classifyRemote(args: readonly string[]): boolean {
+  return (
+    args.length === 3 &&
+    args[0] === "add" &&
+    args[1].length > 0 &&
+    !args[1].startsWith("-") &&
+    args[2].length > 0 &&
+    !args[2].startsWith("-")
+  );
+}
+
 function classifyFetch(args: readonly string[]): boolean {
   const booleanOptions = new Set([
     "-a",
@@ -553,6 +577,7 @@ const CLASSIFIERS: Record<
   PredictableGitMetadataWriterSubcommand,
   (args: readonly string[]) => boolean
 > = {
+  init: classifyInit,
   add: classifyAdd,
   commit: classifyCommit,
   rm: classifyRm,
@@ -565,6 +590,7 @@ const CLASSIFIERS: Record<
   merge: classifyMerge,
   "merge-tree": classifyMergeTree,
   reset: classifyReset,
+  remote: classifyRemote,
   fetch: classifyFetch,
   rebase: classifyRebase,
 };
@@ -589,6 +615,32 @@ function classifyDirectGitMetadataWriter(
   const args = wordScan.words.slice(2).map(({ raw }) => decodeWord(raw));
   if (args.some((argument) => argument === null)) return null;
   return CLASSIFIERS[subcommand](args as string[]) ? subcommand : null;
+}
+
+function isDirectGitStatusFollowup(command: string): boolean {
+  if (!command.trim() || hasUnsupportedShellSyntax(command)) return false;
+  const wordScan = scanShellLexWords(command);
+  if (
+    wordScan.finalState.quote !== null ||
+    wordScan.finalState.danglingEscape ||
+    wordScan.words.length < 2 ||
+    wordScan.words[0].raw !== "git" ||
+    wordScan.words[1].raw !== "status"
+  ) {
+    return false;
+  }
+  const args = wordScan.words.slice(2).map(({ raw }) => decodeWord(raw));
+  if (args.some((argument) => argument === null)) return false;
+  return (args as string[]).every((argument) =>
+    [
+      "--short",
+      "-s",
+      "--branch",
+      "-b",
+      "--porcelain",
+      "--untracked-files=no",
+    ].includes(argument),
+  );
 }
 
 /**
@@ -627,10 +679,18 @@ export function classifyPredictableGitMetadataWriter(
     start = boundary.end;
   }
   segments.push(input.command.slice(start));
-  const subcommands = segments.map(classifyDirectGitMetadataWriter);
-  if (subcommands.some((subcommand) => subcommand === null)) return null;
+  const subcommands: PredictableGitMetadataWriterSubcommand[] = [];
+  for (const segment of segments) {
+    const subcommand = classifyDirectGitMetadataWriter(segment);
+    if (subcommand) {
+      subcommands.push(subcommand);
+      continue;
+    }
+    if (subcommands.length > 0 && isDirectGitStatusFollowup(segment)) continue;
+    return null;
+  }
   return {
     kind: "predictable_git_metadata_writer",
-    subcommands: subcommands as PredictableGitMetadataWriterSubcommand[],
+    subcommands,
   };
 }

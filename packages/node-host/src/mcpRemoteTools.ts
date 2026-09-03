@@ -13,6 +13,7 @@ const MAX_SERVERS = 20;
 const MAX_TOOLS_PER_SERVER = 100;
 const MAX_TOOL_RESULT_CHARS = 100_000;
 const DEFAULT_TIMEOUT_MS = 60_000;
+const MAX_TIMEOUT_MS = 60_000;
 
 export type NodeHostMcpRemoteTransport = "sse" | "streamable-http";
 
@@ -56,10 +57,12 @@ export interface CreateNodeHostMcpRemoteToolsOptions<
 > {
   /** Resolve servers separately for every authenticated principal/session/turn. */
   readonly resolveServers: ResolveNodeHostMcpRemoteServers<TPrincipal>;
-  /** Required default-deny network policy, evaluated before every request and redirect. */
+  /** Required default-deny network policy, evaluated before every transport request. */
   readonly authorizeNetwork: (
     request: NodeHostMcpRemoteNetworkRequest<TPrincipal>,
   ) => boolean | Promise<boolean>;
+  /** Compare host-specific principal fields such as data realm as well as tenant/subject. */
+  readonly principalEquals?: (left: TPrincipal, right: TPrincipal) => boolean;
   readonly clientName?: string;
   readonly clientVersion?: string;
   readonly maxServers?: number;
@@ -122,10 +125,13 @@ export function createNodeHostMcpRemoteTools<
         const transport = createTransport(server, endpoint, fetch);
         await client.connect(transport);
         const catalog = await client.listTools();
-        for (const tool of catalog.tools.slice(0, maxToolsPerServer)) {
+        let acceptedTools = 0;
+        for (const tool of catalog.tools) {
+          if (acceptedTools >= maxToolsPerServer) break;
           const name = `${server.id}__${tool.name}`;
           if (!validToolName(name) || names.has(name)) continue;
           names.add(name);
+          acceptedTools += 1;
           tools.push(
             defineTool<TPrincipal>({
               name,
@@ -138,6 +144,13 @@ export function createNodeHostMcpRemoteTools<
                 tool: tool.name,
               }),
               handler: async (input, context) => {
+                if (!sameTurn(request, context, options.principalEquals)) {
+                  return remoteCallError(
+                    server,
+                    tool.name,
+                    "mcp_remote_turn_mismatch",
+                  );
+                }
                 try {
                   const result = await callRemoteTool({
                     server,
@@ -159,23 +172,12 @@ export function createNodeHostMcpRemoteTools<
                     ...(result.isError ? { isError: true } : {}),
                   };
                 } catch (error) {
-                  return {
-                    modelContent: JSON.stringify({
-                      error: "mcp_remote_call_failed",
-                      server: server.id,
-                      tool: tool.name,
-                      message: boundedText(
-                        error instanceof Error ? error.message : String(error),
-                        500,
-                      ),
-                    }),
-                    displayContent: {
-                      server: server.id,
-                      tool: tool.name,
-                      isError: true,
-                    },
-                    isError: true,
-                  };
+                  return remoteCallError(
+                    server,
+                    tool.name,
+                    "mcp_remote_call_failed",
+                    error,
+                  );
                 }
               },
             }),
@@ -200,7 +202,12 @@ async function resolveServers<TPrincipal extends AgentPrincipal>(
   const ids = new Set<string>();
   return servers
     .filter((server) => {
-      if (ids.has(server.id) || !validServerId(server.id)) return false;
+      if (
+        ids.has(server.id) ||
+        !validServerId(server.id) ||
+        !validTimeout(server.timeoutMs)
+      )
+        return false;
       ids.add(server.id);
       return true;
     })
@@ -237,7 +244,17 @@ function createAuthorizedFetch<TPrincipal extends AgentPrincipal>(
     );
     const allowed = await authorize({ ...request, serverId, url });
     if (!allowed) throw new Error("mcp_remote_destination_not_authorized");
-    return transportFetch(url, { ...init, redirect: "error" });
+    const response = await (input instanceof Request
+      ? transportFetch(new Request(input, { ...init, redirect: "error" }))
+      : transportFetch(url, { ...init, redirect: "error" }));
+    if (
+      response.redirected ||
+      (response.status >= 300 && response.status < 400)
+    ) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error("mcp_remote_redirect_not_allowed");
+    }
+    return response;
   };
 }
 
@@ -291,8 +308,6 @@ async function callRemoteTool(options: {
       {
         signal: options.signal,
         timeout: boundedTimeout(options.server.timeoutMs),
-        onprogress: () => {},
-        resetTimeoutOnProgress: true,
       },
     );
     if (!isCallToolResult(result)) {
@@ -311,6 +326,51 @@ function isCallToolResult(value: unknown): value is CallToolResult {
     Boolean(value) &&
     typeof value === "object" &&
     Array.isArray((value as { content?: unknown }).content)
+  );
+}
+
+function remoteCallError(
+  server: Readonly<NodeHostMcpRemoteServer>,
+  tool: string,
+  code: string,
+  error?: unknown,
+) {
+  return {
+    modelContent: JSON.stringify({
+      error: code,
+      server: server.id,
+      tool,
+      ...(error
+        ? {
+            message: boundedText(
+              error instanceof Error ? error.message : String(error),
+              500,
+            ),
+          }
+        : {}),
+    }),
+    displayContent: { server: server.id, tool, isError: true },
+    isError: true,
+  };
+}
+
+function sameTurn<TPrincipal extends AgentPrincipal>(
+  discovery: ResolveNodeHostMcpRemoteServersRequest<TPrincipal>,
+  invocation: {
+    readonly principal: TPrincipal;
+    readonly sessionId: string;
+    readonly turnId: string;
+  },
+  principalEquals: CreateNodeHostMcpRemoteToolsOptions<TPrincipal>["principalEquals"],
+): boolean {
+  const principalMatches = principalEquals
+    ? principalEquals(discovery.principal, invocation.principal)
+    : discovery.principal.tenantId === invocation.principal.tenantId &&
+      discovery.principal.subjectId === invocation.principal.subjectId;
+  return (
+    principalMatches &&
+    discovery.sessionId === invocation.sessionId &&
+    discovery.turnId === invocation.turnId
   );
 }
 
@@ -340,9 +400,16 @@ function boundedInteger(value: number, field: string, maximum: number): number {
   return value;
 }
 
+function validTimeout(value: number | undefined): boolean {
+  return (
+    value === undefined ||
+    (Number.isSafeInteger(value) && value >= 1 && value <= MAX_TIMEOUT_MS)
+  );
+}
+
 function boundedTimeout(value: number | undefined): number {
   if (value === undefined) return DEFAULT_TIMEOUT_MS;
-  return boundedInteger(value, "timeoutMs", DEFAULT_TIMEOUT_MS);
+  return boundedInteger(value, "timeoutMs", MAX_TIMEOUT_MS);
 }
 
 function safeJson(value: unknown): string {

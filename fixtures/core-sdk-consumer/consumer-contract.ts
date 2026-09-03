@@ -11,6 +11,10 @@ import {
   resolveCoreModelCatalogReadiness,
   type CoreModelCatalogEntry,
 } from "@agentlink/protocol/model-catalog";
+import {
+  createNodeHostAgent,
+  createNodeHostMcpRemoteTools,
+} from "@agentlink/node-host";
 
 interface FixturePrincipal extends AgentPrincipal {
   readonly tenantId: string;
@@ -48,5 +52,37 @@ export function composePackedConsumer(options: {
       `Serve ${current.tenantId}/${current.subjectId}`,
     resolveTools: ({ principal: current }) =>
       current.subjectId === principal.subjectId ? [tool] : [],
+  });
+}
+
+const remoteMcpTools = createNodeHostMcpRemoteTools<FixturePrincipal>({
+  resolveServers: ({ principal: current }) =>
+    current.subjectId === principal.subjectId
+      ? [
+          {
+            id: "records",
+            transport: "streamable-http",
+            url: "https://mcp.example.test/agentlink",
+          },
+        ]
+      : [],
+  authorizeNetwork: ({ principal: current, url }) =>
+    current.subjectId === principal.subjectId &&
+    url.origin === "https://mcp.example.test",
+});
+
+export function composePackedNodeHostConsumer(options: {
+  readonly models: CoreModelRuntime;
+  readonly sessions: AgentSessionRepository<FixturePrincipal>;
+  readonly turnLeases: AgentTurnLeaseProvider<FixturePrincipal>;
+}): AgentEngine<FixturePrincipal> {
+  return createNodeHostAgent({
+    ownerId: "packed-node-host-consumer",
+    models: options.models,
+    persistence: options,
+    instructions: ({ principal: current }) =>
+      `Serve ${current.tenantId}/${current.subjectId}`,
+    tools: { resolveTools: remoteMcpTools },
+    defaultModel: { providerId: "fixture", modelId: "fixture-model" },
   });
 }
