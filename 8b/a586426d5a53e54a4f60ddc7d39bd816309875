@@ -1,0 +1,226 @@
+packages/core/src/codex/streamParser.ts
+  h_9630b74bdac540 1-679
+src/core/model/providers/codex/clientIdentity.ts
+  h_9630b74bdac540 1
+src/core/model/providers/codex/responsesStream.test.ts
+  h_9630b74bdac540 9
+packages/core/src/codex/models.ts
+  h_9630b74bdac540 1-536
+packages/node-host/src/nodeHostAgent.ts
+  h_9630b74bdac540 1-2,9,83-84,124-129
+packages/core/src/openAiCompatible/backend.test.ts
+  h_9630b74bdac540 5,95-153
+packages/node-host/README.md
+  h_9630b74bdac540 34,40,86,88,99-102,107-109,111,164,177,180
+packages/core/src/hostApprovalTestKit.test.ts
+  h_9630b74bdac540 1-34
+fixtures/core-sdk-consumer/consumer-contract.ts
+  h_9630b74bdac540 14-17,57-86
+src/core/model/providers/openaiCompatible/translation.test.ts
+  h_9630b74bdac540 41,69,134-151,154-155,159-162,166,170-172
+packages/node-host/src/fileStateRepository.test.ts
+  h_9630b74bdac540 8-9,151-152,208-554
+scripts/vendor-agentlink-sdk.mjs
+  h_9630b74bdac540 1-411
+packages/node-host/src/fileStateRepository.ts
+  h_9630b74bdac540 1-2,5,10,20-21,25,29,34-38,47-50,53,57-61,67-68,71-72,75-95,102-117,134-135,142-149,166-186,188-314,370-372,503-505,551,622-623,626,629,635,638-639,660-661,663-671,678-684,686-691,693-694,696,700-702,704,706-708,712,714-716,724-725,729-739,746,748,765-767,770-790,794-795,798-809,812-817,819-859,861-894,896,898-906,908-920,924,929-930,940,944-1011,1014-1035,1100-1105,1191-1212,1288-1290,1298-1300,1307-1319
+package.json
+  h_9630b74bdac540 1123,1126
+packages/protocol/src/embeddedAgentPresentation.ts
+  h_9630b74bdac540 1-121
+CHANGELOG.md
+  h_9630b74bdac540 46
+src/agent/providers/codex/CodexUsageClient.ts
+  h_9630b74bdac540 3
+src/core/model/providers/codex/openaiClient.ts
+  h_9630b74bdac540 1
+src/core/model/providers/codex/streamParser.ts
+  h_9630b74bdac540 1
+src/core/model/providers/codex/openaiClient.test.ts
+  h_9630b74bdac540 1-14,16-17
+packages/core/src/codex/errors.test.ts
+  h_9630b74bdac540 1-352
+packages/core/src/turnInteractions.ts
+  h_9630b74bdac540 149-152
+packages/node-host/src/mcpRemoteTools.ts
+  h_9630b74bdac540 16,60,64-65,128-130,134,147-153,175,178-179,207-208,247-257,332-373,403-407,412
+packages/core/src/agentEngine.test.ts
+  h_9630b74bdac540 17-18,49,58-59,66,227-284,286-392,487-498,500-526,528-532,774-860,864-988
+src/terminal/sandbox/gitMetadataProtection.test.ts
+  h_9630b74bdac540 160,168-185,188-203
+packages/core/src/hostApprovalTestKit.ts
+  h_9630b74bdac540 1-424
+packages/core/src/codex/streamParser.test.ts
+  h_9630b74bdac540 1-500
+src/agent/providers/codex/openaiClient.ts
+  h_9630b74bdac540 1
+src/agent/modeModelPreferences.test.ts
+  h_9630b74bdac540 7
+packages/core/src/hostTools.ts
+  h_9630b74bdac540 13-16,18,50-51,64,68,74-97,174-176,178,190-192,217-325,364-385,396-397,401-512
+src/core/model/providers/codex/errors.ts
+  h_9630b74bdac540 1
+resources/builtin-skills/documentation/references/tools.md
+  h_9630b74bdac540 34
+src/tools/executeCommand.ts
+  h_9630b74bdac540 1387-1390
+packages/core/watch.mjs
+  h_9630b74bdac540 33-34,36,71-72,74
+packages/protocol/build-cjs.mjs
+  h_9630b74bdac540 71-72,125,707-721
+packages/core/src/hostTools.test.ts
+  h_9630b74bdac540 4,9-10,82-195
+src/agent/modeModelPreferences.ts
+  h_9630b74bdac540 3
+src/agent/providers/codex/CodexOAuthManager.ts
+  h_9630b74bdac540 10-13
+packages/core/src/turnContracts.ts
+  h_9630b74bdac540 1,13-15,25-28,41-51,68-79,105-106,154,176,227-228,235-236,242-243,250-251
+src/corePackageBoundary.test.ts
+  h_9630b74bdac540 39-71,87-101,109,342-345,348-384,478,658-684
+packages/protocol/src/agentErrorPresentation.ts
+  h_9630b74bdac540 1-33
+src/terminal/sandbox/gitMetadataProtection.ts
+  h_9630b74bdac540 195,212-219,225
+scripts/vendor-agentlink-sdk.test.mjs
+  h_9630b74bdac540 1-149
+packages/core/src/sessionRepository.ts
+  h_9630b74bdac540 1-5,23-79,119-120,135,208-211,280-281,332-333,401-403,443,506-507,512,518,521-522,609-613
+src/core/model/providers/codex/imageGeneration.ts
+  h_9630b74bdac540 6-8
+src/core/model/providers/codex/models.ts
+  h_9630b74bdac540 1
+packages/core/src/codex/translation.ts
+  h_9630b74bdac540 1-558
+packages/protocol/src/embeddedAgentPresentation.test.ts
+  h_9630b74bdac540 1-41
+src/agent/backgroundModelRouter.ts
+  h_9630b74bdac540 16
+src/terminal/native/NativeAgentRuntimeProvider.test.ts
+  h_9630b74bdac540 6-9,12-26,144,218,227-229,231-268,270-312,413,499,533
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_9630b74bdac540 158
+packages/core/src/codex/clientIdentity.test.ts
+  h_9630b74bdac540 1-50
+src/core/model/providers/codex/errors.test.ts
+  h_9630b74bdac540 1-13,15-16
+packages/core/src/turnKernel.test.ts
+  h_9630b74bdac540 2,4,432-516,985,989,1039,1043,1090-1103,1507-1538
+src/agent/providers/codex/models.ts
+  h_9630b74bdac540 1
+fixtures/core-sdk-consumer/node-host-remote-mcp.mjs
+  h_9630b74bdac540 1-396
+packages/protocol/src/embeddedAgentTransport.test.ts
+  h_9630b74bdac540 1-618
+packages/core/src/turnKernel.ts
+  h_9630b74bdac540 1-5,122,130-134,204,515-522,525-538,540-541,549-554,700,705-708,751-754,929,937,943-970,973,977,979,987,992,997,1018-1019,1030-1031,1059-1060,1090,1103,1111,1134,1137,1184,1187,1191,1199-1200,1206,1210,1215,1225-1226,1232-1236,1242,1246-1250,1358-1365,1373,1518,1523-1527,1536,1538,1543,1552-1588,1603-1607
+packages/core/build-cjs.mjs
+  h_9630b74bdac540 8-9,11
+packages/core/src/agentEngine.ts
+  h_9630b74bdac540 3-5,18,22,31,70-79,90-92,119-120,139-144,148-177,203-212,216-218,227-231,237-241,284-289,334-345,365-371,388-399,401,404,408-414,416-422,424-426,428-432,449,458-461,466,483-489,494,503,535,569-591,636-677,686-892,900-932,965,983-992,1009,1044,1068,1079-1081,1089,1100-1103,1108,1123,1128,1141-1144,1148,1171,1175-1205,1458-1468
+src/core/model/providers/codex/clientIdentity.test.ts
+  h_9630b74bdac540 1-12
+src/core/model/providers/codex/responsesStream.ts
+  h_9630b74bdac540 9,12
+packages/core/README.md
+  h_9630b74bdac540 16,19,22-24,26-31,34-36,42,49,52,56,58-59,74,87,99-100,124,126-128,137-138,147,157,159,168-190,194,196,202,206,208,253
+src/agent/providers/codex/CodexProvider.ts
+  h_9630b74bdac540 15-16,38-47,51,53,55,57,63,68-69,243-245
+packages/core/src/embeddedAgentWeb.test.ts
+  h_9630b74bdac540 1-538
+packages/protocol/package.json
+  h_9630b74bdac540 1108-1135
+packages/protocol/src/agentErrorPresentation.test.ts
+  h_9630b74bdac540 5-16
+src/core/model/providers/codex/standaloneWeb.ts
+  h_9630b74bdac540 17
+packages/core/src/codex/openaiClient.ts
+  h_9630b74bdac540 1-85
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_9630b74bdac540 1374,1378,1392
+packages/protocol/watch.mjs
+  h_9630b74bdac540 22,680-695,979-980
+packages/node-host/src/mcpRemoteTools.test.ts
+  h_9630b74bdac540 29,36,38,40-46,48,65-66,68,77-78,80,92,114-122,136-137,141-146,176-178,182-348
+src/core/model/providers/codex/translation.ts
+  h_9630b74bdac540 1
+resources/builtin-skills/documentation/references/embedding-agentlink.md
+  h_9630b74bdac540 8,10,25-30,32-45,51-63,65-68,70-72,74,88,90,104,108,110-111,114-158,160-161,173-179,181,183,185,187-194,199,202,204,206,216,218-219,235,244-251,253,255,261,265,273,280,284-311,317-323,333,338-343,346,348-349,351,357
+src/core/model/providers/codex/streamParser.test.ts
+  h_9630b74bdac540 1-15
+src/util/gitMetadataWriterClassifier.ts
+  h_9630b74bdac540 4,17,33,46,191-199,460-470,580,593,620-643,682-689,691,694
+packages/core/src/codex/clientIdentity.ts
+  h_9630b74bdac540 1-34
+packages/protocol/src/embeddedAgentTransport.ts
+  h_9630b74bdac540 1-1059
+packages/core/src/codex/models.test.ts
+  h_9630b74bdac540 1-213
+packages/core/src/codex/openaiClient.test.ts
+  h_9630b74bdac540 1-136
+packages/core/src/embeddedAgentWeb.ts
+  h_9630b74bdac540 1-822
+packages/core/src/codex/errors.ts
+  h_9630b74bdac540 1-339
+packages/core/src/openAiCompatible/translation.ts
+  h_9630b74bdac540 76-84
+packages/core/src/codex.ts
+  h_9630b74bdac540 1-6
+packages/core/src/turnContracts.test.ts
+  h_9630b74bdac540 12,68-91,94,97,150,153-154,158,161-162
+.agentlink/skills/triage/SKILL.md
+  h_9630b74bdac540 12-13,26-53,55-60,62-63,68,81,91-93
+packages/core/src/codex/translation.test.ts
+  h_9630b74bdac540 1-695
+src/shared/agentErrors.ts
+  h_9630b74bdac540 1-3,6-9
+scripts/run-core-sdk-consumer-gate.mjs
+  h_9630b74bdac540 21,39,50,155-164,167,171-175,179-180,182-185,192-197,204-208,210,213,215-216,220,273,277,281,284,299-306,311-312,318,320,323-333,335,347,357,361-363,407,425-426,430-432,439,453-464,486,492,495,499-502
+src/util/interactiveValidator.ts
+  h_9630b74bdac540 479,589-668
+fixtures/core-sdk-consumer/README.md
+  h_9630b74bdac540 1,3,9-16,19-21,31-33,46,48
+src/tools/executeCommand.test.ts
+  h_9630b74bdac540 227-270,301
+src/terminal/native/NativeAgentRuntimeProvider.ts
+  h_9630b74bdac540 14-16,70-113,142,201,245,279,304-307,312,322,326,328-332,517,523,532,578
+src/browser-gateway/helper/askAgentModelClient.ts
+  h_9630b74bdac540 56,60-62
+packages/core/CHANGELOG.md
+  h_9630b74bdac540 3-22,33
+src/core/model/providers/codex/translation.test.ts
+  h_9630b74bdac540 1-4,6-14,16-18
+src/util/interactiveValidator.test.ts
+  h_9630b74bdac540 305-315,319-332
+packages/core/package.json
+  h_9630b74bdac540 54-77,90-101,340-344
+packages/protocol/src/index.ts
+  h_9630b74bdac540 63-64
+src/protocolPackageBoundary.test.ts
+  h_9630b74bdac540 4642-4704
+packages/core/src/index.ts
+  h_9630b74bdac540 3-4,6
+src/agent/condense.test.ts
+  h_9630b74bdac540 21
+src/util/gitMetadataWriterClassifier.test.ts
+  h_9630b74bdac540 20-28,113,146-148,150-153,248-251,259-264
+packages/node-host/src/nodeHostAgent.test.ts
+  h_9630b74bdac540 5,36,62,114-115,118-135,156,159,225-294,296-297
+src/core/model/providers/codex/completionFacade.ts
+  h_9630b74bdac540 12-15,28
+src/core/model/providers/codex/models.test.ts
+  h_9630b74bdac540 1-2,4,6-10
+src/agent/providers/codex/index.ts
+  h_9630b74bdac540 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "8ba586426d5a53e54a4f60ddc7d39bd816309875",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
