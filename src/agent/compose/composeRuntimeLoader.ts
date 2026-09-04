@@ -2,6 +2,7 @@ import * as path from "node:path";
 
 import type { handleCompose } from "./composeRuntime.js";
 import { pathToFileURL } from "node:url";
+import { runWithComposeRuntimeAdmission } from "./composeRuntimeLimiter.js";
 
 interface ComposeRuntimeModule {
   handleCompose: typeof handleCompose;
@@ -18,7 +19,14 @@ export function loadComposeRuntime(
   const cached = runtimeModules.get(runtimeUrl);
   if (cached) return cached;
 
-  const loading = import(runtimeUrl) as Promise<ComposeRuntimeModule>;
+  const loading = (import(runtimeUrl) as Promise<ComposeRuntimeModule>).then(
+    (runtime) => ({
+      handleCompose: (options) =>
+        runWithComposeRuntimeAdmission(options, () =>
+          runtime.handleCompose(options),
+        ),
+    }),
+  );
   runtimeModules.set(runtimeUrl, loading);
   void loading.catch(() => runtimeModules.delete(runtimeUrl));
   return loading;
