@@ -1,3 +1,5 @@
+import type { ToolResult } from "@agentlink/protocol/tool-result";
+
 export type ToolSideEffect =
   | "read"
   | "write"
@@ -646,32 +648,133 @@ const toolCapabilities = [
   ),
 ] as const satisfies readonly ToolCapabilityMetadata[];
 
-const COMPOSABLE_NATIVE_TOOL_NAMES = new Set([
-  "get_context",
-  "get_repo_map",
-  "get_module_neighbors",
-  "list_files",
-  "search_files",
-  "get_diagnostics",
-  "go_to_definition",
-  "go_to_implementation",
-  "go_to_type_definition",
-  "get_references",
-  "get_symbols",
-  "get_hover",
-  "get_completions",
-  "get_code_actions",
-  "get_call_hierarchy",
-  "get_type_hierarchy",
-  "get_inlay_hints",
-]);
+export interface ComposabilityPolicyViolation {
+  message: string;
+}
+
+export interface ComposabilityPolicy {
+  readonly validateInput: (
+    input: Readonly<Record<string, unknown>>,
+  ) => ComposabilityPolicyViolation | undefined;
+  readonly validateOutputContent: (
+    content: ToolResult["content"],
+  ) => ComposabilityPolicyViolation | undefined;
+  readonly renderedConstraint: string;
+  readonly canonicalResultEligible: boolean;
+}
+
+const ACCEPT_ANY_COMPOSABLE_INPUT: ComposabilityPolicy["validateInput"] = () =>
+  undefined;
+
+const REQUIRE_TEXT_COMPOSABLE_OUTPUT: ComposabilityPolicy["validateOutputContent"] =
+  (content) =>
+    content.some((item) => item.type === "image" || item.type === "document")
+      ? { message: "image and document output is not composable" }
+      : undefined;
+
+function composabilityPolicy(
+  renderedConstraint: string,
+  validateInput: ComposabilityPolicy["validateInput"] = ACCEPT_ANY_COMPOSABLE_INPUT,
+): ComposabilityPolicy {
+  return Object.freeze({
+    validateInput,
+    validateOutputContent: REQUIRE_TEXT_COMPOSABLE_OUTPUT,
+    renderedConstraint,
+    canonicalResultEligible: true,
+  });
+}
+
+/** Canonical source for every native tool and variant that Compose may bridge. */
+export const COMPOSABILITY_POLICIES = Object.freeze({
+  read_file: composabilityPolicy(
+    "query omitted; text or extracted-PDF output only",
+    (input) =>
+      input.query !== undefined
+        ? { message: "query input is not composable" }
+        : undefined,
+  ),
+  get_context: composabilityPolicy("structured text output only"),
+  get_repo_map: composabilityPolicy("structured text output only"),
+  get_module_neighbors: composabilityPolicy("structured text output only"),
+  list_files: composabilityPolicy(
+    "query omitted; structured text output only",
+    (input) =>
+      input.query !== undefined
+        ? { message: "query input is not composable" }
+        : undefined,
+  ),
+  search_files: composabilityPolicy(
+    "semantic omitted or false; structured text output only",
+    (input) =>
+      input.semantic === true
+        ? { message: "semantic input is not composable" }
+        : undefined,
+  ),
+  get_diagnostics: composabilityPolicy("structured text output only"),
+  go_to_definition: composabilityPolicy("structured text output only"),
+  go_to_implementation: composabilityPolicy("structured text output only"),
+  go_to_type_definition: composabilityPolicy("structured text output only"),
+  get_references: composabilityPolicy("structured text output only"),
+  get_symbols: composabilityPolicy("structured text output only"),
+  get_hover: composabilityPolicy("structured text output only"),
+  get_completions: composabilityPolicy("structured text output only"),
+  get_code_actions: composabilityPolicy("structured text output only"),
+  get_call_hierarchy: composabilityPolicy("structured text output only"),
+  get_type_hierarchy: composabilityPolicy("structured text output only"),
+  get_inlay_hints: composabilityPolicy("structured text output only"),
+} satisfies Readonly<Record<string, ComposabilityPolicy>>);
+
+export type ComposableToolName = keyof typeof COMPOSABILITY_POLICIES;
+
+export function getComposabilityPolicy(
+  toolName: string,
+): ComposabilityPolicy | undefined {
+  return (
+    COMPOSABILITY_POLICIES as Readonly<Record<string, ComposabilityPolicy>>
+  )[toolName];
+}
+
+export function validateComposableToolInput(
+  toolName: string,
+  input: Readonly<Record<string, unknown>>,
+): ComposabilityPolicyViolation | undefined {
+  return getComposabilityPolicy(toolName)?.validateInput(input);
+}
+
+export function validateComposableToolOutputContent(
+  toolName: string,
+  content: ToolResult["content"],
+): ComposabilityPolicyViolation | undefined {
+  return getComposabilityPolicy(toolName)?.validateOutputContent(content);
+}
+
+export function isCanonicalComposableResultEligible(toolName: string): boolean {
+  return getComposabilityPolicy(toolName)?.canonicalResultEligible === true;
+}
+
+export const COMPOSABLE_TOOLS: ReadonlySet<string> = new Set(
+  Object.entries(COMPOSABILITY_POLICIES)
+    .filter(([, policy]) => policy.canonicalResultEligible)
+    .map(([name]) => name),
+);
+
+export function renderComposableToolConstraints(
+  toolNames: Iterable<string> = COMPOSABLE_TOOLS,
+): string {
+  return [...toolNames]
+    .flatMap((toolName) => {
+      const policy = getComposabilityPolicy(toolName);
+      return policy ? [`${toolName} (${policy.renderedConstraint})`] : [];
+    })
+    .join(", ");
+}
 
 export const TOOL_CAPABILITIES: Readonly<
   Record<string, ToolCapabilityMetadata>
 > = Object.freeze(
   Object.fromEntries(
     toolCapabilities.map((entry) => {
-      const composable = COMPOSABLE_NATIVE_TOOL_NAMES.has(entry.name);
+      const composable = COMPOSABLE_TOOLS.has(entry.name);
       return [
         entry.name,
         composable
@@ -685,12 +788,6 @@ export const TOOL_CAPABILITIES: Readonly<
 export const PARALLEL_SAFE_TOOLS: ReadonlySet<string> = new Set(
   toolCapabilities
     .filter((entry) => entry.parallelSafe)
-    .map((entry) => entry.name),
-);
-
-export const COMPOSABLE_TOOLS: ReadonlySet<string> = new Set(
-  Object.values(TOOL_CAPABILITIES)
-    .filter((entry) => entry.composable && entry.canonicalResult)
     .map((entry) => entry.name),
 );
 

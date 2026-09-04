@@ -19,6 +19,7 @@ interface Waiter {
   options: ComposeRuntimeOptions;
   execute: () => Promise<ComposeToolResult>;
   resolve: (result: ComposeToolResult) => void;
+  reject: (error: unknown) => void;
   timeout: ReturnType<typeof setTimeout>;
   abort: () => void;
   settled: boolean;
@@ -88,11 +89,12 @@ export class ComposeRuntimeLimiter {
       return Promise.resolve(this.busyResult(options));
     }
 
-    return new Promise<ComposeToolResult>((resolve) => {
+    return new Promise<ComposeToolResult>((resolve, reject) => {
       const waiter: Waiter = {
         options,
         execute,
         resolve,
+        reject,
         timeout: undefined as unknown as ReturnType<typeof setTimeout>,
         abort: () => undefined,
         settled: false,
@@ -146,8 +148,9 @@ export class ComposeRuntimeLimiter {
     void this.execute(waiter.execute).then(
       (result) => this.settleWaiter(waiter, result),
       (error: unknown) => {
+        if (waiter.settled) return;
         waiter.settled = true;
-        waiter.resolve(Promise.reject(error) as never);
+        waiter.reject(error);
       },
     );
   }

@@ -1,8 +1,8 @@
 import * as os from "os";
 import * as path from "path";
 
-import { randomUUID } from "crypto";
 import { appendJsonlLinesWithLock } from "./jsonlAppend.js";
+import { randomUUID } from "crypto";
 
 export type ToolUsageSource = "agent" | "mcp";
 export type ToolUsageOutcome =
@@ -12,6 +12,95 @@ export type ToolUsageOutcome =
   | "cancelled"
   | "rejected";
 export type ToolUsageMetrics = Record<string, number | string | boolean>;
+
+export const COMPOSE_CHILD_COUNT_BUCKETS = [
+  "0",
+  "1",
+  "2-3",
+  "4-7",
+  "8-15",
+  "16+",
+] as const;
+export type ComposeChildCountBucket =
+  (typeof COMPOSE_CHILD_COUNT_BUCKETS)[number];
+
+export const COMPOSE_ERROR_KINDS = [
+  "aborted",
+  "budget_exhausted",
+  "child_failed",
+  "internal",
+  "memory",
+  "policy",
+  "script_error",
+  "serialization",
+  "timeout",
+  "validation",
+] as const;
+export type ComposeErrorKind = (typeof COMPOSE_ERROR_KINDS)[number];
+
+export const COMPOSE_ERROR_CODES = [
+  "compose_final_result_too_large",
+  "compose_child_result_too_large",
+  "compose_cumulative_result_too_large",
+  "compose_unsupported_value",
+  "compose_cyclic_value",
+  "compose_non_finite_number",
+  "compose_invalid_json",
+  "compose_child_handler_failure",
+  "compose_tool_policy_denied",
+  "compose_request_policy_denied",
+  "compose_mode_policy_denied",
+  "compose_composability_policy_denied",
+  "compose_budget_exhausted",
+  "compose_runtime_busy",
+  "compose_timeout",
+  "compose_memory_limit",
+  "compose_aborted",
+  "compose_internal_failure",
+] as const;
+export type ComposeErrorCode = (typeof COMPOSE_ERROR_CODES)[number];
+
+export const COMPOSE_QUEUE_WAIT_BUCKETS = [
+  "none",
+  "lt_100ms",
+  "100_499ms",
+  "500_999ms",
+  "1_4s",
+  "5s_plus",
+] as const;
+export type ComposeQueueWaitBucket =
+  (typeof COMPOSE_QUEUE_WAIT_BUCKETS)[number];
+
+export const COMPOSE_ARTIFACT_RETENTION_CATEGORIES = [
+  "none",
+  "retained",
+  "retention_failed",
+] as const;
+export type ComposeArtifactRetentionCategory =
+  (typeof COMPOSE_ARTIFACT_RETENTION_CATEGORIES)[number];
+
+/** Privacy-safe runtime diagnostics for one Compose call. */
+export interface ComposeToolUsageObservation {
+  source?: ToolUsageSource;
+  mode?: string;
+  projectId?: string;
+  outcome: ToolUsageOutcome;
+  durationMs?: number;
+  childCount: number;
+  completedChildCount?: number;
+  succeededChildCount?: number;
+  failedChildCount?: number;
+  cancelledChildCount?: number;
+  toolAllBatchCount?: number;
+  toolAllSettledBatchCount?: number;
+  bridgedBytes?: number;
+  runtimeReturnedBytes?: number;
+  errorKind?: string;
+  errorCode?: string;
+  queueWaitBucket?: ComposeQueueWaitBucket;
+  artifactRetention?: ComposeArtifactRetentionCategory;
+  sameTurnRepair?: boolean;
+}
 
 export interface ToolUsageEvent {
   toolName: string;
@@ -60,6 +149,8 @@ export interface ToolUsageTelemetryOptions {
 const DEFAULT_FLUSH_INTERVAL_MS = 60_000;
 const DEFAULT_LOCK_TIMEOUT_MS = 20_000;
 const DEFAULT_STALE_LOCK_MS = 10_000;
+const COMPOSE_ERROR_KIND_SET = new Set<string>(COMPOSE_ERROR_KINDS);
+const COMPOSE_ERROR_CODE_SET = new Set<string>(COMPOSE_ERROR_CODES);
 
 function getDefaultTelemetryPath(): string {
   return path.join(os.homedir(), ".agentlink", "tool-usage-telemetry.jsonl");
@@ -151,6 +242,56 @@ export class ToolUsageTelemetry {
       bucket.totalDurationMs += durationMs;
       bucket.maxDurationMs = Math.max(bucket.maxDurationMs, durationMs);
     }
+  }
+
+  /**
+   * Record one Compose call without accepting scripts, inputs, outputs, paths,
+   * child names, or arbitrary metric keys/categories.
+   */
+  recordCompose(observation: ComposeToolUsageObservation): void {
+    this.record({
+      toolName: "compose",
+      source: observation.source ?? "agent",
+      mode: observation.mode,
+      projectId: observation.projectId,
+      outcome: observation.outcome,
+      durationMs: observation.durationMs,
+      metrics: {
+        childCount: nonNegativeInteger(observation.childCount),
+        childCountBucket: composeChildCountBucket(observation.childCount),
+        completedChildCount: nonNegativeInteger(
+          observation.completedChildCount,
+        ),
+        succeededChildCount: nonNegativeInteger(
+          observation.succeededChildCount,
+        ),
+        failedChildCount: nonNegativeInteger(observation.failedChildCount),
+        cancelledChildCount: nonNegativeInteger(
+          observation.cancelledChildCount,
+        ),
+        toolAllBatchCount: nonNegativeInteger(observation.toolAllBatchCount),
+        toolAllSettledBatchCount: nonNegativeInteger(
+          observation.toolAllSettledBatchCount,
+        ),
+        bridgedBytes: nonNegativeInteger(observation.bridgedBytes),
+        runtimeReturnedBytes: nonNegativeInteger(
+          observation.runtimeReturnedBytes,
+        ),
+        errorKind: boundedCategory(
+          observation.errorKind,
+          COMPOSE_ERROR_KIND_SET,
+          "none",
+        ),
+        errorCode: boundedCategory(
+          observation.errorCode,
+          COMPOSE_ERROR_CODE_SET,
+          "none",
+        ),
+        queueWaitBucket: observation.queueWaitBucket ?? "none",
+        artifactRetention: observation.artifactRetention ?? "none",
+        sameTurnRepair: observation.sameTurnRepair === true,
+      },
+    });
   }
 
   /** Record a diagnostic observation without inflating the tool call count. */
@@ -280,6 +421,31 @@ export class ToolUsageTelemetry {
     const message = err instanceof Error ? err.message : String(err);
     this.log?.(`[tool-usage-telemetry] flush failed: ${message}`);
   }
+}
+
+export function composeChildCountBucket(
+  childCount: number,
+): ComposeChildCountBucket {
+  const count = nonNegativeInteger(childCount);
+  if (count === 0) return "0";
+  if (count === 1) return "1";
+  if (count <= 3) return "2-3";
+  if (count <= 7) return "4-7";
+  if (count <= 15) return "8-15";
+  return "16+";
+}
+
+function nonNegativeInteger(value: number | undefined): number {
+  return Number.isFinite(value) ? Math.max(0, Math.round(value ?? 0)) : 0;
+}
+
+function boundedCategory(
+  value: string | undefined,
+  allowed: ReadonlySet<string>,
+  absent: string,
+): string {
+  if (!value) return absent;
+  return allowed.has(value) ? value : "other";
 }
 
 export function createToolUsageTelemetry(

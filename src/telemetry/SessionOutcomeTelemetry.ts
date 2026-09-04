@@ -18,6 +18,37 @@ export type HarnessRuntimeKind =
   | "browser-helper"
   | "unknown";
 
+export const COMPOSE_EFFICIENCY_SCHEMA_VERSION = 1 as const;
+
+/**
+ * Bounded, value-free efficiency counters for one turn or task. AgentEngine
+ * supplies exact retained-history occupancy; SessionManager supplies turn shape
+ * and provider/resource totals.
+ */
+export interface ComposeEfficiencySnapshot {
+  schemaVersion: typeof COMPOSE_EFFICIENCY_SCHEMA_VERSION;
+  enabledRequestCount: number;
+  advertisedRequestCount: number;
+  composeOpportunityTurns: number;
+  candidateFanoutTurns: number;
+  directComposableCalls: number;
+  composeCalls: number;
+  sameTurnRepairs: number;
+  directComposableHistoryTokens: number;
+  composeHistoryTokens: number;
+  foldedContextReadCount: number;
+  foldedContextTokens: number;
+  inlineDefinitionTokens: number;
+  providerAttempts: number;
+  inputTokens: number;
+  uncachedInputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  outputTokens: number;
+  toolCalls: number;
+  durationMs: number;
+}
+
 export interface HarnessEfficiencySnapshot {
   ordinaryAgentProviderAttempts: number;
   condenseProviderAttempts: number;
@@ -77,6 +108,7 @@ export interface TurnCompletedEvent {
   inputTokens?: number;
   outputTokens?: number;
   efficiency?: HarnessEfficiencySnapshot;
+  composeEfficiency?: ComposeEfficiencySnapshot;
 }
 
 /** Terminal task status reported through set_task_status. */
@@ -99,6 +131,7 @@ export interface TaskCompletedEvent {
   agentActiveMs?: number;
   mixedProviderOrModel?: boolean;
   efficiency?: HarnessEfficiencySnapshot;
+  composeEfficiency?: ComposeEfficiencySnapshot;
 }
 
 /** One record per background agent reaching a terminal state. */
@@ -200,7 +233,12 @@ function getDefaultTelemetryPath(): string {
   );
 }
 
-export class SessionOutcomeTelemetry {
+/** Narrow writer contract for call sites that do not need storage lifecycle APIs. */
+export interface SessionOutcomeRecorder {
+  record(event: SessionOutcomeEvent): void;
+}
+
+export class SessionOutcomeTelemetry implements SessionOutcomeRecorder {
   private readonly telemetryPath: string;
   private readonly instanceId = randomUUID();
   private readonly extensionVersion: string;
