@@ -1,0 +1,20 @@
+src/telemetry/ToolUsageTelemetry.ts
+  h_9630b74bdac540 5,16-103,152-153,247-296,426-448
+src/core/tools/toolCapabilities.ts
+  h_9630b74bdac540 1-2,651-685,687-770,777
+src/agent/compose/composeRuntimeLimiter.ts
+  h_9630b74bdac540 22,92,97,151,153
+src/telemetry/SessionOutcomeTelemetry.ts
+  h_9630b74bdac540 21-51,111,134,236-238,241
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "6b1e62f6c98b55d7ddbfb73f82d5a98c683c5429",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
