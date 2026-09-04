@@ -36,7 +36,7 @@ const mocks = vi.hoisted(() => {
         fallbackUsed: false,
       }),
     ),
-    isForegroundOnlyModel: vi.fn((_modelId: string) => false),
+
     createSession: vi.fn(async (opts: any): Promise<any> => {
       seq += 1;
       let pendingModeResume: {
@@ -178,8 +178,6 @@ vi.mock("./backgroundModelRouter.js", () => ({
     request: unknown,
     foreground: unknown,
   ) => mocks.resolveBackgroundRoute(registry, request, foreground),
-  isForegroundOnlyModel: (modelId: string) =>
-    mocks.isForegroundOnlyModel(modelId),
 }));
 
 vi.mock("./AgentEngine.js", () => ({

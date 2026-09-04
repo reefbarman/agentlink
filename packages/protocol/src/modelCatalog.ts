@@ -6,6 +6,7 @@ export const CORE_REASONING_EFFORTS = [
   "high",
   "xhigh",
   "max",
+  "ultra",
 ] as const;
 
 export type CoreReasoningEffort = (typeof CORE_REASONING_EFFORTS)[number];
@@ -16,6 +17,28 @@ export function isCoreReasoningEffort(
   return (
     typeof value === "string" &&
     (CORE_REASONING_EFFORTS as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * Clamp a desired non-disabled effort to the nearest lower supported level.
+ * `none` remains an explicit opt-out rather than an automatic clamp target; when
+ * no lower active level exists, prefer the model default.
+ */
+export function resolveSupportedReasoningEffort(
+  requested: CoreReasoningEffort,
+  supported: readonly CoreReasoningEffort[] | undefined,
+  defaultEffort: CoreReasoningEffort,
+): CoreReasoningEffort {
+  if (!supported?.length || supported.includes(requested)) return requested;
+  const requestedIndex = CORE_REASONING_EFFORTS.indexOf(requested);
+  for (let index = requestedIndex - 1; index > 0; index -= 1) {
+    const candidate = CORE_REASONING_EFFORTS[index];
+    if (candidate && supported.includes(candidate)) return candidate;
+  }
+  if (supported.includes(defaultEffort)) return defaultEffort;
+  return (
+    supported.find((effort) => effort !== "none") ?? supported[0] ?? "none"
   );
 }
 

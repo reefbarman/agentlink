@@ -9,17 +9,8 @@ interface OpenAiApiKeyStore {
   ): Promise<void>;
 }
 
-interface SecretStore {
-  store(key: string, value: string): Thenable<void>;
-}
-
 export interface ModelAuthCommandDependencies {
   openAiAuthManager: OpenAiApiKeyStore;
-  secrets: SecretStore;
-  setAnthropicApiKey(key: string): void;
-  refreshModels(): void;
-  publishBrowserModelCatalog(): void | Promise<void>;
-  grantBrowserModelCredentials(): void | Promise<void>;
 }
 
 export function getSemanticSetupTitle(
@@ -62,11 +53,6 @@ export function getSemanticSetupDetail(
 
 export function registerModelAuthCommands({
   openAiAuthManager,
-  secrets,
-  setAnthropicApiKey,
-  refreshModels,
-  publishBrowserModelCatalog,
-  grantBrowserModelCredentials,
 }: ModelAuthCommandDependencies): vscode.Disposable[] {
   return [
     vscode.commands.registerCommand("agentlink.setOpenaiApiKey", async () => {
@@ -181,30 +167,6 @@ export function registerModelAuthCommands({
             "agentlink",
           );
         }
-      },
-    ),
-    vscode.commands.registerCommand(
-      "agentlink.setAnthropicApiKey",
-      async () => {
-        const key = await vscode.window.showInputBox({
-          title: "Anthropic API Key",
-          prompt:
-            "Get your API key at https://platform.claude.com/settings/keys — or set ANTHROPIC_API_KEY as an environment variable instead",
-          password: true,
-          ignoreFocusOut: true,
-          validateInput: (value) =>
-            value.trim() ? null : "API key cannot be empty",
-        });
-        if (!key) return;
-        const trimmedKey = key.trim();
-        await secrets.store("anthropicApiKey", trimmedKey);
-        setAnthropicApiKey(trimmedKey);
-        refreshModels();
-        void publishBrowserModelCatalog();
-        void grantBrowserModelCredentials();
-        vscode.window.showInformationMessage(
-          "Anthropic API key stored securely.",
-        );
       },
     ),
   ];

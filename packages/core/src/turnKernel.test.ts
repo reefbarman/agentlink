@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { defineTool, defineZodTool } from "./hostTools.js";
+import { defineTool, defineZodTool, HostToolPublicError } from "./hostTools.js";
 import type { AgentPrincipal } from "./modelIdentity.js";
 import {
   CoreModelBackendRegistry,
@@ -780,6 +780,7 @@ describe("headless E4 turn kernel", () => {
         principal: { tenantId: "tenant-a", subjectId: "subject-a" },
         sessionId: "session-1",
         turnId: "turn-1",
+        input: { text: "Find the answer", attachments: undefined },
       });
       return [toolA];
     });
@@ -1000,6 +1001,76 @@ describe("headless E4 turn kernel", () => {
         }),
       ],
     });
+  });
+
+  it("surfaces only explicitly public host-tool failures", async () => {
+    const backend = new ScriptedBackend([
+      toolTurn([
+        { id: "call-public", name: "public_failure", input: {} },
+        { id: "call-private", name: "private_failure", input: {} },
+      ]),
+      finalTurn(),
+    ]);
+    const kernel = createHeadlessTurnKernel({
+      models: createRuntime(backend),
+      resolveTools: async () => [
+        defineZodTool({
+          name: "public_failure",
+          description: "Fail with a safe host-authored message",
+          inputSchema: z.strictObject({ query: z.string() }),
+          effect: "external",
+          handler: async () => {
+            throw new HostToolPublicError(
+              "The website blocked both RecipeChic readers. Paste the recipe text instead.",
+              { code: "recipe_page_unavailable", retryable: true },
+            );
+          },
+        }),
+        defineZodTool({
+          name: "private_failure",
+          description: "Fail with a private implementation detail",
+          inputSchema: z.strictObject({ query: z.string() }),
+          effect: "external",
+          handler: async () => {
+            throw new Error("secret filesystem path");
+          },
+        }),
+      ],
+    });
+
+    const { events, result } = await collect(kernel.runTurn(prepared()));
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool.failed",
+        toolCallId: "call-public",
+        error: {
+          code: "recipe_page_unavailable",
+          category: "internal",
+          message:
+            "The website blocked both RecipeChic readers. Paste the recipe text instead.",
+          retryable: true,
+        },
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool.failed",
+        toolCallId: "call-private",
+        error: expect.objectContaining({
+          code: "tool_execution_failed",
+          message: "Tool execution failed",
+        }),
+      }),
+    );
+    expect(JSON.stringify(events)).not.toContain("secret filesystem path");
+    expect(JSON.stringify(backend.requests[1]?.request.messages)).toContain(
+      "The website blocked both RecipeChic readers",
+    );
+    expect(JSON.stringify(backend.requests[1]?.request.messages)).not.toContain(
+      "secret filesystem path",
+    );
   });
 
   it("fails closed when a dynamic tool requires authorization", async () => {

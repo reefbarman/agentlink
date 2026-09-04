@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
-  "version": "1.21.1",
+  "version": "1.22.6",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -28,7 +28,6 @@
     "code review",
     "mcp",
     "openai",
-    "anthropic",
     "codex",
     "llm",
     "developer tools"
@@ -162,10 +161,6 @@
       {
         "command": "agentlink.setOpenaiApiKey",
         "title": "AgentLink: Set OpenAI API Key for Embeddings"
-      },
-      {
-        "command": "agentlink.setAnthropicApiKey",
-        "title": "AgentLink: Set Anthropic API Key"
       },
       {
         "command": "agentlink.configureOpenAiCompatibleModel",
@@ -388,7 +383,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Provider IDs to disable without clearing credentials. Disabled providers are removed from model selection and automatic routing in this window. Built-in IDs are anthropic and codex; configured OpenAI-compatible connection IDs are also supported."
+          "description": "Provider IDs to disable without clearing credentials. Disabled providers are removed from model selection and automatic routing in this window. The built-in ID is codex; configured OpenAI-compatible connection IDs are also supported."
         },
         "agentlink.webAccess.searchBackend": {
           "scope": "window",
@@ -686,7 +681,8 @@
                           "medium",
                           "high",
                           "xhigh",
-                          "max"
+                          "max",
+                          "ultra"
                         ]
                       }
                     },
@@ -699,7 +695,8 @@
                         "medium",
                         "high",
                         "xhigh",
-                        "max"
+                        "max",
+                        "ultra"
                       ]
                     },
                     "supportsImages": {
@@ -731,7 +728,7 @@
             "high"
           ],
           "enumDescriptions": [
-            "Per-model default: \"low\" for GPT-5.6 models (Sol, Terra, Luna); omitted for older models.",
+            "Per-model default: \"low\" for GPT-6 Astra and GPT-5.6 models (Sol, Terra, Luna); omitted for older models.",
             "Never send text.verbosity; the model uses its API default (medium).",
             "Force low verbosity for all Codex models.",
             "Force medium verbosity for all Codex models.",
@@ -781,7 +778,8 @@
                   "medium",
                   "high",
                   "xhigh",
-                  "max"
+                  "max",
+                  "ultra"
                 ],
                 "description": "Reasoning effort for this review. Validated against the resolved model's declared thinking support and reasoningEfforts. Not allowed with an acp: target, which controls its own effort."
               }
@@ -984,7 +982,8 @@
               "medium",
               "high",
               "xhigh",
-              "max"
+              "max",
+              "ultra"
             ]
           },
           "description": "Default thinking level per chat mode, keyed by mode slug. Manually selecting a thinking level in a mode updates that mode's saved preference."
@@ -1014,19 +1013,13 @@
           "default": 10000,
           "minimum": 1024,
           "maximum": 32768,
-          "description": "Token budget for extended thinking (only used with thinking-capable models like claude-opus-4-8 and claude-sonnet-4-6)."
+          "description": "Token budget for extended thinking when the selected model and provider use a token-based thinking budget."
         },
         "agentlink.showThinking": {
           "scope": "window",
           "type": "boolean",
           "default": true,
           "description": "Show thinking blocks in the agent chat UI."
-        },
-        "agentlink.anthropic.dynamicModelCapabilities": {
-          "scope": "window",
-          "type": "boolean",
-          "default": true,
-          "description": "Fetch Anthropic model list and capabilities (context window, output tokens, reasoning efforts) from the Anthropic API and merge them over the built-in defaults. Refreshes lazily (never on activation) and falls back to the built-in static metadata when offline or the API is unavailable. Disable to use only the built-in static metadata."
         },
         "agentlink.autoCondense": {
           "scope": "resource",
@@ -1138,7 +1131,6 @@
     "@agentlink/core": "0.1.0",
     "@agentlink/node-host": "0.1.0",
     "@agentlink/protocol": "0.1.0",
-    "@anthropic-ai/sdk": "^0.111.0",
     "@iarna/toml": "^3.0.0",
     "@jitl/quickjs-wasmfile-release-asyncify": "0.32.0",
     "@lancedb/lancedb": "0.22.3",

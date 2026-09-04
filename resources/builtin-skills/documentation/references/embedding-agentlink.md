@@ -105,7 +105,9 @@ for await (const event of stream) {
 }
 ```
 
-Use `createEmbeddedAgentWebHandler(...)` from `@agentlink/core/embedded-agent-web` for the standard Web `Request`/`Response` boundary. It requires JSON POSTs, bounds request bodies, dispatches create/inspect/hydrate/turn/resume/cancel/recover/delete, streams turns as NDJSON, maps engine/provider failures to safe public errors, and makes response-body cancellation settle even if the generator is blocked. The host must provide authenticated principal/data-realm derivation. Policy hooks receive the parsed request and canonical session ID; configure message/session length limits and optional principal-aware `validateMessage(...)` / `validateSessionId(...)` hooks before dispatch.
+Use `createEmbeddedAgentWebHandler(...)` from `@agentlink/core/embedded-agent-web` for the standard Web `Request`/`Response` boundary. It requires JSON POSTs, bounds request bodies, dispatches create/inspect/hydrate/turn/resume/cancel/recover/delete, streams turns as NDJSON, maps engine/provider failures to safe public errors, and makes response-body cancellation settle even if the generator is blocked. The host must provide authenticated principal/data-realm derivation. Policy hooks receive the parsed request and canonical session ID; configure message/session/attachment count and byte limits plus optional principal-aware `validateMessage(...)` / `validateSessionId(...)` hooks before dispatch.
+
+Image and document attachments use the core base64 content-block shape and are passed to the engine only after the Web handler validates their count, per-item bytes, total bytes, media type, and base64 envelope. Use `prepareTurnInput(...)` for bounded host-owned preprocessing such as extracting PDF text through a configured provider; it receives the authenticated principal, parsed request, canonical input, and abort signal. It may replace the text or attachments before the turn starts, but must preserve the host's privacy and authority policy.
 
 Hydration never sends private model history automatically. Provide `projectHydration(...)` to construct the exact browser-safe UI state. A Next.js App Router endpoint can export the composed handler directly; AgentLink does not require Next.js or React.
 
@@ -163,7 +165,7 @@ A “retry” that submits the same user text as a new turn is “send again,”
 
 ### 1. Start with core and domain tools
 
-Use `createAgentEngine(...)` with a host-configured model runtime, persistence/lease adapters, instructions, and tools. Convert each domain capability into `defineTool(...)` with a strict JSON Schema.
+Use `createAgentEngine(...)` with a host-configured model runtime, persistence/lease adapters, instructions, and tools. Convert each domain capability into `defineTool(...)` with a strict JSON Schema. A dynamic `resolveTools(...)` request includes the authenticated principal, session and turn IDs, and canonical current-turn text/attachments so the host can create narrowly scoped per-turn tools without a side channel.
 
 - Use `effect: "read"` for non-mutating domain reads.
 - Use `effect: "write"` for mutations.

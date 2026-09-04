@@ -5,16 +5,12 @@ import type {
 import { useCallback, useState } from "preact/hooks";
 
 import { ApprovalLayout } from "./ApprovalLayout.js";
+import {
+  FilePermissionRuleEditor,
+  type FilePermissionRuleMode,
+  type FilePermissionRuleScope,
+} from "./FilePermissionRuleEditor.js";
 import type { RefObject } from "preact";
-
-const MODES = ["prefix", "exact", "glob"] as const;
-const SCOPES = ["session", "project", "global", "skip"] as const;
-const SCOPE_LABELS: Record<string, string> = {
-  session: "Session",
-  project: "Project",
-  global: "Global",
-  skip: "Skip",
-};
 
 interface PathCardProps {
   request: ApprovalRequest;
@@ -28,8 +24,8 @@ export function PathCard({ request, submit, followUpRef }: PathCardProps) {
     filePath.substring(0, filePath.lastIndexOf("/") + 1) || filePath;
 
   const [pattern, setPattern] = useState(dirPath);
-  const [mode, setMode] = useState<(typeof MODES)[number]>("prefix");
-  const [scope, setScope] = useState<(typeof SCOPES)[number]>("skip");
+  const [mode, setMode] = useState<FilePermissionRuleMode>("prefix");
+  const [scope, setScope] = useState<FilePermissionRuleScope>("skip");
 
   const isSkipped = scope === "skip";
 
@@ -65,45 +61,16 @@ export function PathCard({ request, submit, followUpRef }: PathCardProps) {
   );
 
   const rulesJsx = (
-    <div class="rule-row">
-      <div class="rule-row-header">
-        <code class="rule-row-label">{filePath}</code>
-      </div>
-      <input
-        type="text"
-        class={`text-input rule-pattern-input ${isSkipped ? "skipped" : ""}`}
-        value={pattern}
-        onInput={(e) => setPattern((e.target as HTMLInputElement).value)}
-        disabled={isSkipped}
-      />
-      <div class="rule-row-toggles">
-        <div class="toggle-group">
-          {MODES.map((m) => (
-            <button
-              key={m}
-              type="button"
-              class={`mode-btn ${mode === m ? "active" : ""}`}
-              onClick={() => setMode(m)}
-              disabled={isSkipped}
-            >
-              {m.charAt(0).toUpperCase() + m.slice(1)}
-            </button>
-          ))}
-        </div>
-        <div class="toggle-group">
-          {SCOPES.map((s) => (
-            <button
-              key={s}
-              type="button"
-              class={`mode-btn ${scope === s ? "active" : ""} ${s === "skip" ? "mode-btn-skip" : ""}`}
-              onClick={() => setScope(s)}
-            >
-              {SCOPE_LABELS[s]}
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
+    <FilePermissionRuleEditor
+      label={filePath}
+      pattern={pattern}
+      mode={mode}
+      scope={scope}
+      modeGroupName={`path-rule-mode-${request.id}`}
+      onPatternChange={setPattern}
+      onModeChange={setMode}
+      onScopeChange={setScope}
+    />
   );
 
   return (

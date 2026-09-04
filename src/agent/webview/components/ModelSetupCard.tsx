@@ -7,7 +7,6 @@ export type ModelSetupAction =
   | "codex"
   | "openai-api-key"
   | "openai-compatible-api-key"
-  | "anthropic-api-key"
   | "configure-provider";
 
 function setupActionFor(model: ModelSetupModel): ModelSetupAction | undefined {
@@ -17,18 +16,14 @@ function setupActionFor(model: ModelSetupModel): ModelSetupAction | undefined {
     case "configure_provider":
       return "configure-provider";
     case "api_key":
-      return model.provider === "anthropic"
-        ? "anthropic-api-key"
-        : model.provider.startsWith("openai-compatible:")
-          ? "openai-compatible-api-key"
-          : undefined;
+      return model.provider.startsWith("openai-compatible:")
+        ? "openai-compatible-api-key"
+        : undefined;
   }
   if (model.readiness?.status !== "credentials_required") return undefined;
-  return model.provider === "anthropic"
-    ? "anthropic-api-key"
-    : model.provider.startsWith("openai-compatible:")
-      ? "openai-compatible-api-key"
-      : "codex";
+  return model.provider.startsWith("openai-compatible:")
+    ? "openai-compatible-api-key"
+    : "codex";
 }
 
 interface ModelSetupCardProps {
@@ -110,14 +105,12 @@ export function ModelSetupCard({
 
   const primaryAction = setupActionFor(setupState.model);
   const primaryLabel =
-    primaryAction === "anthropic-api-key"
-      ? "Use Anthropic API key"
-      : primaryAction === "openai-api-key" ||
-          primaryAction === "openai-compatible-api-key"
-        ? "Add API key"
-        : primaryAction === "configure-provider"
-          ? "Configure provider"
-          : "Continue with ChatGPT/Codex";
+    primaryAction === "openai-api-key" ||
+    primaryAction === "openai-compatible-api-key"
+      ? "Add API key"
+      : primaryAction === "configure-provider"
+        ? "Configure provider"
+        : "Continue with ChatGPT/Codex";
   const browserMessage =
     "Finish model setup in the AgentLink VS Code window. Credentials stay on that host.";
 

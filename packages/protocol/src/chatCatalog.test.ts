@@ -105,7 +105,7 @@ describe("chat catalog protocol", () => {
 
   it("keeps reasoning efforts and command sources closed", () => {
     expectTypeOf<ChatReasoningEffort>().toEqualTypeOf<
-      "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+      "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
     >();
     expectTypeOf<ChatSlashCommandSource>().toEqualTypeOf<
       "builtin" | "project" | "global" | "agentlink" | "skill"

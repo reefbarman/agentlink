@@ -14,7 +14,10 @@ import {
   isEmbeddedAgentToolPresentation,
   type EmbeddedAgentToolPresentation,
 } from "@agentlink/protocol/embedded-agent-presentation";
-import type { AgentResolvedModelSelection } from "./turnContracts.js";
+import type {
+  AgentResolvedModelSelection,
+  AgentTurnInput,
+} from "./turnContracts.js";
 import { z, type ZodType } from "zod";
 
 export type HostToolEffect = "read" | "write" | "external";
@@ -103,6 +106,8 @@ export interface HostToolResolveRequest<
   readonly principal: TPrincipal;
   readonly sessionId: string;
   readonly turnId: string;
+  /** Host-authenticated input for this turn, including any bounded attachments. */
+  readonly input: AgentTurnInput;
 }
 
 export type HostToolResolver<
@@ -134,6 +139,28 @@ export class HostToolInputValidationError extends Error {
   ) {
     super(formatHostToolValidationError(toolName, issues));
     this.name = "HostToolInputValidationError";
+  }
+}
+
+/**
+ * An explicitly display-safe host-tool failure. Arbitrary thrown errors remain
+ * redacted so provider, credential, filesystem, and network details cannot leak.
+ */
+export class HostToolPublicError extends Error {
+  readonly code: string;
+  readonly retryable: boolean;
+
+  constructor(
+    message: string,
+    options: { readonly code?: string; readonly retryable?: boolean } = {},
+  ) {
+    const bounded = boundText(message.trim(), 1_000);
+    if (!bounded)
+      throw new Error("Host tool public error message must not be empty");
+    super(bounded);
+    this.name = "HostToolPublicError";
+    this.code = options.code?.trim() || "tool_execution_failed";
+    this.retryable = options.retryable ?? false;
   }
 }
 

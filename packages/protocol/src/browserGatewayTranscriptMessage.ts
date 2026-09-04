@@ -31,7 +31,8 @@ export interface BrowserGatewayTranscriptMessage {
         | "medium"
         | "high"
         | "xhigh"
-        | "max";
+        | "max"
+        | "ultra";
       reasoningEffort:
         | "none"
         | "minimal"
@@ -39,7 +40,8 @@ export interface BrowserGatewayTranscriptMessage {
         | "medium"
         | "high"
         | "xhigh"
-        | "max";
+        | "max"
+        | "ultra";
     };
     mode?: { previousMode: string; mode: string };
   };
@@ -63,7 +65,8 @@ export interface BrowserGatewayTranscriptMessage {
       | "medium"
       | "high"
       | "xhigh"
-      | "max";
+      | "max"
+      | "ultra";
     mode?: string;
     commandApprovalPolicy?: "manual" | "safe" | "approve-for-me" | "sensitive";
     inputTokens: number;

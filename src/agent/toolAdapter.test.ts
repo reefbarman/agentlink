@@ -27,6 +27,7 @@ import { TODO_TOOL_NAME } from "./todoTool.js";
 import type { ToolDefinition } from "./providers/types.js";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 import type { MemoryToolProvider } from "../core/capabilities/memory.js";
+import { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { getWorkspaceRoots, resolveAndValidatePath } from "../util/paths.js";
 import { handleLoadRule } from "../tools/loadRule.js";
 import { handleLoadSkill } from "../tools/loadSkill.js";
@@ -2698,6 +2699,105 @@ describe("spawn_background_agent tool", () => {
 });
 
 describe("dispatchToolCall", () => {
+  it("preserves path-card follow-ups and typed rejections for list_files", async () => {
+    const { handleListFiles } = await import("../tools/listFiles.js");
+    vi.mocked(handleListFiles).mockImplementationOnce(
+      async (
+        params,
+        _approvalManager,
+        _approvalPanel,
+        sessionId,
+        providers,
+      ) => {
+        const access = await providers!.pathAccessProvider.ensureAccess({
+          absolutePath: "/outside/docs",
+          inputPath: String(params.path),
+          inWorkspace: false,
+          sessionId,
+          kind: "read",
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: access.approved ? "ok" : "rejected",
+                path: params.path,
+                reason: access.reason,
+              }),
+            },
+          ],
+        };
+      },
+    );
+    const approvalPanel = new ApprovalPanelProvider(
+      {} as any,
+      {
+        setPendingCount: vi.fn(),
+        showAlert: vi.fn(() => ({ dispose: vi.fn() })),
+      } as any,
+    );
+    approvalPanel.onForwardApproval = ({ request }, respond) => {
+      respond({
+        type: "decision",
+        id: request.id,
+        approvalKind: "path",
+        decision: "reject",
+        rejectionReason: "Use the project docs instead.",
+        followUp: "List docs/ in the workspace.",
+      });
+    };
+    const result = await dispatchToolCall(
+      "list_files",
+      { path: "/outside/docs" },
+      {
+        ...mockCtx,
+        approvalManager: { isPathTrusted: vi.fn(() => false) } as any,
+        approvalPanel,
+      },
+    );
+    approvalPanel.dispose();
+
+    expect(
+      result.content.map((entry) =>
+        entry.type === "text" ? JSON.parse(entry.text) : undefined,
+      ),
+    ).toContainEqual({
+      status: "rejected_by_user",
+      reason: "Use the project docs instead.",
+      follow_up: "List docs/ in the workspace.",
+    });
+  });
+
+  it("does not label automatic path denials as user rejections", async () => {
+    const { handleListFiles } = await import("../tools/listFiles.js");
+    vi.mocked(handleListFiles).mockImplementationOnce(async (params) => ({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "rejected",
+            path: params.path,
+            reason: "interaction_denied",
+          }),
+        },
+      ],
+    }));
+
+    const result = await dispatchToolCall(
+      "list_files",
+      { path: "/outside/docs" },
+      mockCtx,
+    );
+
+    expect(result.content).toHaveLength(1);
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual({
+      status: "rejected",
+      path: "/outside/docs",
+      reason: "interaction_denied",
+    });
+  });
+
   it("forwards complete feedback read filters", async () => {
     feedbackToolMocks.handleGetFeedback.mockClear();
 

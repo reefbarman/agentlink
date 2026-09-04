@@ -36,25 +36,29 @@ import {
 import {
   CODEX_CONDENSE_MODEL,
   CodexRequestError,
-  CodexStreamError,
+  CodexResponsesAuthError,
+  CodexResponsesStreamAbortedError,
   buildCodexClientCacheKey,
+  buildCodexAstraOAuthBodylessError,
   buildCodexAuthRequiredError,
   buildCodexContextWindowExceededError,
   buildCodexEndpointRequestBody,
   buildCodexUsageLimitExhaustedError,
   createCodexRequestError,
   createOpenAiResponsesClient,
+  executeCodexResponsesStream,
   getCodexErrorHandlingAction,
   getCodexUnavailableModelFallback,
   getCodexModelCapabilities,
   getCodexModelMigration,
   getCodexEndpointConfig,
   getEndpointCaps,
+  usesCodexResponsesLite,
+  isCodexBodylessBadRequest,
   isCodexModelNotFoundError,
   isCodexModelServedOnChatgptBackend,
   isCodexTextVerbosityRejectionError,
   listCodexModels,
-  parseCodexResponseStreamEvents,
   resolveCodexEffectiveModel,
   resolveCodexReasoningEffort,
   resolveCodexTextVerbosity,
@@ -130,7 +134,9 @@ export class CodexProvider implements ModelProvider {
   }
 
   async isAuthenticated(): Promise<boolean> {
-    return this.authManager.isAuthenticated();
+    const authMethod = await this.authManager.getPreferredAuthMethod();
+    if (authMethod) this.lastResolvedAuthMethod = authMethod;
+    return authMethod !== null;
   }
 
   getCatalogAuthAction() {
@@ -141,6 +147,13 @@ export class CodexProvider implements ModelProvider {
     return getCodexModelCapabilities(
       model,
       this.lastResolvedAuthMethod ?? "oauth",
+    );
+  }
+
+  supportsHostedTools(model: string): boolean {
+    return !(
+      this.lastResolvedAuthMethod !== undefined &&
+      usesCodexResponsesLite(model, this.lastResolvedAuthMethod)
     );
   }
 
@@ -322,6 +335,7 @@ export class CodexProvider implements ModelProvider {
     let effectiveModel = this.resolveEffectiveModel(model, auth, "stream()");
     let reasoningEffort = resolveCodexReasoningEffort({
       modelId: effectiveModel,
+      authMethod: auth.method,
       requestedEffort,
     });
 
@@ -356,6 +370,7 @@ export class CodexProvider implements ModelProvider {
           tools: codexTools,
           hostedTools,
           caps: getEndpointCaps(auth),
+          useResponsesLite: usesCodexResponsesLite(effectiveModel, auth.method),
         });
 
         // Log the request shape (not the full body — base64 data can be huge)
@@ -379,7 +394,16 @@ export class CodexProvider implements ModelProvider {
         yield* result;
         return;
       } catch (err) {
+        if (
+          err instanceof CodexResponsesStreamAbortedError ||
+          signal?.aborted
+        ) {
+          const aborted = new Error("Codex Responses stream aborted");
+          aborted.name = "AbortError";
+          throw aborted;
+        }
         const sdkErr = toCodexRequestError(err);
+        this.logCodexRequestError("stream()", sdkErr);
 
         const unavailableModelFallback =
           getCodexUnavailableModelFallback(effectiveModel);
@@ -401,6 +425,7 @@ export class CodexProvider implements ModelProvider {
           effectiveModel = unavailableModelFallback;
           reasoningEffort = resolveCodexReasoningEffort({
             modelId: effectiveModel,
+            authMethod: auth.method,
             requestedEffort,
           });
           textVerbosity = textVerbosityRejected
@@ -478,7 +503,11 @@ export class CodexProvider implements ModelProvider {
           );
         }
 
-        throw sdkErr;
+        throw this.decorateAstraOAuthBodylessError(
+          sdkErr,
+          effectiveModel,
+          auth.method,
+        );
       }
     }
   }
@@ -506,6 +535,7 @@ export class CodexProvider implements ModelProvider {
     let effectiveModel = this.resolveEffectiveModel(model, auth, "complete()");
     let reasoningEffort = resolveCodexReasoningEffort({
       modelId: effectiveModel,
+      authMethod: auth.method,
       requestedEffort,
     });
 
@@ -528,6 +558,7 @@ export class CodexProvider implements ModelProvider {
         reasoningEffort,
         reasoningMode,
         caps: getEndpointCaps(auth),
+        useResponsesLite: usesCodexResponsesLite(effectiveModel, auth.method),
       });
 
       // Log request shape (mirrors stream() logging)
@@ -551,9 +582,7 @@ export class CodexProvider implements ModelProvider {
       } catch (err) {
         const sdkErr = toCodexRequestError(err);
 
-        this.log(
-          `[codex] complete() error: status=${sdkErr.status ?? "none"} message=${sdkErr.message} rawCode=${sdkErr.rawCode ?? "none"} body=${JSON.stringify(sdkErr.body ?? null)}`,
-        );
+        this.logCodexRequestError("complete()", sdkErr);
 
         const unavailableModelFallback =
           getCodexUnavailableModelFallback(effectiveModel);
@@ -569,6 +598,7 @@ export class CodexProvider implements ModelProvider {
           effectiveModel = unavailableModelFallback;
           reasoningEffort = resolveCodexReasoningEffort({
             modelId: effectiveModel,
+            authMethod: auth.method,
             requestedEffort,
           });
           continue;
@@ -634,46 +664,38 @@ export class CodexProvider implements ModelProvider {
           );
         }
 
-        throw sdkErr;
+        throw this.decorateAstraOAuthBodylessError(
+          sdkErr,
+          effectiveModel,
+          auth.method,
+        );
       }
     }
   }
 
-  // ── Internal streaming parser ──
-
-  private async *processResponseStreamEvents(
-    events: AsyncIterable<Record<string, unknown>>,
-    state?: { outputStarted: boolean },
-    onTransportActivity?: StreamRequest["onTransportActivity"],
-  ): AsyncGenerator<ProviderStreamEvent> {
-    try {
-      const observedEvents = this.observeProviderEvents(
-        events,
-        onTransportActivity,
-      );
-      yield* parseCodexResponseStreamEvents(observedEvents, state, {
-        createThinkingId: randomUUID,
-      });
-    } catch (error) {
-      if (error instanceof CodexStreamError) {
-        throw createCodexRequestError({
-          message: error.message,
-          rawMessage: error.rawMessage,
-          body: error.body,
-        });
-      }
-      throw error;
+  private decorateAstraOAuthBodylessError(
+    error: Error & CodexErrorShape,
+    model: string,
+    authMethod: OpenAiCodexAuthMethod,
+  ): Error & CodexErrorShape {
+    if (
+      model !== "gpt-6-astra" ||
+      authMethod !== "oauth" ||
+      !isCodexBodylessBadRequest(error)
+    ) {
+      return error;
     }
+    return createCodexRequestError(buildCodexAstraOAuthBodylessError(error));
   }
 
-  private async *observeProviderEvents(
-    events: AsyncIterable<Record<string, unknown>>,
-    onTransportActivity?: StreamRequest["onTransportActivity"],
-  ): AsyncGenerator<Record<string, unknown>> {
-    for await (const event of events) {
-      onTransportActivity?.({ kind: "provider_event", at: Date.now() });
-      yield event;
-    }
+  private logCodexRequestError(
+    context: string,
+    error: Error & CodexErrorShape,
+  ): void {
+    const metadata = error.metadata;
+    this.log(
+      `[codex] ${context} error: status=${error.status ?? "none"} message=${error.message} rawCode=${error.rawCode ?? "none"} requestId=${metadata?.requestId ?? "none"} cfRay=${metadata?.cfRay ?? "none"} body=${JSON.stringify(error.body ?? null)}`,
+    );
   }
 
   private async executeStream(
@@ -685,21 +707,31 @@ export class CodexProvider implements ModelProvider {
     onTransportActivity?: StreamRequest["onTransportActivity"],
   ): Promise<AsyncGenerator<ProviderStreamEvent>> {
     try {
-      const client = this.getClient(auth);
-      const stream = await withAgentLinkHttpActivity(onTransportActivity, () =>
-        client.responses.create(requestBody, {
-          signal,
-          maxRetries: 0,
-        }),
-      );
-
-      return this.processResponseStreamEvents(
-        stream as AsyncIterable<Record<string, unknown>>,
-        streamState,
+      const stream = executeCodexResponsesStream({
+        client: this.getClient(auth),
+        body: requestBody,
+        authMethod: auth.method,
+        signal,
+        parserState: streamState,
+        parserOptions: { createThinkingId: randomUUID },
         onTransportActivity,
-      );
+        runRequest: (operation) =>
+          withAgentLinkHttpActivity(onTransportActivity, operation),
+      });
+      return (async function* () {
+        try {
+          yield* stream;
+        } catch (error) {
+          if (error instanceof CodexResponsesStreamAbortedError) throw error;
+          throw toCodexRequestError(
+            error instanceof CodexResponsesAuthError ? error.cause : error,
+          );
+        }
+      })();
     } catch (error) {
-      throw toCodexRequestError(error);
+      throw toCodexRequestError(
+        error instanceof CodexResponsesAuthError ? error.cause : error,
+      );
     }
   }
 }

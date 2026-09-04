@@ -101,7 +101,6 @@ import { collectSessionImages } from "./sessionImages.js";
 import { resolveProjectAttachments } from "./attachmentResolver.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import type { ModelRequestPermit } from "../core/modelRequestScheduler.js";
-import { AnthropicProvider } from "./providers/anthropic/index.js";
 export function buildSessionTranscriptSnapshot(
   messages: readonly AgentMessage[],
 ): SessionTranscriptSnapshot {
@@ -1168,16 +1167,13 @@ export class AgentEngine {
       let pendingEmptyResponseNudge = false;
       let emptyResponseCondenseAttempted = false;
       let contextTooLongCondenseAttempted = false;
-      let thinkingSignatureRetryAttempted = false;
       let toolPairingRepairAttempts = 0;
       const MAX_TOOL_PAIRING_REPAIR_ATTEMPTS = 2;
-      let credentialRefreshCount = 0;
       // Sticky for the whole user turn: once we fall back from remote response
       // state to full local replay, keep reporting that on the eventual
       // successful api_request for this turn.
       let previousResponseIdFallback = false;
       let lastLoggedEffortDowngrade = "";
-      const MAX_CREDENTIAL_REFRESHES = 3;
       const logTiming = (label: string, startedAt: number, details = "") => {
         this.log?.(
           `[perf] ${label} ${Date.now() - startedAt}ms${details ? ` ${details}` : ""}`,
@@ -1195,8 +1191,6 @@ export class AgentEngine {
           requestRetryCount = 0;
           streamRetryCount = 0;
           visibleTextFromRetriedStream = "";
-          credentialRefreshCount = 0;
-          thinkingSignatureRetryAttempted = false;
           session.resetProviderResponseState();
           this.log?.(
             `[model] adopted live selection ${provider.id}/${activeModel} at provider request boundary`,
@@ -1957,25 +1951,7 @@ export class AgentEngine {
             continue;
           }
 
-          if (
-            provider.id === "anthropic" &&
-            !thinkingSignatureRetryAttempted &&
-            /Invalid `signature` in `thinking` block|invalid.*signature.*thinking/i.test(
-              streamErrMsg,
-            )
-          ) {
-            thinkingSignatureRetryAttempted = true;
-            yield {
-              type: "warning",
-              message:
-                "Anthropic rejected a thinking replay signature — retrying with sanitized replay history.",
-            };
-            continue;
-          }
-
           // Context too long: auto-condense and retry rather than failing.
-          // Catches both Anthropic ("prompt is too long") and Codex
-          // ("exceeds the context window") errors.
           const isContextTooLong =
             streamErrMsg.includes("prompt is too long") ||
             streamErrMsg.includes("exceeds the context window") ||
@@ -2021,29 +1997,7 @@ export class AgentEngine {
             throw streamErr;
           }
 
-          // Auth errors: try refreshing credentials before failing.
           if (isAuthError(streamErr)) {
-            const anthropicProvider =
-              provider instanceof AnthropicProvider ? provider : null;
-            if (
-              !signal.aborted &&
-              credentialRefreshCount < MAX_CREDENTIAL_REFRESHES &&
-              anthropicProvider?.currentAuthSource === "cli-credentials"
-            ) {
-              credentialRefreshCount++;
-              yield {
-                type: "status_update",
-                message: `Refreshing credentials… (attempt ${credentialRefreshCount}/${MAX_CREDENTIAL_REFRESHES} — ${streamErrMsg})`,
-              };
-              if (await anthropicProvider.refreshClient(signal)) {
-                yield {
-                  type: "status_update",
-                  message: "Credentials refreshed — retrying…",
-                };
-                if (signal.aborted) break;
-                continue;
-              }
-            }
             throw new AuthenticationError(streamErrMsg);
           }
 

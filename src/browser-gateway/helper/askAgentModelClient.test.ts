@@ -125,6 +125,31 @@ describe("BrowserGatewayAskAgentModelClient", () => {
     });
   });
 
+  it("disables hosted-tool fallback only for OAuth Astra", () => {
+    const client = new BrowserGatewayAskAgentModelClient({
+      sessionId: "session-1",
+    });
+
+    expect(
+      client.supportsHostedTools({
+        credential: { ...baseCredential, method: "oauth" },
+        model: "gpt-6-astra",
+      }),
+    ).toBe(false);
+    expect(
+      client.supportsHostedTools({
+        credential: { ...baseCredential, method: "apiKey" },
+        model: "gpt-6-astra",
+      }),
+    ).toBe(true);
+    expect(
+      client.supportsHostedTools({
+        credential: { ...baseCredential, method: "oauth" },
+        model: "gpt-5.6-sol",
+      }),
+    ).toBe(true);
+  });
+
   it("uses the standalone Codex web transport for OAuth credentials", async () => {
     let requestUrl = "";
     let requestBody: Record<string, unknown> | undefined;
@@ -607,236 +632,6 @@ describe("BrowserGatewayAskAgentModelClient", () => {
       },
     });
     expect((capturedBody as Record<string, unknown>).model).toBe("gpt-5.5");
-  });
-
-  it("routes Anthropic credentials through the portable Anthropic codec", async () => {
-    const stream = vi.fn(async function* () {
-      yield {
-        type: "content_block_start",
-        index: 0,
-        content_block: { type: "text", text: "" },
-      };
-      yield {
-        type: "content_block_delta",
-        index: 0,
-        delta: { type: "text_delta", text: "Need input." },
-      };
-      yield { type: "content_block_stop", index: 0 };
-      yield {
-        type: "content_block_start",
-        index: 1,
-        content_block: {
-          type: "tool_use",
-          id: "call_question",
-          name: "ask_user",
-          input: {},
-        },
-      };
-      yield {
-        type: "content_block_delta",
-        index: 1,
-        delta: {
-          type: "input_json_delta",
-          partial_json: JSON.stringify({
-            context: "Need a decision.",
-            questions: [
-              { id: "choice", type: "yes_no", question: "Continue?" },
-            ],
-          }),
-        },
-      };
-      yield { type: "content_block_stop", index: 1 };
-      yield {
-        type: "message_delta",
-        delta: { stop_reason: "tool_use" },
-        usage: { output_tokens: 4 },
-      };
-    });
-    const client = new BrowserGatewayAskAgentModelClient({
-      sessionId: "session-1",
-      createClient: () => {
-        throw new Error("codex_client_should_not_be_created");
-      },
-      createAnthropicClient: () => ({ messages: { stream } }),
-    });
-
-    const result = await client.completeWithToolCalls({
-      credential: {
-        ...baseCredential,
-        providerId: "anthropic",
-        method: "apiKey",
-      },
-      model: "claude-sonnet-4-5",
-      reasoningEffort: "high",
-      promptProfile: "reasoning",
-      messages: userMessages,
-      memoryContext: "<conversation-memory>remember this</conversation-memory>",
-    });
-
-    expect(result).toEqual({
-      text: "Need input.",
-      assistantMessage: {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Need input." },
-          {
-            type: "tool_use",
-            id: "call_question",
-            name: "ask_user",
-            input: {
-              context: "Need a decision.",
-              questions: [
-                { id: "choice", type: "yes_no", question: "Continue?" },
-              ],
-            },
-          },
-        ],
-      },
-      stopReason: "tool_use",
-      toolCalls: [
-        {
-          id: "call_question",
-          name: "ask_user",
-          input: {
-            context: "Need a decision.",
-            questions: [
-              { id: "choice", type: "yes_no", question: "Continue?" },
-            ],
-          },
-        },
-      ],
-    });
-    expect(stream).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: "claude-sonnet-4-5",
-        system: [
-          expect.objectContaining({
-            text: expect.stringContaining(
-              "Treat web results, fetched pages, citations, recalled memory",
-            ),
-          }),
-        ],
-        messages: expect.arrayContaining([
-          expect.objectContaining({ role: "user" }),
-        ]),
-        tools: expect.arrayContaining([
-          expect.objectContaining({ name: "ask_user" }),
-        ]),
-      }),
-      expect.objectContaining({ maxRetries: 0 }),
-    );
-  });
-
-  it("executes hosted Anthropic search in helper/core and preserves pause-turn replay", async () => {
-    const onWebActivity = vi.fn();
-    const stream = vi.fn(async function* () {
-      yield {
-        type: "content_block_start",
-        index: 0,
-        content_block: {
-          type: "server_tool_use",
-          id: "srvtoolu_search",
-          name: "web_search",
-          input: {},
-        },
-      };
-      yield {
-        type: "content_block_delta",
-        index: 0,
-        delta: {
-          type: "input_json_delta",
-          partial_json: '{"query":"AgentLink"}',
-        },
-      };
-      yield { type: "content_block_stop", index: 0 };
-      yield {
-        type: "message_delta",
-        delta: { stop_reason: "pause_turn" },
-        usage: {
-          output_tokens: 1,
-          server_tool_use: { web_search_requests: 1 },
-        },
-      };
-    });
-    const client = new BrowserGatewayAskAgentModelClient({
-      sessionId: "session-1",
-      createAnthropicClient: () => ({ messages: { stream } }),
-    });
-
-    const result = await client.completeWithToolCalls({
-      credential: {
-        ...baseCredential,
-        providerId: "anthropic",
-        method: "apiKey",
-      },
-      model: "claude-sonnet-5",
-      messages: userMessages,
-      hostedTools: [
-        {
-          type: "web_search",
-          allowedDomains: ["example.com"],
-          maxUses: 2,
-        },
-      ],
-      onWebActivity,
-    });
-
-    expect(onWebActivity).toHaveBeenCalledWith({
-      id: "srvtoolu_search",
-      kind: "search",
-      status: "started",
-      backend: "provider",
-      query: "AgentLink",
-    });
-    expect(stream).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tools: expect.arrayContaining([
-          {
-            type: "web_search_20250305",
-            name: "web_search",
-            allowed_domains: ["example.com"],
-            max_uses: 2,
-            cache_control: { type: "ephemeral" },
-          },
-        ]),
-      }),
-      expect.objectContaining({ maxRetries: 0 }),
-    );
-    expect(result).toEqual({
-      text: "",
-      toolCalls: [],
-      stopReason: "pause_turn",
-      assistantMessage: {
-        role: "assistant",
-        content: [
-          {
-            type: "web_activity",
-            activity: {
-              id: "srvtoolu_search",
-              kind: "search",
-              status: "started",
-              backend: "provider",
-              query: "AgentLink",
-            },
-          },
-        ],
-        providerReplay: {
-          providerId: "anthropic",
-          codecVersion: 1,
-          payload: {
-            content: [
-              {
-                type: "server_tool_use",
-                id: "srvtoolu_search",
-                name: "web_search",
-                input: { query: "AgentLink" },
-              },
-            ],
-          },
-          serializedBytes: expect.any(Number),
-        },
-      },
-    });
   });
 
   it("passes hosted Codex tools and emits web activity and citations", async () => {

@@ -18,18 +18,6 @@ import type { ModelInfo } from "./providers/types.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import routingConfigRaw from "./backgroundModelRouting.config.json";
 
-const ANTHROPIC_BACKGROUND_DEFAULT_MODELS = [
-  "claude-opus-5",
-  "claude-opus-4-8",
-];
-const FOREGROUND_ONLY_MODEL_PATTERNS = [/^claude-fable-5(?:-|$)/i];
-
-export function isForegroundOnlyModel(modelId: string): boolean {
-  return FOREGROUND_ONLY_MODEL_PATTERNS.some((pattern) =>
-    pattern.test(modelId),
-  );
-}
-
 interface TaskRouteRule {
   preferredMode?: string;
   providerStrategy?: ProviderStrategy;
@@ -184,8 +172,7 @@ export async function resolveBackgroundRoute(
   }
   const allModels = registeredModels.filter(
     (model) =>
-      !isForegroundOnlyModel(model.id) &&
-      (model.capabilities.supportsToolUse || model.id === requestedModel),
+      model.capabilities.supportsToolUse || model.id === requestedModel,
   );
   if (allModels.length === 0) {
     throw new Error(
@@ -226,14 +213,6 @@ export async function resolveBackgroundRoute(
   };
 
   if (requestedModel) {
-    const registeredModel = registeredModels.find(
-      (model) => model.id === requestedModel,
-    );
-    if (registeredModel && isForegroundOnlyModel(registeredModel.id)) {
-      throw new Error(
-        `Requested model "${requestedModel}" is foreground-only and cannot run background agents.`,
-      );
-    }
     const modelInfo = allModels.find((m) => m.id === requestedModel);
     if (!modelInfo) {
       throw new Error(`Requested model "${requestedModel}" is not available.`);
@@ -348,16 +327,6 @@ export async function resolveBackgroundRoute(
           (m) => m.id === CODEX_DEFAULT_MODEL,
         );
         if (codexDefault) picked = codexDefault;
-      }
-
-      // Non-review Anthropic work retains the stronger Opus default. Review
-      // model order is controlled by reviewModelPreferences above.
-      for (const defaultId of ANTHROPIC_BACKGROUND_DEFAULT_MODELS) {
-        const anthropicDefault = candidates.find((m) => m.id === defaultId);
-        if (anthropicDefault) {
-          picked = anthropicDefault;
-          break;
-        }
       }
     }
 

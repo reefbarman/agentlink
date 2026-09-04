@@ -2,19 +2,7 @@ import type * as OpenAIResponses from "openai/resources/responses/responses";
 
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
-import {
-  executeAnthropicResolvedCompletion,
-  type AnthropicMessagesStreamClient,
-} from "../../core/model/providers/anthropic/completionFacade.js";
-import {
-  ANTHROPIC_CONDENSE_MODEL,
-  ANTHROPIC_MODEL_CAPABILITIES,
-} from "../../core/model/providers/anthropic/anthropicModels.js";
-import {
-  CodexResponsesAuthError,
-  CodexResponsesStreamAbortedError,
-  executeCodexResolvedCompletion,
-} from "../../core/model/providers/codex/completionFacade.js";
+
 import {
   collectOpenAiCompatibleCompletion,
   streamOpenAiCompatibleCompletion,
@@ -51,14 +39,18 @@ import {
 import OpenAI from "openai";
 import { z } from "zod";
 import { agentLinkFetch } from "../../util/httpDispatcher.js";
-import { createAnthropicClientFromResolvedCredential } from "../../agent/clientFactory.js";
+
 import { TODO_COMPACTION_GUIDANCE } from "../../agent/todoTool.js";
 
 import { normalizeBrowserGatewayModelCredentialProviderId } from "../browserGatewayModelProviderIds.js";
 import { surfaceMessagesToCoreModelMessages } from "../../core/surfaceModelMessages.js";
 import {
+  CodexResponsesAuthError,
+  CodexResponsesStreamAbortedError,
+  executeCodexResolvedCompletion,
   getCodexEndpointConfig,
   translateCodexMessages,
+  usesCodexResponsesLite,
 } from "@agentlink/core/codex";
 import {
   canUseCodexStandaloneWeb,
@@ -123,9 +115,6 @@ export interface BrowserGatewayAskAgentModelClientOptions {
     baseURL: string;
     defaultHeaders: Record<string, string>;
   }) => Pick<OpenAI, "responses">;
-  createAnthropicClient?: (
-    credential: BrowserGatewayModelCredentialRecord,
-  ) => AnthropicMessagesStreamClient;
 }
 
 export interface BrowserGatewayAskAgentToolCall {
@@ -452,6 +441,18 @@ export class BrowserGatewayAskAgentModelClient {
     return result.text;
   }
 
+  supportsHostedTools(params: {
+    credential: BrowserGatewayModelCredentialRecord;
+    model: string;
+  }): boolean {
+    return !(
+      normalizeBrowserGatewayModelCredentialProviderId(
+        params.credential.providerId,
+      ) === "openai-codex" &&
+      usesCodexResponsesLite(params.model, params.credential.method)
+    );
+  }
+
   async executeNativeWebTool(params: {
     credential: BrowserGatewayModelCredentialRecord;
     model: string;
@@ -500,12 +501,7 @@ export class BrowserGatewayAskAgentModelClient {
     if (!params.credential) {
       throw new Error("browser_gateway_ask_agent_model_auth_failed");
     }
-    if (providerId === "anthropic") {
-      return await this.completeAnthropicWithToolCalls({
-        ...params,
-        credential: params.credential,
-      });
-    }
+
     if (providerId !== "openai-codex") {
       throw new Error(
         `browser_gateway_ask_agent_provider_unsupported:${providerId}`,
@@ -639,65 +635,6 @@ export class BrowserGatewayAskAgentModelClient {
       }
       if (err instanceof CodexResponsesStreamAbortedError) {
         throw new Error("browser_gateway_ask_agent_model_aborted");
-      }
-      throw err;
-    }
-  }
-
-  private async completeAnthropicWithToolCalls(
-    params: BrowserGatewayAskAgentCompletionParams & {
-      credential: BrowserGatewayModelCredentialRecord;
-    },
-  ): Promise<BrowserGatewayAskAgentCompletionResult> {
-    const client =
-      this.options.createAnthropicClient?.(params.credential) ??
-      (createAnthropicClientFromResolvedCredential({
-        method: params.credential.method,
-        bearerToken: params.credential.bearerToken,
-      }) as unknown as AnthropicMessagesStreamClient);
-    const model = params.model ?? ANTHROPIC_CONDENSE_MODEL;
-
-    try {
-      const result = await executeAnthropicResolvedCompletion({
-        client,
-        model,
-        systemPrompt:
-          params.instructions ??
-          buildAskAgentInstructions(params.memoryContext, params.promptProfile),
-        messages: [
-          ...surfaceMessagesToCoreModelMessages(params.messages),
-          ...(params.iterationMessages ?? params.toolMessages ?? []),
-        ],
-        maxTokens: params.maxTokens ?? 2048,
-        reasoningEffort: params.reasoningEffort ?? "low",
-        supportsAdaptiveThinking: Boolean(
-          ANTHROPIC_MODEL_CAPABILITIES[model]?.supportsAdaptiveThinking,
-        ),
-        requiresExplicitThinkingDisable: Boolean(
-          ANTHROPIC_MODEL_CAPABILITIES[model]?.requiresExplicitThinkingDisable,
-        ),
-        tools: toMutableTools(params.tools),
-        hostedTools: params.hostedTools,
-        signal: params.signal,
-        onTextDelta: params.onDelta,
-        onStreamEvent: (event) => {
-          if (event.type === "web_activity") {
-            params.onWebActivity?.(event.activity);
-          } else if (event.type === "content_blocks") {
-            const citations = event.blocks.flatMap((block) =>
-              block.type === "text" ? (block.citations ?? []) : [],
-            );
-            if (citations.length > 0) params.onWebCitations?.(citations);
-          }
-        },
-      });
-      return result;
-    } catch (err) {
-      if (params.signal?.aborted) {
-        throw new Error("browser_gateway_ask_agent_model_aborted");
-      }
-      if (isAuthLikeError(err)) {
-        throw new Error("browser_gateway_ask_agent_model_auth_failed");
       }
       throw err;
     }

@@ -3,6 +3,7 @@ import {
   CODEX_OAUTH_CHEAP_MODEL,
   getCodexModelCapabilities,
   getCodexModelMigration,
+  getCodexResponsesRequestHeaders,
   getCodexUnavailableModelFallback,
   getEndpointCaps,
   listCodexModels,
@@ -53,10 +54,17 @@ describe("Codex model resolution", () => {
       model: "gpt-5.6-sol",
       remapped: false,
     });
+    expect(resolveCodexEffectiveModel("gpt-6-astra", "oauth")).toEqual({
+      model: "gpt-6-astra",
+      remapped: false,
+    });
   });
 
-  it("lists GPT-5.6 models without preview labels", () => {
+  it("lists Astra and GPT-5.6 models without preview labels", () => {
     const models = listCodexModels("codex");
+    expect(models.find(({ id }) => id === "gpt-6-astra")?.displayName).toBe(
+      "GPT-6 Astra",
+    );
     expect(models.find(({ id }) => id === "gpt-5.6-sol")?.displayName).toBe(
       "GPT-5.6 Sol",
     );
@@ -66,6 +74,11 @@ describe("Codex model resolution", () => {
     expect(models.find(({ id }) => id === "gpt-5.6-luna")?.displayName).toBe(
       "GPT-5.6 Luna",
     );
+  });
+
+  it("does not silently fall back from Astra", () => {
+    expect(getCodexUnavailableModelFallback("gpt-6-astra")).toBeUndefined();
+    expect(getCodexModelMigration("gpt-6-astra")).toBeUndefined();
   });
 
   it("maps unavailable GPT-5.6 models to gpt-5.5, the last older backend model", () => {
@@ -115,6 +128,37 @@ describe("Codex model resolution", () => {
         requestedEffort: "high",
       }),
     ).toBe("high");
+  });
+
+  it("clamps requested reasoning to the nearest auth-supported effort", () => {
+    expect(
+      resolveCodexReasoningEffort({
+        modelId: "gpt-6-astra",
+        authMethod: "oauth",
+        requestedEffort: "ultra",
+      }),
+    ).toBe("xhigh");
+    expect(
+      resolveCodexReasoningEffort({
+        modelId: "gpt-6-astra",
+        authMethod: "apiKey",
+        requestedEffort: "ultra",
+      }),
+    ).toBe("max");
+    expect(
+      resolveCodexReasoningEffort({
+        modelId: "gpt-5.5",
+        authMethod: "apiKey",
+        requestedEffort: "max",
+      }),
+    ).toBe("xhigh");
+    expect(
+      resolveCodexReasoningEffort({
+        modelId: "gpt-5.6-sol",
+        authMethod: "apiKey",
+        requestedEffort: "minimal",
+      }),
+    ).toBe("medium");
   });
 
   it("uses the effective model default reasoning effort", () => {
@@ -189,6 +233,44 @@ describe("Codex hosted web capabilities", () => {
 });
 
 describe("Codex auth-adjusted context windows", () => {
+  it("marks only OAuth Astra requests for Responses Lite", () => {
+    expect(getCodexResponsesRequestHeaders("gpt-6-astra", "oauth")).toEqual({
+      "x-openai-internal-codex-responses-lite": "true",
+    });
+    expect(
+      getCodexResponsesRequestHeaders("gpt-6-astra", "apiKey"),
+    ).toBeUndefined();
+    expect(
+      getCodexResponsesRequestHeaders("gpt-5.6-sol", "oauth"),
+    ).toBeUndefined();
+  });
+
+  it("uses distinct Astra capabilities for API key and OAuth", () => {
+    const api = getCodexModelCapabilities("gpt-6-astra", "apiKey");
+    expect(api).toMatchObject({
+      contextWindow: 1_050_000,
+      maxOutputTokens: 128_000,
+      reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      defaultReasoningEffort: "low",
+    });
+
+    const oauth = getCodexModelCapabilities("gpt-6-astra", "oauth");
+    expect(oauth).toMatchObject({
+      contextWindow: 872_000,
+      maxOutputTokens: 128_000,
+      reasoningEfforts: [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra",
+      ],
+      defaultReasoningEffort: "low",
+    });
+  });
+
   it("clamps gpt-5.5 to the enforced 400k/272k window over OAuth", () => {
     const caps = getCodexModelCapabilities("gpt-5.5", "oauth");
     expect(caps.contextWindow).toBe(400_000);

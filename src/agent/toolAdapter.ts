@@ -51,7 +51,10 @@ import {
 
 import type { AgentMode } from "./modes.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
-import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import {
+  runWithSubmittedApprovalDecisionTracking,
+  type ApprovalPanelProvider,
+} from "../approvals/ApprovalPanelProvider.js";
 import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 import type { CommandApprovalReviewer } from "../approvals/commandApprovalReview.js";
 import type { NetworkApprovalReviewer } from "../approvals/networkApprovalReview.js";
@@ -3071,7 +3074,94 @@ export function createGuardianOutsideReadOptions(
   };
 }
 
+type SubmittedApprovalDecision = {
+  decision: string;
+  rejectionReason?: string;
+  followUp?: string;
+};
+
+function parsedToolResultPayloads(
+  result: ToolResult,
+): Record<string, unknown>[] {
+  return result.content.flatMap((entry) => {
+    if (entry.type !== "text") return [];
+    try {
+      const parsed = JSON.parse(entry.text) as unknown;
+      return typeof parsed === "object" &&
+        parsed !== null &&
+        !Array.isArray(parsed)
+        ? [parsed as Record<string, unknown>]
+        : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function appendSubmittedApprovalMetadata(
+  result: ToolResult,
+  decisions: readonly SubmittedApprovalDecision[],
+): ToolResult {
+  if (decisions.length === 0) return result;
+  const payloads = parsedToolResultPayloads(result);
+  const followUps = decisions
+    .map((decision) => decision.followUp?.trim())
+    .filter((followUp): followUp is string => Boolean(followUp));
+  const rejection = [...decisions]
+    .reverse()
+    .find((decision) => /^(?:reject|deny|disable)$/u.test(decision.decision));
+  const hasFollowUp = payloads.some(
+    (payload) =>
+      typeof payload.follow_up === "string" && payload.follow_up.trim(),
+  );
+  const hasUserRejection = payloads.some(
+    (payload) => payload.status === "rejected_by_user",
+  );
+  if (
+    (!rejection || hasUserRejection) &&
+    (followUps.length === 0 || hasFollowUp)
+  ) {
+    return result;
+  }
+  const metadata: Record<string, unknown> = {};
+  if (rejection && !hasUserRejection) {
+    metadata.status = "rejected_by_user";
+    metadata.reason =
+      rejection.rejectionReason?.trim() || "The user rejected this approval.";
+  }
+  if (followUps.length > 0 && !hasFollowUp) {
+    metadata.follow_up = followUps.join("\n\n");
+  }
+  return {
+    ...result,
+    content: [
+      ...result.content,
+      { type: "text", text: JSON.stringify(metadata) },
+    ],
+  };
+}
+
 export async function dispatchToolCall(
+  toolName: string,
+  input: Record<string, unknown>,
+  ctx: ToolDispatchContext,
+): Promise<ToolResult> {
+  const approvalDecisions: SubmittedApprovalDecision[] = [];
+  const result = await runWithSubmittedApprovalDecisionTracking(
+    (response) => {
+      const decision = response as SubmittedApprovalDecision;
+      approvalDecisions.push({
+        decision: decision.decision,
+        rejectionReason: decision.rejectionReason,
+        followUp: decision.followUp,
+      });
+    },
+    () => dispatchToolCallWithTrackedApprovals(toolName, input, ctx),
+  );
+  return appendSubmittedApprovalMetadata(result, approvalDecisions);
+}
+
+async function dispatchToolCallWithTrackedApprovals(
   toolName: string,
   input: Record<string, unknown>,
   ctx: ToolDispatchContext,

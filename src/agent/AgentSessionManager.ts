@@ -28,6 +28,7 @@ import {
 import { hostFlightRecorder } from "../core/hostLiveness.js";
 import { runWatchedProviderStream } from "../core/providerStreamWatchdog.js";
 import { normalizePromptProfileOverrides } from "@agentlink/protocol/prompt-profile";
+import { resolveSupportedReasoningEffort } from "@agentlink/protocol/model-catalog";
 import { resolvePromptProfile } from "../core/promptProfilePolicy.js";
 import type {
   BackgroundAgentBudgetUsage,
@@ -91,6 +92,7 @@ import {
   type ContentBlock,
   type DocumentBlock,
   type ImageBlock,
+  type ModelCapabilities,
   type ModelProvider,
   type ReasoningEffort,
 } from "./providers/types.js";
@@ -145,10 +147,7 @@ import {
   isResearchTaskClass,
 } from "./background/backgroundBudgetPolicy.js";
 import { isReviewTaskClass } from "./background/reviewTaskClass.js";
-import {
-  isForegroundOnlyModel,
-  resolveBackgroundRoute,
-} from "./backgroundModelRouter.js";
+import { resolveBackgroundRoute } from "./backgroundModelRouter.js";
 import { parseMcpToolName } from "@agentlink/protocol/mcp-tool-identity";
 import {
   partitionMcpToolsForDisclosure,
@@ -1359,6 +1358,7 @@ export class AgentSessionManager {
       this.projectCatalog.resolvePersistedScope(persistedScope);
     const model = this.resolveAvailableModelId(args.summary.model);
     const providerId = this.host.providers.tryResolveProvider(model)?.id;
+    const background = args.background ?? args.summary.background ?? false;
     const activeContextProject = args.metadata.activeContextResourceUri
       ? this.projectCatalog.resolveProjectForResource(
           args.metadata.activeContextResourceUri,
@@ -1378,7 +1378,7 @@ export class AgentSessionManager {
     const common = {
       mode: args.summary.mode,
       config: this.buildConfigForModel(model),
-      background: args.background,
+      background,
       initialArchitectReviewPending:
         args.metadata.initialArchitectReviewPending ?? false,
       activeFilePath,
@@ -1391,7 +1391,7 @@ export class AgentSessionManager {
         ...common,
         projectScope: resolution.scope,
         devMode: this.devMode,
-        isBackground: args.background,
+        isBackground: background,
       });
     }
     return AgentSession.createTranscriptOnly({
@@ -2088,11 +2088,7 @@ export class AgentSessionManager {
         `[bg-route] migrated ${setting} model "${modelId}" to "${resolved}"`,
       );
     }
-    if (isForegroundOnlyModel(resolved)) {
-      throw new Error(
-        `${setting} references model "${resolved}", which is foreground-only and cannot run background reviews.`,
-      );
-    }
+
     const modelInfo = this.host.providers
       .listAllModels()
       .find((model) => model.id === resolved);
@@ -2303,6 +2299,10 @@ export class AgentSessionManager {
       const provider =
         modelResolution?.provider ??
         this.host.providers.tryResolveProvider(session.model);
+      if (await this.reconcileSessionReasoningEffort(session, provider)) {
+        this.saveSession(session.id);
+        this.notifySessionsChanged();
+      }
       const mcpTools = this.cloneMcpToolDefinitions(context);
       const policy = await this.resolveWebAccessPolicy(
         session,
@@ -2373,10 +2373,23 @@ export class AgentSessionManager {
                         if (directResult !== null) return directResult;
                       } catch (error) {
                         if (request.signal?.aborted) throw error;
+                        if (
+                          provider.supportsHostedTools?.(session.model) ===
+                          false
+                        ) {
+                          throw error;
+                        }
                         this.log?.(
                           `[web] ${provider.id} standalone ${request.kind} failed; falling back to delegated hosted execution: ${error instanceof Error ? error.message : String(error)}`,
                         );
                       }
+                    }
+                    if (
+                      provider.supportsHostedTools?.(session.model) === false
+                    ) {
+                      throw new Error(
+                        `Native web ${request.kind} is unavailable because the provider's standalone request failed and this model does not accept hosted tools.`,
+                      );
                     }
                     const prompt = buildNativeWebDelegationPrompt(
                       request.kind,
@@ -4610,6 +4623,10 @@ export class AgentSessionManager {
     effectiveModel: string,
   ): Promise<void> {
     session.model = effectiveModel;
+    this.applyReasoningEffortToSession(
+      session,
+      this.getDesiredReasoningEffort(session),
+    );
     this.applyThresholdToSession(session);
     await this.reconcileSessionPromptProfile(session);
   }
@@ -4695,7 +4712,23 @@ export class AgentSessionManager {
   }
 
   private resolveAvailableModelId(model: string): string {
-    return this.host.providers.resolveAvailableModel(model)?.model ?? model;
+    const requested = this.host.providers.resolveAvailableModel(model);
+    if (requested) return requested.model;
+    if (this.host.providers.listProviders().length === 0) return model;
+
+    for (const candidate of [
+      this.config.model,
+      FALLBACK_AGENT_MODEL,
+      ...this.host.providers.listAllModels().map((entry) => entry.id),
+    ]) {
+      const fallback = this.host.providers.resolveAvailableModel(candidate);
+      if (!fallback) continue;
+      this.log?.(
+        `[model] persisted model "${model}" is unavailable; using "${fallback.model}" for this session`,
+      );
+      return fallback.model;
+    }
+    return model;
   }
 
   private getReasoningEffortForMode(
@@ -4714,16 +4747,65 @@ export class AgentSessionManager {
     }
   }
 
+  private getDesiredReasoningEffort(session: AgentSession): ReasoningEffort {
+    return session.background
+      ? session.reasoningEffort
+      : this.getReasoningEffortForMode(
+          session.mode,
+          isProjectlessSessionScope(session.projectScope)
+            ? undefined
+            : session.projectScope,
+        );
+  }
+
   private applyReasoningEffortToSession(
     session: AgentSession,
     effort: ReasoningEffort,
+    capabilities: ModelCapabilities | undefined = this.host.providers
+      .tryResolveProvider(session.model)
+      ?.getCapabilities(session.model),
   ): void {
-    session.reasoningEffort = effort;
-    if (effort === "none") {
+    const resolvedEffort = !capabilities
+      ? effort
+      : capabilities.supportsThinking
+        ? resolveSupportedReasoningEffort(
+            effort,
+            capabilities.reasoningEfforts,
+            capabilities.defaultReasoningEffort ?? "high",
+          )
+        : "none";
+    session.reasoningEffort = resolvedEffort;
+    if (resolvedEffort === "none") {
       session.thinkingBudget = 0;
     } else if (session.thinkingBudget === 0) {
       session.thinkingBudget = this.config.thinkingBudget;
     }
+  }
+
+  private async reconcileSessionReasoningEffort(
+    session: AgentSession,
+    provider = this.host.providers.tryResolveProvider(session.model),
+  ): Promise<boolean> {
+    const previousEffort = session.reasoningEffort;
+    const capabilities = provider?.getRequestCapabilities
+      ? await provider.getRequestCapabilities(session.model)
+      : provider?.getCapabilities(session.model);
+    this.applyReasoningEffortToSession(
+      session,
+      this.getDesiredReasoningEffort(session),
+      capabilities,
+    );
+    return session.reasoningEffort !== previousEffort;
+  }
+
+  async reconcileSessionReasoningEfforts(): Promise<void> {
+    let changed = false;
+    for (const session of this.sessions.values()) {
+      if (!(await this.reconcileSessionReasoningEffort(session))) continue;
+      changed = true;
+      this.saveSession(session.id);
+    }
+    if (changed) this.notifySessionsChanged();
   }
 
   private applyThresholdToSession(session: AgentSession): void {
@@ -4949,6 +5031,8 @@ export class AgentSessionManager {
     const previousSessionModel = session.model;
     const previousProviderId = session.providerId;
     const previousSessionThreshold = session.autoCondenseThreshold;
+    const previousReasoningEffort = session.reasoningEffort;
+    const previousThinkingBudget = session.thinkingBudget;
     const foreground = this.foregroundId === session.id;
     const threshold = this.getCondenseThresholdForModel(
       model,
@@ -4965,6 +5049,10 @@ export class AgentSessionManager {
         workspaceFolders: this.getWorkspaceFolders(),
       });
       session.autoCondenseThreshold = threshold;
+      this.applyReasoningEffortToSession(
+        session,
+        this.getDesiredReasoningEffort(session),
+      );
       await this.reconcileSessionPromptProfile(session);
     } catch (error) {
       if (foreground) {
@@ -4976,6 +5064,8 @@ export class AgentSessionManager {
       session.model = previousSessionModel;
       session.providerId = previousProviderId;
       session.autoCondenseThreshold = previousSessionThreshold;
+      session.reasoningEffort = previousReasoningEffort;
+      session.thinkingBudget = previousThinkingBudget;
       throw error;
     }
 
@@ -8816,6 +8906,7 @@ export class AgentSessionManager {
           );
     this.sessionRevisions.set(sessionId, readResult.revision);
     const session = await this.createRestoredSession({ summary, metadata });
+    const modelChanged = session.model !== summary.model;
     this.sessionApprovalModes.set(sessionId, restoredApprovalMode(metadata));
     const projectId = session.projectScope.projectId;
     const restoredCheckpoints =
@@ -8871,6 +8962,15 @@ export class AgentSessionManager {
       initialArchitectReviewPending:
         metadata.initialArchitectReviewPending ?? false,
     });
+    this.applyReasoningEffortToSession(
+      session,
+      session.background
+        ? (metadata.reasoningEffort ?? session.reasoningEffort)
+        : this.getDesiredReasoningEffort(session),
+    );
+    const reasoningEffortChanged =
+      metadata.reasoningEffort !== undefined &&
+      session.reasoningEffort !== metadata.reasoningEffort;
     this.restoreContextLedger(session, metadata);
 
     if (!canCommit()) return null;
@@ -8882,7 +8982,9 @@ export class AgentSessionManager {
     this.syncSessionApproveForMe(session);
     if (
       interruptedRunRecovery.changed ||
-      legacyTodoContinuationIndexes.size > 0
+      legacyTodoContinuationIndexes.size > 0 ||
+      reasoningEffortChanged ||
+      modelChanged
     ) {
       await this.saveSessionNow(session.id);
     }
@@ -9042,6 +9144,12 @@ export class AgentSessionManager {
         fleetMetadata: metadata.fleet,
         lineage: metadata.lineage,
       });
+      const restoredReasoningEffort =
+        metadata.reasoningEffort ?? session.reasoningEffort;
+      this.applyReasoningEffortToSession(session, restoredReasoningEffort);
+      const reasoningEffortChanged =
+        metadata.reasoningEffort !== undefined &&
+        session.reasoningEffort !== metadata.reasoningEffort;
       this.restoreContextLedger(session, metadata);
 
       const fleet = session.fleetMetadata;
@@ -9119,7 +9227,7 @@ export class AgentSessionManager {
       this.restoredBackgroundSessionIds.add(session.id);
       this.sessionRevisions.set(session.id, readResult.revision);
       restored.push(session);
-      if (interruptedOnRestore) {
+      if (interruptedOnRestore || reasoningEffortChanged) {
         await this.saveSessionNow(session.id);
       }
     }

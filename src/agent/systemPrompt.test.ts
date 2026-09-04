@@ -1354,9 +1354,10 @@ describe("buildSystemPrompt", () => {
     );
   });
 
-  it("includes provider section for anthropic provider", async () => {
+  it("includes Claude guidance for an OpenAI-compatible Anthropic model family", async () => {
     const result = await buildSystemPrompt("code", tmpDir, {
-      providerId: "anthropic",
+      providerId: "openai-compatible:claude",
+      modelFamily: "anthropic",
     });
     expect(result).toContain("Provider-Specific Behavior");
     expect(result).toContain("Visible progress and rationale");
@@ -1374,9 +1375,10 @@ describe("buildSystemPrompt", () => {
     );
   });
 
-  it("keeps routine capability plumbing internal for anthropic reasoning profiles", async () => {
+  it("keeps routine capability plumbing internal for compatible Claude reasoning profiles", async () => {
     const result = await buildPromptArtifacts("code", tmpDir, {
-      providerId: "anthropic",
+      providerId: "openai-compatible:claude",
+      modelFamily: "anthropic",
       model: "claude-opus-4-8",
       promptProfileOverrides: { "claude-opus-4-8": "reasoning" },
     });
@@ -1387,9 +1389,10 @@ describe("buildSystemPrompt", () => {
     );
   });
 
-  it("gives anthropic models high-level code tool guidance", async () => {
+  it("gives compatible Claude models high-level code tool guidance", async () => {
     const result = await buildSystemPrompt("code", tmpDir, {
-      providerId: "anthropic",
+      providerId: "openai-compatible:claude",
+      modelFamily: "anthropic",
       model: "claude-haiku-4-5-20251001",
     });
     expect(result).toContain("Tool selection");
@@ -1400,10 +1403,10 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("`search_files` for exact matches only");
   });
 
-  it("serves the compact reasoning profile to evaluated frontier models", async () => {
+  it("serves the compact reasoning profile to evaluated Codex models", async () => {
     const result = await buildSystemPrompt("code", tmpDir, {
-      providerId: "anthropic",
-      model: "claude-opus-4-8",
+      providerId: "codex",
+      model: "gpt-5.6-sol",
     });
     expect(result).toContain(
       "You are AgentLink, a software engineering agent operating in a VS Code workspace.",

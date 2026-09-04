@@ -1,12 +1,15 @@
 import {
   buildCodexApiErrorDetails,
+  buildCodexAstraOAuthBodylessError,
   buildCodexAuthRequiredError,
   buildCodexContextWindowExceededError,
   buildCodexUsageLimitExhaustedError,
   createCodexRequestError,
   extractCodexErrorText,
   getCodexErrorHandlingAction,
+  getCodexProviderDiagnostics,
   isCodexAuthError,
+  isCodexBodylessBadRequest,
   isCodexContextWindowExceeded,
   isCodexTextVerbosityRejectionError,
   isCodexUsageLimitError,
@@ -132,6 +135,77 @@ describe("Codex error classification", () => {
       rawMessage: "boom",
       body: { error: { message: "boom" } },
     });
+  });
+
+  it("preserves request diagnostics from SDK errors and response headers", () => {
+    const headers = new Headers({
+      "x-request-id": "req-header",
+      "cf-ray": "ray-123",
+    });
+    const error = toCodexRequestError(
+      Object.assign(new Error("400 status code (no body)"), {
+        status: 400,
+        requestID: "req-property",
+        headers,
+      }),
+    );
+
+    expect(getCodexProviderDiagnostics(error)).toEqual({
+      requestId: "req-property",
+      cfRay: "ray-123",
+    });
+    expect(error.metadata).toEqual({
+      requestId: "req-property",
+      cfRay: "ray-123",
+    });
+  });
+
+  it("builds an actionable Astra OAuth bodyless-400 error without claiming certainty", () => {
+    const sourceError = {
+      status: 400,
+      message: "Codex API error 400: 400 status code (no body)",
+      rawMessage: "400 status code (no body)",
+      headers: { "x-request-id": "req-astra", "cf-ray": "ray-astra" },
+    };
+
+    expect(isCodexBodylessBadRequest(sourceError)).toBe(true);
+    expect(buildCodexAstraOAuthBodylessError(sourceError)).toMatchObject({
+      code: "astra_oauth_bodyless_400",
+      retryable: false,
+      status: 400,
+      metadata: {
+        model: "gpt-6-astra",
+        authMethod: "oauth",
+        transport: "responses_lite",
+        providerReturnedBody: false,
+        requestId: "req-astra",
+        cfRay: "ray-astra",
+      },
+    });
+    const message = buildCodexAstraOAuthBodylessError(sourceError).message;
+    expect(message).toContain("server returned no exact reason");
+    expect(message).toContain("may not have reached this account yet");
+    expect(message).toContain("Request ID: req-astra");
+    expect(message).toContain("Cloudflare Ray: ray-astra");
+  });
+
+  it("does not classify structured or non-bodyless 400s as bodyless", () => {
+    expect(
+      isCodexBodylessBadRequest({
+        status: 400,
+        message: "400 status code (no body)",
+        body: { error: "invalid" },
+      }),
+    ).toBe(false);
+    expect(
+      isCodexBodylessBadRequest({ status: 400, message: "invalid request" }),
+    ).toBe(false);
+    expect(
+      isCodexBodylessBadRequest({
+        status: 404,
+        message: "404 status code (no body)",
+      }),
+    ).toBe(false);
   });
 
   it("normalizes provider-shaped API errors into Codex request errors", () => {

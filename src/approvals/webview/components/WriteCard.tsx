@@ -5,16 +5,13 @@ import type {
 import { useCallback, useState } from "preact/hooks";
 
 import { ApprovalLayout } from "./ApprovalLayout.js";
+import {
+  FilePermissionRuleEditor,
+  type FilePermissionRuleMode,
+  type FilePermissionRuleScope,
+} from "./FilePermissionRuleEditor.js";
 import type { RefObject } from "preact";
 
-const MODES = ["glob", "prefix", "exact"] as const;
-const SCOPES = ["session", "project", "global", "skip"] as const;
-const SCOPE_LABELS: Record<string, string> = {
-  session: "Session",
-  project: "Project",
-  global: "Global",
-  skip: "Skip",
-};
 const TRUST_SCOPES = ["all-files", "this-file", "pattern"] as const;
 
 interface WriteCardProps {
@@ -49,8 +46,10 @@ export function WriteCard({
     outsideWorkspace ? "pattern" : "all-files",
   );
   const [pattern, setPattern] = useState(filePath);
-  const [mode, setMode] = useState<(typeof MODES)[number]>("glob");
-  const [scope, setScope] = useState<(typeof SCOPES)[number]>("skip");
+  const [mode, setMode] = useState<FilePermissionRuleMode>(
+    outsideWorkspace ? "exact" : "glob",
+  );
+  const [scope, setScope] = useState<FilePermissionRuleScope>("skip");
 
   const isSkipped = scope === "skip";
 
@@ -128,44 +127,39 @@ export function WriteCard({
       )}
 
       {trustScope === "pattern" && (
-        <div class="rule-row">
-          <input
-            type="text"
-            class="text-input rule-pattern-input"
-            value={pattern}
-            onInput={(e) => setPattern((e.target as HTMLInputElement).value)}
-          />
-          <div class="rule-row-toggles">
+        <FilePermissionRuleEditor
+          label={filePath}
+          pattern={pattern}
+          mode={mode}
+          scope={scope}
+          modeGroupName={`write-rule-mode-${request.id}`}
+          onPatternChange={setPattern}
+          onModeChange={setMode}
+          onScopeChange={setScope}
+        />
+      )}
+
+      {trustScope !== "pattern" && (
+        <div class="rule-row-options">
+          <div class="rule-row-option-line">
+            <span class="rule-row-option-label">Scope:</span>
             <div class="toggle-group">
-              {MODES.map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  class={`mode-btn ${mode === m ? "active" : ""}`}
-                  onClick={() => setMode(m)}
-                >
-                  {m.charAt(0).toUpperCase() + m.slice(1)}
-                </button>
-              ))}
+              {(["session", "project", "global", "skip"] as const).map(
+                (candidate) => (
+                  <button
+                    key={candidate}
+                    type="button"
+                    class={`mode-btn ${scope === candidate ? "active" : ""} ${candidate === "skip" ? "mode-btn-skip" : ""}`}
+                    onClick={() => setScope(candidate)}
+                  >
+                    {candidate.charAt(0).toUpperCase() + candidate.slice(1)}
+                  </button>
+                ),
+              )}
             </div>
           </div>
         </div>
       )}
-
-      <div class="rule-row-toggles" style={{ marginTop: "8px" }}>
-        <div class="toggle-group">
-          {SCOPES.map((s) => (
-            <button
-              key={s}
-              type="button"
-              class={`mode-btn ${scope === s ? "active" : ""} ${s === "skip" ? "mode-btn-skip" : ""}`}
-              onClick={() => setScope(s)}
-            >
-              {SCOPE_LABELS[s]}
-            </button>
-          ))}
-        </div>
-      </div>
     </>
   );
 

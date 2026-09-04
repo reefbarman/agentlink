@@ -7,12 +7,12 @@ All settings live under the `agentlink.*` namespace and are set in VS Code Setti
 ## Model and agent behavior
 
 - `modeModelPreferences` — startup model per mode slug; the last model selected in each mode becomes that mode's default
-- `modeReasoningEffortPreferences` — default thinking level per mode slug
-- `modelPromptProfiles` — exact model-ID overrides for `compatibility` or compact `reasoning` prompts; a committed frontier cohort (current Claude Opus/Sonnet and full-size Codex models) automatically uses `reasoning`, while unknown, invalid, and small-tier models fail closed to compatibility
+- `modeReasoningEffortPreferences` — desired thinking level per mode slug (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`). A session clamps an unsupported preference to the nearest lower level without overwriting the saved preference; GPT-6 Astra exposes Codex's `ultra` preset with ChatGPT/Codex OAuth (sent as Astra's `xhigh` wire effort) and supports up to `max` with an OpenAI API key.
+- `modelPromptProfiles` — exact model-ID overrides for `compatibility` or compact `reasoning` prompts; evaluated full-size Codex models automatically use `reasoning`, while unknown, invalid, compatible-provider, and small-tier models fail closed to compatibility
 - `agentMaxTokens` — max output tokens per response
 - `thinkingBudget`, `showThinking` — extended-thinking budget and UI visibility
 - `defaultMode` — mode for new sessions
-- `anthropic.dynamicModelCapabilities` — refresh Anthropic model metadata from the API
+
 - `provider.maxConcurrentRequests` — cap on simultaneous model requests per provider; queued foreground requests take priority over background and maintenance work
 
 ## Context condensing
@@ -53,7 +53,7 @@ MCP servers are configured in `mcp.json` files, not VS Code settings — see `re
 
 ## Providers
 
-- `disabledProviders` — provider IDs temporarily removed from model selection and automatic routing without deleting credentials (`anthropic` and `codex` are the built-in IDs)
+- `disabledProviders` — provider IDs temporarily removed from model selection and automatic routing without deleting credentials (`codex` is the built-in ID; configured connections use `openai-compatible:<connection-id>`)
 
 ## Browser gateway (remote control)
 
@@ -80,7 +80,8 @@ MCP servers are configured in `mcp.json` files, not VS Code settings — see `re
 - `codexStatefulResponses` — OpenAI Responses chaining via `previous_response_id`
 - `codexStoreResponses` — set `store=true` on Responses requests
 - `codexProMode` — GPT-5.6 Pro reasoning mode for API-key requests
-- `codex.textVerbosity` — final-message verbosity (`text.verbosity`) for Codex agent turns: `default` sends `low` for GPT-5.6 models and omits the parameter for older ones; `off` never sends it; `low`/`medium`/`high` force a level for all Codex models. Does not affect detached requests such as condensing. If an endpoint rejects the parameter, the request is retried once without it.
+- GPT-6 Astra (`gpt-6-astra`) is available through either ChatGPT/Codex subscription OAuth or an OpenAI API key. AgentLink does not probe Astra entitlement or change the default model; an account without access receives the normal provider error. OAuth uses Codex's Responses Lite request shape, exposes `ultra` (sent as `xhigh`), and uses the 872K catalog maximum context window. API-key requests use the public 1.05M window and support up to `max`.
+- `codex.textVerbosity` — final-message verbosity (`text.verbosity`) for Codex agent turns: `default` sends `low` for GPT-6 Astra and GPT-5.6 models and omits the parameter for older ones; `off` never sends it; `low`/`medium`/`high` force a level for all Codex models. Does not affect detached requests such as condensing. If an endpoint rejects the parameter, the request is retried once without it.
 
 ## Terminal, worktrees, misc
 

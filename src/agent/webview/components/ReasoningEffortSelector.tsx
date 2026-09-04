@@ -16,6 +16,7 @@ const EFFORT_LABELS: Record<ReasoningEffort, string> = {
   high: "High",
   xhigh: "XHigh",
   max: "Max",
+  ultra: "Ultra",
 };
 
 const EFFORT_ICONS: Record<ReasoningEffort, string> = {
@@ -26,6 +27,7 @@ const EFFORT_ICONS: Record<ReasoningEffort, string> = {
   high: "arrow-small-up",
   xhigh: "flame",
   max: "rocket",
+  ultra: "star-full",
 };
 
 const DEFAULT_REASONING_EFFORTS: ReasoningEffort[] = [

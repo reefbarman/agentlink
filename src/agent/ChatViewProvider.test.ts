@@ -1596,6 +1596,34 @@ describe("ChatViewProvider session state sync", () => {
       delete terminalSettings[key];
   });
 
+  it("reconciles session reasoning after the authenticated model catalog settles", async () => {
+    const { providerRegistry } = await import("./providers/index.js");
+    const snapshot = {
+      models: [],
+      publishedByOwnerId: "agentlink-vscode",
+      publishedAt: 1,
+    };
+    vi.spyOn(providerRegistry, "getModelCatalogSnapshot").mockResolvedValue(
+      snapshot,
+    );
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const reconcileSessionReasoningEfforts = vi.fn(async () => undefined);
+    provider.setSessionManager({
+      reconcileSessionReasoningEfforts,
+      getForegroundSession: vi.fn(() => undefined),
+      getWorkspaceProjects: vi.fn(() => []),
+    } as never);
+
+    await expect(provider.getBrowserModelCatalogSnapshot()).resolves.toBe(
+      snapshot,
+    );
+    expect(reconcileSessionReasoningEfforts).toHaveBeenCalledOnce();
+  });
+
   it("persists a no-folder model selection as the Ask preference", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(

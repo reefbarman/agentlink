@@ -29,6 +29,7 @@ const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
   high: "High",
   xhigh: "XHigh",
   max: "Max",
+  ultra: "Ultra",
 };
 
 const COMMAND_APPROVAL_POLICY_LABELS: Record<CommandApprovalPolicy, string> = {

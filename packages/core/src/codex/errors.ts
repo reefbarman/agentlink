@@ -13,6 +13,14 @@ export interface CodexErrorShape {
   rawMessage?: string;
   rawCode?: string;
   body?: unknown;
+  requestID?: string | null;
+  requestId?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CodexProviderDiagnostics {
+  requestId?: string;
+  cfRay?: string;
 }
 
 export interface CodexErrorDetails extends CodexErrorShape {
@@ -61,7 +69,8 @@ export function toCodexRequestError(error: unknown): Error & CodexErrorShape {
   }
 
   if (error instanceof Error) {
-    const shaped = error as Error & CodexErrorShape & { code?: unknown };
+    const shaped = error as Error &
+      CodexErrorShape & { code?: unknown; error?: unknown };
     if (shaped.name === "CodexStreamError") {
       return createCodexRequestError({
         message: shaped.message,
@@ -85,9 +94,10 @@ export function toCodexRequestError(error: unknown): Error & CodexErrorShape {
               : typeof shaped.code === "string"
                 ? shaped.code
                 : undefined,
-          body: shaped.body,
+          body: shaped.body ?? shaped.error,
         }),
         headers: shaped.headers,
+        metadata: diagnosticsMetadata(shaped),
       });
     }
     return shaped;
@@ -121,6 +131,7 @@ export function toCodexRequestError(error: unknown): Error & CodexErrorShape {
           body,
         }),
         headers: shaped.headers,
+        metadata: diagnosticsMetadata(shaped),
       });
     }
   }
@@ -138,6 +149,69 @@ export interface CodexAuthRetryState {
   method: "oauth" | "apiKey";
   canRefresh?: boolean;
   oauthAccountPoolId?: string;
+}
+
+export function getCodexProviderDiagnostics(
+  error: CodexErrorShape,
+): CodexProviderDiagnostics {
+  const metadata = error.metadata;
+  const requestId = firstNonEmptyString(
+    error.requestID,
+    error.requestId,
+    metadata?.requestId,
+    getHeader(error.headers, "x-request-id"),
+    getHeader(error.headers, "request-id"),
+  );
+  const cfRay = firstNonEmptyString(
+    metadata?.cfRay,
+    getHeader(error.headers, "cf-ray"),
+  );
+  return {
+    ...(requestId ? { requestId } : {}),
+    ...(cfRay ? { cfRay } : {}),
+  };
+}
+
+export function isCodexBodylessBadRequest(error: CodexErrorShape): boolean {
+  if (error.status !== 400) return false;
+  if (error.body !== undefined && error.body !== null) return false;
+  return /\bno body\b/i.test(extractCodexErrorText(error));
+}
+
+export function buildCodexAstraOAuthBodylessError(
+  sourceError: CodexErrorShape,
+): CodexErrorDetails {
+  const diagnostics = getCodexProviderDiagnostics(sourceError);
+  const diagnosticSuffix = [
+    diagnostics.requestId ? `Request ID: ${diagnostics.requestId}.` : "",
+    diagnostics.cfRay ? `Cloudflare Ray: ${diagnostics.cfRay}.` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return {
+    message: [
+      "Codex rejected GPT-6 Astra for this ChatGPT account (HTTP 400 with no response body).",
+      "AgentLink sent the required Responses Lite request, but the server returned no exact reason.",
+      "Astra access may not have reached this account yet; try again later or use an OpenAI API key/project with Astra access.",
+      diagnosticSuffix,
+    ]
+      .filter(Boolean)
+      .join(" "),
+    status: sourceError.status,
+    headers: sourceError.headers,
+    rawMessage: sourceError.rawMessage,
+    rawCode: sourceError.rawCode,
+    body: sourceError.body,
+    code: "astra_oauth_bodyless_400",
+    retryable: false,
+    metadata: {
+      model: "gpt-6-astra",
+      authMethod: "oauth",
+      transport: "responses_lite",
+      providerReturnedBody: false,
+      ...diagnostics,
+    },
+  };
 }
 
 export function extractCodexErrorText(error: CodexErrorShape): string {
@@ -290,6 +364,45 @@ export function buildCodexUsageLimitExhaustedError(params: {
       attemptedOAuthAccountIds: [...params.attemptedOAuthAccountIds],
     },
   };
+}
+
+function diagnosticsMetadata(
+  error: CodexErrorShape,
+): Record<string, unknown> | undefined {
+  const { requestId, cfRay } = getCodexProviderDiagnostics(error);
+  return requestId || cfRay
+    ? {
+        ...(requestId ? { requestId } : {}),
+        ...(cfRay ? { cfRay } : {}),
+      }
+    : undefined;
+}
+
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
+}
+
+function getHeader(headers: unknown, name: string): string | undefined {
+  if (!headers || typeof headers !== "object") return undefined;
+  if (headers instanceof Headers) {
+    return headers.get(name) ?? undefined;
+  }
+  const getter = (headers as { get?: unknown }).get;
+  if (typeof getter === "function") {
+    const value = getter.call(headers, name);
+    return typeof value === "string" ? value : undefined;
+  }
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== name.toLowerCase()) continue;
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) return value.join(", ");
+  }
+  return undefined;
 }
 
 export function isCodexContextWindowExceeded(error: CodexErrorShape): boolean {

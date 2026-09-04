@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   CORE_REASONING_EFFORTS,
   isCoreReasoningEffort,
+  resolveSupportedReasoningEffort,
   type CoreModelCatalogEntry,
   type CoreModelCatalogSnapshot,
   type CoreReasoningEffort,
@@ -18,14 +19,39 @@ describe("model catalog protocol", () => {
       "high",
       "xhigh",
       "max",
+      "ultra",
     ]);
     expectTypeOf<CoreReasoningEffort>().toEqualTypeOf<
-      "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+      "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
     >();
   });
 
   it.each(CORE_REASONING_EFFORTS)("accepts %s", (value) => {
     expect(isCoreReasoningEffort(value)).toBe(true);
+  });
+
+  it("clamps unsupported effort to the nearest lower supported level", () => {
+    expect(
+      resolveSupportedReasoningEffort(
+        "ultra",
+        ["none", "low", "high", "xhigh", "max"],
+        "low",
+      ),
+    ).toBe("max");
+    expect(
+      resolveSupportedReasoningEffort(
+        "max",
+        ["none", "low", "medium", "high", "xhigh"],
+        "medium",
+      ),
+    ).toBe("xhigh");
+    expect(
+      resolveSupportedReasoningEffort(
+        "minimal",
+        ["none", "low", "medium", "high"],
+        "medium",
+      ),
+    ).toBe("medium");
   });
 
   it.each(["", "auto", "extreme", undefined, null, 1])(

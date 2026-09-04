@@ -3,7 +3,11 @@ import type {
   AgentSessionHydration,
   AgentSessionInspection,
 } from "./agentEngine.js";
-import type { AgentTurnEvent, AgentTurnStream } from "./turnContracts.js";
+import type {
+  AgentTurnAttachment,
+  AgentTurnEvent,
+  AgentTurnStream,
+} from "./turnContracts.js";
 import {
   EMBEDDED_AGENT_TRANSPORT_VERSION,
   isCoreReasoningEffort,
@@ -18,6 +22,10 @@ import type {
   EmbeddedAgentTurnEvent,
   EmbeddedAgentTurnResult,
 } from "@agentlink/protocol";
+import {
+  toCoreModelDocumentMediaType,
+  toCoreModelImageMediaType,
+} from "./modelRuntime.js";
 
 import { AgentEngineError } from "./agentEngine.js";
 import type { AgentPrincipal } from "./modelIdentity.js";
@@ -69,6 +77,11 @@ export interface CreateEmbeddedAgentWebHandlerOptions<
   readonly validateMessage?: (
     request: EmbeddedAgentWebMessageValidationRequest<TPrincipal>,
   ) => boolean | Promise<boolean>;
+  /** Observe private host-side failures before they are mapped to safe public errors. */
+  readonly onError?: (request: {
+    readonly request: Request;
+    readonly error: unknown;
+  }) => void | Promise<void>;
   /** Explicit host-safe UI projection; raw model transcript is never returned automatically. */
   readonly projectHydration?: (request: {
     readonly principal: TPrincipal;
@@ -77,11 +90,35 @@ export interface CreateEmbeddedAgentWebHandlerOptions<
   readonly maxBodyBytes?: number;
   readonly maxSessionIdLength?: number;
   readonly maxMessageLength?: number;
+  readonly maxAttachments?: number;
+  readonly maxAttachmentBytes?: number;
+  readonly maxTotalAttachmentBytes?: number;
+  /** Optional host preprocessing before the canonical turn reaches the engine. */
+  readonly prepareTurnInput?: (request: {
+    readonly principal: TPrincipal;
+    readonly parsedRequest: Extract<EmbeddedAgentRequest, { type: "turn" }>;
+    readonly input: {
+      readonly text: string;
+      readonly attachments: readonly AgentTurnAttachment[] | undefined;
+    };
+    readonly signal: AbortSignal;
+  }) =>
+    | {
+        readonly text: string;
+        readonly attachments: readonly AgentTurnAttachment[] | undefined;
+      }
+    | Promise<{
+        readonly text: string;
+        readonly attachments: readonly AgentTurnAttachment[] | undefined;
+      }>;
 }
 
 export interface ParseEmbeddedAgentRequestOptions {
   readonly maxSessionIdLength?: number;
   readonly maxMessageLength?: number;
+  readonly maxAttachments?: number;
+  readonly maxAttachmentBytes?: number;
+  readonly maxTotalAttachmentBytes?: number;
 }
 
 export function createEmbeddedAgentWebHandler<
@@ -98,6 +135,18 @@ export function createEmbeddedAgentWebHandler<
   const maxMessageLength = positiveInteger(
     options.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH,
     "maxMessageLength",
+  );
+  const maxAttachments = positiveInteger(
+    options.maxAttachments ?? 4,
+    "maxAttachments",
+  );
+  const maxAttachmentBytes = positiveInteger(
+    options.maxAttachmentBytes ?? 10 * 1024 * 1024,
+    "maxAttachmentBytes",
+  );
+  const maxTotalAttachmentBytes = positiveInteger(
+    options.maxTotalAttachmentBytes ?? 20 * 1024 * 1024,
+    "maxTotalAttachmentBytes",
   );
   return async (request: Request): Promise<Response> => {
     if (request.method !== "POST") {
@@ -125,7 +174,13 @@ export function createEmbeddedAgentWebHandler<
         return jsonError(401, "unauthenticated", "Authentication is required");
       const operation = parseEmbeddedAgentRequest(
         await readBoundedJson(request, maxBodyBytes),
-        { maxSessionIdLength, maxMessageLength },
+        {
+          maxSessionIdLength,
+          maxMessageLength,
+          maxAttachments,
+          maxAttachmentBytes,
+          maxTotalAttachmentBytes,
+        },
       );
       const policyRequest: EmbeddedAgentWebAuthorizationRequest<TPrincipal> = {
         request,
@@ -175,6 +230,11 @@ export function createEmbeddedAgentWebHandler<
         request.signal,
       );
     } catch (error) {
+      try {
+        await options.onError?.({ request, error });
+      } catch {
+        // Observability must never replace the original request failure.
+      }
       const mapped = mapEmbeddedAgentError(error);
       return jsonError(
         mapped.status,
@@ -259,22 +319,38 @@ async function dispatchEmbeddedAgentRequest<TPrincipal extends AgentPrincipal>(
       });
       return jsonResponse({ schemaVersion: 1, ok: true, type: "deleted" });
     }
-    case "turn":
-      return streamResponse(
-        (streamSignal) =>
-          options.engine.sessions.runTurn(
-            {
-              ...scope,
-              input: { text: request.text, attachments: undefined },
-              model: request.model,
-              ...(request.reasoningEffort !== undefined
-                ? { reasoningEffort: request.reasoningEffort }
-                : {}),
-            },
-            { signal: streamSignal },
-          ),
-        signal,
-      );
+    case "turn": {
+      const input = {
+        text: request.text,
+        attachments: request.attachments,
+      };
+      return streamResponse(async (streamSignal) => {
+        const preparedInput = options.prepareTurnInput
+          ? await options.prepareTurnInput({
+              principal,
+              parsedRequest: request,
+              input,
+              signal: streamSignal,
+            })
+          : input;
+        if (streamSignal.aborted) {
+          throw (
+            streamSignal.reason ?? new DOMException("Aborted", "AbortError")
+          );
+        }
+        return options.engine.sessions.runTurn(
+          {
+            ...scope,
+            input: preparedInput,
+            model: request.model,
+            ...(request.reasoningEffort !== undefined
+              ? { reasoningEffort: request.reasoningEffort }
+              : {}),
+          },
+          { signal: streamSignal },
+        );
+      }, signal);
+    }
     case "resume":
       return streamResponse(
         (streamSignal) =>
@@ -295,7 +371,9 @@ async function dispatchEmbeddedAgentRequest<TPrincipal extends AgentPrincipal>(
 }
 
 function streamResponse(
-  createStream: (signal: AbortSignal) => AgentTurnStream,
+  createStream: (
+    signal: AbortSignal,
+  ) => AgentTurnStream | Promise<AgentTurnStream>,
   requestSignal: AbortSignal,
 ): Response {
   const encoder = new TextEncoder();
@@ -306,12 +384,17 @@ function streamResponse(
   const streamSignal = requestSignal.aborted
     ? requestSignal
     : AbortSignal.any([requestSignal, lifecycleAbort.signal]);
-  const stream = createStream(streamSignal);
+  let stream: AgentTurnStream | undefined;
   let settled = false;
   let cancelled = false;
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
+        stream = await createStream(streamSignal);
+        if (cancelled || streamSignal.aborted) {
+          void stream.return(undefined as never).catch(() => undefined);
+          return;
+        }
         for (;;) {
           const next = await stream.next();
           if (cancelled) break;
@@ -351,7 +434,7 @@ function streamResponse(
       // A generator may be blocked inside next() and may not settle return()
       // promptly. Abort the engine signal, request cleanup, and let Web stream
       // cancellation resolve independently of generator cooperation.
-      void stream.return(undefined as never).catch(() => undefined);
+      void stream?.return(undefined as never).catch(() => undefined);
     },
   });
   return new Response(body, {
@@ -538,6 +621,18 @@ export function parseEmbeddedAgentRequest(
     options.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH,
     "maxMessageLength",
   );
+  const maxAttachments = positiveInteger(
+    options.maxAttachments ?? 4,
+    "maxAttachments",
+  );
+  const maxAttachmentBytes = positiveInteger(
+    options.maxAttachmentBytes ?? 10 * 1024 * 1024,
+    "maxAttachmentBytes",
+  );
+  const maxTotalAttachmentBytes = positiveInteger(
+    options.maxTotalAttachmentBytes ?? 20 * 1024 * 1024,
+    "maxTotalAttachmentBytes",
+  );
   if (
     !isRecord(value) ||
     value.schemaVersion !== EMBEDDED_AGENT_TRANSPORT_VERSION
@@ -568,6 +663,16 @@ export function parseEmbeddedAgentRequest(
         type: "turn",
         sessionId,
         text: boundedText(value.text, "text", maxMessageLength),
+        ...(value.attachments !== undefined
+          ? {
+              attachments: attachments(
+                value.attachments,
+                maxAttachments,
+                maxAttachmentBytes,
+                maxTotalAttachmentBytes,
+              ),
+            }
+          : {}),
         ...(value.model !== undefined
           ? { model: modelReference(value.model) }
           : {}),
@@ -801,6 +906,89 @@ function reasoningEffort(value: unknown) {
     throw invalidRequest("reasoningEffort is unsupported");
   }
   return value;
+}
+
+function attachments(
+  value: unknown,
+  maxAttachments: number,
+  maxAttachmentBytes: number,
+  maxTotalAttachmentBytes: number,
+): readonly AgentTurnAttachment[] {
+  if (!Array.isArray(value) || value.length > maxAttachments) {
+    throw invalidRequest(
+      `attachments must contain at most ${maxAttachments} items`,
+    );
+  }
+  let totalBytes = 0;
+  return value.map((raw, index) => {
+    if (
+      !isRecord(raw) ||
+      !isRecord(raw.source) ||
+      raw.source.type !== "base64"
+    ) {
+      throw invalidRequest(`attachments[${index}] is invalid`);
+    }
+    const data = boundedText(
+      raw.source.data,
+      `attachments[${index}].source.data`,
+      Math.ceil((maxAttachmentBytes * 4) / 3) + 4,
+    );
+    if (
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+        data,
+      )
+    ) {
+      throw invalidRequest(
+        `attachments[${index}] data must be canonical base64`,
+      );
+    }
+    const bytes =
+      Math.floor((data.length * 3) / 4) -
+      (data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0);
+    if (bytes > maxAttachmentBytes) {
+      throw invalidRequest(`attachments[${index}] is too large`);
+    }
+    totalBytes += bytes;
+    if (totalBytes > maxTotalAttachmentBytes) {
+      throw invalidRequest("attachments are too large altogether");
+    }
+    if (raw.type === "image") {
+      const mediaType =
+        typeof raw.source.media_type === "string"
+          ? toCoreModelImageMediaType(raw.source.media_type)
+          : null;
+      if (!mediaType) {
+        throw invalidRequest(
+          `attachments[${index}] image type is not supported`,
+        );
+      }
+      return {
+        type: "image",
+        source: { type: "base64", media_type: mediaType, data },
+      };
+    }
+    if (raw.type === "document") {
+      const mediaType =
+        typeof raw.source.media_type === "string"
+          ? toCoreModelDocumentMediaType(raw.source.media_type)
+          : null;
+      if (!mediaType) {
+        throw invalidRequest(
+          `attachments[${index}] document type is not supported`,
+        );
+      }
+      return {
+        type: "document",
+        source: { type: "base64", media_type: mediaType, data },
+        ...(raw.title !== undefined
+          ? {
+              title: boundedText(raw.title, `attachments[${index}].title`, 256),
+            }
+          : {}),
+      };
+    }
+    throw invalidRequest(`attachments[${index}] type is not supported`);
+  });
 }
 
 function boundedText(value: unknown, field: string, maxLength: number): string {

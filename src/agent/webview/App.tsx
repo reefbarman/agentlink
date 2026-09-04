@@ -3049,7 +3049,6 @@ export function App({
         | "codex"
         | "openai-api-key"
         | "openai-compatible-api-key"
-        | "anthropic-api-key"
         | "configure-provider",
       provider?: string,
     ) => {
@@ -3072,9 +3071,7 @@ export function App({
             provider,
           });
           break;
-        case "anthropic-api-key":
-          vscodeApi.postMessage({ command: "agentAnthropicSignIn" });
-          break;
+
         case "configure-provider":
           vscodeApi.postMessage({
             command: "agentConfigureOpenAiCompatibleModel",
@@ -3094,8 +3091,6 @@ export function App({
         vscodeApi.postMessage({
           command: "agentConfigureOpenAiCompatibleModel",
         });
-      } else if (action?.kind === "api_key" && provider === "anthropic") {
-        vscodeApi.postMessage({ command: "agentAnthropicSignIn" });
       } else if (
         action?.kind === "api_key" &&
         provider.startsWith("openai-compatible:")
@@ -3107,9 +3102,7 @@ export function App({
       } else if (action?.kind === "oauth") {
         vscodeApi.postMessage({ command: "agentCodexSignIn", method: "oauth" });
       } else if (!action) {
-        if (provider === "anthropic") {
-          vscodeApi.postMessage({ command: "agentAnthropicSignIn" });
-        } else if (provider.startsWith("openai-compatible:")) {
+        if (provider.startsWith("openai-compatible:")) {
           vscodeApi.postMessage({
             command: "agentOpenAiCompatibleSignIn",
             provider,

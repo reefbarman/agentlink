@@ -12,6 +12,8 @@ import {
   CODEX_DEFAULT_MODEL,
   getEndpointCaps,
   resolveCodexEffectiveModel,
+  resolveCodexReasoningEffort,
+  usesCodexResponsesLite,
   type CodexAuthMethod,
   type CodexTextVerbosity,
   type ResponsesCaps,
@@ -25,6 +27,8 @@ export type CodexRequestBody = OpenAIResponses.ResponseCreateParamsStreaming;
 export type CodexInputItem = OpenAIResponses.ResponseInputItem;
 export type CodexTool = OpenAIResponses.Tool;
 export type CodexPromptCacheRetention = "in_memory" | "24h";
+
+type CodexResponsesLiteTool = Record<string, unknown>;
 
 const CODEX_REPLAY_PROVIDER_IDS = new Set(["codex", "openai-codex"]);
 
@@ -294,6 +298,77 @@ export function translateCodexHostedTools(
   });
 }
 
+export function translateCodexResponsesLiteTools(
+  tools: readonly CodexTool[],
+): CodexResponsesLiteTool[] {
+  const functionTools: CodexResponsesLiteTool[] = [];
+  const otherTools: CodexResponsesLiteTool[] = [];
+  for (const tool of tools) {
+    const record = tool as unknown as CodexResponsesLiteTool;
+    if (record.type === "function") {
+      const { type: _type, ...definition } = record;
+      functionTools.push({ type: "function", ...definition });
+    } else {
+      otherTools.push(record);
+    }
+  }
+  if (functionTools.length === 0) return otherTools;
+  return [
+    {
+      type: "namespace",
+      name: "functions",
+      description: "",
+      tools: functionTools,
+    },
+    ...otherTools,
+  ];
+}
+
+function buildCodexResponsesLitePrefix(
+  instructions: string,
+  tools: readonly CodexTool[],
+): CodexInputItem[] {
+  const additionalTools = translateCodexResponsesLiteTools(tools);
+  const prefix: CodexInputItem[] = [
+    {
+      id: `at_agentlink_${stableShortHash(JSON.stringify(additionalTools))}`,
+      type: "additional_tools",
+      role: "developer",
+      tools: additionalTools,
+    } as unknown as CodexInputItem,
+  ];
+  if (instructions.length > 0) {
+    prefix.push({
+      id: `msg_agentlink_${stableShortHash(instructions)}`,
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: instructions }],
+      internal_chat_message_metadata_passthrough: {
+        content_item_kinds: ["model.base_instructions"],
+      },
+    } as unknown as CodexInputItem);
+  }
+  return prefix;
+}
+
+function stripCodexResponsesLiteImageDetails(
+  input: readonly CodexInputItem[],
+): CodexInputItem[] {
+  return input.map((item) => {
+    if (!("content" in item) || !Array.isArray(item.content)) return item;
+    return {
+      ...item,
+      content: (item.content as unknown as Array<Record<string, unknown>>).map(
+        (part) => {
+          if (part.type !== "input_image" || !("detail" in part)) return part;
+          const { detail: _detail, ...withoutDetail } = part;
+          return withoutDetail;
+        },
+      ),
+    } as unknown as CodexInputItem;
+  });
+}
+
 function extractCodexReplayItems(
   message: CoreModelMessage,
 ): CodexInputItem[] | undefined {
@@ -330,10 +405,11 @@ export function buildCodexReasoning(
   effort: CoreReasoningEffort,
   context?: "all_turns",
   mode?: "pro",
+  includeSummary = true,
 ): Reasoning {
   return {
     effort: effort as Reasoning["effort"],
-    summary: "detailed",
+    ...(includeSummary ? { summary: "detailed" as const } : {}),
     ...(context ? { context } : {}),
     ...(mode ? { mode } : {}),
   };
@@ -371,11 +447,19 @@ export function buildCodexResolvedRequestBody(args: {
     maxTokens: args.maxTokens,
     state: args.state,
     cache: args.cache,
-    reasoningEffort: args.reasoningEffort,
+    reasoningEffort: resolveCodexReasoningEffort({
+      modelId: modelResolution.model,
+      authMethod: args.authMethod,
+      requestedEffort: args.reasoningEffort,
+    }),
     reasoningMode: args.reasoningMode,
     tools: args.tools,
     hostedTools: args.hostedTools,
     caps: getEndpointCaps({ method: args.authMethod }),
+    useResponsesLite: usesCodexResponsesLite(
+      modelResolution.model,
+      args.authMethod,
+    ),
   });
   return {
     configuredModel,
@@ -398,32 +482,44 @@ export function buildCodexEndpointRequestBody(args: {
   tools?: CodexTool[];
   hostedTools?: readonly CoreHostedToolDefinition[];
   caps: ResponsesCaps;
+  useResponsesLite?: boolean;
 }): CodexRequestBody {
   if (args.hostedTools?.length && !args.caps.supportsHostedWebSearch) {
     throw new Error(
       "Codex hosted web search is unavailable for this authenticated endpoint",
     );
   }
-  const hostedTools = args.hostedTools?.length
-    ? translateCodexHostedTools(args.hostedTools)
-    : undefined;
+  // Responses Lite has no provider-hosted tool channel. Omit hosted tools
+  // fail-soft even when a caller's cached capability view is stale; the host
+  // can still use its separately authorized standalone web transport.
+  const hostedTools =
+    args.hostedTools?.length && !args.useResponsesLite
+      ? translateCodexHostedTools(args.hostedTools)
+      : undefined;
   const tools = [...(args.tools ?? []), ...(hostedTools ?? [])];
   const include = hostedTools?.length
     ? (["web_search_call.action.sources"] as CodexRequestBody["include"])
     : undefined;
+  const input = args.useResponsesLite
+    ? [
+        ...buildCodexResponsesLitePrefix(args.instructions, tools),
+        ...stripCodexResponsesLiteImageDetails(args.input),
+      ]
+    : args.input;
   return buildCodexStreamRequestBody({
     model: args.model,
-    input: args.input,
-    instructions: args.instructions,
+    input,
+    instructions: args.useResponsesLite ? undefined : args.instructions,
     store: args.state?.store ?? false,
     maxTokens: args.caps.supportsMaxOutputTokens ? args.maxTokens : undefined,
     reasoning: args.reasoningEffort
       ? buildCodexReasoning(
           args.reasoningEffort,
-          args.caps.supportsPersistedReasoning &&
-            args.model.startsWith("gpt-5.6") &&
-            args.state?.store &&
-            args.state.previousResponseId
+          args.useResponsesLite ||
+            (args.caps.supportsPersistedReasoning &&
+              args.model.startsWith("gpt-5.6") &&
+              args.state?.store &&
+              args.state.previousResponseId)
             ? "all_turns"
             : undefined,
           args.caps.supportsProMode &&
@@ -431,6 +527,7 @@ export function buildCodexEndpointRequestBody(args: {
             args.reasoningMode === "pro"
             ? "pro"
             : undefined,
+          !args.useResponsesLite,
         )
       : undefined,
     previousResponseId: args.caps.supportsPreviousResponseId
@@ -439,7 +536,8 @@ export function buildCodexEndpointRequestBody(args: {
     textVerbosity: args.caps.supportsTextVerbosity
       ? args.textVerbosity
       : undefined,
-    tools,
+    tools: args.useResponsesLite ? undefined : tools,
+    parallelToolCalls: args.useResponsesLite ? false : undefined,
     include,
     promptCacheKey: args.caps.supportsPromptCacheKey
       ? args.cache?.key
@@ -454,13 +552,14 @@ export function buildCodexEndpointRequestBody(args: {
 export function buildCodexStreamRequestBody(args: {
   model: string;
   input: CodexInputItem[];
-  instructions: string;
+  instructions?: string;
   store: boolean;
   maxTokens?: number;
   reasoning?: Reasoning;
   previousResponseId?: string;
   textVerbosity?: CodexTextVerbosity;
   tools?: CodexTool[];
+  parallelToolCalls?: boolean;
   include?: CodexRequestBody["include"];
   promptCacheKey?: string;
   promptCacheRetention?: CodexPromptCacheRetention;
@@ -468,7 +567,9 @@ export function buildCodexStreamRequestBody(args: {
   return {
     model: args.model,
     input: args.input,
-    instructions: args.instructions,
+    ...(args.instructions !== undefined
+      ? { instructions: args.instructions }
+      : {}),
     stream: true,
     store: args.store,
     ...(typeof args.maxTokens === "number"
@@ -480,6 +581,9 @@ export function buildCodexStreamRequestBody(args: {
       ? { previous_response_id: args.previousResponseId }
       : {}),
     ...(args.tools && args.tools.length > 0 ? { tools: args.tools } : {}),
+    ...(args.parallelToolCalls !== undefined
+      ? { parallel_tool_calls: args.parallelToolCalls }
+      : {}),
     ...(args.include?.length ? { include: args.include } : {}),
     ...(args.promptCacheKey ? { prompt_cache_key: args.promptCacheKey } : {}),
     ...(args.promptCacheRetention

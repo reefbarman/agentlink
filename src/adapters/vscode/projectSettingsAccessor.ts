@@ -62,7 +62,6 @@ export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
   "browserGateway.dataPlane",
   "memory.mode",
   "showThinking",
-  "anthropic.dynamicModelCapabilities",
   "codex.textVerbosity",
 ] as const;
 

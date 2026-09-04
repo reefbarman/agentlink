@@ -32,7 +32,7 @@ Transparency is not just reassuring. It is what makes delegation workable. You c
 
 ## A second lab can check the first
 
-AgentLink supports frontier models from Anthropic and OpenAI/Codex in the same workflow. That makes cross-provider review possible: one model can build while a model from another provider reviews the result.
+AgentLink provides a first-class OpenAI/Codex path and can use additional models through configured OpenAI-compatible providers or external ACP agents. That makes cross-provider review possible: one model can build while a model from another provider reviews the result.
 
 This is not a claim that any one model is always right. Different model families have different strengths and blind spots. A reviewer that did not produce the change is more likely to question its assumptions, especially when it can inspect the live working tree and surrounding code rather than a small isolated patch.
 
@@ -56,7 +56,7 @@ The aim is not to make every capability proprietary. It is to make the capabilit
 
 ## Your machine and your accounts
 
-AgentLink runs as a VS Code extension on your machine. It uses the provider accounts you choose—ChatGPT/Codex, OpenAI, Anthropic, or compatible endpoints—at their provider rates. There is no AgentLink cloud execution service or model middleman.
+AgentLink runs as a VS Code extension on your machine. It uses the provider accounts you choose—ChatGPT/Codex, OpenAI, or compatible endpoints—at their provider rates. There is no AgentLink cloud execution service or model middleman.
 
 Local code indexes, retrieval data, and telemetry stay on-device by default. Provider-backed features send only the inputs they need. The browser remote is a local helper-owned relay over loopback or an explicitly paired LAN connection, not a hosted relay service.
 

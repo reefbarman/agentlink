@@ -417,6 +417,11 @@ describe("embedded agent transport", () => {
         }),
     });
     const first = controller.turn({ sessionId: "session-1", text: "first" });
+    expect(controller.getState()).toMatchObject({
+      sessionId: "session-1",
+      status: "running",
+      blocks: [],
+    });
     await Promise.resolve();
     const before = controller.getState();
     await expect(

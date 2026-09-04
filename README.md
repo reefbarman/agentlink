@@ -34,7 +34,7 @@ Tool calls, progress, questions, approvals, queued work, and background agents s
 
 ### A second opinion from another model provider
 
-Use Anthropic and OpenAI/Codex models in the same workflow. AgentLink can route review to the other provider, giving important work an independent set of model blind spots.
+Use OpenAI/Codex alongside models from configured OpenAI-compatible providers or external ACP agents. AgentLink can route review to another provider, giving important work an independent set of model blind spots.
 
 ### Context for the code, not the harness
 
@@ -48,7 +48,7 @@ AgentLink keeps local lexical and structural codebase retrieval on your machine,
 | **Stay in control**       | Inline approvals, editable command requests, audit context, checkpoints/revert, structured questions, and visible task status.                         |
 | **Work in parallel**      | Background research and review, cross-provider review, Fleet progress, steering, and bounded results.                                                  |
 | **Connect your workflow** | MCP tools, resources, and prompts; `AGENTS.md`/`CLAUDE.md`; skills, custom modes, slash commands, hooks, and Agent Plugins.                            |
-| **Use your accounts**     | ChatGPT/Codex, OpenAI, Anthropic, and compatible providers on your own accounts. Local retrieval and telemetry stay local by default.                  |
+| **Use your accounts**     | ChatGPT/Codex, OpenAI, and compatible providers on your own accounts. Local retrieval and telemetry stay local by default.                             |
 
 ## Get started
 
@@ -77,7 +77,7 @@ code --install-extension agentlink-*.vsix --force
 
 1. Reload VS Code and open the folder you want to work in.
 2. Open **AgentLink** from the Activity Bar, then choose **Agent**.
-3. Use the empty-chat card to sign in with ChatGPT/Codex, add an OpenAI or Anthropic API key, or configure another compatible provider.
+3. Use the empty-chat card to sign in with ChatGPT/Codex, add an OpenAI API key, or configure another compatible provider.
 4. Start with a bounded request:
 
    > Read this project, explain its main module boundaries, and identify the safest place to add `<feature>`.
@@ -88,7 +88,7 @@ The [getting started guide](resources/builtin-skills/documentation/references/ge
 
 ## Bring your own models and workflow
 
-Choose ChatGPT/Codex, OpenAI, Anthropic, or an OpenAI-compatible provider. Connect the tools and services you already use through [MCP](resources/builtin-skills/documentation/references/mcp.md). Keep existing instructions, skills, commands, and compatible hooks in the conventions your projects already understand.
+Choose ChatGPT/Codex, OpenAI, or an OpenAI-compatible provider. Connect the tools and services you already use through [MCP](resources/builtin-skills/documentation/references/mcp.md). Keep existing instructions, skills, commands, and compatible hooks in the conventions your projects already understand.
 
 ## What AgentLink is not
 

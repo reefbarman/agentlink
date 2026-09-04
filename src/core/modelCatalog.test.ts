@@ -17,9 +17,10 @@ describe("model catalog protocol compatibility shim", () => {
       "high",
       "xhigh",
       "max",
+      "ultra",
     ]);
     expectTypeOf<CoreReasoningEffort>().toEqualTypeOf<
-      "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+      "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
     >();
     expect(isCoreReasoningEffort("xhigh")).toBe(true);
     expect(isCoreReasoningEffort("auto")).toBe(false);

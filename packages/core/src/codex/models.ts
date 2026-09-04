@@ -1,4 +1,7 @@
-import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
+import {
+  resolveSupportedReasoningEffort,
+  type CoreReasoningEffort,
+} from "@agentlink/protocol/model-catalog";
 import type { CoreModelCapabilities } from "../modelRuntime.js";
 
 export type CodexAuthMethod = "oauth" | "apiKey";
@@ -13,6 +16,9 @@ export interface CodexResolvedAuthShape {
 }
 
 export type CodexTextVerbosity = "low" | "medium" | "high";
+
+export const CODEX_RESPONSES_LITE_HEADER =
+  "x-openai-internal-codex-responses-lite";
 
 export interface CodexModelDef {
   id: string;
@@ -38,6 +44,20 @@ export interface CodexModelDef {
    */
   apiAvailable?: boolean;
 }
+
+const GPT_6_ASTRA_API_REASONING_EFFORTS = [
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const satisfies readonly CoreReasoningEffort[];
+
+const GPT_6_ASTRA_OAUTH_REASONING_EFFORTS = [
+  ...GPT_6_ASTRA_API_REASONING_EFFORTS,
+  "ultra",
+] as const satisfies readonly CoreReasoningEffort[];
 
 const GPT_5_4_REASONING_EFFORTS = [
   "none",
@@ -124,6 +144,7 @@ export interface ResponsesCaps {
  * in a deprecation grace period — treat them as gone.
  */
 export const CODEX_CHATGPT_BACKEND_MODEL_IDS = [
+  "gpt-6-astra",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",
@@ -219,16 +240,43 @@ export function resolveCodexEffectiveModel(
   return { model: remapToChatgptBackendModel(modelId), remapped: true };
 }
 
+export function usesCodexResponsesLite(
+  modelId: string,
+  authMethod?: CodexAuthMethod,
+): boolean {
+  return modelId === "gpt-6-astra" && authMethod === "oauth";
+}
+
+export function getCodexResponsesRequestHeaders(
+  modelId: string,
+  authMethod?: CodexAuthMethod,
+): Record<string, string> | undefined {
+  return usesCodexResponsesLite(modelId, authMethod)
+    ? { [CODEX_RESPONSES_LITE_HEADER]: "true" }
+    : undefined;
+}
+
 export function resolveCodexReasoningEffort(params: {
   modelId: string;
+  authMethod?: CodexAuthMethod;
   requestedEffort?: CoreReasoningEffort;
 }): CoreReasoningEffort | undefined {
   if (params.requestedEffort === "none") return undefined;
-  return (
-    params.requestedEffort ??
-    CODEX_MODEL_MAP.get(params.modelId)?.defaultReasoningEffort ??
-    "medium"
-  );
+  const def = getAuthAdjustedModelDef(params.modelId, params.authMethod);
+  const defaultEffort = def?.defaultReasoningEffort ?? "medium";
+  const resolvedEffort = params.requestedEffort
+    ? resolveSupportedReasoningEffort(
+        params.requestedEffort,
+        def?.reasoningEfforts,
+        defaultEffort,
+      )
+    : defaultEffort;
+  // `ultra` is a Codex client preset. Astra's catalog maps that local preset
+  // to xhigh for the actual Responses request.
+  return usesCodexResponsesLite(params.modelId, params.authMethod) &&
+    resolvedEffort === "ultra"
+    ? "xhigh"
+    : resolvedEffort;
 }
 
 /** The preferred cheap/fast model for condensing on Codex (OAuth-served). */
@@ -247,9 +295,21 @@ export const CODEX_CONDENSE_MODEL_FALLBACKS = [
 
 const CODEX_400K_INPUT_TOKENS = 272_000;
 const CODEX_1M_CONTEXT_TOKENS = 1_050_000;
+const CODEX_OAUTH_GPT_6_ASTRA_CONTEXT_TOKENS = 872_000;
 const CODEX_OAUTH_GPT_5_5_CONTEXT_TOKENS = 400_000;
 
 export const CODEX_MODELS: CodexModelDef[] = [
+  {
+    id: "gpt-6-astra",
+    displayName: "GPT-6 Astra",
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
+    maxOutputTokens: 128_000,
+    supportsImages: true,
+    supportsThinking: true,
+    defaultReasoningEffort: "low",
+    reasoningEfforts: [...GPT_6_ASTRA_API_REASONING_EFFORTS],
+    defaultTextVerbosity: "low",
+  },
   {
     id: "gpt-5.6-sol",
     displayName: "GPT-5.6 Sol",
@@ -460,15 +520,25 @@ export function resolveCodexTextVerbosity(
   return CODEX_MODEL_MAP.get(modelId)?.defaultTextVerbosity;
 }
 
-/**
- * The ChatGPT/Codex OAuth backend still enforces a smaller GPT-5.5 context
- * window than the public API advertises. GPT-5.6 uses its full advertised
- * 1.05M-token window on both auth surfaces.
- */
-const CODEX_OAUTH_WINDOW_OVERRIDES: Record<
+/** Auth-surface metadata where the ChatGPT/Codex backend differs from the API. */
+const CODEX_OAUTH_MODEL_OVERRIDES: Record<
   string,
-  Pick<CodexModelDef, "contextWindow" | "maxInputTokens">
+  Partial<
+    Pick<
+      CodexModelDef,
+      | "contextWindow"
+      | "maxInputTokens"
+      | "maxOutputTokens"
+      | "reasoningEfforts"
+      | "defaultReasoningEffort"
+    >
+  >
 > = {
+  "gpt-6-astra": {
+    contextWindow: CODEX_OAUTH_GPT_6_ASTRA_CONTEXT_TOKENS,
+    reasoningEfforts: [...GPT_6_ASTRA_OAUTH_REASONING_EFFORTS],
+    defaultReasoningEffort: "low",
+  },
   "gpt-5.5": {
     contextWindow: CODEX_OAUTH_GPT_5_5_CONTEXT_TOKENS,
     maxInputTokens: CODEX_400K_INPUT_TOKENS,
@@ -481,7 +551,7 @@ function getAuthAdjustedModelDef(
 ): CodexModelDef | undefined {
   const def = CODEX_MODEL_MAP.get(model);
   if (!def || authMethod !== "oauth") return def;
-  const override = CODEX_OAUTH_WINDOW_OVERRIDES[model];
+  const override = CODEX_OAUTH_MODEL_OVERRIDES[model];
   return override ? { ...def, ...override } : def;
 }
 

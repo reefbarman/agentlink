@@ -18,13 +18,6 @@ function createDependencies(): ModelAuthCommandDependencies {
     openAiAuthManager: {
       storeApiKey: vi.fn(async () => {}),
     },
-    secrets: {
-      store: vi.fn(async () => {}),
-    },
-    setAnthropicApiKey: vi.fn(),
-    refreshModels: vi.fn(),
-    publishBrowserModelCatalog: vi.fn(),
-    grantBrowserModelCredentials: vi.fn(),
   };
 }
 
@@ -102,9 +95,8 @@ describe("registerModelAuthCommands", () => {
     expect([...commandHandlers.keys()]).toEqual([
       "agentlink.setOpenaiApiKey",
       "agentlink.setupSemanticSearch",
-      "agentlink.setAnthropicApiKey",
     ]);
-    expect(disposables).toHaveLength(3);
+    expect(disposables).toHaveLength(2);
   });
 
   it("stores a trimmed embeddings-only OpenAI key", async () => {
@@ -187,26 +179,6 @@ describe("registerModelAuthCommands", () => {
     expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
       command,
       ...args,
-    );
-  });
-
-  it("stores Anthropic credentials and refreshes both surfaces", async () => {
-    const dependencies = createDependencies();
-    registerModelAuthCommands(dependencies);
-    vi.mocked(vscode.window.showInputBox).mockResolvedValue("  sk-ant  ");
-
-    await invoke("agentlink.setAnthropicApiKey");
-
-    expect(dependencies.secrets.store).toHaveBeenCalledWith(
-      "anthropicApiKey",
-      "sk-ant",
-    );
-    expect(dependencies.setAnthropicApiKey).toHaveBeenCalledWith("sk-ant");
-    expect(dependencies.refreshModels).toHaveBeenCalledOnce();
-    expect(dependencies.publishBrowserModelCatalog).toHaveBeenCalledOnce();
-    expect(dependencies.grantBrowserModelCredentials).toHaveBeenCalledOnce();
-    expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
-      "Anthropic API key stored securely.",
     );
   });
 });

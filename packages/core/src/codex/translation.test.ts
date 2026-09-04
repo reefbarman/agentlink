@@ -9,6 +9,7 @@ import {
   summarizeCodexRequestInput,
   translateCodexHostedTools,
   translateCodexMessages,
+  translateCodexResponsesLiteTools,
   translateCodexTools,
 } from "./translation.js";
 import { describe, expect, it } from "vitest";
@@ -471,6 +472,151 @@ describe("Codex translation", () => {
       prompt_cache_key: "cache-key",
       prompt_cache_retention: "24h",
       text: { verbosity: "low" },
+    });
+  });
+
+  it("builds the Responses Lite request contract for OAuth Astra", () => {
+    const tools = translateCodexTools([
+      {
+        name: "demo_tool",
+        description: "Demo tool",
+        input_schema: { type: "object" },
+      },
+    ]);
+    const body = buildCodexEndpointRequestBody({
+      model: "gpt-6-astra",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_image",
+              image_url: "data:image/png;base64,abc",
+              detail: "auto",
+            },
+          ],
+        },
+      ],
+      instructions: "system",
+      reasoningEffort: "xhigh",
+      tools,
+      useResponsesLite: true,
+      caps: {
+        supportsPreviousResponseId: false,
+        supportsPersistedReasoning: false,
+        supportsProMode: false,
+        supportsPromptCacheKey: false,
+        supportsPromptCacheRetention: false,
+        supportsMaxOutputTokens: false,
+        supportsHostedWebSearch: true,
+        supportsTextVerbosity: true,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(body).not.toHaveProperty("instructions");
+    expect(body).not.toHaveProperty("tools");
+    expect(body).toMatchObject({
+      model: "gpt-6-astra",
+      parallel_tool_calls: false,
+      reasoning: { effort: "xhigh", context: "all_turns" },
+      input: [
+        {
+          id: expect.stringMatching(/^at_/),
+          type: "additional_tools",
+          role: "developer",
+          tools: [
+            {
+              type: "namespace",
+              name: "functions",
+              description: "",
+              tools: [
+                expect.objectContaining({
+                  type: "function",
+                  name: "demo_tool",
+                }),
+              ],
+            },
+          ],
+        },
+        {
+          id: expect.stringMatching(/^msg_/),
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: "system" }],
+          internal_chat_message_metadata_passthrough: {
+            content_item_kinds: ["model.base_instructions"],
+          },
+        },
+        {
+          role: "user",
+          content: [
+            { type: "input_image", image_url: "data:image/png;base64,abc" },
+          ],
+        },
+      ],
+    });
+    expect((body.reasoning as Record<string, unknown>).summary).toBeUndefined();
+  });
+
+  it("coalesces function tools into the Responses Lite functions namespace", () => {
+    expect(
+      translateCodexResponsesLiteTools([
+        {
+          type: "function",
+          name: "one",
+          description: "One",
+          parameters: { type: "object" },
+          strict: false,
+        } as never,
+        {
+          type: "namespace",
+          name: "other",
+          description: "",
+          tools: [],
+        } as never,
+      ]),
+    ).toEqual([
+      {
+        type: "namespace",
+        name: "functions",
+        description: "",
+        tools: [
+          {
+            type: "function",
+            name: "one",
+            description: "One",
+            parameters: { type: "object" },
+            strict: false,
+          },
+        ],
+      },
+      { type: "namespace", name: "other", description: "", tools: [] },
+    ]);
+  });
+
+  it("omits hosted tools fail-soft from Responses Lite requests", () => {
+    const body = buildCodexEndpointRequestBody({
+      model: "gpt-6-astra",
+      input: [],
+      instructions: "system",
+      hostedTools: [{ type: "web_search" }],
+      useResponsesLite: true,
+      caps: {
+        supportsPreviousResponseId: false,
+        supportsPersistedReasoning: false,
+        supportsProMode: false,
+        supportsPromptCacheKey: false,
+        supportsPromptCacheRetention: false,
+        supportsMaxOutputTokens: false,
+        supportsHostedWebSearch: true,
+        supportsTextVerbosity: true,
+      },
+    });
+    expect(body).not.toHaveProperty("tools");
+    expect(body).not.toHaveProperty("include");
+    expect(body).toMatchObject({
+      model: "gpt-6-astra",
+      parallel_tool_calls: false,
     });
   });
 

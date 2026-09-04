@@ -35,7 +35,8 @@ it("pins the complete browser gateway transcript-message contract", () => {
           | "medium"
           | "high"
           | "xhigh"
-          | "max";
+          | "max"
+          | "ultra";
         reasoningEffort:
           | "none"
           | "minimal"
@@ -43,7 +44,8 @@ it("pins the complete browser gateway transcript-message contract", () => {
           | "medium"
           | "high"
           | "xhigh"
-          | "max";
+          | "max"
+          | "ultra";
       };
       mode?: { previousMode: string; mode: string };
     };
@@ -67,7 +69,8 @@ it("pins the complete browser gateway transcript-message contract", () => {
         | "medium"
         | "high"
         | "xhigh"
-        | "max";
+        | "max"
+        | "ultra";
       mode?: string;
       commandApprovalPolicy?:
         | "manual"

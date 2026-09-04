@@ -16,12 +16,22 @@ See [installation](getting-started.md#install) for commands and [platform notes]
 Use the setup action shown in the empty chat:
 
 - **Continue with ChatGPT/Codex** signs in with ChatGPT/Codex.
-- **Use OpenAI API key** or **Use Anthropic API key** opens the matching secure credential prompt.
-- **Configure another provider** opens guided OpenAI-compatible setup.
+- **Use OpenAI API key** opens secure credential setup for the first-class OpenAI provider.
+- **Configure another provider** opens guided OpenAI-compatible setup for every other provider.
 
 A configured credential does not prove the provider request will succeed. Check quota, billing, network access, and whether the key was revoked if the first request fails. Browser workspace chats show the same readiness but direct credential changes to the owning VS Code window.
 
 For OpenAI-compatible setup, see [the complete reference](complete-reference.md#configure-openai-compatible-models).
+
+## GPT-6 Astra is selected but the request fails
+
+AgentLink lists `gpt-6-astra` for ChatGPT/Codex OAuth and OpenAI API-key users without probing whether the current subscription account or API project has rollout access. If access is not enabled yet, AgentLink leaves Astra selected and shows the provider's normal error instead of silently changing models or credentials.
+
+- Confirm the intended ChatGPT account or OpenAI API project has Astra access and available quota.
+- A body-less OAuth `400` does not by itself prove an entitlement problem; it can also represent another ChatGPT/Codex backend rejection. For Astra, AgentLink identifies that exact failure, confirms that it sent the Responses Lite contract, explains that the server supplied no exact reason, and includes the OpenAI request ID or Cloudflare Ray when the response exposes one.
+- OAuth exposes Astra's `ultra` preset and sends its catalog-mapped `xhigh` wire effort through Codex's Responses Lite transport. API-key requests clamp a saved `ultra` preference to `max`, and the UI shows that effective effort.
+- AgentLink budgets OAuth Astra against Codex's 872K catalog maximum context window; the bundled 272K value is the CLI's smaller base window, not its maximum.
+- AgentLink does not retry a different account specifically for Astra entitlement, switch to an API key automatically, or remap Astra to another model.
 
 ## AgentLink has no workspace tools
 

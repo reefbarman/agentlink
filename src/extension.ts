@@ -40,10 +40,6 @@ import { getOpenAiCompatibleSecretKey } from "./agent/openAiCompatibleSecrets.js
 import { createCodexAuthFlows } from "./agent/codexAuthFlows.js";
 import { runLegacyAgentIntegrationCleanup } from "./util/legacyAgentIntegrationCleanup.js";
 
-import {
-  resolveAnthropicModelAuth,
-  setStoredAnthropicApiKey,
-} from "./agent/clientFactory.js";
 import { IndexerManager } from "./indexer/IndexerManager.js";
 import { registerIndexCommands } from "./indexer/indexCommands.js";
 import { createCodeRetrievalHealthProvider } from "./indexer/codeRetrievalHealth.js";
@@ -94,7 +90,7 @@ import { normalizePromptProfileOverrides } from "@agentlink/protocol/prompt-prof
 import { resolvePromptProfile } from "./core/promptProfilePolicy.js";
 import { registerEditorContextCommands } from "./agent/editorContextCommands.js";
 import { registerModelAuthCommands } from "./agent/modelAuthCommands.js";
-import { AnthropicProvider } from "./agent/providers/anthropic/index.js";
+
 import { OpenAiCompatibleProviderManager } from "./agent/providers/openaiCompatible/index.js";
 import { discoverOpenAiCompatibleModels } from "./agent/providers/openaiCompatible/modelDiscovery.js";
 import {
@@ -704,11 +700,6 @@ export async function activate(
   hostTerminalCoordinator.start();
 
   initializeTerminalManager(context.extensionUri, log);
-
-  // Load stored Anthropic API key into memory so createAnthropicClient can use it synchronously.
-  void context.secrets.get("anthropicApiKey").then((key) => {
-    setStoredAnthropicApiKey(key || undefined);
-  });
 
   log("Activating AgentLink extension");
 
@@ -1462,24 +1453,6 @@ export async function activate(
   // Register providers after chatViewProvider is created so all auth logs
   // (including initial client construction) go to the agent output channel.
   const agentLog = (msg: string) => chatViewProvider.log(msg);
-  const ANTHROPIC_MODEL_CATALOG_KEY = "anthropic.modelCatalog.v1";
-  const dynamicModelCapabilitiesEnabled = vscode.workspace
-    .getConfiguration("agentlink")
-    .get<boolean>("anthropic.dynamicModelCapabilities", true);
-  const anthropicProvider = new AnthropicProvider(undefined, agentLog, {
-    dynamicCapabilitiesEnabled: dynamicModelCapabilitiesEnabled,
-    modelCatalogPersistence: {
-      load: () =>
-        context.globalState.get<
-          import("./core/model/providers/anthropic/anthropicModelCatalog.js").AnthropicModelCatalogSnapshot
-        >(ANTHROPIC_MODEL_CATALOG_KEY),
-      save: (snapshot) => {
-        void context.globalState.update(ANTHROPIC_MODEL_CATALOG_KEY, snapshot);
-      },
-    },
-  });
-  providerRegistry.register(anthropicProvider);
-  chatViewProvider.setAnthropicProvider(anthropicProvider);
 
   // Register the OpenAI/Codex provider with unified OAuth + API key auth.
   openAiCodexAuthManager.initialize(context);
@@ -1508,7 +1481,7 @@ export async function activate(
   );
   const openAiCompatibleProviderManager = new OpenAiCompatibleProviderManager({
     registry: providerRegistry,
-    builtInProviders: [anthropicProvider, codexProvider],
+    builtInProviders: [codexProvider],
     configuration: {
       get: <T>(section: string, defaultValue: T): T =>
         openAiCompatibleConfiguration.inspect<T>(section)?.globalValue ??
@@ -1678,7 +1651,6 @@ export async function activate(
   const getPublishableBrowserGatewayModelCredentialProviderIds =
     (): string[] => [
       ...(providerRegistry.isProviderEnabled("codex") ? ["openai-codex"] : []),
-      ...(providerRegistry.isProviderEnabled("anthropic") ? ["anthropic"] : []),
       ...openAiCompatibleProviderManager
         .listProviders()
         .filter(
@@ -2576,17 +2548,7 @@ export async function activate(
                   canRefresh: auth.canRefresh,
                 };
               }
-              if (providerId === "anthropic") {
-                const auth = resolveAnthropicModelAuth();
-                if (!auth) return null;
-                return {
-                  providerId: "anthropic",
-                  method: auth.method,
-                  bearerToken: auth.bearerToken,
-                  accountLabel: auth.accountLabel,
-                  canRefresh: auth.canRefresh,
-                };
-              }
+
               if (providerId.startsWith("openai-compatible:")) {
                 const authKey =
                   openAiCompatibleProviderManager.getAuthKey(providerId);
@@ -3287,13 +3249,6 @@ export async function activate(
     }),
     ...registerModelAuthCommands({
       openAiAuthManager: openAiCodexAuthManager,
-      secrets: context.secrets,
-      setAnthropicApiKey: setStoredAnthropicApiKey,
-      refreshModels: () => chatViewProvider.refreshModels(),
-      publishBrowserModelCatalog: async () => {
-        await publishBrowserGatewayModelCatalog();
-      },
-      grantBrowserModelCredentials: grantBrowserGatewayModelCredentials,
     }),
     ...registerCodexAuthCommands({
       authManager: openAiCodexAuthManager,

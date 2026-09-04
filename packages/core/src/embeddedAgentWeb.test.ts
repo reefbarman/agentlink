@@ -394,6 +394,122 @@ describe("embedded agent Web handler", () => {
     );
   });
 
+  it("bounds attachments and lets the host prepare canonical turn input", async () => {
+    const agent = engine();
+    const prepareTurnInput = vi.fn(({ input }) => ({
+      text: `${input.text}\nprepared`,
+      attachments: input.attachments,
+    }));
+    const handler = createEmbeddedAgentWebHandler({
+      engine: agent,
+      authenticate: () => principal,
+      maxBodyBytes: 10_000,
+      maxAttachments: 1,
+      maxAttachmentBytes: 4,
+      maxTotalAttachmentBytes: 4,
+      prepareTurnInput,
+    });
+    const attachment = {
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: "image/png",
+        data: "AQIDBA==",
+      },
+    };
+
+    await frames(
+      await handler(
+        request({
+          schemaVersion: 1,
+          type: "turn",
+          sessionId: "session-1",
+          text: "Hello",
+          attachments: [attachment],
+        }),
+      ),
+    );
+
+    expect(prepareTurnInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principal,
+        input: { text: "Hello", attachments: [attachment] },
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(agent.sessions.runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: { text: "Hello\nprepared", attachments: [attachment] },
+      }),
+      expect.anything(),
+    );
+
+    expect(
+      (
+        await handler(
+          request({
+            schemaVersion: 1,
+            type: "turn",
+            sessionId: "session-1",
+            text: "Hello",
+            attachments: [attachment, attachment],
+          }),
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await handler(
+          request({
+            schemaVersion: 1,
+            type: "turn",
+            sessionId: "session-1",
+            text: "Hello",
+            attachments: [
+              {
+                ...attachment,
+                source: { ...attachment.source, data: "A===" },
+              },
+            ],
+          }),
+        )
+      ).status,
+    ).toBe(400);
+  });
+
+  it("does not start a turn after cancellation during host preprocessing", async () => {
+    let release!: () => void;
+    const preparing = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const agent = engine();
+    const handler = createEmbeddedAgentWebHandler({
+      engine: agent,
+      authenticate: () => principal,
+      prepareTurnInput: async ({ input }) => {
+        await preparing;
+        return input;
+      },
+    });
+    const response = await handler(
+      request({
+        schemaVersion: 1,
+        type: "turn",
+        sessionId: "session-1",
+        text: "wait",
+      }),
+    );
+    const reader = response.body!.getReader();
+    const cancelled = reader.cancel("client closed");
+    release();
+
+    await expect(
+      Promise.race([cancelled, timeout(250)]),
+    ).resolves.toBeUndefined();
+    await Promise.resolve();
+    expect(agent.sessions.runTurn).not.toHaveBeenCalled();
+  });
+
   it("settles response-body cancellation while the agent generator is blocked", async () => {
     let observedSignal: AbortSignal | undefined;
     let resolveNext!: () => void;
@@ -434,6 +550,34 @@ describe("embedded agent Web handler", () => {
     ).resolves.toBeUndefined();
     expect(observedSignal?.aborted).toBe(true);
     resolveNext();
+  });
+
+  it("observes private pre-stream failures without changing the safe response", async () => {
+    const failure = new Error("private filesystem detail");
+    const onError = vi.fn();
+    const broken = engine({
+      inspect: vi.fn(async () => {
+        throw failure;
+      }),
+    });
+    const handler = createEmbeddedAgentWebHandler({
+      engine: broken,
+      authenticate: () => principal,
+      onError,
+    });
+    const requestValue = request({
+      schemaVersion: 1,
+      type: "inspect",
+      sessionId: "session-1",
+    });
+    const response = await handler(requestValue);
+
+    expect(onError).toHaveBeenCalledWith({
+      request: requestValue,
+      error: failure,
+    });
+    expect(response.status).toBe(500);
+    expect(await response.text()).not.toContain("private filesystem detail");
   });
 
   it("maps pre-stream engine conflicts and emits safe post-header errors", async () => {

@@ -157,7 +157,7 @@ import {
 import { resolvePromptProfile } from "../../core/promptProfilePolicy.js";
 import { getCodexModelCapabilities } from "@agentlink/core/codex";
 import { normalizeUserQuestionAttachments } from "@agentlink/protocol/structured-question";
-import { ANTHROPIC_HOSTED_WEB_CAPABILITIES } from "../../core/model/providers/anthropic/anthropicModels.js";
+
 import {
   normalizeCoreWebAccessSettings,
   resolveCoreWebAccessPolicy,
@@ -968,7 +968,7 @@ export class BrowserGatewayHelper {
     Partial<
       Pick<
         BrowserGatewayAskAgentModelClient,
-        "completeWithToolCalls" | "executeNativeWebTool"
+        "completeWithToolCalls" | "executeNativeWebTool" | "supportsHostedTools"
       >
     >;
 
@@ -1037,7 +1037,9 @@ export class BrowserGatewayHelper {
         Partial<
           Pick<
             BrowserGatewayAskAgentModelClient,
-            "completeWithToolCalls" | "executeNativeWebTool"
+            | "completeWithToolCalls"
+            | "executeNativeWebTool"
+            | "supportsHostedTools"
           >
         >;
       askAgentSummarizer?: BrowserGatewayAskAgentSummarizer;
@@ -5231,9 +5233,7 @@ export class BrowserGatewayHelper {
             modelContext.model,
             modelContext.credential.method,
           ).hostedWeb
-        : providerId === "anthropic" && modelContext.credential
-          ? ANTHROPIC_HOSTED_WEB_CAPABILITIES
-          : undefined;
+        : undefined;
     const policy = resolveCoreWebAccessPolicy({
       settings,
       providerCapabilities,
@@ -5791,11 +5791,30 @@ export class BrowserGatewayHelper {
         }
       } catch (error) {
         if (signal.aborted) throw error;
+        const canDelegateHosted =
+          this.askAgentModelClient.supportsHostedTools?.({
+            credential,
+            model,
+          }) ?? true;
         this.logAskAgentEvent(`ask-agent.tool.web_${kind}.standalone`, {
           ok: false,
-          fallback: "delegated",
+          fallback: canDelegateHosted ? "delegated" : "unavailable",
           error: error instanceof Error ? error.message : String(error),
         });
+        if (!canDelegateHosted) {
+          const content = JSON.stringify({
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return {
+            content,
+            stop: false,
+            toolMessage: this.buildAskAgentToolResultMessage(
+              toolCall,
+              content,
+              true,
+            ),
+          };
+        }
       }
     }
 

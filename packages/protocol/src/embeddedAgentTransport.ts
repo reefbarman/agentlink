@@ -14,6 +14,38 @@ export interface EmbeddedAgentModelReference {
   readonly modelId: string;
 }
 
+export interface EmbeddedAgentImageAttachment {
+  readonly type: "image";
+  readonly source: {
+    readonly type: "base64";
+    readonly media_type:
+      | "image/jpeg"
+      | "image/png"
+      | "image/gif"
+      | "image/webp";
+    readonly data: string;
+  };
+}
+
+export interface EmbeddedAgentDocumentAttachment {
+  readonly type: "document";
+  readonly source: {
+    readonly type: "base64";
+    readonly media_type:
+      | "application/pdf"
+      | "text/plain"
+      | "text/markdown"
+      | "text/csv"
+      | "application/json";
+    readonly data: string;
+  };
+  readonly title?: string;
+}
+
+export type EmbeddedAgentAttachment =
+  | EmbeddedAgentImageAttachment
+  | EmbeddedAgentDocumentAttachment;
+
 export interface EmbeddedAgentError {
   readonly code: string;
   readonly category: EmbeddedAgentErrorCategory;
@@ -123,6 +155,7 @@ export type EmbeddedAgentRequest =
       readonly type: "turn";
       readonly sessionId: string;
       readonly text: string;
+      readonly attachments?: readonly EmbeddedAgentAttachment[];
       readonly model?: EmbeddedAgentModelReference;
       readonly reasoningEffort?: CoreReasoningEffort;
     }
@@ -431,6 +464,7 @@ export class EmbeddedAgentClientController {
     this.publish({
       ...createEmbeddedAgentClientState(),
       sessionId: request.sessionId,
+      status: "running",
     });
     return await this.streamRequest(
       { schemaVersion: 1, type: "turn", ...request },
@@ -455,6 +489,11 @@ export class EmbeddedAgentClientController {
         "Hydrate the matching pending interaction before resume",
       );
     }
+    this.publish({
+      ...this.state,
+      status: "running",
+      pendingInteraction: undefined,
+    });
     return await this.streamRequest(
       { schemaVersion: 1, type: "resume", ...request },
       options,

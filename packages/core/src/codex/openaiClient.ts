@@ -37,6 +37,12 @@ export interface CreateOpenAiResponsesClientOptions {
   readonly fetch?: CodexFetch;
 }
 
+export interface CodexResponsesRequestOptions {
+  readonly signal?: AbortSignal;
+  readonly maxRetries?: number;
+  readonly headers?: Record<string, string>;
+}
+
 export function getCodexEndpointConfig(
   auth: CodexResolvedAuthForClient,
   sessionId: string,

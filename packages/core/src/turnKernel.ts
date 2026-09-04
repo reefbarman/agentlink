@@ -11,6 +11,7 @@ import {
 } from "./agentToolLoop.js";
 import {
   HostToolInputValidationError,
+  HostToolPublicError,
   type HostTool,
   type HostToolAuthorization,
   type HostToolEffect,
@@ -500,6 +501,7 @@ async function resolveTurnTools<TPrincipal extends AgentPrincipal>(
     principal: prepared.request.principal,
     sessionId: prepared.request.sessionId,
     turnId: prepared.turnId,
+    input: prepared.request.input,
   };
   const resolved = await options.resolveTools(request);
   const tools = new Map(staticTools);
@@ -1528,6 +1530,7 @@ function toTurnError(
   if (
     error instanceof HeadlessTurnKernelError ||
     error instanceof HostToolInputValidationError ||
+    error instanceof HostToolPublicError ||
     error instanceof TurnInteractionResumeError ||
     error instanceof TurnInteractionTokenError
   ) {
@@ -1535,7 +1538,7 @@ function toTurnError(
       code: error.code,
       category: embeddedAgentErrorCategory(error.code),
       message: error.message,
-      retryable: false,
+      retryable: error instanceof HostToolPublicError ? error.retryable : false,
     };
   }
   return {

@@ -16,13 +16,9 @@ interface EvaluatedPromptModel {
 // Behavioral impact is tracked with `npm run telemetry:sessions` and
 // `npm run telemetry:tools -- --compare` across the rollout versions.
 // Transport reasoning support alone is still not evidence that a compact
-// prompt is safe — keep small/cheap tiers (Haiku, Luna, Spark) on
-// compatibility until they earn promotion.
+// prompt is safe — keep small/cheap tiers (Luna, Spark) on compatibility until
+// they earn promotion.
 const EVALUATED_REASONING_PROMPT_MODELS: readonly EvaluatedPromptModel[] = [
-  { providerId: "anthropic", modelId: "claude-opus-5" },
-  { providerId: "anthropic", modelId: "claude-sonnet-5" },
-  { providerId: "anthropic", modelId: "claude-opus-4-8" },
-  { providerId: "anthropic", modelId: "claude-sonnet-4-6" },
   { providerId: "codex", modelId: "gpt-5.6-sol" },
   { providerId: "codex", modelId: "gpt-5.6-terra" },
   { providerId: "codex", modelId: "gpt-5.5" },

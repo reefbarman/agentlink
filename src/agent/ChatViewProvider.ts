@@ -28,7 +28,10 @@ import {
   type ChatSlashCommandInfo as SlashCommandInfo,
 } from "@agentlink/protocol/chat-catalog";
 import { getConfiguredBaseThresholdForModel } from "./modelCondenseThresholds.js";
-import { getModeModelPreferences } from "./modeModelPreferences.js";
+import {
+  FALLBACK_AGENT_MODEL,
+  getModeModelPreferences,
+} from "./modeModelPreferences.js";
 import { getModeReasoningEffortPreferences } from "./modeReasoningEffortPreferences.js";
 import type {
   AgentSessionManager,
@@ -1265,12 +1268,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private retrievalHealthProvider:
     | { health(): Promise<RetrievalHealthSnapshot> }
     | undefined;
-  private anthropicProvider: ModelProvider | undefined;
   private openAiCompatibleAuthKeyResolver:
     | ((providerId: string) => string | undefined)
     | undefined;
   private notifyBrowserModelsChanged: (() => void) | undefined;
-  private anthropicModelsRefreshInFlight: Promise<void> | undefined;
   private browserGatewayAdminClient:
     | import("../browser-gateway/helper/BrowserGatewayHelperAdminClient.js").BrowserGatewayHelperAdminClient
     | undefined;
@@ -2196,14 +2197,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.browserGatewayModelAuthProvider = provider;
   }
 
-  /**
-   * Register the Anthropic provider so model capabilities can be refreshed
-   * lazily (Target A). The provider exposes an optional `listAvailableModels()`.
-   */
-  setAnthropicProvider(provider: ModelProvider): void {
-    this.anthropicProvider = provider;
-  }
-
   setOpenAiCompatibleAuthKeyResolver(
     resolver: (providerId: string) => string | undefined,
   ): void {
@@ -2217,47 +2210,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   setBrowserModelsChangedNotifier(notify: () => void): void {
     this.notifyBrowserModelsChanged = notify;
-  }
-
-  /**
-   * Lazily refresh Anthropic dynamic model capabilities. No-op if the provider
-   * has no `listAvailableModels`, dynamic capabilities are disabled, or a
-   * refresh is already in-flight. The provider itself honors the TTL, so a
-   * fresh cache resolves without a network call. On a change: rebuild the
-   * routing index, re-send the VS Code model list, and signal the browser
-   * gateway to re-fetch. `force` bypasses the TTL (explicit refresh / auth).
-   */
-  private maybeRefreshAnthropicModels(options?: { force?: boolean }): void {
-    const provider = this.anthropicProvider;
-    if (!provider?.listAvailableModels) return;
-    if (!providerRegistry.isProviderEnabled("anthropic")) return;
-    // Flag-off kill switch: no dynamic refresh, no registry rebuild, no bump.
-    const enabled = (provider as { dynamicModelCapabilitiesEnabled?: boolean })
-      .dynamicModelCapabilitiesEnabled;
-    if (enabled === false) return;
-    // Coalesce: only one refresh in-flight at a time. Unlike a permanent guard,
-    // this allows later refreshes (TTL expiry, auth change, explicit refresh).
-    if (this.anthropicModelsRefreshInFlight) return;
-    const listAvailableModels = provider.listAvailableModels as (opts?: {
-      force?: boolean;
-    }) => Promise<unknown>;
-    this.anthropicModelsRefreshInFlight = listAvailableModels
-      .call(provider, options)
-      .then(() => {
-        providerRegistry.refreshIndex();
-        void this.sendModelsUpdate();
-        this.notifyBrowserModelsChanged?.();
-      })
-      .catch((err: unknown) => {
-        this.log(
-          `[anthropic] dynamic model refresh failed: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-      })
-      .finally(() => {
-        this.anthropicModelsRefreshInFlight = undefined;
-      });
   }
 
   getBrowserGatewayAdminClient():
@@ -3355,7 +3307,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const foregroundModel =
       fg?.model ??
       this.sessionManager?.getConfig().model ??
-      "claude-sonnet-4-6";
+      FALLBACK_AGENT_MODEL;
     const provider = providerRegistry.tryResolveProvider(foregroundModel);
     if (!provider) {
       throw new Error(`No provider available for model "${foregroundModel}"`);
@@ -3439,7 +3391,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const foregroundModel =
       fg?.model ??
       this.sessionManager?.getConfig().model ??
-      "claude-sonnet-4-6";
+      FALLBACK_AGENT_MODEL;
     const provider = providerRegistry.tryResolveProvider(foregroundModel);
     if (!provider) {
       throw new Error(`No provider available for model "${foregroundModel}"`);
@@ -4576,11 +4528,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!model || !this.sessionManager) return { ok: false };
     const foregroundBefore = this.sessionManager.getForegroundSession();
     const previousModel = foregroundBefore?.model;
+    const previousReasoningEffort = foregroundBefore?.reasoningEffort;
     const selectedModel = await this.sessionManager.setModel(model);
     const foreground = this.sessionManager.getForegroundSession();
     if (foreground && previousModel && previousModel !== selectedModel) {
       this.recordSurfaceChange(foreground, {
         model: { previousModel, model: selectedModel },
+        ...(previousReasoningEffort &&
+        previousReasoningEffort !== foreground.reasoningEffort
+          ? {
+              reasoning: {
+                previousReasoningEffort,
+                reasoningEffort: foreground.reasoningEffort,
+              },
+            }
+          : {}),
       });
     }
     const foregroundMode =
@@ -4611,6 +4573,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const session = this.sessionManager?.getSession(sessionId);
     if (!model || !session || !this.sessionManager) return { ok: false };
     const previousModel = session.model;
+    const previousReasoningEffort = session.reasoningEffort;
     const selectedModel = await this.sessionManager.setSessionModel(
       sessionId,
       model,
@@ -4618,6 +4581,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (previousModel !== selectedModel) {
       this.recordSurfaceChange(session, {
         model: { previousModel, model: selectedModel },
+        ...(previousReasoningEffort !== session.reasoningEffort
+          ? {
+              reasoning: {
+                previousReasoningEffort,
+                reasoningEffort: session.reasoningEffort,
+              },
+            }
+          : {}),
       });
     }
     const { config, target, scopeLabel } =
@@ -4741,6 +4712,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.sessionManager.setForegroundReasoningEffort?.(effort) ??
       false;
     if (!updated) return { ok: false };
+    const effectiveEffort = foreground.reasoningEffort;
     const { config, target } = this.getPreferenceConfigurationTarget(
       foreground.projectScope,
     );
@@ -4750,12 +4722,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       { ...preferences, [foreground.mode]: effort },
       target,
     );
-    if (previousReasoningEffort !== effort) {
+    if (previousReasoningEffort !== effectiveEffort) {
       this.recordSurfaceChange(foreground, {
-        reasoning: { previousReasoningEffort, reasoningEffort: effort },
+        reasoning: {
+          previousReasoningEffort,
+          reasoningEffort: effectiveEffort,
+        },
       });
     }
-    this.applyProjectedAction({ type: "SET_REASONING_EFFORT", effort });
+    this.applyProjectedAction({
+      type: "SET_REASONING_EFFORT",
+      effort: effectiveEffort,
+    });
     this.sendInitialState();
     this.log(
       `Reasoning effort changed: ${effort} (saved for mode: ${foreground.mode})`,
@@ -4773,6 +4751,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!this.sessionManager.setSessionReasoningEffort(sessionId, effort)) {
       return { ok: false };
     }
+    const effectiveEffort = session.reasoningEffort;
     const { config, target } = this.getPreferenceConfigurationTarget(
       session.projectScope,
     );
@@ -4782,14 +4761,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       { ...preferences, [session.mode]: effort },
       target,
     );
-    if (previousReasoningEffort !== effort) {
+    if (previousReasoningEffort !== effectiveEffort) {
       this.recordSurfaceChange(session, {
-        reasoning: { previousReasoningEffort, reasoningEffort: effort },
+        reasoning: {
+          previousReasoningEffort,
+          reasoningEffort: effectiveEffort,
+        },
       });
     }
     if (this.sessionManager.getForegroundSession()?.id === sessionId) {
       this.ensureProjectedForegroundSession(session);
-      this.applyProjectedAction({ type: "SET_REASONING_EFFORT", effort });
+      this.applyProjectedAction({
+        type: "SET_REASONING_EFFORT",
+        effort: effectiveEffort,
+      });
     }
     this.postMessage({
       type: "stateUpdate",
@@ -6444,11 +6429,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   public async getBrowserModelCatalogSnapshot() {
-    return await providerRegistry.getModelCatalogSnapshot({
+    const snapshot = await providerRegistry.getModelCatalogSnapshot({
       publishedByOwnerId: "agentlink-vscode",
       condenseThreshold: (modelId) =>
         this.getConfiguredCondenseThreshold(modelId),
     });
+    try {
+      await this.sessionManager?.reconcileSessionReasoningEfforts?.();
+    } catch (error) {
+      this.log(`[models] Failed to reconcile reasoning effort: ${error}`);
+    }
+    return snapshot;
   }
 
   public async getBrowserModels(): Promise<WebviewModelInfo[]> {
@@ -6668,9 +6659,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async sendModelsUpdate(): Promise<void> {
-    // Lazy (non-blocking) dynamic model refresh — never on activation; runs once
-    // per session, re-sends models + signals the browser when it lands (Target A).
-    this.maybeRefreshAnthropicModels();
     this.postMessage({
       type: "agentModelsUpdate",
       models: await this.getBrowserModels(),
@@ -9609,15 +9597,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 ? "apiKeyOnly"
                 : undefined,
           );
-        } finally {
-          this.refreshModels();
-        }
-        break;
-      }
-
-      case "agentAnthropicSignIn": {
-        try {
-          await vscode.commands.executeCommand("agentlink.setAnthropicApiKey");
         } finally {
           this.refreshModels();
         }
@@ -12667,8 +12646,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * state changes (e.g. Codex sign-in/sign-out).
    */
   public refreshModels(): void {
-    // Force a dynamic refresh (bypass TTL) — e.g. provider auth state changed.
-    this.maybeRefreshAnthropicModels({ force: true });
     void this.sendModelsUpdate();
     this.notifyBrowserModelsChanged?.();
   }

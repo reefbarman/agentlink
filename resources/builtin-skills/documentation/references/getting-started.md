@@ -33,8 +33,8 @@ The installer supports `darwin`, `linux`, `alpine`, and `win32` targets on `arm6
 2. Select the **AgentLink** icon in the Activity Bar, then open **Agent**.
 3. Follow the empty-chat setup card:
    - **Continue with ChatGPT/Codex** starts the recommended sign-in path.
-   - **Use OpenAI API key** or **Use Anthropic API key** opens secure credential setup.
-   - **Configure another provider** opens guided OpenAI-compatible model setup.
+   - **Use OpenAI API key** opens secure credential setup for the first-class OpenAI provider.
+   - **Configure another provider** opens guided OpenAI-compatible model setup for every other provider.
 4. Give the agent a bounded first task, for example:
 
    > Read this project, explain its main module boundaries, and identify the safest place to add `<feature>`.

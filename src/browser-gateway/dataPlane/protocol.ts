@@ -1060,15 +1060,7 @@ function parseForeground(
           reasoningEffort: enumValue(
             object.reasoningEffort,
             `${path}.reasoningEffort`,
-            new Set([
-              "none",
-              "minimal",
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max",
-            ]),
+            new Set(CORE_REASONING_EFFORTS),
           ) as NonNullable<
             BrowserGatewayForegroundControlState["reasoningEffort"]
           >,
@@ -2240,15 +2232,7 @@ function parseSurfaceChange(
         "previousReasoningEffort",
         "reasoningEffort",
       ]);
-      const efforts = new Set([
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max",
-      ]);
+      const efforts = new Set(CORE_REASONING_EFFORTS);
       return {
         previousReasoningEffort: enumValue(
           change.previousReasoningEffort,
@@ -2362,7 +2346,7 @@ function parseApiRequest(
     object,
     "reasoningEffort",
     path,
-    new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]),
+    new Set(CORE_REASONING_EFFORTS),
   ) as NonNullable<
     BrowserGatewayTranscriptMessage["apiRequest"]
   >["reasoningEffort"];

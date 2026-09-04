@@ -26,11 +26,6 @@ export {
 } from "./types.js";
 
 export {
-  AnthropicProvider,
-  ANTHROPIC_CONDENSE_MODEL,
-} from "./anthropic/index.js";
-
-export {
   CodexProvider,
   CODEX_CONDENSE_MODEL,
   CODEX_CONDENSE_MODEL_FALLBACKS,
@@ -137,7 +132,7 @@ export class ProviderRegistry {
       // Index picker-visible models...
       for (const model of provider.listModels()) addModel(model.id);
       // ...plus any routing-floor IDs the provider keeps resolvable but hidden
-      // from the picker (e.g. static Anthropic models omitted by models.list()).
+      // from the picker.
       for (const id of provider.listRoutableModelIds?.() ?? []) {
         if (!index.has(id)) addModel(id);
       }
@@ -152,8 +147,8 @@ export class ProviderRegistry {
   /**
    * Rebuild the model→provider routing index from current `listModels()` output.
    *
-   * Call after a provider's dynamic model set changes (e.g. Anthropic dynamic
-   * capability refresh) so newly added/removed model IDs route correctly.
+   * Call after a provider's dynamic model set changes so newly added/removed
+   * model IDs route correctly.
    */
   refreshIndex(): void {
     this.rebuildIndex();

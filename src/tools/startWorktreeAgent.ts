@@ -186,7 +186,7 @@ export async function handleStartWorktreeAgent(
 
     if (approval.status === "rejected") {
       return successResult({
-        status: "rejected",
+        status: "rejected_by_user",
         worktreePath,
         branch,
         baseRef: initialBaseRef,
@@ -198,6 +198,8 @@ export async function handleStartWorktreeAgent(
           ? { existingWorktreeBranch: existingTarget.branch }
           : {}),
         message: approval.message,
+        reason: approval.message,
+        ...(approval.followUp ? { follow_up: approval.followUp } : {}),
       });
     }
 
@@ -271,6 +273,7 @@ export async function handleStartWorktreeAgent(
       message: reuseExisting
         ? "Reused existing worktree and opened a new VS Code window. Startup intent was written before opening; child-agent startup is best-effort."
         : "Created worktree and opened a new VS Code window. Startup intent was written before opening; child-agent startup is best-effort.",
+      ...(approval.followUp ? { follow_up: approval.followUp } : {}),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -552,8 +555,13 @@ async function requestWorktreeApproval(args: {
   onApprovalRequest?: OnApprovalRequest;
   sessionId?: string;
 }): Promise<
-  | { status: "approved"; autoSubmit: boolean }
-  | { status: "rejected"; decision: string; message: string }
+  | { status: "approved"; autoSubmit: boolean; followUp?: string }
+  | {
+      status: "rejected";
+      decision: string;
+      message: string;
+      followUp?: string;
+    }
 > {
   const detail = buildApprovalDetail(args);
   const choices = [
@@ -584,7 +592,8 @@ async function requestWorktreeApproval(args: {
     const decision = typeof raw === "string" ? raw : raw.decision;
     const rejectionReason =
       typeof raw === "string" ? undefined : raw.rejectionReason;
-    return approvalDecisionToResult(decision, rejectionReason);
+    const followUp = typeof raw === "string" ? undefined : raw.followUp;
+    return approvalDecisionToResult(decision, rejectionReason, followUp);
   }
 
   const selection = await vscode.window.showWarningMessage(
@@ -608,14 +617,21 @@ async function requestWorktreeApproval(args: {
 function approvalDecisionToResult(
   decision: string | undefined,
   rejectionReason?: string,
+  followUp?: string,
 ):
-  | { status: "approved"; autoSubmit: boolean }
-  | { status: "rejected"; decision: string; message: string } {
+  | { status: "approved"; autoSubmit: boolean; followUp?: string }
+  | {
+      status: "rejected";
+      decision: string;
+      message: string;
+      followUp?: string;
+    } {
+  const trimmedFollowUp = followUp?.trim() || undefined;
   if (decision === "approve-autosubmit") {
-    return { status: "approved", autoSubmit: true };
+    return { status: "approved", autoSubmit: true, followUp: trimmedFollowUp };
   }
   if (decision === "approve-prefill") {
-    return { status: "approved", autoSubmit: false };
+    return { status: "approved", autoSubmit: false, followUp: trimmedFollowUp };
   }
   if (decision === undefined) {
     return {
@@ -624,12 +640,14 @@ function approvalDecisionToResult(
       message:
         rejectionReason?.trim() ||
         "The worktree approval was dismissed without a selection.",
+      followUp: trimmedFollowUp,
     };
   }
   return {
     status: "rejected",
     decision,
     message: rejectionReason?.trim() || "User denied worktree agent startup.",
+    followUp: trimmedFollowUp,
   };
 }
 

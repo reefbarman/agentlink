@@ -193,7 +193,11 @@ describe("handleStartWorktreeAgent", () => {
     const git = makeGit(baseGitOutputs(repoRoot, worktreePath, branch));
     const writeIntent = vi.fn();
     const openFolder = vi.fn();
-    const onApprovalRequest = vi.fn().mockResolvedValue("deny");
+    const onApprovalRequest = vi.fn().mockResolvedValue({
+      decision: "deny",
+      rejectionReason: "Keep this work in the current checkout.",
+      followUp: "Review the existing branch instead.",
+    });
 
     const result = await handleStartWorktreeAgent(
       {
@@ -213,8 +217,10 @@ describe("handleStartWorktreeAgent", () => {
     );
 
     expect(textPayload(result)).toMatchObject({
-      status: "rejected",
+      status: "rejected_by_user",
       decision: "deny",
+      reason: "Keep this work in the current checkout.",
+      follow_up: "Review the existing branch instead.",
       worktreePath,
       branch,
       baseRef: "abc123",

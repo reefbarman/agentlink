@@ -40,9 +40,11 @@ const CORE_MODULES = [
     fileName: "codex",
     declarationDependencies: [
       "codex/clientIdentity",
+      "codex/completionFacade",
       "codex/errors",
       "codex/models",
       "codex/openaiClient",
+      "codex/responsesStream",
       "codex/streamParser",
       "codex/translation",
     ],
@@ -50,7 +52,10 @@ const CORE_MODULES = [
       "CODEX_DEFAULT_MODEL",
       "CodexRequestError",
       "CodexStreamError",
+      "collectCodexCompletionResult",
       "createOpenAiResponsesClient",
+      "executeCodexResolvedCompletion",
+      "executeCodexResponsesStream",
       "getCodexEndpointConfig",
       "getCodexModelCapabilities",
       "getCodexOriginator",
@@ -355,6 +360,13 @@ const CORE_COMPATIBILITY_FACADES = [
     importerBaseline: ["src/core/model/providers/codex/clientIdentity.test.ts"],
   },
   {
+    path: "src/core/model/providers/codex/completionFacade.ts",
+    exportPath: "@agentlink/core/codex",
+    importerBaseline: [
+      "src/core/model/providers/codex/completionFacade.test.ts",
+    ],
+  },
+  {
     path: "src/core/model/providers/codex/errors.ts",
     exportPath: "@agentlink/core/codex",
     importerBaseline: [
@@ -371,6 +383,13 @@ const CORE_COMPATIBILITY_FACADES = [
     path: "src/agent/providers/codex/openaiClient.ts",
     exportPath: "@agentlink/core/codex",
     importerBaseline: [],
+  },
+  {
+    path: "src/core/model/providers/codex/responsesStream.ts",
+    exportPath: "@agentlink/core/codex",
+    importerBaseline: [
+      "src/core/model/providers/codex/responsesStream.test.ts",
+    ],
   },
   {
     path: "src/core/model/providers/codex/streamParser.ts",
@@ -474,8 +493,6 @@ const CORE_COMPATIBILITY_FACADES = [
       "src/agent/toolAdapter.ts",
       "src/browser-gateway/browserGatewayAskAgentHistory.ts",
       "src/browser-gateway/helper/browserGatewayHelper.ts",
-      "src/core/model/providers/anthropic/streamParser.ts",
-
       "src/core/model/providers/openaiCompatible/streamParser.ts",
       "src/core/model/providers/openaiCompatible/translation.test.ts",
       "src/core/webAccess.test.ts",
@@ -657,9 +674,11 @@ describe("core package boundary", () => {
 
     for (const module of [
       "clientIdentity",
+      "completionFacade",
       "errors",
       "models",
       "openaiClient",
+      "responsesStream",
       "streamParser",
       "translation",
     ]) {

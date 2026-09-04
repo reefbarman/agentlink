@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import * as vscode from "vscode";
 
 import type {
@@ -121,6 +123,20 @@ export interface MemoryApprovalResponse {
   memoryName?: string;
   /** Optional follow-up message from the user */
   followUp?: string;
+}
+
+/** Non-enumerable marker distinguishing a submitted card decision from policy/cancellation. */
+export const USER_APPROVAL_DECISION = Symbol("agentlink.userApprovalDecision");
+
+const submittedApprovalDecisionTracker = new AsyncLocalStorage<
+  (decision: object) => void
+>();
+
+export function runWithSubmittedApprovalDecisionTracking<T>(
+  track: (decision: object) => void,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return submittedApprovalDecisionTracker.run(track, operation);
 }
 
 export type ApprovalPreflightResult =
@@ -600,6 +616,8 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       ...request,
       ...projectContext,
     };
+    const submittedDecisionTracker =
+      submittedApprovalDecisionTracker.getStore();
     if (attributedRequest.signal?.aborted) {
       return Promise.resolve(this.makeRejectResponse(attributedRequest.kind));
     }
@@ -682,6 +700,15 @@ export class ApprovalPanelProvider implements vscode.Disposable {
         attributedRequest.signal?.removeEventListener("abort", handleAbort);
         if (attributedRequest.deferApprovalRecording) {
           deferRecording?.(attributedRequest, response);
+        }
+        if (
+          submittedDecisionTracker &&
+          typeof response === "object" &&
+          response !== null &&
+          (response as Record<PropertyKey, unknown>)[USER_APPROVAL_DECISION] ===
+            true
+        ) {
+          submittedDecisionTracker(response);
         }
         resolve(response);
       };
@@ -950,6 +977,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       };
     }
 
+    Object.defineProperty(response, USER_APPROVAL_DECISION, { value: true });
     entry.resolve(response);
     if (entry.request.kind === "network") {
       this.resolveMatchingNetworkBatch(

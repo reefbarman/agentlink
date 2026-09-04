@@ -122,6 +122,12 @@ export interface ModelProvider {
    */
   getModelMigration?(model: string): string | undefined;
 
+  /**
+   * Whether delegated requests may send provider-hosted tools for this model.
+   * Defaults to true when omitted.
+   */
+  supportsHostedTools?(model: string): boolean;
+
   /** Streaming completion — the primary agentic loop interface. */
   stream(request: StreamRequest): AsyncGenerator<ProviderStreamEvent>;
 

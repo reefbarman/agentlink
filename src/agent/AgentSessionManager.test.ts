@@ -601,6 +601,143 @@ describe("AgentSessionManager host injection", () => {
     expect(mgr.getConfig().model).toBe(originalConfigModel);
   });
 
+  it("recomputes effective reasoning from the saved preference across model changes", async () => {
+    const providers = new ProviderRegistry();
+    const capabilitiesByModel = {
+      "gpt-6-astra": {
+        supportsThinking: true,
+        supportsCaching: true,
+        supportsImages: true,
+        supportsToolUse: true,
+        contextWindow: 272_000,
+        maxOutputTokens: 128_000,
+        reasoningEfforts: ["none", "low", "medium", "high", "max", "ultra"],
+        defaultReasoningEffort: "low",
+      },
+      "gpt-5.6-sol": {
+        supportsThinking: true,
+        supportsCaching: true,
+        supportsImages: true,
+        supportsToolUse: true,
+        contextWindow: 1_050_000,
+        maxOutputTokens: 128_000,
+        reasoningEfforts: ["none", "low", "medium", "high", "max"],
+        defaultReasoningEffort: "medium",
+      },
+    } as const;
+    providers.register({
+      id: "codex",
+      displayName: "Codex",
+      condenseModel: "gpt-5.6-sol",
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(
+        (model: keyof typeof capabilitiesByModel) => capabilitiesByModel[model],
+      ),
+      listModels: vi.fn(() =>
+        Object.entries(capabilitiesByModel).map(([id, capabilities]) => ({
+          id,
+          displayName: id,
+          provider: "codex",
+          capabilities,
+        })),
+      ),
+      stream: vi.fn(),
+      complete: vi.fn(),
+    } as any);
+    const mgr = new AgentSessionManager(
+      { ...makeConfig(), model: "gpt-6-astra", thinkingBudget: 1024 },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          providers,
+          config: {
+            resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
+            resolveReasoningEffortForMode: () => "ultra",
+            getCondenseThresholdForModel: () => 0.9,
+            getBackgroundAgentSettings: () => ({}),
+          },
+        },
+      },
+    );
+
+    const session = await mgr.createSession("code");
+    expect(session.reasoningEffort).toBe("ultra");
+
+    await mgr.setModel("gpt-5.6-sol");
+    expect(session.reasoningEffort).toBe("max");
+
+    await mgr.setModel("gpt-6-astra");
+    expect(session.reasoningEffort).toBe("ultra");
+  });
+
+  it("reconciles effective reasoning after auth-specific capabilities settle", async () => {
+    const providers = new ProviderRegistry();
+    const oauthCapabilities = {
+      supportsThinking: true,
+      supportsCaching: true,
+      supportsImages: true,
+      supportsToolUse: true,
+      contextWindow: 272_000,
+      maxOutputTokens: 128_000,
+      reasoningEfforts: ["none", "low", "medium", "high", "max", "ultra"],
+      defaultReasoningEffort: "low",
+    } as const;
+    const apiCapabilities = {
+      ...oauthCapabilities,
+      contextWindow: 1_050_000,
+      reasoningEfforts: ["none", "low", "medium", "high", "max"],
+    } as const;
+    providers.register({
+      id: "codex",
+      displayName: "Codex",
+      condenseModel: "gpt-6-astra",
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => oauthCapabilities),
+      getRequestCapabilities: vi.fn(async () => apiCapabilities),
+      listModels: vi.fn(() => [
+        {
+          id: "gpt-6-astra",
+          displayName: "GPT-6 Astra",
+          provider: "codex",
+          capabilities: oauthCapabilities,
+        },
+      ]),
+      stream: vi.fn(),
+      complete: vi.fn(),
+    } as any);
+    const mgr = new AgentSessionManager(
+      { ...makeConfig(), model: "gpt-6-astra", thinkingBudget: 1024 },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          providers,
+          config: {
+            resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
+            resolveReasoningEffortForMode: () => "ultra",
+            getCondenseThresholdForModel: () => 0.9,
+            getBackgroundAgentSettings: () => ({}),
+          },
+        },
+      },
+    );
+
+    const session = await mgr.createSession("code");
+    expect(session.reasoningEffort).toBe("ultra");
+
+    await mgr.reconcileSessionReasoningEfforts();
+    expect(session.reasoningEffort).toBe("max");
+  });
+
   it("falls back to an enabled model when saved selections use a disabled provider", async () => {
     const capabilities = {
       supportsThinking: true,
@@ -1242,7 +1379,33 @@ describe("AgentSessionManager host injection", () => {
     });
   });
 
-  it("hydrates a persisted session without changing foreground ownership", async () => {
+  it("migrates an unavailable persisted Claude model without losing history or foreground ownership", async () => {
+    const capabilities = {
+      supportsThinking: true,
+      supportsCaching: false,
+      supportsImages: true,
+      supportsToolUse: true,
+      contextWindow: 1_050_000,
+      maxOutputTokens: 128_000,
+    };
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: "codex",
+      displayName: "Codex",
+      condenseModel: "gpt-5.6-sol",
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => capabilities),
+      listModels: vi.fn(() => [
+        {
+          id: "gpt-5.6-sol",
+          displayName: "GPT-5.6 Sol",
+          provider: "codex",
+          capabilities,
+        },
+      ]),
+      stream: vi.fn(),
+      complete: vi.fn(),
+    } as any);
     const summary = {
       schemaVersion: 1,
       id: "session-2",
@@ -1255,12 +1418,13 @@ describe("AgentSessionManager host injection", () => {
       createdAt: 1,
       lastActiveAt: 2,
     };
+    const messages = [{ role: "user" as const, content: "hello" }];
     const readSession = vi.fn(async () => ({
       ok: true as const,
       revision: "revision-1",
       value: {
         summary,
-        messages: [{ role: "user" as const, content: "hello" }],
+        messages,
         metadata: {
           mode: summary.mode,
           model: summary.model,
@@ -1270,6 +1434,10 @@ describe("AgentSessionManager host injection", () => {
         },
       },
     }));
+    const saveSession = vi.fn(async () => ({
+      ok: true as const,
+      revision: "revision-2",
+    }));
     const mgr = new AgentSessionManager(
       makeConfig(),
       "/tmp",
@@ -1277,9 +1445,22 @@ describe("AgentSessionManager host injection", () => {
       false,
       {
         readSession,
+        saveSession,
         list: vi.fn(() => [summary]),
         listAll: vi.fn(() => [summary]),
       } as any,
+      undefined,
+      undefined,
+      {
+        host: {
+          providers,
+          config: {
+            resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
+            getCondenseThresholdForModel: () => 0.9,
+            getBackgroundAgentSettings: () => ({}),
+          },
+        },
+      },
     );
     const foreground = await mgr.createSession("code");
     const changes = vi.fn();
@@ -1288,9 +1469,71 @@ describe("AgentSessionManager host injection", () => {
     const hydrated = await mgr.hydratePersistedSession(summary.id);
 
     expect(hydrated).toBeDefined();
+    expect(hydrated?.model).toBe("gpt-5.6-sol");
+    expect(hydrated?.providerId).toBe("codex");
+    expect(hydrated?.restoreFromStore).toHaveBeenCalledWith(
+      expect.objectContaining({ messages }),
+    );
+    expect(saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          summary: expect.objectContaining({ model: "gpt-5.6-sol" }),
+          metadata: expect.objectContaining({ model: "gpt-5.6-sol" }),
+        }),
+      }),
+    );
     expect(mgr.getSession(summary.id)).toBe(hydrated);
     expect(mgr.getForegroundSession()).toBe(foreground);
     expect(changes).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a persisted background reasoning effort through generic hydration", async () => {
+    const summary = {
+      schemaVersion: 1,
+      id: "hydrated-background-session",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Background",
+      messageCount: 1,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 1,
+      lastActiveAt: 2,
+      background: true,
+    };
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      {
+        readSession: vi.fn(async () => ({
+          ok: true as const,
+          revision: "revision-1",
+          value: {
+            summary,
+            messages: [{ role: "user" as const, content: "hello" }],
+            metadata: {
+              mode: summary.mode,
+              model: summary.model,
+              totalInputTokens: 0,
+              totalOutputTokens: 0,
+              reasoningEffort: "low" as const,
+              checkpointState: { baseCommit: null, checkpoints: [] },
+            },
+          },
+        })),
+        list: vi.fn(() => [summary]),
+        listAll: vi.fn(() => [summary]),
+      } as any,
+    );
+
+    const hydrated = await mgr.hydratePersistedSession(summary.id);
+
+    expect(hydrated).toMatchObject({
+      background: true,
+      reasoningEffort: "low",
+    });
   });
 
   it("restores completed context evidence for persisted background sessions", async () => {

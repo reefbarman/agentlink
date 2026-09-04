@@ -1173,20 +1173,32 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     vi.restoreAllMocks();
   });
 
-  function captureBodyOnce(): { current?: Record<string, unknown> } {
-    const captured: { current?: Record<string, unknown> } = {};
-    createMock.mockImplementationOnce(async (body: Record<string, unknown>) => {
-      captured.current = body;
-      return (async function* () {
-        yield {
-          type: "response.done",
-          response: {
-            id: "resp",
-            usage: { input_tokens: 1, output_tokens: 1 },
-          },
-        };
-      })();
-    });
+  function captureBodyOnce(): {
+    current?: Record<string, unknown>;
+    options?: Record<string, unknown>;
+  } {
+    const captured: {
+      current?: Record<string, unknown>;
+      options?: Record<string, unknown>;
+    } = {};
+    createMock.mockImplementationOnce(
+      async (
+        body: Record<string, unknown>,
+        options?: Record<string, unknown>,
+      ) => {
+        captured.current = body;
+        captured.options = options;
+        return (async function* () {
+          yield {
+            type: "response.done",
+            response: {
+              id: "resp",
+              usage: { input_tokens: 1, output_tokens: 1 },
+            },
+          };
+        })();
+      },
+    );
     return captured;
   }
 
@@ -1240,10 +1252,163 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     expect(captured.current?.model).toBe("gpt-5.2-codex");
   });
 
+  it("keeps hosted tools permissive until auth is resolved", () => {
+    const provider = new CodexProvider(makeAuthManager() as never);
+    expect(provider.supportsHostedTools("gpt-6-astra")).toBe(true);
+  });
+
+  it("disables hosted tools only for resolved OAuth Astra", async () => {
+    const oauthProvider = new CodexProvider(makeAuthManager() as never);
+    await oauthProvider.isAuthenticated();
+    expect(oauthProvider.supportsHostedTools("gpt-6-astra")).toBe(false);
+    expect(oauthProvider.supportsHostedTools("gpt-5.6-sol")).toBe(true);
+
+    const apiKeyProvider = new CodexProvider(
+      makeAuthManager({
+        getPreferredAuthMethod: vi.fn().mockResolvedValue("apiKey"),
+      }) as never,
+    );
+    await apiKeyProvider.isAuthenticated();
+    expect(apiKeyProvider.supportsHostedTools("gpt-6-astra")).toBe(true);
+  });
+
+  it("normalizes package stream aborts to the provider cancellation shape", async () => {
+    const controller = new AbortController();
+    const provider = new CodexProvider(makeAuthManager() as never);
+    const stream = provider.stream({
+      model: "gpt-5.6-sol",
+      systemPrompt: "Answer.",
+      messages: [],
+      maxTokens: 128,
+      signal: controller.signal,
+    });
+    const pending = stream.next();
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("sends Astra with the Responses Lite contract and maps ultra to xhigh over OAuth", async () => {
+    const captured = captureBodyOnce();
+    const provider = new CodexProvider(makeAuthManager() as never);
+
+    for await (const _event of provider.stream({
+      model: "gpt-6-astra",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+      reasoningEffort: "ultra",
+    })) {
+      // drain
+    }
+
+    expect(captured.current).toMatchObject({
+      model: "gpt-6-astra",
+      parallel_tool_calls: false,
+      reasoning: { effort: "xhigh", context: "all_turns" },
+      input: [
+        { type: "additional_tools", role: "developer" },
+        { type: "message", role: "developer" },
+        { role: "user" },
+      ],
+    });
+    expect(captured.current).not.toHaveProperty("instructions");
+    expect(captured.current).not.toHaveProperty("tools");
+    expect(captured.options).toMatchObject({
+      headers: { "x-openai-internal-codex-responses-lite": "true" },
+    });
+  });
+
+  it("clamps Astra ultra reasoning to max for API-key requests", async () => {
+    const captured = captureBodyOnce();
+    const apiKeyAuth = makeAuthManager({
+      resolveModelAuth: vi.fn().mockResolvedValue({
+        method: "apiKey",
+        bearerToken: "sk-test",
+        canRefresh: false,
+      }),
+      getPreferredAuthMethod: vi.fn().mockResolvedValue("apiKey"),
+    });
+    const provider = new CodexProvider(apiKeyAuth as never);
+
+    for await (const _event of provider.stream({
+      model: "gpt-6-astra",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+      reasoningEffort: "ultra",
+    })) {
+      // drain
+    }
+
+    expect(captured.current).toMatchObject({
+      model: "gpt-6-astra",
+      reasoning: { effort: "max" },
+    });
+  });
+
+  it("explains an OAuth Astra bodyless 400 and preserves request diagnostics", async () => {
+    createMock.mockRejectedValueOnce(
+      Object.assign(new Error("400 status code (no body)"), {
+        status: 400,
+        requestID: "req-astra",
+        headers: new Headers({ "cf-ray": "ray-astra" }),
+      }),
+    );
+    const provider = new CodexProvider(makeAuthManager() as never);
+
+    await expect(
+      (async () => {
+        for await (const _event of provider.stream({
+          model: "gpt-6-astra",
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "ping" }],
+          maxTokens: 64,
+        })) {
+          // drain
+        }
+      })(),
+    ).rejects.toMatchObject({
+      name: "CodexRequestError",
+      code: "astra_oauth_bodyless_400",
+      retryable: false,
+      message: expect.stringContaining("server returned no exact reason"),
+      metadata: {
+        model: "gpt-6-astra",
+        authMethod: "oauth",
+        transport: "responses_lite",
+        providerReturnedBody: false,
+        requestId: "req-astra",
+        cfRay: "ray-astra",
+      },
+    });
+  });
+
+  it("does not silently remap Astra when the provider rejects access", async () => {
+    createMock.mockRejectedValueOnce(
+      Object.assign(new Error("Model not found gpt-6-astra"), { status: 404 }),
+    );
+    const provider = new CodexProvider(makeAuthManager() as never);
+
+    await expect(
+      (async () => {
+        for await (const _event of provider.stream({
+          model: "gpt-6-astra",
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "ping" }],
+          maxTokens: 64,
+        })) {
+          // drain
+        }
+      })(),
+    ).rejects.toThrow(/gpt-6-astra/);
+    expect(createMock).toHaveBeenCalledOnce();
+  });
+
   it("listModels hides API-key-only models on OAuth and keeps them on API key", async () => {
     const oauthProvider = new CodexProvider(makeAuthManager() as never);
     await new Promise((resolve) => setTimeout(resolve, 0));
     const oauthIds = oauthProvider.listModels().map((m) => m.id);
+    expect(oauthIds).toContain("gpt-6-astra");
     expect(oauthIds).toContain("gpt-5.6-sol");
     expect(oauthIds).toContain("gpt-5.6-terra");
     expect(oauthIds).toContain("gpt-5.6-luna");
@@ -1260,6 +1425,7 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
     const apiKeyIds = apiKeyProvider.listModels().map((m) => m.id);
+    expect(apiKeyIds).toContain("gpt-6-astra");
     expect(apiKeyIds).toContain("gpt-5.6-sol");
     expect(apiKeyIds).toContain("gpt-5.5");
     expect(apiKeyIds).toContain("gpt-5.4-pro");
@@ -1461,6 +1627,38 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     expect(events).toContainEqual(
       expect.objectContaining({ type: "text_delta", text: "hello" }),
     );
+  });
+
+  it("reports auth-specific Astra reasoning and context capabilities", async () => {
+    const oauthProvider = new CodexProvider(makeAuthManager() as never);
+    await expect(
+      oauthProvider.getRequestCapabilities("gpt-6-astra"),
+    ).resolves.toMatchObject({
+      contextWindow: 872_000,
+      reasoningEfforts: [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra",
+      ],
+      defaultReasoningEffort: "low",
+    });
+
+    const apiKeyProvider = new CodexProvider(
+      makeAuthManager({
+        getPreferredAuthMethod: vi.fn().mockResolvedValue("apiKey"),
+      }) as never,
+    );
+    await expect(
+      apiKeyProvider.getRequestCapabilities("gpt-6-astra"),
+    ).resolves.toMatchObject({
+      contextWindow: 1_050_000,
+      reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      defaultReasoningEffort: "low",
+    });
   });
 
   it("reports OAuth-specific GPT-5.5 caps unless API-key auth is preferred", async () => {

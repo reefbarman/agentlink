@@ -79,10 +79,6 @@ describe("prompt profile policy", () => {
       ["codex", "gpt-5.6-sol"],
       ["codex", "gpt-5.6-terra"],
       ["codex", "gpt-5.5"],
-      ["anthropic", "claude-opus-5"],
-      ["anthropic", "claude-sonnet-5"],
-      ["anthropic", "claude-opus-4-8"],
-      ["anthropic", "claude-sonnet-4-6"],
     ] as const) {
       expect(resolvePromptProfile({ providerId, modelId })).toMatchObject({
         profile: "reasoning",
@@ -95,7 +91,7 @@ describe("prompt profile policy", () => {
 
   it("keeps unevaluated and small-tier models on compatibility", () => {
     for (const [providerId, modelId] of [
-      ["anthropic", "claude-haiku-4-5-20251001"],
+      ["openai-compatible:claude", "claude-sonnet-4-6"],
       ["codex", "gpt-5.6-luna"],
       ["codex", "gpt-5.3-codex-spark"],
       ["gemini", "gemini-2.5-pro"],
