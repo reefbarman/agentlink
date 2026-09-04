@@ -28,6 +28,8 @@ export interface AgentToolMode {
 export interface AgentToolListRequest {
   mode?: AgentToolMode;
   mcpToolDefs?: CoreToolDefinition[];
+  /** Immutable startup/configuration gate for foreground Compose disclosure. */
+  composeEnabled?: boolean;
   /** Native AgentLink web tools exposed for this immutable request snapshot. */
   nativeWebToolKinds?: readonly import("@agentlink/core/web-access").CoreWebToolKind[];
   isBackground?: boolean;
@@ -145,6 +147,8 @@ export interface AgentToolExecutionContext {
   toolCallId?: string;
   /** Parent tool call for nested activity. Undefined for model-emitted calls. */
   parentCallId?: string;
+  /** Immutable request-boundary gate for Compose execution. */
+  composeEnabled?: boolean;
   /** Nested calls must not open approval/question/editor interaction UI. */
   interactionPolicy?: "allow" | "deny";
   onNestedToolStart?: (event: {

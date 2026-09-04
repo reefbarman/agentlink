@@ -2,8 +2,12 @@ import type {
   AgentToolExecutionContext,
   AgentToolRuntime,
 } from "../../core/tools/types.js";
+import {
+  COMPOSABLE_TOOLS,
+  validateComposableToolInput,
+  validateComposableToolOutputContent,
+} from "../../core/tools/toolCapabilities.js";
 
-import { COMPOSABLE_TOOLS } from "../../core/tools/toolCapabilities.js";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { randomUUID } from "crypto";
 
@@ -15,7 +19,8 @@ export type ComposeScopeErrorKind =
   | "child_handler_failed"
   | "recursive_compose"
   | "tool_input_not_composable"
-  | "tool_not_composable";
+  | "tool_not_composable"
+  | "tool_output_not_composable";
 
 export type ComposeChildRoute = "inline" | "deferred";
 
@@ -68,13 +73,27 @@ function assertComposableInput(
   toolName: string,
   input: Record<string, unknown>,
 ): void {
-  if (
-    (toolName === "list_files" && typeof input.query === "string") ||
-    (toolName === "search_files" && input.semantic === true)
-  ) {
+  const violation = validateComposableToolInput(toolName, input);
+  if (violation) {
     throw new ComposeScopeError(
       "tool_input_not_composable",
-      `Tool '${toolName}' supports composition only in its native non-semantic mode`,
+      `Tool '${toolName}' input is not composable: ${violation.message}`,
+    );
+  }
+}
+
+function assertComposableOutputContent(
+  toolName: string,
+  result: ToolResult,
+): void {
+  const violation = validateComposableToolOutputContent(
+    toolName,
+    result.content,
+  );
+  if (violation) {
+    throw new ComposeScopeError(
+      "tool_output_not_composable",
+      `Tool '${toolName}' output is not composable: ${violation.message}`,
     );
   }
 }
@@ -164,6 +183,16 @@ function resolveChildRoute(
       "tool_not_in_mode",
     );
   }
+  const skillAllowedTools =
+    parentContext.skillAuthority?.allowedTools ??
+    parentContext.skillAllowedTools;
+  if (skillAllowedTools && !skillAllowedTools.includes(toolName)) {
+    throw new ComposeScopeError(
+      "authorization",
+      `Tool '${toolName}' is not available under the active skill policy`,
+      "tool_not_in_skill",
+    );
+  }
   return inline ? "inline" : "deferred";
 }
 
@@ -193,10 +222,13 @@ export function createComposeExecutionScope(
   const {
     runtime,
     parentContext,
-    isComposable = (toolName) => COMPOSABLE_TOOLS.has(toolName),
+    isComposable: isComposableOverride,
     createCallId = randomUUID,
     now = Date.now,
   } = options;
+  const isComposable = (toolName: string): boolean =>
+    COMPOSABLE_TOOLS.has(toolName) &&
+    (isComposableOverride?.(toolName) ?? true);
   requireParentContext(parentContext);
 
   const canExecuteChild = (toolName: string): boolean => {
@@ -319,6 +351,7 @@ export function createComposeExecutionScope(
           abortPromise,
         ]);
         if (result.isError) throw childResultError(toolName, result);
+        assertComposableOutputContent(toolName, result);
         if (!("data" in result)) {
           throw new ComposeScopeError(
             "canonical_result_required",
