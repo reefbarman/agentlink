@@ -1,0 +1,16 @@
+src/agent/compose/composeScope.ts
+  h_9630b74bdac540 5-9,23,76-77,80-96,186-193,225,229-231,354
+src/core/tools/types.ts
+  h_9630b74bdac540 31-32,150-151
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "2a47d96421249536981edf344fdbdf4e47b0d292",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
