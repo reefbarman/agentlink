@@ -1,0 +1,18 @@
+src/agent/compose/composeRuntimeLimiter.ts
+  h_9630b74bdac540 1-183
+packages/protocol/src/compose.ts
+  h_9630b74bdac540 7-33,55
+src/agent/compose/composeRuntimeLoader.ts
+  h_9630b74bdac540 5,22-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "d99d204cb03737264227c414e2eaa6960f82e0ea",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
