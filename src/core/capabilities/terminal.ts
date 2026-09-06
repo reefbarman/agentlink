@@ -121,6 +121,8 @@ export interface TerminalExecutionAttemptSummary {
 
 export interface TerminalCommandResult {
   exit_code: number | null;
+  signal?: number;
+  command_id?: string;
   output: string;
   cwd?: string;
   output_captured: boolean;
@@ -274,6 +276,8 @@ export type TerminalLifecycleState =
   | "unknown_termination";
 
 export interface TerminalBackgroundState {
+  command_id?: string;
+  signal?: number;
   is_running: boolean;
   state: TerminalLifecycleState;
   exit_code: number | null;
@@ -330,6 +334,8 @@ export interface TerminalCloseResult {
 export interface TerminalTargetRequest {
   owner: TerminalExecutionOwner | undefined;
   terminalId: string;
+  /** Select an exact retained command; never fall back to the latest command. */
+  commandId?: string;
 }
 
 export interface TerminalOutputRequest extends TerminalTargetRequest {

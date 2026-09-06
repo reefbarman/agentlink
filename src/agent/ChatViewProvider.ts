@@ -4803,6 +4803,40 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  public async submitBrowserNewTab(
+    address: ChatTabActionAddress,
+    mode?: string,
+    projectId?: string,
+  ): Promise<{
+    ok: boolean;
+    sessionId?: string;
+    projectId?: string;
+    tabId?: string;
+    controllerEpoch?: string;
+    reason?: string;
+  }> {
+    const nextMode = mode?.trim() || "code";
+    const result = await this.chatTabHostCoordinator?.newTab(
+      address,
+      nextMode,
+      projectId,
+      { focus: false },
+    );
+    if (!result) return { ok: false, reason: "tab_host_unavailable" };
+    if (!result.ok) return { ok: false, reason: result.reason };
+    if (!result.session) return { ok: false, reason: "session_not_found" };
+    this.log(
+      `New tab created from browser: ${result.tab.id} (${nextMode}, model: ${result.session.model})`,
+    );
+    return {
+      ok: true,
+      sessionId: result.session.id,
+      projectId: result.session.projectScope.projectId,
+      tabId: result.tab.id,
+      controllerEpoch: address.controllerEpoch,
+    };
+  }
+
   public async submitBrowserNewSession(
     mode?: string,
     projectId?: string,
@@ -10610,6 +10644,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           pinnedMemoryTokens: event.pinnedMemoryTokens,
           retrievedMemoryTokens: event.retrievedMemoryTokens,
           contextLedger: event.contextLedger,
+          compose: event.compose,
         });
         break;
 
@@ -10738,6 +10773,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               prevInputTokens: event.prevInputTokens,
               newInputTokens: event.newInputTokens,
               durationMs: condenseDurationMs,
+              composeFoldedReadCount: event.composeFoldedReadCount,
+              composeFoldedContextTokens: event.composeFoldedContextTokens,
             });
           }
           // The context bar's budget snapshot (usedInputTokens) is pushed on

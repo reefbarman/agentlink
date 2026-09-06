@@ -1,5 +1,3 @@
-import type * as vscode from "vscode";
-
 import type {
   BrowserGatewayCoreOwnerLeaseRegistration,
   BrowserGatewayCoreOwnerRegistrationResponse,
@@ -18,7 +16,7 @@ interface BrowserGatewayHelperLeaseClientOptions {
   random?: () => number;
 }
 
-export class BrowserGatewayHelperLeaseClient implements vscode.Disposable {
+export class BrowserGatewayHelperLeaseClient {
   private timer: NodeJS.Timeout | undefined;
   private running = false;
   private lifecycleGeneration = 0;

@@ -1,10 +1,18 @@
 import * as vscode from "vscode";
 
+import type {
+  CodexCredentialProvider,
+  CodexCredentialRequest,
+  CodexOAuthAccountRequest,
+  CodexRefreshCredentialRequest,
+  CodexResolvedAuth,
+} from "@agentlink/core/codex";
 import {
   CodexOAuthManager,
   type CodexCredentials,
   type CodexOAuthAccountInfo,
   type SaveOAuthAccountOptions,
+  type CodexOAuthStateStorage,
 } from "./CodexOAuthManager.js";
 
 const OPENAI_API_KEY_SECRET = "openaiApiKey";
@@ -20,17 +28,7 @@ export interface OpenAiApiKeyCredential {
   scope: OpenAiApiKeyScope;
 }
 
-export interface OpenAiCodexResolvedAuth {
-  method: OpenAiCodexAuthMethod;
-  bearerToken: string;
-  /** ChatGPT account header value for Codex OAuth endpoint. */
-  accountId?: string;
-  /** Local OAuth pool account identity. */
-  oauthAccountPoolId?: string;
-  oauthAccountLabel?: string;
-  oauthAccountEmail?: string;
-  canRefresh: boolean;
-}
+export type OpenAiCodexResolvedAuth = CodexResolvedAuth;
 
 export class OpenAiCodexAuthManager {
   private context: vscode.ExtensionContext | null = null;
@@ -48,6 +46,10 @@ export class OpenAiCodexAuthManager {
   initialize(context: vscode.ExtensionContext): void {
     this.context = context;
     this.oauthManager.initialize(context);
+  }
+
+  initializeOAuthStorage(storage: CodexOAuthStateStorage): void {
+    this.oauthManager.initializeStorage(storage);
   }
 
   async isAuthenticated(): Promise<boolean> {
@@ -303,6 +305,35 @@ export class OpenAiCodexAuthManager {
 
   waitForCallback(): Promise<CodexCredentials> {
     return this.oauthManager.waitForCallback();
+  }
+
+  /**
+   * Adapts VS Code secret/OAuth storage to the request-scoped core Codex
+   * credential boundary without moving storage, browser, or callback policy.
+   */
+  createCredentialProvider<TContext>(): CodexCredentialProvider<TContext> {
+    return {
+      resolveAuth: async (_request: CodexCredentialRequest<TContext>) =>
+        await this.resolveModelAuth(),
+      refreshAuth: async (request: CodexRefreshCredentialRequest<TContext>) =>
+        await this.forceRefreshModelAuth(request.previousAuth.method, {
+          oauthAccountPoolId: request.previousAuth.oauthAccountPoolId,
+        }),
+      oauthAccounts: {
+        markUsageLimit: async (request: CodexOAuthAccountRequest<TContext>) =>
+          await this.markOAuthUsageLimit(request.accountId),
+        listFallbackAccountIds: async (
+          request: CodexOAuthAccountRequest<TContext>,
+        ) => await this.getOAuthRoundRobinAccountIds(request.accountId),
+        resolveAccount: async (request: CodexOAuthAccountRequest<TContext>) =>
+          await this.resolveModelAuthForOAuthAccount(request.accountId),
+        activateAccount: async (
+          request: CodexOAuthAccountRequest<TContext>,
+        ) => {
+          await this.setActiveOAuthAccount(request.accountId);
+        },
+      },
+    };
   }
 }
 

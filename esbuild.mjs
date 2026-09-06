@@ -15,6 +15,7 @@ import {
 } from "./scripts/browser-gateway-bundle-report.mjs";
 
 import { resolveBrowserGatewayDevBuild } from "./scripts/browser-gateway-build-env.mjs";
+import { stageKeychainRuntime } from "./scripts/package-keychain-runtime.mjs";
 import { stageRetrievalRuntime } from "./scripts/package-retrieval-runtime.mjs";
 import { stageSandboxRuntime } from "./scripts/package-sandbox-runtime.mjs";
 import { workspacePackageClosurePlugin } from "./scripts/workspace-bundle-closure.mjs";
@@ -44,7 +45,7 @@ const extensionOptions = {
   entryPoints: ["src/extension.ts"],
   bundle: true,
   outfile: "dist/extension.js",
-  external: ["vscode", "@lancedb/lancedb", "apache-arrow"],
+  external: ["vscode", "@lancedb/lancedb", "apache-arrow", "@napi-rs/keyring"],
   format: "cjs",
   platform: "node",
   target: "node22",
@@ -236,7 +237,7 @@ const browserGatewayHelperOptions = {
   entryPoints: ["src/browser-gateway/helper/browserGatewayHelper.ts"],
   bundle: true,
   outfile: "dist/browser-gateway-helper.js",
-  external: ["vscode", "@lancedb/lancedb", "apache-arrow"],
+  external: ["vscode", "@lancedb/lancedb", "apache-arrow", "@napi-rs/keyring"],
   format: "cjs",
   platform: "node",
   target: "node22",
@@ -395,12 +396,20 @@ if (watch) {
     stageSandboxRuntime(),
     stageRetrievalRuntime(),
   ]);
+  // Retrieval owns and recreates dist/node_modules, so stage additional native
+  // packages only after it has finished.
+  const keychainRuntime = await stageKeychainRuntime();
   console.log(
     `Retrieval runtime: ${retrievalRuntime.target} (${retrievalRuntime.nativePackage}); ${retrievalRuntime.packages.length} packages staged`,
   );
   console.log(
     `Sandbox runtime: ${sandboxRuntime.staged.length} entries staged`,
   );
+  if (keychainRuntime.target) {
+    console.log(
+      `Keychain runtime: ${keychainRuntime.target} (${keychainRuntime.nativePackage})`,
+    );
+  }
 
   console.log("Build complete.");
 }

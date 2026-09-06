@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import type { AskAgentControllerPublication } from "./AskAgentController.js";
+import type { StandaloneAskAgentMcpRuntime } from "./StandaloneAskAgentMcpRuntime.js";
 import {
   BrowserGatewayHelper,
   type HelperRuntimeOptions,
@@ -283,6 +284,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
   beforeAskAgentSnapshotPublish?: (
     publication: AskAgentControllerPublication,
   ) => void | Promise<void>;
+  standaloneMcpRuntime?: StandaloneAskAgentMcpRuntime;
 }): Promise<{
   helper: BrowserGatewayHelper;
   helperServer: http.Server;
@@ -316,6 +318,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
       idleShutdownMs: 120_000,
       extensionRootPath,
       askAgentLogPath,
+      standaloneMcp: Boolean(params.standaloneMcpRuntime),
     },
     helperServer,
     {
@@ -328,6 +331,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
         filePath: path.join(storeDir, "memory.json"),
       }),
       askAgentAutonomousMemoryRuntime: params.askAgentAutonomousMemoryRuntime,
+      standaloneMcpRuntime: params.standaloneMcpRuntime,
       streamingMetrics: params.streamingMetrics,
       beforeAskAgentSnapshotPublish: params.beforeAskAgentSnapshotPublish,
     },
@@ -506,6 +510,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     }
     while (servers.length > 0) {
       const server = servers.pop()!;
+      server.closeAllConnections?.();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
     while (isolatedStoreDirs.length > 0) {
@@ -1170,6 +1175,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       const firstBase = `http://127.0.0.1:${firstPort}`;
       const bootstrap = await fetch(firstBase);
       const cookie = bootstrap.headers.get("set-cookie")?.split(";")[0] ?? "";
+      await bootstrap.text();
 
       const before = (await (
         await fetch(`${firstBase}/api/ask-agent/session`, {
@@ -1243,6 +1249,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       const secondBootstrap = await fetch(secondBase);
       const secondCookie =
         secondBootstrap.headers.get("set-cookie")?.split(";")[0] ?? "";
+      await secondBootstrap.text();
 
       const restored = (await (
         await fetch(`${secondBase}/api/ask-agent/session`, {
@@ -5431,8 +5438,18 @@ describe("BrowserGatewayHelper proxy routing", () => {
 
   it("applies safe Ask Agent todo_write and set_task_status tool calls", async () => {
     let callCount = 0;
+    const routings: BrowserGatewayAskAgentCompletionParams["codexRouting"][] =
+      [];
     const publications: AskAgentControllerPublication[] = [];
-    const modelClient = makeAskAgentToolLoopClient(async () => {
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      routings.push(params.codexRouting);
+      expect(params.memoryContextBeforeIndex).toBeDefined();
+      const anchor = params.memoryContextBeforeIndex!;
+      const anchoredMessage = params.iterationMessages?.[anchor];
+      expect(anchoredMessage?.role).toBe("user");
+      expect(JSON.stringify(anchoredMessage?.content)).toContain(
+        callCount < 2 ? "Track and finish this" : "Another turn",
+      );
       callCount++;
       if (callCount === 1) {
         return {
@@ -5542,6 +5559,19 @@ describe("BrowserGatewayHelper proxy routing", () => {
     const finalPublication = publications.at(-1);
     expect(finalPublication?.snapshot).toEqual(body.snapshot);
     expect(finalPublication?.serialized).toBe(JSON.stringify(body.snapshot));
+    expect(routings).toHaveLength(2);
+    expect(routings[0]?.sessionId).toBeTruthy();
+    expect(routings[0]?.turnState).toBeDefined();
+    expect(routings[1]?.turnState).toBe(routings[0]?.turnState);
+    expect(finalPublication?.serialized).not.toContain("codexRouting");
+    const nextTurn = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Another turn" }),
+    });
+    expect(nextTurn.ok).toBe(true);
+    expect(routings[2]?.sessionId).toBe(routings[0]?.sessionId);
+    expect(routings[2]?.turnState).not.toBe(routings[0]?.turnState);
     expect(finalPublication?.snapshot.session.foreground.streaming).toBe(false);
     expect(
       finalPublication?.snapshot.session.foreground.projectedMessages.find(
@@ -7797,6 +7827,430 @@ describe("BrowserGatewayHelper proxy routing", () => {
       ]),
     );
     expect(fallbackRequests).toEqual([]);
+  });
+
+  it("executes desktop standalone MCP without a VS Code instance", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "standalone-result" }],
+    }));
+    const standaloneMcpRuntime = {
+      prepareTurn: vi.fn(
+        async (request: { sessionId: string; turnId: string }) => ({
+          sessionId: request.sessionId,
+          turnId: request.turnId,
+          tools: [
+            {
+              name: "local__search",
+              description: "Search the local MCP fixture.",
+              input_schema: {
+                type: "object",
+                properties: { query: { type: "string" } },
+              },
+            },
+          ],
+          parallelSafeToolNames: ["local__search"],
+          parallelSafeServerNames: ["local"],
+          getApprovalRequirement: (
+            toolName: string,
+            input: Record<string, unknown>,
+          ) =>
+            toolName === "local__search"
+              ? { serverName: "local", bareToolName: "search", input }
+              : undefined,
+          execute,
+        }),
+      ),
+    } as unknown as StandaloneAskAgentMcpRuntime;
+    const modelToolNames: string[][] = [];
+    const modelClient = makeAskAgentToolLoopClient(
+      async ({ toolMessages, tools }) => {
+        modelToolNames.push((tools ?? []).map((tool) => tool.name));
+        if (toolMessages?.length) {
+          expect(JSON.stringify(toolMessages)).toContain("standalone-result");
+          return { text: "Standalone MCP result received.", toolCalls: [] };
+        }
+        return {
+          text: "Calling standalone MCP.",
+          toolCalls: [
+            {
+              id: "standalone-mcp-call",
+              name: "local__search",
+              input: {
+                query: "AgentLink",
+                access_token: "approval-secret-value",
+              },
+            },
+          ],
+        };
+      },
+    );
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      standaloneMcpRuntime,
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const mcpConfig = await fetch(
+      `${harness.helperBase}/api/ask-agent/mcp-config`,
+      { headers: { Cookie: harness.cookie } },
+    );
+    const mcpConfigBody = (await mcpConfig.json()) as {
+      ok?: boolean;
+      error?: string;
+      configSnapshot?: {
+        profile?: string;
+        capabilities?: Record<string, boolean>;
+      };
+    };
+    expect(mcpConfig.ok).toBe(true);
+    expect(mcpConfigBody).toMatchObject({
+      ok: true,
+      configSnapshot: {
+        profile: "ask-agent",
+        capabilities: {
+          canEditConfig: false,
+          canReconnect: false,
+          canReauthenticate: false,
+          canWriteSecrets: false,
+          canConfigureLocalProcess: false,
+        },
+      },
+    });
+    expect(mcpConfigBody.error).not.toBe("mcp_host_unavailable");
+
+    const sendFirst = fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Use local MCP" }),
+    });
+    let approvalId = "";
+    await waitForExpectation(async () => {
+      const session = await fetch(
+        `${harness.helperBase}/api/ask-agent/session`,
+        {
+          headers: { Cookie: harness.cookie },
+        },
+      );
+      const sessionBody = (await session.json()) as {
+        snapshot: {
+          ui: {
+            approval: {
+              id?: string;
+              kind?: string;
+              mcpServerName?: string;
+              mcpToolName?: string;
+              mcpDetail?: string;
+            } | null;
+          };
+        };
+      };
+      expect(sessionBody.snapshot.ui.approval).toMatchObject({
+        kind: "mcp",
+        mcpServerName: "local",
+        mcpToolName: "search",
+      });
+      expect(sessionBody.snapshot.ui.approval?.mcpDetail).toContain(
+        "AgentLink",
+      );
+      expect(sessionBody.snapshot.ui.approval?.mcpDetail).toContain(
+        "[REDACTED]",
+      );
+      expect(sessionBody.snapshot.ui.approval?.mcpDetail).not.toContain(
+        "approval-secret-value",
+      );
+      approvalId = sessionBody.snapshot.ui.approval?.id ?? "";
+      expect(approvalId).toMatch(/^ask-agent-mcp-/);
+    });
+    const approval = await fetch(
+      `${harness.helperBase}/api/ask-agent/approval`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify({
+          id: approvalId,
+          approvalKind: "mcp",
+          decision: "always-tool-session",
+        }),
+      },
+    );
+    expect(approval.ok).toBe(true);
+
+    const first = await sendFirst;
+    const firstBody = (await first.json()) as {
+      snapshot: {
+        session: { foreground: { projectedMessages: ChatMessage[] } };
+      };
+    };
+    expect(first.ok).toBe(true);
+    expect(modelToolNames[0]).toContain("local__search");
+    expect(execute).toHaveBeenCalledWith(
+      "local__search",
+      { query: "AgentLink", access_token: "approval-secret-value" },
+      expect.any(AbortSignal),
+      expect.objectContaining({
+        sessionId: expect.any(String),
+        turnId: expect.any(String),
+      }),
+      true,
+    );
+    expect(
+      firstBody.snapshot.session.foreground.projectedMessages.find(
+        (message) => message.role === "assistant",
+      )?.content,
+    ).toContain("Standalone MCP result received.");
+
+    const second = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Use local MCP again" }),
+    });
+    expect(second.ok).toBe(true);
+    expect(execute).toHaveBeenCalledTimes(2);
+    const sessionAfterSecond = await fetch(
+      `${harness.helperBase}/api/ask-agent/session`,
+      { headers: { Cookie: harness.cookie } },
+    );
+    const sessionAfterSecondBody = (await sessionAfterSecond.json()) as {
+      snapshot: { ui: { approval: unknown } };
+    };
+    expect(sessionAfterSecondBody.snapshot.ui.approval).toBeNull();
+  });
+
+  it("resumes desktop standalone MCP after shared form elicitation", async () => {
+    const execute = vi.fn(
+      async (
+        _toolName: string,
+        _input: Record<string, unknown>,
+        _signal: AbortSignal,
+        _invocation: { sessionId: string; turnId: string },
+      ) => {
+        const response = await preparedRequest?.onElicitation?.({
+          principal: { tenantId: "agentlink-desktop", subjectId: "ask-agent" },
+          sessionId: preparedRequest.sessionId,
+          turnId: preparedRequest.turnId,
+          serverName: "local",
+          message: "Choose a result count",
+          fields: [
+            {
+              name: "count",
+              kind: "integer",
+              required: true,
+              minimum: 1,
+              maximum: 5,
+            },
+          ],
+        });
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `count:${String(response?.action === "accept" ? response.content.count : "cancelled")}`,
+            },
+          ],
+        };
+      },
+    );
+    let preparedRequest:
+      | {
+          sessionId: string;
+          turnId: string;
+          onElicitation?: (
+            request: any,
+          ) => Promise<
+            | { action: "accept"; content: Record<string, unknown> }
+            | { action: "cancel" }
+          >;
+        }
+      | undefined;
+    const standaloneMcpRuntime = {
+      prepareTurn: vi.fn(
+        async (request: NonNullable<typeof preparedRequest>) => {
+          preparedRequest = request;
+          return {
+            sessionId: request.sessionId,
+            turnId: request.turnId,
+            tools: [
+              {
+                name: "local__search",
+                description: "Search with elicited options.",
+                input_schema: { type: "object", properties: {} },
+              },
+            ],
+            parallelSafeToolNames: [],
+            parallelSafeServerNames: [],
+            execute,
+          };
+        },
+      ),
+    } as unknown as StandaloneAskAgentMcpRuntime;
+    const modelClient = makeAskAgentToolLoopClient(async ({ toolMessages }) =>
+      toolMessages?.length
+        ? { text: "MCP form result received.", toolCalls: [] }
+        : {
+            text: "Requesting MCP input.",
+            toolCalls: [
+              {
+                id: "standalone-mcp-form",
+                name: "local__search",
+                input: {},
+              },
+            ],
+          },
+    );
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      standaloneMcpRuntime,
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const sendPromise = fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Use an MCP form" }),
+    });
+    let formId = "";
+    await waitForExpectation(async () => {
+      const session = await fetch(
+        `${harness.helperBase}/api/ask-agent/session`,
+        { headers: { Cookie: harness.cookie } },
+      );
+      const body = (await session.json()) as {
+        snapshot: {
+          ui: {
+            formElicitation: {
+              id?: string;
+              serverName?: string;
+              message?: string;
+              fields?: Array<{ name?: string; kind?: string }>;
+            } | null;
+          };
+        };
+      };
+      expect(body.snapshot.ui.formElicitation).toMatchObject({
+        serverName: "local",
+        message: "Choose a result count",
+        fields: [{ name: "count", kind: "integer" }],
+      });
+      formId = body.snapshot.ui.formElicitation?.id ?? "";
+      expect(formId).toMatch(/^ask-agent-mcp-form-/);
+    });
+
+    const response = await fetch(
+      `${harness.helperBase}/api/ask-agent/form-elicitation`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify({
+          id: formId,
+          action: "accept",
+          values: { count: "2" },
+        }),
+      },
+    );
+    expect(response.ok).toBe(true);
+    const send = await sendPromise;
+    const sendBody = (await send.json()) as {
+      snapshot: {
+        ui: { formElicitation: unknown };
+        session: { foreground: { projectedMessages: ChatMessage[] } };
+      };
+    };
+
+    expect(send.ok).toBe(true);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(sendBody.snapshot.ui.formElicitation).toBeNull();
+    expect(
+      sendBody.snapshot.session.foreground.projectedMessages.find(
+        (message) => message.role === "assistant",
+      )?.content,
+    ).toContain("MCP form result received.");
+  });
+
+  it("stops a pending standalone MCP approval without executing the tool", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "must-not-run" }],
+    }));
+    const standaloneMcpRuntime = {
+      prepareTurn: vi.fn(
+        async (request: { sessionId: string; turnId: string }) => ({
+          sessionId: request.sessionId,
+          turnId: request.turnId,
+          tools: [
+            {
+              name: "local__mutate",
+              description: "Mutate the local MCP fixture.",
+              input_schema: { type: "object", properties: {} },
+            },
+          ],
+          parallelSafeToolNames: [],
+          parallelSafeServerNames: [],
+          getApprovalRequirement: (
+            toolName: string,
+            input: Record<string, unknown>,
+          ) =>
+            toolName === "local__mutate"
+              ? { serverName: "local", bareToolName: "mutate", input }
+              : undefined,
+          execute,
+        }),
+      ),
+    } as unknown as StandaloneAskAgentMcpRuntime;
+    const modelClient = makeAskAgentToolLoopClient(async ({ toolMessages }) =>
+      toolMessages?.length
+        ? { text: "Unexpected tool result.", toolCalls: [] }
+        : {
+            text: "Calling standalone MCP.",
+            toolCalls: [
+              {
+                id: "standalone-mcp-cancel",
+                name: "local__mutate",
+                input: {},
+              },
+            ],
+          },
+    );
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      standaloneMcpRuntime,
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const sendPromise = fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Run guarded MCP" }),
+    });
+    await waitForExpectation(async () => {
+      const session = await fetch(
+        `${harness.helperBase}/api/ask-agent/session`,
+        { headers: { Cookie: harness.cookie } },
+      );
+      const body = (await session.json()) as {
+        snapshot: { ui: { approval: { kind?: string } | null } };
+      };
+      expect(body.snapshot.ui.approval?.kind).toBe("mcp");
+    });
+
+    const stop = await fetch(`${harness.helperBase}/api/ask-agent/stop`, {
+      method: "POST",
+      headers: { Cookie: harness.cookie },
+    });
+    const send = await sendPromise;
+    const finalSession = await fetch(
+      `${harness.helperBase}/api/ask-agent/session`,
+      { headers: { Cookie: harness.cookie } },
+    );
+    const finalBody = (await finalSession.json()) as {
+      snapshot: { ui: { approval: unknown } };
+    };
+
+    expect(stop.ok).toBe(true);
+    expect(send.ok).toBe(true);
+    expect(execute).not.toHaveBeenCalled();
+    expect(finalBody.snapshot.ui.approval).toBeNull();
   });
 
   it("routes MCP tool calls through a VS Code-owned main-agent MCP bridge", async () => {

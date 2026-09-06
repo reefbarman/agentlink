@@ -521,10 +521,16 @@ export class SandboxTerminalSession {
   ): void {
     const active = this.current(process);
     if (!active) return;
+    const exitCode =
+      exit.signal !== undefined &&
+      exit.signal > 0 &&
+      (exit.exitCode === undefined || exit.exitCode === 0)
+        ? 128 + exit.signal
+        : exit.exitCode;
     this.syncCommandRecord(active.command);
     active.command.status = "exited";
     active.command.finishedAt = this.now();
-    active.command.exitCode = exit.exitCode;
+    active.command.exitCode = exitCode;
     active.command.signal = exit.signal;
     active.command.timedOut = exit.timedOut;
     active.eventSubscription?.dispose();
@@ -533,7 +539,7 @@ export class SandboxTerminalSession {
       type: "command-exited",
       commandId: active.command.commandId,
       generation: active.command.generation,
-      exit,
+      exit: { ...exit, exitCode },
     });
   }
 

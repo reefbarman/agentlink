@@ -1187,6 +1187,8 @@ export async function buildPromptArtifacts(
     approveForMe?: boolean;
     /** Initial Architect sessions require one explicit human-approved exit. */
     initialArchitectReviewPending?: boolean;
+    /** Compose is advertised for this workspace foreground session. */
+    composeEnabled?: boolean;
     /**
      * Where mode-specific instructions live. "system" (default) inlines them
      * in the system prompt; "conversation" keeps the system prompt
@@ -1268,6 +1270,10 @@ export async function buildPromptArtifacts(
     options?.workspaceFolders,
   );
   const devFeedback = options?.devMode ? getDevFeedbackPrompt() : "";
+  const composeRouting =
+    options?.composeEnabled && !options.isBackground
+      ? `\n\n## Compose Routing\n\nWhen \`compose\` is available, prefer it for a known workflow with roughly 4+ related read-only calls when you can filter, project, join, count, or summarize before returning. Use direct or ordinary parallel calls for one-offs, independent results you need in full, and exploratory work where each result determines the next action. Default to \`toolAllSettled\` for independent reads so one missing file does not cancel useful siblings; reserve fail-fast \`toolAll\` for batches where every result is required. Use paths established by prior evidence, preserve rejected reasons alongside successful summaries, and do not return raw batches. Child shapes differ: \`search_files.results\` is formatted text, not an array; select documented fields rather than guessing a common shape.`
+      : "";
 
   const skillModeSlugs = [
     ...BUILT_IN_MODE_SLUGS,
@@ -1367,6 +1373,7 @@ Approve for Me is enabled for this session: mode switches are normally allowed a
     ),
     measureContextItem("system info", `${systemInfo}${plansSection}`),
     measureContextItem("dev feedback", devFeedback),
+    measureContextItem("compose routing", composeRouting),
     measureContextItem("custom instructions", customSection),
     measureContextItem(
       "rule catalog (deferred)",
@@ -1390,7 +1397,7 @@ Approve for Me is enabled for this session: mode switches are normally allowed a
 ${modePrompt}${approveForMeSection}
 ${providerPrompt}
 ${systemInfo}${plansSection}
-${devFeedback}${customSection}${instructionSections.ruleCatalogSection}${rulesSection}${skillsSection}${mcpToolCatalogSection}${backgroundSection}`.trimEnd();
+${devFeedback}${composeRouting}${customSection}${instructionSections.ruleCatalogSection}${rulesSection}${skillsSection}${mcpToolCatalogSection}${backgroundSection}`.trimEnd();
 
   const promptBreakdown: RequestContextBreakdown["prompt"] =
     buildPromptBreakdown(sections);

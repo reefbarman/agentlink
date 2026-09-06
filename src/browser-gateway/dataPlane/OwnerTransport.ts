@@ -249,6 +249,11 @@ export class HttpBrowserGatewayOwnerTransport implements BrowserGatewayOwnerTran
       "owner_heartbeat",
     );
     if (!response.ok) throw await responseError(response, "owner_heartbeat");
+    // A healthy command stream need not reconnect after a publication failure.
+    // Retry retained recovery state on the existing heartbeat, even if the turn ended.
+    if (this.acceptingPublications && this.publicationError !== undefined) {
+      this.flushQueued();
+    }
   }
 
   publish(
@@ -460,7 +465,9 @@ export class HttpBrowserGatewayOwnerTransport implements BrowserGatewayOwnerTran
     const publication = this.serializePublication(batch, [
       ...queued.details.values(),
     ])
-      .then(() => undefined)
+      .then(() => {
+        if (this.acceptingPublications) this.publicationError = undefined;
+      })
       .catch((error) => {
         failed = true;
         this.publicationError = error;

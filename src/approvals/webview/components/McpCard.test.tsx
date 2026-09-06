@@ -29,6 +29,36 @@ const request: ApprovalRequest = {
 };
 
 describe("McpCard", () => {
+  it("names the OAuth browser action and omits unavailable approval rules", () => {
+    const submit = vi.fn();
+    render(
+      h(McpCard, {
+        request: {
+          ...request,
+          mcpToolName: "OAuth authorization",
+          mcpDetail:
+            "AgentLink will open your system browser to https://example.com",
+          mcpChoices: [
+            { label: "Open browser", value: "allow-once", isPrimary: true },
+            { label: "Deny", value: "deny", isDanger: true },
+          ],
+        },
+        submit,
+        followUpRef: { current: "" },
+      }),
+    );
+    expect(screen.getByText("Connect linear to AgentLink")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /Auto Approval Rules/ }),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open browser" }));
+    expect(submit).toHaveBeenCalledWith({
+      id: request.id,
+      decision: "allow-once",
+      followUp: undefined,
+    });
+  });
+
   it("uses the standard one-time approval layout by default", () => {
     render(
       h(McpCard, {

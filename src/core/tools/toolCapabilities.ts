@@ -126,6 +126,7 @@ const ESSENTIAL_TOOLS = new Set([
   "load_skill",
   "find_native_tools",
   "call_native_tool",
+  "compose",
   ...MCP_BRIDGE_TOOLS,
 ]);
 
@@ -600,7 +601,7 @@ const toolCapabilities = [
     true,
   ),
 
-  // Dev-only tools
+  // Compose and dev-only feedback tools
   metadata(
     "compose",
     "read",
@@ -608,7 +609,6 @@ const toolCapabilities = [
     "read",
     "never",
     false,
-    true,
   ),
   metadata(
     "send_feedback",

@@ -231,6 +231,7 @@ interface InputAreaProps {
   disabledReason?: string;
   /** Prevents provider-bound submits while preserving the editable draft. */
   sendBlockedReason?: string;
+  placeholder?: string;
   submitOnEnter?: boolean;
   contextMode?: ComposerContextMode | null;
   onComposerEvent?: (
@@ -280,6 +281,7 @@ export function InputArea({
   disabled = false,
   disabledReason,
   sendBlockedReason,
+  placeholder,
   submitOnEnter = true,
   contextMode = null,
   onComposerEvent,
@@ -1918,9 +1920,10 @@ export function InputArea({
                   ? (disabledReason ?? "Local execution unavailable")
                   : contextMode
                     ? contextMode.placeholder
-                    : allowFileMentions && allowAttachments
-                      ? "Message... (/ for commands, @ to attach files, : for emoji)"
-                      : "Message... (/ for commands, : for emoji)"
+                    : (placeholder ??
+                      (allowFileMentions && allowAttachments
+                        ? "Message... (/ for commands, @ to attach files, : for emoji)"
+                        : "Message... (/ for commands, : for emoji)"))
               }
               disabled={disabled}
               onInput={handleInput}

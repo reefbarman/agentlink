@@ -41,6 +41,7 @@ function unavailableTerminalOutputResult(params: {
 export async function handleGetTerminalOutput(
   params: {
     terminal_id: string;
+    command_id?: string;
     wait_seconds?: number;
     kill?: boolean;
     output_head?: number;
@@ -58,6 +59,17 @@ export async function handleGetTerminalOutput(
   const log = terminalProvider.log;
   const startTime = Date.now();
   let waitInterrupted = false;
+  const target = {
+    owner: undefined,
+    terminalId: params.terminal_id,
+    ...(params.command_id ? { commandId: params.command_id } : {}),
+  };
+  const getState = () => {
+    const state = terminalProvider.getBackgroundState(target);
+    return !params.command_id || state?.command_id === params.command_id
+      ? state
+      : undefined;
+  };
 
   log?.(
     `[get_terminal_output] ENTER terminal_id=${params.terminal_id} wait_seconds=${params.wait_seconds ?? "none"}`,
@@ -69,10 +81,7 @@ export async function handleGetTerminalOutput(
   // ~250ms, making wait_seconds effectively useless.
   if (params.wait_seconds && params.wait_seconds > 0) {
     const deadline = Date.now() + params.wait_seconds * 1000;
-    const initialState = terminalProvider.getBackgroundState({
-      owner: undefined,
-      terminalId: params.terminal_id,
-    });
+    const initialState = getState();
 
     log?.(
       `[get_terminal_output] POLL_START is_running=${initialState?.is_running ?? "unknown"}`,
@@ -80,10 +89,7 @@ export async function handleGetTerminalOutput(
 
     while (Date.now() < deadline) {
       if (providers.toolAbortSignal?.aborted) break;
-      const current = terminalProvider.getBackgroundState({
-        owner: undefined,
-        terminalId: params.terminal_id,
-      });
+      const current = getState();
       if (!current) break;
 
       // Stop waiting only when the command has finished
@@ -112,20 +118,19 @@ export async function handleGetTerminalOutput(
   // Kill only when the tool is still executing normally. Completing, cancelling,
   // or handing the wait back to the agent aborts this tool call but must not
   // interrupt the command being observed.
-  if (params.kill && !providers.toolAbortSignal?.aborted) {
+  let killed = false;
+  if (
+    params.kill &&
+    !providers.toolAbortSignal?.aborted &&
+    getState()?.is_running
+  ) {
     log?.(`[get_terminal_output] KILL terminal_id=${params.terminal_id}`);
-    terminalProvider.interruptTerminal({
-      owner: undefined,
-      terminalId: params.terminal_id,
-    });
+    killed = terminalProvider.interruptTerminal(target);
     // Brief wait for the process to respond to SIGINT
     await sleep(500);
   }
 
-  let state = terminalProvider.getBackgroundState({
-    owner: undefined,
-    terminalId: params.terminal_id,
-  });
+  let state = getState();
   const recentlyClosed = state
     ? []
     : terminalProvider.getRecentlyClosedTerminals({
@@ -133,11 +138,13 @@ export async function handleGetTerminalOutput(
         limit: 20,
       });
   const closedState = recentlyClosed.find(
-    (terminal) => terminal.id === params.terminal_id,
+    (terminal) =>
+      terminal.id === params.terminal_id &&
+      (!params.command_id || terminal.command_id === params.command_id),
   );
   state ??= closedState;
 
-  if (!state && providers.allowDirectOutputFallback) {
+  if (!state && !params.command_id && providers.allowDirectOutputFallback) {
     const directOutput = terminalProvider.getCurrentOutput?.({
       owner: undefined,
       terminalId: params.terminal_id,
@@ -171,7 +178,10 @@ export async function handleGetTerminalOutput(
         {
           type: "text",
           text: JSON.stringify({
-            error: `Terminal "${params.terminal_id}" not found. It may have been closed.`,
+            error: params.command_id
+              ? `Command "${params.command_id}" is unavailable in terminal "${params.terminal_id}". It may have expired from bounded retention; no other command was selected.`
+              : `Terminal "${params.terminal_id}" not found. It may have been closed.`,
+            ...(params.command_id ? { command_id: params.command_id } : {}),
             ...(recent.length > 0 && { recently_closed_terminals: recent }),
             hint: "Use execute_command with terminal_name for long-running workflows so you can recover by name if terminal_id changes.",
           }),
@@ -180,10 +190,7 @@ export async function handleGetTerminalOutput(
     };
   }
 
-  const retainedOutput = terminalProvider.getRetainedOutput?.({
-    owner: undefined,
-    terminalId: params.terminal_id,
-  });
+  const retainedOutput = terminalProvider.getRetainedOutput?.(target);
   const output = retainedOutput?.output ?? state.output;
   const outputComplete =
     retainedOutput?.complete ?? state.output_complete ?? true;
@@ -191,6 +198,8 @@ export async function handleGetTerminalOutput(
     retainedOutput?.finalized ?? state.output_finalized ?? !state.is_running;
   const result: Record<string, unknown> = {
     terminal_id: params.terminal_id,
+    ...(state.command_id ? { command_id: state.command_id } : {}),
+    ...(state.signal ? { signal: state.signal } : {}),
     is_running: state.is_running,
     state: state.state,
     exit_code: state.exit_code,
@@ -223,7 +232,7 @@ export async function handleGetTerminalOutput(
     ...(state.interactive_prompt
       ? { interactive_prompt: { ...state.interactive_prompt } }
       : {}),
-    ...(params.kill && !providers.toolAbortSignal?.aborted && { killed: true }),
+    ...(params.kill && !providers.toolAbortSignal?.aborted && { killed }),
     ...(waitInterrupted &&
       state.is_running &&
       !params.kill && {

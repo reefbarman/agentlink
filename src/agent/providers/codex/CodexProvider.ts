@@ -11,6 +11,7 @@
 
 import * as crypto from "crypto";
 import { randomUUID } from "crypto";
+import type { AgentPrincipal } from "@agentlink/core/turn-contracts";
 import {
   agentLinkFetch,
   withAgentLinkHttpActivity,
@@ -35,7 +36,7 @@ import {
 } from "./OpenAiCodexAuthManager.js";
 import {
   CODEX_CONDENSE_MODEL,
-  CodexRequestError,
+  CodexCredentialSession,
   CodexResponsesAuthError,
   CodexResponsesStreamAbortedError,
   buildCodexClientCacheKey,
@@ -43,7 +44,6 @@ import {
   buildCodexAuthRequiredError,
   buildCodexContextWindowExceededError,
   buildCodexEndpointRequestBody,
-  buildCodexUsageLimitExhaustedError,
   createCodexRequestError,
   createOpenAiResponsesClient,
   executeCodexResponsesStream,
@@ -67,6 +67,7 @@ import {
   toCodexRequestError,
   translateCodexMessages,
   translateCodexTools,
+  type CodexCredentialProvider,
   type CodexErrorShape,
   type CodexRequestBody,
 } from "@agentlink/core/codex";
@@ -78,13 +79,15 @@ import {
 import type { CoreWebAccessSettings } from "@agentlink/protocol/web-access-policy";
 import type { CoreWebToolKind } from "@agentlink/protocol/web-activity";
 
-/**
- * Absolute per-request ceiling on OAuth refresh retries. The per-account dedup
- * set normally bounds refreshes to one per account, but it is keyed on
- * oauthAccountPoolId — if that id is ever absent, a persistent 401 would
- * otherwise refresh-and-retry forever with no backoff.
- */
-const MAX_OAUTH_REFRESH_ATTEMPTS = 3;
+interface CodexProviderCredentialContext {
+  principal: AgentPrincipal;
+  authContext: unknown;
+}
+
+const EXTENSION_CODEX_PRINCIPAL: AgentPrincipal = {
+  tenantId: "agentlink-vscode",
+  subjectId: "local-user",
+};
 
 // ── Provider ──
 
@@ -94,6 +97,7 @@ export class CodexProvider implements ModelProvider {
   readonly condenseModel = CODEX_CONDENSE_MODEL;
 
   private authManager: OpenAiCodexAuthManager;
+  private credentialProvider: CodexCredentialProvider<CodexProviderCredentialContext>;
   private sessionId: string;
   private log: (msg: string) => void;
   private clients = new Map<string, OpenAI>();
@@ -118,6 +122,32 @@ export class CodexProvider implements ModelProvider {
     },
   ) {
     this.authManager = authManager ?? openAiCodexAuthManager;
+    this.credentialProvider =
+      typeof this.authManager.createCredentialProvider === "function"
+        ? this.authManager.createCredentialProvider()
+        : {
+            resolveAuth: async () => await this.authManager.resolveModelAuth(),
+            refreshAuth: async ({ previousAuth }) =>
+              await this.authManager.forceRefreshModelAuth(
+                previousAuth.method,
+                {
+                  oauthAccountPoolId: previousAuth.oauthAccountPoolId,
+                },
+              ),
+            oauthAccounts: {
+              markUsageLimit: async ({ accountId }) =>
+                await this.authManager.markOAuthUsageLimit(accountId),
+              listFallbackAccountIds: async ({ accountId }) =>
+                await this.authManager.getOAuthRoundRobinAccountIds(accountId),
+              resolveAccount: async ({ accountId }) =>
+                await this.authManager.resolveModelAuthForOAuthAccount(
+                  accountId,
+                ),
+              activateAccount: async ({ accountId }) => {
+                await this.authManager.setActiveOAuthAccount(accountId);
+              },
+            },
+          };
     this.sessionId = randomUUID();
     this.log = log ?? (() => {});
     this.getTextVerbositySetting =
@@ -260,42 +290,21 @@ export class CodexProvider implements ModelProvider {
     return client;
   }
 
-  private async rotateOAuthAuth(
-    attemptedOAuthAccountIds: Set<string>,
-    currentAuth: OpenAiCodexResolvedAuth,
-  ): Promise<OpenAiCodexResolvedAuth | null> {
-    if (currentAuth.method !== "oauth") return null;
-    const currentAccountId = currentAuth.oauthAccountPoolId;
-    if (!currentAccountId) return null;
-
-    const ordered =
-      await this.authManager.getOAuthRoundRobinAccountIds(currentAccountId);
-    for (const accountId of ordered) {
-      if (attemptedOAuthAccountIds.has(accountId)) continue;
-      const auth =
-        await this.authManager.resolveModelAuthForOAuthAccount(accountId);
-      if (!auth || auth.method !== "oauth") continue;
-      attemptedOAuthAccountIds.add(accountId);
-      await this.authManager.setActiveOAuthAccount(accountId);
-      this.log(
-        `[codex] Rotated OAuth account: ${currentAuth.oauthAccountLabel ?? currentAccountId} -> ${auth.oauthAccountLabel ?? accountId}`,
-      );
-      return auth;
-    }
-
-    return null;
-  }
-
-  private buildUsageLimitExhaustedError(
-    attemptedOAuthAccountIds: Set<string>,
-    sourceError: Error & CodexErrorShape,
-  ): CodexRequestError {
-    return createCodexRequestError(
-      buildCodexUsageLimitExhaustedError({
-        attemptedOAuthAccountIds,
-        sourceError,
-      }),
-    );
+  private createCredentialSession(
+    modelId: string,
+    purpose: "stream" | "complete",
+  ): Promise<CodexCredentialSession<CodexProviderCredentialContext>> {
+    return CodexCredentialSession.create({
+      provider: this.credentialProvider,
+      request: {
+        context: {
+          principal: EXTENSION_CODEX_PRINCIPAL,
+          authContext: undefined,
+        },
+        modelId,
+        purpose,
+      },
+    });
   }
 
   async *stream(request: StreamRequest): AsyncGenerator<ProviderStreamEvent> {
@@ -315,6 +324,7 @@ export class CodexProvider implements ModelProvider {
       onTransportActivity,
     } = request;
 
+    const routingHint = request.providerHints?.codex;
     const codexInput = translateCodexMessages(messages, {
       useProviderReplay: !state?.previousResponseId,
     });
@@ -331,7 +341,12 @@ export class CodexProvider implements ModelProvider {
       );
     }
 
-    let auth = await this.getModelAuthOrThrow();
+    const credentialSession = await this.createCredentialSession(
+      model,
+      "stream",
+    );
+    let auth = credentialSession.auth;
+    this.lastResolvedAuthMethod = auth.method;
     let effectiveModel = this.resolveEffectiveModel(model, auth, "stream()");
     let reasoningEffort = resolveCodexReasoningEffort({
       modelId: effectiveModel,
@@ -346,13 +361,7 @@ export class CodexProvider implements ModelProvider {
       textVerbositySetting,
     );
 
-    const attemptedOAuthAccountIds = new Set<string>();
-    const refreshedOAuthAccountIds = new Set<string>();
-    let oauthRefreshAttempts = 0;
     let unavailableModelFallbackAttempted = false;
-    if (auth.method === "oauth" && auth.oauthAccountPoolId) {
-      attemptedOAuthAccountIds.add(auth.oauthAccountPoolId);
-    }
 
     while (true) {
       const streamState = { outputStarted: false };
@@ -382,7 +391,6 @@ export class CodexProvider implements ModelProvider {
           );
         }
 
-        onProviderRequestAttempt?.({ model: effectiveModel });
         const result = await this.executeStream(
           requestBody,
           auth,
@@ -390,6 +398,8 @@ export class CodexProvider implements ModelProvider {
           signal,
           streamState,
           onTransportActivity,
+          routingHint,
+          onProviderRequestAttempt,
         );
         yield* result;
         return;
@@ -450,51 +460,29 @@ export class CodexProvider implements ModelProvider {
         const action = getCodexErrorHandlingAction({ auth, error: sdkErr });
 
         if (action === "refresh_oauth_auth") {
-          const refreshAccountId = auth.oauthAccountPoolId;
-          if (
-            (refreshAccountId &&
-              refreshedOAuthAccountIds.has(refreshAccountId)) ||
-            oauthRefreshAttempts >= MAX_OAUTH_REFRESH_ATTEMPTS
-          ) {
-            this.log(
-              `[codex] OAuth auth failure persists after refresh for account ${auth.oauthAccountLabel ?? refreshAccountId ?? "unknown"}`,
-            );
-          } else {
-            oauthRefreshAttempts += 1;
-            const refreshed = await this.authManager.forceRefreshModelAuth(
-              "oauth",
-              {
-                oauthAccountPoolId: refreshAccountId,
-              },
-            );
-            if (refreshAccountId) {
-              refreshedOAuthAccountIds.add(refreshAccountId);
-            }
-            if (refreshed) {
-              this.log("[codex] Auth failure, refreshed active OAuth account");
-              auth = refreshed;
-              continue;
-            }
+          if (await credentialSession.refreshOAuth()) {
+            this.log("[codex] Auth failure, refreshed active OAuth account");
+            auth = credentialSession.auth;
+            continue;
           }
+          this.log(
+            `[codex] OAuth auth failure persists after refresh for account ${auth.oauthAccountLabel ?? auth.oauthAccountPoolId ?? "unknown"}`,
+          );
         }
 
         if (action === "handle_oauth_usage_limit" && auth.oauthAccountPoolId) {
-          await this.authManager.markOAuthUsageLimit(auth.oauthAccountPoolId);
-          if (!streamState.outputStarted) {
-            const nextAuth = await this.rotateOAuthAuth(
-              attemptedOAuthAccountIds,
-              auth,
+          const rotation = await credentialSession.handleOAuthUsageLimit({
+            allowRotation: !streamState.outputStarted,
+          });
+          if (rotation.rotated) {
+            auth = credentialSession.auth;
+            this.log(
+              `[codex] Rotated OAuth account: ${rotation.previousAuth?.oauthAccountLabel ?? rotation.previousAuth?.oauthAccountPoolId ?? "unknown"} -> ${auth.oauthAccountLabel ?? auth.oauthAccountPoolId ?? "unknown"}`,
             );
-            if (nextAuth) {
-              auth = nextAuth;
-              continue;
-            }
+            continue;
           }
 
-          throw this.buildUsageLimitExhaustedError(
-            attemptedOAuthAccountIds,
-            sdkErr,
-          );
+          throw credentialSession.buildUsageLimitExhaustedError(sdkErr);
         }
 
         if (action === "throw_context_window_exceeded") {
@@ -531,7 +519,12 @@ export class CodexProvider implements ModelProvider {
       useProviderReplay: !state?.previousResponseId,
     });
 
-    let auth = await this.getModelAuthOrThrow();
+    const credentialSession = await this.createCredentialSession(
+      model,
+      "complete",
+    );
+    let auth = credentialSession.auth;
+    this.lastResolvedAuthMethod = auth.method;
     let effectiveModel = this.resolveEffectiveModel(model, auth, "complete()");
     let reasoningEffort = resolveCodexReasoningEffort({
       modelId: effectiveModel,
@@ -539,13 +532,7 @@ export class CodexProvider implements ModelProvider {
       requestedEffort,
     });
 
-    const attemptedOAuthAccountIds = new Set<string>();
-    const refreshedOAuthAccountIds = new Set<string>();
-    let oauthRefreshAttempts = 0;
     let unavailableModelFallbackAttempted = false;
-    if (auth.method === "oauth" && auth.oauthAccountPoolId) {
-      attemptedOAuthAccountIds.add(auth.oauthAccountPoolId);
-    }
 
     while (true) {
       const requestBody = buildCodexEndpointRequestBody({
@@ -573,9 +560,17 @@ export class CodexProvider implements ModelProvider {
       let text = "";
 
       try {
-        onProviderRequestAttempt?.({ model: effectiveModel });
         const result = await collectCoreModelCompleteResult(
-          await this.executeStream(requestBody, auth, effectiveModel, signal),
+          await this.executeStream(
+            requestBody,
+            auth,
+            effectiveModel,
+            signal,
+            undefined,
+            request.onTransportActivity,
+            request.providerHints?.codex,
+            onProviderRequestAttempt,
+          ),
         );
         text = result.text;
         return result;
@@ -607,55 +602,33 @@ export class CodexProvider implements ModelProvider {
         const action = getCodexErrorHandlingAction({ auth, error: sdkErr });
 
         if (action === "refresh_oauth_auth") {
-          const refreshAccountId = auth.oauthAccountPoolId;
-          if (
-            (refreshAccountId &&
-              refreshedOAuthAccountIds.has(refreshAccountId)) ||
-            oauthRefreshAttempts >= MAX_OAUTH_REFRESH_ATTEMPTS
-          ) {
-            this.log(
-              `[codex] complete() OAuth auth failure persists after refresh for account ${auth.oauthAccountLabel ?? refreshAccountId ?? "unknown"}`,
-            );
-          } else {
-            oauthRefreshAttempts += 1;
-            const refreshed = await this.authManager.forceRefreshModelAuth(
-              "oauth",
-              {
-                oauthAccountPoolId: refreshAccountId,
-              },
-            );
-            if (refreshAccountId) {
-              refreshedOAuthAccountIds.add(refreshAccountId);
-            }
-            if (refreshed) {
-              this.log(
-                "[codex] complete() auth failure, refreshed OAuth token",
-              );
-              auth = refreshed;
-              continue;
-            }
+          if (await credentialSession.refreshOAuth()) {
+            this.log("[codex] complete() auth failure, refreshed OAuth token");
+            auth = credentialSession.auth;
+            continue;
           }
+          this.log(
+            `[codex] complete() OAuth auth failure persists after refresh for account ${auth.oauthAccountLabel ?? auth.oauthAccountPoolId ?? "unknown"}`,
+          );
         }
 
         if (action === "handle_oauth_usage_limit" && auth.oauthAccountPoolId) {
-          await this.authManager.markOAuthUsageLimit(auth.oauthAccountPoolId);
-          const nextAuth = await this.rotateOAuthAuth(
-            attemptedOAuthAccountIds,
-            auth,
-          );
-          if (nextAuth) {
+          const rotation = await credentialSession.handleOAuthUsageLimit({
+            allowRotation: true,
+          });
+          if (rotation.rotated) {
             if (text.length > 0) {
               this.log(
                 "[codex] complete() encountered usage-limit 429 after partial output; retrying with next OAuth account and discarding partial text",
               );
             }
-            auth = nextAuth;
+            auth = credentialSession.auth;
+            this.log(
+              `[codex] Rotated OAuth account: ${rotation.previousAuth?.oauthAccountLabel ?? rotation.previousAuth?.oauthAccountPoolId ?? "unknown"} -> ${auth.oauthAccountLabel ?? auth.oauthAccountPoolId ?? "unknown"}`,
+            );
             continue;
           }
-          throw this.buildUsageLimitExhaustedError(
-            attemptedOAuthAccountIds,
-            sdkErr,
-          );
+          throw credentialSession.buildUsageLimitExhaustedError(sdkErr);
         }
 
         if (action === "throw_context_window_exceeded") {
@@ -705,13 +678,29 @@ export class CodexProvider implements ModelProvider {
     signal?: AbortSignal,
     streamState?: { outputStarted: boolean },
     onTransportActivity?: StreamRequest["onTransportActivity"],
+    routingHint?: NonNullable<StreamRequest["providerHints"]>["codex"],
+    onProviderRequestAttempt?: StreamRequest["onProviderRequestAttempt"],
   ): Promise<AsyncGenerator<ProviderStreamEvent>> {
     try {
       const stream = executeCodexResponsesStream({
         client: this.getClient(auth),
         body: requestBody,
         authMethod: auth.method,
+        routing:
+          routingHint?.sessionId && routingHint.turnState
+            ? {
+                sessionId: routingHint.sessionId,
+                authIdentity: JSON.stringify([
+                  auth.method,
+                  auth.accountId,
+                  auth.oauthAccountPoolId,
+                  auth.bearerToken,
+                ]),
+                turnState: routingHint.turnState,
+              }
+            : undefined,
         signal,
+        onProviderRequestAttempt,
         parserState: streamState,
         parserOptions: { createThinkingId: randomUUID },
         onTransportActivity,

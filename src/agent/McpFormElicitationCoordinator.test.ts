@@ -38,6 +38,7 @@ describe("McpFormElicitationCoordinator", () => {
     const secondResolve = vi.fn();
     const firstCancel = vi.fn();
     const secondCancel = vi.fn();
+    const secondDecline = vi.fn();
 
     coordinator.enqueue(input, {
       sessionId: "session-1",
@@ -50,6 +51,7 @@ describe("McpFormElicitationCoordinator", () => {
         sessionId: "session-2",
         resolve: secondResolve,
         cancel: secondCancel,
+        decline: secondDecline,
       },
     );
 
@@ -72,10 +74,11 @@ describe("McpFormElicitationCoordinator", () => {
       expect.objectContaining({ id: "request-2", message: "Second" }),
     );
 
-    expect(coordinator.submit({ id: "request-2", action: "cancel" })).toEqual({
+    expect(coordinator.submit({ id: "request-2", action: "decline" })).toEqual({
       ok: true,
     });
-    expect(secondCancel).toHaveBeenCalledOnce();
+    expect(secondDecline).toHaveBeenCalledOnce();
+    expect(secondCancel).not.toHaveBeenCalled();
     expect(secondResolve).not.toHaveBeenCalled();
   });
 
@@ -106,6 +109,32 @@ describe("McpFormElicitationCoordinator", () => {
     expect(coordinator.getActiveRequest()?.id).toBe("request-1");
     expect(publishCleared).not.toHaveBeenCalled();
     expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("cancels only the matching request", () => {
+    const { coordinator, publishRequest, publishCleared } = createCoordinator();
+    const firstCancel = vi.fn();
+    const secondCancel = vi.fn();
+    coordinator.enqueue(input, {
+      sessionId: "session-1",
+      resolve: vi.fn(),
+      cancel: firstCancel,
+    });
+    coordinator.enqueue(input, {
+      sessionId: "session-1",
+      resolve: vi.fn(),
+      cancel: secondCancel,
+    });
+
+    expect(coordinator.cancelRequest("request-2")).toBe(true);
+    expect(secondCancel).toHaveBeenCalledOnce();
+    expect(firstCancel).not.toHaveBeenCalled();
+    expect(coordinator.cancelRequest("unknown")).toBe(false);
+
+    expect(coordinator.cancelRequest("request-1")).toBe(true);
+    expect(firstCancel).toHaveBeenCalledOnce();
+    expect(publishCleared).toHaveBeenCalledWith("session-1", "request-1");
+    expect(publishRequest).toHaveBeenCalledTimes(1);
   });
 
   it("cancels only matching active and queued session prompts", () => {

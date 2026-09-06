@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Upgrades the OpenAI SDK to 7.10.0; its Node 22 minimum is compatible with the existing Node 22.19+ runtime requirement. Existing Codex streaming and cache-routing contracts remain unchanged.
+
+- Supports Codex OAuth prompt cache keys and optional runtime-only `CodexTurnState` routing in the shared stream/completion helpers. Hosts allocate a fresh holder per logical turn, bind conversation and private auth identity, and never persist it. The transport captures/echoes the first valid turn-state header and retries explicit pre-stream routing-field rejection once without the optimization.
+
 - Adds runtime, session, and turn reasoning-effort selection with deterministic `turn > session > runtime` precedence and explicit `"none"` disabling.
 - Fails closed when an OpenAI-compatible reasoning effort cannot be represented by the selected model or configured wire mode.
 - Adds an explicit durable/ephemeral transcript policy. Ephemeral mode keeps ordinary chat in a host-supplied transcript store while durable session records remain transcript-free.
@@ -18,7 +22,7 @@
 - Makes embedded Web response-body cancellation settle blocked generators, restores hydrated pending-approval tool blocks, and adds parsed request/session policy data plus configurable message/session validation.
 - Adds restart-stable local file-backed turn leases with durable monotonic fencing that advances beyond persisted session fences.
 - Completes full E8 packed acceptance with the exact Node-host/core/protocol set and a principal-bound, per-request-authorized remote MCP tool through the core turn loop.
-- Extends the shared Codex E2 slice at `@agentlink/core/codex`: model catalog/capabilities, OAuth remapping and migrations, reasoning/text-verbosity policy, Responses API request/message/hosted-tool translation, response-stream parsing and execution, provider replay/citations/usage projection, completion collection, normalized errors, client identity, endpoint/header/cache policy, and host-injected OpenAI client construction now have package-owned ESM/CommonJS output while existing extension behavior remains behind guarded compatibility facades.
+- Extends the shared Codex E2 slice at `@agentlink/core/codex`: model catalog/capabilities, OAuth remapping and migrations, reasoning/text-verbosity policy, Responses API request/message/hosted-tool translation, response-stream parsing and execution, provider replay/citations/usage projection, completion collection, normalized errors, client identity, endpoint/header/cache policy, host-injected OpenAI client construction, and request-scoped credential refresh/account fallback now have package-owned ESM/CommonJS output while existing extension behavior remains behind guarded compatibility facades.
 
 ## 0.1.0 — 2026-09-02
 

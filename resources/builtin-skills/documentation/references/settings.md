@@ -12,6 +12,7 @@ All settings live under the `agentlink.*` namespace and are set in VS Code Setti
 - `agentMaxTokens` — max output tokens per response
 - `thinkingBudget`, `showThinking` — extended-thinking budget and UI visibility
 - `defaultMode` — mode for new sessions
+- `compose.enabled` — machine-scoped, default-on foreground Compose tool. Eligible workspace foreground sessions receive it inline, without tool discovery, to reduce known 4+ read-only fan-outs inside one bounded tool call. Set `false` to opt out; reload affected windows after changing the setting. Background agents, `/btw`, ACP, worktree setup, and projectless sessions remain excluded. Set `AGENTLINK_DISABLE_COMPOSE=1` before startup for force-disable recovery.
 
 - `provider.maxConcurrentRequests` — cap on simultaneous model requests per provider; queued foreground requests take priority over background and maintenance work
 

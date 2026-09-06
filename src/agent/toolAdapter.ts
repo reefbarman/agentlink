@@ -18,6 +18,7 @@ import type { BackgroundAgentStatusResult } from "../core/capabilities/backgroun
 import {
   COMPOSABLE_TOOLS,
   PARALLEL_SAFE_TOOLS,
+  renderComposableToolConstraints,
 } from "../core/tools/toolCapabilities.js";
 import {
   discoverNativeTools,
@@ -1205,6 +1206,7 @@ export function getAgentTools(
   allMcpToolDefsForSkillAllowlist?: ToolDefinition[],
   backgroundExpectedResult?: ExpectedBackgroundResult,
   nativeWebToolKinds: readonly import("../core/webAccess.js").CoreWebToolKind[] = [],
+  composeEnabled = false,
 ): ToolDefinition[] {
   const mcpToolNames = (mcpToolDefs ?? []).map((t) => t.name);
   const allowed = mode ? getToolsForMode(mode, mcpToolNames) : null;
@@ -1230,7 +1232,11 @@ export function getAgentTools(
       ([name]) =>
         !BENCHMARK_LANGUAGE_TOOLS.has(name) || benchmarkLanguageToolsEnabled,
     )
-    .filter(([name]) => !(isBackground && name === "compose"))
+    .filter(
+      ([name]) =>
+        name !== "compose" ||
+        (composeEnabled === true && !isBackground && toolProfile === undefined),
+    )
     .filter(
       ([name]) =>
         (name !== "web_search" || nativeWebToolKinds.includes("search")) &&
@@ -1263,13 +1269,15 @@ export function getAgentTools(
   const composableChildNames = nativeToolEntries
     .map(([name]) => name)
     .filter((name) => COMPOSABLE_TOOLS.has(name));
+  const composableConstraints =
+    renderComposableToolConstraints(composableChildNames);
   const nativeTools = nativeToolEntries.map(([name, zodSchema]) => ({
     name,
     description:
       name === "execute_command" && usesReadOnlyCommand
         ? "Run a recognized read-only command synchronously inside the workspace. Unknown, mutating, redirected, networked, privileged, opaque, background, timed, environment-bearing, forced, and inline-file commands are rejected. AgentLink disables interactive pagers; do not add routine `--no-pager`. Use `rg --no-config <pattern> [path ...]`. Place Git helper guards after the subcommand: `git diff --no-ext-diff --no-textconv ...`, `git show --no-ext-diff --no-textconv ...`, `git log --no-ext-diff --no-textconv ...`, and `git blame --no-textconv ...`. Plain commands such as `git status` and `git grep` need none of these flags."
         : name === "compose"
-          ? `${TOOL_REGISTRY.compose.description} Composable children in this advertised tool union: ${composableChildNames.join(", ") || "none"}. list_files is composable only without query; search_files is composable only with semantic omitted or false.`
+          ? `${TOOL_REGISTRY.compose.description} Current children and constraints: ${composableConstraints || "none"}.`
           : (TOOL_REGISTRY[name]?.description ?? name),
     input_schema:
       name === "execute_command" && usesReadOnlyCommand
@@ -2371,6 +2379,7 @@ export function createAgentToolRuntime(
         request.allMcpToolDefsForSkillAllowlist,
         request.backgroundExpectedResult,
         request.nativeWebToolKinds ?? ctx.nativeWebToolKinds,
+        request.composeEnabled === true,
       );
     },
     resolveToolCall(request) {
@@ -2395,6 +2404,28 @@ export function createAgentToolRuntime(
       const providerToolName = request.context.providerToolName ?? request.name;
       try {
         if (resolved.resolutionError) return resolved.resolutionError;
+        if (
+          request.name === "compose" &&
+          request.context.composeEnabled !== true
+        ) {
+          ctx.toolUsageTelemetry?.recordCompose({
+            source: "agent",
+            mode: request.context.mode,
+            projectId: ctx.projectScope?.projectId,
+            outcome: "rejected",
+            durationMs: Date.now() - startedAt,
+            childCount: 0,
+            errorKind: "policy",
+            errorCode: "tool_not_available",
+          });
+          return errorResult(
+            "Tool 'compose' was not enabled for this provider request",
+            {
+              status: "tool_not_available",
+              tool: "compose",
+            },
+          );
+        }
         const hookRuntime = request.context.hookRuntime ?? ctx.hookRuntime;
         const hookTurnId = request.context.hookTurnId ?? ctx.hookTurnId ?? "";
         let preHookContext: readonly string[] = [];
@@ -2511,27 +2542,25 @@ export function createAgentToolRuntime(
           request.name === "find_native_tools"
             ? executeNativeToolDiscovery(request)
             : request.name === "compose"
-              ? IS_DEV_BUILD
-                ? await (
-                    await loadComposeRuntime(ctx.extensionUri.fsPath)
-                  ).handleCompose({
-                    params: request.input as unknown as ComposeParams,
-                    scope: createComposeExecutionScope({
-                      runtime: this,
-                      parentContext: request.context,
-                    }),
-                    signal:
-                      request.context.toolAbortSignal ??
-                      new AbortController().signal,
-                    retainArtifact: request.context.retainToolResultArtifact,
-                    wasmPath: path.join(
-                      ctx.extensionUri.fsPath,
-                      "dist",
-                      "wasm",
-                      "quickjs-release-asyncify.wasm",
-                    ),
-                  })
-                : errorResult("Tool 'compose' is available only in dev builds")
+              ? await (
+                  await loadComposeRuntime(ctx.extensionUri.fsPath)
+                ).handleCompose({
+                  params: request.input as unknown as ComposeParams,
+                  scope: createComposeExecutionScope({
+                    runtime: this,
+                    parentContext: request.context,
+                  }),
+                  signal:
+                    request.context.toolAbortSignal ??
+                    new AbortController().signal,
+                  retainArtifact: request.context.retainToolResultArtifact,
+                  wasmPath: path.join(
+                    ctx.extensionUri.fsPath,
+                    "dist",
+                    "wasm",
+                    "quickjs-release-asyncify.wasm",
+                  ),
+                })
               : await dispatchToolCall(request.name, request.input, {
                   ...ctx,
                   sessionId: request.context.sessionId,
@@ -2612,44 +2641,46 @@ export function createAgentToolRuntime(
           request.name === "write_file" || request.name === "apply_diff"
             ? getWriteToolUsageMetrics(result)
             : undefined;
-        ctx.toolUsageTelemetry?.record({
-          toolName: request.name,
-          params:
-            request.name === "compose"
-              ? {
-                  descriptionProvided:
-                    typeof request.input.description === "string",
-                }
-              : request.input,
-          source: "agent",
-          mode: request.context.mode,
-          projectId: ctx.projectScope?.projectId,
-          outcome: getToolUsageOutcomeFromResult(result),
-          durationMs: Date.now() - startedAt,
-          ...(composeTrace
-            ? {
-                metrics: {
-                  childCount: composeTrace.totalChildren,
-                  completedChildCount: composeTrace.completedChildren,
-                  succeededChildCount: composeTrace.succeededChildren ?? 0,
-                  failedChildCount: composeTrace.failedChildren ?? 0,
-                  cancelledChildCount: composeTrace.cancelledChildren ?? 0,
-                  toolAllBatchCount: composeTrace.toolAllBatchCount ?? 0,
-                  toolAllSettledBatchCount:
-                    composeTrace.toolAllSettledBatchCount ?? 0,
-                  bridgedBytes: composeTrace.bridgedBytes ?? 0,
-                  ...(composeTrace.errorKind
-                    ? { errorKind: composeTrace.errorKind }
-                    : {}),
-                  cancelled: composeTrace.status === "cancelled",
-                },
-              }
-            : executeCommandMetrics && Object.keys(executeCommandMetrics).length
+        if (request.name === "compose" && composeTrace) {
+          ctx.toolUsageTelemetry?.recordCompose({
+            source: "agent",
+            mode: request.context.mode,
+            projectId: ctx.projectScope?.projectId,
+            outcome: getToolUsageOutcomeFromResult(result),
+            durationMs: Date.now() - startedAt,
+            childCount: composeTrace.totalChildren,
+            completedChildCount: composeTrace.completedChildren,
+            succeededChildCount: composeTrace.succeededChildren ?? 0,
+            failedChildCount: composeTrace.failedChildren ?? 0,
+            cancelledChildCount: composeTrace.cancelledChildren ?? 0,
+            toolAllBatchCount: composeTrace.toolAllBatchCount ?? 0,
+            toolAllSettledBatchCount:
+              composeTrace.toolAllSettledBatchCount ?? 0,
+            bridgedBytes: composeTrace.bridgedBytes ?? 0,
+            runtimeReturnedBytes: composeTrace.runtimeReturnedBytes ?? 0,
+            errorKind: composeTrace.errorKind,
+            errorCode: composeTrace.errorCode,
+            queueWaitBucket: composeTrace.queueWaitBucket,
+            artifactRetention: composeTrace.artifactRetention,
+            outputSpilled: composeTrace.outputSpilled,
+          });
+        } else {
+          ctx.toolUsageTelemetry?.record({
+            toolName: request.name,
+            params: request.name === "compose" ? {} : request.input,
+            source: "agent",
+            mode: request.context.mode,
+            projectId: ctx.projectScope?.projectId,
+            outcome: getToolUsageOutcomeFromResult(result),
+            durationMs: Date.now() - startedAt,
+            ...(executeCommandMetrics &&
+            Object.keys(executeCommandMetrics).length
               ? { metrics: executeCommandMetrics }
               : writeToolMetrics && Object.keys(writeToolMetrics).length
                 ? { metrics: writeToolMetrics }
                 : {}),
-        });
+          });
+        }
         return result;
       } catch (err) {
         ctx.toolUsageTelemetry?.record({

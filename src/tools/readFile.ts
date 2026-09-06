@@ -473,6 +473,37 @@ export async function buildReadFileError(
 
 // --- Main handler ---
 
+/**
+ * Add canonical data/error fields only when read_file returned one JSON text
+ * block. Media remains byte-for-byte and field-for-field unchanged.
+ */
+export function canonicalizeReadFileResult(result: ToolResult): ToolResult {
+  if (result.content.length !== 1 || result.content[0]?.type !== "text") {
+    return result;
+  }
+  const text = result.content[0].text;
+  let data: unknown;
+  try {
+    data = JSON.parse(text) as unknown;
+  } catch {
+    return result;
+  }
+  const errorMessage =
+    data &&
+    typeof data === "object" &&
+    typeof (data as Record<string, unknown>).error === "string"
+      ? ((data as Record<string, unknown>).error as string)
+      : undefined;
+  return {
+    ...result,
+    data,
+    isError: errorMessage !== undefined,
+    ...(errorMessage
+      ? { error: result.error ?? { kind: "tool_error", message: errorMessage } }
+      : {}),
+  };
+}
+
 // unpdf's bundled PDF.js runs a startup polyfill that does
 // `globalThis.navigator ??= {}` (then sets `.platform` / `.userAgent`). In some
 // hosts (e.g. VS Code's Electron Node runtime, Node 21+) `globalThis.navigator`
@@ -687,7 +718,7 @@ function isAdvertisedSkillAssociatedFile(
   });
 }
 
-export async function handleReadFile(
+async function handleReadFileImpl(
   params: ReadFileParams,
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
@@ -1152,4 +1183,30 @@ export async function handleReadFile(
       release();
     }
   }
+}
+
+export async function handleReadFile(
+  params: ReadFileParams,
+  approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
+  sessionId: string,
+  advertisedSkills: AdvertisedSkillFileAccess[] = [],
+  enrichmentProvider = createLegacyReadFileEnrichmentProvider(),
+  signal?: AbortSignal,
+  guardian?: GuardianOutsideReadOptions,
+  semanticQueryOptions: SemanticQueryOptions = {},
+): Promise<ToolResult> {
+  return canonicalizeReadFileResult(
+    await handleReadFileImpl(
+      params,
+      approvalManager,
+      approvalPanel,
+      sessionId,
+      advertisedSkills,
+      enrichmentProvider,
+      signal,
+      guardian,
+      semanticQueryOptions,
+    ),
+  );
 }

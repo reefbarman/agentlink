@@ -338,7 +338,7 @@
   "dependencies": {
     "@agentlink/protocol": "0.1.0",
     "ajv": "8.18.0",
-    "openai": "6.46.0"
+    "openai": "7.10.0"
   },
   "peerDependencies": {
     "zod": "^4.0.0"

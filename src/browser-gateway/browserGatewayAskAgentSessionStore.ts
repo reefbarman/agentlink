@@ -38,6 +38,7 @@ import type { BrowserGatewayModelCredentialStatus } from "./browserGatewayModelC
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import type { CoreModelMessage } from "@agentlink/core/model-runtime";
 import type { FinalMessageMarker } from "@agentlink/protocol/final-status";
+import type { McpFormElicitationRequest } from "@agentlink/protocol/mcp-elicitation";
 import type { MemoryCandidateKind } from "../shared/memoryCandidates.js";
 import type { SessionImageReference } from "../core/tools/types.js";
 import type { ChatSessionHistorySummary as SessionSummary } from "@agentlink/protocol/chat-session-history";
@@ -152,7 +153,7 @@ export interface BrowserGatewayAskAgentSnapshot {
     approval: ApprovalRequest | null;
     question: QuestionRequest | null;
     questionProgress: BrowserGatewayAskAgentQuestionProgress | null;
-    formElicitation: null;
+    formElicitation: McpFormElicitationRequest | null;
     urlElicitation: null;
     recentEvents: [];
     mcpStatusInfos: [];
@@ -346,6 +347,7 @@ export class BrowserGatewayAskAgentSessionStore {
   private questionRequest: QuestionRequest | null = null;
   private questionProgress: BrowserGatewayAskAgentQuestionProgress | null =
     null;
+  private formElicitation: McpFormElicitationRequest | null = null;
   private todos: TodoItem[] = [];
   private projectHandoff: BrowserGatewayAskAgentProjectHandoff | null = null;
   private readGrants: BrowserGatewayAskAgentReadGrant[] = [];
@@ -868,6 +870,14 @@ export class BrowserGatewayAskAgentSessionStore {
     }
   }
 
+  getFormElicitation(): McpFormElicitationRequest | null {
+    return this.formElicitation ? structuredClone(this.formElicitation) : null;
+  }
+
+  setFormElicitation(request: McpFormElicitationRequest | null): void {
+    this.formElicitation = request ? structuredClone(request) : null;
+  }
+
   setQuestionProgress(
     progress: BrowserGatewayAskAgentQuestionProgress,
   ): boolean {
@@ -1049,6 +1059,7 @@ export class BrowserGatewayAskAgentSessionStore {
   private clearEphemeralUiState(): void {
     this.questionRequest = null;
     this.questionProgress = null;
+    this.formElicitation = null;
     this.todos = [];
     this.projectHandoff = null;
   }
@@ -1381,7 +1392,9 @@ export class BrowserGatewayAskAgentSessionStore {
           approval,
           question: this.questionRequest,
           questionProgress: this.questionProgress,
-          formElicitation: null,
+          formElicitation: this.formElicitation
+            ? structuredClone(this.formElicitation)
+            : null,
           urlElicitation: null,
           recentEvents: [],
           mcpStatusInfos: [],

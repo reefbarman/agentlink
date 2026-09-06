@@ -7,7 +7,6 @@
 import * as crypto from "crypto";
 import * as http from "http";
 
-import type { ExtensionContext } from "vscode";
 import { URL } from "url";
 import { getCodexOriginator } from "@agentlink/core/codex";
 import { randomUUID } from "crypto";
@@ -23,7 +22,7 @@ const OAUTH_CONFIG = {
   callbackPort: 1455,
 } as const;
 
-const CREDENTIALS_STORAGE_KEY = "codex-oauth-credentials";
+export const CODEX_OAUTH_CREDENTIALS_STORAGE_KEY = "codex-oauth-credentials";
 const OAUTH_STATE_VERSION = 2;
 
 /** 5-minute buffer before expiry to trigger proactive refresh. */
@@ -108,6 +107,21 @@ export interface SaveOAuthAccountOptions {
 export interface SaveOAuthAccountResult {
   account: CodexOAuthAccountInfo;
   action: "added" | "updated" | "replaced";
+}
+
+export interface CodexOAuthStateStorage {
+  get(): Promise<string | undefined>;
+  store(value: string): Promise<void>;
+  delete(): Promise<void>;
+  withMutationLock?<T>(operation: () => Promise<T>): Promise<T>;
+}
+
+interface SecretStorageContext {
+  secrets: {
+    get(key: string): PromiseLike<string | undefined>;
+    store(key: string, value: string): PromiseLike<void>;
+    delete(key: string): PromiseLike<void>;
+  };
 }
 
 // ── PKCE Helpers ──
@@ -384,7 +398,7 @@ export class CodexOAuthFlowError extends Error {
 }
 
 export class CodexOAuthManager {
-  private context: ExtensionContext | null = null;
+  private storage: CodexOAuthStateStorage | null = null;
   private state: CodexOAuthState = {
     version: OAUTH_STATE_VERSION,
     activeAccountId: null,
@@ -393,6 +407,10 @@ export class CodexOAuthManager {
   private stateLoaded = false;
   private loadedStateRaw: string | null = null;
   private refreshPromises = new Map<string, Promise<CodexOAuthAccountRecord>>();
+  private forcedRefreshPromises = new Map<
+    string,
+    Promise<CodexOAuthAccountRecord>
+  >();
   private log: (msg: string) => void;
   private pendingAuth: {
     codeVerifier: string;
@@ -407,9 +425,22 @@ export class CodexOAuthManager {
     this.log = log ?? console.log;
   }
 
-  /** Must be called during extension activation to enable credential storage. */
-  initialize(context: ExtensionContext): void {
-    this.context = context;
+  /** Compatibility adapter for hosts that still use VS Code SecretStorage. */
+  initialize(context: SecretStorageContext): void {
+    this.initializeStorage({
+      get: async () =>
+        await context.secrets.get(CODEX_OAUTH_CREDENTIALS_STORAGE_KEY),
+      store: async (value) =>
+        await context.secrets.store(CODEX_OAUTH_CREDENTIALS_STORAGE_KEY, value),
+      delete: async () =>
+        await context.secrets.delete(CODEX_OAUTH_CREDENTIALS_STORAGE_KEY),
+    });
+  }
+
+  initializeStorage(storage: CodexOAuthStateStorage): void {
+    this.storage = storage;
+    this.stateLoaded = false;
+    this.loadedStateRaw = null;
   }
 
   // ── Storage ──
@@ -547,9 +578,9 @@ export class CodexOAuthManager {
   private async loadStateFromStorage(options?: {
     persistNormalization?: boolean;
   }): Promise<void> {
-    if (!this.context) return;
+    if (!this.storage) return;
 
-    const raw = await this.context.secrets.get(CREDENTIALS_STORAGE_KEY);
+    const raw = await this.storage.get();
     if (!raw) {
       this.state = {
         version: OAUTH_STATE_VERSION,
@@ -565,7 +596,7 @@ export class CodexOAuthManager {
       this.log(
         "[codex-oauth] Unknown credential payload shape, clearing state",
       );
-      await this.context.secrets.delete(CREDENTIALS_STORAGE_KEY);
+      await this.storage.delete();
       this.state = {
         version: OAUTH_STATE_VERSION,
         activeAccountId: null,
@@ -593,28 +624,19 @@ export class CodexOAuthManager {
     forceReload?: boolean;
     persistNormalization?: boolean;
   }): Promise<void> {
-    if (!this.context) return;
+    if (!this.storage) return;
     if (!options?.forceReload && this.stateLoaded) return;
 
     try {
       await this.loadStateFromStorage({
         persistNormalization: options?.persistNormalization,
       });
+      this.stateLoaded = true;
     } catch (err) {
       this.log(
         `[codex-oauth] Failed to load OAuth state: ${err instanceof Error ? err.message : err}`,
       );
-      if (this.context) {
-        await this.context.secrets.delete(CREDENTIALS_STORAGE_KEY);
-      }
-      this.state = {
-        version: OAUTH_STATE_VERSION,
-        activeAccountId: null,
-        accounts: [],
-      };
-      this.loadedStateRaw = null;
-    } finally {
-      this.stateLoaded = true;
+      throw err;
     }
   }
 
@@ -622,11 +644,10 @@ export class CodexOAuthManager {
     notify = false,
     options?: { checkForExternalChanges?: boolean },
   ): Promise<void> {
-    if (!this.context) throw new Error("CodexOAuthManager not initialized");
+    if (!this.storage) throw new Error("CodexOAuthManager not initialized");
 
     if (options?.checkForExternalChanges ?? true) {
-      const latestRaw =
-        (await this.context.secrets.get(CREDENTIALS_STORAGE_KEY)) ?? null;
+      const latestRaw = (await this.storage.get()) ?? null;
       if (latestRaw !== this.loadedStateRaw) {
         this.log(
           "[codex-oauth] Detected external credential update; reloading before save",
@@ -639,26 +660,37 @@ export class CodexOAuthManager {
     }
 
     const raw = JSON.stringify(this.state);
-    await this.context.secrets.store(CREDENTIALS_STORAGE_KEY, raw);
+    await this.storage.store(raw);
     this.loadedStateRaw = raw;
     if (notify) {
       this.onAuthStateChanged?.();
     }
   }
 
+  private async withStorageMutationLock<T>(
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return this.storage?.withMutationLock
+      ? this.storage.withMutationLock(operation)
+      : operation();
+  }
+
   private async withFreshStateWrite<T>(options: {
     notify?: boolean;
     mutate: () => T;
   }): Promise<T> {
-    await this.ensureStateLoaded({
-      forceReload: true,
-      persistNormalization: true,
-    });
-    const result = options.mutate();
-    await this.saveState(options.notify ?? false, {
-      checkForExternalChanges: false,
-    });
-    return result;
+    const operation = async () => {
+      await this.ensureStateLoaded({
+        forceReload: true,
+        persistNormalization: true,
+      });
+      const result = options.mutate();
+      await this.saveState(options.notify ?? false, {
+        checkForExternalChanges: false,
+      });
+      return result;
+    };
+    return this.withStorageMutationLock(operation);
   }
 
   private findAccountById(
@@ -714,6 +746,7 @@ export class CodexOAuthManager {
 
         this.state.accounts.splice(idx, 1);
         this.refreshPromises.delete(accountId);
+        this.forcedRefreshPromises.delete(accountId);
 
         if (this.state.accounts.length === 0) {
           this.state.activeAccountId = null;
@@ -730,25 +763,38 @@ export class CodexOAuthManager {
     accountId: string,
     force: boolean,
   ): Promise<CodexOAuthAccountRecord | null> {
-    await this.ensureStateLoaded({
-      forceReload: true,
-      persistNormalization: true,
-    });
-    const account = this.findAccountById(accountId);
-    if (!account) return null;
+    const promises = force ? this.forcedRefreshPromises : this.refreshPromises;
+    let promise = promises.get(accountId);
+    if (!promise) {
+      await this.ensureStateLoaded({
+        forceReload: true,
+        persistNormalization: true,
+      });
+      const observedRefreshToken =
+        this.findAccountById(accountId)?.refreshToken;
+      promise = this.withStorageMutationLock(async () => {
+        await this.ensureStateLoaded({
+          forceReload: true,
+          persistNormalization: true,
+        });
+        const account = this.findAccountById(accountId);
+        if (!account) throw new Error("codex_oauth_account_not_found");
 
-    const creds = toCredentials(account);
-    if (!force && !isTokenExpired(creds)) {
-      return account;
-    }
+        const creds = toCredentials(account);
+        const refreshedByAnotherProcess =
+          force &&
+          observedRefreshToken !== undefined &&
+          account.refreshToken !== observedRefreshToken &&
+          !isTokenExpired(creds);
+        if ((!force || refreshedByAnotherProcess) && !isTokenExpired(creds)) {
+          return account;
+        }
 
-    try {
-      let promise = this.refreshPromises.get(accountId);
-      if (!promise) {
         this.log(
           `[codex-oauth] Refreshing token for account=${account.label} (${account.id})`,
         );
-        promise = refreshAccessToken(creds).then((next) => ({
+        const next = await refreshAccessToken(creds);
+        const refreshed: CodexOAuthAccountRecord = {
           ...account,
           accessToken: next.accessToken,
           refreshToken: next.refreshToken,
@@ -758,16 +804,27 @@ export class CodexOAuthManager {
           chatgptUserId: next.chatgptUserId ?? account.chatgptUserId,
           subject: next.subject ?? account.subject,
           updatedAt: Date.now(),
-        }));
-        this.refreshPromises.set(accountId, promise);
-      }
+        };
+        const index = this.state.accounts.findIndex(
+          (candidate) => candidate.id === accountId,
+        );
+        if (index < 0) throw new Error("codex_oauth_account_not_found");
+        this.state.accounts[index] = refreshed;
+        await this.saveState(false, { checkForExternalChanges: false });
+        return refreshed;
+      });
+      promises.set(accountId, promise);
+    }
 
-      const refreshed = await promise;
-      this.refreshPromises.delete(accountId);
-      await this.updateAccountRecord(refreshed, false);
-      return refreshed;
+    try {
+      return await promise;
     } catch (err) {
-      this.refreshPromises.delete(accountId);
+      if (
+        err instanceof Error &&
+        err.message === "codex_oauth_account_not_found"
+      ) {
+        return null;
+      }
       this.log(
         `[codex-oauth] Token refresh failed for account=${accountId}: ${err instanceof Error ? err.message : err}`,
       );
@@ -778,25 +835,29 @@ export class CodexOAuthManager {
         await this.removeAccountInternal(accountId, true);
       }
       return null;
+    } finally {
+      if (promises.get(accountId) === promise) {
+        promises.delete(accountId);
+      }
     }
   }
 
   // ── Account management ──
 
   async listAccounts(): Promise<CodexOAuthAccountInfo[]> {
-    await this.ensureStateLoaded();
+    await this.ensureStateLoaded({ forceReload: true });
     return this.state.accounts.map((a) => this.accountToInfo(a));
   }
 
   async hasAccounts(): Promise<boolean> {
-    await this.ensureStateLoaded();
+    await this.ensureStateLoaded({ forceReload: true });
     return this.state.accounts.length > 0;
   }
 
   async getAccountById(
     accountId: string,
   ): Promise<CodexOAuthAccountInfo | null> {
-    await this.ensureStateLoaded();
+    await this.ensureStateLoaded({ forceReload: true });
     const account = this.findAccountById(accountId);
     return account ? this.accountToInfo(account) : null;
   }
@@ -849,19 +910,19 @@ export class CodexOAuthManager {
   }
 
   async clearCredentials(): Promise<void> {
-    await this.ensureStateLoaded({
-      forceReload: true,
-      persistNormalization: true,
+    await this.withStorageMutationLock(async () => {
+      await this.ensureStateLoaded({ forceReload: true });
+      this.state = {
+        version: OAUTH_STATE_VERSION,
+        activeAccountId: null,
+        accounts: [],
+      };
+      this.refreshPromises.clear();
+      this.forcedRefreshPromises.clear();
+      if (!this.storage) return;
+      await this.storage.delete();
+      this.loadedStateRaw = null;
     });
-    this.state = {
-      version: OAUTH_STATE_VERSION,
-      activeAccountId: null,
-      accounts: [],
-    };
-    this.refreshPromises.clear();
-    if (!this.context) return;
-    await this.context.secrets.delete(CREDENTIALS_STORAGE_KEY);
-    this.loadedStateRaw = null;
     this.onAuthStateChanged?.();
   }
 
@@ -914,6 +975,7 @@ export class CodexOAuthManager {
               (a) => a.id !== duplicate.id,
             );
             this.refreshPromises.delete(duplicate.id);
+            this.forcedRefreshPromises.delete(duplicate.id);
           }
 
           target.accessToken = credentials.accessToken;
@@ -1026,7 +1088,7 @@ export class CodexOAuthManager {
   async getRoundRobinAccountIds(
     startAfterAccountId?: string,
   ): Promise<string[]> {
-    await this.ensureStateLoaded();
+    await this.ensureStateLoaded({ forceReload: true });
     if (this.state.accounts.length === 0) return [];
 
     const accounts = this.state.accounts;
@@ -1330,7 +1392,7 @@ function successHtml(): string {
 <body>
 <div class="container">
 <h1>&#10003; Authentication Successful</h1>
-<p>You can close this window and return to VS Code.</p>
+<p>You can close this window and return to AgentLink.</p>
 </div>
 <script>setTimeout(() => window.close(), 3000);</script>
 </body>

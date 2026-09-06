@@ -2788,6 +2788,7 @@ export async function handleExecuteCommand(
       const retainedOutput = providers.terminalProvider.getRetainedOutput?.({
         owner: undefined,
         terminalId: result.terminal_id,
+        ...(result.command_id ? { commandId: result.command_id } : {}),
       });
       if (retainedOutput) {
         result.output = retainedOutput.output;

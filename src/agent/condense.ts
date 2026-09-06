@@ -440,18 +440,23 @@ export function getEffectiveHistory(messages: AgentMessage[]): AgentMessage[] {
   const retainedFirstMessage =
     firstMessage && firstMessage !== summary ? [firstMessage] : [];
   const laterMessages = fromSummary.slice(1);
-  const canonicalUserMessages = extractCanonicalUserMessages(effectiveMessages);
-  const pendingTasks = extractPendingTasksHeuristic(effectiveMessages);
+  // Resume context belongs to the checkpoint, not the growing live history.
+  // Rewriting this early prefix on later turns invalidates provider caches.
+  const checkpointMessages = effectiveMessages.slice(0, lastSummaryIdx);
+  const canonicalUserMessages =
+    extractCanonicalUserMessages(checkpointMessages);
+  const pendingTasks = extractPendingTasksHeuristic(checkpointMessages);
   const resumeAnchor = extractCondenseResumeAnchor({
     userMessages: canonicalUserMessages,
     pendingTasks,
   });
 
-  const latestTodos = getLatestTodoState(effectiveMessages);
+  const checkpointTodos =
+    summary.preservedContext?.todos ?? getLatestTodoState(checkpointMessages);
   const preservedContext = summary.preservedContext
-    ? { ...summary.preservedContext, todos: latestTodos }
-    : latestTodos.length > 0
-      ? { toolNames: [], todos: latestTodos }
+    ? { ...summary.preservedContext, todos: checkpointTodos }
+    : checkpointTodos.length > 0
+      ? { toolNames: [], todos: checkpointTodos }
       : undefined;
 
   const resumeContextMessage: AgentMessage = {
@@ -470,26 +475,13 @@ export function getEffectiveHistory(messages: AgentMessage[]): AgentMessage[] {
     ],
   };
 
-  // Insert before the first real user prompt. Skip user messages that carry
-  // tool_result blocks: inserting between an assistant tool_use and its
-  // tool_result would break the adjacency the API requires (and trick
-  // injectSyntheticToolResults into adding a duplicate result).
-  const carriesToolResults = (msg: AgentMessage): boolean =>
-    Array.isArray(msg.content) &&
-    msg.content.some((block) => block.type === "tool_result");
-  let insertionIndex = laterMessages.findIndex(
-    (msg) => msg.role === "user" && !msg.isSummary && !carriesToolResults(msg),
-  );
-  if (insertionIndex === -1) {
-    insertionIndex = 0;
-  }
-
+  // A fixed checkpoint position is append-stable and cannot split a later
+  // assistant tool call from its result.
   return [
     ...retainedFirstMessage,
     summary,
-    ...laterMessages.slice(0, insertionIndex),
     resumeContextMessage,
-    ...laterMessages.slice(insertionIndex),
+    ...laterMessages,
   ];
 }
 
@@ -502,11 +494,16 @@ export function getEffectiveHistory(messages: AgentMessage[]): AgentMessage[] {
  * Uses our existing tree-sitter chunker to extract function/class signatures.
  * Each file is wrapped in a <system-reminder> block.
  */
-export async function generateFoldedFileContext(
+interface FoldedFileContextEntry {
+  filePath: string;
+  section: string;
+}
+
+async function generateFoldedFileContextEntries(
   filePaths: string[],
   cwd: string,
   maxChars = 50_000,
-): Promise<string[]> {
+): Promise<FoldedFileContextEntry[]> {
   if (filePaths.length === 0) return [];
 
   // Ensure tree-sitter is initialized
@@ -516,7 +513,7 @@ export async function generateFoldedFileContext(
     return []; // tree-sitter not available
   }
 
-  const sections: string[] = [];
+  const entries: FoldedFileContextEntry[] = [];
   let totalChars = 0;
 
   for (const filePath of filePaths) {
@@ -557,19 +554,29 @@ export async function generateFoldedFileContext(
         const truncated =
           section.slice(0, remaining - 20) +
           "\n... (truncated)\n</system-reminder>";
-        sections.push(truncated);
+        entries.push({ filePath, section: truncated });
         totalChars += truncated.length;
         break;
       }
 
-      sections.push(section);
+      entries.push({ filePath, section });
       totalChars += section.length;
     } catch {
       // Skip files that can't be read
     }
   }
 
-  return sections;
+  return entries;
+}
+
+export async function generateFoldedFileContext(
+  filePaths: string[],
+  cwd: string,
+  maxChars = 50_000,
+): Promise<string[]> {
+  return (await generateFoldedFileContextEntries(filePaths, cwd, maxChars)).map(
+    (entry) => entry.section,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -583,6 +590,8 @@ export interface SummarizeOptions {
   systemPrompt: string;
   isAutomatic: boolean;
   filesRead?: string[];
+  /** Count-only attribution subset; paths are never returned or recorded. */
+  composeFilesRead?: string[];
   cwd?: string;
   preservedContext?: PreservedRuntimeContext;
   onProviderRequest?: (request: {
@@ -602,6 +611,10 @@ export interface SummarizeResult {
   summary: string;
   prevInputTokens: number;
   newInputTokens: number;
+  /** Compose-read paths whose folded sections were actually retained. */
+  composeFoldedReadCount?: number;
+  /** Estimated tokens of those exact retained folded sections. */
+  composeFoldedContextTokens?: number;
   /** Non-fatal validator/retry warnings */
   validationWarnings?: string[];
   /** Structured condense metadata for debugging/forensics */
@@ -1343,6 +1356,20 @@ export async function summarizeConversation(
     }
   }
 
+  const foldedEntries =
+    options.cwd && options.filesRead?.length
+      ? await generateFoldedFileContextEntries(options.filesRead, options.cwd)
+      : [];
+  const composeFilePaths = new Set(options.composeFilesRead ?? []);
+  const composeFoldedEntries = foldedEntries.filter((entry) =>
+    composeFilePaths.has(entry.filePath),
+  );
+  const composeFoldedContextTokens = estimateTokensFromChars(
+    composeFoldedEntries.reduce(
+      (chars, entry) => chars + entry.section.length,
+      0,
+    ),
+  );
   const summaryContent: ContentBlock[] = [
     {
       type: "text",
@@ -1352,6 +1379,9 @@ export async function summarizeConversation(
       type: "text",
       text: `## Conversation Summary\n\n${summaryText}`,
     } satisfies TextBlock,
+    ...foldedEntries.map(
+      (entry): TextBlock => ({ type: "text", text: entry.section }),
+    ),
   ];
 
   const correctionsMatch = summaryText.match(
@@ -1399,6 +1429,8 @@ export async function summarizeConversation(
     summary: summaryText,
     prevInputTokens,
     newInputTokens,
+    composeFoldedReadCount: composeFoldedEntries.length,
+    composeFoldedContextTokens,
     validationWarnings,
     metadata: {
       inputMessageCount: condenseSourceMessages.length,

@@ -228,7 +228,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   get_terminal_output: {
     label: "Read background terminal output",
     description:
-      "Read retained output and lifecycle state from a background, timed-out, completed, or recently closed terminal command. Supports the same filtering params as execute_command; use `kill` to send Ctrl+C.",
+      "Read retained output and lifecycle state from a background, timed-out, completed, or recently closed terminal command. Pass the returned `command_id` with `terminal_id` to preserve command identity across terminal reuse; omitted command_id selects the latest command. Missing or expired command IDs never select newer output. Supports the same filtering params as execute_command; `kill` sends Ctrl+C only if the selected command is still running.",
   },
   close_terminals: {
     label: "Clean up terminals",
@@ -260,14 +260,16 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
       "Answer a pending structured question from a background agent. Use only after receiving a background-agent question interjection, and pass its exact request_id plus a complete answer map keyed by question ID. Answer from the current coordinator context when possible. If human judgment or missing human-only information is required, call ask_user first, then pass the resulting answers here. This resolves the background agent's blocked ask_user call; ordinary assistant text does not.",
   },
 
-  // --- Dev-only tools ---
+  // --- Read-only orchestration ---
 
   compose: {
     label: "Compose read-only tools",
-    devOnly: true,
     description:
-      "Use when you need results from many dependent read-only tool calls and only care about a reduced answer: list items, fetch details, then filter or aggregate. This runs in one model round-trip and intermediate child results stay out of model context. Do not use it for exploratory work, pure shell pipelines, or small one-off calls. The JavaScript function body exposes synchronous tool(name, input), fail-fast toolAll([...]), and toolAllSettled([...]) helpers. Children must be composable and authorized through either an inline provider definition or the exact immutable deferred native catalog captured for this request; current mode, profile, skill, path, and non-interactive policy can only narrow that authority. Oversized final values remain bounded serialization errors and may include a private chunked-json-v1 output_file for exact local recovery.",
+      "Use for 4+ related read-only calls with reduced output. Child results stay out of provider history. Use direct or ordinary parallel calls for one-offs, full results, or exploration where each result determines the next action. Return reduced JSON, not raw batches. JavaScript exposes synchronous tool(name, input), toolAllSettled([...]), and fail-fast toolAll([...]); no Node APIs, imports, filesystem/network globals, eval, or Function. Default to toolAllSettled for independent reads: missing files become per-child errors without cancelling useful siblings. Use toolAll only when every result is required; one failure aborts the batch. Use discovered paths, not guessed filenames, and preserve per-child errors in your summary. Example: const paths = tool('list_files', { path: 'src', pattern: '*.ts' }).entries.slice(0, 8); const results = toolAllSettled(paths.map(path => ({ name: 'get_context', input: { path, limit: 60 } }))); return results.map((r, i) => r.status === 'fulfilled' ? { path: paths[i], lines: r.value.total_lines, errors: r.value.diagnostics?.errors ?? 0 } : { path: paths[i], error: r.reason });",
   },
+
+  // --- Dev-only tools ---
+
   send_feedback: {
     label: "Submit tool feedback",
     devOnly: true,

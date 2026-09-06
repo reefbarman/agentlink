@@ -134,6 +134,67 @@ describe("ChatTabHostCoordinator", () => {
     expect(harness.manager.switchTo).toHaveBeenCalledWith("session-2");
   });
 
+  it("creates a remote tab without changing local focus or stopping the selected session", async () => {
+    const harness = createHarness();
+    const first = session("session-1", true);
+    harness.sessions.set(first.id, first);
+    harness.setInfos([info(first.id, { status: "streaming" })]);
+    await harness.tabs.bindFocusedSession(first.id);
+    const initialAddress = harness.address();
+    const observedFocus: string[] = [];
+    harness.tabs.onDidChangeWorkspace((snapshot) => {
+      observedFocus.push(snapshot.focusedTabId);
+    });
+
+    const result = await harness.coordinator.newTab(
+      initialAddress,
+      "ask",
+      "project-remote",
+      { focus: false },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      tab: { id: "tab-2", sessionId: "session-2" },
+      session: { id: "session-2" },
+    });
+    expect(harness.address()).toEqual(initialAddress);
+    expect(observedFocus.length).toBeGreaterThan(0);
+    expect(observedFocus.every((tabId) => tabId === "tab-1")).toBe(true);
+    expect(harness.manager.createSession).toHaveBeenCalledWith("ask", {
+      projectId: "project-remote",
+      foreground: false,
+    });
+    expect(harness.manager.switchTo).not.toHaveBeenCalled();
+    expect(harness.manager.stopSessionAndWait).not.toHaveBeenCalled();
+    expect(first.setQueuedUiMessageCount).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ controllerEpoch: "old-epoch" }, "stale_controller"],
+    [{ tabId: "missing-tab" }, "not_found"],
+    [{ sessionId: "old-session" }, "stale_session"],
+  ] as const)(
+    "rejects invalid remote tab creation addresses: %s",
+    async (override, reason) => {
+      const harness = createHarness();
+      const before = harness.tabs.getWorkspaceSnapshot();
+
+      await expect(
+        harness.coordinator.newTab(
+          { ...harness.address(), ...override },
+          "code",
+          undefined,
+          { focus: false },
+        ),
+      ).resolves.toEqual({ ok: false, reason });
+
+      expect(harness.tabs.getWorkspaceSnapshot()).toEqual(before);
+      expect(harness.manager.createSession).not.toHaveBeenCalled();
+      expect(harness.manager.switchTo).not.toHaveBeenCalled();
+    },
+  );
+
   it("requires confirmation for a busy New Chat and preserves the stable tab", async () => {
     const harness = createHarness();
     const current = session("session-1");

@@ -314,13 +314,19 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     request: TerminalTargetRequest,
   ): TerminalBackgroundState | undefined {
     const channel = this.ownedChannel(request.terminalId, request.owner);
-    return channel
-      ? this.backgroundStateFromSnapshot(
-          channel.session.snapshot(),
-          false,
-          channel.latestTermination,
-        )
-      : undefined;
+    if (!channel) return undefined;
+    const snapshot = channel.session.snapshot();
+    if (request.commandId) {
+      snapshot.commands = snapshot.commands.filter(
+        (command) => command.commandId === request.commandId,
+      );
+      if (snapshot.commands.length === 0) return undefined;
+    }
+    return this.backgroundStateFromSnapshot(
+      snapshot,
+      false,
+      channel.latestTermination,
+    );
   }
 
   getCurrentOutput(request: TerminalOutputRequest): string | undefined {
@@ -330,9 +336,13 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       request.terminalId,
       request.owner,
     )?.session.snapshot();
-    return snapshot
-      ? cleanTerminalOutput(snapshot.commands.at(-1)?.output ?? "")
-      : undefined;
+    const command = request.commandId
+      ? snapshot?.commands.find(
+          (entry) => entry.commandId === request.commandId,
+        )
+      : snapshot?.commands.at(-1);
+    if (request.commandId && !command) return undefined;
+    return snapshot ? cleanTerminalOutput(command?.output ?? "") : undefined;
   }
 
   getRetainedOutput(
@@ -340,13 +350,16 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
   ): TerminalRetainedOutput | undefined {
     const channel = this.ownedChannel(request.terminalId, request.owner);
     if (channel) {
-      const commandId = channel.session.snapshot().commands.at(-1)?.commandId;
+      const commandId =
+        request.commandId ??
+        channel.session.snapshot().commands.at(-1)?.commandId;
       return commandId
         ? this.retainedOutput(channel.session.getCommandOutput(commandId))
         : undefined;
     }
+    const closed = this.ownedClosedTerminal(request.terminalId, request.owner);
     return this.retainedOutput(
-      this.ownedClosedTerminal(request.terminalId, request.owner)
+      closed && (!request.commandId || closed.command_id === request.commandId)
         ? this.recentlyClosedOutput.get(request.terminalId)?.read()
         : undefined,
     );
@@ -355,7 +368,11 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
   detachRetainedOutput(
     request: TerminalTargetRequest,
   ): TerminalRetainedOutputLease | undefined {
-    if (!this.ownedClosedTerminal(request.terminalId, request.owner)) {
+    const closed = this.ownedClosedTerminal(request.terminalId, request.owner);
+    if (
+      !closed ||
+      (request.commandId && closed.command_id !== request.commandId)
+    ) {
       return undefined;
     }
     const lease = this.recentlyClosedOutput.get(request.terminalId);
@@ -366,13 +383,19 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
 
   interruptTerminal(request: TerminalTargetRequest): boolean {
     const channel = this.ownedChannel(request.terminalId, request.owner);
+    if (request.commandId && channel?.active?.commandId !== request.commandId)
+      return false;
     clearInteractivePromptWatchdog(channel?.active?.interactivePromptWatchdog);
     return channel !== undefined && this.runtime.interrupt(request.terminalId);
   }
 
   detachTerminal(request: TerminalTargetRequest): boolean {
     const active = this.ownedChannel(request.terminalId, request.owner)?.active;
-    if (!active?.detachForeground) return false;
+    if (
+      !active?.detachForeground ||
+      (request.commandId && active.commandId !== request.commandId)
+    )
+      return false;
     const detach = active.detachForeground;
     active.detachForeground = undefined;
     detach();
@@ -1108,6 +1131,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       terminal_name: snapshot.title,
       cwd: snapshot.cwd,
       command: command?.command,
+      command_id: commandId,
       backgrounded: true,
       is_running:
         command?.status === "launching" || command?.status === "running",
@@ -1127,6 +1151,8 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     const output = retained?.output ?? command.output;
     return {
       exit_code: command.exitCode ?? null,
+      ...(command.signal ? { signal: command.signal } : {}),
+      command_id: command.commandId,
       output: cleanTerminalOutput(output),
       terminal_raw_output: cleanTerminalRawOutput(output),
       ...this.outputMetadata(retained),
@@ -1243,6 +1269,8 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     const running =
       command.status === "launching" || command.status === "running";
     return {
+      command_id: command.commandId,
+      ...(command.signal ? { signal: command.signal } : {}),
       is_running: !closed && running,
       state:
         termination?.commandId === command.commandId

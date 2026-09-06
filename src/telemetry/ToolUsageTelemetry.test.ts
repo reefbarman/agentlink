@@ -2,9 +2,11 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 
+import {
+  ToolUsageTelemetry,
+  composeChildCountBucket,
+} from "./ToolUsageTelemetry.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
-import { ToolUsageTelemetry } from "./ToolUsageTelemetry.js";
 
 let tmpDir: string;
 
@@ -170,6 +172,104 @@ describe("ToolUsageTelemetry", () => {
     });
     expect(JSON.stringify(record)).not.toContain("SECRET_COMPOSE_SOURCE");
     expect(JSON.stringify(record)).not.toContain("SECRET_CHILD_RESULT");
+  });
+
+  it("records bounded compose diagnostics through the narrow interface", async () => {
+    const telemetryPath = path.join(tmpDir, "tool-usage.jsonl");
+    const telemetry = new ToolUsageTelemetry({
+      telemetryPath,
+      flushIntervalMs: 0,
+    });
+
+    telemetry.recordCompose({
+      outcome: "error",
+      childCount: 5,
+      completedChildCount: 5,
+      succeededChildCount: 3,
+      failedChildCount: 2,
+      toolAllBatchCount: 2,
+      toolAllSettledBatchCount: 1,
+      bridgedBytes: 2_048,
+      runtimeReturnedBytes: 512,
+      errorKind: "child_failed",
+      errorCode: "child_handler_failed",
+      queueWaitBucket: "100_499ms",
+      artifactRetention: "retained",
+      outputSpilled: true,
+      sameTurnRepair: true,
+    });
+    telemetry.recordCompose({
+      outcome: "error",
+      childCount: 99,
+      errorKind: "PRIVATE_ERROR_MESSAGE",
+      errorCode: "/private/path/file.ts",
+    });
+    await telemetry.flush();
+
+    const [record] = (await readJsonLines(telemetryPath)) as Array<{
+      tools: Record<
+        string,
+        {
+          calls: number;
+          parameters: Record<string, number>;
+          numericMetrics: Record<string, number>;
+          categoricalMetrics: Record<string, number>;
+        }
+      >;
+    }>;
+    expect(record.tools.compose).toMatchObject({
+      calls: 2,
+      parameters: {},
+      numericMetrics: {
+        childCount: 104,
+        completedChildCount: 5,
+        succeededChildCount: 3,
+        failedChildCount: 2,
+        toolAllBatchCount: 2,
+        toolAllSettledBatchCount: 1,
+        bridgedBytes: 2_048,
+        runtimeReturnedBytes: 512,
+      },
+      categoricalMetrics: {
+        "telemetrySchemaVersion:1": 2,
+        "composeOutcome:error": 2,
+        "childCountBucket:4-7": 1,
+        "childCountBucket:16+": 1,
+        "errorKind:child_failed": 1,
+        "errorKind:other": 1,
+        "errorCode:child_handler_failed": 1,
+        "errorCode:other": 1,
+        "queueWaitBucket:100_499ms": 1,
+        "queueWaitBucket:none": 1,
+        "artifactRetention:retained": 1,
+        "artifactRetention:none": 1,
+        "outputSpilled:true": 1,
+        "outputSpilled:false": 1,
+        "sameTurnRepair:true": 1,
+        "sameTurnRepair:false": 1,
+      },
+    });
+    const serialized = JSON.stringify(record);
+    expect(serialized).not.toContain("PRIVATE_ERROR_MESSAGE");
+    expect(serialized).not.toContain("/private/path/file.ts");
+  });
+
+  it("uses the fixed compose child buckets", () => {
+    expect(
+      [-1, 0, 1, 2, 3, 4, 7, 8, 15, 16, 1_000].map(composeChildCountBucket),
+    ).toEqual([
+      "0",
+      "0",
+      "1",
+      "2-3",
+      "2-3",
+      "4-7",
+      "4-7",
+      "8-15",
+      "8-15",
+      "16+",
+      "16+",
+    ]);
   });
 
   it("records diagnostic metrics without inflating tool call counts", async () => {

@@ -16,6 +16,10 @@ export interface BrowserGatewayHelperBootstrapOptions {
   helperVersion: string;
   idleShutdownMs?: number;
   startupTimeoutMs?: number;
+  /** Refuse to terminate a healthy but incompatible helper. Default false. */
+  replaceIncompatibleHelper?: boolean;
+  /** Additional environment for the helper process, such as Electron's Node mode. */
+  spawnEnv?: NodeJS.ProcessEnv;
   /** Expose gateway on 0.0.0.0 and start mDNS advertising. */
   lanAccess?: boolean;
   /** mDNS hostname (without `.local`). */
@@ -154,9 +158,8 @@ export function discoveryMatchesDesiredConfig(
   return true;
 }
 
-export async function resolveHealthyDiscoveredHelper(
+export async function resolveCompatibleDiscoveredHelper(
   expectedPort: number,
-  desired: DesiredHelperConfig,
 ): Promise<BrowserGatewayHelperDiscoveryRecord | null> {
   const discovery = await readBrowserGatewayHelperDiscovery();
   if (!discovery) return null;
@@ -169,8 +172,20 @@ export async function resolveHealthyDiscoveredHelper(
     return null;
   }
   if (health.helperVersion !== discovery.helperVersion) return null;
+  return discovery;
+}
+
+export async function resolveHealthyDiscoveredHelper(
+  expectedPort: number,
+  desired: DesiredHelperConfig,
+): Promise<BrowserGatewayHelperDiscoveryRecord | null> {
+  const discovery = await resolveCompatibleDiscoveredHelper(expectedPort);
+  if (!discovery) return null;
   const versionOrder = desired.helperVersion
-    ? compareHelperReleaseVersions(health.helperVersion, desired.helperVersion)
+    ? compareHelperReleaseVersions(
+        discovery.helperVersion,
+        desired.helperVersion,
+      )
     : null;
   // Protocol compatibility permits reuse across versions, but helper-owned UI
   // assets and runtime behavior must upgrade monotonically. Non-semver development
@@ -268,6 +283,22 @@ async function terminateStaleHelper(
   return null;
 }
 
+export function shouldAttachToCompatibleHelper(params: {
+  runningVersion: string;
+  requestedVersion: string;
+  activeClientLeases: number;
+  activeLivenessReasons?: readonly string[];
+}): boolean {
+  const versionOrder = compareHelperReleaseVersions(
+    params.runningVersion,
+    params.requestedVersion,
+  );
+  const active =
+    params.activeClientLeases > 0 ||
+    (params.activeLivenessReasons?.length ?? 0) > 0;
+  return active || versionOrder === null || versionOrder >= 0;
+}
+
 export async function bootstrapBrowserGatewayHelper(
   options: BrowserGatewayHelperBootstrapOptions,
 ): Promise<BrowserGatewayHelperBootstrapResult> {
@@ -292,6 +323,48 @@ export async function bootstrapBrowserGatewayHelper(
       source: "existing",
       discovery: existing,
     };
+  }
+
+  let replacingIdleCompatibleHelper = false;
+  const discovered = await resolveCompatibleDiscoveredHelper(
+    options.browserGatewayPort,
+  );
+  if (discovered) {
+    const health = await fetchHelperHealth(discovered);
+    const activeClientLeases = health?.activeClientLeases ?? 0;
+    const activeLivenessReasons = health?.activeLivenessReasons;
+    const active =
+      activeClientLeases > 0 || (activeLivenessReasons?.length ?? 0) > 0;
+    if (
+      shouldAttachToCompatibleHelper({
+        runningVersion: discovered.helperVersion,
+        requestedVersion: options.helperVersion,
+        activeClientLeases,
+        activeLivenessReasons,
+      })
+    ) {
+      options.log(
+        `[browser-gateway-helper] attaching to compatible helper at ${discovered.url} (pid=${discovered.pid}, runningVersion=${discovered.helperVersion}, requestedVersion=${options.helperVersion}, active=${active})`,
+      );
+      return { source: "existing", discovery: discovered };
+    }
+    options.log(
+      `[browser-gateway-helper] replacing idle compatible helper pid=${discovered.pid} runningVersion=${discovered.helperVersion} requestedVersion=${options.helperVersion}`,
+    );
+    replacingIdleCompatibleHelper = true;
+  }
+
+  const incompatibleDiscovery = await readBrowserGatewayHelperDiscovery();
+  if (
+    !replacingIdleCompatibleHelper &&
+    incompatibleDiscovery?.port === options.browserGatewayPort &&
+    isPidLikelyAlive(incompatibleDiscovery.pid) &&
+    (await fetchHelperHealth(incompatibleDiscovery)) &&
+    options.replaceIncompatibleHelper !== true
+  ) {
+    throw new Error(
+      `helper_incompatible:running=${incompatibleDiscovery.helperVersion}:requested=${options.helperVersion}`,
+    );
   }
 
   const helperPath = path.join(
@@ -343,6 +416,9 @@ export async function bootstrapBrowserGatewayHelper(
   const child = spawn(process.execPath, args, {
     stdio: ["ignore", "pipe", "pipe"],
     detached: false,
+    env: options.spawnEnv
+      ? { ...process.env, ...options.spawnEnv }
+      : process.env,
   });
 
   child.stdout?.on("data", (data: Buffer) => {

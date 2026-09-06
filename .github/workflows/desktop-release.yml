@@ -1,0 +1,127 @@
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - "desktop-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Desktop version to package (must match apps/desktop/package.json)
+        required: true
+        type: string
+      publish:
+        description: Publish artifacts to a GitHub Release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - run: npm ci
+      - name: Verify desktop version
+        env:
+          REQUESTED_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: |
+          VERSION=$(node -p 'require("./apps/desktop/package.json").version')
+          REQUESTED_VERSION=${REQUESTED_VERSION#desktop-v}
+          test "$REQUESTED_VERSION" = "$VERSION"
+      - run: npm run lint
+      - run: npm test
+      - name: Verify VSIX inventory excludes desktop payloads
+        run: |
+          npx --yes @vscode/vsce@3.9.2 ls --no-dependencies > /tmp/vsix-files.txt
+          node scripts/verify-vsix-boundary.mjs --list /tmp/vsix-files.txt
+
+  package:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-15
+          - target: darwin-x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install target native runtimes
+        env:
+          AGENTLINK_VSCE_TARGET: ${{ matrix.target }}
+        run: |
+          LANCEDB_PACKAGE=$(node scripts/package-retrieval-runtime.mjs --print-native-package)
+          LANCEDB_VERSION=$(node -p 'require("./package.json").dependencies["@lancedb/lancedb"]')
+          KEYCHAIN_PACKAGE=$(node -e 'import("./scripts/package-keychain-runtime.mjs").then(({ KEYCHAIN_NATIVE_PACKAGES }) => process.stdout.write(KEYCHAIN_NATIVE_PACKAGES[process.env.AGENTLINK_VSCE_TARGET]))')
+          KEYCHAIN_VERSION=$(node -p 'require("./apps/desktop/package.json").dependencies["@napi-rs/keyring"]')
+          npm install --no-save --package-lock=false --force \
+            "${LANCEDB_PACKAGE}@${LANCEDB_VERSION}" \
+            "${KEYCHAIN_PACKAGE}@${KEYCHAIN_VERSION}"
+
+      - name: Package standalone desktop app
+        env:
+          AGENTLINK_VSCE_TARGET: ${{ matrix.target }}
+        run: |
+          npm run build
+          npm run package --workspace @agentlink/desktop -- --target "$AGENTLINK_VSCE_TARGET"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentlink-desktop-${{ matrix.target }}
+          path: |
+            desktop-releases/AgentLink-Desktop-*.dmg
+            desktop-releases/AgentLink-Desktop-*.zip
+            desktop-releases/*.blockmap
+          if-no-files-found: error
+
+  release:
+    needs: package
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agentlink-desktop-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create standalone desktop GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'push' && github.ref_name || format('desktop-v{0}', inputs.version) }}
+          name: AgentLink Desktop ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+          files: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.blockmap
+          body: |
+            Standalone AgentLink Desktop preview for macOS. Download the DMG matching your Mac: `arm64` for Apple Silicon or `x64` for Intel.
+
+            This preview is unsigned and not notarized. Prefer the DMG and use **Open** from Finder's context menu on first launch. ZIP files are provided as an advanced fallback and may require removing quarantine with `xattr -dr com.apple.quarantine AgentLink.app` after extraction.
+          prerelease: true

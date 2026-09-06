@@ -1,0 +1,27 @@
+appId: com.agentlink.desktop
+productName: AgentLink
+asar: true
+asarUnpack:
+  - "**/*.node"
+npmRebuild: false
+compression: maximum
+artifactName: AgentLink-Desktop-${version}-mac-${arch}.${ext}
+directories:
+  app: .
+  output: ../../../desktop-releases
+files:
+  - dist/**/*
+  - node_modules/**/*
+  - package.json
+extraResources:
+  - from: runtime
+    to: runtime
+mac:
+  category: public.app-category.productivity
+  icon: ../assets/icon.png
+  identity: null
+  target:
+    - dmg
+    - zip
+dmg:
+  sign: false

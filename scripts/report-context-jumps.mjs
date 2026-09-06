@@ -158,6 +158,12 @@ function createHarnessContextAggregate() {
     overflowTokens: 0,
     attemptsWithOverflow: 0,
     layers: {},
+    composeInstrumentedRequests: 0,
+    composeEnabledRequests: 0,
+    composeAdvertisedRequests: 0,
+    directComposableHistoryTokens: 0,
+    composeHistoryTokens: 0,
+    inlineDefinitionTokens: 0,
   };
 }
 
@@ -167,6 +173,19 @@ function mergeHarnessContextRequest(aggregate, request) {
     return;
   }
   aggregate.agentProviderAttempts += 1;
+  const compose = request.compose;
+  if (compose?.schemaVersion === 1) {
+    aggregate.composeInstrumentedRequests += 1;
+    if (compose.enabled === true) aggregate.composeEnabledRequests += 1;
+    if (compose.advertised === true) aggregate.composeAdvertisedRequests += 1;
+    aggregate.directComposableHistoryTokens += nonNegative(
+      compose.directComposableHistoryTokens,
+    );
+    aggregate.composeHistoryTokens += nonNegative(compose.composeHistoryTokens);
+    aggregate.inlineDefinitionTokens += nonNegative(
+      compose.inlineDefinitionTokens,
+    );
+  }
   const ledger = request.contextLedger;
   if (!ledger) return;
   aggregate.ledgerAttempts += 1;
@@ -268,6 +287,23 @@ function finalizeHarnessContextAggregate(aggregate) {
   };
 }
 
+export function finalizeComposeContextAggregate(aggregate) {
+  return {
+    instrumentedRequests: aggregate.composeInstrumentedRequests,
+    legacyRequestsExcluded:
+      aggregate.agentProviderAttempts - aggregate.composeInstrumentedRequests,
+    enabledRequests: aggregate.composeEnabledRequests,
+    advertisedRequests: aggregate.composeAdvertisedRequests,
+    directComposableHistoryTokens: aggregate.directComposableHistoryTokens,
+    composeHistoryTokens: aggregate.composeHistoryTokens,
+    inlineDefinitionTokens: aggregate.inlineDefinitionTokens,
+    totalMeasuredContextTokens:
+      aggregate.directComposableHistoryTokens +
+      aggregate.composeHistoryTokens +
+      aggregate.inlineDefinitionTokens,
+  };
+}
+
 export function summarize(events, top) {
   const jumps = events.filter((e) => e.kind === "context_jump");
   const postCondense = events.filter(
@@ -287,6 +323,14 @@ export function summarize(events, top) {
   let omittedToolResultAttributions = 0;
   let pinnedMemoryTokens = 0;
   let retrievedMemoryTokens = 0;
+  let composeFoldedReadCount = 0;
+  let composeFoldedContextTokens = 0;
+  for (const condense of condenses) {
+    composeFoldedReadCount += nonNegative(condense.composeFoldedReadCount);
+    composeFoldedContextTokens += nonNegative(
+      condense.composeFoldedContextTokens,
+    );
+  }
   for (const request of requestAttributions) {
     mergeHarnessContextRequest(harnessContext, request);
     const cohort = requestCohort(request);
@@ -380,6 +424,11 @@ export function summarize(events, top) {
           a.toolName.localeCompare(b.toolName),
       ),
     },
+    composeRequestOccupancy: finalizeComposeContextAggregate(harnessContext),
+    composeFoldedContext: {
+      readCount: composeFoldedReadCount,
+      tokens: composeFoldedContextTokens,
+    },
     harnessContext: finalizeHarnessContextAggregate(harnessContext),
     harnessContextByCohort: [...harnessContextByCohort.entries()]
       .map(([cohort, aggregate]) => ({
@@ -453,6 +502,23 @@ function printReport(summary, top) {
       `max=${fmt(harness.estimatedStaticFloor.max)} token-sends=${fmt(harness.estimatedStaticFloor.tokenSends)} ` +
       `weighted-share=${percent(harness.estimatedStaticFloor.weightedShare)}`,
   );
+
+  const compose = summary.composeRequestOccupancy;
+  if (compose.instrumentedRequests > 0 || compose.legacyRequestsExcluded > 0) {
+    console.log("\nCompose exact request occupancy:");
+    console.log(
+      `  instrumented=${fmt(compose.instrumentedRequests)} legacy-excluded=${fmt(compose.legacyRequestsExcluded)} ` +
+        `enabled=${fmt(compose.enabledRequests)} advertised=${fmt(compose.advertisedRequests)}`,
+    );
+    console.log(
+      `  direct-composable=${fmt(compose.directComposableHistoryTokens)} compose=${fmt(compose.composeHistoryTokens)} ` +
+        `inline-definition=${fmt(compose.inlineDefinitionTokens)} total=${fmt(compose.totalMeasuredContextTokens)}`,
+    );
+    console.log(
+      `  folded-read-count=${fmt(summary.composeFoldedContext.readCount)} ` +
+        `folded-context-tokens=${fmt(summary.composeFoldedContext.tokens)}`,
+    );
+  }
 
   console.log("\nRetrieved-context omission and envelope overflow:");
   console.log(

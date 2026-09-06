@@ -27,6 +27,7 @@ export type AskAgentRouteHandler =
   | "mcpRefresh"
   | "question"
   | "questionProgress"
+  | "formElicitation"
   | "memory"
   | "memoryClear"
   | "autonomousMemoryHealth"
@@ -109,6 +110,11 @@ export const ASK_AGENT_ROUTES = [
     method: "POST",
     path: "/api/ask-agent/question-progress",
     handler: "questionProgress",
+  },
+  {
+    method: "POST",
+    path: "/api/ask-agent/form-elicitation",
+    handler: "formElicitation",
   },
   { method: "GET", path: "/api/ask-agent/memory", handler: "memory" },
   {
@@ -417,7 +423,8 @@ export type PublicHelperRouteHandler =
   | "codiconFont"
   | "appIcon"
   | "appIconSvg"
-  | "webManifest";
+  | "webManifest"
+  | "mcpOAuthCallback";
 
 export const PUBLIC_HELPER_EXACT_ROUTES = [
   { method: "GET", path: "/health", handler: "health" },
@@ -463,6 +470,9 @@ export function matchPublicHelperRoute(
   if (method !== "GET") return null;
   const exact = matchExactRoute(PUBLIC_HELPER_EXACT_ROUTES, method, pathname);
   if (exact) return exact;
+  if (/^\/mcp\/oauth\/callback\/[a-f0-9]{32}$/.test(pathname)) {
+    return { handler: "mcpOAuthCallback" };
+  }
   if (
     /^\/browser-gateway-chunks\/[a-zA-Z0-9_-]+-[a-zA-Z0-9]+\.js$/.test(pathname)
   ) {

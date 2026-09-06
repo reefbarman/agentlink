@@ -4,13 +4,22 @@ import {
   type CoreModelJsonSchema,
   type HostToolResolver,
 } from "@agentlink/core";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
   DEFAULT_INHERITED_ENV_VARS,
   StdioClientTransport,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import * as path from "node:path";
+
+import {
+  createNodeHostMcpClient,
+  type NodeHostMcpFormElicitationHandler,
+} from "./mcpElicitation.js";
+import {
+  createNodeHostMcpResourcePromptProvider,
+  type NodeHostMcpResourcePromptContext,
+  type NodeHostMcpResourcePromptProvider,
+} from "./mcpResourcePrompts.js";
 
 const MAX_SERVERS = 20;
 const MAX_TOOLS_PER_SERVER = 100;
@@ -71,12 +80,67 @@ export interface CreateNodeHostMcpStdioToolsOptions<
   readonly maxServers?: number;
   readonly maxToolsPerServer?: number;
   readonly maxToolResultChars?: number;
+  /** Optional host-owned form interaction. URL-mode elicitation remains declined. */
+  readonly onElicitation?: NodeHostMcpFormElicitationHandler<TPrincipal>;
 }
 
 /**
  * Build dynamic stdio MCP tools without ambient config, plugin, filesystem, or
  * process-environment authority. The host supplies and authorizes every launch.
  */
+export async function createNodeHostMcpStdioResourcePrompts<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+>(
+  options: CreateNodeHostMcpStdioToolsOptions<TPrincipal>,
+  request: NodeHostMcpResourcePromptContext<TPrincipal>,
+): Promise<NodeHostMcpResourcePromptProvider<TPrincipal>> {
+  const servers = await resolveServers(
+    options.resolveServers,
+    request,
+    boundedInteger(
+      options.maxServers ?? MAX_SERVERS,
+      "maxServers",
+      MAX_SERVERS,
+    ),
+  );
+  const clientName = options.clientName?.trim() || "agentlink-node-host";
+  const clientVersion = options.clientVersion?.trim() || "0.1.0";
+  return await createNodeHostMcpResourcePromptProvider({
+    discovery: request,
+    ...(options.maxToolResultChars !== undefined
+      ? { maxResultChars: options.maxToolResultChars }
+      : {}),
+    connections: servers.map((server) => ({
+      serverName: server.id,
+      timeoutMs: server.timeoutMs,
+      connect: async (
+        context: NodeHostMcpResourcePromptContext<TPrincipal>,
+      ) => {
+        if (!sameTurn(request, context)) {
+          throw new Error("mcp_stdio_turn_mismatch");
+        }
+        if (!(await options.authorizeLaunch({ ...request, server }))) {
+          throw new Error("mcp_stdio_launch_not_authorized");
+        }
+        const client = createNodeHostMcpClient({
+          clientName,
+          clientVersion,
+          serverName: server.id,
+          context,
+          onElicitation: options.onElicitation,
+        });
+        try {
+          await client.connect(createTransport(server));
+          return client;
+        } catch (error) {
+          await client.close().catch(() => undefined);
+          throw error;
+        }
+      },
+    })),
+  });
+}
+
 export function createNodeHostMcpStdioTools<
   TPrincipal extends AgentPrincipal = AgentPrincipal,
 >(
@@ -110,10 +174,13 @@ export function createNodeHostMcpStdioTools<
     const names = new Set<string>();
     for (const server of servers) {
       if (!(await options.authorizeLaunch({ ...request, server }))) continue;
-      const client = new Client(
-        { name: clientName, version: clientVersion },
-        { capabilities: {} },
-      );
+      const client = createNodeHostMcpClient({
+        clientName,
+        clientVersion,
+        serverName: server.id,
+        context: request,
+        onElicitation: options.onElicitation,
+      });
       try {
         await client.connect(createTransport(server));
         const catalog = await client.listTools();
@@ -156,7 +223,8 @@ export function createNodeHostMcpStdioTools<
                     clientVersion,
                     toolName: tool.name,
                     input,
-                    signal: context.signal,
+                    context,
+                    onElicitation: options.onElicitation,
                   });
                   return {
                     modelContent: normalizeResult(result, maxToolResultChars),
@@ -224,25 +292,29 @@ function createTransport(server: Readonly<NodeHostMcpStdioServer>) {
   });
 }
 
-async function callStdioTool(options: {
+async function callStdioTool<TPrincipal extends AgentPrincipal>(options: {
   readonly server: Readonly<NodeHostMcpStdioServer>;
   readonly clientName: string;
   readonly clientVersion: string;
   readonly toolName: string;
   readonly input: Record<string, unknown>;
-  readonly signal: AbortSignal | undefined;
+  readonly context: NodeHostMcpResourcePromptContext<TPrincipal>;
+  readonly onElicitation?: NodeHostMcpFormElicitationHandler<TPrincipal>;
 }): Promise<CallToolResult> {
-  const client = new Client(
-    { name: options.clientName, version: options.clientVersion },
-    { capabilities: {} },
-  );
+  const client = createNodeHostMcpClient({
+    clientName: options.clientName,
+    clientVersion: options.clientVersion,
+    serverName: options.server.id,
+    context: options.context,
+    onElicitation: options.onElicitation,
+  });
   try {
     await client.connect(createTransport(options.server));
     const result = await client.callTool(
       { name: options.toolName, arguments: options.input },
       undefined,
       {
-        signal: options.signal,
+        signal: options.context.signal,
         timeout: boundedTimeout(options.server.timeoutMs),
         onprogress: () => {},
         // A server cannot extend the host's fixed child-process deadline merely

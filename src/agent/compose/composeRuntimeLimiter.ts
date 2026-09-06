@@ -18,6 +18,7 @@ interface ComposeRuntimeAdmissionOptions {
 interface Waiter {
   options: ComposeRuntimeOptions;
   execute: () => Promise<ComposeToolResult>;
+  queuedAt: number;
   resolve: (result: ComposeToolResult) => void;
   reject: (error: unknown) => void;
   timeout: ReturnType<typeof setTimeout>;
@@ -30,6 +31,7 @@ function terminalResult(
   kind: "aborted" | "internal",
   errorCode: "aborted" | "compose_runtime_busy",
   message: string,
+  queueWaitBucket: ComposeTrace["queueWaitBucket"] = "none",
 ): ComposeToolResult {
   const trace: ComposeTrace = {
     description: options.params.description,
@@ -43,6 +45,9 @@ function terminalResult(
     toolAllBatchCount: 0,
     toolAllSettledBatchCount: 0,
     bridgedBytes: 0,
+    runtimeReturnedBytes: 0,
+    queueWaitBucket,
+    artifactRetention: "none",
     errorKind: kind,
     errorCode,
   };
@@ -93,6 +98,7 @@ export class ComposeRuntimeLimiter {
       const waiter: Waiter = {
         options,
         execute,
+        queuedAt: Date.now(),
         resolve,
         reject,
         timeout: undefined as unknown as ReturnType<typeof setTimeout>,
@@ -113,19 +119,23 @@ export class ComposeRuntimeLimiter {
       };
       waiter.timeout = setTimeout(() => {
         if (!this.removeWaiter(waiter)) return;
-        this.settleWaiter(waiter, this.busyResult(options));
+        this.settleWaiter(waiter, this.busyResult(options, "5s_plus"));
       }, this.admissionTimeoutMs);
       options.signal.addEventListener("abort", waiter.abort, { once: true });
       this.waiters.push(waiter);
     });
   }
 
-  private busyResult(options: ComposeRuntimeOptions): ComposeToolResult {
+  private busyResult(
+    options: ComposeRuntimeOptions,
+    queueWaitBucket: ComposeTrace["queueWaitBucket"] = "none",
+  ): ComposeToolResult {
     return terminalResult(
       options,
       "internal",
       "compose_runtime_busy",
       "Compose runtime capacity is busy; retry after other compose calls finish",
+      queueWaitBucket,
     );
   }
 
@@ -145,11 +155,16 @@ export class ComposeRuntimeLimiter {
     const waiter = this.waiters.shift();
     if (!waiter) return;
     this.clearWaiter(waiter);
+    const queueWaitBucket = bucketQueueWait(Date.now() - waiter.queuedAt);
     void this.execute(waiter.execute).then(
-      (result) => this.settleWaiter(waiter, result),
+      (result) => {
+        result.uiMeta.composeTrace.queueWaitBucket = queueWaitBucket;
+        this.settleWaiter(waiter, result);
+      },
       (error: unknown) => {
         if (waiter.settled) return;
         waiter.settled = true;
+        this.clearWaiter(waiter);
         waiter.reject(error);
       },
     );
@@ -174,6 +189,17 @@ export class ComposeRuntimeLimiter {
     this.clearWaiter(waiter);
     waiter.resolve(result);
   }
+}
+
+function bucketQueueWait(
+  waitMs: number,
+): NonNullable<ComposeTrace["queueWaitBucket"]> {
+  if (waitMs <= 0) return "none";
+  if (waitMs < 100) return "lt_100ms";
+  if (waitMs < 500) return "100_499ms";
+  if (waitMs < 1_000) return "500_999ms";
+  if (waitMs < 5_000) return "1_4s";
+  return "5s_plus";
 }
 
 const extensionHostLimiter = new ComposeRuntimeLimiter();

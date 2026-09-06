@@ -53,6 +53,8 @@ const composeRuntimeMocks = vi.hoisted(() => ({
         toolAllBatchCount: 2,
         toolAllSettledBatchCount: 1,
         bridgedBytes: 1234,
+        outputSpilled: true,
+        artifactRetention: "retained",
         children: [],
       },
     },
@@ -332,11 +334,11 @@ describe("tool usage telemetry project attribution", () => {
   it("forwards the exact run-scoped artifact writer into compose", async () => {
     composeRuntimeMocks.handleCompose.mockClear();
     const retainToolResultArtifact = vi.fn(async () => null);
-    const record = vi.fn();
+    const recordCompose = vi.fn();
     const runtime = createAgentToolRuntime({
       ...mockCtx,
       extensionUri: { fsPath: "/extension" } as any,
-      toolUsageTelemetry: { record } as any,
+      toolUsageTelemetry: { recordCompose } as any,
     });
 
     const result = await runtime.executeTool({
@@ -345,6 +347,7 @@ describe("tool usage telemetry project attribution", () => {
       context: {
         sessionId: "test-session",
         mode: "code",
+        composeEnabled: true,
         availableToolNames: new Set(["compose"]),
         toolCallBudget: new (
           await import("../core/tools/toolCallBudget.js")
@@ -359,19 +362,19 @@ describe("tool usage telemetry project attribution", () => {
     expect(composeRuntimeMocks.handleCompose).toHaveBeenCalledWith(
       expect.objectContaining({ retainArtifact: retainToolResultArtifact }),
     );
-    expect(record).toHaveBeenCalledWith(
+    expect(recordCompose).toHaveBeenCalledWith(
       expect.objectContaining({
-        toolName: "compose",
-        metrics: expect.objectContaining({
-          childCount: 5,
-          completedChildCount: 5,
-          succeededChildCount: 3,
-          failedChildCount: 1,
-          cancelledChildCount: 1,
-          toolAllBatchCount: 2,
-          toolAllSettledBatchCount: 1,
-          bridgedBytes: 1234,
-        }),
+        childCount: 5,
+        completedChildCount: 5,
+        succeededChildCount: 3,
+        failedChildCount: 1,
+        cancelledChildCount: 1,
+        toolAllBatchCount: 2,
+        toolAllSettledBatchCount: 1,
+        bridgedBytes: 1234,
+        outputSpilled: true,
+        artifactRetention: "retained",
+        outcome: "ok",
       }),
     );
   });
@@ -1266,17 +1269,43 @@ describe("getAgentTools", () => {
 
   it("keeps compose out of background, restrictive profile, and skill catalogs", () => {
     expect(
-      getAgentTools(undefined, undefined, true).map((tool) => tool.name),
+      getAgentTools(
+        undefined,
+        undefined,
+        true,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        [],
+        true,
+      ).map((tool) => tool.name),
     ).not.toContain("compose");
     expect(
-      getAgentTools(undefined, undefined, true, "readonly-research").map(
-        (tool) => tool.name,
-      ),
+      getAgentTools(
+        undefined,
+        undefined,
+        true,
+        "readonly-research",
+        undefined,
+        undefined,
+        undefined,
+        [],
+        true,
+      ).map((tool) => tool.name),
     ).not.toContain("compose");
     expect(
-      getAgentTools(undefined, undefined, false, undefined, [
-        "get_context",
-      ]).map((tool) => tool.name),
+      getAgentTools(
+        undefined,
+        undefined,
+        false,
+        undefined,
+        ["get_context"],
+        undefined,
+        undefined,
+        [],
+        true,
+      ).map((tool) => tool.name),
     ).not.toContain("compose");
   });
 
@@ -1295,7 +1324,17 @@ describe("getAgentTools", () => {
         "mcp",
       ],
     };
-    const benchmarkTools = getAgentTools(benchmarkMode);
+    const benchmarkTools = getAgentTools(
+      benchmarkMode,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      [],
+      true,
+    );
     const definitions = new Set(benchmarkTools.map((tool) => tool.name));
     for (const name of COMPOSABLE_TOOLS) {
       expect(TOOL_CAPABILITIES[name]).toMatchObject({
@@ -1308,17 +1347,16 @@ describe("getAgentTools", () => {
       expect(definitions.has(name)).toBe(true);
     }
     expect(COMPOSABLE_TOOLS.has("compose")).toBe(false);
-    expect(COMPOSABLE_TOOLS.has("read_file")).toBe(false);
+    expect(COMPOSABLE_TOOLS.has("read_file")).toBe(true);
     expect(COMPOSABLE_TOOLS.has("codebase_search")).toBe(false);
 
     const childNames = (tools: ToolDefinition[]): string[] => {
       const description = tools.find(
         (tool) => tool.name === "compose",
       )?.description;
-      const match = description?.match(
-        /Composable children in this advertised tool union: ([^.]+)\./,
-      );
-      return match?.[1]?.split(", ") ?? [];
+      return [...COMPOSABLE_TOOLS]
+        .filter((name) => description?.includes(`${name} (`))
+        .sort();
     };
     const ordinaryChildren = [
       "get_call_hierarchy",
@@ -1334,9 +1372,24 @@ describe("getAgentTools", () => {
       "go_to_implementation",
       "go_to_type_definition",
       "list_files",
+      "read_file",
       "search_files",
     ];
-    expect(childNames(getAgentTools())).toEqual(ordinaryChildren);
+    expect(
+      childNames(
+        getAgentTools(
+          undefined,
+          undefined,
+          false,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          [],
+          true,
+        ),
+      ),
+    ).toEqual(ordinaryChildren);
     expect(childNames(benchmarkTools)).toEqual([
       "get_call_hierarchy",
       "get_code_actions",
@@ -1354,8 +1407,16 @@ describe("getAgentTools", () => {
       "go_to_implementation",
       "go_to_type_definition",
       "list_files",
+      "read_file",
       "search_files",
     ]);
+    const composeDefinition = benchmarkTools.find(
+      (tool) => tool.name === "compose",
+    );
+    expect(composeDefinition).toBeDefined();
+    expect(
+      Math.ceil(JSON.stringify(composeDefinition).length / 4),
+    ).toBeLessThan(700);
   });
 
   it("includes the core file tools and foreground task status tool", () => {

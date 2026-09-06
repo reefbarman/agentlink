@@ -4,10 +4,25 @@ import {
   type CoreModelJsonSchema,
   type HostToolResolver,
 } from "@agentlink/core";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import {
+  UnauthorizedError,
+  type OAuthClientProvider,
+} from "@modelcontextprotocol/sdk/client/auth.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { createMcpOAuthTransportFetch } from "./mcpOAuthFetch.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+
+import {
+  createNodeHostMcpClient,
+  type NodeHostMcpFormElicitationHandler,
+} from "./mcpElicitation.js";
+import {
+  createNodeHostMcpResourcePromptProvider,
+  type NodeHostMcpResourcePromptContext,
+  type NodeHostMcpResourcePromptProvider,
+} from "./mcpResourcePrompts.js";
 
 const MAX_SERVERS = 20;
 const MAX_TOOLS_PER_SERVER = 100;
@@ -52,6 +67,22 @@ export interface NodeHostMcpRemoteNetworkRequest<
   readonly url: URL;
 }
 
+export interface NodeHostMcpRemoteOAuthRequest<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+> extends ResolveNodeHostMcpRemoteServersRequest<TPrincipal> {
+  readonly server: Readonly<NodeHostMcpRemoteServer>;
+  readonly url: URL;
+  /** The same destination-authorized fetch used by this MCP connection. */
+  readonly fetch: typeof globalThis.fetch;
+  readonly signal?: AbortSignal;
+}
+
+export type ResolveNodeHostMcpRemoteOAuthProvider<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+> = (
+  request: NodeHostMcpRemoteOAuthRequest<TPrincipal>,
+) => OAuthClientProvider | undefined | Promise<OAuthClientProvider | undefined>;
+
 export interface CreateNodeHostMcpRemoteToolsOptions<
   TPrincipal extends AgentPrincipal = AgentPrincipal,
 > {
@@ -68,6 +99,22 @@ export interface CreateNodeHostMcpRemoteToolsOptions<
   readonly maxServers?: number;
   readonly maxToolsPerServer?: number;
   readonly maxToolResultChars?: number;
+  /** Optional turn cancellation for catalog/resource connections. */
+  readonly signal?: AbortSignal;
+  /** Optional host-owned form interaction. URL-mode elicitation remains declined. */
+  readonly onElicitation?: NodeHostMcpFormElicitationHandler<TPrincipal>;
+  /**
+   * Optional host-owned OAuth provider. It is resolved per connection and must
+   * remain bound to the supplied principal/session/turn/server identity.
+   */
+  readonly resolveOAuthProvider?: ResolveNodeHostMcpRemoteOAuthProvider<TPrincipal>;
+  /**
+   * Separate default-deny policy for OAuth discovery and token endpoints. When
+   * omitted, OAuth receives the narrower MCP endpoint-authorized fetch.
+   */
+  readonly authorizeOAuthNetwork?: (
+    request: NodeHostMcpRemoteNetworkRequest<TPrincipal>,
+  ) => boolean | Promise<boolean>;
   /** Host-selected transport implementation; authorization still wraps every request. */
   readonly fetch?: typeof globalThis.fetch;
 }
@@ -76,6 +123,85 @@ export interface CreateNodeHostMcpRemoteToolsOptions<
  * Build dynamic remote MCP tools with no ambient configuration, OAuth, stdio,
  * plugin, or filesystem authority. Every URL and redirect is host-authorized.
  */
+export async function createNodeHostMcpRemoteResourcePrompts<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+>(
+  options: CreateNodeHostMcpRemoteToolsOptions<TPrincipal>,
+  request: NodeHostMcpResourcePromptContext<TPrincipal>,
+): Promise<NodeHostMcpResourcePromptProvider<TPrincipal>> {
+  const servers = await resolveServers(
+    options.resolveServers,
+    request,
+    boundedInteger(
+      options.maxServers ?? MAX_SERVERS,
+      "maxServers",
+      MAX_SERVERS,
+    ),
+  );
+  const clientName = options.clientName?.trim() || "agentlink-node-host";
+  const clientVersion = options.clientVersion?.trim() || "0.1.0";
+  const transportFetch = options.fetch ?? globalThis.fetch;
+  return await createNodeHostMcpResourcePromptProvider({
+    discovery: request,
+    ...(options.maxToolResultChars !== undefined
+      ? { maxResultChars: options.maxToolResultChars }
+      : {}),
+    connections: servers.flatMap((server) => {
+      const endpoint = parseHttpsUrl(server.url);
+      if (!endpoint) return [];
+      const fetch = createAuthorizedFetch(
+        options.authorizeNetwork,
+        transportFetch,
+        request,
+        server.id,
+      );
+      const oauthFetch = options.authorizeOAuthNetwork
+        ? createAuthorizedFetch(
+            options.authorizeOAuthNetwork,
+            transportFetch,
+            request,
+            server.id,
+          )
+        : fetch;
+      return [
+        {
+          serverName: server.id,
+          timeoutMs: server.timeoutMs,
+          connect: async (
+            context: NodeHostMcpResourcePromptContext<TPrincipal>,
+          ) => {
+            if (!sameTurn(request, context, options.principalEquals)) {
+              throw new Error("mcp_remote_turn_mismatch");
+            }
+            const authProvider = await options.resolveOAuthProvider?.({
+              principal: context.principal,
+              sessionId: context.sessionId,
+              turnId: context.turnId,
+              signal: context.signal ?? options.signal,
+              server,
+              url: endpoint,
+              fetch: oauthFetch,
+            });
+            return await connectRemoteClient({
+              createClient: () =>
+                createNodeHostMcpClient({
+                  clientName,
+                  clientVersion,
+                  serverName: server.id,
+                  context,
+                  onElicitation: options.onElicitation,
+                }),
+              createTransport: () =>
+                createTransport(server, endpoint, fetch, authProvider),
+              authProvider,
+            });
+          },
+        },
+      ];
+    }),
+  });
+}
+
 export function createNodeHostMcpRemoteTools<
   TPrincipal extends AgentPrincipal = AgentPrincipal,
 >(
@@ -117,13 +243,38 @@ export function createNodeHostMcpRemoteTools<
         request,
         server.id,
       );
-      const client = new Client(
-        { name: clientName, version: clientVersion },
-        { capabilities: {} },
-      );
+      const oauthFetch = options.authorizeOAuthNetwork
+        ? createAuthorizedFetch(
+            options.authorizeOAuthNetwork,
+            transportFetch,
+            request,
+            server.id,
+          )
+        : fetch;
+      let client: Client | undefined;
       try {
-        const transport = createTransport(server, endpoint, fetch);
-        await client.connect(transport);
+        const authProvider = await options.resolveOAuthProvider?.({
+          principal: request.principal,
+          sessionId: request.sessionId,
+          turnId: request.turnId,
+          signal: options.signal,
+          server,
+          url: endpoint,
+          fetch: oauthFetch,
+        });
+        client = await connectRemoteClient({
+          createClient: () =>
+            createNodeHostMcpClient({
+              clientName,
+              clientVersion,
+              serverName: server.id,
+              context: request,
+              onElicitation: options.onElicitation,
+            }),
+          createTransport: () =>
+            createTransport(server, endpoint, fetch, authProvider),
+          authProvider,
+        });
         const catalog = await client.listTools();
         let acceptedTools = 0;
         for (const tool of catalog.tools) {
@@ -160,7 +311,11 @@ export function createNodeHostMcpRemoteTools<
                     clientVersion,
                     toolName: tool.name,
                     input,
-                    signal: context.signal,
+                    context,
+                    onElicitation: options.onElicitation,
+                    resolveOAuthProvider: options.resolveOAuthProvider,
+                    authorizeOAuthNetwork: options.authorizeOAuthNetwork,
+                    transportFetch,
                   });
                   return {
                     modelContent: normalizeResult(result, maxToolResultChars),
@@ -186,7 +341,7 @@ export function createNodeHostMcpRemoteTools<
       } catch {
         // A single unavailable or unauthorized server never exposes tools or blocks sibling servers.
       } finally {
-        await client.close().catch(() => undefined);
+        await client?.close().catch(() => undefined);
       }
     }
     return tools;
@@ -218,16 +373,26 @@ function createTransport(
   server: NodeHostMcpRemoteServer,
   endpoint: URL,
   fetch: typeof globalThis.fetch,
+  authProvider?: OAuthClientProvider,
 ) {
   const headers = server.headers ? { ...server.headers } : undefined;
+  const oauthTransportFetch = authProvider
+    ? createMcpOAuthTransportFetch(authProvider, endpoint, fetch)
+    : undefined;
+  if (oauthTransportFetch) {
+    fetch = oauthTransportFetch;
+    authProvider = undefined;
+  }
   if (server.transport === "sse") {
     return new SSEClientTransport(endpoint, {
       fetch,
+      authProvider,
       ...(headers ? { requestInit: { headers } } : {}),
     });
   }
   return new StreamableHTTPClientTransport(endpoint, {
     fetch,
+    authProvider,
     ...(headers ? { requestInit: { headers } } : {}),
   });
 }
@@ -244,9 +409,10 @@ function createAuthorizedFetch<TPrincipal extends AgentPrincipal>(
     );
     const allowed = await authorize({ ...request, serverId, url });
     if (!allowed) throw new Error("mcp_remote_destination_not_authorized");
+    const requestInit = { ...init, redirect: "error" as const };
     const response = await (input instanceof Request
-      ? transportFetch(new Request(input, { ...init, redirect: "error" }))
-      : transportFetch(url, { ...init, redirect: "error" }));
+      ? transportFetch(new Request(input, requestInit), requestInit)
+      : transportFetch(url, requestInit));
     if (
       response.redirected ||
       (response.status >= 300 && response.status < 400)
@@ -284,7 +450,7 @@ function asInputSchema(tool: Tool): CoreModelJsonSchema {
     : { type: "object", properties: {}, additionalProperties: false };
 }
 
-async function callRemoteTool(options: {
+async function callRemoteTool<TPrincipal extends AgentPrincipal>(options: {
   readonly server: NodeHostMcpRemoteServer;
   readonly endpoint: URL;
   readonly fetch: typeof globalThis.fetch;
@@ -292,21 +458,53 @@ async function callRemoteTool(options: {
   readonly clientVersion: string;
   readonly toolName: string;
   readonly input: Record<string, unknown>;
-  readonly signal: AbortSignal | undefined;
+  readonly context: NodeHostMcpResourcePromptContext<TPrincipal>;
+  readonly onElicitation?: NodeHostMcpFormElicitationHandler<TPrincipal>;
+  readonly resolveOAuthProvider?: ResolveNodeHostMcpRemoteOAuthProvider<TPrincipal>;
+  readonly authorizeOAuthNetwork?: CreateNodeHostMcpRemoteToolsOptions<TPrincipal>["authorizeOAuthNetwork"];
+  readonly transportFetch: typeof globalThis.fetch;
 }): Promise<CallToolResult> {
-  const client = new Client(
-    { name: options.clientName, version: options.clientVersion },
-    { capabilities: {} },
-  );
+  const oauthFetch = options.authorizeOAuthNetwork
+    ? createAuthorizedFetch(
+        options.authorizeOAuthNetwork,
+        options.transportFetch,
+        options.context,
+        options.server.id,
+      )
+    : options.fetch;
+  const authProvider = await options.resolveOAuthProvider?.({
+    principal: options.context.principal,
+    sessionId: options.context.sessionId,
+    turnId: options.context.turnId,
+    signal: options.context.signal,
+    server: options.server,
+    url: options.endpoint,
+    fetch: oauthFetch,
+  });
+  const client = await connectRemoteClient({
+    createClient: () =>
+      createNodeHostMcpClient({
+        clientName: options.clientName,
+        clientVersion: options.clientVersion,
+        serverName: options.server.id,
+        context: options.context,
+        onElicitation: options.onElicitation,
+      }),
+    createTransport: () =>
+      createTransport(
+        options.server,
+        options.endpoint,
+        options.fetch,
+        authProvider,
+      ),
+    authProvider,
+  });
   try {
-    await client.connect(
-      createTransport(options.server, options.endpoint, options.fetch),
-    );
     const result = await client.callTool(
       { name: options.toolName, arguments: options.input },
       undefined,
       {
-        signal: options.signal,
+        signal: options.context.signal,
         timeout: boundedTimeout(options.server.timeoutMs),
       },
     );
@@ -318,6 +516,33 @@ async function callRemoteTool(options: {
     return result;
   } finally {
     await client.close().catch(() => undefined);
+  }
+}
+
+async function connectRemoteClient(options: {
+  readonly createClient: () => Client;
+  readonly createTransport: () =>
+    | SSEClientTransport
+    | StreamableHTTPClientTransport;
+  readonly authProvider?: OAuthClientProvider;
+}): Promise<Client> {
+  let client = options.createClient();
+  try {
+    await client.connect(options.createTransport());
+    return client;
+  } catch (error) {
+    await client.close().catch(() => undefined);
+    if (!(error instanceof UnauthorizedError) || !options.authProvider)
+      throw error;
+  }
+
+  client = options.createClient();
+  try {
+    await client.connect(options.createTransport());
+    return client;
+  } catch (error) {
+    await client.close().catch(() => undefined);
+    throw error;
   }
 }
 

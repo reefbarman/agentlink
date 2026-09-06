@@ -52,7 +52,7 @@ describe("Codex OpenAI client helpers", () => {
       canRefresh: true,
       caps: {
         supportsPreviousResponseId: false,
-        supportsPromptCacheKey: false,
+        supportsPromptCacheKey: true,
         supportsPromptCacheRetention: false,
         supportsMaxOutputTokens: false,
       },

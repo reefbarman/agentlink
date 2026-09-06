@@ -17,6 +17,117 @@ afterEach(() => {
 });
 
 describe("ToolCallBlock", () => {
+  it("summarizes compose failures without confusing sibling cancellation with failure", () => {
+    const script = "const requests = [];\nreturn toolAll(requests);";
+    const { container } = render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "compose-failed",
+          name: "compose",
+          inputJson: JSON.stringify({ script }),
+          complete: true,
+          result: JSON.stringify({
+            error: "File not found: apps/desktop/README.md",
+            kind: "child_failed",
+            stack: "ComposeScopeError: internal stack",
+          }),
+          composeTrace: {
+            status: "error",
+            errorKind: "child_failed",
+            totalChildren: 4,
+            completedChildren: 4,
+            succeededChildren: 1,
+            failedChildren: 1,
+            cancelledChildren: 2,
+            children: [
+              {
+                id: "1",
+                name: "search_files",
+                status: "completed",
+                durationMs: 10,
+                inputSummary: "plans/status.md",
+              },
+              {
+                id: "2",
+                name: "get_context",
+                status: "error",
+                durationMs: 35,
+                errorSummary:
+                  "child_failed: File not found: apps/desktop/README.md",
+              },
+              {
+                id: "3",
+                name: "get_context",
+                status: "cancelled",
+                durationMs: 36,
+                inputSummary: "src/main.ts",
+                errorSummary: "aborted: Compose execution was aborted",
+              },
+              {
+                id: "4",
+                name: "get_context",
+                status: "cancelled",
+                errorSummary: "aborted: Compose execution was aborted",
+              },
+            ],
+          },
+        },
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /compose/i }));
+    expect(
+      screen.getByText("1 succeeded · 1 failed · 2 cancelled"),
+    ).toBeTruthy();
+    expect(
+      screen.getAllByText("Cancelled because another read failed"),
+    ).toHaveLength(2);
+    const scriptDetails = screen.getByText("Script").closest("details");
+    expect(scriptDetails?.open).toBe(false);
+    expect(scriptDetails?.querySelector("code")?.textContent).toBe(script);
+    expect(screen.getByText("Technical details").closest("details")?.open).toBe(
+      false,
+    );
+    const failedRow = container.querySelector(".compose-trace-child--error");
+    expect(failedRow?.querySelector(".compose-trace-child-input")).toBeTruthy();
+    expect(
+      failedRow?.querySelector(".compose-trace-child-error")?.textContent,
+    ).toBe("File not found: apps/desktop/README.md");
+  });
+
+  it("derives compose counts from restored legacy child traces and keeps settled results visible", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "compose-settled",
+          name: "compose",
+          inputJson: JSON.stringify({ script: "return toolAllSettled([]);" }),
+          complete: true,
+          result: JSON.stringify({ found: 1, missing: 1 }),
+          composeTrace: {
+            status: "completed",
+            totalChildren: 2,
+            completedChildren: 2,
+            children: [
+              { id: "1", name: "get_context", status: "completed" },
+              {
+                id: "2",
+                name: "get_context",
+                status: "error",
+                errorSummary: "child_failed: File not found: missing.md",
+              },
+            ],
+          },
+        },
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /compose/i }));
+    expect(screen.getByText("1 succeeded · 1 failed")).toBeTruthy();
+    expect(screen.queryByText("Technical details")).toBeNull();
+    expect(screen.getByText('"found"')).toBeTruthy();
+  });
+
   it("shows known input when expanded while the tool call is running", () => {
     render(
       h(ToolCallBlock, {

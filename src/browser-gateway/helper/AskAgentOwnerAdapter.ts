@@ -4,6 +4,7 @@ import type {
   TodoItem,
 } from "@agentlink/protocol/chat-transcript";
 import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
+import type { McpFormElicitationRequest } from "@agentlink/protocol/mcp-elicitation";
 import type { CoreCapabilityStatusDto } from "@agentlink/protocol/session";
 import { BROWSER_GATEWAY_ASK_AGENT_OWNER_ID } from "../browserGatewayAskAgentSessionStore.js";
 import type { BrowserGatewayCoreOwnerRegistry } from "../coreOwnerRegistry.js";
@@ -456,7 +457,11 @@ function snapshotToReadSet(
     questionProgress: snapshot.ui.questionProgress
       ? structuredClone(snapshot.ui.questionProgress)
       : null,
-    formElicitation: null,
+    formElicitation: snapshot.ui.formElicitation
+      ? (structuredClone(
+          snapshot.ui.formElicitation,
+        ) as McpFormElicitationRequest)
+      : null,
     urlElicitation: null,
   };
   const interaction = snapshot.ui.approval
@@ -478,7 +483,13 @@ function snapshotToReadSet(
             : {}),
           totalSteps: snapshot.ui.question.questions.length,
         }
-      : null;
+      : snapshot.ui.formElicitation
+        ? {
+            requestId: snapshot.ui.formElicitation.id,
+            kind: "form" as const,
+            payload: interactionPayload,
+          }
+        : null;
   return {
     catalog: {
       projects: [],

@@ -28,6 +28,7 @@
   "dependencies": {
     "@agentlink/core": "0.1.0",
     "@agentlink/protocol": "0.1.0",
+    "@napi-rs/keyring": "2.0.0",
     "@modelcontextprotocol/sdk": "1.29.0"
   },
   "engines": {

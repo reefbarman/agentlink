@@ -11,6 +11,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import type { ComposeExecutionScope } from "./composeScope.js";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { loadComposeRuntime } from "./composeRuntimeLoader.js";
 import { promisify } from "node:util";
 import { readFile } from "node:fs/promises";
@@ -49,11 +50,28 @@ function runBundledCompose(
     params,
     scope,
     signal: new AbortController().signal,
-    wasmPath: require.resolve("@jitl/quickjs-wasmfile-release-asyncify/wasm"),
+    wasmPath: path.resolve("dist/wasm/quickjs-release-asyncify.wasm"),
   });
 }
 
 describe("bundled compose runtime", () => {
+  it("loads shipped syntax assets and preserves optional final-return fields", async () => {
+    const result = await runBundledCompose({
+      script:
+        'return { pattern: "async function|async (", absent: undefined };',
+    });
+    expect(result.isError).toBe(false);
+    expect(result.data).toEqual({ pattern: "async function|async (" });
+    const denied = await runBundledCompose({
+      script: "return { async read() {} };",
+    });
+    expect(denied.isError).toBe(true);
+    expect(denied.data).toMatchObject({
+      kind: "policy",
+      code: "script_policy_violation",
+    });
+  });
+
   it("keeps QuickJS out of the CommonJS extension bundle", async () => {
     const extensionBundle = await readFile(
       path.resolve("dist/extension.js"),
@@ -104,24 +122,25 @@ describe("bundled compose runtime", () => {
       params,
       scope,
       signal: new AbortController().signal,
-      wasmPath: require.resolve("@jitl/quickjs-wasmfile-release-asyncify/wasm"),
+      wasmPath: path.resolve("dist/wasm/quickjs-release-asyncify.wasm"),
       retainArtifact: async (request) => {
         retainedContent = request.content;
         return {
           path: "/tmp/bundled-compose-result.jsonl",
           bytes: Buffer.byteLength(request.content),
           chars: [...request.content].length,
-          sha256: "artifact-sha",
+          sha256: createHash("sha256").update(request.content).digest("hex"),
         };
       },
     });
 
     expect(result).toMatchObject({
-      isError: true,
-      error: { kind: "serialization" },
+      isError: false,
+      data: { status: "completed", outputSpilled: true },
       uiMeta: {
         composeTrace: {
-          status: "error",
+          status: "completed",
+          outputSpilled: true,
           totalChildren: 1,
           completedChildren: 1,
         },

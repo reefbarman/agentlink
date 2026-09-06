@@ -29,7 +29,7 @@ export const COMPOSE_ERROR_KINDS = [
   "budget_exhausted",
   "child_failed",
   "internal",
-  "memory",
+  "memory_limit",
   "policy",
   "script_error",
   "serialization",
@@ -39,24 +39,35 @@ export const COMPOSE_ERROR_KINDS = [
 export type ComposeErrorKind = (typeof COMPOSE_ERROR_KINDS)[number];
 
 export const COMPOSE_ERROR_CODES = [
-  "compose_final_result_too_large",
-  "compose_child_result_too_large",
-  "compose_cumulative_result_too_large",
-  "compose_unsupported_value",
-  "compose_cyclic_value",
-  "compose_non_finite_number",
-  "compose_invalid_json",
-  "compose_child_handler_failure",
-  "compose_tool_policy_denied",
-  "compose_request_policy_denied",
-  "compose_mode_policy_denied",
-  "compose_composability_policy_denied",
-  "compose_budget_exhausted",
+  "final_result_too_large",
+  "child_result_too_large",
+  "cumulative_child_result_too_large",
+  "unsupported_data",
+  "cyclic_data",
+  "non_finite_data",
+  "invalid_json",
+  "serialization_failed",
+  "child_handler_failed",
+  "canonical_result_required",
+  "tool_not_available",
+  "tool_not_in_request",
+  "tool_not_in_mode",
+  "tool_not_composable",
+  "tool_input_not_composable",
+  "interaction_denied",
+  "tool_policy",
+  "request_policy",
+  "mode_policy",
+  "composability_policy",
+  "budget_exhausted",
   "compose_runtime_busy",
-  "compose_timeout",
-  "compose_memory_limit",
-  "compose_aborted",
-  "compose_internal_failure",
+  "timeout",
+  "memory_limit",
+  "aborted",
+  "validation_failed",
+  "script_policy_violation",
+  "script_error",
+  "internal_failure",
 ] as const;
 export type ComposeErrorCode = (typeof COMPOSE_ERROR_CODES)[number];
 
@@ -99,6 +110,7 @@ export interface ComposeToolUsageObservation {
   errorCode?: string;
   queueWaitBucket?: ComposeQueueWaitBucket;
   artifactRetention?: ComposeArtifactRetentionCategory;
+  outputSpilled?: boolean;
   sameTurnRepair?: boolean;
 }
 
@@ -257,6 +269,8 @@ export class ToolUsageTelemetry {
       outcome: observation.outcome,
       durationMs: observation.durationMs,
       metrics: {
+        telemetrySchemaVersion: "1",
+        composeOutcome: observation.outcome,
         childCount: nonNegativeInteger(observation.childCount),
         childCountBucket: composeChildCountBucket(observation.childCount),
         completedChildCount: nonNegativeInteger(
@@ -289,6 +303,7 @@ export class ToolUsageTelemetry {
         ),
         queueWaitBucket: observation.queueWaitBucket ?? "none",
         artifactRetention: observation.artifactRetention ?? "none",
+        outputSpilled: observation.outputSpilled === true,
         sameTurnRepair: observation.sameTurnRepair === true,
       },
     });

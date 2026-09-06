@@ -695,7 +695,79 @@ User wants to fix the condense resume bug for Codex after summarization.
     ]);
   });
 
-  it("places the injected resume-context message immediately before the next real user message", () => {
+  it("keeps the post-condense provider prefix stable as user messages and TODOs advance", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "Fix the cache bug" },
+      {
+        role: "user",
+        isSummary: true,
+        condenseId: "cache-summary",
+        preservedContext: {
+          toolNames: ["todo_write"],
+          todos: [
+            {
+              id: "fix",
+              content: "Fix cache",
+              activeForm: "Fixing cache",
+              status: "in_progress",
+            },
+          ],
+        },
+        content: [
+          {
+            type: "text",
+            text: "## Conversation Summary\nInvestigating caching.",
+          },
+        ],
+      },
+    ];
+    const before = getEffectiveHistory(messages);
+    const appended: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Found the cause." }],
+      },
+      { role: "user", content: "Now add a regression test" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "todo-update",
+            name: "todo_write",
+            input: {
+              todos: [
+                {
+                  id: "fix",
+                  content: "Fix cache",
+                  activeForm: "Fixing cache",
+                  status: "completed",
+                },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "todo-update",
+            content: "Updated",
+          },
+        ],
+      },
+    ];
+    const after = getEffectiveHistory([...messages, ...appended]);
+    expect(after.slice(0, before.length)).toEqual(before);
+    expect(after.slice(before.length)).toEqual(appended);
+    expect(
+      requestMessageText(before.find((message) => message.isResumeContext)!),
+    ).toContain("in_progress");
+  });
+
+  it("places the injected resume-context message immediately after the summary", () => {
     const messages: AgentMessage[] = [
       {
         role: "user",
@@ -723,11 +795,11 @@ User wants to fix the condense resume bug for Codex after summarization.
     const effective = getEffectiveHistory(messages);
     expect(effective).toHaveLength(4);
     expect(effective[0]?.isSummary).toBe(true);
-    expect(effective[1]?.role).toBe("assistant");
-    expect(effective[2]?.role).toBe("user");
-    expect(effective[2]?.isResumeContext).toBe(true);
-    expect(Array.isArray(effective[2]?.content)).toBe(true);
-    const injected = effective[2]?.content as Array<{
+    expect(effective[1]?.role).toBe("user");
+    expect(effective[1]?.isResumeContext).toBe(true);
+    expect(effective[2]?.role).toBe("assistant");
+    expect(Array.isArray(effective[1]?.content)).toBe(true);
+    const injected = effective[1]?.content as Array<{
       type: string;
       text?: string;
     }>;
@@ -798,9 +870,10 @@ User wants to fix the condense resume bug for Codex after summarization.
     );
     expect(allResults).toHaveLength(1);
 
-    // Resume context still present, after the tool_result.
+    // Resume context stays at the checkpoint, before the intact tool pair.
     const resumeIdx = effective.findIndex((m) => m.isResumeContext);
-    expect(resumeIdx).toBeGreaterThan(assistantIdx + 1);
+    expect(resumeIdx).toBe(1);
+    expect(resumeIdx).toBeLessThan(assistantIdx);
   });
 
   it("derives canonical user messages from array-content user messages", async () => {

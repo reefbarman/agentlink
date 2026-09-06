@@ -139,6 +139,7 @@ export class AgentSession {
   codexStatefulResponses: boolean;
   codexStoreResponses: boolean;
   codexProMode: boolean;
+  readonly composeEnabled: boolean;
   disabledSkillIds: string[];
   /** Frozen metadata budget keeps the session prompt catalog byte-stable. */
   skillCatalogBudgetChars?: number;
@@ -172,6 +173,8 @@ export class AgentSession {
   private messagesRevision = 0;
   /** Files read during this session (for folded file context on condense) */
   readonly filesRead = new Set<string>();
+  /** Subset of files first read through Compose; telemetry uses count only. */
+  readonly composeFilesRead = new Set<string>();
   /** Complete canonical skill catalog for activation authorization, keyed by path. */
   private advertisedSkills = new Map<string, SkillEntry>();
   /** Bounded prompt projection paired with the complete canonical skill catalog. */
@@ -330,6 +333,7 @@ export class AgentSession {
     this.codexStatefulResponses = opts.config.codexStatefulResponses ?? true;
     this.codexStoreResponses = opts.config.codexStoreResponses ?? false;
     this.codexProMode = opts.config.codexProMode ?? false;
+    this.composeEnabled = opts.config.composeEnabled === true;
     this.disabledSkillIds = [...(opts.config.disabledSkillIds ?? [])];
     this.skillCatalogBudgetChars = opts.skillCatalogBudgetChars;
     this.background = opts.background ?? false;
@@ -411,6 +415,7 @@ export class AgentSession {
       projectScope: opts.projectScope,
       agentPluginCatalogProvider: opts.agentPluginCatalogProvider,
       initialArchitectReviewPending,
+      composeEnabled: opts.config.composeEnabled === true,
       modeInstructionPlacement,
     });
     const agentMode =
@@ -616,6 +621,7 @@ export class AgentSession {
               agentPluginCatalogProvider: this.agentPluginCatalogProvider,
               approveForMe: this.approveForMe,
               initialArchitectReviewPending: this.initialArchitectReviewPending,
+              composeEnabled: this.composeEnabled,
               modeInstructionPlacement: this.modeInstructionPlacement,
             })
           : undefined;
@@ -674,6 +680,7 @@ export class AgentSession {
         skillCatalogBudgetChars: this.skillCatalogBudgetChars,
         approveForMe: this.approveForMe,
         initialArchitectReviewPending: this.initialArchitectReviewPending,
+        composeEnabled: this.composeEnabled,
         modeInstructionPlacement: this.modeInstructionPlacement,
       },
     );
@@ -744,6 +751,7 @@ export class AgentSession {
         skillCatalogBudgetChars: this.skillCatalogBudgetChars,
         approveForMe: this.approveForMe,
         initialArchitectReviewPending: this.initialArchitectReviewPending,
+        composeEnabled: this.composeEnabled,
         modeInstructionPlacement: this.modeInstructionPlacement,
       },
     );
@@ -1248,8 +1256,12 @@ export class AgentSession {
   }
 
   /** Record that a file was read during this session */
-  trackFileRead(filePath: string): void {
+  trackFileRead(
+    filePath: string,
+    source: "direct" | "compose" = "direct",
+  ): void {
     this.filesRead.add(filePath);
+    if (source === "compose") this.composeFilesRead.add(filePath);
   }
 
   setAdvertisedSkills(skills: SkillEntry[]): void {

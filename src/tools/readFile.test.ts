@@ -5,6 +5,7 @@ import * as path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildReadFileError,
+  canonicalizeReadFileResult,
   findLikelyPathSuggestions,
   handleReadFile,
   isEnoentWithSingleSuggestion,
@@ -13,6 +14,7 @@ import {
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import type { ReadFileEnrichmentProvider } from "../core/capabilities/readSearch.js";
+import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 const tempDirs: string[] = [];
 
@@ -43,6 +45,62 @@ async function makeWorkspace(): Promise<string> {
   tempDirs.push(workspaceRoot);
   return workspaceRoot;
 }
+
+describe("canonicalizeReadFileResult", () => {
+  it.each([
+    ["text success", '{"content":"1 | hello"}', false],
+    ["empty success", '{"content":"","showing":"0-0"}', false],
+    ["PDF success", '{"file_type":"pdf","content":"1 | title"}', false],
+    ["missing error", '{"error":"File not found","path":"missing"}', true],
+    ["validation error", '{"error":"Invalid limit","path":"x"}', true],
+    [
+      "auto-follow success",
+      '{"content":"1 | ok","resolution":"auto_followed_suggestion"}',
+      false,
+    ],
+    [
+      "redacted success",
+      '{"content":"[REDACTED]","redaction":{"count":1}}',
+      false,
+    ],
+    [
+      "oversized media error",
+      '{"error":"Image too large","path":"x.png"}',
+      true,
+    ],
+  ])("canonicalizes %s from the exact visible JSON", (_name, text, isError) => {
+    const result = canonicalizeReadFileResult({
+      content: [{ type: "text", text }],
+    });
+
+    expect(result.data).toEqual(JSON.parse(text));
+    expect(result.isError).toBe(isError);
+    expect(result.content).toEqual([{ type: "text", text }]);
+    if (isError) {
+      expect(result.error).toMatchObject({ kind: "tool_error" });
+    } else {
+      expect(result.error).toBeUndefined();
+    }
+  });
+
+  it.each([
+    {
+      content: [{ type: "image" as const, data: "abc", mimeType: "image/png" }],
+    },
+    {
+      content: [
+        {
+          type: "document" as const,
+          data: "abc",
+          mimeType: "application/pdf",
+          name: "spec.pdf",
+        },
+      ],
+    },
+  ] satisfies ToolResult[])("preserves media result %#", (result) => {
+    expect(canonicalizeReadFileResult(result)).toBe(result);
+  });
+});
 
 describe("readFile suggestion-follow helpers", () => {
   it("detects ENOENT payload with exactly one suggestion", async () => {
@@ -165,6 +223,8 @@ describe("read_file semantic query metadata", () => {
     const item = result.content[0];
     const payload = JSON.parse(item!.type === "text" ? item!.text : "{}");
 
+    expect(result.data).toEqual(payload);
+    expect(result.isError).toBe(false);
     expect(payload.content).toBe("1 | first\n2 | second");
     expect(payload.semantic_match).toEqual({
       query: "distinctive missing text",

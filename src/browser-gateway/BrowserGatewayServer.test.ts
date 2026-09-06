@@ -299,6 +299,13 @@ function makeChatViewProviderStub() {
     submitBrowserSetWriteApproval: vi.fn(() => ({ ok: true })),
     submitBrowserSetCommandApprovalPolicy: vi.fn(() => ({ ok: true })),
     submitBrowserSetThinkingEnabled: vi.fn(() => ({ ok: true })),
+    submitBrowserNewTab: vi.fn(async () => ({
+      ok: true,
+      controllerEpoch: "controller-1",
+      tabId: "tab-new",
+      sessionId: "session-new",
+      projectId: "project-a",
+    })),
     submitBrowserNewSession: vi.fn(async () => ({ ok: true })),
     submitBrowserLoadSession: vi.fn(async () => ({ ok: true })),
     submitBrowserAttachFile: vi.fn(async () => ({
@@ -2544,6 +2551,74 @@ describe("BrowserGatewayServer", () => {
       browserSelection,
       true,
     );
+
+    const newTab = (body: unknown, authorized = true) =>
+      fetch(`${baseUrl}/api/tabs/new`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(authorized ? { Authorization: "Bearer test-token" } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+    expect((await newTab({ selection: browserSelection }, false)).status).toBe(
+      401,
+    );
+    for (const body of [
+      null,
+      {},
+      { selection: null },
+      { selection: [] },
+      { selection: { tabId: "tab-1" } },
+    ]) {
+      const response = await newTab(body);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "invalid_selection" });
+    }
+    expect(
+      (await newTab({ selection: browserSelection, mode: 42 })).status,
+    ).toBe(400);
+    expect(chatViewProvider.submitBrowserNewTab).not.toHaveBeenCalled();
+    const createdTab = await newTab({
+      selection: browserSelection,
+      mode: "ask",
+    });
+    expect(createdTab.status).toBe(200);
+    expect(await createdTab.json()).toEqual({
+      ok: true,
+      controllerEpoch: "controller-1",
+      tabId: "tab-new",
+      sessionId: "session-new",
+      projectId: "project-a",
+      snapshot: server.getSnapshot(),
+    });
+    expect(chatViewProvider.submitBrowserNewTab).toHaveBeenLastCalledWith(
+      browserSelection,
+      "ask",
+      "project-a",
+    );
+    chatViewProvider.submitBrowserNewTab.mockResolvedValueOnce({
+      ok: false,
+      reason: "stale_session",
+    } as never);
+    const staleTab = await newTab({
+      selection: browserSelection,
+      projectId: "project-a",
+    });
+    expect(staleTab.status).toBe(409);
+    expect(await staleTab.json()).toEqual({
+      ok: false,
+      reason: "stale_session",
+    });
+    const unknownTabProject = await newTab({
+      selection: browserSelection,
+      projectId: "missing",
+    });
+    expect(unknownTabProject.status).toBe(409);
+    expect(await unknownTabProject.json()).toMatchObject({
+      reason: "project_not_found",
+    });
+    expect(chatViewProvider.submitBrowserNewTab).toHaveBeenCalledTimes(2);
 
     const selectedLoadSession = await fetch(`${baseUrl}/api/session/load`, {
       method: "POST",

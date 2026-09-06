@@ -1,4 +1,8 @@
 import {
+  KEYCHAIN_NATIVE_PACKAGES,
+  resolveKeychainRuntimeTarget,
+} from "./package-keychain-runtime.mjs";
+import {
   getRetrievalNativePackage,
   resolveRetrievalRuntimeTarget,
 } from "./package-retrieval-runtime.mjs";
@@ -52,12 +56,24 @@ function normalizePackagePath(value) {
 export function verifyRetrievalPackageFiles(fileList, target) {
   const expectedTarget = resolveRetrievalRuntimeTarget({ target });
   const expectedNativePackage = getRetrievalNativePackage(expectedTarget);
+  const keychainTarget = resolveKeychainRuntimeTarget({
+    target: expectedTarget,
+  });
+  const expectedKeychainPackage = keychainTarget
+    ? KEYCHAIN_NATIVE_PACKAGES[keychainTarget]
+    : undefined;
   const files = new Set(
     fileList.split(/\r?\n/u).map(normalizePackagePath).filter(Boolean),
   );
   const requiredPaths = [
     ...REQUIRED_PATHS,
     `dist/node_modules/${expectedNativePackage}/package.json`,
+    ...(expectedKeychainPackage
+      ? [
+          "dist/node_modules/@napi-rs/keyring/package.json",
+          `dist/node_modules/${expectedKeychainPackage}/package.json`,
+        ]
+      : []),
   ];
   const missing = requiredPaths.filter((required) => !files.has(required));
   const browserChunks = [...files].filter((file) =>
@@ -90,6 +106,14 @@ export function verifyRetrievalPackageFiles(fileList, target) {
     (file) => !file.startsWith(expectedNativeRoot),
   );
 
+  const keychainAddons = expectedKeychainPackage
+    ? [...files].filter(
+        (file) =>
+          file.startsWith(`dist/node_modules/${expectedKeychainPackage}/`) &&
+          file.endsWith(".node"),
+      )
+    : [];
+
   const errors = [];
   if (missing.length > 0) {
     errors.push(`missing required paths: ${missing.join(", ")}`);
@@ -112,6 +136,11 @@ export function verifyRetrievalPackageFiles(fileList, target) {
       `unexpected native addons: ${unexpectedNativeAddons.join(", ")}`,
     );
   }
+  if (expectedKeychainPackage && keychainAddons.length !== 1) {
+    errors.push(
+      `expected exactly one ${expectedKeychainPackage} addon, found ${keychainAddons.length}`,
+    );
+  }
   if (errors.length > 0) {
     throw new Error(
       `Invalid ${expectedTarget} VSIX inventory: ${errors.join("; ")}`,
@@ -122,6 +151,8 @@ export function verifyRetrievalPackageFiles(fileList, target) {
     target: expectedTarget,
     nativePackage: expectedNativePackage,
     nativeAddon: expectedNativeAddons[0],
+    keychainPackage: expectedKeychainPackage,
+    keychainAddon: keychainAddons[0],
     fileCount: files.size,
   };
 }

@@ -72,6 +72,38 @@ describe("ChatTabController", () => {
     );
   });
 
+  it("creates and reuses an unfocused tab without changing local focus", async () => {
+    const workspace = createWorkspaceState();
+    const controller = new ChatTabController(workspace.state, {
+      createId: createIds("tab-1", "tab-2"),
+    });
+    await controller.bindFocusedSession("session-1");
+    const onWorkspaceChange = vi.fn();
+    controller.onDidChangeWorkspace(onWorkspaceChange);
+
+    const created = await controller.createTab("session-2", { focus: false });
+
+    expect(created).toMatchObject({ id: "tab-2", sessionId: "session-2" });
+    expect(controller.getFocusedTab()).toMatchObject({
+      id: "tab-1",
+      sessionId: "session-1",
+    });
+    expect(onWorkspaceChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ focusedTabId: "tab-1" }),
+    );
+    expect(workspace.stored.get(CHAT_TAB_LAYOUT_WORKSPACE_KEY)).toEqual(
+      controller.getLayout(),
+    );
+    await expect(
+      controller.createTab("session-2", { focus: false }),
+    ).resolves.toEqual(created);
+    expect(controller.getFocusedTabId()).toBe("tab-1");
+    expect(controller.getLayout().tabs).toHaveLength(2);
+
+    await controller.createTab("session-2");
+    expect(controller.getFocusedTabId()).toBe("tab-2");
+  });
+
   it("restores valid layout order and focuses the first docked tab", async () => {
     const initial: ChatTabLayout = {
       version: CHAT_TAB_LAYOUT_VERSION,

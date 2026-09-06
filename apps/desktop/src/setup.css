@@ -1,0 +1,262 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    -apple-system,
+    BlinkMacSystemFont,
+    "SF Pro Text",
+    sans-serif;
+  color: #f3f6f5;
+  background: #121516;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 70% 0%, rgb(78 201 176 / 14%), transparent 42%),
+    #121516;
+}
+
+main {
+  width: min(100% - 48px, 470px);
+  padding: 64px 0 44px;
+}
+
+.mark {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid rgb(78 201 176 / 40%);
+  border-radius: 14px;
+  color: #4ec9b0;
+  background: rgb(78 201 176 / 8%);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.eyebrow {
+  margin: 28px 0 8px;
+  color: #4ec9b0;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(36px, 8vw, 48px);
+  font-weight: 620;
+  letter-spacing: -0.045em;
+  line-height: 1.05;
+}
+
+.intro {
+  margin: 20px 0 34px;
+  color: #aeb7b4;
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.oauth-section {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 26px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+h2 {
+  margin: 0 0 4px;
+  font-size: 17px;
+}
+
+.section-heading p {
+  margin: 0;
+  color: #7f8a87;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.accounts {
+  display: grid;
+  gap: 8px;
+}
+
+.account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 58px;
+  padding: 10px 12px 10px 14px;
+  border: 1px solid #303736;
+  border-radius: 14px;
+  background: #1a1e1e;
+}
+
+.account-identity {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.account-identity strong,
+.account-identity span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-identity span,
+.stored-key {
+  color: #89938f;
+  font-size: 12px;
+}
+
+.account-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.active-badge {
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #4ec9b0;
+  background: rgb(78 201 176 / 10%);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.stored-key {
+  margin: 4px 2px 0;
+}
+
+details {
+  margin: 8px 0 22px;
+  border-top: 1px solid #2a302f;
+  padding-top: 18px;
+}
+
+summary {
+  color: #9ba5a2;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+form {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+input {
+  width: 100%;
+  min-height: 52px;
+  padding: 0 16px;
+  border: 1px solid #353c3a;
+  border-radius: 14px;
+  outline: none;
+  color: inherit;
+  background: #1c2020;
+  font: inherit;
+}
+
+input:focus {
+  border-color: #4ec9b0;
+  box-shadow: 0 0 0 3px rgb(78 201 176 / 12%);
+}
+
+input:disabled {
+  opacity: 0.65;
+}
+
+.field-note {
+  margin: 0 2px 10px;
+  color: #7f8a87;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 14px;
+  color: #08251f;
+  background: #4ec9b0;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #68d5bf;
+}
+
+button.primary {
+  width: 100%;
+  min-height: 50px;
+}
+
+button.secondary,
+button.account-action {
+  padding: 0 14px;
+  border: 1px solid #3a4542;
+  color: #dce4e1;
+  background: #222827;
+  font-size: 12px;
+}
+
+button.account-action {
+  min-height: 30px;
+  border-radius: 9px;
+}
+
+button.account-action.quiet {
+  border-color: transparent;
+  color: #98a19e;
+  background: transparent;
+}
+
+button.secondary:hover:not(:disabled),
+button.account-action:hover:not(:disabled) {
+  border-color: #4ec9b0;
+  color: #e9fffa;
+  background: #293330;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+#status {
+  min-height: 20px;
+  margin: 4px 2px 0;
+  color: #93aaa4;
+  font-size: 12px;
+}
+
+#status.error {
+  color: #ff9b9b;
+}

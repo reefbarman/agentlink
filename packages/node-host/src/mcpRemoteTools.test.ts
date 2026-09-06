@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { createNodeHostMcpRemoteTools } from "./mcpRemoteTools.js";
 
 const mocks = vi.hoisted(() => ({
@@ -26,6 +27,8 @@ const mocks = vi.hoisted(() => ({
   >(async () => ({ content: [{ type: "text", text: "found" }] })),
   close: vi.fn(async () => {}),
   fetches: [] as Array<typeof globalThis.fetch>,
+  authProviders: [] as unknown[],
+  connectErrors: [] as Error[],
   connectWithRequest: false,
 }));
 
@@ -35,6 +38,8 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
       fetch?: typeof globalThis.fetch;
       url?: URL;
     }): Promise<void> {
+      const error = mocks.connectErrors.shift();
+      if (error) throw error;
       if (transport.fetch && transport.url) {
         await transport.fetch(
           mocks.connectWithRequest
@@ -63,10 +68,14 @@ vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
   SSEClientTransport: class MockSseTransport {
     fetch: typeof globalThis.fetch;
     url: URL;
-    constructor(url: URL, options: { fetch: typeof globalThis.fetch }) {
+    constructor(
+      url: URL,
+      options: { fetch: typeof globalThis.fetch; authProvider?: unknown },
+    ) {
       this.fetch = options.fetch;
       this.url = url;
       mocks.fetches.push(options.fetch);
+      mocks.authProviders.push(options.authProvider);
     }
   },
 }));
@@ -75,10 +84,14 @@ vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
   StreamableHTTPClientTransport: class MockHttpTransport {
     fetch: typeof globalThis.fetch;
     url: URL;
-    constructor(url: URL, options: { fetch: typeof globalThis.fetch }) {
+    constructor(
+      url: URL,
+      options: { fetch: typeof globalThis.fetch; authProvider?: unknown },
+    ) {
       this.fetch = options.fetch;
       this.url = url;
       mocks.fetches.push(options.fetch);
+      mocks.authProviders.push(options.authProvider);
     }
   },
 }));
@@ -89,6 +102,8 @@ describe("node host remote MCP tools", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.fetches.length = 0;
+    mocks.authProviders.length = 0;
+    mocks.connectErrors.length = 0;
     mocks.connectWithRequest = false;
   });
 
@@ -177,6 +192,47 @@ describe("node host remote MCP tools", () => {
     expect(callOptions).not.toHaveProperty("onprogress");
     expect(callOptions).not.toHaveProperty("resetTimeoutOnProgress");
     expect(authorizeNetwork).toHaveBeenCalledTimes(2);
+  });
+
+  it("resolves host OAuth for the exact turn and retries authorization once", async () => {
+    const authProvider = { tokens: vi.fn() };
+    const resolveOAuthProvider = vi.fn(async () => authProvider as never);
+    mocks.connectErrors.push(new UnauthorizedError());
+    const resolver = createNodeHostMcpRemoteTools({
+      resolveServers: () => [
+        {
+          id: "records",
+          transport: "streamable-http",
+          url: "https://mcp.example.test/mcp",
+        },
+      ],
+      authorizeNetwork: () => true,
+      resolveOAuthProvider,
+      fetch: vi.fn(async () => new Response("ok")),
+    });
+
+    const tools = await resolver({
+      principal,
+      sessionId: "session-a",
+      turnId: "turn-a",
+      input: { text: "", attachments: undefined },
+    });
+
+    expect(tools).toHaveLength(1);
+    expect(resolveOAuthProvider).toHaveBeenCalledWith({
+      principal,
+      sessionId: "session-a",
+      turnId: "turn-a",
+      server: {
+        id: "records",
+        transport: "streamable-http",
+        url: "https://mcp.example.test/mcp",
+      },
+      url: new URL("https://mcp.example.test/mcp"),
+      fetch: expect.any(Function),
+    });
+    expect(mocks.authProviders).toEqual([authProvider, authProvider]);
+    expect(mocks.close).toHaveBeenCalledTimes(2);
   });
 
   it("keeps discovery scoped to its principal and rejects mismatched invocation context", async () => {

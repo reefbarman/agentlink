@@ -5949,6 +5949,7 @@ describe("handleExecuteCommand", () => {
       output: "one\ntwo",
       output_captured: true,
       terminal_id: "term-running-lines",
+      command_id: "original-command",
       is_running: true,
       backgrounded: true,
     });
@@ -5978,6 +5979,11 @@ describe("handleExecuteCommand", () => {
       output_complete: true,
       output_finalized: false,
       output_warning: expect.stringContaining("retained output so far"),
+    });
+    expect(getRetainedOutput).toHaveBeenCalledWith({
+      owner: undefined,
+      terminalId: "term-running-lines",
+      commandId: "original-command",
     });
   });
 

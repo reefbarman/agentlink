@@ -1026,11 +1026,11 @@ describe("AgentSession", () => {
       expect(msgs).toHaveLength(5);
       expect(msgs[0]).toEqual({ role: "user", content: "Fix issue" });
       expect(msgs[1]?.isSummary).toBe(true);
-      expect(msgs[2]?.role).toBe("assistant");
-      expect(msgs[3]?.role).toBe("user");
-      expect(msgs[3]?.isResumeContext).toBe(true);
-      expect(Array.isArray(msgs[3]?.content)).toBe(true);
-      const injected = msgs[3]?.content as Array<{
+      expect(msgs[2]?.role).toBe("user");
+      expect(msgs[2]?.isResumeContext).toBe(true);
+      expect(msgs[3]?.role).toBe("assistant");
+      expect(Array.isArray(msgs[2]?.content)).toBe(true);
+      const injected = msgs[2]?.content as Array<{
         type: string;
         text?: string;
       }>;
@@ -1044,6 +1044,8 @@ describe("AgentSession", () => {
         role: "user",
         content: "Continue fixing the issue.",
       });
+      session.addUserMessage("Now verify the fix.");
+      expect(session.getMessages().slice(0, msgs.length)).toEqual(msgs);
     });
   });
 

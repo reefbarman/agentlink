@@ -185,6 +185,8 @@ export interface CoreModelStateOptions {
 export interface CoreModelProviderHints {
   codex?: {
     sessionId?: string;
+    /** In-process turn lifetime only; never persist or send to renderers. */
+    turnState?: import("./codex/turnRouting.js").CodexTurnState;
   };
 }
 

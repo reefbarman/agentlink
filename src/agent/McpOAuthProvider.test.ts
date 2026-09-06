@@ -50,8 +50,11 @@ describe("MCP OAuth callback page", () => {
     });
 
     expect(html).toContain("Authorization failed");
-    expect(html).toContain("access_denied&lt;script&gt;");
-    expect(html).toContain("No &lt;access&gt; &amp; try again");
+    expect(html).not.toContain("access_denied");
+    expect(html).not.toContain("No &lt;access&gt; &amp; try again");
+    expect(html).toContain(
+      "Authorization was declined or could not be completed.",
+    );
     expect(html).toContain("&lt;linear &amp; &quot;friends&quot;&gt;");
     expect(html).not.toContain("access_denied<script>");
     expect(html).toContain("window.setTimeout(() => window.close(), 8000)");

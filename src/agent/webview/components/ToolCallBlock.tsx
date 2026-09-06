@@ -750,6 +750,52 @@ export function ToolCallBlock({
   );
   const mcpApprovalPromotion = toolCall.mcpApprovalPromotion;
   const composeTrace = toolCall.composeTrace;
+  const composeScript =
+    toolCall.name === "compose" && typeof input?.script === "string"
+      ? input.script
+      : undefined;
+  const composeCounts = composeTrace
+    ? [
+        [
+          composeTrace.succeededChildren ??
+            composeTrace.children.filter(
+              (child) => child.status === "completed",
+            ).length,
+          "succeeded",
+        ],
+        [
+          composeTrace.failedChildren ??
+            composeTrace.children.filter((child) => child.status === "error")
+              .length,
+          "failed",
+        ],
+        [
+          composeTrace.cancelledChildren ??
+            composeTrace.children.filter(
+              (child) => child.status === "cancelled",
+            ).length,
+          "cancelled",
+        ],
+        [
+          composeTrace.children.filter((child) => child.status === "running")
+            .length,
+          "running",
+        ],
+      ]
+        .filter(([count]) => Number(count) > 0)
+        .map(([count, label]) => `${count} ${label}`)
+        .join(" · ")
+    : "";
+  const composeErrorResult =
+    toolCall.name === "compose" &&
+    complete &&
+    (composeTrace?.status === "error" || composeTrace?.status === "cancelled")
+      ? tryParseJson(toolCall.result)
+      : undefined;
+  const composeError =
+    typeof composeErrorResult?.error === "string"
+      ? composeErrorResult.error
+      : undefined;
   const availablePromotionScopes =
     mcpApprovalPromotion?.scopes.filter(
       (scope) => !promotedScopes.has(scope),
@@ -1001,35 +1047,59 @@ export function ToolCallBlock({
             </div>
           )}
           <InlineDiff toolName={toolCall.name} input={input} />
-          {formattedInput && (
-            <div class="tool-call-section">
-              <div class="tool-call-section-label">Input</div>
-              <JsonHighlight
-                json={formattedInput}
-                renderTokenText={(token) => (
-                  <FilePathLinkedText
-                    text={token.text}
-                    onOpenFile={onOpenFile}
-                  />
-                )}
-              />
-            </div>
+          {composeScript ? (
+            <details class="tool-call-section compose-technical-details">
+              <summary>Script</summary>
+              <pre class="tool-call-code">
+                <code class="language-javascript">{composeScript}</code>
+              </pre>
+            </details>
+          ) : (
+            formattedInput && (
+              <div class="tool-call-section">
+                <div class="tool-call-section-label">Input</div>
+                <JsonHighlight
+                  json={formattedInput}
+                  renderTokenText={(token) => (
+                    <FilePathLinkedText
+                      text={token.text}
+                      onOpenFile={onOpenFile}
+                    />
+                  )}
+                />
+              </div>
+            )
           )}
           {composeTrace && (
             <div class="tool-call-section compose-trace">
               <div class="tool-call-section-label">
-                Child tools ({composeTrace.completedChildren}/
-                {composeTrace.totalChildren})
+                Child tools · {composeTrace.completedChildren}/
+                {composeTrace.totalChildren} finished
               </div>
               {composeTrace.description && (
                 <div class="compose-trace-description">
                   {composeTrace.description}
                 </div>
               )}
+              {composeCounts && (
+                <div class="compose-trace-summary">{composeCounts}</div>
+              )}
               <div class="compose-trace-children">
                 {composeTrace.children.map((child) => (
-                  <div class="compose-trace-child" key={child.id}>
+                  <div
+                    class={`compose-trace-child compose-trace-child--${child.status}`}
+                    key={child.id}
+                  >
                     <i
+                      title={
+                        child.status === "completed"
+                          ? "Succeeded"
+                          : child.status === "error"
+                            ? "Failed"
+                            : child.status === "cancelled"
+                              ? "Cancelled"
+                              : "Running"
+                      }
                       class={`codicon ${
                         child.status === "running"
                           ? "codicon-loading codicon-modifier-spin"
@@ -1041,19 +1111,27 @@ export function ToolCallBlock({
                       }`}
                     />
                     <span class="compose-trace-child-name">{child.name}</span>
-                    {child.inputSummary && (
-                      <span class="compose-trace-child-input">
-                        {child.inputSummary}
-                      </span>
-                    )}
+                    <span
+                      class="compose-trace-child-input"
+                      title={child.inputSummary}
+                    >
+                      {child.inputSummary}
+                    </span>
                     {child.durationMs != null && (
                       <span class="compose-trace-child-duration">
                         {fmtDuration(child.durationMs)}
                       </span>
                     )}
                     {child.errorSummary && (
-                      <span class="compose-trace-child-error">
-                        {child.errorSummary}
+                      <span
+                        class="compose-trace-child-error"
+                        title={child.errorSummary}
+                      >
+                        {child.status === "cancelled"
+                          ? composeTrace.errorKind === "child_failed"
+                            ? "Cancelled because another read failed"
+                            : "Cancelled"
+                          : child.errorSummary.replace(/^[a-z_]+: /u, "")}
                       </span>
                     )}
                   </div>
@@ -1064,7 +1142,28 @@ export function ToolCallBlock({
           {(displayedResult || resultMediaCount > 0) && (
             <div class="tool-call-section">
               <div class="tool-call-section-label">Result</div>
-              {displayedResult &&
+              {composeError ? (
+                <>
+                  <div class="compose-result-error">
+                    <FilePathLinkedText
+                      text={composeError}
+                      onOpenFile={onOpenFile}
+                    />
+                  </div>
+                  {composeTrace?.errorKind === "child_failed" && (
+                    <div class="compose-trace-description">
+                      A read failed. Fail-fast batches stop the remaining reads;
+                      independent reads can use toolAllSettled to keep usable
+                      results.
+                    </div>
+                  )}
+                  <details class="compose-technical-details">
+                    <summary>Technical details</summary>
+                    <JsonHighlight json={formatJson(displayedResult)} />
+                  </details>
+                </>
+              ) : (
+                displayedResult &&
                 (isJson(displayedResult) ? (
                   <JsonHighlight
                     json={formatJson(displayedResult)}
@@ -1082,7 +1181,8 @@ export function ToolCallBlock({
                       onOpenFile={onOpenFile}
                     />
                   </pre>
-                ))}
+                ))
+              )}
               {resultImages.length > 0 && (
                 <div class="tool-result-image-previews">
                   {resultImages.map((image, index) => {

@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { join, dirname } from "node:path";
+import { Language, Parser, type Node } from "web-tree-sitter";
 
 import asyncifyVariant from "@jitl/quickjs-wasmfile-release-asyncify";
 import {
@@ -13,6 +15,7 @@ import {
 } from "quickjs-emscripten-core";
 
 import type {
+  ComposeErrorCode,
   ComposeTrace,
   ComposeTraceChild,
 } from "@agentlink/protocol/compose";
@@ -36,7 +39,7 @@ export const COMPOSE_MAX_ARTIFACT_INPUT_BYTES = 10 * 1024 * 1024;
 export const COMPOSE_ARTIFACT_TIMEOUT_MS = 2_000;
 
 const COMPOSE_FILENAME = "compose-script.js";
-const COMPOSE_MAX_DESCRIPTION_BYTES = 1024;
+const COMPOSE_MAX_DESCRIPTION_CHARS = 200;
 const COMPOSE_MAX_TRACE_MESSAGE_CHARS = 512;
 const COMPOSE_MAX_INPUT_SUMMARY_CHARS = 256;
 const COMPOSE_MAX_STACK_CHARS = 2048;
@@ -65,6 +68,7 @@ export interface ComposeRuntimeOptions {
   scope: ComposeExecutionScope;
   signal: AbortSignal;
   wasmPath: string;
+  syntaxWasmPaths?: { parser: string; javascript: string };
   retainArtifact?: (
     request: ComposeArtifactWriteRequest,
   ) => Promise<ComposeArtifactWriteResult | null>;
@@ -111,8 +115,8 @@ class ComposeRuntimeError extends Error {
   constructor(
     readonly kind: ComposeErrorKind,
     message: string,
+    readonly code: ComposeErrorCode,
     readonly stackDetail?: string,
-    readonly code?: string,
   ) {
     super(message);
     this.name = "ComposeRuntimeError";
@@ -157,12 +161,14 @@ function serializeJson(value: unknown, subject: string): string {
       throw new ComposeRuntimeError(
         "serialization",
         `${subject} contains unsupported ${typeof current} data`,
+        "unsupported_data",
       );
     }
     if (typeof current === "number" && !Number.isFinite(current)) {
       throw new ComposeRuntimeError(
         "serialization",
         `${subject} contains a non-finite number`,
+        "non_finite_data",
       );
     }
     if (
@@ -178,6 +184,7 @@ function serializeJson(value: unknown, subject: string): string {
       throw new ComposeRuntimeError(
         "serialization",
         `${subject} contains cyclic data`,
+        "cyclic_data",
       );
     }
     ancestors.add(object);
@@ -201,12 +208,14 @@ function serializeJson(value: unknown, subject: string): string {
     throw new ComposeRuntimeError(
       "serialization",
       `${subject} is not JSON-serializable: ${errorMessage(error)}`,
+      "serialization_failed",
     );
   }
   if (serialized === undefined) {
     throw new ComposeRuntimeError(
       "serialization",
       `${subject} must be a JSON-compatible value`,
+      "unsupported_data",
     );
   }
   return serialized;
@@ -219,6 +228,7 @@ function parseJson(serialized: string, subject: string): JsonValue {
     throw new ComposeRuntimeError(
       "serialization",
       `${subject} was not valid JSON: ${errorMessage(error)}`,
+      "invalid_json",
     );
   }
 }
@@ -252,39 +262,46 @@ function classifyError(error: unknown): ComposeRuntimeError {
     typeof error.stack === "string"
       ? truncate(error.stack, COMPOSE_MAX_STACK_CHARS)
       : undefined;
-  const kindText = `${name} ${message}`.toLowerCase();
-
-  if (
-    scopedKind === "aborted" ||
-    name === "AbortError" ||
-    kindText.includes("abort")
-  ) {
-    return new ComposeRuntimeError("aborted", "Compose execution was aborted");
+  if (scopedKind === "aborted" || name === "AbortError") {
+    return new ComposeRuntimeError(
+      "aborted",
+      "Compose execution was aborted",
+      "aborted",
+    );
   }
   if (scopedKind === "budget_exhausted") {
     return new ComposeRuntimeError(
       "budget_exhausted",
       message,
+      "budget_exhausted",
       stack,
-      scopedCode,
     );
   }
   if (
     scopedKind === "authorization" ||
     scopedKind === "recursive_compose" ||
     scopedKind === "tool_input_not_composable" ||
-    scopedKind === "tool_not_composable"
+    scopedKind === "tool_not_composable" ||
+    scopedKind === "tool_output_not_composable"
   ) {
-    return new ComposeRuntimeError("policy", message, stack, scopedCode);
+    const policyCode: ComposeErrorCode =
+      scopedKind === "tool_input_not_composable" ||
+      scopedKind === "tool_not_composable" ||
+      scopedKind === "tool_output_not_composable" ||
+      scopedKind === "recursive_compose"
+        ? "composability_policy"
+        : scopedCode === "tool_not_in_mode"
+          ? "mode_policy"
+          : scopedCode === "tool_not_in_request"
+            ? "request_policy"
+            : "tool_policy";
+    return new ComposeRuntimeError("policy", message, policyCode, stack);
   }
-  if (
-    kindText.includes("memory") ||
-    kindText.includes("out of memory") ||
-    kindText.includes("allocation")
-  ) {
+  if (scopedKind === "memory_limit") {
     return new ComposeRuntimeError(
       "memory_limit",
       `Compose exceeded the ${COMPOSE_MEMORY_LIMIT_BYTES / 1024 / 1024} MiB memory limit`,
+      "memory_limit",
       stack,
     );
   }
@@ -295,14 +312,30 @@ function classifyError(error: unknown): ComposeRuntimeError {
     (error.kind === "child_handler_failed" ||
       error.kind === "canonical_result_required")
   ) {
-    return new ComposeRuntimeError("child_failed", message, stack, scopedCode);
+    return new ComposeRuntimeError(
+      "child_failed",
+      message,
+      scopedKind === "canonical_result_required"
+        ? "canonical_result_required"
+        : "child_handler_failed",
+      stack,
+    );
   }
-  return new ComposeRuntimeError("internal", message, stack, scopedCode);
+  return new ComposeRuntimeError(
+    "internal",
+    message,
+    "internal_failure",
+    stack,
+  );
 }
 
 function assertNotAborted(signal: AbortSignal): void {
   if (signal.aborted) {
-    throw new ComposeRuntimeError("aborted", "Compose execution was aborted");
+    throw new ComposeRuntimeError(
+      "aborted",
+      "Compose execution was aborted",
+      "aborted",
+    );
   }
 }
 
@@ -317,7 +350,11 @@ async function raceAbort<T>(
   });
   const abort = () =>
     rejectAbort(
-      new ComposeRuntimeError("aborted", "Compose execution was aborted"),
+      new ComposeRuntimeError(
+        "aborted",
+        "Compose execution was aborted",
+        "aborted",
+      ),
     );
   signal.addEventListener("abort", abort, { once: true });
   try {
@@ -332,7 +369,11 @@ function assertRecord(
   subject: string,
 ): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new ComposeRuntimeError("validation", `${subject} must be an object`);
+    throw new ComposeRuntimeError(
+      "validation",
+      `${subject} must be an object`,
+      "validation_failed",
+    );
   }
   return value as Record<string, unknown>;
 }
@@ -346,6 +387,7 @@ function validateDescriptor(
     throw new ComposeRuntimeError(
       "validation",
       `${subject}.name must be a non-empty string`,
+      "validation_failed",
     );
   }
   return {
@@ -395,12 +437,25 @@ function createResult(
         kind: error.kind,
         ...(error.code ? { code: error.code } : {}),
         ...(error.stackDetail ? { stack: error.stackDetail } : {}),
+        ...(error.kind === "child_failed"
+          ? {
+              guidance:
+                "Correct missing paths or child inputs before retrying. For independent reads, use toolAllSettled to retain successful results; filter or reduce them before returning.",
+            }
+          : {}),
       }
     : data;
   trace.status =
     error?.kind === "aborted" ? "cancelled" : error ? "error" : "completed";
-  if (error) trace.errorKind = error.kind;
-  else delete trace.errorKind;
+  trace.runtimeReturnedBytes ??= 0;
+  trace.artifactRetention ??= "none";
+  if (error) {
+    trace.errorKind = error.kind;
+    trace.errorCode = error.code;
+  } else {
+    delete trace.errorKind;
+    delete trace.errorCode;
+  }
   return {
     data: payload,
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
@@ -430,6 +485,7 @@ export function createChunkedJsonArtifact(serialized: string): {
     throw new ComposeRuntimeError(
       "serialization",
       `Compose result exceeds the ${COMPOSE_MAX_ARTIFACT_INPUT_BYTES} byte artifact recovery input limit`,
+      "final_result_too_large",
     );
   }
   const records: string[] = [];
@@ -461,6 +517,7 @@ export function createChunkedJsonArtifact(serialized: string): {
       throw new ComposeRuntimeError(
         "serialization",
         "Compose could not encode an oversized result recovery record",
+        "serialization_failed",
       );
     }
     let end = offset + accepted;
@@ -484,13 +541,18 @@ export function createChunkedJsonArtifact(serialized: string): {
 async function retainOversizedArtifact(
   serializedFinal: string,
   retainArtifact: NonNullable<ComposeRuntimeOptions["retainArtifact"]>,
+  signal: AbortSignal,
 ): Promise<ComposeOversizedArtifactRecovery | null> {
   const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) controller.abort();
   const timeout = setTimeout(
     () => controller.abort(),
     COMPOSE_ARTIFACT_TIMEOUT_MS,
   );
   try {
+    if (controller.signal.aborted) return null;
     const encoded = createChunkedJsonArtifact(serializedFinal);
     const write = retainArtifact({
       content: encoded.content,
@@ -503,9 +565,19 @@ async function retainOversizedArtifact(
         controller.signal.addEventListener("abort", () => resolve(null), {
           once: true,
         });
+        if (controller.signal.aborted) resolve(null);
       }),
     ]);
-    if (!retained) return null;
+    if (
+      !retained ||
+      controller.signal.aborted ||
+      !retained.path ||
+      byteLength(retained.path) > 2048 ||
+      retained.bytes !== byteLength(encoded.content) ||
+      retained.sha256 !==
+        createHash("sha256").update(encoded.content).digest("hex")
+    )
+      return null;
     return {
       output_file: retained.path,
       output_format: "chunked-json-v1",
@@ -518,6 +590,7 @@ async function retainOversizedArtifact(
     return null;
   } finally {
     clearTimeout(timeout);
+    signal.removeEventListener("abort", abort);
     controller.abort();
   }
 }
@@ -532,6 +605,7 @@ function createOversizedFinalResult(
   const error = new ComposeRuntimeError(
     "serialization",
     `Compose returned ${finalBytes} bytes; limit is ${COMPOSE_MAX_FINAL_BYTES} bytes. Reduce or aggregate inside the script.`,
+    "final_result_too_large",
   );
   const children = trace.children
     .slice(0, COMPOSE_MAX_RECOVERY_CHILDREN)
@@ -541,8 +615,9 @@ function createOversizedFinalResult(
     COMPOSE_MAX_RECOVERY_PREVIEW_BYTES,
   );
   const payload = {
-    error: error.message,
-    kind: error.kind,
+    ...(artifact
+      ? { status: "completed", outputSpilled: true }
+      : { error: error.message, kind: error.kind }),
     recovery: {
       reason: "final_result_too_large",
       actual_bytes: finalBytes,
@@ -558,17 +633,46 @@ function createOversizedFinalResult(
       ...artifact,
       ...(warning ? { warning: truncate(warning, 256) } : {}),
       guidance: artifact
-        ? "Use read_file to page the JSONL artifact, parse records in index order, and concatenate each data field to reconstruct the exact JSON result."
+        ? "Execution completed; do not rerun it for this overflow. Use read_file to page only needed JSONL records. Parse records in index order and concatenate each data field to reconstruct the exact JSON result. output_bytes and output_sha256 describe that reconstructed JSON, not the JSONL file."
         : "Return a smaller aggregate, page/filter child calls, or split the workflow into multiple compose calls.",
     },
   };
-  trace.status = "error";
-  trace.errorKind = error.kind;
+  let text = JSON.stringify(payload, null, 2);
+  while (byteLength(text) > COMPOSE_MAX_FINAL_BYTES) {
+    if (!payload.recovery.preview) {
+      throw new ComposeRuntimeError(
+        "serialization",
+        "Compose overflow metadata exceeds the final output limit",
+        "final_result_too_large",
+      );
+    }
+    payload.recovery.preview = truncateUtf8(
+      payload.recovery.preview,
+      Math.floor(payload.recovery.preview_bytes / 2),
+    );
+    payload.recovery.preview_bytes = byteLength(payload.recovery.preview);
+    text = JSON.stringify(payload, null, 2);
+  }
+  trace.status = artifact ? "completed" : "error";
+  trace.outputSpilled = Boolean(artifact);
+  trace.runtimeReturnedBytes = finalBytes;
+  trace.artifactRetention = artifact
+    ? "retained"
+    : (trace.artifactRetention ?? "none");
+  if (artifact) {
+    delete trace.errorKind;
+    delete trace.errorCode;
+  } else {
+    trace.errorKind = error.kind;
+    trace.errorCode = error.code;
+  }
   return {
     data: payload,
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-    isError: true,
-    error: { kind: error.kind, message: error.message },
+    content: [{ type: "text", text }],
+    isError: !artifact,
+    ...(!artifact
+      ? { error: { kind: error.kind, message: error.message } }
+      : {}),
     uiMeta: { composeTrace: trace },
   };
 }
@@ -586,7 +690,6 @@ function accountBridgedValue(
     throw new ComposeRuntimeError(
       "serialization",
       `${subject} returned ${bytes} bytes; compose allows ${COMPOSE_MAX_CHILD_BYTES} bytes per child. Reduce the child result before composing it.`,
-      undefined,
       "child_result_too_large",
     );
   }
@@ -594,7 +697,6 @@ function accountBridgedValue(
     throw new ComposeRuntimeError(
       "serialization",
       `Compose child data exceeded the ${COMPOSE_MAX_CUMULATIVE_CHILD_BYTES} byte cumulative limit. Reduce, filter, paginate, or aggregate earlier.`,
-      undefined,
       "cumulative_child_result_too_large",
     );
   }
@@ -634,6 +736,7 @@ async function executeOne(
     throw new ComposeRuntimeError(
       "budget_exhausted",
       `Compose child-call limit of ${COMPOSE_MAX_CHILD_CALLS} reached. Reduce, filter, paginate, or memoize inside the script.`,
+      "budget_exhausted",
     );
   }
 
@@ -652,7 +755,6 @@ async function executeOne(
       throw new ComposeRuntimeError(
         "child_failed",
         result.error?.message ?? `Tool '${descriptor.name}' failed`,
-        undefined,
         "child_handler_failed",
       );
     }
@@ -660,7 +762,6 @@ async function executeOne(
       throw new ComposeRuntimeError(
         "child_failed",
         `Tool '${descriptor.name}' did not return canonical structured data`,
-        undefined,
         "canonical_result_required",
       );
     }
@@ -727,12 +828,14 @@ async function executeBatch(
     throw new ComposeRuntimeError(
       "validation",
       `toolAll accepts at most ${COMPOSE_MAX_BATCH_SIZE} descriptors`,
+      "validation_failed",
     );
   }
   if (state.callCount + descriptors.length > COMPOSE_MAX_CHILD_CALLS) {
     throw new ComposeRuntimeError(
       "budget_exhausted",
       `toolAll would exceed the compose child-call limit of ${COMPOSE_MAX_CHILD_CALLS}. Reduce, filter, paginate, or memoize inside the script.`,
+      "budget_exhausted",
     );
   }
   for (const descriptor of descriptors) {
@@ -800,33 +903,142 @@ function dumpQuickJSError(
       : typeof dumped === "string"
         ? dumped
         : "Compose script failed";
+  const composeCode =
+    typeof details.composeCode === "string"
+      ? (details.composeCode as ComposeErrorCode)
+      : undefined;
   const name = typeof details.name === "string" ? details.name : "Error";
   const stack =
     typeof details.stack === "string"
       ? truncate(details.stack, COMPOSE_MAX_STACK_CHARS)
       : undefined;
   if (state.abortController.signal.aborted) {
-    return new ComposeRuntimeError("aborted", "Compose execution was aborted");
+    return new ComposeRuntimeError(
+      "aborted",
+      "Compose execution was aborted",
+      "aborted",
+    );
   }
   if (timedOut || (name === "InternalError" && message === "interrupted")) {
     return new ComposeRuntimeError(
       "timeout",
       `Compose exceeded the ${COMPOSE_TIMEOUT_MS}ms wall-time limit`,
+      "timeout",
       stack,
     );
   }
-  const text = `${name}: ${message}`.toLowerCase();
-  if (text.includes("out of memory") || text.includes("allocation")) {
+  if (
+    name === "InternalError" &&
+    /(?:out of memory|memory limit|allocation failed)/iu.test(message)
+  ) {
     return new ComposeRuntimeError(
       "memory_limit",
       `Compose exceeded the ${COMPOSE_MEMORY_LIMIT_BYTES / 1024 / 1024} MiB memory limit`,
+      "memory_limit",
       stack,
     );
   }
-  if (message.startsWith("Compose data contains ")) {
-    return new ComposeRuntimeError("serialization", message, stack);
+  if (
+    composeCode === "unsupported_data" ||
+    composeCode === "non_finite_data" ||
+    composeCode === "cyclic_data"
+  ) {
+    return new ComposeRuntimeError(
+      "serialization",
+      message,
+      composeCode,
+      stack,
+    );
   }
-  return new ComposeRuntimeError("script_error", `${name}: ${message}`, stack);
+  return new ComposeRuntimeError(
+    "script_error",
+    `${name}: ${message}`,
+    "script_error",
+    stack,
+  );
+}
+
+let parserInitialization: Promise<void> | undefined;
+const syntaxLanguages = new Map<string, Promise<Language>>();
+
+function isConstructorProperty(node: Node | null): boolean {
+  if (!node) return false;
+  // Decode escapes without evaluating guest code.
+  const text = node.text.replace(
+    /\\u(?:\{([\da-f]+)\}|([\da-f]{4}))|\\x([\da-f]{2})/giu,
+    (escape, braced: string, unicode: string, hex: string) => {
+      const code = Number.parseInt(braced ?? unicode ?? hex, 16);
+      return code <= 0x10ffff ? String.fromCodePoint(code) : escape;
+    },
+  );
+  return (
+    ((node.type === "property_identifier" || node.type === "identifier") &&
+      text === "constructor") ||
+    ((node.type === "string" || node.type === "template_string") &&
+      text.slice(1, -1) === "constructor")
+  );
+}
+
+async function validateScriptPolicy(
+  script: string,
+  paths: NonNullable<ComposeRuntimeOptions["syntaxWasmPaths"]>,
+): Promise<void> {
+  parserInitialization ??= readFile(paths.parser).then((wasmBinary) =>
+    Parser.init({ wasmBinary }),
+  );
+  await parserInitialization;
+  let language = syntaxLanguages.get(paths.javascript);
+  if (!language) {
+    language = readFile(paths.javascript).then((bytes) => Language.load(bytes));
+    syntaxLanguages.set(paths.javascript, language);
+  }
+  const parser = new Parser();
+  try {
+    parser.setLanguage(await language);
+    const tree = parser.parse(`(function () {\n${script}\n})();`);
+    if (!tree) throw new Error("Compose syntax parser returned no tree");
+    try {
+      // Fail closed if the policy parser cannot understand the entire script.
+      if (tree.rootNode.hasError) {
+        throw new ComposeRuntimeError(
+          "script_error",
+          "SyntaxError: Compose script could not be parsed",
+          "script_error",
+          COMPOSE_FILENAME,
+        );
+      }
+      const pending = [tree.rootNode];
+      while (pending.length > 0) {
+        const node = pending.pop()!;
+        if (
+          node.type === "generator_function" ||
+          node.type === "generator_function_declaration" ||
+          ((node.type === "function_expression" ||
+            node.type === "function_declaration" ||
+            node.type === "arrow_function" ||
+            node.type === "method_definition") &&
+            node.children.some(
+              (child) => child.type === "async" || child.type === "*",
+            )) ||
+          (node.type === "member_expression" &&
+            isConstructorProperty(node.childForFieldName("property"))) ||
+          (node.type === "subscript_expression" &&
+            isConstructorProperty(node.childForFieldName("index")))
+        ) {
+          throw new ComposeRuntimeError(
+            "policy",
+            "Dynamic constructors, generators, and async functions are disabled in compose scripts",
+            "script_policy_violation",
+          );
+        }
+        pending.push(...node.namedChildren);
+      }
+    } finally {
+      tree.delete();
+    }
+  } finally {
+    parser.delete();
+  }
 }
 
 function validateParams(params: ComposeParams): void {
@@ -834,36 +1046,28 @@ function validateParams(params: ComposeParams): void {
     throw new ComposeRuntimeError(
       "validation",
       "Compose script must be a non-empty string",
+      "validation_failed",
     );
   }
-  if (
-    /\.\s*constructor\b/u.test(params.script) ||
-    /\[\s*["']constructor["']\s*\]/u.test(params.script) ||
-    /\bfunction\s*\*/u.test(params.script) ||
-    /\basync\s+function\b/u.test(params.script) ||
-    /\basync\s*\(/u.test(params.script)
-  ) {
-    throw new ComposeRuntimeError(
-      "policy",
-      "Dynamic constructors, generators, and async functions are disabled in compose scripts",
-    );
-  }
+
   const scriptBytes = byteLength(params.script);
   if (scriptBytes > COMPOSE_MAX_SCRIPT_BYTES) {
     throw new ComposeRuntimeError(
       "validation",
       `Compose script is ${scriptBytes} bytes; limit is ${COMPOSE_MAX_SCRIPT_BYTES} bytes`,
+      "validation_failed",
     );
   }
   if (
     params.description !== undefined &&
     (typeof params.description !== "string" ||
-      byteLength(params.description) > COMPOSE_MAX_DESCRIPTION_BYTES ||
+      params.description.length > COMPOSE_MAX_DESCRIPTION_CHARS ||
       /[\r\n]/u.test(params.description))
   ) {
     throw new ComposeRuntimeError(
       "validation",
-      `Compose description must be one line and at most ${COMPOSE_MAX_DESCRIPTION_BYTES} bytes`,
+      `Compose description must be one line and at most ${COMPOSE_MAX_DESCRIPTION_CHARS} characters`,
+      "validation_failed",
     );
   }
 }
@@ -879,29 +1083,39 @@ const require = undefined;
 const module = undefined;
 const exports = undefined;
 const Function = undefined;
-const __composeSerialize = (value) => {
+const __composeSerialize = (value, finalReturn = false) => {
   const ancestors = new Set();
-  const normalize = (current) => {
+  const fail = (message, composeCode) => {
+    const error = new TypeError(message);
+    error.composeCode = composeCode;
+    throw error;
+  };
+  const normalize = (current, path) => {
     const type = typeof current;
     if (type === "undefined" || type === "function" || type === "symbol" || type === "bigint") {
-      throw new TypeError("Compose data contains unsupported " + type + " data");
+      fail("Compose data contains unsupported " + type + " data at " + path, "unsupported_data");
     }
     if (type === "number" && !Number.isFinite(current)) {
-      throw new TypeError("Compose data contains a non-finite number");
+      fail("Compose data contains a non-finite number at " + path, "non_finite_data");
     }
     if (current === null || type === "string" || type === "number" || type === "boolean") return current;
-    if (ancestors.has(current)) throw new TypeError("Compose data contains cyclic data");
+    if (ancestors.has(current)) fail("Compose data contains cyclic data at " + path, "cyclic_data");
     ancestors.add(current);
     try {
-      if (Array.isArray(current)) return current.map(normalize);
-      const output = {};
-      for (const key of Object.keys(current)) output[key] = normalize(current[key]);
+      if (Array.isArray(current)) return current.map((child, index) =>
+        finalReturn && child === undefined ? null : normalize(child, path + "[" + index + "]"));
+      const output = Object.create(null);
+      for (const key of Object.keys(current)) {
+        const child = current[key];
+        if (finalReturn && child === undefined) continue;
+        output[key] = normalize(child, path + "[" + JSON.stringify(key) + "]");
+      }
       return output;
     } finally {
       ancestors.delete(current);
     }
   };
-  return JSON.stringify(normalize(value));
+  return JSON.stringify(normalize(value, "$"));
 };
 const tool = (name, input) => JSON.parse(__composeBridge(__composeSerialize({ operation: "tool", name, input })));
 const toolAll = (descriptors) => JSON.parse(__composeBridge(__composeSerialize({ operation: "toolAll", descriptors: descriptors === undefined ? null : descriptors })));
@@ -909,7 +1123,7 @@ const toolAllSettled = (descriptors) => JSON.parse(__composeBridge(__composeSeri
 const __composeResult = (function () {
 ${script}
 })();
-__composeSerialize(__composeResult);`;
+__composeSerialize(__composeResult, true);`;
 }
 
 const LOCKDOWN_SCRIPT = `
@@ -943,6 +1157,10 @@ export async function handleCompose({
   scope,
   signal,
   wasmPath,
+  syntaxWasmPaths = {
+    parser: join(dirname(wasmPath), "web-tree-sitter.wasm"),
+    javascript: join(dirname(wasmPath), "tree-sitter-javascript.wasm"),
+  },
   retainArtifact,
 }: ComposeRuntimeOptions): Promise<ComposeToolResult> {
   const trace: ComposeTrace = {
@@ -957,6 +1175,9 @@ export async function handleCompose({
     toolAllBatchCount: 0,
     toolAllSettledBatchCount: 0,
     bridgedBytes: 0,
+    runtimeReturnedBytes: 0,
+    queueWaitBucket: "none",
+    artifactRetention: "none",
   };
   const state: ComposeRuntimeState = {
     callCount: 0,
@@ -1002,6 +1223,8 @@ export async function handleCompose({
       state.abortController.abort();
     }, COMPOSE_TIMEOUT_MS);
 
+    await validateScriptPolicy(params.script, syntaxWasmPaths);
+    assertNotAborted(state.abortController.signal);
     ({ runtime, context } = await createRuntime(wasmPath));
     assertNotAborted(state.abortController.signal);
     runtime.setInterruptHandler(() => {
@@ -1035,6 +1258,7 @@ export async function handleCompose({
           throw new ComposeRuntimeError(
             "policy",
             "Only one compose host bridge may be active at a time",
+            "tool_policy",
           );
         }
         state.bridgeActive = true;
@@ -1069,6 +1293,7 @@ export async function handleCompose({
               throw new ComposeRuntimeError(
                 "validation",
                 `${request.operation} requires an array of descriptors`,
+                "validation_failed",
               );
             }
             const descriptors = request.descriptors.map((descriptor, index) =>
@@ -1082,6 +1307,7 @@ export async function handleCompose({
             throw new ComposeRuntimeError(
               "validation",
               "Unknown compose bridge operation",
+              "validation_failed",
             );
           }
           return context!.newString(
@@ -1113,15 +1339,20 @@ export async function handleCompose({
     evaluation.value.dispose();
     assertNotAborted(state.abortController.signal);
     const finalBytes = byteLength(serializedFinal);
+    trace.runtimeReturnedBytes = finalBytes;
     if (finalBytes > COMPOSE_MAX_FINAL_BYTES) {
       cleanupRuntime();
-      if (!retainArtifact || signal.aborted) {
+      assertNotAborted(signal);
+      if (!retainArtifact) {
         return createOversizedFinalResult(serializedFinal, finalBytes, trace);
       }
+      trace.artifactRetention = "retention_failed";
       const artifact = await retainOversizedArtifact(
         serializedFinal,
         retainArtifact,
+        signal,
       );
+      assertNotAborted(signal);
       return createOversizedFinalResult(
         serializedFinal,
         finalBytes,
@@ -1142,6 +1373,7 @@ export async function handleCompose({
       classified = new ComposeRuntimeError(
         "timeout",
         `Compose exceeded the ${COMPOSE_TIMEOUT_MS}ms wall-time limit`,
+        "timeout",
       );
     }
     return createResult(undefined, trace, classified);

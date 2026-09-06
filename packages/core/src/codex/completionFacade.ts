@@ -140,6 +140,7 @@ function buildCodexAssistantBlocks(
 export async function executeCodexResolvedCompletion(args: {
   client: CodexResponsesClient;
   authMethod: CodexAuthMethod;
+  routing?: import("./turnRouting.js").CodexTurnRouting;
   model?: string;
   instructions: string;
   input: CodexInputItem[];
@@ -176,6 +177,7 @@ export async function executeCodexResolvedCompletion(args: {
         client: args.client,
         body: request.body,
         authMethod: args.authMethod,
+        routing: args.routing,
         signal: args.signal,
         onProviderRequestAttempt: args.onProviderRequestAttempt,
         onTransportActivity: args.onTransportActivity,

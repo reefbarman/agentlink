@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { handleGetTerminalOutput } from "../tools/getTerminalOutput.js";
 
 import {
   sameTerminalOwnerScope,
@@ -179,6 +180,47 @@ const t2: TabTerminalOwner = {
 };
 
 describe("TabTerminalProviderRegistry", () => {
+  it("forwards command identity through the production polling and owner-scoping boundary", async () => {
+    const base = createProvider();
+    const provider = new TabTerminalProviderRegistry(base.provider).forOwner(
+      t1,
+    );
+    const terminal = await provider.executeCommand({
+      owner: undefined,
+      command: "npm test",
+      cwd: "/workspace",
+    });
+    vi.mocked(base.provider.getBackgroundState).mockReturnValue({
+      command_id: "distinct-command",
+      is_running: false,
+      state: "completed",
+      exit_code: 1,
+      output: "failure",
+      output_captured: true,
+    });
+    await handleGetTerminalOutput(
+      { terminal_id: terminal.terminal_id, command_id: "distinct-command" },
+      { terminalProvider: provider },
+    );
+    const expected = {
+      terminalId: terminal.terminal_id,
+      commandId: "distinct-command",
+      owner: {
+        scopeId: t1.tabId,
+        displayLabel: t1.tabLabel,
+        generation: t1.generation,
+        authoritySessionId: t1.sessionId,
+      },
+    };
+    expect(base.provider.getBackgroundState).toHaveBeenCalledWith(expected);
+    expect(base.provider.getRetainedOutput).toHaveBeenCalledWith(expected);
+    provider.interruptTerminal({
+      owner: undefined,
+      terminalId: terminal.terminal_id,
+      commandId: "distinct-command",
+    });
+    expect(base.provider.interruptTerminal).toHaveBeenCalledWith(expected);
+  });
   it("titles terminals by stable tab label and reuses only within the owner generation", async () => {
     const base = createProvider();
     const registry = new TabTerminalProviderRegistry(base.provider);

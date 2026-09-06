@@ -1,4 +1,5 @@
 import * as fsSync from "fs";
+import { CodexTurnState } from "@agentlink/core/codex";
 import * as fs from "fs/promises";
 import * as http from "http";
 import * as https from "https";
@@ -85,6 +86,16 @@ import {
 } from "../protocol.js";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
+import type { McpConfigSnapshot } from "@agentlink/protocol/mcp-manager";
+import type {
+  McpFormElicitationInput,
+  McpFormElicitationResponse,
+} from "@agentlink/protocol/mcp-elicitation";
+import {
+  buildMcpConfigEntries,
+  buildMcpConfigRevision,
+  getMcpConfigSources,
+} from "../../agent/mcpConfig.js";
 import {
   getStructuredSecretRedactionMetadata,
   isStructuredConfigPath,
@@ -208,6 +219,7 @@ import {
   ASK_AGENT_SAFE_PROJECTLESS_TOOLS,
   ASK_AGENT_SAFE_PROJECTLESS_TOOL_NAMES,
   BrowserGatewayAskAgentModelClient,
+  findAskAgentMemoryAnchor,
   parseAskAgentDeferredNativeToolInput,
   type BrowserGatewayAskAgentToolCall,
 } from "./askAgentModelClient.js";
@@ -239,6 +251,7 @@ import {
   type BrowserGatewayAskAgentMemoryProposalRequest,
 } from "./browserGatewayAskAgentMemoryProposal.js";
 import { loadAskAgentSlashCommands } from "../../agent/SlashCommandRegistry.js";
+import { McpFormElicitationCoordinator } from "../../agent/McpFormElicitationCoordinator.js";
 import {
   BrowserGatewayCoreOwnerRegistry,
   filterInstancesForVisibleCoreOwners,
@@ -251,7 +264,7 @@ import type {
   CoreCapabilityStatusDto,
   CoreHostKind,
   CoreSessionScopeDto,
-} from "@agentlink/protocol/session";
+} from "@agentlink/protocol/session" with { "resolution-mode": "import" };
 import {
   isCoreReasoningEffort,
   type CoreModelCatalogEntry,
@@ -297,9 +310,20 @@ import {
 } from "./HelperLifecycleCoordinator.js";
 import { BrowserGatewayAutonomousMemoryRuntime } from "./BrowserGatewayAutonomousMemoryRuntime.js";
 import { BrowserGatewayDerivedSessionRuntime } from "./BrowserGatewayDerivedSessionRuntime.js";
+import {
+  createSharedCodexOAuthRuntime,
+  type SharedCodexOAuthRuntime,
+} from "./sharedCodexOAuth.js";
+import {
+  StandaloneAskAgentMcpRuntime,
+  type StandaloneAskAgentMcpTurn,
+} from "./StandaloneAskAgentMcpRuntime.js";
+import { StandaloneMcpOAuthRuntime } from "./StandaloneMcpOAuthRuntime.js";
+import { renderMcpOAuthCallbackPage } from "../../shared/mcpOAuthCallbackPage.js";
 
 export interface PreparedAskAgentWebAccess {
   target: BrowserGatewayInstanceRecord | null;
+  standaloneMcpTurn?: StandaloneAskAgentMcpTurn;
   policy: Readonly<CoreResolvedWebAccessPolicy>;
   tools: readonly CoreModelToolDefinition[];
   parallelSafeMcpToolNames: readonly string[];
@@ -345,6 +369,8 @@ export interface HelperRuntimeOptions {
   mdnsName?: string;
   /** Serve LAN browser requests over HTTPS with AgentLink's local CA. */
   secureLanAccess?: boolean;
+  /** Use helper-local global/Ask-Agent MCP config instead of a VS Code bridge. */
+  standaloneMcp?: boolean;
 }
 
 const DEFAULT_IDLE_SHUTDOWN_MS = 60_000;
@@ -442,6 +468,7 @@ const ASK_AGENT_MEMORY_DISCLOSURE_SOURCE_LIMIT = 5;
 const ASK_AGENT_MEMORY_DISCLOSURE_SUMMARY_SOURCE_LIMIT = 3;
 const ASK_AGENT_MEMORY_DISCLOSURE_TRANSCRIPT_SOURCE_LIMIT = 2;
 const ASK_AGENT_MEMORY_INDEX_SESSION_LIMIT = 12;
+const ASK_AGENT_MCP_APPROVAL_DETAIL_MAX_CHARS = 20_000;
 const CORE_HOST_KINDS = new Set<CoreHostKind>([
   "vscode",
   "browser-gateway",
@@ -531,6 +558,10 @@ function parseArgs(argv: string[]): HelperRuntimeOptions {
     process.env.AGENTLINK_BROWSER_GATEWAY_ASK_AGENT_LOG_PATH ??
     getDefaultAskAgentLogPath()
   ).trim();
+  const standaloneMcp = parseBoolFlag(
+    byKey.get("standaloneMcp") ??
+      process.env.AGENTLINK_BROWSER_GATEWAY_STANDALONE_MCP,
+  );
 
   return {
     port,
@@ -541,6 +572,7 @@ function parseArgs(argv: string[]): HelperRuntimeOptions {
     lanAccess,
     mdnsName: mdnsName || DEFAULT_MDNS_NAME,
     secureLanAccess: lanAccess && secureLanAccess,
+    standaloneMcp,
   };
 }
 
@@ -958,9 +990,17 @@ export class BrowserGatewayHelper {
   private askAgentModelOwnerId: string | undefined;
   private latestModelCatalogOwnerId: string | undefined;
   private readonly askAgentController: AskAgentController;
+  private readonly standaloneMcpFormElicitation: McpFormElicitationCoordinator;
   private readonly askAgentOwnerAdapter: AskAgentOwnerAdapter;
   private readonly askAgentSseHub: SseHub<AskAgentControllerSnapshot>;
   private readonly streamingMetrics: StreamingBaselineMetrics;
+  private readonly sharedCodexOAuth: SharedCodexOAuthRuntime | undefined;
+  private readonly standaloneMcpOAuthRuntime:
+    | StandaloneMcpOAuthRuntime
+    | undefined;
+  private readonly standaloneMcpRuntime:
+    | StandaloneAskAgentMcpRuntime
+    | undefined;
   private readonly askAgentModelClient: Pick<
     BrowserGatewayAskAgentModelClient,
     "complete"
@@ -996,6 +1036,18 @@ export class BrowserGatewayHelper {
   private readonly askAgentMemorySecretSkippedRevisions = new Map<
     string,
     string
+  >();
+  private readonly standaloneMcpApprovedToolsBySession = new Map<
+    string,
+    Set<string>
+  >();
+  private readonly standaloneMcpApprovedServersBySession = new Map<
+    string,
+    Set<string>
+  >();
+  private readonly standaloneMcpDeniedToolsByTurn = new WeakMap<
+    StandaloneAskAgentMcpTurn,
+    Set<string>
   >();
   private readonly httpRouter: HelperHttpRouter<AuthResult>;
   private readonly lifecycle: HelperLifecycleCoordinator;
@@ -1049,6 +1101,8 @@ export class BrowserGatewayHelper {
       askAgentMemorySummaryDebounceMs?: number;
       askAgentPreferencesStore?: BrowserGatewayAskAgentPreferencesStore;
       askAgentHistoryStore?: BrowserGatewayAskAgentHistoryStore;
+      standaloneMcpRuntime?: StandaloneAskAgentMcpRuntime;
+      standaloneMcpOAuthRuntime?: StandaloneMcpOAuthRuntime;
       streamingMetrics?: StreamingBaselineMetrics;
       beforeAskAgentSnapshotPublish?: (
         publication: AskAgentControllerPublication,
@@ -1171,6 +1225,27 @@ export class BrowserGatewayHelper {
         this.relayStore.putDetail(handle, content);
       },
     });
+    this.standaloneMcpOAuthRuntime =
+      options.standaloneMcp && process.platform === "darwin"
+        ? (injectables.standaloneMcpOAuthRuntime ??
+          new StandaloneMcpOAuthRuntime({
+            port: options.port,
+            confirmAuthorization: (request) =>
+              this.confirmStandaloneMcpOAuthAuthorization(request),
+          }))
+        : undefined;
+    this.standaloneMcpRuntime = options.standaloneMcp
+      ? (injectables.standaloneMcpRuntime ??
+        new StandaloneAskAgentMcpRuntime({
+          clientVersion: options.helperVersion,
+          ...(this.standaloneMcpOAuthRuntime
+            ? {
+                resolveOAuthProvider: (request) =>
+                  this.standaloneMcpOAuthRuntime!.resolveOAuthProvider(request),
+              }
+            : {}),
+        }))
+      : undefined;
     this.streamingMetrics =
       injectables.streamingMetrics ??
       getDevelopmentStreamingBaselineMetrics("ask-agent-helper", __DEV_BUILD__);
@@ -1215,6 +1290,26 @@ export class BrowserGatewayHelper {
         this.scheduleAskAgentMemorySummary(sessionId),
       onActiveTurnChanged: (active) => this.handleAskAgentTurnChanged(active),
     });
+    this.standaloneMcpFormElicitation = new McpFormElicitationCoordinator({
+      createId: () => `ask-agent-mcp-form-${randomUUID()}`,
+      publishRequest: (sessionId, request) => {
+        if (sessionId !== this.askAgentSessionStore.getActiveSessionId()) {
+          this.standaloneMcpFormElicitation.cancelRequest(request.id);
+          return;
+        }
+        this.askAgentSessionStore.setFormElicitation(request);
+        void this.publishCurrentAskAgentSnapshot("form-request");
+      },
+      publishCleared: (sessionId, id) => {
+        if (sessionId !== this.askAgentSessionStore.getActiveSessionId())
+          return;
+        const current = this.askAgentSessionStore.getFormElicitation();
+        if (current?.id === id) {
+          this.askAgentSessionStore.setFormElicitation(null);
+          void this.publishCurrentAskAgentSnapshot("form-cleared");
+        }
+      },
+    });
     this.askAgentOwnerAdapter = new AskAgentOwnerAdapter({
       helperGenerationId: this.helperGenerationId,
       ownerRegistry: this.coreOwnerRegistry,
@@ -1250,10 +1345,15 @@ export class BrowserGatewayHelper {
       injectables.askAgentHistoryStore ??
       new BrowserGatewayAskAgentHistoryStore();
 
+    this.sharedCodexOAuth =
+      process.platform === "darwin" && !injectables.askAgentModelClient
+        ? createSharedCodexOAuthRuntime((message) => logHelper(message))
+        : undefined;
     this.askAgentModelClient =
       injectables.askAgentModelClient ??
       new BrowserGatewayAskAgentModelClient({
         sessionId: BROWSER_GATEWAY_ASK_AGENT_SESSION_ID,
+        codexCredentialProvider: this.sharedCodexOAuth?.provider,
       });
     this.askAgentMemoryStore = injectables.askAgentMemoryStore;
     this.askAgentDerivedSessionRuntime =
@@ -1568,6 +1668,8 @@ export class BrowserGatewayHelper {
         return this.handleAskAgentQuestionResponseRequest(req, res);
       case "questionProgress":
         return this.handleAskAgentQuestionProgressRequest(req, res);
+      case "formElicitation":
+        return this.handleAskAgentFormElicitationRequest(req, res);
       case "memory":
         return this.handleAskAgentMemoryStatusRequest(res);
       case "memoryClear":
@@ -1643,6 +1745,7 @@ export class BrowserGatewayHelper {
           now: new Date().toISOString(),
           uptimeMs: Date.now() - this.startedAtMs,
           activeClientLeases: this.getActiveLeaseCount(),
+          activeLivenessReasons: this.lifecycle.getLivenessReasons(),
           helperGenerationId: this.helperGenerationId,
           dataPlaneMode,
           dataPlaneFeatures: [...BROWSER_GATEWAY_DATA_PLANE_FEATURES],
@@ -1725,6 +1828,38 @@ export class BrowserGatewayHelper {
       case "webManifest":
         this.handleWebManifestRequest(res);
         return;
+      case "mcpOAuthCallback": {
+        if (
+          classifyBrowserGatewayClientOrigin(req.socket.remoteAddress) !==
+            "loopback" ||
+          !this.standaloneMcpOAuthRuntime
+        ) {
+          writeJson(res, 404, { error: "not_found" });
+          return;
+        }
+        const result = this.standaloneMcpOAuthRuntime.handleCallback(
+          pathname,
+          requestUrl,
+        );
+        const failed = !result.ok || Boolean(result.oauthError);
+        writeHtml(
+          res,
+          failed ? 400 : 200,
+          renderMcpOAuthCallbackPage({
+            serverName: result.serverName ?? "the MCP server",
+            oauthError: failed ? "authorization_failed" : undefined,
+            returnTarget: "desktop",
+            pendingSetup: true,
+          }),
+          {
+            "Content-Security-Policy":
+              "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+          },
+        );
+        return;
+      }
     }
   }
 
@@ -1846,6 +1981,7 @@ export class BrowserGatewayHelper {
           selectedInstance?.workspaceName ?? "No Workspace",
           await this.resolveInitialTheme(selectedInstance),
           await this.resolveEffectiveDataPlaneMode(),
+          requestUrl.searchParams.get("surface") === "desktop",
         ),
         { "Set-Cookie": this.buildBootstrapCookie(req) },
       );
@@ -1874,6 +2010,7 @@ export class BrowserGatewayHelper {
         selectedInstance?.workspaceName ?? "No Workspace",
         await this.resolveInitialTheme(selectedInstance),
         await this.resolveEffectiveDataPlaneMode(),
+        requestUrl.searchParams.get("surface") === "desktop",
       ),
     );
     void this.recordDeviceActivity(auth);
@@ -2090,11 +2227,15 @@ export class BrowserGatewayHelper {
       writeJson(res, 400, { error: "ask_agent_session_id_invalid" });
       return;
     }
+    const previousSessionId = this.askAgentSessionStore.getActiveSessionId();
     this.askAgentSessionStore.createSession(
       Date.now(),
       undefined,
       requestedSessionId || undefined,
     );
+    if (this.askAgentSessionStore.getActiveSessionId() !== previousSessionId) {
+      this.standaloneMcpFormElicitation.cancelSession(previousSessionId);
+    }
     await this.persistAskAgentHistory();
     const response = await this.buildAskAgentResponse();
     this.logAskAgentEvent("ask-agent.session.new", {
@@ -2114,6 +2255,7 @@ export class BrowserGatewayHelper {
       const body = (await readJsonBody(req)) as { sessionId?: unknown } | null;
       const sessionId =
         typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
+      const previousSessionId = this.askAgentSessionStore.getActiveSessionId();
       if (!sessionId || !this.askAgentSessionStore.loadSession(sessionId)) {
         this.logAskAgentEvent("ask-agent.session.load", {
           sessionId: sessionId || "none",
@@ -2122,6 +2264,9 @@ export class BrowserGatewayHelper {
         });
         writeJson(res, 404, { error: "ask_agent_session_not_found" });
         return;
+      }
+      if (sessionId !== previousSessionId) {
+        this.standaloneMcpFormElicitation.cancelSession(previousSessionId);
       }
       await this.persistAskAgentHistory();
       const response = await this.buildAskAgentResponse();
@@ -2160,6 +2305,9 @@ export class BrowserGatewayHelper {
       }
       this.cancelAskAgentMemorySummary(sessionId);
       await this.deleteAskAgentDerivedSession(sessionId);
+      this.standaloneMcpApprovedToolsBySession.delete(sessionId);
+      this.standaloneMcpApprovedServersBySession.delete(sessionId);
+      this.standaloneMcpFormElicitation.cancelSession(sessionId);
       if (!this.askAgentSessionStore.deleteSession(sessionId)) {
         throw new Error("ask_agent_session_delete_race");
       }
@@ -2249,7 +2397,7 @@ export class BrowserGatewayHelper {
       const attachments = normalizeUserQuestionAttachments(body?.attachments);
       const now = Date.now();
       const theme = await this.resolveInitialTheme(null);
-      const modelContext = this.getAskAgentModelExecutionContext(now);
+      const modelContext = await this.resolveAskAgentModelExecutionContext(now);
       if (!modelContext) {
         this.logAskAgentEvent("ask-agent.question.response", {
           id,
@@ -2445,6 +2593,55 @@ export class BrowserGatewayHelper {
     }
   }
 
+  private async handleAskAgentFormElicitationRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    try {
+      const body = (await readJsonBody(req)) as {
+        id?: unknown;
+        action?: unknown;
+        values?: unknown;
+      } | null;
+      const id = typeof body?.id === "string" ? body.id.trim() : "";
+      const action = body?.action;
+      if (
+        !id ||
+        (action !== "accept" && action !== "cancel" && action !== "decline") ||
+        (action === "accept" &&
+          (!body?.values ||
+            typeof body.values !== "object" ||
+            Array.isArray(body.values)))
+      ) {
+        writeJson(res, 400, { ok: false, error: "invalid_request" });
+        return;
+      }
+      const response: McpFormElicitationResponse =
+        action === "accept"
+          ? {
+              id,
+              action,
+              values: body!.values as Record<string, unknown>,
+            }
+          : { id, action };
+      const result = this.standaloneMcpFormElicitation.submit(response);
+      if (result.ok) {
+        writeJson(res, 200, { ok: true });
+      } else if (result.reason === "invalid_values") {
+        writeJson(res, 400, { ok: false, errors: result.errors });
+      } else {
+        writeJson(res, 404, { ok: false, error: "stale_request" });
+      }
+    } catch (error) {
+      const invalidJson =
+        error instanceof Error && error.message === "invalid_json";
+      writeJson(res, invalidJson ? 400 : 500, {
+        ok: false,
+        error: invalidJson ? "invalid_json" : "internal_error",
+      });
+    }
+  }
+
   private async handleAskAgentQuestionProgressRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -2551,6 +2748,75 @@ export class BrowserGatewayHelper {
   ): void {
     this.askAgentModelOwnerId = preferences.modelOwnerId;
     this.askAgentController.restoreState(preferences, history);
+  }
+
+  private async publishCurrentAskAgentSnapshot(reason: string): Promise<void> {
+    try {
+      const response = await this.buildAskAgentResponse();
+      await this.publishAskAgentSnapshot(response.snapshot);
+    } catch (error) {
+      logHelper(`ask-agent ${reason} snapshot failed: ${String(error)}`);
+    }
+  }
+
+  private requestStandaloneMcpFormElicitation(
+    request: McpFormElicitationInput & {
+      readonly sessionId: string;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<
+    | { readonly action: "accept"; readonly content: Record<string, unknown> }
+    | { readonly action: "cancel" }
+    | { readonly action: "decline" }
+  > {
+    return new Promise((resolve) => {
+      let settled = false;
+      let elicitationId: string | undefined;
+      const finish = (
+        response:
+          | {
+              readonly action: "accept";
+              readonly content: Record<string, unknown>;
+            }
+          | { readonly action: "cancel" }
+          | { readonly action: "decline" },
+      ) => {
+        if (settled) return;
+        settled = true;
+        request.signal?.removeEventListener("abort", abort);
+        resolve(response);
+      };
+      const abort = () => {
+        if (
+          elicitationId &&
+          this.standaloneMcpFormElicitation.cancelRequest(elicitationId)
+        ) {
+          return;
+        }
+        finish({ action: "cancel" });
+      };
+      if (request.signal?.aborted) {
+        finish({ action: "cancel" });
+        return;
+      }
+      const elicitation = this.standaloneMcpFormElicitation.enqueue(
+        {
+          serverName: request.serverName,
+          message: request.message,
+          fields: request.fields,
+        },
+        {
+          sessionId: request.sessionId,
+          resolve: (values) => finish({ action: "accept", content: values }),
+          cancel: () => finish({ action: "cancel" }),
+          decline: () => finish({ action: "decline" }),
+        },
+      );
+      elicitationId = elicitation.id;
+      if (settled) return;
+      request.signal?.addEventListener("abort", abort, { once: true });
+      if (request.signal?.aborted) abort();
+    });
   }
 
   private async buildAskAgentResponse(): Promise<AskAgentSessionResponse> {
@@ -2730,15 +2996,6 @@ export class BrowserGatewayHelper {
       .sessions.find((candidate) => candidate.id === sessionId);
     if (!session || session.messages.length < 2) return;
 
-    const modelContext = this.getAskAgentModelExecutionContext(Date.now());
-    if (!modelContext) {
-      this.logAskAgentEvent("ask-agent.memory.summary.skipped", {
-        sessionId,
-        reason: "credential_unavailable",
-      });
-      return;
-    }
-
     const existingTimer = this.askAgentMemorySummaryTimers.get(sessionId);
     if (existingTimer) {
       clearTimeout(existingTimer);
@@ -2799,7 +3056,9 @@ export class BrowserGatewayHelper {
     scheduledAt: number;
   }): Promise<void> {
     const { session, revision, scheduledAt } = params;
-    const modelContext = this.getAskAgentModelExecutionContext(Date.now());
+    const modelContext = await this.resolveAskAgentModelExecutionContext(
+      Date.now(),
+    );
     if (!modelContext) {
       this.logAskAgentEvent("ask-agent.memory.summary.skipped", {
         sessionId: session.id,
@@ -3362,6 +3621,97 @@ export class BrowserGatewayHelper {
     };
   }
 
+  private async resolveAskAgentModelExecutionContext(
+    now = Date.now(),
+    requestedOwnerId = this.askAgentModelOwnerId,
+  ): Promise<AskAgentModelExecutionContext | null> {
+    const initial = this.getAskAgentModelExecutionContext(
+      now,
+      requestedOwnerId,
+    );
+    const snapshot = this.getModelCatalogSnapshot(requestedOwnerId);
+    const model = this.askAgentSessionStore.getModel();
+    const providerId = this.askAgentSessionStore.getModelProvider();
+    if (
+      !this.sharedCodexOAuth ||
+      providerId !== BROWSER_GATEWAY_CODEX_CREDENTIAL_PROVIDER_ID ||
+      (initial?.credential && initial.credential.method !== "oauth")
+    ) {
+      return initial;
+    }
+    let auth;
+    try {
+      auth = await this.sharedCodexOAuth.provider.resolveAuth({
+        context: { sessionId: this.askAgentSessionStore.getActiveSessionId() },
+        modelId: model,
+        purpose: "authStatus",
+      });
+    } catch (error) {
+      logHelper(
+        `[codex-oauth] Shared credential lookup unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+    if (!auth || auth.method !== "oauth") {
+      if (snapshot && initial?.credential?.method === "oauth") {
+        this.modelCredentialCache.clear({
+          grantedByOwnerId: snapshot.publishedByOwnerId,
+          grantedByOwnerGenerationId: snapshot.publishedByOwnerGenerationId,
+          providerId,
+        });
+      }
+      return null;
+    }
+
+    const ownerId =
+      snapshot?.publishedByOwnerId ?? BROWSER_GATEWAY_ASK_AGENT_OWNER_ID;
+    const ownerGenerationId =
+      snapshot?.publishedByOwnerGenerationId ??
+      this.askAgentOwnerAdapter.ownerGenerationId;
+    const credential = this.modelCredentialCache.grant({
+      providerId,
+      method: "oauth",
+      bearerToken: auth.bearerToken,
+      grantedByOwnerId: ownerId,
+      grantedByOwnerGenerationId: ownerGenerationId,
+      modelScopes: [BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE],
+      helperGenerationId: this.helperGenerationId,
+      ttlMs: 10 * 60_000,
+      accountId: auth.accountId,
+      accountLabel: auth.oauthAccountLabel ?? auth.oauthAccountEmail,
+      canRefresh: true,
+      now,
+    });
+    if (snapshot) {
+      return {
+        modelOwnerId: snapshot.publishedByOwnerId,
+        ownerId,
+        ownerGenerationId,
+        providerId,
+        model,
+        promptProfile: this.resolvePromptProfileFromSnapshot(
+          snapshot,
+          model,
+          providerId,
+        ),
+        credential,
+      };
+    }
+
+    // Once the native catalog owner disconnects, only built-in Codex models may
+    // continue from the helper-owned shared OAuth pool. Custom provider config
+    // remains bound to a connected owner.
+    return {
+      modelOwnerId: BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+      ownerId,
+      ownerGenerationId,
+      providerId,
+      model,
+      promptProfile: resolvePromptProfile({ providerId, modelId: model }),
+      credential,
+    };
+  }
+
   private getAskAgentModelExecutionContext(
     now = Date.now(),
     requestedOwnerId = this.askAgentModelOwnerId,
@@ -3612,10 +3962,50 @@ export class BrowserGatewayHelper {
     }
   }
 
+  private async buildStandaloneAskAgentMcpConfigSnapshot(): Promise<McpConfigSnapshot> {
+    const [sources, entries] = await Promise.all([
+      getMcpConfigSources("ask-agent"),
+      buildMcpConfigEntries("ask-agent"),
+    ]);
+    return {
+      profile: "ask-agent",
+      version: 0,
+      revision: buildMcpConfigRevision(sources),
+      sources,
+      entries,
+      statusInfos: entries.map((entry) => ({
+        name: entry.name,
+        status: entry.config.disabled ? "disabled" : "not_connected",
+        toolCount: 0,
+        resourceCount: 0,
+        promptCount: 0,
+        tools: [],
+      })),
+      capabilities: {
+        canEditConfig: false,
+        canOpenRawConfig: false,
+        canReconnect: false,
+        canReauthenticate: false,
+        canDisable: false,
+        canUseProjectConfig: false,
+        canWriteSecrets: false,
+        canConfigureLocalProcess: false,
+      },
+      unavailableReason:
+        "Desktop MCP servers connect only for an active turn. OAuth opens the system browser when a remote server requires authorization. In-app configuration editing and manual reauthentication remain unavailable.",
+    };
+  }
+
   private async handleAskAgentMcpConfigRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
+    if (this.standaloneMcpRuntime) {
+      const configSnapshot =
+        await this.buildStandaloneAskAgentMcpConfigSnapshot();
+      writeJson(res, 200, { ok: true, configSnapshot });
+      return;
+    }
     await this.proxyAskAgentMcpConfigRequest(
       req,
       res,
@@ -3628,6 +4018,13 @@ export class BrowserGatewayHelper {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
+    if (this.standaloneMcpRuntime) {
+      writeJson(res, 403, {
+        ok: false,
+        error: "standalone_mcp_config_read_only",
+      });
+      return;
+    }
     await this.proxyAskAgentMcpConfigRequest(
       req,
       res,
@@ -3647,6 +4044,16 @@ export class BrowserGatewayHelper {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
+    if (this.standaloneMcpRuntime) {
+      const configSnapshot =
+        await this.buildStandaloneAskAgentMcpConfigSnapshot();
+      writeJson(res, 200, {
+        ok: true,
+        infos: configSnapshot.statusInfos,
+        configSnapshot,
+      });
+      return;
+    }
     const target = await this.getAskAgentMcpBridgeTarget();
     if (!target) {
       writeJson(res, 200, {
@@ -3681,6 +4088,16 @@ export class BrowserGatewayHelper {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
+    if (this.standaloneMcpRuntime) {
+      const configSnapshot =
+        await this.buildStandaloneAskAgentMcpConfigSnapshot();
+      writeJson(res, 200, {
+        ok: true,
+        infos: configSnapshot.statusInfos,
+        configSnapshot,
+      });
+      return;
+    }
     const target = await this.getAskAgentMcpBridgeTarget();
     if (!target) {
       writeJson(res, 200, {
@@ -4759,6 +5176,10 @@ export class BrowserGatewayHelper {
     theme: BrowserGatewayThemeSnapshot;
     signal: AbortSignal;
   }): Promise<AskAgentToolLoopResult> {
+    const codexRouting = {
+      sessionId: this.askAgentSessionStore.getActiveSessionId(),
+      turnState: new CodexTurnState(),
+    };
     const completeWithToolCalls =
       this.askAgentModelClient.completeWithToolCalls?.bind(
         this.askAgentModelClient,
@@ -4787,6 +5208,7 @@ export class BrowserGatewayHelper {
 
     const preparedWebAccess = await this.prepareAskAgentWebAccess(
       params.modelContext,
+      params.assistantMessageId,
       params.signal,
     );
     const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
@@ -4798,9 +5220,13 @@ export class BrowserGatewayHelper {
       this.askAgentSessionStore.getModelTranscriptMessages(
         params.assistantMessageId,
       );
+    const memoryContextBeforeIndex = findAskAgentMemoryAnchor(
+      modelTranscriptMessages,
+    );
 
     if (!completeWithToolCalls) {
       const assistantText = await this.askAgentModelClient.complete({
+        codexRouting,
         credential: params.modelContext.credential,
         providerId: params.modelContext.providerId,
         openAiCompatibleRuntimeProfile:
@@ -4810,6 +5236,7 @@ export class BrowserGatewayHelper {
         reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
         messages: [],
         memoryContext: params.memoryContext,
+        memoryContextBeforeIndex,
         iterationMessages: modelTranscriptMessages,
         signal: params.signal,
         onDelta: (delta) => {
@@ -4843,6 +5270,7 @@ export class BrowserGatewayHelper {
       initialToolMessages: params.initialToolMessages,
       callModel: async ({ iterationMessages, toolMessages, onText }) => {
         const result = await completeWithToolCalls({
+          codexRouting,
           credential: params.modelContext.credential,
           providerId: params.modelContext.providerId,
           openAiCompatibleRuntimeProfile:
@@ -4852,6 +5280,7 @@ export class BrowserGatewayHelper {
           reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
           messages: [],
           memoryContext: params.memoryContext,
+          memoryContextBeforeIndex,
           iterationMessages: [...modelTranscriptMessages, ...iterationMessages],
           toolMessages,
           tools: nativeToolDisclosure.inlineTools,
@@ -4956,6 +5385,10 @@ export class BrowserGatewayHelper {
                 params.modelContext.ownerId,
                 params.signal,
                 { getVisibleAssistantText: () => turnVisibleAssistantText },
+                {
+                  sessionId: this.askAgentSessionStore.getActiveSessionId(),
+                  turnId: params.assistantMessageId,
+                },
               );
         this.recordAskAgentSemanticDelta();
         this.askAgentController.completeAssistantToolCall({
@@ -5201,13 +5634,31 @@ export class BrowserGatewayHelper {
 
   private async prepareAskAgentWebAccess(
     modelContext: AskAgentModelExecutionContext,
+    turnId: string,
     signal: AbortSignal,
   ): Promise<PreparedAskAgentWebAccess> {
     const target = await this.getAskAgentMcpBridgeTarget();
-    const [remotePolicy, mcpCatalog] = await Promise.all([
+    const [remotePolicy, standaloneMcpTurn] = await Promise.all([
       this.getAskAgentWebPolicy(target, signal),
-      this.getAskAgentMcpTools(target, signal),
+      this.standaloneMcpRuntime?.prepareTurn({
+        sessionId: this.askAgentSessionStore.getActiveSessionId(),
+        turnId,
+        providerId: modelContext.providerId,
+        modelId: modelContext.model,
+        signal,
+        onElicitation: (request) =>
+          this.requestStandaloneMcpFormElicitation(request),
+      }),
     ]);
+    const mcpCatalog = standaloneMcpTurn
+      ? {
+          tools: [...standaloneMcpTurn.tools],
+          parallelSafeToolNames: [...standaloneMcpTurn.parallelSafeToolNames],
+          parallelSafeServerNames: [
+            ...standaloneMcpTurn.parallelSafeServerNames,
+          ],
+        }
+      : await this.getAskAgentMcpTools(target, signal);
     const preferences = await this.askAgentPreferencesStore.read();
     const cachedPolicy = preferences.webPolicy;
     const settings = normalizeCoreWebAccessSettings(
@@ -5247,6 +5698,7 @@ export class BrowserGatewayHelper {
     const tools = [...mcpCatalog.tools, ...nativeTools];
     return Object.freeze({
       target,
+      ...(standaloneMcpTurn ? { standaloneMcpTurn } : {}),
       policy: freezeAskAgentValue(policy),
       tools: freezeAskAgentValue(tools),
       parallelSafeMcpToolNames: freezeAskAgentValue(
@@ -5367,11 +5819,253 @@ export class BrowserGatewayHelper {
     }
   }
 
+  private isStandaloneMcpSessionApproved(
+    sessionId: string,
+    serverName: string,
+    bareToolName: string,
+  ): boolean {
+    return (
+      this.standaloneMcpApprovedServersBySession
+        .get(sessionId)
+        ?.has(serverName) === true ||
+      this.standaloneMcpApprovedToolsBySession
+        .get(sessionId)
+        ?.has(`${serverName}__${bareToolName}`) === true
+    );
+  }
+
+  private approveStandaloneMcpForSession(
+    sessionId: string,
+    serverName: string,
+    bareToolName: string,
+    decision: string,
+  ): void {
+    if (decision === "always-server-session") {
+      const servers =
+        this.standaloneMcpApprovedServersBySession.get(sessionId) ?? new Set();
+      servers.add(serverName);
+      this.standaloneMcpApprovedServersBySession.set(sessionId, servers);
+      return;
+    }
+    if (decision === "always-tool-session") {
+      const tools =
+        this.standaloneMcpApprovedToolsBySession.get(sessionId) ?? new Set();
+      tools.add(`${serverName}__${bareToolName}`);
+      this.standaloneMcpApprovedToolsBySession.set(sessionId, tools);
+    }
+  }
+
+  private async confirmStandaloneMcpOAuthAuthorization(request: {
+    serverId: string;
+    authorizationUrl: string;
+    signal?: AbortSignal;
+  }): Promise<boolean> {
+    const signal = request.signal ?? new AbortController().signal;
+    if (this.askAgentController.getPendingApproval()) {
+      throw new Error("ask_agent_approval_pending");
+    }
+    const authorizationUrl = new URL(request.authorizationUrl);
+    const approval: ApprovalRequest = {
+      kind: "mcp",
+      id: `ask-agent-mcp-oauth-${randomUUID()}`,
+      command: `Allow MCP authorization for "${request.serverId}"?`,
+      mcpDetail: `AgentLink will open your system browser to:\n${authorizationUrl.origin}\n\nThe authorization page is controlled by the MCP server's OAuth provider.`,
+      mcpServerName: request.serverId,
+      mcpToolName: "OAuth authorization",
+      toolOrigin: "mcp",
+      mcpChoices: [
+        { label: "Open browser", value: "allow-once", isPrimary: true },
+        { label: "Deny", value: "deny", isDanger: true },
+      ],
+    };
+    const decision = this.askAgentController.requestApproval(approval, signal);
+    const response = await this.buildAskAgentResponse();
+    await this.publishAskAgentSnapshot(response.snapshot);
+    return (await decision).decision === "allow-once";
+  }
+
+  private async requestStandaloneMcpApproval(params: {
+    serverName: string;
+    bareToolName: string;
+    input: Record<string, unknown>;
+    signal: AbortSignal;
+  }): Promise<DecisionMessage> {
+    if (this.askAgentController.getPendingApproval()) {
+      throw new Error("ask_agent_approval_pending");
+    }
+    const serialized = JSON.stringify(params.input, null, 2) ?? "{}";
+    const redacted = redactStructuredSecrets(
+      "/.agentlink/mcp-approval.json",
+      serialized,
+    ).content;
+    const detail =
+      redacted.length > ASK_AGENT_MCP_APPROVAL_DETAIL_MAX_CHARS
+        ? `${redacted.slice(0, ASK_AGENT_MCP_APPROVAL_DETAIL_MAX_CHARS)}\n… [input truncated]`
+        : redacted;
+    const request: ApprovalRequest = {
+      kind: "mcp",
+      id: `ask-agent-mcp-${randomUUID()}`,
+      command: `Allow MCP tool "${params.bareToolName}" from "${params.serverName}"?`,
+      mcpDetail: detail,
+      mcpServerName: params.serverName,
+      mcpToolName: params.bareToolName,
+      toolOrigin: "mcp",
+      mcpChoices: [
+        { label: "Allow once", value: "allow-once", isPrimary: true },
+        { label: "Always allow tool (session)", value: "always-tool-session" },
+        {
+          label: `Always allow ${params.serverName} (session)`,
+          value: "always-server-session",
+        },
+        { label: "Deny", value: "deny", isDanger: true },
+      ],
+    };
+    const decision = this.askAgentController.requestApproval(
+      request,
+      params.signal,
+    );
+    const response = await this.buildAskAgentResponse();
+    await this.publishAskAgentSnapshot(response.snapshot);
+    return await decision;
+  }
+
   private async executeAskAgentMcpTool(
     toolCall: BrowserGatewayAskAgentToolCall,
     target: BrowserGatewayInstanceRecord | null,
     signal: AbortSignal,
+    standaloneMcpTurn?: StandaloneAskAgentMcpTurn,
+    invocation?: { readonly sessionId: string; readonly turnId: string },
   ): Promise<AskAgentToolExecutionResult> {
+    if (standaloneMcpTurn) {
+      const requirement = standaloneMcpTurn.getApprovalRequirement?.(
+        toolCall.name,
+        toolCall.input,
+      );
+      const sessionId = standaloneMcpTurn.sessionId;
+      const deniedKey = requirement
+        ? `${requirement.serverName}__${requirement.bareToolName}`
+        : "";
+      const deniedTools =
+        this.standaloneMcpDeniedToolsByTurn.get(standaloneMcpTurn) ?? new Set();
+      let approved =
+        requirement === undefined ||
+        this.isStandaloneMcpSessionApproved(
+          sessionId,
+          requirement.serverName,
+          requirement.bareToolName,
+        );
+      if (requirement && !approved) {
+        if (deniedTools.has(deniedKey)) {
+          const content = JSON.stringify({
+            status: "rejected_by_user",
+            error: "User denied MCP tool execution earlier in this turn",
+          });
+          return {
+            content,
+            stop: false,
+            toolMessage: this.buildAskAgentToolResultMessage(
+              toolCall,
+              content,
+              true,
+            ),
+          };
+        }
+        let decision: DecisionMessage;
+        try {
+          decision = await this.requestStandaloneMcpApproval({
+            ...requirement,
+            signal,
+          });
+        } catch (error) {
+          const code = error instanceof Error ? error.message : String(error);
+          const cancelled =
+            code === "ask_agent_approval_cancelled" || signal.aborted;
+          const content = JSON.stringify({
+            status: cancelled ? "cancelled" : "approval_pending",
+            error: cancelled
+              ? "MCP tool approval was cancelled"
+              : "Another approval is already pending",
+          });
+          return {
+            content,
+            stop: cancelled,
+            toolMessage: this.buildAskAgentToolResultMessage(
+              toolCall,
+              content,
+              true,
+            ),
+          };
+        }
+        approved =
+          decision.decision === "allow-once" ||
+          decision.decision === "always-tool-session" ||
+          decision.decision === "always-server-session";
+        if (!approved) {
+          deniedTools.add(deniedKey);
+          this.standaloneMcpDeniedToolsByTurn.set(
+            standaloneMcpTurn,
+            deniedTools,
+          );
+          const content = JSON.stringify({
+            status: "rejected_by_user",
+            error: "User denied MCP tool execution",
+            ...(decision.rejectionReason
+              ? { reason: decision.rejectionReason }
+              : {}),
+            ...(decision.followUp ? { follow_up: decision.followUp } : {}),
+          });
+          return {
+            content,
+            stop: false,
+            toolMessage: this.buildAskAgentToolResultMessage(
+              toolCall,
+              content,
+              true,
+            ),
+          };
+        }
+        this.approveStandaloneMcpForSession(
+          sessionId,
+          requirement.serverName,
+          requirement.bareToolName,
+          decision.decision,
+        );
+      }
+      if (!invocation) {
+        throw new Error("standalone_mcp_invocation_context_missing");
+      }
+      const result = await standaloneMcpTurn.execute(
+        toolCall.name,
+        toolCall.input,
+        signal,
+        invocation,
+        approved,
+      );
+      const media = askAgentMediaFromToolResult(result);
+      const content =
+        media.content ||
+        (media.resultImages.length > 0
+          ? `[${media.resultImages.length} image${media.resultImages.length === 1 ? "" : "s"}]`
+          : JSON.stringify({ error: "mcp_tool_failed" }));
+      const modelContent =
+        Array.isArray(media.modelContent) && !media.content
+          ? [{ type: "text" as const, text: content }, ...media.modelContent]
+          : media.modelContent || content;
+      return {
+        content,
+        modelContent,
+        ...(media.resultImages.length > 0
+          ? { resultImages: media.resultImages }
+          : {}),
+        stop: false,
+        toolMessage: this.buildAskAgentToolResultMessage(
+          toolCall,
+          content,
+          result.isError === true,
+          modelContent,
+        ),
+      };
+    }
     if (!target) {
       const content = JSON.stringify({ error: "MCP hub not available" });
       return {
@@ -5592,13 +6286,14 @@ export class BrowserGatewayHelper {
     toolCall: BrowserGatewayAskAgentToolCall,
     _target: BrowserGatewayInstanceRecord | null,
     modelOwnerId: string,
+    resolvedCredential: BrowserGatewayModelCredentialRecord | undefined,
     signal: AbortSignal,
   ): Promise<AskAgentToolExecutionResult> {
     const generatedImages: CodexGeneratedImage[] = [];
     try {
       const input = this.normalizeAskAgentImageInput(toolCall.input);
       const snapshot = this.getModelCatalogSnapshot(modelOwnerId);
-      const credential = snapshot
+      let credential = snapshot
         ? this.modelCredentialCache.getCredential({
             grantedByOwnerId: snapshot.publishedByOwnerId,
             grantedByOwnerGenerationId: snapshot.publishedByOwnerGenerationId,
@@ -5606,10 +6301,29 @@ export class BrowserGatewayHelper {
             modelScope: BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE,
             now: Date.now(),
           })
-        : null;
+        : (resolvedCredential ?? null);
+      if (credential?.method === "oauth" && this.sharedCodexOAuth) {
+        const sharedAuth = await this.sharedCodexOAuth.provider.resolveAuth({
+          context: {
+            sessionId: this.askAgentSessionStore.getActiveSessionId(),
+          },
+          modelId: this.askAgentSessionStore.getModel(),
+          purpose: "complete",
+        });
+        if (sharedAuth?.method === "oauth") {
+          credential = {
+            ...credential,
+            bearerToken: sharedAuth.bearerToken,
+            accountId: sharedAuth.accountId,
+            accountLabel:
+              sharedAuth.oauthAccountLabel ?? sharedAuth.oauthAccountEmail,
+            canRefresh: sharedAuth.canRefresh === true,
+          };
+        }
+      }
       if (!credential) {
         throw new Error(
-          "generate_image requires refreshed Codex/OpenAI credentials from a connected VS Code AgentLink instance",
+          "generate_image requires refreshed Codex/OpenAI credentials from AgentLink's shared account store or a connected owner",
         );
       }
       const billing =
@@ -5953,6 +6667,7 @@ export class BrowserGatewayHelper {
     modelOwnerId: string,
     signal: AbortSignal,
     turnContext?: AskAgentToolTurnContext,
+    mcpInvocation?: { readonly sessionId: string; readonly turnId: string },
   ): Promise<AskAgentToolExecutionResult> {
     const startedAt = Date.now();
     if (toolCall.name === "web_search" || toolCall.name === "web_fetch") {
@@ -5978,6 +6693,8 @@ export class BrowserGatewayHelper {
         toolCall,
         mcpBridgeTarget,
         signal,
+        preparedWebAccess.standaloneMcpTurn,
+        mcpInvocation,
       );
     }
 
@@ -6009,6 +6726,7 @@ export class BrowserGatewayHelper {
         toolCall,
         mcpBridgeTarget,
         modelOwnerId,
+        credential,
         signal,
       );
     }
@@ -6725,7 +7443,7 @@ export class BrowserGatewayHelper {
       }
       const requestedOwnerId =
         typeof body?.instanceId === "string" ? body.instanceId.trim() : "";
-      const modelContext = this.getAskAgentModelExecutionContext(
+      const modelContext = await this.resolveAskAgentModelExecutionContext(
         now,
         requestedOwnerId || undefined,
       );
@@ -7025,7 +7743,7 @@ export class BrowserGatewayHelper {
         this.askAgentSessionStore.getActiveUserMessageTexts();
       const requestedOwnerId =
         typeof body.instanceId === "string" ? body.instanceId.trim() : "";
-      const modelContext = this.getAskAgentModelExecutionContext(
+      const modelContext = await this.resolveAskAgentModelExecutionContext(
         now,
         requestedOwnerId || undefined,
       );
@@ -7239,6 +7957,9 @@ export class BrowserGatewayHelper {
   }
 
   cancelActiveTurn(): Promise<AskAgentControllerPublication | null> {
+    this.standaloneMcpFormElicitation.cancelSession(
+      this.askAgentSessionStore.getActiveSessionId(),
+    );
     return this.askAgentController.cancelActiveTurn((messageId) =>
       this.commitAskAgentCancellation(messageId),
     );
@@ -7295,6 +8016,8 @@ export class BrowserGatewayHelper {
   }
 
   async dispose(): Promise<void> {
+    this.standaloneMcpFormElicitation.dispose();
+    this.standaloneMcpOAuthRuntime?.dispose();
     await this.askAgentController.dispose();
     await this.askAgentOwnerAdapter.dispose();
     await this.askAgentDerivedSessionRuntime.dispose();
@@ -9018,6 +9741,7 @@ export class BrowserGatewayHelper {
     workspaceName: string,
     initialTheme: BrowserGatewayThemeSnapshot,
     dataPlaneMode: BrowserGatewayDataPlaneMode,
+    askAgentOnly = false,
   ): string {
     const assetVersion = encodeURIComponent(this.options.helperVersion);
     return `<!doctype html>
@@ -9047,6 +9771,7 @@ export class BrowserGatewayHelper {
       currentInstanceId: ${JSON.stringify(currentInstanceId)},
       workspaceName: ${JSON.stringify(workspaceName)},
       routeByInstance: true,
+      askAgentOnly: ${JSON.stringify(askAgentOnly)},
       initialTheme: ${JSON.stringify(initialTheme)},
       dataPlaneMode: ${JSON.stringify(dataPlaneMode)}
     };

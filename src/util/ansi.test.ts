@@ -117,12 +117,48 @@ describe("cleanTerminalOutput", () => {
     );
   });
 
-  it("keeps only the final lone-carriage-return redraw", () => {
-    expect(cleanTerminalOutput("progress 10%\rprogress 90%\rresult")).toBe(
-      "result",
+  it("preserves text when a trailing carriage return does not overwrite it", () => {
+    expect(cleanTerminalOutput("triage-output\r")).toBe("triage-output");
+    expect(cleanTerminalOutput("triage-output\r\r")).toBe("triage-output");
+    expect(cleanTerminalOutput("\x1B[32mtriage-output\r\x1B[0m")).toBe(
+      "triage-output",
     );
+  });
+
+  it("overwrites only characters written after a carriage return", () => {
+    expect(cleanTerminalOutput("abcdef\rxy")).toBe("xycdef");
+    expect(cleanTerminalOutput("abcdef\rxy\rz\r")).toBe("zycdef");
+    expect(cleanTerminalOutput("abcdef\rxy\r\nnext")).toBe("xycdef\nnext");
     expect(cleanTerminalOutput("first\r\nspin\rfinished\r\nlast")).toBe(
       "first\nfinished\nlast",
+    );
+  });
+
+  it("applies erase-to-end commands to shorter carriage-return redraws", () => {
+    expect(
+      cleanTerminalOutput("progress 10%\rprogress 90%\rresult\x1B[K"),
+    ).toBe("result");
+    expect(cleanTerminalOutput("abcdef\rxy\x1B[0K")).toBe("xy");
+    expect(cleanTerminalOutput("abcdef\rxy\x9BK")).toBe("xy");
+    expect(cleanTerminalOutput("abcdef\r\x1B[K")).toBe("");
+  });
+
+  it("applies whole-line erasure without resetting the write position", () => {
+    expect(cleanTerminalOutput("abcdef\r\x1B[2Kxy")).toBe("xy");
+    expect(cleanTerminalOutput("first\nabcdef\rxy\x1B[2Kz")).toBe("first\n  z");
+  });
+
+  it("applies erase-to-start without discarding the untouched suffix", () => {
+    expect(cleanTerminalOutput("first\nabcdef\rxy\x1B[1Kz")).toBe(
+      "first\n  zdef",
+    );
+  });
+
+  it("strips ANSI and control-string payloads before counting written characters", () => {
+    expect(cleanTerminalOutput("abcdef\r\x1B[31mxy\x1B[0m")).toBe("xycdef");
+    expect(cleanTerminalOutput("abc\x1B]custom;\r\x07def\rxy")).toBe("xycdef");
+    expect(cleanTerminalOutput("abc\x1BPpayload\r\x1B\\def\rxy")).toBe(
+      "xycdef",
     );
   });
 

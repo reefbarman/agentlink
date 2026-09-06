@@ -30,6 +30,65 @@ describe("handleGetTerminalOutput", () => {
     vi.mocked(terminalProvider.getRecentlyClosedTerminals).mockReturnValue([]);
   });
 
+  it("forwards an exact command ID and preserves its signal result", async () => {
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      command_id: "command-old",
+      signal: 6,
+      exit_code: 134,
+      is_running: false,
+      state: "completed",
+      output: "old output",
+      output_captured: true,
+    });
+    terminalProvider.getRetainedOutput = vi.fn(() => ({
+      output: "old full output",
+      complete: true,
+      finalized: true,
+      total_bytes: 15,
+      retained_bytes: 15,
+      dropped_bytes: 0,
+    }));
+    const result = textPayload(
+      await handleGetTerminalOutput(
+        { terminal_id: "term_42", command_id: "command-old", kill: true },
+        { terminalProvider },
+      ),
+    );
+    expect(result).toMatchObject({
+      command_id: "command-old",
+      signal: 6,
+      exit_code: 134,
+      output: "old full output",
+      killed: false,
+    });
+    expect(terminalProvider.getRetainedOutput).toHaveBeenCalledWith({
+      owner: undefined,
+      terminalId: "term_42",
+      commandId: "command-old",
+    });
+    expect(terminalProvider.interruptTerminal).not.toHaveBeenCalled();
+  });
+
+  it("fails closed if a provider returns a different command and never kills it", async () => {
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      command_id: "command-new",
+      exit_code: null,
+      is_running: true,
+      state: "running",
+      output: "new output",
+      output_captured: true,
+    });
+    const result = textPayload(
+      await handleGetTerminalOutput(
+        { terminal_id: "term_42", command_id: "command-old", kill: true },
+        { terminalProvider, allowDirectOutputFallback: true },
+      ),
+    );
+    expect(result.error).toContain("no other command was selected");
+    expect(result.output).toBeUndefined();
+    expect(terminalProvider.interruptTerminal).not.toHaveBeenCalled();
+  });
+
   it("returns an explicit unavailable result when no terminal provider is supplied", async () => {
     const result = await handleGetTerminalOutput({ terminal_id: "term_42" });
 
@@ -566,6 +625,13 @@ describe("handleGetTerminalOutput", () => {
         output: "stopping",
         output_captured: true,
       })
+      .mockReturnValueOnce({
+        is_running: true,
+        state: "running",
+        exit_code: null,
+        output: "stopping",
+        output_captured: true,
+      })
       .mockReturnValue({
         is_running: false,
         state: "completed",
@@ -574,6 +640,7 @@ describe("handleGetTerminalOutput", () => {
         output_captured: true,
       });
 
+    vi.mocked(terminalProvider.interruptTerminal).mockReturnValue(true);
     const result = await handleGetTerminalOutput(
       { terminal_id: "term_42", wait_seconds: 30, kill: true },
       {

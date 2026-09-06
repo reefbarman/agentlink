@@ -302,6 +302,196 @@ describe("TranscriptMessageList model change rendering", () => {
     expect(container.querySelectorAll(".assistant-message")).toHaveLength(2);
   });
 
+  it("groups separate change events as they arrive without mutating the transcript", () => {
+    const modeChange: ChatMessage = {
+      id: "mode-change",
+      role: "assistant",
+      content: "",
+      timestamp: 1,
+      blocks: [],
+      surfaceChange: {
+        mode: { previousMode: "code", mode: "architect" },
+      },
+    };
+    const reasoningChange: ChatMessage = {
+      id: "reasoning-change",
+      role: "assistant",
+      content: "",
+      timestamp: 60_000,
+      blocks: [],
+      surfaceChange: {
+        reasoning: {
+          previousReasoningEffort: "high",
+          reasoningEffort: "xhigh",
+        },
+      },
+    };
+    const { container, rerender } = render(
+      h(TranscriptMessageList, { messages: [modeChange], streaming: true }),
+    );
+    expect(container.querySelectorAll(".model-change-divider")).toHaveLength(1);
+
+    const messages = [modeChange, reasoningChange];
+    rerender(h(TranscriptMessageList, { messages, streaming: true }));
+    const dividers = container.querySelectorAll(".model-change-divider");
+    expect(dividers).toHaveLength(1);
+    expect(dividers[0]?.getAttribute("aria-label")).toBe(
+      "Thinking level changed from High to XHigh; Mode changed from Code to Architect",
+    );
+    expect(container.querySelectorAll(".assistant-message")).toHaveLength(0);
+    expect(modeChange.surfaceChange?.reasoning).toBeUndefined();
+    expect(reasoningChange.surfaceChange?.mode).toBeUndefined();
+
+    rerender(h(TranscriptMessageList, { messages, streaming: false }));
+    expect(container.querySelectorAll(".model-change-divider")).toHaveLength(1);
+  });
+
+  it("groups explicit changes with adjacent request-inferred changes", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "before",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "Before" }],
+        apiRequest: apiRequest("gpt-5.4", "high", {
+          mode: "code",
+          commandApprovalPolicy: "manual",
+        }),
+      },
+      {
+        id: "mode-change",
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        blocks: [],
+        surfaceChange: {
+          mode: { previousMode: "code", mode: "architect" },
+        },
+      },
+      {
+        id: "after",
+        role: "assistant",
+        content: "",
+        timestamp: 3,
+        blocks: [{ type: "text", text: "After" }],
+        apiRequest: apiRequest("gpt-5.6-sol", "xhigh", {
+          mode: "architect",
+          commandApprovalPolicy: "approve-for-me",
+        }),
+      },
+    ];
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+    const dividers = container.querySelectorAll(".model-change-divider");
+    expect(dividers).toHaveLength(1);
+    expect(dividers[0]?.getAttribute("aria-label")).toBe(
+      "Model changed from gpt-5.4 to gpt-5.6-sol; Thinking level changed from High to XHigh; Mode changed from Code to Architect; Approve for Me turned on",
+    );
+    expect(container.querySelectorAll(".assistant-message")).toHaveLength(2);
+  });
+
+  it("keeps the original and final values for repeated adjacent changes", () => {
+    const messages: ChatMessage[] = ["medium", "high", "xhigh"].map(
+      (effort, index) => ({
+        id: `change-${index}`,
+        role: "assistant",
+        content: "",
+        timestamp: index,
+        blocks: [],
+        surfaceChange: {
+          reasoning: {
+            previousReasoningEffort: (["low", "medium", "high"] as const)[
+              index
+            ]!,
+            reasoningEffort: effort as ReasoningEffort,
+          },
+        },
+      }),
+    );
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+    const dividers = container.querySelectorAll(".model-change-divider");
+    expect(dividers).toHaveLength(1);
+    expect(dividers[0]?.getAttribute("aria-label")).toBe(
+      "Thinking level changed from Low to XHigh",
+    );
+  });
+
+  it.each(["text", "tool", "warning", "user", "error"] as const)(
+    "does not group changes across intervening %s content",
+    (kind) => {
+      const between: ChatMessage = {
+        id: "between",
+        role:
+          kind === "warning"
+            ? "warning"
+            : kind === "user"
+              ? "user"
+              : "assistant",
+        content: "Between changes",
+        timestamp: 2,
+        blocks:
+          kind === "tool"
+            ? [
+                {
+                  type: "tool_call",
+                  id: "tool",
+                  name: "read_file",
+                  inputJson: "{}",
+                  result: "File contents",
+                  complete: true,
+                },
+              ]
+            : kind === "error"
+              ? []
+              : [{ type: "text", text: "Between changes" }],
+        ...(kind === "warning" ? { warningMessage: "Between changes" } : {}),
+        ...(kind === "error"
+          ? {
+              error: { message: "Request failed", retryable: false },
+              surfaceChange: {
+                model: { previousModel: "gpt-5.4", model: "gpt-5.6-sol" },
+              },
+            }
+          : {}),
+      };
+      const messages: ChatMessage[] = [
+        {
+          id: "mode-change",
+          role: "assistant",
+          content: "",
+          timestamp: 1,
+          blocks: [],
+          surfaceChange: { mode: { previousMode: "code", mode: "architect" } },
+        },
+        between,
+        {
+          id: "reasoning-change",
+          role: "assistant",
+          content: "",
+          timestamp: 3,
+          blocks: [],
+          surfaceChange: {
+            reasoning: {
+              previousReasoningEffort: "high",
+              reasoningEffort: "xhigh",
+            },
+          },
+        },
+      ];
+      const { container } = render(
+        h(TranscriptMessageList, { messages, streaming: false }),
+      );
+      const dividers = container.querySelectorAll(".model-change-divider");
+      expect(dividers).toHaveLength(2);
+      expect(dividers[0]?.textContent).toContain("Mode changed to");
+      expect(dividers[1]?.textContent).toContain("Thinking level changed to");
+    },
+  );
+
   it("does not infer a reverse change from an in-flight request completed after an explicit change", () => {
     const messages: ChatMessage[] = [
       {

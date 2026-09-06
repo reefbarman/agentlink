@@ -36,6 +36,7 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
 ] as const;
 
 export const MACHINE_SCOPED_AGENTLINK_SETTINGS = [
+  "compose.enabled",
   "terminal.enabled",
   "terminal.nodePath",
   "terminal.environmentPolicy",

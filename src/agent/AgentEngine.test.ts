@@ -5170,6 +5170,18 @@ describe("AgentEngine", () => {
         providerResponseId: "resp_new",
       });
       expect(session.providerResponseId).toBe("resp_new");
+      const routing = streamCalls[0]?.providerHints?.codex;
+      expect(routing?.sessionId).toBe(session.id);
+      expect(routing?.turnState).toBeDefined();
+      expect(streamCalls[1]?.providerHints?.codex?.turnState).toBe(
+        routing?.turnState,
+      );
+      session.addUserMessage("next turn");
+      await collectEvents(engine.run(session));
+      expect(streamCalls[2]?.providerHints?.codex?.turnState).not.toBe(
+        routing?.turnState,
+      );
+      expect(streamCalls[2]?.cache?.key).toBe(streamCalls[0]?.cache?.key);
     });
 
     it("serializes pasted image turns with text before image blocks", async () => {

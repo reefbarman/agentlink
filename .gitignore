@@ -5,6 +5,8 @@ dist/
 .vscode/
 telemetry-reports/
 releases/
+desktop-releases/
+apps/desktop/package-stage/
 .env.local
 plans/*
 .mcp.json

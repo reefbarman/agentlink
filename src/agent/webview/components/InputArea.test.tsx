@@ -52,6 +52,19 @@ function renderInputArea(
   );
 }
 
+describe("InputArea placeholder", () => {
+  it("uses consumer copy when a surface supplies it", () => {
+    const { container } = renderInputArea([], {
+      placeholder: "Ask AgentLink anything",
+    });
+
+    expect(
+      (container.querySelector(".chat-input") as HTMLTextAreaElement)
+        .placeholder,
+    ).toBe("Ask AgentLink anything");
+  });
+});
+
 describe("InputArea project availability", () => {
   it("disables composing and sending when the project is unavailable", () => {
     const onSend = vi.fn();

@@ -165,11 +165,15 @@ export class ChatTabController {
     return true;
   }
 
-  async createTab(sessionId: string | null = null): Promise<ChatTab> {
+  async createTab(
+    sessionId: string | null = null,
+    options: { focus?: boolean } = {},
+  ): Promise<ChatTab> {
     if (sessionId) {
       const existing = this.getTabForSession(sessionId);
       if (existing) {
         if (
+          options.focus !== false &&
           existing.placement === "docked" &&
           this.focusedTabId !== existing.id
         ) {
@@ -195,7 +199,7 @@ export class ChatTabController {
         displayNumber + 1,
       ),
     };
-    this.focusedTabId = tab.id;
+    if (options.focus !== false) this.focusedTabId = tab.id;
     await this.commit();
     return structuredClone(tab);
   }

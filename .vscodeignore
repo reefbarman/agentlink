@@ -7,6 +7,9 @@
 #    a css/asset), you MUST add a matching `!dist/<file>` line below, or it will 404
 #    at runtime for installed users. This bit us with the Monaco diff workers
 #    (missing workers => diff editor renders but never computes => no highlighting).
+#
+# The standalone Electron app is packaged separately from apps/desktop for GitHub
+# Releases. Never add apps/desktop/** or desktop-releases/** to this allowlist.
 **/*
 !dist/extension.js
 !dist/compose-runtime.mjs

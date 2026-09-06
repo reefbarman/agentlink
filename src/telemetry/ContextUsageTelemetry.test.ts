@@ -54,6 +54,14 @@ describe("ContextUsageTelemetry", () => {
       omittedToolResultAttributions: 2,
       pinnedMemoryTokens: 300,
       retrievedMemoryTokens: 700,
+      compose: {
+        schemaVersion: 1,
+        enabled: true,
+        advertised: true,
+        directComposableHistoryTokens: 120,
+        composeHistoryTokens: 80,
+        inlineDefinitionTokens: 40,
+      },
     });
     telemetry.record({
       kind: "condense",
@@ -62,6 +70,8 @@ describe("ContextUsageTelemetry", () => {
       prevInputTokens: 180_000,
       newInputTokens: 12_000,
       reclaimedTokens: 168_000,
+      composeFoldedReadCount: 3,
+      composeFoldedContextTokens: 900,
     });
     telemetry.record({
       kind: "context_jump",
@@ -101,6 +111,21 @@ describe("ContextUsageTelemetry", () => {
         omittedToolResultAttributions: 2,
         pinnedMemoryTokens: 300,
         retrievedMemoryTokens: 700,
+        compose: {
+          schemaVersion: 1,
+          enabled: true,
+          advertised: true,
+          directComposableHistoryTokens: 120,
+          composeHistoryTokens: 80,
+          inlineDefinitionTokens: 40,
+        },
+      },
+    });
+    expect(records[1]).toMatchObject({
+      event: {
+        kind: "condense",
+        composeFoldedReadCount: 3,
+        composeFoldedContextTokens: 900,
       },
     });
     expect(records.map((r) => r.event.kind)).toEqual([

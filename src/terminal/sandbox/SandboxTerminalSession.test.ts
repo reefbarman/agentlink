@@ -150,6 +150,54 @@ describe("SandboxTerminalSession", () => {
     ]);
   });
 
+  it.each([
+    { exitCode: 0, signal: 6, expectedExitCode: 134 },
+    { exitCode: undefined, signal: 6, expectedExitCode: 134 },
+    { exitCode: 0, signal: 15, expectedExitCode: 143 },
+    { exitCode: undefined, signal: 15, expectedExitCode: 143 },
+    { exitCode: 1, signal: 6, expectedExitCode: 1 },
+    { exitCode: 143, signal: 15, expectedExitCode: 143 },
+    { exitCode: 0, signal: undefined, expectedExitCode: 0 },
+    { exitCode: undefined, signal: undefined, expectedExitCode: undefined },
+    { exitCode: 0, signal: 0, expectedExitCode: 0 },
+  ])(
+    "records and emits exit $expectedExitCode for code $exitCode and signal $signal",
+    async ({ exitCode, signal, expectedExitCode }) => {
+      const test = session();
+      const commandProcess = process("command-1", 1);
+      const events = vi.fn();
+      test.session.onEvent(events);
+      test.session.startCommand({
+        command: "run-command",
+        cwd: "/workspace",
+        origin: "agent",
+        process: commandProcess,
+      });
+      const exit = { exitCode, signal, timedOut: false };
+      commandProcess.completionDeferred.resolve(exit);
+      await flush();
+
+      expect(test.session.snapshot()).toMatchObject({
+        status: "idle",
+        commands: [
+          {
+            status: "exited",
+            exitCode: expectedExitCode,
+            signal,
+            timedOut: false,
+          },
+        ],
+      });
+      expect(events).toHaveBeenLastCalledWith({
+        type: "command-exited",
+        commandId: "command-1",
+        generation: 1,
+        exit: { exitCode: expectedExitCode, signal, timedOut: false },
+      });
+      expect(exit).toEqual({ exitCode, signal, timedOut: false });
+    },
+  );
+
   it("retains buffered output replayed during command startup", async () => {
     const test = session();
     const immediate = process("command-1", 1);

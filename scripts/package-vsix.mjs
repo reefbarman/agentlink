@@ -1,3 +1,8 @@
+import {
+  verifyVsixExcludesDesktop,
+  verifyVsixManifestExcludesDesktop,
+} from "./verify-vsix-boundary.mjs";
+
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -11,9 +16,10 @@ const repoRoot = path.resolve(
   "..",
 );
 const target = resolveRetrievalRuntimeTarget();
-const { version } = JSON.parse(
+const manifest = JSON.parse(
   readFileSync(path.join(repoRoot, "package.json"), "utf8"),
 );
+const { version } = manifest;
 const outputPath = process.argv[2] ?? `agentlink-${version}-${target}.vsix`;
 const commandEnvironment = {
   ...process.env,
@@ -64,5 +70,11 @@ const inventory = run(
   { capture: true },
 );
 const verification = verifyRetrievalPackageFiles(inventory, target);
-process.stdout.write(`${JSON.stringify(verification, null, 2)}\n`);
+const desktopBoundary = {
+  ...verifyVsixExcludesDesktop(inventory),
+  ...verifyVsixManifestExcludesDesktop(manifest),
+};
+process.stdout.write(
+  `${JSON.stringify({ ...verification, desktopBoundary }, null, 2)}\n`,
+);
 process.stdout.write(`Built and verified ${outputPath}\n`);

@@ -99,6 +99,7 @@ import {
   openAiCodexAuthManager,
   queryCodexUsage,
 } from "./agent/providers/index.js";
+import { CODEX_OAUTH_CREDENTIALS_STORAGE_KEY } from "./agent/providers/codex/CodexOAuthManager.js";
 import { BrowserGatewayService } from "./browser-gateway/BrowserGatewayService.js";
 import { wireBrowserGatewayApprovalPolicies } from "./browser-gateway/browserGatewayPolicyWiring.js";
 import { BrowserGatewayRepositoryObserver } from "./browser-gateway/BrowserGatewayRepositoryObserver.js";
@@ -1341,8 +1342,12 @@ export async function activate(
     configuredMode,
     FALLBACK_AGENT_MODEL,
   );
+  const composeEnabledAtStartup =
+    process.env.AGENTLINK_DISABLE_COMPOSE !== "1" &&
+    agentConfiguration.get<boolean>("compose.enabled") === true;
   let agentConfig: AgentConfig = {
     model: startupModel,
+    composeEnabled: composeEnabledAtStartup,
     maxTokens: agentConfiguration.get<number>("agentMaxTokens") ?? 8192,
     thinkingBudget: agentConfiguration.get<number>("thinkingBudget") ?? 10000,
     showThinking: agentConfiguration.get<boolean>("showThinking") ?? true,
@@ -1454,8 +1459,24 @@ export async function activate(
   // (including initial client construction) go to the agent output channel.
   const agentLog = (msg: string) => chatViewProvider.log(msg);
 
-  // Register the OpenAI/Codex provider with unified OAuth + API key auth.
+  // macOS desktop and VS Code share one Keychain-backed OAuth account pool.
+  // Other platforms retain VS Code SecretStorage until their native adapters land.
   openAiCodexAuthManager.initialize(context);
+  if (process.platform === "darwin") {
+    try {
+      const { createKeychainSecretStorage } =
+        await import("@agentlink/node-host");
+      openAiCodexAuthManager.initializeOAuthStorage(
+        await createKeychainSecretStorage({
+          account: CODEX_OAUTH_CREDENTIALS_STORAGE_KEY,
+        }),
+      );
+    } catch (error) {
+      agentLog(
+        `[codex-oauth] Shared Keychain storage unavailable; continuing with VS Code SecretStorage: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
   const codexProvider = new CodexProvider(openAiCodexAuthManager, agentLog, {
     getTextVerbositySetting: () =>
       vscode.workspace

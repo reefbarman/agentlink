@@ -446,6 +446,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     const retiredMatches = this.retiredRecentlyClosed.filter(
       (terminal) =>
         terminal.id === request.terminalId &&
+        (!request.commandId || terminal.command_id === request.commandId) &&
         (request.owner === undefined ||
           (terminal.owner?.scopeId === request.owner.scopeId &&
             terminal.owner.generation === request.owner.generation)),

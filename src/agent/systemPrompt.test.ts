@@ -189,6 +189,32 @@ describe("conversation mode placement", () => {
 });
 
 describe("buildSystemPrompt", () => {
+  it("routes independent compose reads through settled batches only when compose is enabled", async () => {
+    const { systemPrompt: enabled } = await buildPromptArtifacts(
+      "code",
+      tmpDir,
+      {
+        composeEnabled: true,
+      },
+    );
+    expect(enabled).toContain(
+      "Default to `toolAllSettled` for independent reads",
+    );
+    expect(enabled).toContain("reserve fail-fast `toolAll`");
+    expect(enabled).toContain("do not return raw batches");
+    expect(enabled).toContain(
+      "`search_files.results` is formatted text, not an array",
+    );
+    const { systemPrompt: disabled } = await buildPromptArtifacts(
+      "code",
+      tmpDir,
+      {
+        composeEnabled: false,
+      },
+    );
+    expect(disabled).not.toContain("## Compose Routing");
+  });
+
   it("recomputes supplied prompt-profile evidence under current trusted policy", async () => {
     const forgedLunaEvidence = {
       profile: "reasoning" as const,

@@ -19,6 +19,7 @@ declare global {
       currentInstanceId: string;
       workspaceName: string;
       routeByInstance?: boolean;
+      askAgentOnly?: boolean;
       initialTheme?: BrowserGatewayThemeSnapshot;
       dataPlaneMode?: BrowserGatewayDataPlaneMode;
     };
@@ -28,6 +29,12 @@ declare global {
 function BrowserGatewayRoot() {
   const config = window.__AGENTLINK_BROWSER_GATEWAY__;
   if (!config) throw new Error("Browser gateway config missing");
+  const query = new URLSearchParams(window.location.search);
+  const desktopWorkspace = query.get("desktopWorkspace") === "1";
+  const workspaceOnly =
+    config.routeByInstance === true &&
+    config.askAgentOnly !== true &&
+    (desktopWorkspace || query.get("browserWorkspace") === "1");
 
   return (
     <BrowserGatewayApp
@@ -35,6 +42,14 @@ function BrowserGatewayRoot() {
       currentInstanceId={config.currentInstanceId}
       workspaceName={config.workspaceName}
       routeByInstance={config.routeByInstance === true}
+      askAgentOnly={config.askAgentOnly === true}
+      workspaceOnly={workspaceOnly}
+      externalBrowserUnavailable={workspaceOnly && desktopWorkspace}
+      browserShell={
+        config.routeByInstance === true &&
+        config.askAgentOnly !== true &&
+        !workspaceOnly
+      }
       initialTheme={config.initialTheme}
       dataPlaneMode={config.dataPlaneMode}
     />

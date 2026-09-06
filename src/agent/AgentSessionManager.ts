@@ -210,6 +210,13 @@ import {
   type TurnOutcomeStats,
 } from "./turnOutcomeStats.js";
 import {
+  applyComposeEfficiencyEvent,
+  createComposeEfficiencyStats,
+  finalizeComposeEfficiencyTurn,
+  snapshotComposeEfficiencyStats,
+  type ComposeEfficiencyStats,
+} from "./composeEfficiency.js";
+import {
   formatFleetResultEnvelope,
   parseFleetResultEnvelope,
   parseFleetResultEnvelopeDetailed,
@@ -472,6 +479,7 @@ interface SessionTaskTracking {
   currentTurnStartedAt: number;
   currentTurnUserWaitBaselineMs: number;
   efficiency: HarnessEfficiencyStats;
+  composeEfficiency: ComposeEfficiencyStats;
   providerIds: Set<string>;
   models: Set<string>;
 }
@@ -1763,6 +1771,8 @@ export class AgentSessionManager {
             }
           : {}),
         onFileRead: (filePath: string) => session.trackFileRead(filePath),
+        onComposeFileRead: (filePath: string) =>
+          session.trackFileRead(filePath, "compose"),
         getAdvertisedSkills: () =>
           session.getAdvertisedSkills().map((skill) => ({
             id: skill.id,
@@ -1918,6 +1928,9 @@ export class AgentSessionManager {
         inputTokens: stats.inputTokens,
         outputTokens: stats.outputTokens,
         efficiency: snapshotHarnessEfficiencyStats(stats.efficiency),
+        composeEfficiency: snapshotComposeEfficiencyStats(
+          stats.composeEfficiency,
+        ),
       });
     } catch (err) {
       this.log?.(`[session-outcome] turn record failed: ${String(err)}`);
@@ -1971,6 +1984,9 @@ export class AgentSessionManager {
         efficiency: tracking
           ? snapshotHarnessEfficiencyStats(tracking.efficiency)
           : undefined,
+        composeEfficiency: tracking
+          ? snapshotComposeEfficiencyStats(tracking.composeEfficiency)
+          : undefined,
       });
       return terminal;
     } catch (err) {
@@ -1993,6 +2009,7 @@ export class AgentSessionManager {
       currentTurnStartedAt: now,
       currentTurnUserWaitBaselineMs: turnStats.userWaitMs,
       efficiency: createHarnessEfficiencyStats(),
+      composeEfficiency: createComposeEfficiencyStats(),
       providerIds: new Set(session.providerId ? [session.providerId] : []),
       models: new Set([session.model]),
     };
@@ -2178,6 +2195,7 @@ export class AgentSessionManager {
         ? expectedResult
         : undefined,
       preparedTurn.policy.enabledKinds,
+      session.composeEnabled,
     );
     const usesReadOnlyCommand =
       preparedTurn.context.commandExecutionPolicy === "read-only" ||
@@ -7049,6 +7067,7 @@ export class AgentSessionManager {
 
               for await (const event of engine.run(session, {
                 automaticMemoryContext,
+                composeEnabled: session.composeEnabled,
                 getHandoffSourceTranscript:
                   opts?.getHandoffSourceTranscript ??
                   (() => this.getHandoffSourceTranscript(session)),
@@ -7078,6 +7097,10 @@ export class AgentSessionManager {
                 applyTurnOutcomeEvent(turnStats, event);
                 if (taskTracking) {
                   applyHarnessEfficiencyEvent(taskTracking.efficiency, event);
+                  applyComposeEfficiencyEvent(
+                    taskTracking.composeEfficiency,
+                    event,
+                  );
                   if (
                     event.type === "request_context_attribution" &&
                     event.requestKind === "agent"
@@ -7283,6 +7306,7 @@ export class AgentSessionManager {
                   (turnStats.userWaitMs -
                     taskTracking.currentTurnUserWaitBaselineMs),
               );
+              finalizeComposeEfficiencyTurn(taskTracking.composeEfficiency);
             }
             this.recordTurnOutcome(
               session,
@@ -7734,6 +7758,7 @@ export class AgentSessionManager {
           let naturalDone = false;
           for await (const event of engine.run(session, {
             automaticMemoryContext,
+            composeEnabled: session.composeEnabled,
             webAccessPolicy: preparedTurn.policy,
             mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
             mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
@@ -8005,6 +8030,7 @@ export class AgentSessionManager {
             connectedMcpToolDefs,
             undefined,
             nativeWebToolKinds,
+            session.composeEnabled,
           ),
           todoTool,
         ]

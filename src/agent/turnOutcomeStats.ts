@@ -4,6 +4,11 @@ import {
   createHarnessEfficiencyStats,
   type HarnessEfficiencyStats,
 } from "./harnessEfficiencyStats.js";
+import {
+  applyComposeEfficiencyEvent,
+  createComposeEfficiencyStats,
+  type ComposeEfficiencyStats,
+} from "./composeEfficiency.js";
 
 /**
  * Per-turn wall-clock and behavior accumulator for session-outcome telemetry.
@@ -25,6 +30,7 @@ export interface TurnOutcomeStats {
   inputTokens: number;
   outputTokens: number;
   efficiency: HarnessEfficiencyStats;
+  composeEfficiency: ComposeEfficiencyStats;
 }
 
 /** Tools whose duration is a blocking wait on background agents, not work. */
@@ -68,6 +74,7 @@ export function createTurnOutcomeStats(now = Date.now()): TurnOutcomeStats {
     inputTokens: 0,
     outputTokens: 0,
     efficiency: createHarnessEfficiencyStats(),
+    composeEfficiency: createComposeEfficiencyStats(),
   };
 }
 
@@ -76,6 +83,7 @@ export function applyTurnOutcomeEvent(
   event: AgentEvent,
 ): void {
   applyHarnessEfficiencyEvent(stats.efficiency, event);
+  applyComposeEfficiencyEvent(stats.composeEfficiency, event);
   if (event.type === "api_request") {
     if (Number.isFinite(event.durationMs))
       stats.streamingMs += event.durationMs;

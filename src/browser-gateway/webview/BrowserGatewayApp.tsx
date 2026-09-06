@@ -50,6 +50,11 @@ import {
   MIN_APPROVAL_PANEL_HEIGHT,
 } from "../../agent/webview/components/ApprovalPanelEmbed";
 import { ChatHeader } from "../../agent/webview/components/ChatHeader";
+import { DesktopSidebar } from "./DesktopSidebar";
+import { DesktopRemotePane } from "./DesktopRemotePane";
+import type { DesktopMode } from "../../shared/desktopBridge";
+import { DesktopMoreActions } from "./DesktopMoreActions";
+import { LiveLinkIndicator } from "../../agent/webview/components/LiveLinkIndicator";
 import { ChatView } from "../../agent/webview/components/ChatView";
 import { showFileOpenFailure } from "../../agent/webview/components/fileLinkFeedback";
 import { ContextUsageRow } from "../../agent/webview/components/ContextUsageRow";
@@ -804,6 +809,7 @@ async function readGatewaySnapshotResponse(
 
 function buildAskAgentStatusNotice(params: {
   isAskAgentSelected: boolean;
+  standaloneDesktop: boolean;
   foreground: GatewaySnapshot["session"]["foreground"] | null;
   capabilities: AskAgentCapabilityStatus[];
   modelCatalog: AskAgentModelCatalogStatus | null;
@@ -824,6 +830,7 @@ function buildAskAgentStatusNotice(params: {
   }
 
   if (params.modelCatalog?.source === "fallback") {
+    if (params.standaloneDesktop) return null;
     return {
       kind: "info",
       title: "Model list may be stale",
@@ -937,7 +944,9 @@ function UrlElicitationPanel({
   onAccept,
   onDecline,
   onCancel,
+  externalBrowserUnavailable = false,
 }: {
+  externalBrowserUnavailable?: boolean;
   request: McpUrlElicitationRequest;
   onAccept: (id: string, url: string) => void;
   onDecline: (id: string) => void;
@@ -950,6 +959,12 @@ function UrlElicitationPanel({
         <span>MCP URL requested by {request.serverName}</span>
       </div>
       <p>{request.message}</p>
+      {externalBrowserUnavailable && (
+        <p role="status">
+          Complete this browser-opening request in VS Code or the browser
+          gateway. The embedded desktop view cannot open external windows.
+        </p>
+      )}
       <div class="url-elicitation-warning">
         Only continue if you trust this MCP server and expected this browser
         flow.
@@ -973,7 +988,11 @@ function UrlElicitationPanel({
         <button type="button" onClick={() => onDecline(request.id)}>
           Decline
         </button>
-        <button type="button" onClick={() => onAccept(request.id, request.url)}>
+        <button
+          type="button"
+          disabled={externalBrowserUnavailable}
+          onClick={() => onAccept(request.id, request.url)}
+        >
           Open URL
         </button>
       </div>
@@ -986,6 +1005,10 @@ interface BrowserGatewayAppProps {
   currentInstanceId: string;
   workspaceName: string;
   routeByInstance?: boolean;
+  askAgentOnly?: boolean;
+  workspaceOnly?: boolean;
+  browserShell?: boolean;
+  externalBrowserUnavailable?: boolean;
   initialTheme?: BrowserGatewayThemeSnapshot;
   dataPlaneMode?: BrowserGatewayDataPlaneMode;
   reloadPage?: () => void;
@@ -1231,15 +1254,92 @@ function safeTranscriptFilename(title: string): string {
   return `${base || "ask-agent"}-${stamp}.md`;
 }
 
+const ASK_AGENT_STARTERS = [
+  {
+    icon: "sparkle",
+    title: "Explore an idea",
+    prompt: "Help me think through an idea and turn it into a clear plan.",
+  },
+  {
+    icon: "book",
+    title: "Learn something",
+    prompt: "Teach me something useful today, starting with the big picture.",
+  },
+  {
+    icon: "search",
+    title: "Research a topic",
+    prompt: "Research a topic with me and separate facts from open questions.",
+  },
+] as const;
+
+function AskAgentWelcome({
+  onStart,
+  desktop = false,
+}: {
+  onStart: (prompt: string) => void;
+  desktop?: boolean;
+}): JSX.Element {
+  return (
+    <section class="consumer-welcome" aria-labelledby="consumer-welcome-title">
+      <div class="consumer-welcome-mark" aria-hidden="true">
+        {desktop ? (
+          <LiveLinkIndicator motion="static" className="desktop-brand-logo" />
+        ) : (
+          <>
+            <span />
+            <span />
+          </>
+        )}
+      </div>
+      <p class="consumer-welcome-eyebrow">AgentLink</p>
+      <h1 id="consumer-welcome-title">What can I help you with?</h1>
+      <p class="consumer-welcome-copy">
+        Think, research, create, and work through the details together.
+      </p>
+      <div class="consumer-starters" aria-label="Conversation starters">
+        {ASK_AGENT_STARTERS.map((starter) => (
+          <button
+            key={starter.title}
+            class="consumer-starter"
+            onClick={() => onStart(starter.prompt)}
+            type="button"
+          >
+            <i class={`codicon codicon-${starter.icon}`} aria-hidden="true" />
+            <span>{starter.title}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function BrowserGatewayApp({
   authToken,
   currentInstanceId,
   workspaceName: _workspaceName,
   routeByInstance = false,
+  askAgentOnly = false,
+  workspaceOnly = false,
+  browserShell = false,
+  externalBrowserUnavailable = false,
   initialTheme,
   dataPlaneMode: initialDataPlaneMode,
   reloadPage = () => window.location.reload(),
 }: BrowserGatewayAppProps) {
+  const consumerShell = askAgentOnly || browserShell;
+  const [desktopMode, setDesktopMode] = useState<DesktopMode>("ask");
+  const [browserWorkspaceMounted, setBrowserWorkspaceMounted] = useState(false);
+  const desktopModesAvailable =
+    browserShell || (askAgentOnly && Boolean(window.agentlinkDesktopShell));
+  const selectSurfaceMode = (mode: DesktopMode) => {
+    if (mode === "vscode") setBrowserWorkspaceMounted(true);
+    setDesktopMode(mode);
+    if (browserShell && window.innerWidth <= 720) setDesktopSidebarOpen(false);
+  };
+  const desktopRemoteSelected =
+    desktopModesAvailable && desktopMode === "vscode";
+  const surfaceVisibleRef = useRef(true);
+  surfaceVisibleRef.current = !desktopRemoteSelected;
   const [snapshot, setSnapshot] = useState<GatewaySnapshot | null>(null);
   const [associatedInstanceId, setAssociatedInstanceId] =
     useState(currentInstanceId);
@@ -1265,9 +1365,13 @@ export function BrowserGatewayApp({
     storedSelectionRef.current = readStoredBrowserSelection();
   }
   const initialSelectedTabId =
-    routeByInstance && storedSelectionRef.current.kind === "workspace"
+    routeByInstance &&
+    !consumerShell &&
+    storedSelectionRef.current.kind === "workspace"
       ? storedSelectionRef.current.instanceId
-      : BROWSER_GATEWAY_ASK_AGENT_TAB_ID;
+      : workspaceOnly
+        ? currentInstanceId
+        : BROWSER_GATEWAY_ASK_AGENT_TAB_ID;
   const [selectedTabId, setSelectedTabId] =
     useState<string>(initialSelectedTabId);
   const selectedTabIdRef = useRef(initialSelectedTabId);
@@ -1291,6 +1395,8 @@ export function BrowserGatewayApp({
     useState(false);
   const [notificationPromptOpen, setNotificationPromptOpen] = useState(
     () =>
+      !askAgentOnly &&
+      !workspaceOnly &&
       notificationPermissionState() === "default" &&
       !browserGatewayNotificationPromptDismissed(),
   );
@@ -1298,7 +1404,9 @@ export function BrowserGatewayApp({
   const workspaceHydrationInFlightRef = useRef<Set<string>>(new Set());
   const [ownerSnapshotRevision, setOwnerSnapshotRevision] = useState(0);
   const initialLogicalSelection =
-    routeByInstance && storedSelectionRef.current.kind === "workspace"
+    routeByInstance &&
+    !consumerShell &&
+    storedSelectionRef.current.kind === "workspace"
       ? (storedSelectionRef.current.logical ?? null)
       : null;
   const logicalSelectionByInstanceRef = useRef<
@@ -1575,7 +1683,10 @@ export function BrowserGatewayApp({
         preference: notificationPreferenceRef.current,
         selectedSessionId,
         browser: {
-          isDocumentVisible: () => document.visibilityState === "visible",
+          isDocumentVisible: () =>
+            document.visibilityState === "visible" &&
+            surfaceVisibleRef.current &&
+            !window.frameElement?.hasAttribute("hidden"),
           show: showBrowserGatewayNotification,
         },
       });
@@ -1710,6 +1821,14 @@ export function BrowserGatewayApp({
   const [mobilePane, setMobilePane] = useState<"review" | null>(null);
   const [sessionHistory, setSessionHistory] = useState<SessionSummary[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const newTabPendingRef = useRef(false);
+  const [newTabPendingInstance, setNewTabPendingInstance] = useState<
+    string | null
+  >(null);
+  const [newTabError, setNewTabError] = useState<string | null>(null);
+  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(
+    () => typeof window === "undefined" || window.innerWidth >= 960,
+  );
   const [sessionHistoryError, setSessionHistoryError] = useState<string | null>(
     null,
   );
@@ -2483,7 +2602,20 @@ export function BrowserGatewayApp({
     transcriptView?.visible,
   ]);
   useEffect(() => {
+    if (askAgentOnly) return;
     void registerBrowserGatewayNotificationServiceWorker();
+  }, [askAgentOnly]);
+
+  useEffect(() => {
+    const syncNotificationPreference = () => {
+      const preference = readBrowserGatewayNotificationPreference();
+      notificationPreferenceRef.current = preference;
+      setNotificationPreference(preference);
+      setNotificationPermission(notificationPermissionState());
+    };
+    window.addEventListener("storage", syncNotificationPreference);
+    return () =>
+      window.removeEventListener("storage", syncNotificationPreference);
   }, []);
 
   async function enableBrowserNotifications(): Promise<void> {
@@ -2649,6 +2781,7 @@ export function BrowserGatewayApp({
   );
   const askAgentStatusNotice = buildAskAgentStatusNotice({
     isAskAgentSelected,
+    standaloneDesktop: askAgentOnly,
     foreground,
     capabilities: askAgentCapabilities,
     modelCatalog: askAgentModelCatalog,
@@ -2896,7 +3029,10 @@ export function BrowserGatewayApp({
     currentServerInstanceId: string,
   ): string {
     const currentSelectedTabId = selectedTabIdRef.current;
-    if (currentSelectedTabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID) {
+    if (
+      !workspaceOnly &&
+      currentSelectedTabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID
+    ) {
       return BROWSER_GATEWAY_ASK_AGENT_TAB_ID;
     }
     const liveInstances = instances.filter(
@@ -2949,7 +3085,7 @@ export function BrowserGatewayApp({
       liveCurrentServerInstance?.instanceId ||
       liveInstances[0]?.instanceId ||
       instances[0]?.instanceId ||
-      BROWSER_GATEWAY_ASK_AGENT_TAB_ID
+      (workspaceOnly ? "" : BROWSER_GATEWAY_ASK_AGENT_TAB_ID)
     );
   }
 
@@ -4657,6 +4793,75 @@ export function BrowserGatewayApp({
     setTranscriptView(null);
     forwardedFollowUpRef.current = "";
   };
+
+  async function handleNewTab(
+    instanceId: string,
+    workspace: BrowserGatewayChatWorkspaceSummary,
+  ): Promise<void> {
+    if (newTabPendingRef.current) return;
+    const sourceTab =
+      workspace.tabs.find((tab) => tab.tabId === workspace.focusedTabId) ??
+      workspace.tabs[0];
+    if (!sourceTab) return;
+    newTabPendingRef.current = true;
+    setNewTabPendingInstance(instanceId);
+    setNewTabError(null);
+    try {
+      const response = await fetch(
+        buildApiPathForInstance("/api/tabs/new", instanceId),
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            selection: {
+              controllerEpoch: workspace.controllerEpoch,
+              tabId: sourceTab.tabId,
+              sessionId: sourceTab.sessionId,
+            },
+          }),
+        },
+      );
+      const body = (await response.json()) as {
+        ok?: boolean;
+        reason?: string;
+        error?: string;
+        tabId?: string;
+        sessionId?: string;
+        controllerEpoch?: string;
+        snapshot?: GatewaySnapshot;
+      };
+      const nextWorkspace = body.snapshot?.session.chatWorkspace;
+      const nextTab = nextWorkspace?.tabs.find(
+        (tab) => tab.tabId === body.tabId && tab.sessionId === body.sessionId,
+      );
+      if (
+        !response.ok ||
+        !body.ok ||
+        !body.snapshot ||
+        !nextWorkspace ||
+        !nextTab
+      ) {
+        throw new Error(
+          body.reason ?? body.error ?? `Request failed (${response.status})`,
+        );
+      }
+      snapshotCacheRef.current.set(instanceId, {
+        generation: selectedTabGenerationRef.current,
+        snapshot: body.snapshot,
+      });
+      setOwnerSnapshotRevision((revision) => revision + 1);
+      handleLogicalTabSelect(instanceId, nextWorkspace, nextTab);
+    } catch (error) {
+      setNewTabError(`Unable to create a new tab: ${String(error)}`);
+    } finally {
+      newTabPendingRef.current = false;
+      setNewTabPendingInstance(null);
+    }
+  }
 
   const handleSetReasoningEffort = (effort: ReasoningEffort): void => {
     if (!foreground || thinkingPending) {
@@ -6421,6 +6626,10 @@ export function BrowserGatewayApp({
   const statusOverride = foreground?.statusOverride ?? null;
 
   useEffect(() => {
+    if (consumerShell && !streaming) void fetchSessions();
+  }, [consumerShell, streaming, foreground?.sessionId]);
+
+  useEffect(() => {
     const sessionId =
       !isAskAgentSelected && selectedLogicalTab
         ? selectedLogicalTab.sessionId
@@ -7165,33 +7374,159 @@ export function BrowserGatewayApp({
   };
 
   return (
-    <div class="browser-shell">
-      <header class="browser-header">
-        <div class="browser-title">AgentLink Remote</div>
-        <div class="browser-status-group">
-          <span class="browser-status">{status}</span>
-          {sendStatus && (
-            <span class="browser-status-detail">{sendStatus}</span>
+    <div
+      class={`browser-shell${isAskAgentSelected ? " browser-shell-consumer" : ""}${consumerShell ? " browser-shell-desktop" : ""}${browserShell ? " browser-shell-web" : ""}${consumerShell && desktopSidebarOpen ? " desktop-sidebar-open" : ""}`}
+    >
+      {!workspaceOnly && (
+        <header class="browser-header">
+          {consumerShell && (
+            <button
+              class="icon-button desktop-sidebar-toggle"
+              type="button"
+              aria-label={desktopSidebarOpen ? "Hide sidebar" : "Show sidebar"}
+              aria-expanded={desktopSidebarOpen}
+              aria-controls="desktop-sidebar"
+              title={desktopSidebarOpen ? "Hide sidebar" : "Show sidebar"}
+              onClick={() => setDesktopSidebarOpen((open) => !open)}
+            >
+              <i
+                class="codicon codicon-layout-sidebar-left"
+                aria-hidden="true"
+              />
+            </button>
           )}
-          {modeStatus && (
-            <span class="browser-status-detail">{modeStatus}</span>
+          <div class="browser-title">
+            {consumerShell && (
+              <LiveLinkIndicator
+                motion="static"
+                className="desktop-brand-logo"
+              />
+            )}
+            {isAskAgentSelected && !consumerShell && (
+              <span class="consumer-brand-mark" aria-hidden="true" />
+            )}
+            <span>{isAskAgentSelected ? "AgentLink" : "AgentLink Remote"}</span>
+            {isAskAgentSelected && !consumerShell && (
+              <span class="consumer-brand-mode">Ask</span>
+            )}
+          </div>
+          <div class="browser-status-group">
+            <span class="browser-status">{status}</span>
+            {sendStatus && (
+              <span class="browser-status-detail">{sendStatus}</span>
+            )}
+            {modeStatus && (
+              <span class="browser-status-detail">{modeStatus}</span>
+            )}
+            {notificationStatus && (
+              <span class="browser-status-detail">{notificationStatus}</span>
+            )}
+          </div>
+          {desktopRemoteSelected && (
+            <div class="desktop-header-actions">
+              <span>VS Code</span>
+              {!browserShell && (
+                <button
+                  class="desktop-more-trigger"
+                  type="button"
+                  onClick={() => window.agentlinkDesktopShell?.retryRemote()}
+                >
+                  Reconnect
+                </button>
+              )}
+            </div>
           )}
-          {notificationStatus && (
-            <span class="browser-status-detail">{notificationStatus}</span>
+          {consumerShell && !desktopRemoteSelected && (
+            <div class="desktop-header-actions" aria-label="Chat actions">
+              {foreground?.restoringSession && (
+                <span class="session-restore-status" role="status">
+                  Loading last session…
+                </span>
+              )}
+              {!desktopSidebarOpen && (
+                <button
+                  class="icon-button"
+                  type="button"
+                  title="New chat"
+                  aria-label="New chat"
+                  onClick={handleNewSession}
+                >
+                  <i class="codicon codicon-new-file" aria-hidden="true" />
+                </button>
+              )}
+              <DesktopMoreActions>
+                <button
+                  class={`desktop-more-item${showAskAgentMemory ? " active" : ""}`}
+                  type="button"
+                  title="Memory"
+                  aria-label="Memory"
+                  aria-pressed={showAskAgentMemory}
+                  onClick={handleShowAskAgentMemory}
+                >
+                  <i class="codicon codicon-archive" aria-hidden="true" />
+                  Memory
+                </button>
+                <button
+                  class={`desktop-more-item${showAskAgentReadGrants ? " active" : ""}`}
+                  type="button"
+                  title="Manage local file permissions"
+                  aria-pressed={showAskAgentReadGrants}
+                  onClick={() => setShowAskAgentReadGrants((value) => !value)}
+                >
+                  <i class="codicon codicon-folder-opened" aria-hidden="true" />
+                  File access…
+                </button>
+                <button
+                  class={`desktop-more-item${showAskAgentHandoff ? " active" : ""}`}
+                  type="button"
+                  title="Continue in VS Code"
+                  aria-label="Continue in VS Code"
+                  aria-pressed={showAskAgentHandoff}
+                  onClick={() => {
+                    setShowAskAgentHandoff((value) => !value);
+                    if (!askAgentHandoffTargetId)
+                      setAskAgentHandoffTargetId(
+                        askAgentHandoffTargets[0]?.instanceId ?? "",
+                      );
+                  }}
+                >
+                  <i
+                    class="codicon codicon-git-pull-request-go-to-changes"
+                    aria-hidden="true"
+                  />
+                  Continue in VS Code
+                </button>
+                {!desktopSidebarOpen && (
+                  <button
+                    class={`desktop-more-item${showHistory ? " active" : ""}`}
+                    type="button"
+                    title="Manage chats"
+                    aria-label="Manage chats"
+                    aria-pressed={showHistory}
+                    onClick={handleShowHistory}
+                  >
+                    <i class="codicon codicon-history" aria-hidden="true" />
+                    Manage chats
+                  </button>
+                )}
+              </DesktopMoreActions>
+            </div>
           )}
-        </div>
-        <button
-          aria-label="Open browser settings"
-          class="icon-button browser-header-settings"
-          onClick={() => setNotificationSettingsOpen(true)}
-          title="Browser settings"
-          type="button"
-        >
-          <i aria-hidden="true" class="codicon codicon-settings-gear" />
-        </button>
-      </header>
+          {!askAgentOnly && (
+            <button
+              aria-label="Open browser settings"
+              class="icon-button browser-header-settings"
+              onClick={() => setNotificationSettingsOpen(true)}
+              title="Browser settings"
+              type="button"
+            >
+              <i aria-hidden="true" class="codicon codicon-settings-gear" />
+            </button>
+          )}
+        </header>
+      )}
 
-      {notificationPromptOpen && (
+      {!askAgentOnly && !workspaceOnly && notificationPromptOpen && (
         <div class="browser-notification-prompt" role="status">
           <div>
             <strong>Stay informed while AgentLink works</strong>
@@ -7228,7 +7563,7 @@ export function BrowserGatewayApp({
         </div>
       )}
 
-      {notificationSettingsOpen && (
+      {!askAgentOnly && notificationSettingsOpen && (
         <div
           class="browser-notification-settings-backdrop"
           onClick={() => setNotificationSettingsOpen(false)}
@@ -7311,174 +7646,213 @@ export function BrowserGatewayApp({
         </div>
       )}
 
-      <div class="browser-instance-tabs" role="tablist" aria-label="Instances">
-        <button
-          key={BROWSER_GATEWAY_ASK_AGENT_TAB_ID}
-          aria-controls="browser-instance-panel"
-          aria-selected={isAskAgentSelected}
-          class={`instance-tab instance-tab-idle instance-tab-pinned${isAskAgentSelected ? " active" : ""}`}
-          id={`instance-tab-${BROWSER_GATEWAY_ASK_AGENT_TAB_ID}`}
-          onClick={() => selectTab(BROWSER_GATEWAY_ASK_AGENT_TAB_ID)}
-          role="tab"
-          title="Projectless browser Ask Agent"
-          type="button"
+      {!consumerShell && (
+        <div
+          class="browser-instance-tabs"
+          role="tablist"
+          aria-label="Instances"
         >
-          <span class="instance-tab-main">
-            <i class="codicon codicon-comment-discussion" />
-            <span class="instance-tab-name">
-              {BROWSER_GATEWAY_ASK_AGENT_TAB_TITLE}
+          {!workspaceOnly && (
+            <button
+              key={BROWSER_GATEWAY_ASK_AGENT_TAB_ID}
+              aria-controls="browser-instance-panel"
+              aria-selected={isAskAgentSelected}
+              class={`instance-tab instance-tab-idle instance-tab-pinned${isAskAgentSelected ? " active" : ""}`}
+              id={`instance-tab-${BROWSER_GATEWAY_ASK_AGENT_TAB_ID}`}
+              onClick={() => selectTab(BROWSER_GATEWAY_ASK_AGENT_TAB_ID)}
+              role="tab"
+              title="Projectless browser Ask Agent"
+              type="button"
+            >
+              <span class="instance-tab-main">
+                <i class="codicon codicon-comment-discussion" />
+                <span class="instance-tab-name">
+                  {BROWSER_GATEWAY_ASK_AGENT_TAB_TITLE}
+                </span>
+              </span>
+              <span class="instance-tab-status">
+                <i class="codicon codicon-circle-filled" />
+                <span>Ask</span>
+              </span>
+            </button>
+          )}
+          {workspaceOnly && instanceOptions.length === 0 && (
+            <span class="desktop-workspace-empty">
+              Open a VS Code window with AgentLink to connect.
             </span>
-          </span>
-          <span class="instance-tab-status">
-            <i class="codicon codicon-circle-filled" />
-            <span>Ask</span>
-          </span>
-        </button>
-        {instanceOptions.map((instance) => {
-          const instanceStatus = getInstanceStatus(instance);
-          const ownerSnapshot = snapshotCacheRef.current.get(
-            instance.instanceId,
-          )?.snapshot;
-          const workspace = ownerSnapshot?.session.chatWorkspace;
-          const tabs = workspace ? selectableLogicalTabs(workspace) : [];
-          const activeInstance = instance.instanceId === selectedInstanceId;
-          if (!workspace || tabs.length === 0) {
-            return (
-              <button
-                key={instance.instanceId}
-                aria-controls="browser-instance-panel"
-                aria-selected={activeInstance}
-                class={`instance-tab instance-tab-${instanceStatus.kind}${activeInstance ? " active" : ""}`}
-                id={`instance-tab-${instance.instanceId}`}
-                onClick={() => selectTab(instance.instanceId)}
-                onPointerCancel={(e) =>
-                  handleInstancePointerCancel(e as unknown as PointerEvent)
-                }
-                onPointerDown={(e) =>
-                  handleInstancePointerDown(
-                    e as unknown as PointerEvent,
-                    instance.instanceId,
-                  )
-                }
-                onPointerUp={(e) =>
-                  handleInstancePointerUp(
-                    e as unknown as PointerEvent,
-                    instance.instanceId,
-                  )
-                }
-                role="tab"
-                title={`${instance.workspaceName} · ${instanceStatus.label}${instanceStatus.detail ? ` · ${instanceStatus.detail}` : ""}`}
-                type="button"
-              >
-                <span class="instance-tab-main">
-                  <i class="codicon codicon-window" />
-                  <span class="instance-tab-name">
-                    {instance.workspaceName}
+          )}
+          {instanceOptions.map((instance) => {
+            const instanceStatus = getInstanceStatus(instance);
+            const ownerSnapshot = snapshotCacheRef.current.get(
+              instance.instanceId,
+            )?.snapshot;
+            const workspace = ownerSnapshot?.session.chatWorkspace;
+            const tabs = workspace ? selectableLogicalTabs(workspace) : [];
+            const activeInstance = instance.instanceId === selectedInstanceId;
+            if (!workspace || tabs.length === 0) {
+              return (
+                <button
+                  key={instance.instanceId}
+                  aria-controls="browser-instance-panel"
+                  aria-selected={activeInstance}
+                  class={`instance-tab instance-tab-${instanceStatus.kind}${activeInstance ? " active" : ""}`}
+                  id={`instance-tab-${instance.instanceId}`}
+                  onClick={() => selectTab(instance.instanceId)}
+                  onPointerCancel={(e) =>
+                    handleInstancePointerCancel(e as unknown as PointerEvent)
+                  }
+                  onPointerDown={(e) =>
+                    handleInstancePointerDown(
+                      e as unknown as PointerEvent,
+                      instance.instanceId,
+                    )
+                  }
+                  onPointerUp={(e) =>
+                    handleInstancePointerUp(
+                      e as unknown as PointerEvent,
+                      instance.instanceId,
+                    )
+                  }
+                  role="tab"
+                  title={`${instance.workspaceName} · ${instanceStatus.label}${instanceStatus.detail ? ` · ${instanceStatus.detail}` : ""}`}
+                  type="button"
+                >
+                  <span class="instance-tab-main">
+                    <i class="codicon codicon-window" />
+                    <span class="instance-tab-name">
+                      {instance.workspaceName}
+                    </span>
                   </span>
-                </span>
-                <span class="instance-tab-status">
-                  <i
-                    class={`codicon codicon-${getInstanceStatusIcon(instanceStatus.kind)}${instanceStatus.kind === "working" ? " codicon-modifier-spin" : ""}`}
-                  />
-                  <span>{instanceStatus.label}</span>
-                </span>
-              </button>
-            );
-          }
-          const groupColor = instanceGroupColor(instance.instanceId);
-          return (
-            <Fragment key={instance.instanceId}>
-              {tabs.map((tab, tabIndex) => {
-                const selection = logicalTabSelection(
-                  instance.instanceId,
-                  workspace,
-                  tab,
-                );
-                const active = Boolean(
-                  activeInstance &&
-                  selection &&
-                  selectedLogicalTab &&
-                  logicalTabSelectionKey(selection) ===
-                    logicalTabSelectionKey(selectedLogicalTab),
-                );
-                const tabStatus =
-                  instance.disconnectedAt === undefined
-                    ? getLogicalTabStatus(tab.status)
-                    : instanceStatus;
-                const groupPosition =
-                  tabs.length === 1
-                    ? "single"
-                    : tabIndex === 0
-                      ? "start"
-                      : tabIndex === tabs.length - 1
-                        ? "end"
-                        : "middle";
-                return (
-                  <button
-                    key={`${instance.instanceId}:${tab.tabId}`}
-                    aria-controls="browser-instance-panel"
-                    aria-label={`${tab.label} · ${tab.title ?? "Empty chat"} · ${instance.workspaceName} · ${tab.placement === "popped" ? "Popped out" : "Docked"} · ${tabStatus.label}`}
-                    aria-selected={active}
-                    class={`instance-tab logical-tab logical-tab-group-${groupPosition} instance-tab-${tabStatus.kind}${active ? " active" : ""}`}
-                    disabled={!selection}
-                    id={logicalTabDomId(instance.instanceId, tab.tabId)}
-                    onClick={() =>
-                      handleLogicalTabSelect(
-                        instance.instanceId,
-                        workspace,
-                        tab,
-                      )
-                    }
-                    role="tab"
-                    style={
-                      {
-                        "--instance-group-color": groupColor,
-                      } as unknown as JSX.CSSProperties
-                    }
-                    title={`${instance.workspaceName} · ${tab.label} · ${tab.title ?? "Empty chat"} · ${tab.placement} · ${tabStatus.label}`}
-                    type="button"
-                  >
-                    <span class="instance-tab-main">
-                      <span class="logical-tab-label">{tab.label}</span>
-                      <span class="instance-tab-name">
-                        {tab.title ?? "Empty chat"}
+                  <span class="instance-tab-status">
+                    <i
+                      class={`codicon codicon-${getInstanceStatusIcon(instanceStatus.kind)}${instanceStatus.kind === "working" ? " codicon-modifier-spin" : ""}`}
+                    />
+                    <span>{instanceStatus.label}</span>
+                  </span>
+                </button>
+              );
+            }
+            const groupColor = instanceGroupColor(instance.instanceId);
+            return (
+              <Fragment key={instance.instanceId}>
+                {tabs.map((tab, tabIndex) => {
+                  const selection = logicalTabSelection(
+                    instance.instanceId,
+                    workspace,
+                    tab,
+                  );
+                  const active = Boolean(
+                    activeInstance &&
+                    selection &&
+                    selectedLogicalTab &&
+                    logicalTabSelectionKey(selection) ===
+                      logicalTabSelectionKey(selectedLogicalTab),
+                  );
+                  const tabStatus =
+                    instance.disconnectedAt === undefined
+                      ? getLogicalTabStatus(tab.status)
+                      : instanceStatus;
+                  const groupPosition = tabIndex === 0 ? "start" : "middle";
+                  return (
+                    <button
+                      key={`${instance.instanceId}:${tab.tabId}`}
+                      aria-controls="browser-instance-panel"
+                      aria-label={`${tab.label} · ${tab.title ?? "Empty chat"} · ${instance.workspaceName} · ${tab.placement === "popped" ? "Popped out" : "Docked"} · ${tabStatus.label}`}
+                      aria-selected={active}
+                      class={`instance-tab logical-tab logical-tab-group-${groupPosition} instance-tab-${tabStatus.kind}${active ? " active" : ""}`}
+                      disabled={!selection}
+                      id={logicalTabDomId(instance.instanceId, tab.tabId)}
+                      onClick={() =>
+                        handleLogicalTabSelect(
+                          instance.instanceId,
+                          workspace,
+                          tab,
+                        )
+                      }
+                      role="tab"
+                      style={
+                        {
+                          "--instance-group-color": groupColor,
+                        } as unknown as JSX.CSSProperties
+                      }
+                      title={`${instance.workspaceName} · ${tab.label} · ${tab.title ?? "Empty chat"} · ${tab.placement} · ${tabStatus.label}`}
+                      type="button"
+                    >
+                      <span class="instance-tab-main">
+                        <span class="logical-tab-label">{tab.label}</span>
+                        <span class="instance-tab-name">
+                          {tab.title ?? "Empty chat"}
+                        </span>
+                        {tab.placement === "popped" && (
+                          <i
+                            aria-label="Popped out"
+                            class="codicon codicon-opened-editors"
+                          />
+                        )}
                       </span>
-                      {tab.placement === "popped" && (
+                      <span class="instance-tab-status">
                         <i
-                          aria-label="Popped out"
-                          class="codicon codicon-opened-editors"
+                          class={`codicon codicon-${instance.disconnectedAt !== undefined ? "debug-disconnect" : tabStatus.kind === "idle" ? "check" : getInstanceStatusIcon(tabStatus.kind)}${tabStatus.kind === "working" ? " codicon-modifier-spin" : ""}`}
                         />
-                      )}
-                    </span>
-                    <span class="instance-tab-status">
-                      <i
-                        class={`codicon codicon-${instance.disconnectedAt !== undefined ? "debug-disconnect" : tabStatus.kind === "idle" ? "check" : getInstanceStatusIcon(tabStatus.kind)}${tabStatus.kind === "working" ? " codicon-modifier-spin" : ""}`}
-                      />
-                      <span>{tabStatus.label}</span>
-                    </span>
-                  </button>
-                );
-              })}
-            </Fragment>
-          );
-        })}
-      </div>
+                        <span>{tabStatus.label}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+                <button
+                  class="instance-tab logical-tab logical-tab-group-end logical-tab-new"
+                  type="button"
+                  aria-label={`New tab in ${instance.workspaceName}`}
+                  title={`New tab in ${instance.workspaceName} (keeps VS Code focus unchanged)`}
+                  disabled={
+                    instance.disconnectedAt !== undefined ||
+                    newTabPendingInstance !== null
+                  }
+                  onClick={() =>
+                    void handleNewTab(instance.instanceId, workspace)
+                  }
+                  style={
+                    {
+                      "--instance-group-color": groupColor,
+                    } as unknown as JSX.CSSProperties
+                  }
+                >
+                  <i
+                    aria-hidden="true"
+                    class={`codicon codicon-${newTabPendingInstance === instance.instanceId ? "loading codicon-modifier-spin" : "add"}`}
+                  />
+                </button>
+              </Fragment>
+            );
+          })}
+        </div>
+      )}
+      {!consumerShell && newTabError && <div role="alert">{newTabError}</div>}
 
       {/** Shared sendability rule: text or other attached content. */}
 
       <main
         ref={browserLayoutRef}
+        aria-label={
+          consumerShell
+            ? desktopRemoteSelected
+              ? "VS Code"
+              : "Ask Agent"
+            : undefined
+        }
         aria-labelledby={
-          selectedLogicalTab
-            ? logicalTabDomId(
-                selectedLogicalTab.instanceId,
-                selectedLogicalTab.tabId,
-              )
-            : `instance-tab-${selectedTabId}`
+          consumerShell
+            ? undefined
+            : selectedLogicalTab
+              ? logicalTabDomId(
+                  selectedLogicalTab.instanceId,
+                  selectedLogicalTab.tabId,
+                )
+              : `instance-tab-${selectedTabId}`
         }
         class={`browser-layout${sidePaneResizing ? " browser-layout-resizing" : ""}${!reviewPaneVisible ? " browser-layout-chat-only" : ""}`}
         id="browser-instance-panel"
-        role="tabpanel"
+        role={consumerShell ? "region" : "tabpanel"}
         style={
           {
             "--browser-side-width": `${sidePanePercent}%`,
@@ -7515,7 +7889,32 @@ export function BrowserGatewayApp({
           </>
         )}
 
-        <section class="browser-main">
+        {consumerShell && desktopSidebarOpen && (
+          <DesktopSidebar
+            sessions={sessionHistory}
+            currentSessionId={foreground?.sessionId ?? null}
+            onSelect={handleLoadSession}
+            onNew={handleNewSession}
+            onManage={handleShowHistory}
+            mode={desktopMode}
+            onModeChange={desktopModesAvailable ? selectSurfaceMode : undefined}
+          />
+        )}
+        {desktopModesAvailable && !browserShell && (
+          <DesktopRemotePane mode={desktopMode} />
+        )}
+        {browserShell && browserWorkspaceMounted && (
+          <iframe
+            class="browser-workspace-frame"
+            title="VS Code workspaces"
+            src="/?browserWorkspace=1"
+            hidden={!desktopRemoteSelected}
+          />
+        )}
+        <section
+          class="browser-main"
+          style={desktopRemoteSelected ? { display: "none" } : undefined}
+        >
           <PaneCard fill className="chat-pane-card">
             <div class="pane-body browser-chat-pane chat-container">
               {transcriptView?.visible && (
@@ -7540,62 +7939,64 @@ export function BrowserGatewayApp({
                   }
                 />
               )}
-              <ChatHeader
-                restoringSession={foreground?.restoringSession}
-                showHistory={showHistory}
-                onNewSession={handleNewSession}
-                onShowHistory={handleShowHistory}
-                extraActions={
-                  isAskAgentSelected && (
-                    <>
-                      <button
-                        class={`icon-button${showAskAgentMemory ? " active" : ""}`}
-                        onClick={handleShowAskAgentMemory}
-                        title="Ask Agent Memory"
-                        type="button"
-                      >
-                        <i class="codicon codicon-archive" />
-                        {askAgentMemory &&
-                          askAgentMemory.totalSummaryCount > 0 && (
+              {!consumerShell && (
+                <ChatHeader
+                  restoringSession={foreground?.restoringSession}
+                  showHistory={showHistory}
+                  onNewSession={handleNewSession}
+                  onShowHistory={handleShowHistory}
+                  extraActions={
+                    isAskAgentSelected && (
+                      <>
+                        <button
+                          class={`icon-button${showAskAgentMemory ? " active" : ""}`}
+                          onClick={handleShowAskAgentMemory}
+                          title="Ask Agent Memory"
+                          type="button"
+                        >
+                          <i class="codicon codicon-archive" />
+                          {askAgentMemory &&
+                            askAgentMemory.totalSummaryCount > 0 && (
+                              <span class="memory-count-badge">
+                                {askAgentMemory.totalSummaryCount}
+                              </span>
+                            )}
+                        </button>
+                        <button
+                          class={`icon-button${showAskAgentReadGrants ? " active" : ""}`}
+                          onClick={() =>
+                            setShowAskAgentReadGrants((value) => !value)
+                          }
+                          title="Read-only local file grants"
+                          type="button"
+                        >
+                          <i class="codicon codicon-folder-opened" />
+                          {askAgentReadGrants.length > 0 && (
                             <span class="memory-count-badge">
-                              {askAgentMemory.totalSummaryCount}
+                              {askAgentReadGrants.length}
                             </span>
                           )}
-                      </button>
-                      <button
-                        class={`icon-button${showAskAgentReadGrants ? " active" : ""}`}
-                        onClick={() =>
-                          setShowAskAgentReadGrants((value) => !value)
-                        }
-                        title="Read-only local file grants"
-                        type="button"
-                      >
-                        <i class="codicon codicon-folder-opened" />
-                        {askAgentReadGrants.length > 0 && (
-                          <span class="memory-count-badge">
-                            {askAgentReadGrants.length}
-                          </span>
-                        )}
-                      </button>
-                      <button
-                        class={`icon-button${showAskAgentHandoff ? " active" : ""}`}
-                        onClick={() => {
-                          setShowAskAgentHandoff((value) => !value);
-                          if (!askAgentHandoffTargetId) {
-                            setAskAgentHandoffTargetId(
-                              askAgentHandoffTargets[0]?.instanceId ?? "",
-                            );
-                          }
-                        }}
-                        title="Handoff to VS Code project session"
-                        type="button"
-                      >
-                        <i class="codicon codicon-git-pull-request-go-to-changes" />
-                      </button>
-                    </>
-                  )
-                }
-              />
+                        </button>
+                        <button
+                          class={`icon-button${showAskAgentHandoff ? " active" : ""}`}
+                          onClick={() => {
+                            setShowAskAgentHandoff((value) => !value);
+                            if (!askAgentHandoffTargetId) {
+                              setAskAgentHandoffTargetId(
+                                askAgentHandoffTargets[0]?.instanceId ?? "",
+                              );
+                            }
+                          }}
+                          title="Handoff to VS Code project session"
+                          type="button"
+                        >
+                          <i class="codicon codicon-git-pull-request-go-to-changes" />
+                        </button>
+                      </>
+                    )
+                  }
+                />
+              )}
               {showAskAgentMemory && (
                 <section
                   aria-label="Ask Agent memory"
@@ -8209,7 +8610,11 @@ export function BrowserGatewayApp({
                       mobileLayout || touchInput ? 20 : undefined
                     }
                     sessionId={foreground?.sessionId ?? null}
-                    originalPrompt={foreground?.originalPrompt}
+                    originalPrompt={
+                      isAskAgentSelected
+                        ? undefined
+                        : foreground?.originalPrompt
+                    }
                     emptyState={
                       !isAskAgentSelected ? (
                         <ModelSetupCard
@@ -8219,7 +8624,14 @@ export function BrowserGatewayApp({
                           }
                           surface="browser"
                         />
-                      ) : undefined
+                      ) : (
+                        <AskAgentWelcome
+                          desktop={consumerShell}
+                          onStart={(prompt) => {
+                            void handleSend(prompt, []);
+                          }}
+                        />
+                      )
                     }
                     detectedQuestion={foreground?.detectedQuestion ?? null}
                     onDetectedQuestionAnswer={(payload) => {
@@ -8588,8 +9000,7 @@ export function BrowserGatewayApp({
                 {!mobileReviewOpen && (foreground?.todos?.length ?? 0) > 0 && (
                   <TodoPanel todos={foreground?.todos ?? []} />
                 )}
-                {!isAskAgentSelected &&
-                  pendingFormElicitation &&
+                {pendingFormElicitation &&
                   !mobileReviewOpen &&
                   (() => {
                     const originTabId = snapshotOriginRef.current.tabId;
@@ -8600,7 +9011,9 @@ export function BrowserGatewayApp({
                         onRespond={async (response) => {
                           const result = await fetch(
                             buildApiPathForTab(
-                              "/api/form-elicitation",
+                              originTabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID
+                                ? "/api/ask-agent/form-elicitation"
+                                : "/api/form-elicitation",
                               originTabId,
                             ),
                             {
@@ -8637,7 +9050,9 @@ export function BrowserGatewayApp({
                   !mobileReviewOpen && (
                     <UrlElicitationPanel
                       request={pendingUrlElicitation}
+                      externalBrowserUnavailable={externalBrowserUnavailable}
                       onAccept={(id, url) => {
+                        if (externalBrowserUnavailable) return;
                         window.open(url, "_blank", "noopener,noreferrer");
                         browserVscodeApi.postMessage({
                           command: "agentUrlElicitationResponse",
@@ -8724,7 +9139,10 @@ export function BrowserGatewayApp({
                       </button>
                     </div>
                   )}
-                {streaming && !visibleQuestion && !mobileReviewOpen ? (
+                {!consumerShell &&
+                streaming &&
+                !visibleQuestion &&
+                !mobileReviewOpen ? (
                   <StreamingStatusBar
                     messages={messages}
                     statusOverride={statusOverride}
@@ -8763,6 +9181,9 @@ export function BrowserGatewayApp({
                 <div class="browser-chat-composer">
                   <InputArea
                     onSend={handleSend}
+                    placeholder={
+                      isAskAgentSelected ? "Ask AgentLink anything" : undefined
+                    }
                     contextMode={
                       visibleQuestion && activeQuestionContextMode
                         ? ({

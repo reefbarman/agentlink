@@ -273,6 +273,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
     "/api/session/new",
     "Requires a session-create command before Stage 5.",
   ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
+    "/api/tabs/new",
+    "Creates a VS Code-owned chat tab without changing local focus; requires a tab-create command before Stage 5.",
+  ),
   protocolCommand(
     "vscode_gateway",
     "POST",
@@ -465,6 +471,7 @@ function classifyAskAgentRoute(
     case "mcpStatus":
     case "mcpRefresh":
     case "questionProgress":
+    case "formElicitation":
     case "memory":
     case "memoryClear":
     case "autonomousMemoryHealth":

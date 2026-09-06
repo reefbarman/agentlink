@@ -309,6 +309,60 @@ function splitTopLevelChatBlocks(message: ChatMessage): TranscriptRow[] {
   return rows;
 }
 
+function isChangeMarkerOnly(message: ChatMessage): boolean {
+  return (
+    Boolean(message.surfaceChange) &&
+    message.blocks.length === 0 &&
+    !message.error &&
+    !message.finalMarker
+  );
+}
+
+function coalesceChangeDividers(rows: TranscriptRow[]): TranscriptRow[] {
+  const grouped: TranscriptRow[] = [];
+  for (const row of rows) {
+    const previous = grouped[grouped.length - 1];
+    if (
+      previous &&
+      isChangeMarkerOnly(previous.message) &&
+      (row.modelChange ||
+        row.reasoningChange ||
+        row.modeChange ||
+        row.approvalChange)
+    ) {
+      grouped.pop();
+      grouped.push({
+        ...row,
+        modelChange:
+          previous.modelChange && row.modelChange
+            ? { ...previous.modelChange, model: row.modelChange.model }
+            : (row.modelChange ?? previous.modelChange),
+        reasoningChange:
+          previous.reasoningChange && row.reasoningChange
+            ? {
+                ...previous.reasoningChange,
+                reasoningEffort: row.reasoningChange.reasoningEffort,
+              }
+            : (row.reasoningChange ?? previous.reasoningChange),
+        modeChange:
+          previous.modeChange && row.modeChange
+            ? { ...previous.modeChange, mode: row.modeChange.mode }
+            : (row.modeChange ?? previous.modeChange),
+        approvalChange:
+          previous.approvalChange && row.approvalChange
+            ? {
+                ...previous.approvalChange,
+                commandApprovalPolicy: row.approvalChange.commandApprovalPolicy,
+              }
+            : (row.approvalChange ?? previous.approvalChange),
+      });
+    } else {
+      grouped.push(row);
+    }
+  }
+  return grouped;
+}
+
 function buildTranscriptRows(
   messages: ChatMessage[],
   streaming: boolean,
@@ -464,7 +518,7 @@ function buildTranscriptRows(
     });
   }
 
-  return rows;
+  return coalesceChangeDividers(rows);
 }
 
 interface TranscriptRowActions {
@@ -523,11 +577,7 @@ function renderTranscriptRow({
 }: MemoizedTranscriptRowProps) {
   const { key, message, sourceMessage, bgAgentResultOnly, warningMessages } =
     row;
-  const markerOnly =
-    Boolean(message.surfaceChange) &&
-    message.blocks.length === 0 &&
-    !message.error &&
-    !message.finalMarker;
+  const markerOnly = isChangeMarkerOnly(message);
   const content = markerOnly ? null : message.role === "condense" ? (
     <CondenseRow message={message} />
   ) : message.role === "warning" ? (

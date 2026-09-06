@@ -548,6 +548,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "POST",
+        rawExact("/api/tabs/new"),
+        ({ req, res }) => this.handleTabNewAction(req, res),
+        json("tab new action failed"),
+      ),
+      route(
+        "POST",
         rawExact("/api/session/new"),
         ({ req, res }) => this.handleSessionNewAction(req, res),
         json("session new action failed"),
@@ -2021,6 +2027,44 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return false;
     }
     return true;
+  }
+
+  private async handleTabNewAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as {
+      mode?: unknown;
+      projectId?: unknown;
+      selection?: unknown;
+    };
+    const selection = this.parseOptionalChatTabSelection(body?.selection, res);
+    if (selection === false) return;
+    if (!selection) {
+      this.writeJson(res, 400, { error: "invalid_selection" });
+      return;
+    }
+    if (body.mode !== undefined && typeof body.mode !== "string") {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const projectId = this.resolveRequestedProjectId(body.projectId, res);
+    if (!projectId) return;
+    const result = await this.chatViewProvider.submitBrowserNewTab(
+      selection,
+      body.mode,
+      projectId,
+    );
+    this.writeJson(
+      res,
+      result.ok ? 200 : 409,
+      result.ok ? { ...result, snapshot: this.getSnapshot() } : result,
+    );
   }
 
   private async handleSessionNewAction(

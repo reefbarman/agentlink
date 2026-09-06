@@ -389,6 +389,23 @@ describe("CodexOAuthManager", () => {
     expect(ids).toEqual([b.account.id, c.account.id, a.account.id]);
   });
 
+  it("fails closed without deleting state when shared storage is unavailable", async () => {
+    const storage = {
+      get: vi.fn(async () => {
+        throw new Error("keychain_locked");
+      }),
+      store: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const sharedManager = new CodexOAuthManager(() => {});
+    sharedManager.initializeStorage(storage);
+
+    await expect(sharedManager.listAccounts()).rejects.toThrow(
+      "keychain_locked",
+    );
+    expect(storage.delete).not.toHaveBeenCalled();
+  });
+
   it("reads latest shared secret state across separate manager instances", async () => {
     const sharedValues = new Map<string, string>();
 

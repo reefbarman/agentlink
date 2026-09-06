@@ -21,6 +21,10 @@ export type ComposeErrorCode =
   | "tool_not_composable"
   | "tool_input_not_composable"
   | "interaction_denied"
+  | "tool_policy"
+  | "request_policy"
+  | "mode_policy"
+  | "composability_policy"
   | "budget_exhausted"
   | "compose_runtime_busy"
   | "timeout"
@@ -51,6 +55,20 @@ export interface ComposeTrace {
   toolAllBatchCount?: number;
   toolAllSettledBatchCount?: number;
   bridgedBytes?: number;
+  /** Exact UTF-8 bytes returned by the QuickJS script before provider shaping. */
+  runtimeReturnedBytes?: number;
+  /** Runtime admission wait rounded into a bounded telemetry bucket. */
+  queueWaitBucket?:
+    | "none"
+    | "lt_100ms"
+    | "100_499ms"
+    | "500_999ms"
+    | "1_4s"
+    | "5s_plus";
+  /** Whether oversized exact-result retention succeeded. */
+  artifactRetention?: "none" | "retained" | "retention_failed";
+  /** Completed execution whose exact final output was retained outside history. */
+  outputSpilled?: boolean;
   errorKind?: string;
   errorCode?: ComposeErrorCode;
   children: ComposeTraceChild[];

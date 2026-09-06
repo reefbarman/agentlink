@@ -8,8 +8,13 @@ import { writeTextFileAtomic } from "./atomicFile.js";
 const DISCOVERY_DIR = path.join(os.homedir(), ".agentlink");
 const TEST_WORKER_ID =
   process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID;
-const DISCOVERY_FILENAME = TEST_WORKER_ID
-  ? `browser-gateway-helper.${TEST_WORKER_ID}.json`
+const DISCOVERY_NAMESPACE =
+  process.env.AGENTLINK_BROWSER_GATEWAY_DISCOVERY_NAMESPACE?.trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .slice(0, 64);
+const DISCOVERY_SUFFIX = TEST_WORKER_ID ?? DISCOVERY_NAMESPACE;
+const DISCOVERY_FILENAME = DISCOVERY_SUFFIX
+  ? `browser-gateway-helper.${DISCOVERY_SUFFIX}.json`
   : "browser-gateway-helper.json";
 const DISCOVERY_PATH = path.join(DISCOVERY_DIR, DISCOVERY_FILENAME);
 
@@ -134,6 +139,11 @@ const discoveryWriter = new BrowserGatewayHelperDiscoveryWriter({
 
 export function getBrowserGatewayHelperDiscoveryPath(): string {
   return DISCOVERY_PATH;
+}
+
+/** Default VS Code helper, independent of the current host's namespace. */
+export function getDefaultBrowserGatewayHelperDiscoveryPath(): string {
+  return path.join(DISCOVERY_DIR, "browser-gateway-helper.json");
 }
 
 export async function readBrowserGatewayHelperDiscovery(): Promise<BrowserGatewayHelperDiscoveryRecord | null> {

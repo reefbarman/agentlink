@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; form-action 'none'; base-uri 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AgentLink Accounts</title>
+    <link rel="stylesheet" href="./setup.css" />
+  </head>
+  <body>
+    <main>
+      <div class="mark" aria-hidden="true">A</div>
+      <p class="eyebrow">AgentLink Desktop</p>
+      <h1>Your accounts, everywhere.</h1>
+      <p class="intro">
+        Sign in once to share ChatGPT/Codex accounts across AgentLink Desktop,
+        browser chat, and VS Code on this Mac. Secrets stay in macOS Keychain.
+      </p>
+
+      <section class="oauth-section" aria-labelledby="oauth-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="oauth-heading">ChatGPT/Codex</h2>
+            <p>
+              Multiple accounts rotate automatically when limits are reached.
+            </p>
+          </div>
+          <button id="oauth-sign-in" class="secondary" type="button">
+            Add account
+          </button>
+        </div>
+        <div id="accounts" class="accounts"></div>
+      </section>
+
+      <details>
+        <summary>Use an OpenAI API key instead</summary>
+        <form id="setup-form">
+          <label for="api-key">OpenAI API key</label>
+          <input
+            id="api-key"
+            name="api-key"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="sk-…"
+            maxlength="8192"
+            required
+          />
+          <button id="submit" type="submit">Save API key</button>
+        </form>
+      </details>
+
+      <button id="continue" class="primary" type="button" hidden>
+        Continue to AgentLink
+      </button>
+      <p id="status" role="status" aria-live="polite"></p>
+    </main>
+    <script src="./setup.js"></script>
+  </body>
+</html>

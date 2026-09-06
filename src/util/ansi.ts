@@ -63,16 +63,43 @@ export function stripAnsi(text: string): string {
   return result;
 }
 
-/**
- * Resolve lone carriage-return updates with last-write semantics. Terminal tools
- * commonly use CR to redraw one logical line; clean text keeps only the final
- * rendered update rather than preserving every overwritten progress state.
- */
+/** Resolve CR overwrites and explicit line erasure without modeling cursor movement. */
 function normalizeCarriageReturns(text: string): string {
-  return text
+  // Consume control-string payloads before interpreting any CR or erase commands.
+  return removeShellIntegrationSequences(text)
     .replace(/\r\n/g, "\n")
     .split("\n")
-    .map((line) => line.slice(line.lastIndexOf("\r") + 1))
+    .map((line) => {
+      if (!/\r|(?:\x1B\[|\x9B)[012]?K/.test(line)) return stripAnsi(line);
+      const characters: string[] = [];
+      let cursor = 0;
+      for (const part of line.split(/(\r|(?:\x1B\[|\x9B)[012]?K)/g)) {
+        if (part === "\r") {
+          cursor = 0;
+          continue;
+        }
+        const erase = /^(?:\x1B\[|\x9B)([012]?)K$/.exec(part);
+        if (erase) {
+          switch (erase[1]) {
+            case "1":
+              characters.fill(" ", 0, Math.min(cursor + 1, characters.length));
+              break;
+            case "2":
+              characters.length = 0;
+              break;
+            default:
+              characters.length = Math.min(cursor, characters.length);
+          }
+          continue;
+        }
+        for (const character of stripAnsi(part)) {
+          // Erasing a line does not move the cursor; retain its column on write.
+          while (characters.length < cursor) characters.push(" ");
+          characters[cursor++] = character;
+        }
+      }
+      return characters.join("");
+    })
     .join("\n");
 }
 
@@ -83,8 +110,7 @@ export function cleanTerminalRawOutput(text: string): string {
 
 /** Normalize terminal output: strip ANSI, trailing %, normalize line endings */
 export function cleanTerminalOutput(text: string): string {
-  let result = stripAnsi(text);
-  result = normalizeCarriageReturns(result);
+  let result = normalizeCarriageReturns(text);
   // Strip trailing % (zsh PROMPT_EOL_MARK for lines without trailing newline)
   result = result.replace(/%\s*$/, "");
   return result.trim();

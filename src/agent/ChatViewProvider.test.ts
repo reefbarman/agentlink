@@ -9073,6 +9073,67 @@ describe("chat tab host routing", () => {
     };
   }
 
+  it("creates a browser tab without changing foreground presentation", async () => {
+    const { provider, coordinator, postMessage } =
+      await makeTabRoutingProvider();
+    const address = {
+      controllerEpoch: "epoch-1",
+      tabId: "tab-1",
+      sessionId: "session-1",
+    };
+    coordinator.newTab.mockResolvedValue({
+      ok: true,
+      tab: { id: "tab-new", sessionId: "session-new" },
+      session: {
+        id: "session-new",
+        model: "model",
+        projectScope: { projectId: "project-remote" },
+      },
+    });
+    const internals = provider as unknown as {
+      beginForegroundSessionTransition: () => unknown;
+      postSessionLoaded: () => void;
+      sendInitialState: () => void;
+    };
+    const transition = vi.spyOn(internals, "beginForegroundSessionTransition");
+    const loaded = vi.spyOn(internals, "postSessionLoaded");
+    const initialState = vi.spyOn(internals, "sendInitialState");
+    await expect(
+      provider.submitBrowserNewTab(address, " ask ", "project-remote"),
+    ).resolves.toEqual({
+      ok: true,
+      tabId: "tab-new",
+      sessionId: "session-new",
+      projectId: "project-remote",
+      controllerEpoch: "epoch-1",
+    });
+    expect(coordinator.newTab).toHaveBeenLastCalledWith(
+      address,
+      "ask",
+      "project-remote",
+      { focus: false },
+    );
+    await provider.submitBrowserNewTab(address);
+    expect(coordinator.newTab).toHaveBeenLastCalledWith(
+      address,
+      "code",
+      undefined,
+      { focus: false },
+    );
+    coordinator.newTab.mockResolvedValueOnce({
+      ok: false,
+      reason: "stale_session",
+    });
+    await expect(provider.submitBrowserNewTab(address)).resolves.toEqual({
+      ok: false,
+      reason: "stale_session",
+    });
+    expect(transition).not.toHaveBeenCalled();
+    expect(loaded).not.toHaveBeenCalled();
+    expect(initialState).not.toHaveBeenCalled();
+    expect(postMessage).not.toHaveBeenCalled();
+  });
+
   it("focuses the docked chat tab that owns a pending interaction", async () => {
     const { provider, chatTabController, coordinator } =
       await makeTabRoutingProvider();

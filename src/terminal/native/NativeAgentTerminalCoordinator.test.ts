@@ -172,6 +172,80 @@ async function finish(process: FakeProcess, output = "ok\r\n", exitCode = 0) {
 }
 
 describe("NativeAgentTerminalCoordinator", () => {
+  it("keeps timed-out output addressable after reuse and cannot interrupt the newer command", async () => {
+    const test = harness();
+    const first = await test.coordinator.executeCommand({
+      owner: undefined,
+      command: "npm test",
+      cwd: "/workspace",
+      background: true,
+    });
+    const target = {
+      owner: undefined,
+      terminalId: first.terminal_id,
+      commandId: first.command_id,
+    };
+    expect(first.command_id).toBe("native-command-1");
+    await finish(test.processes[0], "original test output\r\n", 1);
+    const second = await test.coordinator.executeCommand({
+      owner: undefined,
+      command: "next command",
+      cwd: "/workspace",
+      background: true,
+    });
+    expect(second.terminal_id).toBe(first.terminal_id);
+    expect(test.coordinator.getBackgroundState(target)).toMatchObject({
+      command_id: first.command_id,
+      exit_code: 1,
+      is_running: false,
+    });
+    expect(test.coordinator.getRetainedOutput(target)?.output).toBe(
+      "original test output",
+    );
+    expect(test.coordinator.interruptTerminal(target)).toBe(false);
+    expect(test.runtime.interrupt).not.toHaveBeenCalled();
+    expect(
+      test.coordinator.getBackgroundState({ ...target, commandId: "expired" }),
+    ).toBeUndefined();
+    expect(
+      test.coordinator.getRetainedOutput({ ...target, commandId: "expired" }),
+    ).toBeUndefined();
+    await finish(test.processes[1], "new output\r\n");
+    test.coordinator.dispose();
+  });
+
+  it("reports signal termination consistently in completed and polled results", async () => {
+    const test = harness();
+    const result = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "node build",
+      cwd: "/workspace",
+    });
+    await vi.waitFor(() => expect(test.processes).toHaveLength(1));
+    test.processes[0].readyDeferred.resolve({
+      pid: 1,
+      pgid: 1,
+      backend: "native-pty",
+    });
+    test.processes[0].completionDeferred.resolve({
+      exitCode: 0,
+      signal: 6,
+      timedOut: false,
+    });
+    const completed = await result;
+    expect(completed).toMatchObject({
+      exit_code: 134,
+      signal: 6,
+      command_id: "native-command-1",
+    });
+    expect(
+      test.coordinator.getBackgroundState({
+        owner: undefined,
+        terminalId: completed.terminal_id,
+      }),
+    ).toMatchObject({ exit_code: 134, signal: 6 });
+    test.coordinator.dispose();
+  });
   it("reserves before approval and starts one interactive shell only when consumed", async () => {
     const test = harness();
     const assigned = vi.fn();

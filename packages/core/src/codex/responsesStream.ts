@@ -14,6 +14,12 @@ import {
 } from "./streamParser.js";
 import type { CodexResponsesRequestOptions } from "./openaiClient.js";
 import type { CodexRequestBody } from "./translation.js";
+import {
+  CODEX_TURN_STATE_HEADER,
+  captureCodexTurnState,
+  isCodexRoutingRejection,
+  type CodexTurnRouting,
+} from "./turnRouting.js";
 
 export interface CodexResponsesClient {
   responses: {
@@ -42,6 +48,7 @@ export async function* executeCodexResponsesStream(args: {
   client: CodexResponsesClient;
   body: CodexRequestBody;
   authMethod?: CodexAuthMethod;
+  routing?: CodexTurnRouting;
   signal?: AbortSignal;
   onProviderRequestAttempt?: (attempt: CoreModelProviderRequestAttempt) => void;
   onTransportActivity?: (activity: CoreModelTransportActivity) => void;
@@ -55,20 +62,76 @@ export async function* executeCodexResponsesStream(args: {
     if (typeof args.body.model !== "string") {
       throw new Error("Codex Responses request model is required");
     }
-    args.onProviderRequestAttempt?.({ model: args.body.model });
     const runRequest =
       args.runRequest ?? (<T>(operation: () => T): T => operation());
-    const headers = getCodexResponsesRequestHeaders(
+    const routing = args.authMethod === "oauth" ? args.routing : undefined;
+    const binding = routing?.turnState.bind(
+      routing.sessionId,
+      routing.authIdentity,
       args.body.model,
-      args.authMethod,
     );
-    stream = await runRequest(() =>
-      args.client.responses.create(args.body, {
-        signal: args.signal,
-        maxRetries: 0,
-        ...(headers ? { headers } : {}),
-      }),
-    );
+    let disabled = binding?.disabled ?? false;
+    for (;;) {
+      args.onProviderRequestAttempt?.({ model: args.body.model });
+      const headers = {
+        ...getCodexResponsesRequestHeaders(args.body.model, args.authMethod),
+        ...(routing ? { session_id: routing.sessionId } : {}),
+        ...(!disabled && binding?.value
+          ? { [CODEX_TURN_STATE_HEADER]: binding.value }
+          : {}),
+      };
+      const body = disabled ? { ...args.body } : args.body;
+      if (disabled) delete body.prompt_cache_key;
+      try {
+        const pending = runRequest(() =>
+          args.client.responses.create(body, {
+            signal: args.signal,
+            maxRetries: 0,
+            ...(Object.keys(headers).length ? { headers } : {}),
+          }),
+        );
+        // The SDK exposes response headers on its promise, not on the stream.
+        if (
+          binding &&
+          pending &&
+          typeof (pending as { withResponse?: unknown }).withResponse ===
+            "function"
+        ) {
+          const response = await (
+            pending as {
+              withResponse(): Promise<{
+                data: unknown;
+                response: { headers: Headers };
+              }>;
+            }
+          ).withResponse();
+          captureCodexTurnState(
+            binding,
+            response.response.headers.get(CODEX_TURN_STATE_HEADER),
+          );
+          stream = response.data;
+        } else {
+          stream = await pending;
+        }
+        break;
+      } catch (error) {
+        if (
+          args.authMethod === "oauth" &&
+          !disabled &&
+          (body.prompt_cache_key || binding?.value) &&
+          !args.signal?.aborted &&
+          isCodexRoutingRejection(error)
+        ) {
+          disabled = true;
+          if (binding) {
+            binding.disabled = true;
+            binding.value = undefined;
+          }
+          continue;
+        }
+        throw error;
+      }
+    }
   } catch (err) {
     if (isCodexAuthError(err)) throw new CodexResponsesAuthError(err);
     throw err;

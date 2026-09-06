@@ -10,6 +10,7 @@ interface PackageManifest {
   workspaces?: string[];
   scripts?: Record<string, string>;
   dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
 }
 
 const ROOT = path.resolve(__dirname, "..");
@@ -72,10 +73,10 @@ describe("workspace gate coverage", () => {
         fs.existsSync(path.join(directory, "tsconfig.json")),
         relativeDirectory,
       ).toBe(true);
-      expect(
-        rootManifest.dependencies?.[manifest.name!],
-        relativeDirectory,
-      ).toBe(manifest.version);
+      const rootDependency = relativeDirectory.startsWith("packages/")
+        ? rootManifest.dependencies?.[manifest.name!]
+        : rootManifest.devDependencies?.[manifest.name!];
+      expect(rootDependency, relativeDirectory).toBe(manifest.version);
       if (relativeDirectory.startsWith("packages/")) {
         expect(
           rootManifest.scripts?.["build:workspaces"],

@@ -241,6 +241,72 @@ function enableManagedNetworking(test: ReturnType<typeof harness>): void {
 }
 
 describe("SandboxTerminalCoordinator", () => {
+  it("keeps timed-out command results after reuse without targeting the newer process", async () => {
+    const test = harness();
+    const first = await test.coordinator.executeCommand({
+      owner: undefined,
+      command: "npm test",
+      cwd: "/workspace",
+      sandboxSessionId: "session",
+      timeout: 1,
+    });
+    expect(first.timed_out).toBe(true);
+    expect(first.command_id).toBe("command-1");
+    const target = {
+      owner: undefined,
+      terminalId: first.terminal_id,
+      commandId: first.command_id,
+    };
+    await finish(test.processes[0], "test failure\r\n", 1);
+    const second = await test.coordinator.executeCommand({
+      owner: undefined,
+      command: "next command",
+      cwd: "/workspace",
+      sandboxSessionId: "session",
+      background: true,
+    });
+    expect(second.terminal_id).toBe(first.terminal_id);
+    expect(test.coordinator.getBackgroundState(target)).toMatchObject({
+      command_id: "command-1",
+      exit_code: 1,
+      is_running: false,
+    });
+    expect(test.coordinator.getRetainedOutput(target)?.output).toBe(
+      "test failure",
+    );
+    expect(test.coordinator.interruptTerminal(target)).toBe(false);
+    expect(test.processes[1].interrupt).not.toHaveBeenCalled();
+    expect(
+      test.coordinator.getBackgroundState({ ...target, commandId: "expired" }),
+    ).toBeUndefined();
+    expect(
+      test.coordinator.getRetainedOutput({ ...target, commandId: "expired" }),
+    ).toBeUndefined();
+    test.processes[1].completionDeferred.resolve({
+      exitCode: 0,
+      signal: 15,
+      timedOut: false,
+    });
+    await flush();
+    expect(
+      test.coordinator.getBackgroundState({
+        ...target,
+        commandId: second.command_id,
+      }),
+    ).toMatchObject({ exit_code: 143, signal: 15 });
+    test.coordinator.closeTerminals({
+      owner: undefined,
+      names: [second.terminal_id],
+    });
+    expect(test.coordinator.getRetainedOutput(target)).toBeUndefined();
+    expect(
+      test.coordinator.getRetainedOutput({
+        ...target,
+        commandId: second.command_id,
+      }),
+    ).toBeDefined();
+    test.coordinator.dispose();
+  });
   it("preauthorizes without launching and transfers cleanup on consume", async () => {
     const test = harness();
     const prepared = await test.coordinator.prepareConfinementExecution(
@@ -2172,6 +2238,7 @@ describe("SandboxTerminalCoordinator", () => {
     ).toEqual([
       {
         id: "sandbox-1",
+        command_id: "command-1",
         name: "Server",
         closedAt: 500,
         is_running: false,

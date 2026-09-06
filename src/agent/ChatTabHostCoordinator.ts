@@ -69,18 +69,19 @@ export class ChatTabHostCoordinator {
     address: ChatTabActionAddress,
     mode: string,
     projectId?: string,
+    options: { focus?: boolean } = {},
   ): Promise<ChatTabHostActionResult> {
     const validated = this.tabs.validateAction(address);
     if (!validated.ok) return validated;
 
-    const tab = await this.tabs.createTab();
+    const tab = await this.tabs.createTab(null, options);
     const session = await this.sessions.createSession(mode, {
       projectId,
       foreground: false,
     });
     const bound = await this.ensureBinding(tab.id, null, session.id);
     if (!bound) return { ok: false, reason: "binding_conflict" };
-    if (this.tabs.getFocusedTabId() === tab.id) {
+    if (options.focus !== false && this.tabs.getFocusedTabId() === tab.id) {
       this.sessions.switchTo(session.id);
     }
     return { ok: true, tab: bound, session };

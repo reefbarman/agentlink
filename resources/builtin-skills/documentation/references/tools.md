@@ -14,6 +14,22 @@ Use the lightweight orientation tools before broad changes:
 
 Exact parameters: [read and language tools](complete-reference.md#tools).
 
+## Reduce related read-only fan-out
+
+`compose` is a default-on foreground tool for known workflows with roughly four or more related reads. It runs a bounded JavaScript function body that calls authorized read-only tools, keeps child results out of provider history, and returns only the filtered, projected, joined, counted, or summarized JSON the model needs.
+
+Compose is inline by default in workspace-backed foreground sessions whose mode and active skill permit it; no `find_native_tools` call is needed. Set the machine-scoped `agentlink.compose.enabled` setting to `false` to opt out, and reload affected VS Code windows after changing it. It remains unavailable to background agents, `/btw`, ACP, worktree setup, and projectless sessions. `AGENTLINK_DISABLE_COMPOSE=1` before startup force-disables it for recovery.
+
+Use direct or ordinary parallel calls for one-offs, independent full results, and exploration where each result determines the next action. Compose cannot write, run commands, use MCP/web/memory/UI tools, nest itself, or open an approval. Text and extracted-PDF `read_file` calls are composable only without `query`; media/document output is rejected.
+
+For independent reads, prefer `toolAllSettled`: it returns fulfilled values and recoverable per-child errors without cancelling useful siblings when a file is missing. Preserve those errors in the reduced summary. Reserve `toolAll` for batches where every result is required; it deliberately fails fast. Use paths established by prior reads/searches rather than guessed filenames, and use each child's documented result shape (`search_files.results` is formatted text, not an array).
+
+Compose cards in VS Code and browser workspace chat distinguish succeeded, failed, and cancelled children. Child errors wrap below the affected read instead of disrupting row alignment. The script is readable JavaScript under **Script**; failed results show the error first, with raw JSON and stack traces under **Technical details**.
+
+The final output limit is 40 KiB. If exact secure retention succeeds, oversized output returns completed-with-spill metadata (`outputSpilled: true`) and a bounded preview plus `recovery.output_file`, rather than an execution failure. Read only needed artifact records instead of rerunning completed work. Retention failures and genuine execution errors remain errors; cancellation remains cancellation. Byte limits are unchanged.
+
+Exact script helpers, child constraints, limits, and recovery behavior: [compose](complete-reference.md#compose).
+
 ## Make reviewed changes
 
 - `write_file` creates or replaces a file through the reviewed editor save boundary.
@@ -28,8 +44,10 @@ Exact write-tool parameters and marker grammar: [write tools](complete-reference
 ## Run and inspect commands
 
 - `execute_command` runs a command in a managed terminal.
-- `get_terminal_output` reads retained output or controls an observed command.
+- `get_terminal_output` reads retained output or controls an observed command. Pass the `command_id` returned by native/sandbox `execute_command` together with `terminal_id` to read the same command after terminal reuse. Omitting it selects the latest command. An unavailable or expired command ID returns an error rather than another command's output; `kill: true` cannot interrupt a newer command when an older ID is selected.
 - `close_terminals` closes managed terminals when appropriate.
+
+Command history and output retention are bounded, not permanent storage. Earlier command IDs remain readable while their records are retained in an open terminal; closing or reclaiming a terminal retains only its latest command. Read final output before closing and use a returned `output_file` when available. Native/sandbox signal deaths include `signal` and a nonzero `exit_code` (128 + signal when the PTY supplied zero or no exit code), so an aborted process cannot look successful. Carriage returns move the output cursor without erasing text that has not been overwritten.
 
 Command route, network access, shell persistence, and approval behavior depend on policy. Native Agent commands are dispatched through verified private command artifacts so complex approved shell text is not retyped through the interactive line editor. Bare SSH sessions remain blocked, while a command supplied after the SSH host is treated as one-shot/non-interactive. Safe `git init` chains targeting the workspace root receive protected-metadata native-retry guidance before launch. Use the structured recovery guidance returned by a failed command instead of guessing at retries.
 

@@ -10,6 +10,7 @@ import {
   discoveryMatchesDesiredConfig,
   fetchHelperHealth,
   resolveHealthyDiscoveredHelper,
+  shouldAttachToCompatibleHelper,
 } from "./bootstrapHelper.js";
 import {
   clearBrowserGatewayHelperDiscovery,
@@ -34,6 +35,34 @@ describe("browser gateway helper bootstrap", () => {
   ])("orders helper release %s against %s", (left, right, expected) => {
     expect(compareHelperReleaseVersions(left, right)).toBe(expected);
   });
+
+  it.each([
+    ["1.22.8", "1.22.9", 0, undefined, false],
+    ["1.22.8", "1.22.9", 1, [], true],
+    ["1.22.8", "1.22.9", 0, ["browser_stream"], true],
+    ["1.22.8", "1.22.9", 0, [], false],
+    ["1.22.9", "1.22.9", 0, [], true],
+    ["1.23.0", "1.22.9", 0, [], true],
+    ["development", "1.22.9", 0, [], true],
+  ])(
+    "attach decision running=%s requested=%s leases=%s liveness=%j: %s",
+    (
+      runningVersion,
+      requestedVersion,
+      activeClientLeases,
+      activeLivenessReasons,
+      expected,
+    ) => {
+      expect(
+        shouldAttachToCompatibleHelper({
+          runningVersion,
+          requestedVersion,
+          activeClientLeases,
+          activeLivenessReasons,
+        }),
+      ).toBe(expected);
+    },
+  );
 
   it("accepts LAN helpers that fell back to direct IP URLs when mDNS is unavailable", () => {
     expect(
@@ -337,7 +366,65 @@ describe("browser gateway helper bootstrap", () => {
 
     expect(result).toEqual({ source: "existing", discovery });
     expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("preserving newer helper"),
+      expect.stringContaining("attaching to compatible helper"),
+    );
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("attaches without replacing a compatible helper when LAN preferences differ", async () => {
+    const server = http.createServer((req, res) => {
+      if (req.url === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            status: "ok",
+            protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
+            helperVersion: "1.22.9",
+            startedAt: new Date().toISOString(),
+            now: new Date().toISOString(),
+            uptimeMs: 123,
+            activeClientLeases: 1,
+          }),
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const discovery = {
+      pid: process.pid,
+      port,
+      url: `http://127.0.0.1:${port}`,
+      protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
+      startedAt: new Date().toISOString(),
+      lastHeartbeatAt: new Date().toISOString(),
+      helperVersion: "1.22.9",
+      browserBootstrapToken: "token",
+      clientSharedSecret: "secret",
+      lanAccess: true,
+      mdnsHostName: "agentlink",
+      mdnsUrl: `http://agentlink.local:${port}`,
+    };
+    await writeBrowserGatewayHelperDiscovery(discovery);
+    const log = vi.fn();
+
+    const result = await bootstrapBrowserGatewayHelper({
+      extensionRootPath: process.cwd(),
+      browserGatewayPort: port,
+      helperVersion: "1.22.9",
+      lanAccess: false,
+      log,
+    });
+
+    expect(result).toEqual({ source: "existing", discovery });
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("attaching to compatible helper"),
     );
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });

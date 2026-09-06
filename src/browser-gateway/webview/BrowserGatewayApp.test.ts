@@ -1452,6 +1452,50 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     ).toBe("off");
   });
 
+  it("synchronizes notification preferences changed by another mounted gateway document", async () => {
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        browserShell: true,
+      }),
+    );
+    await screen.findByRole("heading", { name: "What can I help you with?" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open browser settings" }),
+    );
+    window.localStorage.setItem(
+      "agentlink.browserGateway.notifications.v1",
+      "all",
+    );
+    fireEvent(window, new Event("storage"));
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole("combobox", {
+            name: "Browser notification preference",
+          }) as HTMLSelectElement
+        ).value,
+      ).toBe("all"),
+    );
+    window.localStorage.setItem(
+      "agentlink.browserGateway.notifications.v1",
+      "off",
+    );
+    fireEvent(window, new Event("storage"));
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole("combobox", {
+            name: "Browser notification preference",
+          }) as HTMLSelectElement
+        ).value,
+      ).toBe("off"),
+    );
+  });
+
   it("offers notification settings on insecure first visits without requesting permission", async () => {
     Object.defineProperty(window, "isSecureContext", {
       configurable: true,
@@ -3669,6 +3713,189 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
   });
 
+  it("shares the desktop-style shell in browsers without exposing native Work mode", async () => {
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        browserShell: true,
+      }),
+    );
+    await screen.findByRole("heading", { name: "What can I help you with?" });
+    expect(document.querySelector(".browser-shell-web")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Open browser settings" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Work", exact: true }),
+    ).toBeNull();
+    const chat = document.querySelector(".browser-main");
+    fireEvent.click(
+      screen.getByRole("button", { name: "VS Code", exact: true }),
+    );
+    const frame = screen.getByTitle("VS Code workspaces");
+    expect(frame.getAttribute("src")).toBe("/?browserWorkspace=1");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Ask AgentLink", exact: true }),
+    );
+    expect(screen.getByTitle("VS Code workspaces")).toBe(frame);
+    expect(frame.hasAttribute("hidden")).toBe(true);
+    expect(document.querySelector(".browser-main")).toBe(chat);
+  });
+
+  it("collapses browser navigation after selecting a view on narrow screens", async () => {
+    const width = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 390,
+    });
+    try {
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "test-token",
+          currentInstanceId: "instance-1",
+          workspaceName: "Workspace",
+          routeByInstance: true,
+          browserShell: true,
+        }),
+      );
+      await screen.findByRole("heading", { name: "What can I help you with?" });
+      fireEvent.click(screen.getByRole("button", { name: "Show sidebar" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "VS Code", exact: true }),
+      );
+      expect(screen.getByRole("button", { name: "Show sidebar" })).toBeTruthy();
+      expect(
+        screen.getByTitle("VS Code workspaces").hasAttribute("hidden"),
+      ).toBe(false);
+    } finally {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: width,
+      });
+    }
+  });
+
+  it("shows only workspace tabs in the embedded desktop remote presentation", async () => {
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        workspaceOnly: true,
+      }),
+    );
+    await screen.findByRole("tab", { name: /Workspace/ });
+    expect(screen.queryByRole("tab", { name: /Ask Agent/ })).toBeNull();
+    expect(document.querySelector(".browser-header")).toBeNull();
+    expect(document.querySelector(".browser-shell-desktop")).toBeNull();
+  });
+
+  it("switches desktop modes without unmounting the Ask Agent composer", async () => {
+    const setRemoteLayout = vi.fn();
+    window.agentlinkDesktopShell = {
+      setRemoteLayout,
+      retryRemote: vi.fn(),
+      onRemoteState: () => () => {},
+    };
+    const originalObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as typeof ResizeObserver;
+    try {
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "test-token",
+          currentInstanceId: "instance-1",
+          workspaceName: "Workspace",
+          routeByInstance: true,
+          askAgentOnly: true,
+        }),
+      );
+      await screen.findByRole("heading", { name: "What can I help you with?" });
+      const composer = document.querySelector(".browser-main");
+      fireEvent.click(
+        screen.getByRole("button", { name: "VS Code", exact: true }),
+      );
+      await screen.findByRole("heading", { name: "Your VS Code workspaces" });
+      expect(setRemoteLayout).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: "vscode" }),
+      );
+      expect(document.querySelector(".browser-main")).toBe(composer);
+      fireEvent.click(
+        screen.getByRole("button", { name: "Ask AgentLink", exact: true }),
+      );
+      expect(document.querySelector(".browser-main")).toBe(composer);
+      expect((composer as HTMLElement).style.display).not.toBe("none");
+    } finally {
+      cleanup();
+      delete window.agentlinkDesktopShell;
+      globalThis.ResizeObserver = originalObserver;
+    }
+  });
+
+  it("hides VS Code instance tabs on the desktop Ask Agent surface", async () => {
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        askAgentOnly: true,
+      }),
+    );
+
+    await screen.findByRole("heading", { name: "What can I help you with?" });
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByRole("tab", { name: /Workspace/ })).toBeNull();
+    expect(screen.queryByRole("tab", { name: /Worker/ })).toBeNull();
+    expect(screen.getByRole("region", { name: "Ask Agent" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Open browser settings" }),
+    ).toBeNull();
+    expect(
+      screen.queryByText("Stay informed while AgentLink works"),
+    ).toBeNull();
+  });
+
+  it("omits the duplicate streaming status row on desktop but keeps approvals", async () => {
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        askAgentOnly: true,
+      }),
+    );
+    await screen.findByRole("heading", { name: "What can I help you with?" });
+    const response = createAskAgentSessionResponse();
+    response.snapshot.session.foreground.streaming = true;
+    response.snapshot.session.foreground.status = "streaming";
+    response.snapshot.session.foreground.statusOverride = "Preparing response";
+    response.snapshot.ui.approval = {
+      kind: "mcp",
+      id: "desktop-oauth",
+      mcpServerName: "linear",
+      mcpToolName: "OAuth authorization",
+      mcpChoices: [
+        { label: "Open browser", value: "allow-once", isPrimary: true },
+        { label: "Deny", value: "deny", isDanger: true },
+      ],
+    };
+    await act(async () => {
+      MockEventSource.instances.at(-1)?.emit("snapshot", response.snapshot);
+    });
+    await screen.findByRole("button", { name: "Open browser" });
+    expect(document.querySelector(".browser-streaming-row")).toBeNull();
+  });
+
   it("keeps the current instance selected instead of jumping to an active one", async () => {
     render(
       h(BrowserGatewayApp, {
@@ -3822,6 +4049,139 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       ),
     ).toBe(false);
   });
+
+  it.each([false, true])(
+    "creates a tab from its workspace group (workspace-only surface: %s)",
+    async (workspaceOnly) => {
+      const owner = createGroupedSnapshot();
+      const workspace = owner.session.chatWorkspace!;
+      const newTab = {
+        ...workspace.tabs[0],
+        tabId: "tab-3",
+        sessionId: "session-3",
+        displayNumber: 3,
+        label: "T3",
+        title: "New remote chat",
+      };
+      const created = {
+        ...owner,
+        session: {
+          ...owner.session,
+          chatWorkspace: { ...workspace, tabs: [...workspace.tabs, newTab] },
+        },
+      };
+      let current = owner;
+      const fetchMock = vi.fn(
+        async (input: RequestInfo | URL, _init?: RequestInit) => {
+          const url = String(input);
+          if (url.includes("/api/instances"))
+            return jsonResponse({
+              currentInstanceId: "instance-1",
+              instances: [
+                {
+                  instanceId: "instance-1",
+                  workspaceName: "Workspace",
+                  workspacePath: "/workspace",
+                  url: "http://127.0.0.1:3333",
+                  status: { kind: "idle", label: "Idle" },
+                },
+              ],
+            });
+          if (url.includes("/api/ask-agent/session"))
+            return jsonResponse(createAskAgentSessionResponse());
+          if (url.includes("/api/ui-state")) return jsonResponse(current);
+          if (url.includes("/api/tabs/new")) {
+            current = created;
+            return jsonResponse({
+              ok: true,
+              tabId: "tab-3",
+              sessionId: "session-3",
+              controllerEpoch: "controller-1",
+              snapshot: created,
+            });
+          }
+          if (url.includes("/api/session-detail"))
+            return jsonResponse({
+              selection: {
+                controllerEpoch: "controller-1",
+                tabId: "tab-3",
+                sessionId: "session-3",
+              },
+              session: {
+                ...owner.session.foreground,
+                sessionId: "session-3",
+                title: "New remote chat",
+                projectedMessages: [],
+              },
+              ui: {
+                approval: null,
+                question: null,
+                questionProgress: null,
+                formElicitation: null,
+                urlElicitation: null,
+              },
+              revertRecoveryState: null,
+            });
+          if (url.includes("/api/models")) return jsonResponse({ models: [] });
+          if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+          if (url.includes("/api/slash-commands"))
+            return jsonResponse({ commands: [] });
+          if (url.includes("/api/sessions"))
+            return jsonResponse({ sessions: [] });
+          return jsonResponse({ ok: true });
+        },
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "test-token",
+          currentInstanceId: "instance-1",
+          workspaceName: "Workspace",
+          routeByInstance: true,
+          workspaceOnly,
+        }),
+      );
+
+      const add = await screen.findByRole("button", {
+        name: "New tab in Workspace",
+      });
+      expect(add.previousElementSibling?.textContent).toContain(
+        "Detached chat",
+      );
+      fireEvent.click(add);
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("tab", { name: /T3.*New remote chat/ })
+            .getAttribute("aria-selected"),
+        ).toBe("true"),
+      );
+      const request = fetchMock.mock.calls.find(([input]) =>
+        String(input).includes("/api/tabs/new"),
+      );
+      expect(String(request?.[0])).toBe("/api/tabs/new?instanceId=instance-1");
+      expect(request?.[1]).toMatchObject({
+        method: "POST",
+        headers: { Authorization: "Bearer test-token" },
+      });
+      expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+        selection: {
+          controllerEpoch: "controller-1",
+          tabId: "tab-1",
+          sessionId: "session-1",
+        },
+      });
+      expect(workspace.focusedTabId).toBe("tab-1");
+      expect(
+        screen.getByRole("tab", { name: /T1.*Foreground chat/ }),
+      ).toBeTruthy();
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          /\/api\/session\/(load|new)/.test(String(input)),
+        ),
+      ).toBe(false);
+    },
+  );
 
   it("restores the selected workspace and logical tab after remount", async () => {
     const groupedSnapshot = createGroupedSnapshot();
@@ -5018,7 +5378,24 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(screen.queryByText(/Ask Agent session is ready/)).toBeNull();
     await waitFor(() => {
       expect(screen.queryByText("Loading Ask Agent session…")).toBeNull();
-      expect(screen.getByText("Ask anything to get started")).toBeTruthy();
+      expect(screen.getByText("What can I help you with?")).toBeTruthy();
+    });
+    const starter = screen.getByRole("button", { name: "Explore an idea" });
+    expect(starter).toBeTruthy();
+    fireEvent.click(starter);
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input, init]) => {
+          if (String(input) !== "/api/ask-agent/send") return false;
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            text?: string;
+          };
+          return (
+            body.text ===
+            "Help me think through an idea and turn it into a clear plan."
+          );
+        }),
+      ).toBe(true);
     });
     expect(screen.getByTestId("mock-input-area")).toBeTruthy();
     await waitFor(() => {
@@ -6421,6 +6798,50 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     ).toBeTruthy();
     expect(screen.queryByText("Ask Agent session is ready")).toBeNull();
     expect(screen.queryByText("Model list may be stale")).toBeNull();
+  });
+
+  it("keeps fallback model-catalog details out of the desktop surface", async () => {
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const pathname = String(input).split("?")[0];
+      if (pathname === "/api/instances") {
+        return jsonResponse({ currentInstanceId: "", instances: [] });
+      }
+      if (pathname === "/api/ask-agent/session") {
+        return jsonResponse(createAskAgentSessionResponse());
+      }
+      if (pathname === "/api/ask-agent/models") {
+        return jsonResponse({
+          models: [],
+          source: "fallback",
+          modelCount: 0,
+        });
+      }
+      if (pathname === "/api/ask-agent/sessions") {
+        return jsonResponse({ sessions: [] });
+      }
+      if (pathname === "/api/ask-agent/slash-commands") {
+        return jsonResponse({ commands: [] });
+      }
+      if (pathname === "/api/ask-agent/log") {
+        return jsonResponse({ ok: true });
+      }
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        askAgentOnly: true,
+      }),
+    );
+
+    await screen.findByRole("heading", { name: "What can I help you with?" });
+    expect(screen.queryByText("Model list may be stale")).toBeNull();
+    expect(screen.queryByText(/VS Code AgentLink window/)).toBeNull();
   });
 
   it("surfaces fallback Ask Agent model catalogs after credentials are ready", async () => {

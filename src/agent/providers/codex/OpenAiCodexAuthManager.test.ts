@@ -283,6 +283,77 @@ describe("OpenAiCodexAuthManager", () => {
     });
   });
 
+  it("adapts core credential requests to the VS Code OAuth account store", async () => {
+    oauthManager.getActiveAccount.mockResolvedValue({
+      id: "oauth-1",
+      label: "acct@example.com",
+      email: "acct@example.com",
+      chatgptAccountId: "acct-456",
+      isActive: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    oauthManager.getAccessTokenByAccountId.mockResolvedValue("oauth-token");
+    oauthManager.getAccountById.mockResolvedValue({
+      id: "oauth-1",
+      label: "acct@example.com",
+      email: "acct@example.com",
+      chatgptAccountId: "acct-456",
+      isActive: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    oauthManager.forceRefreshAccessTokenByAccountId.mockResolvedValue(
+      "refreshed-token",
+    );
+    oauthManager.getRoundRobinAccountIds.mockResolvedValue(["oauth-2"]);
+
+    const provider = manager.createCredentialProvider<{
+      principalId: string;
+      turnId: string;
+    }>();
+    const request = {
+      context: { principalId: "tenant-a:user-1", turnId: "turn-1" },
+      modelId: "gpt-5.6-sol",
+      purpose: "stream" as const,
+    };
+    const auth = await provider.resolveAuth(request);
+    await provider.refreshAuth?.({
+      ...request,
+      previousAuth: auth!,
+    });
+    await provider.oauthAccounts?.markUsageLimit({
+      ...request,
+      accountId: "oauth-1",
+    });
+    await provider.oauthAccounts?.listFallbackAccountIds({
+      ...request,
+      accountId: "oauth-1",
+    });
+    await provider.oauthAccounts?.resolveAccount({
+      ...request,
+      accountId: "oauth-1",
+    });
+    await provider.oauthAccounts?.activateAccount({
+      ...request,
+      accountId: "oauth-1",
+    });
+
+    expect(
+      oauthManager.forceRefreshAccessTokenByAccountId,
+    ).toHaveBeenCalledWith("oauth-1");
+    expect(oauthManager.markUsageLimit).toHaveBeenCalledWith("oauth-1");
+    expect(oauthManager.getRoundRobinAccountIds).toHaveBeenCalledWith(
+      "oauth-1",
+    );
+    expect(oauthManager.getAccessTokenByAccountId).toHaveBeenCalledWith(
+      "oauth-1",
+    );
+    expect(oauthManager.setActiveAccount).toHaveBeenCalledWith("oauth-1", {
+      notify: true,
+    });
+  });
+
   it("delegates saveOAuthCredentials to oauth manager", async () => {
     const creds: CodexCredentials = {
       accessToken: "tok",

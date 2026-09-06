@@ -153,6 +153,8 @@ export type AgentEvent =
       /** Non-fatal validator/retry warnings for this condense run */
       validationWarnings?: string[];
       metadata?: CondenseMetadata;
+      composeFoldedReadCount?: number;
+      composeFoldedContextTokens?: number;
     }
   | {
       type: "condense_error";
@@ -185,6 +187,15 @@ export type AgentEvent =
       pinnedMemoryTokens: number;
       retrievedMemoryTokens: number;
       contextLedger?: import("@agentlink/protocol/context-ledger").ContextLedgerSnapshot;
+      /** Exact retained Compose/direct-composable occupancy for this provider attempt. */
+      compose?: {
+        schemaVersion: 1;
+        enabled: boolean;
+        advertised: boolean;
+        directComposableHistoryTokens: number;
+        composeHistoryTokens: number;
+        inlineDefinitionTokens: number;
+      };
       completedUsage?: {
         inputTokens: number;
         uncachedInputTokens: number;
@@ -308,6 +319,8 @@ export interface SessionInfo {
 
 export interface AgentConfig {
   model: string;
+  /** Startup-frozen foreground Compose rollout gate. */
+  composeEnabled?: boolean;
   maxTokens: number;
   thinkingBudget: number;
   showThinking: boolean;

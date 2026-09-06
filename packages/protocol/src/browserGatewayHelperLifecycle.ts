@@ -37,6 +37,10 @@ export interface BrowserGatewayHelperDiscoveryRecord {
   localCaCertificatePath?: string;
 }
 
+export type BrowserGatewayHelperLivenessReason =
+  | "browser_stream"
+  | "ask_agent_turn";
+
 export interface BrowserGatewayHelperHealthResponse {
   status: "ok";
   protocolVersion: number;
@@ -45,6 +49,7 @@ export interface BrowserGatewayHelperHealthResponse {
   now: string;
   uptimeMs: number;
   activeClientLeases: number;
+  activeLivenessReasons?: BrowserGatewayHelperLivenessReason[];
   helperGenerationId?: string;
   dataPlaneMode?: BrowserGatewayDataPlaneMode;
   dataPlaneFeatures?: BrowserGatewayDataPlaneFeature[];

@@ -786,6 +786,7 @@ describe("Codex translation", () => {
       model: "gpt-5.6-sol",
       remapped: true,
       body: {
+        prompt_cache_key: "cache-key",
         model: "gpt-5.6-sol",
         input: [],
         instructions: "system",

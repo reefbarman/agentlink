@@ -489,7 +489,7 @@ export function getEndpointCaps(auth: CodexResolvedAuthShape): ResponsesCaps {
     supportsPreviousResponseId: false,
     supportsPersistedReasoning: false,
     supportsProMode: false,
-    supportsPromptCacheKey: false,
+    supportsPromptCacheKey: true,
     supportsPromptCacheRetention: false,
     supportsMaxOutputTokens: false,
     supportsHostedWebSearch: true,

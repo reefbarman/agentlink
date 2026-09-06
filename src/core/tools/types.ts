@@ -165,6 +165,8 @@ export interface AgentToolExecutionContext {
     result: ToolResult;
     durationMs: number;
   }) => void;
+  /** Count-only session tracking for file reads performed through Compose. */
+  onComposeFileRead?: (filePath: string) => void;
   commandExecutionPolicy?: import("@agentlink/protocol/terminal-security").CommandExecutionPolicy;
   trackerCtx?: unknown;
   toolAbortSignal?: AbortSignal;

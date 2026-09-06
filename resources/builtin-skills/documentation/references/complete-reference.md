@@ -741,9 +741,9 @@ Response details:
 
 The tool rejects non-HTTP(S) URLs, applies domain policy before transport, and enforces the lower of `max_length` and the configured fetched-content limit locally on the Codex standalone path. A delegated fallback is instructed to open the exact URL and not search for alternatives except when following that URL's redirect is required.
 
-### compose (development builds only)
+### compose (default-on foreground tool)
 
-Run a bounded JavaScript function body that calls native read-only AgentLink tools and returns a reduced JSON-compatible result in one model-visible tool phase. Use it for dependent fan-out/filter/aggregate workflows where intermediate results should stay out of model context. Do not use it for exploratory work where each result changes the next step, pure shell pipelines, or small one-off calls.
+Run a bounded JavaScript function body that calls native read-only AgentLink tools and returns a reduced JSON-compatible result in one model-visible tool phase. Prefer it for a known workflow with roughly four or more related calls when the script can filter, project, join, count, or summarize before returning. Child results stay out of provider history. Use direct or ordinary parallel calls for one-offs, independent results needed in full, and exploratory work where each result changes the next step.
 
 | Parameter     | Type    | Description                                                                      |
 | ------------- | ------- | -------------------------------------------------------------------------------- |
@@ -753,32 +753,37 @@ Run a bounded JavaScript function body that calls native read-only AgentLink too
 The isolated QuickJS-WASM context exposes three synchronous guest helpers backed by the async host bridge:
 
 ```js
-const refs = tool("get_references", {
-  path: "src/api.ts",
-  line: 20,
-  column: 10,
-});
-const hovers = toolAll(
-  refs.references.slice(0, 16).map((ref) => ({
-    name: "get_hover",
-    input: { path: ref.path, line: ref.line, column: ref.column },
+const files = tool("list_files", {
+  path: "src",
+  pattern: "*.ts",
+}).entries;
+const packs = toolAllSettled(
+  files.slice(0, 8).map((path) => ({
+    name: "get_context",
+    input: { path, limit: 80 },
   })),
 );
-return hovers.filter((hover) => hover.contents?.length);
+return packs.map((result, index) =>
+  result.status === "fulfilled"
+    ? { path: files[index], errors: result.value.diagnostics?.errors ?? 0 }
+    : { path: files[index], error: result.reason },
+);
 ```
 
 - `tool(name, input)` returns the child tool's canonical structured `data` value or throws a structured script error.
-- `toolAll([{ name, input }, ...])` is fail-fast. It performs one host-side batch with concurrency 4 and preserves descriptor order. Guest `Promise.all` over `tool()` calls is not supported.
+- `toolAll([{ name, input }, ...])` is fail-fast: one child error fails the batch and cancels remaining reads. Reserve it for work where every result is required; prefer `toolAllSettled` for independent reads, especially when files may be missing. It performs one host-side batch with concurrency 4 and preserves descriptor order. Guest `Promise.all` over `tool()` calls is not supported.
 - `toolAllSettled([{ name, input }, ...])` uses the same limits, concurrency, and ordering, returning `{ status: "fulfilled", value }` or `{ status: "rejected", reason: { code, message } }` for recoverable child handler and per-child-size failures. Authorization, mode, deferred-catalog/input, interaction/path policy, cancellation, budget, malformed canonical data, cumulative bridge overflow, memory, and internal failures remain fatal to the whole script.
-- The compose tool description names the exact composable child set generated from canonical capability metadata and the advertised tool union. `list_files` is composable only without `query`; `search_files` is composable only when `semantic` is omitted or false.
+- Return selected fields and preserve per-child errors rather than returning raw batches. Child shapes differ: `search_files.results` is formatted text, not an array. Final return values omit undefined object properties and serialize undefined array entries as `null`, like JSON; a top-level undefined return and other unsupported values still fail, with a property/index path in the error. Tool inputs and canonical child data remain strictly validated.
+- Script policy checks parsed JavaScript syntax, so comments, string literals, regexes, and template text containing words such as `async function` are accepted as data. Actual async functions, generators, and constructor access remain prohibited, including executable template interpolations.
+- The compose tool description names the exact composable child set and variant constraints generated from the canonical composability policy and current advertised tool union. `read_file` supports text and extracted PDF only, with `query` omitted; image/document output is rejected before bridging. `list_files` is composable only without `query`; `search_files` only when `semantic` is omitted or false.
 - Each child must be authorized by the frozen provider request that invoked `compose`: either its canonical name was inline, or `call_native_tool` was inline and the exact child appears in that request's immutable deferred native catalog. The current mode, profile, skill allowlist, and path policy can only narrow this authority. Nested compose, MCP, shell, background/fleet, writes, media, transcript recall, editor UI, semantic variants, and interactive controls are rejected.
 - Outside-workspace child paths are limited to AgentLink temporary artifacts and paths already trusted before composition. Compose never opens approval, question, diff, mode, or editor UI.
-- Limits: 64 child calls, 16 descriptors per batch helper, concurrency 4, 32 MiB QuickJS memory, 60 seconds, 1 MiB bridged data per child/envelope, 8 MiB cumulative bridged data, 40 KiB final serialized return, and a bounded UI-only child trace.
+- Limits: four active QuickJS runtimes per extension host, eight FIFO admission waiters, a five-second admission wait, 64 child calls, 16 descriptors per batch helper, child concurrency 4, 32 MiB QuickJS memory, 60 seconds, 1 MiB bridged data per child/envelope, 8 MiB cumulative bridged data, 40 KiB final serialized return, and a bounded UI-only child trace. Admission overflow or expiry returns `compose_runtime_busy` without dispatching a child.
 - The 40 KiB ceiling applies only to the final serialized value returned to the model, not to child data processed inside the sandbox. It bounds model-context, transcript, persistence, and UI costs and prevents fan-out scripts from returning their full intermediate dataset instead of a reduced answer.
-- An oversized final value remains a bounded serialization error with actual/limit byte counts, an 8 KiB UTF-8-safe preview, bounded child statuses, and bridge metrics. When secure retention succeeds, recovery also includes an ephemeral private `output_file`, `output_format: "chunked-json-v1"`, exact byte/hash metadata, record size, and chunk count. Page the JSONL file with `read_file`, parse records in index order, and concatenate each `data` field to reconstruct the exact serialized JSON. Missing, failed, cancelled, timed-out, or quota-rejected retention falls back to preview-only recovery without a dangling path.
-- Failures return `isError: true` with a canonical error kind such as `validation`, `policy`, `budget_exhausted`, `child_failed`, `serialization`, `memory_limit`, `timeout`, `aborted`, `script_error`, or `internal`. The parent trace includes terminal child and batch counters and remains visible after session restore in both VS Code and mirrored browser sessions.
+- An oversized final value completes successfully with `status: "completed"` and `outputSpilled: true` only when secure exact-result retention succeeds and its byte/hash receipt matches. The bounded `recovery` envelope includes actual/limit byte counts, a UTF-8-safe preview of at most 8 KiB, child statuses, an ephemeral private `output_file`, `output_format: "chunked-json-v1"`, exact byte/hash metadata, record size, and chunk count. The whole visible envelope, including escaped preview and metadata, stays within 40 KiB. Do not rerun completed work for overflow: page only needed JSONL records with `read_file`; parse records in index order and concatenate each `data` field to reconstruct the exact serialized JSON. Missing, failed, timed-out, quota-rejected, or mismatched retention remains a serialization error with preview-only recovery and no dangling path. User cancellation remains cancellation, including during retention. Telemetry counts completed output spills separately from errors; existing runtime byte limits remain unchanged, with no token-based limit added.
+- Failures return `isError: true` with a canonical error kind and stable `errorCode` covering size, malformed data, child handling, policy, budget, runtime admission, timeout, memory, abort, script, and internal failures. The parent trace includes terminal child and batch counters and remains visible after session restore in both VS Code and mirrored browser workspace sessions.
 
-`compose` is available only when the extension is built with `DEV_BUILD=true`. It is foreground-only and is not exposed to background profiles or standalone projectless browser Ask Agent.
+`compose` is enabled by default and inline, without `find_native_tools`, in workspace-backed foreground sessions whose mode and active skill permit read tools. Set the machine-scoped `agentlink.compose.enabled` setting to `false` to opt out; explicit opt-outs are preserved. Reload affected VS Code windows after changing the setting. Default-on availability does not imply that the efficiency evaluation has passed. Background agents, `/btw`, ACP, worktree setup, projectless VS Code, and projectless Browser Ask Agent remain unsupported. Set `AGENTLINK_DISABLE_COMPOSE=1` before startup to force-disable it for recovery; this overrides the setting.
 
 ### read_file
 
@@ -2047,7 +2052,7 @@ Browser notifications are off by default. On a secure browser gateway, AgentLink
 
 The Review pane is intentionally diff-only: it shows pending file changes from write tools in a read-only Monaco diff viewer and does not duplicate approval or question cards from the chat pane. Pending diffs are selected from a VS Code-like file-tab strip, and the editor uses captured VS Code CSS theme variables for tab/editor/diff chrome plus Monaco language tokenization for syntax highlighting. Exact custom theme token colors are best-effort today because the gateway receives CSS variables, not the full resolved VS Code TextMate token color rules.
 
-It is **not** a full browser IDE — diff editing/apply and terminal interaction intentionally stay in VS Code. The browser also does not create, close, reorder, dock, or pop out VS Code logical tabs; those layout and lifecycle controls remain in the owning VS Code window. The browser does not emulate the integrated terminal; command output is available from the `execute_command` tool-call result in the chat transcript. The gateway is designed for local/dev use; treat it as MVP-grade rather than final-hardened.
+It is **not** a full browser IDE — diff editing/apply and terminal interaction intentionally stay in VS Code. The browser and desktop app's VS Code view provide a **+** button at the end of each workspace's tab group to create and remotely select a new Code-mode chat in that window's default project without replacing existing chats or changing VS Code focus. The button is disabled for disconnected windows and while creation is pending. Closing, reordering, docking, and popping out VS Code logical tabs remain controls in the owning VS Code window. The browser does not emulate the integrated terminal; command output is available from the `execute_command` tool-call result in the chat transcript. The gateway is designed for local/dev use; treat it as MVP-grade rather than final-hardened.
 
 ## Multi-Window Support
 

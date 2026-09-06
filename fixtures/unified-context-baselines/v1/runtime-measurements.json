@@ -79,12 +79,7 @@
       "chars": 34082,
       "estimatedTokens": 8521,
       "sha256": "101ebdda0892eaaaa7990b0a5ade648bb995d808f5ec1b5d85de4eb607d76724",
-      "sectionLabels": [
-        "base",
-        "mode:code",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:code", "system info", "skills toc"]
     },
     {
       "mode": "code",
@@ -95,12 +90,7 @@
       "chars": 6867,
       "estimatedTokens": 1717,
       "sha256": "c5149ba0ce1a8ef2cfe12f229a2faa87bdb29e13021330c4b0a9771d14ea02a8",
-      "sectionLabels": [
-        "base",
-        "mode:code",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:code", "system info", "skills toc"]
     },
     {
       "mode": "code",
@@ -111,12 +101,7 @@
       "chars": 34074,
       "estimatedTokens": 8519,
       "sha256": "8ca00d66a09c58fa70cc848c85528a4f0e0dc4ef144b098b985b6fc0fb670e79",
-      "sectionLabels": [
-        "base",
-        "mode:code",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:code", "system info", "skills toc"]
     },
     {
       "mode": "code",
@@ -127,12 +112,7 @@
       "chars": 6859,
       "estimatedTokens": 1715,
       "sha256": "ebbff24868f9fb15a4323482997513732f52ed845d7d6d40a9487871c7ccbaf3",
-      "sectionLabels": [
-        "base",
-        "mode:code",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:code", "system info", "skills toc"]
     },
     {
       "mode": "architect",
@@ -211,12 +191,7 @@
       "chars": 30061,
       "estimatedTokens": 7516,
       "sha256": "a75178e7d80954a3f5afeae275d9f12954a75e46fd29278809721f26637fd893",
-      "sectionLabels": [
-        "base",
-        "mode:architect",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:architect", "system info", "skills toc"]
     },
     {
       "mode": "architect",
@@ -227,12 +202,7 @@
       "chars": 6910,
       "estimatedTokens": 1728,
       "sha256": "8296d9ef23f37f08986f88854301863d40572d6cc58366788ec0afad3e6bc985",
-      "sectionLabels": [
-        "base",
-        "mode:architect",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:architect", "system info", "skills toc"]
     },
     {
       "mode": "architect",
@@ -243,12 +213,7 @@
       "chars": 30053,
       "estimatedTokens": 7514,
       "sha256": "c82d9486d928bb9ba47a918bbe883cf0984bfde8a2377ff56867d0db1f25b85e",
-      "sectionLabels": [
-        "base",
-        "mode:architect",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:architect", "system info", "skills toc"]
     },
     {
       "mode": "architect",
@@ -259,12 +224,7 @@
       "chars": 6902,
       "estimatedTokens": 1726,
       "sha256": "606a192854d2236503a9755c4905ccc0fbd63f34c7a2a1ae16d60912e425beed",
-      "sectionLabels": [
-        "base",
-        "mode:architect",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:architect", "system info", "skills toc"]
     },
     {
       "mode": "ask",
@@ -343,12 +303,7 @@
       "chars": 23911,
       "estimatedTokens": 5978,
       "sha256": "fc6a5e40e41e15f28d0c11b6bc29eb9f8cbc1824fdf2118ba42c5e14f41aacab",
-      "sectionLabels": [
-        "base",
-        "mode:ask",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:ask", "system info", "skills toc"]
     },
     {
       "mode": "ask",
@@ -359,12 +314,7 @@
       "chars": 6652,
       "estimatedTokens": 1663,
       "sha256": "6d494ed53cc097b6d49feaccfbbe4404c6d0e1796f0735a84948df2de7ea10de",
-      "sectionLabels": [
-        "base",
-        "mode:ask",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:ask", "system info", "skills toc"]
     },
     {
       "mode": "ask",
@@ -375,12 +325,7 @@
       "chars": 23903,
       "estimatedTokens": 5976,
       "sha256": "b38b55f3fdd3d54af5f839918b1f97e2642fc2687c1a3029bd7cd8153b4381eb",
-      "sectionLabels": [
-        "base",
-        "mode:ask",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:ask", "system info", "skills toc"]
     },
     {
       "mode": "ask",
@@ -391,12 +336,7 @@
       "chars": 6644,
       "estimatedTokens": 1661,
       "sha256": "236472a45f7959d023fb6d0f7873f9accaf504351bd65f9f29ea72248ca21319",
-      "sectionLabels": [
-        "base",
-        "mode:ask",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:ask", "system info", "skills toc"]
     },
     {
       "mode": "debug",
@@ -475,12 +415,7 @@
       "chars": 25930,
       "estimatedTokens": 6483,
       "sha256": "dd204da657a077221ab64bdc562d68757468a518b3dd62c23b01da1acabb2dd9",
-      "sectionLabels": [
-        "base",
-        "mode:debug",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:debug", "system info", "skills toc"]
     },
     {
       "mode": "debug",
@@ -491,12 +426,7 @@
       "chars": 6656,
       "estimatedTokens": 1664,
       "sha256": "a8ca38f132296c268a147620bcc632275ba9174fed58c69cc1d6f6c5d1a5b4ca",
-      "sectionLabels": [
-        "base",
-        "mode:debug",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:debug", "system info", "skills toc"]
     },
     {
       "mode": "debug",
@@ -507,12 +437,7 @@
       "chars": 25922,
       "estimatedTokens": 6481,
       "sha256": "d9d4bbfd5ed0036b44ded320755ef96bdc7bcaffe014593c5dc05109b68f7342",
-      "sectionLabels": [
-        "base",
-        "mode:debug",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:debug", "system info", "skills toc"]
     },
     {
       "mode": "debug",
@@ -523,12 +448,7 @@
       "chars": 6648,
       "estimatedTokens": 1662,
       "sha256": "57c27315d7cd367119747067ec4cc5f198312dee097b0f08715b07e014ae0a28",
-      "sectionLabels": [
-        "base",
-        "mode:debug",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:debug", "system info", "skills toc"]
     },
     {
       "mode": "review",
@@ -607,12 +527,7 @@
       "chars": 24269,
       "estimatedTokens": 6068,
       "sha256": "839b660223bc22ebca74713a9eb843ada6eb6a50ecc740e1982b39c94866326e",
-      "sectionLabels": [
-        "base",
-        "mode:review",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:review", "system info", "skills toc"]
     },
     {
       "mode": "review",
@@ -623,12 +538,7 @@
       "chars": 6698,
       "estimatedTokens": 1675,
       "sha256": "0ab41a472c50feeefd6b684d5ca639904a2f9610c9961734e2aa841e2615d03c",
-      "sectionLabels": [
-        "base",
-        "mode:review",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:review", "system info", "skills toc"]
     },
     {
       "mode": "review",
@@ -639,12 +549,7 @@
       "chars": 24261,
       "estimatedTokens": 6066,
       "sha256": "ff247f47ce89b6509982504e79fee29e992ad7652823d23511fbc1f47417a6bd",
-      "sectionLabels": [
-        "base",
-        "mode:review",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:review", "system info", "skills toc"]
     },
     {
       "mode": "review",
@@ -655,106 +560,92 @@
       "chars": 6690,
       "estimatedTokens": 1673,
       "sha256": "3048bcb26954d82e1c72db70f1d44c58585498bdae0ba41d120d64d3db0a7d2e",
-      "sectionLabels": [
-        "base",
-        "mode:review",
-        "system info",
-        "skills toc"
-      ]
+      "sectionLabels": ["base", "mode:review", "system info", "skills toc"]
     }
   ],
   "toolsByMode": [
     {
       "mode": "code",
-      "toolCount": 63,
-      "chars": 85550,
-      "estimatedTokens": 21388,
-      "sha256": "145674e53ebae124847f922be6ca7ed2001d6e93037cc2720a690a13bb1fcdb1"
+      "toolCount": 62,
+      "chars": 84247,
+      "estimatedTokens": 21062,
+      "sha256": "b38fb91db433fa85ab89a85fe8068fceeae8a39e9de4ebc047043f6a1c58b9de"
     },
     {
       "mode": "architect",
-      "toolCount": 58,
-      "chars": 79347,
-      "estimatedTokens": 19837,
-      "sha256": "093f697194875e712d92c62fefa92c509f5a944076ad73fbd829eefa3d5e188e"
+      "toolCount": 57,
+      "chars": 78044,
+      "estimatedTokens": 19511,
+      "sha256": "266e6675a2aad6fd7f554acc5d8e630cdf120eccf057cde669baab02d0ea7e66"
     },
     {
       "mode": "ask",
-      "toolCount": 39,
-      "chars": 53608,
-      "estimatedTokens": 13402,
-      "sha256": "42eda37393b3bc10602ef11e54591956a319e09b9cd9eb5efce78e77f6462274"
+      "toolCount": 38,
+      "chars": 51959,
+      "estimatedTokens": 12990,
+      "sha256": "c232f7f76391715ac9ffb462e69881253713b1cbc8ff70abf33b957b822dff0b"
     },
     {
       "mode": "debug",
-      "toolCount": 57,
-      "chars": 74858,
-      "estimatedTokens": 18715,
-      "sha256": "8b3c5976941d2ff7d89b0e063c659056215aab2f4461974522940149408d98c5"
+      "toolCount": 56,
+      "chars": 73555,
+      "estimatedTokens": 18389,
+      "sha256": "a1da6f87c6185cf3d3e2a24920ea800bc6c3a458ce84a524b093fb149ad4b999"
     },
     {
       "mode": "review",
-      "toolCount": 50,
-      "chars": 70471,
-      "estimatedTokens": 17618,
-      "sha256": "88025af1c576f6b7f34e2516d29ef824221c09eaf31848d0595d2171259fa297"
+      "toolCount": 49,
+      "chars": 69168,
+      "estimatedTokens": 17292,
+      "sha256": "715e879027767d82bb55fb3d4fd291d40cd56430e0e74926b0688597402cecc0"
     }
   ],
   "projectedToolsByMode": [
     {
       "mode": "code",
       "toolCount": 38,
-      "deferredToolCount": 25,
-      "chars": 60693,
-      "estimatedTokens": 15174,
-      "sha256": "44f75929d8a76ae6972ab3e0047c591c544303cbec1cecee625cf5aac6a3401b"
+      "deferredToolCount": 24,
+      "chars": 61190,
+      "estimatedTokens": 15298,
+      "sha256": "c0968a5882a7b9e7589640038e842c415e5e1077f04a6020fa8957df5304ddfe"
     },
     {
       "mode": "architect",
       "toolCount": 37,
-      "deferredToolCount": 21,
-      "chars": 59491,
-      "estimatedTokens": 14873,
-      "sha256": "ffc2c20475400642bf261d906d9b8bc276c47db02b3bea605c8fd850a0fe78e0"
+      "deferredToolCount": 20,
+      "chars": 59988,
+      "estimatedTokens": 14997,
+      "sha256": "312756ebed7c958bb1eef4abf8fed6ffc72376eb456608e7b48c7129791b88ce"
     },
     {
       "mode": "ask",
       "toolCount": 28,
-      "deferredToolCount": 11,
-      "chars": 41785,
-      "estimatedTokens": 10447,
-      "sha256": "2601deadc816292dac8acebd5e69017aea31f7bddc04f37c39bdec9354b6e6eb"
+      "deferredToolCount": 10,
+      "chars": 41776,
+      "estimatedTokens": 10444,
+      "sha256": "414311a01715468b25f238fde6aa6332b2e4b37fb37aeb048d49766ec9198668"
     },
     {
       "mode": "debug",
       "toolCount": 35,
-      "deferredToolCount": 22,
-      "chars": 54461,
-      "estimatedTokens": 13616,
-      "sha256": "a2b9f14b6bbd530946c5b1ef7a021a3f94637e44246efa771eaa553a587215c6"
+      "deferredToolCount": 21,
+      "chars": 54958,
+      "estimatedTokens": 13740,
+      "sha256": "e17f07616b4cf0dd7ffad9265a07896ee1ccd347ad145d468af90f4e53c916f1"
     },
     {
       "mode": "review",
       "toolCount": 29,
-      "deferredToolCount": 21,
-      "chars": 52059,
-      "estimatedTokens": 13015,
-      "sha256": "92877a3a5e82aa36d20e1a157f117b08883dc143d71257f763887c6d2348b484"
+      "deferredToolCount": 20,
+      "chars": 52556,
+      "estimatedTokens": 13139,
+      "sha256": "622b4441e56c885dfff54138e50a65b6388407e06298f407227eb697bf00a781"
     }
   ],
   "profileMatrix": {
-    "profiles": [
-      "compatibility",
-      "reasoning"
-    ],
+    "profiles": ["compatibility", "reasoning"],
     "status": "measured",
-    "modes": [
-      "code",
-      "architect",
-      "ask",
-      "debug",
-      "review"
-    ],
+    "modes": ["code", "architect", "ask", "debug", "review"],
     "providerModels": [
       {
         "providerId": "anthropic",
@@ -793,6 +684,6 @@
       "definition": [],
       "dispatch": []
     },
-    "sha256": "a62ebdc3c6bd9c8a8ccd0419cdc845e52f7d2a7ec8e8c4f5a07f3bbcd1f9d2bd"
+    "sha256": "2d4a90093b03ec8ab0376065407b2af470b9b9d1674c68a1f829ea818a1397a9"
   }
 }

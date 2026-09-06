@@ -32,6 +32,10 @@ interface McpCardProps {
 export function McpCard({ request, submit, followUpRef }: McpCardProps) {
   const choices = request.mcpChoices ?? [];
   const isAgentTool = request.toolOrigin === "acp";
+  const isAuthorization = request.mcpToolName === "OAuth authorization";
+  const hasRuleChoices = choices.some((choice) =>
+    choice.value.startsWith("always-"),
+  );
   const titleMatch = request.command?.match(
     /Allow MCP tool "([^"]+)" from "([^"]+)"/,
   );
@@ -135,13 +139,20 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
       sourceProject={request.sourceProject}
       targetProject={request.targetProject}
       purpose={
-        isAgentTool
-          ? "Let an external agent use one of its tools"
-          : "Use an external MCP tool"
+        isAuthorization
+          ? `Connect ${serverName} to AgentLink`
+          : isAgentTool
+            ? "Let an external agent use one of its tools"
+            : "Use an external MCP tool"
       }
-      rulesContent={isAgentTool ? undefined : rulesJsx}
+      rulesContent={isAgentTool || !hasRuleChoices ? undefined : rulesJsx}
       rulesModified={rulesModified}
-      primaryLabel="Allow Once"
+      primaryLabel={
+        isAuthorization
+          ? (choices.find((choice) => choice.isPrimary)?.label ??
+            "Open browser")
+          : "Allow Once"
+      }
       primaryWithRulesLabel="Save Rule & Allow"
       onAccept={handleAllowOnce}
       onSaveAndAccept={handleSaveAndAllow}
@@ -150,7 +161,11 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
     >
       <div class="card-label">
         <span class="codicon codicon-server" />{" "}
-        {isAgentTool ? "External Agent Tool" : "MCP Tool"}
+        {isAuthorization
+          ? "Connect account"
+          : isAgentTool
+            ? "External Agent Tool"
+            : "MCP Tool"}
       </div>
       <pre class="command-box">{`${serverName} / ${toolName}`}</pre>
       {request.mcpDetail && (

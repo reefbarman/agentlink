@@ -182,6 +182,60 @@ afterEach(() => {
 });
 
 describe("HttpBrowserGatewayOwnerTransport", () => {
+  it("publishes a retained final checkpoint on heartbeat without another transcript event", async () => {
+    const publications: BrowserGatewayOwnerPublicationBatch[] = [];
+    let available = false;
+    let failedAttempts = 0;
+    const finalEvent = transcriptEvent(1, "completion");
+    const finalCheckpoint = checkpoint(1);
+    finalCheckpoint.transcript.messages.push(
+      (
+        finalEvent.payload as {
+          message: BrowserGatewayOwnerCheckpoint["transcript"]["messages"][number];
+        }
+      ).message,
+    );
+    const fetchImpl = vi.fn(async (input, init) => {
+      const pathname = new URL(String(input)).pathname;
+      if (pathname.endsWith("/register")) return registrationResponse();
+      if (pathname.endsWith("/commands")) return hangingStreamResponse();
+      if (pathname.endsWith("/heartbeat")) return Response.json({ ok: true });
+      if (pathname.endsWith("/publications")) {
+        if (!available) {
+          failedAttempts += 1;
+          return new Response("unavailable", { status: 503 });
+        }
+        publications.push(JSON.parse(String(init?.body)));
+        return publicationAck(String(init?.body));
+      }
+      throw new Error(`unexpected ${pathname}`);
+    }) as typeof fetch;
+    const ownerTransport = transport(fetchImpl, {
+      getCheckpoint: () => finalCheckpoint,
+    });
+    await ownerTransport.register();
+    ownerTransport.enqueue({ kind: "event", event: finalEvent });
+    await vi.waitFor(() => {
+      expect(failedAttempts).toBe(4);
+      expect(ownerTransport.getPublicationBacklog()).toEqual({
+        pendingBatches: 1,
+        queuedBytes: 0,
+      });
+    });
+    available = true;
+    await ownerTransport.heartbeat();
+    await vi.waitFor(() => expect(publications).toHaveLength(1));
+    expect(
+      publications[0]?.checkpoint?.transcript.messages[0]?.finalMarker?.status,
+    ).toBe("completed");
+    await vi.waitFor(() =>
+      expect(ownerTransport.getPublicationBacklog().pendingBatches).toBe(0),
+    );
+    await ownerTransport.heartbeat();
+    expect(publications).toHaveLength(1);
+    await expect(ownerTransport.close()).resolves.toBeUndefined();
+  });
+
   it("registers and binds subsequent traffic to the collision-assigned effective identity", async () => {
     const calls: Array<{ pathname: string; search: string; body?: string }> =
       [];

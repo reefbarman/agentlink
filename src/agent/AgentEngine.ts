@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "crypto";
+import { CodexTurnState } from "@agentlink/core/codex";
 import * as fs from "fs/promises";
 import * as path from "path";
 import type { AgentSession } from "./AgentSession.js";
@@ -25,6 +26,7 @@ import type {
 } from "../core/tools/types.js";
 import { ToolCallBudget } from "../core/tools/toolCallBudget.js";
 import { createNativeToolDisclosureSnapshot } from "../core/tools/nativeToolDisclosure.js";
+import { measureComposeRequestOccupancy } from "./composeEfficiency.js";
 import {
   buildContextLedger,
   DEFAULT_CONTEXT_SAFETY_BUFFER_RATIO,
@@ -1074,6 +1076,8 @@ export class AgentEngine {
       >;
       /** Exact cloned MCP catalog used to build the prepared disclosure/policy. */
       mcpToolDefinitions?: readonly ToolDefinition[];
+      /** Startup-frozen foreground Compose rollout gate. */
+      composeEnabled?: boolean;
       /** Immutable skill authority inherited from the spawning request. */
       inheritedSkillAuthority?: Readonly<SkillAuthoritySnapshot>;
       /** Immutable lifecycle hook runtime captured at the logical turn boundary. */
@@ -1123,6 +1127,7 @@ export class AgentEngine {
     // replace session._abortSignal via createAbortController(), causing session.isAborted
     // to return false in this (still-running) loop and allowing spurious API calls.
     const { signal } = ac;
+    let codexTurnState = new CodexTurnState();
 
     // Model selection updates are adopted between provider requests. An in-flight
     // stream completes under the provider/model pair that started it.
@@ -1187,6 +1192,7 @@ export class AgentEngine {
         if (session.modelSelectionRevision !== modelSelectionRevision) {
           activeModel = session.model;
           provider = this.registry.resolveProvider(activeModel);
+          codexTurnState = new CodexTurnState();
           modelSelectionRevision = session.modelSelectionRevision;
           requestRetryCount = 0;
           streamRetryCount = 0;
@@ -1262,6 +1268,7 @@ export class AgentEngine {
           skillAllowedTools: requestSkillAllowedTools,
           allMcpToolDefsForSkillAllowlist: connectedMcpToolDefs,
           backgroundExpectedResult: narrowedExpectedResult,
+          composeEnabled: opts?.composeEnabled === true,
         };
         // Sessions with a cache-stable system prompt also advertise a
         // mode-independent tool union, so switching modes never invalidates
@@ -1446,6 +1453,7 @@ export class AgentEngine {
               ...(interjection.documents ?? []),
               ...resolvedInterjection.documents,
             ];
+            codexTurnState = new CodexTurnState();
             session.addUserMessage(resolvedInterjection.text, {
               displayText: interjection.displayText,
               isSlashCommand: interjection.isSlashCommand === true,
@@ -1711,6 +1719,11 @@ export class AgentEngine {
             session.toolResultContextAttributions.map((item) => ({ ...item }));
           const omittedToolResultContextAttributions =
             session.omittedToolResultContextAttributions;
+          const composeRequestOccupancy = measureComposeRequestOccupancy(
+            apiMessages,
+            tools,
+            opts?.composeEnabled === true,
+          );
           const streamGen = provider.stream({
             model: activeModel,
             systemPrompt: requestSystemPrompt,
@@ -1724,6 +1737,9 @@ export class AgentEngine {
             reasoningMode: isCodex && session.codexProMode ? "pro" : "standard",
             cache: currentCache,
             state: currentState,
+            providerHints: isCodex
+              ? { codex: { sessionId: session.id, turnState: codexTurnState } }
+              : undefined,
             signal: requestController.signal,
             onProviderRequestAttempt: ({ model }) => {
               pendingRequestAttributionEvents.push({
@@ -1741,6 +1757,7 @@ export class AgentEngine {
                 pinnedMemoryTokens: 0,
                 retrievedMemoryTokens,
                 contextLedger,
+                compose: composeRequestOccupancy,
               });
             },
             onTransportActivity: transportMonitor.recordActivity,
@@ -2515,6 +2532,10 @@ export class AgentEngine {
           skillAllowedTools: requestSkillAllowedTools,
           skillAuthority: requestSkillAuthority,
           toolCallBudget,
+          composeEnabled:
+            opts?.composeEnabled === true &&
+            !opts?.isBackground &&
+            opts?.toolProfile === undefined,
           commandExecutionPolicy:
             session.agentMode.toolGroups.includes("read-only-command") ||
             opts?.toolProfile === "review" ||
@@ -2995,6 +3016,7 @@ export class AgentEngine {
               ...(interjection.documents ?? []),
               ...resolvedInterjection.documents,
             ];
+            codexTurnState = new CodexTurnState();
             session.addUserMessage(resolvedInterjection.text, {
               displayText: interjection.displayText,
               isSlashCommand: interjection.isSlashCommand === true,
@@ -3473,6 +3495,7 @@ export class AgentEngine {
           systemPrompt: session.systemPrompt,
           isAutomatic,
           filesRead: [...session.filesRead],
+          composeFilesRead: [...session.composeFilesRead],
           cwd: session.requireProjectRoot(),
           preservedContext,
           onProviderRequest: (request) => {
@@ -3621,6 +3644,8 @@ export class AgentEngine {
       validationWarnings: result.validationWarnings,
       metadata,
       durationMs: condenseDurationMs,
+      composeFoldedReadCount: result.composeFoldedReadCount ?? 0,
+      composeFoldedContextTokens: result.composeFoldedContextTokens ?? 0,
     };
     return true;
   }

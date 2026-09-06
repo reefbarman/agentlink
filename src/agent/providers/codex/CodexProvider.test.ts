@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CodexProvider } from "./CodexProvider.js";
+import { CodexTurnState } from "@agentlink/core/codex";
 
 const { createMock, openAiConstructorMock } = vi.hoisted(() => {
   const createMock = vi.fn();
@@ -600,7 +601,7 @@ describe("CodexProvider.complete", () => {
     });
   });
 
-  it("OAuth path omits cache/state params unsupported by ChatGPT backend", async () => {
+  it("OAuth sends cache keys but omits unsupported retention and response state", async () => {
     let requestBody: Record<string, unknown> | undefined;
     createMock.mockImplementationOnce(async (body: Record<string, unknown>) => {
       requestBody = body;
@@ -623,7 +624,7 @@ describe("CodexProvider.complete", () => {
       state: { previousResponseId: "resp_prev", store: true },
     });
 
-    expect(requestBody).not.toHaveProperty("prompt_cache_key");
+    expect(requestBody).toHaveProperty("prompt_cache_key", "codex:test:thread");
     expect(requestBody).not.toHaveProperty("prompt_cache_retention");
     expect(requestBody).not.toHaveProperty("previous_response_id");
     expect(requestBody).not.toHaveProperty("max_output_tokens");
@@ -795,6 +796,70 @@ describe("CodexProvider.complete", () => {
 });
 
 describe("CodexProvider.stream", () => {
+  it("forwards turn routing through the production provider and isolates new turns and accounts", async () => {
+    createMock.mockReset();
+    const authManager = makeAuthManager();
+    const provider = new CodexProvider(authManager as never);
+    let responseNumber = 0;
+    createMock.mockImplementation(() => ({
+      withResponse: async () => ({
+        data: (async function* () {
+          yield { type: "response.done", response: { usage: {} } };
+        })(),
+        response: {
+          headers: new Headers({
+            "x-codex-turn-state": `route-${++responseNumber}`,
+          }),
+        },
+      }),
+    }));
+    const turnState = new CodexTurnState();
+    const run = async (state: CodexTurnState, sessionId = "conversation-a") => {
+      for await (const _event of provider.stream({
+        model: "gpt-5.5",
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hello" }],
+        maxTokens: 128,
+        cache: { key: "stable-conversation-key", retention: "24h" },
+        providerHints: { codex: { sessionId, turnState: state } },
+      })) {
+        /* drain */
+      }
+    };
+    await run(turnState);
+    await run(turnState);
+    expect(createMock.mock.calls[0][1].headers).toEqual({
+      session_id: "conversation-a",
+    });
+    expect(createMock.mock.calls[1][1].headers).toEqual({
+      session_id: "conversation-a",
+      "x-codex-turn-state": "route-1",
+    });
+    expect(createMock.mock.calls[1][0].prompt_cache_key).toBe(
+      "stable-conversation-key",
+    );
+    expect(createMock.mock.calls[1][0]).not.toHaveProperty(
+      "prompt_cache_retention",
+    );
+    await run(new CodexTurnState());
+    expect(createMock.mock.calls[2][1].headers).not.toHaveProperty(
+      "x-codex-turn-state",
+    );
+    authManager.resolveModelAuth.mockResolvedValue({
+      method: "oauth",
+      bearerToken: "other-token",
+      accountId: "other-account",
+      canRefresh: true,
+    });
+    await run(turnState);
+    expect(createMock.mock.calls[3][1].headers).not.toHaveProperty(
+      "x-codex-turn-state",
+    );
+    await run(turnState, "conversation-b");
+    expect(createMock.mock.calls[4][1].headers).toEqual({
+      session_id: "conversation-b",
+    });
+  });
   beforeEach(() => {
     createMock.mockReset();
     openAiConstructorMock.mockClear();

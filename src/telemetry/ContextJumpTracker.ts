@@ -48,6 +48,7 @@ export interface RequestContextAttributionInfo {
   pinnedMemoryTokens?: number;
   retrievedMemoryTokens?: number;
   contextLedger?: import("@agentlink/protocol/context-ledger").ContextLedgerSnapshot;
+  compose?: import("./ContextUsageTelemetry.js").ComposeRequestContextMetrics;
 }
 
 export interface ContextJumpCondenseInfo {
@@ -55,6 +56,8 @@ export interface ContextJumpCondenseInfo {
   prevInputTokens: number;
   newInputTokens: number;
   durationMs?: number;
+  composeFoldedReadCount?: number;
+  composeFoldedContextTokens?: number;
 }
 
 interface SessionContextState {
@@ -126,6 +129,7 @@ export class ContextJumpTracker {
       pinnedMemoryTokens: info.pinnedMemoryTokens ?? 0,
       retrievedMemoryTokens: info.retrievedMemoryTokens ?? 0,
       ...(info.contextLedger ? { contextLedger: info.contextLedger } : {}),
+      ...(info.compose ? { compose: info.compose } : {}),
     });
   }
 
@@ -139,6 +143,8 @@ export class ContextJumpTracker {
       newInputTokens: info.newInputTokens,
       reclaimedTokens: Math.max(0, info.prevInputTokens - info.newInputTokens),
       durationMs: info.durationMs,
+      composeFoldedReadCount: info.composeFoldedReadCount,
+      composeFoldedContextTokens: info.composeFoldedContextTokens,
     });
     state.pendingCondenseEstimateTokens = info.newInputTokens;
     state.lastInputTokens = info.newInputTokens;

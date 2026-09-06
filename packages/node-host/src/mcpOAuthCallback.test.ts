@@ -56,6 +56,37 @@ describe("node host MCP OAuth callback adapter", () => {
     ).resolves.toEqual({ ok: false, reason: "consumed" });
   });
 
+  it("accepts equivalent loopback callback host aliases", async () => {
+    const pendingAuthorizations = new InMemoryMcpCredentialRepository();
+    await pendingAuthorizations.createPendingAuthorization({
+      authorization: {
+        schemaVersion: 1,
+        transactionId: "transaction-loopback",
+        principal,
+        serverId: "records",
+        redirectUri: "http://127.0.0.1:47138/mcp/callback",
+        state: "opaque-state",
+        codeVerifier: "opaque-verifier",
+        createdAt: 100,
+        expiresAt: 200,
+      },
+    });
+    const consume = createNodeHostMcpOAuthCallbackHandler({
+      pendingAuthorizations,
+    });
+
+    await expect(
+      consume({
+        principal,
+        serverId: "records",
+        transactionId: "transaction-loopback",
+        callbackUrl:
+          "http://localhost:47138/mcp/callback?state=opaque-state&code=authorization-code",
+        receivedAt: 150,
+      }),
+    ).resolves.toMatchObject({ ok: true, code: "authorization-code" });
+  });
+
   it("fails closed for cross-principal, state, redirect, and expiry mismatches", async () => {
     const crossPrincipal = await handler();
     await expect(

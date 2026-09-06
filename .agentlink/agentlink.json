@@ -53,6 +53,11 @@
       "pattern": "npm run test:core-sdk-consumer",
       "mode": "prefix",
       "decision": "allow"
+    },
+    {
+      "pattern": "npm exec -- oxfmt",
+      "mode": "prefix",
+      "decision": "allow"
     }
   ],
   "pathRules": [

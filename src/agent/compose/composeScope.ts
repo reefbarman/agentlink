@@ -358,6 +358,12 @@ export function createComposeExecutionScope(
             `Tool '${toolName}' did not return canonical structured data`,
           );
         }
+        if (
+          (toolName === "read_file" || toolName === "get_context") &&
+          typeof input.path === "string"
+        ) {
+          parentContext.onComposeFileRead?.(input.path);
+        }
         parentContext.onNestedToolComplete?.({
           toolCallId: childCallId,
           parentCallId: parentContext.toolCallId,

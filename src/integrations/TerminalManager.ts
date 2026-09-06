@@ -1674,6 +1674,7 @@ export class TerminalManager {
    * Returns undefined if the terminal is not found.
    */
   getCurrentOutput(request: TerminalOutputRequest): string | undefined {
+    if (request.commandId) return undefined;
     const managed = this.findOwnedTerminal(request.terminalId, request.owner);
     if (!managed) return undefined;
     if (
@@ -1702,6 +1703,7 @@ export class TerminalManager {
   getBackgroundState(
     request: TerminalTargetRequest,
   ): TerminalBackgroundState | undefined {
+    if (request.commandId) return undefined;
     const managed = this.findOwnedTerminal(request.terminalId, request.owner);
     if (managed) {
       return {
@@ -1745,6 +1747,7 @@ export class TerminalManager {
    * Returns true if the terminal was found and interrupted.
    */
   interruptTerminal(request: TerminalTargetRequest): boolean {
+    if (request.commandId) return false;
     const managed = this.findOwnedTerminal(request.terminalId, request.owner);
     if (!managed) return false;
     managed.terminal.sendText("\x03", false);

@@ -23,6 +23,12 @@ A configured credential does not prove the provider request will succeed. Check 
 
 For OpenAI-compatible setup, see [the complete reference](complete-reference.md#configure-openai-compatible-models).
 
+## My ChatGPT/Codex accounts disappeared after updating on macOS
+
+AgentLink now uses a shared macOS Keychain account pool for VS Code, AgentLink Desktop, and helper-owned Browser Ask Agent. Legacy OAuth credentials that existed only in VS Code SecretStorage are deliberately not imported or deleted. Sign in again from VS Code or **AgentLink Desktop > Manage Accounts**; subsequent account additions, active-account changes, sign-outs, refreshes, and usage-limit rotation are shared on that Mac.
+
+If Keychain is locked or unavailable, AgentLink fails closed and keeps the stored account data intact. Unlock Keychain and retry rather than repeatedly adding the account. macOS may ask once for each distinct AgentLink host executable (for example VS Code and AgentLink Desktop). AgentLink caches successful reads within each host and uses a non-secret local revision marker to notice account changes from another surface, so reopening account menus should not repeatedly access Keychain; continued prompts from the same host after choosing **Always Allow** indicate a Keychain access-control problem rather than a missing login.
+
 ## GPT-6 Astra is selected but the request fails
 
 AgentLink lists `gpt-6-astra` for ChatGPT/Codex OAuth and OpenAI API-key users without probing whether the current subscription account or API project has rollout access. If access is not enabled yet, AgentLink leaves Astra selected and shows the provider's normal error instead of silently changing models or credentials.

@@ -21,4 +21,48 @@ describe("getAgentTools production build", () => {
       expect(deferredNames).not.toContain(name);
     }
   });
+
+  it("exposes Compose inline only when the production foreground gate is enabled", () => {
+    const disabled = createNativeToolDisclosureSnapshot(getAgentTools());
+    const enabled = createNativeToolDisclosureSnapshot(
+      getAgentTools(
+        undefined,
+        undefined,
+        false,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        [],
+        true,
+      ),
+    );
+    const background = createNativeToolDisclosureSnapshot(
+      getAgentTools(
+        undefined,
+        undefined,
+        true,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        [],
+        true,
+      ),
+    );
+
+    expect(disabled.inlineTools.map((tool) => tool.name)).not.toContain(
+      "compose",
+    );
+    expect(disabled.deferredTools.map((tool) => tool.name)).not.toContain(
+      "compose",
+    );
+    expect(enabled.inlineTools.map((tool) => tool.name)).toContain("compose");
+    expect(enabled.deferredTools.map((tool) => tool.name)).not.toContain(
+      "compose",
+    );
+    expect(background.inlineTools.map((tool) => tool.name)).not.toContain(
+      "compose",
+    );
+  });
 });

@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
-  "version": "1.22.6",
+  "version": "1.22.22",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -295,6 +295,12 @@
     "configuration": {
       "title": "AgentLink",
       "properties": {
+        "agentlink.compose.enabled": {
+          "type": "boolean",
+          "scope": "machine",
+          "default": true,
+          "description": "Enable the default-on foreground Compose tool for bounded read-only fan-out and reduction in workspace sessions. Set false to opt out. Reload affected VS Code windows after changing this setting. Set AGENTLINK_DISABLE_COMPOSE=1 before startup to force-disable it for recovery."
+        },
         "agentlink.terminal.enabled": {
           "type": "boolean",
           "scope": "machine",
@@ -1093,7 +1099,7 @@
   },
   "scripts": {
     "build": "npm run build:workspaces && node scripts/generate-documentation-package-contract.mjs && node esbuild.mjs",
-    "build:workspaces": "tsc -b packages/* && npm run build:cjs --workspace packages/protocol && npm run build:cjs --workspace packages/core",
+    "build:workspaces": "tsc -b packages/* && npm run build:cjs --workspace packages/protocol && npm run build:cjs --workspace packages/core && npm run build --workspace apps/desktop",
     "watch": "npm run build:workspaces && node scripts/generate-documentation-package-contract.mjs && node scripts/watch-workspaces.mjs",
     "docs:generate": "node scripts/generate-documentation-package-contract.mjs",
     "docs:check": "node scripts/generate-documentation-package-contract.mjs --check",
@@ -1104,6 +1110,10 @@
     "audit:assistant-runtime": "node scripts/audit-assistant-runtime.mjs",
     "benchmark:codex-oauth-models": "node --experimental-strip-types scripts/benchmark-codex-oauth-models.mts",
     "benchmark:browser-gateway-bundle": "node esbuild.mjs --browser-gateway-report=benchmarks/browser-gateway-bundle-baseline.json",
+    "desktop:build": "npm run build",
+    "desktop:package": "npm run build && npm run package --workspace @agentlink/desktop --",
+    "desktop:start": "npm run build --workspace @agentlink/desktop && npm run start --workspace @agentlink/desktop",
+    "desktop": "npm run desktop:build && npm run start --workspace @agentlink/desktop",
     "telemetry:tools": "node scripts/report-tool-usage-telemetry.mjs",
     "telemetry:tools:csv": "node scripts/report-tool-usage-telemetry.mjs --csv",
     "telemetry:context": "node scripts/report-context-jumps.mjs",
@@ -1113,7 +1123,7 @@
     "fmt:check": "oxfmt --check",
     "lint": "bash -c 'e=0; npm run docs:check || e=1; oxfmt --check || e=1; npm run build:workspaces || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; npm run lint:workspaces || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
     "lint:workspaces": "npm run lint --workspaces --if-present",
-    "test": "npm run build:workspaces && vitest run && npm run test:workspaces && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-mcp-auth-telemetry.test.mjs scripts/report-session-outcomes.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/vendor-agentlink-sdk.test.mjs scripts/verify-retrieval-package.test.mjs scripts/workspace-bundle-closure.test.mjs",
+    "test": "npm run build:workspaces && vitest run && npm run test:workspaces && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-keychain-runtime.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-mcp-auth-telemetry.test.mjs scripts/report-session-outcomes.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/vendor-agentlink-sdk.test.mjs scripts/verify-desktop-package.test.mjs scripts/verify-retrieval-package.test.mjs scripts/workspace-bundle-closure.test.mjs",
     "test:workspaces": "npm run test --workspaces --if-present",
     "test:core-sdk-consumer": "npm run build:workspaces && node scripts/run-core-sdk-consumer-gate.mjs",
     "vendor:core-sdk": "npm run build:workspaces && node scripts/vendor-agentlink-sdk.mjs",
@@ -1152,7 +1162,7 @@
     "mermaid": "^11.16.0",
     "multicast-dns": "^7.2.5",
     "node-forge": "^1.4.0",
-    "openai": "^6.46.0",
+    "openai": "^7.10.0",
     "picomatch": "^4.0.5",
     "pngjs": "^7.0.0",
     "preact": "^10.29.7",
@@ -1175,6 +1185,7 @@
     "uuid": "^14.0.0"
   },
   "devDependencies": {
+    "@agentlink/desktop": "0.1.0",
     "@anthropic-ai/sandbox-runtime": "0.0.65",
     "@testing-library/preact": "^3.2.4",
     "@types/bmp-js": "^0.1.2",

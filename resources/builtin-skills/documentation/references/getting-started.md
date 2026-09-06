@@ -27,6 +27,16 @@ code --install-extension agentlink-*.vsix --force
 
 The installer supports `darwin`, `linux`, `alpine`, and `win32` targets on `arm64` and `x64`. See the [complete reference](complete-reference.md#installation) for source builds, platform details, and AgentLink Terminal requirements.
 
+### Standalone desktop preview
+
+AgentLink Desktop is a separate macOS application. Its **Ask AgentLink** view runs without VS Code or the extension and shares global `~/.agentlink` configuration and macOS Keychain accounts with other AgentLink surfaces when they are installed on the same Mac.
+
+Use the desktop sidebar to switch between **Ask AgentLink** and **VS Code**. VS Code connects to the running local AgentLink browser gateway and displays its existing workspace tabs, chats, and review panes without desktop restyling. Both views stay mounted when switching, preserving drafts and selected tabs. If no gateway is available, open VS Code with AgentLink and use **Reconnect**; restarting the gateway reloads the remote view. Desktop never starts or replaces the VS Code gateway and does not gain extra remote shell or file-writing permissions. External windows, downloads, and browser permission requests are blocked in the isolated view; complete MCP URL-opening requests in VS Code or the regular browser gateway. Older extension builds may still show their original browser header and Ask Agent tab until updated.
+
+The desktop chat uses AgentLink's interlocking-link logo in the title bar and welcome screen, a dark teal palette with subtle teal/violet accents, softly tinted welcome cards, a compact gradient-edged composer, and a collapsible chat sidebar. The theme is independent of your editor; interactive hover effects respect reduced-motion preferences. Use **Search chats** to filter saved conversations and **Manage chats** to rename or delete them. The sidebar opens by default in wider windows; toggle it beside the app title. The title-bar **More** menu contains **Memory**, **File access…** (local read permissions), and **Continue in VS Code**. **New chat** and **Manage chats** live in the sidebar; when it is collapsed, **New chat** appears in the title bar and **Manage chats** is available under **More**. Desktop shows streaming activity in the transcript rather than repeating it in a status bar above the composer. Questions and approval cards remain visible near the input, with desktop-matched styling. The browser gateway shares this styling and Ask Agent / VS Code sidebar navigation, with a collapsed sidebar on mobile. Workspace views retain their existing VS Code-style layout. Browser settings and notifications remain available; native Work mode is reserved for the desktop and is not available in the browser.
+
+Download the DMG or ZIP matching your architecture from a `desktop-v*` [GitHub release](https://github.com/reefbarman/agentlink/releases). Desktop artifacts have their own version and release workflow; they are never included in the VSIX. The current preview is unsigned and not notarized, so the first launch may require right-clicking **AgentLink**, choosing **Open**, and confirming macOS's warning.
+
 ## Start your first session
 
 1. Reload VS Code and open the folder you want to work in.

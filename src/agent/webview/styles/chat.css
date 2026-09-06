@@ -2704,6 +2704,23 @@ body.chat-activity-shelf-resizing * {
   gap: 2px;
 }
 
+.compose-trace-summary {
+  margin: 4px 0 8px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.compose-technical-details > summary {
+  cursor: pointer;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 6px;
+}
+
+.compose-result-error {
+  color: var(--vscode-errorForeground);
+  overflow-wrap: anywhere;
+  margin-bottom: 6px;
+}
+
 .compose-trace-description {
   margin-bottom: 6px;
   color: var(--vscode-descriptionForeground);
@@ -2717,20 +2734,28 @@ body.chat-activity-shelf-resizing * {
 
 .compose-trace-child {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-columns: 14px max-content minmax(0, 1fr) max-content;
   align-items: center;
   gap: 6px;
   min-width: 0;
   font-size: 11px;
 }
 
+.compose-trace-child > .codicon {
+  grid-column: 1;
+  grid-row: 1;
+}
+
 .compose-trace-child-name {
+  grid-column: 2;
+  grid-row: 1;
   color: var(--vscode-foreground);
   font-family: var(--vscode-editor-font-family);
 }
 
-.compose-trace-child-input,
-.compose-trace-child-error {
+.compose-trace-child-input {
+  grid-column: 3;
+  grid-row: 1;
   overflow: hidden;
   color: var(--vscode-descriptionForeground);
   text-overflow: ellipsis;
@@ -2738,10 +2763,18 @@ body.chat-activity-shelf-resizing * {
 }
 
 .compose-trace-child-error {
+  grid-column: 2 / -1;
+  overflow-wrap: anywhere;
   color: var(--vscode-errorForeground);
 }
 
+.compose-trace-child--cancelled .compose-trace-child-error {
+  color: var(--vscode-descriptionForeground);
+}
+
 .compose-trace-child-duration {
+  grid-column: 4;
+  grid-row: 1;
   color: var(--vscode-descriptionForeground);
   font-variant-numeric: tabular-nums;
 }

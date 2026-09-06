@@ -225,14 +225,14 @@ class ScopedTabTerminalProvider implements TerminalProvider {
   getBackgroundState(request: TerminalTargetRequest) {
     if (!this.authorizeRequest(request)) return undefined;
     return this.registry.baseProvider.getBackgroundState(
-      this.targetRequest(request.terminalId),
+      this.targetRequest(request),
     );
   }
 
   getCurrentOutput(request: TerminalTargetRequest & { force?: boolean }) {
     if (!this.authorizeRequest(request)) return undefined;
     return this.registry.baseProvider.getCurrentOutput?.({
-      ...this.targetRequest(request.terminalId),
+      ...this.targetRequest(request),
       ...(request.force === undefined ? {} : { force: request.force }),
     });
   }
@@ -240,23 +240,21 @@ class ScopedTabTerminalProvider implements TerminalProvider {
   getRetainedOutput(request: TerminalTargetRequest) {
     if (!this.authorizeRequest(request)) return undefined;
     return this.registry.baseProvider.getRetainedOutput?.(
-      this.targetRequest(request.terminalId),
+      this.targetRequest(request),
     );
   }
 
   detachRetainedOutput(request: TerminalTargetRequest) {
     if (!this.authorizeRequest(request)) return undefined;
     return this.registry.baseProvider.detachRetainedOutput?.(
-      this.targetRequest(request.terminalId),
+      this.targetRequest(request),
     );
   }
 
   interruptTerminal(request: TerminalTargetRequest): boolean {
     return (
       this.authorizeRequest(request) &&
-      this.registry.baseProvider.interruptTerminal(
-        this.targetRequest(request.terminalId),
-      )
+      this.registry.baseProvider.interruptTerminal(this.targetRequest(request))
     );
   }
 
@@ -264,7 +262,7 @@ class ScopedTabTerminalProvider implements TerminalProvider {
     return (
       this.authorizeRequest(request) &&
       (this.registry.baseProvider.detachTerminal?.(
-        this.targetRequest(request.terminalId),
+        this.targetRequest(request),
       ) ??
         false)
     );
@@ -274,7 +272,7 @@ class ScopedTabTerminalProvider implements TerminalProvider {
     return (
       this.authorizeRequest(request) &&
       (this.registry.baseProvider.revealTerminal?.(
-        this.targetRequest(request.terminalId),
+        this.targetRequest(request),
       ) ??
         false)
     );
@@ -394,8 +392,8 @@ class ScopedTabTerminalProvider implements TerminalProvider {
     );
   }
 
-  private targetRequest(terminalId: string): TerminalTargetRequest {
-    return { owner: executionOwner(this.owner), terminalId };
+  private targetRequest(request: TerminalTargetRequest): TerminalTargetRequest {
+    return { ...request, owner: executionOwner(this.owner) };
   }
 
   private ownerCandidates(): TerminalTargetCandidate[] {

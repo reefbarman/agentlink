@@ -177,6 +177,7 @@ function createEmptyReport() {
       turns: 0,
     },
     cacheEfficiency: createEfficiencyAggregate(),
+    composeEfficiency: createComposeEfficiencyReport(),
     completionEfficiency: {
       samples: 0,
       legacyMissing: 0,
@@ -233,6 +234,141 @@ function createEmptyReport() {
 }
 
 const SMALL_REVIEW_SCOPE_BYTES = 4_000;
+const COMPOSE_EFFICIENCY_SCHEMA_VERSION = 1;
+const COMPOSE_EFFICIENCY_FIELDS = [
+  "enabledRequestCount",
+  "advertisedRequestCount",
+  "composeOpportunityTurns",
+  "candidateFanoutTurns",
+  "directComposableCalls",
+  "composeCalls",
+  "sameTurnRepairs",
+  "directComposableHistoryTokens",
+  "composeHistoryTokens",
+  "foldedContextReadCount",
+  "foldedContextTokens",
+  "inlineDefinitionTokens",
+  "providerAttempts",
+  "inputTokens",
+  "uncachedInputTokens",
+  "cacheReadTokens",
+  "cacheCreationTokens",
+  "outputTokens",
+  "toolCalls",
+  "durationMs",
+];
+
+function createComposeEfficiencyCohort() {
+  return Object.fromEntries([
+    ["instrumentedTurns", 0],
+    ["opportunityTurns", 0],
+    ["opportunityDurationsMs", []],
+    ...COMPOSE_EFFICIENCY_FIELDS.map((field) => [field, 0]),
+  ]);
+}
+
+function createComposeEfficiencyReport() {
+  return {
+    schemaVersion: COMPOSE_EFFICIENCY_SCHEMA_VERSION,
+    instrumentedTurns: 0,
+    legacyTurnsExcluded: 0,
+    enabled: createComposeEfficiencyCohort(),
+    disabled: createComposeEfficiencyCohort(),
+    normalized: undefined,
+  };
+}
+
+function mergeComposeEfficiency(report, snapshot, turnDurationMs) {
+  if (
+    !snapshot ||
+    typeof snapshot !== "object" ||
+    Array.isArray(snapshot) ||
+    snapshot.schemaVersion !== COMPOSE_EFFICIENCY_SCHEMA_VERSION
+  ) {
+    report.composeEfficiency.legacyTurnsExcluded += 1;
+    return;
+  }
+  const cohort =
+    asCount(snapshot.enabledRequestCount) > 0
+      ? report.composeEfficiency.enabled
+      : report.composeEfficiency.disabled;
+  report.composeEfficiency.instrumentedTurns += 1;
+  cohort.instrumentedTurns += 1;
+  for (const field of COMPOSE_EFFICIENCY_FIELDS) {
+    cohort[field] += asCount(snapshot[field]);
+  }
+  const opportunities = asCount(snapshot.composeOpportunityTurns);
+  cohort.opportunityTurns += opportunities;
+  if (opportunities > 0 && Number.isFinite(turnDurationMs)) {
+    cohort.opportunityDurationsMs.push(turnDurationMs);
+  }
+}
+
+function normalizedComposeCohort(cohort) {
+  const denominator = cohort.opportunityTurns;
+  const perOpportunity = Object.fromEntries(
+    [
+      "directComposableHistoryTokens",
+      "composeHistoryTokens",
+      "inlineDefinitionTokens",
+      "providerAttempts",
+      "inputTokens",
+      "uncachedInputTokens",
+      "outputTokens",
+      "toolCalls",
+      "durationMs",
+    ].map((field) => [
+      field,
+      denominator > 0 ? cohort[field] / denominator : undefined,
+    ]),
+  );
+  perOpportunity.retainedResultTokens =
+    denominator > 0
+      ? (cohort.directComposableHistoryTokens + cohort.composeHistoryTokens) /
+        denominator
+      : undefined;
+  perOpportunity.contextCostTokens =
+    denominator > 0
+      ? (cohort.directComposableHistoryTokens +
+          cohort.composeHistoryTokens +
+          cohort.inlineDefinitionTokens) /
+        denominator
+      : undefined;
+  return {
+    denominator,
+    perOpportunity,
+    p90DurationMs:
+      cohort.opportunityDurationsMs.length > 0
+        ? percentile(cohort.opportunityDurationsMs, 0.9)
+        : undefined,
+  };
+}
+
+function finalizeComposeEfficiency(report) {
+  const disabled = normalizedComposeCohort(report.composeEfficiency.disabled);
+  const enabled = normalizedComposeCohort(report.composeEfficiency.enabled);
+  const baseline = disabled.perOpportunity.contextCostTokens;
+  const experiment = enabled.perOpportunity.contextCostTokens;
+  report.composeEfficiency.normalized = {
+    disabled,
+    enabled,
+    netContextTokensSavedPerOpportunity:
+      Number.isFinite(baseline) && Number.isFinite(experiment)
+        ? baseline - experiment
+        : undefined,
+    netContextSavingsRate:
+      Number.isFinite(baseline) && baseline > 0 && Number.isFinite(experiment)
+        ? (baseline - experiment) / baseline
+        : undefined,
+    cacheAdjustedProviderCost: {
+      basis: "provider_reported_uncached_input_tokens",
+      disabledFreshInputTokensPerOpportunity:
+        disabled.perOpportunity.uncachedInputTokens,
+      enabledFreshInputTokensPerOpportunity:
+        enabled.perOpportunity.uncachedInputTokens,
+    },
+  };
+}
 
 function versionBucket(report, record) {
   const version =
@@ -373,6 +509,13 @@ function mergeTurn(report, record) {
   turns.outputTokens += asCount(record.outputTokens);
   turns.durationsMs.push(asCount(record.turnDurationMs));
   mergeEfficiency(report.cacheEfficiency, record.efficiency);
+  if (record.background !== true) {
+    mergeComposeEfficiency(
+      report,
+      record.composeEfficiency,
+      record.turnDurationMs,
+    );
+  }
 
   const version = versionBucket(report, record);
   version.turns += 1;
@@ -571,6 +714,7 @@ export function finalizeReport(report) {
   report.sessionCount = report.sessions.size;
   report.sessions = undefined;
   finalizeEfficiency(report.cacheEfficiency);
+  finalizeComposeEfficiency(report);
   finalizeEfficiency(report.completionEfficiency.efficiency);
   for (const bucket of Object.values(report.byVersion)) {
     finalizeEfficiency(bucket.cacheEfficiency);
@@ -646,6 +790,14 @@ function formatOptionalPercent(ratio) {
 function formatNumber(value) {
   if (!Number.isFinite(value)) return "0";
   return Number(value.toFixed(2)).toString();
+}
+
+function formatOptionalNumber(value) {
+  return Number.isFinite(value) ? formatNumber(value) : "N/A";
+}
+
+function formatOptionalDuration(value) {
+  return Number.isFinite(value) ? formatMinutes(value) : "N/A";
 }
 
 function printTable(headers, rows) {
@@ -735,6 +887,84 @@ function printSummary(report, inputPath, top) {
           `${cache.ordinaryAgentProviderAttempts} / ${cache.condenseProviderAttempts}`,
         ],
       ],
+    );
+  }
+
+  const compose = report.composeEfficiency;
+  if (compose.instrumentedTurns > 0 || compose.legacyTurnsExcluded > 0) {
+    console.log("");
+    console.log("Compose efficiency (instrumented turns only)");
+    const normalized = compose.normalized;
+    printTable(
+      ["metric", "disabled", "enabled"],
+      [
+        [
+          "opportunities",
+          normalized.disabled.denominator,
+          normalized.enabled.denominator,
+        ],
+        [
+          "retained result tokens / opportunity",
+          formatOptionalNumber(
+            normalized.disabled.perOpportunity.retainedResultTokens,
+          ),
+          formatOptionalNumber(
+            normalized.enabled.perOpportunity.retainedResultTokens,
+          ),
+        ],
+        [
+          "inline definition tokens / opportunity",
+          formatOptionalNumber(
+            normalized.disabled.perOpportunity.inlineDefinitionTokens,
+          ),
+          formatOptionalNumber(
+            normalized.enabled.perOpportunity.inlineDefinitionTokens,
+          ),
+        ],
+        [
+          "provider attempts / opportunity",
+          formatOptionalNumber(
+            normalized.disabled.perOpportunity.providerAttempts,
+          ),
+          formatOptionalNumber(
+            normalized.enabled.perOpportunity.providerAttempts,
+          ),
+        ],
+        [
+          "fresh input tokens / opportunity",
+          formatOptionalNumber(
+            normalized.disabled.perOpportunity.uncachedInputTokens,
+          ),
+          formatOptionalNumber(
+            normalized.enabled.perOpportunity.uncachedInputTokens,
+          ),
+        ],
+        [
+          "output tokens / opportunity",
+          formatOptionalNumber(normalized.disabled.perOpportunity.outputTokens),
+          formatOptionalNumber(normalized.enabled.perOpportunity.outputTokens),
+        ],
+        [
+          "tool calls / opportunity",
+          formatOptionalNumber(normalized.disabled.perOpportunity.toolCalls),
+          formatOptionalNumber(normalized.enabled.perOpportunity.toolCalls),
+        ],
+        [
+          "duration / opportunity",
+          formatOptionalDuration(normalized.disabled.perOpportunity.durationMs),
+          formatOptionalDuration(normalized.enabled.perOpportunity.durationMs),
+        ],
+        [
+          "opportunity turn p90",
+          formatOptionalDuration(normalized.disabled.p90DurationMs),
+          formatOptionalDuration(normalized.enabled.p90DurationMs),
+        ],
+      ],
+    );
+    console.log(
+      `  net-context-saved/opportunity=${formatOptionalNumber(normalized.netContextTokensSavedPerOpportunity)} ` +
+        `rate=${formatOptionalPercent(normalized.netContextSavingsRate)} ` +
+        `legacy-turns-excluded=${compose.legacyTurnsExcluded}`,
     );
   }
 

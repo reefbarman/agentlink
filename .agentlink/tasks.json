@@ -9,6 +9,10 @@
       "command": "npm run release -- --minor --install"
     },
     {
+      "label": "Launch desktop development app",
+      "command": "npm run build && npm run start --workspace @agentlink/desktop"
+    },
+    {
       "label": "Run tests",
       "command": "npm test"
     }

@@ -13,6 +13,7 @@ interface PendingFormElicitation {
   sessionId: string;
   resolve: (values: McpElicitationValues) => void;
   cancel: () => void;
+  decline?: () => void;
 }
 
 export type McpFormElicitationSubmitResult =
@@ -45,6 +46,7 @@ export class McpFormElicitationCoordinator {
       sessionId?: string;
       resolve: (values: McpElicitationValues) => void;
       cancel: () => void;
+      decline?: () => void;
     },
   ): McpFormElicitationRequest {
     const sessionId = callbacks.sessionId?.trim();
@@ -86,8 +88,28 @@ export class McpFormElicitationCoordinator {
       return { ok: true };
     }
 
-    this.finishActive(pending.cancel);
+    this.finishActive(
+      response.action === "decline"
+        ? (pending.decline ?? pending.cancel)
+        : pending.cancel,
+    );
     return { ok: true };
+  }
+
+  cancelRequest(id: string): boolean {
+    const queueIndex = this.queue.findIndex(
+      (pending) => pending.request.id === id,
+    );
+    if (queueIndex !== -1) {
+      const [pending] = this.queue.splice(queueIndex, 1);
+      pending?.cancel();
+      return true;
+    }
+
+    if (this.active?.request.id !== id) return false;
+    const pending = this.active;
+    this.finishActive(pending.cancel);
+    return true;
   }
 
   cancelSession(sessionId: string): void {

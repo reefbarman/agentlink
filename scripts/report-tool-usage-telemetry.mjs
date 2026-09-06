@@ -376,6 +376,20 @@ function createEmptyReport() {
     parameters: [],
     knownToolCount: 0,
     unusedToolCount: 0,
+    compose: {
+      instrumentedCalls: 0,
+      legacyCallsExcluded: 0,
+      outcomes: {},
+      errorKinds: {},
+      errorCodes: {},
+      childBuckets: {},
+      queueWaitBuckets: {},
+      artifactRetention: {},
+      completedSpills: 0,
+      sameTurnRepairs: 0,
+      bridgedBytes: 0,
+      runtimeReturnedBytes: 0,
+    },
   };
 }
 
@@ -410,7 +424,48 @@ export function finalizeReport(report, knownParameters = new Map()) {
   }
   report.extensionVersions = sortVersions(report.extensionVersions);
   report.feedbackCountsByTool = sortCountObject(report.feedbackCountsByTool);
+  report.compose = buildComposeReport(report.tools.compose, report.compose);
   report.warnings = buildWarnings(report);
+}
+
+function buildComposeReport(tool, compose) {
+  const schemaCount =
+    tool?.categoricalMetrics?.["telemetrySchemaVersion:1"] ?? 0;
+  compose.instrumentedCalls = asCount(schemaCount);
+  compose.legacyCallsExcluded = Math.max(
+    0,
+    asCount(tool?.calls) - compose.instrumentedCalls,
+  );
+  compose.outcomes = categoricalMetricCounts(tool, "composeOutcome:");
+  compose.errorKinds = categoricalMetricCounts(tool, "errorKind:");
+  compose.errorCodes = categoricalMetricCounts(tool, "errorCode:");
+  compose.childBuckets = categoricalMetricCounts(tool, "childCountBucket:");
+  compose.queueWaitBuckets = categoricalMetricCounts(tool, "queueWaitBucket:");
+  compose.artifactRetention = categoricalMetricCounts(
+    tool,
+    "artifactRetention:",
+  );
+  compose.completedSpills = asCount(
+    tool?.categoricalMetrics?.["outputSpilled:true"],
+  );
+  compose.sameTurnRepairs = asCount(
+    tool?.categoricalMetrics?.["sameTurnRepair:true"],
+  );
+  compose.bridgedBytes = asCount(tool?.numericMetrics?.bridgedBytes);
+  compose.runtimeReturnedBytes = asCount(
+    tool?.numericMetrics?.runtimeReturnedBytes,
+  );
+  return compose;
+}
+
+function categoricalMetricCounts(tool, prefix) {
+  return Object.fromEntries(
+    Object.entries(tool?.categoricalMetrics ?? {})
+      .filter(([key]) => key.startsWith(prefix))
+      .map(([key, value]) => [key.slice(prefix.length), asCount(value)])
+      .filter(([, count]) => count > 0)
+      .sort(([, left], [, right]) => right - left),
+  );
 }
 
 function seedKnownParameters(report, knownParameters) {
@@ -1065,6 +1120,53 @@ function printSummary(report, inputPath, top) {
         tool.sideEffect ?? "",
         tool.devOnly ? "yes" : "no",
       ]),
+    );
+  }
+
+  const compose = report.compose;
+  if (compose.instrumentedCalls > 0 || compose.legacyCallsExcluded > 0) {
+    console.log("");
+    console.log("Compose diagnostics (instrumented calls only)");
+    printTable(
+      ["metric", "value"],
+      [
+        ["instrumented calls", compose.instrumentedCalls],
+        ["legacy calls excluded", compose.legacyCallsExcluded],
+        ["same-turn repairs", compose.sameTurnRepairs],
+        [
+          "child buckets",
+          Object.entries(compose.childBuckets)
+            .map(([bucket, count]) => `${bucket}:${count}`)
+            .join(" ") || "none",
+        ],
+        [
+          "error kinds",
+          Object.entries(compose.errorKinds)
+            .map(([kind, count]) => `${kind}:${count}`)
+            .join(" ") || "none",
+        ],
+        [
+          "error codes",
+          Object.entries(compose.errorCodes)
+            .map(([code, count]) => `${code}:${count}`)
+            .join(" ") || "none",
+        ],
+        [
+          "queue wait buckets",
+          Object.entries(compose.queueWaitBuckets)
+            .map(([bucket, count]) => `${bucket}:${count}`)
+            .join(" ") || "none",
+        ],
+        [
+          "artifact retention",
+          Object.entries(compose.artifactRetention)
+            .map(([category, count]) => `${category}:${count}`)
+            .join(" ") || "none",
+        ],
+        ["completed output spills", compose.completedSpills],
+        ["bridge bytes (diagnostic)", compose.bridgedBytes],
+        ["runtime returned bytes (diagnostic)", compose.runtimeReturnedBytes],
+      ],
     );
   }
 

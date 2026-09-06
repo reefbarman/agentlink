@@ -73,6 +73,12 @@ You can also download a matching `.vsix` from the [latest release](https://githu
 code --install-extension agentlink-*.vsix --force
 ```
 
+### Try the standalone desktop preview
+
+AgentLink Desktop is a separate macOS Ask Agent app that does not require the VS Code extension. Download the DMG or ZIP matching your Mac from a `desktop-v*` [GitHub release](https://github.com/reefbarman/agentlink/releases). Desktop binaries are never bundled in the VSIX.
+
+The current preview is unsigned and not notarized. macOS may require you to right-click **AgentLink**, choose **Open**, and confirm the first launch. Apple Silicon (`arm64`) and Intel (`x64`) builds are published separately.
+
 ### Start your first session
 
 1. Reload VS Code and open the folder you want to work in.

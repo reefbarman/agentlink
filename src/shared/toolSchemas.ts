@@ -1086,6 +1086,13 @@ export const getTerminalOutputSchema = {
   terminal_id: z
     .string()
     .describe("Terminal ID returned by execute_command (e.g. 'term_3')"),
+  command_id: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Command ID returned by execute_command. Pass it with terminal_id to read that command after terminal reuse; missing or expired commands never fall back to newer output. Omit for the latest command.",
+    ),
   wait_seconds: z.coerce
     .number()
     .optional()
@@ -1257,7 +1264,7 @@ export const composeSchema = {
     .min(1)
     .max(64 * 1024)
     .describe(
-      "Sandboxed JavaScript function body. Use synchronous guest helpers tool(name, input), fail-fast toolAll([{ name, input }, ...]), and toolAllSettled([{ name, input }, ...]); top-level return is supported.",
+      "Sandboxed JavaScript function body; top-level return is supported. Use toolAllSettled([{ name, input }, ...]) for independent reads and summarize both fulfilled values and rejected reasons. toolAll([...]) is fail-fast: use only when every child must succeed. tool(name, input) returns one value or throws. Return selected fields, not raw child results.",
     ),
   description: z
     .string()

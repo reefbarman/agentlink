@@ -184,6 +184,7 @@ async function buildRuntimeMeasurements() {
         undefined,
         undefined,
         ["search", "fetch"],
+        true,
       ).map((tool) => tool.name),
     ),
     TODO_TOOL_NAME,

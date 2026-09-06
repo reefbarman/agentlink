@@ -64,16 +64,18 @@ export function createNodeHostMcpOAuthCallbackHandler<
         transactionId: request.transactionId,
       });
     if (!pending.ok) return pending;
-    if (callbackBase(parsed) !== pending.authorization.redirectUri) {
+    if (!sameCallbackBase(parsed, pending.authorization.redirectUri)) {
       return { ok: false, reason: "redirect_mismatch" };
     }
 
+    const state = parsed.searchParams.get("state");
+    if (!state) return { ok: false, reason: "invalid_callback" };
     const consumed =
       await options.pendingAuthorizations.consumePendingAuthorization({
         principal: request.principal,
         serverId: request.serverId,
         transactionId: request.transactionId,
-        state: parsed.searchParams.get("state") ?? "",
+        state,
         consumedAt: request.receivedAt,
       });
     if (!consumed.ok) return consumed;
@@ -108,6 +110,29 @@ function parseCallbackUrl(value: string): URL | undefined {
   }
 }
 
-function callbackBase(url: URL): string {
-  return `${url.protocol}//${url.host}${url.pathname}`;
+function sameCallbackBase(callback: URL, expectedValue: string): boolean {
+  let expected: URL;
+  try {
+    expected = new URL(expectedValue);
+  } catch {
+    return false;
+  }
+  return (
+    callback.protocol === expected.protocol &&
+    callback.port === expected.port &&
+    callback.pathname === expected.pathname &&
+    sameCallbackHostname(callback.hostname, expected.hostname)
+  );
+}
+
+function sameCallbackHostname(left: string, right: string): boolean {
+  if (left.toLowerCase() === right.toLowerCase()) return true;
+  return isLoopbackHostname(left) && isLoopbackHostname(right);
+}
+
+function isLoopbackHostname(value: string): boolean {
+  const hostname = value.toLowerCase().replace(/^\[|\]$/g, "");
+  return (
+    hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1"
+  );
 }

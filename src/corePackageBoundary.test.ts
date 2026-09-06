@@ -41,6 +41,7 @@ const CORE_MODULES = [
     declarationDependencies: [
       "codex/clientIdentity",
       "codex/completionFacade",
+      "codex/credentialResolution",
       "codex/errors",
       "codex/models",
       "codex/openaiClient",
@@ -50,6 +51,7 @@ const CORE_MODULES = [
     ],
     identityExports: [
       "CODEX_DEFAULT_MODEL",
+      "CodexCredentialSession",
       "CodexRequestError",
       "CodexStreamError",
       "collectCodexCompletionResult",
@@ -675,6 +677,7 @@ describe("core package boundary", () => {
     for (const module of [
       "clientIdentity",
       "completionFacade",
+      "credentialResolution",
       "errors",
       "models",
       "openaiClient",

@@ -1,6 +1,6 @@
 # Why AgentLink
 
-_Last updated: 2026-09-02._
+_Last updated: 2026-09-05._
 
 Coding agents have become capable enough to do useful work on real codebases. The question is no longer whether to give them autonomy. It is what kind of environment lets them make good decisions, and what kind of control lets you trust the result.
 
@@ -43,6 +43,8 @@ You choose the models, accounts, and review depth. AgentLink supplies the coordi
 Long agent sessions fail as much from bad context as from bad reasoning. Repeated files, noisy command output, giant tool catalogs, and stale conversation can crowd out the code that actually matters.
 
 AgentLink treats context as a resource. Its local codebase index provides lexical and structural retrieval without a cloud service. Tool and MCP schemas are progressively disclosed rather than dumped into every request. File reads can omit ranges the agent already received, terminal output can be bounded, and long sessions can condense while carrying the active task forward.
+
+For known groups of related reads, foreground agents also have Compose available by default. It can filter or summarize child results before they enter model history, while one-off reads stay direct. Its real-world efficiency is still being evaluated through dogfooding.
 
 The goal is straightforward: spend model attention on the codebase and the decision at hand, not on the harness talking to itself.
 

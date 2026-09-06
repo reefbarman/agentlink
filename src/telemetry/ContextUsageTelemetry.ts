@@ -12,6 +12,17 @@ import { randomUUID } from "crypto";
  * per-event rows: large jumps are rare, and diagnosing them needs the
  * individual attribution, not an aggregate.
  */
+export const COMPOSE_CONTEXT_SCHEMA_VERSION = 1 as const;
+
+export interface ComposeRequestContextMetrics {
+  schemaVersion: typeof COMPOSE_CONTEXT_SCHEMA_VERSION;
+  enabled: boolean;
+  advertised: boolean;
+  directComposableHistoryTokens: number;
+  composeHistoryTokens: number;
+  inlineDefinitionTokens: number;
+}
+
 export type ContextUsageRecord =
   | {
       /** Privacy-safe composition attribution emitted for every provider request. */
@@ -30,6 +41,7 @@ export type ContextUsageRecord =
       pinnedMemoryTokens: number;
       retrievedMemoryTokens: number;
       contextLedger?: import("@agentlink/protocol/context-ledger").ContextLedgerSnapshot;
+      compose?: ComposeRequestContextMetrics;
     }
   | {
       /** A condense completed: usage dropped from prev to the post-condense estimate. */
@@ -40,6 +52,8 @@ export type ContextUsageRecord =
       newInputTokens: number;
       reclaimedTokens: number;
       durationMs?: number;
+      composeFoldedReadCount?: number;
+      composeFoldedContextTokens?: number;
     }
   | {
       /**
@@ -123,7 +137,12 @@ function getDefaultTelemetryPath(): string {
   return path.join(os.homedir(), ".agentlink", "context-usage-telemetry.jsonl");
 }
 
-export class ContextUsageTelemetry {
+/** Narrow writer contract for AgentEngine and condensation call sites. */
+export interface ContextUsageRecorder {
+  record(event: ContextUsageRecord): void;
+}
+
+export class ContextUsageTelemetry implements ContextUsageRecorder {
   private readonly telemetryPath: string;
   private readonly instanceId = randomUUID();
   private readonly extensionVersion: string;

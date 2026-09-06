@@ -20,6 +20,9 @@ function inventory(...extraPaths) {
     "dist/monaco-ts.worker.js",
     "dist/node_modules/@lancedb/lancedb/package.json",
     "dist/node_modules/apache-arrow/package.json",
+    "dist/node_modules/@napi-rs/keyring/package.json",
+    "dist/node_modules/@napi-rs/keyring-darwin-arm64/package.json",
+    "dist/node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node",
     "resources/builtin-skills/documentation/SKILL.md",
     "resources/builtin-skills/documentation/README.md",
     "resources/builtin-skills/documentation/references/capabilities.md",
@@ -52,6 +55,8 @@ test("accepts the required assets and one matching LanceDB native addon", () => 
   assert.equal(result.target, "darwin-arm64");
   assert.equal(result.nativePackage, "@lancedb/lancedb-darwin-arm64");
   assert.match(result.nativeAddon, /lancedb\.darwin-arm64\.node$/u);
+  assert.equal(result.keychainPackage, "@napi-rs/keyring-darwin-arm64");
+  assert.match(result.keychainAddon, /keyring\.darwin-arm64\.node$/u);
 });
 
 test("accepts VSIX archive paths with a lowercased extension readme", () => {

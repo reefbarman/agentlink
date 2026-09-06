@@ -118,6 +118,12 @@ describe("helper route families", () => {
     expect(matchPublicHelperRoute("GET", "/codicon.ttf?v=1")).toEqual({
       handler: "codiconFont",
     });
+    expect(
+      matchPublicHelperRoute(
+        "GET",
+        "/mcp/oauth/callback/0123456789abcdef0123456789abcdef",
+      ),
+    ).toEqual({ handler: "mcpOAuthCallback" });
   });
 
   it("rejects malformed or non-GET public asset paths", () => {
@@ -142,6 +148,15 @@ describe("helper route families", () => {
       ),
     ).toBeNull();
     expect(matchPublicHelperRoute("GET", "/browser-gateway.js.map")).toBeNull();
+    expect(
+      matchPublicHelperRoute(
+        "POST",
+        "/mcp/oauth/callback/0123456789abcdef0123456789abcdef",
+      ),
+    ).toBeNull();
+    expect(
+      matchPublicHelperRoute("GET", "/mcp/oauth/callback/not-a-transaction"),
+    ).toBeNull();
   });
 
   it.each([

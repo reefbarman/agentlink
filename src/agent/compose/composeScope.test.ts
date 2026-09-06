@@ -8,6 +8,14 @@ import { describe, expect, it, vi } from "vitest";
 import { ToolCallBudget } from "@agentlink/core/tool-call-budget";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { createComposeExecutionScope } from "./composeScope.js";
+import {
+  COMPOSABILITY_POLICIES,
+  COMPOSABLE_TOOLS,
+  TOOL_CAPABILITIES,
+  renderComposableToolConstraints,
+  validateComposableToolInput,
+  validateComposableToolOutputContent,
+} from "../../core/tools/toolCapabilities.js";
 import { createNativeToolDisclosureSnapshot } from "../../core/tools/nativeToolDisclosure.js";
 
 function canonicalResult(data: unknown): ToolResult {
@@ -74,6 +82,73 @@ function makeHarness(
     events,
   };
 }
+
+describe("composability policy", () => {
+  it("keeps Compose production-essential and feedback tools dev-only", () => {
+    expect(TOOL_CAPABILITIES.compose).toMatchObject({
+      devOnly: undefined,
+      disclosure: "essential",
+      availability: { kind: "mode-group" },
+    });
+    for (const name of [
+      "send_feedback",
+      "get_feedback",
+      "triage_feedback",
+      "delete_feedback",
+    ]) {
+      expect(TOOL_CAPABILITIES[name]).toMatchObject({
+        devOnly: true,
+        availability: { kind: "dev-only" },
+      });
+    }
+  });
+
+  it("derives the child set and rendered constraints from the policy map", () => {
+    expect([...COMPOSABLE_TOOLS]).toEqual(Object.keys(COMPOSABILITY_POLICIES));
+    const rendered = renderComposableToolConstraints();
+    for (const [name, policy] of Object.entries(COMPOSABILITY_POLICIES)) {
+      expect(rendered).toContain(`${name} (${policy.renderedConstraint})`);
+      expect(policy.canonicalResultEligible).toBe(true);
+    }
+  });
+
+  it.each([
+    ["read_file", { path: "x", query: "meaning" }, false],
+    ["read_file", { path: "x" }, true],
+    ["list_files", { path: ".", query: "meaning" }, false],
+    ["list_files", { path: "." }, true],
+    ["search_files", { path: ".", regex: "x", semantic: true }, false],
+    ["search_files", { path: ".", regex: "x", semantic: false }, true],
+  ] as const)(
+    "enforces the rendered %s input constraint",
+    (name, input, valid) => {
+      expect(validateComposableToolInput(name, input) === undefined).toBe(
+        valid,
+      );
+    },
+  );
+
+  it.each([
+    [[{ type: "text", text: "{}" }], true],
+    [[{ type: "image", data: "abc", mimeType: "image/png" }], false],
+    [
+      [
+        {
+          type: "document",
+          data: "abc",
+          mimeType: "application/pdf",
+          name: "spec.pdf",
+        },
+      ],
+      false,
+    ],
+  ] as const)("admits only text child output %#", (content, valid) => {
+    expect(
+      validateComposableToolOutputContent("read_file", [...content]) ===
+        undefined,
+    ).toBe(valid);
+  });
+});
 
 describe("createComposeExecutionScope", () => {
   it("dispatches an admitted child through the runtime with frozen authority", async () => {
@@ -255,6 +330,26 @@ describe("createComposeExecutionScope", () => {
     expect(harness.registerAgentCall).not.toHaveBeenCalled();
   });
 
+  it("rejects children excluded by the active skill policy", async () => {
+    const harness = makeHarness({
+      context: {
+        skillAuthority: Object.freeze({
+          schemaVersion: 1 as const,
+          sources: Object.freeze([]),
+          allowedTools: Object.freeze(["get_context"]),
+        }),
+      },
+    });
+
+    await expect(
+      harness.scope.executeChild("read_file", { path: "x" }),
+    ).rejects.toMatchObject({
+      kind: "authorization",
+      code: "tool_not_in_skill",
+    });
+    expect(harness.executeTool).not.toHaveBeenCalled();
+  });
+
   it("preserves structured authorization and handler failure codes", async () => {
     for (const [result, expected] of [
       [
@@ -315,6 +410,44 @@ describe("createComposeExecutionScope", () => {
       expect(harness.registerAgentCall).not.toHaveBeenCalled();
     }
   });
+
+  it.each([
+    [
+      "image",
+      { content: [{ type: "image", data: "abc", mimeType: "image/png" }] },
+    ],
+    [
+      "document",
+      {
+        content: [
+          {
+            type: "document",
+            data: "abc",
+            mimeType: "application/pdf",
+            name: "spec.pdf",
+          },
+        ],
+      },
+    ],
+  ] satisfies Array<[string, ToolResult]>)(
+    "rejects read_file %s output before bridging canonical data",
+    async (_kind, result) => {
+      const harness = makeHarness({
+        execute: async () => ({ ...result, data: { mustNotBridge: true } }),
+      });
+
+      await expect(
+        harness.scope.executeChild("read_file", { path: "x" }),
+      ).rejects.toMatchObject({ kind: "tool_output_not_composable" });
+      expect(harness.events.at(-1)).toMatchObject({
+        phase: "complete",
+        result: {
+          isError: true,
+          error: { kind: "tool_output_not_composable" },
+        },
+      });
+    },
+  );
 
   it("rejects exhausted budget before tracker registration or dispatch", async () => {
     const harness = makeHarness({ limit: 1 });

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   COMPOSE_MAX_ARTIFACT_INPUT_BYTES,
   COMPOSE_MAX_ARTIFACT_RECORD_BYTES,
@@ -25,6 +26,11 @@ import type { ToolResult } from "@agentlink/protocol/tool-result";
 
 const wasmPath =
   require.resolve("@jitl/quickjs-wasmfile-release-asyncify/wasm");
+const syntaxWasmPaths = {
+  parser: require.resolve("web-tree-sitter/web-tree-sitter.wasm"),
+  javascript:
+    require.resolve("@vscode/tree-sitter-wasm/wasm/tree-sitter-javascript.wasm"),
+};
 
 function success(data: unknown): ToolResult {
   return {
@@ -68,6 +74,7 @@ async function run(
     scope,
     signal,
     wasmPath,
+    syntaxWasmPaths,
   });
 }
 
@@ -121,6 +128,9 @@ describe("compose runtime", () => {
       toolAllBatchCount: 0,
       toolAllSettledBatchCount: 0,
       bridgedBytes: 0,
+      runtimeReturnedBytes: 24,
+      queueWaitBucket: "none",
+      artifactRetention: "none",
     });
   });
 
@@ -221,7 +231,8 @@ describe("compose runtime", () => {
     );
 
     expect(errorKind(result)).toBe("policy");
-    expect(result.data).toMatchObject({ code: "tool_not_in_request" });
+    expect(result.data).toMatchObject({ code: "request_policy" });
+    expect(result.uiMeta.composeTrace.errorCode).toBe("request_policy");
     expect(preflightChild).toHaveBeenCalledTimes(2);
     expect(reserveChildren).not.toHaveBeenCalled();
     expect(executeChild).not.toHaveBeenCalled();
@@ -419,6 +430,11 @@ describe("compose runtime", () => {
     );
 
     expect(errorKind(result)).toBe("child_failed");
+    expect(result.isError).toBe(true);
+    expect(result.data).toMatchObject({
+      code: "child_handler_failed",
+      guidance: expect.stringContaining("toolAllSettled"),
+    });
     expect(result.uiMeta.composeTrace.errorKind).toBe("child_failed");
     expect(result.uiMeta.composeTrace.bridgedBytes).toBe(0);
     expect(result.uiMeta.composeTrace.children).toEqual([
@@ -488,13 +504,14 @@ describe("compose runtime", () => {
       scope: fakeScope(),
       signal: new AbortController().signal,
       wasmPath,
+      syntaxWasmPaths,
       retainArtifact: async (request) => {
         retainedContent = request.content;
         return {
           path: "/tmp/agentlink-results-test/output.jsonl",
           bytes: Buffer.byteLength(request.content),
           chars: [...request.content].length,
-          sha256: "artifact-sha",
+          sha256: createHash("sha256").update(request.content).digest("hex"),
         };
       },
     });
@@ -525,6 +542,92 @@ describe("compose runtime", () => {
       COMPOSE_MAX_FINAL_BYTES,
     );
     expect(JSON.stringify(result.data)).not.toBe(reconstructed);
+    expect(result.isError).toBe(false);
+    expect(result.error).toBeUndefined();
+    expect(result.data).toMatchObject({
+      status: "completed",
+      outputSpilled: true,
+    });
+    expect(result.uiMeta.composeTrace).toMatchObject({
+      status: "completed",
+      outputSpilled: true,
+      artifactRetention: "retained",
+      runtimeReturnedBytes: Buffer.byteLength(reconstructed),
+    });
+    expect(result.uiMeta.composeTrace.errorCode).toBeUndefined();
+    expect(
+      result.content[0].type === "text" &&
+        Buffer.byteLength(result.content[0].text),
+    ).toBeLessThanOrEqual(COMPOSE_MAX_FINAL_BYTES);
+  });
+
+  it.each(["bytes", "sha256", "path"])(
+    "rejects unverified artifact %s metadata",
+    async (field) => {
+      const result = await handleCompose({
+        params: { script: `return "x".repeat(${COMPOSE_MAX_FINAL_BYTES});` },
+        scope: fakeScope(),
+        signal: new AbortController().signal,
+        wasmPath,
+        syntaxWasmPaths,
+        retainArtifact: async ({ content }) => ({
+          path: "/tmp/result.jsonl",
+          bytes: Buffer.byteLength(content),
+          chars: content.length,
+          sha256: createHash("sha256").update(content).digest("hex"),
+          [field]: field === "bytes" ? 0 : "",
+        }),
+      });
+      expect(result.isError).toBe(true);
+      expect(result.data).not.toHaveProperty("recovery.output_file");
+      expect(result.uiMeta.composeTrace.outputSpilled).toBe(false);
+    },
+  );
+
+  it("cancels retention even when the writer ignores cancellation", async () => {
+    const controller = new AbortController();
+    let writeSignal: AbortSignal | undefined;
+    const result = await handleCompose({
+      params: { script: `return "x".repeat(${COMPOSE_MAX_FINAL_BYTES});` },
+      scope: fakeScope(),
+      signal: controller.signal,
+      wasmPath,
+      syntaxWasmPaths,
+      retainArtifact: ({ signal }) => {
+        writeSignal = signal;
+        controller.abort();
+        return new Promise(() => {});
+      },
+    });
+    expect(writeSignal?.aborted).toBe(true);
+    expect(result.isError).toBe(true);
+    expect(result.uiMeta.composeTrace.status).toBe("cancelled");
+    expect(result.data).not.toHaveProperty("recovery.output_file");
+  });
+
+  it("bounds escaped preview plus metadata in the visible spill envelope", async () => {
+    const result = await handleCompose({
+      params: { script: `return '"'.repeat(${COMPOSE_MAX_FINAL_BYTES});` },
+      scope: fakeScope(),
+      signal: new AbortController().signal,
+      wasmPath,
+      syntaxWasmPaths,
+      retainArtifact: async ({ content }) => ({
+        path: "/tmp/" + "x".repeat(1800),
+        bytes: Buffer.byteLength(content),
+        chars: content.length,
+        sha256: createHash("sha256").update(content).digest("hex"),
+      }),
+    });
+    expect(result.isError).toBe(false);
+    const text = result.content[0];
+    expect(text.type).toBe("text");
+    if (text.type === "text") {
+      expect(Buffer.byteLength(text.text)).toBeLessThanOrEqual(
+        COMPOSE_MAX_FINAL_BYTES,
+      );
+      expect(JSON.parse(text.text)).toEqual(result.data);
+    }
   });
 
   it("falls back to bounded preview when artifact input exceeds its cap", async () => {
@@ -537,6 +640,7 @@ describe("compose runtime", () => {
       scope: fakeScope(),
       signal: new AbortController().signal,
       wasmPath,
+      syntaxWasmPaths,
       retainArtifact,
     });
 
@@ -559,6 +663,7 @@ describe("compose runtime", () => {
       scope: fakeScope(),
       signal: new AbortController().signal,
       wasmPath,
+      syntaxWasmPaths,
       retainArtifact: async () => {
         throw new Error("disk unavailable");
       },
@@ -631,6 +736,72 @@ describe("compose runtime", () => {
     expect(recovery.preview.endsWith("x")).toBe(true);
   });
 
+  it("normalizes absent final projection fields without discarding completed reads", async () => {
+    const execute = vi.fn(() => success({ path: "file.ts", count: 0 }));
+    const result = await run(
+      `const value = tool("read", {});
+       return {
+         path: value.path, missing: value.optional,
+         nested: { count: value.count, absent: undefined },
+         array: [undefined, , { absent: undefined }, null, false, ""]
+       };`,
+      fakeScope(execute),
+    );
+
+    expect(result.isError).toBe(false);
+    expect(result.data).toEqual({
+      path: "file.ts",
+      nested: { count: 0 },
+      array: [null, null, {}, null, false, ""],
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(result.uiMeta.composeTrace.completedChildren).toBe(1);
+  });
+
+  it.each([
+    'tool("read", { path: undefined })',
+    'toolAll([{ name: "read", input: { values: [undefined] } }])',
+    'toolAllSettled([{ name: "read", input: undefined }])',
+  ])("keeps descriptor and input serialization strict: %s", async (call) => {
+    const execute = vi.fn(() => success(null));
+    const result = await run(`return ${call};`, fakeScope(execute));
+
+    expect(errorKind(result)).toBe("serialization");
+    expect(result.error?.message).toContain("unsupported undefined");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it.each(["tool", "toolAll", "toolAllSettled"])(
+    "keeps canonical child undefined fatal for %s",
+    async (operation) => {
+      const call =
+        operation === "tool"
+          ? 'tool("read", {})'
+          : `${operation}([{ name: "read", input: {} }])`;
+      const result = await run(
+        `return ${call};`,
+        fakeScope(() => success({ optional: undefined })),
+      );
+      expect(errorKind(result)).toBe("serialization");
+      expect(result.uiMeta.composeTrace.errorCode).toBe("unsupported_data");
+    },
+  );
+
+  it.each([
+    ["() => 1", "unsupported function"],
+    ["Symbol('value')", "unsupported symbol"],
+    ["1n", "unsupported bigint"],
+    ["NaN", "non-finite number"],
+  ])(
+    "reports paths for unsupported nested final values: %s",
+    async (value, message) => {
+      const result = await run(`return { rows: [{ value: ${value} }] };`);
+      expect(errorKind(result)).toBe("serialization");
+      expect(result.error?.message).toContain(message);
+      expect(result.error?.message).toContain('$["rows"][0]["value"]');
+    },
+  );
+
   it.each([
     ["undefined", "return undefined;"],
     ["bigint", "return 1n;"],
@@ -643,6 +814,13 @@ describe("compose runtime", () => {
     expect(errorKind(result)).toBe("serialization");
     expect(result.error?.message.toLowerCase()).toContain(
       _name === "undefined" ? "unsupported undefined" : _name,
+    );
+    expect(result.uiMeta.composeTrace.errorCode).toBe(
+      _name === "non-finite number"
+        ? "non_finite_data"
+        : _name === "cyclic data"
+          ? "cyclic_data"
+          : "unsupported_data",
     );
   });
 
@@ -657,6 +835,55 @@ describe("compose runtime", () => {
     expect(result.isError).toBe(false);
     expect(result.data).toBe(true);
   });
+
+  it.each([
+    'return tool("search", { regex: "async function|async (|.constructor|function*" });',
+    'return tool("search", { regex: /async function|async \\(|\\.constructor|function\\*/.source });',
+    'return tool("search", { regex: `async function async ( .constructor ["constructor"] function*` });',
+    '// async function function* .constructor\nreturn tool("search", {});',
+    '/* async ( function* ["constructor"] */ return tool("search", {});',
+    'const async = value => value; return async(tool("search", {}));',
+  ])(
+    "allows policy-like text that is not prohibited syntax: %s",
+    async (script) => {
+      const execute = vi.fn(() => success({ matches: [] }));
+      const result = await run(script, fakeScope(execute));
+      expect(result.isError).toBe(false);
+      expect(execute).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    "return async value => value;",
+    "return async /* comment */ () => 1;",
+    "async /* comment */ function read() {} return 1;",
+    "return { async read() {} };",
+    "return class { async read() {} };",
+    "return function /* comment */ *read() {};",
+    "return { *read() {} };",
+    "return class { *read() {} };",
+    "return (() => {}). /* comment */ constructor;",
+    'return (() => {})[ /* comment */ "constructor" ];',
+    "return (() => {})?.constructor;",
+    "return (() => {})[`constructor`];",
+    String.raw`return (() => {})["constr\u0075ctor"];`,
+    String.raw`return (() => {}).constr\u0075ctor;`,
+    "return `data ${async () => 1}`;",
+  ])(
+    "rejects prohibited executable syntax before child dispatch: %s",
+    async (script) => {
+      const execute = vi.fn(() => success(null));
+      const result = await run(
+        `tool("read", {}); ${script}`,
+        fakeScope(execute),
+      );
+      expect(errorKind(result)).toBe("policy");
+      expect(result.uiMeta.composeTrace.errorCode).toBe(
+        "script_policy_violation",
+      );
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["ordinary", "return (function () {}).constructor;"],
@@ -679,6 +906,16 @@ describe("compose runtime", () => {
     );
   });
 
+  it.each(["abort this operation", "allocation failed"])(
+    "does not infer host failure kinds from guest message %s",
+    async (message) => {
+      const result = await run(`throw new Error(${JSON.stringify(message)});`);
+
+      expect(errorKind(result)).toBe("script_error");
+      expect(result.uiMeta.composeTrace.errorCode).toBe("script_error");
+    },
+  );
+
   it("interrupts an infinite loop at the wall deadline", async () => {
     let calls = 0;
     const dateNow = vi
@@ -687,6 +924,7 @@ describe("compose runtime", () => {
     try {
       const result = await run("while (true) {}", fakeScope());
       expect(errorKind(result)).toBe("timeout");
+      expect(result.uiMeta.composeTrace.errorCode).toBe("timeout");
     } finally {
       dateNow.mockRestore();
     }
@@ -699,6 +937,7 @@ describe("compose runtime", () => {
     const result = await run("return 1;", fakeScope(), controller.signal);
 
     expect(errorKind(result)).toBe("aborted");
+    expect(result.uiMeta.composeTrace.errorCode).toBe("aborted");
   });
 
   it("aborts while suspended in a child and ignores its late result", async () => {
@@ -804,6 +1043,7 @@ describe("compose runtime", () => {
       scope,
       signal: new AbortController().signal,
       wasmPath,
+      syntaxWasmPaths,
     });
 
     expect(errorKind(scriptResult)).toBe("validation");

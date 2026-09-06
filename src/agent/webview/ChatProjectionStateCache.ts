@@ -1,4 +1,9 @@
-import { initialState, type AppState } from "../../shared/chatProjection.js";
+import {
+  initialState,
+  reducer,
+  type AppAction,
+  type AppState,
+} from "../../shared/chatProjection.js";
 
 const MAX_CACHED_PROJECTIONS = 32;
 
@@ -45,6 +50,15 @@ export class ChatProjectionStateCache {
       ...cached,
       ...shared,
     });
+  }
+
+  update(sessionId: string, action: AppAction): void {
+    const cached = this.bySession.get(sessionId);
+    if (!cached) return;
+    this.bySession.set(
+      sessionId,
+      toSessionProjection(reducer({ ...initialState, ...cached }, action)),
+    );
   }
 
   retainSessions(sessionIds: ReadonlySet<string>): void {
