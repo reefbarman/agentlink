@@ -1,0 +1,422 @@
+src/terminal/sandbox/SandboxTerminalCoordinator.test.ts
+  h_9630b74bdac540 244-309,2241
+src/agent/ChatTabController.test.ts
+  h_9630b74bdac540 75-106
+src/core/tools/toolCapabilities.ts
+  h_9630b74bdac540 129,604
+resources/builtin-skills/documentation/references/tools.md
+  h_9630b74bdac540 17-32,47,50
+src/browser-gateway/webview/DesktopMoreActions.test.tsx
+  h_9630b74bdac540 1-56
+packages/core/src/codex/translation.test.ts
+  h_9630b74bdac540 789
+scripts/report-context-jumps.mjs
+  h_9630b74bdac540 161-166,176-188,290-306,326-333,427-430,506-521
+resources/builtin-skills/documentation/references/settings.md
+  h_9630b74bdac540 15
+packages/core/src/codex/turnRouting.test.ts
+  h_9630b74bdac540 1-128
+apps/desktop/src/main.ts
+  h_9630b74bdac540 1-446
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_9630b74bdac540 26-31
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_9630b74bdac540 2,89-93,95-98,222,254,267,313-322,326,372-373,471,561-564,575,993,997-1003,1040-1051,1104-1105,1228-1248,1293-1311,1348-1351,1356,1671-1672,1748,1831-1860,1862,1984,2013,2230,2236-2238,2258,2268-2269,2308-2310,2400,2596-2641,2753-2819,3059-3060,3624-3712,3965-3996,4003-4008,4021-4027,4047-4056,4091-4100,5179-5182,5211,5223-5225,5229,5239,5273,5283,5388-5391,5637,5641,5643-5651,5653-5661,5701,5822-5931,5936-5937,5939-6068,6289,6296,6304-6323,6326,6670,6696-6697,6729,7446,7746,7960-7962,8019-8020,9744,9774
+src/terminal/sandbox/SandboxTerminalCoordinator.ts
+  h_9630b74bdac540 767-776,788,794,796,805-808,820-821,829-830,1319,1341-1342,1552-1553
+src/terminal/sandbox/AgentTerminalProviderRouter.ts
+  h_9630b74bdac540 449
+src/agent/systemPrompt.ts
+  h_9630b74bdac540 1190-1191,1273-1276,1376,1400
+packages/protocol/src/compose.ts
+  h_9630b74bdac540 24-27,58-71
+src/tools/readFile.test.ts
+  h_9630b74bdac540 8,17,49-104,226-227
+apps/desktop/start.mjs
+  h_9630b74bdac540 1-43
+packages/node-host/src/keychainSecretStorage.test.ts
+  h_9630b74bdac540 1-131
+README.md
+  h_9630b74bdac540 76-81
+src/browser-gateway/helper/StandaloneAskAgentMcpRuntime.ts
+  h_9630b74bdac540 1-740
+src/browser-gateway/helper/StandaloneAskAgentMcpRuntime.test.ts
+  h_9630b74bdac540 1-455
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_9630b74bdac540 13,287,321,334,513,1178,1252,5441-5442,5444-5452,5562-5574,7832-8255
+src/agent/providers/codex/CodexProvider.ts
+  h_9630b74bdac540 14,39,70,82-85,87-90,100,125-150,293-307,327,344-349,401-402,463,465,468-470,474-480,485,522-527,568-572,605,607,610-612,616-619,625-628,631,681-682,689-701,703
+src/agent/toolAdapter.ts
+  h_9630b74bdac540 21,1209,1237-1239,1272-1273,1280,2382,2407-2428,2644-2645,2660-2676,2683
+.gitignore
+  h_9630b74bdac540 8-9
+resources/builtin-skills/documentation/references/mcp.md
+  h_9630b74bdac540 24,75-77
+src/agent/AgentSession.test.ts
+  h_9630b74bdac540 1029-1033,1047-1048
+apps/desktop/package.mjs
+  h_9630b74bdac540 1-233
+src/browser-gateway/browserGatewayAskAgentSessionStore.ts
+  h_9630b74bdac540 41,156,350,873-880,1062,1395-1397
+packages/node-host/src/mcpElicitation.test.ts
+  h_9630b74bdac540 1-195
+src/terminal/sandbox/SandboxTerminalSession.test.ts
+  h_9630b74bdac540 153-200
+src/agent/toolAdapter.production.test.ts
+  h_9630b74bdac540 24-67
+src/core/tools/types.ts
+  h_9630b74bdac540 168-169
+src/agent/ChatTabHostCoordinator.ts
+  h_9630b74bdac540 72,77,84
+src/browser-gateway/BrowserGatewayServer.ts
+  h_9630b74bdac540 551-554,2032-2067
+packages/node-host/src/mcpOAuthProvider.test.ts
+  h_9630b74bdac540 1-150
+src/browser-gateway/helper/StandaloneMcpOAuthRuntime.test.ts
+  h_9630b74bdac540 1-71,73-168
+packages/node-host/src/mcpElicitation.ts
+  h_9630b74bdac540 1-126
+scripts/report-session-outcomes.mjs
+  h_9630b74bdac540 180,237-371,512-518,717,795-800,893-940,942-961,963-967
+packages/node-host/src/mcpOAuthProvider.ts
+  h_9630b74bdac540 1-367
+src/browser-gateway/webview/index.tsx
+  h_9630b74bdac540 22,32-37,45-52
+src/agent/compose/composeScope.ts
+  h_9630b74bdac540 361-366
+src/agent/webview/components/ToolCallBlock.tsx
+  h_9630b74bdac540 753-798,1050-1057,1071,1076-1077,1084-1086,1090,1094-1102,1116,1128,1130-1134,1145-1165,1185
+src/browser-gateway/helper/sharedCodexOAuth.ts
+  h_9630b74bdac540 1-108
+src/agent/AgentSessionManager.ts
+  h_9630b74bdac540 213-218,482,1774-1775,1931-1933,1987-1989,2012,2198,7070,7100-7103,7309,7761,8033
+src/agent/compose/composeRuntime.test.ts
+  h_9630b74bdac540 1,29-33,77,131-133,234-235,433-437,507,514,545-630,643,666,739-771,773-803,818-824,839-886,909-918,927,940,1046
+src/agent/compose/composeScope.test.ts
+  h_9630b74bdac540 11-18,86-152,333-350,414-450
+src/integrations/TerminalManager.ts
+  h_9630b74bdac540 1677,1706,1750
+src/agent/composeEfficiency.test.ts
+  h_9630b74bdac540 1-113
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_9630b74bdac540 744,746,756-763,766-769,774,776-778,781,783-784,786,2055
+src/browser-gateway/helper/askAgentModelClient.test.ts
+  h_9630b74bdac540 2-3,16-19,58-122,495,500-503,508-518,527-594,673-674,683,748-818,821-875,1144,1154,1191,1200-1202
+package.json
+  h_9630b74bdac540 5,298-303,1102,1113-1116,1126,1165,1188
+src/browser-gateway/helper/StandaloneMcpOAuthRuntime.ts
+  h_9630b74bdac540 1-227
+src/shared/mcpOAuthCallbackPage.test.ts
+  h_9630b74bdac540 1-73
+packages/node-host/src/mcpOAuthCallback.test.ts
+  h_9630b74bdac540 59-89
+src/agent/ChatTabHostCoordinator.test.ts
+  h_9630b74bdac540 137-197
+src/agent/ChatViewProvider.test.ts
+  h_9630b74bdac540 9076-9136
+.agentlink/tasks.json
+  h_9630b74bdac540 12-14
+packages/core/src/modelRuntime.ts
+  h_9630b74bdac540 188-189
+src/agent/McpOAuthProvider.test.ts
+  h_9630b74bdac540 53-56
+packages/node-host/src/mcpOAuthCallback.ts
+  h_9630b74bdac540 67,71-72,78,113-137
+.github/workflows/desktop-release.yml
+  h_9630b74bdac540 1-127
+src/agent/compose/composeRuntimeLimiter.ts
+  h_9630b74bdac540 21,34,48-50,101,122,130-131,138,158,160-163,167,194-202
+src/agent/AgentEngine.test.ts
+  h_9630b74bdac540 5173-5184
+resources/builtin-skills/documentation/references/getting-started.md
+  h_9630b74bdac540 30-39
+packages/core/src/codex/openaiClient.test.ts
+  h_9630b74bdac540 55
+src/browser-gateway/webview/desktop.css
+  h_9630b74bdac540 1-886
+src/approvals/webview/components/McpCard.tsx
+  h_9630b74bdac540 35-38,142-144,148,150-155,164-166
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  h_9630b74bdac540 1455-1498,3716-3898,4053-4185,5381,5383-5398,6803-6846
+src/shared/desktopBridge.ts
+  h_9630b74bdac540 1-23
+src/agent/types.ts
+  h_9630b74bdac540 156-157,190-198,322-323
+src/adapters/vscode/projectSettingsAccessor.ts
+  h_9630b74bdac540 39
+src/agent/providers/codex/OpenAiCodexAuthManager.ts
+  h_9630b74bdac540 3-9,15,31,51-52,309-337
+src/agent/unifiedContextBaselines.test.ts
+  h_9630b74bdac540 187
+apps/desktop/electron-builder.yml
+  h_9630b74bdac540 1-27
+scripts/verify-desktop-package.test.mjs
+  h_9630b74bdac540 1-109
+src/agent/composeEfficiency.ts
+  h_9630b74bdac540 1-182
+esbuild.mjs
+  h_9630b74bdac540 18,48,240,399-401,408-412
+src/browser-gateway/browserGatewayHelperDiscovery.ts
+  h_9630b74bdac540 11-17,144-148
+packages/node-host/src/keychainMcpCredentialRepository.ts
+  h_9630b74bdac540 1-447
+src/agent/providers/codex/CodexOAuthManager.test.ts
+  h_9630b74bdac540 392-408
+src/telemetry/ContextUsageTelemetry.ts
+  h_9630b74bdac540 15-25,44,55-56,140-142,145
+packages/core/src/codex/models.ts
+  h_9630b74bdac540 492
+src/agent/turnOutcomeStats.ts
+  h_9630b74bdac540 7-11,33,77,86
+packages/node-host/src/mcpOAuthFetch.ts
+  h_9630b74bdac540 1-101,103,106-117
+src/agent/webview/components/TranscriptMessageList.tsx
+  h_9630b74bdac540 312-313,317-365,521,580
+apps/desktop/src/desktopRemoteDiscovery.ts
+  h_9630b74bdac540 1-125
+apps/desktop/src/DesktopRemoteView.test.ts
+  h_9630b74bdac540 1-265
+src/agent/webview/components/ToolCallBlock.test.ts
+  h_9630b74bdac540 20-130
+packages/core/src/codex/credentialResolution.ts
+  h_9630b74bdac540 1-230
+src/agent/webview/styles/chat.css
+  h_9630b74bdac540 2707-2723,2737,2744-2746,2750-2751,2756-2758,2766-2767,2771-2772,2776-2777
+src/terminal/native/NativeAgentTerminalCoordinator.ts
+  h_9630b74bdac540 317-326,339-345,354,360,362,371-374,386-387,395-396,1134,1154-1155,1272-1273
+packages/node-host/src/mcpResourcePrompts.ts
+  h_9630b74bdac540 1-429
+CHANGELOG.md
+  h_9630b74bdac540 5-17,23-26,46,66-72
+src/browser-gateway/webview/styles.css
+  h_9630b74bdac540 1-2,70-88,109-173,175-197,680-687,1115-1249,1606-1839,1842-1934
+scripts/verify-vsix-boundary.mjs
+  h_9630b74bdac540 1-75
+packages/node-host/src/mcpRemoteTools.ts
+  h_9630b74bdac540 7-11,13,17-26,70-73,75-77,79-84,102-117,126-189,191-204,246-254,256-260,262-269,271-277,314-318,344,376,379-385,389,395,412,414-415,453,461-465,467-501,507,522-543,545
+src/agent/webview/components/TranscriptMessageList.test.ts
+  h_9630b74bdac540 305-494
+apps/desktop/src/chatPreload.test.ts
+  h_9630b74bdac540 1-65
+src/agent/ChatViewProvider.ts
+  h_9630b74bdac540 4806-4839,10647,10776-10777
+scripts/verify-retrieval-package.test.mjs
+  h_9630b74bdac540 23-25,58-59
+src/terminal/sandbox/SandboxTerminalSession.ts
+  h_9630b74bdac540 524-529,533,542
+packages/core/src/codex.ts
+  h_9630b74bdac540 3,10
+apps/desktop/tsconfig.json
+  h_9630b74bdac540 1-13
+packages/node-host/src/mcpRemoteTools.test.ts
+  h_9630b74bdac540 3,30-31,41-42,73,78,89,94,105-106,197-235
+src/browser-gateway/helper/BrowserGatewayHelperLeaseClient.ts
+  h_9630b74bdac540 19
+apps/desktop/package.json
+  h_9630b74bdac540 1-29
+resources/builtin-skills/documentation/references/capabilities.md
+  h_9630b74bdac540 19-20,23-24,29,54,58,105-107
+src/browser-gateway/helper/standaloneMcpOAuthPolicy.ts
+  h_9630b74bdac540 1-170
+.vscodeignore
+  h_9630b74bdac540 10-12
+src/extension.ts
+  h_9630b74bdac540 102,1345-1347,1350,1462-1463,1465-1479
+scripts/package-keychain-runtime.mjs
+  h_9630b74bdac540 1-75
+src/agent/webview/ChatProjectionStateCache.ts
+  h_9630b74bdac540 3-5,55-61
+packages/core/src/codex/turnRouting.ts
+  h_9630b74bdac540 1-68
+src/agent/compose/composeRuntime.ts
+  h_9630b74bdac540 3-4,18,42,71,118,164,171,187,211,218,231,268-269,276,284-285,287-298,300,304,318-320,327,336-337,355-356,374-375,390,440-445,450-452,454-458,488,520,544,547-549,555,568,572-578,593,608,618-620,636,640-668,672-675,739,831,838,906-909,918-919,926,931-932,937,942-950,956-957,961-1026,1030,1034-1040,1049,1052,1058,1064,1069-1070,1086,1088-1093,1096,1099,1102,1105-1112,1118,1126,1160-1163,1178-1180,1226-1227,1261,1296,1310,1342,1345,1349,1353,1355,1376
+src/tools/executeCommand.test.ts
+  h_9630b74bdac540 5952,5983-5986
+apps/desktop/src/chatPreload.ts
+  h_9630b74bdac540 1-25
+apps/desktop/src/sharedCredentialStore.ts
+  h_9630b74bdac540 1-55
+packages/core/README.md
+  h_9630b74bdac540 56,124
+src/browser-gateway/BrowserGatewayServer.test.ts
+  h_9630b74bdac540 302-308,2555-2598,2600-2621
+src/tools/executeCommand.ts
+  h_9630b74bdac540 2791
+src/tools/getTerminalOutput.ts
+  h_9630b74bdac540 44,62-72,84,92,121,124-125,128,133,142-143,147,181-184,193,201-202,235
+src/browser-gateway/helper/askAgentModelClient.ts
+  h_9630b74bdac540 46,51,54-55,82,89,94-112,114-130,133,136-137,143-145,168-172,181-182,510-520,560-566,592,618-668,699-711,716,748,759-796
+src/telemetry/ContextUsageTelemetry.test.ts
+  h_9630b74bdac540 57-64,73-74,114-128
+src/agent/compose/composeRuntime.bundle.test.ts
+  h_9630b74bdac540 14,53,58-74,125,132,138-139,142-143
+src/browser-gateway/webview/DesktopRemotePane.tsx
+  h_9630b74bdac540 1-65
+src/browser-gateway/helper/AskAgentOwnerAdapter.ts
+  h_9630b74bdac540 7,460-464,486-492
+src/browser-gateway/migration/actionSurfaceInventory.ts
+  h_9630b74bdac540 276-281,474
+src/browser-gateway/webview/DesktopSidebar.tsx
+  h_9630b74bdac540 1-63,66-69,71-106
+src/agent/McpOAuthProvider.ts
+  h_9630b74bdac540 19,21
+src/shared/toolRegistry.ts
+  h_9630b74bdac540 231,263,268,270-272
+apps/desktop/src/setup.css
+  h_9630b74bdac540 1-262
+packages/node-host/README.md
+  h_9630b74bdac540 113-118,170,174,176,180-183,192
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_9630b74bdac540 53-57,812,833,947,949,962-967,993,1008-1011,1257-1315,1321-1324,1329-1342,1369,1372-1374,1398-1399,1408,1687-1689,1824-1831,2605,2607-2618,2784,3033,3088,4797-4864,6629-6631,7378,7380-7396,7398-7428,7430-7437,7439-7513,7515,7525,7527,7529,7566,7649,7655,7666-7667,7671-7672,7675-7681,7683,7692-7695,7706-7707,7711-7713,7737-7739,7784-7791,7793,7795,7802-7824,7829-7830,7836-7842,7844-7846,7855,7892-7914,7916,7942,7958-7961,7976,7999,8614-8616,8627-8632,9014-9016,9053,9055,9142,9184-9186
+packages/core/src/codex/credentialResolution.test.ts
+  h_9630b74bdac540 1-244
+src/agent/webview/components/InputArea.tsx
+  h_9630b74bdac540 234,284,1923-1924,1926
+packages/protocol/src/browserGatewayHelperLifecycle.ts
+  h_9630b74bdac540 40-43,52
+src/telemetry/ToolUsageTelemetry.ts
+  h_9630b74bdac540 32,42-62,64-70,113,272-273,306
+packages/core/src/codex/responsesStream.ts
+  h_9630b74bdac540 17-22,51,67-70,73-87,90-105,107-134
+packages/core/src/codex/completionFacade.ts
+  h_9630b74bdac540 143,180
+packages/core/src/codex/responsesStream.test.ts
+  h_9630b74bdac540 1-2,11-16,32-443
+packages/node-host/src/mcpStdioTools.ts
+  h_9630b74bdac540 14-23,83-84,91-143,177-183,226-227,295,301-302,304-310,317
+src/workspaceGateCoverage.test.ts
+  h_9630b74bdac540 13,76-79
+src/browser-gateway/helper/helperRouteFamilies.ts
+  h_9630b74bdac540 30,114-117,427,473-475
+src/browser-gateway/dataPlane/OwnerTransport.test.ts
+  h_9630b74bdac540 185-238
+packages/core/CHANGELOG.md
+  h_9630b74bdac540 5-8,25
+apps/desktop/src/preload.ts
+  h_9630b74bdac540 1-33
+src/util/ansi.ts
+  h_9630b74bdac540 66,68-69,72-102,113
+src/agent/webview/components/InputArea.test.tsx
+  h_9630b74bdac540 55-67
+scripts/report-tool-usage-telemetry.mjs
+  h_9630b74bdac540 379-392,427,431-470,1126-1169
+src/agent/AgentSession.ts
+  h_9630b74bdac540 142,176-177,336,418,624,683,754,1260-1261,1264
+apps/desktop/src/DesktopRemoteView.ts
+  h_9630b74bdac540 1-313
+src/shared/toolSchemas.ts
+  h_9630b74bdac540 1089-1095,1267
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_9630b74bdac540 569-572,576-579,583-586,590-593,597-600,607-610,615-618,623-626,631-634,639-642,687
+src/telemetry/ToolUsageTelemetry.test.ts
+  h_9630b74bdac540 5-8,177-272
+why-agentlink.md
+  h_9630b74bdac540 3,47
+src/tools/readFile.ts
+  h_9630b74bdac540 476-506,721,1187-1211
+src/agent/condense.ts
+  h_9630b74bdac540 443-448,454-455,457-459,478-479,484,497-502,506,516,557,562,569-579,593-594,614-617,1359-1372,1382-1384,1432-1433
+src/agent/McpFormElicitationCoordinator.ts
+  h_9630b74bdac540 16,49,92-94,99-112
+src/browser-gateway/webview/DesktopSidebar.test.tsx
+  h_9630b74bdac540 1-62
+packages/node-host/src/keychainSecretStorage.ts
+  h_9630b74bdac540 1-211
+src/browser-gateway/dataPlane/OwnerTransport.ts
+  h_9630b74bdac540 252-256,468-470
+src/browser-gateway/helper/bootstrapHelper.test.ts
+  h_9630b74bdac540 13,39-65,369-427
+src/agent/McpFormElicitationCoordinator.test.ts
+  h_9630b74bdac540 41,54,77,80-81,114-137
+src/tools/getTerminalOutput.test.ts
+  h_9630b74bdac540 33-91,628-634,643
+scripts/package-vsix.mjs
+  h_9630b74bdac540 1-5,19,22,73-76,78
+src/telemetry/ContextJumpTracker.ts
+  h_9630b74bdac540 51,59-60,132,146-147
+src/agent/TabTerminalProviderRegistry.test.ts
+  h_9630b74bdac540 2,183-223
+packages/node-host/src/mcpResourcePrompts.test.ts
+  h_9630b74bdac540 1-162
+src/agent/AgentSessionManagerHost.ts
+  h_9630b74bdac540 220-222
+src/browser-gateway/helper/bootstrapHelper.ts
+  h_9630b74bdac540 19-22,161,175-183,186-187,286-301,328-369,419-421
+apps/desktop/src/desktopRemoteDiscovery.test.ts
+  h_9630b74bdac540 1-118
+src/agent/condense.test.ts
+  h_9630b74bdac540 698-770,798-802,873,875-876
+src/agent/ChatTabController.ts
+  h_9630b74bdac540 169-170,176,202
+src/telemetry/SessionOutcomeTelemetry.test.ts
+  h_9630b74bdac540 49-71,162-168
+apps/desktop/src/setup.ts
+  h_9630b74bdac540 1-210
+packages/core/package.json
+  h_9630b74bdac540 341
+src/browser-gateway/helper/standaloneMcpOAuthPolicy.test.ts
+  h_9630b74bdac540 1-62
+src/agent/systemPrompt.test.ts
+  h_9630b74bdac540 192-217
+packages/node-host/src/keychainMcpCredentialRepository.test.ts
+  h_9630b74bdac540 1-190
+src/corePackageBoundary.test.ts
+  h_9630b74bdac540 44,54,680
+apps/desktop/esbuild.mjs
+  h_9630b74bdac540 1-64
+apps/desktop/src/setup.html
+  h_9630b74bdac540 1-63
+packages/node-host/package.json
+  h_9630b74bdac540 31
+src/agent/providers/codex/CodexOAuthManager.ts
+  h_9630b74bdac540 25,112-126,401,410-413,428-437,440-443,581,583,599,627,634,639,647,650,663,670-677,682,691-693,749,766-775,781,784-789,791,796-797,807-816,819-820,822-827,838-841,848,853,860,913-918,921-923,978,1091,1395
+src/agent/providers/codex/OpenAiCodexAuthManager.test.ts
+  h_9630b74bdac540 286-356
+scripts/package-keychain-runtime.test.mjs
+  h_9630b74bdac540 1-89
+scripts/verify-desktop-package.mjs
+  h_9630b74bdac540 1-180
+src/browser-gateway/helper/helperRouteFamilies.test.ts
+  h_9630b74bdac540 121-126,151-159
+src/agent/AgentEngine.ts
+  h_9630b74bdac540 2,29,1079-1080,1130,1195,1271,1456,1722-1726,1740-1742,1760,2535-2538,3019,3498,3647-3648
+src/browser-gateway/webview/DesktopMoreActions.tsx
+  h_9630b74bdac540 1-71
+src/approvals/webview/components/McpCard.test.tsx
+  h_9630b74bdac540 32-61
+src/shared/mcpOAuthCallbackPage.ts
+  h_9630b74bdac540 1-92
+src/terminal/native/NativeAgentTerminalCoordinator.test.ts
+  h_9630b74bdac540 175-248
+apps/desktop/src/desktopAuth.ts
+  h_9630b74bdac540 1-111
+packages/node-host/src/mcpOAuthFetch.test.ts
+  h_9630b74bdac540 1-233
+src/agent/providers/codex/CodexProvider.test.ts
+  h_9630b74bdac540 4,604,627,799-862
+src/util/ansi.test.ts
+  h_9630b74bdac540 120-124,126-131,137-161
+packages/node-host/src/index.ts
+  h_9630b74bdac540 4-5,7,9,11
+src/agent/compose/composeRuntimeLimiter.test.ts
+  h_9630b74bdac540 1-121
+src/agent/toolAdapter.test.ts
+  h_9630b74bdac540 56-57,337,341,350,365,375-377,1275-1281,1289-1294,1303-1307,1328-1336,1350,1357-1359,1375,1381-1391,1410,1413-1419
+src/core/capabilities/terminal.ts
+  h_9630b74bdac540 124-125,279-280,337-338
+scripts/verify-retrieval-package.mjs
+  h_9630b74bdac540 2-4,59-64,71-76,109-115,139-141,154-155
+src/agent/TabTerminalProviderRegistry.ts
+  h_9630b74bdac540 228,235,243,250,257,265,275,395-396
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "4b89bec5cad435d6694e4d11529a47b416604f97",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
