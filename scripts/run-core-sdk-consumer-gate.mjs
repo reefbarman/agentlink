@@ -378,7 +378,7 @@ async function main() {
             target: "ES2022",
             module: "Node16",
             moduleResolution: "Node16",
-            lib: ["ES2022"],
+            lib: ["ES2022", "DOM"],
             types: ["node"],
             strict: true,
             noEmit: true,
