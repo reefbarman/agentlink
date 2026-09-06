@@ -1,0 +1,20 @@
+src/core/memory/legacyMemoryImport.test.ts
+  h_9630b74bdac540 256-281
+.github/workflows/release.yml
+  h_9630b74bdac540 7-17,36-38,41-42,75,79-91,94-95,98-99,144,156-157,159,175-176
+src/core/memory/memoryPolicy.ts
+  h_9630b74bdac540 33
+.github/workflows/desktop-release.yml
+  h_9630b74bdac540 73,77-89,94-95
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "a3fc28e93046cdec2017137a2f273515bd606763",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
