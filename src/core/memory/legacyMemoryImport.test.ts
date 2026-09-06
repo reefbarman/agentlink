@@ -253,6 +253,32 @@ describe("legacy memory Markdown import", () => {
     ).resolves.toMatchObject({ disposition: "rejected-quota" });
   });
 
+  it("allows slash-delimited macOS temp paths while rejecting encoded secrets", async () => {
+    const repository = new InMemoryMemoryRepository();
+    const service = new AutonomousMemoryService(repository, {
+      now: sequentialNow(),
+      createId: sequentialId(),
+    });
+    const request = buildLegacyMemoryImportRequest({
+      ...source,
+      filePath:
+        "/var/folders/bl/vzjcvbz95c3dk19cb0fw46180000gn/T/agentlink-legacy-memory-migration-abc/home/.agentlink/memory.md",
+      content: "# Preferences\n\n- Prefer concise answers.",
+    });
+
+    await expect(service.importRecords(request)).resolves.toMatchObject({
+      status: "imported",
+    });
+
+    const encodedRequest = buildLegacyMemoryImportRequest({
+      ...source,
+      content: "QWxhZGRpbjpPcGVuU2VzYW1lQWxhZGRpbjpPcGVuU2VzYW1l==",
+    });
+    await expect(service.importRecords(encodedRequest)).rejects.toThrow(
+      "contains sensitive content: encoded-secret",
+    );
+  });
+
   it("records exact failed metadata and rolls back records, snapshot, and audit", async () => {
     const repository = new InMemoryMemoryRepository();
     const service = new AutonomousMemoryService(repository, {

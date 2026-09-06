@@ -4,6 +4,17 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Extension version to package (must match package.json)
+        required: true
+        type: string
+      publish:
+        description: Publish artifacts to a GitHub Release
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -22,10 +33,13 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - name: Verify tag matches package version
+      - name: Verify release version
+        env:
+          REQUESTED_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
         run: |
           VERSION=$(node -p 'require("./package.json").version')
-          test "${GITHUB_REF_NAME#v}" = "$VERSION"
+          REQUESTED_VERSION=${REQUESTED_VERSION#v}
+          test "$REQUESTED_VERSION" = "$VERSION"
       - run: npm run lint
       - run: npm run build
       - run: npm test
@@ -58,19 +72,32 @@ jobs:
 
       - run: npm ci
 
-      - name: Install target native runtimes
+      - name: Extract target native runtimes
         env:
           AGENTLINK_VSCE_TARGET: ${{ matrix.target }}
         run: |
+          extract_package() {
+            local package_spec=$1
+            local pack_dir archive package_name destination
+            pack_dir=$(mktemp -d)
+            archive=$(npm pack "$package_spec" --pack-destination "$pack_dir" --silent)
+            package_name=$(tar -xOf "$pack_dir/$archive" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).name')
+            destination="node_modules/$package_name"
+            rm -rf "$destination"
+            mkdir -p "$destination"
+            tar -xzf "$pack_dir/$archive" -C "$destination" --strip-components=1
+            rm -rf "$pack_dir"
+          }
+
           LANCEDB_PACKAGE=$(node scripts/package-retrieval-runtime.mjs --print-native-package)
           LANCEDB_VERSION=$(node -p 'require("./package.json").dependencies["@lancedb/lancedb"]')
+          extract_package "${LANCEDB_PACKAGE}@${LANCEDB_VERSION}"
+
           KEYCHAIN_PACKAGE=$(node -e 'import("./scripts/package-keychain-runtime.mjs").then(({ KEYCHAIN_NATIVE_PACKAGES }) => process.stdout.write(KEYCHAIN_NATIVE_PACKAGES[process.env.AGENTLINK_VSCE_TARGET] ?? ""))')
-          KEYCHAIN_VERSION=$(node -p 'require("./apps/desktop/package.json").dependencies["@napi-rs/keyring"]')
-          PACKAGES=("${LANCEDB_PACKAGE}@${LANCEDB_VERSION}")
           if [ -n "$KEYCHAIN_PACKAGE" ]; then
-            PACKAGES+=("${KEYCHAIN_PACKAGE}@${KEYCHAIN_VERSION}")
+            KEYCHAIN_VERSION=$(node -p 'require("./apps/desktop/package.json").dependencies["@napi-rs/keyring"]')
+            extract_package "${KEYCHAIN_PACKAGE}@${KEYCHAIN_VERSION}"
           fi
-          npm install --no-save --package-lock=false --force "${PACKAGES[@]}"
 
       - name: Build target bundle
         env:
@@ -114,6 +141,7 @@ jobs:
 
   release:
     needs: [verify, package]
+    if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -125,8 +153,10 @@ jobs:
           merge-multiple: true
 
       - name: Verify release asset set
+        env:
+          RELEASE_VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
+          VERSION=${RELEASE_VERSION#v}
           TARGETS=(
             darwin-arm64 darwin-x64
             linux-arm64 linux-x64
@@ -142,6 +172,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event_name == 'push' && github.ref_name || format('v{0}', inputs.version) }}
+          name: AgentLink ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
           files: dist/*.vsix
           fail_on_unmatched_files: true
           generate_release_notes: true

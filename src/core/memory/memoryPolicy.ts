@@ -28,7 +28,10 @@ const SENSITIVE_PATTERNS: Array<{ finding: string; pattern: RegExp }> = [
   { finding: "slack-token", pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}\b/ },
   { finding: "openai-key", pattern: /\bsk-[A-Za-z0-9_-]{20,}\b/ },
   { finding: "hex-secret", pattern: /\b[0-9a-f]{40,}\b/i },
-  { finding: "encoded-secret", pattern: /\b[A-Za-z0-9+/]{48,}={0,2}\b/ },
+  {
+    finding: "encoded-secret",
+    pattern: /(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/]{48,}={0,2}(?![A-Za-z0-9+/=_-])/,
+  },
   { finding: "social-security-number", pattern: /\b\d{3}-\d{2}-\d{4}\b/ },
 ];
 

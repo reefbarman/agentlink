@@ -70,17 +70,29 @@ jobs:
 
       - run: npm ci
 
-      - name: Install target native runtimes
+      - name: Extract target native runtimes
         env:
           AGENTLINK_VSCE_TARGET: ${{ matrix.target }}
         run: |
+          extract_package() {
+            local package_spec=$1
+            local pack_dir archive package_name destination
+            pack_dir=$(mktemp -d)
+            archive=$(npm pack "$package_spec" --pack-destination "$pack_dir" --silent)
+            package_name=$(tar -xOf "$pack_dir/$archive" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).name')
+            destination="node_modules/$package_name"
+            rm -rf "$destination"
+            mkdir -p "$destination"
+            tar -xzf "$pack_dir/$archive" -C "$destination" --strip-components=1
+            rm -rf "$pack_dir"
+          }
+
           LANCEDB_PACKAGE=$(node scripts/package-retrieval-runtime.mjs --print-native-package)
           LANCEDB_VERSION=$(node -p 'require("./package.json").dependencies["@lancedb/lancedb"]')
           KEYCHAIN_PACKAGE=$(node -e 'import("./scripts/package-keychain-runtime.mjs").then(({ KEYCHAIN_NATIVE_PACKAGES }) => process.stdout.write(KEYCHAIN_NATIVE_PACKAGES[process.env.AGENTLINK_VSCE_TARGET]))')
           KEYCHAIN_VERSION=$(node -p 'require("./apps/desktop/package.json").dependencies["@napi-rs/keyring"]')
-          npm install --no-save --package-lock=false --force \
-            "${LANCEDB_PACKAGE}@${LANCEDB_VERSION}" \
-            "${KEYCHAIN_PACKAGE}@${KEYCHAIN_VERSION}"
+          extract_package "${LANCEDB_PACKAGE}@${LANCEDB_VERSION}"
+          extract_package "${KEYCHAIN_PACKAGE}@${KEYCHAIN_VERSION}"
 
       - name: Package standalone desktop app
         env:
