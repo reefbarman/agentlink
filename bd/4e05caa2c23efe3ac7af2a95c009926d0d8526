@@ -1,0 +1,14 @@
+scripts/run-core-sdk-consumer-gate.mjs
+  h_9630b74bdac540 381
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "bd4e05caa2c23efe3ac7af2a95c009926d0d8526",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
