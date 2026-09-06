@@ -12,11 +12,11 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.x
           cache: npm
@@ -47,23 +47,30 @@ jobs:
           - win32-arm64
           - win32-x64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.x
           cache: npm
 
       - run: npm ci
 
-      - name: Install target LanceDB addon
+      - name: Install target native runtimes
         env:
           AGENTLINK_VSCE_TARGET: ${{ matrix.target }}
         run: |
-          NATIVE_PACKAGE=$(node scripts/package-retrieval-runtime.mjs --print-native-package)
-          npm install --no-save --package-lock=false --force "${NATIVE_PACKAGE}@0.22.3"
+          LANCEDB_PACKAGE=$(node scripts/package-retrieval-runtime.mjs --print-native-package)
+          LANCEDB_VERSION=$(node -p 'require("./package.json").dependencies["@lancedb/lancedb"]')
+          KEYCHAIN_PACKAGE=$(node -e 'import("./scripts/package-keychain-runtime.mjs").then(({ KEYCHAIN_NATIVE_PACKAGES }) => process.stdout.write(KEYCHAIN_NATIVE_PACKAGES[process.env.AGENTLINK_VSCE_TARGET] ?? ""))')
+          KEYCHAIN_VERSION=$(node -p 'require("./apps/desktop/package.json").dependencies["@napi-rs/keyring"]')
+          PACKAGES=("${LANCEDB_PACKAGE}@${LANCEDB_VERSION}")
+          if [ -n "$KEYCHAIN_PACKAGE" ]; then
+            PACKAGES+=("${KEYCHAIN_PACKAGE}@${KEYCHAIN_VERSION}")
+          fi
+          npm install --no-save --package-lock=false --force "${PACKAGES[@]}"
 
       - name: Build target bundle
         env:
@@ -117,8 +124,24 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Verify release asset set
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          TARGETS=(
+            darwin-arm64 darwin-x64
+            linux-arm64 linux-x64
+            alpine-arm64 alpine-x64
+            win32-arm64 win32-x64
+          )
+          for TARGET in "${TARGETS[@]}"; do
+            test -f "dist/agentlink-${VERSION}-${TARGET}.vsix"
+          done
+          ACTUAL_COUNT=$(find dist -maxdepth 1 -type f -name '*.vsix' | wc -l | tr -d ' ')
+          test "$ACTUAL_COUNT" -eq "${#TARGETS[@]}"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.vsix
+          fail_on_unmatched_files: true
           generate_release_notes: true

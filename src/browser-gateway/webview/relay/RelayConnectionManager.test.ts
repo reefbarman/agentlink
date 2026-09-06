@@ -255,7 +255,7 @@ describe("RelayConnectionManager", () => {
     sources[0]!.emit("checkpoint", checkpointEnvelope("subscription-1"));
     expect(checkpoints.map((value) => value.checkpointId)).toEqual(["cached"]);
     subscriptionResponse.resolve(jsonResponse(subscription(), 202));
-    await flushPromises();
+    await waitForSubscription(manager, { ownerId, ownerGenerationId });
 
     expect(checkpoints).toHaveLength(2);
     expect(checkpoints.at(-1)?.checkpointId).toBe("checkpoint-2");
@@ -977,7 +977,7 @@ describe("RelayConnectionManager", () => {
     manager.selectOwner({ ownerId, ownerGenerationId });
     manager.start();
     sources[0]!.emit("hello", hello("connection-1"));
-    await flushPromises();
+    await waitForSubscription(manager, { ownerId, ownerGenerationId });
     await manager.sendCommand({
       operationId: "send-1",
       command: {

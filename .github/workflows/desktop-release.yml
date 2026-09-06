@@ -23,11 +23,11 @@ jobs:
   verify:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.x
           cache: npm
@@ -59,11 +59,11 @@ jobs:
             runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.x
           cache: npm
@@ -111,6 +111,20 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Verify release asset set
+        env:
+          DESKTOP_VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+        run: |
+          VERSION=${DESKTOP_VERSION#desktop-v}
+          for ARCH in arm64 x64; do
+            test -f "dist/AgentLink-Desktop-${VERSION}-mac-${ARCH}.dmg"
+            test -f "dist/AgentLink-Desktop-${VERSION}-mac-${ARCH}.dmg.blockmap"
+            test -f "dist/AgentLink-Desktop-${VERSION}-mac-${ARCH}.zip"
+            test -f "dist/AgentLink-Desktop-${VERSION}-mac-${ARCH}.zip.blockmap"
+          done
+          ACTUAL_COUNT=$(find dist -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.blockmap' \) | wc -l | tr -d ' ')
+          test "$ACTUAL_COUNT" -eq 8
+
       - name: Create standalone desktop GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -120,6 +134,7 @@ jobs:
             dist/*.dmg
             dist/*.zip
             dist/*.blockmap
+          fail_on_unmatched_files: true
           body: |
             Standalone AgentLink Desktop preview for macOS. Download the DMG matching your Mac: `arm64` for Apple Silicon or `x64` for Intel.
 

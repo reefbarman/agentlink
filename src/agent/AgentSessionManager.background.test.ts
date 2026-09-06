@@ -2625,6 +2625,8 @@ describe("AgentSessionManager background agents", () => {
     const outsideRoot = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-acp-read-")),
     );
+    const workspaceRoot = path.join(outsideRoot, "workspace");
+    fs.mkdirSync(workspaceRoot);
     const outsideFile = path.join(outsideRoot, "reference.md");
     fs.writeFileSync(outsideFile, "reference notes\n");
     try {
@@ -2681,7 +2683,7 @@ describe("AgentSessionManager background agents", () => {
       };
       const mgr = new AgentSessionManager(
         config,
-        "/tmp",
+        workspaceRoot,
         undefined,
         false,
         undefined,
