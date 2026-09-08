@@ -870,6 +870,7 @@ body.chat-activity-shelf-resizing * {
 .memory-panel-icon-button,
 .memory-panel button,
 .memory-panel select,
+.memory-panel textarea,
 .memory-panel input {
   box-sizing: border-box;
   min-height: 28px;
@@ -898,6 +899,7 @@ body.chat-activity-shelf-resizing * {
 
 .memory-panel button:focus-visible,
 .memory-panel input:focus-visible,
+.memory-panel textarea:focus-visible,
 .memory-panel select:focus-visible,
 .memory-panel summary:focus-visible {
   outline: 2px solid var(--vscode-focusBorder, #4ec9b0);
@@ -980,11 +982,67 @@ body.chat-activity-shelf-resizing * {
 }
 
 .memory-panel-detail {
+  max-height: 320px;
   padding: 10px;
+  overflow: auto;
   overflow-wrap: anywhere;
 }
 
+.memory-panel-editor {
+  display: flex;
+  min-height: 0;
+  max-height: 340px;
+  padding: 12px;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.memory-panel-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.memory-panel-editor textarea {
+  width: 100%;
+  min-height: 80px;
+  padding: 8px;
+  resize: vertical;
+}
+
+.memory-panel-editor p,
+.memory-panel-history p {
+  margin: 4px 0;
+  white-space: pre-wrap;
+}
+
+.memory-panel-editor p {
+  color: var(--vscode-descriptionForeground);
+}
+
+.memory-panel-history summary {
+  padding: 5px 0;
+  cursor: pointer;
+}
+
+.memory-panel-history ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.memory-panel-history li {
+  display: flex;
+  padding: 6px 0;
+  flex-direction: column;
+  gap: 3px;
+  border-top: 1px solid var(--vscode-panel-border);
+}
+
 .memory-panel-actions {
+  flex-wrap: wrap;
   margin-top: 5px;
 }
 
@@ -2502,7 +2560,7 @@ body.chat-activity-shelf-resizing * {
   font-weight: 400;
 }
 
-.tool-running-command-reason {
+.tool-command-reason {
   display: flex;
   gap: 5px;
   margin: 2px 12px 0 22px;
@@ -2511,9 +2569,12 @@ body.chat-activity-shelf-resizing * {
   line-height: 1.4;
 }
 
-.tool-running-command-reason-label {
+.tool-command-reason-label {
   flex-shrink: 0;
-  color: var(--tool-running-command-accent);
+  color: var(
+    --tool-running-command-accent,
+    var(--vscode-descriptionForeground)
+  );
   font-weight: 600;
 }
 
@@ -4419,13 +4480,28 @@ body.chat-activity-shelf-resizing * {
 
 .model-change-divider-badge {
   display: flex;
-  align-items: center;
-  gap: 5px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
   min-width: 0;
-  padding: 2px 6px;
-  border-radius: 3px;
+  padding: 4px 8px;
+  border-radius: 4px;
   background: color-mix(in srgb, var(--vscode-foreground) 5%, transparent);
-  white-space: nowrap;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.model-change-divider-segment {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.model-change-divider-dot {
+  flex-shrink: 0;
 }
 
 .model-change-divider-badge .codicon {
@@ -4435,10 +4511,8 @@ body.chat-activity-shelf-resizing * {
 }
 
 .model-change-divider-model {
-  overflow: hidden;
   color: var(--vscode-foreground);
   font-weight: 500;
-  text-overflow: ellipsis;
 }
 
 /* ── Context Bar ── */

@@ -1,8 +1,11 @@
+import {
+  createShellIntegrationScript,
+  createZshCommandOutputEndMarkerScript,
+} from "./shellIntegration.js";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 
 import type { HostShellLaunchDecision } from "./hostShellLaunchPolicy.js";
 import type { ResolvedHostShellProfile } from "./shellProfileResolver.js";
-import { createShellIntegrationScript } from "./shellIntegration.js";
 import path from "node:path";
 
 const ARTIFACT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -45,6 +48,8 @@ export interface HostShellBootstrapInput {
   nonce: string;
   homeDirectory: string;
   originalZdotdir?: string;
+  /** Separate Native Agent command output from zsh's pre-prompt line cleanup. */
+  markZshCommandOutputEndBeforeEolPadding?: boolean;
 }
 
 export interface HostShellBootstrapFileOperations {
@@ -185,7 +190,10 @@ function zshPlan(
   }
   const userZdotdir = input.originalZdotdir?.trim() || input.homeDirectory;
   validateAbsoluteDirectory(userZdotdir, "originalZdotdir");
-  const hook = createShellIntegrationScript("zsh", input.nonce);
+  const hook = createShellIntegrationScript("zsh", input.nonce, {
+    markZshCommandOutputEndBeforeEolPadding:
+      input.markZshCommandOutputEndBeforeEolPadding,
+  });
   const bootstrapAssignment = `export ZDOTDIR=${shellQuote(artifactDirectory)}`;
   const restoreForNestedShells = 'export ZDOTDIR="$__agentlink_user_zdotdir"';
   const zshenv = [
@@ -205,7 +213,12 @@ function zshPlan(
     "fi",
     "",
   ].join("\n");
-  const zlogin = `${zshProxySource(".zlogin", [restoreForNestedShells])}\n`;
+  const zlogin = `${zshProxySource(".zlogin", [
+    ...(input.markZshCommandOutputEndBeforeEolPadding
+      ? [createZshCommandOutputEndMarkerScript(input.nonce)]
+      : []),
+    restoreForNestedShells,
+  ])}\n`;
 
   return {
     mode: "integrated",

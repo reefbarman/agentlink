@@ -729,6 +729,7 @@ export type AppAction =
   | { type: "CLEAR_QUEUE" }
   | {
       type: "ADD_INTERJECTION";
+      coordination?: ChatMessage["coordination"];
       text: string;
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
@@ -983,6 +984,7 @@ export function agentMessagesToChatMessages(
           slashCommandLabel?: string;
           origin?: "vscode" | "browser";
           hidden?: boolean;
+          coordination?: ChatMessage["coordination"];
         };
         condense?: {
           prevInputTokens?: number;
@@ -1040,6 +1042,7 @@ export function agentMessagesToChatMessages(
           id: rehydratedMessageId(rawIndex),
           role: "user",
           content: hint?.displayText ?? m.content,
+          coordination: hint?.coordination,
           timestamp: Date.now(),
           blocks: [],
           isSlashCommand: hint?.isSlashCommand,
@@ -2813,13 +2816,14 @@ export function reducer(state: AppState, action: AppAction): AppState {
       return { ...state, messageQueue: [] };
 
     case "ADD_INTERJECTION": {
-      // Insert user interjection bubble mid-run without resetting streaming state
+      // Insert an interjection without resetting streaming state.
       const withInterjection = [
         ...state.messages,
         {
           id: randomId(),
           role: "user" as const,
           content: action.text,
+          coordination: action.coordination,
           timestamp: Date.now(),
           blocks: [],
           isSlashCommand: action.isSlashCommand,

@@ -172,6 +172,8 @@ interface MetadataFile {
   lastInputTokens?: number;
   lastCacheReadTokens?: number;
   reasoningEffort?: import("./providers/types.js").ReasoningEffort;
+  desiredReasoningEffort?: import("./providers/types.js").ReasoningEffort;
+  autoCondenseThreshold?: number;
   loadedSkills?: string[];
   activeSkillState?: PersistedActiveSkillState;
   checkpoints?: Checkpoint[];
@@ -753,6 +755,8 @@ export class SessionStore implements SessionPersistenceProvider {
     lastInputTokens: number;
     lastCacheReadTokens: number;
     reasoningEffort?: import("./providers/types.js").ReasoningEffort;
+    desiredReasoningEffort?: import("./providers/types.js").ReasoningEffort;
+    autoCondenseThreshold?: number;
     commandApprovalPolicy?: import("@agentlink/protocol/terminal").TerminalCommandApprovalPolicySnapshot;
     approvalPolicy?: import("@agentlink/protocol/terminal").TerminalApprovalPolicy;
     approvalReviewer?: import("@agentlink/protocol/terminal").TerminalApprovalReviewer;
@@ -804,6 +808,8 @@ export class SessionStore implements SessionPersistenceProvider {
         lastInputTokens: session.lastInputTokens,
         lastCacheReadTokens: session.lastCacheReadTokens,
         reasoningEffort: session.reasoningEffort,
+        desiredReasoningEffort: session.desiredReasoningEffort,
+        autoCondenseThreshold: session.autoCondenseThreshold,
         loadedSkills: session.getLoadedSkills?.() ?? [],
         activeSkillState: session.getActiveSkillState?.(),
         checkpointState: session.checkpoints
@@ -1349,6 +1355,8 @@ export class SessionStore implements SessionPersistenceProvider {
       lastInputTokens: file.lastInputTokens,
       lastCacheReadTokens: file.lastCacheReadTokens,
       reasoningEffort: file.reasoningEffort,
+      desiredReasoningEffort: file.desiredReasoningEffort,
+      autoCondenseThreshold: file.autoCondenseThreshold,
       loadedSkills: file.loadedSkills,
       activeSkillState: file.activeSkillState,
       checkpointState: file.checkpointState ?? {
@@ -1397,6 +1405,8 @@ export class SessionStore implements SessionPersistenceProvider {
       lastInputTokens: metadata.lastInputTokens,
       lastCacheReadTokens: metadata.lastCacheReadTokens,
       reasoningEffort: metadata.reasoningEffort,
+      desiredReasoningEffort: metadata.desiredReasoningEffort,
+      autoCondenseThreshold: metadata.autoCondenseThreshold,
       loadedSkills: metadata.loadedSkills,
       activeSkillState: metadata.activeSkillState,
       checkpoints,

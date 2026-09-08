@@ -41,6 +41,14 @@ export const webFetchSchema = {
     .min(1)
     .optional()
     .describe("Maximum visible content characters to request"),
+  start_line: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe(
+      "Provider page line to start near when continuing a long page (Codex OAuth only)",
+    ),
   section: z
     .string()
     .optional()
@@ -206,7 +214,7 @@ export const readFileSchema = {
     .string()
     .optional()
     .describe(
-      "Semantic search query to jump to the most relevant section of the file. Uses the codebase index to find the best matching code chunk and auto-sets the offset. Ignored if offset is explicitly provided. Requires codebase index.",
+      "Semantic search query to jump to the most relevant section of a file within the current workspace folders only. Omit query for external files and use offset/limit or an anchor instead. Uses the codebase index to find the best matching code chunk and auto-sets the offset. Ignored if offset is explicitly provided. Requires codebase index.",
     ),
   anchor: z
     .string()
@@ -286,7 +294,7 @@ export const getModuleNeighborsSchema = {
   path: z
     .string()
     .describe(
-      "Source/config file path (absolute or relative to workspace root) to inspect in the structural repo map.",
+      "Source/config file path within the current workspace folders (absolute or workspace-relative). External paths are unsupported; use direct reads or regex search instead.",
     ),
   max_results: z.coerce
     .number()
@@ -301,7 +309,7 @@ export const getRepoMapSchema = {
     .string()
     .optional()
     .describe(
-      "Optional workspace-relative or absolute file/directory path to scope the repo map. Omit for the first workspace root.",
+      "Optional file/directory path within the current workspace folders (absolute or workspace-relative). External paths are unsupported; use direct reads, directory listings, or regex search instead. Omit for the first workspace root.",
     ),
   max_chars: z.coerce
     .number()
@@ -319,7 +327,7 @@ export const getRepoMapSchema = {
     .boolean()
     .optional()
     .describe(
-      "Include summarized external dependency specifiers (default true). Set false to reserve budget for internal files.",
+      "Include summarized external dependency specifiers (default true). This does not index or read external repositories. Set false to reserve budget for internal files.",
     ),
 };
 
@@ -353,7 +361,7 @@ export const listFilesSchema = {
     .string()
     .optional()
     .describe(
-      "Semantic search query to find files by meaning (e.g. 'authentication logic', 'database migrations'). Returns files ranked by relevance using the codebase index. Other params (recursive, depth, pattern) are ignored when query is provided. Requires codebase index.",
+      "Semantic search query to find files by meaning within the current workspace folders only (e.g. 'authentication logic', 'database migrations'). Omit query for external directories and use ordinary listing/globs instead. Returns files ranked by relevance using the codebase index. Other params (recursive, depth, pattern) are ignored when query is provided. Requires codebase index.",
     ),
 };
 
@@ -378,7 +386,7 @@ export const searchFilesSchema = {
     .boolean()
     .optional()
     .describe(
-      "Use semantic/vector search instead of regex. Requires a codebase index and OpenAI/Codex authentication (ChatGPT/Codex OAuth or an OpenAI API key). Default: false",
+      "Use semantic/vector search instead of regex, within the current workspace folders only. For external paths, omit this option or set false to use regex search. Requires a codebase index and OpenAI/Codex authentication (ChatGPT/Codex OAuth or an OpenAI API key). Default: false",
     ),
   context: z.coerce
     .number()
@@ -1285,7 +1293,7 @@ export const codebaseSearchSchema = {
     .string()
     .optional()
     .describe(
-      "Directory to scope the search to (absolute or relative to workspace root). Omit to search the entire workspace.",
+      "Directory within the current workspace folders to scope the search to (absolute or workspace-relative). External paths are unsupported; use regex search_files instead. Omit to search the entire workspace.",
     ),
   limit: z.coerce
     .number()

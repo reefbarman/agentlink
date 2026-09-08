@@ -188,6 +188,44 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     expect(channel.cwdEvents).toContain("/workspace");
     expect(nodePty.spawn).toHaveBeenCalledOnce();
 
+    const third = runtime.createCommand({
+      channelId: "native-agent-1",
+      commandId: "native-command-3",
+      generation: 3,
+      command: "printf 'triage-output\\r'",
+    });
+    const thirdEvents: SandboxCommandEvent[] = [];
+    third.process.onEvent((event) => thirdEvents.push(event));
+    third.start();
+    const outputEndFrame = frame("O");
+    pty.emitData(
+      `${frame("C", "printf triage-output")}triage-output\r${outputEndFrame.slice(0, -1)}`,
+    );
+    pty.emitData(
+      `${outputEndFrame.slice(-1)}                                    \r\r${frame("D", "7")}${frame("P", "/workspace")}${frame("A")}➜  workspace ${frame("B")}`,
+    );
+
+    await expect(third.process.completion).resolves.toEqual({
+      exitCode: 7,
+      timedOut: false,
+    });
+    expect(thirdEvents).toContainEqual({
+      type: "data",
+      data: "triage-output\r",
+    });
+    expect(thirdEvents).not.toContainEqual({
+      type: "data",
+      data: "                                    \r\r",
+    });
+    expect(thirdEvents).toContainEqual({
+      type: "cwd",
+      cwd: "/workspace",
+      nonce,
+    });
+    expect(channel.rawData.join("")).toContain(
+      "                                    \r\r➜  workspace ",
+    );
+
     channel.rawData.length = 0;
     expect(runtime.write("native-agent-1", "\x1b[A")).toBe(true);
     expect(pty.writes.at(-1)).toBe("\x1b[A");

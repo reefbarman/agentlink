@@ -1718,6 +1718,58 @@ describe("ChatViewProvider session state sync", () => {
       initialArchitectReviewApproved: true,
     });
     expect(switchSessionMode).not.toHaveBeenCalled();
+    expect(mockConfigUpdate).toHaveBeenCalledWith("defaultMode", "debug", 1);
+  });
+
+  it("remembers explicit blank-tab selections without mutating the foreground session", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const active = {
+      id: "other-tab",
+      mode: "code",
+      model: "unchanged",
+      reasoningEffort: "low",
+    };
+    provider.setSessionManager({ getForegroundSession: () => active } as never);
+    const handle = (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage.bind(provider);
+    await handle({
+      command: "agentRememberSessionlessSelection",
+      mode: "debug",
+    });
+    await handle({
+      command: "agentRememberSessionlessSelection",
+      mode: "debug",
+      model: "chosen-model",
+    });
+    await handle({
+      command: "agentRememberSessionlessSelection",
+      mode: "debug",
+      effort: "max",
+    });
+    expect(mockConfigUpdate).toHaveBeenCalledWith("defaultMode", "debug", 1);
+    expect(mockConfigUpdate).toHaveBeenCalledWith(
+      "modeModelPreferences",
+      { debug: "chosen-model" },
+      1,
+    );
+    expect(mockConfigUpdate).toHaveBeenCalledWith(
+      "modeReasoningEffortPreferences",
+      { debug: "max" },
+      1,
+    );
+    expect(active).toEqual({
+      id: "other-tab",
+      mode: "code",
+      model: "unchanged",
+      reasoningEffort: "low",
+    });
   });
 
   it("persists model selection for the active session mode and publishes state", async () => {
@@ -1759,7 +1811,7 @@ describe("ChatViewProvider session state sync", () => {
     expect(mockConfigUpdate).toHaveBeenCalledWith(
       "modeModelPreferences",
       { debug: "openrouter-moonshotai-kimi-k3" },
-      3,
+      1,
     );
     expect(sendInitialState).toHaveBeenCalledOnce();
   });
@@ -2838,7 +2890,7 @@ describe("ChatViewProvider session state sync", () => {
     expect(mockConfigUpdate).toHaveBeenCalledWith(
       "modeReasoningEffortPreferences",
       { code: "max" },
-      3,
+      1,
     );
   });
 
@@ -4687,6 +4739,63 @@ describe("ChatViewProvider session state sync", () => {
     );
     expect(sendMessage).not.toHaveBeenCalled();
 
+    for (const disposition of [
+      "stale-revision",
+      "rejected-sensitive",
+      "rejected-quota",
+      "not-found",
+    ] as const) {
+      manageAsUser.mockResolvedValueOnce({
+        result: {
+          disposition,
+          relatedRecords: [],
+          auditEventId: `audit-${disposition}`,
+        },
+        health,
+      });
+      mockPostMessage.mockClear();
+      const input = {
+        operation: "update",
+        scope: "project",
+        target_id: "memory-edit",
+        expected_revision: 7,
+        kind: "gotcha",
+        statement: "Use the project test runner.",
+        source_evidence: "User edited memory from /memory.",
+      };
+      await (
+        provider as unknown as {
+          handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+        }
+      ).handleWebviewMessage({
+        command: "agentMemoryManage",
+        requestId: `edit-${disposition}`,
+        input,
+        request: { scope: "project" },
+      });
+      expect(manageAsUser).toHaveBeenLastCalledWith(
+        input,
+        expect.objectContaining({
+          projectId: "project-host",
+          evidence: input.source_evidence,
+        }),
+      );
+      expect(mockPostMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "agentMemoryPanelUpdate",
+          requestId: `edit-${disposition}`,
+          scope: "project",
+          error: expect.any(String),
+        }),
+      );
+      expect(
+        mockPostMessage.mock.calls.some(
+          ([message]) =>
+            message.type === "agentMemoryPanelUpdate" && message.snapshot,
+        ),
+      ).toBe(false);
+    }
+
     for (const failure of [
       {
         operation: manageAsUser,
@@ -5908,6 +6017,54 @@ describe("ChatViewProvider session state sync", () => {
       expect.anything(),
       expect.anything(),
       expect.anything(),
+    );
+  });
+
+  it("forwards coordination identity to webview events and the browser projection", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const internals = provider as unknown as {
+      view: unknown;
+      webviewReady: boolean;
+      handleAgentEvent: (sessionId: string, event: unknown) => void;
+      applyProjectedAction: ReturnType<typeof vi.fn>;
+      ensureProjectedForegroundSession: ReturnType<typeof vi.fn>;
+      projectedForegroundStore: { setSessionId: (id: string) => void };
+    };
+    internals.ensureProjectedForegroundSession = vi.fn();
+    internals.projectedForegroundStore.setSessionId("session-1");
+    internals.view = { webview: { postMessage: mockPostMessage } };
+    internals.webviewReady = true;
+    internals.applyProjectedAction = vi.fn();
+    const coordination = {
+      requestId: "request-owner",
+      backgroundSessionId: "worker-owner",
+      task: "Confirm ownership",
+      kind: "question",
+      context: "Need a file boundary",
+      questions: [{ id: "path", question: "Which file?" }],
+    };
+    internals.handleAgentEvent("session-1", {
+      type: "user_interjection",
+      queueId: coordination.requestId,
+      text: "internal coordinator instructions",
+      displayText: "Background agent needs an answer",
+      coordination,
+    });
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agentInterjection",
+        coordination,
+      }),
+    );
+    expect(internals.applyProjectedAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "ADD_INTERJECTION",
+        coordination,
+      }),
     );
   });
 
@@ -9109,7 +9266,7 @@ describe("chat tab host routing", () => {
     });
     expect(coordinator.newTab).toHaveBeenLastCalledWith(
       address,
-      "ask",
+      "code",
       "project-remote",
       { focus: false },
     );
@@ -9293,6 +9450,7 @@ describe("chat tab host routing", () => {
       getAllMessages: vi.fn(() => []),
     };
     let foregroundSession: typeof createdSession | undefined;
+    const setSessionModel = vi.fn(async () => "model-selected-before-send");
     const createSession = vi.fn();
     const sendMessage = vi.fn(async () => undefined);
     const switchTo = vi.fn(() => {
@@ -9315,6 +9473,7 @@ describe("chat tab host routing", () => {
       createSession,
       switchTo,
       sendMessage,
+      setSessionModel,
     };
     coordinator.newChat.mockResolvedValueOnce({
       ok: true,
@@ -9389,7 +9548,8 @@ describe("chat tab host routing", () => {
     );
     expect(createSession).not.toHaveBeenCalled();
     expect(switchTo).toHaveBeenCalledWith(createdSession.id);
-    expect(submitSessionSetModel).toHaveBeenCalledWith(
+    expect(submitSessionSetModel).not.toHaveBeenCalled();
+    expect(setSessionModel).toHaveBeenCalledWith(
       createdSession.id,
       "model-selected-before-send",
     );
@@ -9403,7 +9563,7 @@ describe("chat tab host routing", () => {
       "approve-for-me",
       projectScope.rootPath,
     );
-    expect(submitSessionSetModel.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(setSessionModel.mock.invocationCallOrder[0]).toBeLessThan(
       sendMessage.mock.invocationCallOrder[0]!,
     );
     expect(setSessionWriteApproval.mock.invocationCallOrder[0]).toBeLessThan(
@@ -9928,7 +10088,37 @@ describe("chat tab host routing", () => {
     });
   });
 
-  it("forwards a busy New Chat confirmation with its exact replay identity", async () => {
+  it("reads new-session defaults at creation without changing existing sessions", async () => {
+    const { provider, coordinator, handle } = await makeTabRoutingProvider();
+    let defaultMode = "architect";
+    const originalConfiguration = mockGetConfiguration.getMockImplementation()!;
+    const config = mockGetConfiguration();
+    vi.spyOn(config, "inspect").mockImplementation(
+      (..._args: unknown[]) => ({ globalValue: defaultMode }) as never,
+    );
+    mockGetConfiguration.mockReturnValue(config);
+    const address = {
+      controllerEpoch: "epoch-1",
+      tabId: "tab-1",
+      sessionId: "session-1",
+    };
+    await handle({ command: "chatTabNewChat", ...address, mode: "code" });
+    expect(coordinator.newChat).toHaveBeenLastCalledWith(address, "architect", {
+      projectId: undefined,
+      stopRunning: false,
+    });
+    defaultMode = "debug";
+    await provider.submitBrowserNewSession("code", undefined, address);
+    expect(coordinator.newChat).toHaveBeenLastCalledWith(address, "debug", {
+      projectId: undefined,
+      stopRunning: false,
+      focus: false,
+    });
+    expect(mockConfigUpdate).not.toHaveBeenCalled();
+    mockGetConfiguration.mockImplementation(originalConfiguration);
+  });
+
+  it("forwards a busy New Chat confirmation with the shared default mode", async () => {
     const { coordinator, handle, postMessage } = await makeTabRoutingProvider();
     coordinator.newChat.mockResolvedValueOnce({
       ok: false,
@@ -9958,7 +10148,7 @@ describe("chat tab host routing", () => {
         tabId: "tab-1",
         sessionId: "session-1",
       },
-      "debug",
+      "code",
       { projectId: "project-1", stopRunning: false },
     );
     expect(postMessage).toHaveBeenLastCalledWith({
@@ -9971,7 +10161,7 @@ describe("chat tab host routing", () => {
           tabId: "tab-1",
           sessionId: "session-1",
         },
-        mode: "debug",
+        mode: "code",
         projectId: "project-1",
         targetSessionId: undefined,
       },

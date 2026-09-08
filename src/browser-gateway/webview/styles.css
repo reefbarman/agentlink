@@ -934,7 +934,7 @@ textarea {
   min-width: 0;
 }
 
-.browser-shell > .browser-header button,
+.browser-shell > .browser-header > button,
 .browser-side-top:not(.browser-main) button,
 .mobile-secondary-pane button {
   padding: 8px 10px;
@@ -944,7 +944,7 @@ textarea {
   border-color: var(--vscode-button-border, transparent);
 }
 
-.browser-shell > .browser-header button:hover:not(:disabled),
+.browser-shell > .browser-header > button:hover:not(:disabled),
 .browser-side-top:not(.browser-main) button:hover:not(:disabled),
 .mobile-secondary-pane button:hover:not(:disabled) {
   background: var(--vscode-button-hoverBackground, var(--ag-accent));

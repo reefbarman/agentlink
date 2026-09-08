@@ -77,7 +77,7 @@ import {
 import { SessionHistory } from "../../agent/webview/components/SessionHistory";
 import { StreamingStatusBar } from "../../agent/webview/components/StreamingStatusBar";
 import { TodoPanel } from "../../agent/webview/components/TodoPanel";
-import { TranscriptView } from "../../agent/webview/components/TranscriptView";
+import { BrowserBackgroundTranscript } from "./components/BrowserBackgroundTranscript";
 
 import {
   agentMessagesToChatMessages,
@@ -119,9 +119,11 @@ import { SessionHandoffPanel } from "../../shared/ui/SessionHandoffPanel";
 import type { SessionHandoffDraft } from "../../agent/sessionHandoff";
 import { ContextHealthPanel } from "../../shared/ui/ContextHealthPanel";
 import { MemoryPanel } from "../../shared/ui/MemoryPanel";
+import { memoryMutationError } from "../../shared/memoryMutationError";
 import { McpElicitationFormControls } from "../../shared/ui/McpElicitationFormControls";
 import type {
   ManageMemoryToolInput,
+  ManageMemoryResult,
   MemoryArchiveV1,
   MemoryInspectionQueryRequest,
   MemoryPanelSnapshot,
@@ -3705,17 +3707,35 @@ export function BrowserGatewayApp({
       const result = (await response.json().catch(() => ({}))) as {
         ok?: boolean;
         error?: string;
+        result?: ManageMemoryResult;
       };
-      if (!response.ok || !result.ok) {
-        throw new Error(result.error ?? "memory_mutation_failed");
+      if (!response.ok || !result.ok || (path === "manage" && !result.result)) {
+        throw new Error(
+          "Autonomous memory update failed. Refresh before retrying.",
+        );
       }
-      await fetchMemoryPanel(memoryPanelQueryRef.current, selectedId);
+      if (path === "manage" && result.result) {
+        const message = memoryMutationError(result.result.disposition);
+        if (message) throw new Error(message);
+      }
+      if (generation !== memoryPanelRequestGenerationRef.current) return;
+      await fetchMemoryPanel(
+        memoryPanelQueryRef.current,
+        path === "manage"
+          ? (result.result?.record?.id ?? selectedId)
+          : selectedId,
+      );
       await fetchAskAgentAutonomousMemory();
-    } catch {
+    } catch (cause) {
+      const message =
+        cause instanceof Error
+          ? cause.message
+          : "Autonomous memory update failed.";
       if (generation === memoryPanelRequestGenerationRef.current) {
-        setMemoryPanelError("Autonomous memory update failed.");
+        setMemoryPanelError(message);
         setMemoryPanelPending(false);
       }
+      if (path === "manage") throw new Error(message);
     }
   }
 
@@ -7918,7 +7938,7 @@ export function BrowserGatewayApp({
           <PaneCard fill className="chat-pane-card">
             <div class="pane-body browser-chat-pane chat-container">
               {transcriptView?.visible && (
-                <TranscriptView
+                <BrowserBackgroundTranscript
                   task={transcriptView.task}
                   sessionId={transcriptView.sessionId}
                   messages={transcriptView.messages}
@@ -7932,6 +7952,32 @@ export function BrowserGatewayApp({
                   runtimeStatus={background.find(
                     (session) => session.id === transcriptView.sessionId,
                   )}
+                  sessions={background}
+                  workspaceActionsEnabled={!isAskAgentSelected}
+                  onOpenFile={(filePath, line) =>
+                    browserVscodeApi.postMessage({
+                      command: "agentOpenFile",
+                      path: filePath,
+                      line,
+                    })
+                  }
+                  onOpenImageInEditor={(image) =>
+                    browserVscodeApi.postMessage({
+                      command: "agentOpenImageInEditor",
+                      ...image,
+                    })
+                  }
+                  onRetry={() =>
+                    handleBackgroundAction("retry", transcriptView.sessionId)
+                  }
+                  onSignIn={() => handleSignIn("codex")}
+                  onSignInAnotherAccount={() =>
+                    setModeStatus(
+                      "Use VS Code account controls to sign in with another account.",
+                    )
+                  }
+                  onStopBackground={handleStopBackground}
+                  onOpenTranscript={handleOpenBgTranscript}
                   onClose={() =>
                     setTranscriptView((current) =>
                       current ? { ...current, visible: false } : current,

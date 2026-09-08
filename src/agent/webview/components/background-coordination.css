@@ -1,0 +1,160 @@
+.background-coordination {
+  margin: 14px 12px;
+  border: 1px solid
+    var(
+      --vscode-widget-border,
+      color-mix(in srgb, var(--vscode-foreground, #ccc) 14%, transparent)
+    );
+  border-radius: 8px;
+  background: color-mix(
+    in srgb,
+    var(--vscode-foreground, #ccc) 3%,
+    transparent
+  );
+  color: var(--vscode-foreground, #ccc);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.background-coordination-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.background-coordination-summary::-webkit-details-marker {
+  display: none;
+}
+
+.background-coordination-summary:hover {
+  background: var(--vscode-list-hoverBackground, #ffffff08);
+}
+
+.background-coordination-summary:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #4ec9b0);
+  outline-offset: 2px;
+}
+
+.background-coordination-icon,
+.background-coordination-chevron {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--vscode-descriptionForeground, #aaa);
+}
+
+.background-coordination[open] .background-coordination-chevron {
+  transform: rotate(90deg);
+}
+
+.background-coordination-heading {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.background-coordination-title {
+  color: var(--vscode-descriptionForeground, #aaa);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.background-coordination-task {
+  font-weight: 500;
+}
+
+.background-coordination-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  color: var(--vscode-descriptionForeground, #aaa);
+  font-size: 10px;
+}
+
+.background-coordination-kind,
+.background-coordination-status {
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  border-radius: 4px;
+}
+
+.background-coordination-answered .background-coordination-status {
+  color: var(--vscode-testing-iconPassed, #4ec9b0);
+}
+
+.background-coordination-responding .background-coordination-status {
+  color: var(--vscode-progressBar-background, #4ec9b0);
+}
+
+.background-coordination-failed .background-coordination-status {
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+.background-coordination-body {
+  margin: 0 12px;
+  padding: 12px 0;
+  border-top: 1px solid
+    var(
+      --vscode-widget-border,
+      color-mix(in srgb, var(--vscode-foreground, #ccc) 14%, transparent)
+    );
+}
+
+.background-coordination-body section + section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid
+    var(
+      --vscode-widget-border,
+      color-mix(in srgb, var(--vscode-foreground, #ccc) 14%, transparent)
+    );
+}
+
+.background-coordination-body h4 {
+  color: var(--vscode-descriptionForeground, #aaa);
+  font-size: 11px;
+  font-weight: 500;
+  margin: 0 0 10px;
+}
+
+.background-coordination-body p,
+.background-coordination-body dd,
+.background-coordination-body li,
+.background-coordination-body strong {
+  white-space: pre-wrap;
+}
+
+.background-coordination-body p,
+.background-coordination-body ul,
+.background-coordination-body dl {
+  margin: 6px 0;
+}
+
+.background-coordination-body ul {
+  padding-left: 20px;
+}
+
+.background-coordination-question + .background-coordination-question,
+.background-coordination-body dl > div + div {
+  margin-top: 12px;
+}
+
+.background-coordination-body dt {
+  font-weight: 600;
+}
+
+.background-coordination-body dd {
+  margin: 6px 0 0;
+}
+
+.background-coordination-note {
+  color: var(--vscode-descriptionForeground, #aaa);
+}

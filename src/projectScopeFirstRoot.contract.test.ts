@@ -53,13 +53,6 @@ const ALLOWLIST: Record<string, InventoryEntry> = {
     rationale:
       "Legacy provider fallbacks remain for direct callers; agent runtimes execute them inside the request-bound workspace scope.",
   },
-  "src/agent/ChatViewProvider.ts": {
-    counts: { workspaceFolderIndex: 1 },
-    classification: "workspace_level_order_sensitive",
-    ownerSlices: ["B"],
-    rationale:
-      "Model and reasoning preferences target the current session project when available, fall back to the first real workspace folder before a session exists, and use global configuration only when no folder is open.",
-  },
 
   "src/extension.ts": {
     counts: { workspaceFolderIndex: 3 },
@@ -140,8 +133,8 @@ describe("project scope first-root source contract", () => {
       Object.values(entry),
     );
 
-    expect(Object.keys(ALLOWLIST)).toHaveLength(10);
-    expect(counts.reduce((total, count) => total + count, 0)).toBe(25);
+    expect(Object.keys(ALLOWLIST)).toHaveLength(9);
+    expect(counts.reduce((total, count) => total + count, 0)).toBe(24);
   });
 });
 

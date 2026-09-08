@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import {
+  prepareHostShellBootstrap,
+  prepareNativeAgentHostShellBootstrap,
+} from "./prepareHostShellBootstrap.js";
 
 import type { VscodeTerminalConfigurationSnapshot } from "./vscodeTerminalProfileAdapter.js";
-import { prepareHostShellBootstrap } from "./prepareHostShellBootstrap.js";
 
 function configuration(
   shellPath: string,
@@ -86,6 +89,27 @@ describe("prepareHostShellBootstrap", () => {
       shell: "zsh",
       profile: { shellArgs: ["-l", "-i"] },
     });
+    const nativeAgentPlan = prepareNativeAgentHostShellBootstrap({
+      configuration: configuration("/bin/zsh", ["-l"]),
+      host: { platform: "darwin" },
+      runtimeRoot: "/extension-storage/terminal-bootstrap",
+      artifactId: "session-1",
+      nonce: "prepare_nonce_123456",
+    }).plan;
+    if (nativeAgentPlan.mode !== "integrated")
+      throw new Error("expected integrated plan");
+    expect(
+      nativeAgentPlan.files.find(
+        ({ relativePath }) => relativePath === ".zshrc",
+      )?.content,
+    ).toContain("PROMPT_EOL_MARK=");
+    const ordinaryPlan = prepare(configuration("/bin/zsh", ["-l"])).plan;
+    if (ordinaryPlan.mode !== "integrated")
+      throw new Error("expected integrated plan");
+    expect(
+      ordinaryPlan.files.find(({ relativePath }) => relativePath === ".zshrc")
+        ?.content,
+    ).not.toContain("PROMPT_EOL_MARK=");
     expect(prepare(configuration("/bin/sh")).plan).toMatchObject({
       mode: "raw",
       profile: { shellPath: "/bin/sh" },

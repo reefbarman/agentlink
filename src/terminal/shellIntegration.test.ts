@@ -224,6 +224,26 @@ describe("shell integration hook generation", () => {
     expect(script.indexOf("__agentlink_si_emit A")).toBeLessThan(
       script.indexOf("__agentlink_si_emit B"),
     );
+    expect(script).not.toContain("PROMPT_EOL_MARK=");
+  });
+
+  it("optionally marks zsh command output before its end-of-line padding", () => {
+    const script = createShellIntegrationScript("zsh", NONCE, {
+      markZshCommandOutputEndBeforeEolPadding: true,
+    });
+
+    expect(script).toContain(
+      `typeset -g __agentlink_si_output_end_marker=$'%{\\033]697;AgentLink;${NONCE};O\\007%}'`,
+    );
+    expect(script).toContain(
+      'if [[ ${PROMPT_EOL_MARK-} != "$__agentlink_si_output_end_marker"* ]]; then',
+    );
+    expect(script).toContain(
+      `PROMPT_EOL_MARK="\${__agentlink_si_output_end_marker}\${PROMPT_EOL_MARK-'%B%S%#%s%b'}"`,
+    );
+    expect(createShellIntegrationParser(NONCE).push(frame("O")).events).toEqual(
+      [{ type: "command-output-end" }],
+    );
   });
 
   it("generates guarded bash prompt lifecycle and DEBUG hooks", () => {

@@ -106,6 +106,21 @@ export type ContentBlock =
       deviceLabel?: string;
     };
 
+/** Display-only identity and request details for an agent-to-agent exchange. */
+export interface BackgroundCoordination {
+  requestId: string;
+  backgroundSessionId: string;
+  task: string;
+  kind: "question" | "approval";
+  context: string;
+  questions: Array<{
+    id: string;
+    question: string;
+    context?: string;
+    options?: string[];
+  }>;
+}
+
 /** A serializable chat message shared by host runtimes and UI surfaces. */
 export interface ChatMessage {
   id: string;
@@ -115,6 +130,8 @@ export interface ChatMessage {
   timestamp: number;
   /** Ordered content blocks preserving thinking/text/tool-call interleaving. */
   blocks: ContentBlock[];
+  /** Agent communication, never a human-authored message. */
+  coordination?: BackgroundCoordination;
   /** Badge shown on approval follow-up and rejection annotation messages. */
   badge?: "follow-up" | "rejection";
   /** True when this message includes a slash command invocation. */

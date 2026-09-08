@@ -27,7 +27,14 @@ import {
   type ChatProjectInfo as ProjectInfo,
   type ChatSlashCommandInfo as SlashCommandInfo,
 } from "@agentlink/protocol/chat-catalog";
-import { getConfiguredBaseThresholdForModel } from "./modelCondenseThresholds.js";
+import {
+  getConfiguredBaseThresholdForModel,
+  getModelCondenseThresholdMap,
+} from "./modelCondenseThresholds.js";
+import {
+  getNewSessionMode,
+  rememberSessionMode,
+} from "./sharedSessionPreferences.js";
 import {
   FALLBACK_AGENT_MODEL,
   getModeModelPreferences,
@@ -240,6 +247,7 @@ import type {
   MemoryToolScope,
 } from "@agentlink/protocol/autonomous-memory";
 import { buildContextDoctorReport } from "./contextDoctor.js";
+import { memoryMutationError } from "../shared/memoryMutationError.js";
 import {
   INITIAL_CONTEXT_HEALTH,
   projectIndexHealth,
@@ -888,6 +896,7 @@ export type ExtensionToWebview =
     }
   | {
       type: "agentBgInterjection";
+      coordination?: import("@agentlink/protocol/chat-transcript").BackgroundCoordination;
       sessionId: string;
       text: string;
       displayText?: string;
@@ -907,6 +916,7 @@ export type ExtensionToWebview =
     }
   | {
       type: "agentInterjection";
+      coordination?: import("@agentlink/protocol/chat-transcript").BackgroundCoordination;
       sessionId: string;
       text: string;
       queueId: string;
@@ -2118,13 +2128,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private postMemoryPanelMutationError(
     scope: MemoryToolScope,
     requestId: string | undefined,
+    error = "The memory operation could not be completed.",
   ): void {
     this.postMessage({
       type: "agentMemoryPanelUpdate",
       requestId,
       scope,
       availableScopes: this.getMemoryPanelAvailableScopes(),
-      error: "The memory operation could not be completed.",
+      error,
     });
   }
 
@@ -4224,7 +4235,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       (input.thinkingEnabled === false ? "none" : undefined);
     const thinkingEnabled = reasoningEffort
       ? reasoningEffort !== "none"
-      : input.thinkingEnabled !== false;
+      : input.thinkingEnabled;
     const attachments = input.attachments ?? [];
     const images = input.images ?? [];
     const documents = input.documents ?? [];
@@ -4404,7 +4415,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const fg = mgr.getForegroundSession();
     if (fg) {
-      const condenseThreshold = this.getConfiguredCondenseThreshold(fg.model);
+      const condenseThreshold =
+        fg.autoCondenseThreshold ??
+        this.getConfiguredCondenseThreshold(fg.model);
       this.postMessage({
         type: "stateUpdate",
         state: {
@@ -4483,6 +4496,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           },
         );
         if (!switched) return { approved: false, mode };
+        await rememberSessionMode(switched.mode);
         this.log(`[mode] browser switched session ${session.id} to ${mode}`);
         return { approved: true, mode };
       } catch (err) {
@@ -4494,30 +4508,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return { approved: true, mode };
   }
 
-  private getPreferenceConfigurationTarget(
-    projectScope = this.getCurrentProjectScope(),
-  ): {
+  private getPreferenceConfigurationTarget(): {
     config: vscode.WorkspaceConfiguration;
     target: vscode.ConfigurationTarget;
-    scopeLabel: "workspace folder" | "user";
+    scopeLabel: "user";
   } {
-    const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
-    const workspaceFolder =
-      workspaceFolders.find(
-        (folder) =>
-          folder.uri.toString() === projectScope?.workspaceFolderUri ||
-          folder.uri.fsPath === projectScope?.rootPath,
-      ) ?? workspaceFolders[0];
     return {
-      config: vscode.workspace.getConfiguration(
-        "agentlink",
-        workspaceFolder?.uri,
-      ),
-      target: workspaceFolder
-        ? vscode.ConfigurationTarget.WorkspaceFolder
-        : vscode.ConfigurationTarget.Global,
-      scopeLabel: workspaceFolder ? "workspace folder" : "user",
+      config: vscode.workspace.getConfiguration("agentlink"),
+      target: vscode.ConfigurationTarget.Global,
+      scopeLabel: "user",
     };
+  }
+
+  private getDefaultNewSessionMode(): string {
+    return this.hasWorkspaceProjects() ? getNewSessionMode() : "ask";
   }
 
   public async submitBrowserSetModel(
@@ -4545,10 +4549,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           : {}),
       });
     }
-    const foregroundMode =
-      foreground?.mode ?? (this.hasWorkspaceProjects() ? "code" : "ask");
+    const foregroundMode = foreground?.mode ?? this.getDefaultNewSessionMode();
     const { config, target, scopeLabel } =
-      this.getPreferenceConfigurationTarget(foreground?.projectScope);
+      this.getPreferenceConfigurationTarget();
     const modePreferences = getModeModelPreferences(config);
     await config.update(
       "modeModelPreferences",
@@ -4592,7 +4595,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
     }
     const { config, target, scopeLabel } =
-      this.getPreferenceConfigurationTarget(session.projectScope);
+      this.getPreferenceConfigurationTarget();
     const modePrefs = getModeModelPreferences(config);
     await config.update(
       "modeModelPreferences",
@@ -4713,9 +4716,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       false;
     if (!updated) return { ok: false };
     const effectiveEffort = foreground.reasoningEffort;
-    const { config, target } = this.getPreferenceConfigurationTarget(
-      foreground.projectScope,
-    );
+    const { config, target } = this.getPreferenceConfigurationTarget();
     const preferences = getModeReasoningEffortPreferences(config);
     await config.update(
       "modeReasoningEffortPreferences",
@@ -4752,9 +4753,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return { ok: false };
     }
     const effectiveEffort = session.reasoningEffort;
-    const { config, target } = this.getPreferenceConfigurationTarget(
-      session.projectScope,
-    );
+    const { config, target } = this.getPreferenceConfigurationTarget();
     const preferences = getModeReasoningEffortPreferences(config);
     await config.update(
       "modeReasoningEffortPreferences",
@@ -4805,7 +4804,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public async submitBrowserNewTab(
     address: ChatTabActionAddress,
-    mode?: string,
+    _mode?: string,
     projectId?: string,
   ): Promise<{
     ok: boolean;
@@ -4815,7 +4814,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     controllerEpoch?: string;
     reason?: string;
   }> {
-    const nextMode = mode?.trim() || "code";
+    const nextMode = this.getDefaultNewSessionMode();
     const result = await this.chatTabHostCoordinator?.newTab(
       address,
       nextMode,
@@ -4838,7 +4837,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   public async submitBrowserNewSession(
-    mode?: string,
+    _mode?: string,
     projectId?: string,
     address?: ChatTabActionAddress,
     stopRunning = false,
@@ -4851,7 +4850,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     reason?: string;
   }> {
     if (!this.sessionManager) return { ok: false };
-    const nextMode = mode?.trim() || "code";
+    const nextMode = this.getDefaultNewSessionMode();
     if (address) {
       const result = await this.chatTabHostCoordinator?.newChat(
         address,
@@ -5962,7 +5961,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const fg = this.sessionManager.getForegroundSession();
     if (fg) {
-      const condenseThreshold = this.getConfiguredCondenseThreshold(fg.model);
+      const condenseThreshold =
+        fg.autoCondenseThreshold ??
+        this.getConfiguredCondenseThreshold(fg.model);
       this.postMessage({
         type: "stateUpdate",
         state: {
@@ -7412,7 +7413,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const mode = typeof msg.mode === "string" ? msg.mode : "code";
+    const mode = this.getDefaultNewSessionMode();
     const projectId =
       typeof msg.projectId === "string" ? msg.projectId : undefined;
     const stopRunning = msg.stopRunning === true;
@@ -7663,6 +7664,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const sourceSessionId = explicitSourceSessionId ?? sourceSession?.id;
 
     switch (msg.command) {
+      case "agentRememberSessionlessSelection": {
+        const mode = typeof msg.mode === "string" ? msg.mode.trim() : "";
+        if (!mode || explicitSourceSessionId) break;
+        const { config, target } = this.getPreferenceConfigurationTarget();
+        if (typeof msg.model === "string" && msg.model.trim()) {
+          await config.update(
+            "modeModelPreferences",
+            {
+              ...getModeModelPreferences(config),
+              [mode]: msg.model.trim(),
+            },
+            target,
+          );
+        } else if (isCoreReasoningEffort(msg.effort)) {
+          await config.update(
+            "modeReasoningEffortPreferences",
+            {
+              ...getModeReasoningEffortPreferences(config),
+              [mode]: msg.effort,
+            },
+            target,
+          );
+        } else {
+          await rememberSessionMode(mode);
+        }
+        break;
+      }
       case "agentStreamDrop": {
         if (!__DEV_BUILD__) break;
         const reason = String(msg.reason ?? "");
@@ -7748,7 +7776,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         );
         const thinkingEnabled = reasoningEffort
           ? reasoningEffort !== "none"
-          : msg.thinkingEnabled !== false;
+          : typeof msg.thinkingEnabled === "boolean"
+            ? msg.thinkingEnabled
+            : undefined;
         const requestedModel =
           typeof msg.model === "string" && msg.model ? msg.model : undefined;
         const selectedModel = requestedModel
@@ -7815,7 +7845,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             mgr.getSession(effectiveSessionId)?.projectScope.rootPath;
           if (typeof msg.model === "string" && msg.model) {
             try {
-              await this.submitSessionSetModel(effectiveSessionId, msg.model);
+              await mgr.setSessionModel(effectiveSessionId, msg.model);
             } catch (error) {
               this.log(
                 `[selection] Could not apply pre-session model ${msg.model}: ${error instanceof Error ? error.message : String(error)}`,
@@ -8041,6 +8071,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           (input.scope !== "global" && input.scope !== "project") ||
           request?.scope !== input.scope
         ) {
+          this.postMemoryPanelMutationError(
+            input?.scope === "project" ? "project" : "global",
+            requestId,
+            "The memory request is invalid. Refresh the manager before retrying.",
+          );
           break;
         }
         if (!provider) {
@@ -8054,6 +8089,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             observedAt: new Date().toISOString(),
             evidence: input.source_evidence,
           });
+          const error = memoryMutationError(result.result.disposition);
+          if (error) {
+            this.postMemoryPanelMutationError(input.scope, requestId, error);
+            break;
+          }
           await this.refreshContextHealth();
           await this.postMemoryPanelSnapshot(
             { ...request, ...context },
@@ -8329,7 +8369,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentNewSession": {
-        const mode = (msg.mode as string) ?? "code";
+        const mode = this.getDefaultNewSessionMode();
         const projectId =
           typeof msg.projectId === "string" ? msg.projectId : undefined;
         const transition = this.beginForegroundSessionTransition(mode, {
@@ -8367,6 +8407,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               { initialArchitectReviewApproved: true },
             );
             if (!switched) return;
+            await rememberSessionMode(switched.mode);
             if (previousMode !== switched.mode) {
               this.recordSurfaceChange(switched, {
                 mode: { previousMode, mode: switched.mode },
@@ -8396,7 +8437,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           });
         } else if (!sourceSession && !context?.sourceSessionId) {
           // No session yet — preserve the legacy sidebar creation path.
-          this.sessionManager.createSession(mode).then(async () => {
+          this.sessionManager.createSession(mode).then(async (session) => {
+            await rememberSessionMode(session.mode);
             this.sendInitialState();
             await this.sendModesUpdate();
             await this.sendSlashCommands();
@@ -8407,9 +8449,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentClearSession": {
-        // Create a fresh session with the same mode as the current one.
-        const fg = this.sessionManager.getForegroundSession();
-        const mode = fg?.mode ?? "code";
+        const mode = this.getDefaultNewSessionMode();
         this.sessionManager.createForegroundSession(mode).then((session) => {
           this.postSessionLoaded(session, {
             checkpoints: this.getSessionCheckpoints(session.id),
@@ -8435,14 +8475,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentSetCondenseThreshold": {
         const threshold = Number(msg.threshold);
         if (!Number.isFinite(threshold) || !sourceSession) break;
-        const { config, target } = this.getPreferenceConfigurationTarget(
-          sourceSession.projectScope,
-        );
+        const { config, target } = this.getPreferenceConfigurationTarget();
         const currentModel = sourceSession.model;
         const thresholds = {
-          ...(config.get("modelCondenseThresholds") as
-            | Record<string, number>
-            | undefined),
+          ...getModelCondenseThresholdMap(config),
           [currentModel]: Math.min(1, Math.max(0.1, threshold)),
         };
         await config.update("modelCondenseThresholds", thresholds, target);
@@ -10350,6 +10386,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentInterjection":
         this.applyProjectedAction({
           type: "ADD_INTERJECTION",
+          coordination: extMsg.coordination,
           text: extMsg.displayText ?? extMsg.text,
           isSlashCommand: extMsg.isSlashCommand ?? false,
           slashCommandLabel:
@@ -10782,9 +10819,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           // bar keeps showing pre-condense usage until the next user message.
           const fg = this.sessionManager?.getForegroundSession();
           if (!isBackground && fg && fg.id === sessionId) {
-            const condenseThreshold = this.getConfiguredCondenseThreshold(
-              fg.model,
-            );
+            const condenseThreshold =
+              fg.autoCondenseThreshold ??
+              this.getConfiguredCondenseThreshold(fg.model);
             this.postMessage({
               type: "stateUpdate",
               state: {
@@ -10859,6 +10896,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.log(`[agent] user_interjection queueId=${event.queueId}`);
         this.postMessage({
           type: isBackground ? "agentBgInterjection" : "agentInterjection",
+          coordination: event.coordination,
           sessionId,
           text: event.text,
           queueId: event.queueId,
@@ -12612,10 +12650,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     const modelId =
       session?.model ?? this.sessionManager.getConfig?.().model ?? "";
-    const condenseThreshold = this.getConfiguredCondenseThreshold(
-      modelId,
-      session?.projectScope,
-    );
+    const condenseThreshold =
+      session?.autoCondenseThreshold ??
+      this.getConfiguredCondenseThreshold(modelId, session?.projectScope);
     const contextBudget = this.buildContextBudget(
       session,
       modelId,
@@ -12647,7 +12684,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
         : (projects.find((project) => project.projectId === defaultProjectId) ??
           null),
-      mode: session?.mode ?? (this.hasWorkspaceProjects() ? "code" : "ask"),
+      mode: session?.mode ?? this.getDefaultNewSessionMode(),
       model: modelId,
       streaming:
         session?.status === "streaming" ||

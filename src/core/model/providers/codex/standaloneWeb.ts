@@ -21,6 +21,7 @@ const DEFAULT_SEARCH_RESULT_LIMIT = 10;
 const MAX_SEARCH_RESULT_LIMIT = 20;
 const MAX_STANDALONE_OUTPUT_TOKENS = 16_384;
 const FETCH_CHARS_PER_TOKEN = 4;
+const MAX_FETCH_PAGE_REQUESTS = 64;
 
 interface CodexStandaloneWebResponse {
   output?: unknown;
@@ -43,6 +44,7 @@ export interface CodexStandaloneWebRequest {
   settings: CoreWebAccessSettings;
   signal?: AbortSignal;
   fetch?: typeof globalThis.fetch;
+  retainOutput?: (content: string) => string | null;
 }
 
 export function canUseCodexStandaloneWeb(
@@ -64,33 +66,37 @@ export async function executeCodexStandaloneWeb(
   }
 
   const prepared = prepareCodexStandaloneWebRequest(request);
-  const response = await (request.fetch ?? agentLinkFetch)(
-    `${endpoint.baseURL}/${CODEX_STANDALONE_WEB_PATH}`,
-    {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${request.auth.bearerToken}`,
-        "Content-Type": "application/json",
-        ...endpoint.defaultHeaders,
+  const executeRequest = async (
+    body: Record<string, unknown>,
+  ): Promise<CodexStandaloneWebResponse> => {
+    const response = await (request.fetch ?? agentLinkFetch)(
+      `${endpoint.baseURL}/${CODEX_STANDALONE_WEB_PATH}`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${request.auth.bearerToken}`,
+          "Content-Type": "application/json",
+          ...endpoint.defaultHeaders,
+        },
+        body: JSON.stringify(body),
+        signal: request.signal,
       },
-      body: JSON.stringify(prepared.body),
-      signal: request.signal,
-    },
-  );
-  const responseText = await response.text();
-  if (!response.ok) {
-    throw new Error(
-      `Codex standalone web request failed (${response.status}): ${summarizeErrorResponse(responseText)}`,
     );
-  }
+    const responseText = await response.text();
+    if (!response.ok) {
+      throw new Error(
+        `Codex standalone web request failed (${response.status}): ${summarizeErrorResponse(responseText)}`,
+      );
+    }
+    try {
+      return JSON.parse(responseText) as CodexStandaloneWebResponse;
+    } catch {
+      throw new Error("Codex standalone web returned invalid JSON.");
+    }
+  };
 
-  let payload: CodexStandaloneWebResponse;
-  try {
-    payload = JSON.parse(responseText) as CodexStandaloneWebResponse;
-  } catch {
-    throw new Error("Codex standalone web returned invalid JSON.");
-  }
+  const payload = await executeRequest(prepared.body);
 
   const records = normalizeResultRecords(payload.results).filter((record) =>
     isResultAllowed(record, request.settings),
@@ -101,10 +107,42 @@ export async function executeCodexStandaloneWeb(
       : records;
   const citations = citationsFromRecords(visibleRecords);
   const rawOutput = typeof payload.output === "string" ? payload.output : "";
-  const content =
+  const initialNextStartLine = paginationMetadata(
+    rawOutput,
+    prepared.startLine,
+  ).next_start_line;
+  const paginatedOutput =
+    request.operation === "fetch" &&
+    request.retainOutput &&
+    !optionalString(request.input.find)
+      ? await collectFetchPages({
+          initialOutput: rawOutput,
+          initialStartLine: prepared.startLine,
+          maxCharacters: prepared.maxRetainedCharacters,
+          prepare: (startLine) =>
+            prepareCodexStandaloneWebRequest({
+              ...request,
+              input: { ...request.input, start_line: startLine },
+            }).body,
+          executeRequest,
+        })
+      : {
+          output: rawOutput,
+          nextStartLine: initialNextStartLine,
+        };
+  const visibleContent =
     request.operation === "search" && visibleRecords.length > 0
-      ? formatSearchRecords(visibleRecords)
-      : truncateVisibleContent(rawOutput, prepared.maxContentCharacters);
+      ? { content: formatSearchRecords(visibleRecords) }
+      : prepareVisibleContent({
+          visible: rawOutput,
+          retained: paginatedOutput.output,
+          maxCharacters: prepared.maxContentCharacters,
+          retainOutput:
+            request.operation === "fetch" ? request.retainOutput : undefined,
+          nextStartLine: paginatedOutput.nextStartLine,
+          recoveryStartLine: initialNextStartLine,
+        });
+  const content = visibleContent.content;
   if (!content.trim()) {
     throw new Error(
       `Codex standalone web ${request.operation} returned no visible content.`,
@@ -133,6 +171,7 @@ export async function executeCodexStandaloneWeb(
     ],
     content,
     citations,
+    ...visibleContent.metadata,
   };
 }
 
@@ -144,16 +183,21 @@ export function prepareCodexStandaloneWebRequest(
 ): {
   body: Record<string, unknown>;
   maxContentCharacters: number;
+  maxRetainedCharacters: number;
   maxResults: number;
+  startLine?: number;
   query?: string;
   url?: string;
 } {
   const mode = request.settings.nativeSearchMode;
   const maxResults = normalizeResultLimit(request.input.max_results);
+  const maxRetainedCharacters =
+    request.settings.maxFetchContentTokens * FETCH_CHARS_PER_TOKEN;
   const maxContentCharacters = resolveMaxContentCharacters(
     request.input.max_length,
     request.settings.maxFetchContentTokens,
   );
+  const startLine = optionalNonNegativeInteger(request.input.start_line);
   const filters = compactObject({
     allowed_domains:
       request.settings.allowedDomains.length > 0
@@ -195,7 +239,12 @@ export function prepareCodexStandaloneWebRequest(
           response_length: "long",
         }
       : {
-          open: [{ ref_id: url }],
+          open: [
+            {
+              ref_id: url,
+              ...(startLine !== undefined ? { lineno: startLine } : {}),
+            },
+          ],
           response_length: "long",
         };
     prompt = buildFetchInputPrompt(url, request.input);
@@ -230,7 +279,9 @@ export function prepareCodexStandaloneWebRequest(
             ),
     },
     maxContentCharacters,
+    maxRetainedCharacters,
     maxResults,
+    ...(startLine !== undefined ? { startLine } : {}),
     ...(query ? { query } : {}),
     ...(url ? { url } : {}),
   };
@@ -265,6 +316,7 @@ function buildFetchInputPrompt(
   input: Record<string, unknown>,
 ): string {
   const preferences = compactObject({
+    start_line: optionalNonNegativeInteger(input.start_line),
     section: optionalString(input.section),
     find: optionalString(input.find),
   });
@@ -313,6 +365,11 @@ function requiredString(value: unknown, field: string): string {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function optionalNonNegativeInteger(value: unknown): number | undefined {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric >= 0 ? numeric : undefined;
 }
 
 function requiredAllowedHttpUrl(
@@ -414,13 +471,111 @@ function formatSearchRecords(
     .join("\n\n");
 }
 
-function truncateVisibleContent(
+function prepareVisibleContent(params: {
+  visible: string;
+  retained: string;
+  maxCharacters: number;
+  retainOutput?: (content: string) => string | null;
+  nextStartLine?: number;
+  recoveryStartLine?: number;
+}): {
+  content: string;
+  metadata?: {
+    content_truncated: true;
+    output_file?: string;
+    output_warning: string;
+    next_start_line?: number;
+  };
+} {
+  const visible = params.visible.trim();
+  const retained = params.retained.trim();
+  const inlineTruncated = visible.length > params.maxCharacters;
+  const hasAdditionalPages =
+    retained !== visible || params.nextStartLine !== undefined;
+  if (!inlineTruncated && !hasAdditionalPages) return { content: visible };
+
+  const outputFile = params.retainOutput?.(retained) ?? null;
+  const nextStartLine = outputFile
+    ? params.nextStartLine
+    : (params.recoveryStartLine ?? params.nextStartLine);
+  const outputWarning = outputFile
+    ? params.nextStartLine === undefined
+      ? "Content beyond the inline preview was saved to output_file; use read_file(output_file) instead of repeating web_fetch."
+      : "Paginated provider content was saved to output_file, but more remains; use read_file(output_file), then call web_fetch with next_start_line only if needed."
+    : "Content was truncated, and provider output could not be retained. Continue with next_start_line when available.";
+  const preview = inlineTruncated
+    ? visible.slice(0, params.maxCharacters).trimEnd()
+    : visible;
+  return {
+    content: `${preview}\n\n[Content truncated by AgentLink]`,
+    metadata: {
+      content_truncated: true,
+      ...(outputFile ? { output_file: outputFile } : {}),
+      output_warning: outputWarning,
+      ...(nextStartLine !== undefined
+        ? { next_start_line: nextStartLine }
+        : {}),
+    },
+  };
+}
+
+async function collectFetchPages(params: {
+  initialOutput: string;
+  initialStartLine?: number;
+  maxCharacters: number;
+  prepare: (startLine: number) => Record<string, unknown>;
+  executeRequest: (
+    body: Record<string, unknown>,
+  ) => Promise<CodexStandaloneWebResponse>;
+}): Promise<{ output: string; nextStartLine?: number }> {
+  const outputs = [params.initialOutput.trim()];
+  let nextStartLine = paginationMetadata(
+    params.initialOutput,
+    params.initialStartLine,
+  ).next_start_line;
+  for (
+    let requestCount = 1;
+    nextStartLine !== undefined && requestCount < MAX_FETCH_PAGE_REQUESTS;
+    requestCount += 1
+  ) {
+    if (outputs.join("\n\n").length >= params.maxCharacters) break;
+    const requestedLine = nextStartLine;
+    const payload = await params.executeRequest(params.prepare(requestedLine));
+    const output =
+      typeof payload.output === "string" ? payload.output.trim() : "";
+    if (!output) break;
+    outputs.push(output);
+    const following = paginationMetadata(output, requestedLine).next_start_line;
+    if (following === undefined || following <= requestedLine) {
+      nextStartLine = following;
+      break;
+    }
+    nextStartLine = following;
+  }
+  return {
+    output: outputs.join("\n\n"),
+    ...(nextStartLine !== undefined ? { nextStartLine } : {}),
+  };
+}
+
+function paginationMetadata(
   content: string,
-  maxCharacters: number,
-): string {
-  const trimmed = content.trim();
-  if (trimmed.length <= maxCharacters) return trimmed;
-  return `${trimmed.slice(0, maxCharacters).trimEnd()}\n\n[Content truncated by AgentLink]`;
+  requestedStartLine: number | undefined,
+): { next_start_line?: number } {
+  const totalMatch = content.match(/\bTotal lines:\s*(\d+)\b/i);
+  if (!totalMatch) return {};
+  const totalLines = Number(totalMatch[1]);
+  let highestLine = requestedStartLine ?? -1;
+  let hasLineContent = false;
+  for (const match of content.matchAll(/^L(\d+):/gm)) {
+    hasLineContent = true;
+    highestLine = Math.max(highestLine, Number(match[1]));
+  }
+  return hasLineContent &&
+    Number.isSafeInteger(totalLines) &&
+    highestLine + 1 < totalLines
+    ? { next_start_line: highestLine + 1 }
+    : {};
 }
 
 function compactObject(

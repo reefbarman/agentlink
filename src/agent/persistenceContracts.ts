@@ -269,6 +269,8 @@ export interface PersistedSessionMetadata {
   lastInputTokens?: number;
   lastCacheReadTokens?: number;
   reasoningEffort?: ReasoningEffort;
+  desiredReasoningEffort?: ReasoningEffort;
+  autoCondenseThreshold?: number;
   /** Legacy display-only skill names retained for older records and condensation. */
   loadedSkills?: string[];
   /** Exact current-turn skill authority, reauthorized as one batch on restore. */

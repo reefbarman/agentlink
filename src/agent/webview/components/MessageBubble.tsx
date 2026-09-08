@@ -177,7 +177,14 @@ export function MessageBubble({
 }: MessageBubbleProps) {
   const [showAllDetectedOptions, setShowAllDetectedOptions] = useState(false);
   const [settledToolIds, setSettledToolIds] = useState<Set<string>>(
-    () => new Set(),
+    () =>
+      new Set(
+        message.blocks.flatMap((block) =>
+          block.type === "tool_call" && block.complete
+            ? [getToolSettleKey(message.id, block.id)]
+            : [],
+        ),
+      ),
   );
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const toolSettleTimers = useRef<Map<string, number>>(new Map());

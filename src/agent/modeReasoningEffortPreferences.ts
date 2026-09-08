@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { getUserSessionPreference } from "./sharedSessionPreferences.js";
 
 import {
   isCoreReasoningEffort,
@@ -15,7 +16,10 @@ export type ModeReasoningEffortPreferences = Record<
 export function getModeReasoningEffortPreferences(
   config: vscode.WorkspaceConfiguration,
 ): ModeReasoningEffortPreferences {
-  const raw = config.get<unknown>("modeReasoningEffortPreferences");
+  const raw = getUserSessionPreference<unknown>(
+    config,
+    "modeReasoningEffortPreferences",
+  );
   if (!raw || typeof raw !== "object") return {};
 
   const preferences: ModeReasoningEffortPreferences = {};

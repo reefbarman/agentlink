@@ -349,6 +349,7 @@ interface PendingBackgroundQuestion {
   questions: Question[];
   prompt: string;
   displayText: string;
+  coordination: import("@agentlink/protocol/chat-transcript").BackgroundCoordination;
   resolve: (response: QuestionResponse) => void;
 }
 
@@ -1385,7 +1386,19 @@ export class AgentSessionManager {
     }
     const common = {
       mode: args.summary.mode,
-      config: this.buildConfigForModel(model),
+      config: {
+        ...this.config,
+        model,
+        autoCondenseThreshold:
+          args.metadata.autoCondenseThreshold ??
+          getEffectiveAutoCondenseThreshold(
+            model,
+            undefined,
+            this.host.providers
+              .tryResolveProvider(model)
+              ?.getCapabilities(model),
+          ),
+      },
       background,
       initialArchitectReviewPending:
         args.metadata.initialArchitectReviewPending ?? false,
@@ -2302,7 +2315,6 @@ export class AgentSessionManager {
         const retiredModel = session.model;
         session.model = modelResolution.model;
         session.providerId = modelResolution.provider.id;
-        this.applyThresholdToSession(session);
         if (!session.background && this.foregroundId === session.id) {
           this.updateConfig({
             model: session.model,
@@ -4364,7 +4376,6 @@ export class AgentSessionManager {
       session.providerId = this.host.providers.tryResolveProvider(
         event.modelFallback.effectiveModel,
       )?.id;
-      this.applyThresholdToSession(session);
       const backgroundMeta = this.bgMeta.get(sessionId);
       if (backgroundMeta) {
         backgroundMeta.resolvedModel = event.modelFallback.effectiveModel;
@@ -4373,10 +4384,7 @@ export class AgentSessionManager {
       if (!session.background && this.foregroundId === sessionId) {
         this.updateConfig({
           model: event.modelFallback.effectiveModel,
-          autoCondenseThreshold: this.getCondenseThresholdForModel(
-            event.modelFallback.effectiveModel,
-            session.projectScope,
-          ),
+          autoCondenseThreshold: session.autoCondenseThreshold,
         });
       }
       this.saveSession(sessionId);
@@ -4619,11 +4627,14 @@ export class AgentSessionManager {
   private buildConfigForModel(
     model: string,
     scope?: Readonly<SessionProjectScope>,
+    autoCondenseThreshold?: number,
   ): AgentConfig {
     const base = {
       ...this.config,
       model,
-      autoCondenseThreshold: this.getCondenseThresholdForModel(model, scope),
+      autoCondenseThreshold:
+        autoCondenseThreshold ??
+        this.getCondenseThresholdForModel(model, scope),
     };
     if (!scope || !this.host.config.resolveAgentConfig) return base;
     try {
@@ -4645,7 +4656,6 @@ export class AgentSessionManager {
       session,
       this.getDesiredReasoningEffort(session),
     );
-    this.applyThresholdToSession(session);
     await this.reconcileSessionPromptProfile(session);
   }
 
@@ -4656,6 +4666,7 @@ export class AgentSessionManager {
     const config = this.buildConfigForModel(
       session.model,
       projectless ? undefined : session.projectScope,
+      session.autoCondenseThreshold,
     );
     const providerId = this.host.providers.tryResolveProvider(
       session.model,
@@ -4766,14 +4777,7 @@ export class AgentSessionManager {
   }
 
   private getDesiredReasoningEffort(session: AgentSession): ReasoningEffort {
-    return session.background
-      ? session.reasoningEffort
-      : this.getReasoningEffortForMode(
-          session.mode,
-          isProjectlessSessionScope(session.projectScope)
-            ? undefined
-            : session.projectScope,
-        );
+    return session.desiredReasoningEffort;
   }
 
   private applyReasoningEffortToSession(
@@ -4783,6 +4787,7 @@ export class AgentSessionManager {
       .tryResolveProvider(session.model)
       ?.getCapabilities(session.model),
   ): void {
+    session.desiredReasoningEffort = effort;
     const resolvedEffort = !capabilities
       ? effort
       : capabilities.supportsThinking
@@ -5012,6 +5017,7 @@ export class AgentSessionManager {
         const config = this.buildConfigForModel(
           session.model,
           session.projectScope,
+          session.autoCondenseThreshold,
         );
         await session.rebuildSystemPrompt({
           devMode: this.devMode,
@@ -5477,6 +5483,8 @@ export class AgentSessionManager {
       lastInputTokens: session.lastInputTokens,
       lastCacheReadTokens: session.lastCacheReadTokens,
       reasoningEffort: session.reasoningEffort,
+      desiredReasoningEffort: session.desiredReasoningEffort,
+      autoCondenseThreshold: session.autoCondenseThreshold,
       ...this.getSessionApprovalMode(session.id),
       background: session.background,
       projectScope: session.projectScope,
@@ -5718,6 +5726,8 @@ export class AgentSessionManager {
         lastInputTokens: session.lastInputTokens,
         lastCacheReadTokens: session.lastCacheReadTokens,
         reasoningEffort: session.reasoningEffort,
+        desiredReasoningEffort: session.desiredReasoningEffort,
+        autoCondenseThreshold: session.autoCondenseThreshold,
         loadedSkills: session.getLoadedSkills?.() ?? [],
         activeSkillState: session.getActiveSkillState?.(),
         runState: session.runState
@@ -6041,7 +6051,10 @@ export class AgentSessionManager {
           workspaceFolders: this.getWorkspaceFolders(),
         });
         successor.autoCondenseThreshold = source.autoCondenseThreshold;
-        this.applyReasoningEffortToSession(successor, source.reasoningEffort);
+        this.applyReasoningEffortToSession(
+          successor,
+          source.desiredReasoningEffort,
+        );
         successor.lineage = {
           schemaVersion: 1,
           handoffSource: toPersistedSessionHandoff(draft, validation.markdown),
@@ -6411,7 +6424,10 @@ export class AgentSessionManager {
       });
 
       session.title = `/btw ${trimmed}`.slice(0, 80);
-      session.reasoningEffort = fg?.reasoningEffort ?? session.reasoningEffort;
+      this.applyReasoningEffortToSession(
+        session,
+        fg?.desiredReasoningEffort ?? session.desiredReasoningEffort,
+      );
       const btwSystemPrompt = `${fg?.systemPrompt ?? session.systemPrompt}${BTW_SYSTEM_PROMPT_SUFFIX}`;
       session.systemPrompt = btwSystemPrompt;
       if (fg) {
@@ -6588,7 +6604,7 @@ export class AgentSessionManager {
       lightweight: true,
     });
     session.title = "/worktree setup";
-    session.reasoningEffort = "low";
+    this.applyReasoningEffortToSession(session, "low");
     session.systemPrompt = WORKTREE_SETUP_SYSTEM_PROMPT;
     opts.onSessionStarted?.(session.id);
 
@@ -6778,6 +6794,7 @@ export class AgentSessionManager {
       internalInterjection?: {
         queueId: string;
         displayText: string;
+        coordination: import("@agentlink/protocol/chat-transcript").BackgroundCoordination;
       };
     },
   ): Promise<void> {
@@ -6876,12 +6893,17 @@ export class AgentSessionManager {
             }
           }
           // Update reasoning effort. Legacy callers can still send thinkingEnabled.
-          if (opts?.reasoningEffort) {
-            session.reasoningEffort = opts.reasoningEffort;
+          if (opts?.reasoningEffort !== undefined) {
+            if (opts.reasoningEffort !== session.reasoningEffort) {
+              this.applyReasoningEffortToSession(session, opts.reasoningEffort);
+            }
           } else if (opts?.thinkingEnabled === false) {
-            session.reasoningEffort = "none";
-          } else if (session.reasoningEffort === "none") {
-            session.reasoningEffort = "high";
+            this.applyReasoningEffortToSession(session, "none");
+          } else if (
+            opts?.thinkingEnabled === true &&
+            session.desiredReasoningEffort === "none"
+          ) {
+            this.applyReasoningEffortToSession(session, "high");
           }
 
           // Keep the legacy budget field in sync for budget-based providers.
@@ -6975,6 +6997,10 @@ export class AgentSessionManager {
                     countMemoryNudges(priorUserTexts),
                   );
             session.addUserMessage(memoryNudge.text, {
+              coordination:
+                messageIndex === 0
+                  ? opts?.internalInterjection?.coordination
+                  : undefined,
               displayText:
                 message.displayText ??
                 (memoryNudge.nudged ? message.text : undefined),
@@ -6991,6 +7017,7 @@ export class AgentSessionManager {
                 text: memoryNudge.text,
                 queueId: opts.internalInterjection.queueId,
                 displayText: opts.internalInterjection.displayText,
+                coordination: opts.internalInterjection.coordination,
               });
             }
             if (message.images?.length || message.documents?.length) {
@@ -8979,6 +9006,8 @@ export class AgentSessionManager {
       // Use 0 for resumed sessions so cache-aware threshold isn't biased by stale prior runs.
       lastCacheReadTokens: 0,
       reasoningEffort: metadata.reasoningEffort,
+      desiredReasoningEffort: metadata.desiredReasoningEffort,
+      autoCondenseThreshold: metadata.autoCondenseThreshold,
       loadedSkills: metadata.loadedSkills ?? [],
       activeSkillState: metadata.activeSkillState,
       runState: interruptedRunRecovery.runState,
@@ -8990,9 +9019,7 @@ export class AgentSessionManager {
     });
     this.applyReasoningEffortToSession(
       session,
-      session.background
-        ? (metadata.reasoningEffort ?? session.reasoningEffort)
-        : this.getDesiredReasoningEffort(session),
+      this.getDesiredReasoningEffort(session),
     );
     const reasoningEffortChanged =
       metadata.reasoningEffort !== undefined &&
@@ -9164,14 +9191,15 @@ export class AgentSessionManager {
         lastInputTokens: metadata.lastInputTokens ?? 0,
         lastCacheReadTokens: 0,
         reasoningEffort: metadata.reasoningEffort,
+        desiredReasoningEffort: metadata.desiredReasoningEffort,
+        autoCondenseThreshold: metadata.autoCondenseThreshold,
         loadedSkills: metadata.loadedSkills ?? [],
         activeSkillState: metadata.activeSkillState,
         messages,
         fleetMetadata: metadata.fleet,
         lineage: metadata.lineage,
       });
-      const restoredReasoningEffort =
-        metadata.reasoningEffort ?? session.reasoningEffort;
+      const restoredReasoningEffort = this.getDesiredReasoningEffort(session);
       this.applyReasoningEffortToSession(session, restoredReasoningEffort);
       const reasoningEffortChanged =
         metadata.reasoningEffort !== undefined &&
@@ -9940,6 +9968,7 @@ export class AgentSessionManager {
       requestId,
       prompt,
       displayText: `Background agent “${task}” needs approval coordination`,
+      displayContext: JSON.stringify(args.request, null, 2),
       signal: args.signal,
       kind: "approval",
       fallback: async () => ({
@@ -10087,6 +10116,7 @@ export class AgentSessionManager {
     requestId?: string;
     prompt?: string;
     displayText?: string;
+    displayContext?: string;
     signal?: AbortSignal;
     kind?: "question" | "approval";
   }): Promise<QuestionResponse> {
@@ -10103,6 +10133,19 @@ export class AgentSessionManager {
     const displayText =
       args.displayText ??
       `Background agent “${args.task}” needs a coordinator answer`;
+    const coordination: PendingBackgroundQuestion["coordination"] = {
+      requestId,
+      backgroundSessionId: args.backgroundSessionId,
+      task: args.task,
+      kind: args.kind ?? "question",
+      context: args.displayContext ?? args.context,
+      questions: args.questions.map(({ id, question, context, options }) => ({
+        id,
+        question,
+        context,
+        options,
+      })),
+    };
 
     return new Promise((resolve) => {
       const resolvePending = (response: QuestionResponse) => {
@@ -10133,6 +10176,7 @@ export class AgentSessionManager {
         questions: structuredClone(args.questions),
         prompt,
         displayText,
+        coordination,
         resolve: resolvePending,
       });
       args.signal?.addEventListener("abort", handleAbort, { once: true });
@@ -10153,6 +10197,12 @@ export class AgentSessionManager {
           requestId,
           undefined,
           displayText,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          coordination,
         );
         this.notifySessionsChanged();
         return;
@@ -10168,7 +10218,11 @@ export class AgentSessionManager {
         args.coordinator.mode,
         {
           displayText,
-          internalInterjection: { queueId: requestId, displayText },
+          internalInterjection: {
+            queueId: requestId,
+            displayText,
+            coordination,
+          },
         },
       )
         .catch(async (error) => {
@@ -10362,6 +10416,12 @@ export class AgentSessionManager {
         pending.requestId,
         undefined,
         pending.displayText,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        pending.coordination,
       );
     }
   }
@@ -10550,7 +10610,7 @@ export class AgentSessionManager {
         lightweight: true,
         providerId: "acp",
       });
-      session.reasoningEffort = "none";
+      this.applyReasoningEffortToSession(session, "none");
       session.title = task.slice(0, 80);
       session.status = "queued";
       session.addUserMessage(executionMessage);
@@ -10975,7 +11035,7 @@ export class AgentSessionManager {
     });
 
     if (route.thinkingBudget === 0) {
-      session.reasoningEffort = "none";
+      this.applyReasoningEffortToSession(session, "none");
     }
     if (configuredReviewEffort) {
       this.applyReasoningEffortToSession(session, configuredReviewEffort);

@@ -6,6 +6,7 @@ import * as path from "node:path";
 
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { loadToolInventory } from "./tool-inventory.mjs";
 
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -32,43 +33,6 @@ const MAX_WARNING_TOOL_NAMES = 5;
 const MAX_TERMINAL_CELL_LENGTH = 120;
 const OUTCOMES = ["ok", "partial", "error", "cancelled", "rejected"];
 const SOURCES = ["agent", "mcp"];
-const INLINE_TOOL_METADATA = {
-  find_mcp_tools: { cluster: "mcp", sideEffect: "read" },
-  call_mcp_tool: { cluster: "mcp", sideEffect: "external" },
-  ask_user: { cluster: "session", sideEffect: "control" },
-  set_task_status: { cluster: "session", sideEffect: "control" },
-  switch_mode: { cluster: "session", sideEffect: "control" },
-  spawn_background_agent: { cluster: "background", sideEffect: "control" },
-  get_background_status: { cluster: "background", sideEffect: "read" },
-  get_background_result: { cluster: "background", sideEffect: "read" },
-  kill_background_agent: { cluster: "background", sideEffect: "control" },
-};
-const INLINE_TOOL_PARAMETERS = {
-  find_mcp_tools: ["query", "server", "includeSchemas", "schemaLimit", "limit"],
-  call_mcp_tool: ["server", "tool", "input"],
-  ask_user: ["context", "questions"],
-  set_task_status: [
-    "status",
-    "summary",
-    "continueLabel",
-    "completeTodos",
-    "continuePrompt",
-  ],
-  switch_mode: ["mode", "reason"],
-  spawn_background_agent: [
-    "task",
-    "message",
-    "mode",
-    "model",
-    "provider",
-    "taskClass",
-    "modelTier",
-  ],
-  get_background_status: ["sessionId"],
-  get_background_result: ["sessionId"],
-  kill_background_agent: ["sessionId", "reason"],
-};
-
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   if (args.help) {
@@ -79,8 +43,11 @@ export function main(argv = process.argv.slice(2)) {
   const inputPath = path.resolve(args.input ?? DEFAULT_INPUT);
   const top =
     Number.isFinite(args.top) && args.top > 0 ? args.top : DEFAULT_TOP;
-  const knownTools = loadKnownTools();
-  const knownParameters = loadKnownToolParameters();
+  const {
+    knownTools,
+    knownParameters,
+    metadata: inventory,
+  } = loadToolInventory();
 
   if (args.compare) {
     const [left, right] = [args.compare.left, args.compare.right].map(
@@ -100,6 +67,7 @@ export function main(argv = process.argv.slice(2)) {
     until: args.until,
     versions: args.versions,
   });
+  report.inventory = inventory;
   mergeFeedbackCounts(
     report,
     path.resolve(args.feedbackInput ?? DEFAULT_FEEDBACK_INPUT),
@@ -272,6 +240,7 @@ export function readTelemetry(
 
   const raw = fs.readFileSync(inputPath, "utf-8");
   const lines = raw.split(/\r?\n/);
+  const errorProcesses = new Map();
 
   for (const line of lines) {
     if (!line.trim()) continue;
@@ -284,7 +253,55 @@ export function readTelemetry(
       continue;
     }
 
-    if (record?.version !== 1) {
+    if (
+      record?.type === "tool_exposure_flush" &&
+      Number.isInteger(record.version) &&
+      record.version !== 1
+    ) {
+      report.invalidLines += 1;
+      report.unsupportedRecords += 1;
+      continue;
+    }
+    if (
+      record?.type === "tool_exposure_flush" &&
+      record.version === 1 &&
+      isValidDate(record.flushedAt)
+    ) {
+      if (recordMatchesFilters(record, filters)) {
+        report.exposure.records += 1;
+        mergeCounts(report.exposure.totals, record.totals);
+        for (const group of Array.isArray(record.groups) ? record.groups : []) {
+          if (!group || typeof group.toolName !== "string") continue;
+          const dimensions = {
+            toolName: group.toolName,
+            mode: group.mode,
+            profile: group.profile,
+            background: group.background,
+            exposure: group.exposure,
+            eligible: group.eligible,
+            extensionVersion: record.extensionVersion ?? "unknown",
+          };
+          const key = JSON.stringify(dimensions);
+          const target = report.exposure.groups[key] ?? { ...dimensions };
+          report.exposure.groups[key] = target;
+          for (const field of [
+            "requests",
+            "completedRequests",
+            "incompleteRequests",
+            "requestsWithUse",
+            "eligibleCompletedRequests",
+            "eligibleRequestsWithUse",
+            "providerAttempts",
+          ]) {
+            target[field] = (target[field] ?? 0) + asCount(group[field]);
+          }
+        }
+        updateRange(report, record.periodStartedAt);
+        updateRange(report, record.flushedAt);
+      }
+      continue;
+    }
+    if (record?.version !== 1 && record?.version !== 2) {
       report.invalidLines += 1;
       if (
         Number.isInteger(record?.version) &&
@@ -310,6 +327,43 @@ export function readTelemetry(
     if (!recordMatchesFilters(record, filters)) continue;
 
     report.flushes += 1;
+    if (record.version === 2) {
+      mergeCounts(
+        report.invocations.coverage,
+        record.coverage && {
+          attributedCalls: record.coverage.attributedCalls,
+          legacyUnattributedCalls: record.coverage.legacyUnattributedCalls,
+          overflowCalls: record.coverage.overflowCalls,
+        },
+      );
+      for (const group of Array.isArray(record.invocationGroups)
+        ? record.invocationGroups
+        : []) {
+        if (!group || typeof group.toolName !== "string") continue;
+        const dimensions = {
+          toolName: group.toolName,
+          mode: group.mode,
+          profile: group.profile,
+          background: group.background,
+          route: group.route,
+          nesting: group.nesting,
+          extensionVersion: record.extensionVersion ?? "unknown",
+        };
+        const key = JSON.stringify(dimensions);
+        const target = report.invocations.groups[key] ?? {
+          ...dimensions,
+          calls: 0,
+          outcomes: {},
+        };
+        report.invocations.groups[key] = target;
+        target.calls += asCount(group.calls);
+        mergeCounts(target.outcomes, group.outcomes);
+      }
+    } else {
+      report.invocations.coverage.legacyUnattributedCalls += Object.values(
+        record.tools,
+      ).reduce((sum, bucket) => sum + asCount(bucket?.calls), 0);
+    }
     if (typeof record.instanceId === "string") {
       report.instances[record.instanceId] =
         (report.instances[record.instanceId] ?? 0) + 1;
@@ -323,7 +377,42 @@ export function readTelemetry(
 
     for (const [toolName, bucket] of Object.entries(record.tools)) {
       mergeToolBucket(report, toolName, bucket);
+      const errors = asCount(bucket?.outcomes?.error);
+      if (
+        errors > 0 &&
+        typeof record.instanceId === "string" &&
+        record.instanceId
+      ) {
+        const processes = errorProcesses.get(toolName) ?? new Map();
+        errorProcesses.set(toolName, processes);
+        const key = JSON.stringify([
+          record.instanceId,
+          record.extensionVersion,
+        ]);
+        const process = processes.get(key) ?? {
+          version: record.extensionVersion ?? "unknown",
+          errors: 0,
+          firstFlush: record.flushedAt,
+          lastFlush: record.flushedAt,
+        };
+        process.errors += errors;
+        if (Date.parse(record.flushedAt) < Date.parse(process.firstFlush)) {
+          process.firstFlush = record.flushedAt;
+        }
+        if (Date.parse(record.flushedAt) > Date.parse(process.lastFlush)) {
+          process.lastFlush = record.flushedAt;
+        }
+        processes.set(key, process);
+      }
     }
+  }
+  for (const [toolName, processes] of errorProcesses) {
+    const groups = [...processes.values()].sort((a, b) => b.errors - a.errors);
+    report.tools[toolName].errorConcentration = {
+      attributedErrors: groups.reduce((sum, group) => sum + group.errors, 0),
+      processVersionGroups: groups.length,
+      largestProcess: groups[0],
+    };
   }
 
   finalizeReport(report, knownParameters);
@@ -372,6 +461,21 @@ function createEmptyReport() {
     invalidFeedbackLines: 0,
     feedbackCountsByTool: {},
     warnings: [],
+    invocations: {
+      coverage: {
+        attributedCalls: 0,
+        legacyUnattributedCalls: 0,
+        overflowCalls: 0,
+      },
+      groups: {},
+    },
+    exposure: {
+      records: 0,
+      totals: {},
+      groups: {},
+      coverage:
+        "native engine request snapshots only; exact wire, readiness, MCP targets, ACP and projectless runtimes unknown",
+    },
     tools: {},
     parameters: [],
     knownToolCount: 0,
@@ -421,9 +525,32 @@ export function finalizeReport(report, knownParameters = new Map()) {
   for (const tool of Object.values(report.tools)) {
     tool.numericMetrics = sortKeys(tool.numericMetrics);
     tool.categoricalMetrics = sortKeys(tool.categoricalMetrics);
+    tool.recordedErrorRate =
+      tool.calls > 0 ? asCount(tool.outcomes.error) / tool.calls : null;
   }
+  report.reliability = Object.values(report.tools)
+    .filter((tool) => asCount(tool.outcomes.error) > 0)
+    .sort(
+      (a, b) =>
+        asCount(b.outcomes.error) - asCount(a.outcomes.error) ||
+        (b.recordedErrorRate ?? 0) - (a.recordedErrorRate ?? 0) ||
+        a.tool.localeCompare(b.tool),
+    )
+    .map((tool) => ({
+      tool: tool.tool,
+      calls: tool.calls,
+      errors: asCount(tool.outcomes.error),
+      recordedErrorRate: tool.recordedErrorRate,
+      errorConcentration: tool.errorConcentration ?? null,
+    }));
   report.extensionVersions = sortVersions(report.extensionVersions);
   report.feedbackCountsByTool = sortCountObject(report.feedbackCountsByTool);
+  for (const group of Object.values(report.exposure.groups)) {
+    group.useRate =
+      group.eligibleCompletedRequests > 0
+        ? group.eligibleRequestsWithUse / group.eligibleCompletedRequests
+        : null;
+  }
   report.compose = buildComposeReport(report.tools.compose, report.compose);
   report.warnings = buildWarnings(report);
 }
@@ -789,7 +916,23 @@ export function mergeFeedbackCounts(report, feedbackPath) {
 }
 
 function buildWarnings(report) {
-  const warnings = [];
+  const warnings = [
+    {
+      code: "exposure_and_execution_coverage_unknown",
+      message:
+        "Legacy/mixed call totals are not adoption rates. Only instrumented invocation groups separate top-level and nested calls; only completed eligible exposure cohorts have use rates. Missing exposure, readiness, and runtime coverage remain unknown, not zero.",
+    },
+    {
+      code: "current_inventory_reference_only",
+      message:
+        "Historical calls are compared with the current canonical inventory (all static definitions, including dev-only tools and parameter unions), not each request's permissions or catalog. Unrecognized parameters are not proof of invalid input.",
+    },
+    {
+      code: "recorded_outcomes_not_task_success",
+      message:
+        "Errors combine host, remote, and uncategorized failures; ok does not verify an operation or task succeeded. Rejections are separate. Durations include waiting and outliers, not just execution time.",
+    },
+  ];
   if (report.totalCalls > 0) {
     const agentCalls = sumToolMap(report.tools, "sources", "agent");
     if (agentCalls === report.totalCalls) {
@@ -863,200 +1006,6 @@ function sumToolMap(tools, field, key) {
   );
 }
 
-function loadKnownTools() {
-  const capabilitiesPath = path.join(
-    REPO_ROOT,
-    "src",
-    "core",
-    "tools",
-    "toolCapabilities.ts",
-  );
-  const registryPath = path.join(REPO_ROOT, "src", "shared", "toolRegistry.ts");
-  const tools = new Map();
-
-  if (fs.existsSync(capabilitiesPath)) {
-    const source = fs.readFileSync(capabilitiesPath, "utf-8");
-    const metadataCalls = source.matchAll(
-      /metadata\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*\[[\s\S]*?\]\s*,\s*"([^"]+)"[\s\S]*?\)/g,
-    );
-    for (const match of metadataCalls) {
-      const call = match[0];
-      tools.set(match[1], {
-        known: true,
-        cluster: match[2],
-        sideEffect: match[3],
-        devOnly: /,\s*(?:true|false)\s*,\s*true\s*,?\s*\)$/m.test(call),
-      });
-    }
-  }
-
-  if (fs.existsSync(registryPath)) {
-    const source = fs.readFileSync(registryPath, "utf-8");
-    const registryBody = extractAssignedObject(source, "TOOL_REGISTRY");
-    for (const toolName of Object.keys(parseObjectKeys(registryBody))) {
-      const existing = tools.get(toolName) ?? {};
-      const body = extractObjectPropertyBody(registryBody, toolName);
-      tools.set(toolName, {
-        ...existing,
-        known: true,
-        devOnly: existing.devOnly || /\bdevOnly\s*:\s*true\b/.test(body),
-      });
-    }
-  }
-
-  for (const [toolName, meta] of Object.entries(INLINE_TOOL_METADATA)) {
-    const existing = tools.get(toolName) ?? {};
-    tools.set(toolName, {
-      ...meta,
-      ...existing,
-      known: true,
-    });
-  }
-
-  return tools;
-}
-
-function loadKnownToolParameters() {
-  const toolAdapterPath = path.join(
-    REPO_ROOT,
-    "src",
-    "agent",
-    "toolAdapter.ts",
-  );
-  const schemasPath = path.join(REPO_ROOT, "src", "shared", "toolSchemas.ts");
-  const parameters = new Map();
-  if (!fs.existsSync(toolAdapterPath) || !fs.existsSync(schemasPath)) {
-    return parameters;
-  }
-
-  const toolAdapterSource = fs.readFileSync(toolAdapterPath, "utf-8");
-  const schemasSource = fs.readFileSync(schemasPath, "utf-8");
-  const schemaObjects = parseSchemaObjects(schemasSource);
-  const toolSchemasBody = extractAssignedObject(
-    toolAdapterSource,
-    "TOOL_SCHEMAS",
-  );
-
-  const schemaEntries = toolSchemasBody.matchAll(
-    /([A-Za-z0-9_]+)\s*:\s*schemas\.([A-Za-z0-9_]+)/g,
-  );
-  for (const [, toolName, schemaName] of schemaEntries) {
-    const keys = schemaObjects.get(schemaName);
-    if (keys) parameters.set(toolName, keys);
-  }
-
-  const positionKeys = schemaObjects.get("positionSchema");
-  for (const toolName of [
-    "go_to_definition",
-    "go_to_implementation",
-    "go_to_type_definition",
-    "get_hover",
-  ]) {
-    if (positionKeys) parameters.set(toolName, positionKeys);
-  }
-
-  addInlineToolParameters(parameters);
-
-  return parameters;
-}
-
-function addInlineToolParameters(parameters) {
-  for (const [toolName, keys] of Object.entries(INLINE_TOOL_PARAMETERS)) {
-    parameters.set(toolName, keys);
-  }
-}
-
-function parseSchemaObjects(source) {
-  const schemas = new Map();
-  const schemaExports = source.matchAll(
-    /export const ([A-Za-z0-9_]+)\s*=\s*\{/g,
-  );
-  for (const match of schemaExports) {
-    const schemaName = match[1];
-    const objectStart = source.indexOf("{", match.index);
-    const body = extractBalancedBlock(source, objectStart);
-    schemas.set(schemaName, Object.keys(parseObjectKeys(body)));
-  }
-  return schemas;
-}
-
-function parseObjectKeys(objectBody) {
-  const keys = {};
-  let depth = 0;
-  let quote = "";
-  let escaped = false;
-  for (let i = 0; i < objectBody.length; i++) {
-    const char = objectBody[i];
-    if (quote) {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === quote) quote = "";
-      continue;
-    }
-    if (char === '"' || char === "'" || char === "`") {
-      quote = char;
-      continue;
-    }
-    if (char === "{") {
-      depth++;
-      continue;
-    }
-    if (char === "}") {
-      depth--;
-      continue;
-    }
-    if (depth !== 1) continue;
-
-    const rest = objectBody.slice(i);
-    const match = rest.match(/^\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*:/);
-    if (match) {
-      keys[match[1]] = true;
-      i += match[0].length - 1;
-    }
-  }
-  return keys;
-}
-
-function extractAssignedObject(source, name) {
-  const marker = new RegExp(`(?:export\\s+)?const\\s+${name}\\b[^=]*=\\s*\\{`);
-  const match = marker.exec(source);
-  if (!match) return "";
-  const objectStart = source.indexOf("{", match.index);
-  return extractBalancedBlock(source, objectStart);
-}
-
-function extractObjectPropertyBody(objectBody, propertyName) {
-  const propertyMatch = new RegExp(`\\b${propertyName}\\s*:\\s*\\{`).exec(
-    objectBody,
-  );
-  if (!propertyMatch) return "";
-  const objectStart = objectBody.indexOf("{", propertyMatch.index);
-  return extractBalancedBlock(objectBody, objectStart);
-}
-
-function extractBalancedBlock(source, openBraceIndex) {
-  let depth = 0;
-  let quote = "";
-  let escaped = false;
-  for (let i = openBraceIndex; i < source.length; i++) {
-    const char = source[i];
-    if (quote) {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === quote) quote = "";
-      continue;
-    }
-    if (char === '"' || char === "'" || char === "`") {
-      quote = char;
-      continue;
-    }
-    if (char === "{") depth++;
-    if (char === "}") depth--;
-    if (depth === 0) return source.slice(openBraceIndex, i + 1);
-  }
-  return source.slice(openBraceIndex);
-}
-
 function printSummary(report, inputPath, top) {
   console.log("Tool Usage Telemetry");
   console.log("====================");
@@ -1085,6 +1034,80 @@ function printSummary(report, inputPath, top) {
     }
   }
 
+  if (report.inventory)
+    console.log(
+      `Inventory: ${report.inventory.source} ${report.inventory.revision} (${report.inventory.buildVariant})`,
+    );
+  console.log(
+    `Invocation coverage: attributed=${report.invocations.coverage.attributedCalls} legacy/unattributed=${report.invocations.coverage.legacyUnattributedCalls} overflow=${report.invocations.coverage.overflowCalls}`,
+  );
+  const invocationRows = Object.values(report.invocations.groups)
+    .sort((a, b) => b.calls - a.calls)
+    .slice(0, top);
+  if (invocationRows.length) {
+    console.log("Instrumented invocations (separate from legacy/mixed totals)");
+    printTable(
+      [
+        "tool",
+        "nesting",
+        "route",
+        "mode",
+        "profile",
+        "version",
+        "calls",
+        "errors",
+      ],
+      invocationRows.map((g) => [
+        g.toolName,
+        g.nesting,
+        g.route,
+        g.mode,
+        g.profile,
+        g.extensionVersion,
+        g.calls,
+        g.outcomes.error ?? 0,
+      ]),
+    );
+  }
+  if (report.exposure.records) {
+    console.log(
+      `Tool exposure: ${report.exposure.totals.requests ?? 0} logical requests, ${report.exposure.totals.providerAttempts ?? 0} transport attempts. ${report.exposure.coverage}`,
+    );
+    printTable(
+      [
+        "tool",
+        "exposure",
+        "eligible",
+        "mode",
+        "profile",
+        "version",
+        "completed_eligible",
+        "with_use",
+        "use_%",
+        "incomplete",
+      ],
+      Object.values(report.exposure.groups)
+        .sort(
+          (a, b) =>
+            b.eligibleRequestsWithUse - a.eligibleRequestsWithUse ||
+            b.requests - a.requests,
+        )
+        .slice(0, top)
+        .map((g) => [
+          g.toolName,
+          g.exposure,
+          g.eligible ?? "unknown",
+          g.mode,
+          g.profile,
+          g.extensionVersion,
+          g.eligibleCompletedRequests,
+          g.eligibleRequestsWithUse,
+          g.useRate === null ? "N/A" : formatNumber(100 * g.useRate),
+          g.incompleteRequests,
+        ]),
+    );
+  }
+
   const toolRows = Object.values(report.tools)
     .filter((tool) => tool.calls > 0)
     .slice(0, top);
@@ -1092,12 +1115,23 @@ function printSummary(report, inputPath, top) {
     console.log("");
     console.log(`Top tools by calls (top ${toolRows.length})`);
     printTable(
-      ["tool", "calls", "ok", "error", "agent", "mcp", "avg_ms", "max_ms"],
+      [
+        "tool",
+        "calls",
+        ...OUTCOMES,
+        "error_%",
+        "agent",
+        "mcp",
+        "avg_ms",
+        "max_ms",
+      ],
       toolRows.map((tool) => [
         tool.tool,
         tool.calls,
-        tool.outcomes.ok ?? 0,
-        tool.outcomes.error ?? 0,
+        ...OUTCOMES.map((outcome) => tool.outcomes[outcome] ?? 0),
+        tool.recordedErrorRate === null
+          ? "N/A"
+          : formatNumber(100 * tool.recordedErrorRate),
         tool.sources.agent ?? 0,
         tool.sources.mcp ?? 0,
         formatNumber(avgDuration(tool)),
@@ -1106,12 +1140,49 @@ function printSummary(report, inputPath, top) {
     );
   }
 
+  if (report.reliability.length > 0) {
+    console.log("");
+    console.log("Recorded errors by volume (rates use all recorded calls)");
+    printTable(
+      [
+        "tool",
+        "errors",
+        "calls",
+        "error_%",
+        "largest_process_errors",
+        "version",
+        "first_error_flush",
+        "last_error_flush",
+      ],
+      report.reliability.slice(0, top).map((row) => {
+        const process = row.errorConcentration?.largestProcess;
+        return [
+          row.tool,
+          row.errors,
+          row.calls,
+          row.recordedErrorRate === null
+            ? "N/A"
+            : formatNumber(100 * row.recordedErrorRate),
+          process?.errors ?? "N/A",
+          process?.version ?? "N/A",
+          process?.firstFlush ?? "N/A",
+          process?.lastFlush ?? "N/A",
+        ];
+      }),
+    );
+    console.log(
+      "Process concentration is within the selected window; flush timestamps are not exact call times or independent incident counts.",
+    );
+  }
+
   const unusedToolRows = Object.values(report.tools)
     .filter((tool) => tool.known && tool.calls === 0)
     .slice(0, top);
   if (unusedToolRows.length > 0) {
     console.log("");
-    console.log(`Unused known tools (top ${unusedToolRows.length})`);
+    console.log(
+      `Known tools with no recorded calls (top ${unusedToolRows.length}; exposure unknown)`,
+    );
     printTable(
       ["tool", "cluster", "side_effect", "dev_only"],
       unusedToolRows.map((tool) => [
@@ -1262,6 +1333,9 @@ function formatDelta(a, b) {
 }
 
 function printComparison(left, right, compare, inputPath, top) {
+  console.log(
+    "Coverage warning: version comparisons may cross instrumentation changes (including newly recorded internal tools). Raw calls and per-1k rates are not behavior-normalized; inspect attributed/legacy coverage before interpreting differences.",
+  );
   const leftLabel = compare.left.join(",");
   const rightLabel = compare.right.join(",");
   console.log("Tool Usage Comparison");
@@ -1434,6 +1508,8 @@ function writeCsvReports(report, csvDir) {
         "feedback_count",
         "numeric_metrics_json",
         "categorical_metrics_json",
+        "recorded_error_rate",
+        "error_concentration_json",
       ],
       Object.values(report.tools).map((tool) => [
         tool.tool,
@@ -1452,6 +1528,8 @@ function writeCsvReports(report, csvDir) {
         report.feedbackCountsByTool[tool.tool] ?? 0,
         JSON.stringify(tool.numericMetrics),
         JSON.stringify(tool.categoricalMetrics),
+        tool.recordedErrorRate ?? "",
+        JSON.stringify(tool.errorConcentration ?? null),
       ]),
     ),
     "utf-8",
@@ -1518,6 +1596,9 @@ function writeCsvReports(report, csvDir) {
           JSON.stringify(report.feedbackCountsByTool),
         ],
         ["warnings_json", JSON.stringify(report.warnings)],
+        ["inventory_json", JSON.stringify(report.inventory ?? null)],
+        ["invocations_json", JSON.stringify(report.invocations)],
+        ["exposure_json", JSON.stringify(report.exposure)],
       ],
     ),
     "utf-8",

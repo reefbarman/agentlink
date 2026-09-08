@@ -16,6 +16,7 @@ import {
   agentLinkFetch,
   withAgentLinkHttpActivity,
 } from "../../../util/httpDispatcher.js";
+import { saveOutputTempFile } from "../../../util/outputFilter.js";
 
 import OpenAI from "openai";
 import type {
@@ -260,6 +261,7 @@ export class CodexProvider implements ModelProvider {
       input: request.input,
       settings: request.settings,
       signal: request.signal,
+      retainOutput: saveOutputTempFile,
     });
   }
 

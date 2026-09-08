@@ -13,6 +13,10 @@
       "command": "npm run build && npm run start --workspace @agentlink/desktop"
     },
     {
+      "label": "Build and install desktop app",
+      "command": "npm run desktop:package -- --target darwin-arm64 && rsync -a --delete desktop-releases/mac-arm64/AgentLink.app/ /Applications/AgentLink.app/"
+    },
+    {
       "label": "Run tests",
       "command": "npm test"
     }

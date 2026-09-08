@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
-  "version": "1.22.22",
+  "version": "1.22.28",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -962,7 +962,7 @@
           "description": "Suffix for the sibling worktree container used by start_worktree_agent when no worktreePath is provided. Default paths are <repo-parent>/<repo-name><suffix>/<sanitized-workstream-name>."
         },
         "agentlink.modeModelPreferences": {
-          "scope": "resource",
+          "scope": "application",
           "type": "object",
           "default": {
             "code": "gpt-5.6-sol",
@@ -976,7 +976,7 @@
           "description": "Default model per chat mode, keyed by mode slug (e.g. code, architect, ask, debug, review). The last model selected in each mode becomes that mode's startup model."
         },
         "agentlink.modeReasoningEffortPreferences": {
-          "scope": "resource",
+          "scope": "application",
           "type": "object",
           "default": {},
           "additionalProperties": {
@@ -1034,7 +1034,7 @@
           "description": "Automatically condense the conversation context when the context window fills up."
         },
         "agentlink.modelCondenseThresholds": {
-          "scope": "resource",
+          "scope": "application",
           "type": "object",
           "default": {},
           "additionalProperties": {
@@ -1054,7 +1054,7 @@
           "description": "Glob patterns for files that are always auto-approved for writes without showing a diff view. Supports workspace-relative paths (e.g. \"**/*.test.ts\") and absolute paths (e.g. \"/tmp/**\")."
         },
         "agentlink.defaultMode": {
-          "scope": "resource",
+          "scope": "application",
           "type": "string",
           "default": "code",
           "enum": [
@@ -1064,7 +1064,7 @@
             "debug",
             "review"
           ],
-          "description": "Default mode for new agent chat sessions."
+          "description": "Last explicitly selected mode, shared across windows and workspaces for fresh sessions. Existing and restored sessions keep their own selections."
         },
         "agentlink.codexStatefulResponses": {
           "scope": "resource",
@@ -1098,7 +1098,7 @@
     }
   },
   "scripts": {
-    "build": "npm run build:workspaces && node scripts/generate-documentation-package-contract.mjs && node esbuild.mjs",
+    "build": "npm run build:workspaces && npm run telemetry:inventory:generate && node scripts/generate-documentation-package-contract.mjs && node esbuild.mjs",
     "build:workspaces": "tsc -b packages/* && npm run build:cjs --workspace packages/protocol && npm run build:cjs --workspace packages/core && npm run build --workspace apps/desktop",
     "watch": "npm run build:workspaces && node scripts/generate-documentation-package-contract.mjs && node scripts/watch-workspaces.mjs",
     "docs:generate": "node scripts/generate-documentation-package-contract.mjs",
@@ -1114,6 +1114,8 @@
     "desktop:package": "npm run build && npm run package --workspace @agentlink/desktop --",
     "desktop:start": "npm run build --workspace @agentlink/desktop && npm run start --workspace @agentlink/desktop",
     "desktop": "npm run desktop:build && npm run start --workspace @agentlink/desktop",
+    "telemetry:inventory:generate": "node scripts/generate-tool-inventory.mjs",
+    "telemetry:inventory:check": "node scripts/generate-tool-inventory.mjs --check",
     "telemetry:tools": "node scripts/report-tool-usage-telemetry.mjs",
     "telemetry:tools:csv": "node scripts/report-tool-usage-telemetry.mjs --csv",
     "telemetry:context": "node scripts/report-context-jumps.mjs",
@@ -1121,7 +1123,7 @@
     "telemetry:mcp-auth": "node scripts/report-mcp-auth-telemetry.mjs",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
-    "lint": "bash -c 'e=0; npm run docs:check || e=1; oxfmt --check || e=1; npm run build:workspaces || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; npm run lint:workspaces || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
+    "lint": "bash -c 'e=0; npm run docs:check || e=1; npm run telemetry:inventory:check || e=1; oxfmt --check || e=1; npm run build:workspaces || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; npm run lint:workspaces || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
     "lint:workspaces": "npm run lint --workspaces --if-present",
     "test": "npm run build:workspaces && vitest run && npm run test:workspaces && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-keychain-runtime.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-mcp-auth-telemetry.test.mjs scripts/report-session-outcomes.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/vendor-agentlink-sdk.test.mjs scripts/verify-desktop-package.test.mjs scripts/verify-retrieval-package.test.mjs scripts/workspace-bundle-closure.test.mjs",
     "test:workspaces": "npm run test --workspaces --if-present",

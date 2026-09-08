@@ -1281,6 +1281,55 @@ describe("MessageBubble slash-command rendering", () => {
     expect(toolGroup?.nextElementSibling).toBe(textBlock);
   });
 
+  it("renders restored successful tools collapsed immediately on mount and tab remount", () => {
+    vi.useFakeTimers();
+    const message: ChatMessage = {
+      id: "restored-streaming-message",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        {
+          type: "tool_call",
+          id: "completed-tool",
+          name: "read_file",
+          inputJson: JSON.stringify({ path: "src/one.ts" }),
+          result: "file contents",
+          complete: true,
+        },
+        {
+          type: "tool_call",
+          id: "running-tool",
+          name: "execute_command",
+          inputJson: JSON.stringify({ command: "npm test" }),
+          result: "",
+          complete: false,
+        },
+      ],
+    };
+
+    for (let mount = 0; mount < 2; mount += 1) {
+      const { container, unmount } = render(
+        <MessageBubble message={message} streaming={true} />,
+      );
+      const group = screen.getByRole("button", {
+        name: /tools explored 1 file/i,
+      });
+      expect(group.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByRole("button", { name: /read_file/i })).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Command details" }),
+      ).toBeTruthy();
+      expect(container.querySelector(".tool-running-command")).toBeTruthy();
+      const initialMarkup = container.innerHTML;
+      act(() => {
+        vi.advanceTimersByTime(TOOL_GROUP_SETTLE_MS_FOR_TEST);
+      });
+      expect(container.innerHTML).toBe(initialMarkup);
+      unmount();
+    }
+  });
+
   it("settles completed tools into a summary while streaming and keeps running tools standalone", () => {
     vi.useFakeTimers();
 
@@ -1294,6 +1343,12 @@ describe("MessageBubble slash-command rendering", () => {
       toolCallId: "tool-1",
       toolName: "read_file",
     });
+    const { rerender } = render(
+      <MessageBubble
+        message={state.messages[state.messages.length - 1] as ChatMessage}
+        streaming={true}
+      />,
+    );
     state = reducer(state, {
       type: "TOOL_COMPLETE",
       toolCallId: "tool-1",
@@ -1322,9 +1377,7 @@ describe("MessageBubble slash-command rendering", () => {
     });
 
     const assistant = state.messages[state.messages.length - 1] as ChatMessage;
-    const { rerender } = render(
-      <MessageBubble message={assistant} streaming={true} />,
-    );
+    rerender(<MessageBubble message={assistant} streaming={true} />);
 
     expect(
       screen.queryByRole("button", { name: /tools explored/i }),

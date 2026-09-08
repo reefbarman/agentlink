@@ -136,7 +136,9 @@ function trimUtf8Prefix(data: string, bytesToDrop: number): string {
 function boundaryFor(
   event: ShellIntegrationEvent,
 ): HostTerminalBlockBoundary | null {
-  return event.type === "cwd" ? null : event.type;
+  return event.type === "cwd" || event.type === "command-output-end"
+    ? null
+    : event.type;
 }
 
 export class HostTerminalRuntime {

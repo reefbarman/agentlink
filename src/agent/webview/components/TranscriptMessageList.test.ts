@@ -9,6 +9,133 @@ import { StreamingBaselineRecorder } from "../../../shared/streamingBaselineMetr
 import { TranscriptMessageList } from "./TranscriptMessageList";
 import { h } from "preact";
 
+describe("agent coordination cards", () => {
+  const request: ChatMessage = {
+    id: "coordination-message",
+    role: "user",
+    content: "Internal handoff",
+    timestamp: 1,
+    blocks: [],
+    coordination: {
+      requestId: "request-1",
+      backgroundSessionId: "worker-1",
+      task: "Review scope",
+      kind: "question",
+      context: "Confirm ownership",
+      questions: [{ id: "path", question: "Which file?" }],
+    },
+  };
+  const response = (accepted: boolean): ChatMessage => ({
+    id: "reply-message",
+    role: "assistant",
+    content: "",
+    timestamp: 2,
+    blocks: [
+      {
+        type: "tool_call",
+        id: "reply-1",
+        name: "respond_to_background_question",
+        inputJson: JSON.stringify({
+          request_id: "request-1",
+          answers: { path: "src/owned.ts" },
+          notes: { path: "Avoid other files" },
+        }),
+        result: JSON.stringify({ accepted }),
+        complete: true,
+      },
+      { type: "text", text: "Continuing the main task." },
+    ],
+  });
+
+  it("updates a waiting card in place and pairs an accepted reply without a user bubble", () => {
+    cleanup();
+    const view = render(
+      h(TranscriptMessageList, { messages: [request], streaming: false }),
+    );
+    expect(screen.getByText("Waiting for reply")).toBeTruthy();
+    const card = view.container.querySelector(
+      "details.background-coordination",
+    )!;
+    card.setAttribute("open", "");
+    view.rerender(
+      h(TranscriptMessageList, {
+        messages: [request, response(true)],
+        streaming: false,
+      }),
+    );
+    expect(
+      view.container.querySelector("details.background-coordination"),
+    ).toBe(card);
+    expect(card.hasAttribute("open")).toBe(true);
+    expect(screen.getByText("Answered")).toBeTruthy();
+    expect(screen.getByText("src/owned.ts")).toBeTruthy();
+    expect(screen.getByText("Note: Avoid other files")).toBeTruthy();
+    expect(screen.getByText("Continuing the main task.")).toBeTruthy();
+    expect(screen.queryByText("Internal handoff")).toBeNull();
+    expect(view.container.querySelectorAll(".tool-group-block")).toHaveLength(
+      0,
+    );
+    cleanup();
+  });
+
+  it("preserves checkpoint controls on coordination messages", () => {
+    cleanup();
+    const messages = [{ ...request, checkpointId: "checkpoint-1" }];
+    const view = render(
+      h(TranscriptMessageList, {
+        messages,
+        streaming: false,
+        sessionId: "session-1",
+      }),
+    );
+    expect(view.container.querySelector(".checkpoint-row")).toBeNull();
+    view.rerender(
+      h(TranscriptMessageList, {
+        messages,
+        streaming: false,
+        sessionId: "session-1",
+        onRevertCheckpoint: vi.fn(),
+        onViewCheckpointDiff: vi.fn(),
+      }),
+    );
+    expect(view.container.querySelector(".checkpoint-row")).toBeTruthy();
+    expect(screen.getByText("Agent communication")).toBeTruthy();
+    cleanup();
+  });
+
+  it("keeps rejected replies visible as tools and does not mark them answered", () => {
+    cleanup();
+    const { container } = render(
+      h(TranscriptMessageList, {
+        messages: [request, response(false)],
+        streaming: false,
+      }),
+    );
+    expect(screen.getByText("Response failed")).toBeTruthy();
+    expect(screen.queryByText("Answered")).toBeNull();
+    expect(container.querySelectorAll(".tool-group-block")).toHaveLength(1);
+    cleanup();
+  });
+
+  it("uses the same paired treatment for approvals without adding approval controls", () => {
+    cleanup();
+    const approval: ChatMessage = {
+      ...request,
+      coordination: { ...request.coordination!, kind: "approval" },
+    };
+    render(
+      h(TranscriptMessageList, {
+        messages: [approval, response(true)],
+        streaming: false,
+      }),
+    );
+    expect(screen.getByText("Approval")).toBeTruthy();
+    expect(screen.getByText("Answered")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Approve/ })).toBeNull();
+    cleanup();
+  });
+});
+
 function apiRequest(
   model: string,
   reasoningEffort?: ReasoningEffort,

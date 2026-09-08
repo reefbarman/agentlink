@@ -1,5 +1,4 @@
 import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
-import { Fragment } from "preact";
 import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
 
 interface ModelChangeDividerProps {
@@ -109,13 +108,24 @@ export function ModelChangeDivider({
       >
         <i class="codicon codicon-arrow-swap" aria-hidden="true" />
         {badgeSegments.map((segment, index) => (
-          <Fragment key={segment.text}>
-            {index > 0 && <span aria-hidden="true">·</span>}
-            <span>{segment.text}</span>
-            {segment.value && (
-              <span class="model-change-divider-model">{segment.value}</span>
+          <span class="model-change-divider-segment" key={segment.text}>
+            {index > 0 && (
+              <span class="model-change-divider-dot" aria-hidden="true">
+                ·
+              </span>
             )}
-          </Fragment>
+            <span>
+              {segment.text}
+              {segment.value && (
+                <>
+                  {" "}
+                  <span class="model-change-divider-model">
+                    {segment.value}
+                  </span>
+                </>
+              )}
+            </span>
+          </span>
         ))}
       </span>
       <span class="model-change-divider-line" aria-hidden="true" />

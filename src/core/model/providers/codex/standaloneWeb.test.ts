@@ -159,7 +159,8 @@ describe("executeCodexStandaloneWeb", () => {
     });
   });
 
-  it("truncates fetched content to the requested visible length", async () => {
+  it("retains fetched content beyond the visible preview", async () => {
+    const retainOutput = vi.fn(() => "/tmp/agentlink-output-test/output.txt");
     const result = await executeCodexStandaloneWeb({
       auth,
       sessionId: "session-1",
@@ -171,8 +172,94 @@ describe("executeCodexStandaloneWeb", () => {
         new Response(JSON.stringify({ output: "abcdefghij", results: [] }), {
           status: 200,
         })) as typeof globalThis.fetch,
+      retainOutput,
     });
 
-    expect(result.content).toBe("abcde\n\n[Content truncated by AgentLink]");
+    expect(result).toMatchObject({
+      content: "abcde\n\n[Content truncated by AgentLink]",
+      content_truncated: true,
+      output_file: "/tmp/agentlink-output-test/output.txt",
+      output_warning: expect.stringContaining("read_file"),
+    });
+    expect(retainOutput).toHaveBeenCalledWith("abcdefghij");
+  });
+
+  it("continues line-addressed pages before retaining provider output", async () => {
+    const requestBodies: Record<string, unknown>[] = [];
+    const retainOutput = vi.fn(() => "/tmp/agentlink-output-test/output.txt");
+    const outputs = [
+      "Total lines: 4\nL0: zero\nL1: one",
+      "Total lines: 4\nL2: two\nL3: three",
+    ];
+    const result = await executeCodexStandaloneWeb({
+      auth,
+      sessionId: "session-1",
+      model: "gpt-test",
+      operation: "fetch",
+      input: { url: "https://example.com", max_length: 5 },
+      settings: normalizeCoreWebAccessSettings(),
+      fetch: (async (_input, init) => {
+        requestBodies.push(
+          JSON.parse(String(init?.body)) as Record<string, unknown>,
+        );
+        return new Response(
+          JSON.stringify({
+            output: outputs[requestBodies.length - 1],
+            results: [],
+          }),
+          { status: 200 },
+        );
+      }) as typeof globalThis.fetch,
+      retainOutput,
+    });
+
+    expect(requestBodies).toHaveLength(2);
+    expect(requestBodies[1]).toMatchObject({
+      commands: { open: [{ ref_id: "https://example.com/", lineno: 2 }] },
+    });
+    expect(retainOutput).toHaveBeenCalledWith(`${outputs[0]}\n\n${outputs[1]}`);
+    expect(result.next_start_line).toBeUndefined();
+  });
+
+  it("returns a recoverable start line when retained output cannot be saved", async () => {
+    const outputs = [
+      "Total lines: 4\nL0: zero\nL1: one",
+      "Total lines: 4\nL2: two\nL3: three",
+    ];
+    let requestCount = 0;
+    const result = await executeCodexStandaloneWeb({
+      auth,
+      sessionId: "session-1",
+      model: "gpt-test",
+      operation: "fetch",
+      input: { url: "https://example.com", max_length: 5 },
+      settings: normalizeCoreWebAccessSettings(),
+      fetch: (async () =>
+        new Response(
+          JSON.stringify({ output: outputs[requestCount++], results: [] }),
+          { status: 200 },
+        )) as typeof globalThis.fetch,
+      retainOutput: () => null,
+    });
+
+    expect(result).toMatchObject({
+      content_truncated: true,
+      next_start_line: 2,
+      output_warning: expect.stringContaining("could not be retained"),
+    });
+  });
+
+  it("maps explicit start_line to the provider open command", () => {
+    const prepared = prepareCodexStandaloneWebRequest({
+      sessionId: "session-1",
+      model: "gpt-test",
+      operation: "fetch",
+      input: { url: "https://example.com", start_line: 42 },
+      settings: normalizeCoreWebAccessSettings(),
+    });
+
+    expect(prepared.body).toMatchObject({
+      commands: { open: [{ ref_id: "https://example.com/", lineno: 42 }] },
+    });
   });
 });

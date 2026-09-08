@@ -606,6 +606,8 @@ You can use an OpenAI API key for both model chat and embeddings, but credential
 
 ### 4. Query the index
 
+Indexed tools only work on files/folders within the current workspace folders. This includes `codebase_search`, the semantic options below, and the structural tools `get_repo_map` and `get_module_neighbors`. An absolute path to another repository does not make its index available, even if it is open in another window or was previously indexed. For external paths, use `read_file` or `list_files` without `query`, or regex `search_files` with `semantic=false`, subject to existing path permissions and approvals.
+
 After indexing completes, agents can use:
 
 - `codebase_search` for natural-language code search
@@ -720,12 +722,13 @@ Open and read a public HTTP or HTTPS URL through the selected model provider's n
 
 For Codex OAuth, page open and find-in-page are direct standalone search commands. OpenAI API-key requests and compatibility fallback use the combined hosted `web_search` capability rather than sending a separate provider `web_fetch` definition.
 
-| Parameter    | Type    | Description                                            |
-| ------------ | ------- | ------------------------------------------------------ |
-| `url`        | string  | Required absolute HTTP or HTTPS URL.                   |
-| `max_length` | number? | Optional requested maximum visible content characters. |
-| `section`    | string? | Optional heading or section to focus on.               |
-| `find`       | string? | Optional text or pattern to locate within the page.    |
+| Parameter    | Type    | Description                                                        |
+| ------------ | ------- | ------------------------------------------------------------------ |
+| `url`        | string  | Required absolute HTTP or HTTPS URL.                               |
+| `max_length` | number? | Optional requested maximum visible content characters.             |
+| `start_line` | number? | Optional provider page line for continuing long Codex OAuth pages. |
+| `section`    | string? | Optional heading or section to focus on.                           |
+| `find`       | string? | Optional text or pattern to locate within the page.                |
 
 Response details:
 
@@ -734,12 +737,14 @@ Response details:
 - `operation` is `fetch`.
 - `input` contains the complete original normalized input.
 - `activities` contains provider-visible page-open/find lifecycle data when available.
-- `content` contains the relevant visible page content.
+- `content` contains a bounded preview of the relevant page content.
+- `output_file` and `output_warning` are included when the VS Code host receives more Codex page content than fits the preview and successfully retains it. Read that AgentLink-created temp file with `read_file` instead of repeating the fetch.
+- `content_truncated` marks a bounded preview, and `next_start_line` identifies any provider remainder that was not retained. Browser Ask Agent does not expose host temp-file paths, so it uses continuation metadata when available.
 - `citations` contains normalized source/final-URL metadata when available.
 - `usage` contains provider token/server-tool usage when exposed by the provider client.
 - Provider-private replay/encrypted metadata is never included.
 
-The tool rejects non-HTTP(S) URLs, applies domain policy before transport, and enforces the lower of `max_length` and the configured fetched-content limit locally on the Codex standalone path. A delegated fallback is instructed to open the exact URL and not search for alternatives except when following that URL's redirect is required.
+The tool rejects non-HTTP(S) URLs, applies domain policy before transport, and enforces the lower of `max_length` and the configured fetched-content limit for the inline preview. On the Codex standalone path, AgentLink follows the provider's line-addressed page continuation while content remains within the configured fetched-content limit and bounded request count; any remainder is reported through `next_start_line`. A delegated fallback is instructed to open the exact URL and not search for alternatives except when following that URL's redirect is required.
 
 ### compose (default-on foreground tool)
 
@@ -1580,6 +1585,8 @@ Block until a background session finishes. Successful runs return the expected f
 
 A valid `set_task_status` result or parsed expected-result envelope remains authoritative even if the provider disconnects immediately afterward. Required structured output such as `review_findings` cannot be reported as a clean completion when only progress prose was produced. Persisted foreground sessions automatically restore their background tree so the original parent can retrieve durable child results after reload; inactive restored trees are pruned when another foreground is selected.
 
+If a native structured review hits the provider's output-token limit, it receives up to three finalization-only attempts with only `set_task_status` available. These requests use the evidence already collected and do not consume review work allowances. Truncated tool calls are not executed and are marked skipped in history. Reviewers must return a concise result or explicitly report `blocked` with partial findings and unreviewed scope—not claim an unfinished review is clean. Exhausted recovery attempts remain incomplete; foreground output-limit stops and provider safety refusals do not trigger this review recovery.
+
 When a background agent returns images, `get_background_result` includes image content blocks alongside the text result. Generated images render inline in the calling chat and remain available in the background transcript. ACP image output accepts PNG, JPEG, GIF, and WebP payloads up to 10 MB each, with at most 8 images retained per result.
 
 A background agent blocked in `get_background_result` releases its own fleet concurrency slot while it waits, so a parent waiting on a queued child cannot deadlock the fleet: the freed slot lets queued work (typically the awaited descendant) start. The parent resumes as soon as the result arrives, which may briefly exceed the concurrency limit; the scheduler starts nothing new until active counts drop back under it.
@@ -2231,6 +2238,14 @@ npm run telemetry:sessions -- --since 7d
 ```
 
 The tool reporter accepts `--since <ISO date|Nd|Nh|Nm>`, `--until <ISO date>`, repeatable `--version`, `--feedback-input`, `--json`, and `--csv-dir`. It reports aggregate tool/parameter/outcome, latency, feedback-count, and attribution metrics. For `write_file` and `apply_diff`, an interactive review also records bounded approval-state and policy-reason metrics so unexpected prompts can be diagnosed without recording the target path or content. Feedback text, feedback parameters/result summaries, raw tool inputs/results, project paths, and individual project IDs are never emitted. Dynamic direct MCP names (`server__tool`) are classified separately and do not trigger static inventory-drift warnings.
+
+The tool report shows every recorded disposition (`ok`, `partial`, `error`, `cancelled`, `rejected`) and error rates using all recorded calls as the denominator. JSON and tool CSV exports include `recordedErrorRate` / `recorded_error_rate` as a fraction (null / blank when there are no calls). A reliability table highlights the largest error concentration for a process/version in the selected window, without printing its identity; its first/last flush timestamps are not exact call times or incident counts. Errors still combine host, remote, and uncategorized failures. Zero recorded calls do not prove a tool is unused: exposure is not measured, internal tools may bypass the recorder, bridges record canonical targets, and nested calls may be included. The known-tool/parameter inventory is generated from current canonical definitions, including dev-only tools and foreground/background parameter unions; it is not the catalog used by every historical request. Run `npm run telemetry:inventory:generate` after definition changes and `npm run telemetry:inventory:check` to detect drift (also checked by lint).
+
+New `tool_usage_flush` v2 records retain the legacy tool totals and add bounded invocation groups by canonical native tool, mode/profile, background flag, direct/native-bridge/MCP-bridge route, and top-level/Compose-child nesting. Internal TODO calls and adapter early returns are observed once; recorder errors cannot change execution. Old records remain readable and explicitly unattributed rather than being assumed top-level. New groups do not store dynamic MCP target names; bounded legacy tool-name accounting remains compatible.
+
+Separate `tool_exposure_flush` records observe the built-in native engine's outgoing request snapshot: inline versus discoverable tools, current eligibility, completed/incomplete requests, provider-attempt counts, and requests with top-level use. The displayed use rate divides requests with use by completed eligible exposed requests; repeated calls in one response and Compose children do not inflate it. Provider-internal retries are attempts within that request, while engine-level recovery submissions are separate observations (failed observations do not enter the adoption denominator). This is not task suitability or verified tool success. Exact wire advertisement, index readiness, discovered-schema retention, projectless Ask Agent, ACP, and hosted-tool coverage are not measured by this first layer. Pending requests have no terminal observation yet. JSON and summary CSV exports retain joint invocation/exposure groups and coverage. Recorder limits preserve overflow totals and failed-flush recovery without persisting raw arguments, results, queries, or paths in new dimensions.
+
+Compose costs are observational, unmatched enabled/disabled cohorts—not measured savings. Estimated history and definition **token-sends** count repeated inclusion on provider attempts, not unique retained context. Request-attempt averages cover the cohort; opportunity averages use only turns meeting the observed call-shape heuristic. The old JSON savings fields are deprecated and return null; `perOpportunity.retainedResultTokens` remains a deprecated alias for `historyTokenSends`. Review handoff size measures a payload/selector, not the amount of code reviewed. Steering counts include an explicit observed-record denominator and missing-record count.
 
 The session-outcome reporter covers turn timing, task status, background-agent outcomes, and approval cards that interrupted **Approve for Me**. Approval-interruption events contain only bounded categories: approval kind, interruption reason, Guardian status/outcome/risk, and host-owned route/permission classifications. They never include command text, target paths, user prompts, reviewer rationale, or approval-card detail. `ask_user` remains ordinary user-question telemetry rather than an approval interruption.
 

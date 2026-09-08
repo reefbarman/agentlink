@@ -7,6 +7,11 @@ import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval
 
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import { CheckpointRow } from "./CheckpointRow";
+import { BackgroundCoordinationCard } from "./BackgroundCoordinationCard";
+import {
+  pairBackgroundCoordination,
+  type BackgroundCoordinationReply,
+} from "../../../shared/backgroundCoordination";
 import { CondenseRow } from "./CondenseRow";
 import type { DetectedQuestion } from "../questionDetection";
 import { Fragment, type ComponentChildren } from "preact";
@@ -71,6 +76,8 @@ interface TranscriptRow {
   message: ChatMessage;
   sourceMessage: ChatMessage;
   bgAgentResultOnly: boolean;
+  coordinationReply?: BackgroundCoordinationReply;
+  coordinationShell?: boolean;
   warningMessages?: ChatMessage[];
   modelChange?: {
     previousModel: string;
@@ -95,6 +102,10 @@ type BgAgentResultContentBlock = Extract<
   { type: "bg_agent_result" }
 >;
 
+const coordinationMessageCache = new WeakMap<
+  ChatMessage,
+  Map<string, ChatMessage>
+>();
 const messageRevisionCache = new WeakMap<ChatMessage, string>();
 const objectRevisionCache = new WeakMap<object, number>();
 const assistantSegmentCache = new WeakMap<
@@ -142,6 +153,7 @@ function messageRevision(message: ChatMessage): string {
     objectRevision(message.apiRequest),
     objectRevision(message.condenseInfo),
     objectRevision(message.warningRetry),
+    objectRevision(message.coordination),
   ].join("\u0000");
   messageRevisionCache.set(message, revision);
   return revision;
@@ -363,11 +375,51 @@ function coalesceChangeDividers(rows: TranscriptRow[]): TranscriptRow[] {
   return grouped;
 }
 
+function pairCoordinationRows(
+  rows: TranscriptRow[],
+  coordination: ReturnType<typeof pairBackgroundCoordination>,
+): TranscriptRow[] {
+  return rows.map((row) => {
+    if (row.message.coordination) {
+      return {
+        ...row,
+        coordinationReply: coordination.replies.get(
+          row.message.coordination.requestId,
+        ),
+      };
+    }
+    if (coordination.pairedBlocks.size === 0) return row;
+    const removed = row.message.blocks.flatMap((block, index) =>
+      coordination.pairedBlocks.has(block) ? [index] : [],
+    );
+    if (removed.length === 0) return row;
+    const cacheKey = removed.join(",");
+    let cache = coordinationMessageCache.get(row.message);
+    let message = cache?.get(cacheKey);
+    if (!message) {
+      message = {
+        ...row.message,
+        blocks: row.message.blocks.filter(
+          (block) => !coordination.pairedBlocks.has(block),
+        ),
+      };
+      if (!cache) {
+        cache = new Map();
+        coordinationMessageCache.set(row.message, cache);
+      }
+      cache.set(cacheKey, message);
+    }
+    return { ...row, message, coordinationShell: message.blocks.length === 0 };
+  });
+}
+
 function buildTranscriptRows(
   messages: ChatMessage[],
   streaming: boolean,
 ): TranscriptRow[] {
   const rows: TranscriptRow[] = [];
+  const coordination = pairBackgroundCoordination(messages);
+  const renderedRequests = new Set<string>();
   let previousModel: string | undefined;
   let previousReasoningEffort: ReasoningEffort | undefined;
   let pendingExplicitModel: string | undefined;
@@ -377,6 +429,11 @@ function buildTranscriptRows(
   let previousCommandApprovalPolicy: CommandApprovalPolicy | undefined;
 
   for (const message of messages) {
+    if (message.coordination) {
+      const { requestId } = message.coordination;
+      if (renderedRequests.has(requestId) && !message.checkpointId) continue;
+      renderedRequests.add(requestId);
+    }
     if (message.role === "warning") {
       const previous = rows[rows.length - 1];
       if (previous?.warningMessages) {
@@ -398,7 +455,10 @@ function buildTranscriptRows(
       continue;
     }
 
-    const messageRows = splitTopLevelChatBlocks(message);
+    const messageRows = pairCoordinationRows(
+      splitTopLevelChatBlocks(message),
+      coordination,
+    );
     if (message.surfaceChange) {
       if (messageRows.length > 0) {
         messageRows[0] = {
@@ -578,7 +638,29 @@ function renderTranscriptRow({
   const { key, message, sourceMessage, bgAgentResultOnly, warningMessages } =
     row;
   const markerOnly = isChangeMarkerOnly(message);
-  const content = markerOnly ? null : message.role === "condense" ? (
+  const content = message.coordination ? (
+    <Fragment>
+      {message.checkpointId && actions.onRevertCheckpoint && (
+        <CheckpointRow
+          checkpointId={message.checkpointId}
+          sessionId={sessionId ?? null}
+          onRevert={(...args) => actions.onRevertCheckpoint?.(...args)}
+          onViewDiff={
+            actions.onViewCheckpointDiff
+              ? (...args) => actions.onViewCheckpointDiff?.(...args)
+              : undefined
+          }
+        />
+      )}
+      <BackgroundCoordinationCard
+        request={message.coordination}
+        reply={row.coordinationReply}
+      />
+    </Fragment>
+  ) : markerOnly ||
+    (row.coordinationShell &&
+      !message.finalMarker &&
+      !message.error) ? null : message.role === "condense" ? (
     <CondenseRow message={message} />
   ) : message.role === "warning" ? (
     <WarningRow
@@ -791,6 +873,15 @@ function rowActionAvailability(
 ): Record<string, boolean> {
   const { message } = row;
   if (message.role === "condense") return {};
+  if (message.coordination)
+    return {
+      revertCheckpoint: Boolean(
+        message.checkpointId && actions.onRevertCheckpoint,
+      ),
+      viewCheckpointDiff: Boolean(
+        message.checkpointId && actions.onViewCheckpointDiff,
+      ),
+    };
   if (message.role === "warning") {
     return {
       retry: Boolean(isLatest && message.error && actions.onRetry),
@@ -869,6 +960,8 @@ function createRowRevision(params: {
   // nested immutable structures. This preserves semantic equality across shallow
   // clones without serializing potentially multi-megabyte tool results.
   const scalars = JSON.stringify({
+    coordinationReply: objectRevision(row.coordinationReply?.block),
+    coordinationShell: row.coordinationShell,
     modelChange: row.modelChange,
     reasoningChange: row.reasoningChange,
     modeChange: row.modeChange,
@@ -941,7 +1034,7 @@ export function TranscriptMessageList({
   if (streaming && lastMessage?.role === "assistant") {
     for (let i = rows.length - 1; i >= 0; i -= 1) {
       const row = rows[i];
-      if (row.sourceMessage !== lastMessage) continue;
+      if (row.sourceMessage !== lastMessage || row.coordinationShell) continue;
       if (!row.bgAgentResultOnly) {
         streamingRowKey = row.key;
         break;

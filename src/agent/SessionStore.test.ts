@@ -164,6 +164,49 @@ describe("SessionStore", () => {
     }
   });
 
+  it("preserves thinking preferences and thresholds through both save APIs and metadata reads", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    const preferences = {
+      reasoningEffort: "max" as const,
+      desiredReasoningEffort: "ultra" as const,
+      autoCondenseThreshold: 0.67,
+    };
+    const record = createRecord({ metadata: preferences });
+    await expect(
+      store.saveSession({ session: record, expectedRevision: null }),
+    ).resolves.toMatchObject({ ok: true });
+    const reopened = new SessionStore(tmpDir);
+    expect(reopened.loadMetadata(record.summary.id)).toMatchObject(preferences);
+    expect(await reopened.readSession(record.summary.id)).toMatchObject({
+      ok: true,
+      value: { metadata: preferences },
+    });
+    const legacyPreferences = {
+      reasoningEffort: "none" as const,
+      desiredReasoningEffort: "none" as const,
+      autoCondenseThreshold: 0.81,
+    };
+    reopened.save({
+      ...createSummary({ id: "legacy-save" }),
+      lineage: undefined,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+      lastInputTokens: 0,
+      lastCacheReadTokens: 0,
+      ...legacyPreferences,
+      getAllMessages: () => record.messages,
+    });
+    await reopened.flush();
+    expect(new SessionStore(tmpDir).loadMetadata("legacy-save")).toMatchObject(
+      legacyPreferences,
+    );
+    writeLegacySession(tmpDir);
+    const legacy = new SessionStore(tmpDir).loadMetadata("legacy-1");
+    expect(legacy?.desiredReasoningEffort).toBeUndefined();
+    expect(legacy?.autoCondenseThreshold).toBeUndefined();
+  });
+
   it("round-trips the initial Architect review gate and leaves legacy records ungated", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
     const store = new SessionStore(tmpDir);

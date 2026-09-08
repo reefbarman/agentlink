@@ -269,9 +269,10 @@ describe("ToolCallBlock", () => {
 
     expect(screen.getByText("approved · human · sandbox")).toBeTruthy();
     expect(screen.getByText("npm test")).toBeTruthy();
+    expect(screen.getByText("Reason")).toBeTruthy();
     expect(
-      screen.queryByText("Verify the implementation before finishing."),
-    ).toBeNull();
+      screen.getByText("Verify the implementation before finishing."),
+    ).toBeTruthy();
     expect(document.querySelector(".tool-running-command")).toBeNull();
   });
 

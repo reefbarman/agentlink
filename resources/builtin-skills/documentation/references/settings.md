@@ -6,6 +6,14 @@ All settings live under the `agentlink.*` namespace and are set in VS Code Setti
 
 ## Model and agent behavior
 
+### Shared session defaults
+
+Your explicit picker changes are saved in User Settings and shared across VS Code windows and workspaces: the last selected mode, model and thinking level per mode, and compaction percentage per model. New Chat and new tabs read these defaults when created. Switching modes restores that mode's remembered model and thinking level; switching models uses that model's compaction percentage.
+
+Existing sessions do not live-update when another window changes a default. Reopened or reloaded sessions retain their saved selections. Agent-initiated mode switches, restoration, and automatic model fallbacks do not update your shared defaults. A window without an open project still starts in Ask mode.
+
+These four settings are application-scoped. Old workspace-folder overrides no longer take precedence; choose your preferences once in the pickers to save them as shared defaults. Older session records without a saved compaction percentage use the model's built-in default on their first restore.
+
 - `modeModelPreferences` — startup model per mode slug; the last model selected in each mode becomes that mode's default
 - `modeReasoningEffortPreferences` — desired thinking level per mode slug (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`). A session clamps an unsupported preference to the nearest lower level without overwriting the saved preference; GPT-6 Astra exposes Codex's `ultra` preset with ChatGPT/Codex OAuth (sent as Astra's `xhigh` wire effort) and supports up to `max` with an OpenAI API key.
 - `modelPromptProfiles` — exact model-ID overrides for `compatibility` or compact `reasoning` prompts; evaluated full-size Codex models automatically use `reasoning`, while unknown, invalid, compatible-provider, and small-tier models fail closed to compatibility

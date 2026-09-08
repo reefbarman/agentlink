@@ -25,8 +25,9 @@ export interface PreparedHostShellBootstrap {
   plan: HostShellBootstrapPlan;
 }
 
-export function prepareHostShellBootstrap(
+function prepareHostShellBootstrapWithOptions(
   input: PrepareHostShellBootstrapInput,
+  markZshCommandOutputEndBeforeEolPadding: boolean,
 ): PreparedHostShellBootstrap {
   const configuration = adaptVscodeTerminalConfiguration(input.configuration);
   if (configuration.nativeFallbackReason) {
@@ -54,9 +55,24 @@ export function prepareHostShellBootstrap(
     ...(input.originalZdotdir
       ? { originalZdotdir: input.originalZdotdir }
       : {}),
+    ...(markZshCommandOutputEndBeforeEolPadding
+      ? { markZshCommandOutputEndBeforeEolPadding: true }
+      : {}),
   };
   return {
     configuration,
     plan: planHostShellBootstrap(bootstrapInput),
   };
+}
+
+export function prepareHostShellBootstrap(
+  input: PrepareHostShellBootstrapInput,
+): PreparedHostShellBootstrap {
+  return prepareHostShellBootstrapWithOptions(input, false);
+}
+
+export function prepareNativeAgentHostShellBootstrap(
+  input: PrepareHostShellBootstrapInput,
+): PreparedHostShellBootstrap {
+  return prepareHostShellBootstrapWithOptions(input, true);
 }

@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 
+import { getUserSessionPreference } from "./sharedSessionPreferences.js";
+
 export const MODEL_THRESHOLD_KEY = "modelCondenseThresholds";
 
 // Condensing is the expensive event, not carrying context: each condense costs
@@ -98,5 +100,7 @@ export function getConfiguredBaseThresholdForModel(
 export function getModelCondenseThresholdMap(
   config: vscode.WorkspaceConfiguration,
 ): ModelCondenseThresholdMap {
-  return normalizeModelThresholdMap(config.get(MODEL_THRESHOLD_KEY));
+  return normalizeModelThresholdMap(
+    getUserSessionPreference(config, MODEL_THRESHOLD_KEY),
+  );
 }

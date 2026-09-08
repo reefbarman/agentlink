@@ -131,6 +131,7 @@ class PersistentNativeCommandProcess implements SandboxCommandProcess {
   private readonly listeners = new Set<(event: SandboxCommandEvent) => void>();
   private readonly pendingEvents: SandboxCommandEvent[] = [];
   private deliveryReady = false;
+  private outputCaptureStopped = false;
   private completionPending = false;
   private state: "prepared" | "running" | "completed" = "prepared";
   private disposed = false;
@@ -173,7 +174,12 @@ class PersistentNativeCommandProcess implements SandboxCommandProcess {
   }
 
   emit(event: SandboxCommandEvent): void {
-    if (this.state !== "running" || this.disposed) return;
+    if (
+      this.state !== "running" ||
+      this.disposed ||
+      (this.outputCaptureStopped && event.type === "data")
+    )
+      return;
     if (!this.deliveryReady || this.listeners.size === 0) {
       this.pendingEvents.push(event);
       return;
@@ -184,6 +190,11 @@ class PersistentNativeCommandProcess implements SandboxCommandProcess {
   markShellCommandEnd(): void {
     if (this.state !== "running" || this.disposed) return;
     this.onShellCommandEnd?.();
+  }
+
+  stopOutputCapture(): void {
+    if (this.state !== "running" || this.disposed) return;
+    this.outputCaptureStopped = true;
   }
 
   complete(exit: SandboxCommandExit): void {
@@ -416,6 +427,11 @@ class PersistentNativeChannel {
         if (this.commandStarted) continue;
         this.commandStarted = true;
         this.active.markReady(this.pid);
+        continue;
+      }
+      if (event.type === "command-output-end") {
+        if (!this.active || !this.commandStarted) continue;
+        this.active.stopOutputCapture();
         continue;
       }
       if (event.type === "command-end") {

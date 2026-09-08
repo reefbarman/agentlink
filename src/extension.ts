@@ -80,6 +80,7 @@ import { AgentPluginInstaller } from "./agent/AgentPluginInstaller.js";
 import { AgentPluginManagerHost } from "./agent/AgentPluginManagerHost.js";
 import { HookService } from "./agent/HookService.js";
 import { getConfiguredBaseThresholdForModel } from "./agent/modelCondenseThresholds.js";
+import { getNewSessionMode } from "./agent/sharedSessionPreferences.js";
 import {
   resolveModelForMode,
   FALLBACK_AGENT_MODEL,
@@ -181,7 +182,7 @@ import { materializeHostShellBootstrap } from "./terminal/hostShellBootstrap.js"
 import { LiveHostTerminalSurfaceController } from "./terminal/LiveHostTerminalSurfaceController.js";
 import { NativeAgentTerminalCoordinator } from "./terminal/native/NativeAgentTerminalCoordinator.js";
 import { Phase1HostTerminalCoordinator } from "./terminal/Phase1HostTerminalCoordinator.js";
-import { prepareHostShellBootstrap } from "./terminal/prepareHostShellBootstrap.js";
+import { prepareNativeAgentHostShellBootstrap } from "./terminal/prepareHostShellBootstrap.js";
 import {
   AgentTerminalProviderRouter,
   type SandboxPreparationAvailability,
@@ -912,7 +913,7 @@ export async function activate(
           const configuration = readVscodeTerminalConfigurationSnapshot({
             requestedCwd: cwd,
           });
-          const prepared = prepareHostShellBootstrap({
+          const prepared = prepareNativeAgentHostShellBootstrap({
             configuration: {
               ...configuration,
               baseEnvironment: {
@@ -1334,9 +1335,7 @@ export async function activate(
         )
       : agentConfiguration;
   const configuredMode =
-    startupProjectSelection.status === "selected"
-      ? startupAgentConfiguration.get<string>("defaultMode")?.trim() || "code"
-      : "ask";
+    startupProjectSelection.status === "selected" ? getNewSessionMode() : "ask";
   const startupModel = resolveModelForMode(
     startupAgentConfiguration,
     configuredMode,
@@ -3051,14 +3050,10 @@ export async function activate(
         void refreshOpenAiCompatibleProviders();
       }
       if (
-        e.affectsConfiguration("agentlink.modeModelPreferences") ||
-        e.affectsConfiguration("agentlink.modeReasoningEffortPreferences") ||
-        e.affectsConfiguration("agentlink.defaultMode") ||
         e.affectsConfiguration("agentlink.agentMaxTokens") ||
         e.affectsConfiguration("agentlink.thinkingBudget") ||
         e.affectsConfiguration("agentlink.showThinking") ||
         e.affectsConfiguration("agentlink.autoCondense") ||
-        e.affectsConfiguration("agentlink.modelCondenseThresholds") ||
         e.affectsConfiguration("agentlink.codexStatefulResponses") ||
         e.affectsConfiguration("agentlink.codexStoreResponses") ||
         e.affectsConfiguration("agentlink.codexProMode") ||
@@ -3075,31 +3070,12 @@ export async function activate(
             : undefined,
         );
         const windowConfig = vscode.workspace.getConfiguration("agentlink");
-        const fgMode = agentSessionManager.getForegroundSession()?.mode;
-        const effectiveMode =
-          fgMode ??
-          (projectCatalog.listProjects().length === 0
-            ? "ask"
-            : (config.get<string>("defaultMode")?.trim() ?? "code"));
-        const configuredModel = resolveModelForMode(
-          config,
-          effectiveMode,
-          FALLBACK_AGENT_MODEL,
-        );
-        const model =
-          providerRegistry.resolveAvailableModel(configuredModel)?.model ??
-          configuredModel;
         agentSessionManager.updateConfig({
-          model,
           maxTokens: config.get<number>("agentMaxTokens") ?? 8192,
           thinkingBudget: config.get<number>("thinkingBudget") ?? 10000,
           showThinking: windowConfig.get<boolean>("showThinking") ?? true,
           autoCondense: config.get<boolean>("autoCondense") ?? true,
-          autoCondenseThreshold: getConfiguredBaseThresholdForModel(
-            config,
-            model,
-            providerRegistry.tryResolveProvider(model)?.getCapabilities(model),
-          ),
+
           codexStatefulResponses:
             config.get<boolean>("codexStatefulResponses") ?? true,
           codexStoreResponses:

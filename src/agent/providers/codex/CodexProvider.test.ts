@@ -3,12 +3,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexProvider } from "./CodexProvider.js";
 import { CodexTurnState } from "@agentlink/core/codex";
 
-const { createMock, openAiConstructorMock } = vi.hoisted(() => {
-  const createMock = vi.fn();
-  const openAiConstructorMock = vi.fn();
+const {
+  createMock,
+  openAiConstructorMock,
+  executeCodexStandaloneWebMock,
+  saveOutputTempFileMock,
+} = vi.hoisted(() => ({
+  createMock: vi.fn(),
+  openAiConstructorMock: vi.fn(),
+  executeCodexStandaloneWebMock: vi.fn(),
+  saveOutputTempFileMock: vi.fn(),
+}));
 
-  return { createMock, openAiConstructorMock };
-});
+vi.mock("../../../core/model/providers/codex/standaloneWeb.js", () => ({
+  canUseCodexStandaloneWeb: () => true,
+  executeCodexStandaloneWeb: executeCodexStandaloneWebMock,
+}));
+
+vi.mock("../../../util/outputFilter.js", () => ({
+  saveOutputTempFile: saveOutputTempFileMock,
+}));
 
 vi.mock("openai", () => {
   class MockOpenAI {
@@ -53,6 +67,53 @@ function makeAuthManager(overrides?: Partial<Record<string, unknown>>) {
     ...overrides,
   };
 }
+
+describe("CodexProvider native web", () => {
+  it("forwards overflow content through the host retention callback", async () => {
+    saveOutputTempFileMock.mockReturnValue(
+      "/tmp/agentlink-output-test/output.txt",
+    );
+    executeCodexStandaloneWebMock.mockImplementationOnce(
+      async (request: {
+        retainOutput?: (content: string) => string | null;
+      }) => ({
+        backend: "provider",
+        provider: "codex",
+        operation: "fetch",
+        input: {},
+        activities: [],
+        content: "preview",
+        citations: [],
+        output_file: request.retainOutput?.("distinctive provider overflow"),
+      }),
+    );
+    const provider = new CodexProvider(makeAuthManager() as never);
+
+    const result = await provider.executeNativeWebTool({
+      model: "gpt-5.5",
+      kind: "fetch",
+      input: { url: "https://example.com" },
+      settings: {
+        searchBackend: "native",
+        fetchBackend: "native",
+        nativeSearchMode: "cached",
+        allowedDomains: [],
+        blockedDomains: [],
+        maxSearchUsesPerTurn: 3,
+        maxFetchUsesPerTurn: 3,
+        maxFetchContentTokens: 25_000,
+        maxReplayBytesPerTurn: 5_242_880,
+      },
+    });
+
+    expect(saveOutputTempFileMock).toHaveBeenCalledWith(
+      "distinctive provider overflow",
+    );
+    expect(result).toMatchObject({
+      output_file: "/tmp/agentlink-output-test/output.txt",
+    });
+  });
+});
 
 describe("CodexProvider.complete", () => {
   beforeEach(() => {

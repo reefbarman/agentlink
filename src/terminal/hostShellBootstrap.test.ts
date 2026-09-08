@@ -183,6 +183,39 @@ describe("host shell bootstrap", () => {
     ).toBeLessThan(
       zshrc!.content.indexOf(`source "$__agentlink_user_zdotdir/.zshrc"`),
     );
+    expect(zshrc?.content).not.toContain("PROMPT_EOL_MARK=");
+  });
+
+  it("optionally prefixes zsh prompt padding after loading user startup files", async () => {
+    const { runtimeRoot, homeDirectory } = await fixture();
+    const plan = planHostShellBootstrap({
+      decision: integrated("zsh"),
+      runtimeRoot,
+      artifactId: "zsh-native-agent",
+      nonce,
+      homeDirectory,
+      markZshCommandOutputEndBeforeEolPadding: true,
+    });
+    if (plan.mode !== "integrated") throw new Error("expected integrated plan");
+
+    const zshrc = plan.files.find(
+      ({ relativePath }) => relativePath === ".zshrc",
+    )?.content;
+    const zlogin = plan.files.find(
+      ({ relativePath }) => relativePath === ".zlogin",
+    )?.content;
+    const markerAssignment = `typeset -g __agentlink_si_output_end_marker=$'%{\\033]697;AgentLink;${nonce};O\\007%}'`;
+    expect(zshrc).toContain(markerAssignment);
+    expect(zlogin).toContain(markerAssignment);
+    expect(
+      zshrc!.indexOf(`source "$__agentlink_user_zdotdir/.zshrc"`),
+    ).toBeLessThan(zshrc!.indexOf(markerAssignment));
+    expect(
+      zlogin!.indexOf(`source "$__agentlink_user_zdotdir/.zlogin"`),
+    ).toBeLessThan(zlogin!.indexOf(markerAssignment));
+    expect(zlogin).toContain(
+      'if [[ ${PROMPT_EOL_MARK-} != "$__agentlink_si_output_end_marker"* ]]; then',
+    );
   });
 
   it.each([
@@ -523,6 +556,51 @@ describeDarwin("host shell bootstrap Darwin conformance", () => {
       );
     },
   );
+
+  it("reapplies the Native Agent output marker after a login zsh overrides it", async () => {
+    const { runtimeRoot, homeDirectory } = await fixture();
+    const userZdotdir = path.join(homeDirectory, "zsh-config");
+    await mkdir(userZdotdir, { mode: 0o700 });
+    await writeFile(
+      path.join(userZdotdir, ".zlogin"),
+      "PROMPT_EOL_MARK='CUSTOM-END'\n",
+    );
+    const plan = planHostShellBootstrap({
+      decision: integrated("zsh", ["-l"], {
+        HOME: homeDirectory,
+        ZDOTDIR: userZdotdir,
+      }),
+      runtimeRoot,
+      artifactId: "zsh-login-output-marker",
+      nonce,
+      homeDirectory,
+      originalZdotdir: userZdotdir,
+      markZshCommandOutputEndBeforeEolPadding: true,
+    });
+    const materialized = await materializeHostShellBootstrap(plan);
+    if (materialized.mode !== "integrated")
+      throw new Error("expected integrated");
+
+    const result = spawnSync(
+      materialized.profile.shellPath,
+      [
+        ...materialized.profile.shellArgs,
+        "-c",
+        'print -Pn -- "$PROMPT_EOL_MARK"',
+      ],
+      {
+        encoding: "utf8",
+        env: materialized.profile.environment,
+        timeout: 5000,
+      },
+    );
+    await materialized.cleanup();
+
+    expect(result.status).toBe(0);
+    const parsed = createShellIntegrationParser(nonce).push(result.stdout);
+    expect(parsed.events).toEqual([{ type: "command-output-end" }]);
+    expect(parsed.data).toBe("CUSTOM-END");
+  });
 
   it.each([
     ["non-login", []],

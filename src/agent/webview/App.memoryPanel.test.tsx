@@ -5,7 +5,13 @@ import type {
   MemoryRecord,
 } from "@agentlink/protocol/autonomous-memory";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/preact";
 
 import { App } from "./App.js";
 
@@ -161,8 +167,78 @@ describe("App memory panel integration", () => {
     });
 
     expect(screen.getByText(record.statement)).toBeTruthy();
-    expect(screen.getByText(detailedRecord.statement)).toBeTruthy();
-    expect(screen.getByText("Provenance: current_user")).toBeTruthy();
+    expect(
+      screen.getAllByText(detailedRecord.statement).length,
+    ).toBeGreaterThanOrEqual(1);
+    fireEvent.click(screen.getByText("Sources (1)"));
+    expect(
+      screen.getByText("The user stated a durable preference."),
+    ).toBeTruthy();
+  });
+
+  it("forwards direct edits with revision evidence and retains the draft after a host rejection", async () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({
+      type: "agentMemoryPanelUpdate",
+      open: true,
+      scope: "global",
+      availableScopes: ["global", "project"],
+      snapshot: {
+        ...snapshot(),
+        selected: { record, revisions: [], audit: [] },
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.input(screen.getByLabelText("Memory statement"), {
+      target: { value: "Updated in the VS Code manager." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save memory" }));
+    const mutation = postedCommands(
+      vscodeApi.postMessage,
+      "agentMemoryManage",
+    ).at(-1)!;
+    expect(mutation.input).toEqual({
+      operation: "update",
+      scope: "global",
+      kind: "preference",
+      statement: "Updated in the VS Code manager.",
+      target_id: record.id,
+      expected_revision: 2,
+      source_evidence: "User edited memory from /memory.",
+    });
+    expect(screen.getByRole("button", { name: "Saving…" })).toBeTruthy();
+    deliver({
+      type: "agentMemoryPanelUpdate",
+      requestId: mutation.requestId,
+      scope: "global",
+      availableScopes: ["global", "project"],
+      error: "This memory changed elsewhere.",
+    });
+    await screen.findByRole("button", { name: "Save memory" });
+    expect(
+      (screen.getByLabelText("Memory statement") as HTMLTextAreaElement).value,
+    ).toBe("Updated in the VS Code manager.");
+    expect(screen.queryByText(/Memory saved/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save memory" }));
+    const retry = postedCommands(vscodeApi.postMessage, "agentMemoryManage").at(
+      -1,
+    )!;
+    deliver({
+      type: "agentMemoryPanelUpdate",
+      requestId: retry.requestId,
+      scope: "global",
+      availableScopes: ["global", "project"],
+      snapshot: snapshot({
+        ...record,
+        revision: 3,
+        statement: "Updated in the VS Code manager.",
+      }),
+    });
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Memory statement")).toBeNull(),
+    );
+    expect(screen.getByText(/Memory saved/)).toBeTruthy();
   });
 
   it("refreshes the latest query after a stale mutation completion", () => {

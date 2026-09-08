@@ -5417,7 +5417,9 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       String(input).includes("/api/ask-agent/send"),
     ).length;
     fireEvent.click(screen.getByTestId("trigger-memory"));
-    await screen.findByText("No matching memory records.");
+    await screen.findByText(
+      "No memories yet. Add a fact or preference you want to keep across chats.",
+    );
     await waitFor(() => {
       const queryCall = fetchMock.mock.calls.find(
         ([input]) => String(input) === "/api/ask-agent/autonomous-memory/query",
@@ -5432,9 +5434,43 @@ describe("BrowserGatewayApp /mcp behavior", () => {
         String(input).includes("/api/ask-agent/send"),
       ),
     ).toHaveLength(sendCallsBeforeMemory);
+    fireEvent.click(screen.getByRole("button", { name: "Add memory" }));
+    fireEvent.input(screen.getByLabelText("Memory statement"), {
+      target: { value: "Keep browser answers concise" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save memory" }));
+    await screen.findByText(
+      /This memory contains potentially sensitive information/,
+    );
+    expect(
+      (screen.getByLabelText("Memory statement") as HTMLTextAreaElement).value,
+    ).toBe("Keep browser answers concise");
+    expect(screen.queryByText(/Memory saved/)).toBeNull();
+    fireEvent.input(screen.getByLabelText("Memory statement"), {
+      target: { value: "Prefer worked examples." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save memory" }));
+    await screen.findByText(/Memory saved/);
+    expect(
+      fetchMock.mock.calls.some(([input, init]) => {
+        if (String(input) !== "/api/ask-agent/autonomous-memory/manage")
+          return false;
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        return (
+          body.operation === "remember" &&
+          body.statement === "Prefer worked examples." &&
+          body.scope === "global" &&
+          body.source_evidence === "User added memory from /memory."
+        );
+      }),
+    ).toBe(true);
     fireEvent.click(screen.getByTitle("Close memory manager"));
     await waitFor(() => {
-      expect(screen.queryByText("No matching memory records.")).toBeNull();
+      expect(
+        screen.queryByText(
+          "No memories yet. Add a fact or preference you want to keep across chats.",
+        ),
+      ).toBeNull();
     });
 
     fireEvent.click(screen.getByTitle("Ask Agent Memory"));
@@ -8280,7 +8316,12 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     fireEvent.click(
       await screen.findByTitle("Open this agent's full transcript"),
     );
-    await screen.findByText("web_search");
+    const summary = await screen.findByRole("button", {
+      name: "Tools 1 other call",
+    });
+    expect(summary.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(summary);
+    expect(screen.getByText("web_search")).toBeTruthy();
 
     const transcriptRequestsBeforeClose = fetchMock.mock.calls.filter(
       ([input]) => String(input).includes("/api/background/open-transcript"),
@@ -8289,7 +8330,10 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     fireEvent.click(
       await screen.findByTitle("Open this agent's full transcript"),
     );
-    expect(await screen.findByText("web_search")).toBeTruthy();
+    const reopenedSummary = await screen.findByRole("button", {
+      name: "Tools 1 other call",
+    });
+    expect(reopenedSummary.getAttribute("aria-expanded")).toBe("false");
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.filter(([input]) =>
@@ -8297,7 +8341,11 @@ describe("BrowserGatewayApp /mcp behavior", () => {
         ).length,
       ).toBeGreaterThan(transcriptRequestsBeforeClose);
     });
-    expect(screen.getByText("web_search")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: "Tools 1 other call" })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
 
     const unrelatedSnapshot = createSnapshot();
     unrelatedSnapshot.session.foreground.statusOverride = "Unrelated update";

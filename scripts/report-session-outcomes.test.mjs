@@ -86,6 +86,69 @@ function writeEvents(filePath, events) {
   );
 }
 
+test("uses matching opportunity costs and labels repeated context without claiming savings", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "events.jsonl");
+  const turn = (sessionId, opportunities, tokens, attempts, enabled = true) =>
+    event({
+      type: "turn_completed",
+      sessionId,
+      background: false,
+      turnDurationMs: 100,
+      composeEfficiency: {
+        schemaVersion: 1,
+        enabledRequestCount: enabled ? attempts : 0,
+        composeOpportunityTurns: opportunities,
+        directComposableHistoryTokens: tokens,
+        composeHistoryTokens: 0,
+        inlineDefinitionTokens: tokens / 10,
+        providerAttempts: attempts,
+        durationMs: 100,
+        toolCalls: 4,
+      },
+    });
+  writeEvents(inputPath, [
+    turn("opportunity", 1, 100, 2),
+    turn("not-opportunity", 0, 900, 3),
+    turn("disabled", 1, 50, 1, false),
+    event({ type: "background_lifecycle", sessionId: "bg-missing" }),
+    event({
+      type: "background_lifecycle",
+      sessionId: "bg-false",
+      steered: false,
+    }),
+    event({
+      type: "background_lifecycle",
+      sessionId: "bg-true",
+      steered: true,
+    }),
+  ]);
+  const report = readSessionOutcomes(inputPath);
+  const normalized = report.composeEfficiency.normalized;
+  assert.equal(normalized.enabled.instrumentedTurns, 2);
+  assert.equal(normalized.enabled.perOpportunity.historyTokenSends, 100);
+  assert.equal(normalized.enabled.perOpportunity.providerAttempts, 2);
+  assert.equal(normalized.enabled.perRequest.historyTokenSends, 200);
+  assert.equal(normalized.enabled.perRequest.definitionTokenSends, 20);
+  assert.equal(normalized.netContextTokensSavedPerOpportunity, null);
+  assert.equal(normalized.netContextSavingsRate, null);
+  assert.equal(report.background.steeringObservedRecords, 2);
+  assert.equal(report.background.steered, 1);
+  const result = spawnSync(
+    process.execPath,
+    [SCRIPT_PATH, "--input", inputPath],
+    { encoding: "utf-8" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /observational cohorts; not causal savings/);
+  assert.match(result.stdout, /estimated history token-sends/);
+  assert.match(result.stdout, /steering records missing/);
+  assert.doesNotMatch(
+    result.stdout,
+    /net-context-saved|retained result tokens/,
+  );
+});
+
 test("aggregates turns, tasks, and background lifecycles into indicators", () => {
   const directory = makeTempDirectory();
   const inputPath = path.join(directory, "events.jsonl");

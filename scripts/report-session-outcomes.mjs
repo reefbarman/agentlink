@@ -203,6 +203,7 @@ function createEmptyReport() {
       parentBlockedMs: 0,
       killed: 0,
       steered: 0,
+      steeringObservedRecords: 0,
       reviews: 0,
       reviewFindings: {},
       emptyReviews: 0,
@@ -263,6 +264,10 @@ function createComposeEfficiencyCohort() {
     ["instrumentedTurns", 0],
     ["opportunityTurns", 0],
     ["opportunityDurationsMs", []],
+    [
+      "opportunityTotals",
+      Object.fromEntries(COMPOSE_EFFICIENCY_FIELDS.map((field) => [field, 0])),
+    ],
     ...COMPOSE_EFFICIENCY_FIELDS.map((field) => [field, 0]),
   ]);
 }
@@ -299,13 +304,19 @@ function mergeComposeEfficiency(report, snapshot, turnDurationMs) {
   }
   const opportunities = asCount(snapshot.composeOpportunityTurns);
   cohort.opportunityTurns += opportunities;
-  if (opportunities > 0 && Number.isFinite(turnDurationMs)) {
-    cohort.opportunityDurationsMs.push(turnDurationMs);
+  if (opportunities > 0) {
+    for (const field of COMPOSE_EFFICIENCY_FIELDS) {
+      cohort.opportunityTotals[field] += asCount(snapshot[field]);
+    }
+    if (Number.isFinite(turnDurationMs)) {
+      cohort.opportunityDurationsMs.push(turnDurationMs);
+    }
   }
 }
 
 function normalizedComposeCohort(cohort) {
   const denominator = cohort.opportunityTurns;
+  const opportunity = cohort.opportunityTotals;
   const perOpportunity = Object.fromEntries(
     [
       "directComposableHistoryTokens",
@@ -319,23 +330,39 @@ function normalizedComposeCohort(cohort) {
       "durationMs",
     ].map((field) => [
       field,
-      denominator > 0 ? cohort[field] / denominator : undefined,
+      denominator > 0 ? opportunity[field] / denominator : undefined,
     ]),
   );
   perOpportunity.retainedResultTokens =
     denominator > 0
-      ? (cohort.directComposableHistoryTokens + cohort.composeHistoryTokens) /
+      ? (opportunity.directComposableHistoryTokens +
+          opportunity.composeHistoryTokens) /
         denominator
       : undefined;
   perOpportunity.contextCostTokens =
     denominator > 0
-      ? (cohort.directComposableHistoryTokens +
-          cohort.composeHistoryTokens +
-          cohort.inlineDefinitionTokens) /
+      ? (opportunity.directComposableHistoryTokens +
+          opportunity.composeHistoryTokens +
+          opportunity.inlineDefinitionTokens) /
         denominator
       : undefined;
+  perOpportunity.historyTokenSends = perOpportunity.retainedResultTokens;
+  perOpportunity.definitionTokenSends = perOpportunity.inlineDefinitionTokens;
+  const attempts = cohort.providerAttempts;
   return {
     denominator,
+    instrumentedTurns: cohort.instrumentedTurns,
+    providerAttempts: attempts,
+    perRequest: {
+      historyTokenSends:
+        attempts > 0
+          ? (cohort.directComposableHistoryTokens +
+              cohort.composeHistoryTokens) /
+            attempts
+          : null,
+      definitionTokenSends:
+        attempts > 0 ? cohort.inlineDefinitionTokens / attempts : null,
+    },
     perOpportunity,
     p90DurationMs:
       cohort.opportunityDurationsMs.length > 0
@@ -347,19 +374,18 @@ function normalizedComposeCohort(cohort) {
 function finalizeComposeEfficiency(report) {
   const disabled = normalizedComposeCohort(report.composeEfficiency.disabled);
   const enabled = normalizedComposeCohort(report.composeEfficiency.enabled);
-  const baseline = disabled.perOpportunity.contextCostTokens;
-  const experiment = enabled.perOpportunity.contextCostTokens;
   report.composeEfficiency.normalized = {
     disabled,
     enabled,
-    netContextTokensSavedPerOpportunity:
-      Number.isFinite(baseline) && Number.isFinite(experiment)
-        ? baseline - experiment
-        : undefined,
-    netContextSavingsRate:
-      Number.isFinite(baseline) && baseline > 0 && Number.isFinite(experiment)
-        ? (baseline - experiment) / baseline
-        : undefined,
+    comparisonBasis: "observational_unmatched_cohorts",
+    tokenBasis: "estimated_repeated_token_sends_not_unique_retained_context",
+    deprecatedFields: [
+      "netContextTokensSavedPerOpportunity",
+      "netContextSavingsRate",
+      "perOpportunity.retainedResultTokens",
+    ],
+    netContextTokensSavedPerOpportunity: null,
+    netContextSavingsRate: null,
     cacheAdjustedProviderCost: {
       basis: "provider_reported_uncached_input_tokens",
       disabledFreshInputTokensPerOpportunity:
@@ -611,6 +637,7 @@ function mergeBackground(report, record) {
   bg.runMs += asCount(record.runMs);
   bg.parentBlockedMs += asCount(record.parentBlockedMs);
   if (record.killed === true) bg.killed += 1;
+  if (typeof record.steered === "boolean") bg.steeringObservedRecords += 1;
   if (record.steered === true) bg.steered += 1;
   bg.runDurationsMs.push(asCount(record.runMs));
   bg.parentBlockedDurationsMs.push(asCount(record.parentBlockedMs));
@@ -893,18 +920,44 @@ function printSummary(report, inputPath, top) {
   const compose = report.composeEfficiency;
   if (compose.instrumentedTurns > 0 || compose.legacyTurnsExcluded > 0) {
     console.log("");
-    console.log("Compose efficiency (instrumented turns only)");
+    console.log("Compose costs (observational cohorts; not causal savings)");
     const normalized = compose.normalized;
     printTable(
       ["metric", "disabled", "enabled"],
       [
         [
-          "opportunities",
+          "instrumented turns",
+          normalized.disabled.instrumentedTurns,
+          normalized.enabled.instrumentedTurns,
+        ],
+        [
+          "provider attempts",
+          normalized.disabled.providerAttempts,
+          normalized.enabled.providerAttempts,
+        ],
+        [
+          "estimated history token-sends / request attempt",
+          formatOptionalNumber(
+            normalized.disabled.perRequest.historyTokenSends,
+          ),
+          formatOptionalNumber(normalized.enabled.perRequest.historyTokenSends),
+        ],
+        [
+          "estimated definition token-sends / request attempt",
+          formatOptionalNumber(
+            normalized.disabled.perRequest.definitionTokenSends,
+          ),
+          formatOptionalNumber(
+            normalized.enabled.perRequest.definitionTokenSends,
+          ),
+        ],
+        [
+          "opportunities (observed call-shape heuristic)",
           normalized.disabled.denominator,
           normalized.enabled.denominator,
         ],
         [
-          "retained result tokens / opportunity",
+          "estimated history token-sends / opportunity",
           formatOptionalNumber(
             normalized.disabled.perOpportunity.retainedResultTokens,
           ),
@@ -913,7 +966,7 @@ function printSummary(report, inputPath, top) {
           ),
         ],
         [
-          "inline definition tokens / opportunity",
+          "estimated definition token-sends / opportunity",
           formatOptionalNumber(
             normalized.disabled.perOpportunity.inlineDefinitionTokens,
           ),
@@ -962,9 +1015,8 @@ function printSummary(report, inputPath, top) {
       ],
     );
     console.log(
-      `  net-context-saved/opportunity=${formatOptionalNumber(normalized.netContextTokensSavedPerOpportunity)} ` +
-        `rate=${formatOptionalPercent(normalized.netContextSavingsRate)} ` +
-        `legacy-turns-excluded=${compose.legacyTurnsExcluded}`,
+      `  legacy-turns-excluded=${compose.legacyTurnsExcluded}. History is counted on each request attempt, not as unique retained context. ` +
+        "Opportunity averages include only opportunity turns; enabled/disabled cohorts are unmatched and do not establish savings.",
     );
   }
 
@@ -1116,7 +1168,12 @@ function printSummary(report, inputPath, top) {
           "run p50 / p90",
           `${formatMinutes(percentile(bg.runDurationsMs, 0.5))} / ${formatMinutes(percentile(bg.runDurationsMs, 0.9))}`,
         ],
-        ["killed / steered", `${bg.killed} / ${bg.steered}`],
+        ["killed", bg.killed],
+        [
+          "reported steered / observed records",
+          `${bg.steered} / ${bg.steeringObservedRecords}`,
+        ],
+        ["steering records missing", bg.count - bg.steeringObservedRecords],
         [
           "reviews by backend",
           Object.entries(bg.reviewByBackend)
@@ -1132,7 +1189,7 @@ function printSummary(report, inputPath, top) {
             .join(" ") || "none",
         ],
         [
-          "review handoff p50 / p90",
+          "review handoff payload p50 / p90 (not change size)",
           `${percentile(bg.reviewHandoffBytes, 0.5) ?? 0}B / ${percentile(bg.reviewHandoffBytes, 0.9) ?? 0}B`,
         ],
         [

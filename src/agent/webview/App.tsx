@@ -503,6 +503,16 @@ export function App({
   });
   const memoryPanelRequestIdRef = useRef<string | null>(null);
   const memoryPanelMutationRequestIdsRef = useRef(new Set<string>());
+  const memoryManageResolversRef = useRef(
+    new Map<
+      string,
+      {
+        resolve: () => void;
+        reject: (reason: Error) => void;
+        timer: ReturnType<typeof setTimeout>;
+      }
+    >(),
+  );
   const beginMemoryPanelRequest = () => {
     const requestId = randomId();
     memoryPanelRequestIdRef.current = requestId;
@@ -674,6 +684,15 @@ export function App({
         );
       }
       mcpMutationResolversRef.current.clear();
+      for (const pending of memoryManageResolversRef.current.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(
+          new Error(
+            "The memory manager closed before the save completed. Reopen it to check the result.",
+          ),
+        );
+      }
+      memoryManageResolversRef.current.clear();
     },
     [],
   );
@@ -1474,6 +1493,21 @@ export function App({
           break;
         }
         case "agentMemoryPanelUpdate": {
+          const pending = msg.requestId
+            ? memoryManageResolversRef.current.get(msg.requestId)
+            : undefined;
+          if (pending && msg.requestId) {
+            memoryManageResolversRef.current.delete(msg.requestId);
+            clearTimeout(pending.timer);
+            if (msg.error) pending.reject(new Error(msg.error));
+            else if (msg.snapshot) pending.resolve();
+            else
+              pending.reject(
+                new Error(
+                  "The memory result is unavailable. Refresh before retrying.",
+                ),
+              );
+          }
           const mutationResponse = Boolean(
             msg.requestId &&
             memoryPanelMutationRequestIdsRef.current.delete(msg.requestId),
@@ -1895,6 +1929,7 @@ export function App({
           // User message injected mid-run between tool batches
           dispatch({
             type: "ADD_INTERJECTION",
+            coordination: msg.coordination,
             text: (msg.displayText as string | undefined) ?? msg.text,
             isSlashCommand:
               (msg.isSlashCommand as boolean | undefined) ?? false,
@@ -2194,6 +2229,7 @@ export function App({
               msg.sessionId,
               {
                 type: "ADD_INTERJECTION",
+                coordination: msg.coordination,
                 text: msg.displayText ?? msg.text,
                 isSlashCommand: msg.isSlashCommand,
                 slashCommandLabel: msg.slashCommandLabel,
@@ -3015,6 +3051,10 @@ export function App({
       } else {
         setTranscriptView(null);
         updateSessionlessSelections({ mode: slug });
+        vscodeApi.postMessage({
+          command: "agentRememberSessionlessSelection",
+          mode: slug,
+        });
       }
     },
     [updateSessionlessSelections, vscodeApi],
@@ -3024,6 +3064,11 @@ export function App({
     (modelId: string) => {
       if (!stateRef.current.sessionId) {
         updateSessionlessSelections({ model: modelId });
+        vscodeApi.postMessage({
+          command: "agentRememberSessionlessSelection",
+          mode: stateRef.current.mode,
+          model: modelId,
+        });
         return;
       }
       vscodeApi.postMessage(
@@ -3442,6 +3487,11 @@ export function App({
         updateSessionlessSelections({
           reasoningEffort: effort,
           thinkingEnabled: effort !== "none",
+        });
+        vscodeApi.postMessage({
+          command: "agentRememberSessionlessSelection",
+          mode: stateRef.current.mode,
+          effort,
         });
         return;
       }
@@ -4255,16 +4305,37 @@ export function App({
                       scope: memoryPanelScope,
                     });
                   }}
-                  onManage={(input: ManageMemoryToolInput) => {
-                    setMemoryPanelLoading(true);
-                    setMemoryPanelError(null);
-                    vscodeApi.postMessage({
-                      command: "agentMemoryManage",
-                      requestId: beginMemoryPanelMutation(),
-                      input,
-                      request: memoryPanelQueryRef.current,
-                    });
-                  }}
+                  onManage={(input: ManageMemoryToolInput) =>
+                    new Promise<void>((resolve, reject) => {
+                      setMemoryPanelLoading(true);
+                      setMemoryPanelError(null);
+                      const requestId = beginMemoryPanelMutation();
+                      const timer = setTimeout(() => {
+                        memoryManageResolversRef.current.delete(requestId);
+                        memoryPanelMutationRequestIdsRef.current.delete(
+                          requestId,
+                        );
+                        const message =
+                          "The memory operation timed out. Refresh the list before retrying; it may have completed.";
+                        if (memoryPanelRequestIdRef.current === requestId) {
+                          setMemoryPanelLoading(false);
+                          setMemoryPanelError(message);
+                        }
+                        reject(new Error(message));
+                      }, 60_000);
+                      memoryManageResolversRef.current.set(requestId, {
+                        resolve,
+                        reject,
+                        timer,
+                      });
+                      vscodeApi.postMessage({
+                        command: "agentMemoryManage",
+                        requestId,
+                        input,
+                        request: memoryPanelQueryRef.current,
+                      });
+                    })
+                  }
                   onClear={(scope) => {
                     setMemoryPanelLoading(true);
                     setMemoryPanelError(null);

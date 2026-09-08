@@ -54,6 +54,7 @@ const mocks = vi.hoisted(() => {
         agentMode: opts.agentMode,
         model: opts.config.model,
         reasoningEffort: "high",
+        desiredReasoningEffort: "high",
         providerId: opts.providerId,
         projectScope: opts.projectScope,
         projectAvailability: opts.projectAvailability ?? "available",
@@ -4881,6 +4882,17 @@ describe("AgentSessionManager background agents", () => {
     expect(prompt).toContain("respond_to_background_question");
     expect(prompt).toContain("Which NUnit test file should I own?");
     expect(displayText).toContain("review task");
+    const coordination = setPendingInterjection.mock.calls[0][9];
+    expect(coordination).toEqual({
+      requestId,
+      backgroundSessionId: spawned.sessionId,
+      task: "review task",
+      kind: "question",
+      context: "The ownership boundary needs one more exact path.",
+      questions: [
+        { id: "path", question: "Which NUnit test file should I own?" },
+      ],
+    });
     mgr.getSession(spawned.sessionId)!.status = "tool_executing";
     expect(mgr.getBackgroundStatus(spawned.sessionId)?.phase).toBe(
       "awaiting_coordinator",
@@ -4895,6 +4907,7 @@ describe("AgentSessionManager background agents", () => {
     await mgr.sendMessage(foreground.id, "Handle this steering first.", "code");
     expect(setPendingInterjection).toHaveBeenCalledTimes(2);
     expect(setPendingInterjection.mock.calls[1]?.[1]).toBe(requestId);
+    expect(setPendingInterjection.mock.calls[1]?.[9]).toEqual(coordination);
 
     const coordinatorContext = (
       mgr as unknown as {
@@ -4977,6 +4990,19 @@ describe("AgentSessionManager background agents", () => {
     );
     const [firstPrompt, firstRequestId] = setPendingInterjection.mock.calls[0];
     expect(firstPrompt).toContain("<background_agent_approval");
+    expect(setPendingInterjection.mock.calls[0][9]).toMatchObject({
+      requestId: firstRequestId,
+      backgroundSessionId: spawned.sessionId,
+      kind: "approval",
+      task: "edit implementation",
+      context: expect.stringContaining("/tmp/src/output.ts"),
+      questions: [
+        {
+          id: "approval",
+          options: ["Approve once", "Reject", "Escalate to user"],
+        },
+      ],
+    });
     expect(firstPrompt).toContain("Do not call `ask_user`");
     expect(firstPrompt).toContain("Escalate to user");
     expect(onApprovalRequest).not.toHaveBeenCalled();
@@ -5187,12 +5213,26 @@ describe("AgentSessionManager background agents", () => {
     expect(messageOptions).toMatchObject({
       displayText:
         "Background agent “confirm scope” needs a coordinator answer",
+      coordination: {
+        requestId,
+        backgroundSessionId: spawned.sessionId,
+        task: "confirm scope",
+        kind: "question",
+        context: "The implementation scope is otherwise clear.",
+        questions: [
+          {
+            id: "include_docs",
+            question: "Should I update the delegated docs file too?",
+          },
+        ],
+      },
     });
     expect(onEvent).toHaveBeenCalledWith(
       foreground.id,
       expect.objectContaining({
         type: "user_interjection",
         queueId: requestId,
+        coordination: messageOptions?.coordination,
       }),
     );
 

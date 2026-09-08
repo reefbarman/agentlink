@@ -2245,7 +2245,7 @@ describe("BrowserGatewayService", () => {
     }
   });
 
-  it("rebuilds reconnect snapshots with started and completed web tool calls", () => {
+  it("rebuilds reconnect snapshots with complete tool inputs and results", () => {
     const hub = new InMemoryAgentUiEventHub();
     const sessionManager = makeSessionManagerStub();
     const webMessage = (complete: boolean) => ({
@@ -2256,17 +2256,20 @@ describe("BrowserGatewayService", () => {
       blocks: [
         {
           type: "tool_call",
-          id: "search-1",
-          name: "web_search",
-          inputJson: JSON.stringify({ query: "AgentLink docs" }),
+          id: "command-1",
+          name: "execute_command",
+          inputJson: JSON.stringify({
+            command: "npm test",
+            cwd: "/workspace/a",
+            reason: "Verify the browser parity changes.",
+            timeout: 120,
+          }),
           result: complete
             ? JSON.stringify({
-                results: [
-                  {
-                    url: "https://example.com/agentlink",
-                    title: "AgentLink docs",
-                  },
-                ],
+                exit_code: 0,
+                output: "passed",
+                approval: { by: "explicit_rule" },
+                security: { route: "sandbox" },
               })
             : "",
           complete,
@@ -2296,7 +2299,10 @@ describe("BrowserGatewayService", () => {
       expect.arrayContaining([
         expect.objectContaining({
           type: "tool_call",
-          name: "web_search",
+          name: "execute_command",
+          inputJson: expect.stringContaining(
+            '"reason":"Verify the browser parity changes."',
+          ),
           complete: false,
         }),
       ]),
@@ -2314,9 +2320,12 @@ describe("BrowserGatewayService", () => {
       expect.arrayContaining([
         expect.objectContaining({
           type: "tool_call",
-          name: "web_search",
+          name: "execute_command",
+          inputJson: expect.stringContaining(
+            '"reason":"Verify the browser parity changes."',
+          ),
           complete: true,
-          result: expect.stringContaining("https://example.com/agentlink"),
+          result: expect.stringContaining('"route":"sandbox"'),
         }),
       ]),
     );

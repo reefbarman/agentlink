@@ -479,6 +479,16 @@ describe("App chat workspace integration", () => {
     expect(postedCommands(vscodeApi.postMessage, "chatTabNewChat")).toEqual([]);
     expect(postedCommands(vscodeApi.postMessage, "agentSetModel")).toEqual([]);
     expect(
+      postedCommands(
+        vscodeApi.postMessage,
+        "agentRememberSessionlessSelection",
+      ),
+    ).toEqual([
+      expect.objectContaining({ mode: "ask" }),
+      expect.objectContaining({ mode: "ask", model: "model-b" }),
+      expect.objectContaining({ mode: "ask", effort: "low" }),
+    ]);
+    expect(
       postedCommands(vscodeApi.postMessage, "agentSetWriteApproval"),
     ).toEqual([]);
     expect(

@@ -75,6 +75,130 @@ afterEach(() => {
   }
 });
 
+test("separates v2 invocation groups and exposure from legacy call totals", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "telemetry.jsonl");
+  const base = flushRecord({ flushedAt: "2026-09-07T00:00:00Z", tools: {} });
+  writeJsonLines(inputPath, [
+    { ...base, tools: { read_file: toolBucket() } },
+    {
+      ...base,
+      version: 2,
+      tools: { read_file: toolBucket({ calls: 2, outcomes: { ok: 2 } }) },
+      coverage: {
+        attributedCalls: 2,
+        legacyUnattributedCalls: 0,
+        overflowCalls: 0,
+      },
+      invocationGroups: ["top_level", "compose_child"].map((nesting) => ({
+        toolName: "read_file",
+        mode: "code",
+        profile: "default",
+        background: false,
+        route: "direct",
+        nesting,
+        calls: 1,
+        outcomes: { ok: 1 },
+      })),
+    },
+    {
+      ...base,
+      type: "tool_exposure_flush",
+      totals: {
+        requests: 2,
+        completedRequests: 1,
+        incompleteRequests: 1,
+        providerAttempts: 3,
+      },
+      groups: [
+        {
+          toolName: "read_file",
+          mode: "code",
+          profile: "default",
+          background: false,
+          exposure: "inline",
+          eligible: true,
+          requests: 2,
+          completedRequests: 1,
+          incompleteRequests: 1,
+          requestsWithUse: 1,
+          eligibleCompletedRequests: 1,
+          eligibleRequestsWithUse: 1,
+          providerAttempts: 3,
+        },
+      ],
+    },
+  ]);
+  const report = readTelemetry(inputPath);
+  assert.equal(report.totalCalls, 3);
+  assert.equal(report.flushes, 2);
+  assert.equal(report.exposure.records, 1);
+  assert.equal(report.invocations.coverage.legacyUnattributedCalls, 1);
+  assert.equal(Object.values(report.invocations.groups).length, 2);
+  assert.equal(Object.values(report.exposure.groups)[0].useRate, 1);
+  assert.equal(report.exposure.totals.providerAttempts, 3);
+  assert.equal(report.unsupportedRecords, 0);
+});
+
+test("reports error rates and process concentration without confusing zero calls with non-use", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "telemetry.jsonl");
+  const record = (flushedAt, instanceId, errors, calls = errors) => ({
+    ...flushRecord({
+      flushedAt,
+      tools: {
+        apply_diff: toolBucket({
+          calls,
+          outcomes: { error: errors, ok: calls - errors },
+        }),
+      },
+    }),
+    instanceId,
+  });
+  writeJsonLines(inputPath, [
+    record("2026-09-01T01:00:00Z", "private-process-a", 2, 10),
+    record("2026-09-01T00:00:00Z", "private-process-a", 3, 10),
+    record("2026-09-01T02:00:00Z", "private-process-b", 1, 10),
+    record("2026-09-01T03:00:00Z", undefined, 1, 10),
+  ]);
+  const report = readTelemetry(
+    inputPath,
+    new Map([["todo_write", { known: true }]]),
+  );
+  assert.equal(report.totalCalls, 40);
+  assert.equal(report.tools.apply_diff.recordedErrorRate, 7 / 40);
+  assert.equal(report.tools.todo_write.recordedErrorRate, null);
+  assert.equal(report.reliability[0].errors, 7);
+  assert.deepEqual(report.reliability[0].errorConcentration, {
+    attributedErrors: 6,
+    processVersionGroups: 2,
+    largestProcess: {
+      version: "1.0.0",
+      errors: 5,
+      firstFlush: "2026-09-01T00:00:00Z",
+      lastFlush: "2026-09-01T01:00:00Z",
+    },
+  });
+  assert.equal(
+    JSON.stringify(report.reliability).includes("private-process"),
+    false,
+  );
+  assert.ok(
+    report.warnings.some(
+      (warning) => warning.code === "exposure_and_execution_coverage_unknown",
+    ),
+  );
+  finalizeReport(report);
+  assert.equal(report.reliability[0].errors, 7);
+  const filtered = readTelemetry(inputPath, new Map(), new Map(), {
+    since: new Date("2026-09-01T01:30:00Z"),
+  });
+  assert.equal(
+    filtered.reliability[0].errorConcentration.largestProcess.errors,
+    1,
+  );
+});
+
 test("parses inclusive date filters, relative since values, and repeated versions", () => {
   const args = parseArgs(
     [
@@ -206,7 +330,7 @@ test("reports bounded data-quality warnings for invalid and unsupported records"
     "not-json",
     { version: 1, type: "other", tools: {} },
     flushRecord({
-      version: 2,
+      version: 3,
       flushedAt: "2026-07-19T10:00:00Z",
       tools: {},
     }),

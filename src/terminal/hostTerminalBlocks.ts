@@ -205,6 +205,7 @@ function applyShellEvent(
       ? next
       : { ...next, currentCwd: event.cwd };
   }
+  if (event.type === "command-output-end") return next;
   if (event.type === "prompt-end") {
     return closeActivePrompt(next);
   }

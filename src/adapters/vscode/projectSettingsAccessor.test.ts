@@ -1,4 +1,5 @@
 import {
+  APPLICATION_SCOPED_AGENTLINK_SETTINGS,
   MACHINE_SCOPED_AGENTLINK_SETTINGS,
   PROJECT_SCOPED_AGENTLINK_SETTINGS,
   WINDOW_SCOPED_AGENTLINK_SETTINGS,
@@ -36,7 +37,7 @@ describe("ProjectSettingsAccessor", () => {
     expect(
       accessor.get(
         { workspaceFolderUri: "vscode-remote://host/workspace/api" },
-        "modeModelPreferences",
+        "modelPromptProfiles",
         {},
       ),
     ).toBe("project-model");
@@ -50,7 +51,7 @@ describe("ProjectSettingsAccessor", () => {
     expect(getConfiguration).toHaveBeenLastCalledWith("agentlink", {
       value: "file:///workspace/other",
     });
-    expect(get).toHaveBeenCalledWith("modeModelPreferences", {});
+    expect(get).toHaveBeenCalledWith("modelPromptProfiles", {});
   });
 
   it("attributes project-scoped setting changes by workspace-folder URI", () => {
@@ -97,6 +98,7 @@ describe("ProjectSettingsAccessor", () => {
 
   it("classifies every contributed setting exactly once with matching manifest scopes", () => {
     const classifications = [
+      ...APPLICATION_SCOPED_AGENTLINK_SETTINGS,
       ...PROJECT_SCOPED_AGENTLINK_SETTINGS,
       ...MACHINE_SCOPED_AGENTLINK_SETTINGS,
       ...WINDOW_SCOPED_AGENTLINK_SETTINGS,
@@ -156,6 +158,9 @@ describe("ProjectSettingsAccessor", () => {
     }
     expect(new Set(classifications)).toHaveLength(classifications.length);
     expect(Object.keys(properties)).toHaveLength(classifications.length);
+    for (const setting of APPLICATION_SCOPED_AGENTLINK_SETTINGS) {
+      expect(properties[`agentlink.${setting}`]?.scope).toBe("application");
+    }
     for (const setting of PROJECT_SCOPED_AGENTLINK_SETTINGS) {
       expect(properties[`agentlink.${setting}`]?.scope).toBe("resource");
     }

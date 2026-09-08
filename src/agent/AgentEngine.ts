@@ -1456,6 +1456,7 @@ export class AgentEngine {
             codexTurnState = new CodexTurnState();
             session.addUserMessage(resolvedInterjection.text, {
               displayText: interjection.displayText,
+              coordination: interjection.coordination,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
               images: images.length > 0 ? images : undefined,
@@ -1466,6 +1467,7 @@ export class AgentEngine {
               text: interjection.text,
               queueId: interjection.queueId,
               displayText: interjection.displayText,
+              coordination: interjection.coordination,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
               images: images.length > 0 ? images : undefined,
@@ -1550,6 +1552,10 @@ export class AgentEngine {
         let retryTextOffset = 0;
         let retryTextDiverged = false;
         let requestPermit: ModelRequestPermit | undefined;
+        let telemetryRequest:
+          | import("../core/tools/toolTelemetry.js").ToolRequestObservation
+          | undefined;
+        let telemetryResponseCompleted = false;
 
         try {
           // Build a copy of messages for the API call, injecting any attached
@@ -1588,7 +1594,7 @@ export class AgentEngine {
           if (pendingFinalStatusNudge) {
             const structuredReviewReminder =
               backgroundExpectedResult === "review_findings"
-                ? `The review work is over. Do not inspect more files, call any other tool, or add more review prose. Call set_task_status now with status="completed" and the required review_findings result using the evidence you already have. This is finalization attempt ${finalStatusNudgeAttempts} of ${MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS}.`
+                ? `The review work is over. Do not inspect more files, call any other tool, or add more review prose. Call set_task_status now with the required review_findings result using the evidence you already have. Use status="completed" only if the review is complete; otherwise use status="blocked" with a summary of the unreviewed scope and any supported partial findings. Do not report an unfinished review as a clean review. Keep the result concise to fit the output limit. This is finalization attempt ${finalStatusNudgeAttempts} of ${MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS}.`
                 : "You ended the turn without calling set_task_status. Do not redo completed work. If the user's ask is complete, call set_task_status now with the real user-facing summary. Otherwise use waiting_for_user, blocked, or cancelled when that is the true state. This is your one final-status reminder for this turn.";
             apiMessages.push({
               role: "user",
@@ -1724,6 +1730,19 @@ export class AgentEngine {
             tools,
             opts?.composeEnabled === true,
           );
+          telemetryRequest = {
+            inlineToolNames: tools?.map((tool) => tool.name) ?? [],
+            deferredToolNames:
+              nativeToolDisclosure?.deferredTools.map((tool) => tool.name) ??
+              [],
+            eligibleToolNames: currentModeTools?.map((tool) => tool.name) ?? [],
+            usedToolNames: [],
+            mode: session.agentMode.slug,
+            profile: opts?.toolProfile ?? "default",
+            background: opts?.isBackground === true,
+            completed: false,
+            providerAttempts: 0,
+          };
           const streamGen = provider.stream({
             model: activeModel,
             systemPrompt: requestSystemPrompt,
@@ -1742,6 +1761,12 @@ export class AgentEngine {
               : undefined,
             signal: requestController.signal,
             onProviderRequestAttempt: ({ model }) => {
+              if (telemetryRequest) {
+                telemetryRequest = {
+                  ...telemetryRequest,
+                  providerAttempts: telemetryRequest.providerAttempts + 1,
+                };
+              }
               pendingRequestAttributionEvents.push({
                 type: "request_context_attribution",
                 requestId: randomUUID(),
@@ -1897,6 +1922,8 @@ export class AgentEngine {
                   break;
               }
             }
+            telemetryResponseCompleted =
+              !signal.aborted && modelStopReason !== "max_tokens";
           } finally {
             signal.removeEventListener("abort", abortRequest);
             transportMonitor.dispose();
@@ -2073,6 +2100,31 @@ export class AgentEngine {
         } finally {
           requestPermit?.release();
           requestPermit = undefined;
+          if (telemetryRequest) {
+            try {
+              const responseContent =
+                assistantMessage?.content ?? contentBlocks;
+              const usedToolNames = Array.isArray(responseContent)
+                ? responseContent
+                    .filter((block) => block.type === "tool_use")
+                    .map((block) => {
+                      if (block.type !== "tool_use") return "";
+                      return block.name === "call_native_tool" &&
+                        typeof block.input?.name === "string"
+                        ? block.input.name
+                        : block.name;
+                    })
+                : [];
+              this.toolRuntime?.observeRequest?.({
+                ...telemetryRequest,
+                completed: telemetryResponseCompleted,
+                usedToolNames,
+                providerAttempts: telemetryRequest.providerAttempts,
+              });
+            } catch {
+              // Measurement cannot interrupt provider cleanup or retry handling.
+            }
+          }
         }
 
         // Successful API response resets both independently budgeted layers.
@@ -2181,12 +2233,49 @@ export class AgentEngine {
 
         if (modelStopReason === "max_tokens") {
           appendCommittedAssistantMessage();
+          // A truncated tool request is evidence, not authorization to execute.
+          // Close its history entry before a finalization request or later resume.
+          const truncatedToolCalls = Array.isArray(
+            committedAssistantMessage.content,
+          )
+            ? committedAssistantMessage.content.filter(
+                (block): block is ToolUseBlock => block.type === "tool_use",
+              )
+            : [];
+          if (truncatedToolCalls.length > 0) {
+            session.appendToolResults(
+              truncatedToolCalls.map((block) => ({
+                type: "tool_result" as const,
+                tool_use_id: block.id,
+                content:
+                  "[Not executed — the provider reached its output-token limit. Do not assume this tool ran or its arguments are complete.]",
+              })),
+            );
+          }
           opts?.onAssistantTurnCommitted?.();
+          const canFinalizeReview =
+            backgroundExpectedResult === "review_findings" &&
+            finalStatusNudgeAttempts <
+              MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS &&
+            !signal.aborted &&
+            !session.hasPendingInterjections &&
+            !session.hasQueuedUiMessages &&
+            rawTools?.some((tool) => tool.name === "set_task_status") === true;
           yield {
             type: "warning",
-            message:
-              "The model reached its output-token limit. The partial response was preserved; increase the model output limit or ask it to continue.",
+            message: canFinalizeReview
+              ? "The review reached the provider's output-token limit. Requesting a concise final result from the evidence already collected."
+              : "The model reached its output-token limit. The partial response was preserved; increase the model output limit or ask it to continue.",
           };
+          if (canFinalizeReview) {
+            finalStatusNudgeAttempts++;
+            pendingFinalStatusNudge = true;
+            session.status = "streaming";
+            this.log?.(
+              `[agent] structured review hit output-token limit; requesting finalization (${finalStatusNudgeAttempts}/${MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS})`,
+            );
+            continue;
+          }
           break;
         }
 
@@ -2627,25 +2716,59 @@ export class AgentEngine {
         for (const block of resolvedToolUseBlocks) {
           if (block.name === TODO_TOOL_NAME) {
             const start = Date.now();
-            const preHook = opts?.hookRuntime
-              ? await opts.hookRuntime.preToolUse(
-                  {
-                    session_id: session.id,
-                    turn_id: opts.hookTurnId ?? "",
-                    transcript_path: null,
-                    cwd: session.requireProjectRoot(),
-                    hook_event_name: "PreToolUse",
-                    model: session.model,
-                    permission_mode: "default",
-                    tool_name: block.name,
-                    tool_input: block.input,
-                    tool_use_id: block.id,
+            let internalObservation: ToolResult | undefined;
+            try {
+              const preHook = opts?.hookRuntime
+                ? await opts.hookRuntime.preToolUse(
+                    {
+                      session_id: session.id,
+                      turn_id: opts.hookTurnId ?? "",
+                      transcript_path: null,
+                      cwd: session.requireProjectRoot(),
+                      hook_event_name: "PreToolUse",
+                      model: session.model,
+                      permission_mode: "default",
+                      tool_name: block.name,
+                      tool_input: block.input,
+                      tool_use_id: block.id,
+                    },
+                    block.name,
+                    signal,
+                  )
+                : undefined;
+              if (preHook?.preToolUse?.decision === "deny") {
+                internalObservation = {
+                  content: [
+                    {
+                      type: "text",
+                      text: JSON.stringify({ status: "rejected" }),
+                    },
+                  ],
+                };
+                internalResults.push({
+                  tool_use_id: block.id,
+                  toolName: block.name,
+                  result: {
+                    content: [
+                      {
+                        type: "text",
+                        text:
+                          preHook.preToolUse.reason ??
+                          "todo_write was blocked by a PreToolUse hook.",
+                      },
+                    ],
                   },
-                  block.name,
-                  signal,
-                )
-              : undefined;
-            if (preHook?.preToolUse?.decision === "deny") {
+                  durationMs: Date.now() - start,
+                });
+                continue;
+              }
+              const todoInput =
+                preHook?.preToolUse?.updatedInput &&
+                typeof preHook.preToolUse.updatedInput === "object"
+                  ? (preHook.preToolUse
+                      .updatedInput as unknown as TodoToolInput)
+                  : (block.input as unknown as TodoToolInput);
+              const { content, todos } = handleTodoWrite(todoInput);
               internalResults.push({
                 tool_use_id: block.id,
                 toolName: block.name,
@@ -2654,57 +2777,51 @@ export class AgentEngine {
                     {
                       type: "text",
                       text:
-                        preHook.preToolUse.reason ??
-                        "todo_write was blocked by a PreToolUse hook.",
+                        typeof content === "string"
+                          ? content
+                          : JSON.stringify(content),
                     },
                   ],
                 },
                 durationMs: Date.now() - start,
               });
-              continue;
-            }
-            const todoInput =
-              preHook?.preToolUse?.updatedInput &&
-              typeof preHook.preToolUse.updatedInput === "object"
-                ? (preHook.preToolUse.updatedInput as unknown as TodoToolInput)
-                : (block.input as unknown as TodoToolInput);
-            const { content, todos } = handleTodoWrite(todoInput);
-            internalResults.push({
-              tool_use_id: block.id,
-              toolName: block.name,
-              result: {
-                content: [
+              internalObservation =
+                internalResults[internalResults.length - 1]!.result;
+              currentTodos = todos;
+              yield { type: "todo_update" as const, todos };
+              if (opts?.hookRuntime) {
+                await opts.hookRuntime.postToolUse(
                   {
-                    type: "text",
-                    text:
-                      typeof content === "string"
-                        ? content
-                        : JSON.stringify(content),
+                    session_id: session.id,
+                    turn_id: opts.hookTurnId ?? "",
+                    transcript_path: null,
+                    cwd: session.requireProjectRoot(),
+                    hook_event_name: "PostToolUse",
+                    model: session.model,
+                    permission_mode: "default",
+                    tool_name: block.name,
+                    tool_input: todoInput as unknown as Record<string, unknown>,
+                    tool_response: { content, todos },
+                    tool_use_id: block.id,
                   },
-                ],
-              },
-              durationMs: Date.now() - start,
-            });
-            currentTodos = todos;
-            yield { type: "todo_update" as const, todos };
-            if (opts?.hookRuntime) {
-              await opts.hookRuntime.postToolUse(
-                {
-                  session_id: session.id,
-                  turn_id: opts.hookTurnId ?? "",
-                  transcript_path: null,
-                  cwd: session.requireProjectRoot(),
-                  hook_event_name: "PostToolUse",
-                  model: session.model,
-                  permission_mode: "default",
-                  tool_name: block.name,
-                  tool_input: todoInput as unknown as Record<string, unknown>,
-                  tool_response: { content, todos },
-                  tool_use_id: block.id,
-                },
-                block.name,
-                signal,
-              );
+                  block.name,
+                  signal,
+                );
+              }
+            } finally {
+              try {
+                this.toolRuntime?.observeInternalTool?.(
+                  {
+                    name: block.name,
+                    input: block.input as Record<string, unknown>,
+                    context: { ...sessionToolContext, toolCallId: block.id },
+                  },
+                  internalObservation,
+                  Date.now() - start,
+                );
+              } catch {
+                // Internal tools retain their behavior when telemetry is unavailable.
+              }
             }
           } else {
             dispatchBlocks.push(block);
@@ -3019,6 +3136,7 @@ export class AgentEngine {
             codexTurnState = new CodexTurnState();
             session.addUserMessage(resolvedInterjection.text, {
               displayText: interjection.displayText,
+              coordination: interjection.coordination,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
               images: images.length > 0 ? images : undefined,
@@ -3029,6 +3147,7 @@ export class AgentEngine {
               text: interjection.text,
               queueId: interjection.queueId,
               displayText: interjection.displayText,
+              coordination: interjection.coordination,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
               images: images.length > 0 ? images : undefined,

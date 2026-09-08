@@ -189,6 +189,54 @@ describe("conversation mode placement", () => {
 });
 
 describe("buildSystemPrompt", () => {
+  it.each([
+    ["codex", "compatibility"],
+    ["codex", "reasoning"],
+    ["anthropic", "compatibility"],
+    ["anthropic", "reasoning"],
+  ] as const)(
+    "limits indexed tool guidance to current workspace folders for %s/%s",
+    async (providerId, profile) => {
+      const { systemPrompt, promptProfile } = await buildPromptArtifacts(
+        "code",
+        tmpDir,
+        {
+          providerId,
+          model: "scope-guidance-test",
+          promptProfileOverrides: { "scope-guidance-test": profile },
+        },
+      );
+      expect(promptProfile.profile).toBe(profile);
+      expect(systemPrompt).toContain("## Indexed tool scope");
+      expect(systemPrompt).toContain(
+        "only work on files/folders within the current workspace folders",
+      );
+      for (const tool of [
+        "get_repo_map",
+        "get_module_neighbors",
+        "codebase_search",
+        "read_file(query)",
+        "list_files(query)",
+        "search_files(semantic=true)",
+      ]) {
+        expect(systemPrompt).toContain(`\`${tool}\``);
+      }
+      expect(systemPrompt).toContain("`read_file` without `query`");
+      expect(systemPrompt).toContain("`list_files` without `query`");
+      expect(systemPrompt).toContain("`semantic=false`");
+      expect(systemPrompt).toContain("subject to existing path permissions");
+      expect(systemPrompt).toContain(
+        "Do not retry indexed tools against an external path",
+      );
+      expect(systemPrompt).not.toContain("Never use `list_files` to explore");
+      if (profile === "compatibility") {
+        expect(systemPrompt).toContain(
+          "directory/package/workspace area within the current workspace folders",
+        );
+      }
+    },
+  );
+
   it("routes independent compose reads through settled batches only when compose is enabled", async () => {
     const { systemPrompt: enabled } = await buildPromptArtifacts(
       "code",

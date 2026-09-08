@@ -355,6 +355,85 @@ describe("AgentEngine", () => {
     vi.clearAllMocks();
   });
 
+  it("forwards internal invocation and request exposure through the production runtime", async () => {
+    const session = await makeSession();
+    session.addUserMessage("Track this task");
+    const record = vi.fn();
+    const recordRequest = vi.fn();
+    const provider = makeMockProvider();
+    let calls = 0;
+    provider.stream = async function* (request: StreamRequest) {
+      request.onProviderRequestAttempt?.({ model: request.model });
+      if (calls++ === 0) {
+        request.onProviderRequestAttempt?.({ model: request.model });
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "tool_use",
+              id: "telemetry-todo",
+              name: "todo_write",
+              input: { todos: [] },
+            },
+          ],
+        };
+      } else {
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "tool_use",
+              id: "telemetry-final",
+              name: "set_task_status",
+              input: { status: "completed", summary: "Tracked." },
+            },
+          ],
+        };
+      }
+      yield { type: "done" };
+    };
+    const engine = new AgentEngine(makeRegistry(provider));
+    setEngineToolContext(engine, {
+      approvalManager: {} as ToolDispatchContext["approvalManager"],
+      approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+      extensionUri: {} as ToolDispatchContext["extensionUri"],
+      sessionId: session.id,
+      toolUsageTelemetry: {
+        record,
+        recordRequest,
+      } as unknown as ToolDispatchContext["toolUsageTelemetry"],
+    });
+    await collectEvents(engine.run(session));
+    expect(
+      record.mock.calls.filter(([value]) => value.toolName === "todo_write"),
+    ).toHaveLength(1);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "todo_write",
+        params: { todos: [] },
+        outcome: "ok",
+        invocation: {
+          route: "direct",
+          nesting: "top_level",
+          profile: "default",
+          background: false,
+        },
+      }),
+    );
+    expect(recordRequest).toHaveBeenCalledTimes(2);
+    expect(recordRequest.mock.calls[0][0]).toMatchObject({
+      completed: true,
+      providerAttempts: 2,
+      usedToolNames: ["todo_write"],
+    });
+    expect(recordRequest.mock.calls[0][0].inlineToolNames).toContain(
+      "todo_write",
+    );
+    expect(recordRequest.mock.calls[0][0].eligibleToolNames).toContain(
+      "todo_write",
+    );
+  });
+
   // Soft threshold applies to projected request input. For fixed-envelope models,
   // usable input is contextWindow - maxOutputTokens.
   describe("auto-condense threshold behavior", () => {
@@ -1533,8 +1612,27 @@ describe("AgentEngine", () => {
         sessionId: "seed-session",
         extensionUri: {} as ToolDispatchContext["extensionUri"],
       };
+      const coordination = {
+        requestId: "queue-1",
+        backgroundSessionId: "worker-1",
+        task: "Check ownership",
+        kind: "question" as const,
+        context: "Confirm delegated boundaries",
+        questions: [{ id: "path", question: "Which file?" }],
+      };
       setEngineToolContext(engine, toolCtx, async () => {
-        session.setPendingInterjection("first follow up", "queue-1");
+        session.setPendingInterjection(
+          "first follow up",
+          "queue-1",
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          coordination,
+        );
         session.setPendingInterjection("second follow up", "queue-2");
         return {
           content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
@@ -1552,6 +1650,14 @@ describe("AgentEngine", () => {
         "queue-2",
       ]);
 
+      expect(interjections[0].coordination).toEqual(coordination);
+      expect(interjections[1].coordination).toBeUndefined();
+      expect(
+        session
+          .getAllMessages()
+          .find((message) => message.content === "first follow up")?.uiHint
+          ?.userMessage?.coordination,
+      ).toEqual(coordination);
       expect(requests).toHaveLength(3);
       expect(requests[1].messages.slice(-2)).toEqual([
         { role: "user", content: "first follow up" },
@@ -2080,6 +2186,175 @@ describe("AgentEngine", () => {
         },
       });
     });
+
+    it.each(["completed", "blocked"] as const)(
+      "recovers an output-limited review with a %s result through production dispatch",
+      async (status) => {
+        const requests: StreamRequest[] = [];
+        const result = {
+          type: "review_findings",
+          findings: [],
+          emptyDiff: false,
+        } as const;
+        const provider = makeMockProvider();
+        provider.stream = async function* (request: StreamRequest) {
+          requests.push(request);
+          if (requests.length === 1) {
+            yield {
+              type: "model_stop",
+              reason: "max_tokens",
+              assistantMessage: {
+                role: "assistant",
+                content: [
+                  { type: "text", text: "I inspected the diff." },
+                  {
+                    type: "tool_use",
+                    id: "truncated_read",
+                    name: "read_file",
+                    input: { path: "src/example.ts", offset: "60" },
+                  },
+                ],
+              },
+            };
+          } else {
+            yield {
+              type: "content_blocks",
+              blocks: [
+                {
+                  type: "tool_use",
+                  id: "review_final",
+                  name: "set_task_status",
+                  input: {
+                    status,
+                    summary:
+                      status === "blocked"
+                        ? "Partial review only: downstream consumers remain unreviewed."
+                        : "Reviewed the scoped change; no supported findings.",
+                    result,
+                  },
+                },
+              ],
+            };
+          }
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+        };
+        const session = await makeSession();
+        session.addUserMessage("review it");
+        session.fleetMetadata = {
+          delegation: { expectedResult: "review_findings" },
+        } as NonNullable<typeof session.fleetMetadata>;
+        const engine = new AgentEngine(makeRegistry(provider));
+        setEngineToolContext(engine, {
+          approvalManager: {} as ToolDispatchContext["approvalManager"],
+          approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+          sessionId: session.id,
+          extensionUri: {} as ToolDispatchContext["extensionUri"],
+        });
+
+        const events = await collectEvents(
+          engine.run(session, {
+            isBackground: true,
+            maxApiTurns: 1,
+            maxToolCalls: 1,
+          }),
+        );
+
+        expect(requests).toHaveLength(2);
+        expect(requests[1].tools?.map((tool) => tool.name)).toEqual([
+          "set_task_status",
+        ]);
+        expect(requests[1].messages.at(-1)).toEqual({
+          role: "user",
+          content: expect.stringContaining('otherwise use status="blocked"'),
+        });
+        expect(requests[1].messages).toContainEqual({
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "truncated_read",
+              content: expect.stringContaining("Not executed"),
+            },
+          ],
+        });
+        expect(
+          events
+            .filter((event) => event.type === "tool_start")
+            .map((event) => event.toolName),
+        ).toEqual(["set_task_status"]);
+        expect(
+          events.find((event) => event.type === "final_marker"),
+        ).toMatchObject({ marker: { status, result } });
+        expect(
+          events
+            .filter((event) => event.type === "api_request")
+            .map((event) => event.finalizationOnly ?? false),
+        ).toEqual([false, true]);
+      },
+    );
+
+    it.each([true, false])(
+      "bounds repeated output truncation and closes skipped calls (background=%s)",
+      async (isBackground) => {
+        const requests: StreamRequest[] = [];
+        const provider = makeMockProvider();
+        provider.stream = async function* (request: StreamRequest) {
+          requests.push(request);
+          yield {
+            type: "model_stop",
+            reason: "max_tokens",
+            assistantMessage: {
+              role: "assistant",
+              content: [
+                { type: "text", text: "Partial review evidence." },
+                {
+                  type: "tool_use",
+                  id: `truncated_${requests.length}`,
+                  name: "set_task_status",
+                  input: { status: "completed" },
+                },
+              ],
+            },
+          };
+          yield { type: "done" };
+        };
+        const session = await makeSession();
+        session.addUserMessage("review it");
+        session.fleetMetadata = {
+          delegation: { expectedResult: "review_findings" },
+        } as NonNullable<typeof session.fleetMetadata>;
+        const engine = new AgentEngine(makeRegistry(provider));
+        setEngineToolContext(engine, {
+          approvalManager: {} as ToolDispatchContext["approvalManager"],
+          approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+          sessionId: session.id,
+          extensionUri: {} as ToolDispatchContext["extensionUri"],
+        });
+
+        const events = await collectEvents(
+          engine.run(session, { isBackground }),
+        );
+
+        expect(requests).toHaveLength(isBackground ? 4 : 1);
+        expect(events.some((event) => event.type === "tool_start")).toBe(false);
+        expect(events.some((event) => event.type === "final_marker")).toBe(
+          false,
+        );
+        const toolResults = session
+          .getAllMessages()
+          .flatMap((message) =>
+            Array.isArray(message.content)
+              ? message.content.filter((block) => block.type === "tool_result")
+              : [],
+          );
+        expect(toolResults).toHaveLength(requests.length);
+        expect(toolResults.at(-1)).toMatchObject({
+          tool_use_id: `truncated_${requests.length}`,
+          content: expect.stringContaining("Not executed"),
+        });
+      },
+    );
 
     it("stops after three empty structured-review finalization attempts", async () => {
       const requests: StreamRequest[] = [];

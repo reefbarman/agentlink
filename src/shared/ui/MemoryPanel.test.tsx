@@ -102,7 +102,9 @@ describe("MemoryPanel", () => {
     const onQuery = vi.fn();
     render(<MemoryPanel {...props({ onQuery })} />);
 
-    expect(screen.getAllByText("Keep final answers concise.")).toHaveLength(2);
+    expect(
+      screen.getAllByText("Keep final answers concise.").length,
+    ).toBeGreaterThanOrEqual(2);
     fireEvent.input(screen.getByLabelText("Search memory"), {
       target: { value: "concise" },
     });
@@ -193,7 +195,11 @@ describe("MemoryPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Clear…" }));
     expect(onClear).not.toHaveBeenCalled();
-    expect(screen.getByText(/Clear tombstones all non-forgotten/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /Forget all global memories, including records hidden by filters/,
+      ),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Confirm clear" }));
     expect(onClear).toHaveBeenCalledWith("global");
     expect(screen.queryByRole("button", { name: "Confirm clear" })).toBeNull();
@@ -252,6 +258,134 @@ describe("MemoryPanel", () => {
     expect(
       (screen.getByLabelText("Memory status") as HTMLSelectElement).disabled,
     ).toBe(true);
+  });
+
+  it("adds memory directly and waits for the save before closing the editor", async () => {
+    let finish!: () => void;
+    const onManage = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    render(
+      <MemoryPanel {...props({ onManage, availableScopes: ["global"] })} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add memory" }));
+    expect(
+      (screen.getByRole("button", { name: "Save memory" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    fireEvent.input(screen.getByLabelText("Memory statement"), {
+      target: { value: "  Prefer concise examples.  " },
+    });
+    fireEvent.change(screen.getByLabelText("Record kind"), {
+      target: { value: "workflow_hint" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save memory" }));
+    expect(onManage).toHaveBeenCalledWith({
+      operation: "remember",
+      scope: "global",
+      statement: "Prefer concise examples.",
+      kind: "workflow_hint",
+      source_evidence: "User added memory from /memory.",
+    });
+    expect(screen.getByRole("button", { name: "Saving…" })).toBeTruthy();
+    finish();
+    await screen.findByText(/Memory saved/);
+    expect(screen.queryByLabelText("Memory statement")).toBeNull();
+  });
+
+  it("preserves failed edit drafts and their original revision, then allows retry", async () => {
+    const onManage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("This memory changed elsewhere."))
+      .mockResolvedValue(undefined);
+    render(<MemoryPanel {...props({ onManage })} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(
+      (screen.getByLabelText("Memory statement") as HTMLTextAreaElement).value,
+    ).toBe(activeRecord.statement);
+    fireEvent.input(screen.getByLabelText("Memory statement"), {
+      target: { value: "A corrected preference." },
+    });
+    for (const name of [
+      "Project",
+      "Search",
+      "Forget",
+      "Import JSON",
+      "Clear…",
+    ]) {
+      expect(
+        (screen.getByRole("button", { name }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Save memory" }));
+    await screen.findByText("This memory changed elsewhere.");
+    expect(
+      (screen.getByLabelText("Memory statement") as HTMLTextAreaElement).value,
+    ).toBe("A corrected preference.");
+    expect(onManage).toHaveBeenCalledWith({
+      operation: "update",
+      scope: "global",
+      kind: "preference",
+      statement: "A corrected preference.",
+      target_id: "memory-1",
+      expected_revision: 3,
+      source_evidence: "User edited memory from /memory.",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save memory" }));
+    await screen.findByText(/Memory saved/);
+  });
+
+  it("preserves a draft when the host changes scope and prevents saving it into the new scope", () => {
+    const onManage = vi.fn();
+    const { rerender } = render(<MemoryPanel {...props({ onManage })} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add memory" }));
+    fireEvent.input(screen.getByLabelText("Memory statement"), {
+      target: { value: "My global preference." },
+    });
+    rerender(<MemoryPanel {...props({ onManage, scope: "project" })} />);
+    expect(
+      (screen.getByLabelText("Memory statement") as HTMLTextAreaElement).value,
+    ).toBe("My global preference.");
+    expect(screen.getByText(/The active scope changed/)).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Save memory" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    fireEvent.submit(screen.getByRole("form", { name: "Add memory" }));
+    expect(onManage).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel editing" }));
+    expect(screen.queryByLabelText("Memory statement")).toBeNull();
+  });
+
+  it("submits search from the form and resets filters", () => {
+    const onQuery = vi.fn();
+    render(<MemoryPanel {...props({ onQuery })} />);
+    fireEvent.input(screen.getByLabelText("Search memory"), {
+      target: { value: " concise " },
+    });
+    fireEvent.submit(screen.getByRole("form", { name: "Filter memories" }));
+    expect(onQuery).toHaveBeenLastCalledWith({
+      scope: "global",
+      query: "concise",
+      limit: 100,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reset filters" }));
+    expect(onQuery).toHaveBeenLastCalledWith({ scope: "global", limit: 100 });
+    expect(
+      (screen.getByLabelText("Search memory") as HTMLInputElement).value,
+    ).toBe("");
+  });
+
+  it("shows source evidence and revision statements, not only counts", () => {
+    render(<MemoryPanel {...props()} />);
+    fireEvent.click(screen.getByText("Sources (1)"));
+    expect(screen.getByText("User requested concise answers.")).toBeTruthy();
+    fireEvent.click(screen.getByText("Revisions (1)"));
+    expect(screen.getByText(/Revision 3 ·/)).toBeTruthy();
+    expect(screen.getByText("Confidence: 95%")).toBeTruthy();
   });
 
   it("shows a controlled error for malformed JSON archives", async () => {

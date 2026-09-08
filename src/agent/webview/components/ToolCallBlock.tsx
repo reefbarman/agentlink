@@ -731,9 +731,7 @@ export function ToolCallBlock({
     ? String(input?.terminal_id ?? "").trim()
     : "";
   const command = isCommand ? String(input?.command ?? "").trim() : "";
-  const commandReason = isRunningCommand
-    ? String(input?.reason ?? "").trim()
-    : "";
+  const commandReason = isCommand ? String(input?.reason ?? "").trim() : "";
   const displayName = isCommand
     ? "Command"
     : isTerminalOutput
@@ -1023,8 +1021,8 @@ export function ToolCallBlock({
       </div>
 
       {commandReason && (
-        <div class="tool-running-command-reason">
-          <span class="tool-running-command-reason-label">Reason</span>
+        <div class="tool-command-reason">
+          <span class="tool-command-reason-label">Reason</span>
           <span>{commandReason}</span>
         </div>
       )}

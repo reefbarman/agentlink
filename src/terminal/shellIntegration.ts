@@ -12,6 +12,7 @@ export type ShellIntegrationEvent =
   | { type: "prompt-start" }
   | { type: "prompt-end" }
   | { type: "command-start"; command: string }
+  | { type: "command-output-end" }
   | { type: "command-end"; exitCode: number }
   | { type: "cwd"; cwd: string };
 
@@ -34,6 +35,11 @@ export interface ShellIntegrationParser {
 
 export interface ShellIntegrationParserOptions {
   maxFrameBytes?: number;
+}
+
+export interface ShellIntegrationScriptOptions {
+  /** End command capture before zsh clears an unterminated output line. */
+  markZshCommandOutputEndBeforeEolPadding?: boolean;
 }
 
 function assertValidNonce(nonce: string): void {
@@ -91,6 +97,9 @@ function parseEvent(frameBody: string): ShellIntegrationEvent | undefined {
     return command === undefined
       ? undefined
       : { type: "command-start", command };
+  }
+  if (kind === "O" && payload === undefined) {
+    return { type: "command-output-end" };
   }
   if (
     kind === "D" &&
@@ -281,9 +290,25 @@ function commonFunctions(nonce: string, shell: ShellIntegrationKind): string[] {
   ];
 }
 
-function createZshIntegrationScript(nonce: string): string {
+export function createZshCommandOutputEndMarkerScript(nonce: string): string {
+  assertValidNonce(nonce);
+  return [
+    `typeset -g __agentlink_si_output_end_marker=$'%{\\033]${OSC_NAMESPACE};${nonce};O\\007%}'`,
+    'if [[ ${PROMPT_EOL_MARK-} != "$__agentlink_si_output_end_marker"* ]]; then',
+    `  PROMPT_EOL_MARK="\${__agentlink_si_output_end_marker}\${PROMPT_EOL_MARK-'%B%S%#%s%b'}"`,
+    "fi",
+  ].join("\n");
+}
+
+function createZshIntegrationScript(
+  nonce: string,
+  options: ShellIntegrationScriptOptions,
+): string {
   return [
     ...commonFunctions(nonce, "zsh"),
+    ...(options.markZshCommandOutputEndBeforeEolPadding
+      ? [createZshCommandOutputEndMarkerScript(nonce)]
+      : []),
     "__agentlink_si_prompt_start() {",
     "  __agentlink_si_emit A",
     "}",
@@ -365,9 +390,10 @@ function createBashIntegrationScript(nonce: string): string {
 export function createShellIntegrationScript(
   shell: ShellIntegrationKind,
   nonce: string,
+  options: ShellIntegrationScriptOptions = {},
 ): string {
   assertValidNonce(nonce);
   return shell === "zsh"
-    ? createZshIntegrationScript(nonce)
+    ? createZshIntegrationScript(nonce, options)
     : createBashIntegrationScript(nonce);
 }

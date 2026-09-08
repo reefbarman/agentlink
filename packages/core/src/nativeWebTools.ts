@@ -86,6 +86,12 @@ export const CORE_NATIVE_WEB_TOOL_DEFINITIONS: Readonly<
           minimum: 1,
           description: "Maximum visible content characters to request",
         },
+        start_line: {
+          type: "number",
+          minimum: 0,
+          description:
+            "Provider page line to start near when continuing a long page (Codex OAuth only)",
+        },
         section: {
           type: "string",
           description: "Optional heading or section to focus on",
@@ -109,6 +115,10 @@ export interface CoreNativeWebToolResult {
   content: string;
   citations: CoreWebCitation[];
   usage?: CoreModelUsage;
+  output_file?: string;
+  output_warning?: string;
+  content_truncated?: boolean;
+  next_start_line?: number;
 }
 
 export function buildNativeWebDelegationPrompt(
@@ -148,6 +158,7 @@ export function buildNativeWebDelegationPrompt(
   const url = requiredHttpUrl(input.url);
   const options = compactObject({
     maxLength: optionalPositiveInteger(input.max_length),
+    startLine: optionalNonNegativeInteger(input.start_line),
     section: optionalString(input.section),
     find: optionalString(input.find),
   });
@@ -349,6 +360,12 @@ function optionalPositiveInteger(value: unknown): number | undefined {
   if (value === undefined) return undefined;
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : undefined;
+}
+
+function optionalNonNegativeInteger(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 ? number : undefined;
 }
 
 function compactObject(

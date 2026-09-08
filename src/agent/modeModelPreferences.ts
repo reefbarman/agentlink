@@ -1,6 +1,7 @@
 import type * as vscode from "vscode";
 
 import { CODEX_DEFAULT_MODEL } from "@agentlink/core/codex";
+import { getUserSessionPreference } from "./sharedSessionPreferences.js";
 
 export const FALLBACK_AGENT_MODEL = CODEX_DEFAULT_MODEL;
 
@@ -9,7 +10,7 @@ export type ModeModelPreferences = Record<string, string>;
 export function getModeModelPreferences(
   config: vscode.WorkspaceConfiguration,
 ): ModeModelPreferences {
-  const raw = config.get<unknown>("modeModelPreferences");
+  const raw = getUserSessionPreference<unknown>(config, "modeModelPreferences");
   if (!raw || typeof raw !== "object") return {};
 
   const prefs: ModeModelPreferences = {};

@@ -483,6 +483,7 @@ export type ExtensionMessage =
     }
   | {
       type: "agentInterjection";
+      coordination?: import("@agentlink/protocol/chat-transcript").BackgroundCoordination;
       sessionId: string;
       text: string;
       queueId: string;
@@ -684,6 +685,7 @@ export type ExtensionMessage =
     }
   | {
       type: "agentBgInterjection";
+      coordination?: import("@agentlink/protocol/chat-transcript").BackgroundCoordination;
       sessionId: string;
       text: string;
       displayText?: string;

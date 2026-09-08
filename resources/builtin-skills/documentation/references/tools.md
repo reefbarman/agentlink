@@ -12,6 +12,10 @@ Use the lightweight orientation tools before broad changes:
 - `get_repo_map` and `get_module_neighbors` — understand structure and dependency impact.
 - Language tools — definitions, references, symbols, hovers, code actions, and rename support through VS Code.
 
+**Indexed tools are workspace-only.** `get_repo_map`, `get_module_neighbors`, `codebase_search`, `read_file(query)`, `list_files(query)`, and `search_files(semantic=true)` only cover files/folders within the current workspace folders. An absolute path to an external repository does not make its index available, even if it is open in another window or was previously indexed. `get_repo_map.include_external` includes dependency names, not external repository contents.
+
+For external paths, use `read_file` and `list_files` without `query`, or regex `search_files` with `semantic=false`, subject to existing path permissions and approvals. The repo-map-first and semantic-search-first guidance does not apply outside the current workspace.
+
 Exact parameters: [read and language tools](complete-reference.md#tools).
 
 ## Reduce related read-only fan-out
@@ -75,9 +79,11 @@ Use clear ownership and a focused review scope for writable or review work. See 
 
 - `find_mcp_tools` and `call_mcp_tool` discover and invoke configured MCP capabilities.
 - Resources and prompts use `list_mcp_resources`, `read_mcp_resource`, `list_mcp_prompts`, and `get_mcp_prompt`.
-- Native web search/fetch may be available according to the configured web-access backend.
+- Native `web_search` and `web_fetch` may be available according to the configured web-access backend.
 
-MCP configuration and trust behavior: [MCP](mcp.md).
+A Codex OAuth `web_fetch` can follow the provider's line-addressed continuation. The VS Code host keeps the inline result bounded and returns an AgentLink temp `output_file` for additional retained content; read it with `read_file` rather than repeating the fetch. If the provider still has more than AgentLink retained, continue from `next_start_line` with `start_line`. Browser Ask Agent does not expose host temp-file paths.
+
+MCP configuration and trust behavior: [MCP](mcp.md). Exact native web contracts: [web access](complete-reference.md#web-access).
 
 ## Exact contracts and recovery behavior
 

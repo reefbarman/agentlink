@@ -61,6 +61,7 @@ const mocks = vi.hoisted(() => {
       requireProjectRoot: vi.fn(() => opts.projectScope.rootPath),
       autoCondenseThreshold: opts.config.autoCondenseThreshold,
       reasoningEffort: "high",
+      desiredReasoningEffort: "high",
       thinkingBudget: opts.config.thinkingBudget,
       title: "New Chat",
       background: Boolean(opts.background),
@@ -97,7 +98,15 @@ const mocks = vi.hoisted(() => {
       getActiveSkillAllowedTools: vi.fn(() => undefined),
       getAdvertisedSkills: vi.fn(() => advertisedSkills),
       getSkillCatalogProjection: vi.fn(() => skillCatalogProjection),
-      restoreFromStore: vi.fn(),
+      restoreFromStore: vi.fn(function (this: any, data: any) {
+        this.reasoningEffort = data.reasoningEffort ?? this.reasoningEffort;
+        this.desiredReasoningEffort =
+          data.desiredReasoningEffort ??
+          data.reasoningEffort ??
+          this.desiredReasoningEffort;
+        this.autoCondenseThreshold =
+          data.autoCondenseThreshold ?? this.autoCondenseThreshold;
+      }),
       rebuildSystemPrompt: vi.fn(async () => {}),
       refreshModeInstructionAnchor: vi.fn(async () => {}),
       updateModelSelection: vi.fn(async function (
@@ -601,8 +610,9 @@ describe("AgentSessionManager host injection", () => {
     expect(mgr.getConfig().model).toBe(originalConfigModel);
   });
 
-  it("recomputes effective reasoning from the saved preference across model changes", async () => {
+  it("recomputes effective reasoning from the session preference across model changes", async () => {
     const providers = new ProviderRegistry();
+    const resolveReasoningEffortForMode = vi.fn(() => "ultra" as const);
     const capabilitiesByModel = {
       "gpt-6-astra": {
         supportsThinking: true,
@@ -657,7 +667,7 @@ describe("AgentSessionManager host injection", () => {
           providers,
           config: {
             resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
-            resolveReasoningEffortForMode: () => "ultra",
+            resolveReasoningEffortForMode,
             getCondenseThresholdForModel: () => 0.9,
             getBackgroundAgentSettings: () => ({}),
           },
@@ -667,12 +677,21 @@ describe("AgentSessionManager host injection", () => {
 
     const session = await mgr.createSession("code");
     expect(session.reasoningEffort).toBe("ultra");
+    resolveReasoningEffortForMode.mockImplementation(() => {
+      throw new Error("Existing sessions must not reread thinking defaults");
+    });
 
     await mgr.setModel("gpt-5.6-sol");
     expect(session.reasoningEffort).toBe("max");
+    expect(session.desiredReasoningEffort).toBe("ultra");
 
     await mgr.setModel("gpt-6-astra");
     expect(session.reasoningEffort).toBe("ultra");
+    expect(resolveReasoningEffortForMode).toHaveBeenCalledOnce();
+    mgr.setSessionReasoningEffort(session.id, "none");
+    await mgr.reconcileSessionReasoningEfforts();
+    expect(session.reasoningEffort).toBe("none");
+    expect(session.desiredReasoningEffort).toBe("none");
   });
 
   it("reconciles effective reasoning after auth-specific capabilities settle", async () => {
@@ -1870,6 +1889,7 @@ describe("AgentSessionManager host injection", () => {
       requireProjectRoot: vi.fn(() => opts.projectScope.rootPath),
       autoCondenseThreshold: opts.config.autoCondenseThreshold,
       reasoningEffort: "high",
+      desiredReasoningEffort: "high",
       thinkingBudget: opts.config.thinkingBudget,
       title: "New Chat",
       background: Boolean(opts.background),
@@ -1988,6 +2008,112 @@ describe("AgentSessionManager host injection", () => {
     expect(mgr.listPersistedSessions().map((session) => session.id)).toEqual([
       "real-foreground",
     ]);
+  });
+
+  it("round-trips session preferences through the production store and session restoration", async () => {
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), "session-preferences-"),
+    );
+    const { AgentSession } =
+      await vi.importActual<typeof import("./AgentSession.js")>(
+        "./AgentSession.js",
+      );
+    const resolveReasoningEffortForMode = vi.fn(() => "ultra" as const);
+    const getCondenseThresholdForModel = vi.fn(() => 0.73);
+    const host = {
+      createSession: AgentSession.create,
+      config: {
+        resolveModelForMode: (_mode: string, fallback: string) => fallback,
+        resolveReasoningEffortForMode,
+        getCondenseThresholdForModel,
+        getBackgroundAgentSettings: () => ({}),
+      },
+    };
+    try {
+      const store = new SessionStore(workspace);
+      const manager = new AgentSessionManager(
+        makeConfig(),
+        workspace,
+        undefined,
+        false,
+        store,
+        undefined,
+        undefined,
+        { host },
+      );
+      const session = await manager.createSession("code");
+      session.addUserMessage("Keep these preferences");
+      session.reasoningEffort = "max";
+      session.autoCondenseThreshold = 0.67;
+      await (manager as any).saveSessionNow(session.id);
+      const disk = await new SessionStore(workspace).readSession(session.id);
+      expect(disk.ok && disk.value.metadata).toMatchObject({
+        reasoningEffort: "max",
+        desiredReasoningEffort: "ultra",
+        autoCondenseThreshold: 0.67,
+      });
+      resolveReasoningEffortForMode.mockClear();
+      getCondenseThresholdForModel.mockClear();
+      const restoredManager = new AgentSessionManager(
+        makeConfig(),
+        workspace,
+        undefined,
+        false,
+        new SessionStore(workspace),
+        undefined,
+        undefined,
+        { host },
+      );
+      const restored = await restoredManager.loadPersistedSession(session.id);
+      expect(restored).toBeInstanceOf(AgentSession);
+      expect(restored).toMatchObject({
+        desiredReasoningEffort: "ultra",
+        reasoningEffort: "ultra",
+        autoCondenseThreshold: 0.67,
+      });
+      await restoredManager.reconcileSessionReasoningEfforts();
+      expect(resolveReasoningEffortForMode).not.toHaveBeenCalled();
+      expect(getCondenseThresholdForModel).not.toHaveBeenCalled();
+      expect(restored?.getAllMessages()).toEqual(session.getAllMessages());
+
+      if (!disk.ok) throw new Error("Expected persisted session");
+      const legacyRecord = {
+        ...disk.value,
+        summary: { ...disk.value.summary, id: "legacy-preferences" },
+        metadata: {
+          ...disk.value.metadata,
+          reasoningEffort: "none" as const,
+          desiredReasoningEffort: undefined,
+          autoCondenseThreshold: undefined,
+        },
+      };
+      const legacyStore = new SessionStore(workspace);
+      await legacyStore.saveSession({
+        session: legacyRecord,
+        expectedRevision: null,
+      });
+      const legacyManager = new AgentSessionManager(
+        makeConfig(),
+        workspace,
+        undefined,
+        false,
+        legacyStore,
+        undefined,
+        undefined,
+        { host },
+      );
+      const legacy =
+        await legacyManager.loadPersistedSession("legacy-preferences");
+      expect(legacy).toMatchObject({
+        reasoningEffort: "none",
+        desiredReasoningEffort: "none",
+        autoCondenseThreshold: 0.8,
+      });
+      expect(resolveReasoningEffortForMode).not.toHaveBeenCalled();
+      expect(getCondenseThresholdForModel).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   it("persists foreground reasoning effort changes immediately", async () => {
@@ -2245,105 +2371,127 @@ describe("AgentSessionManager host injection", () => {
     expect(session.rebuildSystemPrompt).toHaveBeenCalledTimes(1);
   });
 
-  it("wires runtime fallback reconciliation through the production engine boundary", async () => {
-    const providers = new ProviderRegistry();
-    providers.register({
-      id: "test",
-      displayName: "Test",
-      condenseModel: "model-a",
-      isAuthenticated: vi.fn(async () => true),
-      getCapabilities: vi.fn(() => ({
-        supportsThinking: false,
-        supportsCaching: false,
-        supportsImages: false,
-        supportsToolUse: true,
-        contextWindow: 200_000,
-        maxOutputTokens: 8_192,
-      })),
-      listModels: vi.fn(() =>
-        ["model-a", "model-b"].map((id) => ({
-          id,
-          displayName: id,
-          provider: "test",
-          capabilities: {
-            supportsThinking: false,
-            supportsCaching: false,
-            supportsImages: false,
-            supportsToolUse: true,
-            contextWindow: 200_000,
-            maxOutputTokens: 8_192,
-          },
+  it.each([
+    { desired: "high" as const, echo: true },
+    { desired: "none" as const, echo: false },
+  ])(
+    "preserves $desired thinking and threshold through send and fallback (echo=$echo)",
+    async ({ desired, echo }) => {
+      const providers = new ProviderRegistry();
+      providers.register({
+        id: "test",
+        displayName: "Test",
+        condenseModel: "model-a",
+        isAuthenticated: vi.fn(async () => true),
+        getCapabilities: vi.fn(() => ({
+          supportsThinking: false,
+          supportsCaching: false,
+          supportsImages: false,
+          supportsToolUse: true,
+          contextWindow: 200_000,
+          maxOutputTokens: 8_192,
         })),
-      ),
-      stream: vi.fn(),
-      complete: vi.fn(),
-    } as any);
-    let reconciledBeforeWarning = false;
-    const engine = {
-      setToolRuntime: vi.fn(),
-      run: vi.fn(async function* (session: any, opts: any) {
-        await opts.onModelFallback({
-          requestedModel: "model-a",
-          effectiveModel: "model-b",
-        });
-        reconciledBeforeWarning =
-          session.model === "model-b" &&
-          session.providerId === "test" &&
-          session.promptProfile.profile === "reasoning" &&
-          session.promptProfile.modelId === "model-b";
-        yield {
-          type: "warning",
-          message: "model-a is unavailable. Switched to model-b.",
-          modelFallback: {
+        listModels: vi.fn(() =>
+          ["model-a", "model-b"].map((id) => ({
+            id,
+            displayName: id,
+            provider: "test",
+            capabilities: {
+              supportsThinking: false,
+              supportsCaching: false,
+              supportsImages: false,
+              supportsToolUse: true,
+              contextWindow: 200_000,
+              maxOutputTokens: 8_192,
+            },
+          })),
+        ),
+        stream: vi.fn(),
+        complete: vi.fn(),
+      } as any);
+      let reconciledBeforeWarning = false;
+      const engine = {
+        setToolRuntime: vi.fn(),
+        run: vi.fn(async function* (session: any, opts: any) {
+          expect(session.reasoningEffort).toBe("none");
+          expect(session.desiredReasoningEffort).toBe(desired);
+          await opts.onModelFallback({
             requestedModel: "model-a",
             effectiveModel: "model-b",
-          },
-        };
-        yield {
-          type: "done",
-          totalInputTokens: 0,
-          totalOutputTokens: 0,
-          totalCacheReadTokens: 0,
-          totalCacheCreationTokens: 0,
-        };
-      }),
-    };
-    const promptProfileOverrides = { "model-b": "reasoning" as const };
-    const mgr = new AgentSessionManager(
-      { ...makeConfig(), model: "model-a", promptProfileOverrides },
-      "/tmp",
-      undefined,
-      false,
-      undefined,
-      undefined,
-      undefined,
-      {
-        host: {
-          providers,
-          createEngine: vi.fn(() => engine as never),
-          config: {
-            resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
-            getCondenseThresholdForModel: () => 0.9,
-            getBackgroundAgentSettings: () => ({}),
+          });
+          reconciledBeforeWarning =
+            session.model === "model-b" &&
+            session.providerId === "test" &&
+            session.promptProfile.profile === "reasoning" &&
+            session.promptProfile.modelId === "model-b";
+          yield {
+            type: "warning",
+            message: "model-a is unavailable. Switched to model-b.",
+            modelFallback: {
+              requestedModel: "model-a",
+              effectiveModel: "model-b",
+            },
+          };
+          yield {
+            type: "done",
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            totalCacheReadTokens: 0,
+            totalCacheCreationTokens: 0,
+          };
+        }),
+      };
+      const promptProfileOverrides = { "model-b": "reasoning" as const };
+      const mgr = new AgentSessionManager(
+        { ...makeConfig(), model: "model-a", promptProfileOverrides },
+        "/tmp",
+        undefined,
+        false,
+        undefined,
+        undefined,
+        undefined,
+        {
+          host: {
+            providers,
+            createEngine: vi.fn(() => engine as never),
+            config: {
+              resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
+              getCondenseThresholdForModel: () => 0.9,
+              getBackgroundAgentSettings: () => ({}),
+            },
           },
         },
-      },
-    );
-    const session = await mgr.createSession("code");
-    vi.mocked(session.rebuildSystemPrompt).mockClear();
+      );
+      const session = await mgr.createSession("code");
+      vi.mocked(session.rebuildSystemPrompt).mockClear();
 
-    await mgr.sendMessage(session.id, "trigger fallback", session.mode);
+      mgr.setSessionReasoningEffort(session.id, desired);
+      session.autoCondenseThreshold = 0.67;
+      const thresholdDefaults = vi.spyOn(
+        mgr as any,
+        "getCondenseThresholdForModel",
+      );
+      await mgr.sendMessage(
+        session.id,
+        "trigger fallback",
+        session.mode,
+        echo ? { reasoningEffort: session.reasoningEffort } : undefined,
+      );
 
-    expect(reconciledBeforeWarning).toBe(true);
-    expect(session.rebuildSystemPrompt).toHaveBeenCalledWith(
-      expect.objectContaining({ promptProfileOverrides }),
-    );
-    expect(session.promptProfile).toMatchObject({
-      profile: "reasoning",
-      providerId: "test",
-      modelId: "model-b",
-    });
-  });
+      expect(reconciledBeforeWarning).toBe(true);
+      expect(session.desiredReasoningEffort).toBe(desired);
+      expect(session.autoCondenseThreshold).toBe(0.67);
+      expect(thresholdDefaults).not.toHaveBeenCalled();
+      expect(session.rebuildSystemPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({ promptProfileOverrides }),
+      );
+      expect(session.promptProfile).toMatchObject({
+        profile: "reasoning",
+        providerId: "test",
+        modelId: "model-b",
+      });
+    },
+  );
 
   it("emits session-outcome turn and task events through the production send loop", async () => {
     const providers = new ProviderRegistry();
@@ -3317,7 +3465,18 @@ describe("AgentSessionManager condense thresholds", () => {
         }
         return undefined;
       },
-      inspect: () => undefined,
+      inspect: (key: string) => ({
+        globalValue:
+          key === "modelCondenseThresholds"
+            ? {
+                "claude-sonnet-4-6": 0.72,
+                "gpt-5.4": 0.83,
+                "gpt-5.3-codex": 0.77,
+              }
+            : key === "modeModelPreferences"
+              ? { code: "gpt-5.3-codex", architect: "gpt-5.4" }
+              : undefined,
+      }),
     });
   });
 

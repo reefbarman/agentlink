@@ -32,7 +32,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   web_fetch: {
     label: "Native web fetch",
     description:
-      "Open and read a public HTTP or HTTPS URL using the selected model provider's native page-access transport. Codex OAuth uses low-latency structured open/find commands with automatic hosted-tool fallback; other supported providers use their hosted capability. Available only when agentlink.webAccess.fetchBackend is native. Returns bounded content, citations, and usage when available as an ordinary tool result.",
+      "Open and read a public HTTP or HTTPS URL using the selected model provider's native page-access transport. Codex OAuth uses low-latency structured open/find commands with automatic hosted-tool fallback; other supported providers use their hosted capability. Available only when agentlink.webAccess.fetchBackend is native. Returns a bounded preview and, when the VS Code host receives more Codex page content, an output_file readable with read_file; use start_line/next_start_line for any provider remainder.",
   },
 
   // --- Native tool discovery ---
@@ -53,7 +53,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   read_file: {
     label: "Read with line numbers",
     description:
-      "Read the contents of a file with line numbers. Use get_context first for orientation on a known source/config file; use read_file when you need exact file content, local images/PDFs, complete temp outputs, a specific large line slice, or semantic in-file jumping via query. Returns content in 'line_number | content' format with metadata, git status, and diagnostics summary when available. High-confidence secret values in eligible settings/config JSON/JSONC are automatically redacted; malformed eligible content is withheld.",
+      "Read the contents of a file with line numbers. Use get_context first for orientation on a known source/config file; use read_file when you need exact file content, local images/PDFs, complete temp outputs, a specific large line slice, or semantic in-file jumping via query. The query option only works within the current workspace folders; omit query for external files. Returns content in 'line_number | content' format with metadata, git status, and diagnostics summary when available. High-confidence secret values in eligible settings/config JSON/JSONC are automatically redacted; malformed eligible content is withheld.",
   },
   get_context: {
     label: "Context pack",
@@ -63,12 +63,12 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   get_module_neighbors: {
     label: "Module neighbors",
     description:
-      "Read the structural code index for a file and return imports, exports, top-level symbols, reverse module dependents, bounded counts, and freshness metadata. Use after get_context when you need module-level blast-radius awareness before editing. Requires the codebase index to be built.",
+      "Read the structural code index for a file and return imports, exports, top-level symbols, reverse module dependents, bounded counts, and freshness metadata. Use after get_context when you need module-level blast-radius awareness before editing. Requires the codebase index to be built. Only works on files/folders within the current workspace folders, not external repositories or other windows. For external paths, use read_file/list_files without query or regex search_files (semantic=false), subject to path permissions.",
   },
   get_repo_map: {
     label: "Repo map",
     description:
-      "Read the structural code index and return a budgeted whole-project skeleton: store metadata, aggregate counts, directory summaries, external dependency summaries, and prioritized file/module entries. Use before broad edits to understand module boundaries and drill into files with get_module_neighbors. Requires the codebase index to be built.",
+      "Read the structural code index and return a budgeted whole-project skeleton: store metadata, aggregate counts, directory summaries, external dependency summaries, and prioritized file/module entries. Use before broad edits to understand module boundaries and drill into files with get_module_neighbors. Requires the codebase index to be built. Only works on files/folders within the current workspace folders, not external repositories or other windows. For external paths, use read_file/list_files without query or regex search_files (semantic=false), subject to path permissions.",
   },
   load_skill: {
     label: "Load advertised skill",
@@ -83,12 +83,12 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   list_files: {
     label: "Directory listing",
     description:
-      "List files and directories at a given path. Directories have a trailing '/' suffix. Use 'pattern' to find files matching a glob (e.g. '*.test.ts'). Set include_ignored=true with recursive/pattern listing to include files hidden by ignore rules; pair it with pattern when possible to avoid noisy/truncated results. Supports optional 'query' param to find files by meaning using the codebase index, returning files ranked by semantic relevance.",
+      "List files and directories at a given path. Directories have a trailing '/' suffix. Use 'pattern' to find files matching a glob (e.g. '*.test.ts'). Set include_ignored=true with recursive/pattern listing to include files hidden by ignore rules; pair it with pattern when possible to avoid noisy/truncated results. Supports optional 'query' param to find files by meaning using the codebase index, returning files ranked by semantic relevance. The query option only works within the current workspace folders; omit query for external directories.",
   },
   search_files: {
     label: "Regex & semantic search",
     description:
-      "Search file contents using regex, or perform semantic codebase search. Default: fast ripgrep regex search with context lines. When semantic=true, uses vector similarity search against the codebase index \u2014 'regex' is interpreted as a natural language query in this mode. When path already names a file, a redundant file_pattern is ignored and returned as a warning instead of failing the search.",
+      "Search file contents using regex, or perform semantic codebase search. Default: fast ripgrep regex search with context lines. The semantic=true option only works within the current workspace folders; use regex search (semantic=false) for external paths. When semantic=true, uses vector similarity search against the codebase index \u2014 'regex' is interpreted as a natural language query in this mode. When path already names a file, a redundant file_pattern is ignored and returned as a warning instead of failing the search.",
   },
   search_session_history: {
     label: "Search session history",
@@ -249,7 +249,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   codebase_search: {
     label: "Semantic code search",
     description:
-      'Search the codebase by meaning, not exact text. Uses the embedded local retrieval index with lexical ranking and optional vector/hybrid ranking. Best for exploratory questions like "how does authentication work" or "where are database connections configured". Falls back gracefully with a helpful error if the index is not available.',
+      'Search the codebase by meaning, not exact text. Uses the embedded local retrieval index with lexical ranking and optional vector/hybrid ranking. Best for exploratory questions like "how does authentication work" or "where are database connections configured". Only works on files/folders within the current workspace folders, not external repositories or other windows. For external paths, use read_file/list_files without query or regex search_files (semantic=false), subject to path permissions. Falls back gracefully with a helpful error if the index is not available.',
   },
 
   // --- Agent coordination ---

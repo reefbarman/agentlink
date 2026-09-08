@@ -1,0 +1,810 @@
+{
+  "version": 1,
+  "source": "canonical-definitions",
+  "buildVariant": "all-static-definitions",
+  "includesDevOnly": true,
+  "parameterScope": "top-level-union",
+  "tools": [
+    {
+      "name": "apply_code_action",
+      "parameters": ["index"],
+      "cluster": "language",
+      "sideEffect": "write",
+      "devOnly": false,
+      "availability": "benchmark-only",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "apply_diff",
+      "parameters": [
+        "atomic",
+        "block_options",
+        "diff",
+        "path",
+        "save_without_formatting"
+      ],
+      "cluster": "edit",
+      "sideEffect": "write",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "ask_user",
+      "parameters": ["context", "questions"],
+      "cluster": "session",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "session-control",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "call_mcp_tool",
+      "parameters": ["input", "server", "tool"],
+      "cluster": "mcp",
+      "sideEffect": "external",
+      "devOnly": false,
+      "availability": "mcp-bridge",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "call_native_tool",
+      "parameters": ["input", "name"],
+      "cluster": "session",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "native-bridge",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "close_terminals",
+      "parameters": ["names"],
+      "cluster": "terminal",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "codebase_search",
+      "parameters": ["exclude_globs", "limit", "path", "query"],
+      "cluster": "search",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "compose",
+      "parameters": ["description", "script"],
+      "cluster": "read",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "delete_feedback",
+      "parameters": ["ids", "indices"],
+      "cluster": "dev",
+      "sideEffect": "write",
+      "devOnly": true,
+      "availability": "dev-only",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "detach_background_agent",
+      "parameters": ["sessionId"],
+      "cluster": "background",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "background-control",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "diagnose_activity",
+      "parameters": ["limit", "path", "tool_call_id", "tool_name"],
+      "cluster": "session",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "execute_command",
+      "parameters": [
+        "additional_permissions",
+        "background",
+        "command",
+        "cwd",
+        "env",
+        "files",
+        "force",
+        "force_reason",
+        "output_grep",
+        "output_grep_context",
+        "output_head",
+        "output_offset",
+        "output_tail",
+        "reason",
+        "sandbox_permissions",
+        "split_from",
+        "temporary_home",
+        "terminal_id",
+        "terminal_name",
+        "timeout"
+      ],
+      "cluster": "terminal",
+      "sideEffect": "execute",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "find_and_replace",
+      "parameters": [
+        "find",
+        "glob",
+        "max_replacements",
+        "path",
+        "regex",
+        "replace"
+      ],
+      "cluster": "edit",
+      "sideEffect": "write",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "find_mcp_tools",
+      "parameters": [
+        "includeSchemas",
+        "limit",
+        "query",
+        "schemaLimit",
+        "server"
+      ],
+      "cluster": "mcp",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mcp-bridge",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "find_native_tools",
+      "parameters": [
+        "include_schemas",
+        "limit",
+        "offset",
+        "query",
+        "schema_limit"
+      ],
+      "cluster": "search",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "native-bridge",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "generate_image",
+      "parameters": [
+        "count",
+        "output_path",
+        "prompt",
+        "reference_image_ids",
+        "reference_image_paths",
+        "size",
+        "timeout_seconds",
+        "use_recent_images"
+      ],
+      "cluster": "media",
+      "sideEffect": "write",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "get_background_result",
+      "parameters": ["sessionId", "wait_seconds"],
+      "cluster": "background",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "background-control",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "get_background_status",
+      "parameters": ["sessionId"],
+      "cluster": "background",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "background-control",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "get_call_hierarchy",
+      "parameters": ["column", "direction", "line", "max_depth", "path"],
+      "cluster": "language",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "get_code_actions",
+      "parameters": [
+        "column",
+        "end_column",
+        "end_line",
+        "kind",
+        "line",
+        "only_preferred",
+        "path"
+      ],
+      "cluster": "language",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "benchmark-only",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "get_completions",
+      "parameters": ["column", "limit", "line", "path"],
+      "cluster": "language",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "benchmark-only",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "get_context",
+      "parameters": [
+        "dedupe_unchanged_content",
+        "limit",
+        "offset",
+        "path",
+        "refresh"
+      ],
+      "cluster": "read",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "get_diagnostics",
+      "parameters": ["path", "severity", "source"],
+      "cluster": "language",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "get_feedback",
+      "parameters": ["priorities", "tool_name", "triaged"],
+      "cluster": "dev",
+      "sideEffect": "read",
+      "devOnly": true,
+      "availability": "dev-only",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "get_fleet_workflow_result",
+      "parameters": ["kind", "workflowId"],
+      "cluster": "background",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "background-control",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "get_hover",
+      "parameters": ["column", "line", "path"],
+      "cluster": "language",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "get_inlay_hints",
+      "parameters": ["end_line", "path", "start_line"],
+      "cluster": "language",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "benchmark-only",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "get_mcp_prompt",
+      "parameters": ["arguments", "name", "server"],
+      "cluster": "mcp",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mcp-bridge",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "get_module_neighbors",
+      "parameters": ["max_results", "path"],
+      "cluster": "search",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "get_references",
+      "parameters": ["column", "include_declaration", "line", "path"],
+      "cluster": "language",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "get_repo_map",
+      "parameters": ["include_external", "max_chars", "max_files", "path"],
+      "cluster": "search",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "get_symbols",
+      "parameters": ["path", "query"],
+      "cluster": "language",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "get_terminal_output",
+      "parameters": [
+        "command_id",
+        "kill",
+        "output_grep",
+        "output_grep_context",
+        "output_head",
+        "output_offset",
+        "output_tail",
+        "terminal_id",
+        "wait_seconds"
+      ],
+      "cluster": "terminal",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "get_type_hierarchy",
+      "parameters": ["column", "direction", "line", "max_depth", "path"],
+      "cluster": "language",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "go_to_definition",
+      "parameters": ["column", "line", "path"],
+      "cluster": "language",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "go_to_implementation",
+      "parameters": ["column", "line", "path"],
+      "cluster": "language",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "go_to_type_definition",
+      "parameters": ["column", "line", "path"],
+      "cluster": "language",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "kill_background_agent",
+      "parameters": ["reason", "sessionId"],
+      "cluster": "background",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "background-control",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "list_files",
+      "parameters": [
+        "depth",
+        "include_ignored",
+        "path",
+        "pattern",
+        "query",
+        "recursive"
+      ],
+      "cluster": "read",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "list_mcp_prompts",
+      "parameters": [],
+      "cluster": "mcp",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mcp-bridge",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "list_mcp_resources",
+      "parameters": [],
+      "cluster": "mcp",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mcp-bridge",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "load_rule",
+      "parameters": ["path"],
+      "cluster": "read",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "artifact-loader",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "load_skill",
+      "parameters": ["path"],
+      "cluster": "read",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "artifact-loader",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "manage_fleet_automations",
+      "parameters": ["action", "id"],
+      "cluster": "background",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "background-control",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "manage_memory",
+      "parameters": [
+        "confidence",
+        "conflict_key",
+        "expected_revision",
+        "expires_at",
+        "kind",
+        "operation",
+        "scope",
+        "source_evidence",
+        "statement",
+        "target_id",
+        "undo_audit_event_id"
+      ],
+      "cluster": "memory",
+      "sideEffect": "write",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "open_file",
+      "parameters": ["column", "end_column", "end_line", "line", "path"],
+      "cluster": "ui",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "present_images",
+      "parameters": ["image_ids", "use_recent_images"],
+      "cluster": "media",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "propose_memory",
+      "parameters": [
+        "content",
+        "name",
+        "operation",
+        "rationale",
+        "replaces",
+        "scope",
+        "tier",
+        "title"
+      ],
+      "cluster": "memory",
+      "sideEffect": "write",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "read_file",
+      "parameters": [
+        "anchor",
+        "anchor_offset",
+        "anchor_regex",
+        "auto_follow_suggestion",
+        "include_symbols",
+        "limit",
+        "offset",
+        "path",
+        "query"
+      ],
+      "cluster": "read",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "read_mcp_resource",
+      "parameters": ["server", "uri"],
+      "cluster": "mcp",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mcp-bridge",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "read_session_excerpt",
+      "parameters": [
+        "end_message_index",
+        "scope",
+        "snapshot_message_count",
+        "snapshot_revision",
+        "source_session_id",
+        "start_message_index"
+      ],
+      "cluster": "session",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "recall_memory",
+      "parameters": ["limit", "minimum_score", "query", "scope"],
+      "cluster": "memory",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "rename_symbol",
+      "parameters": ["column", "line", "new_name", "path"],
+      "cluster": "language",
+      "sideEffect": "write",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "respond_to_background_question",
+      "parameters": ["answers", "notes", "request_id"],
+      "cluster": "background",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "foreground-control",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "schedule_fleet_workflow",
+      "parameters": ["eventType", "everyMinutes", "name", "workflow"],
+      "cluster": "background",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "background-control",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "search_files",
+      "parameters": [
+        "case_insensitive",
+        "context",
+        "context_after",
+        "context_before",
+        "file_pattern",
+        "max_results",
+        "multiline",
+        "offset",
+        "output_mode",
+        "path",
+        "regex",
+        "semantic"
+      ],
+      "cluster": "search",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "search_session_history",
+      "parameters": ["limit", "mode", "query", "role", "scope", "tool_name"],
+      "cluster": "session",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "send_feedback",
+      "parameters": [
+        "feedback",
+        "tool_name",
+        "tool_params",
+        "tool_result_summary"
+      ],
+      "cluster": "dev",
+      "sideEffect": "external",
+      "devOnly": true,
+      "availability": "dev-only",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "set_task_status",
+      "parameters": [
+        "completeTodos",
+        "continueLabel",
+        "continuePrompt",
+        "result",
+        "status",
+        "summary"
+      ],
+      "cluster": "session",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "session-control",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "show_notification",
+      "parameters": ["message", "type"],
+      "cluster": "ui",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "dormant",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "spawn_background_agent",
+      "parameters": [
+        "budget",
+        "expectedResult",
+        "forbiddenPaths",
+        "goalId",
+        "imageIds",
+        "message",
+        "mode",
+        "model",
+        "modelTier",
+        "ownedPaths",
+        "permissionProfile",
+        "provider",
+        "reviewScope",
+        "task",
+        "taskClass",
+        "useRecentImages"
+      ],
+      "cluster": "background",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "background-control",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "start_fleet_workflow",
+      "parameters": [
+        "budget",
+        "candidates",
+        "goalId",
+        "kind",
+        "message",
+        "task"
+      ],
+      "cluster": "background",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "background-control",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "steer_background_agent",
+      "parameters": ["message", "sessionId"],
+      "cluster": "background",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "background-control",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "switch_mode",
+      "parameters": ["mode", "reason"],
+      "cluster": "session",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "session-control",
+      "definitionSource": "adapter-definition"
+    },
+    {
+      "name": "todo_write",
+      "parameters": ["todos"],
+      "cluster": "session",
+      "sideEffect": "control",
+      "devOnly": false,
+      "availability": "session-control",
+      "definitionSource": "engine-inline"
+    },
+    {
+      "name": "triage_feedback",
+      "parameters": ["ids", "priority", "triaged"],
+      "cluster": "dev",
+      "sideEffect": "write",
+      "devOnly": true,
+      "availability": "dev-only",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "web_fetch",
+      "parameters": ["find", "max_length", "section", "start_line", "url"],
+      "cluster": "read",
+      "sideEffect": "external",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "web_search",
+      "parameters": [
+        "language",
+        "max_results",
+        "query",
+        "safe_search",
+        "time_range"
+      ],
+      "cluster": "search",
+      "sideEffect": "external",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
+      "name": "write_file",
+      "parameters": ["content", "path", "save_without_formatting"],
+      "cluster": "edit",
+      "sideEffect": "write",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    }
+  ],
+  "revision": "a74b59b7acd46fb38ec93c8d392e99a07a6d6f129abbecbde5f2e4e09ce7d332"
+}

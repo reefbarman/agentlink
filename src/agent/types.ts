@@ -60,6 +60,7 @@ export type AgentMessage = MessageParam & {
   diagnosticOnly?: boolean;
   uiHint?: {
     userMessage?: {
+      coordination?: import("@agentlink/protocol/chat-transcript").BackgroundCoordination;
       displayText?: string;
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
@@ -272,6 +273,7 @@ export type AgentEvent =
     }
   | {
       type: "user_interjection";
+      coordination?: import("@agentlink/protocol/chat-transcript").BackgroundCoordination;
       text: string;
       queueId: string;
       displayText?: string;

@@ -238,6 +238,15 @@ export interface AgentToolCallTracker<TTrackerContext = unknown> {
 }
 
 export interface AgentToolRuntime {
+  /** Host-owned observation hooks; must not affect execution or authorization. */
+  observeInternalTool?(
+    request: AgentToolExecutionRequest,
+    result: ToolResult | undefined,
+    durationMs: number,
+  ): void;
+  observeRequest?(
+    observation: import("./toolTelemetry.js").ToolRequestObservation,
+  ): void;
   listTools(request: AgentToolListRequest): CoreToolDefinition[];
   resolveToolCall?(request: AgentToolExecutionRequest): ResolvedAgentToolCall;
   executeTool(request: AgentToolExecutionRequest): Promise<ToolResult>;

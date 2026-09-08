@@ -1082,6 +1082,23 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   },
 ];
 
+/** Unfiltered definitions for the generated, value-free telemetry inventory. */
+export function getAgentToolInventoryDefinitions(): ToolDefinition[] {
+  return [
+    ...Object.entries(TOOL_SCHEMAS).map(([name, schema]) => ({
+      name,
+      description: TOOL_REGISTRY[name]?.description ?? name,
+      input_schema: cachedJsonSchemaFor(name, schema),
+    })),
+    ...MCP_META_TOOLS,
+    CALL_MCP_TOOL,
+    ASK_USER_TOOL,
+    getSetTaskStatusTool(undefined, true),
+    SWITCH_MODE_TOOL,
+    ...BG_AGENT_TOOLS,
+  ];
+}
+
 /**
  * Every static adapter-defined tool contract. Direct MCP target names are
  * intentionally excluded because connected catalogs make those names dynamic.
@@ -1182,6 +1199,10 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "execute_command",
   ]),
 };
+
+export function getAgentToolProfileNames(): string[] {
+  return Object.keys(TOOL_PROFILES);
+}
 
 // --- Public API ---
 
@@ -2365,10 +2386,106 @@ function executeNativeToolDiscovery(
   return jsonResult(result);
 }
 
+function observeToolInvocation(
+  ctx: ToolDispatchContext,
+  request: AgentToolExecutionRequest,
+  result: ToolResult | undefined,
+  durationMs: number,
+  unresolved = false,
+): void {
+  try {
+    const invocation = {
+      route: unresolved
+        ? ("unresolved" as const)
+        : request.context.providerToolName === "call_native_tool"
+          ? ("native_bridge" as const)
+          : request.name === "call_mcp_tool"
+            ? ("mcp_bridge" as const)
+            : ("direct" as const),
+      nesting: request.context.parentCallId
+        ? ("compose_child" as const)
+        : ("top_level" as const),
+      profile: request.context.toolProfile ?? "default",
+      background: ctx.isBackgroundSession === true,
+    };
+    const outcome = result ? getToolUsageOutcomeFromResult(result) : "error";
+    const trace = result?.uiMeta?.composeTrace;
+    if (request.name === "compose" && trace) {
+      ctx.toolUsageTelemetry?.recordCompose({
+        source: "agent",
+        mode: request.context.mode,
+        projectId: ctx.projectScope?.projectId,
+        invocation,
+        outcome,
+        durationMs,
+        childCount: trace.totalChildren,
+        completedChildCount: trace.completedChildren,
+        succeededChildCount: trace.succeededChildren ?? 0,
+        failedChildCount: trace.failedChildren ?? 0,
+        cancelledChildCount: trace.cancelledChildren ?? 0,
+        toolAllBatchCount: trace.toolAllBatchCount ?? 0,
+        toolAllSettledBatchCount: trace.toolAllSettledBatchCount ?? 0,
+        bridgedBytes: trace.bridgedBytes ?? 0,
+        runtimeReturnedBytes: trace.runtimeReturnedBytes ?? 0,
+        errorKind: trace.errorKind,
+        errorCode: trace.errorCode,
+        queueWaitBucket: trace.queueWaitBucket,
+        artifactRetention: trace.artifactRetention,
+        outputSpilled: trace.outputSpilled,
+      });
+    } else if (
+      request.name === "compose" &&
+      request.context.composeEnabled !== true
+    ) {
+      ctx.toolUsageTelemetry?.recordCompose({
+        source: "agent",
+        mode: request.context.mode,
+        projectId: ctx.projectScope?.projectId,
+        invocation,
+        outcome: "rejected",
+        durationMs,
+        childCount: 0,
+        errorKind: "policy",
+        errorCode: "tool_not_available",
+      });
+    } else {
+      ctx.toolUsageTelemetry?.record({
+        toolName: request.name,
+        params: request.name === "compose" ? {} : request.input,
+        source: "agent",
+        mode: request.context.mode,
+        projectId: ctx.projectScope?.projectId,
+        invocation,
+        outcome,
+        durationMs,
+        metrics:
+          result && request.name === "execute_command"
+            ? getExecuteCommandUsageMetrics(result)
+            : result &&
+                (request.name === "write_file" || request.name === "apply_diff")
+              ? getWriteToolUsageMetrics(result)
+              : undefined,
+      });
+    }
+  } catch {
+    // Diagnostics must never change tool results, cancellation, or authorization.
+  }
+}
+
 export function createAgentToolRuntime(
   ctx: ToolDispatchContext,
 ): AgentToolRuntime {
   return {
+    observeInternalTool(request, result, durationMs) {
+      observeToolInvocation(ctx, request, result, durationMs);
+    },
+    observeRequest(observation) {
+      try {
+        ctx.toolUsageTelemetry?.recordRequest(observation);
+      } catch {
+        // Telemetry is best-effort and cannot fail a provider request.
+      }
+    },
     listTools(request) {
       return getAgentTools(
         request.mode as AgentMode | undefined,
@@ -2402,22 +2519,13 @@ export function createAgentToolRuntime(
         },
       };
       const providerToolName = request.context.providerToolName ?? request.name;
-      try {
+      let observedResult: ToolResult | undefined;
+      const executeObserved = async (): Promise<ToolResult> => {
         if (resolved.resolutionError) return resolved.resolutionError;
         if (
           request.name === "compose" &&
           request.context.composeEnabled !== true
         ) {
-          ctx.toolUsageTelemetry?.recordCompose({
-            source: "agent",
-            mode: request.context.mode,
-            projectId: ctx.projectScope?.projectId,
-            outcome: "rejected",
-            durationMs: Date.now() - startedAt,
-            childCount: 0,
-            errorKind: "policy",
-            errorCode: "tool_not_available",
-          });
           return errorResult(
             "Tool 'compose' was not enabled for this provider request",
             {
@@ -2632,67 +2740,19 @@ export function createAgentToolRuntime(
             };
           }
         }
-        const composeTrace = result.uiMeta?.composeTrace;
-        const executeCommandMetrics =
-          request.name === "execute_command"
-            ? getExecuteCommandUsageMetrics(result)
-            : undefined;
-        const writeToolMetrics =
-          request.name === "write_file" || request.name === "apply_diff"
-            ? getWriteToolUsageMetrics(result)
-            : undefined;
-        if (request.name === "compose" && composeTrace) {
-          ctx.toolUsageTelemetry?.recordCompose({
-            source: "agent",
-            mode: request.context.mode,
-            projectId: ctx.projectScope?.projectId,
-            outcome: getToolUsageOutcomeFromResult(result),
-            durationMs: Date.now() - startedAt,
-            childCount: composeTrace.totalChildren,
-            completedChildCount: composeTrace.completedChildren,
-            succeededChildCount: composeTrace.succeededChildren ?? 0,
-            failedChildCount: composeTrace.failedChildren ?? 0,
-            cancelledChildCount: composeTrace.cancelledChildren ?? 0,
-            toolAllBatchCount: composeTrace.toolAllBatchCount ?? 0,
-            toolAllSettledBatchCount:
-              composeTrace.toolAllSettledBatchCount ?? 0,
-            bridgedBytes: composeTrace.bridgedBytes ?? 0,
-            runtimeReturnedBytes: composeTrace.runtimeReturnedBytes ?? 0,
-            errorKind: composeTrace.errorKind,
-            errorCode: composeTrace.errorCode,
-            queueWaitBucket: composeTrace.queueWaitBucket,
-            artifactRetention: composeTrace.artifactRetention,
-            outputSpilled: composeTrace.outputSpilled,
-          });
-        } else {
-          ctx.toolUsageTelemetry?.record({
-            toolName: request.name,
-            params: request.name === "compose" ? {} : request.input,
-            source: "agent",
-            mode: request.context.mode,
-            projectId: ctx.projectScope?.projectId,
-            outcome: getToolUsageOutcomeFromResult(result),
-            durationMs: Date.now() - startedAt,
-            ...(executeCommandMetrics &&
-            Object.keys(executeCommandMetrics).length
-              ? { metrics: executeCommandMetrics }
-              : writeToolMetrics && Object.keys(writeToolMetrics).length
-                ? { metrics: writeToolMetrics }
-                : {}),
-          });
-        }
         return result;
-      } catch (err) {
-        ctx.toolUsageTelemetry?.record({
-          toolName: request.name,
-          params: request.name === "compose" ? {} : request.input,
-          source: "agent",
-          mode: request.context.mode,
-          projectId: ctx.projectScope?.projectId,
-          outcome: "error",
-          durationMs: Date.now() - startedAt,
-        });
-        throw err;
+      };
+      try {
+        observedResult = await executeObserved();
+        return observedResult;
+      } finally {
+        observeToolInvocation(
+          ctx,
+          request,
+          observedResult,
+          Date.now() - startedAt,
+          Boolean(resolved.resolutionError),
+        );
       }
     },
     isParallelSafe(toolName, input) {

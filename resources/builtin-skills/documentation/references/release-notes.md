@@ -2,9 +2,21 @@
 
 ## Unreleased
 
+- Shared explicit mode, per-mode model/thinking, and per-model compaction preferences across VS Code windows and workspaces. Fresh chats use the latest shared defaults, while active and restored sessions retain their own settings. Automatic switches and fallbacks no longer overwrite user preferences.
+
+- Added direct memory creation and editing to the shared `/memory` manager in VS Code and Browser Ask Agent, with revision-safe saves, retained drafts on rejection, expandable source evidence and revision history, keyboard search, reset filters, and clearer scope-wide clear confirmation. Automatic capture and recall are unchanged.
+
+- Added generated canonical telemetry inventory with drift checks, bounded invocation groups for internal/bridged/nested tool accounting, and separate native engine request-exposure observations. Reports preserve legacy coverage gaps and distinguish eligible completed-request use from raw calls; tool guidance and permissions are unchanged.
+
+- Improved local telemetry reports with all recorded outcomes, explicit error rates, process-level error concentration, and missing-exposure/inventory caveats. Compose reports now distinguish repeated token-sends from retained context, calculate opportunity costs from matching turns, and avoid unsupported savings claims; background reports expose missing steering observations and label handoff size as payload size.
+
+- Background-to-foreground questions and approval coordination now render as paired **Agent communication** cards in VS Code and browser workspace chat, with task labels, directional requests/replies, expandable details, and accepted/failed reply states instead of misleading human-message bubbles.
+
+- Fixed native background reviews stopping without findings when the provider hits its output-token limit. They now receive up to three finalization-only attempts to return a concise structured result or explicitly report an unfinished review as blocked; truncated tool calls are never executed and receive matching skipped results in history.
+
 - Added a **+** button to each VS Code workspace tab group in the browser remote and desktop app. It creates and remotely selects a new chat tab without replacing existing chats or changing local VS Code focus.
 
-- Fixed terminal signal deaths appearing successful and carriage-return cleanup erasing retained text. Native/sandbox command results now include a `command_id`; pass it to `get_terminal_output` to retrieve the same retained command after terminal reuse without reading or interrupting a newer command.
+- Fixed terminal signal deaths appearing successful, carriage-return cleanup erasing retained text, and Native Agent zsh prompt padding overwriting an unterminated command-output line. Native/sandbox command results now include a `command_id`; pass it to `get_terminal_output` to retrieve the same retained command after terminal reuse without reading or interrupting a newer command.
 
 - Made compose failures easier to read in VS Code and browser chat: aligned child rows, separate success/failure/cancellation counts, readable scripts, and collapsed technical errors. Agent guidance now prefers settled batches for independent reads, preserving useful results when a file is missing. Fixed false policy rejections caused by JavaScript-like search text and final-return serialization failing on optional undefined fields; explicit fail-fast behavior and strict child validation remain unchanged.
 

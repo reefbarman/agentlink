@@ -293,6 +293,47 @@ const ddgMcpTools: ToolDefinition[] = [
 ];
 
 describe("tool usage telemetry project attribution", () => {
+  it("records early rejections and nested invocations once and isolates recorder failures", async () => {
+    const record = vi.fn();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      toolUsageTelemetry: { record } as any,
+    });
+    await runtime.executeTool({
+      name: "read_file",
+      input: { path: "README.md" },
+      context: { sessionId: "test", availableToolNames: new Set() },
+    });
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record.mock.calls[0][0]).toMatchObject({
+      outcome: "error",
+      invocation: { nesting: "top_level" },
+    });
+    await runtime.executeTool({
+      name: "read_file",
+      input: { path: "README.md" },
+      context: {
+        sessionId: "test",
+        parentCallId: "compose-1",
+        toolProfile: "review",
+      },
+    });
+    expect(record).toHaveBeenCalledTimes(2);
+    expect(record.mock.calls[1][0]).toMatchObject({
+      invocation: { nesting: "compose_child", profile: "review" },
+    });
+    record.mockImplementation(() => {
+      throw new Error("recorder failed");
+    });
+    await expect(
+      runtime.executeTool({
+        name: "read_file",
+        input: { path: "README.md" },
+        context: { sessionId: "test" },
+      }),
+    ).resolves.toBeDefined();
+  });
+
   it("records only the request-bound project ID", async () => {
     const record = vi.fn();
     const runtime = createAgentToolRuntime({

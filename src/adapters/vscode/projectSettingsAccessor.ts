@@ -20,19 +20,25 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
   "recentApprovalTtl",
   "commandAutoApproveTier",
   "worktreeDirectorySuffix",
-  "modeModelPreferences",
-  "modeReasoningEffortPreferences",
+
   "modelPromptProfiles",
   "agentMaxTokens",
   "thinkingBudget",
   "autoCondense",
-  "modelCondenseThresholds",
+
   "writeRules",
-  "defaultMode",
+
   "codexStatefulResponses",
   "codexStoreResponses",
   "codexProMode",
   "skills.disabledIds",
+] as const;
+
+export const APPLICATION_SCOPED_AGENTLINK_SETTINGS = [
+  "modeModelPreferences",
+  "modeReasoningEffortPreferences",
+  "modelCondenseThresholds",
+  "defaultMode",
 ] as const;
 
 export const MACHINE_SCOPED_AGENTLINK_SETTINGS = [

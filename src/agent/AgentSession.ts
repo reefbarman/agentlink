@@ -101,6 +101,7 @@ function countStringUserMessages(messages: readonly AgentMessage[]): number {
 }
 
 export interface PendingInterjection {
+  coordination?: import("@agentlink/protocol/chat-transcript").BackgroundCoordination;
   text: string;
   queueId: string;
   messageId?: string;
@@ -134,6 +135,8 @@ export class AgentSession {
   maxTokens: number;
   thinkingBudget: number;
   reasoningEffort: ReasoningEffort;
+  /** Session preference before the current model's capability clamp. */
+  desiredReasoningEffort: ReasoningEffort;
   autoCondense: boolean;
   autoCondenseThreshold: number;
   codexStatefulResponses: boolean;
@@ -328,6 +331,7 @@ export class AgentSession {
     this.maxTokens = opts.config.maxTokens;
     this.thinkingBudget = opts.config.thinkingBudget;
     this.reasoningEffort = "high";
+    this.desiredReasoningEffort = "high";
     this.autoCondense = opts.config.autoCondense ?? true;
     this.autoCondenseThreshold = opts.config.autoCondenseThreshold ?? 0.9;
     this.codexStatefulResponses = opts.config.codexStatefulResponses ?? true;
@@ -824,6 +828,7 @@ export class AgentSession {
   addUserMessage(
     text: string,
     opts?: {
+      coordination?: import("@agentlink/protocol/chat-transcript").BackgroundCoordination;
       displayText?: string;
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
@@ -853,6 +858,7 @@ export class AgentSession {
         opts.slashCommandLabel ||
         opts.origin ||
         opts.hidden ||
+        opts.coordination ||
         opts.handoff)
         ? {
             uiHint: {
@@ -860,9 +866,13 @@ export class AgentSession {
               opts.isSlashCommand ||
               opts.slashCommandLabel ||
               opts.origin ||
-              opts.hidden
+              opts.hidden ||
+              opts.coordination
                 ? {
                     userMessage: {
+                      ...(opts.coordination
+                        ? { coordination: opts.coordination }
+                        : {}),
                       ...(opts.displayText
                         ? { displayText: opts.displayText }
                         : {}),
@@ -1211,6 +1221,8 @@ export class AgentSession {
     lastInputTokens?: number;
     lastCacheReadTokens?: number;
     reasoningEffort?: ReasoningEffort;
+    desiredReasoningEffort?: ReasoningEffort;
+    autoCondenseThreshold?: number;
     loadedSkills?: string[];
     activeSkillState?: PersistedActiveSkillState;
     runState?: PersistedSessionRunState;
@@ -1231,6 +1243,12 @@ export class AgentSession {
     this.lastInputTokens = data.lastInputTokens ?? 0;
     this.lastCacheReadTokens = data.lastCacheReadTokens ?? 0;
     this.reasoningEffort = data.reasoningEffort ?? this.reasoningEffort;
+    this.desiredReasoningEffort =
+      data.desiredReasoningEffort ??
+      data.reasoningEffort ??
+      this.desiredReasoningEffort;
+    this.autoCondenseThreshold =
+      data.autoCondenseThreshold ?? this.autoCondenseThreshold;
     // Leave status at its constructed idle value. A restored runState marks the
     // session resumable without pretending the old in-memory run still exists.
     this.runState = data.runState;
@@ -1557,8 +1575,10 @@ export class AgentSession {
     attachments?: string[],
     images?: Array<{ name: string; mimeType: string; base64: string }>,
     documents?: Array<{ name: string; mimeType: string; base64: string }>,
+    coordination?: PendingInterjection["coordination"],
   ): boolean {
     const entry: PendingInterjection = {
+      coordination,
       text,
       queueId,
       messageId,
