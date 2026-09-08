@@ -1,0 +1,192 @@
+src/agent/toolAdapter.test.ts
+  h_9630b74bdac540 296-336
+src/shared/toolRegistry.test.ts
+  h_9630b74bdac540 1-9,16-41
+src/agent/webview/styles/chat.css
+  h_9630b74bdac540 873,902,985,987,991-1041,1045,2575-2576,4483-4485,4487-4488,4490-4492,4495-4504
+src/terminal/hostShellBootstrap.test.ts
+  h_9630b74bdac540 186-218,560-604
+src/agent/webview/types.ts
+  h_9630b74bdac540 486,688
+scripts/report-session-outcomes.mjs
+  h_9630b74bdac540 206,267-270,307-311,313,319,333,338-339,344-346,349-351,354-365,380-388,640,923,929-953,955,960,969,1018-1019,1171-1174,1176,1192
+src/agent/SessionStore.ts
+  h_9630b74bdac540 175-176,758-759,811-812,1358-1359,1408-1409
+src/terminal/shellIntegration.ts
+  h_9630b74bdac540 15,40-44,101-103,293-302,304-305,309-311,393,397
+src/extension.ts
+  h_9630b74bdac540 83,185,916,1338,3078
+src/agent/providers/codex/CodexProvider.ts
+  h_9630b74bdac540 19,264
+resources/builtin-skills/documentation/references/tools.md
+  h_9630b74bdac540 15-18,82,84,86
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_9630b74bdac540 80,122,126,3710,3712-3719,3721,3724-3726,3729-3733,3735,3738,7941,7955-7980
+scripts/report-session-outcomes.test.mjs
+  h_9630b74bdac540 89-151
+src/shared/chatProjection.coordination.test.ts
+  h_9630b74bdac540 1-101
+src/core/tools/toolTelemetry.ts
+  h_9630b74bdac540 1-22
+src/telemetry/ToolUsageTelemetry.test.ts
+  h_9630b74bdac540 7,9-11,13,15-16,37-68,391-755,758-881
+src/agent/types.ts
+  h_9630b74bdac540 63,276
+scripts/generate-tool-inventory.mjs
+  h_9630b74bdac540 1-29
+package.json
+  h_9630b74bdac540 5,965,979,1037,1057,1067,1101,1117-1118,1126
+resources/builtin-skills/documentation/references/customization.md
+  h_9630b74bdac540 77-80
+src/agent/sharedSessionPreferences.ts
+  h_9630b74bdac540 1-38
+src/agent/modeReasoningEffortPreferences.ts
+  h_9630b74bdac540 2,19-21
+src/shared/toolRegistry.ts
+  h_9630b74bdac540 35,56,66,71,86,91,252
+src/agent/AgentSessionManager.test.ts
+  h_9630b74bdac540 64,101-109,613,615,680-682,686,690-694,1892,2013-2118,2374-2379,2394,2406-2407,2416-2418,2425-2426,2431-2433,2460-2461,2468-2473,2477-2478,2482-2485,2493,3468-3479
+src/agent/webview/components/ToolCallBlock.tsx
+  h_9630b74bdac540 734,1024-1025
+src/shared/toolSchemas.ts
+  h_9630b74bdac540 44-51,217,297,312,330,364,389,1296
+src/agent/webview/components/MessageBubble.tsx
+  h_9630b74bdac540 182-186
+packages/protocol/src/chatTranscript.ts
+  h_9630b74bdac540 109-123,133-134
+src/agent/webview/App.chatWorkspace.test.tsx
+  h_9630b74bdac540 482-490
+src/terminal/prepareHostShellBootstrap.ts
+  h_9630b74bdac540 28,30,58-60,67-77
+src/agent/webview/components/ToolCallBlock.test.ts
+  h_9630b74bdac540 272,274-275
+src/adapters/vscode/projectSettingsAccessor.ts
+  h_9630b74bdac540 23,28,30,37-41
+src/agent/webview/components/TranscriptMessageList.test.ts
+  h_9630b74bdac540 12-138
+CHANGELOG.md
+  h_9630b74bdac540 5-16,19
+src/agent/webview/components/TranscriptMessageList.tsx
+  h_9630b74bdac540 10-14,79-80,105-108,156,378-413,421-422,432-436,458-460,641-663,876,878-883,963-964,1037
+resources/builtin-skills/documentation/references/capabilities.md
+  h_9630b74bdac540 91-92,109,127-130
+src/agent/webview/components/background-coordination.css
+  h_9630b74bdac540 1-147
+src/agent/webview/components/BackgroundCoordinationCard.tsx
+  h_9630b74bdac540 1-109
+src/agent/AgentSessionManager.background.test.ts
+  h_9630b74bdac540 57,4885-4895,4910,4993-5005,5216-5228,5235
+packages/core/src/nativeWebTools.ts
+  h_9630b74bdac540 89-94,118-121,161,365-368
+src/agent/ChatViewProvider.test.ts
+  h_9630b74bdac540 1721,1724-1772,1814,2893,4742-4798,6023-6070,9269,9453,9476,9551-9552,9566,10091-10118,10121,10151,10164
+src/agent/webview/components/ModelChangeDivider.tsx
+  h_9630b74bdac540 111-114,117-128
+src/shared/ui/MemoryPanel.tsx
+  h_9630b74bdac540 8,12,68-77,79-149,192-193,199-204,211,213-217,222-223,225-229,237,247,264,279-281,283,285-290,292,294-301,303,305,308-387,393-395,405-406,422-426,438-441,444-445,447-485,488-496,499,501,515,517,543,546,562,569,578,589-590,593,603,612,647-650
+src/agent/webview/App.memoryPanel.test.tsx
+  h_9630b74bdac540 12-13,171-239,241
+src/agent/modeModelPreferences.ts
+  h_9630b74bdac540 4,13
+src/shared/ui/MemoryPanel.test.tsx
+  h_9630b74bdac540 106-107,200-201,263-277,279-388
+src/agent/modelCondenseThresholds.ts
+  h_9630b74bdac540 3-4,104
+src/agent/SessionStore.test.ts
+  h_9630b74bdac540 167-209
+src/browser-gateway/webview/components/BrowserBackgroundTranscript.test.tsx
+  h_9630b74bdac540 1-109
+src/agent/ChatViewProvider.ts
+  h_9630b74bdac540 31-37,250,899,919,2131,4238,4419,4499,4523-4526,4552,4807,4817,4840,4853,5965,7416,7667-7693,7779-7781,7848,8074-8078,8092-8096,8372,8410,8440-8441,8452,8481,10389,10823,10899,12654,12687
+src/agent/toolInventory.test.ts
+  h_9630b74bdac540 1-113
+scripts/report-tool-usage-telemetry.mjs
+  h_9630b74bdac540 9,46-50,70,243,257-304,330-366,380-406,409-416,464-478,528-529,531-545,548-553,920-934,1037-1108,1121-1122,1126,1131-1134,1143-1171,1173-1175,1184,1336-1338,1511-1512,1531-1532,1599-1601
+src/agent/systemPrompt.ts
+  h_9630b74bdac540 81-86,119-120,253,286,288,298-299,302,314,316,318-319
+src/terminal/prepareHostShellBootstrap.test.ts
+  h_9630b74bdac540 2-5,92-112
+src/agent/AgentSessionManager.ts
+  h_9630b74bdac540 352,1389-1401,4387,4630,4636,4669,4780,4790,5020,5486-5487,5729-5730,6056,6427-6430,6607,6797,6896-6899,6901,6903-6904,6906,7000-7003,7020,9009-9010,9194-9195,9202,9971,10119,10136-10148,10179,10200-10205,10223-10224,10419-10424,10613,11038
+src/agent/persistenceContracts.ts
+  h_9630b74bdac540 272-273
+src/terminal/hostTerminalBlocks.ts
+  h_9630b74bdac540 208
+src/core/model/providers/codex/standaloneWeb.test.ts
+  h_9630b74bdac540 162-163,175,178-263
+src/shared/backgroundCoordination.test.ts
+  h_9630b74bdac540 1-195
+src/shared/memoryMutationError.ts
+  h_9630b74bdac540 1-18
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  h_9630b74bdac540 5421,5437-5466,5471-5472,8319-8324,8333-8336,8346-8348
+resources/builtin-skills/documentation/references/settings.md
+  h_9630b74bdac540 9-16
+scripts/tool-inventory.mjs
+  h_9630b74bdac540 1-53
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_9630b74bdac540 609-610,726,728-729,740-742,747,1588-1589,2242-2249
+src/terminal/native/NativeAgentRuntimeProvider.test.ts
+  h_9630b74bdac540 191-228
+src/core/tools/types.ts
+  h_9630b74bdac540 241-249
+src/telemetry/ToolUsageTelemetry.ts
+  h_9630b74bdac540 4-9,13-17,106,130,154-181,184-201,209-232,249-514,551-554,578-579,582,585-586,588-594,599-604,609-614,634,681-908,912-913,925-928,930,932-933,953,956-959,962-965,967,974-1004,1008,1016-1024,1026-1073,1086-1092,1103,1107,1110,1113,1116,1146
+src/agent/webview/components/MessageBubble.test.tsx
+  h_9630b74bdac540 1284-1332,1346-1351
+src/core/model/providers/codex/standaloneWeb.ts
+  h_9630b74bdac540 24,47,69-72,80-83,90,92-97,99,110-133,135-145,174,186,188,194-195,200,244-246,282,284,319,370-374,474-561,563-578
+src/agent/AgentEngine.ts
+  h_9630b74bdac540 1459,1470,1555-1558,1597,1733-1745,1764-1769,1925-1926,2103-2127,2236-2254,2256-2263,2266-2268,2270-2278,2719-2720,2732-2733,2737-2759,2761-2762,2766-2771,2780-2782,2788-2793,2795-2796,2798,2802-2804,2808-2813,2815-2817,2819,2822-2823,3139,3150
+src/projectScopeFirstRoot.contract.test.ts
+  h_9630b74bdac540 136-137
+src/agent/systemPrompt.test.ts
+  h_9630b74bdac540 192-239
+src/agent/sharedSessionPreferences.test.ts
+  h_9630b74bdac540 1-82
+src/agent/providers/codex/CodexProvider.test.ts
+  h_9630b74bdac540 8-16,18-25,71-116
+src/shared/backgroundCoordination.ts
+  h_9630b74bdac540 1-98
+src/terminal/shellIntegration.test.ts
+  h_9630b74bdac540 227-246
+src/agent/toolAdapter.ts
+  h_9630b74bdac540 1085-1101,1203-1206,2389-2413,2418-2439,2444-2446,2458-2474,2479-2488,2522-2523,2744-2750,2752,2754-2755
+src/shared/chatProjection.ts
+  h_9630b74bdac540 732,987,1045,2819,2826
+src/terminal/HostTerminalRuntime.ts
+  h_9630b74bdac540 139
+.agentlink/tasks.json
+  h_9630b74bdac540 16-18
+src/browser-gateway/webview/styles.css
+  h_9630b74bdac540 937,947
+src/adapters/vscode/projectSettingsAccessor.test.ts
+  h_9630b74bdac540 2,40,54,101,161-163
+src/browser-gateway/BrowserGatewayService.test.ts
+  h_9630b74bdac540 2248,2259-2260,2262-2265,2269-2272,2302-2305,2323-2326,2328
+src/agent/AgentEngine.test.ts
+  h_9630b74bdac540 358-436,1615-1622,1626-1634,1653-1660,2190-2358
+src/agent/AgentSession.ts
+  h_9630b74bdac540 104,138-139,334,831,861,869-870,873-875,1224-1225,1246-1251,1578,1581
+src/terminal/hostShellBootstrap.ts
+  h_9630b74bdac540 1-4,51-52,193-196,216-221
+scripts/report-tool-usage-telemetry.test.mjs
+  h_9630b74bdac540 78-201,333
+src/terminal/native/NativeAgentRuntimeProvider.ts
+  h_9630b74bdac540 134,179-180,195-199,432-434
+src/browser-gateway/webview/components/BrowserBackgroundTranscript.tsx
+  h_9630b74bdac540 1-68
+src/agent/webview/App.tsx
+  h_9630b74bdac540 506-515,687-695,1496-1510,1932,2232,3054-3057,3067-3071,3491-3494,4308-4338
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "1b5dd676775c89290a015ff7f2d4a8837f7f6a26",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
