@@ -1,0 +1,152 @@
+src/corePackageBoundary.test.ts
+  h_9630b74bdac540 39-50,61,72,182-187
+src/agent/AgentSessionManager.background.test.ts
+  h_9630b74bdac540 3874,3885-3937,6137-6255,6692-6695,7696-7702
+packages/core/src/openAiCompatible/completionFacade.ts
+  h_9630b74bdac540 32,65-67,74-76,84-88,138-139,211,249,272,282,301,365,369-370,372,381,434-435
+src/tools/writeFile.test.ts
+  h_9630b74bdac540 108-240
+fixtures/core-sdk-consumer/typed-generation.mjs
+  h_9630b74bdac540 1-191
+src/agent/systemPrompt.test.ts
+  h_9630b74bdac540 676,687-691
+src/agent/AgentSession.ts
+  h_9630b74bdac540 226,450,623,681,753
+src/shared/toolRegistry.ts
+  h_9630b74bdac540 116
+src/agent/AgentEngine.ts
+  h_9630b74bdac540 6,1245-1248,1339,1599-1600,2260,2282-2284,2317-2319,2376,2389,2502,2508,2545,3068-3071
+CHANGELOG.md
+  h_9630b74bdac540 5-9
+packages/core/src/codex/completionFacade.ts
+  h_9630b74bdac540 6,50,67,90,124,156,164-165,178,193-197
+packages/core/src/client.test.ts
+  h_9630b74bdac540 1-680
+packages/core/src/codex/responsesStream.ts
+  h_9630b74bdac540 53,59-60,70-75,83,94-95,97,144-154,221-266
+src/shared/toolSchemas.ts
+  h_9630b74bdac540 572-577
+src/agent/AgentSession.test.ts
+  h_9630b74bdac540 1847-1866
+src/util/paths.ts
+  h_9630b74bdac540 2,106-117
+fixtures/core-sdk-consumer/consumer-contract.ts
+  h_9630b74bdac540 2,11-14,19,48-103
+src/agent/backgroundParity.contract.test.ts
+  h_9630b74bdac540 54-57,59-60
+packages/core/src/codex/models.ts
+  h_9630b74bdac540 120,486,498
+packages/core/src/turnContracts.test.ts
+  h_9630b74bdac540 97,99-101
+packages/core/src/codex/translation.test.ts
+  h_9630b74bdac540 104-151
+resources/builtin-skills/documentation/references/capabilities.md
+  h_9630b74bdac540 78
+packages/core/src/openAiCompatible/backend.test.ts
+  h_9630b74bdac540 259-272,279
+packages/core/src/turnContracts.ts
+  h_9630b74bdac540 7,10-11,120-128,133-138
+packages/core/src/client.ts
+  h_9630b74bdac540 1-1870
+packages/core/src/codex/streamParser.test.ts
+  h_9630b74bdac540 154-252
+packages/core/src/codex/providerFactory.ts
+  h_9630b74bdac540 1-626
+packages/core/build-cjs.mjs
+  h_9630b74bdac540 8,21
+src/agent/AgentSessionManager.ts
+  h_9630b74bdac540 10779-10781,12294-12295,12663-12664,12701-12709,12711,12713-12714,12737-12738,12751-12755,12764-12770,12789-12790,12794-12795,12798-12804,12827-12828,12834-12843,12867-12869,12889-12893,12897
+src/agent/toolAdapter.test.ts
+  h_9630b74bdac540 445-534,1750
+packages/core/src/openAiCompatible/providerFactory.ts
+  h_9630b74bdac540 1-187
+fixtures/core-sdk-consumer/README.md
+  h_9630b74bdac540 23-24,50
+src/tools/generateImage.ts
+  h_9630b74bdac540 13-14,33,182,309,329,459-460,477,515,548,577,617
+packages/core/src/index.ts
+  h_9630b74bdac540 3,16
+packages/core/src/openAiCompatible/types.ts
+  h_9630b74bdac540 38,104-112,190-191
+packages/core/src/codex/providerFactory.test.ts
+  h_9630b74bdac540 1-329
+packages/core/src/openAiResponses.ts
+  h_9630b74bdac540 1-8
+fixtures/core-sdk-consumer/responses-backends.mjs
+  h_9630b74bdac540 1-146
+src/agent/toolPermissions.ts
+  h_9630b74bdac540 71-72
+packages/core/src/openAiCompatible/translation.ts
+  h_9630b74bdac540 4,37-39,57-73
+resources/builtin-skills/documentation/references/tools.md
+  h_9630b74bdac540 44,48-54,83
+packages/core/src/modelRuntime.ts
+  h_9630b74bdac540 167-180,219-243,246-254,264-265,267-268,316-317,351,370,387,407
+packages/core/src/openAiCompatible/index.ts
+  h_9630b74bdac540 6
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_9630b74bdac540 153,155-156,203,6159,6161,6164,6173,6193-6209,6259,6261,6275,6277-6280,6394,6396,6409,6414-6418
+src/agent/systemPrompt.ts
+  h_9630b74bdac540 644,667
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_9630b74bdac540 1058,1063,1074,1589,1893
+packages/core/README.md
+  h_9630b74bdac540 49-51,57-58,67-142,201
+packages/core/src/codex.ts
+  h_9630b74bdac540 7-14
+packages/core/src/openAiCompatible/backend.ts
+  h_9630b74bdac540 28-32,44,58-62,65,177,183,192,202-224,233-236,238
+scripts/run-core-sdk-consumer-gate.mjs
+  h_9630b74bdac540 350,428-429,437-438,445-446,461-486,530-531
+packages/core/src/turnKernel.ts
+  h_9630b74bdac540 23-26,250,467,589-598,750-752,754-757,761,766,1015-1017,1045-1047,1546-1548,1607-1609,1620-1622,1674-1679,1684,1689-1698,1703-1705,1707-1715,1727-1730
+src/browser-gateway/helper/askAgentModelClient.ts
+  h_9630b74bdac540 229-234,237-248,462
+packages/core/src/codex/streamParser.ts
+  h_9630b74bdac540 2-7,26-28,76-87,99,120,132,134,198,345-346,349-362,450-467,471,491,534-539,543,590-591,593,595-601
+src/agent/modes.test.ts
+  h_9630b74bdac540 4-5,7,11-22
+src/agent/toolAdapter.ts
+  h_9630b74bdac540 227,2611-2628,2631,3710-3727
+packages/core/CHANGELOG.md
+  h_9630b74bdac540 5
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_9630b74bdac540 6676,6681,6686,6692-6699,6729-6730,6749,6765-6773,6775-6784,6788-6801
+packages/core/src/codex/translation.ts
+  h_9630b74bdac540 5,436,458,485,496-500,548,571,590,592-606
+src/tools/writeFile.ts
+  h_9630b74bdac540 1-7,73-87
+src/util/paths.test.ts
+  h_9630b74bdac540 117-149
+resources/builtin-skills/documentation/references/embedding-agentlink.md
+  h_9630b74bdac540 8,15,17,19-82,125
+packages/core/package.json
+  h_9630b74bdac540 54-65,210-221
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_9630b74bdac540 459-461,476-478,493-495,510-512,527-529,538-540,549-551,560-562,570-572,597-600,638,640-642
+packages/core/src/openAiCompatible/streamParser.ts
+  h_9630b74bdac540 1,87-96,116,163,213,339,422,424-426,725-738,740-741,743-758
+src/agent/AgentEngine.test.ts
+  h_9630b74bdac540 2191-2194,2196-2197,2200-2201,2205-2206,2240,2252,2299-2307,2379-2468
+packages/core/src/openAiCompatible/config.ts
+  h_9630b74bdac540 81,97,121,217,303-307,394,490-503,602
+src/browser-gateway/helper/askAgentModelClient.test.ts
+  h_9630b74bdac540 194-207,750-757
+src/tools/generateImage.test.ts
+  h_9630b74bdac540 67,102-103,128,157,181,203,221-289,563,568
+src/core/model/providers/codex/imageGeneration.ts
+  h_9630b74bdac540 12-19,101-115,128,159,525,535,563,588,610,620,632
+packages/core/watch.mjs
+  h_9630b74bdac540 33,44,73,84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "11508c32da1821f9e40475ea60a69af57413eead",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
