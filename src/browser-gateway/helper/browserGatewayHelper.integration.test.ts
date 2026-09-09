@@ -6673,19 +6673,31 @@ describe("BrowserGatewayHelper proxy routing", () => {
       "utf-8",
     );
 
+    let generationCallCount = 0;
     const modelClient = makeAskAgentToolLoopClient(async ({ toolMessages }) => {
       if (toolMessages?.length) {
         return { text: "Image generated.", toolCalls: [] };
       }
+      generationCallCount += 1;
       return {
         text: "Generating image.",
         toolCalls: [
           {
-            id: "image-call-1",
+            id: `image-call-${generationCallCount}`,
             name: "call_native_tool",
             input: {
               name: "generate_image",
-              input: { prompt: "Create a tiny test avatar", count: 1 },
+              input: {
+                prompt:
+                  generationCallCount === 1
+                    ? "Create a tiny test avatar"
+                    : "Polish the selected test avatar",
+                count: 1,
+                image_model: "gpt-image-2.5-sunburst",
+                ...(generationCallCount === 2
+                  ? { reference_image_ids: ["image_1"] }
+                  : {}),
+              },
             },
           },
         ],
@@ -6714,6 +6726,9 @@ describe("BrowserGatewayHelper proxy routing", () => {
         /^ask-agent-generate-image-/,
       );
       expect(body.snapshot.ui.approval?.detail).toContain(
+        "Image model: gpt-image-2.5-sunburst",
+      );
+      expect(body.snapshot.ui.approval?.detail).toContain(
         "Output: Ask Agent chat display only (no files will be written)",
       );
     });
@@ -6731,7 +6746,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json", Cookie: harness.cookie },
-        body: JSON.stringify({ id: approvalId, decision: "accept" }),
+        body: JSON.stringify({ id: approvalId, decision: "accept-session" }),
       },
     );
     expect(approval.ok).toBe(true);
@@ -6747,9 +6762,44 @@ describe("BrowserGatewayHelper proxy routing", () => {
     );
     expect(send.ok).toBe(true);
     expect(assistant?.content).toContain("Image generated.");
-    expect(providerRequests).toHaveLength(1);
+
+    const refinement = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Polish the selected image" }),
+    });
+    expect(refinement.ok).toBe(true);
+
+    expect(providerRequests).toHaveLength(2);
     expect(providerRequests[0]?.body).toEqual(
-      expect.objectContaining({ tools: [{ type: "image_generation" }] }),
+      expect.objectContaining({
+        tools: [
+          {
+            type: "image_generation",
+            model: "gpt-image-2.5-sunburst",
+          },
+        ],
+      }),
+    );
+    expect(providerRequests[1]?.body).toEqual(
+      expect.objectContaining({
+        tools: [
+          {
+            type: "image_generation",
+            model: "gpt-image-2.5-sunburst",
+          },
+        ],
+        input: [
+          expect.objectContaining({
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                type: "input_image",
+                image_url: expect.stringContaining("data:image/png;base64,"),
+              }),
+            ]),
+          }),
+        ],
+      }),
     );
     expect(upstreamRequests).not.toContain(
       "/internal/ask-agent/generate-image",

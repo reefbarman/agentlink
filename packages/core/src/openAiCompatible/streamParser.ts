@@ -1,3 +1,4 @@
+import { CoreModelOutputLimitError } from "../modelRuntime.js";
 import type {
   CoreModelContentBlock,
   CoreModelMessage,
@@ -83,6 +84,16 @@ export async function* parseOpenAiCompatibleStreamEvents(
   let providerResponseId: string | undefined;
   let reportedUsage: OpenAiCompatibleUsage | undefined;
   let sawChunk = false;
+  let outputBytes = 0;
+  const countOutput = (value: string): void => {
+    outputBytes += Buffer.byteLength(value, "utf8");
+    if (
+      options.maxOutputBytes !== undefined &&
+      outputBytes > options.maxOutputBytes
+    ) {
+      throw new CoreModelOutputLimitError(options.maxOutputBytes);
+    }
+  };
 
   for await (const chunk of chunks) {
     sawChunk = true;
@@ -102,6 +113,7 @@ export async function* parseOpenAiCompatibleStreamEvents(
       if (delta) {
         const content = typeof delta.content === "string" ? delta.content : "";
         if (content) {
+          countOutput(content);
           markOutputStarted(options);
           const parsed =
             availableToolNames.size > 0
@@ -148,6 +160,7 @@ export async function* parseOpenAiCompatibleStreamEvents(
             ? delta.reasoning_content
             : "";
         const visibleReasoning = `${reasoning}${reasoningContent}`;
+        if (visibleReasoning) countOutput(visibleReasoning);
         if (reasoning) choice.reasoning += reasoning;
         if (reasoningContent) choice.reasoningContent += reasoningContent;
         choice.visibleReasoning += visibleReasoning;
@@ -197,6 +210,7 @@ export async function* parseOpenAiCompatibleStreamEvents(
             call.name = mergeStreamedField(call.name, deltaCall.function.name);
           }
           if (typeof deltaCall.function?.arguments === "string") {
+            countOutput(deltaCall.function.arguments);
             call.arguments += deltaCall.function.arguments;
           }
           toolCalls.set(key, call);
@@ -322,7 +336,7 @@ export async function* parseOpenAiCompatibleStreamEvents(
     content: publicBlocks,
     ...(replay ? { providerReplay: replay } : {}),
   };
-  const stopReason = normalizeStopReason(
+  const termination = normalizeStopReason(
     [...sortedChoices(choices)].map(([, choice]) => choice.finishReason),
     completedTools.length > 0,
   );
@@ -405,8 +419,11 @@ export async function* parseOpenAiCompatibleStreamEvents(
   yield { type: "content_blocks", blocks: publicBlocks };
   yield {
     type: "model_stop",
-    reason: stopReason,
+    reason: termination.reason,
     assistantMessage,
+    ...(options.includeTerminationEvidence
+      ? { terminationEvidence: termination.evidence }
+      : {}),
   };
   yield { type: "done" };
 }
@@ -705,10 +722,40 @@ function parseToolArguments(
 function normalizeStopReason(
   reasons: Array<string | undefined>,
   hasTools: boolean,
-): CoreModelStopReason {
-  if (reasons.includes("length")) return "max_tokens";
-  if (reasons.includes("tool_calls") || hasTools) return "tool_use";
-  return "end_turn";
+): { reason: CoreModelStopReason; evidence: "observed" | "inferred" } {
+  const observedReasons = reasons.filter(
+    (reason): reason is string => reason !== undefined,
+  );
+  if (observedReasons.some((reason) => reason === "length")) {
+    return { reason: "max_tokens", evidence: "observed" };
+  }
+  if (
+    observedReasons.some(
+      (reason) => reason === "content_filter" || reason === "refusal",
+    )
+  ) {
+    return { reason: "refusal", evidence: "observed" };
+  }
+  if (
+    reasons.includes("tool_calls") ||
+    reasons.includes("function_call") ||
+    hasTools
+  ) {
+    return {
+      reason: "tool_use",
+      evidence:
+        reasons.includes("tool_calls") || reasons.includes("function_call")
+          ? "observed"
+          : "inferred",
+    };
+  }
+  return {
+    reason: "end_turn",
+    evidence:
+      reasons.length > 0 && reasons.every((reason) => reason === "stop")
+        ? "observed"
+        : "inferred",
+  };
 }
 
 function markOutputStarted(options: OpenAiCompatibleStreamOptions): void {

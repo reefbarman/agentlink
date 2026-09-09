@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
-  "version": "1.22.28",
+  "version": "1.22.30",
   "publisher": "agentlink",
   "repository": {
     "type": "git",

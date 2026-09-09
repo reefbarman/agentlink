@@ -94,7 +94,11 @@ describe("turn contracts", () => {
       "principal" | "sessionId" | "input" | "model" | "reasoningEffort"
     >();
     expectTypeOf<keyof AgentTurnRunOptions>().toEqualTypeOf<
-      "signal" | "onDurableState"
+      | "signal"
+      | "onDurableState"
+      | "modelRequest"
+      | "maxModelOutputBytes"
+      | "maxQueuedEventBytes"
     >();
     expectTypeOf<keyof PreparedAgentTurnRequest<TestPrincipal>>().toEqualTypeOf<
       | "request"

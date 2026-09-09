@@ -3,6 +3,7 @@ import { CodexTurnState } from "@agentlink/core/codex";
 import * as fs from "fs/promises";
 import * as path from "path";
 import type { AgentSession } from "./AgentSession.js";
+import { isReviewTaskClass } from "./background/reviewTaskClass.js";
 import { ToolResultArtifactManager } from "./toolResultArtifacts.js";
 import type {
   AgentEvent,
@@ -1241,6 +1242,10 @@ export class AgentEngine {
         const backgroundExpectedResult = opts?.isBackground
           ? session.fleetMetadata?.delegation?.expectedResult
           : undefined;
+        const isBackgroundReview =
+          opts?.isBackground === true &&
+          (backgroundExpectedResult === "review_findings" ||
+            isReviewTaskClass(session.fleetMetadata?.taskClass));
         const narrowedExpectedResult:
           | "text"
           | "review_findings"
@@ -1331,8 +1336,7 @@ export class AgentEngine {
           }),
         );
         const structuredReviewFinalization =
-          backgroundExpectedResult === "review_findings" &&
-          finalStatusNudgeAttempts > 0;
+          isBackgroundReview && finalStatusNudgeAttempts > 0;
         const rawTools =
           advertisedTools && inlineToolNames
             ? advertisedTools
@@ -1592,10 +1596,9 @@ export class AgentEngine {
             });
           }
           if (pendingFinalStatusNudge) {
-            const structuredReviewReminder =
-              backgroundExpectedResult === "review_findings"
-                ? `The review work is over. Do not inspect more files, call any other tool, or add more review prose. Call set_task_status now with the required review_findings result using the evidence you already have. Use status="completed" only if the review is complete; otherwise use status="blocked" with a summary of the unreviewed scope and any supported partial findings. Do not report an unfinished review as a clean review. Keep the result concise to fit the output limit. This is finalization attempt ${finalStatusNudgeAttempts} of ${MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS}.`
-                : "You ended the turn without calling set_task_status. Do not redo completed work. If the user's ask is complete, call set_task_status now with the real user-facing summary. Otherwise use waiting_for_user, blocked, or cancelled when that is the true state. This is your one final-status reminder for this turn.";
+            const structuredReviewReminder = isBackgroundReview
+              ? `The review work is over. Do not inspect more files, call any other tool, or add more review prose. Call set_task_status now with ${backgroundExpectedResult === "review_findings" ? "the required review_findings result" : 'a text result in result={type:"text",text:"..."} containing the actual review findings, not a progress recap or a reference to an undelivered result'} using the evidence you already have. Use status="completed" only if the review is complete; otherwise use status="blocked" with a summary of the unreviewed scope and any supported partial findings. Do not report an unfinished review as a clean review. Keep the result concise to fit the output limit. This is finalization attempt ${finalStatusNudgeAttempts} of ${MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS}.`
+              : "You ended the turn without calling set_task_status. Do not redo completed work. If the user's ask is complete, call set_task_status now with the real user-facing summary. Otherwise use waiting_for_user, blocked, or cancelled when that is the true state. This is your one final-status reminder for this turn.";
             apiMessages.push({
               role: "user",
               content: structuredReviewReminder,
@@ -2254,7 +2257,7 @@ export class AgentEngine {
           }
           opts?.onAssistantTurnCommitted?.();
           const canFinalizeReview =
-            backgroundExpectedResult === "review_findings" &&
+            isBackgroundReview &&
             finalStatusNudgeAttempts <
               MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS &&
             !signal.aborted &&
@@ -2275,6 +2278,9 @@ export class AgentEngine {
               `[agent] structured review hit output-token limit; requesting finalization (${finalStatusNudgeAttempts}/${MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS})`,
             );
             continue;
+          }
+          if (opts?.isBackground && session.fleetMetadata) {
+            session.fleetMetadata.terminalReason = "provider_stop:max_tokens";
           }
           break;
         }
@@ -2308,6 +2314,9 @@ export class AgentEngine {
             message:
               "The provider declined this request (safety refusal). Any partial response was preserved. Rephrase the request or retry on a different model (e.g. Claude Opus 4.8).",
           };
+          if (opts?.isBackground && session.fleetMetadata) {
+            session.fleetMetadata.terminalReason = "provider_stop:refusal";
+          }
           break;
         }
 
@@ -2363,11 +2372,8 @@ export class AgentEngine {
         }
 
         if (!hasVisibleOrActionableOutput(contentBlocks)) {
-          const warnedStructuredReview =
-            backgroundExpectedResult === "review_findings" &&
-            session.fleetMetadata?.budgetWarning !== undefined;
           if (
-            warnedStructuredReview &&
+            isBackgroundReview &&
             finalStatusNudgeAttempts === 0 &&
             emptyResponseRetryCount === 0
           ) {
@@ -2380,10 +2386,7 @@ export class AgentEngine {
             session.status = "streaming";
             continue;
           }
-          if (
-            backgroundExpectedResult === "review_findings" &&
-            (finalStatusNudgeAttempts > 0 || warnedStructuredReview)
-          ) {
+          if (isBackgroundReview) {
             if (finalStatusNudgeAttempts === 0) {
               finalStatusNudgeAttempts = 1;
               pendingFinalStatusNudge = true;
@@ -2496,15 +2499,13 @@ export class AgentEngine {
           appendCommittedAssistantMessage();
           opts?.onAssistantTurnCommitted?.();
 
-          const maxFinalStatusNudgeAttempts =
-            backgroundExpectedResult === "review_findings"
-              ? MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS
-              : 1;
+          const maxFinalStatusNudgeAttempts = isBackgroundReview
+            ? MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS
+            : 1;
           const canNudgeFinalStatus =
             !finalMarkerApplied &&
             finalStatusNudgeAttempts < maxFinalStatusNudgeAttempts &&
-            (backgroundExpectedResult === "review_findings" ||
-              !hasPendingTodos(currentTodos)) &&
+            (isBackgroundReview || !hasPendingTodos(currentTodos)) &&
             !session.hasPendingInterjections &&
             !session.hasQueuedUiMessages &&
             rawTools?.some((tool) => tool.name === "set_task_status") === true;
@@ -2541,7 +2542,7 @@ export class AgentEngine {
         const dispatchableToolCount = toolUseBlocks.filter(
           (b) =>
             b.name !== TODO_TOOL_NAME &&
-            (!structuredReviewFinalization || b.name !== "set_task_status"),
+            (!isBackgroundReview || b.name !== "set_task_status"),
         ).length;
         const toolCallReservation =
           dispatchableToolCount > 0
@@ -3063,7 +3064,12 @@ export class AgentEngine {
         ) {
           break;
         }
-        if (structuredReviewFinalization && !successfulFinalMarker) {
+        if (
+          isBackgroundReview &&
+          !successfulFinalMarker &&
+          (structuredReviewFinalization ||
+            toolUseBlocks.some((block) => block.name === "set_task_status"))
+        ) {
           if (
             finalStatusNudgeAttempts <
             MAX_STRUCTURED_REVIEW_FINALIZATION_ATTEMPTS

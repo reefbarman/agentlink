@@ -224,6 +224,7 @@ import * as path from "path";
 import { z } from "zod";
 import {
   canonicalizePath,
+  isPathInsideHostTemporaryDirectory,
   isPathWithinRoot,
   resolveAndValidatePath,
   withWorkspaceRoots,
@@ -2607,8 +2608,27 @@ export function createAgentToolRuntime(
           request.input,
           ctx,
         );
+        const isReviewWrite =
+          request.name === "write_file" && request.context.mode === "review";
+        const isReviewTemporaryWrite =
+          isReviewWrite &&
+          typeof request.input.path === "string" &&
+          path.isAbsolute(request.input.path) &&
+          isPathInsideHostTemporaryDirectory(request.input.path) &&
+          !mutationTarget;
+        if (isReviewWrite && !isReviewTemporaryWrite) {
+          return errorResult(
+            "Review mode can only use write_file for files inside the host temporary directory",
+            {
+              path: request.input.path,
+              reason: "review_mode_temporary_write_only",
+              temporaryDirectory: os.tmpdir(),
+            },
+          );
+        }
         if (
           PATH_MUTATING_TOOLS.has(request.name) &&
+          !isReviewTemporaryWrite &&
           !(
             request.name === "execute_command" &&
             (request.context.commandExecutionPolicy ??
@@ -3687,6 +3707,24 @@ async function dispatchToolCallWithTrackedApprovals(
       }
       const expectedResult = ctx.backgroundExpectedResult;
       const structuredResult = params.result;
+      if (
+        status === "completed" &&
+        isFleetResultEnvelope(structuredResult) &&
+        structuredResult.type === "text" &&
+        !structuredResult.text.trim()
+      ) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error:
+                  "Completion requires non-empty text in set_task_status.result.text",
+              }),
+            },
+          ],
+        };
+      }
       if (status === "completed" && expectedResult) {
         if (
           !isFleetResultEnvelope(structuredResult) ||

@@ -30,6 +30,7 @@ const declarationsPlugin = {
 const sharedCoreModuleNames = new Set([
   "agentEngine",
   "agentToolLoop",
+  "client",
   "codex",
   "embeddedAgentWeb",
   "hostAdapterContracts",
@@ -40,6 +41,7 @@ const sharedCoreModuleNames = new Set([
   "modelRuntime",
   "nativeWebTools",
   "openAiCompatible",
+  "openAiResponses",
   "providerStreamWatchdog",
   "sessionRepository",
   "sessionTranscriptRecall",
@@ -68,6 +70,7 @@ const cjs = await context({
   entryPoints: [
     "src/agentEngine.ts",
     "src/agentToolLoop.ts",
+    "src/client.ts",
     "src/codex.ts",
     "src/embeddedAgentWeb.ts",
     "src/hostAdapterContracts.ts",
@@ -78,6 +81,7 @@ const cjs = await context({
     "src/modelRuntime.ts",
     "src/nativeWebTools.ts",
     "src/openAiCompatible.ts",
+    "src/openAiResponses.ts",
     "src/providerStreamWatchdog.ts",
     "src/sessionRepository.ts",
     "src/sessionTranscriptRecall.ts",

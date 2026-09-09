@@ -25,6 +25,11 @@ export interface OpenAiCompatibleBackendOptions {
   credentialResolver?: CoreModelCredentialResolver;
   /** Required scope binding when a constructor resolver is supplied. */
   credentialPrincipal?: AgentPrincipal;
+  /**
+   * Factory-owned fallback used only when an operation supplies no auth context.
+   * It receives the real operation principal and must remain server-side.
+   */
+  defaultCredentialResolver?: CoreModelCredentialResolver;
   fetch?: OpenAiCompatibleFetch;
 }
 
@@ -36,6 +41,7 @@ export class OpenAiCompatibleBackend implements CoreModelBackend {
   private readonly connection: NormalizedOpenAiCompatibleConnection;
   private readonly credentialResolver?: CoreModelCredentialResolver;
   private readonly credentialPrincipal?: AgentPrincipal;
+  private readonly defaultCredentialResolver?: CoreModelCredentialResolver;
   private readonly fetch?: OpenAiCompatibleFetch;
   private readonly modelsById: ReadonlyMap<
     string,
@@ -49,8 +55,14 @@ export class OpenAiCompatibleBackend implements CoreModelBackend {
         "OpenAI-compatible constructor credentials require a bound principal",
       );
     }
+    if (options.credentialResolver && options.defaultCredentialResolver) {
+      throw new Error(
+        "OpenAI-compatible credentials must use either a principal-bound resolver or a request-scoped default resolver",
+      );
+    }
     this.credentialResolver = options.credentialResolver;
     this.credentialPrincipal = options.credentialPrincipal;
+    this.defaultCredentialResolver = options.defaultCredentialResolver;
     this.fetch = options.fetch;
     this.providerId = options.connection.providerId;
     this.displayName = options.connection.displayName;
@@ -162,12 +174,13 @@ export class OpenAiCompatibleBackend implements CoreModelBackend {
     request: CoreModelStreamRequest,
     context: CoreModelRequestContext,
   ): AsyncGenerator<CoreModelStreamEvent> {
-    this.getCapabilities(request.model);
+    this.validateRequestCapabilities(request);
     const apiKey = await this.resolveApiKey(request.model, "stream", context);
     yield* streamOpenAiCompatibleCompletion({
       profile: this.runtimeProfile,
       apiKey,
       request,
+      temperature: request.temperature,
       fetch: this.fetch,
     });
   }
@@ -176,7 +189,7 @@ export class OpenAiCompatibleBackend implements CoreModelBackend {
     request: CoreModelCompleteRequest,
     context: CoreModelRequestContext,
   ): Promise<CoreModelCompleteResult> {
-    this.getCapabilities(request.model);
+    this.validateRequestCapabilities(request);
     const apiKey = await this.resolveApiKey(request.model, "complete", context);
     return await completeOpenAiCompatibleCompletion({
       profile: this.runtimeProfile,
@@ -186,12 +199,43 @@ export class OpenAiCompatibleBackend implements CoreModelBackend {
     });
   }
 
+  private validateRequestCapabilities(
+    request: CoreModelStreamRequest | CoreModelCompleteRequest,
+  ): void {
+    const capabilities = this.getCapabilities(request.model);
+    if (
+      request.outputFormat?.type === "json_schema" &&
+      capabilities.structuredOutput !== "json_schema"
+    ) {
+      throw new OpenAiCompatibleRequestError({
+        message: `OpenAI-compatible model "${request.model}" does not declare native JSON Schema output support`,
+        providerCode: "unsupported_capability",
+        retryable: false,
+        authentication: false,
+      });
+    }
+    if (request.executionControls && !capabilities.requestControls) {
+      throw new OpenAiCompatibleRequestError({
+        message: `OpenAI-compatible model "${request.model}" does not declare request-control support`,
+        providerCode: "unsupported_capability",
+        retryable: false,
+        authentication: false,
+      });
+    }
+  }
+
   private resolveCredentialResolver(
     context: CoreModelRequestContext,
   ): CoreModelCredentialResolver | undefined {
     if (context.authContext?.credentialResolver) {
       return context.authContext.credentialResolver;
     }
+    if (context.authContext?.authProvider) {
+      return samePrincipal(context.principal, this.credentialPrincipal)
+        ? this.credentialResolver
+        : undefined;
+    }
+    if (this.defaultCredentialResolver) return this.defaultCredentialResolver;
     return samePrincipal(context.principal, this.credentialPrincipal)
       ? this.credentialResolver
       : undefined;

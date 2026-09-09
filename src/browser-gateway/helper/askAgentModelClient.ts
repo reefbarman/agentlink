@@ -226,8 +226,26 @@ const ASK_AGENT_RECALL_MEMORY_SCHEMA = {
 };
 const ASK_AGENT_GENERATE_IMAGE_SCHEMA = {
   prompt: z.string().min(1),
+  image_model: z
+    .enum(["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"])
+    .optional()
+    .describe(
+      "Image model. Default: gpt-image-2.5-flare. Use Flare for fast exploration and alignment, then Sunburst with the selected session image as a reference for polished output. Go directly to Sunburst when the direction is settled.",
+    ),
   size: z.string().optional(),
   count: z.coerce.number().int().min(1).max(4).optional(),
+  reference_image_ids: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "IDs of prior Browser Ask Agent session images to use as references. Use the selected exploration image when polishing with Sunburst.",
+    ),
+  use_recent_images: z
+    .union([z.boolean(), z.coerce.number().positive().max(8)])
+    .optional()
+    .describe(
+      "Use recent Browser Ask Agent session images as references. Pass true for up to 4 recent images, or a number for that many.",
+    ),
   timeout_seconds: z.coerce.number().positive().max(300).optional(),
 };
 const ASK_AGENT_PRESENT_IMAGES_SCHEMA = {
@@ -441,7 +459,7 @@ export const ASK_AGENT_SAFE_PROJECTLESS_TOOLS: CoreModelToolDefinition[] = [
   {
     name: "generate_image",
     description:
-      "Generate PNG images in the Browser Ask Agent helper using leased or cached OpenAI/Codex credentials and show them in this browser chat. Ask Agent cannot save generated images to files; output_path and local reference image paths are unavailable.",
+      "Generate PNG images in the Browser Ask Agent helper using leased or cached OpenAI/Codex credentials and show them in this browser chat. Default to GPT-Image-2.5 Flare for fast exploration and user alignment, then use Sunburst with the selected session image as a reference for polished assets, concepts, or final images. Go directly to Sunburst when the direction is already settled, and honor explicit user preferences. Ask Agent cannot save generated images to files; output_path and local reference image paths are unavailable.",
     input_schema: askAgentSchema(ASK_AGENT_GENERATE_IMAGE_SCHEMA),
   },
   {

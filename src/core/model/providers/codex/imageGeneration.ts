@@ -9,6 +9,14 @@ import {
 
 export const CODEX_IMAGE_GENERATION_MAX_COUNT = 4;
 export const CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS = 300_000;
+export const CODEX_IMAGE_GENERATION_MODELS = [
+  "gpt-image-2.5-flare",
+  "gpt-image-2.5-sunburst",
+] as const;
+export type CodexImageGenerationModel =
+  (typeof CODEX_IMAGE_GENERATION_MODELS)[number];
+export const CODEX_IMAGE_GENERATION_DEFAULT_MODEL: CodexImageGenerationModel =
+  "gpt-image-2.5-flare";
 
 const TRANSIENT_RETRIES = 2;
 
@@ -90,6 +98,21 @@ export class CodexImageGenerationError extends Error {
   }
 }
 
+export function normalizeCodexImageGenerationModel(
+  value: unknown,
+): CodexImageGenerationModel {
+  if (value == null) return CODEX_IMAGE_GENERATION_DEFAULT_MODEL;
+  if (
+    typeof value === "string" &&
+    CODEX_IMAGE_GENERATION_MODELS.includes(value as CodexImageGenerationModel)
+  ) {
+    return value as CodexImageGenerationModel;
+  }
+  throw new Error(
+    `image_model must be one of: ${CODEX_IMAGE_GENERATION_MODELS.join(", ")}`,
+  );
+}
+
 export function getCodexImageGenerationModel(
   auth: CodexImageGenerationAuth,
 ): string {
@@ -102,6 +125,7 @@ export function buildCodexImageGenerationRequestBody(params: {
   prompt: string;
   count: number;
   model: string;
+  imageModel: CodexImageGenerationModel;
   size?: string;
   referenceImages?: CodexImageReferenceImage[];
 }): Record<string, unknown> {
@@ -132,7 +156,7 @@ export function buildCodexImageGenerationRequestBody(params: {
         ],
       },
     ],
-    tools: [{ type: "image_generation" }],
+    tools: [{ type: "image_generation", model: params.imageModel }],
     tool_choice: { type: "image_generation" },
   };
 }
@@ -498,6 +522,7 @@ async function callCodexImageGeneration(params: {
   prompt: string;
   count: number;
   size?: string;
+  imageModel: CodexImageGenerationModel;
   referenceImages: CodexImageReferenceImage[];
   deadlineMs: number;
   generatedImages: CodexGeneratedImage[];
@@ -507,6 +532,7 @@ async function callCodexImageGeneration(params: {
   images: CodexGeneratedImage[];
   eventTypes: string[];
   model: string;
+  imageModel: CodexImageGenerationModel;
 }> {
   const model = getCodexImageGenerationModel(params.auth);
   const remainingMs = params.deadlineMs - Date.now();
@@ -534,6 +560,7 @@ async function callCodexImageGeneration(params: {
           prompt: params.prompt,
           count: params.count,
           model,
+          imageModel: params.imageModel,
           size: params.size,
           referenceImages: params.referenceImages,
         }),
@@ -558,7 +585,7 @@ async function callCodexImageGeneration(params: {
     if (parsed.terminalFailure || parsed.images.length === 0) {
       throw createCodexImageGenerationResultError(parsed);
     }
-    return { ...parsed, model };
+    return { ...parsed, model, imageModel: params.imageModel };
   } finally {
     clearTimeout(timeout);
   }
@@ -580,6 +607,7 @@ export async function generateCodexImages(params: {
   prompt: string;
   count: number;
   size?: string;
+  imageModel: CodexImageGenerationModel;
   referenceImages?: CodexImageReferenceImage[];
   timeoutMs: number;
   generatedImages?: CodexGeneratedImage[];
@@ -589,6 +617,7 @@ export async function generateCodexImages(params: {
   images: CodexGeneratedImage[];
   eventTypes: string[];
   model: string;
+  imageModel: CodexImageGenerationModel;
 }> {
   const deadlineMs = Date.now() + params.timeoutMs;
   const generatedImages = params.generatedImages ?? [];
@@ -600,6 +629,7 @@ export async function generateCodexImages(params: {
         prompt: params.prompt,
         count: params.count,
         size: params.size,
+        imageModel: params.imageModel,
         referenceImages: params.referenceImages ?? [],
         deadlineMs,
         generatedImages,

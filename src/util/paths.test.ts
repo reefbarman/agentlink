@@ -114,6 +114,39 @@ describe("getRelativePath", () => {
     });
   });
 
+  it("recognizes files inside the host temporary directory", async () => {
+    const { isPathInsideHostTemporaryDirectory } = await import("./paths.js");
+
+    expect(
+      isPathInsideHostTemporaryDirectory(
+        path.join(os.tmpdir(), "agentlink-review", "body.md"),
+      ),
+    ).toBe(true);
+    expect(isPathInsideHostTemporaryDirectory(os.tmpdir())).toBe(false);
+    expect(isPathInsideHostTemporaryDirectory("/workspace/review.md")).toBe(
+      false,
+    );
+  });
+
+  it("rejects temporary-directory symlinks that escape the temporary root", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-paths-"));
+    const outsideDir = fs.mkdtempSync(
+      path.join(process.cwd(), ".tmp-agentlink-paths-outside-"),
+    );
+    try {
+      const symlink = path.join(tempDir, "outside-link");
+      fs.symlinkSync(outsideDir, symlink, "dir");
+      const { isPathInsideHostTemporaryDirectory } = await import("./paths.js");
+
+      expect(
+        isPathInsideHostTemporaryDirectory(path.join(symlink, "review.md")),
+      ).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
   it("classifies missing nested paths through an outside symlink as outside-workspace", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-paths-"));
     try {

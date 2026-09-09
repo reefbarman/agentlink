@@ -1,11 +1,25 @@
 import { BUILT_IN_MODES, buildUnionAgentMode } from "./modes.js";
 import { describe, expect, it } from "vitest";
 
+import { getToolsForMode } from "./toolPermissions.js";
+
 describe("built-in modes", () => {
-  it("gives review mode terminal access without edit tools", () => {
+  it("gives review mode terminal access without the general edit group", () => {
     const review = BUILT_IN_MODES.find((mode) => mode.slug === "review");
     expect(review?.toolGroups).toContain("command");
     expect(review?.toolGroups).not.toContain("edit");
+    expect(getToolsForMode(review!)).toContain("write_file");
+  });
+
+  it("does not expose review's constrained write through a reusable tool group", () => {
+    expect(
+      getToolsForMode({
+        slug: "custom",
+        name: "Custom",
+        icon: "tools",
+        toolGroups: ["read", "temporary-write"],
+      }),
+    ).not.toContain("write_file");
   });
 });
 

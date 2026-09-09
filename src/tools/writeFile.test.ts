@@ -105,6 +105,139 @@ describe("handleWriteFile", () => {
     expect(fs.readFileSync(filePath, "utf-8")).toBe("old");
   });
 
+  it("allows review mode to write inside the host temporary directory", async () => {
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "accepted" as const,
+        path: path.join(tempDir, "review.md"),
+        operation: "auto-approved" as const,
+        ...durable("review body"),
+      })),
+    };
+    const policy = createApprovalPolicy(true);
+    const filePath = path.join(tempDir, "review.md");
+
+    const { handleWriteFile } = await import("./writeFile.js");
+    const result = await handleWriteFile(
+      { path: filePath, content: "review body" },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "review",
+      { editReviewProvider, writeApprovalPolicyProvider: policy },
+    );
+
+    expect(toolJson(result)).toMatchObject({ status: "accepted" });
+    expect(editReviewProvider.reviewAndApply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        absolutePath: filePath,
+        outsideWorkspace: true,
+        content: "review body",
+      }),
+    );
+  });
+
+  it("keeps normal approval review for review-mode temporary writes", async () => {
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async (params) => {
+        params.onApprovalPresented?.();
+        return {
+          status: "accepted" as const,
+          path: path.join(tempDir, "review.md"),
+          operation: "created" as const,
+          ...durable("review body"),
+          decision: "accept" as const,
+        };
+      }),
+    };
+    const policy = createApprovalPolicy(false);
+    const onApprovalPrompt = vi.fn();
+    const filePath = path.join(tempDir, "review.md");
+
+    const { handleWriteFile } = await import("./writeFile.js");
+    const result = await handleWriteFile(
+      { path: filePath, content: "review body" },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "review",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: policy,
+        onApprovalPrompt,
+      },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      status: "accepted",
+      authorization: {
+        allowed: true,
+        basis: "human",
+        decision: "accept",
+      },
+    });
+    expect(editReviewProvider.reviewAndApply).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "interactive", outsideWorkspace: true }),
+    );
+    expect(onApprovalPrompt).toHaveBeenCalledOnce();
+  });
+
+  it("rejects relative review-mode paths even when they resolve under the host temporary directory", async () => {
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(),
+    };
+    const policy = createApprovalPolicy(true);
+
+    const { handleWriteFile } = await import("./writeFile.js");
+    const result = await handleWriteFile(
+      { path: "../review.md", content: "review body" },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "review",
+      { editReviewProvider, writeApprovalPolicyProvider: policy },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      reason: "review_mode_temporary_write_only",
+      temporaryDirectory: os.tmpdir(),
+    });
+    expect(policy.canAutoApprove).not.toHaveBeenCalled();
+    expect(editReviewProvider.reviewAndApply).not.toHaveBeenCalled();
+  });
+
+  it("rejects review-mode writes outside the host temporary directory", async () => {
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(),
+    };
+    const policy = createApprovalPolicy(true);
+    const filePath = path.join(workspaceDir, "review.md");
+
+    const { handleWriteFile } = await import("./writeFile.js");
+    const result = await handleWriteFile(
+      { path: filePath, content: "review body" },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "review",
+      { editReviewProvider, writeApprovalPolicyProvider: policy },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error:
+        "Review mode can only use write_file for files inside the host temporary directory",
+      path: "review.md",
+      reason: "review_mode_temporary_write_only",
+      temporaryDirectory: os.tmpdir(),
+    });
+    expect(policy.canAutoApprove).not.toHaveBeenCalled();
+    expect(editReviewProvider.reviewAndApply).not.toHaveBeenCalled();
+  });
+
   it("delegates auto-approved writes to the edit-review provider", async () => {
     const editReviewProvider: EditReviewProvider = {
       reviewAndApply: vi.fn(async () => ({

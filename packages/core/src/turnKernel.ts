@@ -20,6 +20,10 @@ import {
   type HostToolValidationResult,
 } from "./hostTools.js";
 import type { AgentPrincipal } from "./modelIdentity.js";
+import {
+  CoreModelAttemptLimitError,
+  CoreModelOutputLimitError,
+} from "./modelRuntime.js";
 import type {
   CoreModelAuthContext,
   CoreModelContentBlock,
@@ -243,7 +247,7 @@ function streamResumedInteraction<TPrincipal extends AgentPrincipal>(
   runOptions: AgentTurnRunOptions,
 ): AgentTurnStream {
   return (async function* (): AgentTurnStream {
-    const queue = new TurnEventQueue();
+    const queue = new TurnEventQueue(runOptions.maxQueuedEventBytes);
     const consumerAbort = new AbortController();
     const signal = combineAbortSignals(runOptions.signal, consumerAbort.signal);
     let settled = false;
@@ -460,7 +464,7 @@ function streamHeadlessTurn<TPrincipal extends AgentPrincipal>(
   runOptions: AgentTurnRunOptions,
 ): AgentTurnStream {
   return (async function* (): AgentTurnStream {
-    const queue = new TurnEventQueue();
+    const queue = new TurnEventQueue(runOptions.maxQueuedEventBytes);
     const consumerAbort = new AbortController();
     const signal = combineAbortSignals(runOptions.signal, consumerAbort.signal);
     let settled = false;
@@ -582,6 +586,16 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
   let usage: CoreModelUsage | undefined = continuation?.state.usage;
   let stopReason: CoreModelStopReason | undefined =
     continuation?.state.stopReason;
+  let modelOutputBytes = 0;
+  const countModelOutput = (value: string): void => {
+    modelOutputBytes += Buffer.byteLength(value, "utf8");
+    if (
+      runOptions.maxModelOutputBytes !== undefined &&
+      modelOutputBytes > runOptions.maxModelOutputBytes
+    ) {
+      throw new CoreModelOutputLimitError(runOptions.maxModelOutputBytes);
+    }
+  };
   let suspension: HeadlessTurnSuspension | undefined;
   let durableMessages: readonly CoreModelMessage[] = structuredClone(
     prepared.history,
@@ -733,15 +747,23 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
             maxTokens: prepared.maxOutputTokens,
             reasoningEffort: prepared.reasoningEffort,
             tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
+            temperature: runOptions.modelRequest?.temperature,
+            state: runOptions.modelRequest?.state,
+            executionControls: runOptions.modelRequest?.executionControls,
             signal,
-            onProviderRequestAttempt: onModelCallAttempt,
+            onProviderRequestAttempt: (attempt) => {
+              onModelCallAttempt();
+              runOptions.modelRequest?.onProviderRequestAttempt?.(attempt);
+            },
           },
         })) {
           if (event.type === "text_delta") {
+            countModelOutput(event.text);
             modelResult.text += event.text;
             onText(event.text);
             emit({ type: "text.delta", text: event.text });
           } else if (event.type === "tool_done") {
+            countModelOutput(JSON.stringify(event.input));
             const call = toToolCall(event);
             modelResult.toolCalls.push(call);
             const tool = tools.get(call.name);
@@ -990,6 +1012,9 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
         ...(displayInput !== undefined ? { displayInput } : {}),
         effect: tool.effect ?? "unknown",
       });
+      if (context.signal?.aborted) {
+        throw new TurnExecutionCancelledError(execution);
+      }
       if (authorization.decision === "deny") {
         return authorizationDenied(call, emit, authorization.reason, tool);
       }
@@ -1017,6 +1042,9 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
   }
 
   try {
+    if (context.signal?.aborted) {
+      throw new TurnExecutionCancelledError(execution);
+    }
     const execute = tool.executeValidated ?? tool.execute;
     const result = await execute(canonicalInput, {
       principal: prepared.request.principal,
@@ -1514,7 +1542,11 @@ function toTurnError(
   error: unknown,
   fallbackCode = "turn_execution_failed",
 ): AgentTurnError {
-  if (error instanceof TurnExecutionLimitError) {
+  if (
+    error instanceof TurnExecutionLimitError ||
+    error instanceof CoreModelAttemptLimitError ||
+    error instanceof CoreModelOutputLimitError
+  ) {
     return {
       code: error.code,
       category: embeddedAgentErrorCategory(error.code),
@@ -1522,11 +1554,6 @@ function toTurnError(
       retryable: false,
     };
   }
-  const providerError =
-    fallbackCode === "turn_execution_failed"
-      ? sanitizedProviderTurnError(error)
-      : undefined;
-  if (providerError) return providerError;
   if (
     error instanceof HeadlessTurnKernelError ||
     error instanceof HostToolInputValidationError ||
@@ -1541,6 +1568,11 @@ function toTurnError(
       retryable: error instanceof HostToolPublicError ? error.retryable : false,
     };
   }
+  const providerError =
+    fallbackCode === "turn_execution_failed"
+      ? sanitizedProviderTurnError(error)
+      : undefined;
+  if (providerError) return providerError;
   return {
     code: fallbackCode,
     category: embeddedAgentErrorCategory(fallbackCode),
@@ -1572,22 +1604,26 @@ function sanitizedProviderTurnError(
   const code =
     candidate.authentication === true || status === 401 || status === 403
       ? "provider_authentication_required"
-      : status === 429 || providerCode.includes("rate_limit")
-        ? "provider_rate_limited"
-        : candidate.retryable
-          ? "provider_unavailable"
-          : "provider_request_failed";
+      : providerCode === "timeout" || status === 408
+        ? "provider_timeout"
+        : status === 429 || providerCode.includes("rate_limit")
+          ? "provider_rate_limited"
+          : candidate.retryable
+            ? "provider_unavailable"
+            : "provider_request_failed";
   return {
     code,
     category: embeddedAgentErrorCategory(code),
     message:
       code === "provider_authentication_required"
         ? "Provider authentication is required"
-        : code === "provider_rate_limited"
-          ? "The model provider rate limit was reached"
-          : code === "provider_unavailable"
-            ? "The model provider is temporarily unavailable"
-            : "The model provider rejected the request",
+        : code === "provider_timeout"
+          ? "The model provider request timed out"
+          : code === "provider_rate_limited"
+            ? "The model provider rate limit was reached"
+            : code === "provider_unavailable"
+              ? "The model provider is temporarily unavailable"
+              : "The model provider rejected the request",
     retryable: candidate.retryable,
   };
 }
@@ -1635,18 +1671,48 @@ class HeadlessTurnKernelError extends Error {
   }
 }
 
+export class HeadlessTurnEventQueueLimitError extends Error {
+  readonly code = "turn_event_queue_limit_reached";
+
+  constructor(readonly maxQueuedEventBytes: number) {
+    super(`Turn event queue exceeded the ${maxQueuedEventBytes}-byte limit`);
+    this.name = "HeadlessTurnEventQueueLimitError";
+  }
+}
+
 class TurnEventQueue {
-  private readonly values: AgentTurnEvent[] = [];
+  private readonly values: Array<{ event: AgentTurnEvent; bytes: number }> = [];
   private readonly waiting: Array<
     (result: IteratorResult<AgentTurnEvent, undefined>) => void
   > = [];
   private closed = false;
+  private queuedBytes = 0;
+
+  constructor(private readonly maxQueuedEventBytes?: number) {
+    if (
+      maxQueuedEventBytes !== undefined &&
+      (!Number.isSafeInteger(maxQueuedEventBytes) || maxQueuedEventBytes <= 0)
+    ) {
+      throw new Error("maxQueuedEventBytes must be a positive safe integer");
+    }
+  }
 
   push(value: AgentTurnEvent): void {
     if (this.closed) return;
     const waiter = this.waiting.shift();
-    if (waiter) waiter({ done: false, value });
-    else this.values.push(value);
+    if (waiter) {
+      waiter({ done: false, value });
+      return;
+    }
+    const bytes = Buffer.byteLength(JSON.stringify(value), "utf8");
+    if (
+      this.maxQueuedEventBytes !== undefined &&
+      this.queuedBytes + bytes > this.maxQueuedEventBytes
+    ) {
+      throw new HeadlessTurnEventQueueLimitError(this.maxQueuedEventBytes);
+    }
+    this.values.push({ event: value, bytes });
+    this.queuedBytes += bytes;
   }
 
   close(): void {
@@ -1658,7 +1724,10 @@ class TurnEventQueue {
 
   async next(): Promise<IteratorResult<AgentTurnEvent, undefined>> {
     const value = this.values.shift();
-    if (value) return { done: false, value };
+    if (value) {
+      this.queuedBytes -= value.bytes;
+      return { done: false, value: value.event };
+    }
     if (this.closed) return { done: true, value: undefined };
     return await new Promise((resolve) => this.waiting.push(resolve));
   }

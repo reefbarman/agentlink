@@ -190,6 +190,7 @@
       "name": "generate_image",
       "parameters": [
         "count",
+        "image_model",
         "output_path",
         "prompt",
         "reference_image_ids",
@@ -806,5 +807,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "a74b59b7acd46fb38ec93c8d392e99a07a6d6f129abbecbde5f2e4e09ce7d332"
+  "revision": "48d189027fd021cb5c2fe69bc531e13180c1282de43f3a8bb9a8e0efca0a892f"
 }

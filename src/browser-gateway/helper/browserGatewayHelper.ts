@@ -150,7 +150,10 @@ import {
   codexGeneratedImageMetadata,
   codexImageGenerationErrorMetadata,
   generateCodexImages,
+  normalizeCodexImageGenerationModel,
   type CodexGeneratedImage,
+  type CodexImageGenerationModel,
+  type CodexImageReferenceImage,
 } from "../../core/model/providers/codex/imageGeneration.js";
 import {
   toCoreModelDocumentMediaType,
@@ -197,6 +200,7 @@ import type {
 } from "@agentlink/protocol/final-status";
 import { handleTodoWrite, type TodoToolInput } from "../../agent/todoTool.js";
 import { handlePresentImages } from "../../tools/presentImages.js";
+import { resolveSessionReferenceImages } from "../../tools/generateImage.js";
 import {
   handleManageMemory,
   handleRecallMemory,
@@ -6152,15 +6156,12 @@ export class BrowserGatewayHelper {
   private normalizeAskAgentImageInput(input: Record<string, unknown>): {
     prompt: string;
     count: number;
+    imageModel: CodexImageGenerationModel;
     size?: string;
+    referenceImages: CodexImageReferenceImage[];
     timeoutMs: number;
   } {
-    for (const forbidden of [
-      "output_path",
-      "reference_image_paths",
-      "reference_image_ids",
-      "use_recent_images",
-    ]) {
+    for (const forbidden of ["output_path", "reference_image_paths"]) {
       if (Object.hasOwn(input, forbidden)) {
         throw new Error(
           `Ask Agent generate_image does not support ${forbidden}; browser Ask Agent image generation is display-only and cannot read or write local files.`,
@@ -6169,6 +6170,7 @@ export class BrowserGatewayHelper {
     }
     const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
     if (!prompt) throw new Error("prompt is required");
+    const imageModel = normalizeCodexImageGenerationModel(input.image_model);
     const numericCount = Number(input.count ?? 1);
     const count =
       Number.isFinite(numericCount) && numericCount >= 1
@@ -6188,7 +6190,23 @@ export class BrowserGatewayHelper {
             CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS,
           )
         : CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS;
-    return { prompt, count, size, timeoutMs };
+    const referenceImages = resolveSessionReferenceImages({
+      referenceImageIds: Array.isArray(input.reference_image_ids)
+        ? input.reference_image_ids.filter(
+            (id): id is string =>
+              typeof id === "string" && id.trim().length > 0,
+          )
+        : [],
+      useRecentImages:
+        input.use_recent_images === true
+          ? true
+          : Number.isFinite(Number(input.use_recent_images)) &&
+              Number(input.use_recent_images) > 0
+            ? Number(input.use_recent_images)
+            : false,
+      getSessionImages: () => this.askAgentSessionStore.getSessionImages(),
+    });
+    return { prompt, count, imageModel, size, referenceImages, timeoutMs };
   }
 
   private executeAskAgentPresentImagesTool(
@@ -6238,7 +6256,9 @@ export class BrowserGatewayHelper {
   private async requestAskAgentGenerateImageApproval(params: {
     prompt: string;
     count: number;
+    imageModel: CodexImageGenerationModel;
     size?: string;
+    referenceImages: CodexImageReferenceImage[];
     billing: string;
     signal: AbortSignal;
   }): Promise<DecisionMessage> {
@@ -6252,7 +6272,12 @@ export class BrowserGatewayHelper {
     const detail = [
       `Generation prompt:\n${params.prompt}`,
       `Images: ${params.count}`,
+      `Image model: ${params.imageModel}`,
       params.size ? `Requested size: ${params.size}` : undefined,
+      params.referenceImages.length > 0
+        ? `Reference images (${params.referenceImages.length}):`
+        : undefined,
+      ...params.referenceImages.map((image) => `- ${image.label}`),
       `Billing: ${params.billing}`,
       "Output: Ask Agent chat display only (no files will be written)",
       "",
@@ -6366,7 +6391,9 @@ export class BrowserGatewayHelper {
         auth: credential,
         prompt: input.prompt,
         count: input.count,
+        imageModel: input.imageModel,
         size: input.size,
+        referenceImages: input.referenceImages,
         timeoutMs: input.timeoutMs,
         generatedImages,
         sessionId: this.askAgentSessionStore.getActiveSessionId(),
@@ -6379,11 +6406,16 @@ export class BrowserGatewayHelper {
             {
               status: "accepted",
               model: result.model,
+              image_model: result.imageModel,
               billing,
               requested_count: input.count,
               generated_count: result.images.length,
               saved: false,
-              reference_images: [],
+              reference_images: input.referenceImages.map((image) => ({
+                source: image.source,
+                label: image.label,
+                mime_type: image.mimeType,
+              })),
               images: codexGeneratedImageMetadata(result.images),
               event_types: Array.from(new Set(result.eventTypes)),
               ...(approval.followUp ? { follow_up: approval.followUp } : {}),

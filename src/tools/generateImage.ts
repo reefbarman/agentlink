@@ -10,6 +10,8 @@ import {
   CODEX_IMAGE_GENERATION_MAX_COUNT,
   CodexImageGenerationError,
   generateCodexImages,
+  normalizeCodexImageGenerationModel,
+  type CodexImageGenerationModel,
   parseCodexImageGenerationSse,
   type CodexGeneratedImage,
   type CodexImageGenerationSseResult,
@@ -28,6 +30,7 @@ const MAX_REFERENCE_IMAGES = 8;
 
 type GenerateImageParams = {
   prompt?: unknown;
+  image_model?: unknown;
   output_path?: unknown;
   size?: unknown;
   count?: unknown;
@@ -176,7 +179,7 @@ async function resolveReferenceImageFiles(
   return images;
 }
 
-function resolveSessionReferenceImages(params: {
+export function resolveSessionReferenceImages(params: {
   referenceImageIds: string[];
   useRecentImages: boolean | number;
   getSessionImages?: () => SessionImageReference[];
@@ -303,6 +306,7 @@ export async function requestImageGenerationApprovalForTest(params: {
   onApprovalRequest?: OnApprovalRequest;
   prompt: string;
   count: number;
+  imageModel: CodexImageGenerationModel;
   size?: string;
   targets?: Array<{ relPath: string; absolutePath?: string }>;
   referenceImages?: GenerateImageReferenceImage[];
@@ -322,6 +326,7 @@ export async function requestImageGenerationApprovalForTest(params: {
   const detail = [
     `Generation prompt:\n${params.prompt}`,
     `Images: ${params.count}`,
+    `Image model: ${params.imageModel}`,
     params.size ? `Requested size: ${params.size}` : undefined,
     referenceImages.length > 0
       ? `Reference images (${referenceImages.length}):`
@@ -448,7 +453,12 @@ function buildGenerateImageErrorResult(params: {
 }
 
 function buildGenerateImageSuccessResult(params: {
-  result: { images: GeneratedImage[]; eventTypes: string[]; model: string };
+  result: {
+    images: GeneratedImage[];
+    eventTypes: string[];
+    model: string;
+    imageModel: CodexImageGenerationModel;
+  };
   billing: string;
   refreshedAuth?: boolean;
   requestedCount: number;
@@ -464,6 +474,7 @@ function buildGenerateImageSuccessResult(params: {
           {
             status: "accepted",
             model: result.model,
+            image_model: result.imageModel,
             billing: params.billing,
             ...(params.refreshedAuth ? { refreshed_auth: true } : {}),
             requested_count: params.requestedCount,
@@ -501,6 +512,7 @@ export async function handleGenerateImage(
   try {
     const prompt = normalizePrompt(params.prompt);
     const count = normalizeCount(params.count);
+    const imageModel = normalizeCodexImageGenerationModel(params.image_model);
     const size = normalizeSize(params.size);
     const timeoutMs = normalizeTimeoutMs(params.timeout_seconds);
     const referenceImages = await resolveReferenceImagesForTest({
@@ -533,6 +545,7 @@ export async function handleGenerateImage(
       onApprovalRequest,
       prompt,
       count,
+      imageModel,
       size,
       targets,
       referenceImages,
@@ -561,6 +574,7 @@ export async function handleGenerateImage(
         auth,
         prompt,
         count,
+        imageModel,
         size,
         referenceImages,
         timeoutMs,
@@ -600,6 +614,7 @@ export async function handleGenerateImage(
             auth,
             prompt,
             count,
+            imageModel,
             size,
             referenceImages,
             timeoutMs,

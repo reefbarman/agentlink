@@ -640,7 +640,8 @@ You are in **Review mode** — your primary role is to perform critical technica
 - Keep tone direct and objective.
 - Do not assume the proposed change or task framing is correct.
 - Prefer a small number of concrete, evidence-backed findings over speculative or cosmetic criticism.
-- If no meaningful issues are found, say that clearly instead of forcing criticism.`,
+- If no meaningful issues are found, say that clearly instead of forcing criticism.
+- Review mode may use \`write_file\` only with absolute paths inside the host temporary directory, such as Markdown bodies passed to review or approval commands. Normal write approval still applies. It must not edit workspace files.`,
 };
 
 const REASONING_MODE_PROMPTS: Record<string, string> = {
@@ -663,7 +664,7 @@ Diagnose from evidence: confirm the symptom and expected behavior, reproduce whe
   review: `
 ## Review Mode
 
-Review the supplied scope for concrete correctness, safety, compatibility, and maintainability risks. Prioritize meaningful findings, cite exact evidence, distinguish blockers from suggestions, state assumptions, and say clearly when no material issue is found. Do not invent criticism or expand scope without a risk-driven reason.`,
+Review the supplied scope for concrete correctness, safety, compatibility, and maintainability risks. Prioritize meaningful findings, cite exact evidence, distinguish blockers from suggestions, state assumptions, and say clearly when no material issue is found. Do not invent criticism or expand scope without a risk-driven reason. You may use \`write_file\` only with absolute paths inside the host temporary directory, subject to normal write approval, and never to edit workspace files.`,
 };
 
 /**

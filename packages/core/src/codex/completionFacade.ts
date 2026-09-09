@@ -3,6 +3,7 @@ import type { CoreHostedToolDefinition } from "@agentlink/protocol/web-access-po
 import type {
   CoreModelContentBlock,
   CoreModelMessage,
+  CoreModelOutputFormat,
   CoreModelProviderRequestAttempt,
   CoreModelStopReason,
   CoreModelStreamEvent,
@@ -46,6 +47,7 @@ export interface CodexCompletionResult {
   providerResponseId?: string;
   assistantMessage: CoreModelMessage;
   stopReason: CoreModelStopReason;
+  terminationEvidence?: "observed" | "inferred";
   request: CodexResolvedRequestBodyResult;
 }
 
@@ -62,6 +64,7 @@ export async function collectCodexCompletionResult(
   let providerResponseId: string | undefined;
   let assistantMessage: CoreModelMessage | undefined;
   let stopReason: CoreModelStopReason | undefined;
+  let terminationEvidence: "observed" | "inferred" | undefined;
   let contentBlocks: CoreModelContentBlock[] | undefined;
   const toolCalls: CodexCompletionToolCall[] = [];
 
@@ -84,6 +87,7 @@ export async function collectCodexCompletionResult(
     } else if (event.type === "model_stop") {
       assistantMessage = event.assistantMessage;
       stopReason = event.reason;
+      terminationEvidence = event.terminationEvidence;
     } else if (event.type === "usage") {
       usage = {
         inputTokens: event.inputTokens,
@@ -117,6 +121,7 @@ export async function collectCodexCompletionResult(
           contentBlocks ?? buildCodexAssistantBlocks(finalText, toolCalls),
       } satisfies CoreModelMessage),
     stopReason: stopReason ?? (toolCalls.length > 0 ? "tool_use" : "end_turn"),
+    ...(terminationEvidence ? { terminationEvidence } : {}),
   };
 }
 
@@ -148,6 +153,7 @@ export async function executeCodexResolvedCompletion(args: {
   state?: { store?: boolean; previousResponseId?: string };
   cache?: { key?: string; retention?: CodexPromptCacheRetention };
   reasoningEffort?: CoreReasoningEffort;
+  outputFormat?: CoreModelOutputFormat;
   tools?: readonly CoreModelToolDefinition[];
   hostedTools?: readonly CoreHostedToolDefinition[];
   signal?: AbortSignal;
@@ -155,6 +161,8 @@ export async function executeCodexResolvedCompletion(args: {
   onStreamEvent?: (event: CoreModelStreamEvent) => void;
   onProviderRequestAttempt?: (attempt: CoreModelProviderRequestAttempt) => void;
   onTransportActivity?: (activity: CoreModelTransportActivity) => void;
+  maxRetries?: number;
+  maxOutputBytes?: number;
   runRequest?: <T>(operation: () => T) => T;
   trimText?: boolean;
 }): Promise<CodexCompletionResult> {
@@ -167,6 +175,7 @@ export async function executeCodexResolvedCompletion(args: {
     state: args.state,
     cache: args.cache,
     reasoningEffort: args.reasoningEffort,
+    outputFormat: args.outputFormat,
     tools: args.tools ? translateCodexTools([...args.tools]) : undefined,
     hostedTools: args.hostedTools,
   });
@@ -181,6 +190,11 @@ export async function executeCodexResolvedCompletion(args: {
         signal: args.signal,
         onProviderRequestAttempt: args.onProviderRequestAttempt,
         onTransportActivity: args.onTransportActivity,
+        parserOptions: {
+          maxOutputBytes: args.maxOutputBytes,
+          includeTerminationEvidence: args.maxOutputBytes !== undefined,
+        },
+        maxRetries: args.maxRetries,
         runRequest: args.runRequest,
       }),
       {

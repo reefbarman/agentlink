@@ -3,6 +3,7 @@ export * from "./completionFacade.js";
 export * from "./config.js";
 export * from "./errors.js";
 export * from "./modelDiscovery.js";
+export * from "./providerFactory.js";
 export * from "./sse.js";
 export * from "./streamParser.js";
 export * from "./translation.js";

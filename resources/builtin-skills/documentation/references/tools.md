@@ -41,9 +41,16 @@ Exact script helpers, child constraints, limits, and recovery behavior: [compose
 - `find_and_replace` makes a bounded multi-file replacement proposal.
 - `rename_symbol` uses VS Code language intelligence where available.
 
-Accepted writes include durability evidence. If format-on-save changes approved content, re-read when the result requests it. Protected targets, outside-workspace paths, and other policy boundaries remain reviewable.
+Accepted writes include durability evidence. If format-on-save changes approved content, re-read when the result requests it. Protected targets, outside-workspace paths, and other policy boundaries remain reviewable. Foreground Review mode exposes `write_file` only for absolute paths inside the host temporary directory, such as Markdown bodies passed to review or approval commands; workspace files remain read-only. Normal write approval still applies. Background agents using the `review` tool profile remain fully read-only.
 
 Exact write-tool parameters and marker grammar: [write tools](complete-reference.md#write_file).
+
+## Generate and present images
+
+- `generate_image` defaults to GPT-Image-2.5 Flare for fast visual exploration and user alignment. After the user selects a direction, call it with Sunburst and the selected session image as a reference for the polished asset. Go directly to Sunburst when the direction is already settled, and honor explicit user preferences.
+- `present_images` shows images already retained in the session without generating a new image or consuming quota.
+
+VS Code can save generated PNGs to workspace paths and use workspace-local reference files. Browser Ask Agent remains display-only, but can refine user attachments and prior generated session images. Exact parameters: [image tools](complete-reference.md#generate_image).
 
 ## Run and inspect commands
 
@@ -73,7 +80,7 @@ Exact session-tool parameters: [orchestration tools](complete-reference.md#built
 - `get_background_status`, `get_background_result`, `steer_background_agent`, and `kill_background_agent` supervise it.
 - Fleet workflows can run structured review, browser verification, best-of-N work, or scheduled goals.
 
-Use clear ownership and a focused review scope for writable or review work. See [background agents](capabilities.md#background-agents-and-orchestration) and the [full background tool reference](complete-reference.md#spawn_background_agent).
+Use clear ownership and a focused review scope for writable or review work. Native text and structured reviews receive bounded finalization recovery after an output limit or missing result. Empty text and unfinalized native review output are incomplete, not successful; partial output remains available. Explicit unsuccessful provider/ACP stops cannot turn partial output into a completed review. See [background agents](capabilities.md#background-agents-and-orchestration) and the [full background tool reference](complete-reference.md#spawn_background_agent).
 
 ## Connect external capabilities
 

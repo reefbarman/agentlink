@@ -10776,6 +10776,9 @@ export class AgentSessionManager {
             transcriptCommitted = true;
             if (stopReasonMessage) {
               session.status = "error";
+              if (session.fleetMetadata && promptResponse) {
+                session.fleetMetadata.terminalReason = `acp_stop:${promptResponse.stopReason}`;
+              }
               this.setBgError(session.id, stopReasonMessage, false);
               this.recordAndEmitEvent(session.id, {
                 type: "error",
@@ -12286,11 +12289,11 @@ export class AgentSessionManager {
     // Already done (belt + suspenders)
     if (this.getProjectedBgStatus(session).done) {
       return Promise.resolve(
-        session.fleetMetadata?.finalResult ??
-          this.resolveBackgroundResult(
-            session,
-            "(background agent completed without output)",
-          ).resultText,
+        this.resolveBackgroundResult(
+          session,
+          "(background agent completed without output)",
+          { preferDurableMetadata: true },
+        ).resultText,
       );
     }
 
@@ -12657,8 +12660,10 @@ export class AgentSessionManager {
       fleet.lifecycle = "failed";
       fleet.terminalReason =
         resolution.resultState === "incomplete_expected_result"
-          ? "incomplete_expected_result"
-          : (this.bgErrors.get(session.id) ?? "agent_error");
+          ? (resolution.terminalReason ?? "incomplete_expected_result")
+          : (resolution.terminalReason ??
+            this.bgErrors.get(session.id) ??
+            "agent_error");
       terminalEvent = this.appendFleetEvent(
         session,
         "failed",
@@ -12693,7 +12698,21 @@ export class AgentSessionManager {
     // immediately afterward. Non-completed markers retain their output as partial
     // evidence but cannot authorize a successful background result.
     const marker = session.getLastFinalMarker?.();
-    if (marker?.status === "completed" && marker.result) {
+    const acpStopReason = session.fleetMetadata?.terminalReason?.startsWith(
+      "acp_stop:",
+    )
+      ? session.fleetMetadata.terminalReason
+      : undefined;
+    const providerStopReason =
+      session.fleetMetadata?.terminalReason?.startsWith("provider_stop:")
+        ? session.fleetMetadata.terminalReason
+        : undefined;
+    if (
+      !acpStopReason &&
+      marker?.status === "completed" &&
+      marker.result &&
+      (marker.result.type !== "text" || marker.result.text.trim().length > 0)
+    ) {
       const markerResult = structuredClone(marker.result);
       if (
         markerResult.type === "review_findings" &&
@@ -12715,6 +12734,8 @@ export class AgentSessionManager {
     const markerPartialResult = marker?.result
       ? formatFleetResultEnvelope(marker.result)
       : marker?.summary;
+    const emptyTextMarker =
+      marker?.result?.type === "text" && !marker.result.text.trim();
     const durablePartialResult =
       this.bgPartialResults.get(session.id) ??
       session.fleetMetadata?.partialResult;
@@ -12727,9 +12748,11 @@ export class AgentSessionManager {
           ? (durablePartialResult ??
             session.getLastAssistantText() ??
             markerPartialResult)
-          : (session.getLastAssistantText() ??
-            markerPartialResult ??
-            durablePartialResult);
+          : [
+              markerPartialResult,
+              session.getLastAssistantText(),
+              durablePartialResult,
+            ].find((text) => text?.trim());
     const rawText =
       (options?.preferDurableMetadata
         ? session.fleetMetadata?.finalResult
@@ -12738,6 +12761,13 @@ export class AgentSessionManager {
       fallbackText;
     const expected = session.fleetMetadata?.delegation
       ?.expectedResult as SpawnBackgroundRequest["expectedResult"];
+    const missingTextResult =
+      (!expected || expected === "text") &&
+      (emptyTextMarker ||
+        !partialResult?.trim() ||
+        (session.fleetMetadata?.backend === "native" &&
+          isReviewTaskClass(session.fleetMetadata.taskClass) &&
+          marker?.status !== "completed"));
     const parsedEnvelope = parseFleetResultEnvelopeDetailed(expected, rawText, {
       workspaceRoots: this.getWorkspaceFolders().map((folder) => folder.path),
     });
@@ -12756,10 +12786,22 @@ export class AgentSessionManager {
         : undefined) ?? "completed";
     if (
       !options?.preferDurableMetadata ||
-      !session.fleetMetadata?.resultState
+      !session.fleetMetadata?.resultState ||
+      session.fleetMetadata.resultState === "running"
     ) {
-      if (this.bgCancelled.has(session.id) || marker?.status === "cancelled") {
+      if (
+        this.bgCancelled.has(session.id) ||
+        marker?.status === "cancelled" ||
+        acpStopReason === "acp_stop:cancelled"
+      ) {
         resultState = "cancelled";
+      } else if (
+        acpStopReason ||
+        providerStopReason === "provider_stop:refusal"
+      ) {
+        resultState = "failed";
+      } else if (providerStopReason) {
+        resultState = "incomplete_expected_result";
       } else if (
         marker?.status === "blocked" ||
         marker?.status === "waiting_for_user"
@@ -12782,14 +12824,23 @@ export class AgentSessionManager {
       } else if (session.status === "error") {
         resultState = "failed";
       } else if (
-        expected &&
-        expected !== "text" &&
-        structuredResult.type !== expected
+        missingTextResult ||
+        (expected && expected !== "text" && structuredResult.type !== expected)
       ) {
         resultState = "incomplete_expected_result";
       }
     }
 
+    if (
+      resultState === "completed" &&
+      (emptyTextMarker ||
+        !rawText.trim() ||
+        /^\((?:ACP )?background agent completed without output\)$/.test(
+          rawText.trim(),
+        ))
+    ) {
+      resultState = "incomplete_expected_result";
+    }
     if (resultState === "completed") {
       return {
         resultText:
@@ -12813,8 +12864,10 @@ export class AgentSessionManager {
             : undefined;
     const terminalReason =
       resultState === "incomplete_expected_result"
-        ? "incomplete_expected_result"
-        : (this.bgErrors.get(session.id) ??
+        ? (providerStopReason ?? "incomplete_expected_result")
+        : (acpStopReason ??
+          providerStopReason ??
+          this.bgErrors.get(session.id) ??
           session.fleetMetadata?.terminalReason ??
           markerTerminalReason ??
           resultState);
@@ -12833,11 +12886,15 @@ export class AgentSessionManager {
       // the coordinator can salvage findings instead of guessing.
       ...(incompleteEnvelope
         ? {
-            expectedResultIssue: `Expected a "${expected}" envelope; the final message parsed as ${
-              structuredResult.type === "text"
-                ? "plain text without a valid envelope"
-                : `a "${structuredResult.type}" envelope`
-            }.${parsedEnvelope.issue ? ` ${parsedEnvelope.issue}.` : ""} The raw final output is preserved in partialOutput.`,
+            expectedResultIssue: missingTextResult
+              ? "The agent stopped without a completed final text result. Any partial output is evidence only, not a completed review."
+              : providerStopReason
+                ? `The provider stopped before finalizing the result (${providerStopReason}). Partial output is not a completed result.`
+                : `Expected a "${expected}" envelope; the final message parsed as ${
+                    structuredResult.type === "text"
+                      ? "plain text without a valid envelope"
+                      : `a "${structuredResult.type}" envelope`
+                  }.${parsedEnvelope.issue ? ` ${parsedEnvelope.issue}.` : ""} The raw final output is preserved in partialOutput.`,
           }
         : {}),
       ...(partialResult

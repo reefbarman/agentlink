@@ -673,7 +673,7 @@ describe("buildSystemPrompt", () => {
     );
   });
 
-  it("includes review mode anti-speculation guidance", async () => {
+  it("includes review mode anti-speculation and temporary-write guidance", async () => {
     const result = await buildSystemPrompt("review", tmpDir);
     expect(result).toContain(
       "Do not assume the proposed change or task framing is correct.",
@@ -684,6 +684,11 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain(
       "If no meaningful issues are found, say that clearly instead of forcing criticism.",
     );
+    expect(result).toContain(
+      "Review mode may use `write_file` only with absolute paths inside the host temporary directory",
+    );
+    expect(result).toContain("Normal write approval still applies.");
+    expect(result).toContain("It must not edit workspace files.");
   });
 
   it("shows plans folder does not exist when ./plans is absent", async () => {

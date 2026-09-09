@@ -1,8 +1,10 @@
-import type {
-  CoreModelContentBlock,
-  CoreModelMessage,
-  CoreModelStreamEvent,
-  CoreModelThinkingBlock,
+import {
+  CoreModelOutputLimitError,
+  type CoreModelContentBlock,
+  type CoreModelMessage,
+  type CoreModelStopReason,
+  type CoreModelStreamEvent,
+  type CoreModelThinkingBlock,
 } from "../modelRuntime.js";
 import {
   CORE_WEB_ACCESS_DEFAULT_MAX_REPLAY_BYTES_PER_TURN,
@@ -21,6 +23,9 @@ export interface CodexStreamParserState {
 export interface CodexStreamParserOptions {
   createThinkingId?: () => string;
   maxReplayBytes?: number;
+  maxOutputBytes?: number;
+  includeTerminationEvidence?: boolean;
+  replayProviderId?: string;
 }
 
 export class CodexStreamError extends Error {
@@ -68,6 +73,18 @@ export async function* parseCodexResponseStreamEvents(
   let cacheCreationTokens = 0;
   let inputTokenBreakdownReported: boolean | undefined;
   let providerResponseId: string | undefined;
+  let stopReason: CoreModelStopReason | undefined;
+  let sawAuthoritativeTerminal = false;
+  let outputBytes = 0;
+  const addOutputBytes = (value: string) => {
+    outputBytes += Buffer.byteLength(value, "utf8");
+    if (
+      options.maxOutputBytes !== undefined &&
+      outputBytes > options.maxOutputBytes
+    ) {
+      throw new CoreModelOutputLimitError(options.maxOutputBytes);
+    }
+  };
 
   for await (const event of events) {
     const eventType = event.type as string | undefined;
@@ -79,6 +96,7 @@ export async function* parseCodexResponseStreamEvents(
     ) {
       const delta = event.delta as string | undefined;
       if (delta) {
+        addOutputBytes(delta);
         currentText += delta;
         if (state) state.outputStarted = true;
         yield { type: "text_delta", text: delta };
@@ -99,6 +117,7 @@ export async function* parseCodexResponseStreamEvents(
           if (state) state.outputStarted = true;
           yield { type: "thinking_start", thinkingId };
         }
+        addOutputBytes(delta);
         currentThinking += delta;
         if (state) state.outputStarted = true;
         yield { type: "thinking_delta", thinkingId, text: delta };
@@ -110,7 +129,9 @@ export async function* parseCodexResponseStreamEvents(
       const delta = event.delta as string | undefined;
       if (delta) {
         const refusalText = `[Refusal] ${delta}`;
+        addOutputBytes(refusalText);
         currentText += refusalText;
+        if (options.includeTerminationEvidence) stopReason = "refusal";
         if (state) state.outputStarted = true;
         yield { type: "text_delta", text: refusalText };
       }
@@ -174,6 +195,7 @@ export async function* parseCodexResponseStreamEvents(
       if (callId && delta) {
         const pending = pendingToolCalls.get(callId);
         if (pending) {
+          addOutputBytes(delta);
           pending.arguments += delta;
           if (state) state.outputStarted = true;
           yield {
@@ -318,8 +340,26 @@ export async function* parseCodexResponseStreamEvents(
       });
     }
 
-    if (eventType === "response.done" || eventType === "response.completed") {
+    if (
+      eventType === "response.done" ||
+      eventType === "response.completed" ||
+      eventType === "response.incomplete"
+    ) {
       const resp = event.response as Record<string, unknown> | undefined;
+      const status =
+        resp?.status ??
+        (eventType === "response.incomplete" ? "incomplete" : undefined);
+      const incompleteReason = isRecord(resp?.incomplete_details)
+        ? resp.incomplete_details.reason
+        : undefined;
+      const outputLimitReached =
+        incompleteReason === "max_output_tokens" ||
+        incompleteReason === "max_tokens";
+      if (options.includeTerminationEvidence) {
+        sawAuthoritativeTerminal ||=
+          status !== "incomplete" || outputLimitReached;
+        if (outputLimitReached) stopReason = "max_tokens";
+      }
       if (Array.isArray(resp?.output)) {
         responseOutput = resp.output.filter(isRecord);
       }
@@ -407,9 +447,28 @@ export async function* parseCodexResponseStreamEvents(
           }
           if (item.type === "message" && Array.isArray(item.content)) {
             for (const c of item.content.filter(isRecord)) {
+              if (c.type === "refusal" && options.includeTerminationEvidence) {
+                stopReason = "refusal";
+                const refusal =
+                  typeof c.refusal === "string"
+                    ? c.refusal
+                    : typeof c.text === "string"
+                      ? c.text
+                      : undefined;
+                const refusalText = refusal
+                  ? `[Refusal] ${refusal}`
+                  : undefined;
+                if (refusalText && !currentText.includes(refusalText)) {
+                  addOutputBytes(refusalText);
+                  currentText += refusalText;
+                  if (state) state.outputStarted = true;
+                  yield { type: "text_delta", text: refusalText };
+                }
+              }
               if (c.type === "output_text" && typeof c.text === "string") {
                 collectOutputCitations(c, citations);
                 if (useCompletedText) {
+                  addOutputBytes(c.text);
                   currentText += c.text;
                   if (state) state.outputStarted = true;
                   yield { type: "text_delta", text: c.text };
@@ -429,6 +488,7 @@ export async function* parseCodexResponseStreamEvents(
                   if (state) state.outputStarted = true;
                   yield { type: "thinking_start", thinkingId };
                 }
+                addOutputBytes(s.text);
                 currentThinking += s.text;
                 if (state) state.outputStarted = true;
                 yield {
@@ -471,10 +531,16 @@ export async function* parseCodexResponseStreamEvents(
     [...completedOutputItems.entries()]
       .sort(([left], [right]) => left - right)
       .map(([, item]) => item);
+  if (
+    options.maxOutputBytes !== undefined &&
+    Buffer.byteLength(JSON.stringify(output), "utf8") > options.maxOutputBytes
+  ) {
+    throw new CoreModelOutputLimitError(options.maxOutputBytes);
+  }
   const replay =
     output.length > 0
       ? createCoreProviderReplayEnvelope({
-          providerId: "openai-codex",
+          providerId: options.replayProviderId ?? "openai-codex",
           codecVersion: 1,
           payload: { output: output as CoreJsonValue[] },
           maxBytes: maxReplayBytes,
@@ -520,10 +586,19 @@ export async function* parseCodexResponseStreamEvents(
   yield { type: "content_blocks", blocks: contentBlocks };
   yield {
     type: "model_stop",
-    reason: contentBlocks.some((block) => block.type === "tool_use")
-      ? "tool_use"
-      : "end_turn",
+    reason:
+      stopReason ??
+      (contentBlocks.some((block) => block.type === "tool_use")
+        ? "tool_use"
+        : "end_turn"),
     assistantMessage,
+    ...(options.includeTerminationEvidence
+      ? {
+          terminationEvidence: sawAuthoritativeTerminal
+            ? "observed"
+            : "inferred",
+        }
+      : {}),
   };
   yield { type: "done" };
 }

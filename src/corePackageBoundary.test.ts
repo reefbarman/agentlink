@@ -36,6 +36,19 @@ const CORE_MODULES = [
     loadEsm: () => import("@agentlink/core/agent-tool-loop"),
   },
   {
+    exportPath: "client",
+    fileName: "client",
+    declarationDependencies: [
+      "hostTools",
+      "modelIdentity",
+      "modelRuntime",
+      "turnContracts",
+      "turnExecution",
+    ],
+    identityExports: ["AgentClientError", "createAgentClient"],
+    loadEsm: () => import("@agentlink/core/client"),
+  },
+  {
     exportPath: "codex",
     fileName: "codex",
     declarationDependencies: [
@@ -45,6 +58,7 @@ const CORE_MODULES = [
       "codex/errors",
       "codex/models",
       "codex/openaiClient",
+      "codex/providerFactory",
       "codex/responsesStream",
       "codex/streamParser",
       "codex/translation",
@@ -55,6 +69,7 @@ const CORE_MODULES = [
       "CodexRequestError",
       "CodexStreamError",
       "collectCodexCompletionResult",
+      "createCodexOAuthProvider",
       "createOpenAiResponsesClient",
       "executeCodexResolvedCompletion",
       "executeCodexResponsesStream",
@@ -163,6 +178,13 @@ const CORE_MODULES = [
       "streamOpenAiCompatibleCompletion",
     ],
     loadEsm: () => import("@agentlink/core/openai-compatible"),
+  },
+  {
+    exportPath: "openai-responses",
+    fileName: "openAiResponses",
+    declarationDependencies: ["codex/providerFactory"],
+    identityExports: ["createOpenAIProvider", "createOpenAIResponsesProvider"],
+    loadEsm: () => import("@agentlink/core/openai-responses"),
   },
   {
     exportPath: "provider-stream-watchdog",

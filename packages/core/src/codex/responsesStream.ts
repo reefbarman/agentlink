@@ -50,11 +50,14 @@ export async function* executeCodexResponsesStream(args: {
   authMethod?: CodexAuthMethod;
   routing?: CodexTurnRouting;
   signal?: AbortSignal;
+  beforeModelDispatch?: (attempt: CoreModelProviderRequestAttempt) => void;
   onProviderRequestAttempt?: (attempt: CoreModelProviderRequestAttempt) => void;
   onTransportActivity?: (activity: CoreModelTransportActivity) => void;
   /** Mutable parser state for this stream attempt. Do not reuse across retries. */
   parserState?: CodexStreamParserState;
   parserOptions?: CodexStreamParserOptions;
+  maxRetries?: number;
+  retryDelay?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
   runRequest?: <T>(operation: () => T) => T;
 }): AsyncGenerator<CoreModelStreamEvent> {
   let stream: unknown;
@@ -64,6 +67,12 @@ export async function* executeCodexResponsesStream(args: {
     }
     const runRequest =
       args.runRequest ?? (<T>(operation: () => T): T => operation());
+    const maxRetries = args.maxRetries ?? 0;
+    if (!Number.isSafeInteger(maxRetries) || maxRetries < 0) {
+      throw new Error(
+        "Codex Responses maxRetries must be a non-negative integer",
+      );
+    }
     const routing = args.authMethod === "oauth" ? args.routing : undefined;
     const binding = routing?.turnState.bind(
       routing.sessionId,
@@ -71,8 +80,8 @@ export async function* executeCodexResponsesStream(args: {
       args.body.model,
     );
     let disabled = binding?.disabled ?? false;
+    let retryAttempt = 0;
     for (;;) {
-      args.onProviderRequestAttempt?.({ model: args.body.model });
       const headers = {
         ...getCodexResponsesRequestHeaders(args.body.model, args.authMethod),
         ...(routing ? { session_id: routing.sessionId } : {}),
@@ -82,7 +91,10 @@ export async function* executeCodexResponsesStream(args: {
       };
       const body = disabled ? { ...args.body } : args.body;
       if (disabled) delete body.prompt_cache_key;
+      const attempt = { model: args.body.model };
+      args.beforeModelDispatch?.(attempt);
       try {
+        args.onProviderRequestAttempt?.(attempt);
         const pending = runRequest(() =>
           args.client.responses.create(body, {
             signal: args.signal,
@@ -127,6 +139,19 @@ export async function* executeCodexResponsesStream(args: {
             binding.disabled = true;
             binding.value = undefined;
           }
+          continue;
+        }
+        if (
+          !args.signal?.aborted &&
+          retryAttempt < maxRetries &&
+          isRetryableResponsesError(error)
+        ) {
+          const retryAfterMs = retryDelayMs(error, retryAttempt);
+          retryAttempt += 1;
+          await (args.retryDelay ?? defaultRetryDelay)(
+            retryAfterMs,
+            args.signal,
+          );
           continue;
         }
         throw error;
@@ -191,6 +216,54 @@ function nextCodexStreamEvent(
   });
 
   return Promise.race([iterator.next(), abortPromise]).finally(cleanup);
+}
+
+function isRetryableResponsesError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const status = (error as { status?: unknown }).status;
+  return (
+    status === 408 ||
+    status === 409 ||
+    status === 429 ||
+    (typeof status === "number" && status >= 500)
+  );
+}
+
+function retryDelayMs(error: unknown, attempt: number): number {
+  const maxDelayMs = 5_000;
+  if (error && typeof error === "object") {
+    const headers = (error as { headers?: unknown }).headers;
+    if (headers instanceof Headers) {
+      const milliseconds = Number(headers.get("retry-after-ms"));
+      if (Number.isFinite(milliseconds)) {
+        return Math.min(maxDelayMs, Math.max(0, milliseconds));
+      }
+      const seconds = Number(headers.get("retry-after"));
+      if (Number.isFinite(seconds)) {
+        return Math.min(maxDelayMs, Math.max(0, seconds * 1000));
+      }
+    }
+  }
+  return Math.min(maxDelayMs, 250 * 2 ** attempt);
+}
+
+function defaultRetryDelay(
+  delayMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted)
+    return Promise.reject(new CodexResponsesStreamAbortedError());
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new CodexResponsesStreamAbortedError());
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function isCodexAuthError(error: unknown): boolean {

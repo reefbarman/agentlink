@@ -64,6 +64,7 @@ describe("requestImageGenerationApprovalForTest", () => {
       onApprovalRequest,
       prompt: "Create a colorful Gemini icon with no text.",
       count: 1,
+      imageModel: "gpt-image-2.5-sunburst",
       size: "1024x1024",
       targets: [{ relPath: "generated-icons/gemini.png" }],
       referenceImages: [
@@ -98,6 +99,9 @@ describe("requestImageGenerationApprovalForTest", () => {
       "Generation prompt:\nCreate a colorful Gemini icon with no text.",
     );
     expect(approvalRequest?.detail).toContain(
+      "Image model: gpt-image-2.5-sunburst",
+    );
+    expect(approvalRequest?.detail).toContain(
       "Reference images (1):\n- image_1 (hexaza.png)",
     );
     expect(approvalRequest?.detail).toContain(
@@ -121,6 +125,7 @@ describe("requestImageGenerationApprovalForTest", () => {
       onApprovalRequest,
       prompt: "Create an icon.",
       count: 1,
+      imageModel: "gpt-image-2.5-flare",
       billing: "OpenAI API key billing",
     });
 
@@ -149,6 +154,7 @@ describe("requestImageGenerationApprovalForTest", () => {
       onApprovalRequest,
       prompt: "Create an icon.",
       count: 1,
+      imageModel: "gpt-image-2.5-flare",
       billing: "OpenAI API key billing",
     });
 
@@ -172,6 +178,7 @@ describe("requestImageGenerationApprovalForTest", () => {
       onApprovalRequest,
       prompt: "Create an icon.",
       count: 1,
+      imageModel: "gpt-image-2.5-flare",
       billing: "OpenAI API key billing",
     });
 
@@ -193,6 +200,7 @@ describe("requestImageGenerationApprovalForTest", () => {
       onApprovalRequest,
       prompt: "Create an icon.",
       count: 1,
+      imageModel: "gpt-image-2.5-flare",
       targets: [{ relPath: "generated-icons/icon.png" }],
       billing: "OpenAI API key billing",
     });
@@ -208,6 +216,75 @@ describe("requestImageGenerationApprovalForTest", () => {
 describe("handleGenerateImage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("defaults to Flare and forwards an explicit Sunburst selection", async () => {
+    vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
+      method: "apiKey",
+      bearerToken: "test-key",
+      canRefresh: false,
+    });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () =>
+        sseResponse([
+          {
+            type: "response.image_generation_call.completed",
+            result: tinyPngBase64,
+          },
+        ]),
+      );
+    const approvalManager = {
+      isBuiltInToolApproved: vi.fn().mockReturnValue(true),
+    } as never;
+
+    const defaultResult = await handleGenerateImage(
+      { prompt: "Create a quick concept" },
+      approvalManager,
+      "session-1",
+    );
+    const explicitResult = await handleGenerateImage(
+      {
+        prompt: "Create the polished image",
+        image_model: "gpt-image-2.5-sunburst",
+      },
+      approvalManager,
+      "session-1",
+    );
+
+    for (const [result, expectedModel] of [
+      [defaultResult, "gpt-image-2.5-flare"],
+      [explicitResult, "gpt-image-2.5-sunburst"],
+    ] as const) {
+      const text =
+        result.content[0]?.type === "text" ? result.content[0].text : "";
+      expect(JSON.parse(text)).toMatchObject({ image_model: expectedModel });
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      fetchMock.mock.calls.map((call) => {
+        const body = JSON.parse(String((call[1] as RequestInit).body));
+        return body.tools[0].model;
+      }),
+    ).toEqual(["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"]);
+  });
+
+  it("rejects unsupported image model names before requesting auth", async () => {
+    const resolveAuth = vi.spyOn(openAiCodexAuthManager, "resolveModelAuth");
+
+    const result = await handleGenerateImage(
+      { prompt: "Create an image", image_model: "gpt-image-2" },
+      {} as never,
+      "session-1",
+    );
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(text).error).toContain(
+      "image_model must be one of: gpt-image-2.5-flare, gpt-image-2.5-sunburst",
+    );
+    expect(resolveAuth).not.toHaveBeenCalled();
   });
 
   it("preserves classified metadata when the post-refresh attempt fails", async () => {
@@ -483,10 +560,12 @@ describe("reference images", () => {
       prompt: "Use the reference style.",
       count: 1,
       model: "gpt-5",
+      imageModel: "gpt-image-2.5-sunburst",
       referenceImages,
     });
 
     expect(body).toMatchObject({
+      tools: [{ type: "image_generation", model: "gpt-image-2.5-sunburst" }],
       input: [
         {
           role: "user",

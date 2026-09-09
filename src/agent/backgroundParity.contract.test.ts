@@ -51,18 +51,14 @@ describe("foreground/background capability parity contract", () => {
     );
   });
 
-  it("applies review-only restrictions explicitly rather than by placement", () => {
-    const unrestricted = getAgentTools(
-      BUILT_IN_MODES.find((mode) => mode.slug === "code"),
-      mcpTools,
-      true,
-    ).map((tool) => tool.name);
-    const reviewOnly = getAgentTools(
-      BUILT_IN_MODES.find((mode) => mode.slug === "code"),
-      mcpTools,
-      true,
-      "review",
-    ).map((tool) => tool.name);
+  it("applies the read-only review profile explicitly rather than by placement", () => {
+    const reviewMode = BUILT_IN_MODES.find((mode) => mode.slug === "review");
+    const unrestricted = getAgentTools(reviewMode, mcpTools, true).map(
+      (tool) => tool.name,
+    );
+    const reviewOnly = getAgentTools(reviewMode, mcpTools, true, "review").map(
+      (tool) => tool.name,
+    );
     expect(unrestricted).toContain("write_file");
     expect(reviewOnly).not.toContain("write_file");
     expect(reviewOnly).not.toContain("example__lookup");

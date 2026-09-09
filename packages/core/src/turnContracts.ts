@@ -4,8 +4,11 @@ export type { AgentModelReference, AgentPrincipal } from "./modelIdentity.js";
 import type { AgentModelReference, AgentPrincipal } from "./modelIdentity.js";
 import type {
   CoreModelDocumentBlock,
+  CoreModelExecutionControls,
   CoreModelImageBlock,
   CoreModelMessage,
+  CoreModelProviderRequestAttempt,
+  CoreModelStateOptions,
   CoreModelStopReason,
   CoreModelUsage,
 } from "./modelRuntime.js";
@@ -114,10 +117,25 @@ export interface AgentTurnDurableState {
   readonly usage: CoreModelUsage | undefined;
 }
 
+export interface AgentTurnModelRequestOptions {
+  readonly temperature?: number;
+  readonly state?: CoreModelStateOptions;
+  readonly executionControls?: CoreModelExecutionControls;
+  readonly onProviderRequestAttempt?: (
+    attempt: CoreModelProviderRequestAttempt,
+  ) => void;
+}
+
 export interface AgentTurnRunOptions {
   readonly signal: AbortSignal | undefined;
   /** Internal host persistence hook; raw tool results remain outside public events. */
   readonly onDurableState?: (state: AgentTurnDurableState) => void;
+  /** Optional request-scoped model controls; never retained in durable continuation. */
+  readonly modelRequest?: AgentTurnModelRequestOptions;
+  /** Optional maximum UTF-8 bytes accumulated across model text and tool-call input. */
+  readonly maxModelOutputBytes?: number;
+  /** Optional maximum UTF-8 bytes retained in the producer/consumer event queue. */
+  readonly maxQueuedEventBytes?: number;
 }
 
 /**

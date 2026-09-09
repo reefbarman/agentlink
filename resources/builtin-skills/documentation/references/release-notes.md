@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed background reviews falsely completing without output: text reviews now receive the same bounded finalization recovery as structured reviews, including empty responses before budget warnings. Empty text results are rejected, unsuccessful native/ACP stops preserve partial output without claiming success, and lightweight review prompts survive policy/model rebuilds.
+
+- Upgraded image generation to GPT-Image-2.5. Agent tools now default to Flare for fast exploration and user alignment, support Sunburst for polished final assets, and can refine selected session images across both VS Code and Browser Ask Agent.
+
+- Added a private Node SDK client for request-scoped text, text streaming, typed JSON, and bounded tool workflows without session or lease storage. Generic OpenAI-compatible, standalone OpenAI Responses API-key, and standalone Codex OAuth providers support request-scoped credentials and bounded execution. Responses preserve authoritative refusal/truncation evidence, map supported native JSON Schema to `text.format`, and reject unsupported endpoint/model options before dispatch.
 - Shared explicit mode, per-mode model/thinking, and per-model compaction preferences across VS Code windows and workspaces. Fresh chats use the latest shared defaults, while active and restored sessions retain their own settings. Automatic switches and fallbacks no longer overwrite user preferences.
 
 - Added direct memory creation and editing to the shared `/memory` manager in VS Code and Browser Ask Agent, with revision-safe saves, retained drafts on rejection, expandable source evidence and revision history, keyboard search, reset filters, and clearer scope-wide clear confirmation. Automatic capture and recall are unchanged.

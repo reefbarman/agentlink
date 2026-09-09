@@ -2187,15 +2187,23 @@ describe("AgentEngine", () => {
       });
     });
 
-    it.each(["completed", "blocked"] as const)(
-      "recovers an output-limited review with a %s result through production dispatch",
-      async (status) => {
+    it.each([
+      ["completed", "review_findings"],
+      ["blocked", "review_findings"],
+      ["completed", "text"],
+      ["blocked", "text"],
+    ] as const)(
+      "recovers an output-limited review with a %s %s result through production dispatch",
+      async (status, expectedResult) => {
         const requests: StreamRequest[] = [];
-        const result = {
-          type: "review_findings",
-          findings: [],
-          emptyDiff: false,
-        } as const;
+        const result =
+          expectedResult === "review_findings"
+            ? ({
+                type: "review_findings",
+                findings: [],
+                emptyDiff: false,
+              } as const)
+            : ({ type: "text", text: "No actionable findings." } as const);
         const provider = makeMockProvider();
         provider.stream = async function* (request: StreamRequest) {
           requests.push(request);
@@ -2206,7 +2214,6 @@ describe("AgentEngine", () => {
               assistantMessage: {
                 role: "assistant",
                 content: [
-                  { type: "text", text: "I inspected the diff." },
                   {
                     type: "tool_use",
                     id: "truncated_read",
@@ -2230,7 +2237,7 @@ describe("AgentEngine", () => {
                       status === "blocked"
                         ? "Partial review only: downstream consumers remain unreviewed."
                         : "Reviewed the scoped change; no supported findings.",
-                    result,
+                    ...(result ? { result } : {}),
                   },
                 },
               ],
@@ -2242,7 +2249,8 @@ describe("AgentEngine", () => {
         const session = await makeSession();
         session.addUserMessage("review it");
         session.fleetMetadata = {
-          delegation: { expectedResult: "review_findings" },
+          taskClass: "review_plan",
+          delegation: { expectedResult },
         } as NonNullable<typeof session.fleetMetadata>;
         const engine = new AgentEngine(makeRegistry(provider));
         setEngineToolContext(engine, {
@@ -2285,7 +2293,19 @@ describe("AgentEngine", () => {
         ).toEqual(["set_task_status"]);
         expect(
           events.find((event) => event.type === "final_marker"),
-        ).toMatchObject({ marker: { status, result } });
+        ).toMatchObject({
+          marker: {
+            status,
+            ...(result
+              ? { result }
+              : {
+                  summary:
+                    status === "blocked"
+                      ? "Partial review only: downstream consumers remain unreviewed."
+                      : "Reviewed the scoped change; no supported findings.",
+                }),
+          },
+        });
         expect(
           events
             .filter((event) => event.type === "api_request")
@@ -2352,6 +2372,96 @@ describe("AgentEngine", () => {
         expect(toolResults.at(-1)).toMatchObject({
           tool_use_id: `truncated_${requests.length}`,
           content: expect.stringContaining("Not executed"),
+        });
+      },
+    );
+
+    it.each(["text", "review_findings"] as const)(
+      "bounds empty review recovery without a budget warning (%s)",
+      async (expectedResult) => {
+        const requests: StreamRequest[] = [];
+        const provider = makeMockProvider();
+        provider.stream = async function* (request: StreamRequest) {
+          requests.push(request);
+          yield { type: "content_blocks", blocks: [] };
+          yield { type: "done" };
+        };
+        const session = await makeSession();
+        session.addUserMessage("review it");
+        session.fleetMetadata = {
+          taskClass: "review_plan",
+          delegation: { expectedResult },
+        } as NonNullable<typeof session.fleetMetadata>;
+        const engine = new AgentEngine(makeRegistry(provider));
+        setEngineToolContext(engine, {
+          approvalManager: {} as ToolDispatchContext["approvalManager"],
+          approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+          sessionId: session.id,
+          extensionUri: {} as ToolDispatchContext["extensionUri"],
+        });
+        await collectEvents(engine.run(session, { isBackground: true }));
+        expect(requests).toHaveLength(5);
+        expect(
+          requests
+            .slice(2)
+            .map((request) => request.tools?.map((tool) => tool.name)),
+        ).toEqual([
+          ["set_task_status"],
+          ["set_task_status"],
+          ["set_task_status"],
+        ]);
+        expect(session.getLastFinalMarker()).toBeUndefined();
+      },
+    );
+
+    it.each([undefined, "text"] as const)(
+      "rejects empty text completion and recovers (expected=%s)",
+      async (expectedResult) => {
+        const provider = makeMockProvider();
+        let calls = 0;
+        provider.stream = async function* () {
+          calls++;
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: `final_${calls}`,
+                name: "set_task_status",
+                input: {
+                  status: "completed",
+                  result: {
+                    type: "text",
+                    text: calls === 1 ? "   " : "No actionable findings.",
+                  },
+                },
+              },
+            ],
+          };
+          yield { type: "done" };
+        };
+        const session = await makeSession();
+        session.addUserMessage("review it");
+        session.fleetMetadata = {
+          taskClass: "review_plan",
+          delegation: { expectedResult },
+        } as NonNullable<typeof session.fleetMetadata>;
+        const engine = new AgentEngine(makeRegistry(provider));
+        setEngineToolContext(engine, {
+          approvalManager: {} as ToolDispatchContext["approvalManager"],
+          approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+          sessionId: session.id,
+          extensionUri: {} as ToolDispatchContext["extensionUri"],
+        });
+        const events = await collectEvents(
+          engine.run(session, { isBackground: true }),
+        );
+        expect(calls).toBe(2);
+        expect(
+          events.filter((event) => event.type === "final_marker"),
+        ).toHaveLength(1);
+        expect(session.getLastFinalMarker()).toMatchObject({
+          result: { type: "text", text: "No actionable findings." },
         });
       },
     );

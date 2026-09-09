@@ -1,6 +1,7 @@
 import type {
   CoreModelContentBlock,
   CoreModelMessage,
+  CoreModelOutputFormat,
   CoreModelToolDefinition,
 } from "../modelRuntime.js";
 import type {
@@ -33,6 +34,9 @@ export function buildOpenAiCompatibleChatRequest(args: {
   maxTokens: number;
   reasoningEffort?: CoreReasoningEffort;
   tools?: readonly CoreModelToolDefinition[];
+  outputFormat?: CoreModelOutputFormat;
+  store?: boolean;
+  supportsStoreFalse?: boolean;
   temperature?: number;
 }): OpenAiCompatibleChatRequest {
   const tools = args.model.capabilities.supportsToolUse
@@ -50,6 +54,23 @@ export function buildOpenAiCompatibleChatRequest(args: {
     ],
     max_tokens: args.maxTokens,
     stream: true,
+    ...(args.store === false && args.supportsStoreFalse
+      ? { store: false }
+      : {}),
+    ...(args.outputFormat
+      ? {
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: args.outputFormat.name,
+              schema: args.outputFormat.schema,
+              ...(args.outputFormat.strict !== undefined
+                ? { strict: args.outputFormat.strict }
+                : {}),
+            },
+          },
+        }
+      : {}),
     ...(tools ? { tools, tool_choice: "auto" } : {}),
     ...reasoningEffortRequest(
       args.reasoningEffortMode,

@@ -223,6 +223,7 @@ export class AgentSession {
    * background/lightweight sessions that never switch modes mid-run.
    */
   modeInstructionPlacement: "system" | "conversation" = "system";
+  private lightweightPrompt = false;
   /** Mode instruction blocks pinned to conversation positions (see type doc). */
   modeInstructionAnchors: ModeInstructionAnchor[] = [];
   /** Cached block text for the current mode, used to re-seed anchors after replaceMessages. */
@@ -446,6 +447,7 @@ export class AgentSession {
       agentPluginCatalogProvider: opts.agentPluginCatalogProvider,
       initialArchitectReviewPending,
     });
+    session.lightweightPrompt = opts.lightweight === true;
     session.setAdvertisedSkills(artifacts.skills);
     session.setSkillCatalogProjection(artifacts.skillCatalog);
     session.setAdvertisedRules(artifacts.advertisedRules);
@@ -618,6 +620,7 @@ export class AgentSession {
               providerId,
               model,
               isBackground: this.background,
+              lightweight: this.lightweightPrompt,
               workspaceFolders,
               mcpToolCatalog: this.mcpToolDisclosure?.catalog,
               agentMode: this.agentMode,
@@ -675,6 +678,7 @@ export class AgentSession {
         model: this.model,
         promptProfileOverrides,
         isBackground: this.background,
+        lightweight: this.lightweightPrompt,
         workspaceFolders,
         mcpToolCatalog: this.mcpToolDisclosure?.catalog,
         agentMode: this.agentMode,
@@ -746,6 +750,7 @@ export class AgentSession {
         model: this.model,
         promptProfileOverrides: this.promptProfileOverrides,
         isBackground: this.background,
+        lightweight: this.lightweightPrompt,
         workspaceFolders: this.workspaceFolders,
         mcpToolCatalog: this.mcpToolDisclosure?.catalog,
         agentMode: opts?.agentMode,

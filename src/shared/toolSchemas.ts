@@ -569,6 +569,12 @@ export const generateImageSchema = {
   prompt: z
     .string()
     .describe("Prompt describing the image or images to generate."),
+  image_model: z
+    .enum(["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"])
+    .optional()
+    .describe(
+      "Image model. Default: gpt-image-2.5-flare. Use Flare for fast exploration and user alignment. After the direction is approved, use Sunburst with the selected image as a reference for polished assets, concepts, or final images. Go directly to Sunburst when the direction is already settled, and honor an explicit user preference.",
+    ),
   output_path: z
     .string()
     .optional()

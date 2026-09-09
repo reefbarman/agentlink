@@ -35,6 +35,7 @@ export interface OpenAiCompatibleRuntimeProfile {
   headers?: Readonly<Record<string, string>>;
   timeoutMs: number;
   authRequired: boolean;
+  supportsStoreFalse?: boolean;
   models: Readonly<Record<string, OpenAiCompatibleRuntimeModel>>;
 }
 
@@ -100,6 +101,15 @@ export interface OpenAiCompatibleChatRequest {
   messages: OpenAiCompatibleWireMessage[];
   max_tokens: number;
   stream: true;
+  store?: false;
+  response_format?: {
+    type: "json_schema";
+    json_schema: {
+      name: string;
+      schema: Record<string, unknown>;
+      strict?: boolean;
+    };
+  };
   tools?: OpenAiCompatibleWireTool[];
   tool_choice?: "auto";
   reasoning_effort?: CoreReasoningEffort;
@@ -177,6 +187,8 @@ export interface OpenAiCompatibleStreamOptions {
   state?: OpenAiCompatibleStreamParserState;
   createThinkingId?: (choiceIndex: number) => string;
   maxReplayBytes?: number;
+  maxOutputBytes?: number;
+  includeTerminationEvidence?: boolean;
   /** Exact client-dispatched tool names exposed on this request. */
   availableToolNames?: readonly string[];
 }

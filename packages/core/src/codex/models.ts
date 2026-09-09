@@ -117,6 +117,7 @@ export interface ResponsesCaps {
   supportsPromptCacheRetention: boolean;
   supportsMaxOutputTokens: boolean;
   supportsHostedWebSearch: boolean;
+  supportsStructuredOutput?: boolean;
   /**
    * Whether the endpoint accepts `text.verbosity`. The public API supports it
    * for GPT-5-family models; the ChatGPT backend is enabled optimistically —
@@ -482,6 +483,7 @@ export function getEndpointCaps(auth: CodexResolvedAuthShape): ResponsesCaps {
       supportsPromptCacheRetention: true,
       supportsMaxOutputTokens: true,
       supportsHostedWebSearch: true,
+      supportsStructuredOutput: true,
       supportsTextVerbosity: true,
     };
   }
@@ -493,6 +495,7 @@ export function getEndpointCaps(auth: CodexResolvedAuthShape): ResponsesCaps {
     supportsPromptCacheRetention: false,
     supportsMaxOutputTokens: false,
     supportsHostedWebSearch: true,
+    supportsStructuredOutput: false,
     supportsTextVerbosity: true,
   };
 }

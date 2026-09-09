@@ -5,6 +5,7 @@ import { build } from "esbuild";
 const modules = [
   "agentEngine",
   "agentToolLoop",
+  "client",
   "codex",
   "embeddedAgentWeb",
   "hostAdapterContracts",
@@ -17,6 +18,7 @@ const modules = [
   "modelRuntime",
   "nativeWebTools",
   "openAiCompatible",
+  "openAiResponses",
   "providerStreamWatchdog",
   "sessionRepository",
   "sessionTranscriptRecall",

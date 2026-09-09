@@ -1,5 +1,6 @@
 export * from "./agentEngine.js";
 export * from "./agentToolLoop.js";
+export * from "./client.js";
 export * from "./codex.js";
 export * from "./embeddedAgentWeb.js";
 export * from "./hostAdapterContracts.js";
@@ -12,6 +13,7 @@ export * from "./modelRequestScheduler.js";
 export * from "./modelRuntime.js";
 export * from "./nativeWebTools.js";
 export * from "./openAiCompatible.js";
+export * from "./openAiResponses.js";
 export * from "./providerStreamWatchdog.js";
 export * from "./sessionRepository.js";
 export * from "./sessionTranscriptRecall.js";

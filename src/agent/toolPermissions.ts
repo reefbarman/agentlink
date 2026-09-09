@@ -68,5 +68,8 @@ export function getToolsForMode(
       allowed.add(tool);
     }
   }
+  if (mode.slug === "review") {
+    allowed.add("write_file");
+  }
   return allowed;
 }

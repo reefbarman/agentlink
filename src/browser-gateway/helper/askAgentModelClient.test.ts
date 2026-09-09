@@ -191,6 +191,20 @@ describe("BrowserGatewayAskAgentModelClient", () => {
         reference_image_paths: ["reference.png"],
       }),
     ).toMatchObject({ success: false, status: "invalid_native_tool_input" });
+    expect(
+      parseAskAgentDeferredNativeToolInput("generate_image", {
+        prompt: "polished diagram",
+        image_model: "gpt-image-2.5-sunburst",
+        reference_image_ids: ["image_1"],
+      }),
+    ).toMatchObject({
+      success: true,
+      data: {
+        prompt: "polished diagram",
+        image_model: "gpt-image-2.5-sunburst",
+        reference_image_ids: ["image_1"],
+      },
+    });
     expect(parseAskAgentDeferredNativeToolInput("unknown", {})).toMatchObject({
       success: false,
       status: "native_tool_not_invocable",
@@ -732,6 +746,15 @@ describe("BrowserGatewayAskAgentModelClient", () => {
     );
     expect(generateImageParameters.parameters?.properties).not.toHaveProperty(
       "reference_image_paths",
+    );
+    expect(generateImageParameters.parameters?.properties).toHaveProperty(
+      "image_model",
+    );
+    expect(generateImageParameters.parameters?.properties).toHaveProperty(
+      "reference_image_ids",
+    );
+    expect(generateImageParameters.parameters?.properties).toHaveProperty(
+      "use_recent_images",
     );
     const presentImagesTool = (
       (body.tools as

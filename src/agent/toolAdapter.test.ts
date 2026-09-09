@@ -442,6 +442,96 @@ describe("tool usage telemetry project attribution", () => {
     });
   });
 
+  it("allows review-mode temp writes without preparing a workspace mutation", async () => {
+    const { handleWriteFile } = await import("../tools/writeFile.js");
+    vi.mocked(handleWriteFile).mockClear();
+    const prepareWorkspaceMutation = vi.fn();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      prepareWorkspaceMutation,
+    });
+    const filePath = path.join(os.tmpdir(), "agentlink-review.md");
+
+    const result = await runtime.executeTool({
+      name: "write_file",
+      input: { path: filePath, content: "review" },
+      context: {
+        sessionId: "test-session",
+        mode: "review",
+        availableToolNames: new Set(["read_file", "write_file"]),
+        modeAllowedToolNames: new Set(["read_file", "write_file"]),
+      },
+    });
+
+    expect(result).not.toMatchObject({
+      data: { status: "tool_not_in_mode" },
+    });
+    expect(handleWriteFile).toHaveBeenCalledOnce();
+    expect(prepareWorkspaceMutation).not.toHaveBeenCalled();
+  });
+
+  it("rejects review-mode relative temp-looking paths before mutation preparation", async () => {
+    const { handleWriteFile } = await import("../tools/writeFile.js");
+    vi.mocked(handleWriteFile).mockClear();
+    const prepareWorkspaceMutation = vi.fn();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      prepareWorkspaceMutation,
+    });
+
+    const result = await runtime.executeTool({
+      name: "write_file",
+      input: { path: "../agentlink-review.md", content: "review" },
+      context: {
+        sessionId: "test-session",
+        mode: "review",
+        availableToolNames: new Set(["read_file", "write_file"]),
+        modeAllowedToolNames: new Set(["read_file", "write_file"]),
+      },
+    });
+
+    expect(result).toMatchObject({
+      isError: true,
+      data: {
+        path: "../agentlink-review.md",
+        reason: "review_mode_temporary_write_only",
+      },
+    });
+    expect(handleWriteFile).not.toHaveBeenCalled();
+    expect(prepareWorkspaceMutation).not.toHaveBeenCalled();
+  });
+
+  it("rejects review-mode workspace writes before mutation preparation", async () => {
+    const { handleWriteFile } = await import("../tools/writeFile.js");
+    vi.mocked(handleWriteFile).mockClear();
+    const prepareWorkspaceMutation = vi.fn();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      prepareWorkspaceMutation,
+    });
+
+    const result = await runtime.executeTool({
+      name: "write_file",
+      input: { path: "src/file.ts", content: "review" },
+      context: {
+        sessionId: "test-session",
+        mode: "review",
+        availableToolNames: new Set(["read_file", "write_file"]),
+        modeAllowedToolNames: new Set(["read_file", "write_file"]),
+      },
+    });
+
+    expect(result).toMatchObject({
+      isError: true,
+      data: {
+        path: "src/file.ts",
+        reason: "review_mode_temporary_write_only",
+      },
+    });
+    expect(handleWriteFile).not.toHaveBeenCalled();
+    expect(prepareWorkspaceMutation).not.toHaveBeenCalled();
+  });
+
   it("rejects advertised tools outside the current mode's allowance", async () => {
     const runtime = createAgentToolRuntime(mockCtx);
 
@@ -1657,7 +1747,7 @@ describe("getAgentTools", () => {
     expect(names).not.toContain("ddg-search__search");
     expect(names).not.toContain("ddg-search__fetch_content");
 
-    // Should NOT include write tools or foreground-only helpers.
+    // Background review profiles stay fully read-only.
     expect(names).not.toContain("write_file");
     expect(names).not.toContain("apply_diff");
     expect(names).not.toContain("find_and_replace");

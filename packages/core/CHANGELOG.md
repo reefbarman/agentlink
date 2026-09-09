@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Adds `createAgentClient` for request-scoped text, text streaming, typed JSON, and bounded tool workflows without session or lease storage, plus generic OpenAI-compatible, standalone OpenAI Responses API-key, and standalone Codex OAuth provider factories. The Responses backends preserve authoritative completion/refusal/truncation evidence, map supported native JSON Schema to `text.format`, enforce bounded output/retry controls, keep credentials request-scoped, and reject unsupported endpoint/model options before dispatch.
 - Upgrades the OpenAI SDK to 7.10.0; its Node 22 minimum is compatible with the existing Node 22.19+ runtime requirement. Existing Codex streaming and cache-routing contracts remain unchanged.
 
 - Supports Codex OAuth prompt cache keys and optional runtime-only `CodexTurnState` routing in the shared stream/completion helpers. Hosts allocate a fresh holder per logical turn, bind conversation and private auth identity, and never persist it. The transport captures/echoes the first valid turn-state header and retries explicit pre-stream routing-field rejection once without the optimization.

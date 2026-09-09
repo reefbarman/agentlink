@@ -20,6 +20,8 @@ Add `--include-node-host` when needed. The command emits content-addressed tarba
 - [x] Install all three tarballs outside the repository and its `node_modules` ancestry with exact local dependency overrides.
 - [x] Type-check and runtime-load every packed core export path under ESM and CommonJS without source aliases.
 - [x] Run a Node consumer with one provider-qualified catalog model.
+- [x] Run text, text streaming, native typed JSON, prompt-validated JSON, and an authorized tool workflow through the stateless client with no session, lease, or interaction adapter.
+- [x] Run standalone OpenAI Responses API-key typed output and Codex OAuth tool workflows with synthetic SSE, exact endpoint/auth checks, and no network access.
 - [x] Exercise hard-coded and catalog-driven model selection.
 - [x] Execute two schema-defined, principal-scoped host tools.
 - [x] Stream turns through shared session/lease stores for two tenants.
@@ -45,4 +47,4 @@ Add `--include-node-host` when needed. The command emits content-addressed tarba
 - [x] Document package-pair rollback in [`packages/core/README.md`](../../packages/core/README.md).
 - [ ] Re-vendor with `npm run vendor:core-sdk`, copy `vendor/agentlink` before dependency installation in every Docker/add-on build, and prove a clean deployment with no pre-existing `node_modules`.
 
-This fixture preserves the E8a synthetic non-MCP runtime proof and completes full E8 with a packed Node-host remote-MCP path. WealthFlow remains an external integration under validation, not yet production proof; its clean packaging, privacy, lifecycle, event handling, and approval integration gates still need to pass.
+This fixture preserves the E8a synthetic non-MCP runtime proof, covers stateless typed generation, text streaming, request-scoped tool workflows, and both standalone Responses backends, and completes full E8 with a packed Node-host remote-MCP path. WealthFlow remains an external integration under validation, not yet production proof; its clean packaging, privacy, lifecycle, event handling, and approval integration gates still need to pass.

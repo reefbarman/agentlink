@@ -347,6 +347,7 @@ async function main() {
       "@agentlink/node-host": `file:${nodeHostTarball}`,
       "@agentlink/protocol": `file:${protocolTarball}`,
     };
+    packageJson.dependencies.zod = exactLockedVersion(rootLock, "zod");
     packageJson.devDependencies = Object.fromEntries(
       ["@types/node", "esbuild", "typescript"].map((name) => [
         name,
@@ -424,6 +425,8 @@ async function main() {
       { stdout: cjsCount },
       { stdout },
       { stdout: mcpStdout },
+      { stdout: typedStdout },
+      { stdout: responsesStdout },
     ] = await Promise.all([
       run("node", ["all-exports-esm.mjs"], { cwd: consumerDirectory }),
       run("node", ["all-exports-cjs.cjs"], { cwd: consumerDirectory }),
@@ -431,12 +434,16 @@ async function main() {
       run("node", ["node-host-remote-mcp.mjs"], {
         cwd: consumerDirectory,
       }),
+      run("node", ["typed-generation.mjs"], { cwd: consumerDirectory }),
+      run("node", ["responses-backends.mjs"], { cwd: consumerDirectory }),
     ]);
     if (Number(esmCount) !== exportCount || Number(cjsCount) !== exportCount) {
       throw new Error("Not every packed export loaded under ESM and CommonJS");
     }
     const result = JSON.parse(stdout.trim());
     const mcpResult = JSON.parse(mcpStdout.trim());
+    const typedResult = JSON.parse(typedStdout.trim());
+    const responsesResult = JSON.parse(responsesStdout.trim());
     if (
       result.ok !== true ||
       result.catalogModels !== 1 ||
@@ -448,6 +455,33 @@ async function main() {
     ) {
       throw new Error(
         `Packed consumer returned an invalid result: ${stdout.trim()}`,
+      );
+    }
+    if (
+      typedResult.ok !== true ||
+      typedResult.text !== "plain text" ||
+      typedResult.nativeSuggestions !== 2 ||
+      typedResult.promptAllowed !== true ||
+      typedResult.streamedText !== "streamed text" ||
+      typedResult.toolRun !== "completed" ||
+      typedResult.toolOutcomes !== 1 ||
+      typedResult.requests !== 6 ||
+      typedResult.sessionsRequired !== false
+    ) {
+      throw new Error(
+        `Packed typed-generation consumer returned an invalid result: ${typedStdout.trim()}`,
+      );
+    }
+    if (
+      responsesResult.ok !== true ||
+      responsesResult.openAIObject !== "OpenAI" ||
+      responsesResult.codexRun !== "completed" ||
+      responsesResult.codexTools !== 1 ||
+      responsesResult.requests !== 3 ||
+      responsesResult.sessionsRequired !== false
+    ) {
+      throw new Error(
+        `Packed Responses backends consumer returned an invalid result: ${responsesStdout.trim()}`,
       );
     }
     if (
@@ -493,6 +527,8 @@ async function main() {
           protocolVersion: protocolPack.version,
           exportPaths: exportCount,
           remoteMcpAcceptance: mcpResult,
+          typedGenerationAcceptance: typedResult,
+          responsesBackendsAcceptance: responsesResult,
           esmAndCjsExportsLoaded: true,
           browserAndEdgeImportsRejected: true,
           protocolBrowserImportAccepted: true,

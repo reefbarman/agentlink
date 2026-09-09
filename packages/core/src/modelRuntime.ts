@@ -164,6 +164,20 @@ export interface CoreModelCapabilities {
   supportsCaching: boolean;
   supportsImages: boolean;
   supportsToolUse: boolean;
+  /** Provider-native constrained output supported by this exact model/endpoint. */
+  structuredOutput?: "json_schema";
+  /** Sampling temperature is supported on both complete and stream operations. */
+  supportsTemperature?: true;
+  /** The endpoint accepts and enforces a per-request maximum output token count. */
+  supportsMaxOutputTokens?: true;
+  /** Request controls enforced by the backend rather than merely observed. */
+  requestControls?: {
+    maxRetries: true;
+    beforeModelDispatch: true;
+    maxOutputBytes: true;
+  };
+  /** The backend distinguishes observed provider termination from inference. */
+  completionEvidence?: "authoritative";
   hostedWeb?: CoreHostedWebCapabilities;
   contextWindow: number;
   maxInputTokens?: number;
@@ -202,6 +216,42 @@ export interface CoreModelProviderRequestAttempt {
   model: string;
 }
 
+export interface CoreModelJsonSchemaOutputFormat {
+  type: "json_schema";
+  name: string;
+  schema: CoreModelJsonSchema;
+  strict?: boolean;
+}
+
+export type CoreModelOutputFormat = CoreModelJsonSchemaOutputFormat;
+
+export interface CoreModelExecutionControls {
+  /** Number of retries after the first physical model request. */
+  maxRetries: number;
+  /** Enforced synchronously immediately before every physical model request. */
+  beforeModelDispatch: (attempt: CoreModelProviderRequestAttempt) => void;
+  /** Maximum accumulated provider output retained by the backend. */
+  maxOutputBytes: number;
+}
+
+export class CoreModelOutputLimitError extends Error {
+  readonly code = "model_output_limit_exceeded";
+
+  constructor(readonly maxOutputBytes: number) {
+    super(`Model output exceeded the ${maxOutputBytes}-byte limit`);
+    this.name = "CoreModelOutputLimitError";
+  }
+}
+
+export class CoreModelAttemptLimitError extends Error {
+  readonly code = "model_attempt_limit_exceeded";
+
+  constructor(readonly maxAttempts: number) {
+    super(`Model request exceeded the ${maxAttempts}-attempt limit`);
+    this.name = "CoreModelAttemptLimitError";
+  }
+}
+
 export interface CoreModelRequestBase {
   model: string;
   systemPrompt: string;
@@ -211,7 +261,11 @@ export interface CoreModelRequestBase {
   reasoningMode?: "standard" | "pro";
   cache?: CoreModelCacheOptions;
   state?: CoreModelStateOptions;
+  outputFormat?: CoreModelOutputFormat;
+  executionControls?: CoreModelExecutionControls;
   providerHints?: CoreModelProviderHints;
+  /** Sampling temperature; providers must honour or reject it explicitly. */
+  temperature?: number;
   signal?: AbortSignal;
   /**
    * Physical request-attempt hook. Providers invoke this immediately before
@@ -234,9 +288,7 @@ export interface CoreModelStreamRequest extends CoreModelRequestBase {
   thinking?: { budgetTokens: number };
 }
 
-export interface CoreModelCompleteRequest extends CoreModelRequestBase {
-  temperature?: number;
-}
+export interface CoreModelCompleteRequest extends CoreModelRequestBase {}
 
 export interface CoreModelServerToolUsage {
   webSearchRequests?: number;
@@ -261,6 +313,8 @@ export interface CoreModelCompleteResult {
   providerResponseId?: string;
   assistantMessage?: CoreModelMessage;
   stopReason?: CoreModelStopReason;
+  /** Whether the provider explicitly supplied a recognized terminal reason. */
+  terminationEvidence?: "observed" | "inferred";
 }
 
 export type CoreModelStopReason =
@@ -294,6 +348,7 @@ export type CoreModelStreamEvent =
       type: "model_stop";
       reason: CoreModelStopReason;
       assistantMessage: CoreModelMessage;
+      terminationEvidence?: "observed" | "inferred";
     }
   | ({ type: "usage" } & CoreModelUsage & { providerResponseId?: string })
   | { type: "done" };
@@ -312,6 +367,7 @@ export async function collectCoreModelCompleteResult(
   let providerResponseId: string | undefined;
   let assistantMessage: CoreModelMessage | undefined;
   let stopReason: CoreModelStopReason | undefined;
+  let terminationEvidence: "observed" | "inferred" | undefined;
 
   for await (const event of events) {
     if (event.type === "text_delta") {
@@ -328,6 +384,7 @@ export async function collectCoreModelCompleteResult(
     } else if (event.type === "model_stop") {
       assistantMessage = event.assistantMessage;
       stopReason = event.reason;
+      terminationEvidence = event.terminationEvidence;
     }
   }
 
@@ -347,6 +404,7 @@ export async function collectCoreModelCompleteResult(
     providerResponseId,
     ...(assistantMessage ? { assistantMessage } : {}),
     ...(stopReason ? { stopReason } : {}),
+    ...(terminationEvidence ? { terminationEvidence } : {}),
   };
 }
 

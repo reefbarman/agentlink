@@ -51,6 +51,18 @@
         "default": "./dist/cjs/agentToolLoop.cjs"
       }
     },
+    "./client": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/client.d.ts",
+        "default": "./dist/client.js"
+      },
+      "require": {
+        "types": "./dist/cjs/client.d.cts",
+        "default": "./dist/cjs/client.cjs"
+      }
+    },
     "./codex": {
       "browser": null,
       "edge": null,
@@ -193,6 +205,18 @@
       "require": {
         "types": "./dist/cjs/openAiCompatible.d.cts",
         "default": "./dist/cjs/openAiCompatible.cjs"
+      }
+    },
+    "./openai-responses": {
+      "browser": null,
+      "edge": null,
+      "import": {
+        "types": "./dist/openAiResponses.d.ts",
+        "default": "./dist/openAiResponses.js"
+      },
+      "require": {
+        "types": "./dist/cjs/openAiResponses.d.cts",
+        "default": "./dist/cjs/openAiResponses.cjs"
       }
     },
     "./provider-stream-watchdog": {

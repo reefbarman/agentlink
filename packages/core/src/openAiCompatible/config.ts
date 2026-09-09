@@ -78,6 +78,7 @@ export interface OpenAiCompatibleConnectionDto {
   headers?: Record<string, string>;
   allowInsecureHttp?: boolean;
   auxiliaryModel?: string;
+  supportsStoreFalse?: boolean;
   models: OpenAiCompatibleModelDto[];
 }
 
@@ -93,6 +94,7 @@ export interface OpenAiCompatibleModelDto {
   reasoningEfforts?: CoreReasoningEffort[];
   defaultReasoningEffort?: CoreReasoningEffort;
   supportsImages?: boolean;
+  structuredOutput?: "json_schema";
   modelFamily?: OpenAiCompatibleModelFamily;
 }
 
@@ -116,6 +118,7 @@ export interface NormalizedOpenAiCompatibleConnection {
   headers?: Readonly<Record<string, string>>;
   allowInsecureHttp: boolean;
   auxiliaryModel?: string;
+  supportsStoreFalse?: boolean;
   models: readonly NormalizedOpenAiCompatibleModel[];
   runtimeProfile: OpenAiCompatibleRuntimeProfile;
 }
@@ -211,6 +214,7 @@ export function toOpenAiCompatibleRuntimeProfile(
     ...(headers ? { headers } : {}),
     timeoutMs: connection.timeoutMs,
     authRequired: connection.authKey !== undefined,
+    ...(connection.supportsStoreFalse ? { supportsStoreFalse: true } : {}),
     models: Object.fromEntries(
       connection.models.map((model) => [
         model.id,
@@ -295,6 +299,11 @@ function parseConnection(
     `${path}.auxiliaryModel`,
     context,
     MAX_ID_LENGTH,
+  );
+  const supportsStoreFalse = readOptionalBoolean(
+    raw.supportsStoreFalse,
+    `${path}.supportsStoreFalse`,
+    context,
   );
 
   if (!Array.isArray(raw.models)) {
@@ -382,6 +391,7 @@ function parseConnection(
     ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
     allowInsecureHttp: allowInsecureHttp ?? false,
     ...(auxiliaryModel === undefined ? {} : { auxiliaryModel }),
+    ...(supportsStoreFalse ? { supportsStoreFalse: true } : {}),
     models,
   } satisfies Omit<NormalizedOpenAiCompatibleConnection, "runtimeProfile">;
 
@@ -477,6 +487,20 @@ function parseModel(
     `${path}.modelFamily`,
     context,
   );
+  const structuredOutput =
+    raw.structuredOutput === undefined || raw.structuredOutput === "json_schema"
+      ? raw.structuredOutput
+      : undefined;
+  if (
+    raw.structuredOutput !== undefined &&
+    raw.structuredOutput !== "json_schema"
+  ) {
+    issue(
+      context,
+      `${path}.structuredOutput`,
+      'Structured output must be "json_schema" when configured.',
+    );
+  }
   const reasoningEfforts = parseReasoningEfforts(
     raw.reasoningEfforts,
     `${path}.reasoningEfforts`,
@@ -575,6 +599,7 @@ function parseModel(
       supportsCaching: false,
       supportsImages: supportsImages ?? false,
       supportsToolUse,
+      ...(structuredOutput ? { structuredOutput } : {}),
       contextWindow,
       ...(maxInputTokens === undefined ? {} : { maxInputTokens }),
       maxOutputTokens,

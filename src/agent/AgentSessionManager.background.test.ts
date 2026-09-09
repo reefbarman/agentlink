@@ -3871,7 +3871,7 @@ describe("AgentSessionManager background agents", () => {
     const result = await mgr.waitForBackground(spawned.sessionId);
 
     expect(result).toContain("Partial ACP result");
-    expect(result).toContain("ACP background agent refused the request.");
+    expect(result).toContain("acp_stop:refusal");
     expect(mgr.getBackgroundStatus(spawned.sessionId)).toMatchObject({
       status: "error",
       done: true,
@@ -3881,6 +3881,60 @@ describe("AgentSessionManager background agents", () => {
       partialOutput: expect.stringContaining("Partial ACP result"),
     });
   });
+
+  it.each(["cancelled", "refusal", "max_tokens", "max_turn_requests"] as const)(
+    "does not promote an ACP envelope after explicit %s termination",
+    async (stopReason) => {
+      configHost.getBackgroundAgentSettings.mockReturnValue({
+        defaultAgent: "acp:claude",
+        acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+      });
+      const envelope = {
+        type: "review_findings",
+        findings: [],
+        emptyDiff: false,
+      };
+      const acpBackgroundRunner = {
+        run: vi.fn(async (request: any) => {
+          request.onEvent({
+            type: "update",
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: JSON.stringify(envelope) },
+            },
+          });
+          request.onEvent({ type: "stop", response: { stopReason } });
+        }),
+      };
+      const mgr = new AgentSessionManager(
+        config,
+        "/tmp",
+        undefined,
+        false,
+        undefined,
+        undefined,
+        { maxConcurrent: 3 },
+        { host: { config: configHost, acpBackgroundRunner } },
+      );
+      mgr.setToolContext(toolCtx);
+      const spawned = await mgr.spawnBackground({
+        task: "external review",
+        message: "review this",
+        expectedResult: "review_findings",
+      });
+      const result = JSON.parse(await mgr.waitForBackground(spawned.sessionId));
+      expect(result).toMatchObject({
+        status: stopReason === "cancelled" ? "cancelled" : "failed",
+        terminalReason: `acp_stop:${stopReason}`,
+        partialOutput: expect.stringContaining("review_findings"),
+      });
+      expect(mgr.getBackgroundCompletion(spawned.sessionId)).toMatchObject({
+        status: stopReason === "cancelled" ? "cancelled" : "error",
+        terminalReason: `acp_stop:${stopReason}`,
+        resultText: undefined,
+      });
+    },
+  );
 
   it("creates background engines through the host without caching an idle interactive engine", async () => {
     const providers = new ProviderRegistry();
@@ -6080,6 +6134,125 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it.each([undefined, "", "   "])(
+    "does not promote missing text output (%s) to a completed result",
+    (text) => {
+      const mgr = new AgentSessionManager(config, "/tmp");
+      const session = {
+        id: "bg-empty-text",
+        status: "idle",
+        getLastFinalMarker: () => undefined,
+        getLastAssistantText: () => text,
+        fleetMetadata: { delegation: { expectedResult: "text" } },
+      };
+      const resolved = (mgr as any).resolveBackgroundResult(
+        session,
+        "(background agent completed without output)",
+      );
+      expect(resolved.resultState).toBe("incomplete_expected_result");
+      expect(JSON.parse(resolved.resultText)).toMatchObject({
+        status: "incomplete_expected_result",
+        expectedResultIssue: expect.stringContaining(
+          "without a completed final text result",
+        ),
+      });
+    },
+  );
+
+  it("preserves unfinalized native text-review narration as incomplete evidence", () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const resolved = (mgr as any).resolveBackgroundResult(
+      {
+        id: "bg-text-review",
+        status: "idle",
+        getLastFinalMarker: () => undefined,
+        getLastAssistantText: () => "I'll inspect the plan.",
+        fleetMetadata: {
+          backend: "native",
+          taskClass: "review_plan",
+          delegation: { expectedResult: "text" },
+        },
+      },
+      "fallback",
+    );
+    expect(resolved).toMatchObject({
+      resultState: "incomplete_expected_result",
+      partialResult: "I'll inspect the plan.",
+    });
+  });
+
+  it("returns the final text summary rather than earlier progress narration", () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const resolved = (mgr as any).resolveBackgroundResult(
+      {
+        id: "bg-text-summary",
+        status: "idle",
+        getLastFinalMarker: () => ({
+          status: "completed",
+          summary: "No actionable findings.",
+        }),
+        getLastAssistantText: () => "I'll inspect the plan.",
+        fleetMetadata: {
+          backend: "native",
+          taskClass: "review_plan",
+          delegation: { expectedResult: "text" },
+        },
+      },
+      "fallback",
+    );
+    expect(resolved).toMatchObject({
+      resultState: "completed",
+      resultText: "No actionable findings.",
+    });
+  });
+
+  it.each(["max_tokens", "refusal"] as const)(
+    "does not promote native provider %s partial output to success",
+    (reason) => {
+      const mgr = new AgentSessionManager(config, "/tmp");
+      const resolved = (mgr as any).resolveBackgroundResult(
+        {
+          id: "bg-provider-stop",
+          status: "idle",
+          getLastFinalMarker: () => undefined,
+          getLastAssistantText: () => "Partial review evidence.",
+          fleetMetadata: {
+            backend: "native",
+            terminalReason: `provider_stop:${reason}`,
+            delegation: { expectedResult: "text" },
+          },
+        },
+        "fallback",
+      );
+      expect(resolved).toMatchObject({
+        resultState:
+          reason === "refusal" ? "failed" : "incomplete_expected_result",
+        terminalReason: `provider_stop:${reason}`,
+        partialResult: "Partial review evidence.",
+      });
+    },
+  );
+
+  it("does not display a persisted empty completion as successful", () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const resolved = (mgr as any).resolveBackgroundResult(
+      {
+        id: "bg-restored-empty",
+        status: "idle",
+        getLastFinalMarker: () => undefined,
+        getLastAssistantText: () => undefined,
+        fleetMetadata: {
+          resultState: "completed",
+          finalResult: "(background agent completed without output)",
+          delegation: { expectedResult: "text" },
+        },
+      },
+      "fallback",
+      { preferDurableMetadata: true },
+    );
+    expect(resolved.resultState).toBe("incomplete_expected_result");
+  });
+
   it("preserves a valid final marker across a later provider failure", () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     const structuredResult = {
@@ -6516,6 +6689,10 @@ describe("AgentSessionManager background agents", () => {
       expectedResult: "text",
     });
     const session = (mgr as any).sessions.get(spawned.sessionId);
+    session.getLastFinalMarker = () => ({
+      status: "completed",
+      result: { type: "text", text: "background result" },
+    });
 
     expect(session.fleetMetadata).toEqual(
       expect.objectContaining({
@@ -7516,9 +7693,13 @@ describe("AgentSessionManager background agents", () => {
       .find((s: any) => s.id === result.sessionId);
     expect(info).toMatchObject({ status: "cancelled" });
     expect(info?.completedAt).toEqual(expect.any(Number));
-    await expect(mgr.waitForBackground(result.sessionId)).resolves.toBe(
-      "background result",
-    );
+    expect(
+      JSON.parse(await mgr.waitForBackground(result.sessionId)),
+    ).toMatchObject({
+      status: "cancelled",
+      terminalReason: "cancelled_by_user",
+      partialOutput: "partial work",
+    });
 
     // Cleanup: resolve the pending promise so the generator can exit
     yieldControl();

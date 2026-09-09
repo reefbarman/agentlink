@@ -1,4 +1,11 @@
-import { resolveAndValidatePath, getRelativePath } from "../util/paths.js";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import {
+  getRelativePath,
+  isPathInsideHostTemporaryDirectory,
+  resolveAndValidatePath,
+} from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 
@@ -62,6 +69,22 @@ export async function handleWriteFile(
       params.path,
     );
     const relPath = getRelativePath(filePath);
+
+    if (
+      mode === "review" &&
+      (inWorkspace ||
+        !path.isAbsolute(params.path) ||
+        !isPathInsideHostTemporaryDirectory(filePath))
+    ) {
+      return errorResult(
+        "Review mode can only use write_file for files inside the host temporary directory",
+        {
+          path: relPath,
+          reason: "review_mode_temporary_write_only",
+          temporaryDirectory: os.tmpdir(),
+        },
+      );
+    }
 
     // Note: for writes, the diff view acts as the approval gate for outside-workspace paths.
     // No separate path access prompt — that would be double-prompting. The PathRule is stored

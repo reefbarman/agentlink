@@ -1,4 +1,5 @@
 import * as fs from "fs";
+import * as os from "node:os";
 import * as path from "path";
 import * as vscode from "vscode";
 
@@ -100,6 +101,20 @@ export function isPathWithinRoot(filePath: string, rootPath: string): boolean {
       relative !== ".." &&
       !path.isAbsolute(relative))
   );
+}
+
+export function isPathInsideHostTemporaryDirectory(filePath: string): boolean {
+  const canonicalTarget = canonicalizePath(filePath);
+  const temporaryRoots = [os.tmpdir()];
+  if (process.platform === "darwin") {
+    temporaryRoots.push("/tmp", "/private/tmp");
+  }
+  return temporaryRoots
+    .map(canonicalizePath)
+    .some(
+      (root) =>
+        canonicalTarget !== root && isPathWithinRoot(canonicalTarget, root),
+    );
 }
 
 /**

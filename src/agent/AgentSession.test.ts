@@ -1844,6 +1844,26 @@ describe("AgentSession", () => {
   });
 });
 
+it("preserves lightweight review prompts across every rebuild path", async () => {
+  const session = await AgentSession.create({
+    mode: "review",
+    config: testConfig,
+    projectScope: testProjectScope,
+    background: true,
+    isBackground: true,
+    lightweight: true,
+  });
+  mockedBuildPromptArtifacts.mockClear();
+  session.approveForMe = true;
+  await session.rebuildSystemPrompt();
+  await session.updateModelSelection("another-model", "another-provider");
+  await session.setMode("review");
+  expect(mockedBuildPromptArtifacts).toHaveBeenCalledTimes(3);
+  for (const call of mockedBuildPromptArtifacts.mock.calls) {
+    expect(call[2]).toMatchObject({ lightweight: true, isBackground: true });
+  }
+});
+
 describe("in-flight assistant snapshot", () => {
   it("accumulates the streaming response from agent events", async () => {
     const session = await makeSession();

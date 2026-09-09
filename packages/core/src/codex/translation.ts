@@ -2,6 +2,7 @@ import type * as OpenAIResponses from "openai/resources/responses/responses";
 
 import type {
   CoreModelMessage,
+  CoreModelOutputFormat,
   CoreModelToolDefinition,
 } from "../modelRuntime.js";
 import type { CoreHostedToolDefinition } from "@agentlink/protocol/web-access-policy";
@@ -432,6 +433,7 @@ export function buildCodexResolvedRequestBody(args: {
   cache?: { key?: string; retention?: CodexPromptCacheRetention };
   reasoningEffort?: CoreReasoningEffort;
   reasoningMode?: "standard" | "pro";
+  outputFormat?: CoreModelOutputFormat;
   tools?: CodexTool[];
   hostedTools?: readonly CoreHostedToolDefinition[];
 }): CodexResolvedRequestBodyResult {
@@ -453,6 +455,7 @@ export function buildCodexResolvedRequestBody(args: {
       requestedEffort: args.reasoningEffort,
     }),
     reasoningMode: args.reasoningMode,
+    outputFormat: args.outputFormat,
     tools: args.tools,
     hostedTools: args.hostedTools,
     caps: getEndpointCaps({ method: args.authMethod }),
@@ -479,6 +482,7 @@ export function buildCodexEndpointRequestBody(args: {
   reasoningEffort?: CoreReasoningEffort;
   reasoningMode?: "standard" | "pro";
   textVerbosity?: CodexTextVerbosity;
+  outputFormat?: CoreModelOutputFormat;
   tools?: CodexTool[];
   hostedTools?: readonly CoreHostedToolDefinition[];
   caps: ResponsesCaps;
@@ -487,6 +491,11 @@ export function buildCodexEndpointRequestBody(args: {
   if (args.hostedTools?.length && !args.caps.supportsHostedWebSearch) {
     throw new Error(
       "Codex hosted web search is unavailable for this authenticated endpoint",
+    );
+  }
+  if (args.outputFormat && !args.caps.supportsStructuredOutput) {
+    throw new Error(
+      "This Responses endpoint does not support native structured output",
     );
   }
   // Responses Lite has no provider-hosted tool channel. Omit hosted tools
@@ -536,6 +545,7 @@ export function buildCodexEndpointRequestBody(args: {
     textVerbosity: args.caps.supportsTextVerbosity
       ? args.textVerbosity
       : undefined,
+    outputFormat: args.outputFormat,
     tools: args.useResponsesLite ? undefined : tools,
     parallelToolCalls: args.useResponsesLite ? false : undefined,
     include,
@@ -558,6 +568,7 @@ export function buildCodexStreamRequestBody(args: {
   reasoning?: Reasoning;
   previousResponseId?: string;
   textVerbosity?: CodexTextVerbosity;
+  outputFormat?: CoreModelOutputFormat;
   tools?: CodexTool[];
   parallelToolCalls?: boolean;
   include?: CodexRequestBody["include"];
@@ -576,7 +587,25 @@ export function buildCodexStreamRequestBody(args: {
       ? ({ max_output_tokens: args.maxTokens } as Record<string, unknown>)
       : {}),
     ...(args.reasoning ? { reasoning: args.reasoning } : {}),
-    ...(args.textVerbosity ? { text: { verbosity: args.textVerbosity } } : {}),
+    ...(args.textVerbosity || args.outputFormat
+      ? {
+          text: {
+            ...(args.textVerbosity ? { verbosity: args.textVerbosity } : {}),
+            ...(args.outputFormat
+              ? {
+                  format: {
+                    type: "json_schema",
+                    name: args.outputFormat.name,
+                    schema: args.outputFormat.schema,
+                    ...(args.outputFormat.strict !== undefined
+                      ? { strict: args.outputFormat.strict }
+                      : {}),
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
     ...(args.previousResponseId
       ? { previous_response_id: args.previousResponseId }
       : {}),

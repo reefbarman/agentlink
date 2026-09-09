@@ -29,6 +29,7 @@ import {
   parseOpenAiCompatibleStreamEvents,
 } from "./streamParser.js";
 
+import { CoreModelOutputLimitError } from "../modelRuntime.js";
 import { buildOpenAiCompatibleChatRequest } from "./translation.js";
 import { parseOpenAiCompatibleSse } from "./sse.js";
 
@@ -61,17 +62,30 @@ export async function* streamOpenAiCompatibleCompletion(
     maxTokens: args.request.maxTokens,
     reasoningEffort: args.request.reasoningEffort,
     tools: args.request.tools,
+    outputFormat: args.request.outputFormat,
+    store: args.request.state?.store,
+    supportsStoreFalse: args.profile.supportsStoreFalse,
     temperature: args.temperature,
   });
   const estimatedInputTokens = estimateOpenAiCompatibleInputTokens(body);
   const fetchImpl = args.fetch ?? globalThis.fetch;
-  const maxRetries = Math.max(0, args.maxRetries ?? DEFAULT_MAX_RETRIES);
+  const maxRetries = Math.max(
+    0,
+    args.request.executionControls?.maxRetries ??
+      args.maxRetries ??
+      DEFAULT_MAX_RETRIES,
+  );
   const retryDelay = args.retryDelay ?? defaultRetryDelay;
   const state = { outputStarted: false };
   const abort = createRequestAbort(args.request.signal, args.profile.timeoutMs);
 
   try {
     for (let attempt = 0; ; attempt += 1) {
+      if (args.request.executionControls) {
+        args.request.executionControls.beforeModelDispatch({
+          model: model.model,
+        });
+      }
       try {
         const response = await executeFetch({
           profile: args.profile,
@@ -121,6 +135,8 @@ export async function* streamOpenAiCompatibleCompletion(
           state,
           sensitiveValues: args.apiKey ? [args.apiKey] : undefined,
           availableToolNames: args.request.tools?.map((tool) => tool.name),
+          maxOutputBytes: args.request.executionControls?.maxOutputBytes,
+          includeTerminationEvidence: Boolean(args.request.executionControls),
         });
         return;
       } catch (error) {
@@ -192,6 +208,7 @@ export async function collectOpenAiCompatibleCompletion(
   let providerResponseId: string | undefined;
   let assistantMessage: CoreModelMessage | undefined;
   let stopReason: CoreModelStopReason | undefined;
+  let terminationEvidence: "observed" | "inferred" | undefined;
   let contentBlocks: CoreModelContentBlock[] | undefined;
   const toolCalls: OpenAiCompatibleCompletionToolCall[] = [];
 
@@ -229,6 +246,7 @@ export async function collectOpenAiCompatibleCompletion(
     } else if (event.type === "model_stop") {
       assistantMessage = event.assistantMessage;
       stopReason = event.reason;
+      terminationEvidence = event.terminationEvidence;
     }
   }
 
@@ -251,6 +269,7 @@ export async function collectOpenAiCompatibleCompletion(
     providerResponseId,
     assistantMessage: assistantMessage ?? fallbackMessage,
     stopReason: stopReason ?? (toolCalls.length > 0 ? "tool_use" : "end_turn"),
+    ...(terminationEvidence ? { terminationEvidence } : {}),
   };
 }
 
@@ -260,7 +279,7 @@ async function executeFetch(args: {
   body: unknown;
   fetch: OpenAiCompatibleFetch;
   signal: AbortSignal;
-  onProviderRequestAttempt: () => void;
+  onProviderRequestAttempt?: () => void;
   onHeaders: () => void;
 }): Promise<Response> {
   if (args.profile.authRequired && !args.apiKey) {
@@ -279,7 +298,7 @@ async function executeFetch(args: {
     headers.set("X-OpenRouter-Title", "AgentLink");
     headers.set("X-OpenRouter-Categories", "ide-extension");
   }
-  args.onProviderRequestAttempt();
+  args.onProviderRequestAttempt?.();
   const response = await args.fetch(
     `${args.profile.baseUrl.replace(/\/$/, "")}/chat/completions`,
     {
@@ -343,10 +362,14 @@ async function* observeBody(
   now?: () => number,
 ): AsyncGenerator<Uint8Array> {
   const reader = body.getReader();
+  let completed = false;
   try {
     while (true) {
       const result = await reader.read();
-      if (result.done) return;
+      if (result.done) {
+        completed = true;
+        return;
+      }
       onTransportActivity?.({
         kind: "body",
         at: now?.() ?? Date.now(),
@@ -355,6 +378,7 @@ async function* observeBody(
       yield result.value;
     }
   } finally {
+    if (!completed) await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 }
@@ -407,7 +431,8 @@ function normalizeFacadeError(
   abort: { timedOut: () => boolean },
   timeoutMs: number,
   sensitiveValues?: readonly string[],
-): OpenAiCompatibleRequestError | OpenAiCompatibleAbortError {
+): Error {
+  if (error instanceof CoreModelOutputLimitError) return error;
   if (abort.timedOut()) return new OpenAiCompatibleTimeoutError(timeoutMs);
   return toOpenAiCompatibleRequestError(error, { sensitiveValues });
 }

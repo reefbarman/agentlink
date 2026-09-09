@@ -151,6 +151,105 @@ describe("parseCodexResponseStreamEvents", () => {
     ]);
   });
 
+  it("preserves legacy refusal text without changing its stop reason", async () => {
+    const events = await collect([
+      { type: "response.refusal.delta", delta: "cannot comply" },
+      {
+        type: "response.completed",
+        response: { status: "completed", usage: {} },
+      },
+    ]);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "model_stop",
+        reason: "end_turn",
+      }),
+    );
+  });
+
+  it("preserves authoritative refusal and truncation termination", async () => {
+    const refusal = [];
+    for await (const event of parseCodexResponseStreamEvents(
+      toAsyncIterable([
+        { type: "response.refusal.delta", delta: "cannot comply" },
+        {
+          type: "response.completed",
+          response: { status: "completed", usage: {} },
+        },
+      ]),
+      undefined,
+      { includeTerminationEvidence: true },
+    )) {
+      refusal.push(event);
+    }
+    expect(refusal).toContainEqual(
+      expect.objectContaining({
+        type: "model_stop",
+        reason: "refusal",
+      }),
+    );
+
+    const truncated = [];
+    for await (const event of parseCodexResponseStreamEvents(
+      toAsyncIterable([
+        { type: "response.output_text.delta", delta: '{"partial":' },
+        {
+          type: "response.completed",
+          response: {
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+            usage: {},
+          },
+        },
+      ]),
+      undefined,
+      { includeTerminationEvidence: true },
+    )) {
+      truncated.push(event);
+    }
+    expect(truncated).toContainEqual(
+      expect.objectContaining({
+        type: "model_stop",
+        reason: "max_tokens",
+        terminationEvidence: "observed",
+      }),
+    );
+  });
+
+  it("marks a stream without a terminal response as inferred", async () => {
+    const events = [];
+    for await (const event of parseCodexResponseStreamEvents(
+      toAsyncIterable([
+        { type: "response.output_text.delta", delta: "partial" },
+      ]),
+      undefined,
+      { includeTerminationEvidence: true },
+    )) {
+      events.push(event);
+    }
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "model_stop",
+        reason: "end_turn",
+        terminationEvidence: "inferred",
+      }),
+    );
+  });
+
+  it("enforces the accumulated output byte limit", async () => {
+    await expect(async () => {
+      for await (const _event of parseCodexResponseStreamEvents(
+        toAsyncIterable([
+          { type: "response.output_text.delta", delta: "too large" },
+        ]),
+        undefined,
+        { maxOutputBytes: 4 },
+      )) {
+        // Consume the stream.
+      }
+    }).rejects.toMatchObject({ code: "model_output_limit_exceeded" });
+  });
+
   it("keeps top-level cache creation counters additive to reported input", async () => {
     const events = await collect([
       {

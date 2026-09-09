@@ -256,13 +256,27 @@ describe("OpenAiCompatibleBackend", () => {
     );
     expect(constructorResolver).not.toHaveBeenCalled();
 
+    await backend.complete(request(), {
+      principal,
+      authContext: {
+        authProvider: {
+          requestLease: vi.fn(),
+          revokeLease: vi.fn(),
+        },
+      },
+    });
+    expect(authorizations).toEqual(["Bearer request", "Bearer constructor"]);
+    expect(constructorResolver).toHaveBeenCalledWith(
+      expect.objectContaining({ principal }),
+    );
+
     await expect(
       backend.complete(request(), {
         principal: { tenantId: "other", subjectId: "subject" },
         authContext: undefined,
       }),
     ).rejects.toBeInstanceOf(OpenAiCompatibleRequestError);
-    expect(constructorResolver).not.toHaveBeenCalled();
+    expect(constructorResolver).toHaveBeenCalledTimes(1);
   });
 
   it("requires constructor credentials to bind to one principal", () => {

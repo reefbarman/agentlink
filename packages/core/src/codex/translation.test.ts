@@ -101,6 +101,54 @@ describe("Codex translation", () => {
     ]);
   });
 
+  it("maps native JSON Schema output to Responses text.format", () => {
+    expect(
+      buildCodexResolvedRequestBody({
+        authMethod: "apiKey",
+        model: "gpt-5.4-mini",
+        input: [],
+        instructions: "Return JSON.",
+        outputFormat: {
+          type: "json_schema",
+          name: "moderation",
+          schema: {
+            type: "object",
+            properties: { explanation: { type: "string" } },
+          },
+          strict: false,
+        },
+      }).body,
+    ).toMatchObject({
+      text: {
+        format: {
+          type: "json_schema",
+          name: "moderation",
+          schema: {
+            type: "object",
+            properties: { explanation: { type: "string" } },
+          },
+          strict: false,
+        },
+      },
+    });
+  });
+
+  it("rejects native structured output on Responses Lite", () => {
+    expect(() =>
+      buildCodexResolvedRequestBody({
+        authMethod: "oauth",
+        model: "gpt-6-astra",
+        input: [],
+        instructions: "Return JSON.",
+        outputFormat: {
+          type: "json_schema",
+          name: "result",
+          schema: { type: "object" },
+        },
+      }),
+    ).toThrow(/does not support native structured output/);
+  });
+
   it("re-attaches tool result media as a user message after the function output", () => {
     const input = translateCodexMessages([
       {
