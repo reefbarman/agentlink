@@ -1,3 +1,4 @@
+import { isCodexModelServedOnChatgptBackend } from "./models.js";
 import { summarizeHtmlErrorText } from "@agentlink/protocol/agent-error-presentation";
 
 export interface CodexErrorActions {
@@ -299,6 +300,7 @@ export function getCodexErrorHandlingAction(params: {
 }
 
 export function isCodexUsageLimitError(error: CodexErrorShape): boolean {
+  if (isCodexMisreportedChatgptUsageLimit(error)) return true;
   if (error.status !== 429) return false;
 
   const text = extractCodexErrorText(error);
@@ -321,6 +323,19 @@ export function isCodexUsageLimitError(error: CodexErrorShape): boolean {
   }
 
   return false;
+}
+
+/**
+ * The ChatGPT backend can report exhausted usage as an unsupported-model 400.
+ * Only accept that contradiction for models in the known OAuth-served roster,
+ * so a genuinely unsupported model keeps its original error.
+ */
+function isCodexMisreportedChatgptUsageLimit(error: CodexErrorShape): boolean {
+  if (error.status !== 400) return false;
+  const match = extractCodexErrorText(error).match(
+    /the ['"]([^'"]+)['"] model is not supported when using codex with a chatgpt account/,
+  );
+  return Boolean(match?.[1] && isCodexModelServedOnChatgptBackend(match[1]));
 }
 
 export function isCodexModelNotFoundError(error: CodexErrorShape): boolean {
@@ -350,9 +365,10 @@ export function buildCodexUsageLimitExhaustedError(params: {
   sourceError: CodexErrorShape;
 }): CodexErrorDetails {
   return {
-    message:
-      params.sourceError.message ||
-      "Codex API error 429: The usage limit has been reached on all signed-in accounts.",
+    message: isCodexMisreportedChatgptUsageLimit(params.sourceError)
+      ? "Codex usage limit has been reached for all signed-in ChatGPT accounts. Wait for it to reset or sign in with another account."
+      : params.sourceError.message ||
+        "Codex API error 429: The usage limit has been reached on all signed-in accounts.",
     status: params.sourceError.status,
     rawMessage: params.sourceError.rawMessage,
     rawCode: params.sourceError.rawCode,

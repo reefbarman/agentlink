@@ -23,6 +23,12 @@ A configured credential does not prove the provider request will succeed. Check 
 
 For OpenAI-compatible setup, see [the complete reference](complete-reference.md#configure-openai-compatible-models).
 
+## Changing models mentions unsaved User Settings
+
+Current AgentLink releases save picker defaults in `~/.agentlink/session-preferences.json`, not VS Code User Settings. VS Code imports older AgentLink defaults once, then model, mode, thinking-level, and compaction changes should not touch `settings.json`.
+
+If an installed build still says it could not save a shared default because User Settings has unsaved changes, reload every VS Code window after updating and confirm the new extension version is active in each window. The message comes from the older User Settings persistence path.
+
 ## My ChatGPT/Codex accounts disappeared after updating on macOS
 
 AgentLink now uses a shared macOS Keychain account pool for VS Code, AgentLink Desktop, and helper-owned Browser Ask Agent. Legacy OAuth credentials that existed only in VS Code SecretStorage are deliberately not imported or deleted. Sign in again from VS Code or **AgentLink Desktop > Manage Accounts**; subsequent account additions, active-account changes, sign-outs, refreshes, and usage-limit rotation are shared on that Mac.
@@ -34,6 +40,7 @@ If Keychain is locked or unavailable, AgentLink fails closed and keeps the store
 AgentLink lists `gpt-6-astra` for ChatGPT/Codex OAuth and OpenAI API-key users without probing whether the current subscription account or API project has rollout access. If access is not enabled yet, AgentLink leaves Astra selected and shows the provider's normal error instead of silently changing models or credentials.
 
 - Confirm the intended ChatGPT account or OpenAI API project has Astra access and available quota.
+- The ChatGPT backend can return `The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account` after that account exhausts its Codex allowance. AgentLink treats that exact contradiction as a usage limit, rotates to another signed-in account when available, and otherwise shows usage-limit guidance instead of repeating the misleading provider message.
 - A body-less OAuth `400` does not by itself prove an entitlement problem; it can also represent another ChatGPT/Codex backend rejection. For Astra, AgentLink identifies that exact failure, confirms that it sent the Responses Lite contract, explains that the server supplied no exact reason, and includes the OpenAI request ID or Cloudflare Ray when the response exposes one.
 - OAuth exposes Astra's `ultra` preset and sends its catalog-mapped `xhigh` wire effort through Codex's Responses Lite transport. API-key requests clamp a saved `ultra` preference to `max`, and the UI shows that effective effort.
 - AgentLink budgets OAuth Astra against Codex's 872K catalog maximum context window; the bundled 272K value is the CLI's smaller base window, not its maximum.

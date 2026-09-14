@@ -34,6 +34,7 @@ Task rules:
 - Before starting substantive work, make sure the list reflects the actual scope and current item
 - Before moving from one item to the next, call todo_write in the same transition: mark the finished item completed and the next item in_progress
 - Mark an item completed immediately after its outcome is achieved and verified; do not batch status updates until the end
+- Tool calls, edits, and narration do not update the visible list by themselves. Call todo_write at each real task transition, in the same response where the transition happens
 - After new evidence, user direction, or scope changes, promptly add, revise, reorder, or remove items so descriptions and statuses remain true
 - Never silently drop unfinished items. Remove one only when it is no longer part of the user's ask or is explicitly superseded, and preserve completed items as progress history
 - ${TODO_COMPACTION_GUIDANCE}
@@ -60,17 +61,23 @@ Task rules:
         properties: {
           id: {
             type: "string",
-            description: "Unique identifier for this task",
+            minLength: 1,
+            pattern: "\\S",
+            description: "Unique non-blank identifier for this task",
           },
           content: {
             type: "string",
+            minLength: 1,
+            pattern: "\\S",
             description:
-              "Imperative description of the task (e.g. 'Run tests')",
+              "Non-blank imperative description of the task (e.g. 'Run tests')",
           },
           activeForm: {
             type: "string",
+            minLength: 1,
+            pattern: "\\S",
             description:
-              "Present continuous form (e.g. 'Running tests'). Shown when task is in_progress.",
+              "Non-blank present continuous form (e.g. 'Running tests'). Shown when task is in_progress.",
           },
           status: {
             type: "string",
@@ -102,14 +109,26 @@ export function handleTodoWrite(input: TodoToolInput): {
   content: string;
   todos: TodoItem[];
 } {
-  const todos = Array.isArray(input.todos) ? input.todos : [];
+  const normalized = removeBlankTodoItems(
+    Array.isArray(input.todos) ? input.todos : [],
+  );
+  const todos = normalized.todos;
 
   const counts = countTodos(todos);
   const summary = `Updated: ${counts.completed}/${counts.total} complete, ${counts.inProgress} in progress, ${counts.pending} pending`;
   const guidance: string[] = [];
+  if (normalized.removed > 0) {
+    guidance.push(
+      `Ignored ${normalized.removed} blank todo ${normalized.removed === 1 ? "item" : "items"}. Resubmit the complete list with non-blank id, content, and activeForm values before continuing.`,
+    );
+  }
   if (counts.inProgress > 1) {
     guidance.push(
       `Warning: ${counts.inProgress} items are in_progress; reconcile the complete list so exactly one actual current item is in_progress before continuing.`,
+    );
+  } else if (counts.inProgress === 0 && counts.pending > 0) {
+    guidance.push(
+      "Warning: no item is in_progress. If work is actively continuing, resubmit the complete list with the actual current item in_progress before doing more work. A pending-only list is valid while waiting for the user or when the turn is blocked or cancelled.",
     );
   }
 
@@ -124,6 +143,46 @@ export function handleTodoWrite(input: TodoToolInput): {
     content: [summary, ...guidance].join(" "),
     todos,
   };
+}
+
+function removeBlankTodoItems(items: TodoItem[]): {
+  todos: TodoItem[];
+  removed: number;
+} {
+  let removed = 0;
+  let changed = false;
+  const todos: TodoItem[] = [];
+
+  for (const item of items) {
+    if (
+      !item ||
+      !isNonBlankString(item.id) ||
+      !isNonBlankString(item.content) ||
+      !isNonBlankString(item.activeForm)
+    ) {
+      removed += 1;
+      changed = true;
+      continue;
+    }
+
+    if (item.children?.length) {
+      const normalizedChildren = removeBlankTodoItems(item.children);
+      removed += normalizedChildren.removed;
+      if (normalizedChildren.todos !== item.children) {
+        todos.push({ ...item, children: normalizedChildren.todos });
+        changed = true;
+        continue;
+      }
+    }
+
+    todos.push(item);
+  }
+
+  return { todos: changed ? todos : items, removed };
+}
+
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function countOlderCompletedItems(todos: TodoItem[]): number {
@@ -188,7 +247,7 @@ export function getLatestTodoState(messages: MessageParam[]): TodoItem[] {
           ? (block.input as Record<string, unknown>)
           : null;
       if (block.name === TODO_TOOL_NAME && Array.isArray(input?.todos)) {
-        todos = input.todos as TodoItem[];
+        todos = removeBlankTodoItems(input.todos as TodoItem[]).todos;
       } else if (
         block.name === "set_task_status" &&
         input?.status === "completed" &&

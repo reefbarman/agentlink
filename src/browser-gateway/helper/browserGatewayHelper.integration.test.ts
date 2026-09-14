@@ -528,6 +528,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     } catch {
       // ignore
     }
+    vi.restoreAllMocks();
     await clearBrowserGatewayHelperDiscovery();
   });
 
@@ -6628,9 +6629,10 @@ describe("BrowserGatewayHelper proxy routing", () => {
           });
           return new Response(
             `data: ${JSON.stringify({
-              type: "response.image_generation_call.partial_image",
-              partial_image_b64: tinyPngBase64,
+              type: "response.image_generation_call.completed",
+              result: tinyPngBase64,
               size: "1024x1024",
+              output_format: "png",
             })}\n\ndata: [DONE]\n\n`,
             { status: 200, headers: { "content-type": "text/event-stream" } },
           );
@@ -6803,6 +6805,280 @@ describe("BrowserGatewayHelper proxy routing", () => {
     );
     expect(upstreamRequests).not.toContain(
       "/internal/ask-agent/generate-image",
+    );
+  });
+
+  it("forwards Browser Image 2.5 controls, edit targets, masks, and provider MIME for API keys", async () => {
+    const originalFetch = globalThis.fetch;
+    const providerRequests: Array<Record<string, unknown>> = [];
+    const tinyPngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4AWMAAQAABQABNtCI3QAAAABJRU5ErkJggg==";
+    const tinyWebpBase64 = Buffer.from([
+      0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+    ]).toString("base64");
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("https://api.openai.com/v1/responses")) {
+          const body = JSON.parse(String(init?.body)) as Record<
+            string,
+            unknown
+          >;
+          providerRequests.push(body);
+          const imageTool = (body.tools as Array<Record<string, unknown>>)[0];
+          const outputFormat = imageTool.output_format;
+          const events =
+            providerRequests.length === 1
+              ? [
+                  {
+                    type: "response.image_generation_call.completed",
+                    item_id: "target",
+                    output_index: 0,
+                    result: tinyPngBase64,
+                    output_format: "png",
+                  },
+                  {
+                    type: "response.image_generation_call.completed",
+                    item_id: "mask",
+                    output_index: 1,
+                    result: tinyPngBase64,
+                    output_format: "png",
+                  },
+                ]
+              : [
+                  {
+                    type: "response.image_generation_call.completed",
+                    item_id: "edited",
+                    output_index: 0,
+                    result:
+                      outputFormat === "webp" ? tinyWebpBase64 : tinyPngBase64,
+                    output_format: outputFormat,
+                  },
+                ];
+          return new Response(
+            `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
+            { status: 200, headers: { "content-type": "text/event-stream" } },
+          );
+        }
+        return await originalFetch(input, init);
+      },
+    );
+
+    let generationCallCount = 0;
+    const modelClient = makeAskAgentToolLoopClient(async ({ toolMessages }) => {
+      if (toolMessages?.length) {
+        return { text: "Image generated.", toolCalls: [] };
+      }
+      generationCallCount += 1;
+      return {
+        text: "Generating image.",
+        toolCalls: [
+          {
+            id: `advanced-image-call-${generationCallCount}`,
+            name: "call_native_tool",
+            input: {
+              name: "generate_image",
+              input:
+                generationCallCount === 1
+                  ? { prompt: "Create an edit target and mask", count: 2 }
+                  : {
+                      prompt: "Edit the selected area",
+                      image_model: "gpt-image-2.5-sunburst",
+                      output_size: "1024x1024",
+                      quality: "xhigh",
+                      background: "transparent",
+                      output_format: "webp",
+                      output_compression: 80,
+                      action: "edit",
+                      input_fidelity: "high",
+                      edit_image_id: "image_1",
+                      mask_image_id: "image_2",
+                    },
+            },
+          },
+        ],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      credentialMethod: "apiKey",
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const approvePending = async (decision: "accept" | "accept-session") => {
+      let approvalId = "";
+      await waitForExpectation(async () => {
+        const response = await fetch(
+          `${harness.helperBase}/api/ask-agent/session`,
+          { headers: { Cookie: harness.cookie } },
+        );
+        const body = (await response.json()) as {
+          snapshot: {
+            ui: {
+              approval: {
+                id?: string;
+                detail?: string;
+                writeChoices?: Array<{ value: string }>;
+              } | null;
+            };
+          };
+        };
+        approvalId = body.snapshot.ui.approval?.id ?? "";
+        expect(approvalId).toMatch(/^ask-agent-generate-image-/);
+        if (generationCallCount === 2) {
+          expect(body.snapshot.ui.approval?.detail).toContain(
+            "Output size: 1024x1024",
+          );
+          expect(body.snapshot.ui.approval?.detail).toContain("Quality: xhigh");
+          expect(body.snapshot.ui.approval?.detail).toContain(
+            "Background: transparent",
+          );
+          expect(body.snapshot.ui.approval?.detail).toContain(
+            "Output format: webp",
+          );
+          expect(body.snapshot.ui.approval?.detail).toContain(
+            "Output compression: 80",
+          );
+          expect(body.snapshot.ui.approval?.detail).toContain("Action: edit");
+          expect(body.snapshot.ui.approval?.detail).toContain(
+            "Edit target: image_1",
+          );
+          expect(body.snapshot.ui.approval?.detail).toContain("Mask: image_2");
+          expect(
+            body.snapshot.ui.approval?.writeChoices?.map(({ value }) => value),
+          ).toEqual(["accept", "reject"]);
+        }
+      });
+      const response = await fetch(
+        `${harness.helperBase}/api/ask-agent/approval`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: harness.cookie,
+          },
+          body: JSON.stringify({ id: approvalId, decision }),
+        },
+      );
+      expect(response.ok).toBe(true);
+    };
+
+    const initialSend = fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Create source images" }),
+    });
+    await approvePending("accept-session");
+    expect((await initialSend).ok).toBe(true);
+
+    const editSend = fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Edit the image" }),
+    });
+    await approvePending("accept");
+    const editResponse = await editSend;
+    const editBody = (await editResponse.json()) as {
+      snapshot: {
+        session: {
+          foreground: {
+            projectedMessages: ChatMessage[];
+          };
+        };
+      };
+    };
+
+    expect(editResponse.ok).toBe(true);
+    expect(providerRequests).toHaveLength(2);
+    expect(providerRequests[1]).toMatchObject({
+      tools: [
+        {
+          type: "image_generation",
+          model: "gpt-image-2.5-sunburst",
+          size: "1024x1024",
+          quality: "xhigh",
+          background: "transparent",
+          output_format: "webp",
+          output_compression: 80,
+          action: "edit",
+          input_fidelity: "high",
+          input_image_mask: {
+            image_url: expect.stringContaining("data:image/png;base64,"),
+          },
+        },
+      ],
+      input: [
+        expect.objectContaining({
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "input_image",
+              image_url: expect.stringContaining("data:image/png;base64,"),
+            }),
+          ]),
+        }),
+      ],
+    });
+    const imageToolBlock =
+      editBody.snapshot.session.foreground.projectedMessages
+        .flatMap((message) => message.blocks ?? [])
+        .find(
+          (block) =>
+            block.type === "tool_call" && block.id === "advanced-image-call-2",
+        );
+    expect(imageToolBlock).toMatchObject({
+      resultImages: [{ mimeType: "image/webp", data: tinyWebpBase64 }],
+    });
+  });
+
+  it("rejects OAuth Image 2.5 controls before browser approval or provider execution", async () => {
+    const originalFetch = globalThis.fetch;
+    const providerRequests: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith("https://chatgpt.com/backend-api/codex/responses")) {
+        providerRequests.push(url);
+        throw new Error("provider should not execute");
+      }
+      return await originalFetch(input, init);
+    });
+    const toolResults: CoreModelMessage[][] = [];
+    const modelClient = makeAskAgentToolLoopClient(async ({ toolMessages }) => {
+      toolResults.push([...(toolMessages ?? [])]);
+      return toolMessages?.length
+        ? { text: "Advanced options are unavailable on OAuth.", toolCalls: [] }
+        : {
+            text: "Generating image.",
+            toolCalls: [
+              {
+                id: "oauth-advanced-image",
+                name: "call_native_tool",
+                input: {
+                  name: "generate_image",
+                  input: { prompt: "Create an image", quality: "xhigh" },
+                },
+              },
+            ],
+          };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Use Image 2.5 quality" }),
+    });
+    const body = (await send.json()) as {
+      snapshot: { ui: { approval: unknown } };
+    };
+
+    expect(send.ok).toBe(true);
+    expect(body.snapshot.ui.approval).toBeNull();
+    expect(providerRequests).toEqual([]);
+    expect(JSON.stringify(toolResults)).toContain(
+      "Codex OAuth support is not yet verified for image option: quality",
     );
   });
 

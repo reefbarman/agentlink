@@ -189,10 +189,21 @@
     {
       "name": "generate_image",
       "parameters": [
+        "action",
+        "background",
         "count",
+        "edit_image_id",
+        "edit_image_path",
         "image_model",
+        "input_fidelity",
+        "mask_image_id",
+        "mask_image_path",
+        "output_compression",
+        "output_format",
         "output_path",
+        "output_size",
         "prompt",
+        "quality",
         "reference_image_ids",
         "reference_image_paths",
         "size",
@@ -807,5 +818,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "48d189027fd021cb5c2fe69bc531e13180c1282de43f3a8bb9a8e0efca0a892f"
+  "revision": "08499dd44555aaf84f5686f5ed4e7880c1e4b3fb131ba0e7ccd0830e4e7f4aa4"
 }

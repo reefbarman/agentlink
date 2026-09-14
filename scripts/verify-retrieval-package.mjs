@@ -31,6 +31,7 @@ const REQUIRED_PATHS = [
   "resources/builtin-skills/documentation/README.md",
   "resources/builtin-skills/documentation/references/capabilities.md",
   "resources/builtin-skills/documentation/references/getting-started.md",
+  "resources/builtin-skills/documentation/references/standalone-cli.md",
   "resources/builtin-skills/documentation/references/embedding-agentlink.md",
   "resources/builtin-skills/documentation/references/tools.md",
   "resources/builtin-skills/documentation/references/troubleshooting.md",

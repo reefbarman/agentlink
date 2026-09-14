@@ -7,6 +7,7 @@ telemetry-reports/
 releases/
 desktop-releases/
 apps/desktop/package-stage/
+apps/cli/artifacts/
 .env.local
 plans/*
 .mcp.json

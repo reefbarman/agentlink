@@ -235,6 +235,19 @@ export type AgentTurnEvent =
       };
     })
   | (AgentTurnEventBase & {
+      readonly type: "thinking.started";
+      readonly thinkingId: string;
+    })
+  | (AgentTurnEventBase & {
+      readonly type: "thinking.delta";
+      readonly thinkingId: string;
+      readonly text: string;
+    })
+  | (AgentTurnEventBase & {
+      readonly type: "thinking.completed";
+      readonly thinkingId: string;
+    })
+  | (AgentTurnEventBase & {
       readonly type: "text.delta";
       readonly text: string;
     })

@@ -6,6 +6,7 @@
   "semi": true,
   "singleQuote": false,
   "trailingComma": "all",
+  "ignorePatterns": ["apps/cli/THIRD_PARTY_NOTICES.md"],
   "sortImports": false,
   "sortPackageJson": false
 }

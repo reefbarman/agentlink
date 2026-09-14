@@ -10,13 +10,15 @@ import type {
 } from "@agentlink/protocol/terminal";
 import type { CommandReviewContextEntry } from "./commandApprovalReview.js";
 import {
+  DEFAULT_GUARDIAN_REVIEW_TIMEOUT_MS,
   runGuardianReview,
   type GuardianReviewContextResolver,
   type GuardianReviewResult,
 } from "./guardianReview.js";
 import { isMemoryProtectedPath } from "./protectedPaths.js";
 
-export const DEFAULT_ACTION_REVIEW_TIMEOUT_MS = 90_000;
+export const DEFAULT_ACTION_REVIEW_TIMEOUT_MS =
+  DEFAULT_GUARDIAN_REVIEW_TIMEOUT_MS;
 export const ACTION_REVIEW_EVIDENCE_LIMITS = Object.freeze({
   maxContextEntries: 8,
   maxContextEntryBytes: 1_000,

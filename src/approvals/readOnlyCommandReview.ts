@@ -1,10 +1,12 @@
 import {
+  DEFAULT_GUARDIAN_REVIEW_TIMEOUT_MS,
   runGuardianReview,
   type GuardianReviewContextResolver,
   type GuardianReviewResult,
 } from "./guardianReview.js";
 
-export const DEFAULT_READ_ONLY_COMMAND_REVIEW_TIMEOUT_MS = 45_000;
+export const DEFAULT_READ_ONLY_COMMAND_REVIEW_TIMEOUT_MS =
+  DEFAULT_GUARDIAN_REVIEW_TIMEOUT_MS;
 
 const MAX_RAW_INPUT_LENGTH = 4_000;
 

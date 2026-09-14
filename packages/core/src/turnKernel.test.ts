@@ -429,6 +429,107 @@ describe("headless E4 turn kernel", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
+  it("persists and executes host-prepared private input without exposing it", async () => {
+    const backend = new ScriptedBackend([
+      toolTurn([{ id: "call-prepared", name: "run_prepared" }]),
+      finalTurn("Done"),
+    ]);
+    const repository = new InMemoryInteractionRepository();
+    const tokens = createTurnInteractionTokenService({
+      secret: "s".repeat(32),
+      now: () => 100,
+      createResponseId: () => "response-prepared",
+    });
+    const handler = vi.fn(async () => ({ modelContent: "ran prepared input" }));
+    const kernel = createHeadlessTurnKernel({
+      models: createRuntime(backend),
+      resolveTools: async () => [
+        defineTool({
+          name: "run_prepared",
+          description: "Run a host-prepared operation",
+          inputSchema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+            additionalProperties: false,
+          },
+          effect: "write",
+          authorization: "required",
+          displayInput: (input) => ({ query: input.query }),
+          handler,
+        }),
+      ],
+      authorizeToolCall: async () => ({
+        decision: "require_user",
+        summary: "Approve prepared operation?",
+        displayContent: { safe: true },
+        preparedInput: {
+          operationId: "opaque-1",
+          secret: "private launch value",
+        },
+      }),
+      interactions: repository,
+      interactionTokens: tokens,
+      createInteractionId: () => "interaction-prepared",
+      now: () => 100,
+    });
+
+    const requested = toolTurn([{ id: "call-prepared", name: "run_prepared" }]);
+    const event = requested.events.find(
+      (candidate) => candidate.type === "tool_done",
+    );
+    if (event?.type === "tool_done") event.input = { query: "model input" };
+    (backend as unknown as { turns: ScriptedTurn[] }).turns = [
+      requested,
+      finalTurn("Done"),
+    ];
+
+    const suspended = await collect(kernel.runTurn(prepared()));
+    expect(suspended.result).toMatchObject({
+      status: "suspended",
+      interaction: {
+        displayInput: { query: "model input" },
+        displayContent: { safe: true },
+      },
+    });
+    expect(JSON.stringify(suspended.events)).not.toContain(
+      "private launch value",
+    );
+    expect(repository.record?.continuation.pendingToolCalls).toEqual([
+      {
+        id: "call-prepared",
+        name: "run_prepared",
+        input: { operationId: "opaque-1", secret: "private launch value" },
+      },
+    ]);
+
+    const token = await kernel.issueInteractionResponseToken({
+      interactionId: "interaction-prepared",
+      interactionRevision: "interaction-revision-1",
+      principal: { tenantId: "tenant-a", subjectId: "subject-a" },
+      sessionId: "session-1",
+      turnId: "turn-1",
+      expectedSessionRevision: "session-revision-2",
+      decision: "allow",
+    });
+    await collect(
+      kernel.resumeInteraction({
+        interactionId: "interaction-prepared",
+        interactionRevision: "interaction-revision-1",
+        principal: { tenantId: "tenant-a", subjectId: "subject-a" },
+        sessionId: "session-1",
+        turnId: "turn-1",
+        expectedSessionRevision: "session-revision-2",
+        decision: "allow",
+        responseToken: token,
+      }),
+    );
+    expect(handler).toHaveBeenCalledWith(
+      { operationId: "opaque-1", secret: "private launch value" },
+      expect.any(Object),
+    );
+  });
+
   it("binds Zod defaults and transforms to approval, durable continuation, and resumed execution", async () => {
     const turn = toolTurn([{ id: "call-zod", name: "update_record" }]);
     const requested = turn.events.find((event) => event.type === "tool_done");
@@ -1006,8 +1107,8 @@ describe("headless E4 turn kernel", () => {
   it("surfaces only explicitly public host-tool failures", async () => {
     const backend = new ScriptedBackend([
       toolTurn([
-        { id: "call-public", name: "public_failure", input: {} },
-        { id: "call-private", name: "private_failure", input: {} },
+        { id: "call-public", name: "public_failure" },
+        { id: "call-private", name: "private_failure" },
       ]),
       finalTurn(),
     ]);
@@ -1199,6 +1300,54 @@ describe("headless E4 turn kernel", () => {
     );
     expect(requested).toBeDefined();
     expect(requested).not.toHaveProperty("displayInput");
+  });
+
+  it("forwards model thinking events in order", async () => {
+    const backend = new ScriptedBackend([
+      {
+        events: [
+          { type: "thinking_start", thinkingId: "thinking-1" },
+          {
+            type: "thinking_delta",
+            thinkingId: "thinking-1",
+            text: "Inspecting",
+          },
+          { type: "thinking_end", thinkingId: "thinking-1" },
+          { type: "text_delta", text: "Done" },
+          {
+            type: "model_stop",
+            reason: "end_turn",
+            assistantMessage: { role: "assistant", content: "Done" },
+          },
+          { type: "done" },
+        ],
+      },
+    ]);
+    const kernel = createHeadlessTurnKernel({ models: createRuntime(backend) });
+
+    const { events, result } = await collect(kernel.runTurn(prepared()));
+
+    expect(result).toMatchObject({ status: "completed", text: "Done" });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "thinking.started",
+          thinkingId: "thinking-1",
+        }),
+        expect.objectContaining({
+          type: "thinking.delta",
+          thinkingId: "thinking-1",
+          text: "Inspecting",
+        }),
+        expect.objectContaining({
+          type: "thinking.completed",
+          thinkingId: "thinking-1",
+        }),
+      ]),
+    );
+    expect(events.map((event) => event.sequence)).toEqual(
+      events.map((_event, index) => index),
+    );
   });
 
   it("streams a bounded multi-tool conversation with exact replay and safe events", async () => {

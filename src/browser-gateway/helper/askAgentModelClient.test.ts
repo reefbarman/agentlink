@@ -31,6 +31,24 @@ describe("BrowserGatewayAskAgentModelClient", () => {
     expect(todoTool?.description).toContain(
       "3 most recent ordinary completed items",
     );
+    expect(todoTool?.description).toContain(
+      "call todo_write at each real task transition",
+    );
+    expect(todoTool?.input_schema).toMatchObject({
+      properties: {
+        todos: { items: { $ref: "#/$defs/todoItem" } },
+      },
+      $defs: {
+        todoItem: {
+          properties: {
+            id: { minLength: 1, pattern: "\\S" },
+            content: { minLength: 1, pattern: "\\S" },
+            activeForm: { minLength: 1, pattern: "\\S" },
+            children: { items: { $ref: "#/$defs/todoItem" } },
+          },
+        },
+      },
+    });
   });
 
   const baseCredential = {
@@ -172,37 +190,61 @@ describe("BrowserGatewayAskAgentModelClient", () => {
     ).toContain("manage_memory, recall_memory, generate_image, present_images");
   });
 
-  it("rejects project memory and workspace image fields in deferred Browser tools", () => {
+  it("supports Browser Image 2.5 controls while rejecting workspace image fields", () => {
     expect(
       parseAskAgentDeferredNativeToolInput("recall_memory", {
         query: "project details",
         scope: "project",
       }),
     ).toMatchObject({ success: false, status: "invalid_native_tool_input" });
-    expect(
-      parseAskAgentDeferredNativeToolInput("generate_image", {
-        prompt: "diagram",
-        output_path: "diagram.png",
-      }),
-    ).toMatchObject({ success: false, status: "invalid_native_tool_input" });
-    expect(
-      parseAskAgentDeferredNativeToolInput("generate_image", {
-        prompt: "diagram",
-        reference_image_paths: ["reference.png"],
-      }),
-    ).toMatchObject({ success: false, status: "invalid_native_tool_input" });
+    for (const forbiddenInput of [
+      { output_path: "diagram.png" },
+      { reference_image_paths: ["reference.png"] },
+      { edit_image_path: "target.png" },
+      { mask_image_path: "mask.png" },
+    ]) {
+      expect(
+        parseAskAgentDeferredNativeToolInput("generate_image", {
+          prompt: "diagram",
+          ...forbiddenInput,
+        }),
+      ).toMatchObject({
+        success: false,
+        status: "invalid_native_tool_input",
+      });
+    }
     expect(
       parseAskAgentDeferredNativeToolInput("generate_image", {
         prompt: "polished diagram",
         image_model: "gpt-image-2.5-sunburst",
-        reference_image_ids: ["image_1"],
+        size: "square",
+        output_size: "1024x1024",
+        quality: "xhigh",
+        background: "transparent",
+        output_format: "webp",
+        output_compression: "80",
+        action: "edit",
+        input_fidelity: "high",
+        edit_image_id: "image_1",
+        mask_image_id: "image_2",
+        reference_image_ids: ["image_3"],
       }),
     ).toMatchObject({
       success: true,
       data: {
         prompt: "polished diagram",
         image_model: "gpt-image-2.5-sunburst",
-        reference_image_ids: ["image_1"],
+        size: "square",
+        output_size: "1024x1024",
+        quality: "xhigh",
+        background: "transparent",
+        output_format: "webp",
+        output_compression: 80,
+        action: "edit",
+        input_fidelity: "high",
+        edit_image_id: "image_1",
+        mask_image_id: "image_2",
+        reference_image_ids: ["image_3"],
       },
     });
     expect(parseAskAgentDeferredNativeToolInput("unknown", {})).toMatchObject({

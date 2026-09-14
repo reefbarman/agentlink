@@ -272,7 +272,11 @@ describe("command approval response parser", () => {
 describe("command review context", () => {
   it("keeps bounded recent user, assistant, and tool evidence", () => {
     const context = buildCommandReviewContext([
-      { role: "user", content: "Inspect the fixture" },
+      {
+        role: "user",
+        content: "Inspect the fixture",
+        uiHint: { userMessage: { origin: "vscode" } },
+      },
       {
         role: "assistant",
         content: [
@@ -298,7 +302,11 @@ describe("command review context", () => {
     ]);
 
     expect(context).toEqual([
-      { role: "user", content: "Inspect the fixture" },
+      {
+        role: "user",
+        content: "Inspect the fixture",
+        directUserInstruction: true,
+      },
       { role: "assistant", content: "I will inspect it." },
       {
         role: "tool",
@@ -306,6 +314,109 @@ describe("command review context", () => {
           'Tool call execute_command: {"command":"strings -a fixture.bin"}',
       },
       { role: "tool", content: "Tool result tool-1: approval required" },
+    ]);
+  });
+
+  it("pins the newest direct instruction when later tool activity fills the context window", () => {
+    const context = buildCommandReviewContext([
+      {
+        role: "user",
+        content: "commit and push everything",
+        uiHint: { userMessage: { origin: "vscode" } },
+      },
+      ...Array.from({ length: 20 }, (_, index) => ({
+        role: "assistant" as const,
+        content: `later activity ${index}`,
+      })),
+    ]);
+
+    expect(context).toHaveLength(12);
+    expect(context[0]).toEqual({
+      role: "user",
+      content: "commit and push everything",
+      directUserInstruction: true,
+    });
+    expect(context.at(-1)?.content).toBe("later activity 19");
+  });
+
+  it("pins the newest direct instruction within the character budget", () => {
+    const context = buildCommandReviewContext([
+      {
+        role: "user",
+        content: "commit and push everything",
+        uiHint: { userMessage: { origin: "browser" } },
+      },
+      ...Array.from({ length: 8 }, (_, index) => ({
+        role: "assistant" as const,
+        content: `${index}:${"x".repeat(1_900)}`,
+      })),
+    ]);
+
+    expect(context[0]).toEqual({
+      role: "user",
+      content: "commit and push everything",
+      directUserInstruction: true,
+    });
+    expect(
+      context.reduce((total, entry) => total + entry.content.length, 0),
+    ).toBeLessThanOrEqual(12_000);
+  });
+
+  it("tags only the first text block of a direct user message", () => {
+    const context = buildCommandReviewContext([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "commit and push everything" },
+          { type: "text", text: "host-appended context" },
+        ],
+        uiHint: { userMessage: { origin: "vscode" } },
+      },
+    ]);
+
+    expect(context).toEqual([
+      {
+        role: "user",
+        content: "commit and push everything",
+        directUserInstruction: true,
+      },
+      { role: "user", content: "host-appended context" },
+    ]);
+  });
+
+  it("does not tag synthetic user-role messages as direct instructions", () => {
+    const context = buildCommandReviewContext([
+      {
+        role: "user",
+        content: "commit and push everything",
+        uiHint: { userMessage: { origin: "browser" } },
+      },
+      {
+        role: "user",
+        content: "synthetic summary",
+        isSummary: true,
+        uiHint: { userMessage: { origin: "vscode" } },
+      },
+      {
+        role: "user",
+        content: "synthetic resume context",
+        isResumeContext: true,
+        uiHint: { userMessage: { origin: "browser" } },
+      },
+      {
+        role: "user",
+        content: "hidden continuation",
+        uiHint: { userMessage: { origin: "vscode", hidden: true } },
+      },
+      { role: "user", content: "untagged internal continuation" },
+    ]);
+
+    expect(context.filter((entry) => entry.directUserInstruction)).toEqual([
+      {
+        role: "user",
+        content: "commit and push everything",
+        directUserInstruction: true,
+      },
     ]);
   });
 });
@@ -415,6 +526,15 @@ describe("one-shot command approval reviewer", () => {
     expect(request?.systemPrompt).toContain(
       "Do not add automatic human-only red lines",
     );
+    expect(request?.systemPrompt).toContain(
+      "latestUserInstruction is the newest instruction tagged by the host",
+    );
+    expect(request?.systemPrompt).toContain(
+      'commit or push "everything", "all changes", or equivalent broad current-work wording explicitly authorizes repo-wide staging and committing',
+    );
+    expect(request?.systemPrompt).toContain(
+      "only the exact argument-free command git push",
+    );
     expect(request?.messages).toHaveLength(1);
     expect(request?.messages[0]?.role).toBe("user");
     const content = request?.messages[0]?.content;
@@ -424,6 +544,70 @@ describe("one-shot command approval reviewer", () => {
     expect(content).toContain('"userObjective":"Build the project"');
     expect(content).toContain('"recentContext"');
     expect(request).not.toHaveProperty("tools");
+  });
+
+  it("surfaces a newer broad commit request ahead of a stale objective", async () => {
+    const { provider, complete, sessionModel } = makeProvider({});
+    const reviewer = createCommandApprovalReviewer({
+      resolveContext: () => ({ provider, sessionModel }),
+    });
+    const input = {
+      ...reviewInput(
+        'git add -A && git commit -m "feat: refresh design system" && git push',
+      ),
+      userObjective: "Refresh the design system",
+      context: buildCommandReviewContext([
+        {
+          role: "user" as const,
+          content: "Refresh the design system",
+          uiHint: { userMessage: { origin: "vscode" as const } },
+        },
+        {
+          role: "assistant" as const,
+          content: "I will finish the remaining implementation work.",
+        },
+        {
+          role: "user" as const,
+          content: "commit and push everything",
+          uiHint: { userMessage: { origin: "vscode" as const } },
+        },
+        {
+          role: "assistant" as const,
+          content: "I will inspect, commit, and push the current branch.",
+        },
+        {
+          role: "user" as const,
+          content: "Continue pending TODO work.",
+          uiHint: { userMessage: { hidden: true } },
+        },
+      ]),
+    };
+
+    await reviewer.review(input);
+
+    const content = complete.mock.calls[0]?.[0]?.messages[0]?.content;
+    expect(content).toContain(
+      '"latestUserInstruction":"commit and push everything"',
+    );
+    expect(content).toContain('"userObjective":"Refresh the design system"');
+  });
+
+  it("serializes no latest instruction when context lacks host provenance", async () => {
+    const { provider, complete, sessionModel } = makeProvider({});
+    const reviewer = createCommandApprovalReviewer({
+      resolveContext: () => ({ provider, sessionModel }),
+    });
+
+    await reviewer.review({
+      ...reviewInput("git push origin HEAD:main"),
+      context: [
+        { role: "user", content: "commit and push everything" },
+        { role: "user", content: "synthetic summary" },
+      ],
+    });
+
+    const content = complete.mock.calls[0]?.[0]?.messages[0]?.content;
+    expect(content).toContain('"latestUserInstruction":null');
   });
 
   it("returns a valid explicit escalation", async () => {
@@ -632,7 +816,7 @@ describe("one-shot command approval reviewer", () => {
     });
   });
 
-  it("uses a 90 second default deadline and at most three transient attempts", async () => {
+  it("retries hung attempts within one shared end-to-end deadline", async () => {
     vi.useFakeTimers();
     try {
       const complete = vi.fn(
@@ -641,22 +825,27 @@ describe("one-shot command approval reviewer", () => {
       const { provider, sessionModel } = makeProvider({ complete });
       const reviewer = createCommandApprovalReviewer({
         resolveContext: () => ({ provider, sessionModel }),
+        timeoutMs: 1_000,
+        attemptTimeoutMs: 400,
       });
       const pending = reviewer.review(reviewInput());
 
-      await vi.advanceTimersByTimeAsync(DEFAULT_COMMAND_REVIEW_TIMEOUT_MS - 1);
-      expect(complete).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(complete).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(complete).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(1);
       await expect(pending).resolves.toMatchObject({
         status: "timed_out",
         outcome: "deny",
       });
+      expect(DEFAULT_COMMAND_REVIEW_TIMEOUT_MS).toBe(5 * 60_000);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("retries transient completion failures no more than three times", async () => {
+  it("retries transient completion failures within the attempt limit", async () => {
     const { provider, complete, sessionModel } = makeProvider({
       complete: async () => {
         throw new Error("transient reviewer failure");
@@ -668,6 +857,44 @@ describe("one-shot command approval reviewer", () => {
 
     await expect(reviewer.review(reviewInput())).resolves.toMatchObject({
       status: "unavailable",
+      outcome: "deny",
+    });
+    expect(complete).toHaveBeenCalledTimes(MAX_COMMAND_REVIEW_ATTEMPTS);
+  });
+
+  it("retries invalid reviewer output before falling back", async () => {
+    const responses = [
+      "not json",
+      '{"outcome":"allow","rationale":"Recovered reviewer response"}',
+    ];
+    const { provider, complete, sessionModel } = makeProvider({
+      complete: async () => ({ text: responses.shift() ?? "not json" }),
+    });
+    const reviewer = createCommandApprovalReviewer({
+      resolveContext: () => ({ provider, sessionModel }),
+    });
+
+    await expect(reviewer.review(reviewInput())).resolves.toMatchObject({
+      status: "reviewed",
+      outcome: "allow",
+      rationale: "Recovered reviewer response",
+    });
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete.mock.calls[1]?.[0]?.messages[0]?.content).toContain(
+      "Your previous response was invalid",
+    );
+  });
+
+  it("returns invalid after exhausting malformed reviewer responses", async () => {
+    const { provider, complete, sessionModel } = makeProvider({
+      complete: async () => ({ text: "not json" }),
+    });
+    const reviewer = createCommandApprovalReviewer({
+      resolveContext: () => ({ provider, sessionModel }),
+    });
+
+    await expect(reviewer.review(reviewInput())).resolves.toMatchObject({
+      status: "invalid",
       outcome: "deny",
     });
     expect(complete).toHaveBeenCalledTimes(MAX_COMMAND_REVIEW_ATTEMPTS);

@@ -157,6 +157,7 @@ interface ConnectedServer {
   name: string;
   config: McpServerConfig;
   client: Client;
+  connectionController: AbortController;
   tools: ToolDefinition[];
   /** Bare tool names whose MCP annotations declare read-only behavior. */
   parallelSafeToolNames: Set<string>;
@@ -272,15 +273,27 @@ function describeOutputSchemaError(
 async function withHttpConnectLock<T>(
   url: string,
   fn: () => Promise<T>,
+  signal: AbortSignal,
 ): Promise<T> {
+  signal.throwIfAborted();
   const previous = httpConnectQueues.get(url) ?? Promise.resolve();
-  const run = previous.then(fn);
+  const run = previous.then(() => {
+    signal.throwIfAborted();
+    return fn();
+  });
   const tail = run.catch(() => {});
   httpConnectQueues.set(url, tail);
   void tail.finally(() => {
     if (httpConnectQueues.get(url) === tail) httpConnectQueues.delete(url);
   });
-  return run;
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    run.then(resolve, reject).finally(() => {
+      signal.removeEventListener("abort", onAbort);
+    });
+    if (signal.aborted) onAbort();
+  });
 }
 
 /**
@@ -292,6 +305,10 @@ export class McpClientHub {
   private servers = new Map<string, ConnectedServer>();
   private disabledServers = new Map<string, McpServerConfig>();
   private oauthProviders = new Map<string, McpOAuthProvider>();
+  private connectionAttempts = new Map<
+    string,
+    { config: McpServerConfig; controller: AbortController }
+  >();
   private globalState?: vscode.Memento;
   private authFailureCounts = new Map<string, number>();
   private invalidRedirectRecoveryAttempted = new Set<string>();
@@ -463,7 +480,11 @@ export class McpClientHub {
       ...this.disabledServers.keys(),
     ]);
     const newNames = new Set(configs.map((config) => config.name));
-    for (const name of this.servers.keys()) {
+    for (const name of new Set([
+      ...this.servers.keys(),
+      ...this.connectionAttempts.keys(),
+      ...this.oauthProviders.keys(),
+    ])) {
       if (!newNames.has(name)) await this.disconnectServer(name);
     }
     for (const name of this.disabledServers.keys()) {
@@ -736,7 +757,30 @@ export class McpClientHub {
     cfg: McpServerConfig,
     options: ConnectServerOptions = {},
   ): Promise<void> {
-    if (!(await this.configIsCurrent(cfg))) {
+    if (this.connectionAttempts.has(cfg.name)) return;
+    const controller = new AbortController();
+    const attempt = { config: cfg, controller };
+    this.connectionAttempts.set(cfg.name, attempt);
+    try {
+      await this.performConnectServer(cfg, options, controller);
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
+    } finally {
+      if (this.connectionAttempts.get(cfg.name) === attempt) {
+        this.connectionAttempts.delete(cfg.name);
+      }
+    }
+  }
+
+  private async performConnectServer(
+    cfg: McpServerConfig,
+    options: ConnectServerOptions,
+    controller: AbortController,
+  ): Promise<void> {
+    const signal = controller.signal;
+    const configCurrent = await this.configIsCurrent(cfg);
+    signal.throwIfAborted();
+    if (!configCurrent) {
       this.disabledServers.delete(cfg.name);
       await this.disconnectServer(cfg.name);
       this.onStatusChange?.(this.getServerInfos());
@@ -770,6 +814,7 @@ export class McpClientHub {
       tokenGenerationBefore:
         await this.authCoordinator.readTokenGeneration(serverIdentityHash),
     };
+    signal.throwIfAborted();
     const existing = this.servers.get(cfg.name);
     if (existing?.status === "connected") return;
     if (existing?.status === "connecting") {
@@ -799,6 +844,10 @@ export class McpClientHub {
       cfg.type === "http";
     if (isHttpServer && cfg.url && this.globalState) {
       oauthProvider = this.oauthProviders.get(cfg.name);
+      if (oauthProvider?.signal.aborted) {
+        this.oauthProviders.delete(cfg.name);
+        oauthProvider = undefined;
+      }
       if (!oauthProvider) {
         oauthProvider = new McpOAuthProvider(
           cfg.name,
@@ -822,12 +871,14 @@ export class McpClientHub {
       oauthProvider.authorizationAttempt = authorizationAttempt;
       oauthProvider.suppressRefreshTokenReauthPrompt = !afterAuth;
       await oauthProvider.start();
+      signal.throwIfAborted();
     }
 
     const entry: ConnectedServer = {
       name: cfg.name,
       config: cfg,
       client: undefined as unknown as Client,
+      connectionController: controller,
       tools: [],
       parallelSafeToolNames: new Set(),
       outputValidators: new Map(),
@@ -863,12 +914,17 @@ export class McpClientHub {
     this.onStatusChange?.(this.getServerInfos());
 
     try {
-      const transport = this.createTransport(cfg, oauthProvider);
+      const transport = this.createTransport(cfg, oauthProvider, signal);
 
       // Reconnect on unexpected close (only after a successful connected state).
       transport.onclose = () => {
         const current = this.servers.get(cfg.name);
-        if (!current || current.status === "disconnected") return;
+        if (
+          current !== entry ||
+          signal.aborted ||
+          current.status === "disconnected"
+        )
+          return;
         if (current.status !== "connected") {
           this.log(
             `[mcp:${cfg.name}] transport closed while status=${current.status}; skipping onclose reconnect`,
@@ -992,12 +1048,20 @@ export class McpClientHub {
         `[mcp:${cfg.name}] connect start type=${cfg.type ?? "stdio"} retryCount=${retryCount} afterAuth=${afterAuth} authMode=${authMode} trigger=${trigger} attemptId=${attemptId} rootAttemptId=${rootAttemptId}`,
       );
       if (isHttpServer && cfg.url) {
-        await withHttpConnectLock(cfg.url, () =>
-          entry.client.connect(transport),
+        await withHttpConnectLock(
+          cfg.url,
+          async () => {
+            signal.throwIfAborted();
+            if (this.servers.get(cfg.name) !== entry) return;
+            await entry.client.connect(transport, { signal });
+          },
+          signal,
         );
       } else {
-        await entry.client.connect(transport);
+        await entry.client.connect(transport, { signal });
       }
+      signal.throwIfAborted();
+      if (this.servers.get(cfg.name) !== entry) return;
       this.log(`[mcp:${cfg.name}] connect succeeded`);
       this.authCoordinator.record({
         type: "connect_success",
@@ -1016,6 +1080,7 @@ export class McpClientHub {
         tokenGenerationAfter:
           await this.authCoordinator.readTokenGeneration(serverIdentityHash),
       });
+      signal.throwIfAborted();
       entry.retryCount = 0;
       this.authFailureCounts.delete(cfg.name);
       this.invalidRedirectRecoveryAttempted.delete(cfg.name);
@@ -1029,14 +1094,17 @@ export class McpClientHub {
         ),
       );
 
+      signal.throwIfAborted();
       if (oauthProvider) {
         oauthProvider.suppressRefreshTokenReauthPrompt = false;
       }
       entry.status = "connected";
     } catch (err) {
+      if (signal.aborted || this.servers.get(cfg.name) !== entry) return;
       const errMsg = err instanceof Error ? err.message : String(err);
       const normalizedErr = errMsg.toLowerCase();
       const hasSavedTokens = Boolean(await oauthProvider?.tokens());
+      if (signal.aborted || this.servers.get(cfg.name) !== entry) return;
       this.log(
         `[mcp:${cfg.name}] connect exception details: ${this.describeError(err)}`,
       );
@@ -1433,8 +1501,19 @@ export class McpClientHub {
 
   private createTransport(
     cfg: McpServerConfig,
-    authProvider?: McpOAuthProvider,
+    authProvider: McpOAuthProvider | undefined,
+    signal: AbortSignal,
   ) {
+    const connectionFetch: typeof agentLinkLongPollingFetch = (input, init) => {
+      const requestSignal =
+        init?.signal ?? (input instanceof Request ? input.signal : undefined);
+      return agentLinkLongPollingFetch(input, {
+        ...init,
+        signal: requestSignal
+          ? AbortSignal.any([signal, requestSignal])
+          : signal,
+      });
+    };
     const type = cfg.type ?? "stdio";
 
     if (type === "stdio") {
@@ -1475,16 +1554,16 @@ export class McpClientHub {
           mcpFetch: createAgentPluginMcpFetch(
             cfg.url,
             cfg.headers,
-            agentLinkLongPollingFetch,
+            connectionFetch,
           ),
-          oauthFetch: agentLinkLongPollingFetch,
+          oauthFetch: connectionFetch,
         });
       }
       const headers: Record<string, string> = {};
       if (cfg.headers) Object.assign(headers, cfg.headers);
       return new SSEClientTransport(new URL(cfg.url), {
         authProvider,
-        fetch: agentLinkLongPollingFetch,
+        fetch: connectionFetch,
         requestInit: Object.keys(headers).length ? { headers } : undefined,
       });
     }
@@ -1500,12 +1579,8 @@ export class McpClientHub {
       return new StreamableHTTPClientTransport(new URL(cfg.url), {
         authProvider,
         fetch: isPlugin
-          ? createAgentPluginMcpFetch(
-              cfg.url,
-              cfg.headers,
-              agentLinkLongPollingFetch,
-            )
-          : agentLinkLongPollingFetch,
+          ? createAgentPluginMcpFetch(cfg.url, cfg.headers, connectionFetch)
+          : connectionFetch,
         requestInit: Object.keys(headers).length ? { headers } : undefined,
       });
     }
@@ -1517,8 +1592,16 @@ export class McpClientHub {
 
   private async disconnectServer(name: string): Promise<void> {
     const entry = this.servers.get(name);
-    if (!entry) return;
+    const attempt = this.connectionAttempts.get(name);
+    this.connectionAttempts.delete(name);
+    this.servers.delete(name);
+    const provider = this.oauthProviders.get(name);
+    this.oauthProviders.delete(name);
+    attempt?.controller.abort();
+    entry?.connectionController.abort();
+    provider?.stop();
     this.runtimeReconnectPending.delete(name);
+    if (!entry) return;
     if (entry.retryTimer) clearTimeout(entry.retryTimer);
     for (const state of Object.values(entry.catalogRefresh)) {
       if (state.scheduled) clearTimeout(state.scheduled);
@@ -1531,9 +1614,6 @@ export class McpClientHub {
     } catch {
       // best effort
     }
-    this.servers.delete(name);
-    this.oauthProviders.get(name)?.stop();
-    this.oauthProviders.delete(name);
   }
 
   private async configIsCurrent(
@@ -1548,6 +1628,7 @@ export class McpClientHub {
   ): import("./mcpConfig.js").McpServerConfig | undefined {
     return (
       this.servers.get(serverName)?.config ??
+      this.connectionAttempts.get(serverName)?.config ??
       this.disabledServers.get(serverName)
     );
   }
@@ -1638,12 +1719,16 @@ export class McpClientHub {
       cfg.type === "streamable-http" ||
       cfg.type === "http";
     if (isHttpServer && cfg.url && this.globalState) {
-      // Create a fresh provider with a clean slate, run the full browser flow
+      const controller = new AbortController();
+      const attempt = { config: cfg, controller };
+      this.connectionAttempts.set(name, attempt);
+      // Register before awaiting startup so disconnect can cancel manual auth too.
       const provider = new McpOAuthProvider(
         cfg.name,
         cfg.url,
         this.globalState,
       );
+      this.oauthProviders.set(name, provider);
       provider.onLog = (message) => this.log(message);
       provider.onBeforeAuthorizationOpen = (request) =>
         this.onBeforeAuthorizationOpen(request);
@@ -1655,32 +1740,44 @@ export class McpClientHub {
       provider.readTokenGeneration = (identity) =>
         this.authCoordinator.readTokenGeneration(identity);
       provider.onAuthEvent = (event) => this.authCoordinator.record(event);
-      const attemptId = randomUUID();
-      provider.authorizationAttempt = {
-        serverName: cfg.name,
-        serverUrl: cfg.url,
-        serverIdentityHash,
-        trigger: "manual-reauth",
-        userInitiated: true,
-        authMode: "interactive",
-        attemptId,
-        rootAttemptId: attemptId,
-        retryCount: 0,
-        hubScope: this.options.hubScope,
-        hubGeneration: this.options.hubGeneration,
-        tokenGenerationBefore:
-          await this.authCoordinator.readTokenGeneration(serverIdentityHash),
-      };
-      await provider.start();
       try {
-        await withHttpConnectLock(cfg.url, () => provider.forceReauth());
+        const attemptId = randomUUID();
+        provider.authorizationAttempt = {
+          serverName: cfg.name,
+          serverUrl: cfg.url,
+          serverIdentityHash,
+          trigger: "manual-reauth",
+          userInitiated: true,
+          authMode: "interactive",
+          attemptId,
+          rootAttemptId: attemptId,
+          retryCount: 0,
+          hubScope: this.options.hubScope,
+          hubGeneration: this.options.hubGeneration,
+          tokenGenerationBefore:
+            await this.authCoordinator.readTokenGeneration(serverIdentityHash),
+        };
+        controller.signal.throwIfAborted();
+        await provider.start();
+        await withHttpConnectLock(
+          cfg.url,
+          () => provider.forceReauth(),
+          controller.signal,
+        );
+        controller.signal.throwIfAborted();
       } catch (err) {
         provider.stop();
+        if (this.oauthProviders.get(name) === provider) {
+          this.oauthProviders.delete(name);
+        }
+        if (controller.signal.aborted) return;
         throw err;
+      } finally {
+        if (this.connectionAttempts.get(name) === attempt) {
+          this.connectionAttempts.delete(name);
+        }
       }
       // Keep the callback server alive for the immediate reconnect handoff.
-      // connectServer reuses this provider and avoids callback redirectUrl churn.
-      this.oauthProviders.set(cfg.name, provider);
     }
 
     try {
@@ -1696,6 +1793,7 @@ export class McpClientHub {
       const current = this.servers.get(cfg.name);
       if (!current || current.status !== "connected") {
         this.oauthProviders.get(cfg.name)?.stop();
+        this.oauthProviders.delete(cfg.name);
       }
     }
     this.onStatusChange?.(this.getServerInfos());
@@ -1704,7 +1802,13 @@ export class McpClientHub {
   /** Disconnect all servers. */
   async disconnectAll(): Promise<void> {
     await Promise.all(
-      Array.from(this.servers.keys()).map((n) => this.disconnectServer(n)),
+      Array.from(
+        new Set([
+          ...this.servers.keys(),
+          ...this.connectionAttempts.keys(),
+          ...this.oauthProviders.keys(),
+        ]),
+      ).map((n) => this.disconnectServer(n)),
     );
     this.disabledServers.clear();
     this.onStatusChange?.(this.getServerInfos());

@@ -1,6 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 
-import type { DesktopBridge } from "../../../src/shared/desktopBridge.js";
+import {
+  AGENTLINK_DESKTOP_OWNER_ARGUMENT_PREFIX,
+  type DesktopBridge,
+} from "../../../src/shared/desktopBridge.js";
 
 const electron = vi.hoisted(() => ({
   expose: vi.fn(),
@@ -23,7 +26,14 @@ afterEach(() => {
 });
 
 it("exposes only the shell bridge and strips Electron events from state callbacks", async () => {
-  vi.stubGlobal("process", { ...process, isMainFrame: true });
+  vi.stubGlobal("process", {
+    ...process,
+    argv: [
+      ...process.argv,
+      `${AGENTLINK_DESKTOP_OWNER_ARGUMENT_PREFIX}agentlink-desktop~generation`,
+    ],
+    isMainFrame: true,
+  });
   await import("./chatPreload.js");
   expect(electron.expose).toHaveBeenCalledWith(
     "agentlinkDesktopShell",
@@ -31,10 +41,28 @@ it("exposes only the shell bridge and strips Electron events from state callback
   );
   const bridge = electron.expose.mock.calls[0][1] as DesktopBridge;
   expect(Object.keys(bridge).sort()).toEqual([
+    "askAgentOwnerId",
+    "onAskAgentOwnerIdChanged",
     "onRemoteState",
     "retryRemote",
     "setRemoteLayout",
   ]);
+  expect(bridge.askAgentOwnerId).toBe("agentlink-desktop~generation");
+  const ownerListener = vi.fn();
+  const unsubscribeOwner = bridge.onAskAgentOwnerIdChanged(ownerListener);
+  const ownerHandler = electron.on.mock.calls.find(
+    ([channel]) => channel === "agentlink:ask-agent-owner-id",
+  )?.[1];
+  ownerHandler?.({ sender: "privileged" }, " agentlink-desktop~updated ");
+  ownerHandler?.({ sender: "privileged" }, { secret: "not-forwarded" });
+  expect(ownerListener).toHaveBeenCalledExactlyOnceWith(
+    "agentlink-desktop~updated",
+  );
+  unsubscribeOwner();
+  expect(electron.removeListener).toHaveBeenCalledWith(
+    "agentlink:ask-agent-owner-id",
+    ownerHandler,
+  );
   const layout = {
     mode: "ask" as const,
     bounds: { x: 1, y: 2, width: 3, height: 4 },
@@ -45,7 +73,9 @@ it("exposes only the shell bridge and strips Electron events from state callback
   expect(electron.send).toHaveBeenCalledWith("agentlink:remote:retry");
   const listener = vi.fn();
   const unsubscribe = bridge.onRemoteState(listener);
-  const handler = electron.on.mock.calls[0][1];
+  const handler = electron.on.mock.calls.find(
+    ([channel]) => channel === "agentlink:remote:state",
+  )?.[1];
   handler(
     { sender: "privileged" },
     { status: "ready", secret: "not-forwarded" },

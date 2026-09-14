@@ -79,6 +79,185 @@ function projectContext(input: { sessionId?: string; targetPath?: string }) {
   };
 }
 
+describe("forwarded approval session isolation", () => {
+  it("rejects unattributed approvals without blocking subsequent tabs", async () => {
+    const { provider } = createProvider();
+    const forwarded = vi.fn();
+    provider.onForwardApproval = forwarded;
+    const invalid = provider.enqueueCommandApproval("pwd", "pwd");
+    await expect(invalid.promise).resolves.toMatchObject({
+      decision: "reject",
+      rejectionReason: "Forwarded approval requires a session ID",
+    });
+    const valid = provider.enqueueCommandApproval("pwd", "pwd", {
+      sessionId: "tab-a",
+    });
+    expect(forwarded).toHaveBeenCalledOnce();
+    provider.dispose();
+    await expect(valid.promise).resolves.toMatchObject({ decision: "reject" });
+  });
+
+  it("rechecks live session ownership after a synchronous forwarding response", async () => {
+    const { provider } = createProvider();
+    const cards = new Map<string, (message: DecisionMessage) => boolean>();
+    let synchronousId: string | undefined;
+    provider.onForwardApproval = ({ request }, respond) => {
+      cards.set(request.id, respond);
+      if (request.id === synchronousId) {
+        respond({
+          type: "decision",
+          id: request.id,
+          approvalKind: "command",
+          decision: "reject",
+        });
+      }
+    };
+    const blockerA = provider.enqueueCommandApproval("a", "a", {
+      sessionId: "a",
+    });
+    const blockerT = provider.enqueueCommandApproval("t", "t", {
+      sessionId: "t",
+    });
+    const first = provider.enqueueCommandApproval("a1", "a1", {
+      sessionId: "a",
+    });
+    const second = provider.enqueueCommandApproval("t1", "t1", {
+      sessionId: "t",
+    });
+    const third = provider.enqueueCommandApproval("t2", "t2", {
+      sessionId: "t",
+    });
+    synchronousId = first.id;
+    // Cancel the other tab during forwarding to exercise nested queue draining.
+    const forward = provider.onForwardApproval;
+    provider.onForwardApproval = (request, respond) => {
+      if (request.request.id === first.id) provider.cancelApproval(blockerT.id);
+      forward(request, respond);
+    };
+    provider.cancelApproval(blockerA.id);
+    expect(cards.has(second.id)).toBe(true);
+    expect(cards.has(third.id)).toBe(false);
+    provider.dispose();
+    await Promise.all([
+      blockerA.promise,
+      blockerT.promise,
+      first.promise,
+      second.promise,
+      third.promise,
+    ]);
+  });
+
+  it("shows each tab's card independently while preserving same-tab order and decision ownership", async () => {
+    const { provider } = createProvider();
+    const cards = new Map<
+      string,
+      {
+        request: ApprovalRequest;
+        respond: (message: DecisionMessage) => boolean;
+      }
+    >();
+    provider.onForwardApproval = ({ request }, respond) => {
+      cards.set(request.id, { request, respond });
+    };
+    const first = provider.enqueueCommandApproval("npm test", "npm test", {
+      sessionId: "tab-a",
+    });
+    const queued = provider.enqueueCommandApproval(
+      "npm run build",
+      "npm run build",
+      { sessionId: "tab-a" },
+    );
+    const other = provider.enqueueWriteApproval("src/other.ts", {
+      operation: "modify",
+      outsideWorkspace: false,
+      sessionId: "tab-b",
+    });
+    expect([...cards.keys()]).toEqual([first.id, other.id]);
+    expect(cards.get(other.id)?.request.queueTotal).toBe(1);
+    expect(
+      cards.get(first.id)!.respond({
+        type: "decision",
+        id: other.id,
+        approvalKind: "write",
+        decision: "accept",
+      }),
+    ).toBe(false);
+    expect(
+      cards.get(other.id)!.respond({
+        type: "decision",
+        id: other.id,
+        approvalKind: "write",
+        decision: "accept",
+      }),
+    ).toBe(true);
+    await expect(other.promise).resolves.toMatchObject({ decision: "accept" });
+    expect(cards.has(queued.id)).toBe(false);
+    expect(
+      cards.get(first.id)!.respond({
+        type: "decision",
+        id: first.id,
+        approvalKind: "command",
+        decision: "reject",
+      }),
+    ).toBe(true);
+    await expect(first.promise).resolves.toMatchObject({ decision: "reject" });
+    expect(cards.has(queued.id)).toBe(true);
+    expect(
+      cards.get(first.id)!.respond({
+        type: "decision",
+        id: first.id,
+        approvalKind: "command",
+        decision: "run-once",
+      }),
+    ).toBe(false);
+    provider.dispose();
+    await expect(queued.promise).resolves.toMatchObject({ decision: "reject" });
+  });
+
+  it("cancels only the owning tab's card and preserves other tabs' attention", async () => {
+    const { provider, statusBarManager } = createProvider();
+    const alerts = [
+      { dispose: vi.fn() },
+      { dispose: vi.fn() },
+      { dispose: vi.fn() },
+    ];
+    statusBarManager.showAlert
+      .mockReturnValueOnce(alerts[0])
+      .mockReturnValueOnce(alerts[1])
+      .mockReturnValueOnce(alerts[2]);
+    const forwarded: string[] = [];
+    provider.onForwardApproval = ({ request }) => {
+      forwarded.push(request.id);
+    };
+    const cancelled = vi.fn();
+    provider.onForwardApprovalCancelled = cancelled;
+    const controller = new AbortController();
+    const first = provider.enqueueCommandApproval("npm test", "npm test", {
+      sessionId: "tab-a",
+      signal: controller.signal,
+    });
+    const queued = provider.enqueueCommandApproval(
+      "npm run build",
+      "npm run build",
+      { sessionId: "tab-a" },
+    );
+    const other = provider.enqueueCommandApproval("pwd", "pwd", {
+      sessionId: "tab-b",
+    });
+    controller.abort();
+    await expect(first.promise).resolves.toMatchObject({ decision: "reject" });
+    expect(forwarded).toEqual([first.id, other.id, queued.id]);
+    expect(cancelled).toHaveBeenCalledExactlyOnceWith("tab-a", first.id);
+    expect(alerts[0].dispose).toHaveBeenCalledOnce();
+    expect(alerts[1].dispose).not.toHaveBeenCalled();
+    provider.dispose();
+    await expect(other.promise).resolves.toMatchObject({ decision: "reject" });
+    await expect(queued.promise).resolves.toMatchObject({ decision: "reject" });
+    expect(alerts[1].dispose).toHaveBeenCalledOnce();
+    expect(alerts[2].dispose).toHaveBeenCalledOnce();
+  });
+});
+
 describe("requeueCommandApprovalsForPolicyChange", () => {
   it("re-resolves the session's pending command approvals and advances the queue", async () => {
     const { provider } = createProvider();
@@ -101,7 +280,10 @@ describe("requeueCommandApprovalsForPolicyChange", () => {
     const other = provider.enqueueCommandApproval("ls", "ls", {
       sessionId: "session-b",
     });
-    expect(forwarded.map((request) => request.id)).toEqual([first.id]);
+    expect(forwarded.map((request) => request.id)).toEqual([
+      first.id,
+      other.id,
+    ]);
 
     const resolved = provider.requeueCommandApprovalsForPolicyChange(
       "session-a",
@@ -119,7 +301,7 @@ describe("requeueCommandApprovalsForPolicyChange", () => {
     });
     expect([...cancelled].sort()).toEqual([first.id, second.id].sort());
 
-    // The untouched session's command becomes the visible card.
+    // The other session's card was already visible and remains untouched.
     expect(forwarded.map((request) => request.id)).toEqual([
       first.id,
       other.id,

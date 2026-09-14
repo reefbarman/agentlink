@@ -1,15 +1,14 @@
 import { shell } from "electron";
-import { createKeychainSecretStorage } from "@agentlink/node-host";
-
 import {
-  CODEX_OAUTH_CREDENTIALS_STORAGE_KEY,
-  CodexOAuthManager,
+  createCodexOAuthRuntime,
   type CodexOAuthAccountInfo,
-} from "../../../src/agent/providers/codex/CodexOAuthManager.js";
+} from "@agentlink/node-host";
 import { KeychainSharedCredentialStore } from "./sharedCredentialStore.js";
 
 export interface DesktopAuthStatus {
   hasOpenAiApiKey: boolean;
+  openAiCompatibleCredentialCount?: number;
+  hasUsableOpenAiCompatibleModel?: boolean;
   oauthAccounts: CodexOAuthAccountInfo[];
 }
 
@@ -24,16 +23,13 @@ export interface DesktopResolvedModelAuth {
 
 export class DesktopAuthController {
   readonly apiKeys = new KeychainSharedCredentialStore();
-  readonly oauth = new CodexOAuthManager((message) =>
-    process.stderr.write(`[agentlink-desktop] ${message}\n`),
-  );
+  private readonly oauthRuntime = createCodexOAuthRuntime({
+    log: (message) => process.stderr.write(`[agentlink-desktop] ${message}\n`),
+  });
+  readonly oauth = this.oauthRuntime.manager;
 
   async initialize(): Promise<void> {
-    this.oauth.initializeStorage(
-      await createKeychainSecretStorage({
-        account: CODEX_OAUTH_CREDENTIALS_STORAGE_KEY,
-      }),
-    );
+    await this.oauthRuntime.ready();
   }
 
   async getStatus(): Promise<DesktopAuthStatus> {

@@ -228,12 +228,14 @@ export async function diagnoseEditApplyFailure(params: {
   };
 }
 
-export function interactiveDiffEditorOptions(): vscode.TextDocumentShowOptions {
-  return withPrimaryEditorColumn({ preview: true });
+export function interactiveDiffEditorOptions(
+  preserveFocus = true,
+): vscode.TextDocumentShowOptions {
+  return withPrimaryEditorColumn({ preview: true, preserveFocus });
 }
 
 export function interactiveFallbackEditorOptions(): vscode.TextDocumentShowOptions {
-  return withPrimaryEditorColumn();
+  return withPrimaryEditorColumn({ preserveFocus: true });
 }
 
 export function createUserEditsPatch(
@@ -352,12 +354,12 @@ export class DiffViewProvider {
     for (const tab of tabs) {
       this.documentWasOpen = true;
       if (!tab.isDirty) {
-        await vscode.window.tabGroups.close(tab);
+        await vscode.window.tabGroups.close(tab, true);
       }
     }
 
     try {
-      await this.revealDiff();
+      await this.revealDiff(true);
 
       // Wait for the diff editor to open. Poll until it appears rather than
       // blocking on a fixed delay — the editor is usually visible within a few
@@ -415,7 +417,7 @@ export class DiffViewProvider {
     }
   }
 
-  private async revealDiff(): Promise<void> {
+  private async revealDiff(preserveFocus = false): Promise<void> {
     const fileName = path.basename(this.absolutePath!);
     const leftUri = vscode.Uri.parse(
       `${DIFF_VIEW_URI_SCHEME}:${fileName}`,
@@ -430,7 +432,7 @@ export class DiffViewProvider {
       leftUri,
       vscode.Uri.file(this.absolutePath!),
       `${outsidePrefix}${this.relPath}: ${this.editType === "modify" ? "Proposed Changes" : "New File"} (Editable)`,
-      interactiveDiffEditorOptions(),
+      interactiveDiffEditorOptions(preserveFocus),
     );
   }
 
@@ -818,7 +820,7 @@ export async function closeDiffTabsForFile(
 
   for (const tab of tabs) {
     try {
-      await vscode.window.tabGroups.close(tab);
+      await vscode.window.tabGroups.close(tab, true);
     } catch (err) {
       if (!isIgnorableTabCloseError(err)) {
         throw err;

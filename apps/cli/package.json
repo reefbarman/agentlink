@@ -1,0 +1,56 @@
+{
+  "name": "@agentlink/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone local AgentLink coding CLI",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "agentlink": "dist/agentlink.js"
+  },
+  "files": [
+    "dist/agentlink.js",
+    "dist/rg",
+    "dist/runtime-manifest.json",
+    "LICENSE",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "lint": "tsc -p tsconfig.json --noEmit && oxlint src --import-plugin --report-unused-disable-directives --deny-warnings",
+    "pack:private": "npm run build && npm pack --pack-destination ./artifacts",
+    "smoke:package": "node smoke-package.mjs",
+    "smoke:tui": "npm run build && node smoke-tui.mjs",
+    "smoke:tui:no-color": "npm run build && node smoke-tui.mjs dist/agentlink.js --no-color",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@napi-rs/keyring": "2.0.0"
+  },
+  "devDependencies": {
+    "@agentlink/core": "0.1.0",
+    "@agentlink/node-host": "0.1.0",
+    "@agentlink/protocol": "0.1.0",
+    "@agentlink/workspace-host": "0.1.0",
+    "@types/react": "^19.2.14",
+    "@vscode/ripgrep-darwin-arm64": "1.18.0",
+    "commander": "12.1.0",
+    "ink": "7.1.1",
+    "ink-picture": "2.1.0",
+    "ink-testing-library": "4.0.0",
+    "marked": "15.0.12",
+    "react": "19.3.0",
+    "react-ink-textarea": "0.4.0",
+    "undici": "^8.7.0"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ]
+}

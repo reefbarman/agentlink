@@ -359,6 +359,29 @@ describe("Codex error classification", () => {
     ).toBe(false);
   });
 
+  it("detects the ChatGPT backend's misleading usage-limit 400", () => {
+    const message =
+      "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.";
+
+    expect(isCodexUsageLimitError({ status: 400, message })).toBe(true);
+    expect(
+      getCodexErrorHandlingAction({
+        auth: { method: "oauth", oauthAccountPoolId: "acct" },
+        error: { status: 400, message },
+      }),
+    ).toBe("handle_oauth_usage_limit");
+  });
+
+  it("does not treat a genuinely unsupported model as exhausted usage", () => {
+    expect(
+      isCodexUsageLimitError({
+        status: 400,
+        message:
+          "The 'gpt-4.1' model is not supported when using Codex with a ChatGPT account.",
+      }),
+    ).toBe(false);
+  });
+
   it("builds usage-limit exhausted error details", () => {
     expect(
       buildCodexUsageLimitExhaustedError({
@@ -381,6 +404,23 @@ describe("Codex error classification", () => {
       retryable: true,
       actions: { signInAnotherAccount: true },
       metadata: { attemptedOAuthAccountIds: ["acct-1", "acct-2"] },
+    });
+
+    expect(
+      buildCodexUsageLimitExhaustedError({
+        attemptedOAuthAccountIds: ["acct-1"],
+        sourceError: {
+          status: 400,
+          message:
+            "Codex API error 400: The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.",
+        },
+      }),
+    ).toMatchObject({
+      message:
+        "Codex usage limit has been reached for all signed-in ChatGPT accounts. Wait for it to reset or sign in with another account.",
+      status: 400,
+      code: "oauth_usage_limit_exhausted",
+      actions: { signInAnotherAccount: true },
     });
   });
 

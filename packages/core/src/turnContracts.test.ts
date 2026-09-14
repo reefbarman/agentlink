@@ -143,6 +143,7 @@ describe("turn contracts", () => {
       | "sequence"
       | "emittedAt"
       | "type";
+    type ThinkingDelta = Extract<AgentTurnEvent, { type: "thinking.delta" }>;
     type Requested = Extract<AgentTurnEvent, { type: "tool.requested" }>;
     type Completed = Extract<AgentTurnEvent, { type: "tool.completed" }>;
     type Usage = Extract<AgentTurnEvent, { type: "usage.updated" }>;
@@ -150,6 +151,9 @@ describe("turn contracts", () => {
     type Required = Extract<AgentTurnEvent, { type: "interaction.required" }>;
     type Resumed = Extract<AgentTurnEvent, { type: "interaction.resumed" }>;
 
+    expectTypeOf<keyof ThinkingDelta>().toEqualTypeOf<
+      EventBaseKeys | "thinkingId" | "text"
+    >();
     expectTypeOf<keyof Requested>().toEqualTypeOf<
       | EventBaseKeys
       | "toolCallId"

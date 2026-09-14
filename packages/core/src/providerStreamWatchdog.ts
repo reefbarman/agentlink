@@ -1,7 +1,7 @@
 import {
   clearTimeout as clearNodeTimeout,
   setTimeout as setNodeTimeout,
-} from "timers";
+} from "node:timers";
 
 import type { CoreModelTransportActivity } from "./modelRuntime.js";
 

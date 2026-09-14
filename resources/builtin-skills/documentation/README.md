@@ -14,6 +14,7 @@ These are the shipped product docs for AgentLink. They are written for people us
 - [Settings](references/settings.md) — grouped `agentlink.*` settings and their purpose.
 - [MCP](references/mcp.md) — configure and use Model Context Protocol servers, including servers contributed by Agent Plugins.
 - [Customization](references/customization.md) — instructions, rules, modes, slash commands, skills, Agent Plugins, and memory.
+- [Standalone CLI](references/standalone-cli.md) — install and use the private macOS Apple Silicon terminal coding preview with reviewed file edits.
 - [Embed AgentLink](references/embedding-agentlink.md) — build application assistants, desktop runtimes, CLI harnesses, and cloud hosts with the private packages.
 - [Complete product reference](references/complete-reference.md) — the comprehensive compatibility reference while focused guides are being split out.
 - [Package contract](references/package-contract.md) — generated exact commands, views, settings, defaults, scopes, and allowed values.

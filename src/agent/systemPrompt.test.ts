@@ -418,6 +418,10 @@ describe("buildSystemPrompt", () => {
       "Before moving to another item, update the list in the same transition",
     );
     expect(result).toContain(
+      "Tool calls, edits, commands, and progress narration do not update the visible list automatically",
+    );
+    expect(result).toContain("Call `todo_write` at each real task transition");
+    expect(result).toContain(
       "Treat stale status as bookkeeping to repair, not evidence that work must be repeated",
     );
     expect(result).toContain(

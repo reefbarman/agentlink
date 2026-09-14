@@ -22,6 +22,9 @@ describe("todoTool", () => {
       "Before moving from one item to the next",
     );
     expect(todoTool.description).toContain(
+      "Tool calls, edits, and narration do not update the visible list by themselves",
+    );
+    expect(todoTool.description).toContain(
       "Never silently drop unfinished items",
     );
     expect(todoTool.description).toContain(
@@ -33,6 +36,20 @@ describe("todoTool", () => {
     expect(todoTool.description).toContain(
       "keep every unfinished item and the 3 most recent ordinary completed items",
     );
+  });
+
+  it("requires non-blank item fields in the tool schema", () => {
+    expect(todoTool.input_schema).toMatchObject({
+      $defs: {
+        todoItem: {
+          properties: {
+            id: { minLength: 1, pattern: "\\S" },
+            content: { minLength: 1, pattern: "\\S" },
+            activeForm: { minLength: 1, pattern: "\\S" },
+          },
+        },
+      },
+    });
   });
 });
 
@@ -83,6 +100,54 @@ describe("handleTodoWrite", () => {
     expect(content).toBe("Updated: 0/0 complete, 0 in progress, 0 pending");
   });
 
+  it("removes blank top-level and nested items without mutating valid items", () => {
+    const validChild = makeItem({
+      id: "valid-child",
+      content: "Keep child",
+      activeForm: "Keeping child",
+    });
+    const validParent = makeItem({
+      id: "valid-parent",
+      content: "Keep parent",
+      activeForm: "Keeping parent",
+      status: "in_progress",
+      children: [
+        validChild,
+        makeItem({ id: "blank-child", content: "   ", activeForm: "Working" }),
+      ],
+    });
+
+    const { content, todos } = handleTodoWrite({
+      todos: [
+        validParent,
+        makeItem({ id: "blank-top", content: "", activeForm: "Working" }),
+      ],
+    });
+
+    expect(todos).toEqual([
+      expect.objectContaining({
+        id: "valid-parent",
+        children: [validChild],
+      }),
+    ]);
+    expect(content).toContain("Ignored 2 blank todo items");
+    expect(content).toContain(
+      "Resubmit the complete list with non-blank id, content, and activeForm values",
+    );
+  });
+
+  it("requests an active item when unfinished work has no current item", () => {
+    const { content } = handleTodoWrite({
+      todos: [makeItem({ id: "pending", content: "Continue work" })],
+    });
+
+    expect(content).toContain("no item is in_progress");
+    expect(content).toContain("before doing more work");
+    expect(content).toContain(
+      "A pending-only list is valid while waiting for the user",
+    );
+  });
+
   it("counts nested children recursively", () => {
     const todos: TodoItem[] = [
       makeItem({
@@ -120,7 +185,10 @@ describe("handleTodoWrite", () => {
     ];
     const { content } = handleTodoWrite({ todos });
     // total=3, completed=2 (Mid+Leaf), inProgress=0, pending=1 (Root)
-    expect(content).toBe("Updated: 2/3 complete, 0 in progress, 1 pending");
+    expect(content).toContain(
+      "Updated: 2/3 complete, 0 in progress, 1 pending",
+    );
+    expect(content).toContain("no item is in_progress");
   });
 
   it("requests cleanup when older completed top-level items can be grouped", () => {
@@ -256,6 +324,29 @@ describe("completeTodos", () => {
 });
 
 describe("getLatestTodoState", () => {
+  it("filters blank items while rebuilding the latest list", () => {
+    expect(
+      getLatestTodoState([
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "todo-blank",
+              name: "todo_write",
+              input: {
+                todos: [
+                  makeItem({ id: "valid", content: "Keep this" }),
+                  makeItem({ id: "blank", content: "   " }),
+                ],
+              },
+            },
+          ],
+        },
+      ]),
+    ).toEqual([expect.objectContaining({ id: "valid" })]);
+  });
+
   it("rebuilds the latest list and applies final completion", () => {
     const todos = [
       makeItem({ id: "1", content: "Inspect", status: "completed" }),

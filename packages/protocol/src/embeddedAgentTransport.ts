@@ -91,6 +91,15 @@ export type EmbeddedAgentTurnEvent =
       readonly model: EmbeddedAgentModelReference;
     })
   | (EmbeddedAgentTurnEventBase & {
+      readonly type: "thinking.started" | "thinking.completed";
+      readonly thinkingId: string;
+    })
+  | (EmbeddedAgentTurnEventBase & {
+      readonly type: "thinking.delta";
+      readonly thinkingId: string;
+      readonly text: string;
+    })
+  | (EmbeddedAgentTurnEventBase & {
       readonly type: "text.delta";
       readonly text: string;
     })
@@ -233,6 +242,13 @@ export interface EmbeddedAgentTextBlock {
   readonly text: string;
 }
 
+export interface EmbeddedAgentThinkingBlock {
+  readonly type: "thinking";
+  readonly thinkingId: string;
+  readonly text: string;
+  readonly status: "running" | "completed";
+}
+
 export interface EmbeddedAgentToolBlock {
   readonly type: "tool";
   readonly toolCallId: string;
@@ -247,6 +263,7 @@ export interface EmbeddedAgentToolBlock {
 
 export type EmbeddedAgentBlock =
   | EmbeddedAgentTextBlock
+  | EmbeddedAgentThinkingBlock
   | EmbeddedAgentToolBlock;
 
 export interface EmbeddedAgentClientState {
@@ -823,6 +840,29 @@ export function reduceEmbeddedAgentTurnEvent(
     case "usage.updated":
     case "execution.updated":
       return base;
+    case "thinking.started":
+      return {
+        ...base,
+        blocks: [
+          ...base.blocks,
+          {
+            type: "thinking",
+            thinkingId: event.thinkingId,
+            text: "",
+            status: "running",
+          },
+        ],
+      };
+    case "thinking.delta":
+      return updateThinking(base, event.thinkingId, (thinking) => ({
+        ...thinking,
+        text: thinking.text + event.text,
+      }));
+    case "thinking.completed":
+      return updateThinking(base, event.thinkingId, (thinking) => ({
+        ...thinking,
+        status: "completed",
+      }));
     case "text.delta":
       return { ...base, blocks: appendText(base.blocks, event.text) };
     case "tool.requested":
@@ -926,6 +966,13 @@ function isEmbeddedAgentTurnEvent(
       return true;
     case "model.resolved":
       return isModelReference(value.model);
+    case "thinking.started":
+    case "thinking.completed":
+      return isNonEmptyString(value.thinkingId);
+    case "thinking.delta":
+      return (
+        isNonEmptyString(value.thinkingId) && typeof value.text === "string"
+      );
     case "text.delta":
       return typeof value.text === "string";
     case "tool.requested":
@@ -1076,6 +1123,35 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function updateThinking(
+  state: EmbeddedAgentClientState,
+  thinkingId: string,
+  update: (block: EmbeddedAgentThinkingBlock) => EmbeddedAgentThinkingBlock,
+): EmbeddedAgentClientState {
+  const index = state.blocks.findIndex(
+    (block) => block.type === "thinking" && block.thinkingId === thinkingId,
+  );
+  if (index < 0) {
+    throw new EmbeddedAgentProtocolError(
+      `Thinking event references unknown block: ${thinkingId}`,
+    );
+  }
+  const current = state.blocks[index];
+  if (current?.type !== "thinking") {
+    throw new EmbeddedAgentProtocolError(
+      `Thinking event references invalid block: ${thinkingId}`,
+    );
+  }
+  return {
+    ...state,
+    blocks: [
+      ...state.blocks.slice(0, index),
+      update(current),
+      ...state.blocks.slice(index + 1),
+    ],
+  };
 }
 
 function updateTool(

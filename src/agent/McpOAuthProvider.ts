@@ -114,6 +114,92 @@ export class McpOAuthProvider implements OAuthClientProvider {
   private _port = 0;
   private _server: http.Server | null = null;
   private _codeVerifier = "";
+  private readonly lifetime = new AbortController();
+
+  get signal(): AbortSignal {
+    return this.lifetime.signal;
+  }
+
+  private waitForLifetime<T>(
+    operation: PromiseLike<T>,
+    timeout?: { ms: number; message: string },
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.signal.removeEventListener("abort", onAbort);
+      };
+      const onAbort = () => {
+        cleanup();
+        reject(this.signal.reason);
+      };
+      Promise.resolve(operation).then(
+        (value) => {
+          cleanup();
+          resolve(value);
+        },
+        (error) => {
+          cleanup();
+          reject(error);
+        },
+      );
+      if (this.signal.aborted) {
+        onAbort();
+        return;
+      }
+      this.signal.addEventListener("abort", onAbort, { once: true });
+      if (timeout) {
+        timer = setTimeout(() => {
+          cleanup();
+          reject(new McpOAuthError("authorization_error", timeout.message));
+        }, timeout.ms);
+      }
+    });
+  }
+
+  private async acquireAuthorizationDecision(
+    attempt: Readonly<McpAuthorizationAttempt>,
+  ): Promise<McpAuthorizationDecision | undefined> {
+    this.signal.throwIfAborted();
+    const pending = Promise.resolve(
+      this.onBeforeAuthorizationOpen?.(attempt),
+    ).then((decision) => {
+      if (!decision?.allowed) return decision;
+      let completion: Promise<void> | undefined;
+      const complete = () => {
+        this.signal.removeEventListener("abort", onAbort);
+        return (completion ??= Promise.resolve().then(() =>
+          decision.lease.complete(),
+        ));
+      };
+      const onAbort = () => {
+        void complete().catch((error: unknown) => {
+          this.onLog?.(
+            `[mcp:${this.serverName}] oauth lease cleanup failed: ${String(error)}`,
+          );
+        });
+      };
+      if (this.signal.aborted) onAbort();
+      else this.signal.addEventListener("abort", onAbort, { once: true });
+      return { ...decision, lease: { ...decision.lease, complete } };
+    });
+    return this.waitForLifetime(pending);
+  }
+
+  private readonly authFetch: NonNullable<
+    Parameters<typeof auth>[1]["fetchFn"]
+  > = (input, init) => {
+    this.signal.throwIfAborted();
+    const requestSignal =
+      init?.signal ?? (input instanceof Request ? input.signal : undefined);
+    return fetch(input, {
+      ...init,
+      signal: requestSignal
+        ? AbortSignal.any([this.signal, requestSignal])
+        : this.signal,
+    });
+  };
   onLog?: (message: string) => void;
   onBeforeAuthorizationOpen?: (
     request: Readonly<McpAuthorizationAttempt>,
@@ -205,7 +291,9 @@ export class McpOAuthProvider implements OAuthClientProvider {
     for (const legacyKey of legacyStorageKeys(this.serverName, suffix)) {
       const legacy = this.storage.get<T>(legacyKey);
       if (legacy !== undefined) {
+        this.signal.throwIfAborted();
         await this.storage.update(this.key(suffix), legacy);
+        this.signal.throwIfAborted();
         await this.storage.update(legacyKey, undefined);
         this.onLog?.(
           `[mcp:${this.serverName}] migrated legacy oauth ${suffix} storage to server-identity key`,
@@ -218,8 +306,10 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
   /** Delete a credential everywhere so a wipe cannot resurrect via migration. */
   private async deleteStored(suffix: StorageSuffix): Promise<void> {
+    this.signal.throwIfAborted();
     await this.storage.update(this.key(suffix), undefined);
     for (const legacyKey of legacyStorageKeys(this.serverName, suffix)) {
+      this.signal.throwIfAborted();
       await this.storage.update(legacyKey, undefined);
     }
   }
@@ -254,32 +344,46 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   private async listenOnPort(port: number): Promise<void> {
-    if (!this._server) return;
-
+    this.signal.throwIfAborted();
+    const server = this._server!;
     await new Promise<void>((resolve, reject) => {
-      const server = this._server!;
-      const onError = (err: Error): void => {
+      const cleanup = () => {
         server.off("listening", onListening);
+        server.off("error", onError);
+        this.signal.removeEventListener("abort", onAbort);
+      };
+      const onError = (err: Error): void => {
+        cleanup();
         reject(err);
       };
       const onListening = (): void => {
-        server.off("error", onError);
+        cleanup();
         this._port = (server.address() as net.AddressInfo).port;
         resolve();
       };
+      const onAbort = () => {
+        cleanup();
+        server.close();
+        reject(this.signal.reason);
+      };
 
+      this.signal.addEventListener("abort", onAbort, { once: true });
       server.once("error", onError);
       server.once("listening", onListening);
-      server.listen(port, "localhost");
+      server.listen({ port, host: "localhost", signal: this.signal });
     });
   }
 
   /** Start the local callback HTTP server and capture the assigned port. */
   async start(): Promise<void> {
+    this.signal.throwIfAborted();
     if (this._server) return;
 
-    const clientInfo =
-      await this.readStored<OAuthClientInformationMixed>("client");
+    const clientInfo = await this.waitForLifetime(
+      this.readStored<OAuthClientInformationMixed>("client"),
+    );
+    this.signal.throwIfAborted();
+    if (this._server) return;
     const preferredPort = this.preferredCallbackPort(clientInfo);
 
     this._server = http.createServer();
@@ -288,11 +392,13 @@ export class McpOAuthProvider implements OAuthClientProvider {
       if (preferredPort) {
         try {
           await this.listenOnPort(preferredPort);
+          this.signal.throwIfAborted();
           this.onLog?.(
             `[mcp:${this.serverName}] callback server bound to preferred cached redirect port ${preferredPort}`,
           );
           return;
         } catch (err) {
+          this.signal.throwIfAborted();
           const code = (err as NodeJS.ErrnoException | undefined)?.code;
           this.onLog?.(
             `[mcp:${this.serverName}] preferred cached redirect port ${preferredPort} unavailable (${code ?? "unknown"}); falling back to ephemeral callback port`,
@@ -301,6 +407,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
       }
 
       await this.listenOnPort(0);
+      this.signal.throwIfAborted();
       this.onLog?.(
         `[mcp:${this.serverName}] callback server bound to port ${this._port}${preferredPort ? ` (fallback from preferred ${preferredPort})` : ""}`,
       );
@@ -312,8 +419,14 @@ export class McpOAuthProvider implements OAuthClientProvider {
     }
   }
 
-  /** Stop the callback server. */
+  /** Permanently cancel this provider lifetime and stop its callback server. */
   stop(): void {
+    this.lifetime.abort(
+      new DOMException(
+        `OAuth authorization cancelled for "${this.serverName}"`,
+        "AbortError",
+      ),
+    );
     this._server?.close();
     this._server = null;
     this._port = 0;
@@ -366,6 +479,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
   async saveClientInformation(
     info: OAuthClientInformationMixed,
   ): Promise<void> {
+    this.signal.throwIfAborted();
     this.onLog?.(
       `[mcp:${this.serverName}] saveClientInformation() ${this.clientSummary(info)}`,
     );
@@ -377,16 +491,19 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
+    this.signal.throwIfAborted();
     this.onLog?.(
       `[mcp:${this.serverName}] saveTokens() ${this.tokenSummary(tokens)}`,
     );
     await this.storage.update(this.key("tokens"), tokens);
+    this.signal.throwIfAborted();
     if (this.authorizationAttempt) {
       await this.onTokensSaved?.(this.authorizationAttempt);
     }
   }
 
   saveCodeVerifier(verifier: string): void {
+    this.signal.throwIfAborted();
     this._codeVerifier = verifier;
   }
 
@@ -412,11 +529,15 @@ export class McpOAuthProvider implements OAuthClientProvider {
    * (McpClientHub) retries the connection immediately with the new token.
    */
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
+    this.signal.throwIfAborted();
     const authRedirectUri = authorizationUrl.searchParams.get("redirect_uri");
-    const [clientInfo, existingTokens] = await Promise.all([
-      this.readStored<OAuthClientInformationMixed>("client"),
-      this.readStored<OAuthTokens>("tokens"),
-    ]);
+    const [clientInfo, existingTokens] = await this.waitForLifetime(
+      Promise.all([
+        this.readStored<OAuthClientInformationMixed>("client"),
+        this.readStored<OAuthTokens>("tokens"),
+      ]),
+    );
+    this.signal.throwIfAborted();
     const hasSavedTokens = Boolean(existingTokens);
     const hasRefreshToken = Boolean(existingTokens?.refresh_token);
 
@@ -452,7 +573,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
     const decision =
       this.preauthorizedDecision ??
-      (await this.onBeforeAuthorizationOpen?.(attempt));
+      (await this.acquireAuthorizationDecision(attempt));
     this.preauthorizedDecision = undefined;
     if (!decision?.allowed) {
       const reason = decision?.reason ?? "blocked_manual_reauth";
@@ -463,9 +584,11 @@ export class McpOAuthProvider implements OAuthClientProvider {
     }
 
     try {
-      const currentTokenGeneration = await this.readTokenGeneration?.(
-        attempt.serverIdentityHash,
+      this.signal.throwIfAborted();
+      const currentTokenGeneration = await this.waitForLifetime(
+        Promise.resolve(this.readTokenGeneration?.(attempt.serverIdentityHash)),
       );
+      this.signal.throwIfAborted();
       if (
         !attempt.userInitiated &&
         currentTokenGeneration !== undefined &&
@@ -510,10 +633,17 @@ export class McpOAuthProvider implements OAuthClientProvider {
         }
 
         const reauthAction = "Reauthenticate now";
-        const selection = await vscode.window.showWarningMessage(
-          `AgentLink: Automatic token refresh failed for "${this.serverName}". Reauthenticate to continue.`,
-          reauthAction,
+        const selection = await this.waitForLifetime(
+          vscode.window.showWarningMessage(
+            `AgentLink: Automatic token refresh failed for "${this.serverName}". Reauthenticate within 60 seconds, or use Reauthenticate in MCP settings later.`,
+            reauthAction,
+          ),
+          {
+            ms: 60_000,
+            message: `OAuth authorization prompt timed out for "${this.serverName}": manual reauthentication required. Use Reauthenticate in MCP settings.`,
+          },
         );
+        this.signal.throwIfAborted();
         if (selection !== reauthAction) {
           this.onLog?.(
             `[mcp:${this.serverName}] user deferred interactive reauthentication after refresh-token fallback; entering manual reauthenticate required state`,
@@ -557,13 +687,15 @@ export class McpOAuthProvider implements OAuthClientProvider {
       this.onLog?.(
         `[mcp:${this.serverName}] opening browser for oauth authorization trigger=${attempt.trigger} attemptId=${attempt.attemptId} lease=${decision.lease.outcome}`,
       );
+      this.signal.throwIfAborted();
       void vscode.window.showInformationMessage(
         `AgentLink: Opening browser to authorize "${this.serverName}"…`,
       );
 
-      const browserOpened = await vscode.env.openExternal(
-        vscode.Uri.parse(authorizationUrl.toString()),
+      const browserOpened = await this.waitForLifetime(
+        vscode.env.openExternal(vscode.Uri.parse(authorizationUrl.toString())),
       );
+      this.signal.throwIfAborted();
       this.onAuthEvent?.({
         type: "browser_open_result",
         ...this.authEventBase(attempt),
@@ -582,6 +714,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
       // Wait for the browser to redirect back to our local server
       const callback = await this.waitForCallback();
+      this.signal.throwIfAborted();
 
       this.onAuthEvent?.({
         type: "oauth_callback",
@@ -608,18 +741,26 @@ export class McpOAuthProvider implements OAuthClientProvider {
         );
       }
 
-      await this.debugStateSnapshot("before authorizationCode exchange");
+      await this.waitForLifetime(
+        this.debugStateSnapshot("before authorizationCode exchange"),
+      );
+      this.signal.throwIfAborted();
       this.onLog?.(
         `[mcp:${this.serverName}] exchanging authorization code for tokens`,
       );
 
       try {
         // Exchange the code for tokens (saves them via saveTokens)
-        await auth(this, {
-          serverUrl: this.serverUrl,
-          authorizationCode: code,
-        });
+        await this.waitForLifetime(
+          auth(this, {
+            serverUrl: this.serverUrl,
+            authorizationCode: code,
+            fetchFn: this.authFetch,
+          }),
+        );
+        this.signal.throwIfAborted();
       } catch (err) {
+        this.signal.throwIfAborted();
         const detail =
           err instanceof Error ? `${err.name}: ${err.message}` : String(err);
         this.onLog?.(
@@ -631,14 +772,27 @@ export class McpOAuthProvider implements OAuthClientProvider {
         throw err;
       }
 
-      await this.debugStateSnapshot("after authorizationCode exchange");
+      await this.waitForLifetime(
+        this.debugStateSnapshot("after authorizationCode exchange"),
+      );
+      this.signal.throwIfAborted();
       void vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
           title: `AgentLink: "${this.serverName}" authorized successfully`,
           cancellable: false,
         },
-        () => new Promise<void>((resolve) => setTimeout(resolve, 4_000)),
+        () =>
+          new Promise<void>((resolve) => {
+            const finish = () => {
+              clearTimeout(timer);
+              this.signal.removeEventListener("abort", finish);
+              resolve();
+            };
+            const timer = setTimeout(finish, 4_000);
+            if (this.signal.aborted) finish();
+            else this.signal.addEventListener("abort", finish, { once: true });
+          }),
       );
     } finally {
       await decision.lease.complete();
@@ -657,6 +811,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
    * Call this before reconnecting so the new tokens are ready.
    */
   async forceReauth(): Promise<void> {
+    this.signal.throwIfAborted();
     const attempt = this.authorizationAttempt;
     if (!attempt) {
       throw new McpOAuthError(
@@ -664,7 +819,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
         `OAuth authorization blocked for "${this.serverName}": missing authorization attempt`,
       );
     }
-    const decision = await this.onBeforeAuthorizationOpen?.(attempt);
+    const decision = await this.acquireAuthorizationDecision(attempt);
     if (!decision?.allowed) {
       throw new McpOAuthError(
         "authorization_error",
@@ -673,11 +828,19 @@ export class McpOAuthProvider implements OAuthClientProvider {
     }
     this.preauthorizedDecision = decision;
     try {
+      this.signal.throwIfAborted();
       // Hold the cross-window lease before clearing globally shared credentials.
-      await this.invalidateCredentials("all");
+      await this.waitForLifetime(this.invalidateCredentials("all"));
+      this.signal.throwIfAborted();
       // auth() with no authorizationCode will discover the server and call
       // redirectToAuthorization() since we have no tokens or client info.
-      await auth(this, { serverUrl: this.serverUrl });
+      await this.waitForLifetime(
+        auth(this, {
+          serverUrl: this.serverUrl,
+          fetchFn: this.authFetch,
+        }),
+      );
+      this.signal.throwIfAborted();
     } finally {
       if (this.preauthorizedDecision === decision) {
         this.preauthorizedDecision = undefined;
@@ -689,10 +852,29 @@ export class McpOAuthProvider implements OAuthClientProvider {
   // ── Internals ──────────────────────────────────────────────────────────
 
   private waitForCallback(): Promise<OAuthCallbackResult> {
+    this.signal.throwIfAborted();
+    const server = this._server;
+    if (!server) {
+      return Promise.reject(
+        new McpOAuthError(
+          "authorization_error",
+          "OAuth callback server is not running",
+        ),
+      );
+    }
     return new Promise<OAuthCallbackResult>((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        server.removeListener("request", handler);
+        this.signal.removeEventListener("abort", onAbort);
+      };
+      const onAbort = () => {
+        cleanup();
+        reject(this.signal.reason);
+      };
       const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
       const timer = setTimeout(() => {
-        this._server?.removeListener("request", handler);
+        cleanup();
         reject(
           new McpOAuthError(
             "callback_timeout",
@@ -710,8 +892,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
           return;
         }
 
-        clearTimeout(timer);
-        this._server?.removeListener("request", handler);
+        cleanup();
 
         const oauthError = url.searchParams.get("error") ?? undefined;
         const oauthErrorDescription =
@@ -741,7 +922,8 @@ export class McpOAuthProvider implements OAuthClientProvider {
         });
       };
 
-      this._server?.on("request", handler);
+      this.signal.addEventListener("abort", onAbort, { once: true });
+      server.on("request", handler);
     });
   }
 }

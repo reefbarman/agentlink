@@ -1345,6 +1345,32 @@ export function BrowserGatewayApp({
   const [snapshot, setSnapshot] = useState<GatewaySnapshot | null>(null);
   const [associatedInstanceId, setAssociatedInstanceId] =
     useState(currentInstanceId);
+  // Browser Ask Agent may borrow a connected VS Code owner's catalog and
+  // credentials. Standalone desktop publishes its own catalog to its private
+  // helper, so bind requests to that owner instead of a discovered VS Code
+  // instance or a stale owner restored from shared Ask Agent preferences.
+  const desktopShell = askAgentOnly ? window.agentlinkDesktopShell : undefined;
+  const [desktopAskAgentOwner, setDesktopAskAgentOwner] = useState(() => ({
+    ownerId:
+      typeof desktopShell?.askAgentOwnerId === "string"
+        ? desktopShell.askAgentOwnerId.trim()
+        : "",
+    revision: 0,
+  }));
+  useEffect(() => {
+    if (!desktopShell) return;
+    return desktopShell.onAskAgentOwnerIdChanged((ownerId) => {
+      const normalized = ownerId.trim();
+      if (!normalized) return;
+      setDesktopAskAgentOwner((current) => ({
+        ownerId: normalized,
+        revision: current.revision + 1,
+      }));
+    });
+  }, [desktopShell]);
+  const desktopAskAgentOwnerId = desktopAskAgentOwner.ownerId;
+  const askAgentAssociatedInstanceId =
+    desktopAskAgentOwnerId || associatedInstanceId;
   const [dataPlaneMode, setDataPlaneMode] =
     useState<BrowserGatewayDataPlaneMode>(() =>
       normalizeBrowserGatewayDataPlaneMode(initialDataPlaneMode, "off"),
@@ -2350,6 +2376,20 @@ export function BrowserGatewayApp({
     if (modelsVersion === undefined || modelsVersion === 0) return;
     void fetchModels();
   }, [modelsVersion]);
+  useEffect(() => {
+    if (!desktopAskAgentOwnerId || !isAskAgentSelected) return;
+    void fetchModels(
+      selectedInstanceId,
+      true,
+      BROWSER_GATEWAY_ASK_AGENT_TAB_ID,
+      selectedTabGenerationRef.current,
+    );
+  }, [
+    desktopAskAgentOwner.revision,
+    desktopAskAgentOwnerId,
+    isAskAgentSelected,
+    selectedInstanceId,
+  ]);
 
   const pluginsVersion = snapshot?.pluginsVersion;
   useEffect(() => {
@@ -3377,7 +3417,7 @@ export function BrowserGatewayApp({
     try {
       const response = await fetch(
         askAgentSelected
-          ? `/api/ask-agent/models${associatedInstanceId ? `?instanceId=${encodeURIComponent(associatedInstanceId)}` : ""}`
+          ? `/api/ask-agent/models${askAgentAssociatedInstanceId ? `?instanceId=${encodeURIComponent(askAgentAssociatedInstanceId)}` : ""}`
           : buildApiPathForInstance("/api/models", instanceId),
         {
           credentials: "same-origin",
@@ -4576,7 +4616,9 @@ export function BrowserGatewayApp({
           slashCommandLabel,
           isSlashCommand: Boolean(slashCommandLabel),
           interject,
-          instanceId: isAskAgentSelected ? associatedInstanceId : undefined,
+          instanceId: isAskAgentSelected
+            ? askAgentAssociatedInstanceId || undefined
+            : undefined,
         }),
       });
       const body = (await response.json()) as {
@@ -5571,7 +5613,7 @@ export function BrowserGatewayApp({
               body: JSON.stringify({
                 ...selectionRequest.body,
                 instanceId: isAskAgentSelected
-                  ? associatedInstanceId
+                  ? askAgentAssociatedInstanceId || undefined
                   : undefined,
                 sessionId: isAskAgentSelected
                   ? undefined
@@ -6208,7 +6250,7 @@ export function BrowserGatewayApp({
           },
           body: JSON.stringify({
             sessionId: foreground.sessionId,
-            instanceId: associatedInstanceId,
+            instanceId: askAgentAssociatedInstanceId || undefined,
           }),
         });
         const body = (await response.json().catch(() => ({}))) as {

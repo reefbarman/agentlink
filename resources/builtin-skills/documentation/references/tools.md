@@ -41,22 +41,28 @@ Exact script helpers, child constraints, limits, and recovery behavior: [compose
 - `find_and_replace` makes a bounded multi-file replacement proposal.
 - `rename_symbol` uses VS Code language intelligence where available.
 
+In VS Code, automatic write/edit review opens and tab cleanup preserve keyboard focus so they do not interrupt typing in chat. Explicitly opening a pending diff still focuses it. Exception: Save without Formatting (including exact-preservation saves for Unity files) still activates the target editor because VS Code's command requires it. Browser diff review remains read-only.
+
 Accepted writes include durability evidence. If format-on-save changes approved content, re-read when the result requests it. Protected targets, outside-workspace paths, and other policy boundaries remain reviewable. Foreground Review mode exposes `write_file` only for absolute paths inside the host temporary directory, such as Markdown bodies passed to review or approval commands; workspace files remain read-only. Normal write approval still applies. Background agents using the `review` tool profile remain fully read-only.
 
-Exact write-tool parameters and marker grammar: [write tools](complete-reference.md#write_file).
+The standalone CLI exposes a narrower terminal-native contract: project-relative reads, bounded regex search, hash-bearing `get_context`, and single-file `write_file`/canonical SEARCH-DIVIDER-REPLACE `apply_diff`. Existing files require the saved baseline hash, new files require an absent-file precondition, and the terminal shows the complete resulting diff before approval. A session grant continues only the same tool and path along its verified content-hash chain; external edits, changed scope or policy, and switching between patch and replacement require a fresh review. CLI writes preserve exact content and return a verified final hash; they do not run VS Code format-on-save. After explicit managed TypeScript/JavaScript installation and separate typed enablement for the canonical project, the CLI also exposes read-only `get_diagnostics`, `get_symbols`, `go_to_definition`, `get_references`, and `get_hover`. These use project-relative paths, return explicit freshness/readiness metadata, and recheck file scopes before returning locations.
+
+Exact write-tool parameters and marker grammar: [write tools](complete-reference.md#write_file). Standalone CLI details: [Standalone CLI](standalone-cli.md).
 
 ## Generate and present images
 
-- `generate_image` defaults to GPT-Image-2.5 Flare for fast visual exploration and user alignment. After the user selects a direction, call it with Sunburst and the selected session image as a reference for the polished asset. Go directly to Sunburst when the direction is already settled, and honor explicit user preferences.
+- `generate_image` is available in Code and Architect modes and defaults to GPT-Image-2.5 Flare for fast visual exploration. Use Sunburst when editing precision or final polish matters. OpenAI API-key sessions can select validated dimensions, quality through `max`, input fidelity, background transparency, PNG/JPEG/WebP output and compression, or explicitly edit a selected image with an optional PNG mask. ChatGPT/Codex OAuth keeps legacy generation and reference-led refinement; advanced controls are rejected before spending quota until that backend is verified.
 - `present_images` shows images already retained in the session without generating a new image or consuming quota.
 
-VS Code can save generated PNGs to workspace paths and use workspace-local reference files. Browser Ask Agent remains display-only, but can refine user attachments and prior generated session images. Exact parameters: [image tools](complete-reference.md#generate_image).
+VS Code can save generated PNG, JPEG, and WebP files and use workspace-local edit/reference images. Browser Ask Agent remains display-only and uses retained session image IDs. Advanced calls require approval each time; legacy generation can still use **Generate for Session**. Partial streaming frames are never reported or saved as completed assets. Exact parameters: [image tools](complete-reference.md#generate_image).
 
 ## Run and inspect commands
 
-- `execute_command` runs a command in a managed terminal.
+- `execute_command` runs a command in a managed terminal. Command approval checks are ordered within each chat session, not across tabs: a pending approval in another tab does not block this session's checks or approval card. All authorization and shared workspace scheduling constraints remain in force.
 - `get_terminal_output` reads retained output or controls an observed command. Pass the `command_id` returned by native/sandbox `execute_command` together with `terminal_id` to read the same command after terminal reuse. Omitting it selects the latest command. An unavailable or expired command ID returns an error rather than another command's output; `kill: true` cannot interrupt a newer command when an older ID is selected.
 - `close_terminals` closes managed terminals when appropriate.
+
+The standalone CLI has a separate non-PTY command contract. Its `execute_command` uses an exact reviewed `/bin/zsh -c` launch with closed stdin, no persistent shell state, a project-contained working directory, and no sandbox claim. Environment values are omitted from approval and prepared-launch persistence; approvals retain variable names plus a host-keyed digest and revalidate the resolved environment before launch. Values of credential-like environment variables are redacted if a command prints them. `get_command_output`, `list_commands`, and `stop_command` operate on stable session-owned command IDs. Foreground commands hold the project mutation window until exit. Background development processes require typing `allow background` for each exact launch and remain observable through `/processes`, `/output ID`, and `/stop ID`. Retained interleaved output is bounded and reports dropped offsets; restart marks prior running records interrupted without reconnecting or replaying them.
 
 Command history and output retention are bounded, not permanent storage. Earlier command IDs remain readable while their records are retained in an open terminal; closing or reclaiming a terminal retains only its latest command. Read final output before closing and use a returned `output_file` when available. Native/sandbox signal deaths include `signal` and a nonzero `exit_code` (128 + signal when the PTY supplied zero or no exit code), so an aborted process cannot look successful. Carriage returns move the output cursor without erasing text that has not been overwritten.
 
@@ -67,7 +73,7 @@ Exact command-tool parameters: [terminal tools](complete-reference.md#execute_co
 ## Work with people and the session
 
 - `ask_user` asks structured questions.
-- `todo_write` maintains visible work state.
+- `todo_write` maintains visible work state. Todo identifiers and labels must contain non-whitespace text; malformed blank rows are ignored with model-visible correction guidance. The list changes only when the agent calls the tool, so multi-step work should update it at each real task transition.
 - `set_task_status` ends a turn with a truthful result.
 - `switch_mode` changes the workflow mode.
 - `search_session_history` and `read_session_excerpt` retrieve prior context when allowed.

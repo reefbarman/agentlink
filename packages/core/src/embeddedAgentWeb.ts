@@ -472,6 +472,20 @@ function projectTurnEvent(event: AgentTurnEvent): EmbeddedAgentTurnEvent {
         type: event.type,
         model: event.provenance.resolvedModel.model,
       };
+    case "thinking.started":
+    case "thinking.completed":
+      return {
+        ...base,
+        type: event.type,
+        thinkingId: event.thinkingId,
+      };
+    case "thinking.delta":
+      return {
+        ...base,
+        type: event.type,
+        thinkingId: event.thinkingId,
+        text: event.text,
+      };
     case "text.delta":
       return { ...base, type: event.type, text: event.text };
     case "tool.requested":

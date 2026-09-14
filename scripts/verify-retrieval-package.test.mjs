@@ -27,6 +27,7 @@ function inventory(...extraPaths) {
     "resources/builtin-skills/documentation/README.md",
     "resources/builtin-skills/documentation/references/capabilities.md",
     "resources/builtin-skills/documentation/references/getting-started.md",
+    "resources/builtin-skills/documentation/references/standalone-cli.md",
     "resources/builtin-skills/documentation/references/embedding-agentlink.md",
     "resources/builtin-skills/documentation/references/tools.md",
     "resources/builtin-skills/documentation/references/troubleshooting.md",
@@ -85,6 +86,23 @@ test("rejects an inventory without the focused getting-started guide", () => {
         "darwin-arm64",
       ),
     /missing required paths: resources\/builtin-skills\/documentation\/references\/getting-started\.md/u,
+  );
+});
+
+test("rejects an inventory without the standalone CLI guide", () => {
+  assert.throws(
+    () =>
+      verifyRetrievalPackageFiles(
+        inventory(
+          "dist/node_modules/@lancedb/lancedb-darwin-arm64/package.json",
+          "dist/node_modules/@lancedb/lancedb-darwin-arm64/lancedb.darwin-arm64.node",
+        ).replace(
+          "resources/builtin-skills/documentation/references/standalone-cli.md\n",
+          "",
+        ),
+        "darwin-arm64",
+      ),
+    /missing required paths: resources\/builtin-skills\/documentation\/references\/standalone-cli\.md/u,
   );
 });
 

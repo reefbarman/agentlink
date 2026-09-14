@@ -28,6 +28,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "generate_image",
     "propose_memory",
   ],
+  media: ["generate_image"],
   command: ["execute_command", "get_terminal_output", "close_terminals"],
   language: [
     "get_diagnostics",

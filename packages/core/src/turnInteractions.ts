@@ -33,7 +33,11 @@ export interface AuthorizeToolCallRequest<
 }
 
 export type AuthorizeToolCallResult =
-  | { readonly decision: "allow" }
+  | {
+      readonly decision: "allow";
+      /** Optional host-prepared private input executed instead of the model input. */
+      readonly preparedInput?: Readonly<Record<string, unknown>>;
+    }
   | { readonly decision: "deny"; readonly reason?: string }
   | {
       readonly decision: "require_user";
@@ -41,6 +45,11 @@ export type AuthorizeToolCallResult =
       readonly summary: string;
       /** Optional explicitly host-safe structured detail for the host UI. */
       readonly displayContent?: unknown;
+      /**
+       * Optional host-prepared private input persisted in the continuation and
+       * executed unchanged after approval. It is never projected into events.
+       */
+      readonly preparedInput?: Readonly<Record<string, unknown>>;
     };
 
 export type AuthorizeToolCall<

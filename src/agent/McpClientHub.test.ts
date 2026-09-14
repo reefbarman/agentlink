@@ -61,6 +61,11 @@ const mocks = vi.hoisted(() => ({
     async () => ({ content: [] }),
   ),
   close: vi.fn(async () => {}),
+  fetch: vi.fn<typeof fetch>(),
+}));
+
+vi.mock("../util/httpDispatcher.js", () => ({
+  agentLinkLongPollingFetch: mocks.fetch,
 }));
 
 vi.mock("vscode", async () => {
@@ -288,6 +293,39 @@ describe("McpClientHub protocol correctness", () => {
       const options =
         type === "sse" ? mocks.sseTransportOptions : mocks.httpTransportOptions;
       expect(options?.fetch).toEqual(expect.any(Function));
+    },
+  );
+
+  it.each(["sse", "streamable-http"] as const)(
+    "forwards caller and connection cancellation to the %s fetch consumer",
+    async (type) => {
+      const fetchMock = mocks.fetch.mockResolvedValue(new Response());
+      const hub = new McpClientHub();
+      try {
+        await hub.connect([
+          { name: "cancel-fetch", type, url: "https://mcp.example/cancel" },
+        ]);
+        const options =
+          type === "sse"
+            ? mocks.sseTransportOptions
+            : mocks.httpTransportOptions;
+        const caller = new AbortController();
+        await options!.fetch!("https://mcp.example/cancel", {
+          signal: caller.signal,
+        });
+        const firstSignal = fetchMock.mock.calls[0][1]!.signal!;
+        expect(firstSignal.aborted).toBe(false);
+        caller.abort();
+        expect(firstSignal.aborted).toBe(true);
+        await options!.fetch!("https://mcp.example/cancel");
+        const secondSignal = fetchMock.mock.calls[1][1]!.signal!;
+        expect(secondSignal.aborted).toBe(false);
+        await hub.disconnectAll();
+        expect(secondSignal.aborted).toBe(true);
+      } finally {
+        await hub.disconnectAll();
+        fetchMock.mockReset();
+      }
     },
   );
 

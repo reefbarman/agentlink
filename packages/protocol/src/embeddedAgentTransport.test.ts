@@ -43,8 +43,15 @@ describe("embedded agent transport", () => {
   it("preserves ordered text and tool blocks and renders denial neutrally", () => {
     const state = reduce([
       event(0, { type: "turn.started" }),
-      event(1, { type: "text.delta", text: "Before " }),
+      event(1, { type: "thinking.started", thinkingId: "thinking-1" }),
       event(2, {
+        type: "thinking.delta",
+        thinkingId: "thinking-1",
+        text: "Checking",
+      }),
+      event(3, { type: "thinking.completed", thinkingId: "thinking-1" }),
+      event(4, { type: "text.delta", text: "Before " }),
+      event(5, {
         type: "tool.requested",
         toolCallId: "call-1",
         toolName: "write_record",
@@ -52,13 +59,13 @@ describe("embedded agent transport", () => {
         presentation: { title: "Update record", destructive: true },
         displayInput: { title: "Update record" },
       }),
-      event(3, {
+      event(6, {
         type: "tool.started",
         toolCallId: "call-1",
         toolName: "write_record",
         effect: "write",
       }),
-      event(4, {
+      event(7, {
         type: "tool.failed",
         toolCallId: "call-1",
         toolName: "write_record",
@@ -71,8 +78,8 @@ describe("embedded agent transport", () => {
           retryable: false,
         },
       }),
-      event(5, { type: "text.delta", text: "after" }),
-      event(6, {
+      event(8, { type: "text.delta", text: "after" }),
+      event(9, {
         type: "turn.completed",
         result: {
           status: "completed",
@@ -86,6 +93,12 @@ describe("embedded agent transport", () => {
 
     expect(state.status).toBe("completed");
     expect(state.blocks).toEqual([
+      {
+        type: "thinking",
+        thinkingId: "thinking-1",
+        text: "Checking",
+        status: "completed",
+      },
       { type: "text", text: "Before " },
       {
         type: "tool",

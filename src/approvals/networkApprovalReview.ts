@@ -5,12 +5,21 @@ import type {
   CommandReviewStatus,
   CommandReviewUserAuthorization,
 } from "./commandApprovalReview.js";
+import {
+  DEFAULT_GUARDIAN_REVIEW_ATTEMPTS,
+  DEFAULT_GUARDIAN_REVIEW_ATTEMPT_TIMEOUT_MS,
+  DEFAULT_GUARDIAN_REVIEW_TIMEOUT_MS,
+  GUARDIAN_INVALID_RESPONSE_RETRY_INSTRUCTION,
+  isGuardianAttemptTimeoutError,
+  runGuardianReviewAttempts,
+} from "./guardianReview.js";
 
 import type { ManagedNetworkRequest } from "@agentlink/protocol/terminal-security";
 import type { ModelProvider } from "../agent/providers/types.js";
 
-export const DEFAULT_NETWORK_REVIEW_TIMEOUT_MS = 90_000;
-const MAX_NETWORK_REVIEW_ATTEMPTS = 3;
+export const DEFAULT_NETWORK_REVIEW_TIMEOUT_MS =
+  DEFAULT_GUARDIAN_REVIEW_TIMEOUT_MS;
+const MAX_NETWORK_REVIEW_ATTEMPTS = DEFAULT_GUARDIAN_REVIEW_ATTEMPTS;
 const MAX_RATIONALE_LENGTH = 500;
 
 const NETWORK_REVIEW_SYSTEM_PROMPT = `You are a separate Guardian reviewer deciding whether one exact paused public network connection is allowed under the user's request. Apply destination risk and user authorization jointly. Do not authorize a different host, protocol, port, address, command, or later connection.
@@ -61,6 +70,7 @@ export interface NetworkApprovalReviewerFactoryOptions {
     | undefined
     | Promise<CommandApprovalReviewerContext | undefined>;
   timeoutMs?: number;
+  attemptTimeoutMs?: number;
 }
 
 export function parseNetworkApprovalReviewResponse(
@@ -138,56 +148,60 @@ export function createNetworkApprovalReviewer(
         if (!context || !isRoutable(context.provider, context.sessionModel)) {
           return unavailableReviewResult(model);
         }
-        for (
-          let attempt = 1;
-          attempt <= MAX_NETWORK_REVIEW_ATTEMPTS;
-          attempt++
-        ) {
-          try {
-            const result = await awaitWithAbort(
-              context.provider.complete({
-                model: context.sessionModel,
-                systemPrompt: NETWORK_REVIEW_SYSTEM_PROMPT,
-                messages: [
-                  { role: "user", content: serializeNetworkReviewData(input) },
-                ],
-                maxTokens: 384,
-                temperature: 0,
-                reasoningEffort: context.provider
-                  .getCapabilities(context.sessionModel)
-                  .reasoningEfforts?.includes("low")
-                  ? "low"
-                  : "none",
-                signal,
-              }),
-              signal,
-            );
-            if (signal.aborted) throw abortError();
-            return {
-              ...parseNetworkApprovalReviewResponse(result.text),
+        let retryingInvalidResponse = false;
+        const decision = await runGuardianReviewAttempts({
+          signal,
+          maxAttempts: MAX_NETWORK_REVIEW_ATTEMPTS,
+          attemptTimeoutMs:
+            options.attemptTimeoutMs ??
+            DEFAULT_GUARDIAN_REVIEW_ATTEMPT_TIMEOUT_MS,
+          async run(_attempt, attemptSignal) {
+            const result = await context.provider.complete({
               model: context.sessionModel,
-            };
-          } catch {
-            if (signal.aborted || attempt === MAX_NETWORK_REVIEW_ATTEMPTS) {
-              throw abortError();
-            }
-          }
-        }
-        return unavailableReviewResult(model);
-      } catch {
+              systemPrompt: NETWORK_REVIEW_SYSTEM_PROMPT,
+              messages: [
+                {
+                  role: "user",
+                  content:
+                    serializeNetworkReviewData(input) +
+                    (retryingInvalidResponse
+                      ? GUARDIAN_INVALID_RESPONSE_RETRY_INSTRUCTION
+                      : ""),
+                },
+              ],
+              maxTokens: 384,
+              temperature: 0,
+              reasoningEffort: context.provider
+                .getCapabilities(context.sessionModel)
+                .reasoningEfforts?.includes("low")
+                ? "low"
+                : "none",
+              signal: attemptSignal,
+            });
+            const parsed = parseNetworkApprovalReviewResponse(result.text);
+            retryingInvalidResponse = parsed.status === "invalid";
+            return parsed;
+          },
+          shouldRetry: (result) => result.status === "invalid",
+        });
+        return { ...decision, model: context.sessionModel };
+      } catch (error) {
+        const timedOut =
+          timeoutController.signal.aborted ||
+          isGuardianAttemptTimeoutError(error);
         return {
           outcome: "deny",
           risk: "high",
           userAuthorization: "unknown",
           rationale: input.signal?.aborted
             ? "Network review was cancelled"
-            : timeoutController.signal.aborted
+            : timedOut
               ? "Network review timed out"
               : "Network review was unavailable",
           model,
           status: input.signal?.aborted
             ? "cancelled"
-            : timeoutController.signal.aborted
+            : timedOut
               ? "timed_out"
               : "unavailable",
         };

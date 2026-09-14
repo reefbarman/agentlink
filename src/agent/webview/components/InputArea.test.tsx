@@ -255,6 +255,50 @@ describe("InputArea slash popup", () => {
     expect(popup?.classList.contains("slash-cmd-popup-attached")).toBe(true);
   });
 
+  it("executes an exact match instead of the first grouped result", () => {
+    const onExecuteBuiltinCommand = vi.fn();
+    const onSend = vi.fn();
+    const { container } = renderInputArea(
+      [
+        {
+          name: "mcp-tools",
+          description: "Project MCP tools",
+          source: "project",
+          builtin: false,
+          body: "List the project MCP tools",
+        },
+        {
+          name: "mcp",
+          description: "Open MCP",
+          source: "builtin",
+          builtin: true,
+        },
+      ],
+      { onExecuteBuiltinCommand, onSend },
+    );
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    input.value = "/";
+    input.selectionStart = 1;
+    input.selectionEnd = 1;
+    fireEvent.input(input);
+    input.value = "/mcp";
+    input.selectionStart = 4;
+    input.selectionEnd = 4;
+    fireEvent.input(input);
+
+    const options =
+      container.querySelectorAll<HTMLButtonElement>(".slash-cmd-option");
+    expect(options[0]?.textContent).toContain("/mcp-tools");
+    expect(options[1]?.textContent).toContain("/mcp");
+    expect(options[1]?.classList.contains("selected")).toBe(true);
+
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onExecuteBuiltinCommand).toHaveBeenCalledWith("mcp", "");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("selects the visibly highlighted command when navigating mixed sources", () => {
     const onExecuteBuiltinCommand = vi.fn();
     const onSend = vi.fn();

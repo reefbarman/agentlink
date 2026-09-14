@@ -1,8 +1,20 @@
 import type { ModelProvider } from "../agent/providers/types.js";
 
-export const DEFAULT_GUARDIAN_REVIEW_TIMEOUT_MS = 90_000;
-export const DEFAULT_GUARDIAN_REVIEW_ATTEMPTS = 3;
+/**
+ * Guardian review is part of an unattended approval path, so prefer a generous
+ * end-to-end deadline over prematurely handing the action to a human. The
+ * deadline covers context resolution and every retry rather than multiplying
+ * per attempt.
+ */
+export const DEFAULT_GUARDIAN_REVIEW_TIMEOUT_MS = 5 * 60_000;
+export const DEFAULT_GUARDIAN_REVIEW_ATTEMPTS = 5;
+// Leave enough room inside the five-minute end-to-end deadline for the bounded
+// backoff between all five attempts.
+export const DEFAULT_GUARDIAN_REVIEW_ATTEMPT_TIMEOUT_MS = 59_000;
 export const DEFAULT_GUARDIAN_RATIONALE_MAX_LENGTH = 500;
+
+export const GUARDIAN_INVALID_RESPONSE_RETRY_INSTRUCTION =
+  "\n\nYour previous response was invalid. Return exactly one JSON object matching the required schema, with no markdown or prose.";
 
 export type GuardianReviewRisk = "low" | "medium" | "high" | "critical";
 export type GuardianReviewUserAuthorization =
@@ -66,8 +78,18 @@ export interface RunGuardianReviewOptions {
   };
   timeoutMs?: number;
   maxAttempts?: number;
+  attemptTimeoutMs?: number;
   maxTokens?: number;
   maxRationaleLength?: number;
+}
+
+export interface GuardianReviewAttemptsOptions<T> {
+  signal: AbortSignal;
+  maxAttempts: number;
+  attemptTimeoutMs: number;
+  run(attempt: number, signal: AbortSignal): Promise<T>;
+  shouldRetry(result: T): boolean;
+  retryDelayMs?(completedAttempts: number): number;
 }
 
 export interface GuardianDenialCircuitDecision {
@@ -194,44 +216,49 @@ export async function runGuardianReview(
       .reasoningEfforts?.includes("low")
       ? "low"
       : "none";
-    const maxAttempts = options.maxAttempts ?? DEFAULT_GUARDIAN_REVIEW_ATTEMPTS;
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      try {
-        const result = await awaitWithAbort(
-          context.provider.complete({
-            model,
-            systemPrompt: options.systemPrompt,
-            messages: [{ role: "user", content: options.userContent }],
-            maxTokens: options.maxTokens ?? 384,
-            temperature: 0,
-            reasoningEffort,
-            signal,
-          }),
-          signal,
-        );
-        if (signal.aborted) throw abortError();
-        return {
-          ...parseGuardianReviewResponse(result.text, {
-            messages: options.messages,
-            maxRationaleLength: options.maxRationaleLength,
-          }),
+    let retryingInvalidResponse = false;
+    const decision = await runGuardianReviewAttempts({
+      signal,
+      maxAttempts: options.maxAttempts ?? DEFAULT_GUARDIAN_REVIEW_ATTEMPTS,
+      attemptTimeoutMs:
+        options.attemptTimeoutMs ?? DEFAULT_GUARDIAN_REVIEW_ATTEMPT_TIMEOUT_MS,
+      async run(_attempt, attemptSignal) {
+        const result = await context.provider.complete({
           model,
-        };
-      } catch {
-        if (signal.aborted || attempt === maxAttempts) throw abortError();
-      }
-    }
-
-    return failedReviewResult(
-      model,
-      "unavailable",
-      options.messages.unavailable,
-    );
-  } catch {
+          systemPrompt: options.systemPrompt,
+          messages: [
+            {
+              role: "user",
+              content:
+                options.userContent +
+                (retryingInvalidResponse
+                  ? GUARDIAN_INVALID_RESPONSE_RETRY_INSTRUCTION
+                  : ""),
+            },
+          ],
+          maxTokens: options.maxTokens ?? 384,
+          temperature: 0,
+          reasoningEffort,
+          signal: attemptSignal,
+        });
+        const parsed = parseGuardianReviewResponse(result.text, {
+          messages: options.messages,
+          maxRationaleLength: options.maxRationaleLength,
+        });
+        retryingInvalidResponse = parsed.status === "invalid";
+        return parsed;
+      },
+      shouldRetry: (result) => result.status === "invalid",
+    });
+    return { ...decision, model };
+  } catch (error) {
     if (options.signal?.aborted) {
       return failedReviewResult(model, "cancelled", options.messages.cancelled);
     }
-    if (timeoutController.signal.aborted) {
+    if (
+      timeoutController.signal.aborted ||
+      isGuardianAttemptTimeoutError(error)
+    ) {
       return failedReviewResult(model, "timed_out", options.messages.timedOut);
     }
     return failedReviewResult(
@@ -242,6 +269,74 @@ export async function runGuardianReview(
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function runGuardianReviewAttempts<T>(
+  options: GuardianReviewAttemptsOptions<T>,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= options.maxAttempts; attempt += 1) {
+    const attemptController = new AbortController();
+    const timer = setTimeout(
+      () => attemptController.abort(),
+      options.attemptTimeoutMs,
+    );
+    const attemptSignal = AbortSignal.any([
+      options.signal,
+      attemptController.signal,
+    ]);
+    try {
+      const result = await awaitWithAbort(
+        options.run(attempt, attemptSignal),
+        attemptSignal,
+      );
+      if (!options.shouldRetry(result) || attempt === options.maxAttempts) {
+        return result;
+      }
+    } catch (error) {
+      lastError =
+        attemptController.signal.aborted && !options.signal.aborted
+          ? guardianAttemptTimeoutError()
+          : error;
+      if (options.signal.aborted || attempt === options.maxAttempts)
+        throw lastError;
+    } finally {
+      clearTimeout(timer);
+    }
+    await delayWithAbort(
+      (options.retryDelayMs ?? guardianRetryDelayMs)(attempt),
+      options.signal,
+    );
+  }
+  throw lastError ?? new Error("Guardian review attempts exhausted");
+}
+
+function guardianAttemptTimeoutError(): DOMException {
+  return new DOMException("Guardian review attempt timed out", "TimeoutError");
+}
+
+export function isGuardianAttemptTimeoutError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "TimeoutError";
+}
+
+function guardianRetryDelayMs(completedAttempts: number): number {
+  return Math.min(100 * 2 ** (completedAttempts - 1), 1_000);
+}
+
+function delayWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(abortError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export function isGuardianReviewModelRoutable(

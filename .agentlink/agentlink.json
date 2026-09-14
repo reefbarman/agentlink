@@ -16,7 +16,8 @@
     },
     {
       "pattern": "npx oxlint",
-      "mode": "prefix"
+      "mode": "prefix",
+      "decision": "allow"
     },
     {
       "pattern": "npm run fmt",
@@ -25,7 +26,8 @@
     },
     {
       "pattern": "npx oxfmt",
-      "mode": "prefix"
+      "mode": "prefix",
+      "decision": "allow"
     },
     {
       "pattern": "npx @vscode/vsce ls",
@@ -56,6 +58,41 @@
     },
     {
       "pattern": "npm exec -- oxfmt",
+      "mode": "prefix",
+      "decision": "allow"
+    },
+    {
+      "pattern": "npm run build:workspaces",
+      "mode": "prefix",
+      "decision": "allow"
+    },
+    {
+      "pattern": "npm run lint:workspaces",
+      "mode": "prefix",
+      "decision": "allow"
+    },
+    {
+      "pattern": "npm run test:workspaces",
+      "mode": "prefix",
+      "decision": "allow"
+    },
+    {
+      "pattern": "npm run docs:check",
+      "mode": "prefix",
+      "decision": "allow"
+    },
+    {
+      "pattern": "npm run cli:smoke",
+      "mode": "prefix",
+      "decision": "allow"
+    },
+    {
+      "pattern": "npm run docs:generate",
+      "mode": "prefix",
+      "decision": "allow"
+    },
+    {
+      "pattern": "npm run telemetry:mcp-auth",
       "mode": "prefix",
       "decision": "allow"
     }

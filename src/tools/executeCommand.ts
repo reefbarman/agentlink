@@ -94,8 +94,25 @@ import {
   materializeInlineCommandFiles,
 } from "../util/commandInlineFiles.js";
 
-/** Serializes the approval-check phase so pending dialogs block other commands. */
-const approvalGate = new Semaphore(1);
+const approvalGates = new Map<
+  string,
+  { semaphore: Semaphore; users: number }
+>();
+
+async function acquireApprovalGate(sessionId: string): Promise<() => void> {
+  let gate = approvalGates.get(sessionId);
+  if (!gate) {
+    gate = { semaphore: new Semaphore(1), users: 0 };
+    approvalGates.set(sessionId, gate);
+  }
+  gate.users += 1;
+  const release = await gate.semaphore.acquire();
+  return () => {
+    release();
+    gate.users -= 1;
+    if (gate.users === 0) approvalGates.delete(sessionId);
+  };
+}
 
 type CommandApprovalAudit =
   | { by: "readonly_policy" }
@@ -2012,9 +2029,8 @@ export async function handleExecuteCommand(
         additionalPermissions ||
         (!masterBypass && !readOnlyPolicy)
       ) {
-        // Gate: only one command goes through approval at a time, so pending
-        // dialogs aren't buried by terminals from auto-approved commands.
-        const releaseGate = await approvalGate.acquire();
+        // Preserve approval order within a session without blocking other tabs.
+        const releaseGate = await acquireApprovalGate(sessionId);
         try {
           const subCommands = splitCompoundCommand(params.command);
           const gatedRulePolicy = commandRulePolicyFor(
@@ -2494,7 +2510,7 @@ export async function handleExecuteCommand(
           }
 
           try {
-            const releaseGate = await approvalGate.acquire();
+            const releaseGate = await acquireApprovalGate(sessionId);
             let retryApproval: Awaited<ReturnType<typeof approveSubCommands>>;
             try {
               retryApproval = await approveSubCommands(

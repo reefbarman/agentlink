@@ -6,6 +6,7 @@ import type {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -61,6 +62,7 @@ export function useSlashCommandPopup({
   const [view, setView] = useState<SlashCommandView>("main");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const popupRef = useRef<HTMLDivElement>(null);
+  const autoSelectionKeyRef = useRef<string | null>(null);
 
   const displayCommands = commands;
   const modelList = useMemo(
@@ -167,6 +169,25 @@ export function useSlashCommandPopup({
     () => orderSlashCommandsForPicker(filteredCommands),
     [filteredCommands],
   );
+
+  useLayoutEffect(() => {
+    if (view !== "main") {
+      autoSelectionKeyRef.current = null;
+      return;
+    }
+    const commandOrderKey = orderedCommands
+      .map((command) => `${command.source}:${command.name}`)
+      .join("\0");
+    const autoSelectionKey = `${view}\0${query}\0${commandOrderKey}`;
+    if (autoSelectionKeyRef.current === autoSelectionKey) return;
+    autoSelectionKeyRef.current = autoSelectionKey;
+
+    const normalizedQuery = query.toLowerCase();
+    const exactMatchIndex = orderedCommands.findIndex(
+      (command) => slashCommandMatchRank(command, normalizedQuery) === 0,
+    );
+    setSelectedIndex(exactMatchIndex >= 0 ? exactMatchIndex : 0);
+  }, [view, query, orderedCommands]);
 
   const hasSearchAlternatives = useMemo(() => {
     if (!matchedCommand || view !== "main") return false;

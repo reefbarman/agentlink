@@ -43,6 +43,8 @@ export interface CreateNodeHostReadToolsOptions<
   readonly maxListEntries?: number;
   readonly maxSearchResults?: number;
   readonly maxSearchDepth?: number;
+  /** Optional host policy checked before files or directories are listed or read. */
+  readonly shouldIncludePath?: (absolutePath: string) => boolean;
 }
 
 /**
@@ -176,6 +178,7 @@ export function createNodeHostReadTools<
             directory: resolved.path,
             displayRoot: resolved.path,
             rootPath: resolved.rootPath,
+            shouldIncludePath: options.shouldIncludePath,
             depth: 0,
             maxDepth: depth,
             limit: maxListEntries,
@@ -239,6 +242,7 @@ export function createNodeHostReadTools<
           await searchPath({
             target: resolved.path,
             rootPath: resolved.rootPath,
+            shouldIncludePath: options.shouldIncludePath,
             maxDepth: maxSearchDepth,
             depth: 0,
             limit,
@@ -292,8 +296,10 @@ async function resolveGrantedPath(
   if (typeof input !== "string" || !path.isAbsolute(input)) {
     return { ok: false, error: "absolute_path_required" };
   }
-  const resolved = await fs.realpath(input).catch(() => undefined);
+  const requested = path.resolve(input);
+  const resolved = await fs.realpath(requested).catch(() => undefined);
   if (!resolved) return { ok: false, error: "path_not_found" };
+  if (resolved !== requested) return { ok: false, error: "path_alias" };
   for (const grant of grants) {
     if (
       (grant.kind === "file" && resolved === grant.path) ||
@@ -313,15 +319,17 @@ async function visitDirectory(options: {
   readonly maxDepth: number;
   readonly limit: number;
   readonly entries: string[];
+  readonly shouldIncludePath?: (absolutePath: string) => boolean;
 }): Promise<void> {
   if (options.entries.length >= options.limit) return;
   const directory = await fs.realpath(options.directory).catch(() => undefined);
   if (!directory || !isPathWithin(directory, options.rootPath)) return;
   for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
     if (options.entries.length >= options.limit) return;
-    const child = await fs
-      .realpath(path.join(directory, entry.name))
-      .catch(() => undefined);
+    if (entry.isSymbolicLink()) continue;
+    const requestedChild = path.join(directory, entry.name);
+    if (options.shouldIncludePath?.(requestedChild) === false) continue;
+    const child = await fs.realpath(requestedChild).catch(() => undefined);
     if (!child || !isPathWithin(child, options.rootPath)) continue;
     const stat = await fs.stat(child).catch(() => undefined);
     if (!stat) continue;
@@ -345,14 +353,22 @@ async function searchPath(options: {
   readonly limit: number;
   readonly regex: RegExp;
   readonly matches: Array<{ path: string; line: number; text: string }>;
+  readonly shouldIncludePath?: (absolutePath: string) => boolean;
 }): Promise<void> {
   if (
     options.matches.length >= options.limit ||
     options.depth > options.maxDepth
   )
     return;
+  if (options.shouldIncludePath?.(path.resolve(options.target)) === false)
+    return;
   const target = await fs.realpath(options.target).catch(() => undefined);
-  if (!target || !isPathWithin(target, options.rootPath)) return;
+  if (
+    !target ||
+    target !== path.resolve(options.target) ||
+    !isPathWithin(target, options.rootPath)
+  )
+    return;
   const stat = await fs.stat(target).catch(() => undefined);
   if (!stat) return;
   if (stat.isFile()) {
@@ -375,9 +391,12 @@ async function searchPath(options: {
   if (!stat.isDirectory()) return;
   for (const entry of await fs.readdir(target, { withFileTypes: true })) {
     if (options.matches.length >= options.limit) return;
+    if (entry.isSymbolicLink()) continue;
+    const child = path.join(target, entry.name);
+    if (options.shouldIncludePath?.(child) === false) continue;
     await searchPath({
       ...options,
-      target: path.join(target, entry.name),
+      target: child,
       depth: options.depth + 1,
     });
   }

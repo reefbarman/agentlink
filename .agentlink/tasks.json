@@ -17,6 +17,10 @@
       "command": "npm run desktop:package -- --target darwin-arm64 && rsync -a --delete desktop-releases/mac-arm64/AgentLink.app/ /Applications/AgentLink.app/"
     },
     {
+      "label": "Build and install CLI",
+      "command": "npm run cli:smoke && npm install --global --prefix \"$HOME/.local\" ./apps/cli/artifacts/agentlink-cli-*.tgz"
+    },
+    {
       "label": "Run tests",
       "command": "npm test"
     }

@@ -10,6 +10,8 @@ interface DesktopOAuthAccount {
 
 interface DesktopAuthStatus {
   hasOpenAiApiKey: boolean;
+  openAiCompatibleCredentialCount?: number;
+  hasUsableOpenAiCompatibleModel?: boolean;
   oauthAccounts: DesktopOAuthAccount[];
 }
 
@@ -146,13 +148,23 @@ function renderStatus(next: DesktopAuthStatus): void {
     accountList.append(item);
   }
 
-  const hasAuth = next.oauthAccounts.length > 0 || next.hasOpenAiApiKey;
+  const compatibleCredentialCount = next.openAiCompatibleCredentialCount ?? 0;
+  const hasAuth =
+    next.oauthAccounts.length > 0 ||
+    next.hasOpenAiApiKey ||
+    next.hasUsableOpenAiCompatibleModel === true;
   continueButton.hidden = !hasAuth;
   if (next.hasOpenAiApiKey) {
     const key = document.createElement("p");
     key.className = "stored-key";
     key.textContent = "OpenAI API key stored in Keychain";
     accountList.append(key);
+  }
+  if (compatibleCredentialCount > 0) {
+    const compatible = document.createElement("p");
+    compatible.className = "stored-key";
+    compatible.textContent = `${compatibleCredentialCount} OpenAI-compatible API key${compatibleCredentialCount === 1 ? "" : "s"} stored in Keychain`;
+    accountList.append(compatible);
   }
 }
 

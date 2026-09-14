@@ -579,13 +579,82 @@ export const generateImageSchema = {
     .string()
     .optional()
     .describe(
-      "Optional workspace-relative PNG file path or output directory. When omitted, generated images are shown in chat only and no files are written. When provided, images are also saved to this workspace path.",
+      "Optional workspace-relative PNG, JPEG, or WebP file path or output directory. The extension can infer output_format. When omitted, generated images are shown in chat only and no files are written.",
     ),
   size: z
     .string()
     .optional()
     .describe(
-      "Optional requested size/aspect hint, e.g. 1024x1024, 1536x1024, or 1024x1536. The Codex backend may choose the closest supported size.",
+      "Deprecated best-effort size/aspect hint retained for compatibility. Prefer output_size when exact supported dimensions are required. Cannot be combined with output_size.",
+    ),
+  output_size: z
+    .string()
+    .optional()
+    .describe(
+      "Structured output dimensions: auto or WIDTHxHEIGHT. Each edge must be a multiple of 16 and at most 3840 px, aspect ratio 1:3 to 3:1, and total pixels 655360 to 8294400. Public OpenAI API-key route only until Codex OAuth support is verified.",
+    ),
+  quality: z
+    .enum(["auto", "low", "medium", "high", "xhigh", "max"])
+    .optional()
+    .describe(
+      "Rendering quality. xhigh and max are Image 2.5 options. Higher settings cost more and take longer. Public OpenAI API-key route only until Codex OAuth support is verified.",
+    ),
+  background: z
+    .enum(["auto", "opaque", "transparent"])
+    .optional()
+    .describe(
+      "Output background. Transparent output requires PNG or WebP. Public OpenAI API-key route only until Codex OAuth support is verified.",
+    ),
+  output_format: z
+    .enum(["png", "jpeg", "webp"])
+    .optional()
+    .describe(
+      "Generated file format. Defaults to PNG, or is inferred from a .png/.jpg/.jpeg/.webp output_path. Public OpenAI API-key route only until Codex OAuth support is verified.",
+    ),
+  output_compression: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(100)
+    .optional()
+    .describe(
+      "JPEG/WebP compression level from 0 to 100. Requires output_format jpeg or webp. Public OpenAI API-key route only until Codex OAuth support is verified.",
+    ),
+  action: z
+    .enum(["auto", "generate", "edit"])
+    .optional()
+    .describe(
+      "Whether to generate, edit, or let the model choose. edit requires exactly one explicit edit_image_path or edit_image_id. Public OpenAI API-key route only until Codex OAuth support is verified.",
+    ),
+  input_fidelity: z
+    .enum(["low", "high"])
+    .optional()
+    .describe(
+      "How strongly to preserve style and features from input images. Public OpenAI API-key route only until Codex OAuth support is verified.",
+    ),
+  edit_image_path: z
+    .string()
+    .optional()
+    .describe(
+      "Workspace-local image to edit. Mutually exclusive with edit_image_id. The source is never overwritten unless output_path separately names it and normal write approval permits that path.",
+    ),
+  edit_image_id: z
+    .string()
+    .optional()
+    .describe(
+      "Prior session image ID to edit. Mutually exclusive with edit_image_path.",
+    ),
+  mask_image_path: z
+    .string()
+    .optional()
+    .describe(
+      "Workspace-local PNG mask for the explicit edit target. Requires an alpha channel, matching target dimensions, and action edit. Mutually exclusive with mask_image_id.",
+    ),
+  mask_image_id: z
+    .string()
+    .optional()
+    .describe(
+      "Prior session PNG image ID to use as the edit mask. Requires an alpha channel, matching target dimensions, and action edit. Mutually exclusive with mask_image_path.",
     ),
   count: z.coerce
     .number()

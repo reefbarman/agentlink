@@ -232,19 +232,55 @@ const indexerOptions = {
   },
 };
 
+/** @type {esbuild.Plugin} */
+const standaloneHelperBoundaryPlugin = {
+  name: "standalone-helper-boundary",
+  setup(build) {
+    build.onEnd((result) => {
+      if (!result.metafile) {
+        return {
+          errors: [
+            {
+              text: "Cannot verify the standalone browser gateway helper without an esbuild metafile.",
+            },
+          ],
+        };
+      }
+      const vscodeImport = Object.values(result.metafile.outputs)
+        .flatMap((output) => output.imports)
+        .find((entry) => entry.external && entry.path === "vscode");
+      if (vscodeImport) {
+        return {
+          errors: [
+            {
+              text: "The browser gateway helper must remain standalone and cannot import the VS Code runtime.",
+            },
+          ],
+        };
+      }
+      return undefined;
+    });
+  },
+};
+
 /** @type {esbuild.BuildOptions} */
 const browserGatewayHelperOptions = {
   entryPoints: ["src/browser-gateway/helper/browserGatewayHelper.ts"],
   bundle: true,
   outfile: "dist/browser-gateway-helper.js",
-  external: ["vscode", "@lancedb/lancedb", "apache-arrow", "@napi-rs/keyring"],
+  external: [
+    "vscode",
+    "@lancedb/lancedb",
+    "apache-arrow",
+    "@napi-rs/keyring-*",
+  ],
   format: "cjs",
   platform: "node",
   target: "node22",
   sourcemap: true,
   minify: false,
   metafile: true,
-  plugins: [workspacePackageClosurePlugin],
+  plugins: [standaloneHelperBoundaryPlugin, workspacePackageClosurePlugin],
   define: {
     __DEV_BUILD__: JSON.stringify(devBuild),
   },

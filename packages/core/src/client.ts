@@ -262,6 +262,9 @@ export type AgentClientSafeRunResult =
 export type AgentClientRunEvent =
   | { type: "run.started"; requestId: string }
   | { type: "model.resolved"; model: AgentModelReference }
+  | { type: "thinking.started"; thinkingId: string }
+  | { type: "thinking.delta"; thinkingId: string; text: string }
+  | { type: "thinking.completed"; thinkingId: string }
   | { type: "text.delta"; text: string }
   | {
       type: "tool.requested";
@@ -892,6 +895,19 @@ function projectRunEvent(
       type: "model.resolved",
       model: event.provenance.resolvedModel.model,
     };
+  }
+  if (event.type === "thinking.started") {
+    return { type: "thinking.started", thinkingId: event.thinkingId };
+  }
+  if (event.type === "thinking.delta") {
+    return {
+      type: "thinking.delta",
+      thinkingId: event.thinkingId,
+      text: event.text,
+    };
+  }
+  if (event.type === "thinking.completed") {
+    return { type: "thinking.completed", thinkingId: event.thinkingId };
   }
   if (event.type === "text.delta") {
     return { type: "text.delta", text: event.text };

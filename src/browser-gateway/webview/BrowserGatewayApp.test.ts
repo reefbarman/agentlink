@@ -1020,6 +1020,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
 
   afterEach(() => {
     cleanup();
+    delete window.agentlinkDesktopShell;
     window.localStorage.clear();
     window.sessionStorage.clear();
     document.documentElement.removeAttribute("style");
@@ -1795,6 +1796,146 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }
     });
   }
+
+  it("keeps standalone desktop Ask Agent on its live collision-safe desktop owner", async () => {
+    const desktopOwnerId = "agentlink-desktop~generation";
+    const updatedDesktopOwnerId = "agentlink-desktop~updated";
+    let updateDesktopOwner: ((ownerId: string) => void) | undefined;
+    window.agentlinkDesktopShell = {
+      askAgentOwnerId: desktopOwnerId,
+      onAskAgentOwnerIdChanged: (listener) => {
+        updateDesktopOwner = listener;
+        return () => {
+          updateDesktopOwner = undefined;
+        };
+      },
+      setRemoteLayout: vi.fn(),
+      retryRemote: vi.fn(),
+      onRemoteState: () => () => {},
+    };
+    const initialResponse = createAskAgentSessionResponse();
+    initialResponse.snapshot.session.foreground.projectedMessages = [
+      {
+        id: "desktop-user-error",
+        role: "user",
+        content: "Retry me",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "Retry me" }],
+      },
+      {
+        id: "desktop-assistant-error",
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        blocks: [],
+        error: {
+          message: "Provider unavailable",
+          retryable: true,
+          code: "model_error",
+        },
+      },
+    ];
+    const fallbackFetch = globalThis.fetch;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/ask-agent/session") {
+          return jsonResponse(initialResponse);
+        }
+        if (
+          url === "/api/ask-agent/model" ||
+          url === "/api/ask-agent/send" ||
+          url === "/api/ask-agent/retry"
+        ) {
+          return jsonResponse({
+            ok: true,
+            snapshot: createAskAgentSessionResponse().snapshot,
+          });
+        }
+        return fallbackFetch(input, init);
+      },
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        askAgentOnly: true,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([input]) =>
+            String(input) ===
+            `/api/ask-agent/models?instanceId=${encodeURIComponent(desktopOwnerId)}`,
+        ),
+      ).toBe(true);
+    });
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("/api/ask-agent/models?instanceId=instance-1"),
+      ),
+    ).toBe(false);
+
+    act(() => updateDesktopOwner?.(updatedDesktopOwnerId));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([input]) =>
+            String(input) ===
+            `/api/ask-agent/models?instanceId=${encodeURIComponent(updatedDesktopOwnerId)}`,
+        ),
+      ).toBe(true);
+    });
+    const updatedCatalogCalls = () =>
+      fetchMock.mock.calls.filter(
+        ([input]) =>
+          String(input) ===
+          `/api/ask-agent/models?instanceId=${encodeURIComponent(updatedDesktopOwnerId)}`,
+      ).length;
+    const callsBeforeCredentialRecovery = updatedCatalogCalls();
+    act(() => updateDesktopOwner?.(updatedDesktopOwnerId));
+    await waitFor(() => {
+      expect(updatedCatalogCalls()).toBeGreaterThan(
+        callsBeforeCredentialRecovery,
+      );
+    });
+
+    fireEvent.click(await screen.findByText("Retry"));
+    await waitFor(() => {
+      const retryCall = fetchMock.mock.calls.find(
+        ([input]) => String(input) === "/api/ask-agent/retry",
+      );
+      expect(retryCall).toBeTruthy();
+      expect(JSON.parse(String(retryCall?.[1]?.body))).toMatchObject({
+        instanceId: updatedDesktopOwnerId,
+      });
+    });
+
+    fireEvent.click(screen.getByTestId("trigger-select-model"));
+    fireEvent.click(screen.getByTestId("trigger-send"));
+    await waitFor(() => {
+      const modelCall = fetchMock.mock.calls.find(
+        ([input]) => String(input) === "/api/ask-agent/model",
+      );
+      const sendCall = fetchMock.mock.calls.find(
+        ([input]) => String(input) === "/api/ask-agent/send",
+      );
+      expect(modelCall).toBeTruthy();
+      expect(sendCall).toBeTruthy();
+      expect(JSON.parse(String(modelCall?.[1]?.body))).toMatchObject({
+        instanceId: updatedDesktopOwnerId,
+      });
+      expect(JSON.parse(String(sendCall?.[1]?.body))).toMatchObject({
+        instanceId: updatedDesktopOwnerId,
+      });
+    });
+  });
 
   it("associates Browser Ask Agent model and send requests with the current VS Code instance", async () => {
     let resolveModelSelection!: () => void;
@@ -3797,6 +3938,8 @@ describe("BrowserGatewayApp /mcp behavior", () => {
   it("switches desktop modes without unmounting the Ask Agent composer", async () => {
     const setRemoteLayout = vi.fn();
     window.agentlinkDesktopShell = {
+      askAgentOwnerId: "agentlink-desktop",
+      onAskAgentOwnerIdChanged: () => () => {},
       setRemoteLayout,
       retryRemote: vi.fn(),
       onRemoteState: () => () => {},

@@ -11,6 +11,36 @@ describe("built-in modes", () => {
     expect(getToolsForMode(review!)).toContain("write_file");
   });
 
+  it("allows image generation in architect without general edit access", () => {
+    const architect = BUILT_IN_MODES.find((mode) => mode.slug === "architect");
+    const tools = getToolsForMode(architect!);
+
+    expect(architect?.toolGroups).toContain("media");
+    expect(architect?.toolGroups).not.toContain("edit");
+    expect(tools).toContain("generate_image");
+    expect(tools).not.toContain("find_and_replace");
+    expect(tools).not.toContain("rename_symbol");
+
+    const toolsByMode = new Map(
+      BUILT_IN_MODES.map((mode) => [mode.slug, getToolsForMode(mode)]),
+    );
+    expect(toolsByMode.get("code")).toContain("generate_image");
+    for (const mode of ["ask", "debug", "review"]) {
+      expect(toolsByMode.get(mode), mode).not.toContain("generate_image");
+    }
+  });
+
+  it("preserves image generation for custom modes using the edit group", () => {
+    expect(
+      getToolsForMode({
+        slug: "custom",
+        name: "Custom",
+        icon: "tools",
+        toolGroups: ["edit"],
+      }),
+    ).toContain("generate_image");
+  });
+
   it("does not expose review's constrained write through a reusable tool group", () => {
     expect(
       getToolsForMode({
@@ -30,6 +60,7 @@ describe("buildUnionAgentMode", () => {
       expect.arrayContaining([
         "read",
         "edit",
+        "media",
         "command",
         "language",
         "search",

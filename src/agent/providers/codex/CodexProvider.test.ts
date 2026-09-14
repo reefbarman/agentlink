@@ -1509,6 +1509,51 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     });
   });
 
+  it("replaces the misleading OAuth model-support 400 when usage is exhausted", async () => {
+    const markOAuthUsageLimit = vi.fn().mockResolvedValue(undefined);
+    const authManager = makeAuthManager({
+      resolveModelAuth: vi.fn().mockResolvedValue({
+        method: "oauth",
+        bearerToken: "token",
+        accountId: "chatgpt-account",
+        oauthAccountPoolId: "pool-account",
+        canRefresh: true,
+      }),
+      markOAuthUsageLimit,
+      getOAuthRoundRobinAccountIds: vi.fn().mockResolvedValue([]),
+    });
+    createMock.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.",
+        ),
+        { status: 400 },
+      ),
+    );
+    const provider = new CodexProvider(authManager as never);
+
+    await expect(
+      (async () => {
+        for await (const _event of provider.stream({
+          model: "gpt-6-astra",
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "ping" }],
+          maxTokens: 64,
+        })) {
+          // drain
+        }
+      })(),
+    ).rejects.toMatchObject({
+      name: "CodexRequestError",
+      code: "oauth_usage_limit_exhausted",
+      retryable: true,
+      message:
+        "Codex usage limit has been reached for all signed-in ChatGPT accounts. Wait for it to reset or sign in with another account.",
+      actions: { signInAnotherAccount: true },
+    });
+    expect(markOAuthUsageLimit).toHaveBeenCalledWith("pool-account");
+  });
+
   it("does not silently remap Astra when the provider rejects access", async () => {
     createMock.mockRejectedValueOnce(
       Object.assign(new Error("Model not found gpt-6-astra"), { status: 404 }),

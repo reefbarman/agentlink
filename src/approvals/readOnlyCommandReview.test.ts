@@ -7,8 +7,10 @@ import type {
   ProviderStreamEvent,
   StreamRequest,
 } from "../agent/providers/types.js";
-import { createReadOnlyCommandReviewer } from "./readOnlyCommandReview.js";
 import { describe, expect, it, vi } from "vitest";
+
+import { DEFAULT_GUARDIAN_REVIEW_ATTEMPTS } from "./guardianReview.js";
+import { createReadOnlyCommandReviewer } from "./readOnlyCommandReview.js";
 
 const capabilities: ModelCapabilities = {
   supportsThinking: false,
@@ -127,8 +129,8 @@ describe("createReadOnlyCommandReviewer", () => {
     expect(result).toMatchObject({ outcome: "deny", status: "unavailable" });
   });
 
-  it("treats an invalid response as a deny with invalid status", async () => {
-    const { provider, sessionModel } = makeProvider({
+  it("retries invalid responses before returning a deny", async () => {
+    const { provider, complete, sessionModel } = makeProvider({
       response: "sure, that looks fine",
     });
     const reviewer = createReadOnlyCommandReviewer({
@@ -138,6 +140,7 @@ describe("createReadOnlyCommandReviewer", () => {
     const result = await reviewer.review(reviewInput());
 
     expect(result).toMatchObject({ outcome: "deny", status: "invalid" });
+    expect(complete).toHaveBeenCalledTimes(DEFAULT_GUARDIAN_REVIEW_ATTEMPTS);
   });
 
   it("serializes unserializable raw input defensively", async () => {

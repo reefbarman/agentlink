@@ -28,6 +28,7 @@ function desktopInventory(...extra) {
     "dist/node_modules/@lancedb/lancedb-darwin-arm64/package.json",
     "dist/node_modules/@lancedb/lancedb-darwin-arm64/lancedb.darwin-arm64.node",
     "node_modules/@napi-rs/keyring/package.json",
+    "node_modules/@napi-rs/keyring/index.js",
     "node_modules/@napi-rs/keyring-darwin-arm64/package.json",
     "node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node",
     "resources/builtin-skills/documentation/SKILL.md",
@@ -43,6 +44,20 @@ test("accepts a complete standalone macOS desktop runtime", () => {
   assert.equal(result.target, "darwin-arm64");
   assert.equal(result.nativePackage, "@lancedb/lancedb-darwin-arm64");
   assert.equal(result.keychainPackage, "@napi-rs/keyring-darwin-arm64");
+});
+
+test("rejects a desktop runtime without the Keychain JavaScript wrapper", () => {
+  assert.throws(
+    () =>
+      verifyDesktopRuntimeFiles(
+        desktopInventory().replace(
+          "node_modules/@napi-rs/keyring/index.js\n",
+          "",
+        ),
+        "darwin-arm64",
+      ),
+    /missing node_modules\/@napi-rs\/keyring\/index\.js/u,
+  );
 });
 
 test("rejects a desktop runtime without the shared browser UI", () => {

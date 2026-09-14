@@ -1,82 +1,92 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getNewSessionMode,
-  getUserSessionPreference,
-  rememberSessionMode,
+  initializeSharedSessionPreferences,
+  resetSharedSessionPreferencesForTesting,
+  writeUserSessionPreferenceEntry,
 } from "./sharedSessionPreferences.js";
 
+import type { SessionPreferencesSnapshot } from "@agentlink/node-host";
 import { getConfiguredBaseThresholdForModel } from "./modelCondenseThresholds.js";
 import { resolveModelForMode } from "./modeModelPreferences.js";
 import { resolveReasoningEffortForMode } from "./modeReasoningEffortPreferences.js";
 
-const { globalValues, getConfiguration, update } = vi.hoisted(() => {
-  const globalValues: Record<string, unknown> = {};
-  const update = vi.fn(async (key: string, value: unknown) => {
-    globalValues[key] = value;
-  });
+function preferences(
+  overrides: Partial<SessionPreferencesSnapshot> = {},
+): SessionPreferencesSnapshot {
   return {
-    globalValues,
-    update,
-    getConfiguration: vi.fn(() => ({
-      inspect: (key: string) => ({
-        globalValue: globalValues[key],
-        workspaceFolderValue: "stale-workspace-value",
-      }),
-      get: () => "stale-workspace-value",
-      update,
-    })),
+    modeModels: {},
+    modeReasoningEfforts: {},
+    modelCondenseThresholds: {},
+    ...overrides,
   };
-});
-vi.mock("vscode", () => ({
-  workspace: { getConfiguration },
-  ConfigurationTarget: { Global: 1 },
-}));
+}
 
 describe("shared session defaults", () => {
-  beforeEach(() => {
-    for (const key of Object.keys(globalValues)) delete globalValues[key];
-    vi.clearAllMocks();
-  });
+  beforeEach(() => resetSharedSessionPreferencesForTesting());
 
-  it("reads the latest user defaults from separate window snapshots without workspace overrides", async () => {
-    const windowA = getConfiguration();
-    const windowB = getConfiguration();
-    await rememberSessionMode("architect");
-    await windowA.update("modeModelPreferences", { architect: "model-a" });
-    await windowA.update("modeReasoningEffortPreferences", {
-      architect: "max",
-    });
-    await windowA.update("modelCondenseThresholds", { "model-a": 0.73 });
-    const config = windowB as never;
+  it("uses the host-neutral snapshot for all picker defaults", () => {
+    initializeSharedSessionPreferences(
+      { update: vi.fn() } as never,
+      preferences({
+        defaultMode: "architect",
+        modeModels: { architect: "model-a" },
+        modeReasoningEfforts: { architect: "max" },
+        modelCondenseThresholds: { "model-a": 0.73 },
+      }),
+    );
+    const legacyConfig = {
+      inspect: () => ({
+        defaultValue: { architect: "default-model" },
+        globalValue: { architect: "legacy-model" },
+      }),
+    } as never;
+
     expect(getNewSessionMode()).toBe("architect");
-    expect(resolveModelForMode(config, "architect")).toBe("model-a");
-    expect(resolveReasoningEffortForMode(config, "architect")).toBe("max");
-    expect(getConfiguredBaseThresholdForModel(config, "model-a")).toBe(0.73);
-    expect(update).toHaveBeenCalledWith("defaultMode", "architect", 1);
-    await windowA.update("modeModelPreferences", { architect: "model-b" });
-    expect(resolveModelForMode(config, "architect")).toBe("model-b");
+    expect(resolveModelForMode(legacyConfig, "architect")).toBe("model-a");
+    expect(resolveReasoningEffortForMode(legacyConfig, "architect")).toBe(
+      "max",
+    );
+    expect(getConfiguredBaseThresholdForModel(legacyConfig, "model-a")).toBe(
+      0.73,
+    );
   });
 
-  it("merges a partial user model map over the declared mode defaults", () => {
+  it("writes picker changes to the shared store and refreshes the snapshot", async () => {
+    const update = vi.fn(async () =>
+      preferences({ modeModels: { code: "model-new" } }),
+    );
+    initializeSharedSessionPreferences(
+      { update } as never,
+      preferences({
+        modeModels: { code: "model-old", ask: "cached-ask-model" },
+      }),
+    );
+    const config = { inspect: () => undefined } as never;
+
+    await writeUserSessionPreferenceEntry(
+      config,
+      "modeModelPreferences",
+      "code",
+      "model-new",
+    );
+
+    expect(update).toHaveBeenCalledWith({
+      modeModels: { code: "model-new" },
+    });
+    expect(resolveModelForMode(config, "code")).toBe("model-new");
+  });
+
+  it("falls back to legacy User Settings before shared storage initializes", () => {
     const config = {
       inspect: () => ({
         defaultValue: { code: "default-code", ask: "default-ask" },
-        globalValue: { code: "chosen-code" },
+        globalValue: { code: "legacy-code" },
         workspaceFolderValue: { ask: "stale-ask" },
       }),
     } as never;
-    expect(resolveModelForMode(config, "code")).toBe("chosen-code");
-    expect(resolveModelForMode(config, "ask")).toBe("default-ask");
-  });
 
-  it("uses declared defaults instead of legacy workspace values", () => {
-    const config = {
-      inspect: () => ({
-        defaultValue: "code",
-        workspaceValue: "debug",
-        workspaceFolderValue: "ask",
-      }),
-    } as never;
-    expect(getUserSessionPreference(config, "defaultMode")).toBe("code");
+    expect(resolveModelForMode(config, "code")).toBe("legacy-code");
+    expect(resolveModelForMode(config, "ask")).toBe("default-ask");
   });
 });

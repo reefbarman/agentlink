@@ -20,7 +20,7 @@ Rules can also be advertised and loaded on demand via the `load_rule` tool.
 
 ## Custom modes
 
-Project-level only, from `modes.json` in `.agents` / `.claude` / `.agentlink` (ascending priority). Custom modes can override built-in modes (`code`, `review`, ...). A mode defines a slug, name, and `toolGroups`. Note: `get_completions`, `get_inlay_hints`, `get_code_actions`, and `apply_code_action` are hidden from ordinary modes; expose them only via an explicit mode with the `language-benchmark` tool group.
+Project-level only, from `modes.json` in `.agents` / `.claude` / `.agentlink` (ascending priority). Custom modes can override built-in modes (`code`, `review`, ...). A mode defines a slug, name, and `toolGroups`. Use the `media` group to grant image generation without the general file-editing tools in `edit`; existing custom modes using `edit` continue to receive image generation. Note: `get_completions`, `get_inlay_hints`, `get_code_actions`, and `apply_code_action` are hidden from ordinary modes; expose them only via an explicit mode with the `language-benchmark` tool group.
 
 ## Custom slash commands
 

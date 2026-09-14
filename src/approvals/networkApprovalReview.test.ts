@@ -143,6 +143,47 @@ describe("network approval reviewer", () => {
     expect(JSON.stringify(call?.messages)).not.toContain("audit-1");
   });
 
+  it("retries malformed reviewer output before allowing", async () => {
+    const { provider, model, complete } = makeProvider();
+    complete
+      .mockResolvedValueOnce({ text: "not json" })
+      .mockResolvedValueOnce({ text: '{"outcome":"allow"}' });
+    const reviewer = createNetworkApprovalReviewer({
+      resolveContext: () => ({ provider, sessionModel: model }),
+    });
+
+    await expect(reviewer.review(reviewInput())).resolves.toMatchObject({
+      outcome: "allow",
+      status: "reviewed",
+    });
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a hung attempt before the shared deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const { provider, model, complete } = makeProvider();
+      complete.mockImplementation(() => new Promise(() => undefined));
+      const reviewer = createNetworkApprovalReviewer({
+        resolveContext: () => ({ provider, sessionModel: model }),
+        timeoutMs: 1_000,
+        attemptTimeoutMs: 400,
+      });
+      const pending = reviewer.review(reviewInput());
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(complete).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(500);
+
+      await expect(pending).resolves.toMatchObject({
+        outcome: "deny",
+        status: "timed_out",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("denies when no routable reviewer is available", async () => {
     const { provider, model } = makeProvider();
     const reviewer = createNetworkApprovalReviewer({

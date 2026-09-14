@@ -10,24 +10,33 @@ import {
   shell,
   type WebContents,
 } from "electron";
-import { listCodexModels } from "@agentlink/core/codex";
-import type { CoreModelCatalogEntry } from "@agentlink/protocol/model-catalog";
-
 import type { BrowserGatewayHelperLeaseClient } from "../../../src/browser-gateway/helper/BrowserGatewayHelperLeaseClient.js";
 import type { BrowserGatewayHelperModelAuthLeaseClient } from "../../../src/browser-gateway/helper/BrowserGatewayHelperModelAuthLeaseClient.js";
 import type { BrowserGatewayHelperDiscoveryRecord } from "../../../src/browser-gateway/protocol.js";
-import { DesktopAuthController } from "./desktopAuth.js";
+import {
+  AGENTLINK_DESKTOP_OWNER_ARGUMENT_PREFIX,
+  AGENTLINK_DESKTOP_OWNER_ID,
+} from "../../../src/shared/desktopBridge.js";
+import {
+  DesktopAuthController,
+  type DesktopResolvedModelAuth,
+} from "./desktopAuth.js";
+import { buildDesktopCodexCatalog } from "./desktopModelCatalog.js";
+import { DesktopOpenAiCompatibleController } from "./desktopOpenAiCompatible.js";
+import { refreshDesktopOwner } from "./desktopOwnerRouting.js";
 import { DesktopRemoteView } from "./DesktopRemoteView.js";
 
 declare const __AGENTLINK_HOST_VERSION__: string;
 
 const CHAT_LOAD_ATTEMPTS = 2;
 const CHAT_LOAD_RETRY_MS = 250;
-const OWNER_ID = "agentlink-desktop";
+const OWNER_ID = AGENTLINK_DESKTOP_OWNER_ID;
 const OWNER_GENERATION_ID = randomUUID();
-const CLIENT_ID = `agentlink-desktop:${OWNER_GENERATION_ID}`;
+const CLIENT_ID = `${AGENTLINK_DESKTOP_OWNER_ID}:${OWNER_GENERATION_ID}`;
 const CREDENTIAL_REFRESH_MS = 45 * 60_000;
+const CODEX_AUTH_RESOLUTION_TIMEOUT_MS = 3_000;
 const authController = new DesktopAuthController();
+const compatibleController = new DesktopOpenAiCompatibleController();
 
 let chatWindow: BrowserWindow | null = null;
 let setupWindow: BrowserWindow | null = null;
@@ -35,6 +44,7 @@ let leaseClient: BrowserGatewayHelperLeaseClient | null = null;
 let authClient: BrowserGatewayHelperModelAuthLeaseClient | null = null;
 let discovery: BrowserGatewayHelperDiscoveryRecord | null = null;
 let credentialRefreshTimer: NodeJS.Timeout | null = null;
+let cachedCodexAuth: DesktopResolvedModelAuth | null = null;
 
 function log(message: string): void {
   process.stderr.write(`[agentlink-desktop] ${message}\n`);
@@ -49,26 +59,6 @@ function getResourceRoot(): string {
 
 function getDesktopAssetPath(fileName: string): string {
   return path.join(__dirname, fileName);
-}
-
-function buildCodexCatalog(
-  authMethod: "oauth" | "apiKey",
-): CoreModelCatalogEntry[] {
-  return listCodexModels("openai-codex", authMethod).map((model) => ({
-    id: model.id,
-    displayName: model.displayName,
-    providerId: "openai-codex",
-    providerDisplayName: "OpenAI",
-    supportsToolUse: model.capabilities.supportsToolUse,
-    supportsImages: model.capabilities.supportsImages,
-    contextWindow: model.capabilities.contextWindow,
-    maxInputTokens: model.capabilities.maxInputTokens,
-    maxOutputTokens: model.capabilities.maxOutputTokens,
-    reasoningEfforts: model.capabilities.reasoningEfforts,
-    defaultReasoningEffort: model.capabilities.defaultReasoningEffort,
-    authenticated: true,
-    readiness: { status: "ready" },
-  }));
 }
 
 async function startLocalService(): Promise<BrowserGatewayHelperDiscoveryRecord> {
@@ -98,7 +88,11 @@ async function startLocalService(): Promise<BrowserGatewayHelperDiscoveryRecord>
       AGENTLINK_BROWSER_GATEWAY_STANDALONE_MCP: "1",
       ...(app.isPackaged
         ? {
-            NODE_PATH: path.join(process.resourcesPath, "node_modules"),
+            NODE_PATH: path.join(
+              process.resourcesPath,
+              "app.asar.unpacked",
+              "node_modules",
+            ),
           }
         : {}),
     },
@@ -123,6 +117,20 @@ async function startLocalService(): Promise<BrowserGatewayHelperDiscoveryRecord>
       processId: process.pid,
     },
     log,
+    onEffectiveOwnerIdChanged: (ownerId) => {
+      if (!authClient) return;
+      void refreshDesktopOwner({
+        ownerId,
+        refresh: publishDesktopModelOwner,
+        notify: (nextOwnerId) => {
+          const contents = chatWindow?.webContents;
+          if (contents && !contents.isDestroyed()) {
+            contents.send("agentlink:ask-agent-owner-id", nextOwnerId);
+          }
+        },
+        log,
+      });
+    },
   });
   await leaseClient.start();
 
@@ -132,38 +140,101 @@ async function startLocalService(): Promise<BrowserGatewayHelperDiscoveryRecord>
     grantedByOwnerId: OWNER_ID,
     getGrantedByOwnerId: () => leaseClient?.getEffectiveOwnerId() ?? OWNER_ID,
     grantedByOwnerGenerationId: OWNER_GENERATION_ID,
-    resolveModelAuth: async () => await authController.resolveModelAuth(),
+    resolveModelAuth: async (request) => {
+      if (request?.providerId?.startsWith("openai-compatible:")) {
+        return await compatibleController.resolveModelAuth(request.providerId);
+      }
+      return cachedCodexAuth;
+    },
     log,
     defaultTtlMs: 55 * 60_000,
   });
 
-  if (await authController.hasModelAuth()) await publishDesktopModelOwner();
+  if (await hasDesktopModel()) await publishDesktopModelOwner();
   credentialRefreshTimer = setInterval(() => {
-    void publishDesktopModelOwner().catch((error) =>
-      log(`credential refresh failed: ${String(error)}`),
-    );
+    void compatibleController
+      .initialize()
+      .then(() => publishDesktopModelOwner())
+      .catch((error) => log(`credential refresh failed: ${String(error)}`));
   }, CREDENTIAL_REFRESH_MS);
   credentialRefreshTimer.unref();
   return discovery;
+}
+
+async function hasDesktopModel(): Promise<boolean> {
+  return (
+    (await authController.hasModelAuth()) ||
+    compatibleController.hasUsableModel()
+  );
+}
+
+async function resolveCodexAuthForPublication() {
+  const timeout = new Promise<null>((resolve) => {
+    const timer = setTimeout(
+      () => resolve(null),
+      CODEX_AUTH_RESOLUTION_TIMEOUT_MS,
+    );
+    timer.unref();
+  });
+  const resolved = await Promise.race([
+    authController.resolveModelAuth(),
+    timeout,
+  ]);
+  if (!resolved) {
+    log("Codex auth resolution timed out; publishing other available models");
+  }
+  return resolved;
 }
 
 async function publishDesktopModelOwner(): Promise<void> {
   if (!authClient || !discovery?.helperGenerationId) {
     throw new Error("desktop_service_not_ready");
   }
-  const resolvedAuth = await authController.resolveModelAuth();
-  if (!resolvedAuth) throw new Error("model_credentials_missing");
+  log("publishing desktop model owner: resolving Codex auth");
+  const resolvedAuth = await resolveCodexAuthForPublication();
+  cachedCodexAuth = resolvedAuth;
+  log(
+    `publishing desktop model owner: Codex auth ${resolvedAuth ? "ready" : "unavailable"}`,
+  );
+  const compatibleModels = compatibleController.getModels();
+  if (!resolvedAuth && compatibleModels.length === 0) {
+    throw new Error("model_credentials_missing");
+  }
+  log(
+    `publishing desktop model owner: publishing ${compatibleModels.length + (resolvedAuth ? buildDesktopCodexCatalog(resolvedAuth.method).length : 0)} models`,
+  );
   await authClient.publishModelCatalog({
     helperGenerationId: discovery.helperGenerationId,
-    models: buildCodexCatalog(resolvedAuth.method),
+    models: [
+      ...(resolvedAuth ? buildDesktopCodexCatalog(resolvedAuth.method) : []),
+      ...compatibleModels,
+    ],
+    openAiCompatibleRuntimeProfiles: compatibleController.getRuntimeProfiles(),
   });
-  const credential = await authClient.grantCredential({
-    helperGenerationId: discovery.helperGenerationId,
-    modelScopes: ["chat"],
-    now: Date.now(),
-    providerId: "openai-codex",
-  });
-  if (!credential) throw new Error("model_credentials_missing");
+  log("publishing desktop model owner: catalog published");
+  void publishDesktopCredentials(resolvedAuth !== null);
+}
+
+async function publishDesktopCredentials(hasCodexAuth: boolean): Promise<void> {
+  if (!authClient || !discovery?.helperGenerationId) return;
+  const providerIds = [
+    ...(hasCodexAuth ? ["openai-codex"] : []),
+    ...compatibleController.listCredentialProviderIds(),
+  ];
+  await Promise.all(
+    providerIds.map(async (providerId) => {
+      log(`publishing desktop credential: ${providerId}`);
+      const credential = await authClient!.grantCredential({
+        helperGenerationId: discovery!.helperGenerationId!,
+        modelScopes: ["chat"],
+        now: Date.now(),
+        providerId,
+      });
+      log(
+        `publishing desktop credential: ${providerId} ${credential ? "ready" : "unavailable"}`,
+      );
+    }),
+  ).catch((error) => log(`credential publication failed: ${String(error)}`));
 }
 
 function allowOnlyLocalService(
@@ -205,6 +276,9 @@ async function showChatWindow(): Promise<void> {
     titleBarStyle: "hiddenInset",
     webPreferences: {
       preload: getDesktopAssetPath("chat-preload.cjs"),
+      additionalArguments: [
+        `${AGENTLINK_DESKTOP_OWNER_ARGUMENT_PREFIX}${leaseClient?.getEffectiveOwnerId() ?? OWNER_ID}`,
+      ],
       backgroundThrottling: false,
       contextIsolation: true,
       nodeIntegration: false,
@@ -278,9 +352,14 @@ async function showSetupWindow(): Promise<void> {
 }
 
 function registerCredentialIpc(): void {
-  ipcMain.handle("agentlink:credentials:status", (event) => {
+  ipcMain.handle("agentlink:credentials:status", async (event) => {
     assertSetupSender(event.sender);
-    return authController.getStatus();
+    return {
+      ...(await authController.getStatus()),
+      openAiCompatibleCredentialCount:
+        compatibleController.getCredentialCount(),
+      hasUsableOpenAiCompatibleModel: compatibleController.hasUsableModel(),
+    };
   });
   ipcMain.handle(
     "agentlink:credentials:store-openai-api-key",
@@ -320,13 +399,19 @@ function registerCredentialIpc(): void {
       throw new Error("invalid_oauth_account_id");
     }
     await authController.removeAccount(accountId);
-    if (await authController.hasModelAuth()) await publishDesktopModelOwner();
-    else await authClient?.clearCredential("openai-codex");
+    if (await authController.hasModelAuth()) {
+      await publishDesktopModelOwner();
+    } else {
+      await authClient?.clearCredential("openai-codex");
+      if (compatibleController.hasUsableModel()) {
+        await publishDesktopModelOwner();
+      }
+    }
     return await authController.getStatus();
   });
   ipcMain.handle("agentlink:continue-to-chat", async (event) => {
     assertSetupSender(event.sender);
-    if (!(await authController.hasModelAuth())) {
+    if (!(await hasDesktopModel())) {
       throw new Error("model_credentials_missing");
     }
     await publishDesktopModelOwner();
@@ -397,9 +482,14 @@ async function main(): Promise<void> {
 
   registerCredentialIpc();
   installApplicationMenu();
-  await authController.initialize();
+  await Promise.all([
+    authController.initialize(),
+    compatibleController.initialize().catch((error) => {
+      log(`OpenAI-compatible config unavailable: ${String(error)}`);
+    }),
+  ]);
   await startLocalService();
-  if (await authController.hasModelAuth()) await showChatWindow();
+  if (await hasDesktopModel()) await showChatWindow();
   else await showSetupWindow();
 }
 
@@ -416,11 +506,9 @@ if (!hasSingleInstanceLock) {
   });
   app.on("activate", () => {
     if (chatWindow || setupWindow) return;
-    void authController
-      .hasModelAuth()
-      .then((hasModelAuth) =>
-        hasModelAuth ? showChatWindow() : showSetupWindow(),
-      );
+    void hasDesktopModel().then((hasModelAuth) =>
+      hasModelAuth ? showChatWindow() : showSetupWindow(),
+    );
   });
   app.on("before-quit", (event) => {
     if (!leaseClient) return;

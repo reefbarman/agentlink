@@ -34,9 +34,13 @@ import { normalizeBackgroundMaxConcurrent } from "./agent/background/backgroundC
 import { addTrustedCommandViaUi } from "./agent/trustedCommandFlow.js";
 import { registerCodexAuthCommands } from "./agent/codexAuthCommands.js";
 import { registerOpenAiCompatibleAuthCommands } from "./agent/openAiCompatibleAuthCommands.js";
-import { OpenAiCompatibleCredentialService } from "./agent/openAiCompatibleCredentials.js";
+import {
+  OpenAiCompatibleCredentialService,
+  type OpenAiCompatibleSecretStore,
+} from "./agent/openAiCompatibleCredentials.js";
 import { registerOpenAiCompatibleModelConfigurationWizard } from "./agent/openAiCompatibleModelConfigurationWizard.js";
 import { getOpenAiCompatibleSecretKey } from "./agent/openAiCompatibleSecrets.js";
+import { initializeSharedOpenAiCompatibleStorage } from "./agent/sharedOpenAiCompatibleStorage.js";
 import { createCodexAuthFlows } from "./agent/codexAuthFlows.js";
 import { runLegacyAgentIntegrationCleanup } from "./util/legacyAgentIntegrationCleanup.js";
 
@@ -80,7 +84,10 @@ import { AgentPluginInstaller } from "./agent/AgentPluginInstaller.js";
 import { AgentPluginManagerHost } from "./agent/AgentPluginManagerHost.js";
 import { HookService } from "./agent/HookService.js";
 import { getConfiguredBaseThresholdForModel } from "./agent/modelCondenseThresholds.js";
-import { getNewSessionMode } from "./agent/sharedSessionPreferences.js";
+import {
+  getNewSessionMode,
+  initializeSharedSessionPreferences,
+} from "./agent/sharedSessionPreferences.js";
 import {
   resolveModelForMode,
   FALLBACK_AGENT_MODEL,
@@ -94,6 +101,12 @@ import { registerModelAuthCommands } from "./agent/modelAuthCommands.js";
 
 import { OpenAiCompatibleProviderManager } from "./agent/providers/openaiCompatible/index.js";
 import { discoverOpenAiCompatibleModels } from "./agent/providers/openaiCompatible/modelDiscovery.js";
+import { normalizeOpenAiCompatibleConnections } from "@agentlink/core/openai-compatible";
+import {
+  createSharedOpenAiCompatibleCredentialStore,
+  SessionPreferencesStore,
+  SharedOpenAiCompatibleConfigStore,
+} from "@agentlink/node-host";
 import {
   providerRegistry,
   CodexProvider,
@@ -872,6 +885,67 @@ export async function activate(
 
   // Agent chat view
   const agentConfiguration = vscode.workspace.getConfiguration("agentlink");
+  const sessionPreferencesStore = new SessionPreferencesStore();
+  let sessionPreferences;
+  try {
+    sessionPreferences = await sessionPreferencesStore.importLegacyIfAbsent({
+      defaultMode:
+        agentConfiguration.inspect<string>("defaultMode")?.globalValue,
+      modeModels: agentConfiguration.inspect<Record<string, string>>(
+        "modeModelPreferences",
+      )?.globalValue,
+      modeReasoningEfforts: agentConfiguration.inspect<
+        Record<
+          string,
+          import("@agentlink/protocol/model-catalog").CoreReasoningEffort
+        >
+      >("modeReasoningEffortPreferences")?.globalValue,
+      modelCondenseThresholds: agentConfiguration.inspect<
+        Record<string, number>
+      >("modelCondenseThresholds")?.globalValue,
+    });
+  } catch (error) {
+    log(
+      `[preferences] Shared session preferences unavailable; using legacy User Settings for this window: ${String(error)}`,
+    );
+  }
+  if (sessionPreferences) {
+    initializeSharedSessionPreferences(
+      sessionPreferencesStore,
+      sessionPreferences,
+    );
+  }
+  const sessionPreferencesWatcher = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(
+      vscode.Uri.file(sessionPreferencesStore.dataRoot),
+      path.basename(sessionPreferencesStore.configPath),
+    ),
+  );
+  const refreshSharedSessionPreferences = () => {
+    void sessionPreferencesStore
+      .read()
+      .then((preferences) => {
+        initializeSharedSessionPreferences(
+          sessionPreferencesStore,
+          preferences,
+        );
+      })
+      .catch((error) => {
+        log(`[preferences] Could not reload shared defaults: ${String(error)}`);
+      });
+  };
+  context.subscriptions.push(
+    sessionPreferencesWatcher,
+    sessionPreferencesWatcher.onDidChange(refreshSharedSessionPreferences),
+    sessionPreferencesWatcher.onDidCreate(refreshSharedSessionPreferences),
+    sessionPreferencesWatcher.onDidDelete(() => {
+      initializeSharedSessionPreferences(sessionPreferencesStore, {
+        modeModels: {},
+        modeReasoningEfforts: {},
+        modelCondenseThresholds: {},
+      });
+    }),
+  );
   const workspaceSessionLocation = resolveWorkspaceSessionLocation({
     workspaceFolders: vscode.workspace.workspaceFolders,
     workspaceFile: vscode.workspace.workspaceFile,
@@ -1499,19 +1573,52 @@ export async function activate(
   const openAiCompatibleConfiguration = vscode.workspace.getConfiguration(
     "agentlink.openaiCompatible",
   );
+  const legacyOpenAiCompatibleConnections =
+    openAiCompatibleConfiguration.inspect<unknown>("connections")
+      ?.globalValue ?? [];
+  const sharedOpenAiCompatibleConfig = new SharedOpenAiCompatibleConfigStore();
+  const sharedOpenAiCompatibleCredentials =
+    createSharedOpenAiCompatibleCredentialStore();
+  const builtInModelIds = codexProvider.listModels().map((model) => model.id);
+  let openAiCompatibleConnections = legacyOpenAiCompatibleConnections;
+  let openAiCompatibleSecrets: OpenAiCompatibleSecretStore = context.secrets;
+  let sharedOpenAiCompatibleStorageReady = false;
+  try {
+    const sharedStorage = await initializeSharedOpenAiCompatibleStorage({
+      configStore: sharedOpenAiCompatibleConfig,
+      credentialStore: sharedOpenAiCompatibleCredentials,
+      legacyConnections: legacyOpenAiCompatibleConnections,
+      legacySecrets: context.secrets,
+      getConfiguredAuthKeys: (connections) =>
+        normalizeOpenAiCompatibleConnections(connections, {
+          builtInModelIds,
+        }).connections.flatMap((connection) =>
+          connection.authKey ? [connection.authKey] : [],
+        ),
+      log: agentLog,
+    });
+    openAiCompatibleConnections = sharedStorage.connections;
+    openAiCompatibleSecrets = sharedStorage.secrets;
+    sharedOpenAiCompatibleStorageReady = true;
+  } catch (error) {
+    agentLog(
+      `[openai-compatible] Shared storage unavailable; continuing with legacy VS Code storage: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const openAiCompatibleProviderManager = new OpenAiCompatibleProviderManager({
     registry: providerRegistry,
     builtInProviders: [codexProvider],
     configuration: {
       get: <T>(section: string, defaultValue: T): T =>
-        openAiCompatibleConfiguration.inspect<T>(section)?.globalValue ??
-        defaultValue,
+        section === "connections"
+          ? (openAiCompatibleConnections as T)
+          : defaultValue,
     },
-    secrets: context.secrets,
+    secrets: openAiCompatibleSecrets,
     log: agentLog,
   });
   const openAiCompatibleCredentials = new OpenAiCompatibleCredentialService({
-    secrets: context.secrets,
+    secrets: openAiCompatibleSecrets,
     state: context.globalState,
     getConfiguredApiKeyNames: () =>
       openAiCompatibleProviderManager.listConfiguredAuthKeys(),
@@ -1525,14 +1632,13 @@ export async function activate(
     void vscode.window
       .showWarningMessage(
         `AgentLink kept the previous OpenAI-compatible model configuration because ${initialOpenAiCompatibleReconcile.issues.length} validation issue${initialOpenAiCompatibleReconcile.issues.length === 1 ? " was" : "s were"} found. See the AgentLink output for details.`,
-        "Open Settings",
+        "Open Config",
       )
       .then((choice) => {
-        if (choice === "Open Settings") {
-          void vscode.commands.executeCommand(
-            "workbench.action.openSettings",
-            "agentlink.openaiCompatible.connections",
-          );
+        if (choice === "Open Config") {
+          void vscode.workspace
+            .openTextDocument(sharedOpenAiCompatibleConfig.configPath)
+            .then((document) => vscode.window.showTextDocument(document));
         }
       });
   }
@@ -1765,6 +1871,25 @@ export async function activate(
       return openAiCompatibleRefreshInFlight;
     }
     const refresh = async () => {
+      if (sharedOpenAiCompatibleStorageReady) {
+        try {
+          openAiCompatibleConnections = [
+            ...((await sharedOpenAiCompatibleConfig.read())?.connections ?? []),
+          ];
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          agentLog(
+            `[openai-compatible] shared config reload failed: ${message}`,
+          );
+          return {
+            applied: false,
+            providers: openAiCompatibleProviderManager.listProviders(),
+            issues: [{ path: "$", message }],
+            warnings: [],
+          };
+        }
+      }
       const previousProviders = openAiCompatibleProviderManager
         .listProviders()
         .map((provider) => provider.id);
@@ -1773,14 +1898,13 @@ export async function activate(
         void vscode.window
           .showWarningMessage(
             `AgentLink kept the previous OpenAI-compatible model configuration because ${result.issues.length} validation issue${result.issues.length === 1 ? " was" : "s were"} found. See the AgentLink output for details.`,
-            "Open Settings",
+            "Open Config",
           )
           .then((choice) => {
-            if (choice === "Open Settings") {
-              void vscode.commands.executeCommand(
-                "workbench.action.openSettings",
-                "agentlink.openaiCompatible.connections",
-              );
+            if (choice === "Open Config") {
+              void vscode.workspace
+                .openTextDocument(sharedOpenAiCompatibleConfig.configPath)
+                .then((document) => vscode.window.showTextDocument(document));
             }
           });
         return result;
@@ -2573,7 +2697,7 @@ export async function activate(
                 const authKey =
                   openAiCompatibleProviderManager.getAuthKey(providerId);
                 if (!authKey) return null;
-                const bearerToken = await context.secrets.get(
+                const bearerToken = await openAiCompatibleSecrets.get(
                   getOpenAiCompatibleSecretKey(authKey),
                 );
                 if (!bearerToken) return null;
@@ -3040,14 +3164,36 @@ export async function activate(
     log,
   });
 
+  if (sharedOpenAiCompatibleStorageReady) {
+    const sharedOpenAiCompatibleWatcher =
+      vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(
+          path.dirname(sharedOpenAiCompatibleConfig.configPath),
+          path.basename(sharedOpenAiCompatibleConfig.configPath),
+        ),
+      );
+    const refreshSharedOpenAiCompatibleConfig = () => {
+      void refreshOpenAiCompatibleProviders();
+    };
+    context.subscriptions.push(
+      sharedOpenAiCompatibleWatcher,
+      sharedOpenAiCompatibleWatcher.onDidCreate(
+        refreshSharedOpenAiCompatibleConfig,
+      ),
+      sharedOpenAiCompatibleWatcher.onDidChange(
+        refreshSharedOpenAiCompatibleConfig,
+      ),
+      sharedOpenAiCompatibleWatcher.onDidDelete(
+        refreshSharedOpenAiCompatibleConfig,
+      ),
+    );
+  }
+
   // Update agent config when settings change
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("agentlink.disabledProviders")) {
         void applyDisabledProviders();
-      }
-      if (e.affectsConfiguration("agentlink.openaiCompatible.connections")) {
-        void refreshOpenAiCompatibleProviders();
       }
       if (
         e.affectsConfiguration("agentlink.agentMaxTokens") ||
@@ -3200,15 +3346,25 @@ export async function activate(
     }),
     registerOpenAiCompatibleModelConfigurationWizard({
       credentials: openAiCompatibleCredentials,
-      getGlobalConnections: () =>
-        openAiCompatibleConfiguration.inspect<unknown>("connections")
-          ?.globalValue ?? [],
+      getGlobalConnections: () => openAiCompatibleConnections,
       updateGlobalConnections: async (value) => {
-        await openAiCompatibleConfiguration.update(
-          "connections",
-          value,
-          vscode.ConfigurationTarget.Global,
-        );
+        if (!sharedOpenAiCompatibleStorageReady) {
+          throw new Error(
+            "Shared OpenAI-compatible storage is unavailable. Fix the shared config or Keychain access, then reload VS Code.",
+          );
+        }
+        if (!Array.isArray(value)) {
+          throw new Error(
+            "Expected an array of OpenAI-compatible connections.",
+          );
+        }
+        const expectedConnections = Array.isArray(openAiCompatibleConnections)
+          ? openAiCompatibleConnections
+          : [];
+        await sharedOpenAiCompatibleConfig.write(value, {
+          expectedConnections,
+        });
+        openAiCompatibleConnections = value;
       },
       validateConnections: (raw) =>
         openAiCompatibleProviderManager.validateConnections(raw),
@@ -3226,10 +3382,20 @@ export async function activate(
           fetch: agentLinkFetch,
         }),
       openSettings: async () => {
-        await vscode.commands.executeCommand(
-          "workbench.action.openSettings",
-          "agentlink.openaiCompatible.connections",
+        if (!sharedOpenAiCompatibleStorageReady) {
+          throw new Error(
+            "Shared OpenAI-compatible storage is unavailable. Fix the shared config or Keychain access, then reload VS Code.",
+          );
+        }
+        if (!(await sharedOpenAiCompatibleConfig.read())) {
+          await sharedOpenAiCompatibleConfig.write(
+            openAiCompatibleConnections as unknown[],
+          );
+        }
+        const document = await vscode.workspace.openTextDocument(
+          sharedOpenAiCompatibleConfig.configPath,
         );
+        await vscode.window.showTextDocument(document);
       },
       log,
     }),

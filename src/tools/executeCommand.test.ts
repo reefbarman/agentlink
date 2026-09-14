@@ -151,6 +151,132 @@ describe("handleExecuteCommand", () => {
     });
   });
 
+  it("keeps other tabs executable and their approval cards actionable while one tab waits", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((_key: string, fallback?: unknown) => fallback),
+    });
+    const { ApprovalPanelProvider } =
+      await import("../approvals/ApprovalPanelProvider.js");
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const panel = new ApprovalPanelProvider(
+      {} as never,
+      {
+        setPendingCount: vi.fn(),
+        showAlert: () => ({ dispose: vi.fn() }),
+      } as never,
+    );
+    const cards = new Map<
+      string,
+      {
+        id: string;
+        respond: Parameters<NonNullable<typeof panel.onForwardApproval>>[1];
+      }
+    >();
+    panel.onForwardApproval = ({ sessionId, request }, respond) => {
+      cards.set(sessionId, { id: request.id, respond });
+    };
+    const manager = {
+      isCommandApproved: (sessionId: string) => sessionId === "allowed-tab",
+      findMatchingCommandRule: vi.fn(),
+    };
+    const providers = {
+      terminalProvider,
+      getCommandApprovalPolicy: () => "manual" as const,
+    };
+    const pending = handleExecuteCommand(
+      { command: "npm test" },
+      manager as never,
+      panel,
+      "waiting-tab",
+      undefined,
+      providers,
+    );
+    const calls = [pending];
+    try {
+      await vi.waitFor(() => expect(cards.has("waiting-tab")).toBe(true));
+      const sameTab = handleExecuteCommand(
+        { command: "npm run build" },
+        manager as never,
+        panel,
+        "waiting-tab",
+        undefined,
+        providers,
+      );
+      calls.push(sameTab);
+      const allowed = handleExecuteCommand(
+        { command: "pwd" },
+        manager as never,
+        panel,
+        "allowed-tab",
+        undefined,
+        providers,
+      );
+      calls.push(allowed);
+      await vi.waitFor(() => expect(executeCommand).toHaveBeenCalledOnce());
+      expect(textPayload(await allowed)).toMatchObject({
+        exit_code: 0,
+        approval: { by: "explicit_rule" },
+      });
+      expect(executeCommand.mock.calls[0][0].command).toBe("pwd");
+
+      const other = handleExecuteCommand(
+        { command: "npm run lint" },
+        manager as never,
+        panel,
+        "other-tab",
+        undefined,
+        providers,
+      );
+      calls.push(other);
+      await vi.waitFor(() => expect(cards.has("other-tab")).toBe(true));
+      const otherCard = cards.get("other-tab")!;
+      expect(
+        otherCard.respond({
+          type: "decision",
+          id: otherCard.id,
+          approvalKind: "command",
+          decision: "reject",
+        }),
+      ).toBe(true);
+      expect(textPayload(await other)).toMatchObject({
+        status: "rejected_by_user",
+      });
+      expect(executeCommand).toHaveBeenCalledOnce();
+
+      const first = cards.get("waiting-tab")!;
+      first.respond({
+        type: "decision",
+        id: first.id,
+        approvalKind: "command",
+        decision: "reject",
+      });
+      await pending;
+      await vi.waitFor(() =>
+        expect(cards.get("waiting-tab")?.id).not.toBe(first.id),
+      );
+      const next = cards.get("waiting-tab")!;
+      next.respond({
+        type: "decision",
+        id: next.id,
+        approvalKind: "command",
+        decision: "reject",
+      });
+      await sameTab;
+    } finally {
+      // Reject future cards too, so a failed assertion cannot strand a gate waiter.
+      panel.onForwardApproval = ({ request }, respond) => {
+        respond({
+          type: "decision",
+          id: request.id,
+          approvalKind: request.kind,
+          decision: "reject",
+        });
+      };
+      panel.dispose();
+      await Promise.all(calls);
+    }
+  });
+
   it("adds protected Git recovery after an unclassified sandbox denial", async () => {
     resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
       marker: "/workspace/.git",

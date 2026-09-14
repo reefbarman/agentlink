@@ -220,6 +220,8 @@ export class ApprovalPanelProvider implements vscode.Disposable {
   // Queue
   private queue: QueueEntry[] = [];
   private currentEntry: QueueEntry | undefined;
+  private readonly forwardedEntries = new Map<string, QueueEntry>();
+  private readonly forwardedAlerts = new Map<string, vscode.Disposable>();
   private preflightEntries = new Map<string, PreflightEntry>();
 
   // Recent single-use approvals cache (key → timestamp)
@@ -506,6 +508,14 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       preflight.cancel();
       return;
     }
+    const forwarded = this.forwardedEntries.get(id);
+    if (forwarded) {
+      this.removeForwardedEntry(id);
+      this.onForwardApprovalCancelled?.(forwarded.request.sessionId!, id);
+      forwarded.resolve(this.makeRejectResponse(forwarded.request.kind));
+      this.processQueue();
+      return;
+    }
     if (this.currentEntry?.request.id === id) {
       this.alertDisposable?.dispose();
       this.alertDisposable = undefined;
@@ -570,6 +580,14 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       this.updatePendingCount();
     }
 
+    for (const [id, entry] of this.forwardedEntries) {
+      if (!matches(entry)) continue;
+      this.removeForwardedEntry(id);
+      this.onForwardApprovalCancelled?.(sessionId, id);
+      entry.resolve(makeResponse());
+      resolved += 1;
+    }
+
     if (this.currentEntry && matches(this.currentEntry)) {
       const entry = this.currentEntry;
       this.alertDisposable?.dispose();
@@ -578,9 +596,9 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       this.onForwardApprovalCancelled?.(sessionId, entry.request.id);
       entry.resolve(makeResponse());
       resolved += 1;
-      this.processQueue();
     }
 
+    this.processQueue();
     return resolved;
   }
 
@@ -722,6 +740,41 @@ export class ApprovalPanelProvider implements vscode.Disposable {
   }
 
   private processQueue(options?: { allowRecentPathApprovals?: boolean }): void {
+    if (this.onForwardApproval) {
+      while (this.queue.length > 0) {
+        // Forwarding may synchronously respond or enqueue, so inspect live state.
+        const activeSessions = new Set(
+          [...this.forwardedEntries.values()].map(
+            (entry) => entry.request.sessionId,
+          ),
+        );
+        const index = this.queue.findIndex(
+          (entry) => !activeSessions.has(entry.request.sessionId),
+        );
+        if (index === -1) break;
+        const [entry] = this.queue.splice(index, 1);
+        if (!entry.request.sessionId) {
+          entry.resolve({
+            ...this.makeRejectResponse(entry.request.kind),
+            rejectionReason: "Forwarded approval requires a session ID",
+          });
+          continue;
+        }
+        if (
+          !entry.request.bypassRecentApproval &&
+          this.isRecentlyApprovedRequest(entry.request, {
+            allowPathApprovals: options?.allowRecentPathApprovals ?? false,
+          })
+        ) {
+          entry.resolve(this.makeAutoApproveResponse(entry.request.kind));
+          continue;
+        }
+        this.forwardedEntries.set(entry.request.id, entry);
+        this.showCurrentApproval(entry);
+      }
+      this.updatePendingCount();
+      return;
+    }
     if (this.currentEntry) return;
 
     // Auto-resolve any recently-approved items at the front of the queue.
@@ -754,16 +807,22 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     this.showCurrentApproval();
   }
 
-  private showCurrentApproval(): void {
-    if (!this.currentEntry) return;
+  private removeForwardedEntry(id: string): void {
+    this.forwardedEntries.delete(id);
+    this.forwardedAlerts.get(id)?.dispose();
+    this.forwardedAlerts.delete(id);
+  }
 
-    const { request } = this.currentEntry;
+  private showCurrentApproval(entry = this.currentEntry): void {
+    if (!entry) return;
+
+    const { request } = entry;
 
     // Approval attention is presentation-independent. Built-in approvals are
     // rendered in chat while external approvals use a separate webview, but
     // both must remain visible in the status bar until they are resolved.
-    this.alertDisposable?.dispose();
-    this.alertDisposable = this.showAlert(
+    if (!this.onForwardApproval) this.alertDisposable?.dispose();
+    const alert = this.showAlert(
       request.kind === "command"
         ? "Command approval required"
         : request.kind === "network"
@@ -784,17 +843,28 @@ export class ApprovalPanelProvider implements vscode.Disposable {
         : undefined,
     );
 
+    if (this.onForwardApproval) {
+      this.forwardedAlerts.set(request.id, alert);
+    } else {
+      this.alertDisposable = alert;
+    }
+
     // If a forwarding hook is set, delegate rendering to the caller (e.g. chat webview)
     if (this.onForwardApproval) {
       if (!request.sessionId) {
         throw new Error("Forwarded approval requires a session ID");
       }
       const queuePosition = 1;
-      const queueTotal = 1 + this.queue.length;
+      const queueTotal =
+        1 +
+        this.queue.filter(
+          (queued) => queued.request.sessionId === request.sessionId,
+        ).length;
       const msg = this.toApprovalRequest(request, queuePosition, queueTotal);
       this.onForwardApproval(
         { sessionId: request.sessionId, request: msg },
-        (decision) => this.handleMessage(decision),
+        (decision) =>
+          decision.id === request.id && this.handleMessage(decision),
       );
       return;
     }
@@ -896,18 +966,18 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     }
 
     if (message.type !== "decision") return false;
-    if (!this.currentEntry || message.id !== this.currentEntry.request.id) {
-      return false;
-    }
-    if (!this.isValidDecision(this.currentEntry.request, message)) {
-      return false;
-    }
+    const entry =
+      this.forwardedEntries.get(message.id ?? "") ?? this.currentEntry;
+    if (!entry || message.id !== entry.request.id) return false;
+    if (!this.isValidDecision(entry.request, message)) return false;
 
-    this.alertDisposable?.dispose();
-    this.alertDisposable = undefined;
-
-    const entry = this.currentEntry;
-    this.currentEntry = undefined;
+    if (this.forwardedEntries.has(entry.request.id)) {
+      this.removeForwardedEntry(entry.request.id);
+    } else {
+      this.alertDisposable?.dispose();
+      this.alertDisposable = undefined;
+      this.currentEntry = undefined;
+    }
 
     const followUp = message.followUp || undefined;
 
@@ -1182,6 +1252,11 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       entry.cancel();
     }
     this.rejectCurrent();
+    for (const [id, entry] of this.forwardedEntries) {
+      this.removeForwardedEntry(id);
+      this.onForwardApprovalCancelled?.(entry.request.sessionId!, id);
+      entry.resolve(this.makeRejectResponse(entry.request.kind));
+    }
     for (const entry of this.queue) {
       entry.resolve(this.makeRejectResponse(entry.request.kind));
     }

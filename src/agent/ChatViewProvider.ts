@@ -34,12 +34,9 @@ import {
 import {
   getNewSessionMode,
   rememberSessionMode,
+  writeUserSessionPreferenceEntry,
 } from "./sharedSessionPreferences.js";
-import {
-  FALLBACK_AGENT_MODEL,
-  getModeModelPreferences,
-} from "./modeModelPreferences.js";
-import { getModeReasoningEffortPreferences } from "./modeReasoningEffortPreferences.js";
+import { FALLBACK_AGENT_MODEL } from "./modeModelPreferences.js";
 import type {
   AgentSessionManager,
   CheckpointRevertResult,
@@ -4510,13 +4507,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private getPreferenceConfigurationTarget(): {
     config: vscode.WorkspaceConfiguration;
-    target: vscode.ConfigurationTarget;
-    scopeLabel: "user";
+    scopeLabel: "shared preferences";
   } {
     return {
       config: vscode.workspace.getConfiguration("agentlink"),
-      target: vscode.ConfigurationTarget.Global,
-      scopeLabel: "user",
+      scopeLabel: "shared preferences",
     };
   }
 
@@ -4550,16 +4545,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
     }
     const foregroundMode = foreground?.mode ?? this.getDefaultNewSessionMode();
-    const { config, target, scopeLabel } =
-      this.getPreferenceConfigurationTarget();
-    const modePreferences = getModeModelPreferences(config);
-    await config.update(
+    const { config, scopeLabel } = this.getPreferenceConfigurationTarget();
+    await writeUserSessionPreferenceEntry(
+      config,
       "modeModelPreferences",
-      {
-        ...modePreferences,
-        [foregroundMode]: selectedModel,
-      },
-      target,
+      foregroundMode,
+      selectedModel,
     );
 
     this.sendInitialState();
@@ -4594,16 +4585,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           : {}),
       });
     }
-    const { config, target, scopeLabel } =
-      this.getPreferenceConfigurationTarget();
-    const modePrefs = getModeModelPreferences(config);
-    await config.update(
+    const { config, scopeLabel } = this.getPreferenceConfigurationTarget();
+    await writeUserSessionPreferenceEntry(
+      config,
       "modeModelPreferences",
-      {
-        ...modePrefs,
-        [session.mode]: selectedModel,
-      },
-      target,
+      session.mode,
+      selectedModel,
     );
 
     this.postMessage({
@@ -4716,12 +4703,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       false;
     if (!updated) return { ok: false };
     const effectiveEffort = foreground.reasoningEffort;
-    const { config, target } = this.getPreferenceConfigurationTarget();
-    const preferences = getModeReasoningEffortPreferences(config);
-    await config.update(
+    const { config } = this.getPreferenceConfigurationTarget();
+    await writeUserSessionPreferenceEntry(
+      config,
       "modeReasoningEffortPreferences",
-      { ...preferences, [foreground.mode]: effort },
-      target,
+      foreground.mode,
+      effort,
     );
     if (previousReasoningEffort !== effectiveEffort) {
       this.recordSurfaceChange(foreground, {
@@ -4753,12 +4740,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return { ok: false };
     }
     const effectiveEffort = session.reasoningEffort;
-    const { config, target } = this.getPreferenceConfigurationTarget();
-    const preferences = getModeReasoningEffortPreferences(config);
-    await config.update(
+    const { config } = this.getPreferenceConfigurationTarget();
+    await writeUserSessionPreferenceEntry(
+      config,
       "modeReasoningEffortPreferences",
-      { ...preferences, [session.mode]: effort },
-      target,
+      session.mode,
+      effort,
     );
     if (previousReasoningEffort !== effectiveEffort) {
       this.recordSurfaceChange(session, {
@@ -7667,24 +7654,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentRememberSessionlessSelection": {
         const mode = typeof msg.mode === "string" ? msg.mode.trim() : "";
         if (!mode || explicitSourceSessionId) break;
-        const { config, target } = this.getPreferenceConfigurationTarget();
+        const { config } = this.getPreferenceConfigurationTarget();
         if (typeof msg.model === "string" && msg.model.trim()) {
-          await config.update(
+          await writeUserSessionPreferenceEntry(
+            config,
             "modeModelPreferences",
-            {
-              ...getModeModelPreferences(config),
-              [mode]: msg.model.trim(),
-            },
-            target,
+            mode,
+            msg.model.trim(),
           );
         } else if (isCoreReasoningEffort(msg.effort)) {
-          await config.update(
+          await writeUserSessionPreferenceEntry(
+            config,
             "modeReasoningEffortPreferences",
-            {
-              ...getModeReasoningEffortPreferences(config),
-              [mode]: msg.effort,
-            },
-            target,
+            mode,
+            msg.effort,
           );
         } else {
           await rememberSessionMode(mode);
@@ -8475,13 +8458,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentSetCondenseThreshold": {
         const threshold = Number(msg.threshold);
         if (!Number.isFinite(threshold) || !sourceSession) break;
-        const { config, target } = this.getPreferenceConfigurationTarget();
+        const { config } = this.getPreferenceConfigurationTarget();
         const currentModel = sourceSession.model;
         const thresholds = {
           ...getModelCondenseThresholdMap(config),
           [currentModel]: Math.min(1, Math.max(0.1, threshold)),
         };
-        await config.update("modelCondenseThresholds", thresholds, target);
+        await writeUserSessionPreferenceEntry(
+          config,
+          "modelCondenseThresholds",
+          currentModel,
+          thresholds[currentModel],
+        );
         sourceSession.autoCondenseThreshold = thresholds[currentModel];
         if (
           this.sessionManager.getForegroundSession()?.id === sourceSession.id

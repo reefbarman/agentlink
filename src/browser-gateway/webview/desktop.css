@@ -549,12 +549,12 @@
 .browser-shell.browser-shell-desktop .input-area:focus-within {
   box-shadow:
     0 8px 32px #00000030,
-    0 0 0 1px #4ec9b030,
+    0 0 0 2px var(--ag-accent),
     0 0 24px #4ec9b00c;
 }
 
-.browser-shell.browser-shell-desktop .input-wrapper:focus-within {
-  box-shadow: none;
+.browser-shell.browser-shell-desktop .input-area .chat-input:focus-visible {
+  outline: none;
 }
 
 .browser-shell.browser-shell-desktop .chat-input {

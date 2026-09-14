@@ -26,6 +26,7 @@ async function tool(
     principal,
     sessionId: "session-a",
     turnId: "turn-a",
+    input: { text: "test", attachments: undefined },
   });
   const resolved = tools.find(
     (candidate) => candidate.definition.name === name,
@@ -91,7 +92,7 @@ describe("node host read tools", () => {
       read.execute({ path: escape }, context),
     ).resolves.toMatchObject({
       isError: true,
-      modelContent: JSON.stringify({ error: "path_not_granted" }),
+      modelContent: JSON.stringify({ error: "path_alias" }),
     });
 
     await fs.rm(root, { recursive: true, force: true });

@@ -111,9 +111,9 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
       "Create a new file or overwrite an existing file, creating missing parent directories if the write is approved. Opens a diff view in VS Code for the user to review, optionally edit, and accept or reject the changes. After saving, AgentLink reads and verifies the disk content: accepted results include exact or transformed durability evidence and a final SHA-256 hash, while reverted, divergent, missing, unreadable, invalid transformed structured content, or exact-preservation failures are canonical errors. Set save_without_formatting=true to require exact preservation without ordinary save participants; known Unity serialization files use this path automatically.",
   },
   generate_image: {
-    label: "Generate image",
+    label: "Generate or edit image",
     description:
-      "Generate PNG images via OpenAI/Codex auth and show them inline in chat. Default to GPT-Image-2.5 Flare for fast exploration and user alignment, then use Sunburst with the selected image as a reference for polished assets, concepts, or final images. Go directly to Sunburst when the direction is already settled, and honor explicit user preferences. Uses ChatGPT/Codex OAuth image quota when signed in with OAuth, or OpenAI API-key billing when using an API key. Requests approval before generation because quota is consumed before images are returned; the user can auto-approve later calls for the current session. Pass output_path in VS Code to also save files into the workspace.",
+      "Generate or edit images with GPT-Image-2.5 Flare or Sunburst and show them inline. Flare remains the fast default; use Sunburst when editing precision or final polish matters. With an OpenAI API key, supports structured dimensions, quality through max, transparent backgrounds, PNG/JPEG/WebP output, compression, explicit edit targets, and masks. These advanced controls fail before generation on ChatGPT/Codex OAuth until that backend is verified; legacy OAuth generation and reference-led refinement remain supported. Every advanced call requires approval. VS Code can save output files and use workspace images; Browser Ask Agent is display-only and uses session image IDs.",
   },
   present_images: {
     label: "Present session images",

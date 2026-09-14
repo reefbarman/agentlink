@@ -7,6 +7,7 @@ import {
 } from "@agentlink/core";
 import { createHash, randomUUID } from "node:crypto";
 import { constants, promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const MAX_FILE_BYTES = 1_000_000;
@@ -134,20 +135,27 @@ export function createNodeHostWriteTools<
           return await withWriteLock(target.path, async () => {
             const precondition = await verifyPrecondition(target, input);
             if (!precondition.ok) return error(precondition.error);
-            const committed = await atomicWrite(target.path, content);
+            const committed = await atomicWrite(target.path, content, {
+              expectedAbsent: !precondition.existed,
+              expectedContentHash: precondition.existed
+                ? String(input.expectedContentHash)
+                : undefined,
+            });
             if (!committed.ok) return error(committed.error);
-            const digest = contentHash(content);
+            const operation = precondition.existed ? "modified" : "created";
             return {
               modelContent: JSON.stringify({
                 path: target.path,
-                operation: precondition.existed ? "modified" : "created",
-                contentHash: digest,
+                operation,
+                contentHash: committed.contentHash,
                 bytes: Buffer.byteLength(content, "utf8"),
+                durability: committed.durability,
               }),
               displayContent: {
                 path: target.path,
-                operation: precondition.existed ? "modified" : "created",
-                contentHash: digest,
+                operation,
+                contentHash: committed.contentHash,
+                durability: committed.durability,
               },
             };
           });
@@ -214,21 +222,25 @@ export function createNodeHostApplyDiffTools<
             if (Buffer.byteLength(applied.content, "utf8") > maxFileBytes) {
               return error("file_too_large");
             }
-            const committed = await atomicWrite(target.path, applied.content);
+            const committed = await atomicWrite(target.path, applied.content, {
+              expectedAbsent: false,
+              expectedContentHash: String(input.expectedContentHash),
+            });
             if (!committed.ok) return error(committed.error);
-            const digest = contentHash(applied.content);
             return {
               modelContent: JSON.stringify({
                 path: target.path,
                 operation: "modified",
-                contentHash: digest,
+                contentHash: committed.contentHash,
                 blocksApplied: parsed.blocks.length,
+                durability: committed.durability,
               }),
               displayContent: {
                 path: target.path,
                 operation: "modified",
-                contentHash: digest,
+                contentHash: committed.contentHash,
                 blocksApplied: parsed.blocks.length,
+                durability: committed.durability,
               },
             };
           });
@@ -434,6 +446,7 @@ async function resolveWriteTarget(
   const requested = path.resolve(input);
   const existing = await fs.realpath(requested).catch(() => undefined);
   if (existing) {
+    if (existing !== requested) return { ok: false, error: "path_alias" };
     for (const grant of grants) {
       if (
         (grant.kind === "file" && existing === grant.path) ||
@@ -449,6 +462,9 @@ async function resolveWriteTarget(
     .realpath(path.dirname(requested))
     .catch(() => undefined);
   if (!parent) return { ok: false, error: "parent_not_found" };
+  if (parent !== path.dirname(requested)) {
+    return { ok: false, error: "path_alias" };
+  }
   for (const grant of grants) {
     if (grant.kind !== "directory" || !isPathWithin(parent, grant.path)) {
       continue;
@@ -471,8 +487,8 @@ async function readPinnedText(
   }
   const stat = await fs.lstat(target.path).catch(() => undefined);
   if (!stat) return { ok: false, error: "expected_file_missing" };
-  if (!stat.isFile() || stat.isSymbolicLink()) {
-    return { ok: false, error: "not_a_regular_file" };
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1) {
+    return { ok: false, error: "not_a_private_regular_file" };
   }
   if (stat.size > MAX_FILE_BYTES) return { ok: false, error: "file_too_large" };
   const bytes = await fs.readFile(target.path).catch(() => undefined);
@@ -574,8 +590,8 @@ async function verifyPrecondition(
       ? { ok: true, existed: false }
       : { ok: false, error: "expected_file_missing" };
   }
-  if (!stat.isFile() || stat.isSymbolicLink()) {
-    return { ok: false, error: "not_a_regular_file" };
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1) {
+    return { ok: false, error: "not_a_private_regular_file" };
   }
   if (expectedAbsent) return { ok: false, error: "expected_file_absent" };
   if (typeof expectedHash !== "string") {
@@ -588,28 +604,149 @@ async function verifyPrecondition(
     : { ok: false, error: "content_hash_mismatch" };
 }
 
+interface WriteLockOwner {
+  readonly version: 1;
+  readonly ownerNonce: string;
+  readonly hostname: string;
+  readonly pid: number;
+}
+
 async function withWriteLock<T>(
   destination: string,
   operation: () => Promise<T>,
 ): Promise<T | ReturnType<typeof error>> {
-  const lockDirectory = `${destination}.agentlink-write.lock`;
-  try {
-    await fs.mkdir(lockDirectory, { mode: 0o700 });
-  } catch {
+  const lockPath = path.join(
+    path.dirname(destination),
+    `.${path.basename(destination)}.agentlink-write.lock`,
+  );
+  const owner: WriteLockOwner = {
+    version: 1,
+    ownerNonce: randomUUID(),
+    hostname: os.hostname(),
+    pid: process.pid,
+  };
+  if (!(await acquireWriteLock(lockPath, owner))) {
     return error("write_locked");
   }
   try {
     return await operation();
   } finally {
-    await fs.rmdir(lockDirectory).catch(() => undefined);
+    await releaseWriteLock(lockPath, owner.ownerNonce).catch(() => undefined);
   }
+}
+
+async function acquireWriteLock(
+  lockPath: string,
+  owner: WriteLockOwner,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const temporary = `${lockPath}.${owner.ownerNonce}.tmp`;
+    try {
+      const handle = await fs.open(
+        temporary,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+        0o600,
+      );
+      try {
+        await handle.writeFile(`${JSON.stringify(owner)}\n`, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await fs.link(temporary, lockPath);
+      await fs.unlink(temporary).catch(() => undefined);
+      return true;
+    } catch (lockError) {
+      await fs.unlink(temporary).catch(() => undefined);
+      if (!hasCode(lockError, "EEXIST")) return false;
+    }
+    if (!(await reclaimDeadWriteLock(lockPath))) return false;
+  }
+  return false;
+}
+
+async function reclaimDeadWriteLock(lockPath: string): Promise<boolean> {
+  const owner = await readWriteLock(lockPath);
+  if (!owner || owner.hostname !== os.hostname()) return false;
+  try {
+    process.kill(owner.pid, 0);
+    return false;
+  } catch (lockError) {
+    if (!hasCode(lockError, "ESRCH")) return false;
+  }
+  const current = await readWriteLock(lockPath);
+  if (!current || current.ownerNonce !== owner.ownerNonce) return false;
+  try {
+    await fs.unlink(lockPath);
+    return true;
+  } catch (lockError) {
+    return hasCode(lockError, "ENOENT");
+  }
+}
+
+async function readWriteLock(
+  lockPath: string,
+): Promise<WriteLockOwner | undefined> {
+  let value: unknown;
+  try {
+    value = JSON.parse(await fs.readFile(lockPath, "utf8")) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (
+    !isRecord(value) ||
+    value.version !== 1 ||
+    typeof value.ownerNonce !== "string" ||
+    !value.ownerNonce ||
+    typeof value.hostname !== "string" ||
+    !value.hostname ||
+    !Number.isSafeInteger(value.pid) ||
+    Number(value.pid) <= 0
+  ) {
+    return undefined;
+  }
+  return {
+    version: 1,
+    ownerNonce: value.ownerNonce,
+    hostname: value.hostname,
+    pid: Number(value.pid),
+  };
+}
+
+async function releaseWriteLock(
+  lockPath: string,
+  ownerNonce: string,
+): Promise<void> {
+  const current = await readWriteLock(lockPath);
+  if (!current || current.ownerNonce !== ownerNonce) return;
+  await fs.unlink(lockPath).catch((lockError: unknown) => {
+    if (!hasCode(lockError, "ENOENT")) throw lockError;
+  });
+}
+
+interface NodeHostWriteDurabilityEvidence {
+  readonly status: "durable";
+  readonly outcome: "exact";
+  readonly policy: "preserve_exact";
+  readonly final_exists: true;
+  readonly final_content_hash: string;
+  readonly requires_reread: false;
 }
 
 async function atomicWrite(
   destination: string,
   content: string,
+  baseline: {
+    readonly expectedAbsent: boolean;
+    readonly expectedContentHash: string | undefined;
+  },
 ): Promise<
-  { readonly ok: true } | { readonly ok: false; readonly error: string }
+  | {
+      readonly ok: true;
+      readonly contentHash: string;
+      readonly durability: NodeHostWriteDurabilityEvidence;
+    }
+  | { readonly ok: false; readonly error: string }
 > {
   const directory = path.dirname(destination);
   const temporary = path.join(
@@ -630,15 +767,75 @@ async function atomicWrite(
     await handle.sync();
     await handle.close();
     handle = undefined;
+    const current = await verifyStagedWriteBaseline(destination, baseline);
+    if (!current.ok) return current;
     await fs.rename(temporary, destination);
     await fs.chmod(destination, 0o600).catch(() => undefined);
-    return { ok: true };
+    const directoryHandle = await fs.open(directory, constants.O_RDONLY);
+    try {
+      await directoryHandle.sync();
+    } finally {
+      await directoryHandle.close();
+    }
+    const finalStat = await fs.lstat(destination).catch(() => undefined);
+    if (
+      !finalStat?.isFile() ||
+      finalStat.isSymbolicLink() ||
+      finalStat.nlink > 1
+    ) {
+      return { ok: false, error: "post_write_verification_failed" };
+    }
+    const finalBytes = await fs.readFile(destination).catch(() => undefined);
+    if (!finalBytes || finalBytes.toString("utf8") !== content) {
+      return { ok: false, error: "post_write_verification_failed" };
+    }
+    const finalContentHash = contentHash(finalBytes);
+    return {
+      ok: true,
+      contentHash: finalContentHash,
+      durability: {
+        status: "durable",
+        outcome: "exact",
+        policy: "preserve_exact",
+        final_exists: true,
+        final_content_hash: finalContentHash,
+        requires_reread: false,
+      },
+    };
   } catch {
     return { ok: false, error: "write_failed" };
   } finally {
     await handle?.close().catch(() => undefined);
     await fs.unlink(temporary).catch(() => undefined);
   }
+}
+
+async function verifyStagedWriteBaseline(
+  destination: string,
+  baseline: {
+    readonly expectedAbsent: boolean;
+    readonly expectedContentHash: string | undefined;
+  },
+): Promise<
+  { readonly ok: true } | { readonly ok: false; readonly error: string }
+> {
+  const stat = await fs.lstat(destination).catch(() => undefined);
+  if (!stat) {
+    return baseline.expectedAbsent
+      ? { ok: true }
+      : { ok: false, error: "expected_file_missing" };
+  }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1) {
+    return { ok: false, error: "not_a_private_regular_file" };
+  }
+  if (baseline.expectedAbsent) {
+    return { ok: false, error: "expected_file_absent" };
+  }
+  const bytes = await fs.readFile(destination).catch(() => undefined);
+  if (!bytes) return { ok: false, error: "file_unreadable" };
+  return contentHash(bytes) === baseline.expectedContentHash
+    ? { ok: true }
+    : { ok: false, error: "content_hash_mismatch" };
 }
 
 function sameTurn<TPrincipal extends AgentPrincipal>(
@@ -680,6 +877,10 @@ function boundedPositiveInteger(
     throw new Error(`${label} must be an integer between 1 and ${maximum}`);
   }
   return value;
+}
+
+function hasCode(value: unknown, code: string): boolean {
+  return isRecord(value) && value.code === code;
 }
 
 function error(code: string) {

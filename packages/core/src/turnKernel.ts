@@ -757,7 +757,24 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
             },
           },
         })) {
-          if (event.type === "text_delta") {
+          if (event.type === "thinking_start") {
+            emit({
+              type: "thinking.started",
+              thinkingId: event.thinkingId,
+            });
+          } else if (event.type === "thinking_delta") {
+            countModelOutput(event.text);
+            emit({
+              type: "thinking.delta",
+              thinkingId: event.thinkingId,
+              text: event.text,
+            });
+          } else if (event.type === "thinking_end") {
+            emit({
+              type: "thinking.completed",
+              thinkingId: event.thinkingId,
+            });
+          } else if (event.type === "text_delta") {
             countModelOutput(event.text);
             modelResult.text += event.text;
             onText(event.text);
@@ -988,7 +1005,7 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
     });
     return toolResult(call.id, publicError.message, true);
   }
-  const canonicalInput = validation?.valid ? validation.input : call.input;
+  let canonicalInput = validation?.valid ? validation.input : call.input;
   const canonicalCall =
     canonicalInput === call.input ? call : { ...call, input: canonicalInput };
 
@@ -1018,10 +1035,17 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
       if (authorization.decision === "deny") {
         return authorizationDenied(call, emit, authorization.reason, tool);
       }
+      const authorizedInput = authorization.preparedInput
+        ? structuredClone(authorization.preparedInput)
+        : canonicalInput;
+      const authorizedCall =
+        authorizedInput === canonicalInput
+          ? canonicalCall
+          : { ...canonicalCall, input: authorizedInput };
       if (authorization.decision === "require_user") {
         return await suspendToolAuthorization(
           options,
-          canonicalCall,
+          authorizedCall,
           context,
           tool,
           prepared,
@@ -1031,6 +1055,7 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
           stopReason,
           authorizedToolCallIds,
           authorization,
+          displayInput,
           getSequence,
           getSessionRevision,
           setSuspension,
@@ -1038,6 +1063,9 @@ async function executeTool<TPrincipal extends AgentPrincipal>(
         );
       }
       authorizedToolCallIds.add(call.id);
+      if (authorization.preparedInput) {
+        canonicalInput = structuredClone(authorization.preparedInput);
+      }
     }
   }
 
@@ -1111,6 +1139,7 @@ async function suspendToolAuthorization<TPrincipal extends AgentPrincipal>(
   stopReason: CoreModelStopReason | undefined,
   authorizedToolCallIds: Set<string>,
   authorization: Extract<AuthorizeToolCallResult, { decision: "require_user" }>,
+  displayInput: unknown,
   getSequence: () => number,
   getSessionRevision: () => string,
   setSuspension: (suspension: HeadlessTurnSuspension) => void,
@@ -1120,7 +1149,7 @@ async function suspendToolAuthorization<TPrincipal extends AgentPrincipal>(
     return authorizationRequired(call, emit, tool);
   }
   const interactionId = requiredKernelText(
-    (options.createInteractionId ?? globalThis.crypto.randomUUID)(),
+    (options.createInteractionId ?? (() => globalThis.crypto.randomUUID()))(),
     "interaction ID",
   );
   const summary = boundedInteractionText(authorization.summary, 500);
@@ -1130,7 +1159,6 @@ async function suspendToolAuthorization<TPrincipal extends AgentPrincipal>(
       "Tool authorization interaction summary must not be empty",
     );
   }
-  const displayInput = projectDisplayInput(tool, call.input, true);
   const interaction: AgentInteractionRequest = {
     interactionId,
     kind: "tool_authorization" as const,

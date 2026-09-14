@@ -12,6 +12,8 @@ export interface DesktopOAuthAccount {
 
 export interface DesktopAuthStatus {
   hasOpenAiApiKey: boolean;
+  openAiCompatibleCredentialCount?: number;
+  hasUsableOpenAiCompatibleModel?: boolean;
   oauthAccounts: DesktopOAuthAccount[];
 }
 

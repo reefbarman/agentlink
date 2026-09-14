@@ -4,6 +4,7 @@ import * as path from "path";
 
 import type { CoreWebAccessSettings } from "@agentlink/protocol/web-access-policy";
 import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
+import { SessionPreferencesStore } from "@agentlink/node-host";
 import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import { normalizeCoreWebAccessSettings } from "@agentlink/core/web-access";
 import { writeTextFileAtomic } from "./atomicFile.js";
@@ -107,6 +108,8 @@ async function writePreferencesFile(
 
 export interface BrowserGatewayAskAgentPreferencesStoreOptions {
   filePath?: string;
+  sessionPreferencesStore?: SessionPreferencesStore;
+  log?: (message: string) => void;
 }
 
 export function getBrowserGatewayAskAgentPreferencesPath(): string {
@@ -115,10 +118,18 @@ export function getBrowserGatewayAskAgentPreferencesPath(): string {
 
 export class BrowserGatewayAskAgentPreferencesStore {
   private readonly filePath: string;
+  private readonly sessionPreferencesStore: SessionPreferencesStore;
+  private readonly log: (message: string) => void;
   private pending: Promise<void> = Promise.resolve();
 
   constructor(options: BrowserGatewayAskAgentPreferencesStoreOptions = {}) {
     this.filePath = options.filePath ?? PREFERENCES_PATH;
+    this.log = options.log ?? (() => undefined);
+    this.sessionPreferencesStore =
+      options.sessionPreferencesStore ??
+      new SessionPreferencesStore({
+        dataRoot: options.filePath ? path.dirname(options.filePath) : undefined,
+      });
   }
 
   getPath(): string {
@@ -127,7 +138,41 @@ export class BrowserGatewayAskAgentPreferencesStore {
 
   async read(): Promise<BrowserGatewayAskAgentPreferencesSnapshot> {
     await this.pending.catch(() => undefined);
-    return await readPreferencesFile(this.filePath);
+    const legacy = await readPreferencesFile(this.filePath);
+    const shared = await this.sessionPreferencesStore.read().catch((error) => {
+      this.log(`Shared session preferences unavailable: ${String(error)}`);
+      return undefined;
+    });
+    if (!shared) return legacy;
+    const model = shared.modeModels.ask ?? legacy.model;
+    const reasoningEffort =
+      shared.modeReasoningEfforts.ask ?? legacy.reasoningEffort;
+    if (
+      (legacy.model && !shared.modeModels.ask) ||
+      (legacy.reasoningEffort && !shared.modeReasoningEfforts.ask)
+    ) {
+      await this.sessionPreferencesStore
+        .importLegacyIfAbsent({
+          modeModels: legacy.model ? { ask: legacy.model } : undefined,
+          modeReasoningEfforts: legacy.reasoningEffort
+            ? { ask: legacy.reasoningEffort }
+            : undefined,
+        })
+        .catch((error) => {
+          this.log(
+            `Could not import legacy Ask Agent preferences: ${String(error)}`,
+          );
+        });
+    }
+    return {
+      ...legacy,
+      model,
+      modelOwnerId:
+        shared.modeModels.ask && shared.modeModels.ask !== legacy.model
+          ? undefined
+          : legacy.modelOwnerId,
+      reasoningEffort,
+    };
   }
 
   async update(
@@ -138,6 +183,20 @@ export class BrowserGatewayAskAgentPreferencesStore {
       const current = await readPreferencesFile(this.filePath);
       nextSnapshot = normalizePreferences({ ...current, ...patch });
       await writePreferencesFile(this.filePath, nextSnapshot);
+      if (patch.model || patch.reasoningEffort) {
+        await this.sessionPreferencesStore
+          .update({
+            modeModels: patch.model ? { ask: patch.model } : undefined,
+            modeReasoningEfforts: patch.reasoningEffort
+              ? { ask: patch.reasoningEffort }
+              : undefined,
+          })
+          .catch((error) => {
+            this.log(
+              `Could not update shared Ask Agent preferences: ${String(error)}`,
+            );
+          });
+      }
     });
     return nextSnapshot;
   }

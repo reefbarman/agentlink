@@ -70,7 +70,11 @@ vi.mock("vscode", async () => {
 
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
   Client: class MockClient {
-    async connect(transport: unknown): Promise<void> {
+    async connect(
+      transport: unknown,
+      options?: { signal?: AbortSignal },
+    ): Promise<void> {
+      options?.signal?.throwIfAborted();
       return mocks.createTransportConnect.call(transport);
     }
 
@@ -157,6 +161,10 @@ vi.mock("./McpOAuthProvider.js", async () => {
   return {
     ...actual,
     McpOAuthProvider: class MockMcpOAuthProvider {
+      private controller = new AbortController();
+      get signal(): AbortSignal {
+        return this.controller.signal;
+      }
       onLog?: (message: string) => void;
       onBeforeAuthorizationOpen?: (...args: unknown[]) => unknown;
       onTokensSaved?: (...args: unknown[]) => unknown;
@@ -176,6 +184,7 @@ vi.mock("./McpOAuthProvider.js", async () => {
       }
 
       stop(): void {
+        this.controller.abort();
         mocks.providerStop();
       }
 
@@ -243,6 +252,111 @@ describe("McpClientHub OAuth recovery", () => {
     mocks.providerTokens.mockReset();
     mocks.providerInvalidateCredentials.mockReset();
     mocks.providerForceReauth.mockReset();
+  });
+
+  it("cancels a queued connection without running it or blocking the next hub", async () => {
+    let release!: () => void;
+    mocks.createTransportConnect
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+      )
+      .mockResolvedValue(undefined);
+    const first = new McpClientHub(new FakeMemento());
+    const cancelled = new McpClientHub(new FakeMemento());
+    const next = new McpClientHub(new FakeMemento());
+    const firstRun = first.connect([notionCfg]);
+    await vi.waitFor(() =>
+      expect(mocks.createTransportConnect).toHaveBeenCalledTimes(1),
+    );
+    const cancelledRun = cancelled.connect([notionCfg]);
+    await vi.waitFor(() =>
+      expect(cancelled.getServerInfos()[0]?.status).toBe("connecting"),
+    );
+    await cancelled.disableServer(notionCfg.name);
+    await cancelledRun;
+    const nextRun = next.connect([notionCfg]);
+    expect(mocks.createTransportConnect).toHaveBeenCalledTimes(1);
+    release();
+    await Promise.all([firstRun, nextRun]);
+    expect(mocks.createTransportConnect).toHaveBeenCalledTimes(2);
+    expect(cancelled.getServerInfos()[0]?.status).toBe("disabled");
+    expect(next.getServerInfos()[0]?.status).toBe("connected");
+    await Promise.all([
+      first.disconnectAll(),
+      cancelled.disconnectAll(),
+      next.disconnectAll(),
+    ]);
+  });
+
+  it("does not retry or publish a late connect failure after disconnect", async () => {
+    let fail!: (error: Error) => void;
+    mocks.createTransportConnect.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    const hub = new McpClientHub(new FakeMemento());
+    const run = hub.connect([notionCfg]);
+    await vi.waitFor(() =>
+      expect(mocks.createTransportConnect).toHaveBeenCalledTimes(1),
+    );
+    await hub.disconnectAll();
+    await run;
+    fail(new UnauthorizedError());
+    await Promise.resolve();
+    expect(hub.getServerInfos()).toEqual([]);
+    expect(mocks.showWarningMessage).not.toHaveBeenCalled();
+    expect(mocks.createTransportConnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels startup before the provider can register a late connection", async () => {
+    let release!: () => void;
+    mocks.providerStart.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const hub = new McpClientHub(new FakeMemento());
+    const run = hub.connect([notionCfg]);
+    await vi.waitFor(() =>
+      expect(mocks.providerStart).toHaveBeenCalledTimes(1),
+    );
+    await hub.disableServer(notionCfg.name);
+    release();
+    await run;
+    expect(mocks.providerStop).toHaveBeenCalledTimes(1);
+    expect(mocks.createTransportConnect).not.toHaveBeenCalled();
+    expect(hub.getServerInfos()[0]?.status).toBe("disabled");
+    await hub.disconnectAll();
+  });
+
+  it("tracks manual reauthentication before it finishes and prevents a cancelled handoff", async () => {
+    mocks.createTransportConnect.mockResolvedValue(undefined);
+    let release!: () => void;
+    mocks.providerForceReauth.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([notionCfg]);
+    const reauth = hub.reauthenticateServer(notionCfg.name);
+    await vi.waitFor(() =>
+      expect(mocks.providerForceReauth).toHaveBeenCalledTimes(1),
+    );
+    await hub.disableServer(notionCfg.name);
+    await reauth;
+    release();
+    await Promise.resolve();
+    expect(mocks.createTransportConnect).toHaveBeenCalledTimes(1);
+    expect(hub.getServerInfos()[0]?.status).toBe("disabled");
+    await hub.disconnectAll();
   });
 
   it("clears cached oauth client registration (not all credentials) on stale_client_redirect and schedules recovery", async () => {

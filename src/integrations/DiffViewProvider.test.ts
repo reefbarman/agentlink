@@ -161,15 +161,25 @@ describe("createFormatOnSaveReport", () => {
 });
 
 describe("interactive review editor options", () => {
-  it("reveals the diff in the primary editor group", () => {
+  it("reveals automatic diffs without taking keyboard focus", () => {
     expect(interactiveDiffEditorOptions()).toEqual({
       preview: true,
+      preserveFocus: true,
       viewColumn: 1,
     });
   });
 
-  it("reveals the fallback file in the primary editor group", () => {
+  it("focuses the diff when explicitly requested", () => {
+    expect(interactiveDiffEditorOptions(false)).toEqual({
+      preview: true,
+      preserveFocus: false,
+      viewColumn: 1,
+    });
+  });
+
+  it("reveals the fallback file without taking keyboard focus", () => {
     expect(interactiveFallbackEditorOptions()).toEqual({
+      preserveFocus: true,
       viewColumn: 1,
     });
   });

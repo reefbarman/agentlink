@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
-  "version": "1.22.30",
+  "version": "1.22.38",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -973,7 +973,8 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Default model per chat mode, keyed by mode slug (e.g. code, architect, ask, debug, review). The last model selected in each mode becomes that mode's startup model."
+          "description": "Legacy per-mode model defaults imported into ~/.agentlink/session-preferences.json when shared values are absent.",
+          "markdownDeprecationMessage": "Picker defaults now live in `~/.agentlink/session-preferences.json`. This setting is retained only for one-time migration."
         },
         "agentlink.modeReasoningEffortPreferences": {
           "scope": "application",
@@ -992,7 +993,8 @@
               "ultra"
             ]
           },
-          "description": "Default thinking level per chat mode, keyed by mode slug. Manually selecting a thinking level in a mode updates that mode's saved preference."
+          "description": "Legacy per-mode thinking defaults imported into ~/.agentlink/session-preferences.json when shared values are absent.",
+          "markdownDeprecationMessage": "Picker defaults now live in `~/.agentlink/session-preferences.json`. This setting is retained only for one-time migration."
         },
         "agentlink.modelPromptProfiles": {
           "scope": "resource",
@@ -1042,7 +1044,8 @@
             "minimum": 0.1,
             "maximum": 1
           },
-          "description": "Per-model auto-condense thresholds keyed by model ID. GPT-5.6 models default to 0.65; other models with 1M+ context windows default to 0.85; legacy frontier models default to 0.8 when capabilities are unavailable; all remaining models default to 0.9."
+          "description": "Legacy per-model auto-condense thresholds imported into ~/.agentlink/session-preferences.json when shared values are absent.",
+          "markdownDeprecationMessage": "Picker defaults now live in `~/.agentlink/session-preferences.json`. This setting is retained only for one-time migration."
         },
         "agentlink.writeRules": {
           "scope": "resource",
@@ -1064,7 +1067,8 @@
             "debug",
             "review"
           ],
-          "description": "Last explicitly selected mode, shared across windows and workspaces for fresh sessions. Existing and restored sessions keep their own selections."
+          "description": "Legacy new-session mode imported into ~/.agentlink/session-preferences.json when the shared value is absent.",
+          "markdownDeprecationMessage": "The new-session mode now lives in `~/.agentlink/session-preferences.json`. This setting is retained only for one-time migration."
         },
         "agentlink.codexStatefulResponses": {
           "scope": "resource",
@@ -1099,7 +1103,7 @@
   },
   "scripts": {
     "build": "npm run build:workspaces && npm run telemetry:inventory:generate && node scripts/generate-documentation-package-contract.mjs && node esbuild.mjs",
-    "build:workspaces": "tsc -b packages/* && npm run build:cjs --workspace packages/protocol && npm run build:cjs --workspace packages/core && npm run build --workspace apps/desktop",
+    "build:workspaces": "tsc -b packages/* && npm run build:cjs --workspace packages/protocol && npm run build:cjs --workspace packages/core && npm run build:cjs --workspace packages/node-host && npm run build --workspace apps/desktop && npm run build --workspace apps/cli",
     "watch": "npm run build:workspaces && node scripts/generate-documentation-package-contract.mjs && node scripts/watch-workspaces.mjs",
     "docs:generate": "node scripts/generate-documentation-package-contract.mjs",
     "docs:check": "node scripts/generate-documentation-package-contract.mjs --check",
@@ -1114,6 +1118,9 @@
     "desktop:package": "npm run build && npm run package --workspace @agentlink/desktop --",
     "desktop:start": "npm run build --workspace @agentlink/desktop && npm run start --workspace @agentlink/desktop",
     "desktop": "npm run desktop:build && npm run start --workspace @agentlink/desktop",
+    "cli:build": "npm run build --workspace @agentlink/cli",
+    "cli:pack": "npm run build:workspaces && npm run pack:private --workspace @agentlink/cli",
+    "cli:smoke": "npm run build:workspaces && node apps/cli/smoke-package.mjs",
     "telemetry:inventory:generate": "node scripts/generate-tool-inventory.mjs",
     "telemetry:inventory:check": "node scripts/generate-tool-inventory.mjs --check",
     "telemetry:tools": "node scripts/report-tool-usage-telemetry.mjs",
@@ -1125,7 +1132,7 @@
     "fmt:check": "oxfmt --check",
     "lint": "bash -c 'e=0; npm run docs:check || e=1; npm run telemetry:inventory:check || e=1; oxfmt --check || e=1; npm run build:workspaces || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; npm run lint:workspaces || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
     "lint:workspaces": "npm run lint --workspaces --if-present",
-    "test": "npm run build:workspaces && vitest run && npm run test:workspaces && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-keychain-runtime.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-mcp-auth-telemetry.test.mjs scripts/report-session-outcomes.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/vendor-agentlink-sdk.test.mjs scripts/verify-desktop-package.test.mjs scripts/verify-retrieval-package.test.mjs scripts/workspace-bundle-closure.test.mjs",
+    "test": "npm run build:workspaces && vitest run && npm run test:workspaces && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-keychain-runtime.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-mcp-auth-telemetry.test.mjs scripts/report-session-outcomes.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/vendor-agentlink-sdk.test.mjs scripts/verify-cli-package.test.mjs scripts/verify-desktop-package.test.mjs scripts/verify-retrieval-package.test.mjs scripts/workspace-bundle-closure.test.mjs",
     "test:workspaces": "npm run test --workspaces --if-present",
     "test:core-sdk-consumer": "npm run build:workspaces && node scripts/run-core-sdk-consumer-gate.mjs",
     "vendor:core-sdk": "npm run build:workspaces && node scripts/vendor-agentlink-sdk.mjs",
@@ -1143,6 +1150,7 @@
     "@agentlink/core": "0.1.0",
     "@agentlink/node-host": "0.1.0",
     "@agentlink/protocol": "0.1.0",
+    "@agentlink/workspace-host": "0.1.0",
     "@iarna/toml": "^3.0.0",
     "@jitl/quickjs-wasmfile-release-asyncify": "0.32.0",
     "@lancedb/lancedb": "0.22.3",
@@ -1187,6 +1195,7 @@
     "uuid": "^14.0.0"
   },
   "devDependencies": {
+    "@agentlink/cli": "0.1.0",
     "@agentlink/desktop": "0.1.0",
     "@anthropic-ai/sandbox-runtime": "0.0.65",
     "@testing-library/preact": "^3.2.4",

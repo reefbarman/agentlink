@@ -38,6 +38,7 @@ async function writeTool(
     principal,
     sessionId: "session-a",
     turnId: "turn-a",
+    input: { text: "test", attachments: undefined },
   });
   const tool = tools.find(
     (candidate) => candidate.definition.name === "write_file",
@@ -53,6 +54,7 @@ async function applyDiffTool(
     principal,
     sessionId: "session-a",
     turnId: "turn-a",
+    input: { text: "test", attachments: undefined },
   });
   const tool = tools.find(
     (candidate) => candidate.definition.name === "apply_diff",
@@ -68,6 +70,7 @@ async function multiFileTool(
     principal,
     sessionId: "session-a",
     turnId: "turn-a",
+    input: { text: "test", attachments: undefined },
   });
   const tool = tools.find(
     (candidate) => candidate.definition.name === "apply_multi_file",
@@ -168,7 +171,7 @@ describe("node host write tools", () => {
     );
     await assertError(
       { path: escaped, content: "after", expectedContentHash: hash("secret") },
-      "path_not_granted",
+      "path_alias",
     );
     await assertError(
       { path: "relative.txt", content: "after", expectedAbsent: true },
@@ -177,6 +180,58 @@ describe("node host write tools", () => {
     await expect(fs.readFile(outsideFile, "utf8")).resolves.toBe("secret");
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(outside, { recursive: true, force: true });
+  });
+
+  it("reclaims only definitely dead same-host write locks", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "node-host-write-lock-"),
+    );
+    const target = path.join(root, "record.txt");
+    const lockPath = path.join(root, ".record.txt.agentlink-write.lock");
+    await fs.writeFile(target, "before", "utf8");
+    const write = await writeTool(
+      createNodeHostWriteTools({
+        resolveGrants: () => [{ rootPath: root, kind: "directory" }],
+      }),
+    );
+    const input = {
+      path: target,
+      content: "after",
+      expectedContentHash: hash("before"),
+    };
+
+    await fs.writeFile(
+      lockPath,
+      `${JSON.stringify({
+        version: 1,
+        ownerNonce: "dead-owner",
+        hostname: os.hostname(),
+        pid: 2_147_483_647,
+      })}\n`,
+      { mode: 0o600 },
+    );
+    await expect(write.execute(input, context())).resolves.toMatchObject({
+      displayContent: expect.objectContaining({ contentHash: hash("after") }),
+    });
+    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await fs.writeFile(target, "before", "utf8");
+    await fs.writeFile(
+      lockPath,
+      `${JSON.stringify({
+        version: 1,
+        ownerNonce: "live-owner",
+        hostname: os.hostname(),
+        pid: process.pid,
+      })}\n`,
+      { mode: 0o600 },
+    );
+    await expect(write.execute(input, context())).resolves.toMatchObject({
+      isError: true,
+      modelContent: JSON.stringify({ error: "write_locked" }),
+    });
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("before");
+    await fs.rm(root, { recursive: true, force: true });
   });
 
   it("allows deliberate creation only under a directory grant and preserves exact file grants", async () => {
@@ -372,6 +427,7 @@ describe("node host write tools", () => {
       principal,
       sessionId: "session-a",
       turnId: "turn-a",
+      input: { text: "test", attachments: undefined },
       changes: [
         {
           path: await fs.realpath(first),
@@ -389,6 +445,7 @@ describe("node host write tools", () => {
       principal,
       sessionId: "session-a",
       turnId: "turn-a",
+      input: { text: "test", attachments: undefined },
       transactionId: "tx-1",
     });
     await fs.rm(root, { recursive: true, force: true });

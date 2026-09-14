@@ -4,14 +4,28 @@ import * as path from "path";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import { openAiCodexAuthManager } from "../agent/providers/codex/OpenAiCodexAuthManager.js";
 import {
+  assertCodexImageGenerationOptionsSupported,
   codexGeneratedImageMetadata,
   codexImageGenerationErrorMetadata,
+  CODEX_IMAGE_GENERATION_ACTIONS,
+  CODEX_IMAGE_GENERATION_BACKGROUNDS,
   CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS,
+  CODEX_IMAGE_GENERATION_INPUT_FIDELITIES,
   CODEX_IMAGE_GENERATION_MAX_COUNT,
+  CODEX_IMAGE_GENERATION_MAX_REFERENCE_IMAGES,
+  CODEX_IMAGE_GENERATION_OUTPUT_FORMATS,
+  CODEX_IMAGE_GENERATION_QUALITIES,
   CodexImageGenerationError,
   generateCodexImages,
   normalizeCodexImageGenerationModel,
+  validateCodexMaskedEdit,
+  type CodexImageGenerationAction,
+  type CodexImageGenerationBackground,
+  type CodexImageGenerationInputFidelity,
   type CodexImageGenerationModel,
+  type CodexImageGenerationOptions,
+  type CodexImageGenerationOutputFormat,
+  type CodexImageGenerationQuality,
   parseCodexImageGenerationSse,
   type CodexGeneratedImage,
   type CodexImageGenerationSseResult,
@@ -26,13 +40,24 @@ import { getRelativePath, resolveAndValidatePath } from "../util/paths.js";
 const MAX_COUNT = CODEX_IMAGE_GENERATION_MAX_COUNT;
 const DEFAULT_TIMEOUT_MS = CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS;
 const DEFAULT_RECENT_IMAGE_COUNT = 4;
-const MAX_REFERENCE_IMAGES = 8;
+const MAX_REFERENCE_IMAGES = CODEX_IMAGE_GENERATION_MAX_REFERENCE_IMAGES;
 
 type GenerateImageParams = {
   prompt?: unknown;
   image_model?: unknown;
   output_path?: unknown;
   size?: unknown;
+  output_size?: unknown;
+  quality?: unknown;
+  background?: unknown;
+  output_format?: unknown;
+  output_compression?: unknown;
+  action?: unknown;
+  input_fidelity?: unknown;
+  edit_image_path?: unknown;
+  edit_image_id?: unknown;
+  mask_image_path?: unknown;
+  mask_image_id?: unknown;
   count?: unknown;
   timeout_seconds?: unknown;
   reference_image_paths?: unknown;
@@ -68,6 +93,70 @@ function normalizeTimeoutMs(value: unknown): number {
 function normalizeSize(value: unknown): string | undefined {
   if (value == null) return undefined;
   if (typeof value !== "string" || value.trim().length === 0) return undefined;
+  return value.trim();
+}
+
+function normalizeEnum<T extends string>(params: {
+  value: unknown;
+  values: readonly T[];
+  fieldName: string;
+}): T | undefined {
+  if (params.value == null) return undefined;
+  if (
+    typeof params.value === "string" &&
+    params.values.includes(params.value as T)
+  ) {
+    return params.value as T;
+  }
+  throw new Error(
+    `${params.fieldName} must be one of: ${params.values.join(", ")}`,
+  );
+}
+
+function normalizeOutputSize(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error("output_size must be auto or WIDTHxHEIGHT");
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "auto") return normalized;
+  const match = /^(\d+)x(\d+)$/.exec(normalized);
+  if (!match) throw new Error("output_size must be auto or WIDTHxHEIGHT");
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  const pixels = width * height;
+  const ratio = width / height;
+  if (
+    width % 16 !== 0 ||
+    height % 16 !== 0 ||
+    width > 3840 ||
+    height > 3840 ||
+    ratio < 1 / 3 ||
+    ratio > 3 ||
+    pixels < 655_360 ||
+    pixels > 8_294_400
+  ) {
+    throw new Error(
+      "output_size dimensions must be multiples of 16, each no larger than 3840, use an aspect ratio from 1:3 to 3:1, and contain 655360 to 8294400 pixels",
+    );
+  }
+  return normalized;
+}
+
+function normalizeOutputCompression(value: unknown): number | undefined {
+  if (value == null) return undefined;
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric < 0 || numeric > 100) {
+    throw new Error("output_compression must be an integer from 0 to 100");
+  }
+  return numeric;
+}
+
+function optionalString(value: unknown, fieldName: string): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${fieldName} must be a non-empty string`);
+  }
   return value.trim();
 }
 
@@ -137,8 +226,27 @@ function uniqueById(
   });
 }
 
-function looksLikePngFile(inputPath: string): boolean {
-  return path.extname(inputPath).toLowerCase() === ".png";
+const OUTPUT_FORMAT_EXTENSIONS: Record<
+  CodexImageGenerationOutputFormat,
+  readonly string[]
+> = {
+  png: [".png"],
+  jpeg: [".jpg", ".jpeg"],
+  webp: [".webp"],
+};
+
+function outputFormatFromPath(
+  outputPath: string | undefined,
+): CodexImageGenerationOutputFormat | undefined {
+  if (!outputPath) return undefined;
+  const extension = path.extname(outputPath).toLowerCase();
+  return CODEX_IMAGE_GENERATION_OUTPUT_FORMATS.find((format) =>
+    OUTPUT_FORMAT_EXTENSIONS[format].includes(extension),
+  );
+}
+
+function outputExtension(format: CodexImageGenerationOutputFormat): string {
+  return format === "jpeg" ? ".jpg" : `.${format}`;
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -227,6 +335,28 @@ export function resolveSessionReferenceImages(params: {
   });
 }
 
+async function resolveSingleImage(params: {
+  pathValue?: unknown;
+  idValue?: unknown;
+  pathField: string;
+  idField: string;
+  getSessionImages?: () => SessionImageReference[];
+}): Promise<GenerateImageReferenceImage | undefined> {
+  const imagePath = optionalString(params.pathValue, params.pathField);
+  const imageId = optionalString(params.idValue, params.idField);
+  if (imagePath && imageId) {
+    throw new Error(
+      `${params.pathField} and ${params.idField} are mutually exclusive`,
+    );
+  }
+  const images = await resolveReferenceImagesForTest({
+    referenceImagePaths: imagePath ? [imagePath] : [],
+    referenceImageIds: imageId ? [imageId] : [],
+    getSessionImages: params.getSessionImages,
+  });
+  return images[0];
+}
+
 export async function resolveReferenceImagesForTest(params: {
   referenceImagePaths?: unknown;
   referenceImageIds?: unknown;
@@ -256,9 +386,18 @@ export async function resolveReferenceImagesForTest(params: {
 async function resolveOutputTargets(
   outputPath: string,
   count: number,
+  outputFormat: CodexImageGenerationOutputFormat,
 ): Promise<Array<{ absolutePath: string; relPath: string }>> {
-  const isFile = looksLikePngFile(outputPath);
-  const baseInput = isFile ? outputPath : path.join(outputPath, "image.png");
+  const suppliedFormat = outputFormatFromPath(outputPath);
+  const extension = path.extname(outputPath).toLowerCase();
+  const isFile = Boolean(suppliedFormat);
+  if (suppliedFormat && suppliedFormat !== outputFormat) {
+    throw new Error(
+      `output_path extension does not match output_format ${outputFormat}`,
+    );
+  }
+  const ext = isFile ? extension : outputExtension(outputFormat);
+  const baseInput = isFile ? outputPath : path.join(outputPath, `image${ext}`);
   const { absolutePath, inWorkspace } = resolveAndValidatePath(baseInput);
   if (!inWorkspace) {
     throw new Error(
@@ -267,7 +406,6 @@ async function resolveOutputTargets(
   }
 
   const directory = path.dirname(absolutePath);
-  const ext = ".png";
   const basename = isFile
     ? path.basename(absolutePath, ext)
     : `image-${new Date().toISOString().replace(/[:.]/g, "-")}`;
@@ -308,11 +446,16 @@ export async function requestImageGenerationApprovalForTest(params: {
   count: number;
   imageModel: CodexImageGenerationModel;
   size?: string;
+  options?: CodexImageGenerationOptions;
   targets?: Array<{ relPath: string; absolutePath?: string }>;
   referenceImages?: GenerateImageReferenceImage[];
+  editImage?: GenerateImageReferenceImage;
   billing: string;
 }): Promise<ImageGenerationApprovalResult> {
+  const options = params.options ?? {};
+  const advanced = Object.keys(options).length > 0;
   if (
+    !advanced &&
     params.approvalManager.isBuiltInToolApproved(
       params.sessionId,
       "generate_image",
@@ -327,7 +470,20 @@ export async function requestImageGenerationApprovalForTest(params: {
     `Generation prompt:\n${params.prompt}`,
     `Images: ${params.count}`,
     `Image model: ${params.imageModel}`,
-    params.size ? `Requested size: ${params.size}` : undefined,
+    params.size ? `Best-effort size hint: ${params.size}` : undefined,
+    options.outputSize ? `Output size: ${options.outputSize}` : undefined,
+    options.quality ? `Quality: ${options.quality}` : undefined,
+    options.background ? `Background: ${options.background}` : undefined,
+    options.outputFormat ? `Output format: ${options.outputFormat}` : undefined,
+    options.outputCompression !== undefined
+      ? `Output compression: ${options.outputCompression}`
+      : undefined,
+    options.action ? `Action: ${options.action}` : undefined,
+    options.inputFidelity
+      ? `Input fidelity: ${options.inputFidelity}`
+      : undefined,
+    params.editImage ? `Edit target: ${params.editImage.label}` : undefined,
+    options.maskImage ? `Mask: ${options.maskImage.label}` : undefined,
     referenceImages.length > 0
       ? `Reference images (${referenceImages.length}):`
       : undefined,
@@ -341,7 +497,9 @@ export async function requestImageGenerationApprovalForTest(params: {
     targets.length > 0
       ? "Image generation consumes ChatGPT/Codex image quota or OpenAI API-key billing before files are written."
       : "Image generation consumes ChatGPT/Codex image quota or OpenAI API-key billing before images are returned to chat.",
-    "Generate for Session also authorizes later generate_image calls in this chat, including creation of new workspace PNG outputs.",
+    advanced
+      ? "Advanced Image 2.5 controls and edits require approval for each call."
+      : "Generate for Session also authorizes later legacy generate_image calls in this chat, including creation of new workspace PNG outputs.",
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
@@ -355,21 +513,31 @@ export async function requestImageGenerationApprovalForTest(params: {
         targetPath:
           targets[0]?.absolutePath ??
           (targets.length === 1 ? targets[0]?.relPath : undefined),
-        choices: [
-          { label: "Generate", value: "accept", isPrimary: true },
-          { label: "Generate for Session", value: "accept-session" },
-          { label: "Deny", value: "reject", isDanger: true },
-        ],
-        writeChoices: [
-          { label: "Generate", value: "accept", isPrimary: true },
-          { label: "Generate for Session", value: "accept-session" },
-          { label: "Deny", value: "reject", isDanger: true },
-        ],
+        choices: advanced
+          ? [
+              { label: "Generate", value: "accept", isPrimary: true },
+              { label: "Deny", value: "reject", isDanger: true },
+            ]
+          : [
+              { label: "Generate", value: "accept", isPrimary: true },
+              { label: "Generate for Session", value: "accept-session" },
+              { label: "Deny", value: "reject", isDanger: true },
+            ],
+        writeChoices: advanced
+          ? [
+              { label: "Generate", value: "accept", isPrimary: true },
+              { label: "Deny", value: "reject", isDanger: true },
+            ]
+          : [
+              { label: "Generate", value: "accept", isPrimary: true },
+              { label: "Generate for Session", value: "accept-session" },
+              { label: "Deny", value: "reject", isDanger: true },
+            ],
       },
       params.sessionId,
     );
     const decision = typeof raw === "string" ? raw : raw.decision;
-    if (decision === "accept-session") {
+    if (decision === "accept-session" && !advanced) {
       params.approvalManager.approveBuiltInTool(
         params.sessionId,
         "generate_image",
@@ -413,8 +581,30 @@ export async function parseCodexImageSseForTest(params: {
   return { ...parsed, images };
 }
 
+function assertGeneratedImageFormat(
+  image: GeneratedImage,
+  expectedFormat: CodexImageGenerationOutputFormat,
+): void {
+  const bytes = Buffer.from(image.base64, "base64");
+  const matches =
+    expectedFormat === "png"
+      ? bytes
+          .subarray(0, 8)
+          .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+      : expectedFormat === "jpeg"
+        ? bytes[0] === 0xff && bytes[1] === 0xd8
+        : bytes.subarray(0, 4).toString("ascii") === "RIFF" &&
+          bytes.subarray(8, 12).toString("ascii") === "WEBP";
+  if (!matches) {
+    throw new Error(
+      `Generated image bytes do not match requested ${expectedFormat} output format`,
+    );
+  }
+}
+
 async function writeGeneratedImageTargets(params: {
   images: GeneratedImage[];
+  outputFormat: CodexImageGenerationOutputFormat;
   targets?: Array<{ absolutePath: string; relPath: string }>;
 }): Promise<GeneratedImage[]> {
   if (!params.targets?.length) return params.images;
@@ -422,6 +612,7 @@ async function writeGeneratedImageTargets(params: {
   for (const [index, image] of images.entries()) {
     const target = params.targets[index];
     if (!target) continue;
+    assertGeneratedImageFormat(image, params.outputFormat);
     await fs.mkdir(path.dirname(target.absolutePath), { recursive: true });
     await fs.writeFile(
       target.absolutePath,
@@ -440,28 +631,75 @@ function buildGenerateImageErrorResult(params: {
   const message =
     params.error instanceof Error ? params.error.message : String(params.error);
   const failureMetadata = codexImageGenerationErrorMetadata(params.error);
-  return errorResult(message, {
+  const partialImages =
+    params.error instanceof CodexImageGenerationError
+      ? params.error.partialImages
+      : [];
+  const result = errorResult(message, {
     ...failureMetadata,
     ...(params.generatedImages.length > 0
       ? {
           generated_count: params.generatedImages.length,
-          partial_images: codexGeneratedImageMetadata(params.generatedImages),
+          completed_images: codexGeneratedImageMetadata(params.generatedImages),
+        }
+      : {}),
+    ...(partialImages.length > 0
+      ? {
+          partial_count: partialImages.length,
+          partial_images: codexGeneratedImageMetadata(partialImages),
         }
       : {}),
     ...(params.followUp ? { follow_up: params.followUp } : {}),
   });
+  result.content.push(
+    ...params.generatedImages.map((image) => ({
+      type: "image" as const,
+      data: image.base64,
+      mimeType: image.mimeType,
+    })),
+  );
+  return result;
+}
+
+function requestedOptionsMetadata(
+  options: CodexImageGenerationOptions,
+): Record<string, unknown> {
+  return {
+    ...(options.outputSize ? { output_size: options.outputSize } : {}),
+    ...(options.quality ? { quality: options.quality } : {}),
+    ...(options.background ? { background: options.background } : {}),
+    ...(options.outputFormat ? { output_format: options.outputFormat } : {}),
+    ...(options.outputCompression !== undefined
+      ? { output_compression: options.outputCompression }
+      : {}),
+    ...(options.action ? { action: options.action } : {}),
+    ...(options.inputFidelity ? { input_fidelity: options.inputFidelity } : {}),
+    ...(options.maskImage
+      ? {
+          mask_image: {
+            source: options.maskImage.source,
+            label: options.maskImage.label,
+            mime_type: options.maskImage.mimeType,
+          },
+        }
+      : {}),
+  };
 }
 
 function buildGenerateImageSuccessResult(params: {
   result: {
     images: GeneratedImage[];
+    partialImages: GeneratedImage[];
     eventTypes: string[];
+    responseId?: string;
+    usage?: Record<string, unknown>;
     model: string;
     imageModel: CodexImageGenerationModel;
   };
   billing: string;
   refreshedAuth?: boolean;
   requestedCount: number;
+  requestedOptions: CodexImageGenerationOptions;
   referenceImages: GenerateImageReferenceImage[];
   followUp?: string;
 }): ToolResult {
@@ -479,6 +717,9 @@ function buildGenerateImageSuccessResult(params: {
             ...(params.refreshedAuth ? { refreshed_auth: true } : {}),
             requested_count: params.requestedCount,
             generated_count: result.images.length,
+            requested_options: requestedOptionsMetadata(
+              params.requestedOptions,
+            ),
             saved: result.images.some((image) => Boolean(image.path)),
             reference_images: referenceImages.map((image) => ({
               source: image.source,
@@ -486,6 +727,8 @@ function buildGenerateImageSuccessResult(params: {
               mime_type: image.mimeType,
             })),
             images: codexGeneratedImageMetadata(result.images),
+            ...(result.responseId ? { response_id: result.responseId } : {}),
+            ...(result.usage ? { usage: result.usage } : {}),
             event_types: Array.from(new Set(result.eventTypes)),
             ...(params.followUp ? { follow_up: params.followUp } : {}),
           },
@@ -514,16 +757,102 @@ export async function handleGenerateImage(
     const count = normalizeCount(params.count);
     const imageModel = normalizeCodexImageGenerationModel(params.image_model);
     const size = normalizeSize(params.size);
+    const outputSize = normalizeOutputSize(params.output_size);
+    if (size && outputSize) {
+      throw new Error("size and output_size cannot be combined");
+    }
+    const quality = normalizeEnum<CodexImageGenerationQuality>({
+      value: params.quality,
+      values: CODEX_IMAGE_GENERATION_QUALITIES,
+      fieldName: "quality",
+    });
+    const background = normalizeEnum<CodexImageGenerationBackground>({
+      value: params.background,
+      values: CODEX_IMAGE_GENERATION_BACKGROUNDS,
+      fieldName: "background",
+    });
+    const requestedOutputFormat =
+      normalizeEnum<CodexImageGenerationOutputFormat>({
+        value: params.output_format,
+        values: CODEX_IMAGE_GENERATION_OUTPUT_FORMATS,
+        fieldName: "output_format",
+      });
+    const outputCompression = normalizeOutputCompression(
+      params.output_compression,
+    );
+    const requestedAction = normalizeEnum<CodexImageGenerationAction>({
+      value: params.action,
+      values: CODEX_IMAGE_GENERATION_ACTIONS,
+      fieldName: "action",
+    });
+    const inputFidelity = normalizeEnum<CodexImageGenerationInputFidelity>({
+      value: params.input_fidelity,
+      values: CODEX_IMAGE_GENERATION_INPUT_FIDELITIES,
+      fieldName: "input_fidelity",
+    });
     const timeoutMs = normalizeTimeoutMs(params.timeout_seconds);
+    const editImage = await resolveSingleImage({
+      pathValue: params.edit_image_path,
+      idValue: params.edit_image_id,
+      pathField: "edit_image_path",
+      idField: "edit_image_id",
+      getSessionImages,
+    });
+    const maskImage = await resolveSingleImage({
+      pathValue: params.mask_image_path,
+      idValue: params.mask_image_id,
+      pathField: "mask_image_path",
+      idField: "mask_image_id",
+      getSessionImages,
+    });
+    if (requestedAction === "edit" && !editImage) {
+      throw new Error("action edit requires edit_image_path or edit_image_id");
+    }
+    if (requestedAction === "generate" && (editImage || maskImage)) {
+      throw new Error(
+        "action generate cannot be combined with an edit target or mask",
+      );
+    }
+    validateCodexMaskedEdit({ editImage, maskImage });
+    const action = editImage || maskImage ? "edit" : requestedAction;
     const referenceImages = await resolveReferenceImagesForTest({
       referenceImagePaths: params.reference_image_paths,
       referenceImageIds: params.reference_image_ids,
       useRecentImages: params.use_recent_images,
       getSessionImages,
     });
+    const providerReferenceImages = editImage
+      ? uniqueById([editImage, ...referenceImages])
+      : referenceImages;
+    if (providerReferenceImages.length > MAX_REFERENCE_IMAGES) {
+      throw new Error(
+        `generate_image supports at most ${MAX_REFERENCE_IMAGES} input images including the edit target`,
+      );
+    }
     const outputPath = outputPathInput(params.output_path);
+    const inferredOutputFormat = outputFormatFromPath(outputPath);
+    const outputFormat = requestedOutputFormat ?? inferredOutputFormat ?? "png";
+    if (background === "transparent" && outputFormat === "jpeg") {
+      throw new Error("transparent backgrounds require PNG or WebP output");
+    }
+    if (outputCompression !== undefined && outputFormat === "png") {
+      throw new Error("output_compression requires JPEG or WebP output");
+    }
+    const options: CodexImageGenerationOptions = {
+      ...(outputSize ? { outputSize } : {}),
+      ...(quality ? { quality } : {}),
+      ...(background ? { background } : {}),
+      ...(requestedOutputFormat ||
+      (inferredOutputFormat && inferredOutputFormat !== "png")
+        ? { outputFormat }
+        : {}),
+      ...(outputCompression !== undefined ? { outputCompression } : {}),
+      ...(action ? { action } : {}),
+      ...(inputFidelity ? { inputFidelity } : {}),
+      ...(maskImage ? { maskImage } : {}),
+    };
     const targets = outputPath
-      ? await resolveOutputTargets(outputPath, count)
+      ? await resolveOutputTargets(outputPath, count, outputFormat)
       : undefined;
     const generatedImages: GeneratedImage[] = [];
 
@@ -533,6 +862,8 @@ export async function handleGenerateImage(
         "OpenAI/Codex auth is not configured. Sign in with ChatGPT/Codex OAuth or add an OpenAI API key before using generate_image.",
       );
     }
+
+    assertCodexImageGenerationOptionsSupported(auth, options);
 
     const billing =
       auth.method === "oauth"
@@ -547,8 +878,10 @@ export async function handleGenerateImage(
       count,
       imageModel,
       size,
+      options,
       targets,
       referenceImages,
+      editImage,
       billing,
     });
     if (!approval.approved) {
@@ -576,7 +909,8 @@ export async function handleGenerateImage(
         count,
         imageModel,
         size,
-        referenceImages,
+        options,
+        referenceImages: providerReferenceImages,
         timeoutMs,
         generatedImages,
         sessionId,
@@ -585,6 +919,7 @@ export async function handleGenerateImage(
         ...rawResult,
         images: await writeGeneratedImageTargets({
           images: rawResult.images,
+          outputFormat,
           targets,
         }),
       };
@@ -592,7 +927,8 @@ export async function handleGenerateImage(
         result,
         billing,
         requestedCount: count,
-        referenceImages,
+        requestedOptions: options,
+        referenceImages: providerReferenceImages,
         followUp: approval.followUp,
       });
     } catch (error) {
@@ -609,6 +945,7 @@ export async function handleGenerateImage(
           throw new Error("Codex OAuth refresh failed after 401 response");
         }
         auth = refreshed;
+        assertCodexImageGenerationOptionsSupported(auth, options);
         try {
           const rawResult = await generateCodexImages({
             auth,
@@ -616,7 +953,8 @@ export async function handleGenerateImage(
             count,
             imageModel,
             size,
-            referenceImages,
+            options,
+            referenceImages: providerReferenceImages,
             timeoutMs,
             generatedImages,
             sessionId,
@@ -625,6 +963,7 @@ export async function handleGenerateImage(
             ...rawResult,
             images: await writeGeneratedImageTargets({
               images: rawResult.images,
+              outputFormat,
               targets,
             }),
           };
@@ -633,7 +972,8 @@ export async function handleGenerateImage(
             billing,
             refreshedAuth: true,
             requestedCount: count,
-            referenceImages,
+            requestedOptions: options,
+            referenceImages: providerReferenceImages,
             followUp: approval.followUp,
           });
         } catch (refreshError) {

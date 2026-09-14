@@ -182,6 +182,7 @@ describe("BrowserGatewayHelperLeaseClient", () => {
 
   it("renews and releases a collision-assigned effective owner identity", async () => {
     const calls: Array<{ pathname: string; body: string }> = [];
+    const onEffectiveOwnerIdChanged = vi.fn();
     let heartbeatCount = 0;
     globalThis.fetch = vi.fn(async (input, init) => {
       const pathname = new URL(String(input)).pathname;
@@ -229,6 +230,7 @@ describe("BrowserGatewayHelperLeaseClient", () => {
       },
       log: vi.fn(),
       renewIntervalMs: 60_000,
+      onEffectiveOwnerIdChanged,
     });
 
     await client.start();
@@ -242,6 +244,9 @@ describe("BrowserGatewayHelperLeaseClient", () => {
       (call) => call.pathname === "/internal/client/release",
     );
     expect(client.getEffectiveOwnerId()).toBe("owner-1~generation-1");
+    expect(onEffectiveOwnerIdChanged).toHaveBeenCalledExactlyOnceWith(
+      "owner-1~generation-1",
+    );
     expect(secondHeartbeat?.body).toContain('"ownerId":"owner-1~generation-1"');
     expect(release?.body).toContain('"ownerId":"owner-1~generation-1"');
   });

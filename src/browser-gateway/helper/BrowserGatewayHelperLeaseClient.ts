@@ -14,6 +14,7 @@ interface BrowserGatewayHelperLeaseClientOptions {
   requestTimeoutMs?: number;
   leaseTtlMs?: number;
   random?: () => number;
+  onEffectiveOwnerIdChanged?: (ownerId: string) => void;
 }
 
 export class BrowserGatewayHelperLeaseClient {
@@ -275,7 +276,11 @@ export class BrowserGatewayHelperLeaseClient {
         typeof body.effectiveOwnerId === "string" &&
         body.effectiveOwnerId.trim()
       ) {
-        this.effectiveOwnerId = body.effectiveOwnerId.trim();
+        const effectiveOwnerId = body.effectiveOwnerId.trim();
+        if (effectiveOwnerId !== this.effectiveOwnerId) {
+          this.effectiveOwnerId = effectiveOwnerId;
+          this.options.onEffectiveOwnerIdChanged?.(effectiveOwnerId);
+        }
       }
     } catch {
       // Older helpers omit collision metadata; continue with the requested ID.

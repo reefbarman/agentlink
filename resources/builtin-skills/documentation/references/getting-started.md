@@ -27,6 +27,10 @@ code --install-extension agentlink-*.vsix --force
 
 The installer supports `darwin`, `linux`, `alpine`, and `win32` targets on `arm64` and `x64`. See the [complete reference](complete-reference.md#installation) for source builds, platform details, and AgentLink Terminal requirements.
 
+### Standalone CLI preview
+
+A private macOS Apple Silicon CLI tarball provides terminal-native multi-turn coding without VS Code. It supports Codex OAuth, OpenAI API keys, configured OpenAI-compatible endpoints, durable per-project sessions, project-relative file inspection, terminal-reviewed baseline-hash writes and patches, reviewed non-interactive commands with retained process output, approved stdio and HTTPS MCP tools, up to two scoped background writers, optional managed TypeScript/JavaScript intelligence, resume/delete, cancellation, and pre-request context limits. See [Standalone CLI](standalone-cli.md) for build, install, setup, approval, and command details.
+
 ### Standalone desktop preview
 
 AgentLink Desktop is a separate macOS application. Its **Ask AgentLink** view runs without VS Code or the extension and shares global `~/.agentlink` configuration and macOS Keychain accounts with other AgentLink surfaces when they are installed on the same Mac.

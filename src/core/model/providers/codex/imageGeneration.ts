@@ -1,5 +1,7 @@
 import { randomUUID } from "crypto";
 
+import { PNG } from "pngjs";
+
 import {
   CODEX_DEFAULT_MODEL,
   getCodexEndpointConfig,
@@ -8,6 +10,7 @@ import {
 } from "@agentlink/core/codex";
 
 export const CODEX_IMAGE_GENERATION_MAX_COUNT = 4;
+export const CODEX_IMAGE_GENERATION_MAX_REFERENCE_IMAGES = 8;
 export const CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS = 300_000;
 export const CODEX_IMAGE_GENERATION_MODELS = [
   "gpt-image-2.5-flare",
@@ -17,6 +20,52 @@ export type CodexImageGenerationModel =
   (typeof CODEX_IMAGE_GENERATION_MODELS)[number];
 export const CODEX_IMAGE_GENERATION_DEFAULT_MODEL: CodexImageGenerationModel =
   "gpt-image-2.5-flare";
+
+export const CODEX_IMAGE_GENERATION_QUALITIES = [
+  "auto",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+export type CodexImageGenerationQuality =
+  (typeof CODEX_IMAGE_GENERATION_QUALITIES)[number];
+export const CODEX_IMAGE_GENERATION_BACKGROUNDS = [
+  "auto",
+  "opaque",
+  "transparent",
+] as const;
+export type CodexImageGenerationBackground =
+  (typeof CODEX_IMAGE_GENERATION_BACKGROUNDS)[number];
+export const CODEX_IMAGE_GENERATION_OUTPUT_FORMATS = [
+  "png",
+  "jpeg",
+  "webp",
+] as const;
+export type CodexImageGenerationOutputFormat =
+  (typeof CODEX_IMAGE_GENERATION_OUTPUT_FORMATS)[number];
+export const CODEX_IMAGE_GENERATION_ACTIONS = [
+  "auto",
+  "generate",
+  "edit",
+] as const;
+export type CodexImageGenerationAction =
+  (typeof CODEX_IMAGE_GENERATION_ACTIONS)[number];
+export const CODEX_IMAGE_GENERATION_INPUT_FIDELITIES = ["low", "high"] as const;
+export type CodexImageGenerationInputFidelity =
+  (typeof CODEX_IMAGE_GENERATION_INPUT_FIDELITIES)[number];
+
+export interface CodexImageGenerationOptions {
+  outputSize?: string;
+  quality?: CodexImageGenerationQuality;
+  background?: CodexImageGenerationBackground;
+  outputFormat?: CodexImageGenerationOutputFormat;
+  outputCompression?: number;
+  action?: CodexImageGenerationAction;
+  inputFidelity?: CodexImageGenerationInputFidelity;
+  maskImage?: CodexImageReferenceImage;
+}
 
 const TRANSIENT_RETRIES = 2;
 
@@ -32,6 +81,66 @@ export interface CodexImageReferenceImage {
   source: "file" | "session";
 }
 
+function pngDimensions(bytes: Buffer): { width: number; height: number } {
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (
+    bytes.byteLength < 24 ||
+    !bytes.subarray(0, signature.byteLength).equals(signature) ||
+    bytes.subarray(12, 16).toString("ascii") !== "IHDR"
+  ) {
+    throw new Error("Edit target and mask must be valid PNG images");
+  }
+  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+}
+
+export function validateCodexMaskedEdit(params: {
+  editImage: CodexImageReferenceImage | undefined;
+  maskImage: CodexImageReferenceImage | undefined;
+}): void {
+  if (!params.maskImage) return;
+  if (!params.editImage)
+    throw new Error("A mask requires an explicit edit image");
+  if (
+    params.editImage.mimeType !== "image/png" ||
+    params.maskImage.mimeType !== "image/png"
+  ) {
+    throw new Error(
+      "Masked edits currently require PNG target and mask images",
+    );
+  }
+  const maxBytes = 50 * 1024 * 1024;
+  const editBytes = Buffer.from(params.editImage.base64, "base64");
+  const maskBytes = Buffer.from(params.maskImage.base64, "base64");
+  if (editBytes.byteLength >= maxBytes || maskBytes.byteLength >= maxBytes) {
+    throw new Error("Edit target and mask must each be smaller than 50 MB");
+  }
+  const editDimensions = pngDimensions(editBytes);
+  const maskDimensions = pngDimensions(maskBytes);
+  const maxPixels = 8_294_400;
+  if (
+    editDimensions.width * editDimensions.height > maxPixels ||
+    maskDimensions.width * maskDimensions.height > maxPixels
+  ) {
+    throw new Error("Edit target and mask must each be no larger than 4K");
+  }
+  if (
+    editDimensions.width !== maskDimensions.width ||
+    editDimensions.height !== maskDimensions.height
+  ) {
+    throw new Error("edit target and mask must have matching dimensions");
+  }
+  let maskMetadata: ReturnType<typeof PNG.sync.read>;
+  try {
+    PNG.sync.read(editBytes);
+    maskMetadata = PNG.sync.read(maskBytes);
+  } catch {
+    throw new Error("Edit target and mask must be valid PNG images");
+  }
+  if (!maskMetadata.alpha) {
+    throw new Error("mask image must contain an alpha channel");
+  }
+}
+
 export interface CodexGeneratedImage {
   bytes: number;
   mimeType: string;
@@ -40,6 +149,8 @@ export interface CodexGeneratedImage {
   quality?: string;
   background?: string;
   output_format?: string;
+  provider_id?: string;
+  revised_prompt?: string;
   event_type: string;
 }
 
@@ -56,6 +167,7 @@ interface StreamImageEvent {
 
 interface StreamImagePayload {
   base64: string;
+  kind: "partial" | "final";
   identity?: string;
   outputIndex?: number;
   partialImageIndex?: number;
@@ -63,6 +175,7 @@ interface StreamImagePayload {
   quality?: string;
   background?: string;
   outputFormat?: string;
+  revisedPrompt?: string;
 }
 
 export type CodexImageGenerationFailureCategory =
@@ -83,7 +196,10 @@ export interface CodexImageGenerationFailure {
 
 export interface CodexImageGenerationSseResult {
   images: CodexGeneratedImage[];
+  partialImages: CodexGeneratedImage[];
   eventTypes: string[];
+  responseId?: string;
+  usage?: Record<string, unknown>;
   terminalFailure?: Omit<CodexImageGenerationFailure, "eventTypes">;
 }
 
@@ -92,6 +208,7 @@ export class CodexImageGenerationError extends Error {
     message: string,
     readonly status?: number,
     readonly failure?: CodexImageGenerationFailure,
+    readonly partialImages: CodexGeneratedImage[] = [],
   ) {
     super(message);
     this.name = "CodexImageGenerationError";
@@ -121,20 +238,65 @@ export function getCodexImageGenerationModel(
     : CODEX_DEFAULT_MODEL;
 }
 
+export function assertCodexImageGenerationOptionsSupported(
+  auth: CodexImageGenerationAuth,
+  options: CodexImageGenerationOptions,
+): void {
+  if (auth.method !== "oauth") return;
+  const unsupported = [
+    options.outputSize ? "output_size" : undefined,
+    options.quality ? "quality" : undefined,
+    options.background ? "background" : undefined,
+    options.outputFormat ? "output_format" : undefined,
+    options.outputCompression !== undefined ? "output_compression" : undefined,
+    options.action ? "action" : undefined,
+    options.inputFidelity ? "input_fidelity" : undefined,
+    options.maskImage ? "mask_image" : undefined,
+  ].filter((value): value is string => Boolean(value));
+  if (unsupported.length > 0) {
+    throw new Error(
+      `Codex OAuth support is not yet verified for image option${unsupported.length === 1 ? "" : "s"}: ${unsupported.join(", ")}. Use the existing defaults, or configure an OpenAI API key with model access.`,
+    );
+  }
+}
+
 export function buildCodexImageGenerationRequestBody(params: {
   prompt: string;
   count: number;
   model: string;
   imageModel: CodexImageGenerationModel;
   size?: string;
+  options?: CodexImageGenerationOptions;
   referenceImages?: CodexImageReferenceImage[];
 }): Record<string, unknown> {
+  const options = params.options ?? {};
+  const formatLabel = options.outputFormat?.toUpperCase() ?? "PNG";
   const countInstruction =
     params.count === 1
-      ? "Create exactly one PNG image."
-      : `Create exactly ${params.count} distinct PNG images.`;
+      ? `Create exactly one ${formatLabel} image.`
+      : `Create exactly ${params.count} distinct ${formatLabel} images.`;
   const sizeInstruction = params.size ? ` Requested size: ${params.size}.` : "";
   const referenceImages = params.referenceImages ?? [];
+  const imageTool = {
+    type: "image_generation",
+    model: params.imageModel,
+    ...(options.outputSize ? { size: options.outputSize } : {}),
+    ...(options.quality ? { quality: options.quality } : {}),
+    ...(options.background ? { background: options.background } : {}),
+    ...(options.outputFormat ? { output_format: options.outputFormat } : {}),
+    ...(options.outputCompression !== undefined
+      ? { output_compression: options.outputCompression }
+      : {}),
+    ...(options.action ? { action: options.action } : {}),
+    ...(options.inputFidelity ? { input_fidelity: options.inputFidelity } : {}),
+    ...(options.maskImage
+      ? {
+          input_image_mask: {
+            image_url: `data:${options.maskImage.mimeType};base64,${options.maskImage.base64}`,
+          },
+        }
+      : {}),
+  };
   return {
     model: params.model,
     stream: true,
@@ -156,7 +318,7 @@ export function buildCodexImageGenerationRequestBody(params: {
         ],
       },
     ],
-    tools: [{ type: "image_generation", model: params.imageModel }],
+    tools: [imageTool],
     tool_choice: { type: "image_generation" },
   };
 }
@@ -177,7 +339,9 @@ function buildImageGenerationHeaders(params: {
 export async function parseCodexImageGenerationSse(params: {
   response: Response;
   maxImages: number;
+  outputFormat?: CodexImageGenerationOutputFormat;
   generatedImages?: CodexGeneratedImage[];
+  partialImages?: CodexGeneratedImage[];
 }): Promise<CodexImageGenerationSseResult> {
   if (!params.response.body) {
     throw new Error(
@@ -187,13 +351,17 @@ export async function parseCodexImageGenerationSse(params: {
 
   const decoder = new TextDecoder();
   let buffer = "";
-  const imageSlots = new Map<string, number>();
+  const finalSlots = new Map<string, number>();
+  const partialSlots = new Map<string, number>();
   const images = params.generatedImages ?? [];
+  const partialImages = params.partialImages ?? [];
   const eventTypes: string[] = [];
   let terminalFailure:
     | Omit<CodexImageGenerationFailure, "eventTypes">
     | undefined;
   let observedQuotaConsumed: boolean | "unknown" = "unknown";
+  let responseId: string | undefined;
+  let usage: Record<string, unknown> | undefined;
   let fallbackImageEventIndex = 0;
 
   function handleLine(line: string): void {
@@ -210,6 +378,8 @@ export async function parseCodexImageGenerationSse(params: {
 
     if (event.type) eventTypes.push(event.type);
     const response = isRecord(event.response) ? event.response : undefined;
+    responseId = firstString(response?.id) ?? responseId;
+    usage = isRecord(response?.usage) ? response.usage : usage;
     const explicitQuota = explicitQuotaConsumed(event, response);
     if (explicitQuota !== "unknown") observedQuotaConsumed = explicitQuota;
     const classifiedFailure = classifyImageGenerationTerminalEvent(event);
@@ -225,27 +395,40 @@ export async function parseCodexImageGenerationSse(params: {
         typeof payload.outputIndex === "number"
           ? `output:${payload.outputIndex}`
           : (payload.identity ??
-            (typeof payload.partialImageIndex === "number"
-              ? `partial:${payload.partialImageIndex}`
+            (payload.kind === "partial"
+              ? "partial:fallback"
               : `fallback:${fallbackImageEventIndex++}`));
-      let slot = imageSlots.get(identity);
+      const slots = payload.kind === "final" ? finalSlots : partialSlots;
+      const destination = payload.kind === "final" ? images : partialImages;
+      let slot = slots.get(identity);
       if (slot === undefined) {
-        if (imageSlots.size >= params.maxImages) continue;
-        slot = imageSlots.size;
-        imageSlots.set(identity, slot);
+        if (slots.size >= params.maxImages) continue;
+        slot = slots.size;
+        slots.set(identity, slot);
       }
 
+      const prior =
+        payload.kind === "final"
+          ? partialImages[partialSlots.get(identity) ?? -1]
+          : undefined;
       const bytes = Buffer.from(payload.base64, "base64");
-      images[slot] = {
-        ...images[slot],
+      const outputFormat =
+        detectOutputFormat(bytes) ??
+        normalizeReturnedOutputFormat(payload.outputFormat) ??
+        params.outputFormat;
+      destination[slot] = {
+        ...prior,
+        ...destination[slot],
         bytes: bytes.byteLength,
-        mimeType: "image/png",
+        mimeType: outputFormatToMimeType(outputFormat),
         base64: payload.base64,
         ...(payload.size ? { size: payload.size } : {}),
         ...(payload.quality ? { quality: payload.quality } : {}),
         ...(payload.background ? { background: payload.background } : {}),
-        ...(payload.outputFormat
-          ? { output_format: payload.outputFormat }
+        ...(outputFormat ? { output_format: outputFormat } : {}),
+        ...(payload.identity ? { provider_id: payload.identity } : {}),
+        ...(payload.revisedPrompt
+          ? { revised_prompt: payload.revisedPrompt }
           : {}),
         event_type: event.type ?? "image_generation_call",
       };
@@ -267,7 +450,10 @@ export async function parseCodexImageGenerationSse(params: {
   if (buffer.trim()) handleLine(buffer.trim());
   return {
     images,
+    partialImages,
     eventTypes,
+    ...(responseId ? { responseId } : {}),
+    ...(usage ? { usage } : {}),
     terminalFailure:
       terminalFailure && observedQuotaConsumed !== "unknown"
         ? { ...terminalFailure, quotaConsumed: observedQuotaConsumed }
@@ -290,12 +476,15 @@ export function createCodexImageGenerationResultError(
   const detail = failure.message ? `: ${failure.message}` : "";
   const outcome =
     result.images.length > 0
-      ? `ended with ${failure.category} after partial image output`
-      : `returned no image (${failure.category})`;
+      ? `ended with ${failure.category} after completed image output`
+      : result.partialImages.length > 0
+        ? `ended with ${failure.category} after partial image output`
+        : `returned no image (${failure.category})`;
   return new CodexImageGenerationError(
     `Codex image generation ${outcome}${detail}`,
     undefined,
     failure,
+    result.partialImages,
   );
 }
 
@@ -408,13 +597,15 @@ function extractImageGenerationPayloads(
     event.type === "response.image_generation_call.partial_image" &&
     typeof event.partial_image_b64 === "string"
   ) {
-    payloads.push(imagePayloadFromRecord(event, event.partial_image_b64));
+    payloads.push(
+      imagePayloadFromRecord(event, event.partial_image_b64, "partial"),
+    );
   }
   if (
     event.type === "response.image_generation_call.completed" &&
     typeof event.result === "string"
   ) {
-    payloads.push(imagePayloadFromRecord(event, event.result));
+    payloads.push(imagePayloadFromRecord(event, event.result, "final"));
   }
 
   const item = isRecord(event.item) ? event.item : undefined;
@@ -426,6 +617,7 @@ function extractImageGenerationPayloads(
       imagePayloadFromRecord(
         item,
         item.result,
+        "final",
         numericValue(event.output_index),
       ),
     );
@@ -441,7 +633,9 @@ function extractImageGenerationPayloads(
       ) {
         continue;
       }
-      payloads.push(imagePayloadFromRecord(output, output.result, outputIndex));
+      payloads.push(
+        imagePayloadFromRecord(output, output.result, "final", outputIndex),
+      );
     }
   }
   return payloads;
@@ -450,10 +644,12 @@ function extractImageGenerationPayloads(
 function imagePayloadFromRecord(
   record: Record<string, unknown>,
   base64: string,
+  kind: "partial" | "final",
   fallbackOutputIndex?: number,
 ): StreamImagePayload {
   return {
     base64,
+    kind,
     identity: firstString(record.item_id, record.id),
     outputIndex: numericValue(record.output_index) ?? fallbackOutputIndex,
     partialImageIndex: numericValue(record.partial_image_index),
@@ -461,7 +657,53 @@ function imagePayloadFromRecord(
     quality: firstString(record.quality),
     background: firstString(record.background),
     outputFormat: firstString(record.output_format),
+    revisedPrompt: firstString(record.revised_prompt),
   };
+}
+
+function detectOutputFormat(
+  bytes: Buffer,
+): CodexImageGenerationOutputFormat | undefined {
+  if (
+    bytes.length >= 8 &&
+    bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  ) {
+    return "png";
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    return "jpeg";
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes.subarray(0, 4).toString("ascii") === "RIFF" &&
+    bytes.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return "webp";
+  }
+  return undefined;
+}
+
+function normalizeReturnedOutputFormat(
+  value: string | undefined,
+): CodexImageGenerationOutputFormat | undefined {
+  return CODEX_IMAGE_GENERATION_OUTPUT_FORMATS.includes(
+    value as CodexImageGenerationOutputFormat,
+  )
+    ? (value as CodexImageGenerationOutputFormat)
+    : undefined;
+}
+
+function outputFormatToMimeType(
+  outputFormat: CodexImageGenerationOutputFormat | undefined,
+): string {
+  switch (outputFormat) {
+    case "jpeg":
+      return "image/jpeg";
+    case "webp":
+      return "image/webp";
+    default:
+      return "image/png";
+  }
 }
 
 function numericValue(value: unknown): number | undefined {
@@ -522,15 +764,20 @@ async function callCodexImageGeneration(params: {
   prompt: string;
   count: number;
   size?: string;
+  options: CodexImageGenerationOptions;
   imageModel: CodexImageGenerationModel;
   referenceImages: CodexImageReferenceImage[];
   deadlineMs: number;
   generatedImages: CodexGeneratedImage[];
+  partialImages: CodexGeneratedImage[];
   sessionId?: string;
   signal?: AbortSignal;
 }): Promise<{
   images: CodexGeneratedImage[];
+  partialImages: CodexGeneratedImage[];
   eventTypes: string[];
+  responseId?: string;
+  usage?: Record<string, unknown>;
   model: string;
   imageModel: CodexImageGenerationModel;
 }> {
@@ -562,6 +809,7 @@ async function callCodexImageGeneration(params: {
           model,
           imageModel: params.imageModel,
           size: params.size,
+          options: params.options,
           referenceImages: params.referenceImages,
         }),
       ),
@@ -580,7 +828,9 @@ async function callCodexImageGeneration(params: {
     const parsed = await parseCodexImageGenerationSse({
       response,
       maxImages: params.count,
+      outputFormat: params.options.outputFormat,
       generatedImages: params.generatedImages,
+      partialImages: params.partialImages,
     });
     if (parsed.terminalFailure || parsed.images.length === 0) {
       throw createCodexImageGenerationResultError(parsed);
@@ -595,7 +845,8 @@ function isTransientError(error: unknown): boolean {
   if (error instanceof CodexImageGenerationError) {
     return error.status
       ? [408, 409, 429, 500, 502, 503, 504].includes(error.status)
-      : false;
+      : error.failure?.retryable === true &&
+          error.failure.quotaConsumed === false;
   }
   if (!(error instanceof Error)) return false;
   if (error.name === "AbortError") return false;
@@ -607,6 +858,7 @@ export async function generateCodexImages(params: {
   prompt: string;
   count: number;
   size?: string;
+  options?: CodexImageGenerationOptions;
   imageModel: CodexImageGenerationModel;
   referenceImages?: CodexImageReferenceImage[];
   timeoutMs: number;
@@ -615,12 +867,18 @@ export async function generateCodexImages(params: {
   signal?: AbortSignal;
 }): Promise<{
   images: CodexGeneratedImage[];
+  partialImages: CodexGeneratedImage[];
   eventTypes: string[];
+  responseId?: string;
+  usage?: Record<string, unknown>;
   model: string;
   imageModel: CodexImageGenerationModel;
 }> {
   const deadlineMs = Date.now() + params.timeoutMs;
   const generatedImages = params.generatedImages ?? [];
+  const partialImages: CodexGeneratedImage[] = [];
+  const options = params.options ?? {};
+  assertCodexImageGenerationOptionsSupported(params.auth, options);
   let lastError: unknown;
   for (let attempt = 0; attempt <= TRANSIENT_RETRIES; attempt++) {
     try {
@@ -629,16 +887,25 @@ export async function generateCodexImages(params: {
         prompt: params.prompt,
         count: params.count,
         size: params.size,
+        options,
         imageModel: params.imageModel,
         referenceImages: params.referenceImages ?? [],
         deadlineMs,
         generatedImages,
+        partialImages,
         sessionId: params.sessionId,
         signal: params.signal,
       });
     } catch (error) {
       lastError = error;
-      if (!isTransientError(error) || attempt === TRANSIENT_RETRIES) break;
+      if (
+        generatedImages.length > 0 ||
+        partialImages.length > 0 ||
+        !isTransientError(error) ||
+        attempt === TRANSIENT_RETRIES
+      ) {
+        break;
+      }
     }
   }
   throw lastError;

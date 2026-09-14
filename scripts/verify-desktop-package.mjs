@@ -54,6 +54,7 @@ export function verifyDesktopRuntimeFiles(fileList, target) {
     "dist/node_modules/apache-arrow/package.json",
     `dist/node_modules/${nativePackage}/package.json`,
     "node_modules/@napi-rs/keyring/package.json",
+    "node_modules/@napi-rs/keyring/index.js",
     `node_modules/${keychainPackage}/package.json`,
   ];
   const missing = required.filter((entry) => !files.has(entry));

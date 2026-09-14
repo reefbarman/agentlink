@@ -37,6 +37,14 @@ import {
 import OpenAI from "openai";
 import { z } from "zod";
 import { agentLinkFetch } from "../../util/httpDispatcher.js";
+import {
+  CODEX_IMAGE_GENERATION_ACTIONS,
+  CODEX_IMAGE_GENERATION_BACKGROUNDS,
+  CODEX_IMAGE_GENERATION_INPUT_FIDELITIES,
+  CODEX_IMAGE_GENERATION_MODELS,
+  CODEX_IMAGE_GENERATION_OUTPUT_FORMATS,
+  CODEX_IMAGE_GENERATION_QUALITIES,
+} from "../../core/model/providers/codex/imageGeneration.js";
 
 import { TODO_COMPACTION_GUIDANCE } from "../../agent/todoTool.js";
 
@@ -227,12 +235,41 @@ const ASK_AGENT_RECALL_MEMORY_SCHEMA = {
 const ASK_AGENT_GENERATE_IMAGE_SCHEMA = {
   prompt: z.string().min(1),
   image_model: z
-    .enum(["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"])
+    .enum(CODEX_IMAGE_GENERATION_MODELS)
     .optional()
     .describe(
       "Image model. Default: gpt-image-2.5-flare. Use Flare for fast exploration and alignment, then Sunburst with the selected session image as a reference for polished output. Go directly to Sunburst when the direction is settled.",
     ),
-  size: z.string().optional(),
+  size: z
+    .string()
+    .optional()
+    .describe(
+      "Deprecated best-effort size/aspect hint retained for compatibility. Prefer output_size for exact supported dimensions. Cannot be combined with output_size.",
+    ),
+  output_size: z
+    .string()
+    .optional()
+    .describe(
+      "Structured output dimensions: auto or WIDTHxHEIGHT. Public OpenAI API-key route only until Codex OAuth support is verified.",
+    ),
+  quality: z.enum(CODEX_IMAGE_GENERATION_QUALITIES).optional(),
+  background: z.enum(CODEX_IMAGE_GENERATION_BACKGROUNDS).optional(),
+  output_format: z.enum(CODEX_IMAGE_GENERATION_OUTPUT_FORMATS).optional(),
+  output_compression: z.coerce.number().int().min(0).max(100).optional(),
+  action: z.enum(CODEX_IMAGE_GENERATION_ACTIONS).optional(),
+  input_fidelity: z.enum(CODEX_IMAGE_GENERATION_INPUT_FIDELITIES).optional(),
+  edit_image_id: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Prior Browser Ask Agent session image ID to edit."),
+  mask_image_id: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Prior Browser Ask Agent session PNG image ID to use as the edit mask.",
+    ),
   count: z.coerce.number().int().min(1).max(4).optional(),
   reference_image_ids: z
     .array(z.string())
@@ -365,29 +402,35 @@ export const ASK_AGENT_SAFE_PROJECTLESS_TOOLS: CoreModelToolDefinition[] = [
   },
   {
     name: "todo_write",
-    description: `Create and manage a structured task list for the current Ask Agent turn. Replaces the whole visible todo list. This is session UI state only and performs no workspace, shell, or editor side effects. ${TODO_COMPACTION_GUIDANCE}`,
+    description: `Create and manage a structured task list for the current Ask Agent turn. Replaces the whole visible todo list. This is session UI state only and performs no workspace, shell, or editor side effects. Tool calls and response text do not update it automatically, so call todo_write at each real task transition. ${TODO_COMPACTION_GUIDANCE}`,
     input_schema: {
       type: "object",
       properties: {
         todos: {
           type: "array",
-          items: {
-            type: "object",
-            properties: {
-              id: { type: "string" },
-              content: { type: "string" },
-              activeForm: { type: "string" },
-              status: {
-                type: "string",
-                enum: ["pending", "in_progress", "completed"],
-              },
-              children: { type: "array", items: { type: "object" } },
-            },
-            required: ["id", "content", "activeForm", "status"],
-          },
+          items: { $ref: "#/$defs/todoItem" },
         },
       },
       required: ["todos"],
+      $defs: {
+        todoItem: {
+          type: "object",
+          properties: {
+            id: { type: "string", minLength: 1, pattern: "\\S" },
+            content: { type: "string", minLength: 1, pattern: "\\S" },
+            activeForm: { type: "string", minLength: 1, pattern: "\\S" },
+            status: {
+              type: "string",
+              enum: ["pending", "in_progress", "completed"],
+            },
+            children: {
+              type: "array",
+              items: { $ref: "#/$defs/todoItem" },
+            },
+          },
+          required: ["id", "content", "activeForm", "status"],
+        },
+      },
     },
   },
   {

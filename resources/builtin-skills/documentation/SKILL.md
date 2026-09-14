@@ -1,6 +1,6 @@
 ---
 name: documentation
-description: Answer questions about AgentLink's VS Code extension, including installation, onboarding, Codex/OpenAI/Anthropic setup, settings, tools, MCP, Agent Plugins, approvals, browser remote, codebase indexing, skills, modes, troubleshooting, and contributing. Use when users ask how AgentLink works, what a feature or setting does, how to configure it, or why an AgentLink behavior occurs.
+description: Answer questions about AgentLink's VS Code extension and private standalone CLI, including installation, onboarding, providers, settings, tools, MCP, approvals, browser remote, indexing, skills, modes, troubleshooting, and contributing. Use when users ask how AgentLink works, what a feature or setting does, how to configure it, or why an AgentLink behavior occurs.
 ---
 
 # AgentLink Documentation
@@ -26,6 +26,7 @@ Load the smallest relevant reference page directly with `load_skill`:
 
 | User question                                                                                                                                                     | Load                                                                                                                  |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Install or use the private standalone CLI; terminal chat, CLI providers, sessions, storage, limits, commands, or current slice boundaries                         | `references/standalone-cli.md`                                                                                        |
 | Embed AgentLink in an app, desktop runtime, CLI, or cloud service; SDK package architecture; host tools, sessions, approvals, or migration from another agent SDK | `references/embedding-agentlink.md`                                                                                   |
 | What AgentLink is, modes, chat surfaces, context, memory, editor entry points, or images                                                                          | `references/capabilities.md`, then `references/complete-reference.md` if it needs detailed behavior                   |
 | Install, update, first run, sign-in, providers, first task, or setup failure                                                                                      | `references/getting-started.md`, then `references/troubleshooting.md` or `references/complete-reference.md` if needed |

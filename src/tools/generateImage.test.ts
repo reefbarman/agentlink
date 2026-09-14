@@ -18,6 +18,7 @@ import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
 import {
   codexImageGenerationErrorMetadata,
   createCodexImageGenerationResultError,
+  validateCodexMaskedEdit,
 } from "../core/model/providers/codex/imageGeneration.js";
 
 import {
@@ -32,6 +33,10 @@ import {
 
 const tinyPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+const tinyRgbaPngBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4AWMAAQAABQABNtCI3QAAAABJRU5ErkJggg==";
+const tinyRgbPngBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACklEQVR4AWMAAgAABAABsYaQRAAAAABJRU5ErkJggg==";
 
 function sseResponse(events: unknown[]): Response {
   const body = events
@@ -105,7 +110,7 @@ describe("requestImageGenerationApprovalForTest", () => {
       "Reference images (1):\n- image_1 (hexaza.png)",
     );
     expect(approvalRequest?.detail).toContain(
-      "Generate for Session also authorizes later generate_image calls in this chat, including creation of new workspace PNG outputs.",
+      "Generate for Session also authorizes later legacy generate_image calls in this chat, including creation of new workspace PNG outputs.",
     );
     expect(onApprovalRequest.mock.calls[0]?.[1]).toBe("session-1");
   });
@@ -269,6 +274,338 @@ describe("handleGenerateImage", () => {
     ).toEqual(["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"]);
   });
 
+  it("forwards Image 2.5 output controls and saves the requested format", async () => {
+    vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
+      method: "apiKey",
+      bearerToken: "test-key",
+      canRefresh: false,
+    });
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      sseResponse([
+        {
+          type: "response.completed",
+          response: {
+            id: "response-image-1",
+            status: "completed",
+            usage: { input_tokens: 12, output_tokens: 34 },
+            output: [
+              {
+                id: "ig_advanced",
+                type: "image_generation_call",
+                status: "completed",
+                result: jpeg.toString("base64"),
+                revised_prompt: "A revised image prompt",
+              },
+            ],
+          },
+        },
+      ]),
+    );
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-image-output-"),
+    );
+    const outputPath = path.join(dir, "result.jpg");
+
+    try {
+      const result = await handleGenerateImage(
+        {
+          prompt: "Create a wide transparent-compatible test asset",
+          image_model: "gpt-image-2.5-sunburst",
+          output_path: outputPath,
+          output_size: "1536x864",
+          quality: "max",
+          background: "opaque",
+          output_format: "jpeg",
+          output_compression: 70,
+          action: "generate",
+          input_fidelity: "high",
+        },
+        { isBuiltInToolApproved: vi.fn().mockReturnValue(false) } as never,
+        "session-1",
+        vi.fn<OnApprovalRequest>(async () => ({ decision: "accept" })),
+      );
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const request = fetchMock.mock.calls[0]![1] as RequestInit;
+      const body = JSON.parse(String(request.body));
+      expect(body.tools[0]).toMatchObject({
+        type: "image_generation",
+        model: "gpt-image-2.5-sunburst",
+        size: "1536x864",
+        quality: "max",
+        background: "opaque",
+        output_format: "jpeg",
+        output_compression: 70,
+        action: "generate",
+        input_fidelity: "high",
+      });
+      const text =
+        result.content[0]?.type === "text" ? result.content[0].text : "";
+      expect(JSON.parse(text)).toMatchObject({
+        status: "accepted",
+        response_id: "response-image-1",
+        usage: { input_tokens: 12, output_tokens: 34 },
+        requested_options: {
+          output_size: "1536x864",
+          quality: "max",
+          background: "opaque",
+          output_format: "jpeg",
+          output_compression: 70,
+          action: "generate",
+          input_fidelity: "high",
+        },
+        images: [
+          {
+            path: outputPath,
+            mimeType: "image/jpeg",
+            output_format: "jpeg",
+            provider_id: "ig_advanced",
+            revised_prompt: "A revised image prompt",
+          },
+        ],
+      });
+      await expect(fs.readFile(outputPath)).resolves.toEqual(jpeg);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns paid image bytes inline when the requested file format mismatches", async () => {
+    vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
+      method: "apiKey",
+      bearerToken: "test-key",
+      canRefresh: false,
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      sseResponse([
+        {
+          type: "response.image_generation_call.completed",
+          item_id: "ig_mismatch",
+          output_index: 0,
+          result: tinyPngBase64,
+          output_format: "png",
+        },
+      ]),
+    );
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-image-mismatch-"),
+    );
+    const outputPath = path.join(dir, "result.webp");
+
+    try {
+      const result = await handleGenerateImage(
+        {
+          prompt: "Create a test asset",
+          output_path: outputPath,
+          output_format: "webp",
+        },
+        { isBuiltInToolApproved: vi.fn().mockReturnValue(false) } as never,
+        "session-1",
+        vi.fn<OnApprovalRequest>(async () => ({ decision: "accept" })),
+      );
+      const text =
+        result.content[0]?.type === "text" ? result.content[0].text : "";
+
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(text)).toMatchObject({
+        error:
+          "Generated image bytes do not match requested webp output format",
+        generated_count: 1,
+        completed_images: [
+          expect.objectContaining({
+            mimeType: "image/png",
+            provider_id: "ig_mismatch",
+          }),
+        ],
+      });
+      expect(result.content).toContainEqual({
+        type: "image",
+        data: tinyPngBase64,
+        mimeType: "image/png",
+      });
+      await expect(fs.access(outputPath)).rejects.toThrow();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unverified advanced OAuth controls before approval or generation", async () => {
+    vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
+      method: "oauth",
+      bearerToken: "oauth-token",
+      accountId: "account-1",
+      oauthAccountPoolId: "pool-1",
+      canRefresh: true,
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const onApprovalRequest = vi.fn<OnApprovalRequest>();
+
+    const result = await handleGenerateImage(
+      { prompt: "Create an image", quality: "xhigh" },
+      { isBuiltInToolApproved: vi.fn().mockReturnValue(false) } as never,
+      "session-1",
+      onApprovalRequest,
+    );
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(text).error).toContain(
+      "Codex OAuth support is not yet verified for image option: quality",
+    );
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("places an explicit edit target first and forwards a session mask", async () => {
+    vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
+      method: "apiKey",
+      bearerToken: "test-key",
+      canRefresh: false,
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      sseResponse([
+        {
+          type: "response.image_generation_call.completed",
+          item_id: "ig_edit",
+          output_index: 0,
+          result: tinyPngBase64,
+          output_format: "png",
+        },
+      ]),
+    );
+    const sessionImages = [
+      {
+        id: "image_1",
+        name: "target.png",
+        mimeType: "image/png",
+        base64: tinyRgbaPngBase64,
+        messageIndex: 0,
+        imageIndex: 0,
+      },
+      {
+        id: "image_2",
+        name: "mask.png",
+        mimeType: "image/png",
+        base64: tinyRgbaPngBase64,
+        messageIndex: 1,
+        imageIndex: 0,
+      },
+    ];
+
+    const result = await handleGenerateImage(
+      {
+        prompt: "Change only the selected area",
+        action: "edit",
+        edit_image_id: "image_1",
+        mask_image_id: "image_2",
+      },
+      { isBuiltInToolApproved: vi.fn().mockReturnValue(false) } as never,
+      "session-1",
+      vi.fn<OnApprovalRequest>(async () => ({ decision: "accept" })),
+      () => sessionImages,
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const request = fetchMock.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(String(request.body));
+    expect(body.input[0].content[1].image_url).toBe(
+      `data:image/png;base64,${tinyRgbaPngBase64}`,
+    );
+    expect(body.tools[0]).toMatchObject({
+      action: "edit",
+      input_image_mask: {
+        image_url: `data:image/png;base64,${tinyRgbaPngBase64}`,
+      },
+    });
+  });
+
+  it("does not retry after a preview frame from a retryable failure", async () => {
+    vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
+      method: "apiKey",
+      bearerToken: "test-key",
+      canRefresh: false,
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      sseResponse([
+        {
+          type: "response.image_generation_call.partial_image",
+          item_id: "ig_preview",
+          output_index: 0,
+          partial_image_index: 0,
+          partial_image_b64: tinyPngBase64,
+        },
+        {
+          type: "response.error",
+          error: { code: "server_unavailable", message: "try later" },
+        },
+      ]),
+    );
+
+    const result = await handleGenerateImage(
+      { prompt: "Create a test image" },
+      { isBuiltInToolApproved: vi.fn().mockReturnValue(true) } as never,
+      "session-1",
+    );
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(text)).toMatchObject({
+      failure_category: "provider_error",
+      retryable: true,
+      generated_count: 0,
+      partial_count: 1,
+      partial_images: [
+        expect.objectContaining({
+          provider_id: "ig_preview",
+          event_type: "response.image_generation_call.partial_image",
+        }),
+      ],
+    });
+  });
+
+  it("does not retry a zero-byte failure after quota was consumed", async () => {
+    vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
+      method: "apiKey",
+      bearerToken: "test-key",
+      canRefresh: false,
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      sseResponse([
+        {
+          type: "response.incomplete",
+          quota_consumed: true,
+          response: {
+            status: "incomplete",
+            incomplete_details: { reason: "provider_timeout" },
+          },
+        },
+      ]),
+    );
+
+    const result = await handleGenerateImage(
+      { prompt: "Create a test image" },
+      { isBuiltInToolApproved: vi.fn().mockReturnValue(true) } as never,
+      "session-1",
+    );
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(text)).toMatchObject({
+      failure_category: "incomplete",
+      retryable: true,
+      quota_consumed: true,
+      generated_count: 0,
+      provider_code: "provider_timeout",
+    });
+  });
+
   it("rejects unsupported image model names before requesting auth", async () => {
     const resolveAuth = vi.spyOn(openAiCodexAuthManager, "resolveModelAuth");
 
@@ -354,6 +691,28 @@ describe("handleGenerateImage", () => {
       oauthAccountPoolId: "pool-1",
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("shared masked-edit validation", () => {
+  it("rejects a PNG mask without an alpha channel", () => {
+    const image = {
+      id: "session:image_1",
+      label: "image_1 (target.png)",
+      mimeType: "image/png",
+      base64: tinyRgbaPngBase64,
+      source: "session" as const,
+    };
+    expect(() =>
+      validateCodexMaskedEdit({
+        editImage: image,
+        maskImage: {
+          ...image,
+          id: "session:image_2",
+          base64: tinyRgbPngBase64,
+        },
+      }),
+    ).toThrow("mask image must contain an alpha channel");
   });
 });
 
@@ -596,7 +955,7 @@ describe("parseCodexImageSseForTest", () => {
     tempDirs.length = 0;
   });
 
-  it("updates the same output file for multiple partials of one image", async () => {
+  it("keeps multiple partials separate from the completed output", async () => {
     const dir = await fs.mkdtemp(
       path.join(os.tmpdir(), "agentlink-image-test-"),
     );
@@ -621,9 +980,16 @@ describe("parseCodexImageSseForTest", () => {
           item_id: "ig_1",
           output_index: 0,
           partial_image_index: 1,
-          partial_image_b64: Buffer.from("final").toString("base64"),
+          partial_image_b64: Buffer.from("second").toString("base64"),
           size: "1024x1024",
           quality: "medium",
+          output_format: "png",
+        },
+        {
+          type: "response.image_generation_call.completed",
+          item_id: "ig_1",
+          output_index: 0,
+          result: Buffer.from("final").toString("base64"),
           output_format: "png",
         },
       ]),
@@ -640,13 +1006,20 @@ describe("parseCodexImageSseForTest", () => {
       base64: Buffer.from("final").toString("base64"),
       size: "1024x1024",
       quality: "medium",
+      provider_id: "ig_1",
     });
+    expect(result.partialImages).toEqual([
+      expect.objectContaining({
+        base64: Buffer.from("second").toString("base64"),
+        event_type: "response.image_generation_call.partial_image",
+      }),
+    ]);
     await expect(fs.readFile(targets[0].absolutePath, "utf8")).resolves.toBe(
       "final",
     );
   });
 
-  it("maps distinct image_generation items to distinct targets", async () => {
+  it("keeps distinct partial image_generation items out of final targets", async () => {
     const dir = await fs.mkdtemp(
       path.join(os.tmpdir(), "agentlink-image-test-"),
     );
@@ -674,16 +1047,13 @@ describe("parseCodexImageSseForTest", () => {
       generatedImages: writtenImages,
     });
 
-    expect(result.images.map((image) => image.path)).toEqual([
-      "image-1.png",
-      "image-2.png",
+    expect(result.images).toEqual([]);
+    expect(result.partialImages.map((image) => image.base64)).toEqual([
+      Buffer.from("one").toString("base64"),
+      Buffer.from("two").toString("base64"),
     ]);
-    await expect(fs.readFile(targets[0].absolutePath, "utf8")).resolves.toBe(
-      "one",
-    );
-    await expect(fs.readFile(targets[1].absolutePath, "utf8")).resolves.toBe(
-      "two",
-    );
+    await expect(fs.access(targets[0].absolutePath)).rejects.toThrow();
+    await expect(fs.access(targets[1].absolutePath)).rejects.toThrow();
   });
 
   it("collects image payloads without writing files when no targets are provided", async () => {
@@ -703,7 +1073,8 @@ describe("parseCodexImageSseForTest", () => {
       generatedImages,
     });
 
-    expect(result.images[0]).toEqual(
+    expect(result.images).toEqual([]);
+    expect(result.partialImages[0]).toEqual(
       expect.objectContaining({
         bytes: Buffer.byteLength("display-only"),
         mimeType: "image/png",
@@ -711,8 +1082,50 @@ describe("parseCodexImageSseForTest", () => {
         event_type: "response.image_generation_call.partial_image",
       }),
     );
-    expect(result.images[0].path).toBeUndefined();
+    expect((result.partialImages[0] as GeneratedImage).path).toBeUndefined();
     expect(generatedImages).toBe(result.images);
+  });
+
+  it("does not let unkeyed partials consume completed-output slots", async () => {
+    const finalBase64 = Buffer.from("completed-at-cap").toString("base64");
+    const result = await parseCodexImageSseForTest({
+      response: sseResponse([
+        {
+          type: "response.image_generation_call.partial_image",
+          partial_image_index: 0,
+          partial_image_b64: Buffer.from("preview-one").toString("base64"),
+        },
+        {
+          type: "response.image_generation_call.partial_image",
+          partial_image_index: 1,
+          partial_image_b64: Buffer.from("preview-two").toString("base64"),
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            id: "ig_final",
+            type: "image_generation_call",
+            status: "completed",
+            result: finalBase64,
+          },
+        },
+      ]),
+      maxImages: 1,
+      generatedImages: [],
+    });
+
+    expect(result.partialImages).toEqual([
+      expect.objectContaining({
+        base64: Buffer.from("preview-two").toString("base64"),
+      }),
+    ]);
+    expect(result.images).toEqual([
+      expect.objectContaining({
+        base64: finalBase64,
+        provider_id: "ig_final",
+      }),
+    ]);
   });
 
   it("collects the final result from a completed output item", async () => {
@@ -948,7 +1361,7 @@ describe("parseCodexImageSseForTest", () => {
     });
   });
 
-  it("records partial files in the shared writtenImages array", async () => {
+  it("does not record partial files in the shared completed-image array", async () => {
     const dir = await fs.mkdtemp(
       path.join(os.tmpdir(), "agentlink-image-test-"),
     );
@@ -970,11 +1383,7 @@ describe("parseCodexImageSseForTest", () => {
       generatedImages: writtenImages,
     });
 
-    expect(writtenImages).toEqual([
-      expect.objectContaining({
-        path: "image-1.png",
-        event_type: "response.image_generation_call.partial_image",
-      }),
-    ]);
+    expect(writtenImages).toEqual([]);
+    await expect(fs.access(targets[0].absolutePath)).rejects.toThrow();
   });
 });

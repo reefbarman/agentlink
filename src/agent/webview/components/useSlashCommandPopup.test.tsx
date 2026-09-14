@@ -34,12 +34,18 @@ const commands: SlashCommandInfo[] = [
   },
 ];
 
-function Harness({ matchedName }: { matchedName?: string }) {
+function Harness({
+  matchedName,
+  commandList = commands,
+}: {
+  matchedName?: string;
+  commandList?: SlashCommandInfo[];
+}) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const matchedCommand =
-    commands.find((command) => command.name === matchedName) ?? null;
+    commandList.find((command) => command.name === matchedName) ?? null;
   const popup = useSlashCommandPopup({
-    commands,
+    commands: commandList,
     modes: [
       { slug: "code", name: "Code", icon: "code" },
       { slug: "ask", name: "Ask", icon: "question" },
@@ -143,6 +149,29 @@ describe("useSlashCommandPopup", () => {
     fireEvent.click(getByText("substring"));
 
     expect(state(container).commands).toEqual(["refresh", "mcp-refresh"]);
+  });
+
+  it("selects an exact match after grouping commands by source", () => {
+    const commandList: SlashCommandInfo[] = [
+      {
+        name: "mcp-tools",
+        description: "Project MCP tools",
+        source: "project",
+        builtin: false,
+      },
+      ...commands,
+    ];
+    const { container, getByText } = render(
+      <Harness matchedName="mcp" commandList={commandList} />,
+    );
+
+    fireEvent.click(getByText("open"));
+    fireEvent.click(getByText("args"));
+
+    expect(state(container)).toMatchObject({
+      commands: ["mcp-tools", "mcp", "mcp-refresh"],
+      selectedIndex: 1,
+    });
   });
 
   it("builds subviews, navigates back, and wraps selection", () => {

@@ -2,12 +2,25 @@
 
 ## Unreleased
 
+- Replaced the standalone CLI's hand-written launch-command parser with Commander. Incomplete command groups now show contextual help, unknown commands and subcommands suggest close matches, missing option values show the relevant command usage, and parsing failures return standard nonzero exit codes without starting host state.
+
+- Fixed automatic write/edit review opens and tab cleanup stealing keyboard focus. Explicitly opening a pending diff still focuses it. Save without Formatting retains its existing editor-activation requirement.
+
+- Fixed cancelled MCP connection and OAuth attempts retaining shared connection queues or reconnecting after disconnect. VS Code-backed sign-in now cancels pending prompts and callbacks, releases authorization leases, and expires unanswered refresh-failure prompts after 60 seconds.
+
+- Made Approve for Me more resilient during unattended work: Guardian reviews now share a five-minute end-to-end deadline with up to five bounded attempts and short cancellation-aware backoff, so one stalled provider call cannot consume every retry opportunity. Malformed responses retry with corrective JSON-only guidance alongside provider failures before falling back to human approval. Explicit denials and cancellation remain fail-closed and are never retried.
+
+- Enabled image generation in Architect mode for visual exploration during planning and design without granting general file-editing tools. Architect can display generated images inline or save them to a reviewed workspace output path.
+
+- Added the private standalone CLI MVP for macOS Apple Silicon: an installable terminal coding executable, reusable workspace host, canonical per-project durable sessions, Codex OAuth/OpenAI/OpenAI-compatible provider setup, bounded project-relative read/search/context tools backed by a pinned packaged ripgrep binary, terminal-reviewed baseline-hash writes and canonical patches, exact reviewed non-PTY commands with retained process output, approved stdio and HTTPS MCP tools, up to two scoped background writers, and optional managed TypeScript/JavaScript intelligence. The tarball has an exact file allowlist, generated licences for bundled dependencies, no unpublished or repository-relative runtime dependencies, and only the exact public `@napi-rs/keyring` native dependency closure. Broader platforms, sandbox confinement, interactive PTYs, and public distribution remain deferred.
+- Moved the shared Node-specific Codex OAuth account-pool implementation into `@agentlink/node-host` with compatibility re-exports for existing extension consumers. VS Code, Browser Ask Agent, AgentLink Desktop, and the CLI continue to share the same Keychain schema, account selection, refresh, and usage-limit state.
+
 - Fixed background reviews falsely completing without output: text reviews now receive the same bounded finalization recovery as structured reviews, including empty responses before budget warnings. Empty text results are rejected, unsuccessful native/ACP stops preserve partial output without claiming success, and lightweight review prompts survive policy/model rebuilds.
 
 - Upgraded image generation to GPT-Image-2.5. Agent tools now default to Flare for fast exploration and user alignment, support Sunburst for polished final assets, and can refine selected session images across both VS Code and Browser Ask Agent.
 
 - Added a private Node SDK client for request-scoped text, text streaming, typed JSON, and bounded tool workflows without session or lease storage. Generic OpenAI-compatible, standalone OpenAI Responses API-key, and standalone Codex OAuth providers support request-scoped credentials and bounded execution. Responses preserve authoritative refusal/truncation evidence, map supported native JSON Schema to `text.format`, and reject unsupported endpoint/model options before dispatch.
-- Shared explicit mode, per-mode model/thinking, and per-model compaction preferences across VS Code windows and workspaces. Fresh chats use the latest shared defaults, while active and restored sessions retain their own settings. Automatic switches and fallbacks no longer overwrite user preferences.
+- Shared explicit mode, per-mode model/thinking, and per-model compaction preferences across VS Code, AgentLink Desktop/Work, Browser Ask Agent, and the standalone CLI through `~/.agentlink/session-preferences.json`. VS Code imports existing User Settings once and no longer rewrites `settings.json` from picker changes, avoiding hidden dirty-settings conflicts. Fresh chats use the latest shared defaults, while active and restored sessions retain their own settings. Automatic switches and fallbacks do not overwrite user preferences.
 
 - Added direct memory creation and editing to the shared `/memory` manager in VS Code and Browser Ask Agent, with revision-safe saves, retained drafts on rejection, expandable source evidence and revision history, keyboard search, reset filters, and clearer scope-wide clear confirmation. Automatic capture and recall are unchanged.
 

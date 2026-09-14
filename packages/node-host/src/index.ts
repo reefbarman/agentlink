@@ -1,3 +1,5 @@
+export * from "./codexOAuthManager.js";
+export * from "./codexOAuthRuntime.js";
 export * from "./commandTools.js";
 export * from "./fileStateRepository.js";
 export * from "./instructionCatalog.js";
@@ -12,4 +14,7 @@ export * from "./mcpResourcePrompts.js";
 export * from "./mcpStdioTools.js";
 export * from "./nodeHostAgent.js";
 export * from "./readTools.js";
+export * from "./sessionPreferences.js";
+export * from "./sharedOpenAiCompatibleConfig.js";
+export * from "./sharedOpenAiCompatibleCredentials.js";
 export * from "./writeTools.js";

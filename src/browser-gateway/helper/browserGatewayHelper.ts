@@ -145,14 +145,29 @@ import {
   normalizeBrowserGatewayModelCredentialProviderId,
 } from "../browserGatewayModelProviderIds.js";
 import {
+  assertCodexImageGenerationOptionsSupported,
+  CODEX_IMAGE_GENERATION_ACTIONS,
+  CODEX_IMAGE_GENERATION_BACKGROUNDS,
   CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS,
+  CODEX_IMAGE_GENERATION_INPUT_FIDELITIES,
   CODEX_IMAGE_GENERATION_MAX_COUNT,
+  CODEX_IMAGE_GENERATION_MAX_REFERENCE_IMAGES,
+  CODEX_IMAGE_GENERATION_OUTPUT_FORMATS,
+  CODEX_IMAGE_GENERATION_QUALITIES,
+  CodexImageGenerationError,
   codexGeneratedImageMetadata,
   codexImageGenerationErrorMetadata,
   generateCodexImages,
   normalizeCodexImageGenerationModel,
+  validateCodexMaskedEdit,
   type CodexGeneratedImage,
+  type CodexImageGenerationAction,
+  type CodexImageGenerationBackground,
+  type CodexImageGenerationInputFidelity,
   type CodexImageGenerationModel,
+  type CodexImageGenerationOptions,
+  type CodexImageGenerationOutputFormat,
+  type CodexImageGenerationQuality,
   type CodexImageReferenceImage,
 } from "../../core/model/providers/codex/imageGeneration.js";
 import {
@@ -200,7 +215,6 @@ import type {
 } from "@agentlink/protocol/final-status";
 import { handleTodoWrite, type TodoToolInput } from "../../agent/todoTool.js";
 import { handlePresentImages } from "../../tools/presentImages.js";
-import { resolveSessionReferenceImages } from "../../tools/generateImage.js";
 import {
   handleManageMemory,
   handleRecallMemory,
@@ -6158,10 +6172,19 @@ export class BrowserGatewayHelper {
     count: number;
     imageModel: CodexImageGenerationModel;
     size?: string;
+    options: CodexImageGenerationOptions;
+    editImage?: CodexImageReferenceImage;
     referenceImages: CodexImageReferenceImage[];
+    providerReferenceImages: CodexImageReferenceImage[];
     timeoutMs: number;
+    advanced: boolean;
   } {
-    for (const forbidden of ["output_path", "reference_image_paths"]) {
+    for (const forbidden of [
+      "output_path",
+      "reference_image_paths",
+      "edit_image_path",
+      "mask_image_path",
+    ]) {
       if (Object.hasOwn(input, forbidden)) {
         throw new Error(
           `Ask Agent generate_image does not support ${forbidden}; browser Ask Agent image generation is display-only and cannot read or write local files.`,
@@ -6180,6 +6203,83 @@ export class BrowserGatewayHelper {
       typeof input.size === "string" && input.size.trim()
         ? input.size.trim()
         : undefined;
+    const outputSize = this.normalizeAskAgentOutputSize(input.output_size);
+    if (size && outputSize) {
+      throw new Error("size and output_size cannot be combined");
+    }
+    const quality =
+      this.normalizeAskAgentImageEnum<CodexImageGenerationQuality>(
+        input.quality,
+        CODEX_IMAGE_GENERATION_QUALITIES,
+        "quality",
+      );
+    const background =
+      this.normalizeAskAgentImageEnum<CodexImageGenerationBackground>(
+        input.background,
+        CODEX_IMAGE_GENERATION_BACKGROUNDS,
+        "background",
+      );
+    const outputFormat =
+      this.normalizeAskAgentImageEnum<CodexImageGenerationOutputFormat>(
+        input.output_format,
+        CODEX_IMAGE_GENERATION_OUTPUT_FORMATS,
+        "output_format",
+      );
+    const outputCompression = this.normalizeAskAgentOutputCompression(
+      input.output_compression,
+    );
+    const requestedAction =
+      this.normalizeAskAgentImageEnum<CodexImageGenerationAction>(
+        input.action,
+        CODEX_IMAGE_GENERATION_ACTIONS,
+        "action",
+      );
+    const inputFidelity =
+      this.normalizeAskAgentImageEnum<CodexImageGenerationInputFidelity>(
+        input.input_fidelity,
+        CODEX_IMAGE_GENERATION_INPUT_FIDELITIES,
+        "input_fidelity",
+      );
+    const editImage = this.resolveAskAgentSessionImage(
+      input.edit_image_id,
+      "edit_image_id",
+    );
+    const maskImage = this.resolveAskAgentSessionImage(
+      input.mask_image_id,
+      "mask_image_id",
+    );
+    if (requestedAction === "edit" && !editImage) {
+      throw new Error("action edit requires edit_image_id");
+    }
+    if (requestedAction === "generate" && (editImage || maskImage)) {
+      throw new Error(
+        "action generate cannot be combined with an edit target or mask",
+      );
+    }
+    if (maskImage && !editImage) {
+      throw new Error("A mask requires edit_image_id");
+    }
+    validateCodexMaskedEdit({ editImage, maskImage });
+    if (background === "transparent" && outputFormat === "jpeg") {
+      throw new Error("transparent backgrounds require PNG or WebP output");
+    }
+    if (
+      outputCompression !== undefined &&
+      !["jpeg", "webp"].includes(outputFormat ?? "")
+    ) {
+      throw new Error("output_compression requires JPEG or WebP output");
+    }
+    const action = editImage || maskImage ? "edit" : requestedAction;
+    const options: CodexImageGenerationOptions = {
+      ...(outputSize ? { outputSize } : {}),
+      ...(quality ? { quality } : {}),
+      ...(background ? { background } : {}),
+      ...(outputFormat ? { outputFormat } : {}),
+      ...(outputCompression !== undefined ? { outputCompression } : {}),
+      ...(action ? { action } : {}),
+      ...(inputFidelity ? { inputFidelity } : {}),
+      ...(maskImage ? { maskImage } : {}),
+    };
     const numericTimeoutSeconds = Number(
       input.timeout_seconds ?? CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS / 1000,
     );
@@ -6190,7 +6290,7 @@ export class BrowserGatewayHelper {
             CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS,
           )
         : CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS;
-    const referenceImages = resolveSessionReferenceImages({
+    const referenceImages = this.resolveAskAgentSessionImages({
       referenceImageIds: Array.isArray(input.reference_image_ids)
         ? input.reference_image_ids.filter(
             (id): id is string =>
@@ -6204,9 +6304,162 @@ export class BrowserGatewayHelper {
               Number(input.use_recent_images) > 0
             ? Number(input.use_recent_images)
             : false,
-      getSessionImages: () => this.askAgentSessionStore.getSessionImages(),
     });
-    return { prompt, count, imageModel, size, referenceImages, timeoutMs };
+    const providerReferenceImages = [
+      ...(editImage ? [editImage] : []),
+      ...referenceImages,
+    ].filter(
+      (image, index, images) =>
+        images.findIndex((candidate) => candidate.id === image.id) === index,
+    );
+    if (
+      providerReferenceImages.length >
+      CODEX_IMAGE_GENERATION_MAX_REFERENCE_IMAGES
+    ) {
+      throw new Error(
+        `generate_image supports at most ${CODEX_IMAGE_GENERATION_MAX_REFERENCE_IMAGES} input images including the edit target`,
+      );
+    }
+    return {
+      prompt,
+      count,
+      imageModel,
+      size,
+      options,
+      editImage,
+      referenceImages,
+      providerReferenceImages,
+      timeoutMs,
+      advanced: Object.keys(options).length > 0,
+    };
+  }
+
+  private normalizeAskAgentImageEnum<T extends string>(
+    value: unknown,
+    values: readonly T[],
+    fieldName: string,
+  ): T | undefined {
+    if (value == null) return undefined;
+    if (typeof value === "string" && values.includes(value as T)) {
+      return value as T;
+    }
+    throw new Error(`${fieldName} must be one of: ${values.join(", ")}`);
+  }
+
+  private normalizeAskAgentOutputSize(value: unknown): string | undefined {
+    if (value == null) return undefined;
+    if (typeof value !== "string" || value.trim().length === 0) {
+      throw new Error("output_size must be auto or WIDTHxHEIGHT");
+    }
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "auto") return normalized;
+    const match = /^(\d+)x(\d+)$/.exec(normalized);
+    if (!match) throw new Error("output_size must be auto or WIDTHxHEIGHT");
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+    const pixels = width * height;
+    const ratio = width / height;
+    if (
+      width % 16 !== 0 ||
+      height % 16 !== 0 ||
+      width > 3840 ||
+      height > 3840 ||
+      ratio < 1 / 3 ||
+      ratio > 3 ||
+      pixels < 655_360 ||
+      pixels > 8_294_400
+    ) {
+      throw new Error(
+        "output_size dimensions must be multiples of 16, each no larger than 3840, use an aspect ratio from 1:3 to 3:1, and contain 655360 to 8294400 pixels",
+      );
+    }
+    return normalized;
+  }
+
+  private normalizeAskAgentOutputCompression(
+    value: unknown,
+  ): number | undefined {
+    if (value == null) return undefined;
+    const numeric = Number(value);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 100) {
+      throw new Error("output_compression must be an integer from 0 to 100");
+    }
+    return numeric;
+  }
+
+  private resolveAskAgentSessionImages(params: {
+    referenceImageIds: string[];
+    useRecentImages: boolean | number;
+  }): CodexImageReferenceImage[] {
+    const sessionImages = this.askAgentSessionStore.getSessionImages();
+    const byId = new Map(sessionImages.map((image) => [image.id, image]));
+    const selected = [];
+
+    for (const id of params.referenceImageIds) {
+      const image = byId.get(id);
+      if (!image) {
+        const available = sessionImages.map((item) => item.id).join(", ");
+        throw new Error(
+          `No prior session image found for reference_image_ids entry "${id}"${available ? `. Available image IDs: ${available}` : ""}`,
+        );
+      }
+      selected.push(image);
+    }
+
+    if (params.useRecentImages) {
+      const recentCount =
+        params.useRecentImages === true ? 4 : params.useRecentImages;
+      selected.push(...sessionImages.slice(-recentCount));
+    }
+
+    return selected.map((image) => {
+      const extensionMimeType = (() => {
+        switch (path.extname(image.name).toLowerCase()) {
+          case ".png":
+            return "image/png";
+          case ".jpg":
+          case ".jpeg":
+            return "image/jpeg";
+          case ".gif":
+            return "image/gif";
+          case ".webp":
+            return "image/webp";
+          default:
+            return null;
+        }
+      })();
+      const mimeType =
+        toCoreModelImageMediaType(image.mimeType) ??
+        (extensionMimeType
+          ? toCoreModelImageMediaType(extensionMimeType)
+          : null);
+      if (!mimeType) {
+        throw new Error(
+          `Prior session image "${image.id}" (${image.name}) has an unsupported MIME type: ${image.mimeType || "unknown"}`,
+        );
+      }
+      return {
+        id: `session:${image.id}`,
+        label: `${image.id} (${image.name})`,
+        mimeType,
+        base64: image.base64,
+        source: "session",
+      };
+    });
+  }
+
+  private resolveAskAgentSessionImage(
+    value: unknown,
+    fieldName: string,
+  ): CodexImageReferenceImage | undefined {
+    if (value == null) return undefined;
+    if (typeof value !== "string" || value.trim().length === 0) {
+      throw new Error(`${fieldName} must be a non-empty string`);
+    }
+    return this.resolveAskAgentSessionImages({
+      referenceImageIds: [value.trim()],
+      useRecentImages: false,
+    })[0];
   }
 
   private executeAskAgentPresentImagesTool(
@@ -6258,9 +6511,12 @@ export class BrowserGatewayHelper {
     count: number;
     imageModel: CodexImageGenerationModel;
     size?: string;
+    options: CodexImageGenerationOptions;
+    editImage?: CodexImageReferenceImage;
     referenceImages: CodexImageReferenceImage[];
     billing: string;
     signal: AbortSignal;
+    advanced: boolean;
   }): Promise<DecisionMessage> {
     if (this.askAgentMemoryProposalBridge.getPendingApproval()) {
       throw new Error("An Ask Agent memory approval is already pending");
@@ -6273,7 +6529,28 @@ export class BrowserGatewayHelper {
       `Generation prompt:\n${params.prompt}`,
       `Images: ${params.count}`,
       `Image model: ${params.imageModel}`,
-      params.size ? `Requested size: ${params.size}` : undefined,
+      params.size ? `Best-effort size hint: ${params.size}` : undefined,
+      params.options.outputSize
+        ? `Output size: ${params.options.outputSize}`
+        : undefined,
+      params.options.quality ? `Quality: ${params.options.quality}` : undefined,
+      params.options.background
+        ? `Background: ${params.options.background}`
+        : undefined,
+      params.options.outputFormat
+        ? `Output format: ${params.options.outputFormat}`
+        : undefined,
+      params.options.outputCompression !== undefined
+        ? `Output compression: ${params.options.outputCompression}`
+        : undefined,
+      params.options.action ? `Action: ${params.options.action}` : undefined,
+      params.options.inputFidelity
+        ? `Input fidelity: ${params.options.inputFidelity}`
+        : undefined,
+      params.editImage ? `Edit target: ${params.editImage.label}` : undefined,
+      params.options.maskImage
+        ? `Mask: ${params.options.maskImage.label}`
+        : undefined,
       params.referenceImages.length > 0
         ? `Reference images (${params.referenceImages.length}):`
         : undefined,
@@ -6282,7 +6559,9 @@ export class BrowserGatewayHelper {
       "Output: Ask Agent chat display only (no files will be written)",
       "",
       "Image generation consumes ChatGPT/Codex image quota or OpenAI API-key billing before images are returned to chat.",
-      "Generate for Session authorizes later display-only generate_image calls in this Ask Agent chat.",
+      params.advanced
+        ? "Advanced Image 2.5 controls and edits always require approval in Browser Ask Agent."
+        : "Generate for Session authorizes later display-only legacy generate_image calls in this Ask Agent chat.",
     ]
       .filter((line): line is string => line !== undefined)
       .join("\n");
@@ -6292,11 +6571,16 @@ export class BrowserGatewayHelper {
       filePath: `Generate ${params.count} image${params.count === 1 ? "" : "s"}?`,
       writeOperation: "modify",
       detail,
-      writeChoices: [
-        { label: "Generate", value: "accept", isPrimary: true },
-        { label: "Generate for Session", value: "accept-session" },
-        { label: "Deny", value: "reject", isDanger: true },
-      ],
+      writeChoices: params.advanced
+        ? [
+            { label: "Generate", value: "accept", isPrimary: true },
+            { label: "Deny", value: "reject", isDanger: true },
+          ]
+        : [
+            { label: "Generate", value: "accept", isPrimary: true },
+            { label: "Generate for Session", value: "accept-session" },
+            { label: "Deny", value: "reject", isDanger: true },
+          ],
     };
     const decisionPromise = this.askAgentController.requestApproval(
       request,
@@ -6351,17 +6635,19 @@ export class BrowserGatewayHelper {
           "generate_image requires refreshed Codex/OpenAI credentials from AgentLink's shared account store or a connected owner",
         );
       }
+      assertCodexImageGenerationOptionsSupported(credential, input.options);
       const billing =
         credential.method === "oauth"
           ? `ChatGPT/Codex OAuth quota (${credential.accountLabel ?? "active account"})`
           : "OpenAI API key billing";
-      const approval = this.askAgentSessionStore.isGenerateImageApproved()
-        ? ({ decision: "accept" } as DecisionMessage)
-        : await this.requestAskAgentGenerateImageApproval({
-            ...input,
-            billing,
-            signal,
-          });
+      const approval =
+        !input.advanced && this.askAgentSessionStore.isGenerateImageApproved()
+          ? ({ decision: "accept" } as DecisionMessage)
+          : await this.requestAskAgentGenerateImageApproval({
+              ...input,
+              billing,
+              signal,
+            });
       const approved =
         approval.decision === "accept" ||
         approval.decision === "accept-session";
@@ -6383,7 +6669,7 @@ export class BrowserGatewayHelper {
           ),
         };
       }
-      if (approval.decision === "accept-session") {
+      if (approval.decision === "accept-session" && !input.advanced) {
         this.askAgentSessionStore.approveGenerateImageForSession();
         await this.persistAskAgentHistory();
       }
@@ -6393,7 +6679,8 @@ export class BrowserGatewayHelper {
         count: input.count,
         imageModel: input.imageModel,
         size: input.size,
-        referenceImages: input.referenceImages,
+        options: input.options,
+        referenceImages: input.providerReferenceImages,
         timeoutMs: input.timeoutMs,
         generatedImages,
         sessionId: this.askAgentSessionStore.getActiveSessionId(),
@@ -6410,6 +6697,38 @@ export class BrowserGatewayHelper {
               billing,
               requested_count: input.count,
               generated_count: result.images.length,
+              requested_options: {
+                ...(input.options.outputSize
+                  ? { output_size: input.options.outputSize }
+                  : {}),
+                ...(input.options.quality
+                  ? { quality: input.options.quality }
+                  : {}),
+                ...(input.options.background
+                  ? { background: input.options.background }
+                  : {}),
+                ...(input.options.outputFormat
+                  ? { output_format: input.options.outputFormat }
+                  : {}),
+                ...(input.options.outputCompression !== undefined
+                  ? { output_compression: input.options.outputCompression }
+                  : {}),
+                ...(input.options.action
+                  ? { action: input.options.action }
+                  : {}),
+                ...(input.options.inputFidelity
+                  ? { input_fidelity: input.options.inputFidelity }
+                  : {}),
+                ...(input.options.maskImage
+                  ? {
+                      mask_image: {
+                        source: input.options.maskImage.source,
+                        label: input.options.maskImage.label,
+                        mime_type: input.options.maskImage.mimeType,
+                      },
+                    }
+                  : {}),
+              },
               saved: false,
               reference_images: input.referenceImages.map((image) => ({
                 source: image.source,
@@ -6417,6 +6736,8 @@ export class BrowserGatewayHelper {
                 mime_type: image.mimeType,
               })),
               images: codexGeneratedImageMetadata(result.images),
+              ...(result.responseId ? { response_id: result.responseId } : {}),
+              ...(result.usage ? { usage: result.usage } : {}),
               event_types: Array.from(new Set(result.eventTypes)),
               ...(approval.followUp ? { follow_up: approval.followUp } : {}),
             },
@@ -6424,14 +6745,21 @@ export class BrowserGatewayHelper {
             2,
           ),
         },
-        ...result.images.map((image) => ({
-          type: "image" as const,
-          source: {
-            type: "base64" as const,
-            media_type: "image/png" as const,
-            data: image.base64,
-          },
-        })),
+        ...result.images.flatMap((image) => {
+          const mediaType = toCoreModelImageMediaType(image.mimeType);
+          return mediaType
+            ? [
+                {
+                  type: "image" as const,
+                  source: {
+                    type: "base64" as const,
+                    media_type: mediaType,
+                    data: image.base64,
+                  },
+                },
+              ]
+            : [];
+        }),
       ];
       const resultImages = result.images.map((image) => ({
         mimeType: image.mimeType,
@@ -6461,7 +6789,14 @@ export class BrowserGatewayHelper {
         ...(generatedImages.length > 0
           ? {
               generated_count: generatedImages.length,
-              partial_images: codexGeneratedImageMetadata(generatedImages),
+              completed_images: codexGeneratedImageMetadata(generatedImages),
+            }
+          : {}),
+        ...(err instanceof CodexImageGenerationError &&
+        err.partialImages.length > 0
+          ? {
+              partial_count: err.partialImages.length,
+              partial_images: codexGeneratedImageMetadata(err.partialImages),
             }
           : {}),
       });

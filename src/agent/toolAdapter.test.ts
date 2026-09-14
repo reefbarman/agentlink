@@ -592,7 +592,7 @@ describe("tool usage telemetry project attribution", () => {
       input: { name: "generate_image", input },
       context: {
         sessionId: "test-session",
-        mode: "code",
+        mode: "architect",
         availableToolNames: new Set(["call_native_tool"]),
         modeAllowedToolNames: new Set(["generate_image"]),
         nativeToolDisclosure,
