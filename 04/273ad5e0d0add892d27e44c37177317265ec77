@@ -1,0 +1,428 @@
+packages/node-host/src/sharedOpenAiCompatibleConfig.ts
+  h_9630b74bdac540 1-269
+.oxfmtrc.json
+  h_9630b74bdac540 9
+apps/cli/src/tui/MarkdownText.tsx
+  h_9630b74bdac540 1-229
+apps/cli/src/tui/reactDevtoolsStub.ts
+  h_9630b74bdac540 1-5
+apps/cli/src/tui/inkRendererLifecycle.test.tsx
+  h_9630b74bdac540 1-145
+apps/cli/src/sessionController.test.ts
+  h_9630b74bdac540 1-656
+src/agent/ChatViewProvider.ts
+  h_9630b74bdac540 37,39,4510,4514,4549-4550,4552,4589-4590,4592,4707-4708,4710-4711,4744-4745,4747-4748,7659-7660,7662,7666-7667,7669,8467-8471
+packages/node-host/src/sharedOpenAiCompatibleCredentials.test.ts
+  h_9630b74bdac540 1-133
+apps/desktop/src/main.ts
+  h_9630b74bdac540 16-19,21-22,24-26,33,35,37,39,47,93-94,120-133,143-148,153,155-157,164-168,171-188,193-200,202-205,208-212,214-234,236-237,279-281,355,357-362,402,404,406-409,414,485-490,492,509
+apps/cli/src/tui/InkChatApp.tsx
+  h_9630b74bdac540 1-1175
+apps/cli/src/attachments.ts
+  h_9630b74bdac540 1-179
+apps/desktop/src/chatPreload.test.ts
+  h_9630b74bdac540 4-5,31-35,44-45,50-65,76-78
+packages/workspace-host/src/workspaceOwnership.ts
+  h_9630b74bdac540 1-491
+src/agent/McpOAuthProvider.test.ts
+  h_9630b74bdac540 1,9,11-36,61-338
+apps/cli/src/tui/InkChatApp.test.tsx
+  h_9630b74bdac540 1-194,196-211,213-1130
+packages/core/src/turnContracts.test.ts
+  h_9630b74bdac540 146,154-156
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_9630b74bdac540 1-229
+apps/cli/vitest.config.ts
+  h_9630b74bdac540 1-11
+packages/workspace-host/src/workspaceHostMcp.test.ts
+  h_9630b74bdac540 1-251
+apps/cli/src/tui/tuiShellState.test.ts
+  h_9630b74bdac540 1-217
+src/agent/sharedOpenAiCompatibleStorage.test.ts
+  h_9630b74bdac540 1-96
+src/agent/McpClientHub.test.ts
+  h_9630b74bdac540 64,67-68,299-331
+apps/cli/src/types.ts
+  h_9630b74bdac540 1-31
+src/approvals/networkApprovalReview.ts
+  h_9630b74bdac540 8-15,21-22,73,151-158,166-169,179,181-191,198,204
+packages/core/src/turnKernel.test.ts
+  h_9630b74bdac540 432-532,1305-1352
+packages/node-host/src/writeTools.ts
+  h_9630b74bdac540 10,138-143,145,150,152,156-158,225-228,234,236,241,243,449,465-467,490-491,593-594,607-613,618-626,628,634-675,677-694,696-713,716-733,739-742,744-747,770-771,774-792,794-803,813-832,834-838,882-883
+packages/node-host/src/writeTools.test.ts
+  h_9630b74bdac540 41,57,73,174,185-236,430,448
+src/browser-gateway/helper/askAgentModelClient.ts
+  h_9630b74bdac540 40-47,238,243-271,405,411-416,419-421,424,426-428,431
+apps/cli/README.md
+  h_9630b74bdac540 1-64
+apps/desktop/src/desktopOwnerRouting.test.ts
+  h_9630b74bdac540 1-46
+apps/cli/src/tui/controlTypes.ts
+  h_9630b74bdac540 1-37
+src/agent/webview/components/useSlashCommandPopup.ts
+  h_9630b74bdac540 9,65,173-191
+src/agent/todoTool.test.ts
+  h_9630b74bdac540 25-26,40-52,103-148,188-191,327-349
+packages/workspace-host/src/mcpConfig.test.ts
+  h_9630b74bdac540 1-249
+apps/desktop/src/setup.ts
+  h_9630b74bdac540 13-14,151-152,154-155,163-167
+packages/workspace-host/src/managedTypeScriptInstaller.test.ts
+  h_9630b74bdac540 1-297
+packages/node-host/src/codexOAuthManager.test.ts
+  h_9630b74bdac540 1-530
+packages/core/src/turnInteractions.ts
+  h_9630b74bdac540 37-39,48-52
+apps/cli/smoke-tui.mjs
+  h_9630b74bdac540 1-171
+packages/workspace-host/src/mcpConfig.ts
+  h_9630b74bdac540 1-565
+src/core/model/providers/codex/imageGeneration.ts
+  h_9630b74bdac540 3-4,13,24-69,84-141,152-153,170,178,199,201-202,211,241-260,269,272-273,276-277,280-299,321,342,344,354-355,357,363-364,381-382,398-399,401-403,405-407,410-413,415-421,423,428-431,453,455-456,479-481,487,601,608,620,637,647,652,660,664-706,767,772,777,779-780,812,831,833,848-849,861,870,872-873,879-881,890,895,902-903,906,908
+packages/workspace-host/src/mcpTools.test.ts
+  h_9630b74bdac540 1-222
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_9630b74bdac540 1348-1373,2379-2392,3420,4620,5616,6253
+apps/cli/src/mcpConfig.ts
+  h_9630b74bdac540 1-181
+packages/workspace-host/src/projectIdentity.test.ts
+  h_9630b74bdac540 1-36
+src/browser-gateway/helper/BrowserGatewayHelperLeaseClient.ts
+  h_9630b74bdac540 17,279-283
+packages/node-host/src/sessionPreferences.test.ts
+  h_9630b74bdac540 1-134
+apps/cli/tsconfig.json
+  h_9630b74bdac540 1-13
+src/agent/webview/components/InputArea.test.tsx
+  h_9630b74bdac540 258-301
+scripts/verify-retrieval-package.mjs
+  h_9630b74bdac540 34
+apps/desktop/src/chatPreload.ts
+  h_9630b74bdac540 2-5,10-16,18-31
+apps/desktop/src/desktopOpenAiCompatible.test.ts
+  h_9630b74bdac540 1-84
+apps/cli/src/mcpConfig.test.ts
+  h_9630b74bdac540 1-71
+packages/workspace-host/src/backgroundSupervisor.ts
+  h_9630b74bdac540 1-306,309-353,357-1154
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_9630b74bdac540 11-13,28-30,45-47,62-64,79-81,90-92,101-103,112-114,123-125,140-142,157-159,174-176,191-193,202-204,213-215,224-226,235-237,252-254,269-271,286-288,303-305,314-316,325-327,336-338,347-349,364-366,381-383,398-400,415-417,426-428,437-439,448-450,459-461,476-478,493-495,510-512,527-529,538-540,549-551,560-562,570-572,576-579,615-618,670-671,674
+src/agent/sharedSessionPreferences.ts
+  h_9630b74bdac540 3-31,36-37,39-42,60,65-75,78-101,103-105,108-187
+apps/cli/src/cli.ts
+  h_9630b74bdac540 1-338,340-549,551-2233
+packages/node-host/package.json
+  h_9630b74bdac540 18,20-25,29-30
+packages/core/src/client.ts
+  h_9630b74bdac540 265-267,899-910
+packages/workspace-host/src/managedTypeScriptEnablement.test.ts
+  h_9630b74bdac540 1-69
+src/agent/sharedOpenAiCompatibleStorage.ts
+  h_9630b74bdac540 1-72
+packages/node-host/src/index.ts
+  h_9630b74bdac540 1-2,17-19
+src/agent/toolAdapter.test.ts
+  h_9630b74bdac540 595
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_9630b74bdac540 26-31,43
+scripts/verify-cli-package.test.mjs
+  h_9630b74bdac540 1-82
+resources/builtin-skills/documentation/references/capabilities.md
+  h_9630b74bdac540 12,21-24,75-77,87-89
+packages/workspace-host/src/artifactTools.test.ts
+  h_9630b74bdac540 1-350
+packages/workspace-host/src/sessionInteractionTools.test.ts
+  h_9630b74bdac540 1-100
+apps/cli/src/tui/tuiShellState.ts
+  h_9630b74bdac540 1-508
+apps/cli/src/tui/ActivityShelf.test.tsx
+  h_9630b74bdac540 1-141
+packages/node-host/src/sharedOpenAiCompatibleCredentials.ts
+  h_9630b74bdac540 1-125
+apps/desktop/src/desktopModelCatalog.ts
+  h_9630b74bdac540 1-87
+packages/workspace-host/src/managedTypeScriptService.test.ts
+  h_9630b74bdac540 1-288
+src/shared/desktopBridge.ts
+  h_9630b74bdac540 1-4,18-19
+packages/workspace-host/src/mutationCoordinator.ts
+  h_9630b74bdac540 1-184
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_9630b74bdac540 148-150,152,154-157,162,164-166,168-170,6175-6176,6178,6180,6184-6186,6206-6282,6293,6308-6322,6328-6329,6331-6462,6514-6515,6519,6532-6552,6562-6564,6574-6579,6638,6644,6672,6682-6683,6700-6731,6739-6740,6748-6751,6756,6759-6762,6792-6799
+apps/cli/src/mcpOAuthRuntime.test.ts
+  h_9630b74bdac540 1-238
+packages/workspace-host/src/managedTypeScriptTools.test.ts
+  h_9630b74bdac540 1-217
+apps/cli/src/tui/MarkdownText.test.tsx
+  h_9630b74bdac540 1-95
+src/agent/McpClientHub.oauth.test.ts
+  h_9630b74bdac540 74-75,77,164-167,187,257-313,316-361
+apps/cli/src/tui/terminalText.ts
+  h_9630b74bdac540 1-28
+apps/cli/src/tui/ActivityShelf.tsx
+  h_9630b74bdac540 1-313
+apps/desktop/src/desktopAuth.ts
+  h_9630b74bdac540 3,5,10-11,26-29,32
+packages/workspace-host/src/managedTypeScriptEnablement.ts
+  h_9630b74bdac540 1-120
+resources/builtin-skills/documentation/references/getting-started.md
+  h_9630b74bdac540 30-33
+apps/desktop/src/desktopOpenAiCompatible.ts
+  h_9630b74bdac540 1-107
+packages/core/src/turnKernel.ts
+  h_9630b74bdac540 760-777,1008,1038-1044,1048,1058,1066-1068,1142,1152
+src/tools/executeCommand.test.ts
+  h_9630b74bdac540 154-279
+packages/workspace-host/src/fileTools.ts
+  h_9630b74bdac540 1-222,224-1359
+resources/builtin-skills/documentation/references/tools.md
+  h_9630b74bdac540 44-45,48-50,54,57,61,65-66,76
+apps/cli/src/config.ts
+  h_9630b74bdac540 1-246
+src/agent/todoTool.ts
+  h_9630b74bdac540 37,64-66,70-71,73,77-78,80,112-115,120-124,129-131,148-185,250
+apps/cli/src/attachments.test.ts
+  h_9630b74bdac540 1-71
+apps/cli/src/sessionController.ts
+  h_9630b74bdac540 1-638
+scripts/verify-cli-package.mjs
+  h_9630b74bdac540 1-267
+src/browser-gateway/helper/askAgentModelClient.test.ts
+  h_9630b74bdac540 34-51,193,200-205,209-215,220-230,237-247
+packages/node-host/build-cjs.mjs
+  h_9630b74bdac540 1-51
+src/tools/executeCommand.ts
+  h_9630b74bdac540 97-115,2032-2033,2513
+src/browser-gateway/webview/desktop.css
+  h_9630b74bdac540 552,556-557
+src/agent/McpClientHub.ts
+  h_9630b74bdac540 160,276,278,280-283,289-295,308-311,483-487,760-783,817,847-850,874,881,917,923-924,1053-1058,1061,1063-1064,1083,1097,1103,1107,1504-1505,1507-1516,1557,1559,1566,1582-1583,1595-1602,1604,1631,1722-1725,1731,1760-1762,1764-1767,1770-1773,1775-1778,1796,1806-1810
+packages/workspace-host/src/commandSupervisor.test.ts
+  h_9630b74bdac540 1-365
+packages/workspace-host/src/backgroundTools.ts
+  h_9630b74bdac540 1-324
+src/browser-gateway/browserGatewayAskAgentPreferences.ts
+  h_9630b74bdac540 7,111-112,121-122,127-132,141-175,186-196,198-199
+src/approvals/readOnlyCommandReview.ts
+  h_9630b74bdac540 2,9
+packages/node-host/src/codexOAuthManager.ts
+  h_9630b74bdac540 1-1403
+src/integrations/DiffViewProvider.ts
+  h_9630b74bdac540 232,234,238,357,362,420,435,823
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  h_9630b74bdac540 1023,1800-1917,1919-1939,3941-3942
+packages/workspace-host/src/workspaceHost.ts
+  h_9630b74bdac540 1-1056
+src/approvals/commandApprovalReview.test.ts
+  h_9630b74bdac540 276-279,307-308,319-419,529-530,532-537,549-610,819,828-829,833-836,842,848,861-897
+src/agent/sharedSessionPreferences.test.ts
+  h_9630b74bdac540 4-6,9,14-16,18-21,26-43,46-52,55-75,77,80,84,89-90
+src/approvals/actionApprovalReview.ts
+  h_9630b74bdac540 13,21
+packages/workspace-host/src/mcpTools.ts
+  h_9630b74bdac540 1-618
+packages/workspace-host/src/mutationCoordinator.test.ts
+  h_9630b74bdac540 1-86
+packages/node-host/src/sharedOpenAiCompatibleConfig.test.ts
+  h_9630b74bdac540 1-109
+apps/cli/src/mcpOAuthRuntime.ts
+  h_9630b74bdac540 1-246,248-429
+src/approvals/guardianReview.ts
+  h_9630b74bdac540 3-13,16-18,81,86-92,219-225,233-237,242,244,247-254,259-260,274-309,311-339
+src/shared/toolRegistry.ts
+  h_9630b74bdac540 114,116
+.agentlink/tasks.json
+  h_9630b74bdac540 20-22
+src/integrations/DiffViewProvider.test.ts
+  h_9630b74bdac540 164,167,172-180,182
+esbuild.mjs
+  h_9630b74bdac540 235-265,275,283
+apps/cli/src/main.ts
+  h_9630b74bdac540 1-71
+packages/workspace-host/src/modelRuntime.test.ts
+  h_9630b74bdac540 1-57
+packages/node-host/src/readTools.test.ts
+  h_9630b74bdac540 29,95
+src/agent/systemPrompt.ts
+  h_9630b74bdac540 167
+packages/protocol/src/embeddedAgentTransport.test.ts
+  h_9630b74bdac540 46,48-54,62,68,81-82,96-101
+packages/workspace-host/src/backgroundSupervisor.test.ts
+  h_9630b74bdac540 1-345
+src/tools/generateImage.ts
+  h_9630b74bdac540 7,10-11,13,15-17,21-24,26-28,43,50-60,99-159,229-245,248-249,338-359,389,391-400,449,452,455-456,458,473-486,500-502,516-517,519-523,526-530,540,584-602,607,615,634-638,643-649,654-661,664-686,692,694-695,702,720-722,730-731,760-792,794-817,824-831,833-853,855,866,881,884,912-913,922,930-931,948,956-957,966,975-976
+src/approvals/ApprovalPanelProvider.ts
+  h_9630b74bdac540 223-224,511-518,583-588,601,743-777,810-814,816-817,819,824-825,846-850,860-862,867,969-972,974-979,1255-1259
+packages/workspace-host/src/artifactTools.ts
+  h_9630b74bdac540 1-358
+apps/cli/licenses/yoga-layout-3.2.1-LICENSE
+  h_9630b74bdac540 1-19
+src/agent/systemPrompt.test.ts
+  h_9630b74bdac540 421-423
+packages/workspace-host/src/commandTools.test.ts
+  h_9630b74bdac540 1-277
+src/browser-gateway/helper/sharedCodexOAuth.ts
+  h_9630b74bdac540 5-7,20-33,38-39,41-42,45-46,48-53,55-59
+packages/workspace-host/vitest.config.ts
+  h_9630b74bdac540 1-8
+packages/workspace-host/src/managedTypeScriptTools.ts
+  h_9630b74bdac540 1-422
+src/approvals/guardianReview.test.ts
+  h_9630b74bdac540 1-71
+apps/desktop/src/desktopModelCatalog.test.ts
+  h_9630b74bdac540 1-64
+src/browser-gateway/browserGatewayAskAgentPreferences.test.ts
+  h_9630b74bdac540 5,70-73,76-159,161
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_9630b74bdac540 531,6632-6633,6635,6811-7084
+packages/workspace-host/src/index.ts
+  h_9630b74bdac540 1-18
+packages/core/src/codex/errors.test.ts
+  h_9630b74bdac540 362-384,408-423
+apps/cli/src/sessionProjection.ts
+  h_9630b74bdac540 1-633
+src/tools/generateImage.test.ts
+  h_9630b74bdac540 21,36-39,113,277-608,697-715,958,983,988-994,1009,1011-1016,1022,1050-1053,1055-1056,1076-1077,1085,1089-1130,1364,1386-1387
+package.json
+  h_9630b74bdac540 5,976-977,996-997,1047-1048,1070-1071,1106,1121-1123,1135,1153,1198
+packages/node-host/src/readTools.ts
+  h_9630b74bdac540 46-47,181,245,299-300,302,322,329-332,356,363-364,368,394-396,399
+packages/workspace-host/src/modelRuntime.ts
+  h_9630b74bdac540 1-245
+apps/cli/src/globals.d.ts
+  h_9630b74bdac540 1
+src/extension.ts
+  h_9630b74bdac540 38-39,43,88-90,104,106-109,888-948,1576-1607,1613-1615,1617,1621,1635,1638-1641,1874-1892,1901,1904-1907,2700,3167-3191,3349,3351-3367,3385-3396,3398
+packages/workspace-host/src/commandTools.ts
+  h_9630b74bdac540 1-835
+resources/builtin-skills/documentation/references/embedding-agentlink.md
+  h_9630b74bdac540 15,18-19,88,92,330
+src/agent/providers/codex/CodexOAuthManager.ts
+  h_9630b74bdac540 1-11
+resources/builtin-skills/documentation/references/mcp.md
+  h_9630b74bdac540 70
+resources/builtin-skills/documentation/SKILL.md
+  h_9630b74bdac540 3,29
+src/agent/McpOAuthProvider.ts
+  h_9630b74bdac540 117-202,294,296,309,312,347-348,350,352-356,360,364-367,370,373,379,382-386,395,401,410,422,424-429,482,494,499,506,532,534,538-540,576,587-589,591,636,638-644,646,690,695-696,698,717,744-747,754,757-761,763,775-778,786-795,814,822,831,833-834,837,839-843,855-864,866-874,877,895,925-926
+resources/builtin-skills/documentation/README.md
+  h_9630b74bdac540 17
+src/browser-gateway/helper/BrowserGatewayHelperLeaseClient.test.ts
+  h_9630b74bdac540 185,233,247-249
+src/agent/providers/codex/CodexOAuthManager.test.ts
+  h_9630b74bdac540 2-3,5,7-14
+scripts/verify-retrieval-package.test.mjs
+  h_9630b74bdac540 30,92-105
+resources/builtin-skills/documentation/references/settings.md
+  h_9630b74bdac540 11,13,15,81-84
+packages/workspace-host/package.json
+  h_9630b74bdac540 1-35
+packages/workspace-host/src/fileTools.test.ts
+  h_9630b74bdac540 1-616
+apps/cli/src/tui/inkRendererFixture.tsx
+  h_9630b74bdac540 1-229
+src/agent/webview/components/useSlashCommandPopup.test.tsx
+  h_9630b74bdac540 38-39,41-42,46,48,154-174
+scripts/verify-desktop-package.mjs
+  h_9630b74bdac540 57
+scripts/verify-desktop-package.test.mjs
+  h_9630b74bdac540 31,49-60
+src/agent/providers/codex/CodexProvider.test.ts
+  h_9630b74bdac540 1512-1556
+apps/cli/esbuild.mjs
+  h_9630b74bdac540 1-307
+packages/workspace-host/tsconfig.json
+  h_9630b74bdac540 1-32
+packages/core/src/embeddedAgentWeb.ts
+  h_9630b74bdac540 475-488
+src/agent/toolPermissions.ts
+  h_9630b74bdac540 31
+packages/workspace-host/src/managedTypeScriptInstaller.ts
+  h_9630b74bdac540 1-899
+packages/workspace-host/src/projectIdentity.ts
+  h_9630b74bdac540 1-32
+src/approvals/readOnlyCommandReview.test.ts
+  h_9630b74bdac540 12-13,132-133,143
+src/shared/toolSchemas.ts
+  h_9630b74bdac540 582,588-657
+src/approvals/ApprovalPanelProvider.test.ts
+  h_9630b74bdac540 82-260,284-285,304
+resources/builtin-skills/documentation/references/customization.md
+  h_9630b74bdac540 23
+packages/workspace-host/src/workspaceOwnership.test.ts
+  h_9630b74bdac540 1-262
+packages/workspace-host/src/sessionInteractionTools.ts
+  h_9630b74bdac540 1-220
+apps/desktop/src/desktopOwnerRouting.ts
+  h_9630b74bdac540 1-37
+packages/core/src/codex/errors.ts
+  h_9630b74bdac540 1,303,328-340,368-370
+src/agent/modes.ts
+  h_9630b74bdac540 63-64
+packages/node-host/src/sessionPreferences.ts
+  h_9630b74bdac540 1-358
+CHANGELOG.md
+  h_9630b74bdac540 5-17,23
+apps/cli/src/tui/tuiCommand.ts
+  h_9630b74bdac540 1-131
+apps/cli/src/tui/rendererBakeoffFixture.ts
+  h_9630b74bdac540 1-191
+src/agent/modes.test.ts
+  h_9630b74bdac540 14-43,63
+packages/workspace-host/src/workspaceHost.test.ts
+  h_9630b74bdac540 1-625
+packages/workspace-host/src/managedTypeScriptService.ts
+  h_9630b74bdac540 1-526,528-553,555-1010
+packages/workspace-host/src/commandSupervisor.ts
+  h_9630b74bdac540 1-831
+packages/node-host/src/codexOAuthRuntime.ts
+  h_9630b74bdac540 1-116
+apps/cli/src/cli.test.ts
+  h_9630b74bdac540 1-235
+packages/protocol/src/embeddedAgentTransport.ts
+  h_9630b74bdac540 94-101,245-247,249,266,843-865,969-975,1128-1154
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_9630b74bdac540 48,1058-1087,1695,1697
+src/approvals/commandApprovalReview.ts
+  h_9630b74bdac540 5-12,14,22-23,42-46,84,227,351-358,366-369,375,377-387,394,400,420,478,484-495,503-512,522,527,529-530,532-543,547,550,558,565,575-576,580-581,583,601-609
+src/browser-gateway/webview/styles.css
+  h_9630b74bdac540 1640-1646
+apps/desktop/src/preload.ts
+  h_9630b74bdac540 15-16
+packages/workspace-host/README.md
+  h_9630b74bdac540 1-9
+apps/cli/src/sessionProjection.test.ts
+  h_9630b74bdac540 1-356
+.gitignore
+  h_9630b74bdac540 10
+apps/cli/package.json
+  h_9630b74bdac540 1-55
+packages/node-host/src/codexOAuthRuntime.test.ts
+  h_9630b74bdac540 1-132
+packages/core/src/providerStreamWatchdog.ts
+  h_9630b74bdac540 4
+packages/core/src/turnContracts.ts
+  h_9630b74bdac540 238-249
+apps/cli/smoke-package.mjs
+  h_9630b74bdac540 1-158
+apps/cli/src/config.test.ts
+  h_9630b74bdac540 1-89
+apps/cli/src/tui/inkRendererFixture.test.tsx
+  h_9630b74bdac540 1-187
+src/approvals/networkApprovalReview.test.ts
+  h_9630b74bdac540 146-186
+packages/workspace-host/src/workspaceHostBackground.test.ts
+  h_9630b74bdac540 1-175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "04273ad5e0d0add892d27e44c37177317265ec77",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
