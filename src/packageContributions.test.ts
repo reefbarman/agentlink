@@ -186,6 +186,27 @@ describe("extension package contributions", () => {
     );
   });
 
+  it("keeps TypeSafe Guardian evaluation optional and shadow-only", () => {
+    const commands = new Set(
+      extensionPackage.contributes?.commands?.map(({ command }) => command),
+    );
+    const settings = extensionPackage.contributes?.configuration?.properties as
+      | Record<string, ConfigurationProperty>
+      | undefined;
+
+    expect(commands.has("agentlink.setTypeSafeGuardianApiKey")).toBe(true);
+    expect(commands.has("agentlink.clearTypeSafeGuardianApiKey")).toBe(true);
+    expect(
+      settings?.["agentlink.guardian.typeSafeShadow.enabled"]?.default,
+    ).toBe(false);
+    expect(settings?.["agentlink.guardian.typeSafeShadow.model"]?.default).toBe(
+      "jev-latest",
+    );
+    expect(
+      settings?.["agentlink.guardian.typeSafeShadow.timeoutMs"]?.default,
+    ).toBe(15_000);
+  });
+
   it("retains browser gateway and MCP client package contracts", () => {
     const commands = new Set(
       extensionPackage.contributes?.commands?.map(({ command }) => command),

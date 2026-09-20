@@ -294,6 +294,15 @@
       "definitionSource": "registry-schema"
     },
     {
+      "name": "get_editor_state",
+      "parameters": ["limit", "offset", "path"],
+      "cluster": "read",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
       "name": "get_feedback",
       "parameters": ["priorities", "tool_name", "triaged"],
       "cluster": "dev",
@@ -628,6 +637,15 @@
       "definitionSource": "registry-schema"
     },
     {
+      "name": "save_editor",
+      "parameters": ["disk_hash", "editor_hash", "editor_version", "path"],
+      "cluster": "edit",
+      "sideEffect": "write",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
       "name": "schedule_fleet_workflow",
       "parameters": ["eventType", "everyMinutes", "name", "workflow"],
       "cluster": "background",
@@ -818,5 +836,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "08499dd44555aaf84f5686f5ed4e7880c1e4b3fb131ba0e7ccd0830e4e7f4aa4"
+  "revision": "c1f18d484df0c46700f087d4b34a06ffe8a77055f25c89fe287d2684e10d7820"
 }

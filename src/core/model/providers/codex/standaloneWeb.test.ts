@@ -221,6 +221,119 @@ describe("executeCodexStandaloneWeb", () => {
     expect(result.next_start_line).toBeUndefined();
   });
 
+  it.each([true, false])(
+    "stops repeated pages without appending them or inventing progress (retention: %s)",
+    async (retain) => {
+      const output = "Total lines: 100\nL0: zero\nL1: one";
+      const fetch = vi.fn(
+        async () => new Response(JSON.stringify({ output }), { status: 200 }),
+      );
+      const retainOutput = vi.fn(() => (retain ? "/tmp/retained.txt" : null));
+      const result = await executeCodexStandaloneWeb({
+        auth,
+        sessionId: "session-1",
+        model: "gpt-test",
+        operation: "fetch",
+        input: { url: "https://example.com/", max_length: 1000 },
+        settings: normalizeCoreWebAccessSettings(),
+        fetch: fetch as typeof globalThis.fetch,
+        retainOutput,
+      });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(retainOutput).toHaveBeenCalledWith(output);
+      expect(result.next_start_line).toBeUndefined();
+      expect(result.output_warning).toContain("did not advance");
+      expect(result.content_truncated).toBe(true);
+    },
+  );
+
+  it.each([undefined, "GetOwnedGames"])(
+    "does not fabricate progress when an explicit start line is ignored (find: %s)",
+    async (find) => {
+      const fetch = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              output:
+                "Total lines: 900\nL0: navigation\nL3: more navigation L800: collapsed marker",
+            }),
+            { status: 200 },
+          ),
+      );
+      const result = await executeCodexStandaloneWeb({
+        auth,
+        sessionId: "session-1",
+        model: "gpt-test",
+        operation: "fetch",
+        input: { url: "https://example.com/", start_line: 360, find },
+        settings: normalizeCoreWebAccessSettings(),
+        fetch: fetch as typeof globalThis.fetch,
+        retainOutput: () => "/tmp/retained.txt",
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(result.next_start_line).toBeUndefined();
+      expect(result.output_warning).toContain("did not advance");
+    },
+  );
+
+  it("retains only new line blocks from an overlapping final page", async () => {
+    const outputs = [
+      "Total lines: 4\nL0: zero\nL1: one",
+      "Total lines: 4\nL0: zero\nL1: one\nL2: two\nwrapped text\nL3: three",
+    ];
+    const fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ output: outputs.shift() }), {
+          status: 200,
+        }),
+    );
+    const retainOutput = vi.fn(() => "/tmp/retained.txt");
+    const result = await executeCodexStandaloneWeb({
+      auth,
+      sessionId: "session-1",
+      model: "gpt-test",
+      operation: "fetch",
+      input: { url: "https://example.com/", max_length: 1000 },
+      settings: normalizeCoreWebAccessSettings(),
+      fetch: fetch as typeof globalThis.fetch,
+      retainOutput,
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(retainOutput).toHaveBeenCalledWith(
+      "Total lines: 4\nL0: zero\nL1: one\n\nL2: two\nwrapped text\nL3: three",
+    );
+    expect(result.next_start_line).toBeUndefined();
+    expect(result.output_warning).not.toContain("did not advance");
+  });
+
+  it("stops an unnumbered continuation without claiming the page is complete", async () => {
+    const outputs = [
+      "Total lines: 10\nL0: zero",
+      "provider returned an unrelated answer",
+    ];
+    const fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ output: outputs.shift() }), {
+          status: 200,
+        }),
+    );
+    const retainOutput = vi.fn(() => "/tmp/retained.txt");
+    const result = await executeCodexStandaloneWeb({
+      auth,
+      sessionId: "session-1",
+      model: "gpt-test",
+      operation: "fetch",
+      input: { url: "https://example.com/" },
+      settings: normalizeCoreWebAccessSettings(),
+      fetch: fetch as typeof globalThis.fetch,
+      retainOutput,
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(retainOutput).toHaveBeenCalledWith("Total lines: 10\nL0: zero");
+    expect(result.output_warning).toContain("did not advance");
+    expect(result.next_start_line).toBeUndefined();
+  });
+
   it("returns a recoverable start line when retained output cannot be saved", async () => {
     const outputs = [
       "Total lines: 4\nL0: zero\nL1: one",

@@ -237,13 +237,46 @@ test("aggregates turns, tasks, and background lifecycles into indicators", () =>
       approvalKind: "path",
       reason: "human_only",
     }),
+    event({
+      type: "guardian_shadow_comparison",
+      sessionId: "s1",
+      reviewKind: "command",
+      shadowProvider: "typesafe",
+      primaryStatus: "reviewed",
+      primaryOutcome: "deny",
+      primaryRisk: "high",
+      primaryDurationMs: 1_000,
+      shadowStatus: "completed",
+      shadowOutcome: "allow",
+      shadowRisk: "medium",
+      shadowAuthorization: "high",
+      shadowDurationMs: 200,
+      outcomesAgree: false,
+      shadowFaster: true,
+      shadowInputRedacted: true,
+      shadowEvidenceWithheld: true,
+      shadowInputTokens: 300,
+      shadowOutputTokens: 40,
+    }),
+    event({
+      type: "guardian_shadow_comparison",
+      sessionId: "s2",
+      reviewKind: "command",
+      shadowProvider: "typesafe",
+      primaryStatus: "reviewed",
+      primaryOutcome: "allow",
+      primaryRisk: "low",
+      primaryDurationMs: 500,
+      shadowStatus: "timed_out",
+      shadowDurationMs: 15_000,
+    }),
     "not json",
     event({ type: "mystery_event", sessionId: "s9" }),
   ]);
 
   const report = readSessionOutcomes(inputPath);
 
-  assert.equal(report.events, 9);
+  assert.equal(report.events, 11);
   assert.equal(report.invalidLines, 1);
   assert.equal(report.unknownEvents, 1);
   assert.equal(report.sessionCount, 3);
@@ -286,6 +319,23 @@ test("aggregates turns, tasks, and background lifecycles into indicators", () =>
     reviewed: 1,
   });
   assert.equal(report.byVersion["1.18.21"].approvalInterruptions, 2);
+
+  assert.equal(report.guardianShadow.count, 2);
+  assert.equal(report.guardianShadow.completed, 1);
+  assert.equal(report.guardianShadow.agreements, 0);
+  assert.equal(report.guardianShadow.disagreements, 1);
+  assert.equal(report.guardianShadow.comparableDurations, 1);
+  assert.equal(report.guardianShadow.shadowFaster, 1);
+  assert.equal(report.guardianShadow.redacted, 1);
+  assert.equal(report.guardianShadow.evidenceWithheld, 1);
+  assert.deepEqual(report.guardianShadow.byStatus, {
+    completed: 1,
+    timed_out: 1,
+  });
+  assert.deepEqual(report.guardianShadow.primaryDurationsMs, [1_000]);
+  assert.deepEqual(report.guardianShadow.shadowDurationsMs, [200]);
+  assert.equal(report.guardianShadow.inputTokens, 300);
+  assert.equal(report.guardianShadow.outputTokens, 40);
 
   const indicators = report.indicators;
   // Active time = 700k - 100k user wait; 200k blocked on background.

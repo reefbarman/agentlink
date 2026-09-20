@@ -1,4 +1,5 @@
 import * as crypto from "crypto";
+import { appendOwnershipHandoff } from "./background/ownershipHandoff.js";
 import * as nodePath from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { isDeepStrictEqual } from "util";
@@ -2332,6 +2333,9 @@ export class AgentSessionManager {
       if (await this.reconcileSessionReasoningEffort(session, provider)) {
         this.saveSession(session.id);
         this.notifySessionsChanged();
+      }
+      if (context?.mcpHub?.activatePendingInteractiveServers) {
+        await context.mcpHub.activatePendingInteractiveServers();
       }
       const mcpTools = this.cloneMcpToolDefinitions(context);
       const policy = await this.resolveWebAccessPolicy(
@@ -10570,15 +10574,23 @@ export class AgentSessionManager {
         request.budget,
       );
       this.ensureChildBudgetAdmission(parent, effectiveBudget);
-      const executionMessage = isReviewTask
-        ? buildReviewHandoff({
-            message,
-            target: reviewTarget,
-            budget: effectiveBudget,
-          })
-        : reviewTarget
-          ? `${message}\n\n${reviewTarget.content}`
-          : message;
+      const executionMessage = appendOwnershipHandoff(
+        isReviewTask
+          ? buildReviewHandoff({
+              message,
+              target: reviewTarget,
+              budget: effectiveBudget,
+            })
+          : reviewTarget
+            ? `${message}\n\n${reviewTarget.content}`
+            : message,
+        {
+          ownedPaths: request.ownedPaths,
+          forbiddenPaths: request.forbiddenPaths,
+          backend: "acp",
+          executionRoot,
+        },
+      );
       // ACP agents do not use AgentLink's set_task_status tool, so keep the
       // serialized-envelope fallback at that external boundary only.
       const reviewHandoffBytes = isReviewTask
@@ -10981,15 +10993,23 @@ export class AgentSessionManager {
       request.budget,
     );
     this.ensureChildBudgetAdmission(parent, effectiveBudget);
-    const executionMessage = isReviewTask
-      ? buildReviewHandoff({
-          message,
-          target: reviewTarget,
-          budget: effectiveBudget,
-        })
-      : reviewTarget
-        ? `${message}\n\n${reviewTarget.content}`
-        : message;
+    const executionMessage = appendOwnershipHandoff(
+      isReviewTask
+        ? buildReviewHandoff({
+            message,
+            target: reviewTarget,
+            budget: effectiveBudget,
+          })
+        : reviewTarget
+          ? `${message}\n\n${reviewTarget.content}`
+          : message,
+      {
+        ownedPaths: request.ownedPaths,
+        forbiddenPaths: request.forbiddenPaths,
+        backend: "native",
+        executionRoot,
+      },
+    );
     const reviewHandoffBytes = isReviewTask
       ? Buffer.byteLength(executionMessage)
       : undefined;

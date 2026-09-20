@@ -1,4 +1,5 @@
 import type { AgentConfig, AgentMessage } from "./types.js";
+import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildModeInstructionBlock,
@@ -605,6 +606,113 @@ describe("AgentSession", () => {
         activations: snapshot?.activations,
       });
     });
+
+    it.each([
+      {
+        declarations: [["Bash"]],
+        legacyAllowedTools: ["Bash"],
+        expected: ["execute_command"],
+      },
+      {
+        declarations: [["Bash"], ["execute_command"]],
+        legacyAllowedTools: [],
+        expected: ["execute_command"],
+      },
+      {
+        declarations: [["Bash"], ["read_file"]],
+        legacyAllowedTools: [],
+        expected: [],
+      },
+      { declarations: [["Bash"], []], legacyAllowedTools: [], expected: [] },
+      {
+        declarations: [["Bash", "Bash(git:*)"]],
+        legacyAllowedTools: ["Bash", "Bash(git:*)"],
+        expected: ["Bash(git:*)", "execute_command"],
+      },
+    ])(
+      "restores verified legacy restrictions $declarations",
+      async ({ declarations, legacyAllowedTools, expected }) => {
+        const skills = declarations.map((tools, index) =>
+          makeSkillEntry(`legacy-${index}`, "a".repeat(64), tools),
+        );
+        mockedBuildPromptArtifacts.mockResolvedValue({
+          ...makePromptArtifacts("mock system prompt"),
+          skills,
+          skillCatalog: makeSkillCatalogProjection("catalog"),
+        });
+        const source = await makeSession();
+        for (const skill of skills) source.trackLoadedSkill(skill);
+        const snapshot = source.getActiveSkillState()!;
+        const legacyPolicy = {
+          allowedTools: legacyAllowedTools,
+          dependencies: snapshot.policy.dependencies,
+          recommendations: snapshot.policy.recommendations,
+          requestedTools: snapshot.policy.requestedTools,
+          schemaVersion: 1 as const,
+          skillIds: snapshot.policy.skillIds,
+        };
+        snapshot.policy = {
+          ...legacyPolicy,
+          revision: createHash("sha256")
+            .update(JSON.stringify(legacyPolicy))
+            .digest("hex"),
+        };
+        const restore = async (state: PersistedActiveSkillState) => {
+          const session = await makeSession();
+          session.restoreFromStore({
+            id: "restored",
+            title: "Restored",
+            createdAt: 1,
+            lastActiveAt: 2,
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            activeSkillState: JSON.parse(JSON.stringify(state)),
+            messages: [],
+          });
+          return session;
+        };
+        const restored = await restore(snapshot);
+        expect(restored.getActiveSkillAllowedTools()).toEqual(expected);
+        expect(restored.getActiveSkillState()?.activations).toEqual(
+          snapshot.activations,
+        );
+        expect(restored.getActiveSkillPolicy()).toEqual(
+          source.getActiveSkillPolicy(),
+        );
+        expect(
+          (
+            await restore(restored.getActiveSkillState()!)
+          ).getActiveSkillAllowedTools(),
+        ).toEqual(expected);
+        expect(
+          (
+            await restore({
+              ...snapshot,
+              policy: { ...snapshot.policy, revision: "f".repeat(64) },
+            })
+          ).getActiveSkillState(),
+        ).toBeUndefined();
+        expect(
+          (
+            await restore({
+              ...snapshot,
+              policy: { ...snapshot.policy, allowedTools: ["write_file"] },
+            })
+          ).getActiveSkillState(),
+        ).toBeUndefined();
+        expect(
+          (
+            await restore({
+              ...snapshot,
+              activations: snapshot.activations.map((activation) => ({
+                ...activation,
+                revision: "f".repeat(64),
+              })),
+            })
+          ).getActiveSkillState(),
+        ).toBeUndefined();
+      },
+    );
 
     it.each([
       [

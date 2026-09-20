@@ -11,6 +11,7 @@ export function MessageQueuePanel({
   onEdit,
   onEditingChange,
   onRemove,
+  allowSteering = true,
 }: {
   queue: MessageQueueItem[];
   pendingIds?: ReadonlySet<string>;
@@ -19,6 +20,7 @@ export function MessageQueuePanel({
   onEdit?: (item: MessageQueueItem, text: string) => void;
   onEditingChange?: (item: MessageQueueItem, editing: boolean) => void;
   onRemove?: (item: MessageQueueItem) => void;
+  allowSteering?: boolean;
 }) {
   const [editingQueueId, setEditingQueueId] = useState<string | null>(null);
   const [editingQueueText, setEditingQueueText] = useState("");
@@ -78,90 +80,99 @@ export function MessageQueuePanel({
               {item.text}
             </span>
           )}
-          <div class="queue-item-actions">
-            <button
-              class="icon-button queue-item-steer"
-              title={
-                pendingIds?.has(item.id)
-                  ? "Waiting for queue confirmation"
-                  : editingQueueId === item.id
-                    ? "Finish editing before steering"
-                    : "Steer now"
-              }
-              disabled={pendingIds?.has(item.id) || editingQueueId === item.id}
-              onClick={() => {
-                if (!pendingIds?.has(item.id) && editingQueueId !== item.id) {
-                  onSteer(item);
-                }
-              }}
-            >
-              <i class="codicon codicon-compass-active" />
-            </button>
-            <button
-              class={`icon-button queue-item-interject${item.interjectionReady ? " active" : ""}`}
-              title={
-                pendingIds?.has(item.id)
-                  ? "Waiting for queue confirmation"
-                  : editingQueueId === item.id
-                    ? "Finish editing before interjecting"
-                    : item.interjectionReady
-                      ? "Ready to interject at next break"
-                      : "Interject at next break"
-              }
-              disabled={pendingIds?.has(item.id) || editingQueueId === item.id}
-              onClick={() => {
-                if (!pendingIds?.has(item.id) && editingQueueId !== item.id) {
-                  onInterject(item);
-                }
-              }}
-            >
-              <i class="codicon codicon-reply" />
-            </button>
-            {onEdit && editingQueueId !== item.id && (
+          {allowSteering && (
+            <div class="queue-item-actions">
               <button
-                class="icon-button queue-item-edit"
-                title={
-                  pendingIds?.has(item.id)
-                    ? "Waiting for queue confirmation"
-                    : editingQueueId === null
-                      ? "Edit"
-                      : "Finish current edit first"
-                }
-                disabled={pendingIds?.has(item.id) || editingQueueId !== null}
-                onClick={() => {
-                  if (pendingIds?.has(item.id) || editingQueueId !== null)
-                    return;
-                  setEditingQueueText(item.text);
-                  setEditingQueueId(item.id);
-                  onEditingChange?.(item, true);
-                }}
-              >
-                <i class="codicon codicon-edit" />
-              </button>
-            )}
-            {onRemove && (
-              <button
-                class="icon-button queue-item-remove"
+                class="icon-button queue-item-steer"
                 title={
                   pendingIds?.has(item.id)
                     ? "Waiting for queue confirmation"
                     : editingQueueId === item.id
-                      ? "Finish editing before removing"
-                      : "Remove"
+                      ? "Finish editing before steering"
+                      : "Steer now"
                 }
                 disabled={
                   pendingIds?.has(item.id) || editingQueueId === item.id
                 }
                 onClick={() => {
                   if (!pendingIds?.has(item.id) && editingQueueId !== item.id) {
-                    onRemove(item);
+                    onSteer(item);
                   }
                 }}
               >
-                <i class="codicon codicon-close" />
+                <i class="codicon codicon-compass-active" />
               </button>
-            )}
-          </div>
+              <button
+                class={`icon-button queue-item-interject${item.interjectionReady ? " active" : ""}`}
+                title={
+                  pendingIds?.has(item.id)
+                    ? "Waiting for queue confirmation"
+                    : editingQueueId === item.id
+                      ? "Finish editing before interjecting"
+                      : item.interjectionReady
+                        ? "Ready to interject at next break"
+                        : "Interject at next break"
+                }
+                disabled={
+                  pendingIds?.has(item.id) || editingQueueId === item.id
+                }
+                onClick={() => {
+                  if (!pendingIds?.has(item.id) && editingQueueId !== item.id) {
+                    onInterject(item);
+                  }
+                }}
+              >
+                <i class="codicon codicon-reply" />
+              </button>
+              {onEdit && editingQueueId !== item.id && (
+                <button
+                  class="icon-button queue-item-edit"
+                  title={
+                    pendingIds?.has(item.id)
+                      ? "Waiting for queue confirmation"
+                      : editingQueueId === null
+                        ? "Edit"
+                        : "Finish current edit first"
+                  }
+                  disabled={pendingIds?.has(item.id) || editingQueueId !== null}
+                  onClick={() => {
+                    if (pendingIds?.has(item.id) || editingQueueId !== null)
+                      return;
+                    setEditingQueueText(item.text);
+                    setEditingQueueId(item.id);
+                    onEditingChange?.(item, true);
+                  }}
+                >
+                  <i class="codicon codicon-edit" />
+                </button>
+              )}
+              {onRemove && (
+                <button
+                  class="icon-button queue-item-remove"
+                  title={
+                    pendingIds?.has(item.id)
+                      ? "Waiting for queue confirmation"
+                      : editingQueueId === item.id
+                        ? "Finish editing before removing"
+                        : "Remove"
+                  }
+                  disabled={
+                    pendingIds?.has(item.id) || editingQueueId === item.id
+                  }
+                  onClick={() => {
+                    if (
+                      !pendingIds?.has(item.id) &&
+                      editingQueueId !== item.id
+                    ) {
+                      onRemove(item);
+                    }
+                  }}
+                >
+                  <i class="codicon codicon-close" />
+                </button>
+              )}
+            </div>
+          )}
         </div>
       ))}
     </div>

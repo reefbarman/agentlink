@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
-  "version": "1.22.38",
+  "version": "1.22.55",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -173,6 +173,14 @@
       {
         "command": "agentlink.clearOpenAiCompatibleApiKey",
         "title": "AgentLink: Clear OpenAI-compatible API Key"
+      },
+      {
+        "command": "agentlink.setTypeSafeGuardianApiKey",
+        "title": "AgentLink: Set TypeSafe API Key for Guardian Shadow Mode"
+      },
+      {
+        "command": "agentlink.clearTypeSafeGuardianApiKey",
+        "title": "AgentLink: Clear TypeSafe API Key for Guardian Shadow Mode"
       },
       {
         "command": "agentlink.rebuildIndex",
@@ -532,6 +540,26 @@
           "type": "boolean",
           "default": false,
           "description": "Skip ordinary command and file-write approval prompts. Explicit native escalation, outside-path reads, MCP tools, protected paths, and read-only/delegation boundaries still apply. Use with caution."
+        },
+        "agentlink.guardian.typeSafeShadow.enabled": {
+          "scope": "machine",
+          "type": "boolean",
+          "default": false,
+          "description": "Run an optional TypeSafe BYOK shadow evaluation alongside command Guardian reviews. Shadow results never affect approval decisions. Bounded command-review evidence is sent to TypeSafe only when this setting is enabled and a TypeSafe API key is stored."
+        },
+        "agentlink.guardian.typeSafeShadow.model": {
+          "scope": "machine",
+          "type": "string",
+          "default": "jev-latest",
+          "description": "TypeSafe model used for optional Guardian shadow evaluations."
+        },
+        "agentlink.guardian.typeSafeShadow.timeoutMs": {
+          "scope": "machine",
+          "type": "number",
+          "default": 15000,
+          "minimum": 1000,
+          "maximum": 60000,
+          "description": "Maximum time for an optional TypeSafe Guardian shadow request. The current Guardian decision does not wait for this request."
         },
         "agentlink.diagnosticDelay": {
           "scope": "resource",

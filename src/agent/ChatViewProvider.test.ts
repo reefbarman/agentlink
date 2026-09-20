@@ -2476,6 +2476,49 @@ describe("ChatViewProvider session state sync", () => {
     provider.dispose();
   });
 
+  it("replaces Ask Agent MCP connections and forwards the refresh intent", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const calls: string[] = [];
+    const disconnectAll = vi.fn(async () => {
+      calls.push("disconnect");
+    });
+    const connect = vi.fn(async (_configs: unknown[], options: unknown) => {
+      calls.push("connect");
+      expect(options).toEqual({
+        interactiveForNewServers: true,
+        trigger: "config-watcher",
+        userInitiated: false,
+      });
+    });
+    const internals = provider as unknown as {
+      askAgentMcpHub: {
+        disconnectAll(): Promise<void>;
+        connect(configs: unknown[], options: unknown): Promise<void>;
+      };
+      refreshAskAgentMcpConnections(options: {
+        interactiveForNewServers: boolean;
+        trigger: "config-watcher";
+        userInitiated: boolean;
+      }): Promise<void>;
+    };
+    internals.askAgentMcpHub = { disconnectAll, connect };
+
+    await internals.refreshAskAgentMcpConnections({
+      interactiveForNewServers: true,
+      trigger: "config-watcher",
+      userInitiated: false,
+    });
+
+    expect(calls).toEqual(["disconnect", "connect"]);
+    expect(disconnectAll).toHaveBeenCalledOnce();
+    expect(connect).toHaveBeenCalledOnce();
+    provider.dispose();
+  });
+
   it("routes browser reauthentication through the project MCP hub", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(

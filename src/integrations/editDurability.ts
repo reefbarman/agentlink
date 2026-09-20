@@ -255,15 +255,28 @@ async function withPreservingSaveCoordinator<T>(
   }
 }
 
+export async function saveVerifiedEditorDocument(
+  document: vscode.TextDocument,
+  absolutePath: string,
+  validate: () => Promise<boolean>,
+): Promise<boolean> {
+  return withPreservingSaveCoordinator(() =>
+    saveWithoutFormatting(document, absolutePath, validate),
+  );
+}
+
 async function saveWithoutFormatting(
   document: vscode.TextDocument,
   absolutePath: string,
+  validate?: () => Promise<boolean>,
 ): Promise<boolean> {
   const previousEditor = vscode.window.activeTextEditor;
   const targetPath = canonicalizePath(absolutePath);
+  // The save command needs an active editor, not keyboard focus. Keeping focus
+  // in the sidebar lets the user continue typing while this document is saved.
   const targetEditor = await vscode.window.showTextDocument(document, {
     preview: false,
-    preserveFocus: false,
+    preserveFocus: true,
   });
 
   if (
@@ -276,6 +289,13 @@ async function saveWithoutFormatting(
   }
 
   try {
+    if (validate && !(await validate())) return false;
+    if (
+      validate &&
+      (vscode.window.activeTextEditor?.document !== document ||
+        !documentMatchesTarget(document, absolutePath))
+    )
+      return false;
     await vscode.commands.executeCommand(
       "workbench.action.files.saveWithoutFormatting",
     );
@@ -290,7 +310,7 @@ async function saveWithoutFormatting(
     ) {
       await vscode.window.showTextDocument(previousEditor.document, {
         preview: false,
-        preserveFocus: false,
+        preserveFocus: true,
         ...(previousEditor.viewColumn
           ? { viewColumn: previousEditor.viewColumn }
           : {}),
@@ -435,9 +455,9 @@ export async function diagnoseEditSaveFailure(params: {
     },
     next_steps: [
       dirtyDocumentState === "matches_save_attempt"
-        ? "The dirty editor is preserved with the exact content submitted to the failed save. Do not submit another file-edit tool call; resolve the save issue and retry the editor save."
+        ? "The dirty editor is preserved with the exact content submitted to the failed save. Use get_editor_state to inspect it, then save_editor with the returned hashes/version for a human-reviewed exact save. Do not overwrite the buffer to retry."
         : dirtyDocumentState === "changed_after_save_attempt"
-          ? "The dirty editor changed during the failed save. Inspect and reconcile its current content before saving or composing another edit."
+          ? "The dirty editor changed during the failed save. Use get_editor_state to compare the buffer with disk. Use save_editor only if the current buffer is what should be saved; otherwise reconcile it in VS Code."
           : params.reviewState === "diff_snapshot_preserved"
             ? "The review snapshot and dirty editor are preserved. Inspect the file/editor state before retrying the editor save."
             : "The dirty editor is preserved. Inspect the file/editor state before retrying the editor save.",

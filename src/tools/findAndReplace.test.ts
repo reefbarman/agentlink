@@ -171,6 +171,60 @@ describe("handleFindAndReplace", () => {
     );
   });
 
+  it.each([
+    { find: "old", replace: "values ($1, $9)", expected: "values ($1, $9)" },
+    { find: "(old)", replace: "$$1/$1/$$/$0/$9", expected: "$1/old/$/$0/$9" },
+    { find: "(old)(missing)?", replace: "$1:$2:$3", expected: "old::$3" },
+    { find: "(old)", replace: "$12/$123/$01", expected: "old2/old23/old" },
+    { find: "(o)(l)(d)()()()()()()()()()", replace: "$12:$3", expected: ":d" },
+    { find: "old", replace: "$&/$`/$'/$$", expected: "$&/$`/$'/$" },
+    {
+      find: "(old)",
+      replace: "$$1/$1",
+      expected: "$$1/$1",
+      regex: false,
+      text: "(old)",
+    },
+    { find: "(.+)", replace: "$1", expected: "$&$$1", text: "$&$$1" },
+    {
+      find: "(?<=prefix )(old)$",
+      replace: "$1/$2",
+      expected: "old/$2",
+      text: "prefix old",
+    },
+    {
+      find: "hashtextextended\\(\\$1, [146895]\\)",
+      replace: "hashtextextended($1, 0)",
+      expected: "hashtextextended($1, 0)",
+      text: "hashtextextended($1, 6)",
+    },
+  ])(
+    "preserves replacement semantics for $replace ($find)",
+    async ({ find, replace, expected, regex = true, text = "old" }) => {
+      const filePath = path.join(workspaceDir, "example.ts");
+      mockWorkspace.openTextDocument.mockResolvedValue(
+        createDocument(filePath, text),
+      );
+      const reviewAndApply = vi.fn<
+        MultiFileEditReviewProvider["reviewAndApply"]
+      >(async () => ({ content: [] }));
+      const { handleFindAndReplace } = await import("./findAndReplace.js");
+      await handleFindAndReplace(
+        { path: "example.ts", find, replace, regex },
+        { isPathTrusted: vi.fn(() => true) } as never,
+        {} as never,
+        "session-1",
+        {} as never,
+        undefined,
+        { multiFileEditReviewProvider: { reviewAndApply } },
+      );
+      expect(reviewAndApply).toHaveBeenCalledOnce();
+      const file = reviewAndApply.mock.calls[0][0].files[0];
+      expect(file.replacements[0].newText).toBe(expected);
+      expect(file.matches[0].replaceText).toBe(expected);
+    },
+  );
+
   it("matches regex line anchors on every line", async () => {
     const filePath = path.join(workspaceDir, "src", "example.meta");
     mockWorkspace.openTextDocument.mockResolvedValue(

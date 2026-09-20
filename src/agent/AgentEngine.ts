@@ -3,6 +3,7 @@ import { CodexTurnState } from "@agentlink/core/codex";
 import * as fs from "fs/promises";
 import * as path from "path";
 import type { AgentSession } from "./AgentSession.js";
+import { normalizeSkillToolNames } from "./skillToolAliases.js";
 import { isReviewTaskClass } from "./background/reviewTaskClass.js";
 import { ToolResultArtifactManager } from "./toolResultArtifacts.js";
 import type {
@@ -949,8 +950,8 @@ function buildSkillAuthoritySnapshot(
   // authority only as a narrowing ceiling: intersection can never grant a tool
   // that the active skill, mode, or permission profile would otherwise deny.
   const allowedTools = intersectToolAllowlist(
-    inherited?.allowedTools,
-    activeAllowedTools,
+    normalizeSkillToolNames(inherited?.allowedTools),
+    normalizeSkillToolNames(activeAllowedTools),
   );
   return Object.freeze({
     schemaVersion: 1 as const,

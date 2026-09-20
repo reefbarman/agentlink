@@ -85,6 +85,7 @@ import {
   type ToolResult,
 } from "@agentlink/protocol/tool-result";
 import { getToolsForMode } from "./toolPermissions.js";
+import { normalizeSkillToolNames } from "./skillToolAliases.js";
 import { handleApplyDiff } from "../tools/applyDiff.js";
 import { handleCloseTerminals } from "../tools/closeTerminals.js";
 import { handleDeleteFeedback } from "../tools/deleteFeedback.js";
@@ -143,6 +144,10 @@ import { getConfiguredDiagnosticDelay } from "../adapters/vscode/agentLinkConfig
 import { handleLoadRule } from "../tools/loadRule.js";
 import { handleLoadSkill } from "../tools/loadSkill.js";
 import { handleOpenFile } from "../tools/openFile.js";
+import {
+  handleGetEditorState,
+  handleSaveEditor,
+} from "../tools/editorState.js";
 import type { GuardianOutsideReadOptions } from "../tools/pathAccessUI.js";
 import { createGuardianOutsideWriteAuthorizationPreparer } from "../tools/actionWriteApproval.js";
 import { handleProposeMemory } from "../tools/proposeMemory.js";
@@ -325,6 +330,8 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   rename_symbol: schemas.renameSymbolSchema,
   propose_memory: schemas.proposeMemorySchema,
   open_file: schemas.openFileSchema,
+  get_editor_state: schemas.getEditorStateSchema,
+  save_editor: schemas.saveEditorSchema,
   show_notification: schemas.showNotificationSchema,
   execute_command: schemas.executeCommandSchema,
   get_terminal_output: schemas.getTerminalOutputSchema,
@@ -1168,6 +1175,8 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "read_session_excerpt",
     "diagnose_activity",
     "recall_memory",
+    "web_search",
+    "web_fetch",
   ]),
   btw: new Set([
     "read_file",
@@ -1241,7 +1250,7 @@ export function getAgentTools(
     toolProfile && MCP_ENABLED_TOOL_PROFILES.has(toolProfile),
   );
   const skillAllowlist = skillAllowedTools
-    ? new Set(skillAllowedTools)
+    ? new Set(normalizeSkillToolNames(skillAllowedTools))
     : undefined;
 
   const usesReadOnlyCommand =
@@ -2890,6 +2899,7 @@ function enforceNonInteractiveReadPathPolicy(
 
 const PATH_MUTATING_TOOLS = new Set([
   "write_file",
+  "save_editor",
   "apply_diff",
   "find_and_replace",
   "generate_image",
@@ -3293,7 +3303,7 @@ async function dispatchToolCallWithTrackedApprovals(
   } = ctx;
 
   const skillAllowlist = ctx.skillAllowedTools
-    ? new Set(ctx.skillAllowedTools)
+    ? new Set(normalizeSkillToolNames(ctx.skillAllowedTools))
     : undefined;
 
   if (toolName === "web_search" || toolName === "web_fetch") {
@@ -4283,6 +4293,22 @@ async function dispatchToolCallWithTrackedApprovals(
       });
 
     // --- Editor ---
+    case "get_editor_state":
+    case "save_editor": {
+      const context = {
+        sessionId,
+        pathAccessProvider: createVscodePathAccessProvider(
+          approvalManager,
+          approvalPanel,
+          { signal: toolAbortSignal },
+        ),
+        onApprovalRequest,
+        signal: toolAbortSignal,
+      };
+      return toolName === "get_editor_state"
+        ? handleGetEditorState(params, context)
+        : handleSaveEditor(params, context);
+    }
     case "open_file":
       return handleOpenFile(params, sessionId, {
         workspaceFileProvider: createVscodeWorkspaceFileProvider(),

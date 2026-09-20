@@ -566,80 +566,80 @@
   "toolsByMode": [
     {
       "mode": "code",
-      "toolCount": 62,
-      "chars": 89480,
-      "estimatedTokens": 22370,
-      "sha256": "f458589df28a6ccacd3dce300f323867c13be4fee071c9699ae854d1af7ab5e2"
+      "toolCount": 64,
+      "chars": 91561,
+      "estimatedTokens": 22891,
+      "sha256": "5390c48dc1a9d8101d82cdf1757432063b6c010fdd350ebaf58ebf05cdfc7b41"
     },
     {
       "mode": "architect",
-      "toolCount": 58,
-      "chars": 85381,
-      "estimatedTokens": 21346,
-      "sha256": "c3ac8112da47afd320b10c0eb263ddd32353a4da6c35d22138342a6211440ea4"
+      "toolCount": 59,
+      "chars": 86282,
+      "estimatedTokens": 21571,
+      "sha256": "79bab340e3639d7d5d6b7f930538779e1cb60f6e96969d104f19143bdac5d7c5"
     },
     {
       "mode": "ask",
-      "toolCount": 38,
-      "chars": 53931,
-      "estimatedTokens": 13483,
-      "sha256": "b5dad87d3573c333c8b80fdad3d52d8e92f985da2ba0e7ad644c8d4bc5aa77d6"
+      "toolCount": 39,
+      "chars": 54832,
+      "estimatedTokens": 13708,
+      "sha256": "9c67afc2db73cff1bf0aa3e34e50108038fa56e1cc05009f820b651e94ceb202"
     },
     {
       "mode": "debug",
-      "toolCount": 56,
-      "chars": 75527,
-      "estimatedTokens": 18882,
-      "sha256": "dd38fbb3b301cffbdf16a4f941a432d087449ecdc266f00404dfec8b2f661a1d"
+      "toolCount": 57,
+      "chars": 76428,
+      "estimatedTokens": 19107,
+      "sha256": "1694b582bc4fc8a8469bcfb457e1610b6050e907428a4ba57f36d4e3d43f44fc"
     },
     {
       "mode": "review",
-      "toolCount": 50,
-      "chars": 72304,
-      "estimatedTokens": 18076,
-      "sha256": "9189befcfcf926ad454146afc49d331ab63b932ab90bb204834d8bae2531e15d"
+      "toolCount": 51,
+      "chars": 73205,
+      "estimatedTokens": 18302,
+      "sha256": "03d01e0a69be6fe01926ea2d117bd5856cee68221205b93837352481db90987a"
     }
   ],
   "projectedToolsByMode": [
     {
       "mode": "code",
       "toolCount": 38,
-      "deferredToolCount": 24,
-      "chars": 63162,
-      "estimatedTokens": 15791,
-      "sha256": "c10d5f1c8d8bdb59ccd3d2774612029af90d2d3df5f8ea4e130078faef26e4e1"
+      "deferredToolCount": 26,
+      "chars": 63388,
+      "estimatedTokens": 15847,
+      "sha256": "9d13e12aad2609acb37b23bdc98c64de3126145a1f9561684d1fea681a7b1f00"
     },
     {
       "mode": "architect",
       "toolCount": 37,
-      "deferredToolCount": 21,
-      "chars": 61976,
-      "estimatedTokens": 15494,
-      "sha256": "455653a15c5eadb1989feed2b01a1c228dd31f489d733a344e9fbe5b0cae9414"
+      "deferredToolCount": 22,
+      "chars": 62054,
+      "estimatedTokens": 15514,
+      "sha256": "8a07215cc80f517dd5077ba2e177d025934290fe1ed2b0bb3e9ac4209486f028"
     },
     {
       "mode": "ask",
       "toolCount": 28,
-      "deferredToolCount": 10,
-      "chars": 43748,
-      "estimatedTokens": 10937,
-      "sha256": "a82036b32a9c26a3ca35a152b1c352305303ac748090a845035209e2fcd5e10a"
+      "deferredToolCount": 11,
+      "chars": 43826,
+      "estimatedTokens": 10957,
+      "sha256": "11a09ead0fb7dcedc1b333414550b04c3be54baafa1a67a35be3b47651d3d38f"
     },
     {
       "mode": "debug",
       "toolCount": 35,
-      "deferredToolCount": 21,
-      "chars": 56930,
-      "estimatedTokens": 14233,
-      "sha256": "f82f05ded88114d8a23dc971cfc20cb8a7cf49f91895def5f2084944e6c30bc3"
+      "deferredToolCount": 22,
+      "chars": 57008,
+      "estimatedTokens": 14252,
+      "sha256": "eaf1e81e83bd41f5aca77e65188723ba81ec3f69b813463b349d6eadba18452c"
     },
     {
       "mode": "review",
       "toolCount": 30,
-      "deferredToolCount": 20,
-      "chars": 55692,
-      "estimatedTokens": 13923,
-      "sha256": "420eb8c17e98d4bd019f054fea25ceb97e25f48e7cbabaf1e97d3284380752fb"
+      "deferredToolCount": 21,
+      "chars": 55770,
+      "estimatedTokens": 13943,
+      "sha256": "ba7e95267a5527dc2e2f7ddd0446f4db363c71a20c3a9f2704a39479fb48a188"
     }
   ],
   "profileMatrix": {
@@ -674,7 +674,7 @@
     "sha256": "728ab3b3af1bce3bc82007af1e5bf9c7ae35a1d34a33046fc20b3b8094263a0f"
   },
   "toolInventory": {
-    "count": 69,
+    "count": 71,
     "driftCount": 0,
     "missingBySource": {
       "registry": [],
@@ -684,6 +684,6 @@
       "definition": [],
       "dispatch": []
     },
-    "sha256": "2d4a90093b03ec8ab0376065407b2af470b9b9d1674c68a1f829ea818a1397a9"
+    "sha256": "c20ca1d2a47aa9b8205ea08bcb885b420b20cddc1ad342f59e3c37fcd51f78b4"
   }
 }

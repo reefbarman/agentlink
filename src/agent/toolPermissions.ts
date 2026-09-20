@@ -13,6 +13,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "get_module_neighbors",
     "list_files",
     "open_file",
+    "get_editor_state",
     "search_session_history",
     "read_session_excerpt",
     "diagnose_activity",
@@ -22,6 +23,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
   ],
   edit: [
     "write_file",
+    "save_editor",
     "apply_diff",
     "find_and_replace",
     "rename_symbol",

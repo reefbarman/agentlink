@@ -2769,9 +2769,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!this.askAgentMcpHub) return;
     try {
       const configs = await loadAskAgentMcpConfigs();
-      await this.askAgentMcpHub.connect(configs, {
-        interactiveForNewServers: options?.interactiveForNewServers,
-      });
+      await this.askAgentMcpHub.disconnectAll();
+      await this.askAgentMcpHub.connect(configs, options);
       this.log(`[ask-agent:mcp] connected ${configs.length} server(s)`);
     } catch (err) {
       this.log(`[ask-agent:mcp] connection error: ${err}`);

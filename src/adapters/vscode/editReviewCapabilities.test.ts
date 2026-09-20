@@ -508,7 +508,7 @@ describe("createVscodeEditReviewProvider", () => {
         document_state: "differs_from_baseline",
         pending_buffer_matches_proposal: false,
         next_steps: [
-          "The unsaved editor buffer differs from the proposed content. Review and reconcile it before saving or retrying the file-edit tool call.",
+          "The unsaved editor buffer differs from the proposed content. Use get_editor_state to compare it with disk. Save the existing buffer with save_editor only if it is correct; otherwise reconcile it in VS Code.",
         ],
       });
       expect(applyEdit).not.toHaveBeenCalled();

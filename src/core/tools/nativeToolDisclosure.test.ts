@@ -165,6 +165,113 @@ describe("native tool disclosure snapshots", () => {
     expect(second.nextOffset).toBeUndefined();
   });
 
+  it("redirects exact queries for directly exposed tools", () => {
+    const snapshot = createNativeToolDisclosureSnapshot([
+      definition("execute_command", "Run a command"),
+      definition("get_terminal_output", "Read command output"),
+      definition("get_call_hierarchy", "Inspect calls"),
+    ]);
+
+    expect(
+      discoverNativeTools(snapshot, {
+        query: "execute_command get_terminal_output",
+      }),
+    ).toMatchObject({
+      tools: [],
+      total: 0,
+      directTools: ["execute_command", "get_terminal_output"],
+      guidance: expect.stringContaining("Call only those tools by name"),
+    });
+  });
+
+  it("keeps direct guidance alongside deferred matches", () => {
+    const snapshot = createNativeToolDisclosureSnapshot([
+      definition("read_file", "Read a file"),
+      definition("get_call_hierarchy", "Inspect calls"),
+    ]);
+
+    const result = discoverNativeTools(snapshot, {
+      query: "read_file get_call_hierarchy",
+    });
+
+    expect(result).toMatchObject({
+      tools: [expect.objectContaining({ name: "get_call_hierarchy" })],
+      directTools: ["read_file"],
+      guidance: expect.stringContaining("Already exposed directly: read_file"),
+    });
+  });
+
+  it("gives scoped guidance for mixed direct and excluded names", () => {
+    const snapshot = createNativeToolDisclosureSnapshot([
+      definition("read_file", "Read a file"),
+      definition("get_call_hierarchy", "Inspect calls"),
+    ]);
+
+    const result = discoverNativeTools(snapshot, {
+      query: "execute_command then read_file",
+    });
+
+    expect(result).toMatchObject({
+      tools: [],
+      directTools: ["read_file"],
+      unavailableTools: ["execute_command"],
+    });
+    expect(result.guidance).toContain("Already exposed directly: read_file");
+    expect(result.guidance).toContain(
+      "Not authorized in this provider request: execute_command",
+    );
+  });
+
+  it("does not classify natural-language phrases as exact direct tool names", () => {
+    const snapshot = createNativeToolDisclosureSnapshot([
+      definition("list_files", "List workspace files"),
+      definition("get_call_hierarchy", "Inspect calls"),
+    ]);
+
+    const result = discoverNativeTools(snapshot, {
+      query: "list files under src",
+    });
+
+    expect(result.directTools).toBeUndefined();
+    expect(result.unavailableTools).toBeUndefined();
+    expect(result.guidance).not.toContain("Already exposed directly");
+  });
+
+  it("identifies dormant names without suggesting a mode or profile change", () => {
+    const snapshot = createNativeToolDisclosureSnapshot([
+      definition("find_native_tools", "Discover deferred native tools"),
+      definition("show_notification", "Show a notification"),
+    ]);
+
+    expect(
+      discoverNativeTools(snapshot, { query: "show_notification" }),
+    ).toMatchObject({
+      tools: [],
+      dormantTools: ["show_notification"],
+      guidance: expect.stringContaining("Intentionally dormant"),
+    });
+  });
+
+  it("identifies exact native tool names excluded from the current request", () => {
+    const snapshot = createNativeToolDisclosureSnapshot([
+      definition("find_native_tools", "Discover deferred native tools"),
+      definition("read_file", "Read a file"),
+    ]);
+
+    expect(
+      discoverNativeTools(snapshot, {
+        query: "execute_command get_terminal_output",
+      }),
+    ).toMatchObject({
+      tools: [],
+      total: 0,
+      unavailableTools: ["execute_command", "get_terminal_output"],
+      guidance: expect.stringContaining(
+        "Not authorized in this provider request",
+      ),
+    });
+  });
+
   it("matches normalized names and ranks description query terms", () => {
     const snapshot = createNativeToolDisclosureSnapshot([
       definition("get_call_hierarchy", "Inspect incoming and outgoing calls"),

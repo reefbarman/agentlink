@@ -145,6 +145,90 @@ describe("App chat workspace integration", () => {
     ]);
   });
 
+  it.each(["", "Keep my existing draft."])(
+    "prefills Continue prompts without sending and preserves draft %j",
+    async (existingDraft) => {
+      const vscodeApi = createVsCodeApi();
+      render(<App vscodeApi={vscodeApi} />);
+      deliver({
+        type: "stateUpdate",
+        state: {
+          sessionId: "session-1",
+          mode: "code",
+          model: "claude-opus-5",
+          streaming: true,
+          projects: [{ projectId: "project-1", displayName: "Project" }],
+        },
+      });
+      deliver({
+        type: "agentTextDelta",
+        sessionId: "session-1",
+        text: "Ready for another slice.",
+      });
+      deliver({
+        type: "agentFinalMarker",
+        sessionId: "session-1",
+        marker: {
+          status: "completed",
+          source: "tool",
+          continueAction: {
+            label: "Implement next slice",
+            prompt: "Please implement the next UI slice, without releasing it.",
+          },
+        },
+      });
+      deliver({ type: "agentDone", sessionId: "session-1" });
+      deliver({
+        type: "agentModelsUpdate",
+        models: [
+          {
+            id: "claude-opus-5",
+            displayName: "Claude Opus",
+            provider: "anthropic",
+            authenticated: true,
+            reasoningEfforts: ["none", "low", "high"],
+          },
+        ],
+      });
+
+      const composer = screen.getByRole("textbox") as HTMLTextAreaElement;
+      fireEvent.input(composer, { target: { value: existingDraft } });
+      const continueButton = screen.getByRole("button", {
+        name: "Implement next slice",
+      });
+      fireEvent.click(continueButton);
+      await waitFor(() => {
+        expect(composer.value).toBe(
+          [
+            existingDraft,
+            "Please implement the next UI slice, without releasing it.",
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
+        );
+        expect(document.activeElement).toBe(composer);
+      });
+      expect(postedCommands(vscodeApi.postMessage, "agentSend")).toHaveLength(
+        0,
+      );
+      expect(screen.getByRole("button", { name: "Implement next slice" })).toBe(
+        continueButton,
+      );
+
+      fireEvent.input(composer, {
+        target: { value: "Only implement the button change." },
+      });
+      fireEvent.keyDown(composer, { key: "Enter" });
+      await waitFor(() => {
+        expect(postedCommands(vscodeApi.postMessage, "agentSend")).toEqual([
+          expect.objectContaining({
+            text: "Only implement the button change.",
+          }),
+        ]);
+      });
+    },
+  );
+
   it("restores Auto Continue independently for each tab", async () => {
     const vscodeApi = createVsCodeApi();
     const { container } = render(<App vscodeApi={vscodeApi} />);

@@ -1,5 +1,9 @@
 import type * as vscode from "vscode";
 
+import { createHash } from "crypto";
+import * as fs from "fs/promises";
+import * as os from "os";
+import * as path from "path";
 import {
   ErrorCode,
   McpError,
@@ -60,7 +64,9 @@ const mocks = vi.hoisted(() => ({
   callTool: vi.fn<(...args: unknown[]) => Promise<CallToolResult>>(
     async () => ({ content: [] }),
   ),
+  connect: vi.fn(async () => {}),
   close: vi.fn(async () => {}),
+  stdioTransports: [] as Array<{ onclose?: () => void }>,
   fetch: vi.fn<typeof fetch>(),
 }));
 
@@ -81,7 +87,9 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
       mocks.clientOptions = options;
     }
 
-    async connect(): Promise<void> {}
+    async connect(transport: unknown): Promise<void> {
+      await mocks.connect.call(transport);
+    }
     async close(): Promise<void> {
       await mocks.close();
     }
@@ -108,6 +116,7 @@ vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
 
     constructor(options: typeof mocks.stdioTransportOptions) {
       mocks.stdioTransportOptions = options;
+      mocks.stdioTransports.push(this);
     }
   },
 }));
@@ -216,6 +225,9 @@ describe("McpClientHub protocol correctness", () => {
     mocks.pluginSseUrl = undefined;
     mocks.pluginSseTransportOptions = undefined;
     mocks.stdioTransportOptions = undefined;
+    mocks.stdioTransports.length = 0;
+    mocks.connect.mockReset();
+    mocks.connect.mockResolvedValue(undefined);
     setCatalogPages(mocks.listTools, "tools", {
       first: { items: [] },
     });
@@ -276,6 +288,175 @@ describe("McpClientHub protocol correctness", () => {
       "one",
       "two",
     ]);
+  });
+
+  it("defers cache-cold mcp-remote until an active turn", async () => {
+    const configDirectory = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-mcp-remote-cold-"),
+    );
+    const remoteConfig: McpServerConfig = {
+      name: "datadog",
+      type: "stdio",
+      command: "npx",
+      args: [
+        "-y",
+        "mcp-remote@latest",
+        "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp",
+      ],
+      env: { MCP_REMOTE_CONFIG_DIR: configDirectory },
+    };
+    const hub = new McpClientHub(new FakeMemento());
+
+    try {
+      await hub.connect([remoteConfig]);
+
+      expect(mocks.connect).not.toHaveBeenCalled();
+      expect(hub.getServerConfig("datadog")).toEqual(remoteConfig);
+      expect(hub.getServerInfos()).toMatchObject([
+        {
+          name: "datadog",
+          status: "disconnected",
+          error: expect.stringContaining("agent turn"),
+        },
+      ]);
+
+      await hub.activatePendingInteractiveServers();
+      expect(mocks.connect).toHaveBeenCalledTimes(1);
+      expect(hub.getServerInfos()[0]?.status).toBe("connected");
+
+      await hub.activatePendingInteractiveServers();
+      expect(mocks.connect).toHaveBeenCalledTimes(1);
+    } finally {
+      await hub.disconnectAll();
+      await fs.rm(configDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("starts cache-warm mcp-remote during background connection", async () => {
+    const configDirectory = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-mcp-remote-warm-"),
+    );
+    const serverUrl = "https://mcp.example.test/service";
+    const resource = "https://api.example.test/";
+    const headers = { Authorization: "Bearer fixture", "X-Tenant": "demo" };
+    const authorizeParams = { audience: "datadog", prompt: "consent" };
+    const clientMetadataUrl = "https://client.example.test/metadata.json";
+    const tokenEndpoint = "https://auth.example.test/token";
+    const parts = [
+      serverUrl,
+      resource,
+      JSON.stringify(authorizeParams, Object.keys(authorizeParams).sort()),
+      JSON.stringify(headers, Object.keys(headers).sort()),
+      clientMetadataUrl,
+      tokenEndpoint,
+    ];
+    const serverHash = createHash("md5").update(parts.join("|")).digest("hex");
+    const cacheDirectory = path.join(configDirectory, "mcp-remote-v1");
+    await fs.mkdir(cacheDirectory);
+    await fs.writeFile(
+      path.join(cacheDirectory, `${serverHash}_tokens.json`),
+      JSON.stringify({
+        access_token: "cached-access",
+        refresh_token: "cached-refresh",
+        expires_at: Date.now() - 60_000,
+      }),
+    );
+    const hub = new McpClientHub(new FakeMemento());
+
+    try {
+      await hub.connect([
+        {
+          name: "warm",
+          type: "stdio",
+          command: "mcp-remote",
+          args: [
+            serverUrl,
+            "--resource",
+            resource,
+            "--authorize-param",
+            "prompt=consent",
+            "--authorize-param",
+            "audience=datadog",
+            "--header",
+            "X-Tenant:demo",
+            "--header",
+            "Authorization: Bearer fixture",
+            "--client-metadata-url",
+            clientMetadataUrl,
+            "--client-credentials",
+            "--token-endpoint",
+            tokenEndpoint,
+          ],
+          env: { MCP_REMOTE_CONFIG_DIR: configDirectory },
+        },
+      ]);
+
+      expect(mocks.connect).toHaveBeenCalledTimes(1);
+      expect(hub.getServerInfos()[0]?.status).toBe("connected");
+    } finally {
+      await hub.disconnectAll();
+      await fs.rm(configDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("pauses a failed mcp-remote startup without scheduling a retry", async () => {
+    vi.useFakeTimers();
+    const hub = new McpClientHub(new FakeMemento());
+    mocks.connect.mockRejectedValue(new Error("proxy startup failed"));
+
+    try {
+      await hub.connect(
+        [
+          {
+            name: "remote",
+            type: "stdio",
+            command: "mcp-remote",
+            args: ["https://mcp.example.test/service"],
+          },
+        ],
+        { interactiveServerNames: new Set(["remote"]) },
+      );
+
+      expect(mocks.connect).toHaveBeenCalledTimes(1);
+      expect(hub.getServerInfos()[0]).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("Automatic startup retries are paused"),
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mocks.connect).toHaveBeenCalledTimes(1);
+    } finally {
+      await hub.disconnectAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconnects mcp-remote after a previously healthy transport drops", async () => {
+    vi.useFakeTimers();
+    const hub = new McpClientHub(new FakeMemento());
+
+    try {
+      await hub.connect(
+        [
+          {
+            name: "remote",
+            type: "stdio",
+            command: "mcp-remote",
+            args: ["https://mcp.example.test/service"],
+          },
+        ],
+        { interactiveServerNames: new Set(["remote"]) },
+      );
+      expect(mocks.connect).toHaveBeenCalledTimes(1);
+
+      mocks.stdioTransports[0]?.onclose?.();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => expect(mocks.connect).toHaveBeenCalledTimes(2));
+
+      expect(hub.getServerInfos()[0]?.status).toBe("connected");
+    } finally {
+      await hub.disconnectAll();
+      vi.useRealTimers();
+    }
   });
 
   it.each(["sse", "streamable-http"] as const)(

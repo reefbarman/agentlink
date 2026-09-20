@@ -26,6 +26,7 @@ import {
   getContextGitStatus,
 } from "../../tools/context/getContext.js";
 import { hashContent } from "../../indexer/workerLib.js";
+import { refreshStructuralAliasLinks } from "../../indexer/structuralExtractor.js";
 import {
   canonicalizePath,
   getWorkspaceRoots,
@@ -265,12 +266,14 @@ export function createVscodeStructuralGraphProvider(
           },
         });
         return {
-          graph: projectStructuralRelations({
-            workspaceRoot,
-            indexName,
-            sources: snapshot.sources,
-            relations: snapshot.relations,
-          }),
+          graph: refreshStructuralAliasLinks(
+            projectStructuralRelations({
+              workspaceRoot,
+              indexName,
+              sources: snapshot.sources,
+              relations: snapshot.relations,
+            }),
+          ),
           workspaceRoot,
           indexName,
           structuralStorePath: structuralCachePath,

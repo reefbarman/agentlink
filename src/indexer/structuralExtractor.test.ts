@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildLineStarts,
   extractStructuralFile,
+  refreshStructuralAliasLinks,
   getLineNumberAtOffset,
   normalizeStructuralSymbolHints,
   shouldUseTreeSitterSymbolHints,
@@ -126,6 +127,234 @@ describe("extractStructuralFile", () => {
         hash: hashContent(content),
       }),
     ).toThrow("Path does not match its canonical workspace identity");
+  });
+
+  it("resolves exact and wildcard aliases with ordered fallbacks and longest-prefix precedence", () => {
+    writeFile(
+      "tsconfig.json",
+      `{
+      // JSONC is accepted
+      "compilerOptions": { "baseUrl": ".", "paths": {
+        "@/*": ["missing/*", "src/*"],
+        "@/special/*": ["special/*"],
+        "@/exact": ["exact.ts"],
+      } },
+    }`,
+    );
+    writeFile("src/foo.ts", "export const foo = 1;");
+    writeFile("special/foo.ts", "export const foo = 2;");
+    writeFile("exact.ts", "export const exact = 3;");
+    writeFile("src/folder/index.ts", "export const folder = 4;");
+    const result = extract(
+      "src/main.ts",
+      [
+        'import { foo } from "@/foo.js";',
+        'export { foo } from "@/special/foo";',
+        'const exact = require("@/exact");',
+        'const folder = import("@/folder");',
+        'import "external-package";',
+        'import "@/missing";',
+      ].join("\n"),
+    );
+    const imports = [...result.imports].sort(
+      (left, right) => left.line - right.line,
+    );
+    expect(imports.map((item) => item.resolvedRelPath)).toEqual([
+      "src/foo.ts",
+      "special/foo.ts",
+      "exact.ts",
+      "src/folder/index.ts",
+      undefined,
+      undefined,
+    ]);
+    expect(imports.slice(0, 4).every((item) => !item.external)).toBe(true);
+    expect(imports[4].external).toBe(true);
+    expect(imports[5].external).toBe(true);
+    expect(result.exports[0].resolvedRelPath).toBe("special/foo.ts");
+  });
+
+  it("uses nearest configs, relative extends origins, arrays and paths replacement", () => {
+    writeFile(
+      "configs/base.json",
+      '{"compilerOptions":{"paths":{"@/*":["../shared/*"],"old":["../shared/value.ts"]}}}',
+    );
+    writeFile(
+      "configs/override.json",
+      '{"compilerOptions":{"paths":{"@/*":["../other/*"]}}}',
+    );
+    writeFile("tsconfig.json", '{"extends":"./configs/base"}');
+    writeFile("shared/value.ts", "export const value = 1;");
+    writeFile("other/value.ts", "export const value = 2;");
+    expect(
+      extract("src/main.ts", 'import "@/value";').imports[0].resolvedRelPath,
+    ).toBe("shared/value.ts");
+    writeFile(
+      "nested/tsconfig.json",
+      '{"extends":["../configs/base.json","../configs/override.json"]}',
+    );
+    const result = extract(
+      "nested/main.ts",
+      'import "@/value";\nimport "old";',
+    );
+    expect(result.imports[0].resolvedRelPath).toBe("other/value.ts");
+    expect(result.imports[1].external).toBe(true);
+  });
+
+  it("applies a child baseUrl to inherited paths and exact mappings before wildcard patterns", () => {
+    writeFile(
+      "base.json",
+      '{"compilerOptions":{"baseUrl":"./old","paths":{"alias":["exact.ts"],"*": ["fallback/*"]}}}',
+    );
+    writeFile(
+      "tsconfig.json",
+      '{"extends":"./base.json","compilerOptions":{"baseUrl":"./new"}}',
+    );
+    writeFile("new/exact.ts", "export {};");
+    writeFile("new/fallback/alias.ts", "export {};");
+    expect(
+      extract("src/main.ts", 'import "alias";').imports[0].resolvedRelPath,
+    ).toBe("new/exact.ts");
+  });
+
+  it("does not fall back to parent mappings through an out-of-workspace config symlink", () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "alias-config-"));
+    try {
+      writeFile(
+        "tsconfig.json",
+        '{"compilerOptions":{"paths":{"alias":["value.ts"]}}}',
+      );
+      writeFile("value.ts", "export {};");
+      writeFile("nested/main.ts", "");
+      fs.writeFileSync(path.join(outside, "tsconfig.json"), "{}");
+      fs.symlinkSync(
+        path.join(outside, "tsconfig.json"),
+        path.join(workspaceRoot, "nested/tsconfig.json"),
+      );
+      expect(
+        extract("nested/main.ts", 'import "alias";').imports[0].resolvedRelPath,
+      ).toBeUndefined();
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("supports baseUrl, jsconfig, wildcard suffixes and workspace-contained package extends", () => {
+    writeFile(
+      "node_modules/@configs/base/package.json",
+      '{"tsconfig":"config.json"}',
+    );
+    writeFile(
+      "node_modules/@configs/base/config.json",
+      '{"compilerOptions":{"baseUrl":"../../../src","paths":{"~/*/suffix":["*"]}}}',
+    );
+    writeFile("jsconfig.json", '{"extends":"@configs/base"}');
+    writeFile("src/value.ts", "export const value = 1;");
+    const result = extract(
+      "app/main.js",
+      'import "~/value/suffix";\nimport "value";',
+    );
+    expect(result.imports.map((item) => item.resolvedRelPath)).toEqual([
+      "src/value.ts",
+      "src/value.ts",
+    ]);
+  });
+
+  it("rejects traversal and symlink alias escapes, including config extends", () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "alias-outside-"));
+    try {
+      fs.writeFileSync(
+        path.join(outside, "secret.ts"),
+        "export const secret = 1;",
+      );
+      fs.writeFileSync(
+        path.join(outside, "config.json"),
+        '{"compilerOptions":{"paths":{"@/*":["src/*"]}}}',
+      );
+      writeFile(
+        "tsconfig.json",
+        JSON.stringify({
+          compilerOptions: {
+            paths: {
+              escape: [path.join(outside, "secret.ts")],
+              linked: ["linked.ts"],
+              "@/*": ["src/*"],
+            },
+          },
+        }),
+      );
+      fs.symlinkSync(
+        path.join(outside, "secret.ts"),
+        path.join(workspaceRoot, "linked.ts"),
+      );
+      const result = extract(
+        "src/main.ts",
+        'import "escape";\nimport "linked";\nimport "@/../../outside";',
+      );
+      expect(
+        result.imports.every((item) => !item.resolvedRelPath && item.external),
+      ).toBe(true);
+      writeFile("src/value.ts", "export const value = 1;");
+      writeFile(
+        "tsconfig.json",
+        JSON.stringify({ extends: path.join(outside, "config.json") }),
+      );
+      expect(
+        extract("src/main.ts", 'import "@/value";').imports[0].resolvedRelPath,
+      ).toBeUndefined();
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    '{"extends":"./tsconfig.json"}',
+    '{"compilerOptions":{"paths":{"@/*":42}}}',
+    "{broken",
+  ])("fails safely for invalid or cyclic config %s", (config) => {
+    writeFile("tsconfig.json", config);
+    writeFile("src/value.ts", "export const value = 1;");
+    expect(
+      extract("src/main.ts", 'import "@/value";').imports[0].resolvedRelPath,
+    ).toBeUndefined();
+  });
+
+  it("refreshes existing graph links after config-only edits without mutating stored entries", () => {
+    writeFile(
+      "tsconfig.json",
+      '{"compilerOptions":{"paths":{"@/*":["src/*"]}}}',
+    );
+    writeFile("src/value.ts", "export const value = 1;");
+    writeFile("next/value.ts", "export const value = 2;");
+    const entry = extract(
+      "src/main.ts",
+      'import "@/value";\nexport * from "@/value";',
+    );
+    const graph = {
+      version: 1 as const,
+      workspaceRoot,
+      generatedAt: "now",
+      files: { "src/main.ts": entry },
+    };
+    writeFile(
+      "tsconfig.json",
+      '{"compilerOptions":{"paths":{"@/*":["next/*"]}}}',
+    );
+    const refreshed = refreshStructuralAliasLinks(graph);
+    expect(refreshed.files["src/main.ts"].imports[0].resolvedRelPath).toBe(
+      "next/value.ts",
+    );
+    expect(refreshed.files["src/main.ts"].exports[0].resolvedRelPath).toBe(
+      "next/value.ts",
+    );
+    expect(entry.imports[0].resolvedRelPath).toBe("src/value.ts");
+    fs.unlinkSync(path.join(workspaceRoot, "tsconfig.json"));
+    expect(
+      refreshStructuralAliasLinks(refreshed).files["src/main.ts"].imports[0],
+    ).toMatchObject({ external: true });
+    expect(
+      refreshStructuralAliasLinks(refreshed).files["src/main.ts"].imports[0]
+        .resolvedRelPath,
+    ).toBeUndefined();
   });
 
   it("bounds module-resolution candidate checks", () => {

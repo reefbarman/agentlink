@@ -40,7 +40,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   find_native_tools: {
     label: "Discover deferred native tools",
     description:
-      "Discover native AgentLink tools deferred from the provider request. When a requested capability is not directly exposed, search this catalog before saying it is unavailable; image generation is a common deferred capability. Searches only the immutable, request-authorized catalog and returns bounded, deterministic results. Discovery cannot broaden mode, profile, skill, background, web, or surface restrictions.",
+      "Discover native AgentLink tools deferred from the provider request. Use this only for tools named in the deferred catalog appended to this description. Direct tools must be called by name, not searched here. When exact requested names are direct or excluded from the current request, the result says so and gives actionable guidance. Searches only the immutable, request-authorized catalog and cannot broaden mode, profile, skill, background, web, or surface restrictions.",
   },
   call_native_tool: {
     label: "Invoke deferred native tool",
@@ -236,6 +236,16 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
       "Close managed terminals to clean up clutter. With no arguments, closes all terminals created by agentlink. Pass specific names to close only those (e.g. ['Server'] to close a background dev server terminal). Recently closed output and final status remain retrievable by terminal ID.",
   },
 
+  get_editor_state: {
+    label: "Inspect unsaved editor state",
+    description:
+      "Inspect an existing file-backed VS Code editor without changing it. Returns bounded buffer content and disk-to-buffer differences, editor version, and disk/editor SHA-256 hashes for save recovery. Eligible configuration secrets are redacted. Files/buffers above 256 KiB require native editor inspection. Disk read tools do not expose unsaved buffer content.",
+  },
+  save_editor: {
+    label: "Save reviewed editor buffer",
+    description:
+      "Save an existing VS Code editor buffer without formatting, replacement, or reversion. Requires hashes and version from get_editor_state and fresh human approval of the complete save diff. Stale state or unsupported/protected targets fail safely; rejection leaves unsaved work intact. Does not grant persistent write trust. Large diffs require manual VS Code save.",
+  },
   open_file: {
     label: "Open in editor",
     description:

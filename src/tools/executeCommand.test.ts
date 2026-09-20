@@ -3790,6 +3790,40 @@ describe("handleExecuteCommand", () => {
       code: "managed_network_tls_trust",
     },
     {
+      name: "Speakeasy macOS TLS trust failure through mise",
+      command: "mise run gen:sdk",
+      output:
+        "speakeasy: GET https://app.speakeasy.com/v1/auth/validate: tls: failed to verify certificate: x509: OSStatus -26276",
+      code: "managed_network_tls_trust",
+      action: "fix_trust_and_retry",
+      sameCommand: true,
+    },
+    {
+      name: "compound Speakeasy macOS TLS trust failure",
+      command: "mise run gen:goa-server && mise run gen:sdk",
+      output:
+        "speakeasy: GET https://app.speakeasy.com/v1/auth/validate: tls: failed to verify certificate: x509: OSStatus -26276",
+      code: "managed_network_tls_trust",
+      action: "isolate_failed_step_after_trust_repair",
+      sameCommand: false,
+    },
+    {
+      name: "npm cache HOME denial",
+      command: "npm view vite version",
+      output: `npm error code EPERM\nnpm error syscall open\nnpm error path ${os.homedir()}/.npm/_cacache/tmp/fixture`,
+      code: "sandbox_missing_capabilities",
+      action: "retry_with_missing_sandbox_capabilities",
+      sameCommand: true,
+    },
+    {
+      name: "compound npm cache HOME denial",
+      command: "npm view vite version && npm view vitest version",
+      output: `npm error code EPERM\nnpm error syscall open\nnpm error path ${os.homedir()}/.npm/_cacache/tmp/fixture`,
+      code: "sandbox_missing_capabilities",
+      action: "isolate_failed_step_with_temporary_home",
+      sameCommand: false,
+    },
+    {
       name: "macOS GitHub CLI TLS trust failure",
       command: "gh run list --repo owner/repo",
       output:
@@ -3820,7 +3854,7 @@ describe("handleExecuteCommand", () => {
     },
   ])(
     "attaches bounded guidance after a managed-network $name without retrying natively",
-    async ({ command, output, code }) => {
+    async ({ command, output, code, action, sameCommand }) => {
       const execute = vi.fn(async () => ({
         exit_code: 1,
         output,
@@ -3886,6 +3920,12 @@ describe("handleExecuteCommand", () => {
         security: { route: "sandbox" },
         retry_guidance: { code, automatic_retry: false },
       });
+      if (action) {
+        expect(payload.retry_guidance.options[0]).toMatchObject({
+          action,
+          same_command: sameCommand,
+        });
+      }
       expect(payload.retry_lineage_id).toBeUndefined();
     },
   );
@@ -4017,7 +4057,7 @@ describe("handleExecuteCommand", () => {
       name: "Turbopack internal listener denial",
       command: "pnpm build",
       output:
-        "Turbopack panic: failed to bind internal worker socket: Operation not permitted (os error 1)",
+        "Turbopack panic\nCaused by:\n- creating new process\n- binding to a port\n- Operation not permitted (os error 1)",
       missing: ["network.allow_local_binding"],
       action: "retry_with_missing_sandbox_capabilities",
       option: {
@@ -4041,6 +4081,58 @@ describe("handleExecuteCommand", () => {
       name: "host process inspection denial",
       command: "ps aux",
       output: "/bin/ps: operation not permitted",
+      action: "reviewed_native_retry",
+      code: "sandbox_host_integration",
+      option: {
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    },
+    {
+      name: "tsx Unix IPC denial",
+      command: "npx tsx /tmp/probe.ts",
+      output:
+        "Error: listen EPERM: operation not permitted /private/var/folders/tmp/tsx-501/12345.pipe",
+      action: "reviewed_native_retry",
+      code: "sandbox_host_integration",
+      option: {
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    },
+    {
+      name: "compound mise-wrapped container runtime socket denial",
+      command: "mise run prepare && mise run test:server",
+      output:
+        "permission denied while trying to connect to unix:///Users/test/.colima/default/docker.sock",
+      action: "isolate_failed_step_for_reviewed_native_retry",
+      code: "sandbox_host_integration",
+      option: {
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+      sameCommand: false,
+    },
+    {
+      name: "mise-wrapped container runtime socket denial",
+      command: "mise run test:server",
+      output:
+        "permission denied while trying to connect to unix:///Users/test/.colima/default/docker.sock",
+      action: "reviewed_native_retry",
+      code: "sandbox_host_integration",
+      option: {
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    },
+    {
+      name: "mise trusted-config symlink denial",
+      command: "mise run gen:sqlc-server",
+      output: `failed to ln -sf /workspace/project/mise.toml ${os.homedir()}/.local/state/mise/trusted-configs/project: Operation not permitted`,
       action: "reviewed_native_retry",
       code: "sandbox_host_integration",
       option: {
@@ -4121,6 +4213,7 @@ describe("handleExecuteCommand", () => {
       action,
       code = "sandbox_missing_capabilities",
       option,
+      sameCommand = true,
     }) => {
       const execute = vi.fn(async () => ({
         exit_code: 1,
@@ -4171,7 +4264,7 @@ describe("handleExecuteCommand", () => {
           options: [
             {
               action,
-              same_command: true,
+              same_command: sameCommand,
               ...option,
             },
           ],
@@ -4280,6 +4373,13 @@ describe("handleExecuteCommand", () => {
       approvalPolicy: "approve-for-me" as const,
     },
     {
+      name: "mixed compound HOME output without a correlated write denial",
+      params: { command: "echo EPERM && npm view vite version" },
+      output: `unrelated EPERM\nunrelated syscall open\nnpm error path ${os.homedir()}/.npm/_cacache/tmp/fixture`,
+      outputComplete: true,
+      approvalPolicy: "approve-for-me" as const,
+    },
+    {
       name: "host HOME mention without a write denial",
       params: { command: "npm test" },
       output: `Reading configuration from ${os.homedir()}/.config/tool/config.json`,
@@ -4330,9 +4430,58 @@ describe("handleExecuteCommand", () => {
       approvalPolicy: "approve-for-me" as const,
     },
     {
+      name: "Turbopack listener denial after local binding grant",
+      params: {
+        command: "pnpm build",
+        sandbox_permissions: "with_additional_permissions" as const,
+        additional_permissions: {
+          network: { allow_local_binding: true as const },
+        },
+        reason: "Run the build's internal listener.",
+      },
+      output:
+        "Turbopack panic\nCaused by:\n- binding to a port\n- Operation not permitted (os error 1)",
+      outputComplete: true,
+      approvalPolicy: "approve-for-me" as const,
+      expectedCode: "sandbox_capability_unresolved",
+      expectedAction: "inspect_listener_denial",
+    },
+    {
+      name: "tsx Unix IPC denial after unrelated TCP grant",
+      params: {
+        command: "npx tsx /tmp/probe.ts",
+        sandbox_permissions: "with_additional_permissions" as const,
+        additional_permissions: {
+          network: { allow_local_binding: true as const },
+        },
+        reason: "Run the probe.",
+      },
+      output:
+        "Error: listen EPERM: operation not permitted /private/tmp/tsx-501/123.pipe",
+      outputComplete: true,
+      approvalPolicy: "approve-for-me" as const,
+      expectedCode: "sandbox_host_integration",
+      expectedAction: "reviewed_native_retry",
+    },
+    {
       name: "temporary HOME already requested",
       params: { command: "npm test", temporary_home: true as const },
       output: `npm error failed to write '${os.homedir()}/.npm/_logs/error.log'`,
+      outputComplete: true,
+      approvalPolicy: "approve-for-me" as const,
+    },
+    {
+      name: "unrelated command printing a tsx-shaped pipe denial",
+      params: { command: "echo diagnostic" },
+      output:
+        "Error: listen EPERM: operation not permitted /private/tmp/tsx-501/123.pipe",
+      outputComplete: true,
+      approvalPolicy: "approve-for-me" as const,
+    },
+    {
+      name: "unrelated command printing a mise trusted-config denial",
+      params: { command: "echo diagnostic" },
+      output: `failed to ln -sf /workspace/project/mise.toml ${os.homedir()}/.local/state/mise/trusted-configs/project: Operation not permitted`,
       outputComplete: true,
       approvalPolicy: "approve-for-me" as const,
     },
@@ -4341,6 +4490,21 @@ describe("handleExecuteCommand", () => {
       params: { command: "echo diagnostic" },
       output:
         "permission denied while trying to connect to /Users/test/.colima/default/docker.sock",
+      outputComplete: true,
+      approvalPolicy: "approve-for-me" as const,
+    },
+    {
+      name: "Turbopack import failure near unrelated permission text",
+      params: { command: "pnpm build" },
+      output:
+        "Turbopack build started\nfailed to import stylesheet\npermission denied while opening output.css",
+      outputComplete: true,
+      approvalPolicy: "approve-for-me" as const,
+    },
+    {
+      name: "distant Turbopack output",
+      params: { command: "pnpm build" },
+      output: `Turbopack build started\n${"ordinary line\n".repeat(8)}binding to a port\nOperation not permitted`,
       outputComplete: true,
       approvalPolicy: "approve-for-me" as const,
     },
@@ -4360,6 +4524,8 @@ describe("handleExecuteCommand", () => {
       outputComplete,
       approvalPolicy,
       workspaceRoots,
+      expectedCode,
+      expectedAction,
     }) => {
       if (workspaceRoots) {
         getWorkspaceRoots.mockReturnValue(workspaceRoots);
@@ -4419,7 +4585,16 @@ describe("handleExecuteCommand", () => {
         },
       );
 
-      expect(textPayload(result).retry_guidance).toBeUndefined();
+      if (expectedCode) {
+        const guidance = textPayload(result).retry_guidance;
+        expect(guidance).toMatchObject({
+          code: expectedCode,
+          automatic_retry: false,
+        });
+        expect(guidance.options[0]).toMatchObject({ action: expectedAction });
+      } else {
+        expect(textPayload(result).retry_guidance).toBeUndefined();
+      }
     },
   );
 

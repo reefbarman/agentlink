@@ -5,6 +5,7 @@ import * as path from "path";
 import type {
   BrowserGatewayAskAgentHistorySnapshot,
   BrowserGatewayAskAgentPrivateModelHistory,
+  BrowserGatewayAskAgentQueuedMessage,
 } from "./browserGatewayAskAgentSessionStore.js";
 
 import { CORE_WEB_ACCESS_DEFAULT_MAX_REPLAY_BYTES_PER_TURN } from "../core/webAccess.js";
@@ -78,6 +79,52 @@ function isCoreModelMessage(value: unknown): value is CoreModelMessage {
   );
 }
 
+function normalizeQueuedMessages(
+  value: unknown,
+): BrowserGatewayAskAgentQueuedMessage[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const messages = value.slice(0, 16).flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const item = entry as Record<string, unknown>;
+    const id = typeof item.id === "string" ? item.id.trim() : "";
+    const text = typeof item.text === "string" ? item.text : "";
+    if (!id || !text.trim()) return [];
+    const media = (key: "images" | "documents") =>
+      Array.isArray(item[key])
+        ? item[key].flatMap((candidate) => {
+            if (!candidate || typeof candidate !== "object") return [];
+            const value = candidate as Record<string, unknown>;
+            return typeof value.name === "string" &&
+              typeof value.mimeType === "string" &&
+              typeof value.base64 === "string"
+              ? [
+                  {
+                    name: value.name,
+                    mimeType: value.mimeType,
+                    base64: value.base64,
+                  },
+                ]
+              : [];
+          })
+        : [];
+    const images = media("images");
+    const documents = media("documents");
+    return [
+      {
+        id,
+        text,
+        ...(images.length > 0 ? { images } : {}),
+        ...(documents.length > 0 ? { documents } : {}),
+        ...(typeof item.instanceId === "string" && item.instanceId.trim()
+          ? { instanceId: item.instanceId.trim() }
+          : {}),
+        source: "browser" as const,
+      },
+    ];
+  });
+  return messages.length > 0 ? messages : undefined;
+}
+
 function normalizeHistorySnapshot(
   value: unknown,
 ): BrowserGatewayAskAgentHistorySnapshot {
@@ -105,6 +152,7 @@ function normalizeHistorySnapshot(
             lastActiveAt?: unknown;
             messages?: unknown;
             nextMessageSequence?: unknown;
+            queuedMessages?: unknown;
             generateImageApproved?: unknown;
             privateModelHistory?: unknown;
           };
@@ -134,6 +182,7 @@ function normalizeHistorySnapshot(
           const privateModelHistory = normalizePrivateModelHistory(
             item.privateModelHistory,
           );
+          const queuedMessages = normalizeQueuedMessages(item.queuedMessages);
           return {
             id,
             title,
@@ -141,6 +190,7 @@ function normalizeHistorySnapshot(
             lastActiveAt,
             messages,
             nextMessageSequence,
+            ...(queuedMessages ? { queuedMessages } : {}),
             ...(item.generateImageApproved === true
               ? { generateImageApproved: true }
               : {}),

@@ -39,6 +39,15 @@ describe("TOOL_REGISTRY", () => {
     );
   });
 
+  it("tells agents to call direct tools instead of searching the deferred catalog", () => {
+    expect(TOOL_REGISTRY.find_native_tools.description).toContain(
+      "Direct tools must be called by name",
+    );
+    expect(TOOL_REGISTRY.find_native_tools.description).toContain(
+      "excluded from the current request",
+    );
+  });
+
   it("tells agents that execute_command already disables interactive pagers", () => {
     expect(TOOL_REGISTRY.execute_command.description).toContain(
       "AgentLink already disables interactive pagers consistently",

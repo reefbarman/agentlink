@@ -12,6 +12,7 @@ export function useAutoScroll({ contentPresent }: UseAutoScrollOptions) {
   const contentRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
   const expectedProgrammaticScrollTopRef = useRef<number | null>(null);
+  const lastObservedScrollTopRef = useRef<number | null>(null);
   const pendingAnimationFrameRef = useRef<number | null>(null);
   const scrollSequenceRef = useRef(0);
 
@@ -22,9 +23,9 @@ export function useAutoScroll({ contentPresent }: UseAutoScrollOptions) {
   const scrollToBottom = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
-    const scrollTop = container.scrollHeight;
-    markProgrammaticScroll(scrollTop);
-    container.scrollTop = scrollTop;
+    container.scrollTop = container.scrollHeight;
+    markProgrammaticScroll(container.scrollTop);
+    lastObservedScrollTopRef.current = container.scrollTop;
   }, [markProgrammaticScroll]);
 
   const cancelPendingScrolls = useCallback(() => {
@@ -64,19 +65,27 @@ export function useAutoScroll({ contentPresent }: UseAutoScrollOptions) {
   const handleScroll = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
+    const scrollTop = container.scrollTop;
     const expectedScrollTop = expectedProgrammaticScrollTopRef.current;
     expectedProgrammaticScrollTopRef.current = null;
-    if (
-      expectedScrollTop !== null &&
-      container.scrollTop === expectedScrollTop
-    ) {
+    if (expectedScrollTop !== null && scrollTop === expectedScrollTop) {
+      lastObservedScrollTopRef.current = scrollTop;
       return;
     }
+
+    const previousScrollTop = lastObservedScrollTopRef.current;
+    lastObservedScrollTopRef.current = scrollTop;
+    if (previousScrollTop !== null && scrollTop < previousScrollTop) {
+      shouldAutoScrollRef.current = false;
+      cancelPendingScrolls();
+      return;
+    }
+
     const distanceFromBottom =
-      container.scrollHeight - container.scrollTop - container.clientHeight;
+      container.scrollHeight - scrollTop - container.clientHeight;
     shouldAutoScrollRef.current =
       distanceFromBottom < BOTTOM_DISTANCE_THRESHOLD;
-  }, []);
+  }, [cancelPendingScrolls]);
 
   return {
     containerRef,

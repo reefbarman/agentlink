@@ -759,6 +759,53 @@ describe("AgentEngine", () => {
       expect(session.getActiveSkillAllowedTools()).toEqual(["read_file"]);
     });
 
+    it.each([
+      { inherited: ["Bash"], expected: ["execute_command"] },
+      { inherited: [], expected: [] },
+      { inherited: ["Bash(git:*)"], expected: [] },
+    ])(
+      "normalizes legacy inherited aliases without widening $inherited",
+      async ({ inherited, expected }) => {
+        const provider = makeMockProvider();
+        provider.stream = async function* () {
+          yield* makeProviderStream({ text: "done" });
+        };
+        const session = await makeSession();
+        session.addUserMessage("inspect authority");
+        const skill = makeSkillEntry("shell", "b".repeat(64), [
+          "execute_command",
+        ]);
+        session.setAdvertisedSkills([skill]);
+        session.trackLoadedSkill({
+          id: skill.id,
+          name: skill.name,
+          revision: skill.revision,
+          skillPath: skill.skillPath,
+        });
+        const policies: Array<readonly string[] | undefined> = [];
+        const engine = new AgentEngine(makeRegistry(provider));
+        engine.setToolRuntime({
+          listTools: (request) => {
+            policies.push(request.skillAllowedTools);
+            return [];
+          },
+          isParallelSafe: () => false,
+          executeTool: async () => ({ content: [] }),
+        });
+        await collectEvents(
+          engine.run(session, {
+            inheritedSkillAuthority: {
+              schemaVersion: 1,
+              sources: [],
+              allowedTools: inherited,
+            },
+          }),
+        );
+        expect(policies.length).toBeGreaterThan(0);
+        for (const policy of policies) expect(policy).toEqual(expected);
+      },
+    );
+
     it("intersects inherited skill authority with child skill restrictions", async () => {
       const childSkill = makeSkillEntry("child-broad", "b".repeat(64), [
         "read_file",

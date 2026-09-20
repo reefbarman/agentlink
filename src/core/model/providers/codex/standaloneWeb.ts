@@ -107,10 +107,8 @@ export async function executeCodexStandaloneWeb(
       : records;
   const citations = citationsFromRecords(visibleRecords);
   const rawOutput = typeof payload.output === "string" ? payload.output : "";
-  const initialNextStartLine = paginationMetadata(
-    rawOutput,
-    prepared.startLine,
-  ).next_start_line;
+  const initialPagination = paginationMetadata(rawOutput, prepared.startLine);
+  const initialNextStartLine = initialPagination.next_start_line;
   const paginatedOutput =
     request.operation === "fetch" &&
     request.retainOutput &&
@@ -129,6 +127,7 @@ export async function executeCodexStandaloneWeb(
       : {
           output: rawOutput,
           nextStartLine: initialNextStartLine,
+          stalled: initialPagination.stalled,
         };
   const visibleContent =
     request.operation === "search" && visibleRecords.length > 0
@@ -141,6 +140,7 @@ export async function executeCodexStandaloneWeb(
             request.operation === "fetch" ? request.retainOutput : undefined,
           nextStartLine: paginatedOutput.nextStartLine,
           recoveryStartLine: initialNextStartLine,
+          stalled: paginatedOutput.stalled,
         });
   const content = visibleContent.content;
   if (!content.trim()) {
@@ -478,6 +478,7 @@ function prepareVisibleContent(params: {
   retainOutput?: (content: string) => string | null;
   nextStartLine?: number;
   recoveryStartLine?: number;
+  stalled?: boolean;
 }): {
   content: string;
   metadata?: {
@@ -492,17 +493,22 @@ function prepareVisibleContent(params: {
   const inlineTruncated = visible.length > params.maxCharacters;
   const hasAdditionalPages =
     retained !== visible || params.nextStartLine !== undefined;
-  if (!inlineTruncated && !hasAdditionalPages) return { content: visible };
+  if (!inlineTruncated && !hasAdditionalPages && !params.stalled)
+    return { content: visible };
 
   const outputFile = params.retainOutput?.(retained) ?? null;
-  const nextStartLine = outputFile
-    ? params.nextStartLine
-    : (params.recoveryStartLine ?? params.nextStartLine);
-  const outputWarning = outputFile
-    ? params.nextStartLine === undefined
-      ? "Content beyond the inline preview was saved to output_file; use read_file(output_file) instead of repeating web_fetch."
-      : "Paginated provider content was saved to output_file, but more remains; use read_file(output_file), then call web_fetch with next_start_line only if needed."
-    : "Content was truncated, and provider output could not be retained. Continue with next_start_line when available.";
+  const nextStartLine = params.stalled
+    ? undefined
+    : outputFile
+      ? params.nextStartLine
+      : (params.recoveryStartLine ?? params.nextStartLine);
+  const outputWarning = params.stalled
+    ? `Provider pagination did not advance. Stopped without appending the non-advancing page or advertising a continuation line.${outputFile ? " Use read_file(output_file) for retained content." : " No retained output file is available."}`
+    : outputFile
+      ? params.nextStartLine === undefined
+        ? "Content beyond the inline preview was saved to output_file; use read_file(output_file) instead of repeating web_fetch."
+        : "Paginated provider content was saved to output_file, but more remains; use read_file(output_file), then call web_fetch with next_start_line only if needed."
+      : "Content was truncated, and provider output could not be retained. Continue with next_start_line when available.";
   const preview = inlineTruncated
     ? visible.slice(0, params.maxCharacters).trimEnd()
     : visible;
@@ -527,12 +533,14 @@ async function collectFetchPages(params: {
   executeRequest: (
     body: Record<string, unknown>,
   ) => Promise<CodexStandaloneWebResponse>;
-}): Promise<{ output: string; nextStartLine?: number }> {
+}): Promise<{ output: string; nextStartLine?: number; stalled?: boolean }> {
   const outputs = [params.initialOutput.trim()];
-  let nextStartLine = paginationMetadata(
+  const initial = paginationMetadata(
     params.initialOutput,
     params.initialStartLine,
-  ).next_start_line;
+  );
+  let nextStartLine = initial.next_start_line;
+  let stalled = initial.stalled;
   for (
     let requestCount = 1;
     nextStartLine !== undefined && requestCount < MAX_FETCH_PAGE_REQUESTS;
@@ -543,35 +551,51 @@ async function collectFetchPages(params: {
     const payload = await params.executeRequest(params.prepare(requestedLine));
     const output =
       typeof payload.output === "string" ? payload.output.trim() : "";
-    if (!output) break;
-    outputs.push(output);
-    const following = paginationMetadata(output, requestedLine).next_start_line;
-    if (following === undefined || following <= requestedLine) {
-      nextStartLine = following;
+    const progress = paginationMetadata(output, requestedLine);
+    if (!output || progress.stalled) {
+      stalled = true;
+      nextStartLine = undefined;
       break;
     }
-    nextStartLine = following;
+    // Providers may return an overlapping window around the requested line.
+    // Keep complete new line blocks (including wrapped text), not repeated nav.
+    const blocks = [
+      ...output.matchAll(/^L(\d+):[^\n]*(?:\n(?!L\d+:)[^\n]*)*/gm),
+    ];
+    const hasOverlap = blocks.some((block) => Number(block[1]) < requestedLine);
+    outputs.push(
+      hasOverlap
+        ? blocks
+            .filter((block) => Number(block[1]) >= requestedLine)
+            .map((block) => block[0])
+            .join("\n")
+        : output,
+    );
+    nextStartLine = progress.next_start_line;
   }
   return {
     output: outputs.join("\n\n"),
     ...(nextStartLine !== undefined ? { nextStartLine } : {}),
+    ...(stalled ? { stalled: true } : {}),
   };
 }
 
 function paginationMetadata(
   content: string,
   requestedStartLine: number | undefined,
-): { next_start_line?: number } {
+): { next_start_line?: number; stalled?: boolean } {
   const totalMatch = content.match(/\bTotal lines:\s*(\d+)\b/i);
-  if (!totalMatch) return {};
-  const totalLines = Number(totalMatch[1]);
-  let highestLine = requestedStartLine ?? -1;
-  let hasLineContent = false;
+  const totalLines = totalMatch ? Number(totalMatch[1]) : undefined;
+  let highestLine = -1;
   for (const match of content.matchAll(/^L(\d+):/gm)) {
-    hasLineContent = true;
-    highestLine = Math.max(highestLine, Number(match[1]));
+    const line = Number(match[1]);
+    if (Number.isSafeInteger(line)) highestLine = Math.max(highestLine, line);
   }
-  return hasLineContent &&
+  if (requestedStartLine !== undefined && highestLine < requestedStartLine) {
+    return { stalled: true };
+  }
+  return highestLine >= 0 &&
+    totalLines !== undefined &&
     Number.isSafeInteger(totalLines) &&
     highestLine + 1 < totalLines
     ? { next_start_line: highestLine + 1 }

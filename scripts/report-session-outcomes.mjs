@@ -135,6 +135,8 @@ export function readSessionOutcomes(inputPath, filters = {}) {
       mergeBackground(report, record);
     } else if (record.type === "approval_interruption") {
       mergeApprovalInterruption(report, record);
+    } else if (record.type === "guardian_shadow_comparison") {
+      mergeGuardianShadowComparison(report, record);
     } else report.unknownEvents += 1;
   }
   finalizeReport(report);
@@ -228,6 +230,21 @@ function createEmptyReport() {
       byReason: {},
       byGuardianStatus: {},
       byRisk: {},
+    },
+    guardianShadow: {
+      count: 0,
+      completed: 0,
+      agreements: 0,
+      disagreements: 0,
+      comparableDurations: 0,
+      shadowFaster: 0,
+      redacted: 0,
+      evidenceWithheld: 0,
+      byStatus: {},
+      primaryDurationsMs: [],
+      shadowDurationsMs: [],
+      inputTokens: 0,
+      outputTokens: 0,
     },
     byVersion: {},
     indicators: {},
@@ -725,6 +742,34 @@ function mergeApprovalInterruption(report, record) {
   versionBucket(report, record).approvalInterruptions += 1;
 }
 
+function mergeGuardianShadowComparison(report, record) {
+  const shadow = report.guardianShadow;
+  shadow.count += 1;
+  const status =
+    typeof record.shadowStatus === "string" ? record.shadowStatus : "unknown";
+  shadow.byStatus[status] = (shadow.byStatus[status] ?? 0) + 1;
+  if (record.shadowInputRedacted === true) shadow.redacted += 1;
+  if (record.shadowEvidenceWithheld === true) shadow.evidenceWithheld += 1;
+  shadow.inputTokens += asCount(record.shadowInputTokens);
+  shadow.outputTokens += asCount(record.shadowOutputTokens);
+  if (status === "completed") shadow.completed += 1;
+  if (status === "completed" && record.primaryStatus === "reviewed") {
+    if (record.outcomesAgree === true) shadow.agreements += 1;
+    else if (record.outcomesAgree === false) shadow.disagreements += 1;
+    if (
+      Number.isFinite(record.primaryDurationMs) &&
+      Number.isFinite(record.shadowDurationMs)
+    ) {
+      shadow.comparableDurations += 1;
+      shadow.primaryDurationsMs.push(record.primaryDurationMs);
+      shadow.shadowDurationsMs.push(record.shadowDurationMs);
+      if (record.shadowFaster === true) shadow.shadowFaster += 1;
+    }
+  }
+  if (typeof record.sessionId === "string")
+    report.sessions.add(record.sessionId);
+}
+
 function updateRange(report, value) {
   if (typeof value !== "string" || !value) return;
   if (!report.periodStart || value < report.periodStart) {
@@ -1058,6 +1103,54 @@ function printSummary(report, inputPath, top) {
             .sort(([, a], [, b]) => b - a)
             .map(([risk, count]) => `${risk}:${count}`)
             .join(" ") || "none",
+        ],
+      ],
+    );
+  }
+
+  const shadow = report.guardianShadow;
+  if (shadow.count > 0) {
+    console.log("");
+    console.log("TypeSafe Guardian shadow comparisons (non-authoritative)");
+    printTable(
+      ["metric", "value"],
+      [
+        ["attempts", shadow.count],
+        ["completed", `${shadow.completed}/${shadow.count}`],
+        [
+          "status",
+          Object.entries(shadow.byStatus)
+            .sort(([, a], [, b]) => b - a)
+            .map(([status, count]) => `${status}:${count}`)
+            .join(" "),
+        ],
+        ["input redacted", `${shadow.redacted}/${shadow.count}`],
+        ["evidence withheld", `${shadow.evidenceWithheld}/${shadow.count}`],
+        [
+          "outcome agreement",
+          shadow.agreements + shadow.disagreements > 0
+            ? formatPercent(
+                shadow.agreements / (shadow.agreements + shadow.disagreements),
+              )
+            : "n/a",
+        ],
+        [
+          "shadow faster",
+          shadow.comparableDurations > 0
+            ? formatPercent(shadow.shadowFaster / shadow.comparableDurations)
+            : "n/a",
+        ],
+        [
+          "current Guardian p50 / p95",
+          `${formatOptionalDuration(percentile(shadow.primaryDurationsMs, 0.5))} / ${formatOptionalDuration(percentile(shadow.primaryDurationsMs, 0.95))}`,
+        ],
+        [
+          "TypeSafe p50 / p95",
+          `${formatOptionalDuration(percentile(shadow.shadowDurationsMs, 0.5))} / ${formatOptionalDuration(percentile(shadow.shadowDurationsMs, 0.95))}`,
+        ],
+        [
+          "TypeSafe input / output tokens",
+          `${shadow.inputTokens} / ${shadow.outputTokens}`,
         ],
       ],
     );

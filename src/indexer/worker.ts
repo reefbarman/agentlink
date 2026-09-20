@@ -80,6 +80,7 @@ import {
   type IndexResetTarget,
 } from "./collectionResetState.js";
 import type { StructuralGraphCache } from "./structuralGraph.js";
+import { createTsconfigPathResolver } from "./tsconfigPaths.js";
 import type {
   ExtensionToWorkerMessage,
   StartIndexMessage,
@@ -666,6 +667,7 @@ async function updateStructuralCacheForFiles(
   useTreeSitter: boolean,
 ): Promise<number> {
   const indexedAt = new Date().toISOString();
+  const pathResolver = createTsconfigPathResolver(workspaceRoot);
   let updated = 0;
   for (const file of files) {
     if (aborted) break;
@@ -699,6 +701,7 @@ async function updateStructuralCacheForFiles(
         mtimeMs: file.mtimeMs,
         size: file.size,
         symbolHints,
+        pathResolver,
       }),
       ...(existing?.hash === file.hash && existing.generation
         ? { generation: existing.generation }
@@ -1192,6 +1195,7 @@ async function processFileBatch(
   }
 
   const publications = [];
+  const pathResolver = createTsconfigPathResolver(config.workspaceRoot);
   for (const [fileIndex, chunks] of publicationChunks) {
     const file = files[fileIndex];
     try {
@@ -1205,6 +1209,7 @@ async function processFileBatch(
         mtimeMs: file.mtimeMs,
         size: file.size,
         symbolHints: structuralSymbolHints.get(fileIndex),
+        pathResolver,
       });
       const publication = prepareCodeFilePublication({
         publicationId: randomUUID(),

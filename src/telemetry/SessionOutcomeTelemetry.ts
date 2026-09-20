@@ -196,11 +196,43 @@ export interface ApprovalInterruptionEvent {
   routeReason?: string;
 }
 
+/**
+ * One paired TypeSafe shadow/current Guardian observation. This deliberately
+ * excludes commands, paths, prompts, evidence, rationale, and API credentials.
+ */
+export interface GuardianShadowComparisonEvent {
+  type: "guardian_shadow_comparison";
+  sessionId: string;
+  reviewKind: "command";
+  shadowProvider: "typesafe";
+  primaryStatus: string;
+  primaryOutcome: string;
+  primaryRisk: string;
+  primaryDurationMs: number;
+  shadowStatus: string;
+  shadowOutcome?: string;
+  shadowRisk?: string;
+  shadowAuthorization?: string;
+  shadowDurationMs: number;
+  outcomesAgree?: boolean;
+  shadowFaster?: boolean;
+  shadowConfidencePermille?: number;
+  shadowInputRedacted?: boolean;
+  shadowEvidenceWithheld?: boolean;
+  objectiveMatchPermille?: number;
+  secretExposurePermille?: number;
+  boundedImpactPermille?: number;
+  shadowInputTokens?: number;
+  shadowOutputTokens?: number;
+  shadowHttpStatus?: number;
+}
+
 export type SessionOutcomeEvent =
   | TurnCompletedEvent
   | TaskCompletedEvent
   | BackgroundLifecycleEvent
-  | ApprovalInterruptionEvent;
+  | ApprovalInterruptionEvent
+  | GuardianShadowComparisonEvent;
 
 export interface SessionOutcomeRecord {
   version: 1;

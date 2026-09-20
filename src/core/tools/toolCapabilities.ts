@@ -593,6 +593,22 @@ const toolCapabilities = [
   // UI/front-end
   metadata("open_file", "ui", ["ui.editor.open"], "control", "never", true),
   metadata(
+    "get_editor_state",
+    "read",
+    ["editor.buffer.read"],
+    "read",
+    "policy",
+    false,
+  ),
+  metadata(
+    "save_editor",
+    "edit",
+    ["editor.buffer.save", "edit.review"],
+    "write",
+    "always",
+    false,
+  ),
+  metadata(
     "show_notification",
     "ui",
     ["ui.notification"],

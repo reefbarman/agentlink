@@ -1,6 +1,7 @@
 import type { CoreToolDefinition } from "./types.js";
 import {
   getToolCapabilityMetadata,
+  TOOL_CAPABILITIES,
   type NativeToolDisclosureClass,
 } from "./toolCapabilities.js";
 
@@ -41,6 +42,14 @@ export interface NativeToolDiscoveryResult {
   readonly offset: number;
   readonly limit: number;
   readonly nextOffset?: number;
+  /** Exact requested names already exposed as directly callable tools. */
+  readonly directTools?: readonly string[];
+  /** Exact requested canonical names excluded from this provider request. */
+  readonly unavailableTools?: readonly string[];
+  /** Exact requested canonical names that are intentionally dormant. */
+  readonly dormantTools?: readonly string[];
+  /** Actionable interpretation when a query has no deferred matches. */
+  readonly guidance?: string;
 }
 
 /**
@@ -100,21 +109,57 @@ export function discoverNativeTools(
   snapshot: NativeToolDisclosureSnapshot,
   request: NativeToolDiscoveryRequest = {},
 ): NativeToolDiscoveryResult {
-  const query = normalizeSearchText(request.query ?? "");
+  const rawQuery = request.query?.trim() ?? "";
+  const query = normalizeSearchText(rawQuery);
   const explicitNameMatches = query
     ? snapshot.deferredTools.filter((tool) =>
         containsSearchPhrase(query, normalizeSearchText(tool.name)),
       )
     : [];
-  const remainingQuery = explicitNameMatches.reduce(
-    (value, tool) => removeSearchPhrase(value, normalizeSearchText(tool.name)),
+  const directTools = rawQuery
+    ? sortByQueryOrder(
+        snapshot.inlineTools
+          .filter((tool) => containsExactToolName(rawQuery, tool.name))
+          .map((tool) => tool.name),
+        rawQuery,
+      )
+    : [];
+  const dormantTools = rawQuery
+    ? sortByQueryOrder(
+        snapshot.dormantToolNames.filter((toolName) =>
+          containsExactToolName(rawQuery, toolName),
+        ),
+        rawQuery,
+      )
+    : [];
+  const unavailableTools = rawQuery
+    ? sortByQueryOrder(
+        Object.keys(TOOL_CAPABILITIES).filter(
+          (toolName) =>
+            containsExactToolName(rawQuery, toolName) &&
+            !snapshot.inlineTools.some((tool) => tool.name === toolName) &&
+            !snapshot.deferredTools.some((tool) => tool.name === toolName) &&
+            !snapshot.dormantToolNames.includes(toolName),
+        ),
+        rawQuery,
+      )
+    : [];
+  const exactRequestedNames = [
+    ...explicitNameMatches.map((tool) => tool.name),
+    ...directTools,
+    ...unavailableTools,
+    ...dormantTools,
+  ];
+  const remainingQuery = exactRequestedNames.reduce(
+    (value, toolName) =>
+      removeSearchPhrase(value, normalizeSearchText(toolName)),
     query,
   );
   const remainingQueryTokens = discoveryQueryTokens(remainingQuery);
   const directNameMatches =
-    query && explicitNameMatches.length === 0
+    remainingQuery && explicitNameMatches.length === 0
       ? snapshot.deferredTools.filter((tool) =>
-          normalizeSearchText(tool.name).includes(query),
+          normalizeSearchText(tool.name).includes(remainingQuery),
         )
       : [];
   const rankedMatches =
@@ -139,7 +184,9 @@ export function discoverNativeTools(
     : directNameMatches.length
       ? directNameMatches
       : remainingQueryTokens.length === 0
-        ? [...snapshot.deferredTools]
+        ? exactRequestedNames.length > 0
+          ? []
+          : [...snapshot.deferredTools]
         : rankedMatches;
   const limit = clampInteger(
     request.limit,
@@ -168,6 +215,30 @@ export function discoverNativeTools(
   });
   const nextOffset = offset + tools.length;
 
+  const guidanceParts: string[] = [];
+  if (directTools.length > 0) {
+    guidanceParts.push(
+      `Already exposed directly: ${directTools.join(", ")}. Call only those tools by name instead of using call_native_tool.`,
+    );
+  }
+  if (unavailableTools.length > 0) {
+    guidanceParts.push(
+      `Not authorized in this provider request: ${unavailableTools.join(", ")}. These tools may have been available in an earlier request because the mode, active skill, background profile, or surface can change the tool set. Do not search the deferred catalog again or describe this as a temporary outage. Use an authorized alternative, switch to an appropriate mode or foreground session when possible, or explain the current restriction accurately.`,
+    );
+  }
+  if (dormantTools.length > 0) {
+    guidanceParts.push(
+      `Intentionally dormant and not callable in this runtime: ${dormantTools.join(", ")}. Changing mode, skill, profile, or surface will not enable these tools.`,
+    );
+  }
+  if (query && matches.length === 0 && guidanceParts.length === 0) {
+    guidanceParts.push(
+      "No matching deferred native tool is authorized in this provider request. An empty deferred result does not prove that a previously direct tool is globally unavailable. Check the current mode, active skill, background profile, and surface restrictions before reporting a blocker, and do not promise that access will return automatically.",
+    );
+  }
+  const guidance =
+    guidanceParts.length > 0 ? guidanceParts.join(" ") : undefined;
+
   return Object.freeze({
     schemaVersion: 1 as const,
     tools: Object.freeze(tools),
@@ -175,6 +246,16 @@ export function discoverNativeTools(
     offset,
     limit,
     ...(nextOffset < matches.length ? { nextOffset } : {}),
+    ...(directTools.length > 0
+      ? { directTools: Object.freeze(directTools) }
+      : {}),
+    ...(unavailableTools.length > 0
+      ? { unavailableTools: Object.freeze(unavailableTools) }
+      : {}),
+    ...(dormantTools.length > 0
+      ? { dormantTools: Object.freeze(dormantTools) }
+      : {}),
+    ...(guidance ? { guidance } : {}),
   });
 }
 
@@ -232,6 +313,30 @@ function discoveryQueryTokens(normalizedQuery: string): string[] {
 
 function containsSearchPhrase(haystack: string, phrase: string): boolean {
   return ` ${haystack} `.includes(` ${phrase} `);
+}
+
+function containsExactToolName(query: string, toolName: string): boolean {
+  const lowerQuery = query.toLocaleLowerCase("en-US");
+  const lowerName = toolName.toLocaleLowerCase("en-US");
+  let offset = lowerQuery.indexOf(lowerName);
+  while (offset >= 0) {
+    const before = offset === 0 ? "" : lowerQuery[offset - 1]!;
+    const afterIndex = offset + lowerName.length;
+    const after =
+      afterIndex >= lowerQuery.length ? "" : lowerQuery[afterIndex]!;
+    if (!/[a-z0-9_]/.test(before) && !/[a-z0-9_]/.test(after)) return true;
+    offset = lowerQuery.indexOf(lowerName, offset + 1);
+  }
+  return false;
+}
+
+function sortByQueryOrder(toolNames: string[], query: string): string[] {
+  const lowerQuery = query.toLocaleLowerCase("en-US");
+  return toolNames.sort(
+    (left, right) =>
+      lowerQuery.indexOf(left.toLocaleLowerCase("en-US")) -
+      lowerQuery.indexOf(right.toLocaleLowerCase("en-US")),
+  );
 }
 
 function removeSearchPhrase(value: string, phrase: string): string {

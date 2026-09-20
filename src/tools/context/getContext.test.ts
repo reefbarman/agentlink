@@ -202,6 +202,98 @@ describe("handleGetContext", () => {
     vscodeMock.getExtension.mockReturnValue(undefined);
   });
 
+  it("bounds a large outline and prioritises symbols in the requested slice", async () => {
+    const workspace = makeTempWorkspace();
+    const filePath = path.join(workspace, "large.css");
+    const content = Array.from({ length: 1000 }, (_, i) => `.item${i} {}`).join(
+      "\n",
+    );
+    fs.writeFileSync(filePath, content);
+    const symbols = {
+      class: Array.from(
+        { length: 1000 },
+        (_, i) => `.item${i} (line ${i + 1})`,
+      ),
+    };
+    const { handleGetContext } = await import("./getContext.js");
+    const payload = JSON.parse(
+      getText(
+        await handleGetContext(
+          { path: "large.css", offset: 900, limit: 5 },
+          "bounded-symbols",
+          makeProviders(filePath, "large.css", content, symbols),
+        ),
+      ),
+    );
+    expect(payload.symbols.class).toHaveLength(60);
+    expect(payload.symbols.class.slice(0, 5)).toEqual(
+      symbols.class.slice(899, 904),
+    );
+    expect(payload).toMatchObject({
+      symbols_truncated: true,
+      symbols_omitted: 940,
+      showing: "900-904",
+    });
+    expect(symbols.class).toHaveLength(1000);
+  });
+
+  it("bounds serialized outline bytes including escaped and multibyte names", async () => {
+    const workspace = makeTempWorkspace();
+    const filePath = path.join(workspace, "large.ts");
+    fs.writeFileSync(filePath, "export {};\n");
+    const symbols = {
+      variable: [
+        "x".repeat(7000),
+        ...Array.from({ length: 100 }, () => `${'雪"'.repeat(80)} (line 1)`),
+      ],
+      constructor: ["Example.constructor (line 1)"],
+    };
+    const { handleGetContext } = await import("./getContext.js");
+    const payload = JSON.parse(
+      getText(
+        await handleGetContext(
+          { path: "large.ts" },
+          "bounded-bytes",
+          makeProviders(filePath, "large.ts", "export {};\n", symbols),
+        ),
+      ),
+    );
+    expect(
+      Buffer.byteLength(JSON.stringify(payload.symbols)),
+    ).toBeLessThanOrEqual(6000);
+    const included = Object.values(
+      payload.symbols as Record<string, string[]>,
+    ).flat().length;
+    expect(payload.symbols_omitted).toBe(102 - included);
+    expect(payload.symbols.constructor).toEqual([
+      "Example.constructor (line 1)",
+    ]);
+    expect(payload.symbols_truncated).toBe(true);
+  });
+
+  it("leaves a small complete outline unchanged without truncation metadata", async () => {
+    const workspace = makeTempWorkspace();
+    const filePath = path.join(workspace, "small.ts");
+    fs.writeFileSync(filePath, "one\ntwo\n");
+    const symbols = {
+      class: ["Example (line 1)"],
+      method: ["Example.run (line 2)"],
+    };
+    const { handleGetContext } = await import("./getContext.js");
+    const payload = JSON.parse(
+      getText(
+        await handleGetContext(
+          { path: "small.ts" },
+          "small-outline",
+          makeProviders(filePath, "small.ts", "one\ntwo\n", symbols),
+        ),
+      ),
+    );
+    expect(payload.symbols).toEqual(symbols);
+    expect(payload.symbols_truncated).toBeUndefined();
+    expect(payload.symbols_omitted).toBeUndefined();
+  });
+
   it("returns core context when symbol enrichment does not settle", async () => {
     const workspace = makeTempWorkspace();
     const filePath = path.join(workspace, "stalled.ts");

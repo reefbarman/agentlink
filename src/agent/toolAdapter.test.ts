@@ -32,6 +32,10 @@ import { getWorkspaceRoots, resolveAndValidatePath } from "../util/paths.js";
 import { handleLoadRule } from "../tools/loadRule.js";
 import { handleLoadSkill } from "../tools/loadSkill.js";
 import { handleReadFile } from "../tools/readFile.js";
+import {
+  handleGetEditorState,
+  handleSaveEditor,
+} from "../tools/editorState.js";
 import { handleGetContext } from "../tools/context/getContext.js";
 import { handleGetCallHierarchy } from "../tools/getCallHierarchy.js";
 import { handleGetModuleNeighbors } from "../tools/getModuleNeighbors.js";
@@ -161,6 +165,10 @@ vi.mock("../tools/closeTerminals.js", () => ({
   handleCloseTerminals: vi
     .fn()
     .mockResolvedValue({ content: [{ type: "text", text: "closed" }] }),
+}));
+vi.mock("../tools/editorState.js", () => ({
+  handleGetEditorState: vi.fn(async () => ({ content: [] })),
+  handleSaveEditor: vi.fn(async () => ({ content: [] })),
 }));
 vi.mock("../tools/openFile.js", () => ({
   handleOpenFile: vi
@@ -642,6 +650,34 @@ describe("tool usage telemetry project attribution", () => {
       ],
     });
     expect(JSON.stringify(result.data)).not.toContain("read_file");
+  });
+
+  it("explains when exact native tool names are excluded from this request", async () => {
+    const runtime = createAgentToolRuntime(mockCtx);
+    const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
+      getAgentTools().find((tool) => tool.name === "find_native_tools")!,
+      getAgentTools().find((tool) => tool.name === "read_file")!,
+    ]);
+
+    const result = await runtime.executeTool({
+      name: "find_native_tools",
+      input: { query: "execute_command get_terminal_output" },
+      context: {
+        sessionId: "test-session",
+        mode: "code",
+        availableToolNames: new Set(["find_native_tools", "read_file"]),
+        nativeToolDisclosure,
+      },
+    });
+
+    expect(result.data).toMatchObject({
+      tools: [],
+      total: 0,
+      unavailableTools: ["execute_command", "get_terminal_output"],
+      guidance: expect.stringContaining(
+        "Not authorized in this provider request",
+      ),
+    });
   });
 
   it("discovers multiple exact deferred tool names through the runtime bridge", async () => {
@@ -1396,6 +1432,43 @@ describe("getAgentTools", () => {
     expect(readOnlyCwdSchema?.description).toContain(
       "sandbox_cwd_outside_workspace",
     );
+  });
+
+  it("exposes provider-native web tools to readonly research only when enabled by request policy", () => {
+    const enabled = getAgentTools(
+      undefined,
+      undefined,
+      true,
+      "readonly-research",
+      undefined,
+      undefined,
+      "text",
+      ["search", "fetch"],
+    ).map((tool) => tool.name);
+    expect(enabled).toContain("web_search");
+    expect(enabled).toContain("web_fetch");
+
+    const searchOnly = getAgentTools(
+      undefined,
+      undefined,
+      true,
+      "readonly-research",
+      undefined,
+      undefined,
+      "text",
+      ["search"],
+    ).map((tool) => tool.name);
+    expect(searchOnly).toContain("web_search");
+    expect(searchOnly).not.toContain("web_fetch");
+
+    const disabled = getAgentTools(
+      undefined,
+      undefined,
+      true,
+      "readonly-research",
+    ).map((tool) => tool.name);
+    expect(disabled).not.toContain("web_search");
+    expect(disabled).not.toContain("web_fetch");
   });
 
   it("keeps compose out of background, restrictive profile, and skill catalogs", () => {
@@ -2887,6 +2960,93 @@ describe("spawn_background_agent tool", () => {
       killed: true,
       partialOutput: "some partial work",
     });
+  });
+});
+
+describe("editor recovery wiring", () => {
+  it("exposes saves only in editing modes, never in read-only background profiles", () => {
+    const code = BUILT_IN_MODES.find((mode) => mode.slug === "code")!;
+    const ask = BUILT_IN_MODES.find((mode) => mode.slug === "ask")!;
+    expect(getAgentTools(code).map((tool) => tool.name)).toContain(
+      "save_editor",
+    );
+    expect(getAgentTools(ask).map((tool) => tool.name)).not.toContain(
+      "save_editor",
+    );
+    expect(
+      getAgentTools(code, [], true, "review").map((tool) => tool.name),
+    ).not.toContain("save_editor");
+  });
+
+  it("forwards hashes, version, approval callback, session and cancellation to the save consumer", async () => {
+    const signal = new AbortController().signal;
+    const input = {
+      path: "src/example.ts",
+      disk_hash: "a".repeat(64),
+      editor_hash: "b".repeat(64),
+      editor_version: 42,
+    };
+    await dispatchToolCall("save_editor", input, {
+      ...mockCtx,
+      mode: "code",
+      toolAbortSignal: signal,
+    });
+    expect(handleSaveEditor).toHaveBeenLastCalledWith(
+      input,
+      expect.objectContaining({
+        sessionId: mockCtx.sessionId,
+        signal,
+        onApprovalRequest: expect.any(Function),
+        pathAccessProvider: expect.objectContaining({
+          ensureAccess: expect.any(Function),
+        }),
+      }),
+    );
+    const forwarded = vi.mocked(handleSaveEditor).mock.calls.at(-1)![1];
+    const approval = {
+      kind: "write" as const,
+      title: "save",
+      detail: "exact delta",
+      choices: [],
+      writeChoices: [{ label: "Save once", value: "accept" }],
+    };
+    await forwarded.onApprovalRequest!(approval, "distinct-session");
+    expect(mockOnApprovalRequest).toHaveBeenLastCalledWith(
+      approval,
+      "distinct-session",
+    );
+    await dispatchToolCall(
+      "get_editor_state",
+      { path: input.path, offset: 7, limit: 11 },
+      { ...mockCtx, mode: "code", toolAbortSignal: signal },
+    );
+    expect(handleGetEditorState).toHaveBeenLastCalledWith(
+      { path: input.path, offset: 7, limit: 11 },
+      expect.objectContaining({ signal }),
+    );
+    mockOnApprovalRequest.mockClear();
+  });
+
+  it("denies save outside delegated ownership before reaching the consumer", async () => {
+    vi.mocked(handleSaveEditor).mockClear();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      mode: "code",
+      delegationPolicy: { ownedPaths: ["src/owned"] },
+    } as ToolDispatchContext);
+    await expect(
+      runtime.executeTool({
+        name: "save_editor",
+        input: {
+          path: "src/other.ts",
+          disk_hash: null,
+          editor_hash: "b".repeat(64),
+          editor_version: 4,
+        },
+        context: { sessionId: "test-session", mode: "code" },
+      }),
+    ).rejects.toThrow(/outside owned paths/);
+    expect(handleSaveEditor).not.toHaveBeenCalled();
   });
 });
 

@@ -401,6 +401,88 @@ describe("commitAndVerifyEdit", () => {
     });
   });
 
+  it.each([false, true])(
+    "preserves sidebar focus while saving and restoring the previous editor (save fails: %s)",
+    async (saveFails) => {
+      const target = await makeFile("example.ts", "old");
+      const document = makeDocument(target.absolutePath, "new");
+      const previous = {
+        document: makeDocument(
+          path.join(path.dirname(target.absolutePath), "other.ts"),
+          "other",
+        ),
+        viewColumn: vscode.ViewColumn.Two,
+      } as unknown as vscode.TextEditor;
+      const editor = {
+        document,
+        viewColumn: vscode.ViewColumn.One,
+      } as unknown as vscode.TextEditor;
+      Object.assign(vscode.window, { activeTextEditor: previous });
+      let keyboardFocus = "chat";
+      const show = vi
+        .spyOn(vscode.window, "showTextDocument")
+        .mockImplementation(async (shownDocument, options) => {
+          if (!(options as vscode.TextDocumentShowOptions)?.preserveFocus) {
+            keyboardFocus = "editor";
+          }
+          const shown =
+            (shownDocument as unknown) === document ? editor : previous;
+          Object.assign(vscode.window, { activeTextEditor: shown });
+          return shown;
+        });
+      vi.spyOn(vscode.commands, "executeCommand").mockImplementation(
+        async () => {
+          expect(vscode.window.activeTextEditor).toBe(editor);
+          expect(keyboardFocus).toBe("chat");
+          if (saveFails) throw new Error("save failed");
+          await fs.writeFile(target.absolutePath, document.content, "utf-8");
+          document.isDirty = false;
+        },
+      );
+
+      const result = await commitAndVerifyEdit({
+        ...request(document, target.absolutePath, target.relativePath, "old"),
+        saveWithoutFormatting: true,
+      });
+
+      expect(result.status).toBe(saveFails ? "error" : "accepted");
+      expect(show).toHaveBeenNthCalledWith(1, document, {
+        preview: false,
+        preserveFocus: true,
+      });
+      expect(show).toHaveBeenNthCalledWith(2, previous.document, {
+        preview: false,
+        preserveFocus: true,
+        viewColumn: vscode.ViewColumn.Two,
+      });
+      expect(vscode.window.activeTextEditor).toBe(previous);
+      expect(keyboardFocus).toBe("chat");
+    },
+  );
+
+  it("does not save another editor when a focus-preserving open leaves it active", async () => {
+    const target = await makeFile("example.ts", "old");
+    const document = makeDocument(target.absolutePath, "new");
+    vi.spyOn(vscode.window, "showTextDocument").mockResolvedValue({
+      document,
+    } as unknown as vscode.TextEditor);
+    const command = vi.spyOn(vscode.commands, "executeCommand");
+    const normalSave = vi.spyOn(document, "save");
+
+    const result = await commitAndVerifyEdit({
+      ...request(document, target.absolutePath, target.relativePath, "old"),
+      saveWithoutFormatting: true,
+    });
+
+    expect(command).not.toHaveBeenCalled();
+    expect(normalSave).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "preserving_save_failed",
+    });
+    expect(await fs.readFile(target.absolutePath, "utf-8")).toBe("old");
+  });
+
   it("uses the active-editor save-without-formatting command for Unity files", async () => {
     const target = await makeFile("Example.meta", "old");
     const document = makeDocument(target.absolutePath, "new");

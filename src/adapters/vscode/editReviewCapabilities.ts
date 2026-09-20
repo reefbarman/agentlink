@@ -386,8 +386,8 @@ function dirtyDocumentConflictResult(params: {
     pending_buffer_matches_proposal: pendingBufferMatchesProposal,
     next_steps: [
       pendingBufferMatchesProposal
-        ? "The unsaved editor buffer already contains the proposed content. Save it in the editor, then re-read the file before continuing."
-        : "The unsaved editor buffer differs from the proposed content. Review and reconcile it before saving or retrying the file-edit tool call.",
+        ? "The unsaved editor buffer already contains the proposed content. Inspect it with get_editor_state, then use save_editor with its hashes/version for a reviewed exact save."
+        : "The unsaved editor buffer differs from the proposed content. Use get_editor_state to compare it with disk. Save the existing buffer with save_editor only if it is correct; otherwise reconcile it in VS Code.",
     ],
   };
 }

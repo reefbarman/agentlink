@@ -39,6 +39,8 @@ The standalone CLI uses the shared `code` model and thinking preference when tha
 - `writeRules` — glob patterns whose writes are always auto-approved
 - `recentApprovalTtl` — seconds an identical command approval repeats within the same session without re-prompting
 - `masterBypass` — skip ordinary command and file-write prompts; native escalation, outside-path reads, MCP tools, protected paths, and read-only/delegation boundaries still apply
+- `guardian.typeSafeShadow.enabled` — opt in to a non-authoritative TypeSafe evaluation alongside command Guardian reviews. The current Guardian remains the only approval decision; TypeSafe runs concurrently and never delays it. Store a BYOK credential with **AgentLink: Set TypeSafe API Key for Guardian Shadow Mode** before enabling this setting.
+- `guardian.typeSafeShadow.model`, `guardian.typeSafeShadow.timeoutMs` — select the TypeSafe model (default `jev-latest`) and bound the independent shadow request. AgentLink sends a compact decision record: the command, compact paths, reason, latest direct user instruction, bounded task context, confinement/classifier facts, script and inline-file metadata, and bounded delete metadata. Only the latest direct instruction grants authorization. Script bodies, inline-file previews, unrelated recent context, duplicate subcommand text, hashes, and directory sample names are excluded. A conservative best-effort local scan replaces likely credential values with `[REDACTED]`; local telemetry records only whether any redaction occurred.
 
 ## Web access
 

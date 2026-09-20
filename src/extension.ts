@@ -24,6 +24,13 @@ import {
 } from "./approvals/commandApprovalReview.js";
 import { createNetworkApprovalReviewer } from "./approvals/networkApprovalReview.js";
 import { createActionApprovalReviewer } from "./approvals/actionApprovalReview.js";
+import { registerTypeSafeGuardianCommands } from "./approvals/typeSafeGuardianCommands.js";
+import {
+  createShadowingCommandApprovalReviewer,
+  createTypeSafeGuardianShadowReviewer,
+  toGuardianShadowComparisonEvent,
+  TYPESAFE_GUARDIAN_API_KEY_SECRET,
+} from "./approvals/typeSafeGuardianShadow.js";
 import { AgentToolCallTracker } from "./agent/AgentToolCallTracker.js";
 import { registerAgentActivityCommands } from "./agent/agentActivityCommands.js";
 import {
@@ -2959,8 +2966,36 @@ export async function activate(
     const provider = providerRegistry.tryResolveProvider(session.model);
     return provider ? { provider, sessionModel: session.model } : undefined;
   };
-  const commandApprovalReviewer = createCommandApprovalReviewer({
+  const primaryCommandApprovalReviewer = createCommandApprovalReviewer({
     resolveContext: resolveApprovalReviewerContext,
+  });
+  const typeSafeGuardianShadowReviewer = createTypeSafeGuardianShadowReviewer({
+    getConfig: () => {
+      const config = vscode.workspace.getConfiguration("agentlink");
+      return {
+        enabled: config.get<boolean>("guardian.typeSafeShadow.enabled", false),
+        model: config.get<string>(
+          "guardian.typeSafeShadow.model",
+          "jev-latest",
+        ),
+        timeoutMs: config.get<number>(
+          "guardian.typeSafeShadow.timeoutMs",
+          15_000,
+        ),
+      };
+    },
+    getApiKey: () =>
+      Promise.resolve(context.secrets.get(TYPESAFE_GUARDIAN_API_KEY_SECRET)),
+    fetch: agentLinkFetch,
+  });
+  const commandApprovalReviewer = createShadowingCommandApprovalReviewer({
+    primary: primaryCommandApprovalReviewer,
+    shadow: typeSafeGuardianShadowReviewer,
+    record: (comparison) =>
+      sessionOutcomeTelemetry?.record(
+        toGuardianShadowComparisonEvent(comparison),
+      ),
+    log,
   });
   const networkApprovalReviewer = createNetworkApprovalReviewer({
     resolveContext: resolveApprovalReviewerContext,
@@ -3400,16 +3435,14 @@ export async function activate(
       log,
     }),
     ...registerOpenAiCompatibleAuthCommands({
-      secrets: context.secrets,
-      state: context.globalState,
-      getConfiguredAuthKeys: () =>
-        openAiCompatibleProviderManager.listConfiguredAuthKeys(),
+      credentials: openAiCompatibleCredentials,
       onCredentialChanged: async () => {
         chatViewProvider.refreshModels();
         await publishBrowserGatewayModelCatalog();
         await grantBrowserGatewayModelCredentials();
       },
     }),
+    ...registerTypeSafeGuardianCommands({ secrets: context.secrets }),
     ...registerModelAuthCommands({
       openAiAuthManager: openAiCodexAuthManager,
     }),

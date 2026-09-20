@@ -2796,13 +2796,9 @@ export function App({
     [vscodeApi],
   );
 
-  const handleFinalMarkerContinue = useCallback(
-    (prompt: string) => {
-      dispatch({ type: "CLEAR_FINAL_MARKER_CONTINUE_ACTIONS" });
-      handleSend(prompt);
-    },
-    [handleSend],
-  );
+  const handleFinalMarkerContinue = useCallback((prompt: string) => {
+    setInjection({ type: "context", context: prompt });
+  }, []);
 
   useEffect(() => {
     const sessionId = state.chatState.sessionId;

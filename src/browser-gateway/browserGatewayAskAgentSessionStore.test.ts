@@ -206,6 +206,48 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     expect(store.getActiveSessionId()).toBe(previousSessionId);
   });
 
+  it("queues helper-owned sends FIFO and projects only the active session queue", () => {
+    const store = createStore();
+    expect(
+      store.enqueueMessage({
+        id: "queued-1",
+        text: "First queued message",
+        instanceId: "owner-1",
+        source: "browser",
+      }),
+    ).toBe(true);
+    expect(
+      store.enqueueMessage({
+        id: "queued-2",
+        text: "Second queued message",
+        source: "browser",
+      }),
+    ).toBe(true);
+    expect(store.hasQueuedMessageId("queued-1")).toBe(true);
+
+    const snapshot = store.getOrCreate({
+      now: 100,
+      theme,
+      modelCredentialStatus: { state: "not_required", providerId: "test" },
+    }).snapshot;
+    expect(snapshot.session.foreground.messageQueue).toEqual([
+      {
+        id: "queued-1",
+        text: "First queued message",
+        instanceId: "owner-1",
+        source: "browser",
+      },
+      {
+        id: "queued-2",
+        text: "Second queued message",
+        source: "browser",
+      },
+    ]);
+    expect(store.dequeueMessage()).toMatchObject({ id: "queued-1" });
+    expect(store.dequeueMessage()).toMatchObject({ id: "queued-2" });
+    expect(store.dequeueMessage()).toBeNull();
+  });
+
   it("treats repeated client message ids as idempotent sends", () => {
     const store = createStore();
     const credentialStatus: BrowserGatewayModelCredentialStatus = {

@@ -3,6 +3,7 @@ import {
   OPENAI_COMPATIBLE_SECRET_PREFIX,
   registerOpenAiCompatibleAuthCommands,
 } from "./openAiCompatibleAuthCommands.js";
+import { OpenAiCompatibleCredentialService } from "./openAiCompatibleCredentials.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { commandHandlers, showQuickPick, showInputBox, showInformationMessage } =
@@ -30,22 +31,29 @@ function createDependencies(
   configuredAuthKeys: string[] = ["openrouter-main", "shared"],
 ) {
   const stateValue = [...index];
+  const secrets = {
+    get: vi.fn(async () => undefined),
+    store: vi.fn(async () => {}),
+    delete: vi.fn(async () => {}),
+  };
+  const state = {
+    get<T>(_key: string, defaultValue: T): T {
+      return (stateValue.length ? [...stateValue] : defaultValue) as T;
+    },
+    update: vi.fn(async (_key: string, value: unknown) => {
+      stateValue.splice(0, stateValue.length, ...((value as string[]) ?? []));
+    }),
+  };
+  const credentials = new OpenAiCompatibleCredentialService({
+    secrets,
+    state,
+    getConfiguredApiKeyNames: () => configuredAuthKeys,
+  });
   const dependencies = {
-    secrets: {
-      get: vi.fn(async () => undefined),
-      store: vi.fn(async () => {}),
-      delete: vi.fn(async () => {}),
-    },
-    state: {
-      get<T>(_key: string, defaultValue: T): T {
-        return (stateValue.length ? [...stateValue] : defaultValue) as T;
-      },
-      update: vi.fn(async (_key: string, value: unknown) => {
-        stateValue.splice(0, stateValue.length, ...((value as string[]) ?? []));
-      }),
-    },
-    getConfiguredAuthKeys: vi.fn(() => configuredAuthKeys),
+    credentials,
     onCredentialChanged: vi.fn(async () => {}),
+    secrets,
+    state,
   };
   return dependencies;
 }

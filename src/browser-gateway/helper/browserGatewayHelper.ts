@@ -118,6 +118,7 @@ import {
   BrowserGatewayAskAgentSessionStore,
   type BrowserGatewayAskAgentMediaItem,
   type BrowserGatewayAskAgentPersistedSession,
+  type BrowserGatewayAskAgentQueuedMessage,
   type BrowserGatewayAskAgentProjectHandoff,
 } from "../browserGatewayAskAgentSessionStore.js";
 import { isBrowserGatewayAskAgentSessionId } from "../browserGatewayAskAgentIdentity.js";
@@ -1084,6 +1085,9 @@ export class BrowserGatewayHelper {
   private discoveryHeartbeatTimer: NodeJS.Timeout | undefined;
   private shuttingDown = false;
   private stopPromise: Promise<void> | undefined;
+  private askAgentQueueDrainPromise: Promise<void> | undefined;
+  private readonly askAgentQueueDrainToken = randomUUID();
+  private readonly drainingAskAgentMessageIds = new Set<string>();
   private lastLeaseActivityAtMs = Date.now();
   private dataPlaneModeFallbackFingerprint: string | undefined;
   private releaseAskAgentTurnLiveness: (() => void) | undefined;
@@ -1555,6 +1559,7 @@ export class BrowserGatewayHelper {
         mdns: this.mdnsState,
       }) + "\n",
     );
+    void this.drainAskAgentMessageQueue();
   }
 
   stop(reason = "shutdown"): Promise<void> {
@@ -1587,6 +1592,7 @@ export class BrowserGatewayHelper {
     const result = await this.lifecycle.shutdown({
       drain: async () => {
         await this.dispose();
+        await this.askAgentQueueDrainPromise;
         this.askAgentSseHub.dispose();
         this.relayRoutes.close();
         this.relayStore.close();
@@ -8022,6 +8028,10 @@ export class BrowserGatewayHelper {
   ): Promise<void> {
     let activeTurn: AskAgentControllerTurn | null = null;
     try {
+      if (this.shuttingDown) {
+        writeJson(res, 503, { error: "ask_agent_helper_shutting_down" });
+        return;
+      }
       const body = (await readJsonBody(req)) as {
         id?: unknown;
         text?: unknown;
@@ -8030,6 +8040,7 @@ export class BrowserGatewayHelper {
         images?: unknown;
         documents?: unknown;
         instanceId?: unknown;
+        queueDrainToken?: unknown;
       } | null;
       const images = parseAskAgentMediaItems(body?.images);
       const documents = parseAskAgentMediaItems(body?.documents);
@@ -8145,20 +8156,62 @@ export class BrowserGatewayHelper {
         ok: true,
         phase: "received",
       });
-      const duplicateUserMessage =
+      const queueDrain = body.queueDrainToken === this.askAgentQueueDrainToken;
+      const duplicateCommittedMessage =
         typeof body.id === "string" &&
         this.askAgentSessionStore.hasActiveUserMessageId(body.id);
+      const duplicateQueuedMessage =
+        typeof body.id === "string" &&
+        this.askAgentSessionStore.hasQueuedMessageId(body.id);
+      const duplicateDrainingMessage =
+        typeof body.id === "string" &&
+        this.drainingAskAgentMessageIds.has(body.id) &&
+        !queueDrain;
+      const duplicateUserMessage =
+        duplicateCommittedMessage ||
+        duplicateQueuedMessage ||
+        duplicateDrainingMessage;
       let sendOutcome = modelContext ? "model_success" : "credential_missing";
       if (duplicateUserMessage) {
         response = this.buildAskAgentSnapshotResponse(now, theme);
         sendOutcome = "duplicate_ignored";
       } else if (modelContext && this.askAgentController.hasActiveTurn()) {
+        const id =
+          typeof body.id === "string" && body.id.trim()
+            ? body.id
+            : randomUUID();
+        const queuedMessage: BrowserGatewayAskAgentQueuedMessage = {
+          id,
+          text: body.text,
+          ...(images.length > 0 ? { images } : {}),
+          ...(documents.length > 0 ? { documents } : {}),
+          ...(requestedOwnerId ? { instanceId: requestedOwnerId } : {}),
+          source: "browser",
+        };
+        if (!this.askAgentSessionStore.enqueueMessage(queuedMessage)) {
+          writeJson(res, 409, { error: "queue_full" });
+          return;
+        }
+        await this.persistAskAgentHistory();
+        response = this.buildAskAgentSnapshotResponse(now, theme);
+        void this.publishAskAgentSnapshot(response.snapshot).catch((error) => {
+          this.logAskAgentEvent("ask-agent.queue.publish", {
+            queueId: id,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
         this.logAskAgentEvent("ask-agent.send", {
           ...sendLogFields,
-          ok: false,
-          error: "ask_agent_turn_in_progress",
+          ok: true,
+          outcome: "queued",
+          queueId: id,
         });
-        writeJson(res, 409, { error: "ask_agent_turn_in_progress" });
+        writeJson(res, 200, {
+          ok: true,
+          queued: true,
+          snapshot: response.snapshot,
+        });
         return;
       }
       if (!duplicateUserMessage && modelContext) {
@@ -8283,7 +8336,11 @@ export class BrowserGatewayHelper {
       // Return the snapshot for the sender's immediate UI update and broadcast
       // the same full snapshot for any other connected Ask Agent browser tabs.
       await this.publishAskAgentSnapshot(response.snapshot);
-      writeJson(res, 200, { ok: true, snapshot: response.snapshot });
+      writeJson(res, 200, {
+        ok: true,
+        ...(duplicateQueuedMessage ? { queued: true } : {}),
+        snapshot: response.snapshot,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (message === "browser_gateway_ask_agent_empty_message") {
@@ -8304,7 +8361,73 @@ export class BrowserGatewayHelper {
         error: invalidJson ? "invalid_json" : "internal_error",
       });
     } finally {
-      if (activeTurn) this.askAgentController.completeTurn(activeTurn);
+      if (activeTurn) {
+        this.askAgentController.completeTurn(activeTurn);
+        void this.drainAskAgentMessageQueue();
+      }
+    }
+  }
+
+  private drainAskAgentMessageQueue(): Promise<void> {
+    if (this.askAgentQueueDrainPromise) return this.askAgentQueueDrainPromise;
+    this.askAgentQueueDrainPromise = this.runAskAgentMessageQueue().finally(
+      () => {
+        this.askAgentQueueDrainPromise = undefined;
+      },
+    );
+    return this.askAgentQueueDrainPromise;
+  }
+
+  private async runAskAgentMessageQueue(): Promise<void> {
+    while (!this.shuttingDown && !this.askAgentController.hasActiveTurn()) {
+      const queued = this.askAgentSessionStore.dequeueMessage();
+      if (!queued) return;
+      const modelContext = await this.resolveAskAgentModelExecutionContext(
+        Date.now(),
+        queued.instanceId,
+      );
+      if (!modelContext) {
+        this.askAgentSessionStore.enqueueMessage(queued, "front");
+        await this.persistAskAgentHistory();
+        return;
+      }
+      this.drainingAskAgentMessageIds.add(queued.id);
+      try {
+        const result = await invokeJsonHandlerInProcess(
+          {
+            id: queued.id,
+            sessionId: this.askAgentSessionStore.getActiveSessionId(),
+            text: queued.text,
+            images: queued.images ?? [],
+            documents: queued.documents ?? [],
+            instanceId: queued.instanceId,
+            queueDrainToken: this.askAgentQueueDrainToken,
+          },
+          (req, res) => this.handleAskAgentSendRequest(req, res),
+        );
+        if (result.status < 200 || result.status >= 300) {
+          this.askAgentSessionStore.enqueueMessage(queued, "front");
+          await this.persistAskAgentHistory();
+          this.logAskAgentEvent("ask-agent.queue.drain", {
+            queueId: queued.id,
+            ok: false,
+            status: result.status,
+          });
+          return;
+        }
+        await this.persistAskAgentHistory();
+      } catch (error) {
+        this.askAgentSessionStore.enqueueMessage(queued, "front");
+        await this.persistAskAgentHistory().catch(() => undefined);
+        this.logAskAgentEvent("ask-agent.queue.drain", {
+          queueId: queued.id,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      } finally {
+        this.drainingAskAgentMessageIds.delete(queued.id);
+      }
     }
   }
 
@@ -9482,6 +9605,7 @@ export class BrowserGatewayHelper {
         await this.resolveInitialTheme(null),
       );
       await this.publishAskAgentSnapshot(response.snapshot);
+      void this.drainAskAgentMessageQueue();
     } catch (err) {
       const invalidJson =
         err instanceof Error && err.message === "invalid_json";

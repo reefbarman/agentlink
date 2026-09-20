@@ -1930,6 +1930,10 @@ export function BrowserGatewayApp({
   const [localDismissedQuestionId, setLocalDismissedQuestionId] = useState<
     string | null
   >(null);
+  const [composerInjection, setComposerInjection] = useState<{
+    type: "context";
+    context: string;
+  } | null>(null);
   const [hiddenFinalContinueMessageIds, setHiddenFinalContinueMessageIds] =
     useState<ReadonlySet<string>>(() => new Set());
   const [autoContinueStopReasons, setAutoContinueStopReasons] = useState<
@@ -8757,38 +8761,9 @@ export function BrowserGatewayApp({
                     onStopBackground={handleStopBackground}
                     onOpenTranscript={handleOpenBgTranscript}
                     onFinalMarkerContinue={(prompt) => {
-                      const continuedMessageIds = messages.flatMap(
-                        (message) => {
-                          if (
-                            message.role !== "assistant" ||
-                            !message.finalMarker
-                          ) {
-                            return [];
-                          }
-                          return getFinalMessageContinueAction(
-                            message.finalMarker,
-                          )?.prompt === prompt
-                            ? [message.id]
-                            : [];
-                        },
-                      );
-                      void handleSend(
-                        prompt,
-                        [],
-                        undefined,
-                        undefined,
-                        undefined,
-                        "user",
-                        foreground ?? undefined,
-                      ).then((sent) => {
-                        if (!sent) return;
-                        setHiddenFinalContinueMessageIds((prev) => {
-                          const next = new Set(prev);
-                          for (const id of continuedMessageIds) {
-                            next.add(id);
-                          }
-                          return next;
-                        });
+                      setComposerInjection({
+                        type: "context",
+                        context: prompt,
                       });
                     }}
                     onRevertCheckpoint={handleRevertCheckpoint}
@@ -8817,58 +8792,58 @@ export function BrowserGatewayApp({
                     onConfirm={confirmSessionHandoff}
                   />
                 )}
-                {!isAskAgentSelected &&
-                  foreground &&
-                  messageQueue.length > 0 &&
-                  !mobileReviewOpen && (
-                    <MessageQueuePanel
-                      pendingIds={pendingMessageQueueIds}
-                      queue={messageQueue.map((item) => {
-                        const override = queueInterjectionOverrides.get(
-                          `${foreground.sessionId}:${item.id}`,
-                        );
-                        return override === undefined
-                          ? item
-                          : { ...item, interjectionReady: override };
-                      })}
-                      onSteer={(item) => {
+                {foreground && messageQueue.length > 0 && !mobileReviewOpen && (
+                  <MessageQueuePanel
+                    allowSteering={!isAskAgentSelected}
+                    pendingIds={pendingMessageQueueIds}
+                    queue={messageQueue.map((item) => {
+                      const override = queueInterjectionOverrides.get(
+                        `${foreground.sessionId}:${item.id}`,
+                      );
+                      return override === undefined
+                        ? item
+                        : { ...item, interjectionReady: override };
+                    })}
+                    onSteer={(item) => {
+                      if (isAskAgentSelected) return;
+                      browserVscodeApi.postMessage({
+                        command: "agentSteerQueuedMessage",
+                        sessionId: foreground.sessionId,
+                        queueId: item.id,
+                        text: item.fullText ?? item.text,
+                        displayText: item.text,
+                        isSlashCommand: item.isSlashCommand === true,
+                        slashCommandLabel: item.slashCommandLabel,
+                        attachments: item.attachments,
+                        images: item.images,
+                        documents: item.documents,
+                      });
+                    }}
+                    onInterject={(item) => {
+                      if (isAskAgentSelected) return;
+                      if (item.interjectionReady) {
                         browserVscodeApi.postMessage({
-                          command: "agentSteerQueuedMessage",
+                          command: "agentPauseQueuedMessageInterjection",
                           sessionId: foreground.sessionId,
                           queueId: item.id,
-                          text: item.fullText ?? item.text,
-                          displayText: item.text,
-                          isSlashCommand: item.isSlashCommand === true,
-                          slashCommandLabel: item.slashCommandLabel,
-                          attachments: item.attachments,
-                          images: item.images,
-                          documents: item.documents,
                         });
-                      }}
-                      onInterject={(item) => {
-                        if (item.interjectionReady) {
-                          browserVscodeApi.postMessage({
-                            command: "agentPauseQueuedMessageInterjection",
-                            sessionId: foreground.sessionId,
-                            queueId: item.id,
-                          });
-                          return;
-                        }
-                        browserVscodeApi.postMessage({
-                          command: "agentInterjectQueuedMessage",
-                          sessionId: foreground.sessionId,
-                          queueId: item.id,
-                          text: item.fullText ?? item.text,
-                          displayText: item.text,
-                          isSlashCommand: item.isSlashCommand === true,
-                          slashCommandLabel: item.slashCommandLabel,
-                          attachments: item.attachments,
-                          images: item.images,
-                          documents: item.documents,
-                        });
-                      }}
-                    />
-                  )}
+                        return;
+                      }
+                      browserVscodeApi.postMessage({
+                        command: "agentInterjectQueuedMessage",
+                        sessionId: foreground.sessionId,
+                        queueId: item.id,
+                        text: item.fullText ?? item.text,
+                        displayText: item.text,
+                        isSlashCommand: item.isSlashCommand === true,
+                        slashCommandLabel: item.slashCommandLabel,
+                        attachments: item.attachments,
+                        images: item.images,
+                        documents: item.documents,
+                      });
+                    }}
+                  />
+                )}
                 {!isAskAgentSelected && !mobileReviewOpen && foreground && (
                   <ContextUsageRow
                     inputTokens={foreground.lastInputTokens}
@@ -9468,8 +9443,8 @@ export function BrowserGatewayApp({
                     onExportTranscript={handleExportTranscript}
                     hasMessages={messages.length > 0}
                     vscodeApi={browserVscodeApi}
-                    injection={null}
-                    onInjectionConsumed={() => undefined}
+                    injection={composerInjection}
+                    onInjectionConsumed={() => setComposerInjection(null)}
                     slashCommands={slashCommands}
                     onExecuteBuiltinCommand={
                       isAskAgentSelected

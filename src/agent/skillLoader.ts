@@ -5,6 +5,7 @@ import * as path from "path";
 import type { Dirent } from "fs";
 import { createHash } from "crypto";
 import { existsSync } from "fs";
+import { normalizeSkillToolNames } from "./skillToolAliases.js";
 import { parseDocument } from "yaml";
 
 const BUNDLED_SKILLS_DIRS = [
@@ -930,6 +931,30 @@ export async function loadSkillsForModes(
 export function composeSkillCapabilityPolicy(
   skills: readonly SkillEntry[],
 ): SkillCapabilityPolicySnapshot {
+  return composeSkillPolicy(skills, true);
+}
+
+export function isVerifiedSkillCapabilityPolicy(
+  skills: readonly SkillEntry[],
+  policy: SkillCapabilityPolicySnapshot,
+): boolean {
+  const persisted = stableStringify({
+    ...policy,
+    allowedTools: policy.allowedTools,
+  });
+  return (
+    persisted === stableStringify(composeSkillCapabilityPolicy(skills)) ||
+    (skills.some((skill) =>
+      skill.restrictions.allowedTools?.includes("Bash"),
+    ) &&
+      persisted === stableStringify(composeSkillPolicy(skills, false)))
+  );
+}
+
+function composeSkillPolicy(
+  skills: readonly SkillEntry[],
+  normalizeAliases: boolean,
+): SkillCapabilityPolicySnapshot {
   const ordered = [...skills].sort((left, right) =>
     left.id.localeCompare(right.id),
   );
@@ -949,7 +974,9 @@ export function composeSkillCapabilityPolicy(
     }
     const restriction = skill.restrictions.allowedTools;
     if (restriction === undefined) continue;
-    const next = new Set(restriction);
+    const next = new Set(
+      normalizeAliases ? normalizeSkillToolNames(restriction) : restriction,
+    );
     allowedTools = allowedTools
       ? new Set([...allowedTools].filter((tool) => next.has(tool)))
       : next;

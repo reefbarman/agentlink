@@ -32,6 +32,7 @@ import {
 import { resolvePromptProfile } from "../core/promptProfilePolicy.js";
 import {
   composeSkillCapabilityPolicy,
+  isVerifiedSkillCapabilityPolicy,
   type SkillCapabilityPolicySnapshot,
   type SkillEntry,
 } from "./skillLoader.js";
@@ -1390,8 +1391,7 @@ export class AgentSession {
         : [];
     });
     if (activeSkills.length !== state.activations.length) return;
-    const policy = composeSkillCapabilityPolicy(activeSkills);
-    if (policy.revision !== state.policy.revision) return;
+    if (!isVerifiedSkillCapabilityPolicy(activeSkills, state.policy)) return;
     for (const skill of activeSkills) {
       this.activeSkillIds.add(skill.id);
       this.loadedSkills.add(skill.name);

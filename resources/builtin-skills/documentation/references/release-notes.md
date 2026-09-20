@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Fixed **Add API key** for OpenAI-compatible models (for example OpenRouter) accepting a key that the model picker then never recognised. The Set/Clear API key commands wrote to VS Code SecretStorage while providers read from the shared Keychain store, so the model kept asking for a key after every entry. Both paths now use the same shared credential store; a key entered before this fix is imported from SecretStorage on the next activation.
+- Added optional BYOK TypeSafe shadow evaluation for built-in command Guardian reviews. The current Guardian remains authoritative and returns without waiting for TypeSafe. Shadow requests are off by default and send a compact decision record that excludes script bodies, inline-file previews, unrelated recent context, duplicate subcommand text, hashes, and directory sample names. A conservative best-effort local scan replaces recognized credential values before dispatch, credentials stay in VS Code SecretStorage, and bounded local comparison telemetry records completion, agreement, latency, probabilities, status, token usage, and whether redaction occurred.
+- Fixed six sandbox recovery gaps in `execute_command`: tsx Unix IPC failures no longer suggest an ineffective TCP grant; Turbopack multiline listener causes and already-granted failures are distinguished; mise-wrapped Docker and trusted-config denials receive reviewed host guidance; managed-network npm cache failures can use a disposable HOME when appropriate; and Speakeasy macOS TLS failures receive trust-repair guidance. Compound commands are never blindly replayed, and Unix IPC, private sockets, and TLS verification remain protected.
+- Fixed dependency maps treating TypeScript path aliases as external packages. Structural links now resolve workspace-contained tsconfig/jsconfig paths, base URLs, and inherited mappings; map loads refresh aliases after config-only edits, including reverse dependents.
+
+- Added exact structured file ownership to background-agent task handoffs. Native children see their enforced owned/forbidden paths and immutable-scope guidance; external ACP children receive explicitly advisory boundaries. Existing permission enforcement is unchanged.
+
+- Bounded `get_context` symbol outlines independently of file slices, prioritising requested lines and reporting omitted entries instead of flooding context with large outlines.
+- Fixed Codex web pagination inventing progress when the provider repeats earlier lines. Non-advancing pages stop with an explicit warning, and overlapping continuations retain only new line blocks.
+
+- Changed final-response Continue buttons to prefill the composer instead of sending immediately in VS Code and browser chat, including Ask Agent. Users can inspect and edit the full prompt before sending, without losing existing draft text or attachments. Auto Continue remains unchanged.
+
+- Fixed regex replacements erasing literal SQL placeholders when capture groups do not exist. Numbered captures now preserve missing references and support literal dollars with `$$`.
+- Fixed exact `Bash` skill restrictions hiding the native command executor, including verified legacy session restoration and inherited-policy intersection, without widening command approvals or background permissions.
+- Added VS Code editor-state inspection and one-shot human-reviewed exact buffer saves for failed-save recovery. Saves validate disk/buffer hashes and editor versions, skip formatting, and never revert unsaved work on rejection.
+
+- Fixed agents mistaking an empty deferred native-tool search for lost command access. `find_native_tools` now identifies exact tools that are already directly callable or excluded from the current request, with guidance that accounts for mode, skill, background-profile, and surface restrictions.
+
+- Fixed messages sent to helper-owned Ask Agent while a turn is running disappearing in AgentLink Desktop and the browser. Follow-ups now enter a visible bounded FIFO queue, persist across helper restarts, preserve their selected model owner and media, and start automatically after the current turn finishes or is stopped.
+
 - Replaced the standalone CLI's hand-written launch-command parser with Commander. Incomplete command groups now show contextual help, unknown commands and subcommands suggest close matches, missing option values show the relevant command usage, and parsing failures return standard nonzero exit codes without starting host state.
 
 - Fixed automatic write/edit review opens and tab cleanup stealing keyboard focus. Explicitly opening a pending diff still focuses it. Save without Formatting retains its existing editor-activation requirement.

@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 import type {
+  StructuralGraphCache,
   StructuralExport,
   StructuralFileEntry,
   StructuralImport,
@@ -11,7 +12,12 @@ import type {
 import { inferCodeLanguage } from "./chunkQuality.js";
 import { resolveContainedCodeIndexPath } from "./codeIndexPaths.js";
 
-export const STRUCTURAL_EXTRACTOR_VERSION = 2;
+import {
+  createTsconfigPathResolver,
+  type TsconfigPathResolver,
+} from "./tsconfigPaths.js";
+
+export const STRUCTURAL_EXTRACTOR_VERSION = 3;
 
 export interface StructuralExtractorMetrics {
   lineLookupComparisons: number;
@@ -39,6 +45,7 @@ export interface ExtractStructuralFileOptions {
   mtimeMs?: number;
   symbolHints?: readonly StructuralSymbolHint[];
   metrics?: StructuralExtractorMetrics;
+  pathResolver?: TsconfigPathResolver;
 }
 
 const SOURCE_EXTENSIONS = [
@@ -77,6 +84,8 @@ export function extractStructuralFile(
   }
   const canonicalOptions = {
     ...options,
+    pathResolver:
+      options.pathResolver ?? createTsconfigPathResolver(options.workspaceRoot),
     absPath: identity.absolutePath,
     relPath: identity.relativePath,
   };
@@ -352,6 +361,49 @@ function extractSymbols(
   return dedupeSymbols(symbols);
 }
 
+/** Resolve stored bare specifiers again so config-only edits update displayed maps. */
+export function refreshStructuralAliasLinks(
+  graph: StructuralGraphCache,
+): StructuralGraphCache {
+  const pathResolver = createTsconfigPathResolver(graph.workspaceRoot);
+  const files = Object.fromEntries(
+    Object.entries(graph.files).map(([key, entry]) => {
+      const identity = resolveContainedCodeIndexPath(
+        graph.workspaceRoot,
+        path.resolve(graph.workspaceRoot, entry.relPath),
+      );
+      if (!identity || identity.portableRelativePath !== entry.relPath)
+        return [key, entry];
+      const options: ExtractStructuralFileOptions = {
+        content: "",
+        absPath: identity.absolutePath,
+        relPath: entry.relPath,
+        workspaceRoot: graph.workspaceRoot,
+        hash: entry.hash,
+        pathResolver,
+      };
+      return [
+        key,
+        {
+          ...entry,
+          imports: entry.imports.map((item) =>
+            isRelativeSpecifier(item.specifier)
+              ? item
+              : buildImport({ ...item, options }),
+          ),
+          exports: entry.exports.map((item) => {
+            if (!item.source || isRelativeSpecifier(item.source)) return item;
+            const { resolvedRelPath: _previous, ...rest } = item;
+            const resolvedRelPath = resolveSpecifier(item.source, options);
+            return { ...rest, ...(resolvedRelPath ? { resolvedRelPath } : {}) };
+          }),
+        },
+      ];
+    }),
+  );
+  return { ...graph, files };
+}
+
 function buildImport(args: {
   specifier: string;
   kind: StructuralImport["kind"];
@@ -360,7 +412,7 @@ function buildImport(args: {
   options: ExtractStructuralFileOptions;
 }): StructuralImport {
   const resolvedRelPath = resolveSpecifier(args.specifier, args.options);
-  const external = !isRelativeSpecifier(args.specifier);
+  const external = !resolvedRelPath && !isRelativeSpecifier(args.specifier);
   return {
     specifier: args.specifier,
     kind: args.kind,
@@ -416,11 +468,24 @@ function resolveSpecifier(
   specifier: string,
   options: ExtractStructuralFileOptions,
 ): string | undefined {
-  if (!isRelativeSpecifier(specifier)) return undefined;
+  if (!isRelativeSpecifier(specifier)) {
+    const candidates = options.pathResolver?.(options.absPath, specifier);
+    for (const base of candidates?.bases ?? []) {
+      const resolved = resolveCandidateBase(base, options);
+      if (resolved) return resolved;
+    }
+    return undefined;
+  }
 
   if (options.metrics) options.metrics.relativeSpecifiers++;
   const sourceDir = path.dirname(options.absPath);
-  const candidateBase = path.resolve(sourceDir, specifier);
+  return resolveCandidateBase(path.resolve(sourceDir, specifier), options);
+}
+
+function resolveCandidateBase(
+  candidateBase: string,
+  options: ExtractStructuralFileOptions,
+): string | undefined {
   for (const candidate of buildResolutionCandidates(
     candidateBase,
     options.absPath,

@@ -22,7 +22,10 @@ import {
   type McpAuthMode,
   type McpAuthTrigger,
 } from "./mcpAuthCoordinator.js";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
+import * as fs from "fs/promises";
+import * as os from "os";
+import * as path from "path";
 import {
   buildAgentExecutionEnv,
   inheritProcessEnv,
@@ -107,6 +110,7 @@ interface ConnectServerOptions {
   userInitiated?: boolean;
   rootAttemptId?: string;
   parentAttemptId?: string;
+  retryAfterConnected?: boolean;
 }
 
 type McpCatalogKind = "tools" | "resources" | "prompts";
@@ -183,6 +187,203 @@ interface ConnectedServer {
 const httpConnectQueues = new Map<string, Promise<unknown>>();
 const MAX_MCP_CATALOG_PAGES = 100;
 const MAX_MCP_CATALOG_ITEMS = 10_000;
+
+interface McpRemoteInvocation {
+  readonly serverUrl: string;
+  readonly args: readonly string[];
+}
+
+function parseMcpRemoteInvocation(
+  config: Readonly<McpServerConfig>,
+): McpRemoteInvocation | undefined {
+  if ((config.type ?? "stdio") !== "stdio" || !config.command) return undefined;
+  const command = config.command
+    .split(/[\\/]/u)
+    .at(-1)
+    ?.toLowerCase()
+    .replace(/\.cmd$/u, "");
+  const configuredArgs = config.args ?? [];
+  const packageIndex =
+    command === "mcp-remote"
+      ? -1
+      : command === "npx"
+        ? configuredArgs.findIndex((arg) =>
+            /^mcp-remote(?:@[^/]+)?$/u.test(arg),
+          )
+        : -2;
+  if (packageIndex === -2) return undefined;
+
+  const args = configuredArgs.slice(packageIndex + 1);
+  const positionalArgs = [...args];
+  for (let index = 0; index < positionalArgs.length;) {
+    if (
+      (positionalArgs[index] === "--header" ||
+        positionalArgs[index] === "--header-file") &&
+      index < positionalArgs.length - 1
+    ) {
+      positionalArgs.splice(index, 2);
+    } else {
+      index += 1;
+    }
+  }
+  const serverUrl = positionalArgs[0];
+  if (!serverUrl || !/^https?:\/\//u.test(serverUrl)) return undefined;
+  return { serverUrl, args };
+}
+
+function isMcpRemoteConfig(config: Readonly<McpServerConfig>): boolean {
+  return parseMcpRemoteInvocation(config) !== undefined;
+}
+
+function optionValue(
+  args: readonly string[],
+  flag: string,
+): string | undefined {
+  const index = args.indexOf(flag);
+  return index >= 0 && index < args.length - 1 ? args[index + 1] : undefined;
+}
+
+function parseMcpRemoteHeader(line: string): [string, string] | undefined {
+  const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/u);
+  return match ? [match[1], match[2]] : undefined;
+}
+
+async function mcpRemoteCacheHash(
+  config: Readonly<McpServerConfig>,
+  invocation: Readonly<McpRemoteInvocation>,
+): Promise<string> {
+  const { args, serverUrl } = invocation;
+  const headers: Record<string, string> = {};
+  for (let index = 0; index < args.length - 1; index += 1) {
+    if (args[index] === "--header") {
+      const parsed = parseMcpRemoteHeader(args[index + 1]);
+      if (parsed) headers[parsed[0]] = parsed[1];
+      index += 1;
+      continue;
+    }
+    if (args[index] !== "--header-file") continue;
+    const headerFile = path.resolve(
+      config.cwd ?? process.cwd(),
+      args[index + 1],
+    );
+    try {
+      const contents = await fs.readFile(headerFile, "utf8");
+      for (const line of contents.split(/\r?\n/u)) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const parsed = parseMcpRemoteHeader(trimmed);
+        if (parsed) headers[parsed[0]] = parsed[1];
+      }
+    } catch {
+      // mcp-remote will report an unreadable header file when it starts. It
+      // cannot match an existing cache identity until the file is readable.
+    }
+    index += 1;
+  }
+
+  let authorizeResource = optionValue(args, "--resource")?.trim();
+  if (!authorizeResource || args.includes("--disable-resource-parameter")) {
+    authorizeResource = undefined;
+  }
+  const authorizeParams: Record<string, string> = {};
+  for (let index = 0; index < args.length - 1; index += 1) {
+    if (args[index] !== "--authorize-param") continue;
+    const raw = args[index + 1];
+    const separator = raw.indexOf("=");
+    if (separator > 0) {
+      authorizeParams[raw.slice(0, separator).trim()] = raw.slice(
+        separator + 1,
+      );
+    }
+    index += 1;
+  }
+
+  let clientMetadataUrl = optionValue(args, "--client-metadata-url")?.trim();
+  try {
+    const parsed = clientMetadataUrl ? new URL(clientMetadataUrl) : undefined;
+    if (
+      !parsed ||
+      parsed.protocol !== "https:" ||
+      parsed.pathname === "/" ||
+      parsed.username ||
+      parsed.password ||
+      parsed.hash
+    ) {
+      clientMetadataUrl = undefined;
+    }
+  } catch {
+    clientMetadataUrl = undefined;
+  }
+
+  let tokenEndpoint = args.includes("--client-credentials")
+    ? optionValue(args, "--token-endpoint")?.trim()
+    : undefined;
+  try {
+    tokenEndpoint = tokenEndpoint
+      ? new URL(tokenEndpoint).toString()
+      : undefined;
+  } catch {
+    tokenEndpoint = undefined;
+  }
+
+  const parts = [serverUrl];
+  if (authorizeResource) parts.push(authorizeResource);
+  if (Object.keys(authorizeParams).length > 0) {
+    parts.push(
+      JSON.stringify(authorizeParams, Object.keys(authorizeParams).sort()),
+    );
+  }
+  if (Object.keys(headers).length > 0) {
+    parts.push(JSON.stringify(headers, Object.keys(headers).sort()));
+  }
+  if (clientMetadataUrl) parts.push(clientMetadataUrl);
+  if (tokenEndpoint) parts.push(tokenEndpoint);
+  return createHash("md5").update(parts.join("|")).digest("hex");
+}
+
+async function hasMcpRemoteCachedTokens(
+  config: Readonly<McpServerConfig>,
+): Promise<boolean> {
+  const invocation = parseMcpRemoteInvocation(config);
+  if (!invocation) return false;
+  const baseDirectory =
+    config.env?.MCP_REMOTE_CONFIG_DIR ??
+    process.env.MCP_REMOTE_CONFIG_DIR ??
+    path.join(os.homedir(), ".mcp-auth");
+  const currentHash = await mcpRemoteCacheHash(config, invocation);
+  try {
+    const entries = await fs.readdir(baseDirectory, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith("mcp-remote"))
+        continue;
+      try {
+        const raw = await fs.readFile(
+          path.join(baseDirectory, entry.name, `${currentHash}_tokens.json`),
+          "utf8",
+        );
+        const tokens = JSON.parse(raw) as Record<string, unknown>;
+        if (typeof tokens.access_token !== "string" || !tokens.access_token) {
+          continue;
+        }
+        const expiresAt = Number(tokens.expires_at);
+        const isExpired =
+          Number.isFinite(expiresAt) && Date.now() >= expiresAt - 60_000;
+        if (
+          !isExpired ||
+          (typeof tokens.refresh_token === "string" && tokens.refresh_token)
+        ) {
+          return true;
+        }
+      } catch {
+        // Missing, malformed, or unreadable credentials are not safe to start
+        // in the background because mcp-remote may fall back to browser auth.
+      }
+    }
+  } catch {
+    // A missing or unreadable cache is equivalent to a first-time connection.
+  }
+  return false;
+}
 
 function isCallToolResult(value: unknown): value is CallToolResult {
   return (
@@ -305,6 +506,7 @@ export class McpClientHub {
   private servers = new Map<string, ConnectedServer>();
   private disabledServers = new Map<string, McpServerConfig>();
   private oauthProviders = new Map<string, McpOAuthProvider>();
+  private pendingInteractiveServers = new Map<string, McpServerConfig>();
   private connectionAttempts = new Map<
     string,
     { config: McpServerConfig; controller: AbortController }
@@ -478,12 +680,14 @@ export class McpClientHub {
     const existingNames = new Set([
       ...this.servers.keys(),
       ...this.disabledServers.keys(),
+      ...this.pendingInteractiveServers.keys(),
     ]);
     const newNames = new Set(configs.map((config) => config.name));
     for (const name of new Set([
       ...this.servers.keys(),
       ...this.connectionAttempts.keys(),
       ...this.oauthProviders.keys(),
+      ...this.pendingInteractiveServers.keys(),
     ])) {
       if (!newNames.has(name)) await this.disconnectServer(name);
     }
@@ -503,6 +707,16 @@ export class McpClientHub {
           : Boolean(
               options.interactiveForNewServers && !existingNames.has(cfg.name),
             );
+        if (
+          !isInteractive &&
+          isMcpRemoteConfig(cfg) &&
+          !(await hasMcpRemoteCachedTokens(cfg))
+        ) {
+          await this.disconnectServer(cfg.name);
+          this.pendingInteractiveServers.set(cfg.name, cfg);
+          return;
+        }
+        this.pendingInteractiveServers.delete(cfg.name);
         await this.connectServer(cfg, {
           authMode: isInteractive ? "interactive" : "noninteractive",
           trigger: options.trigger ?? "startup",
@@ -937,6 +1151,7 @@ export class McpClientHub {
           cfg,
           (current.retryCount ?? 0) + 1,
           "transport-error",
+          true,
         );
       };
 
@@ -1281,8 +1496,18 @@ export class McpClientHub {
 
         this.authFailureCounts.delete(cfg.name);
         entry.status = "error";
-        entry.error = errMsg;
-        this.scheduleReconnect(cfg, retryCount + 1, "transport-error");
+        if (isMcpRemoteConfig(cfg) && !options.retryAfterConnected) {
+          entry.error = `MCP proxy '${cfg.name}' failed to start. Automatic startup retries are paused to avoid repeated interactive authentication. Use Reconnect to try again.`;
+          this.log(`[mcp:${cfg.name}] ${entry.error}`);
+        } else {
+          entry.error = errMsg;
+          this.scheduleReconnect(
+            cfg,
+            retryCount + 1,
+            "transport-error",
+            options.retryAfterConnected,
+          );
+        }
       }
     }
 
@@ -1468,6 +1693,7 @@ export class McpClientHub {
     cfg: McpServerConfig,
     attempt: number,
     reason: "auth-failure" | "transport-error",
+    retryAfterConnected = false,
   ): void {
     const serverIdentity = cfg.url
       ? mcpServerIdentityHash(cfg.name, cfg.url)
@@ -1495,6 +1721,7 @@ export class McpClientHub {
         retryCount: attempt,
         authMode: "noninteractive",
         trigger: "scheduled-retry",
+        retryAfterConnected,
       });
     }, delay);
   }
@@ -1595,6 +1822,7 @@ export class McpClientHub {
     const attempt = this.connectionAttempts.get(name);
     this.connectionAttempts.delete(name);
     this.servers.delete(name);
+    this.pendingInteractiveServers.delete(name);
     const provider = this.oauthProviders.get(name);
     this.oauthProviders.delete(name);
     attempt?.controller.abort();
@@ -1622,15 +1850,36 @@ export class McpClientHub {
     return (await this.options.isConfigCurrent?.(config)) ?? true;
   }
 
-  /** Return the stored config for a connected or disabled server. */
+  /** Return the stored config for a connected, deferred, or disabled server. */
   getServerConfig(
     serverName: string,
   ): import("./mcpConfig.js").McpServerConfig | undefined {
     return (
       this.servers.get(serverName)?.config ??
       this.connectionAttempts.get(serverName)?.config ??
+      this.pendingInteractiveServers.get(serverName) ??
       this.disabledServers.get(serverName)
     );
+  }
+
+  /**
+   * Starts cache-cold mcp-remote proxies at an active-turn boundary. The proxy
+   * remains authoritative for transport and OAuth, including browser launch.
+   */
+  async activatePendingInteractiveServers(): Promise<void> {
+    const pending = [...this.pendingInteractiveServers.values()];
+    await Promise.all(
+      pending.map(async (config) => {
+        if (this.pendingInteractiveServers.get(config.name) !== config) return;
+        this.pendingInteractiveServers.delete(config.name);
+        await this.connectServer(config, {
+          authMode: "interactive",
+          trigger: "tool-use",
+          userInitiated: true,
+        });
+      }),
+    );
+    this.onStatusChange?.(this.getServerInfos());
   }
 
   /** Whether a server has explicitly opted into concurrent tool calls. */
@@ -1680,7 +1929,7 @@ export class McpClientHub {
   /** Reconnect a server by name using its stored config. */
   async reconnectServer(name: string): Promise<void> {
     const entry = this.servers.get(name);
-    const cfg = entry?.config;
+    const cfg = entry?.config ?? this.pendingInteractiveServers.get(name);
     if (!cfg) return;
     this.authFailureCounts.delete(name);
     this.invalidRedirectRecoveryAttempted.delete(name);
@@ -1702,7 +1951,7 @@ export class McpClientHub {
   /** Force a fresh OAuth browser flow then reconnect. */
   async reauthenticateServer(name: string): Promise<void> {
     const entry = this.servers.get(name);
-    const cfg = entry?.config;
+    const cfg = entry?.config ?? this.pendingInteractiveServers.get(name);
     if (!cfg) return;
 
     this.authFailureCounts.delete(name);
@@ -1807,9 +2056,11 @@ export class McpClientHub {
           ...this.servers.keys(),
           ...this.connectionAttempts.keys(),
           ...this.oauthProviders.keys(),
+          ...this.pendingInteractiveServers.keys(),
         ]),
       ).map((n) => this.disconnectServer(n)),
     );
+    this.pendingInteractiveServers.clear();
     this.disabledServers.clear();
     this.onStatusChange?.(this.getServerInfos());
   }
@@ -1891,6 +2142,15 @@ export class McpClientHub {
           name: tool.name,
           description: tool.description,
         })),
+      })),
+      ...Array.from(this.pendingInteractiveServers.values()).map((config) => ({
+        name: config.name,
+        status: "disconnected" as const,
+        error: "Authentication will start when an agent turn first uses MCP.",
+        toolCount: 0,
+        resourceCount: 0,
+        promptCount: 0,
+        tools: [],
       })),
       ...Array.from(this.disabledServers.values()).map((config) => ({
         name: config.name,

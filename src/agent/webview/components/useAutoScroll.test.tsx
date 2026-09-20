@@ -160,6 +160,44 @@ describe("useAutoScroll", () => {
     expect(container.scrollTop).toBe(0);
   });
 
+  it("stops following growth as soon as the user scrolls upward", () => {
+    const { getByTestId } = render(<Harness />);
+    const container = getByTestId("container");
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 600 },
+      scrollTop: { configurable: true, writable: true, value: 0 },
+    });
+
+    resizeObservers[0].callback([], resizeObservers[0] as never);
+    fireEvent.scroll(container);
+    container.scrollTop = 480;
+    fireEvent.scroll(container);
+
+    resizeObservers[0].callback([], resizeObservers[0] as never);
+    expect(container.scrollTop).toBe(480);
+  });
+
+  it("cancels remaining layout scrolls when the user scrolls upward", () => {
+    const { getByTestId, rerender } = render(<Harness />);
+    const container = getByTestId("container");
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 600 },
+      scrollTop: { configurable: true, writable: true, value: 0 },
+    });
+
+    rerender(<Harness scrollAfterLayout />);
+    animationFrames.shift()?.(0);
+    const staleCallback = animationFrames[0];
+    container.scrollTop = 480;
+    fireEvent.scroll(container);
+
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(2);
+    staleCallback(0);
+    expect(container.scrollTop).toBe(480);
+  });
+
   it("rebinds resize observation when content appears and disconnects it", () => {
     const { rerender, unmount } = render(<Harness contentPresent={false} />);
     expect(resizeObservers).toHaveLength(0);

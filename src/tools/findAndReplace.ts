@@ -39,6 +39,24 @@ export interface FindAndReplaceProviders {
   prepareOneShotAuthorization?: EditReviewParams["prepareOneShotAuthorization"];
 }
 
+function expandReplacement(
+  replacement: string,
+  match: RegExpExecArray,
+): string {
+  return replacement.replace(/\$(\$|\d{1,2})/g, (token, reference: string) => {
+    if (reference === "$") return "$";
+    const index = Number(reference);
+    if (index > 0 && index < match.length) return match[index] ?? "";
+    if (reference.length === 2) {
+      const first = Number(reference[0]);
+      if (first > 0 && first < match.length) {
+        return (match[first] ?? "") + reference[1];
+      }
+    }
+    return token;
+  });
+}
+
 export async function handleFindAndReplace(
   params: {
     find: string;
@@ -168,17 +186,11 @@ export async function handleFindAndReplace(
         const startPos = doc.positionAt(regexMatch.index);
         const endPos = doc.positionAt(regexMatch.index + regexMatch[0].length);
 
-        // For regex, support capture group references ($1, $2, etc.)
-        // Use the match array directly to avoid re-executing the pattern
-        // (which fails for anchored patterns like ^, $, lookahead).
-        const m = regexMatch;
-        let newText = replaceStr;
-        if (params.regex) {
-          newText = replaceStr.replace(
-            /\$(\d+)/g,
-            (_, n) => m[parseInt(n, 10)] ?? "",
-          );
-        }
+        // Expand once from the original match so anchors/lookarounds and dollar
+        // tokens inside captured content are not reinterpreted.
+        const newText = params.regex
+          ? expandReplacement(replaceStr, regexMatch)
+          : replaceStr;
 
         const matchId = `${fileIdx}:${matchIdx}`;
 

@@ -135,13 +135,38 @@ describe("SessionOutcomeTelemetry", () => {
       authorityReason: "explicit-escalation",
       routeReason: "explicit-native-request",
     });
+    telemetry.record({
+      type: "guardian_shadow_comparison",
+      sessionId: "session-a",
+      reviewKind: "command",
+      shadowProvider: "typesafe",
+      primaryStatus: "reviewed",
+      primaryOutcome: "deny",
+      primaryRisk: "high",
+      primaryDurationMs: 1_200.4,
+      shadowStatus: "completed",
+      shadowOutcome: "allow",
+      shadowRisk: "medium",
+      shadowAuthorization: "high",
+      shadowDurationMs: 250.7,
+      outcomesAgree: false,
+      shadowFaster: true,
+      shadowConfidencePermille: 820,
+      shadowInputRedacted: true,
+      shadowEvidenceWithheld: true,
+      objectiveMatchPermille: 940,
+      secretExposurePermille: 30,
+      boundedImpactPermille: 890,
+      shadowInputTokens: 321,
+      shadowOutputTokens: 45,
+    });
 
     await telemetry.flush();
 
     const records = (await readJsonLines(telemetryPath)) as Array<
       Record<string, unknown>
     >;
-    expect(records).toHaveLength(4);
+    expect(records).toHaveLength(5);
     for (const record of records) {
       expect(record.version).toBe(1);
       expect(record.extensionVersion).toBe("1.2.3");
@@ -192,6 +217,23 @@ describe("SessionOutcomeTelemetry", () => {
       guardianStatus: "reviewed",
       risk: "high",
       permissionIntent: "require_escalated",
+    });
+    expect(records[4]).toMatchObject({
+      type: "guardian_shadow_comparison",
+      reviewKind: "command",
+      shadowProvider: "typesafe",
+      primaryOutcome: "deny",
+      primaryDurationMs: 1_200,
+      shadowStatus: "completed",
+      shadowOutcome: "allow",
+      shadowDurationMs: 251,
+      outcomesAgree: false,
+      shadowFaster: true,
+      shadowConfidencePermille: 820,
+      shadowInputRedacted: true,
+      shadowEvidenceWithheld: true,
+      shadowInputTokens: 321,
+      shadowOutputTokens: 45,
     });
   });
 

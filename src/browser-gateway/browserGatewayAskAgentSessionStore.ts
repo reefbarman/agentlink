@@ -148,6 +148,15 @@ export interface BrowserGatewayAskAgentReadGrant {
   kind: "file" | "directory";
 }
 
+export interface BrowserGatewayAskAgentQueuedMessage {
+  id: string;
+  text: string;
+  images?: BrowserGatewayAskAgentMediaItem[];
+  documents?: BrowserGatewayAskAgentMediaItem[];
+  instanceId?: string;
+  source: "browser";
+}
+
 export interface BrowserGatewayAskAgentSnapshot {
   ui: {
     approval: ApprovalRequest | null;
@@ -190,7 +199,7 @@ export interface BrowserGatewayAskAgentSnapshot {
       lastOutputTokens: 0;
       lastCacheReadTokens: 0;
       estimatedTotalUsed: 0;
-      messageQueue: [];
+      messageQueue: BrowserGatewayAskAgentQueuedMessage[];
       questionRequest: QuestionRequest | null;
       detectedQuestion: null;
       todos: TodoItem[];
@@ -235,6 +244,7 @@ export interface BrowserGatewayAskAgentPersistedSession {
   lastActiveAt: number;
   messages: ChatMessage[];
   nextMessageSequence: number;
+  queuedMessages?: BrowserGatewayAskAgentQueuedMessage[];
   generateImageApproved?: boolean;
   /** Server-only exact model replay. Never include this in browser snapshots. */
   privateModelHistory?: BrowserGatewayAskAgentPrivateModelHistory;
@@ -335,6 +345,8 @@ function getAskAgentCapabilities(
           };
   return [modelAuth, ...additionalCapabilities];
 }
+
+const MAX_QUEUED_ASK_AGENT_MESSAGES = 16;
 
 export class BrowserGatewayAskAgentSessionStore {
   private sessions: BrowserGatewayAskAgentPersistedSession[] = [];
@@ -767,6 +779,33 @@ export class BrowserGatewayAskAgentSessionStore {
     return this.getActiveSession().messages.some(
       (message) => message.role === "user" && message.id === normalized,
     );
+  }
+
+  hasQueuedMessageId(messageId: string | undefined): boolean {
+    const normalized = messageId?.trim();
+    if (!normalized) return false;
+    return (
+      this.getActiveSession().queuedMessages?.some(
+        (message) => message.id === normalized,
+      ) === true
+    );
+  }
+
+  enqueueMessage(
+    message: BrowserGatewayAskAgentQueuedMessage,
+    position: "front" | "back" = "back",
+  ): boolean {
+    const session = this.getActiveSession();
+    const queue = (session.queuedMessages ??= []);
+    if (queue.some((queued) => queued.id === message.id)) return true;
+    if (queue.length >= MAX_QUEUED_ASK_AGENT_MESSAGES) return false;
+    if (position === "front") queue.unshift(message);
+    else queue.push(message);
+    return true;
+  }
+
+  dequeueMessage(): BrowserGatewayAskAgentQueuedMessage | null {
+    return this.getActiveSession().queuedMessages?.shift() ?? null;
   }
 
   getAvailableModels(): WebviewModelInfo[] {
@@ -1421,7 +1460,12 @@ export class BrowserGatewayAskAgentSessionStore {
             lastOutputTokens: 0,
             lastCacheReadTokens: 0,
             estimatedTotalUsed: 0,
-            messageQueue: [],
+            messageQueue: (activeSession.queuedMessages ?? []).map(
+              (message) => ({
+                ...message,
+                displayMedia: askAgentMediaToDisplayMedia(message),
+              }),
+            ),
             questionRequest: this.questionRequest,
             detectedQuestion: null,
             todos: this.todos,

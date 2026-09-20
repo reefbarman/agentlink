@@ -1,9 +1,7 @@
 import * as vscode from "vscode";
 
 import {
-  OpenAiCompatibleCredentialService,
-  type OpenAiCompatibleKeyNameState,
-  type OpenAiCompatibleSecretStore,
+  type OpenAiCompatibleCredentialService,
   normalizeOpenAiCompatibleApiKeyName,
 } from "./openAiCompatibleCredentials.js";
 
@@ -11,9 +9,13 @@ export { OPENAI_COMPATIBLE_KEY_INDEX_STATE } from "./openAiCompatibleCredentials
 export { OPENAI_COMPATIBLE_SECRET_PREFIX } from "./openAiCompatibleSecrets.js";
 
 export interface OpenAiCompatibleAuthCommandDependencies {
-  secrets: OpenAiCompatibleSecretStore;
-  state: OpenAiCompatibleKeyNameState;
-  getConfiguredAuthKeys(): readonly string[];
+  /**
+   * The same credential service the providers, wizard, and browser gateway
+   * read from. The commands must never compose their own secret store: a key
+   * written to a store the providers do not read leaves the model picker
+   * asking for the key forever.
+   */
+  credentials: OpenAiCompatibleCredentialService;
   onCredentialChanged(authKey: string): void | Promise<void>;
 }
 
@@ -76,11 +78,7 @@ async function chooseAuthKey(
 export function registerOpenAiCompatibleAuthCommands(
   dependencies: OpenAiCompatibleAuthCommandDependencies,
 ): vscode.Disposable[] {
-  const credentials = new OpenAiCompatibleCredentialService({
-    secrets: dependencies.secrets,
-    state: dependencies.state,
-    getConfiguredApiKeyNames: dependencies.getConfiguredAuthKeys,
-  });
+  const { credentials } = dependencies;
 
   return [
     vscode.commands.registerCommand(
@@ -95,7 +93,7 @@ export function registerOpenAiCompatibleAuthCommands(
         const value = await vscode.window.showInputBox({
           title: `API key: ${authKey}`,
           prompt:
-            "The key is stored in VS Code SecretStorage and is never written to settings.",
+            "The key is stored in AgentLink's secure credential store and is never written to settings.",
           password: true,
           ignoreFocusOut: true,
           validateInput: (input) =>

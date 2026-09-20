@@ -45,7 +45,9 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     contextMode,
     currentModel,
     reasoningEffort,
+    injection,
   }: {
+    injection?: { type: string; context?: string } | null;
     allowThinkingToggle?: boolean;
     availableModels?: Array<{ id: string; displayName?: string }>;
     onExecuteBuiltinCommand?: (name: string, args: string) => void;
@@ -89,6 +91,23 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
   }) =>
     h("div", { "data-testid": "mock-input-area" }, [
       contextMode?.content,
+      h("textarea", {
+        "data-testid": "continuation-draft",
+        value: injection?.context ?? "",
+      }),
+      h(
+        "button",
+        {
+          "data-testid": "send-continuation-draft",
+          onClick: () =>
+            onSend?.(
+              (screen.getByTestId("continuation-draft") as HTMLTextAreaElement)
+                .value,
+              [],
+            ),
+        },
+        "Send draft",
+      ),
       h(
         "button",
         {
@@ -3068,6 +3087,67 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
   });
 
+  it("shows helper-owned Ask Agent messages queued while a turn is running", async () => {
+    const askSnapshot = createAskAgentSessionResponse().snapshot;
+    askSnapshot.session.foreground.status = "streaming";
+    askSnapshot.session.foreground.streaming = true;
+    const queuedSnapshot = structuredClone(askSnapshot);
+    queuedSnapshot.session.foreground.messageQueue = [
+      { id: "ask-queued", text: "Ship it", source: "browser" },
+    ];
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input).split("?")[0];
+        if (url === "/api/instances") {
+          return jsonResponse({ currentInstanceId: "", instances: [] });
+        }
+        if (url === "/api/ask-agent/session") {
+          return jsonResponse(createAskAgentSessionResponse(askSnapshot));
+        }
+        if (url === "/api/ask-agent/send") {
+          const request = JSON.parse(String(init?.body ?? "{}")) as {
+            id?: string;
+          };
+          const responseSnapshot = structuredClone(queuedSnapshot);
+          responseSnapshot.session.foreground.messageQueue[0]!.id =
+            request.id ?? "";
+          return jsonResponse({
+            ok: true,
+            queued: true,
+            snapshot: responseSnapshot,
+          });
+        }
+        if (url === "/api/ask-agent/sessions")
+          return jsonResponse({ sessions: [] });
+        if (url === "/api/ask-agent/models")
+          return jsonResponse({ models: [] });
+        if (url === "/api/ask-agent/slash-commands") {
+          return jsonResponse({ commands: [] });
+        }
+        if (url === "/api/ask-agent/log") return jsonResponse({ ok: true });
+        return jsonResponse({ error: "not_found" }, 404);
+      },
+    );
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        askAgentOnly: true,
+      }),
+    );
+
+    await screen.findByRole("heading", { name: "What can I help you with?" });
+    fireEvent.click(screen.getByTestId("trigger-send"));
+    expect(await screen.findByText("Queued.")).toBeTruthy();
+    expect(screen.getByText("Queued (1)")).toBeTruthy();
+    expect(screen.getByText("Ship it")).toBeTruthy();
+    expect(screen.queryByTitle("Steer now")).toBeNull();
+  });
+
   it("reconciles a queued send when its transcript turn skips the queue snapshot", async () => {
     let queuedMessageId = "";
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
@@ -3637,7 +3717,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(screen.queryByText("Late origin response")).toBeNull();
   });
 
-  it("sends project final-marker Continue prompts through the selected project instance", async () => {
+  it("prefills project Continue prompts and sends only after the user edits and submits", async () => {
     const snapshot = createSnapshot();
     snapshot.session.foreground.projectedMessages = [
       {
@@ -3710,13 +3790,28 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     await selectWorkspaceTab();
     fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
 
+    const draft = screen.getByTestId(
+      "continuation-draft",
+    ) as HTMLTextAreaElement;
+    expect(draft.value).toBe("Please continue the next slice.");
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("/api/send"),
+      ),
+    ).toBe(false);
+    expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
+    fireEvent.input(draft, {
+      target: { value: "Only continue the UI slice." },
+    });
+    fireEvent.click(screen.getByTestId("send-continuation-draft"));
+
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(([input, init]) => {
           if (!String(input).includes("/api/send")) return false;
           const body = JSON.parse(String((init as RequestInit).body ?? "{}"));
           return (
-            body.text === "Please continue the next slice." &&
+            body.text === "Only continue the UI slice." &&
             body.sessionId === "session-1" &&
             body.projectId === "project-1"
           );
@@ -3725,7 +3820,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
   });
 
-  it("sends Ask Agent final-marker Continue prompts through Ask Agent", async () => {
+  it("prefills Ask Agent Continue prompts without sending until submission", async () => {
     const askSnapshot = createAskAgentSessionResponse().snapshot;
     askSnapshot.session.foreground.projectedMessages = [
       {
@@ -3801,6 +3896,15 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     );
 
     fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+
+    const draft = screen.getByTestId(
+      "continuation-draft",
+    ) as HTMLTextAreaElement;
+    expect(draft.value).toBe("Please continue in Ask Agent.");
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).includes("/send")),
+    ).toBe(false);
+    fireEvent.click(screen.getByTestId("send-continuation-draft"));
 
     await waitFor(() => {
       expect(

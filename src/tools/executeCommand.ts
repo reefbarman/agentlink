@@ -368,6 +368,7 @@ type ExecuteCommandRetryGuidance = {
   code:
     | "sandbox_cwd_outside_workspace"
     | "sandbox_missing_capabilities"
+    | "sandbox_capability_unresolved"
     | "sandbox_host_integration"
     | "sandbox_node_oom"
     | "sandbox_preparation_changed"
@@ -431,23 +432,31 @@ const LOOPBACK_LISTEN_DENIAL_PATTERNS = [
 ];
 
 const TURBOPACK_LISTENER_DENIAL_PATTERNS = [
-  /turbopack/i,
-  /(?:bind|listen|socket)/i,
+  /\bturbopack\b/i,
+  /(?:\bbind(?:ing)?\b[^\r\n]{0,80}\b(?:port|listener)\b|\blisten(?:er)?\b[^\r\n]{0,80}(?:\bEPERM\b|\bport\s+\d+\b)|\bport\s+\d+\b)/i,
   /(?:operation not permitted|permission denied|os error 1)/i,
 ];
 
 function outputHasTurbopackListenerDenial(output: string): boolean {
-  return output
-    .split(/\r?\n/)
-    .some((line) =>
-      TURBOPACK_LISTENER_DENIAL_PATTERNS.every((pattern) => pattern.test(line)),
+  const lines = output.split(/\r?\n/);
+  return lines.some((_, index) => {
+    const causeChain = lines
+      .slice(index, index + 6)
+      .join("\n")
+      .slice(0, 2_048);
+    return TURBOPACK_LISTENER_DENIAL_PATTERNS.every((pattern) =>
+      pattern.test(causeChain),
     );
+  });
 }
+
+const TSX_UNIX_SOCKET_DENIAL_PATTERN =
+  /listen\s+EPERM:\s+operation not permitted[^\r\n]*[\\/]tsx-\d+[\\/][^\s"']+\.pipe\b/i;
 
 const HOME_WRITE_DENIAL_PATTERNS = [
   /(?:not written|error writing|failed to write|cannot write|unable to write)/i,
-  /(?:\bEPERM\b|operation not permitted|permission denied|read-only file system).*\b(?:create|mkdir|rename|truncate|unlink|write|writing)\b/i,
-  /\b(?:create|mkdir|rename|truncate|unlink|write|writing)\b.*(?:\bEPERM\b|operation not permitted|permission denied|read-only file system)/i,
+  /(?:\bEPERM\b|operation not permitted|permission denied|read-only file system).*\b(?:create|mkdir|open|rename|symlink|link|truncate|unlink|write|writing)\b/i,
+  /\b(?:create|mkdir|open|rename|symlink|link|truncate|unlink|write|writing)\b.*(?:\bEPERM\b|operation not permitted|permission denied|read-only file system)/i,
 ];
 
 const PROCESS_INSPECTION_DENIAL_PATTERNS = [
@@ -651,6 +660,19 @@ function outsideWorkspaceCwdResult(input: {
   };
 }
 
+function isSpeakeasyTlsFailure(command: string, output: string): boolean {
+  if (!TLS_TRUST_FAILURE_PATTERNS.some((pattern) => pattern.test(output)))
+    return false;
+  if (!/(?:\bspeakeasy\b|app\.speakeasy\.com)/i.test(output)) return false;
+  return splitCompoundCommand(command).some((segment) => {
+    const tokens = singleCommandTokens(segment);
+    return (
+      tokens?.[0] === "speakeasy" ||
+      (tokens?.[0] === "mise" && tokens[1] === "run")
+    );
+  });
+}
+
 function attachManagedNetworkFailureGuidance(input: {
   result: TerminalCommandResult;
   command: string;
@@ -679,31 +701,38 @@ function attachManagedNetworkFailureGuidance(input: {
   ) {
     guidance = managedNetworkSshGitGuidance();
   } else if (
-    isGhOnlyCommand(command) &&
+    (isGhOnlyCommand(command) || isSpeakeasyTlsFailure(command, output)) &&
     TLS_TRUST_FAILURE_PATTERNS.some((pattern) => pattern.test(output))
   ) {
+    const compound = splitCompoundCommand(command).length > 1;
     guidance = {
       code: "managed_network_tls_trust",
-      message:
-        "Managed networking preserves server TLS and does not provide a replacement CA. Repair the host/client trust configuration before retrying; do not disable certificate verification or install an unverified proxy CA.",
+      message: compound
+        ? "Managed networking preserved server TLS, but a step in this compound command hit a trust failure. Repair the host/client trust configuration, identify the failed step, and retry only that step; do not replay successful prefixes blindly or disable certificate verification."
+        : "Managed networking preserves server TLS and does not provide a replacement CA. Repair the host/client trust configuration before retrying; do not disable certificate verification or install an unverified proxy CA.",
       automatic_retry: false,
       options: [
         {
-          action: "fix_trust_and_retry",
+          action: compound
+            ? "isolate_failed_step_after_trust_repair"
+            : "fix_trust_and_retry",
           sandbox_permissions: "require_managed_network",
-          same_command: true,
+          same_command: !compound,
         },
         {
-          action: "reviewed_native_retry",
+          action: compound
+            ? "isolate_failed_step_for_reviewed_native_retry"
+            : "reviewed_native_retry",
           sandbox_permissions: "require_escalated",
           reason_required: true,
           reviewed_native_execution: true,
-          same_command: true,
+          same_command: !compound,
         },
       ],
       prohibited_workarounds: [
         "disable_tls_verification",
         "inject_unverified_ca",
+        ...(compound ? ["blindly_replay_successful_prefixes"] : []),
       ],
     };
   } else if (
@@ -816,6 +845,20 @@ function attachPnpmStoreMismatchGuidance(input: {
   });
 }
 
+function isMiseTrustedConfigDenial(output: string): boolean {
+  return output
+    .split(/\r?\n/)
+    .some(
+      (line) =>
+        /(?:\.local[\\/]state[\\/]mise[\\/]trusted-configs|mise[\\/]trusted-configs)/i.test(
+          line,
+        ) &&
+        /(?:ln|link|symlink|operation not permitted|permission denied|\bEPERM\b)/i.test(
+          line,
+        ),
+    );
+}
+
 function outputHasHostHomeWriteDenial(
   output: string,
   workspaceRoots: readonly string[],
@@ -824,7 +867,8 @@ function outputHasHostHomeWriteDenial(
   const excludedRoots = [...workspaceRoots, os.tmpdir()].map((root) =>
     path.resolve(root),
   );
-  return output.split(/\r?\n/).some((line) => {
+  const lines = output.split(/\r?\n/);
+  return lines.some((line, index) => {
     if (!line.includes(homePrefix)) return false;
     if (
       excludedRoots.some(
@@ -833,7 +877,25 @@ function outputHasHostHomeWriteDenial(
     ) {
       return false;
     }
-    return HOME_WRITE_DENIAL_PATTERNS.some((pattern) => pattern.test(line));
+    const adjacentLines = [line, lines[index - 1], lines[index + 1]].filter(
+      (candidate): candidate is string => candidate !== undefined,
+    );
+    if (
+      adjacentLines.some((candidate) =>
+        HOME_WRITE_DENIAL_PATTERNS.some((pattern) => pattern.test(candidate)),
+      )
+    )
+      return true;
+    const npmCause = lines
+      .slice(Math.max(0, index - 3), index + 1)
+      .join("\n")
+      .slice(0, 1_024);
+    return (
+      /npm error code EPERM\b/i.test(npmCause) &&
+      /npm error syscall (?:open|mkdir|rename|symlink|unlink|write)\b/i.test(
+        npmCause,
+      )
+    );
   });
 }
 
@@ -846,6 +908,7 @@ function attachSandboxCapabilityRetryGuidance(input: {
   replayable: boolean;
   hasHomeOverride: boolean;
   allowTemporaryHome: boolean;
+  managedNetwork: boolean;
   workspaceRoots: readonly string[];
 }): void {
   const {
@@ -857,15 +920,17 @@ function attachSandboxCapabilityRetryGuidance(input: {
     replayable,
     hasHomeOverride,
     allowTemporaryHome,
+    managedNetwork,
     workspaceRoots,
   } = input;
   if (
     hasRetryGuidance(result) ||
     !replayable ||
-    !singleCommandTokens(command) ||
     result.security?.route !== "sandbox" ||
     result.security.confinement !== "verified-baseline" ||
-    result.security.permissionIntent !== "default" ||
+    (!managedNetwork &&
+      !localBinding &&
+      result.security.permissionIntent !== "default") ||
     result.security.commandExecutionPolicySnapshot === "read-only" ||
     result.exit_code === 0 ||
     result.exit_code === null ||
@@ -879,24 +944,77 @@ function attachSandboxCapabilityRetryGuidance(input: {
     return;
   }
 
+  const turbopackDenial = outputHasTurbopackListenerDenial(output);
   const needsLocalBinding =
     !localBinding &&
     (LOOPBACK_LISTEN_DENIAL_PATTERNS.some((pattern) => pattern.test(output)) ||
-      outputHasTurbopackListenerDenial(output));
+      turbopackDenial);
+  const hostHomeDenial = outputHasHostHomeWriteDenial(output, workspaceRoots);
+  const npmHomeDenial =
+    /(?:^|[\\/])\.npm(?:[\\/]|\b)/i.test(output) &&
+    splitCompoundCommand(command).some((segment) => {
+      const tokens = singleCommandTokens(segment);
+      return tokens?.[0] === "npm";
+    });
   const needsTemporaryHome =
     allowTemporaryHome &&
     !temporaryHome &&
     !hasHomeOverride &&
-    outputHasHostHomeWriteDenial(output, workspaceRoots);
-  if (!needsLocalBinding && !needsTemporaryHome) return;
+    hostHomeDenial &&
+    !isMiseTrustedConfigDenial(output) &&
+    (!managedNetwork || npmHomeDenial);
+  const unresolvedLocalBinding = localBinding && turbopackDenial;
+  if (!needsLocalBinding && !needsTemporaryHome && !unresolvedLocalBinding)
+    return;
+
+  if (unresolvedLocalBinding) {
+    Object.assign(result, {
+      retry_guidance: {
+        code: "sandbox_capability_unresolved",
+        message: needsTemporaryHome
+          ? "The command still reported a Turbopack listener denial after local binding was granted, and it also needs a writable disposable HOME. Do not repeat the listener grant automatically; retry only the failed step with temporary_home when host credentials are unnecessary, or inspect the listener cause chain."
+          : "The command still reported a Turbopack listener denial after local binding was granted. Do not repeat the same grant automatically; inspect the cause chain or request a separately reviewed native diagnostic run.",
+        automatic_retry: false,
+        options: [
+          ...(needsTemporaryHome
+            ? [
+                {
+                  action: "isolate_failed_step_with_temporary_home",
+                  same_command: false,
+                  temporary_home: true,
+                },
+              ]
+            : []),
+          { action: "inspect_listener_denial", same_command: false },
+          ...(temporaryHome
+            ? []
+            : [
+                {
+                  action: "reviewed_native_diagnostic",
+                  same_command: true,
+                  sandbox_permissions: "require_escalated",
+                  reason_required: true,
+                  reviewed_native_execution: true,
+                },
+              ]),
+        ],
+      } satisfies ExecuteCommandRetryGuidance,
+    });
+    return;
+  }
 
   const missingCapabilities = [
     ...(needsTemporaryHome ? ["temporary_home"] : []),
     ...(needsLocalBinding ? ["network.allow_local_binding"] : []),
   ];
+  const compound = splitCompoundCommand(command).length > 1;
   const option: Record<string, unknown> = {
-    action: "retry_with_missing_sandbox_capabilities",
-    same_command: true,
+    action: compound
+      ? needsTemporaryHome
+        ? "isolate_failed_step_with_temporary_home"
+        : "isolate_failed_step_with_local_binding"
+      : "retry_with_missing_sandbox_capabilities",
+    same_command: !compound,
     ...(needsTemporaryHome ? { temporary_home: true } : {}),
     ...(needsLocalBinding
       ? {
@@ -910,7 +1028,9 @@ function attachSandboxCapabilityRetryGuidance(input: {
   };
   const guidance: ExecuteCommandRetryGuidance = {
     code: "sandbox_missing_capabilities",
-    message: `The command failed with bounded evidence that the default sandbox is missing ${missingCapabilities.join(" and ")}. Retry only if those capabilities match the intended workflow; AgentLink will not broaden the sandbox automatically.`,
+    message: compound
+      ? `A step in this compound command failed with bounded evidence that the sandbox is missing ${missingCapabilities.join(" and ")}. Identify and retry only the failed step with the listed capability, and use a disposable HOME only when that step does not need host credentials or configuration.`
+      : `The command failed with bounded evidence that the sandbox is missing ${missingCapabilities.join(" and ")}. Retry only if those capabilities match the intended workflow; use a disposable HOME only when host credentials and configuration are unnecessary. AgentLink will not broaden the sandbox automatically.`,
     automatic_retry: false,
     options: [option],
   };
@@ -1030,16 +1150,30 @@ function attachSandboxHostIntegrationRetryGuidance(input: {
   command: string;
   output: string;
   replayable: boolean;
+  temporaryHome: boolean;
   cwd: string;
   workspaceRoots: readonly string[];
 }): void {
-  const { result, command, output, replayable, cwd, workspaceRoots } = input;
+  const {
+    result,
+    command,
+    output,
+    replayable,
+    temporaryHome,
+    cwd,
+    workspaceRoots,
+  } = input;
+  const tsxUnixIpcEvidence = TSX_UNIX_SOCKET_DENIAL_PATTERN.test(output);
   if (
     hasRetryGuidance(result) ||
     !replayable ||
     result.security?.route !== "sandbox" ||
     result.security.confinement !== "verified-baseline" ||
-    result.security.permissionIntent !== "default" ||
+    (result.security.permissionIntent !== "default" &&
+      !(
+        result.security.permissionIntent === "additional-permissions" &&
+        tsxUnixIpcEvidence
+      )) ||
     result.exit_code === 0 ||
     result.exit_code === null ||
     result.backgrounded ||
@@ -1052,6 +1186,7 @@ function attachSandboxHostIntegrationRetryGuidance(input: {
   }
 
   const tokens = singleCommandTokens(command);
+  const segments = splitCompoundCommand(command);
   const classified = classifyCommand(command, {
     cwd,
     workspaceRoots: [...workspaceRoots],
@@ -1075,18 +1210,43 @@ function attachSandboxHostIntegrationRetryGuidance(input: {
       pattern.test(output),
     );
   const isProcessSignal = isDirectProcessSignal || isIndirectProcessSignal;
+  const isMiseRun = segments.some((segment) => {
+    const segmentTokens = singleCommandTokens(segment);
+    return segmentTokens?.[0] === "mise" && segmentTokens[1] === "run";
+  });
   const isContainerRuntimeDenial =
     (tokens?.[0] === "docker" ||
       tokens?.[0] === "colima" ||
-      isProjectToolchain) &&
+      isProjectToolchain ||
+      isMiseRun) &&
     CONTAINER_RUNTIME_DENIAL_PATTERNS.some((pattern) => pattern.test(output));
-  if (!isPsInspection && !isProcessSignal && !isContainerRuntimeDenial) return;
+  const isTsxUnixIpcDenial =
+    tsxUnixIpcEvidence &&
+    (tokens?.[0] === "tsx" ||
+      (["npx", "pnpm", "yarn"].includes(tokens?.[0] ?? "") &&
+        tokens?.some((token) => /(?:^|[\\/])tsx(?:$|[\\/.])/i.test(token))));
+  const isMiseTrustDenial = isMiseRun && isMiseTrustedConfigDenial(output);
+  if (result.security.permissionIntent !== "default" && !isTsxUnixIpcDenial)
+    return;
+  if (
+    !isPsInspection &&
+    !isProcessSignal &&
+    !isContainerRuntimeDenial &&
+    !isTsxUnixIpcDenial &&
+    !isMiseTrustDenial
+  )
+    return;
 
+  const compound = segments.length > 1;
   const capability = isPsInspection
     ? "host_process_inspection"
     : isProcessSignal
       ? "host_process_signal"
-      : "container_runtime_socket";
+      : isContainerRuntimeDenial
+        ? "container_runtime_socket"
+        : isTsxUnixIpcDenial
+          ? "unix_ipc_socket"
+          : "mise_trusted_config";
   Object.assign(result, {
     retry_guidance: {
       code: "sandbox_host_integration",
@@ -1094,15 +1254,21 @@ function attachSandboxHostIntegrationRetryGuidance(input: {
       automatic_retry: false,
       options: [
         {
-          action: "reviewed_native_retry",
-          same_command: true,
+          action: compound
+            ? "isolate_failed_step_for_reviewed_native_retry"
+            : temporaryHome
+              ? "reviewed_native_retry_without_disposable_home"
+              : "reviewed_native_retry",
+          same_command: !compound,
           sandbox_permissions: "require_escalated",
           reason_required: true,
           reviewed_native_execution: true,
+          ...(temporaryHome ? { temporary_home: false } : {}),
         },
       ],
       prohibited_workarounds: [
         "weaken_container_socket_permissions",
+        "grant_unrestricted_unix_ipc",
         "disable_sandboxing_without_review",
       ],
     } satisfies ExecuteCommandRetryGuidance,
@@ -2367,6 +2533,7 @@ export async function handleExecuteCommand(
           hasHomeOverride,
           allowTemporaryHome:
             approvalMode.commandApprovalPolicy === "approve-for-me",
+          managedNetwork,
           workspaceRoots,
         });
         attachSandboxNodeOomRetryGuidance({
@@ -2380,6 +2547,7 @@ export async function handleExecuteCommand(
           command: commandToRun,
           output: result.output,
           replayable: replayableWithNarrowSandboxCapabilities,
+          temporaryHome,
           cwd,
           workspaceRoots,
         });
@@ -2840,6 +3008,7 @@ export async function handleExecuteCommand(
           hasHomeOverride,
           allowTemporaryHome:
             approvalMode.commandApprovalPolicy === "approve-for-me",
+          managedNetwork,
           workspaceRoots,
         });
         attachSandboxNodeOomRetryGuidance({
@@ -2853,6 +3022,7 @@ export async function handleExecuteCommand(
           command: commandToRun,
           output: result.output,
           replayable: replayableWithNarrowSandboxCapabilities,
+          temporaryHome,
           cwd,
           workspaceRoots,
         });

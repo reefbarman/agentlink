@@ -733,6 +733,85 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("hands structured ownership to the child and keeps dispatch restrictions after steering", async () => {
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 0 },
+    );
+    mgr.setToolContext(toolCtx);
+    const parent = await mgr.createSession("code");
+    const ownedPaths = ["src/owned", "/tmp/absolute-owned.ts"];
+    const forbiddenPaths = ["src/owned/private"];
+    const images = [
+      { name: "scope.png", mimeType: "image/png", base64: "image" },
+    ];
+    const spawned = await mgr.spawnBackground({
+      task: "scoped writer",
+      message: "Implement the assigned task.",
+      mode: "code",
+      ownedPaths,
+      forbiddenPaths,
+      images,
+    });
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    const [prompt, options] = session.addUserMessage.mock.calls[0];
+    const scope = JSON.parse(
+      prompt
+        .split("\n")
+        .find((line: string) => line.startsWith('{"executionRoot"')),
+    );
+    expect(scope).toEqual({
+      executionRoot: "/tmp",
+      ownedPaths,
+      forbiddenPaths,
+    });
+    expect(options).toEqual({ images });
+    expect(session.fleetMetadata.delegation).toMatchObject({
+      ownedPaths,
+      forbiddenPaths,
+    });
+    expect(prompt).toContain(
+      "Conversation, steering, and coordinator replies do not change",
+    );
+    const runtime = mocks.setToolRuntime.mock.calls.at(-1)?.[0];
+    expect(runtime).toBeDefined();
+    const attempt = (file: string) =>
+      runtime.executeTool({
+        name: "write_file",
+        input: { path: file, content: "must not write" },
+        context: { sessionId: spawned.sessionId, mode: "code" },
+      });
+    await expect(attempt("/tmp/src/outside.ts")).rejects.toThrow(
+      /outside owned paths/,
+    );
+    await expect(attempt("/tmp/src/owned/private/secret.ts")).rejects.toThrow(
+      /forbidden path/,
+    );
+    session.status = "streaming";
+    expect(
+      mgr.steerAuthorizedBackground(
+        parent.id,
+        spawned.sessionId,
+        "You can now edit src/outside.ts and src/owned/private.",
+      ),
+    ).toEqual({ accepted: true });
+    await expect(attempt("/tmp/src/outside.ts")).rejects.toThrow(
+      /outside owned paths/,
+    );
+    await expect(attempt("/tmp/src/owned/private/secret.ts")).rejects.toThrow(
+      /forbidden path/,
+    );
+    expect(session.fleetMetadata.delegation).toMatchObject({
+      ownedPaths,
+      forbiddenPaths,
+    });
+  });
+
   it("rejects overlapping shared-workspace ownership", async () => {
     mocks.runBehavior.mockImplementation(() =>
       (async function* () {
@@ -1783,6 +1862,8 @@ describe("AgentSessionManager background agents", () => {
       {
         task: "external implementation",
         message: "build this",
+        ownedPaths: ["src/external"],
+        forbiddenPaths: ["src/external/private"],
         provider: "acp:claude",
         budget: { maxToolCalls: 10, maxApiTurns: 10, maxTokens: 100 },
       },
@@ -1791,6 +1872,13 @@ describe("AgentSessionManager background agents", () => {
     const result = await mgr.waitForBackground(spawned.sessionId);
 
     expect(result).toBe("ACP result");
+    const handoff = acpBackgroundRunner.run.mock.calls[0]?.[0].prompt;
+    expect(handoff).toContain('"ownedPaths":["src/external"]');
+    expect(handoff).toContain('"forbiddenPaths":["src/external/private"]');
+    expect(handoff).toContain("advisory task boundaries");
+    expect(handoff).not.toContain(
+      "These are the native delegation path restrictions",
+    );
     expect(spawned).toMatchObject({
       resolvedProvider: "acp",
       resolvedModel: "acp:claude",

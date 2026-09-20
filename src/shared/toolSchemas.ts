@@ -893,7 +893,7 @@ export const findAndReplaceSchema = {
     .boolean()
     .optional()
     .describe(
-      "Treat 'find' as a regular expression. Supports capture groups ($1, $2) in 'replace'. Default: false.",
+      "Regex search (default false). Replacement: $1-$99 captures, $$ literal dollar. Missing captures and $0 stay literal; unmatched optional groups become empty. Two-digit references fall back to one digit. Other dollar tokens stay literal.",
     ),
   max_replacements: z.coerce
     .number()
@@ -916,6 +916,45 @@ export const renameSymbolSchema = {
 };
 
 // ─── Editor tools ────────────────────────────────────────────────────────────
+
+export const getEditorStateSchema = {
+  path: z.string().describe("Path to an existing file-backed VS Code editor"),
+  offset: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe("First buffer line, default 1"),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      "Buffer lines to return, default 100; output is independently byte-bounded",
+    ),
+};
+
+export const saveEditorSchema = {
+  path: z.string().describe("Same editor path inspected with get_editor_state"),
+  disk_hash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable()
+    .describe(
+      "Exact disk_hash from inspection; null means the file must still be missing",
+    ),
+  editor_hash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .describe("Exact editor_hash from inspection"),
+  editor_version: z
+    .number()
+    .int()
+    .min(0)
+    .describe("Exact editor_version from inspection"),
+};
 
 export const openFileSchema = {
   path: z

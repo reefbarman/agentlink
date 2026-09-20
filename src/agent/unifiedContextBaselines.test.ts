@@ -33,6 +33,9 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const isolatedHome = path.join(os.tmpdir(), "agentlink-unified-context-home");
+const PROJECT_LOCAL_SKILL_IDS = [
+  "project:agentlink:.agentlink/skills/agentlink-dogfood-install",
+] as const;
 
 const providerCohorts = [
   { providerId: "anthropic", model: "claude-opus-4-8" },
@@ -106,6 +109,7 @@ async function buildRuntimeMeasurements() {
           model: cohort.model,
           promptProfileOverrides: { [cohort.model]: profile },
           modeInstructionPlacement: "system",
+          disabledSkillIds: PROJECT_LOCAL_SKILL_IDS,
         });
         const normalized = normalizePrompt(artifacts.systemPrompt);
         prompts.push({
@@ -128,6 +132,7 @@ async function buildRuntimeMeasurements() {
   const skills = await loadSkillsForModes(
     fixtureRoot,
     BUILT_IN_MODES.map((mode) => mode.slug),
+    { disabledSkillIds: PROJECT_LOCAL_SKILL_IDS },
   );
   const normalizedSkills = skills
     .map((skill) => ({

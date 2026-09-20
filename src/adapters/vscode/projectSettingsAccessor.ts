@@ -48,6 +48,9 @@ export const MACHINE_SCOPED_AGENTLINK_SETTINGS = [
   "terminal.environmentPolicy",
   "openaiCompatible.connections",
   "background.reviewTarget",
+  "guardian.typeSafeShadow.enabled",
+  "guardian.typeSafeShadow.model",
+  "guardian.typeSafeShadow.timeoutMs",
 ] as const;
 
 export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [

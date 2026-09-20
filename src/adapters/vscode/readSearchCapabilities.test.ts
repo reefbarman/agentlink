@@ -19,6 +19,7 @@ import {
 } from "../../indexer/codeRetrievalIdentity.js";
 
 import { LanceDbRetrievalRepository } from "../../storage/retrieval/LanceDbRetrievalRepository.js";
+import { buildModuleNeighborsPayload } from "../../tools/getModuleNeighbors.js";
 import { createCodeIndexFingerprint } from "../../indexer/retrievalFingerprint.js";
 import { prepareCodeFilePublication } from "../../indexer/retrievalPublicationTranslation.js";
 
@@ -258,6 +259,91 @@ describe("createVscodeStructuralGraphProvider", () => {
       graph: { files: {} },
     });
     expect(fs.readdirSync(storeRoot)).toEqual(before);
+  });
+
+  it("resolves persisted external aliases into reverse dependents and refreshes config-only edits", async () => {
+    const directory = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "graph-alias-")),
+    );
+    directories.push(directory);
+    const workspaceRoot = path.join(directory, "workspace");
+    fs.mkdirSync(path.join(workspaceRoot, "src"), { recursive: true });
+    for (const name of ["main", "first", "second"])
+      fs.writeFileSync(
+        path.join(workspaceRoot, "src", `${name}.ts`),
+        "export {};",
+      );
+    const configPath = path.join(workspaceRoot, "tsconfig.json");
+    fs.writeFileSync(
+      configPath,
+      '{"compilerOptions":{"paths":{"@target":["src/first.ts"]}}}',
+    );
+    const repository = new LanceDbRetrievalRepository({
+      root: getCodeRetrievalStoreRoot(directory, workspaceRoot),
+    });
+    await repository.migrate(createCodeIndexFingerprint("standard"));
+    try {
+      const publication = prepareCodeFilePublication({
+        publicationId: "alias-publication",
+        generation: "alias-generation",
+        workspaceRoot,
+        sourcePath: "src/main.ts",
+        contentHash: "hash",
+        observedAt: "2026-07-25T01:00:00.000Z",
+        sourceContent: 'import "@target";',
+        chunks: [],
+        structuralEntry: {
+          relPath: "src/main.ts",
+          hash: "hash",
+          indexedAt: "2026-07-25T01:00:00.000Z",
+          imports: [
+            { specifier: "@target", kind: "static", external: true, line: 1 },
+          ],
+          exports: [],
+          symbols: [],
+        },
+      });
+      await repository.preparePublication(publication);
+      await repository.commitPublication(publication.publicationId);
+    } finally {
+      await repository.close();
+    }
+    const provider = createVscodeStructuralGraphProvider(
+      {
+        fsPath: directory,
+      } as never,
+      "standard",
+    )!;
+    const first = await provider.loadGraph(workspaceRoot);
+    expect(first.graph.files["src/main.ts"].imports[0]).toMatchObject({
+      resolvedRelPath: "src/first.ts",
+    });
+    expect(
+      first.graph.files["src/main.ts"].imports[0].external,
+    ).toBeUndefined();
+    expect(
+      buildModuleNeighborsPayload({
+        graph: first.graph,
+        targetRelPath: "src/first.ts",
+      }),
+    ).toMatchObject({ dependents: { total: 1 } });
+    fs.writeFileSync(
+      configPath,
+      '{"compilerOptions":{"paths":{"@target":["src/second.ts"]}}}',
+    );
+    const second = await provider.loadGraph(workspaceRoot);
+    expect(
+      buildModuleNeighborsPayload({
+        graph: second.graph,
+        targetRelPath: "src/first.ts",
+      }),
+    ).toMatchObject({ dependents: { total: 0 } });
+    expect(
+      buildModuleNeighborsPayload({
+        graph: second.graph,
+        targetRelPath: "src/second.ts",
+      }),
+    ).toMatchObject({ dependents: { total: 1 } });
   });
 
   it("projects only the requested workspace from committed retrieval records", async () => {

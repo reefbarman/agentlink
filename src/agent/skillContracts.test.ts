@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   composeSkillCapabilityPolicy,
   getSkillDiscoveryRoots,
+  isVerifiedSkillCapabilityPolicy,
   loadSkillCatalog,
   parseFrontmatter,
 } from "./skillLoader.js";
@@ -428,6 +429,61 @@ describe("canonical skill catalog", () => {
 });
 
 describe("skill capability policy composition", () => {
+  it("normalizes exact Bash aliases before intersection without rewriting provenance", async () => {
+    const sourceRoot = path.join(tmpDir, ".agentlink", "skills");
+    writeSkill(
+      sourceRoot,
+      "bash-only",
+      "name: bash-only\ndescription: Shell workflow\nallowed-tools: Bash",
+    );
+    writeSkill(
+      sourceRoot,
+      "native-only",
+      "name: native-only\ndescription: Shell workflow\nallowed-tools: execute_command",
+    );
+    const catalog = await loadSkillCatalog(tmpDir, "code");
+    const bash = catalog.entries.find((entry) => entry.name === "bash-only")!;
+    const native = catalog.entries.find(
+      (entry) => entry.name === "native-only",
+    )!;
+
+    expect(bash.allowedTools).toEqual(["Bash"]);
+    expect(bash.restrictions.allowedTools).toEqual(["Bash"]);
+    expect(composeSkillCapabilityPolicy([bash]).allowedTools).toEqual([
+      "execute_command",
+    ]);
+    expect(composeSkillCapabilityPolicy([bash, native])).toEqual(
+      composeSkillCapabilityPolicy([native, bash]),
+    );
+    expect(composeSkillCapabilityPolicy([bash, native]).allowedTools).toEqual([
+      "execute_command",
+    ]);
+    expect(
+      composeSkillCapabilityPolicy([
+        bash,
+        { ...native, restrictions: { allowedTools: ["read_file"] } },
+      ]).allowedTools,
+    ).toEqual([]);
+  });
+
+  it.each(["Bash(git:*)", "bash", "BASH", "Bash(*)", "Read"])(
+    "does not grant native authority for unsupported declaration %s",
+    async (name) => {
+      writeSkill(
+        path.join(tmpDir, ".agentlink", "skills"),
+        "unsupported",
+        `name: unsupported\ndescription: Restricted workflow\nallowed-tools: ["${name}"]`,
+      );
+      const catalog = await loadSkillCatalog(tmpDir, "code");
+      const skill = catalog.entries.find(
+        (entry) => entry.name === "unsupported",
+      )!;
+      expect(composeSkillCapabilityPolicy([skill]).allowedTools).toEqual([
+        name,
+      ]);
+    },
+  );
+
   it("intersects restrictions monotonically and unions non-authorizing metadata", async () => {
     const sourceRoot = path.join(tmpDir, ".agentlink", "skills");
     writeSkill(
@@ -488,6 +544,13 @@ describe("skill capability policy composition", () => {
       "write_file",
     ]);
     expect(firstOrder.dependencies).toEqual(narrow.resolvedDependencies);
+
+    const persistedNeutral = JSON.parse(
+      JSON.stringify(composeSkillCapabilityPolicy([neutral])),
+    );
+    expect(isVerifiedSkillCapabilityPolicy([neutral], persistedNeutral)).toBe(
+      true,
+    );
 
     const afterNarrow = composeSkillCapabilityPolicy([narrow]);
     const afterBroaderLoad = composeSkillCapabilityPolicy([narrow, broad]);

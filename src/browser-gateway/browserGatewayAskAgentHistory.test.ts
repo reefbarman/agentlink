@@ -47,6 +47,21 @@ describe("BrowserGatewayAskAgentHistoryStore", () => {
           lastActiveAt: 210,
           nextMessageSequence: 1,
           messages: [],
+          queuedMessages: [
+            {
+              id: "queued-1",
+              text: "Follow up after restart",
+              instanceId: "desktop-owner",
+              source: "browser",
+              images: [
+                {
+                  name: "queued.png",
+                  mimeType: "image/png",
+                  base64: "cG5n",
+                },
+              ],
+            },
+          ],
         },
       ],
     });
@@ -61,7 +76,26 @@ describe("BrowserGatewayAskAgentHistoryStore", () => {
           generateImageApproved: true,
           messages: [{ content: "Hello" }],
         },
-        { id: "session-2", title: "Second chat", messages: [] },
+        {
+          id: "session-2",
+          title: "Second chat",
+          messages: [],
+          queuedMessages: [
+            {
+              id: "queued-1",
+              text: "Follow up after restart",
+              instanceId: "desktop-owner",
+              source: "browser",
+              images: [
+                {
+                  name: "queued.png",
+                  mimeType: "image/png",
+                  base64: "cG5n",
+                },
+              ],
+            },
+          ],
+        },
       ],
     });
   });

@@ -4891,11 +4891,28 @@ describe("BrowserGatewayHelper proxy routing", () => {
     const overlappingSend = await fetch(`${helperBase}/api/ask-agent/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Cookie: cookie },
-      body: JSON.stringify({ text: "Second overlapping send" }),
+      body: JSON.stringify({
+        id: "queued-second",
+        text: "Second overlapping send",
+      }),
     });
-    expect(overlappingSend.status).toBe(409);
-    await expect(overlappingSend.json()).resolves.toEqual({
-      error: "ask_agent_turn_in_progress",
+    expect(overlappingSend.ok).toBe(true);
+    await expect(overlappingSend.json()).resolves.toMatchObject({
+      ok: true,
+      queued: true,
+      snapshot: {
+        session: {
+          foreground: {
+            messageQueue: [
+              {
+                id: "queued-second",
+                text: "Second overlapping send",
+                source: "browser",
+              },
+            ],
+          },
+        },
+      },
     });
 
     const stopResponse = await fetch(`${helperBase}/api/ask-agent/stop`, {
@@ -4985,6 +5002,31 @@ describe("BrowserGatewayHelper proxy routing", () => {
         }),
       ]),
     );
+
+    await waitForExpectation(async () => {
+      const session = await fetch(`${helperBase}/api/ask-agent/session`, {
+        headers: { Cookie: cookie },
+      });
+      const body = (await session.json()) as {
+        snapshot: {
+          session: {
+            foreground: {
+              messageQueue: unknown[];
+              projectedMessages: Array<{ role: string; content: string }>;
+            };
+          };
+        };
+      };
+      expect(body.snapshot.session.foreground.messageQueue).toEqual([]);
+      expect(body.snapshot.session.foreground.projectedMessages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            content: "Second overlapping send",
+          }),
+        ]),
+      );
+    });
 
     await fs.rm(extensionRootPath, { recursive: true, force: true });
   });
@@ -5100,10 +5142,14 @@ describe("BrowserGatewayHelper proxy routing", () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json", Cookie: harness.cookie },
-        body: JSON.stringify({ text: "Must be rejected" }),
+        body: JSON.stringify({ text: "Must be queued" }),
       },
     );
-    expect(overlappingSend.status).toBe(409);
+    expect(overlappingSend.ok).toBe(true);
+    await expect(overlappingSend.json()).resolves.toMatchObject({
+      ok: true,
+      queued: true,
+    });
 
     let shutdownCompleted = false;
     const shutdown = helper

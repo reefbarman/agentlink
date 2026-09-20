@@ -865,7 +865,7 @@ function FinalMarkerActions({
         <button
           class="final-marker-continue"
           type="button"
-          title={action.prompt}
+          title={`Edit in composer before sending:\n${action.prompt}`}
           onClick={() => onContinue(action.prompt)}
         >
           {action.label}

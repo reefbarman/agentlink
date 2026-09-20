@@ -37,6 +37,8 @@ export interface GetContextParams {
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 400;
 const SYMBOL_TIMEOUT_MS = 5_000;
+const MAX_OUTLINE_SYMBOLS = 60;
+const MAX_OUTLINE_BYTES = 6_000;
 const CONTAINER_KINDS = new Set([
   vscode.SymbolKind.Class,
   vscode.SymbolKind.Interface,
@@ -146,7 +148,14 @@ export async function handleGetContext(
       document,
       providers.symbolTimeoutMs ?? SYMBOL_TIMEOUT_MS,
     );
-    if (symbols) result.symbols = symbols;
+    if (symbols) {
+      const outline = boundSymbolOutline(symbols, range);
+      result.symbols = outline.symbols;
+      if (outline.omitted > 0) {
+        result.symbols_truncated = true;
+        result.symbols_omitted = outline.omitted;
+      }
+    }
 
     const diagnostics =
       providers.enrichmentProvider.getDiagnosticsSummary(document);
@@ -168,6 +177,41 @@ export async function handleGetContext(
     }
     return handleToolError(err, { path: params.path });
   }
+}
+
+function boundSymbolOutline(
+  symbols: Record<string, string[]>,
+  range: ContextWorkingSetRange,
+): { symbols: Record<string, string[]>; omitted: number } {
+  const entries = Object.entries(symbols).flatMap(([kind, names]) =>
+    names.map((name) => {
+      const line = Number(name.match(/\(line (\d+)\)$/)?.[1]);
+      return {
+        kind,
+        name,
+        inRange: line >= range.startLine && line <= range.endLine,
+      };
+    }),
+  );
+  // Keep the existing grouped shape, prioritising the requested slice before
+  // the whole-file overview. Bound serialized bytes as well as symbol count.
+  entries.sort((left, right) => Number(right.inRange) - Number(left.inRange));
+  const bounded: Record<string, string[]> = Object.create(null);
+  let included = 0;
+  for (const { kind, name } of entries) {
+    if (included >= MAX_OUTLINE_SYMBOLS) break;
+    const bucket = (bounded[kind] ??= []);
+    bucket.push(name);
+    if (
+      Buffer.byteLength(JSON.stringify(bounded), "utf8") > MAX_OUTLINE_BYTES
+    ) {
+      bucket.pop();
+      if (!bucket.length) delete bounded[kind];
+      continue;
+    }
+    included++;
+  }
+  return { symbols: bounded, omitted: entries.length - included };
 }
 
 function buildNumberedContent(
