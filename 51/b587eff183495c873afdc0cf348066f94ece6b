@@ -1,0 +1,242 @@
+src/agent/skillContracts.test.ts
+  h_9630b74bdac540 9,432-486,548-553
+  h_9630b74bdac540 554
+src/integrations/editDurability.ts
+  h_9630b74bdac540 258-267,271,275-276,279,292-298,313,458,460
+src/agent/AgentEngine.test.ts
+  h_9630b74bdac540 762-808
+src/approvals/typeSafeGuardianCommands.test.ts
+  h_9630b74bdac540 1-81
+src/agent/webview/components/useAutoScroll.ts
+  h_9630b74bdac540 15,26-28,68,71-72,75-83,85,88
+src/agent/AgentSession.ts
+  h_9630b74bdac540 35,1394
+resources/builtin-skills/documentation/references/capabilities.md
+  h_9630b74bdac540 89,108-110
+src/core/tools/nativeToolDisclosure.test.ts
+  h_9630b74bdac540 168-274
+src/core/tools/toolCapabilities.ts
+  h_9630b74bdac540 596-610
+  h_9630b74bdac540 595
+resources/builtin-skills/documentation/references/tools.md
+  h_9630b74bdac540 12,19-20,23-34,55,58,83,91,103,111
+src/agent/skillToolAliases.ts
+  h_9630b74bdac540 1-11
+src/packageContributions.test.ts
+  h_9630b74bdac540 189-209
+src/agent/openAiCompatibleAuthCommands.ts
+  s_ea349e3039ebc5::t_a05a94a49782d5 4,12-18,81,96
+src/approvals/typeSafeGuardianShadow.ts
+  h_9630b74bdac540 1-614
+src/agent/toolAdapter.ts
+  h_9630b74bdac540 88,147-150,333-334,1178-1179,1253,2902,3306,4296-4311
+src/agent/webview/components/useAutoScroll.test.tsx
+  h_9630b74bdac540 163-200
+src/indexer/worker.ts
+  h_9630b74bdac540 83,670,704,1198,1212
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_9630b74bdac540 121,1088-1090,1562,1595,8031-8034,8043,8159-8160,8163,8165-8173,8179-8203,8206-8208,8210-8213,8341-8342,8364-8397,8400-8412,8414-8430,9608
+  h_9630b74bdac540 8164,8209,8339-8340,8343,8398-8399,8413
+src/tools/findAndReplace.test.ts
+  h_9630b74bdac540 174-227
+src/agent/skillLoader.ts
+  h_9630b74bdac540 8,934-956,978
+  h_9630b74bdac540 933,977,979
+scripts/tool-inventory.json
+  s_ea349e3039ebc5::t_eb52aaaa040a12 296-304,639-647,839
+src/agent/webview/components/MessageQueuePanel.tsx
+  h_9630b74bdac540 14,23,83-84,86,90-92,95,98-100,103,106,111-112,121,125,127-129,133-138,143-151,156-167,171-172,175
+  h_9630b74bdac540 93-94,113-114,130-132,139-142,152-155,168-170,173-174
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  h_9630b74bdac540 48,50,94-110,3090-3150,3720,3793-3806,3814,3823,3900-3907
+  h_9630b74bdac540 3807,3908
+src/browser-gateway/browserGatewayAskAgentSessionStore.ts
+  h_9630b74bdac540 151-159,202,247,349-350,784-808,1463-1468
+  h_9630b74bdac540 809-810
+src/tools/executeCommand.ts
+  h_9630b74bdac540 371,435-436,441-448,450,453-455,458-459,663-675,704,707,710-712,716-718,720,723-725,729,735,848-861,870-871,880-885,887-898,911,923,931-933,947,951-958,963-1002,1004,1010,1012-1017,1031-1033,1153,1162,1164,1166,1172-1176,1189,1213-1216,1220-1221,1223-1230,1234-1236,1240,1245-1249,1257-1262,1266,1271,2536,2550,3011,3025
+  h_9630b74bdac540 886,1003,1157-1161,1163,1165,1231-1233,1237-1238
+src/adapters/vscode/editReviewCapabilities.test.ts
+  h_9630b74bdac540 511
+src/core/model/providers/codex/standaloneWeb.ts
+  h_9630b74bdac540 110-111,130,143,481,496,500-502,505-507,536,538,541-543,554-557,560-574,579,586,588-589,591-595,597-598
+  h_9630b74bdac540 497,503-504,508-511
+src/telemetry/SessionOutcomeTelemetry.ts
+  h_9630b74bdac540 199-229,235
+  h_9630b74bdac540 234
+src/adapters/vscode/projectSettingsAccessor.ts
+  h_9630b74bdac540 51-53
+.agentlink/skills/agentlink-dogfood-install/SKILL.md
+  h_9630b74bdac540 1-34
+src/adapters/vscode/editReviewCapabilities.ts
+  h_9630b74bdac540 389-390
+resources/builtin-skills/documentation/references/settings.md
+  h_9630b74bdac540 42-43
+src/tools/editorState.test.ts
+  h_9630b74bdac540 1-294
+src/agent/ChatViewProvider.test.ts
+  h_9630b74bdac540 2479-2521
+src/integrations/editDurability.test.ts
+  h_9630b74bdac540 404-485
+scripts/report-session-outcomes.test.mjs
+  h_9630b74bdac540 240-272,279,323-338
+  h_9630b74bdac540 339
+resources/builtin-skills/documentation/references/package-contract.md
+  s_ea349e3039ebc5::t_14f9e24410c823 20-60,72-128
+  s_ea349e3039ebc5::t_eb52aaaa040a12 12
+src/agent/skillToolAliases.test.ts
+  h_9630b74bdac540 1-33
+package.json
+  h_9630b74bdac540 178-184,544-562
+  s_ea349e3039ebc5::t_eb52aaaa040a12 5
+  s_ea349e3039ebc5::t_dbd9a20d0a4999 177,563
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_9630b74bdac540 1933-1936,8764-8766,8797,8807-8812,8820-8824,8826,9446-9447
+  h_9630b74bdac540 8795-8796,8798-8806,8813-8819,8830-8846
+src/agent/openAiCompatibleAuthCommands.test.ts
+  s_ea349e3039ebc5::t_05c5285faeec96 6,34-41,43-53,55-56
+src/shared/toolRegistry.test.ts
+  h_9630b74bdac540 42-50
+src/tools/findAndReplace.ts
+  h_9630b74bdac540 42-59,189-193
+src/agent/unifiedContextBaselines.test.ts
+  h_9630b74bdac540 36-38,112,135
+src/agent/background/ownershipHandoff.test.ts
+  h_9630b74bdac540 1-52
+src/approvals/typeSafeGuardianCommands.ts
+  h_9630b74bdac540 1-45
+src/browser-gateway/browserGatewayAskAgentHistory.test.ts
+  h_9630b74bdac540 50-64,82-97
+  h_9630b74bdac540 79-81,98
+resources/builtin-skills/documentation/references/release-notes.md
+  s_ea349e3039ebc5::t_14f9e24410c823 5-24
+src/openAiCompatibleCredentialWiring.test.ts
+  s_ea349e3039ebc5::t_05c5285faeec96 1-57
+src/agent/toolPermissions.ts
+  h_9630b74bdac540 16,26
+scripts/report-session-outcomes.mjs
+  h_9630b74bdac540 138-139,234-248,745-770,1111-1153
+  h_9630b74bdac540 771-772,1154-1158
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_9630b74bdac540 4895-4896,4899-4915,5006-5029,5145,5148-5152
+  h_9630b74bdac540 4894,4897,5030
+src/agent/AgentSessionManager.ts
+  h_9630b74bdac540 2,2337-2339,10577,10586-10593,10996,11005-11012
+  h_9630b74bdac540 10578-10585,10997-11004
+src/agent/ChatViewProvider.ts
+  h_9630b74bdac540 2772
+  h_9630b74bdac540 2773
+src/core/tools/nativeToolDisclosure.ts
+  h_9630b74bdac540 4,45-52,112-113,119-155,160,162,187-189,218-240,249-258,318-339
+  h_9630b74bdac540 241,340-341
+src/indexer/structuralExtractor.ts
+  h_9630b74bdac540 5,15-18,20,48,87-88,364-404,415,471-476,478,482-488
+  h_9630b74bdac540 19,405-406,477
+src/agent/McpClientHub.ts
+  h_9630b74bdac540 25-28,113,191-387,509,683,690,710-719,1154,1499-1502,1507-1508,1510,1696,1724,1825,1853,1860,1865-1884,1932,1954,2059,2063,2146-2153
+  h_9630b74bdac540 1503-1506,1509,2154
+src/agent/skillToolExposure.test.ts
+  h_9630b74bdac540 1-235
+src/agent/AgentEngine.ts
+  h_9630b74bdac540 6,953-954
+src/shared/toolRegistry.ts
+  h_9630b74bdac540 43,239-248
+src/adapters/vscode/readSearchCapabilities.test.ts
+  h_9630b74bdac540 22,264-346
+  h_9630b74bdac540 347-348
+src/agent/webview/App.chatWorkspace.test.tsx
+  h_9630b74bdac540 148-231
+src/browser-gateway/browserGatewayAskAgentSessionStore.test.ts
+  h_9630b74bdac540 209-250
+src/agent/AgentSession.test.ts
+  h_9630b74bdac540 2,610-715
+  h_9630b74bdac540 716
+src/agent/toolAdapter.test.ts
+  h_9630b74bdac540 35-38,169-172,655-682,1437-1473,2966-2992,2994-3049
+  h_9630b74bdac540 2993,3050-3052
+src/tools/editorState.ts
+  h_9630b74bdac540 1-360
+src/extension.ts
+  h_9630b74bdac540 27-33,2969,2972-2998,3445
+  s_ea349e3039ebc5::t_a05a94a49782d5 3438
+  s_ea349e3039ebc5::t_540223f500db0a 2999
+src/agent/webview/components/MessageBubble.tsx
+  h_9630b74bdac540 868
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_9630b74bdac540 68-80
+resources/builtin-skills/documentation/references/complete-reference.md
+  s_ea349e3039ebc5::t_e6d2e5a302adf8 302
+  h_9630b74bdac540 742,849-850,898-901,1419,1530-1532,1647,1780
+src/agent/McpClientHub.test.ts
+  h_9630b74bdac540 3-6,67,69,90-91,119,228-230,293-459
+  h_9630b74bdac540 92,460-461
+src/approvals/typeSafeGuardianShadow.test.ts
+  h_9630b74bdac540 1-588
+resources/builtin-skills/documentation/references/mcp.md
+  h_9630b74bdac540 70
+src/tools/context/getContext.test.ts
+  h_9630b74bdac540 205-296
+CHANGELOG.md
+  s_ea349e3039ebc5::t_e6d2e5a302adf8 5
+  h_9630b74bdac540 6-24
+src/telemetry/SessionOutcomeTelemetry.test.ts
+  h_9630b74bdac540 138-162,169,221-236
+  h_9630b74bdac540 237
+src/core/model/providers/codex/standaloneWeb.test.ts
+  h_9630b74bdac540 224-336
+src/agent/AgentSessionManager.background.test.ts
+  h_9630b74bdac540 736-814,1865-1866,1875-1881
+src/indexer/tsconfigPaths.ts
+  h_9630b74bdac540 1-240
+src/adapters/vscode/readSearchCapabilities.ts
+  h_9630b74bdac540 29,269,275
+  h_9630b74bdac540 270-274,276
+src/shared/toolSchemas.ts
+  h_9630b74bdac540 896,920-957
+  h_9630b74bdac540 958
+src/tools/context/getContext.ts
+  h_9630b74bdac540 40-41,151-158,182-212,214
+  h_9630b74bdac540 213,215-216
+src/agent/background/ownershipHandoff.ts
+  h_9630b74bdac540 1-30
+src/indexer/structuralExtractor.test.ts
+  h_9630b74bdac540 9,132-357
+  h_9630b74bdac540 358-359
+src/browser-gateway/browserGatewayAskAgentHistory.ts
+  h_9630b74bdac540 8,82-127,155,185,193
+src/agent/webview/App.tsx
+  h_9630b74bdac540 2800-2801
+  h_9630b74bdac540 2799
+resources/builtin-skills/documentation/references/customization.md
+  h_9630b74bdac540 43-44
+src/tools/executeCommand.test.ts
+  h_9630b74bdac540 3793-3825,3857,3923-3928,4060,4092-4135,4216,4267,4375-4378,4433-4465,4474-4487,4496-4507,4527-4528,4588-4595,4597
+  h_9630b74bdac540 3792,4136-4143,4379-4381,4432,4473,4508-4510,4596
+package-lock.json
+  s_ea349e3039ebc5::t_314d4e3bf202ff 3,9
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_9630b74bdac540 569-572,576-579,583-586,590-593,597-600,607-610,615-618,623-626,631-634,639-642,677,687
+skills-lock.json
+  h_9630b74bdac540 1-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "51b587eff183495c873afdc0cf348066f94ece6b",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  },
+  "sessions": {
+    "s_ea349e3039ebc5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9c5080e1-4a6a-457f-8a43-25f5d5e5ada0",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
