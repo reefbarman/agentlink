@@ -1,0 +1,214 @@
+src/agent/modelCondenseThresholds.test.ts
+  h_9630b74bdac540 9-15,17,35-96,99,106,113
+  h_9630b74bdac540 97-98
+src/shared/chatProjection.ts
+  h_9630b74bdac540 47-66,68-84,412-413,421-422,425,445-450,456-457,466-520,534-535,539-541,549-550,553-555,558-568,570,586-587,590-592,598-617,619-622,629,658-691,699,703,707,711-712,716-746,1508-1528,1537,1555-1562,1566-1571,1573-1574,1576-1577,2485,2489-2498,2500-2502,2504-2505,2573-2594
+  h_9630b74bdac540 67,414-420,451-455,458-465,521-522,536-538,551-552,569,588-589,692-698,700-702,704-706,708-710,713-715,1529,1554,1563-1565,1572,1575,1578,2499
+scripts/report-session-outcomes.test.mjs
+  h_9630b74bdac540 246-248,250-251,253-256,343-352,367-400
+src/agent/webview/components/ModelSelector.tsx
+  h_9630b74bdac540 17,66,280-292
+src/agent/providers/codex/CodexProvider.test.ts
+  h_9630b74bdac540 1583-1584,1602-1603
+resources/builtin-skills/documentation/references/capabilities.md
+  h_9630b74bdac540 10,12-13,31,63,90,103,121-122
+  h_9630b74bdac540 9,11,14-16,104
+src/browser-gateway/BrowserGatewayServer.test.ts
+  h_9630b74bdac540 299-301,2338-2353
+  h_9630b74bdac540 2354
+src/agent/condenseTargetWindow.ts
+  h_9630b74bdac540 1-34
+package.json
+  h_9630b74bdac540 5,765,823-854
+  h_9630b74bdac540 855-858
+src/agent/webview/components/ModelSelector.test.tsx
+  h_9630b74bdac540 79-102
+src/agent/backgroundModelRouter.test.ts
+  h_9630b74bdac540 12,42,74-79,81-86,89,91-98,100,102-107,109,114-115,117-121,125-132,136-140,144-145,147-150,154-158,161-165,169-171,174-175,178-188,192-194,197-201,205-207,209-210,213-224,227-231,233,238-239,241-244,248-252,255-258,260-271,274-277,279,282-287,290-293,295,300-301,304-309,313-316,318,323-324,326-329,333-337,341-347,349,351-355,358,361-365,367-374,377-379,381-382,387-388,390-392,396-405,408-412,414-415,420-421,423-426,430-435,438-442,446-447,452,454-456,459-461,465-468,472-474,476-477,482,484-489,492-494,498,501-505,507-508,511-522,525-528,530,535-536,538-541,545-550,554-555,560,564,566-570,572,577-578,580-583,587-589,593-608,610-611,617-618,620
+  h_9630b74bdac540 80,87-88,99,359-360,551-553,615-616,619
+src/extension.ts
+  h_9630b74bdac540 3085-3090
+src/browser-gateway/migration/actionSurfaceInventory.ts
+  h_9630b74bdac540 225-227
+  h_9630b74bdac540 222-224
+src/agent/condenseTargetWindow.test.ts
+  h_9630b74bdac540 1-43
+src/approvals/typeSafeGuardianShadow.ts
+  h_9630b74bdac540 9-12,70-72,115-124,140,142-144,149,184-188,216,225,234,245,252,258-262,363-380,389-390,420-425,430,490-491,495-562,667-670,686
+  h_9630b74bdac540 8,13,181-183,257,381,492-494
+packages/node-host/src/sessionPreferences.ts
+  h_9630b74bdac540 26,178-184,192
+src/agent/persistenceContracts.ts
+  h_9630b74bdac540 2-5,151-155
+  h_9630b74bdac540 1
+src/browser-gateway/webview/relay/relaySnapshotProjection.ts
+  h_9630b74bdac540 480-490
+src/agent/systemPrompt.test.ts
+  h_9630b74bdac540 513-521,545
+src/agent/webview/App.tsx
+  h_9630b74bdac540 3087-3090,4835
+src/agent/systemPrompt.ts
+  h_9630b74bdac540 502-524,680-683,1061
+packages/core/src/codex/models.test.ts
+  h_9630b74bdac540 21-22,55-60,67,72-77,253-255,290,292-293,296,301-310,315
+  h_9630b74bdac540 291,294-295,297
+src/agent/AgentToolCallTracker.test.ts
+  h_9630b74bdac540 213-238
+src/agent/ChatViewProvider.ts
+  h_9630b74bdac540 34,4519-4530,6856-6863,6867-6868,6873-6886,6888-6893,8510-8516
+  h_9630b74bdac540 30,6864-6866,6869-6872,6887,6894-6895
+src/agent/McpClientHub.test.ts
+  h_9630b74bdac540 453-456
+src/agent/backgroundModelRouting.config.json
+  h_9630b74bdac540 6,28,32,36,45-51
+  h_9630b74bdac540 40,44
+packages/node-host/src/sessionPreferences.test.ts
+  h_9630b74bdac540 85-100
+src/agent/providers/codex/models.test.ts
+  h_9630b74bdac540 6,8-9,12
+  h_9630b74bdac540 7,10-11,13
+scripts/package-vsix.mjs
+  h_9630b74bdac540 1,8,44,50,60-75,82
+  h_9630b74bdac540 45-49,51-59
+packages/protocol/src/chatTranscript.ts
+  h_9630b74bdac540 60-73
+src/browser-gateway/testing/stateEquivalenceOracle.ts
+  h_9630b74bdac540 201-218,708-718
+src/core/capabilities/background.ts
+  h_9630b74bdac540 9-17,79,101-105,127-131,179-191,199-202
+src/agent/AgentSessionManager.test.ts
+  h_9630b74bdac540 2072,2076-2078,2113,2116-2118,3515-3535
+  h_9630b74bdac540 2079,2119,3536-3537
+apps/desktop/src/desktopModelCatalog.test.ts
+  h_9630b74bdac540 19-20,63-64
+src/agent/modes.test.ts
+  h_9630b74bdac540 33-49
+src/shared/chatProjection.test.ts
+  h_9630b74bdac540 929-1141
+src/agent/toolAdapter.test.ts
+  h_9630b74bdac540 1771,1833,1911-1912,1949,1952,1977,2104,2107,2862,2868-2888,2890-2891,2919-2950,2952-3003
+  h_9630b74bdac540 1910,1948,1950-1951,1953,2103,2105-2106,2108,2889,2951,3004-3005
+src/agent/ChatViewProvider.test.ts
+  h_9630b74bdac540 2027-2053
+scripts/package-vsix-output.test.mjs
+  h_9630b74bdac540 1-17
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_9630b74bdac540 38,40,42
+src/agent/webview/styles/chat.css
+  h_9630b74bdac540 4976-4993
+src/browser-gateway/BrowserGatewayService.ts
+  h_9630b74bdac540 839
+src/agent/backgroundModelRouter.ts
+  h_9630b74bdac540 8,13,16,23,36,43-55,59-63,97-176,198-222,224-228,230,233-244,253,256,279-281,285-289,293-311,313,317,324-345,347,351-354,359,368-381,383-384,386,388,391-393,397-398,400,408,410-412,417,419-420,428,430,435,437-440,443-446,448-449,451,453,457-458,466-470
+  h_9630b74bdac540 56-57,177-178,282,318,355,360-361,364-365,382,385,387,394-396,406-407,409,413-416,418,436,441,447,450,459-461,463
+src/agent/AgentSessionManagerHost.ts
+  h_9630b74bdac540 266-268
+scripts/package-vsix-output.mjs
+  h_9630b74bdac540 1-8
+src/agent/sharedSessionPreferences.test.ts
+  h_9630b74bdac540 5,81-109
+  h_9630b74bdac540 110-111
+scripts/report-session-outcomes.mjs
+  h_9630b74bdac540 15-51,285-294,806-838,853-865,1250-1280
+src/telemetry/SessionOutcomeTelemetry.ts
+  h_9630b74bdac540 199-229,233,243,245-246,251
+fixtures/unified-context-baselines/v1/acceptance-bars.json
+  h_9630b74bdac540 28
+src/agent/sharedSessionPreferences.ts
+  h_9630b74bdac540 102-122
+packages/core/src/codex/models.ts
+  h_9630b74bdac540 48,58,145-147,151-152,315,318-336
+  h_9630b74bdac540 337
+src/agent/background/acpAgentConfig.ts
+  h_9630b74bdac540 25-30,50,58,185-248,373,389
+  h_9630b74bdac540 249-250
+src/agent/AgentSessionManager.ts
+  h_9630b74bdac540 40-42,175-177,983-987,1404-1406,4844-4856,4858,9039,9224,9275-9279,10563,10565,10586-10590,10677-10680,10704-10707,10986-10989,11013,11134-11138,11161-11165,11444-11448,11783-11788,12050-12331,12339-12341,12357-12359,12566,13865-13873
+  h_9630b74bdac540 39,43,1407,4857,4859-4862,12342-12356
+src/agent/toolAdapter.ts
+  h_9630b74bdac540 205-207,829,831,946,950-954,956-957,959-961,966-977,979-994,999-1004,2176-2181,4979-4980,5141-5178,5180-5183,5186,5199-5201
+  h_9630b74bdac540 962-965,978,995-998,1005-1006,5184-5185,5187-5198,5202-5204
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_9630b74bdac540 1796-1797,2488-2490,2495-2517,2520-2521,2531,2535-2537,2540,2542-2555,2559,4519-4521,5769-5807,5810-5815,9543-9546
+  h_9630b74bdac540 1794-1795,1798,2519,2522,5808-5809,9547
+src/agent/backgroundTypes.ts
+  h_9630b74bdac540 3-5,12-14,26-29
+  h_9630b74bdac540 11,15
+resources/builtin-skills/documentation/references/tools.md
+  h_9630b74bdac540 99-100,103
+  h_9630b74bdac540 104
+src/agent/AgentEngine.ts
+  h_9630b74bdac540 32,634-635,638
+  h_9630b74bdac540 637
+src/browser-gateway/BrowserGatewayServer.ts
+  h_9630b74bdac540 503-506,1685-1715
+  h_9630b74bdac540 501-502,1716-1722
+src/browser-gateway/dataPlane/protocol.ts
+  h_9630b74bdac540 1963-1967,1984-2014,2025-2029
+src/agent/AgentSessionManager.background.test.ts
+  h_9630b74bdac540 1068-1486
+packages/protocol/src/browserGatewayTranscriptBlock.ts
+  h_9630b74bdac540 43-56
+src/browser-gateway/BrowserGatewayService.test.ts
+  h_9630b74bdac540 568-616
+resources/builtin-skills/documentation/references/settings.md
+  h_9630b74bdac540 30,43,61,96-97
+src/telemetry/ToolUsageTelemetry.ts
+  h_9630b74bdac540 260
+CHANGELOG.md
+  h_9630b74bdac540 5-7,9
+src/agent/background/acpAgentConfig.test.ts
+  h_9630b74bdac540 19,46,62-112
+  h_9630b74bdac540 113-114
+src/approvals/typeSafeGuardianShadow.test.ts
+  h_9630b74bdac540 66-80,137,139-140,168,306-367,513,515-516,535,537-538,542-560,581,583-584,629-632
+  h_9630b74bdac540 539-541,627-628,633
+src/agent/webview/components/InputArea.tsx
+  h_9630b74bdac540 212,267,1631
+src/browser-gateway/dataPlane/ownerProjectionAdapter.ts
+  h_9630b74bdac540 1436-1448
+src/telemetry/SessionOutcomeTelemetry.test.ts
+  h_9630b74bdac540 146,148-149,154,230,232-233,236
+src/agent/AgentEngine.test.ts
+  h_9630b74bdac540 561-597
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  h_9630b74bdac540 3239-3341
+src/agent/modelCondenseThresholds.ts
+  h_9630b74bdac540 3-6,16-19,61,63,77-84,102,112
+  h_9630b74bdac540 85-86
+src/agent/modes.ts
+  h_9630b74bdac540 68-72
+  h_9630b74bdac540 67
+packages/protocol/src/browserGatewayTranscriptBlock.test.ts
+  h_9630b74bdac540 47-60
+src/agent/unifiedContextBaselines.test.ts
+  h_9630b74bdac540 779
+src/agent/AgentToolCallTracker.ts
+  h_9630b74bdac540 258,263-267,270,273,275,281-283,286-287
+  h_9630b74bdac540 284-285,288
+src/adapters/vscode/projectSettingsAccessor.ts
+  h_9630b74bdac540 51
+packages/protocol/src/backgroundResult.ts
+  h_9630b74bdac540 62-76
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_9630b74bdac540 229-340,682-684,689-698,703-705,710-712,717-719,727-729,735-745,751-753,759-761,767-769,775
+package-lock.json
+  h_9630b74bdac540 3,9
+resources/builtin-skills/documentation/references/package-contract.md
+  h_9630b74bdac540 12,80
+resources/builtin-skills/documentation/references/release-notes.md
+  h_9630b74bdac540 5-7,9
+scripts/tool-inventory.json
+  h_9630b74bdac540 221,839
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1a37b73c96e8b9b34190653db1bdd715bf30a189",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
