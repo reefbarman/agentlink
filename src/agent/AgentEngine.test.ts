@@ -558,6 +558,43 @@ describe("AgentEngine", () => {
       expect(condenseSpy).toHaveBeenCalledTimes(1);
     });
 
+    it("scales the cache-hit bonus to the 256k target window on large models", async () => {
+      // 1M window, 872k usable: a full-cache bonus adds 10% of 256k (~3% of
+      // usable) rather than 10% of usable, so 300k is over a 30% threshold.
+      const largeProvider = {
+        ...makeMockProvider(),
+        getCapabilities: () => ({
+          ...TEST_CAPABILITIES,
+          contextWindow: 1_000_000,
+          maxOutputTokens: 128_000,
+        }),
+      };
+      const session = await makeSession({
+        ...testConfig,
+        autoCondenseThreshold: 0.3,
+      });
+      session.addUserMessage("hello");
+      session.lastInputTokens = 300_000; // > 872k * (0.3 + 0.1 * 256k/872k) ≈ 288k
+      session.lastCacheReadTokens = 300_000; // unscaled bonus would allow up to ~349k
+
+      const engine = new AgentEngine(makeRegistry(largeProvider));
+      const condenseSpy = vi
+        .spyOn(engine, "condenseSession")
+        .mockImplementation(async function* () {
+          yield { type: "condense_start", isAutomatic: true };
+          yield {
+            type: "condense",
+            summary: "summary",
+            prevInputTokens: 300_000,
+            newInputTokens: 20_000,
+          };
+          return true;
+        });
+
+      await collectEvents(engine.run(session));
+      expect(condenseSpy).toHaveBeenCalledTimes(1);
+    });
+
     it("does not count previous output tokens against input-cap condensing", async () => {
       const session = await makeSession();
       session.addUserMessage("hello");

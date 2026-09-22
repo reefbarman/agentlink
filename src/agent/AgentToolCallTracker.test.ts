@@ -210,6 +210,32 @@ describe("AgentToolCallTracker continueInBackground", () => {
     });
   });
 
+  it("preserves all session IDs when returning control from a multi-agent wait", () => {
+    const tracker = createTracker();
+    const forceResolve = vi.fn();
+    tracker.registerAgentCall(
+      "call-background-results",
+      "get_background_result",
+      "2 background agents",
+      "session-1",
+      forceResolve,
+      JSON.stringify({
+        sessionIds: ["bg-session-1", "bg-session-2"],
+        return_when: "all",
+      }),
+    );
+
+    tracker.continueInBackground("call-background-results");
+
+    expect(JSON.parse(forceResolve.mock.calls[0][0].content[0].text)).toEqual({
+      status: "continued-in-background",
+      done: false,
+      sessionIds: ["bg-session-1", "bg-session-2"],
+      message:
+        "Returned control to the agent. The background agents are still running; use get_background_status to check progress or get_background_result when ready to wait again.",
+    });
+  });
+
   it("ignores background requests for other tools", async () => {
     const tracker = createTracker();
     tracker.registerAgentCall(

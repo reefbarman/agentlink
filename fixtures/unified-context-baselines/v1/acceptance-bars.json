@@ -25,7 +25,7 @@
       "model": "gemini-2.5-pro"
     }
   ],
-  "modes": ["code", "architect", "ask", "debug", "review"],
+  "modes": ["code", "architect", "orchestrate", "ask", "debug", "review"],
   "promptMatrix": {
     "taskClasses": [
       "small-bugfix",

@@ -227,6 +227,118 @@
       "sectionLabels": ["base", "mode:architect", "system info", "skills toc"]
     },
     {
+      "mode": "orchestrate",
+      "providerId": "anthropic",
+      "model": "claude-opus-4-8",
+      "profile": "compatibility",
+      "status": "measured",
+      "chars": 30555,
+      "estimatedTokens": 7639,
+      "sha256": "68990ce11d89ee9160ce63559ad6ae66f744a3bf3e5c44c3f38c98dadb21fe12",
+      "sectionLabels": [
+        "base",
+        "mode:orchestrate",
+        "provider:anthropic",
+        "system info",
+        "skills toc"
+      ]
+    },
+    {
+      "mode": "orchestrate",
+      "providerId": "anthropic",
+      "model": "claude-opus-4-8",
+      "profile": "reasoning",
+      "status": "measured",
+      "chars": 8766,
+      "estimatedTokens": 2192,
+      "sha256": "5f76c87a27750b3bebab174425c2e5464f4a5ee87447d7fa51f9deb036837d0c",
+      "sectionLabels": [
+        "base",
+        "mode:orchestrate",
+        "provider:anthropic",
+        "system info",
+        "skills toc"
+      ]
+    },
+    {
+      "mode": "orchestrate",
+      "providerId": "codex",
+      "model": "gpt-5.6-sol",
+      "profile": "compatibility",
+      "status": "measured",
+      "chars": 33243,
+      "estimatedTokens": 8311,
+      "sha256": "e64406d3d64cf2021377a92151922db0f24c2c419d2c89613c7a420571ae4121",
+      "sectionLabels": [
+        "base",
+        "mode:orchestrate",
+        "provider:codex",
+        "system info",
+        "skills toc"
+      ]
+    },
+    {
+      "mode": "orchestrate",
+      "providerId": "codex",
+      "model": "gpt-5.6-sol",
+      "profile": "reasoning",
+      "status": "measured",
+      "chars": 8834,
+      "estimatedTokens": 2209,
+      "sha256": "2ccacfd5ec93aeaa4cdfb17ef2c778b2db210164c925edd22c957682946f5626",
+      "sectionLabels": [
+        "base",
+        "mode:orchestrate",
+        "provider:codex",
+        "system info",
+        "skills toc"
+      ]
+    },
+    {
+      "mode": "orchestrate",
+      "providerId": "openai-compatible",
+      "model": "openai-compatible-eval",
+      "profile": "compatibility",
+      "status": "measured",
+      "chars": 26740,
+      "estimatedTokens": 6685,
+      "sha256": "56fa6c11246dd5620d9c4499f0994b64e6d545add865e5c8e7db19f427df9ff2",
+      "sectionLabels": ["base", "mode:orchestrate", "system info", "skills toc"]
+    },
+    {
+      "mode": "orchestrate",
+      "providerId": "openai-compatible",
+      "model": "openai-compatible-eval",
+      "profile": "reasoning",
+      "status": "measured",
+      "chars": 8026,
+      "estimatedTokens": 2007,
+      "sha256": "028468a7ba5b2dfb33012a0e1e3f59a6d90134a41f6331e9d24df8f2d7a86728",
+      "sectionLabels": ["base", "mode:orchestrate", "system info", "skills toc"]
+    },
+    {
+      "mode": "orchestrate",
+      "providerId": "gemini",
+      "model": "gemini-2.5-pro",
+      "profile": "compatibility",
+      "status": "measured",
+      "chars": 26732,
+      "estimatedTokens": 6683,
+      "sha256": "96b4036cedd95088c201811cb744c784e1cd86154ee267e30e97e8966e54c49e",
+      "sectionLabels": ["base", "mode:orchestrate", "system info", "skills toc"]
+    },
+    {
+      "mode": "orchestrate",
+      "providerId": "gemini",
+      "model": "gemini-2.5-pro",
+      "profile": "reasoning",
+      "status": "measured",
+      "chars": 8018,
+      "estimatedTokens": 2005,
+      "sha256": "56af8a6d5fb2f863a20667cad876522b6ae2211d6805639475239bc0897bc832",
+      "sectionLabels": ["base", "mode:orchestrate", "system info", "skills toc"]
+    },
+    {
       "mode": "ask",
       "providerId": "anthropic",
       "model": "claude-opus-4-8",
@@ -567,37 +679,44 @@
     {
       "mode": "code",
       "toolCount": 64,
-      "chars": 91561,
-      "estimatedTokens": 22891,
-      "sha256": "5390c48dc1a9d8101d82cdf1757432063b6c010fdd350ebaf58ebf05cdfc7b41"
+      "chars": 92635,
+      "estimatedTokens": 23159,
+      "sha256": "e63d64cc5a4bac979a03f6adbb4a8d87ca7cdd854ce2b95d1f337cb62e728da6"
     },
     {
       "mode": "architect",
       "toolCount": 59,
-      "chars": 86282,
-      "estimatedTokens": 21571,
-      "sha256": "79bab340e3639d7d5d6b7f930538779e1cb60f6e96969d104f19143bdac5d7c5"
+      "chars": 87356,
+      "estimatedTokens": 21839,
+      "sha256": "5d121d22d60802bba03c4b04f2b18600a152829c94d654c74c239c54cc4c21c0"
+    },
+    {
+      "mode": "orchestrate",
+      "toolCount": 54,
+      "chars": 63884,
+      "estimatedTokens": 15971,
+      "sha256": "23d94500dd3b4692c5f11da89ea97a260f26cbd9373e81d5d265eb5e59b160b4"
     },
     {
       "mode": "ask",
       "toolCount": 39,
-      "chars": 54832,
-      "estimatedTokens": 13708,
-      "sha256": "9c67afc2db73cff1bf0aa3e34e50108038fa56e1cc05009f820b651e94ceb202"
+      "chars": 55906,
+      "estimatedTokens": 13977,
+      "sha256": "ce82d06635d97a4bd5bd83fd8c550244f854b7bef7c30d92ec9e4fdf51d93632"
     },
     {
       "mode": "debug",
       "toolCount": 57,
-      "chars": 76428,
-      "estimatedTokens": 19107,
-      "sha256": "1694b582bc4fc8a8469bcfb457e1610b6050e907428a4ba57f36d4e3d43f44fc"
+      "chars": 77502,
+      "estimatedTokens": 19376,
+      "sha256": "cc08d743d181e3a97dd88b438bb4995ddb2652daa1151cafcee7cf99ecbf9351"
     },
     {
       "mode": "review",
       "toolCount": 51,
-      "chars": 73205,
-      "estimatedTokens": 18302,
-      "sha256": "03d01e0a69be6fe01926ea2d117bd5856cee68221205b93837352481db90987a"
+      "chars": 74279,
+      "estimatedTokens": 18570,
+      "sha256": "786c2fc868a49ec1a06af6f3b34348c82f282cab689d71b4d26b76ebab348e4e"
     }
   ],
   "projectedToolsByMode": [
@@ -605,47 +724,55 @@
       "mode": "code",
       "toolCount": 38,
       "deferredToolCount": 26,
-      "chars": 63388,
-      "estimatedTokens": 15847,
-      "sha256": "9d13e12aad2609acb37b23bdc98c64de3126145a1f9561684d1fea681a7b1f00"
+      "chars": 64462,
+      "estimatedTokens": 16116,
+      "sha256": "f2e75c8fdc69c618291b96f8232b3a9569dfdaddef4c54b4a55b3c3d8ae48191"
     },
     {
       "mode": "architect",
       "toolCount": 37,
       "deferredToolCount": 22,
-      "chars": 62054,
-      "estimatedTokens": 15514,
-      "sha256": "8a07215cc80f517dd5077ba2e177d025934290fe1ed2b0bb3e9ac4209486f028"
+      "chars": 63128,
+      "estimatedTokens": 15782,
+      "sha256": "dbb3c7e694e24d660d46b93c8dbf783c3967288b197b5c0b6e98bd7453147947"
+    },
+    {
+      "mode": "orchestrate",
+      "toolCount": 33,
+      "deferredToolCount": 21,
+      "chars": 45005,
+      "estimatedTokens": 11252,
+      "sha256": "6b034a088d4461ec9ad3252ba2bd8dd9e954f59ea778dd3c2d7abcafd96099fa"
     },
     {
       "mode": "ask",
       "toolCount": 28,
       "deferredToolCount": 11,
-      "chars": 43826,
-      "estimatedTokens": 10957,
-      "sha256": "11a09ead0fb7dcedc1b333414550b04c3be54baafa1a67a35be3b47651d3d38f"
+      "chars": 44900,
+      "estimatedTokens": 11225,
+      "sha256": "02dac1647a359ddcab02da8a6e5f9de0db425d83a4232231c9be6f3cf65ba868"
     },
     {
       "mode": "debug",
       "toolCount": 35,
       "deferredToolCount": 22,
-      "chars": 57008,
-      "estimatedTokens": 14252,
-      "sha256": "eaf1e81e83bd41f5aca77e65188723ba81ec3f69b813463b349d6eadba18452c"
+      "chars": 58082,
+      "estimatedTokens": 14521,
+      "sha256": "95339488e6cb4dd6e09abc06aa41cced992353891adccf03e085d4b40f6768a0"
     },
     {
       "mode": "review",
       "toolCount": 30,
       "deferredToolCount": 21,
-      "chars": 55770,
-      "estimatedTokens": 13943,
-      "sha256": "ba7e95267a5527dc2e2f7ddd0446f4db363c71a20c3a9f2704a39479fb48a188"
+      "chars": 56844,
+      "estimatedTokens": 14211,
+      "sha256": "a55c29987e46bc3b3d49a69aa544182ca0199039bebda9d1fa2c1b96ec144bf2"
     }
   ],
   "profileMatrix": {
     "profiles": ["compatibility", "reasoning"],
     "status": "measured",
-    "modes": ["code", "architect", "ask", "debug", "review"],
+    "modes": ["code", "architect", "orchestrate", "ask", "debug", "review"],
     "providerModels": [
       {
         "providerId": "anthropic",

@@ -5,25 +5,22 @@ import {
 import type {
   BackgroundRouteResolution,
   ModelTier,
+  ModelTierSource,
   ProviderStrategy,
   SpawnBackgroundRequest,
 } from "./backgroundTypes.js";
-import {
-  getAutomaticBackgroundBudget,
-  inferReviewTier,
-} from "./background/backgroundBudgetPolicy.js";
 
-import { CODEX_DEFAULT_MODEL } from "@agentlink/core/codex";
+import type { BackgroundModelTierGroups } from "./background/acpAgentConfig.js";
 import type { ModelInfo } from "./providers/types.js";
 import type { ProviderRegistry } from "./providers/index.js";
+import { getAutomaticBackgroundBudget } from "./background/backgroundBudgetPolicy.js";
 import routingConfigRaw from "./backgroundModelRouting.config.json";
 
 interface TaskRouteRule {
   preferredMode?: string;
   providerStrategy?: ProviderStrategy;
   specificProvider?: string;
-  modelTier?: ModelTier;
-  useForegroundModelByDefault?: boolean;
+  modelTier?: ModelTier | "below_foreground";
   requireReviewCapableModel?: boolean;
   /** Override thinking budget for background agents of this task class. */
   thinkingBudget?: number;
@@ -36,13 +33,34 @@ interface TaskRouteRule {
 interface RoutingConfig {
   defaults: TaskRouteRule & { taskClass: string };
   taskClasses: Record<string, TaskRouteRule>;
+  defaultTierGroups?: BackgroundModelTierGroups;
   reviewModelPreferences?: Partial<
     Record<string, Partial<Record<ModelTier, string[]>>>
   >;
   fallbackProviderOrder: string[];
 }
 
+export interface BackgroundRoutingPolicy {
+  modelTiers?: BackgroundModelTierGroups;
+}
+
+interface ModelTierClassification {
+  tier: ModelTier | "unknown";
+  source: ModelTierSource;
+  group?: string;
+}
+
+interface TierMembership extends ModelTierClassification {
+  tier: ModelTier;
+  order: number;
+}
+
 const routingConfig = routingConfigRaw as RoutingConfig;
+const MODEL_TIERS: readonly ModelTier[] = [
+  "cheap",
+  "balanced",
+  "deep_reasoning",
+];
 
 function getTaskRule(taskClass?: string): {
   taskClass: string;
@@ -54,8 +72,6 @@ function getTaskRule(taskClass?: string): {
     "general"
   ).trim();
   const fromConfig = routingConfig.taskClasses[normalized];
-  // A custom review_* class must keep review policy instead of silently
-  // inheriting the general rule (which reviews with the foreground model).
   const resolvedClass = fromConfig
     ? normalized
     : isReviewTaskClass(normalized)
@@ -78,6 +94,88 @@ function pickMode(
   return request.mode?.trim() || rule.preferredMode || foregroundMode || "code";
 }
 
+function unique(values: string[]): string[] {
+  const out: string[] = [];
+  for (const value of values) {
+    if (value && !out.includes(value)) out.push(value);
+  }
+  return out;
+}
+
+function buildTierMemberships(
+  userGroups: BackgroundModelTierGroups | undefined,
+): Map<string, TierMembership> {
+  const memberships = new Map<string, TierMembership>();
+  const addGroups = (
+    groups: BackgroundModelTierGroups | undefined,
+    source: Extract<ModelTierSource, "builtin" | "configured">,
+  ) => {
+    for (const [group, tiers] of Object.entries(groups ?? {})) {
+      for (const tier of MODEL_TIERS) {
+        for (const [order, modelId] of (tiers[tier] ?? []).entries()) {
+          if (source === "builtin" && memberships.has(modelId)) continue;
+          memberships.set(modelId, { tier, source, group, order });
+        }
+      }
+    }
+  };
+  addGroups(routingConfig.defaultTierGroups, "builtin");
+  addGroups(userGroups, "configured");
+  return memberships;
+}
+
+function classifyModel(
+  model: ModelInfo,
+  memberships: ReadonlyMap<string, TierMembership>,
+): ModelTierClassification {
+  const configured = memberships.get(model.id);
+  if (configured) return configured;
+
+  const id = model.id.toLowerCase();
+  if (/haiku|spark|mini|lite|luna/.test(id)) {
+    return { tier: "cheap", source: "heuristic" };
+  }
+  if (/opus|fable|terra|astra|\bmax\b|[-_.]pro(?:[-_.]|$)/.test(id)) {
+    return { tier: "deep_reasoning", source: "heuristic" };
+  }
+  if (/sonnet|\bsol\b|gpt-5(?:\.\d+)?(?:$|[-_.])/.test(id)) {
+    return { tier: "balanced", source: "heuristic" };
+  }
+  return { tier: "unknown", source: "unknown" };
+}
+
+function tierBelow(tier: ModelTier): ModelTier {
+  if (tier === "deep_reasoning") return "balanced";
+  return "cheap";
+}
+
+function resolveRoutingTier(
+  request: SpawnBackgroundRequest,
+  rule: TaskRouteRule,
+  foregroundClassification: ModelTierClassification,
+): ModelTier {
+  if (request.modelTier && request.modelTier !== "foreground") {
+    return request.modelTier;
+  }
+  if (request.modelTier === "foreground") {
+    if (foregroundClassification.tier === "unknown") {
+      throw new Error(
+        `Foreground model "${request.model ?? "current"}" has no configured or inferable tier. Configure agentlink.background.modelTiers or request an exact model.`,
+      );
+    }
+    return foregroundClassification.tier;
+  }
+  if (rule.modelTier && rule.modelTier !== "below_foreground") {
+    return rule.modelTier;
+  }
+  if (foregroundClassification.tier === "unknown") {
+    throw new Error(
+      "Cannot select a cheaper background model because the foreground model tier is unknown. Configure agentlink.background.modelTiers or pass modelTier/model explicitly.",
+    );
+  }
+  return tierBelow(foregroundClassification.tier);
+}
+
 function pickPreferredReviewModel(
   candidates: ModelInfo[],
   tier: ModelTier,
@@ -97,57 +195,53 @@ function pickPreferredReviewModel(
   return undefined;
 }
 
-function scoreModel(model: ModelInfo, tier: ModelTier): number {
-  const id = model.id.toLowerCase();
-  const caps = model.capabilities;
-  const base =
-    (caps.contextWindow / 1000) * 2 +
-    caps.maxOutputTokens / 1000 +
-    (caps.supportsThinking ? 40 : 0) +
-    (caps.supportsToolUse ? 20 : 0);
+function pickTierModel(
+  candidates: ModelInfo[],
+  tier: ModelTier,
+  memberships: ReadonlyMap<string, TierMembership>,
+  preferredGroup?: string,
+): ModelInfo | undefined {
+  const eligible = candidates
+    .map((model) => ({
+      model,
+      classification: classifyModel(model, memberships),
+    }))
+    .filter(({ classification }) => classification.tier === tier);
+  if (eligible.length === 0) return undefined;
 
-  const cheapHints = /haiku|spark|mini|lite|luna/;
-  const deepHints = /mythos|opus|max|5\.3|sonnet|pro/;
-  const isOpus = /opus/.test(id);
-  const isSonnet = /sonnet/.test(id);
-
-  if (tier === "deep_reasoning") {
+  const inPreferredGroup = preferredGroup
+    ? eligible.filter(
+        ({ classification }) => classification.group === preferredGroup,
+      )
+    : [];
+  const pool = inPreferredGroup.length > 0 ? inPreferredGroup : eligible;
+  return [...pool].sort((a, b) => {
+    const aMembership = memberships.get(a.model.id);
+    const bMembership = memberships.get(b.model.id);
+    const sourceRank = (source: ModelTierSource) =>
+      source === "configured" ? 0 : source === "builtin" ? 1 : 2;
     return (
-      base +
-      (caps.supportsThinking ? 120 : -120) +
-      (deepHints.test(id) ? 80 : 0) +
-      (cheapHints.test(id) ? -100 : 0) +
-      (isOpus ? 60 : 0) +
-      (isSonnet ? 10 : 0)
+      sourceRank(a.classification.source) -
+        sourceRank(b.classification.source) ||
+      (aMembership?.order ?? Number.MAX_SAFE_INTEGER) -
+        (bMembership?.order ?? Number.MAX_SAFE_INTEGER) ||
+      a.model.id.localeCompare(b.model.id)
     );
-  }
-
-  if (tier === "cheap") {
-    return (
-      base +
-      (cheapHints.test(id) ? 180 : 0) +
-      (deepHints.test(id) ? -80 : 0) -
-      caps.contextWindow / 3000
-    );
-  }
-
-  // balanced
-  return (
-    base +
-    (caps.supportsThinking ? 30 : 0) +
-    (cheapHints.test(id) ? 20 : 0) +
-    (deepHints.test(id) ? 20 : 0) +
-    (isOpus ? 60 : 0) +
-    (isSonnet ? 25 : 0)
-  );
+  })[0]?.model;
 }
 
-function unique(values: string[]): string[] {
-  const out: string[] = [];
-  for (const value of values) {
-    if (value && !out.includes(value)) out.push(value);
-  }
-  return out;
+function tierError(args: {
+  tier: ModelTier;
+  providers: readonly string[];
+  foregroundModel: string;
+}): Error {
+  const providerText =
+    args.providers.length > 0
+      ? args.providers.join(", ")
+      : "the allowed provider";
+  return new Error(
+    `No eligible ${args.tier} background model is available on ${providerText}. Configure agentlink.background.modelTiers, authenticate a model at that tier, or request an explicit model. The router will not silently spend a higher tier than requested (foreground: ${args.foregroundModel}).`,
+  );
 }
 
 export async function resolveBackgroundRoute(
@@ -156,13 +250,10 @@ export async function resolveBackgroundRoute(
   foreground: {
     mode: string;
     model: string;
-    /**
-     * Providers that recently failed background work before doing any turns
-     * (auth/billing/quota). Treated as unauthenticated during automatic
-     * selection; an explicit provider/model request still wins.
-     */
+    /** Providers recently unavailable for automatic background selection. */
     unavailableProviders?: readonly string[];
   },
+  policy: BackgroundRoutingPolicy = {},
 ): Promise<BackgroundRouteResolution> {
   const registeredModels = registry.listAllModels();
   const requestedProvider = request.provider?.trim();
@@ -185,187 +276,196 @@ export async function resolveBackgroundRoute(
   const isRouteable = (provider: string): boolean =>
     Boolean(authStatus[provider]) &&
     (!unavailable.has(provider) || provider === requestedProvider);
-  const providersWithModels = unique(allModels.map((m) => m.provider));
-
+  const providersWithModels = unique(allModels.map((model) => model.provider));
+  const foregroundModelInfo = allModels.find(
+    (model) => model.id === foreground.model,
+  );
   const foregroundProvider =
     registry.tryResolveProvider(foreground.model)?.id ??
-    allModels.find((m) => m.id === foreground.model)?.provider;
+    foregroundModelInfo?.provider;
+  const memberships = buildTierMemberships(policy.modelTiers);
+  const foregroundClassification: ModelTierClassification = foregroundModelInfo
+    ? classifyModel(foregroundModelInfo, memberships)
+    : { tier: "unknown", source: "unknown" };
 
   const { taskClass, rule } = getTaskRule(request.taskClass);
   const resolvedMode = pickMode(request, foreground.mode, rule);
-  const modelTier =
-    request.modelTier ??
-    inferReviewTier(request) ??
-    rule.modelTier ??
-    "balanced";
-  const defaultBudget = getAutomaticBackgroundBudget(taskClass, modelTier);
-
-  // Per-task-class overrides forwarded to the caller
+  const requestedModelInfo = requestedModel
+    ? allModels.find((model) => model.id === requestedModel)
+    : undefined;
+  const requestedModelClassification = requestedModelInfo
+    ? classifyModel(requestedModelInfo, memberships)
+    : undefined;
+  const explicitlyRequestedTier =
+    request.modelTier && request.modelTier !== "foreground"
+      ? request.modelTier
+      : undefined;
+  const modelTier = requestedModelInfo
+    ? (explicitlyRequestedTier ??
+      (requestedModelClassification?.tier === "unknown"
+        ? undefined
+        : requestedModelClassification?.tier))
+    : resolveRoutingTier(request, rule, foregroundClassification);
+  const defaultBudget = modelTier
+    ? getAutomaticBackgroundBudget(taskClass, modelTier)
+    : undefined;
   const ruleOverrides = {
-    ...(rule.thinkingBudgetByTier?.[modelTier] !== undefined ||
+    ...((modelTier && rule.thinkingBudgetByTier?.[modelTier] !== undefined) ||
     rule.thinkingBudget !== undefined
       ? {
           thinkingBudget:
-            rule.thinkingBudgetByTier?.[modelTier] ?? rule.thinkingBudget,
+            (modelTier ? rule.thinkingBudgetByTier?.[modelTier] : undefined) ??
+            rule.thinkingBudget,
         }
       : {}),
     ...(rule.toolProfile ? { toolProfile: rule.toolProfile } : {}),
   };
 
-  if (requestedModel) {
-    const modelInfo = allModels.find((m) => m.id === requestedModel);
-    if (!modelInfo) {
-      throw new Error(`Requested model "${requestedModel}" is not available.`);
-    }
-    const providerMismatch = Boolean(
-      requestedProvider && requestedProvider !== modelInfo.provider,
-    );
+  const resultFor = (
+    model: ModelInfo,
+    routingReason: string,
+    fallbackUsed: boolean,
+  ): BackgroundRouteResolution => {
+    const classification = classifyModel(model, memberships);
     return {
       resolvedMode,
-      resolvedModel: modelInfo.id,
-      resolvedProvider: modelInfo.provider,
+      resolvedModel: model.id,
+      resolvedProvider: model.provider,
       taskClass,
-      modelTier,
-      routingReason: providerMismatch
-        ? `explicit model override (${modelInfo.id}) ignored requested provider (${requestedProvider})`
-        : `explicit model override (${modelInfo.id})`,
-      fallbackUsed: providerMismatch,
-      ...(defaultBudget ? { defaultBudget } : {}),
-      ...ruleOverrides,
-    };
-  }
-  const strategy = rule.providerStrategy ?? "same";
-  const specificProvider = rule.specificProvider;
-
-  // Keep same-provider tasks on the foreground model when requested by policy.
-  // An opposite-provider strategy always takes precedence over this fast path,
-  // even if a future config edit accidentally enables both flags.
-  if (
-    strategy !== "opposite" &&
-    rule.useForegroundModelByDefault &&
-    foreground.model &&
-    allModels.some((m) => m.id === foreground.model) &&
-    (!requestedProvider || requestedProvider === foregroundProvider)
-  ) {
-    const foregroundModelInfo = allModels.find(
-      (m) => m.id === foreground.model,
-    )!;
-    return {
-      resolvedMode,
-      resolvedModel: foregroundModelInfo.id,
-      resolvedProvider: foregroundModelInfo.provider,
-      taskClass,
-      modelTier,
-      routingReason: "defaulted to foreground model",
-      fallbackUsed: false,
-      ...(defaultBudget ? { defaultBudget } : {}),
-      ...ruleOverrides,
-    };
-  }
-
-  const oppositeProviders = providersWithModels.filter(
-    (p) => p !== foregroundProvider,
-  );
-
-  const preferredProviders = (() => {
-    if (requestedProvider) return [requestedProvider];
-    if (strategy === "specific" && specificProvider) return [specificProvider];
-    if (strategy === "opposite") return oppositeProviders;
-    if (strategy === "same" && foregroundProvider) return [foregroundProvider];
-    return foregroundProvider ? [foregroundProvider] : [];
-  })();
-
-  const fallbackProviders = unique([
-    ...routingConfig.fallbackProviderOrder,
-    ...providersWithModels,
-  ]);
-
-  const preferredOrder = unique(preferredProviders).filter((provider) =>
-    providersWithModels.includes(provider),
-  );
-  const fallbackOrder = unique(fallbackProviders).filter(
-    (provider) =>
-      providersWithModels.includes(provider) &&
-      !preferredOrder.includes(provider),
-  );
-
-  const preferredAuthenticated = preferredOrder.filter(isRouteable);
-  const fallbackAuthenticated = fallbackOrder.filter(isRouteable);
-  const providerPasses = [preferredAuthenticated, fallbackAuthenticated].filter(
-    (providers) => providers.length > 0,
-  );
-
-  const requireReviewCapable = rule.requireReviewCapableModel ?? false;
-
-  for (const providers of providerPasses) {
-    const candidates = allModels.filter((model) => {
-      if (!providers.includes(model.provider)) return false;
-      if (requireReviewCapable && !model.capabilities.supportsThinking)
-        return false;
-      return true;
-    });
-
-    if (candidates.length === 0) continue;
-
-    const ranked = [...candidates].sort(
-      (a, b) => scoreModel(b, modelTier) - scoreModel(a, modelTier),
-    );
-    let picked = ranked[0];
-
-    const preferredReviewModel = taskClass.startsWith("review_")
-      ? pickPreferredReviewModel(candidates, modelTier)
-      : undefined;
-
-    if (preferredReviewModel) {
-      picked = preferredReviewModel;
-    } else if (modelTier !== "cheap") {
-      // On the codex/gpt side, default non-cheap background work to the current
-      // flagship model rather than letting the heuristic land on an older or
-      // OAuth-unavailable model. Cheap-tier tasks keep their scored pick.
-      if (picked.provider === "codex") {
-        const codexDefault = candidates.find(
-          (m) => m.id === CODEX_DEFAULT_MODEL,
-        );
-        if (codexDefault) picked = codexDefault;
-      }
-    }
-
-    const preferredHit = preferredAuthenticated.includes(picked.provider);
-    const fallbackUsed = !preferredHit;
-    const selectionDetail = preferredReviewModel
-      ? `, model=${picked.id}, policy=review-preference`
-      : `, model=${picked.id}`;
-    const routingReason = fallbackUsed
-      ? `fallback to ${picked.provider}/${picked.id} (strategy=${strategy}, tier=${modelTier}${preferredReviewModel ? ", policy=review-preference" : ""})`
-      : `routed by ${strategy} provider strategy (tier=${modelTier}${selectionDetail})`;
-
-    return {
-      resolvedMode,
-      resolvedModel: picked.id,
-      resolvedProvider: picked.provider,
-      taskClass,
-      modelTier,
+      ...(modelTier ? { modelTier } : {}),
+      resolvedModelTier: classification.tier,
+      resolvedModelTierSource: classification.source,
+      ...(classification.group ? { modelGroup: classification.group } : {}),
       routingReason,
       fallbackUsed,
       ...(defaultBudget ? { defaultBudget } : {}),
       ...ruleOverrides,
     };
+  };
+
+  if (requestedModel) {
+    const modelInfo = requestedModelInfo;
+    if (!modelInfo) {
+      throw new Error(`Requested model "${requestedModel}" is not available.`);
+    }
+    if (!authStatus[modelInfo.provider]) {
+      throw new Error(
+        `Requested model "${requestedModel}" is not authenticated on provider "${modelInfo.provider}".`,
+      );
+    }
+    const providerMismatch = Boolean(
+      requestedProvider && requestedProvider !== modelInfo.provider,
+    );
+    return resultFor(
+      modelInfo,
+      providerMismatch
+        ? `explicit model override (${modelInfo.id}) ignored requested provider (${requestedProvider})`
+        : `explicit model override (${modelInfo.id})`,
+      providerMismatch,
+    );
   }
 
-  const authenticatedModels = allModels.filter((m) => isRouteable(m.provider));
-  const fallbackModel = authenticatedModels[0] ?? allModels[0];
-  return {
-    resolvedMode,
-    resolvedModel: fallbackModel.id,
-    resolvedProvider: fallbackModel.provider,
-    taskClass,
-    modelTier,
-    routingReason:
-      authenticatedModels.length > 0
-        ? "no preferred/authenticated candidates available; using first authenticated model"
-        : "no authenticated providers available; using first discovered model",
-    fallbackUsed: true,
-    ...(defaultBudget ? { defaultBudget } : {}),
-    ...ruleOverrides,
-  };
+  if (request.modelTier === "foreground") {
+    if (!foregroundModelInfo || !foregroundProvider) {
+      throw new Error(
+        `Foreground model "${foreground.model}" is not available for background work.`,
+      );
+    }
+    if (requestedProvider && requestedProvider !== foregroundProvider) {
+      throw new Error(
+        `modelTier "foreground" conflicts with requested provider "${requestedProvider}"; the foreground model belongs to "${foregroundProvider}".`,
+      );
+    }
+    if (!isRouteable(foregroundProvider)) {
+      throw new Error(
+        `Foreground model "${foreground.model}" is not currently routeable.`,
+      );
+    }
+    return resultFor(
+      foregroundModelInfo,
+      `explicit foreground model (${foregroundModelInfo.id})`,
+      false,
+    );
+  }
+
+  if (!modelTier) {
+    throw new Error(
+      `Requested model "${requestedModel}" has no configured or inferable tier. Configure agentlink.background.modelTiers or pass modelTier explicitly.`,
+    );
+  }
+
+  const strategy = rule.providerStrategy ?? "same";
+  const specificProvider = rule.specificProvider;
+  const oppositeProviders = providersWithModels.filter(
+    (provider) => provider !== foregroundProvider,
+  );
+  const preferredProviders = (() => {
+    if (requestedProvider) return [requestedProvider];
+    if (strategy === "specific" && specificProvider) return [specificProvider];
+    if (strategy === "opposite") return oppositeProviders;
+    if (foregroundProvider) return [foregroundProvider];
+    return [];
+  })().filter(isRouteable);
+
+  const fallbackProviders =
+    strategy === "opposite" && !requestedProvider
+      ? unique([
+          ...routingConfig.fallbackProviderOrder,
+          ...providersWithModels,
+        ]).filter(
+          (provider) =>
+            isRouteable(provider) && !preferredProviders.includes(provider),
+        )
+      : [];
+  const providerPasses = [preferredProviders, fallbackProviders].filter(
+    (providers) => providers.length > 0,
+  );
+  const requireReviewCapable = rule.requireReviewCapableModel ?? false;
+
+  for (const providers of providerPasses) {
+    const candidates = allModels.filter((model) => {
+      if (!providers.includes(model.provider)) return false;
+      if (requireReviewCapable && !model.capabilities.supportsThinking) {
+        return false;
+      }
+      return true;
+    });
+    if (candidates.length === 0) continue;
+
+    const preferredReviewModel = isReviewTaskClass(taskClass)
+      ? pickPreferredReviewModel(
+          candidates.filter(
+            (model) => classifyModel(model, memberships).tier === modelTier,
+          ),
+          modelTier,
+        )
+      : undefined;
+    const picked =
+      preferredReviewModel ??
+      pickTierModel(
+        candidates,
+        modelTier,
+        memberships,
+        strategy === "same" ? foregroundClassification.group : undefined,
+      );
+    if (!picked) continue;
+
+    const fallbackUsed = !preferredProviders.includes(picked.provider);
+    const selectionDetail = preferredReviewModel
+      ? `, model=${picked.id}, policy=review-preference`
+      : `, model=${picked.id}`;
+    return resultFor(
+      picked,
+      fallbackUsed
+        ? `fallback to ${picked.provider}/${picked.id} (strategy=${strategy}, tier=${modelTier}${preferredReviewModel ? ", policy=review-preference" : ""})`
+        : `routed by ${strategy} provider strategy (tier=${modelTier}${selectionDetail})`,
+      fallbackUsed,
+    );
+  }
+
+  throw tierError({
+    tier: modelTier,
+    providers: preferredProviders,
+    foregroundModel: foreground.model,
+  });
 }

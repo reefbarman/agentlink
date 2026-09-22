@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getNewSessionMode,
   initializeSharedSessionPreferences,
+  removeUserSessionPreferenceEntry,
   resetSharedSessionPreferencesForTesting,
   writeUserSessionPreferenceEntry,
 } from "./sharedSessionPreferences.js";
@@ -75,6 +76,37 @@ describe("shared session defaults", () => {
       modeModels: { code: "model-new" },
     });
     expect(resolveModelForMode(config, "code")).toBe("model-new");
+  });
+
+  it("removes picker overrides from shared and legacy storage", async () => {
+    const update = vi.fn(async () => preferences());
+    initializeSharedSessionPreferences(
+      { update } as never,
+      preferences({ modelCondenseThresholds: { "model-a": 0.73 } }),
+    );
+    const configUpdate = vi.fn(async () => undefined);
+    const config = {
+      inspect: () => ({
+        globalValue: { "model-a": 0.73, "model-b": 0.8 },
+      }),
+      update: configUpdate,
+    } as never;
+
+    await removeUserSessionPreferenceEntry(
+      config,
+      "modelCondenseThresholds",
+      "model-a",
+    );
+
+    expect(configUpdate).toHaveBeenCalledWith(
+      "modelCondenseThresholds",
+      { "model-b": 0.8 },
+      true,
+    );
+    expect(update).toHaveBeenCalledWith({
+      removeModelCondenseThresholds: ["model-a"],
+    });
+    expect(getConfiguredBaseThresholdForModel(config, "model-a")).toBe(0.9);
   });
 
   it("falls back to legacy User Settings before shared storage initializes", () => {

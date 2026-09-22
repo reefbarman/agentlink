@@ -2069,11 +2069,14 @@ describe("AgentSessionManager host injection", () => {
       expect(restored).toMatchObject({
         desiredReasoningEffort: "ultra",
         reasoningEffort: "ultra",
-        autoCondenseThreshold: 0.67,
+        autoCondenseThreshold: 0.73,
       });
       await restoredManager.reconcileSessionReasoningEfforts();
       expect(resolveReasoningEffortForMode).not.toHaveBeenCalled();
-      expect(getCondenseThresholdForModel).not.toHaveBeenCalled();
+      expect(getCondenseThresholdForModel).toHaveBeenCalledWith(
+        "claude-sonnet-4-6",
+        expect.anything(),
+      );
       expect(restored?.getAllMessages()).toEqual(session.getAllMessages());
 
       if (!disk.ok) throw new Error("Expected persisted session");
@@ -2107,10 +2110,13 @@ describe("AgentSessionManager host injection", () => {
       expect(legacy).toMatchObject({
         reasoningEffort: "none",
         desiredReasoningEffort: "none",
-        autoCondenseThreshold: 0.8,
+        autoCondenseThreshold: 0.73,
       });
       expect(resolveReasoningEffortForMode).not.toHaveBeenCalled();
-      expect(getCondenseThresholdForModel).not.toHaveBeenCalled();
+      expect(getCondenseThresholdForModel).toHaveBeenCalledWith(
+        "claude-sonnet-4-6",
+        expect.anything(),
+      );
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }
@@ -3504,6 +3510,29 @@ describe("AgentSessionManager condense thresholds", () => {
     expect(mgr.getConfig().autoCondenseThreshold).toBe(0.83);
     expect(session.model).toBe("gpt-5.4");
     expect(session.autoCondenseThreshold).toBe(0.83);
+  });
+
+  it("reconciles every loaded session using a changed model threshold", async () => {
+    const createSession = mocks.createSession.getMockImplementation()!;
+    mocks.createSession.mockImplementationOnce(async (opts: any) => ({
+      ...(await createSession(opts)),
+      id: "session-first",
+    }));
+    mocks.createSession.mockImplementationOnce(async (opts: any) => ({
+      ...(await createSession(opts)),
+      id: "session-second",
+    }));
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const first = await mgr.createSession("code");
+    const second = await mgr.createSession("code");
+    first.autoCondenseThreshold = 0.42;
+    second.autoCondenseThreshold = 0.42;
+
+    mgr.reconcileCondenseThresholdsForModel("gpt-5.3-codex");
+
+    expect(first.autoCondenseThreshold).toBe(0.77);
+    expect(second.autoCondenseThreshold).toBe(0.77);
+    expect(mgr.getConfig().autoCondenseThreshold).toBe(0.77);
   });
 
   it("switchForegroundMode applies the target mode's preferred model", async () => {

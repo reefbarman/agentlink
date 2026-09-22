@@ -2024,6 +2024,33 @@ describe("ChatViewProvider session state sync", () => {
     );
   });
 
+  it("routes VS Code condense resets to the active session", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = { id: "session-1", model: "gpt-5.6-sol" };
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      getWorkspaceProjects: vi.fn(() => []),
+    } as never);
+    const setSessionCondenseThreshold = vi.fn(async () => undefined);
+    (
+      provider as unknown as {
+        setSessionCondenseThreshold: typeof setSessionCondenseThreshold;
+      }
+    ).setSessionCondenseThreshold = setSessionCondenseThreshold;
+
+    await (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage({ command: "agentResetCondenseThreshold" });
+
+    expect(setSessionCondenseThreshold).toHaveBeenCalledWith(session, null);
+  });
+
   it("refreshes project skill projections in prompt, cache, then slash order", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const order: string[] = [];

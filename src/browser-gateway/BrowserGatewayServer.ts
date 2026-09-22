@@ -500,6 +500,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "POST",
+        rawExact("/api/condense-threshold"),
+        ({ req, res }) => this.handleCondenseThresholdAction(req, res),
+        json("condense threshold action failed"),
+      ),
+      route(
+        "POST",
         rawExact("/api/write-approval"),
         ({ req, res }) => this.handleWriteApprovalAction(req, res),
         json("write approval action failed"),
@@ -1669,6 +1675,44 @@ export class BrowserGatewayServer implements vscode.Disposable {
     const result = sessionId
       ? await this.chatViewProvider.submitBrowserSetModel(body.model, sessionId)
       : await this.chatViewProvider.submitBrowserSetModel(body.model);
+    this.writeJson(
+      res,
+      result.ok ? 200 : 400,
+      result.ok ? { ...result, snapshot: this.getSnapshot() } : result,
+    );
+  }
+
+  private async handleCondenseThresholdAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as {
+      threshold?: unknown;
+      sessionId?: unknown;
+    };
+    if (
+      body?.threshold !== null &&
+      (typeof body?.threshold !== "number" ||
+        !Number.isFinite(body.threshold) ||
+        body.threshold < 0.1 ||
+        body.threshold > 1)
+    ) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+
+    const sessionId = this.parseOptionalSessionId(body.sessionId, res);
+    if (sessionId === false) return;
+    const result =
+      await this.chatViewProvider.submitBrowserSetCondenseThreshold(
+        body.threshold ?? null,
+        sessionId || undefined,
+      );
     this.writeJson(
       res,
       result.ok ? 200 : 400,

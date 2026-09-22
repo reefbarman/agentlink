@@ -40,6 +40,20 @@ export type BrowserGatewayTranscriptBlock =
       reasoningEffort?: CoreReasoningEffort;
       resolvedMode?: string;
       taskClass?: string;
+      requestedModelTier?:
+        | "cheap"
+        | "balanced"
+        | "deep_reasoning"
+        | "foreground";
+      modelTier?: "cheap" | "balanced" | "deep_reasoning";
+      resolvedModelTier?: "cheap" | "balanced" | "deep_reasoning" | "unknown";
+      resolvedModelTierSource?:
+        | "configured"
+        | "builtin"
+        | "heuristic"
+        | "unknown"
+        | "external";
+      modelGroup?: string;
     }
   | {
       type: "bg_agent_result";

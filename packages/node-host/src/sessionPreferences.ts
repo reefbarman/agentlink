@@ -23,6 +23,7 @@ export interface SessionPreferencesPatch {
   readonly modeModels?: Readonly<Record<string, string>>;
   readonly modeReasoningEfforts?: Readonly<Record<string, CoreReasoningEffort>>;
   readonly modelCondenseThresholds?: Readonly<Record<string, number>>;
+  readonly removeModelCondenseThresholds?: readonly string[];
 }
 
 export interface SessionPreferencesStoreOptions {
@@ -174,6 +175,13 @@ function mergeSessionPreferences(
   current: SessionPreferencesSnapshot,
   patch: SessionPreferencesPatch,
 ): SessionPreferencesSnapshot {
+  const modelCondenseThresholds = {
+    ...current.modelCondenseThresholds,
+    ...patch.modelCondenseThresholds,
+  };
+  for (const modelId of patch.removeModelCondenseThresholds ?? []) {
+    delete modelCondenseThresholds[modelId.trim()];
+  }
   return normalizePreferences({
     defaultMode: patch.defaultMode ?? current.defaultMode,
     modeModels: { ...current.modeModels, ...patch.modeModels },
@@ -181,10 +189,7 @@ function mergeSessionPreferences(
       ...current.modeReasoningEfforts,
       ...patch.modeReasoningEfforts,
     },
-    modelCondenseThresholds: {
-      ...current.modelCondenseThresholds,
-      ...patch.modelCondenseThresholds,
-    },
+    modelCondenseThresholds,
   });
 }
 

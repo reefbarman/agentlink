@@ -3,8 +3,14 @@ import { describe, expect, it } from "vitest";
 import { getCodexModelCapabilities } from "./models.js";
 
 describe("codex model capabilities", () => {
-  it("uses 1M context limits and max reasoning for GPT-5.6", () => {
-    for (const id of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+  it("uses 1M context limits and max reasoning for GPT-6 Sol/Luna and GPT-5.6", () => {
+    for (const id of [
+      "gpt-6-sol",
+      "gpt-6-luna",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+    ]) {
       const model = getCodexModelCapabilities(id);
       expect(model.contextWindow).toBe(1_050_000);
       expect(model.maxOutputTokens).toBe(128_000);

@@ -836,7 +836,7 @@ export class BrowserGatewayService implements vscode.Disposable {
           : session.estimatedTotalUsed,
         messageQueue: projectedMatchesSession ? projected.messageQueue : [],
         questionRequest: projectedMatchesSession
-          ? projected.questionRequest
+          ? (projected.questionRequest ?? ui.question)
           : ui.question,
         detectedQuestion: projectedMatchesSession
           ? projected.detectedQuestion

@@ -65,6 +65,12 @@ export const BUILT_IN_MODES: AgentMode[] = [
     ],
   },
   {
+    slug: "orchestrate",
+    name: "Orchestrate",
+    icon: "server-process",
+    toolGroups: ["read", "language", "search", "memory", "mcp"],
+  },
+  {
     slug: "ask",
     name: "Ask",
     icon: "question",

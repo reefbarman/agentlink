@@ -3,56 +3,52 @@
     "taskClass": "general",
     "preferredMode": "code",
     "providerStrategy": "same",
-    "modelTier": "balanced",
-    "useForegroundModelByDefault": true
+    "modelTier": "below_foreground"
   },
   "taskClasses": {
     "review_code": {
       "preferredMode": "review",
       "providerStrategy": "opposite",
-      "useForegroundModelByDefault": false,
       "requireReviewCapableModel": true,
       "thinkingBudgetByTier": { "balanced": 6000 }
     },
     "review_plan": {
       "preferredMode": "review",
       "providerStrategy": "opposite",
-      "modelTier": "balanced",
-      "useForegroundModelByDefault": false,
       "requireReviewCapableModel": false,
       "thinkingBudgetByTier": { "balanced": 6000 }
     },
     "readonly-research": {
       "preferredMode": "ask",
       "providerStrategy": "same",
-      "modelTier": "balanced",
       "toolProfile": "readonly-research"
     },
     "research": {
       "preferredMode": "ask",
-      "providerStrategy": "same",
-      "modelTier": "balanced"
+      "providerStrategy": "same"
     },
     "explore": {
       "preferredMode": "architect",
-      "providerStrategy": "same",
-      "modelTier": "balanced"
+      "providerStrategy": "same"
     },
     "debug": {
       "preferredMode": "debug",
-      "providerStrategy": "same",
-      "modelTier": "balanced"
+      "providerStrategy": "same"
     },
     "design": {
       "preferredMode": "architect",
-      "providerStrategy": "same",
-      "modelTier": "deep_reasoning"
+      "providerStrategy": "same"
     },
     "general": {
       "preferredMode": "code",
-      "providerStrategy": "same",
-      "modelTier": "balanced",
-      "useForegroundModelByDefault": true
+      "providerStrategy": "same"
+    }
+  },
+  "defaultTierGroups": {
+    "codex": {
+      "cheap": ["gpt-5.6-luna", "gpt-5.4-mini"],
+      "balanced": ["gpt-5.6-sol", "gpt-5.5", "gpt-5.4"],
+      "deep_reasoning": ["gpt-6-astra", "gpt-5.6-terra", "gpt-5.4-pro"]
     }
   },
   "reviewModelPreferences": {

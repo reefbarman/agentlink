@@ -202,6 +202,9 @@ import type { WorktreeAgentLaunchProvider } from "../core/capabilities/worktree.
 import type {
   BackgroundAgentProvider,
   BackgroundAgentResultContent,
+  BackgroundAgentResultsContent,
+  BackgroundAgentResultsRequest,
+  BackgroundAgentWaitMode,
 } from "../core/capabilities/background.js";
 import type { NativeWebToolExecutionProvider } from "../core/capabilities/web.js";
 import type { UserQuestionResponse } from "@agentlink/protocol/structured-question";
@@ -823,8 +826,9 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         },
         modelTier: {
           type: "string",
+          enum: ["cheap", "balanced", "deep_reasoning", "foreground"],
           description:
-            'Optional routing tier override ("cheap", "balanced", or "deep_reasoning"). Reviews default to balanced; select deep_reasoning explicitly only when the actual risk justifies the higher-cost reviewer.',
+            'Optional routing tier override. Ordinary work defaults below the foreground tier. Use "foreground" only when complexity or useful parallelization justifies the same model; use "deep_reasoning" only when the actual risk justifies the higher-cost model.',
         },
         ownedPaths: {
           type: "array",
@@ -939,24 +943,67 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "get_background_result",
     description:
-      "Wait for a background agent for a bounded interval and return its final response if it finishes. You must provide wait_seconds from 1 to 60. If the wait expires, the background agent keeps running and the tool returns status=still_running with current progress, partial output when available, retryAfterMs, and guidance to continue independent foreground work before checking again. Successful runs return the expected response; failed, interrupted, cancelled, unauthorized, or incomplete expected-result runs return structured JSON with status, terminalReason, retrySafe, agentRetryable, and preserved partialOutput when available. Skip this when a completion result was already pushed into context. Waiting releases your own background concurrency slot. If a user or steering message arrives for your session, the call returns early with status=wait_interrupted; handle that message before waiting again.",
+      'Wait for one or several background agents for a bounded interval and return available final responses. For one agent, provide sessionId and wait_seconds. For several agents, provide sessionIds, return_when ("any" or "all"), and wait_seconds. The two forms are mutually exclusive. If the wait expires, the background agents keep running and the tool returns status=still_running with current progress, partial output when available, retryAfterMs, and guidance to continue independent foreground work before checking again. Successful runs return the expected response; failed, interrupted, cancelled, unauthorized, or incomplete expected-result runs return structured JSON with status, terminalReason, retrySafe, agentRetryable, and preserved partialOutput when available. Skip this when completion results were already pushed into context. Waiting releases your own background concurrency slot. If a user or steering message arrives for your session, the call returns early with status=wait_interrupted; handle that message before waiting again.',
     input_schema: {
       type: "object",
       properties: {
-        sessionId: {
-          type: "string",
-          description:
-            "The exact sessionId returned by spawn_background_agent — copy it verbatim, a single dropped or altered character targets a different session",
+        sessionId: { type: "string" },
+        sessionIds: {
+          type: "array",
+          minItems: 1,
+          items: { type: "string" },
         },
-        wait_seconds: {
-          type: "integer",
-          minimum: 1,
-          maximum: 60,
-          description:
-            "Maximum seconds to wait for completion before returning status=still_running. Use a short bounded synchronization point and continue independent foreground work after a timeout.",
-        },
+        return_when: { type: "string", enum: ["any", "all"] },
+        wait_seconds: { type: "integer", minimum: 1, maximum: 60 },
       },
-      required: ["sessionId", "wait_seconds"],
+      oneOf: [
+        {
+          type: "object",
+          properties: {
+            sessionId: {
+              type: "string",
+              description:
+                "The exact sessionId returned by spawn_background_agent — copy it verbatim, a single dropped or altered character targets a different session",
+            },
+            wait_seconds: {
+              type: "integer",
+              minimum: 1,
+              maximum: 60,
+              description:
+                "Maximum seconds to wait before returning current progress. Use a short bounded synchronization point and continue independent foreground work after a timeout.",
+            },
+          },
+          required: ["sessionId", "wait_seconds"],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: {
+            sessionIds: {
+              type: "array",
+              minItems: 1,
+              items: { type: "string" },
+              description:
+                "The exact sessionIds returned by spawn_background_agent.",
+            },
+            return_when: {
+              type: "string",
+              enum: ["any", "all"],
+              description:
+                "Return when any requested agent completes or only when all requested agents complete.",
+            },
+            wait_seconds: {
+              type: "integer",
+              minimum: 1,
+              maximum: 60,
+              description:
+                "Maximum seconds to wait before returning current aggregate progress.",
+            },
+          },
+          required: ["sessionIds", "return_when", "wait_seconds"],
+          additionalProperties: false,
+        },
+      ],
     },
   },
   {
@@ -2126,6 +2173,12 @@ export interface ToolDispatchContext {
     sessionId: string,
     waitSeconds: number,
   ) => Promise<string | BackgroundAgentResultContent>;
+  /** Atomically wait for several background sessions and return aggregate results or progress. */
+  onGetBackgroundResults?: (
+    callerSessionId: string,
+    request: BackgroundAgentResultsRequest,
+    signal?: AbortSignal,
+  ) => Promise<string | BackgroundAgentResultsContent>;
   /** Kill a running background agent and return its partial output. */
   onKillBackground?: (
     callerSessionId: string,
@@ -4923,7 +4976,8 @@ async function dispatchToolCallWithTrackedApprovals(
           params.modelTier !== undefined && params.modelTier !== null
             ? String(params.modelTier) === "cheap" ||
               String(params.modelTier) === "balanced" ||
-              String(params.modelTier) === "deep_reasoning"
+              String(params.modelTier) === "deep_reasoning" ||
+              String(params.modelTier) === "foreground"
               ? (String(
                   params.modelTier,
                 ) as SpawnBackgroundRequest["modelTier"])
@@ -5084,29 +5138,71 @@ async function dispatchToolCallWithTrackedApprovals(
     }
 
     case "get_background_result": {
-      const getBackgroundResult = ctx.backgroundAgentProvider
-        ? (sessionId: string, waitSeconds: number) =>
-            ctx.backgroundAgentProvider!.getResult(sessionId, waitSeconds)
-        : ctx.onGetBackgroundResult
+      let bgResult:
+        | string
+        | BackgroundAgentResultContent
+        | BackgroundAgentResultsContent;
+      if (Array.isArray(params.sessionIds)) {
+        const getBackgroundResults = ctx.backgroundAgentProvider?.getResults
+          ? (request: BackgroundAgentResultsRequest) =>
+              ctx.backgroundAgentProvider!.getResults!(request, toolAbortSignal)
+          : ctx.onGetBackgroundResults
+            ? (request: BackgroundAgentResultsRequest) =>
+                ctx.onGetBackgroundResults!(
+                  ctx.sessionId,
+                  request,
+                  toolAbortSignal,
+                )
+            : undefined;
+        if (!getBackgroundResults) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  error:
+                    "Multi-agent background result waits are not available",
+                }),
+              },
+            ],
+          };
+        }
+        bgResult = await getBackgroundResults({
+          sessionIds: params.sessionIds.map((sessionId: unknown) =>
+            String(sessionId),
+          ),
+          returnWhen: String(params.return_when) as BackgroundAgentWaitMode,
+          waitSeconds: Number(params.wait_seconds),
+        });
+      } else {
+        const getBackgroundResult = ctx.backgroundAgentProvider
           ? (sessionId: string, waitSeconds: number) =>
-              ctx.onGetBackgroundResult!(ctx.sessionId, sessionId, waitSeconds)
-          : undefined;
-      if (!getBackgroundResult) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                error: "Background agents not available",
-              }),
-            },
-          ],
-        };
+              ctx.backgroundAgentProvider!.getResult(sessionId, waitSeconds)
+          : ctx.onGetBackgroundResult
+            ? (sessionId: string, waitSeconds: number) =>
+                ctx.onGetBackgroundResult!(
+                  ctx.sessionId,
+                  sessionId,
+                  waitSeconds,
+                )
+            : undefined;
+        if (!getBackgroundResult) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  error: "Background agents not available",
+                }),
+              },
+            ],
+          };
+        }
+        bgResult = await getBackgroundResult(
+          String(params.sessionId ?? ""),
+          Number(params.wait_seconds),
+        );
       }
-      const bgResult = await getBackgroundResult(
-        String(params.sessionId ?? ""),
-        Number(params.wait_seconds),
-      );
       if (typeof bgResult !== "string") {
         return {
           content: [

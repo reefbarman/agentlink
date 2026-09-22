@@ -82,6 +82,22 @@ describe("SessionPreferencesStore", () => {
     if (process.platform !== "win32") expect(stat.mode & 0o777).toBe(0o600);
   });
 
+  it("removes a saved model condense threshold", async () => {
+    const { store } = await makeStore();
+    await store.update({
+      modelCondenseThresholds: {
+        "gpt-5.6-sol": 0.72,
+        "claude-sonnet-4-6": 0.8,
+      },
+    });
+
+    await expect(
+      store.update({ removeModelCondenseThresholds: [" gpt-5.6-sol "] }),
+    ).resolves.toMatchObject({
+      modelCondenseThresholds: { "claude-sonnet-4-6": 0.8 },
+    });
+  });
+
   it("imports only legacy values missing from an existing shared file", async () => {
     const { store } = await makeStore();
     await store.update({

@@ -27,13 +27,11 @@ import {
   type ChatProjectInfo as ProjectInfo,
   type ChatSlashCommandInfo as SlashCommandInfo,
 } from "@agentlink/protocol/chat-catalog";
-import {
-  getConfiguredBaseThresholdForModel,
-  getModelCondenseThresholdMap,
-} from "./modelCondenseThresholds.js";
+import { getConfiguredBaseThresholdForModel } from "./modelCondenseThresholds.js";
 import {
   getNewSessionMode,
   rememberSessionMode,
+  removeUserSessionPreferenceEntry,
   writeUserSessionPreferenceEntry,
 } from "./sharedSessionPreferences.js";
 import { FALLBACK_AGENT_MODEL } from "./modeModelPreferences.js";
@@ -4518,6 +4516,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return this.hasWorkspaceProjects() ? getNewSessionMode() : "ask";
   }
 
+  public async submitBrowserSetCondenseThreshold(
+    threshold: number | null,
+    sessionId?: string,
+  ): Promise<{ ok: boolean }> {
+    const session = sessionId
+      ? this.sessionManager?.getSession(sessionId)
+      : this.sessionManager?.getForegroundSession();
+    if (!session || !this.sessionManager) return { ok: false };
+    await this.setSessionCondenseThreshold(session, threshold);
+    return { ok: true };
+  }
+
   public async submitBrowserSetModel(
     model: string,
     sessionId?: string,
@@ -6843,6 +6853,46 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  private async setSessionCondenseThreshold(
+    session: AgentSession,
+    requestedThreshold: number | null,
+  ): Promise<void> {
+    const { config } = this.getPreferenceConfigurationTarget();
+    const currentModel = session.model;
+    if (requestedThreshold === null) {
+      await removeUserSessionPreferenceEntry(
+        config,
+        "modelCondenseThresholds",
+        currentModel,
+      );
+    } else {
+      await writeUserSessionPreferenceEntry(
+        config,
+        "modelCondenseThresholds",
+        currentModel,
+        Math.min(1, Math.max(0.1, requestedThreshold)),
+      );
+    }
+    const threshold = this.getConfiguredCondenseThreshold(
+      currentModel,
+      session.projectScope,
+    );
+    this.sessionManager?.reconcileCondenseThresholdsForModel(currentModel);
+    session.autoCondenseThreshold = threshold;
+    await this.sessionManager?.maybeAutoCondenseSession(session.id);
+    this.sessionManager?.saveSession(session.id);
+    this.postMessage({
+      type: "stateUpdate",
+      state: this.buildChatState(session),
+    });
+    this.notifyBrowserModelsChanged?.();
+    this.log(
+      requestedThreshold === null
+        ? `Auto-condense threshold reset to ${Math.round(threshold * 100)}% for ${currentModel}`
+        : `Auto-condense threshold set to ${Math.round(threshold * 100)}% for ${currentModel}`,
+    );
+  }
+
   private getConfiguredCondenseThreshold(
     modelId: string,
     projectScope?: SessionProjectScope,
@@ -8457,35 +8507,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentSetCondenseThreshold": {
         const threshold = Number(msg.threshold);
         if (!Number.isFinite(threshold) || !sourceSession) break;
-        const { config } = this.getPreferenceConfigurationTarget();
-        const currentModel = sourceSession.model;
-        const thresholds = {
-          ...getModelCondenseThresholdMap(config),
-          [currentModel]: Math.min(1, Math.max(0.1, threshold)),
-        };
-        await writeUserSessionPreferenceEntry(
-          config,
-          "modelCondenseThresholds",
-          currentModel,
-          thresholds[currentModel],
-        );
-        sourceSession.autoCondenseThreshold = thresholds[currentModel];
-        if (
-          this.sessionManager.getForegroundSession()?.id === sourceSession.id
-        ) {
-          this.sessionManager.updateConfig({
-            autoCondenseThreshold: thresholds[currentModel],
-          });
-        }
-        await this.sessionManager.maybeAutoCondenseSession(sourceSession.id);
-        this.sessionManager.saveSession(sourceSession.id);
-        this.postMessage({
-          type: "stateUpdate",
-          state: this.buildChatState(sourceSession),
-        });
-        this.log(
-          `Auto-condense threshold set to ${Math.round(thresholds[currentModel] * 100)}% for ${currentModel}`,
-        );
+        await this.setSessionCondenseThreshold(sourceSession, threshold);
+        break;
+      }
+
+      case "agentResetCondenseThreshold": {
+        if (!sourceSession) break;
+        await this.setSessionCondenseThreshold(sourceSession, null);
         break;
       }
 

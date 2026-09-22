@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
-  "version": "1.22.55",
+  "version": "1.22.61",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -762,7 +762,7 @@
             "high"
           ],
           "enumDescriptions": [
-            "Per-model default: \"low\" for GPT-6 Astra and GPT-5.6 models (Sol, Terra, Luna); omitted for older models.",
+            "Per-model default: \"low\" for GPT-6 Astra and GPT-5.6 models (Sol, Terra, Luna); omitted for GPT-6 Sol/Luna and older models.",
             "Never send text.verbosity; the model uses its API default (medium).",
             "Force low verbosity for all Codex models.",
             "Force medium verbosity for all Codex models.",
@@ -816,6 +816,42 @@
                   "ultra"
                 ],
                 "description": "Reasoning effort for this review. Validated against the resolved model's declared thinking support and reasoningEfforts. Not allowed with an acp: target, which controls its own effort."
+              }
+            }
+          }
+        },
+        "agentlink.background.modelTiers": {
+          "scope": "machine",
+          "type": "object",
+          "default": {},
+          "description": "Optional named model groups for native background routing. Each group assigns registered local model IDs to cheap, balanced, and deep_reasoning tiers. Ordinary background work defaults one tier below the foreground model and fails rather than silently upgrading when that tier is unavailable. Machine-scoped so workspaces cannot redirect delegated work to a different model tier.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "cheap": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "default": []
+              },
+              "balanced": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "default": []
+              },
+              "deep_reasoning": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "default": []
               }
             }
           }

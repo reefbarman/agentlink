@@ -926,6 +926,219 @@ describe("BG_AGENT_DONE result placement", () => {
     ]);
   });
 
+  it("projects one result per completed target from an aggregate wait", () => {
+    const state = stateWith(
+      [
+        {
+          type: "bg_agent",
+          sessionId: "bg-1",
+          task: "Review implementation",
+        },
+        {
+          type: "bg_agent",
+          sessionId: "bg-2",
+          task: "Run verification",
+        },
+        {
+          type: "tool_call",
+          id: "tool-results",
+          name: "get_background_result",
+          inputJson: JSON.stringify({
+            sessionIds: ["bg-1", "bg-2", "bg-3"],
+            return_when: "any",
+          }),
+          result: "",
+          complete: false,
+        },
+      ],
+      true,
+    );
+
+    const next = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-results",
+      toolName: "get_background_result",
+      result: JSON.stringify({
+        status: "completed",
+        returnWhen: "any",
+        conditionMet: true,
+        completed: {
+          "bg-1": {
+            result: "Review complete.",
+            resultState: "completed",
+          },
+          "bg-2": {
+            result: "Verification failed.",
+            resultState: "failed",
+            terminalReason: "tests_failed",
+            retrySafe: true,
+          },
+        },
+        pending: {
+          "bg-3": { status: "running", partialOutput: "Still working" },
+        },
+      }),
+      durationMs: 1,
+      input: {
+        sessionIds: ["bg-1", "bg-2", "bg-3"],
+        return_when: "any",
+      },
+    });
+
+    expect(next.messages[0].blocks.map((block) => block.type)).toEqual([
+      "bg_agent",
+      "bg_agent",
+      "tool_call",
+      "bg_agent_result",
+      "bg_agent_result",
+    ]);
+    expect(
+      next.messages[0].blocks.filter(
+        (block) => block.type === "bg_agent_result",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        sessionId: "bg-1",
+        task: "Review implementation",
+        status: "completed",
+        resultState: "completed",
+        resultText: "Review complete.",
+      }),
+      expect.objectContaining({
+        sessionId: "bg-2",
+        task: "Run verification",
+        status: "error",
+        resultState: "failed",
+        resultText: "Verification failed.",
+        terminalReason: "tests_failed",
+        retrySafe: true,
+      }),
+    ]);
+  });
+
+  it("projects completed aggregate targets from persisted tool results only", () => {
+    const messages = agentMessagesToChatMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "tool-results",
+            name: "get_background_result",
+            input: {
+              sessionIds: ["bg-1", "bg-2"],
+              return_when: "any",
+            },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "tool-results",
+            content: JSON.stringify({
+              status: "still_running",
+              returnWhen: "any",
+              conditionMet: false,
+              completed: {
+                "bg-1": {
+                  result: "Review complete.",
+                  resultState: "completed",
+                },
+              },
+              pending: { "bg-2": { status: "running" } },
+            }),
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      messages[0].blocks.filter((block) => block.type === "bg_agent_result"),
+    ).toEqual([
+      expect.objectContaining({
+        sessionId: "bg-1",
+        resultState: "completed",
+        resultText: "Review complete.",
+      }),
+    ]);
+  });
+
+  it("preserves canonical metadata for each target in an aggregate wait", () => {
+    let state = stateWith(
+      [
+        {
+          type: "tool_call",
+          id: "tool-results",
+          name: "get_background_result",
+          inputJson: JSON.stringify({ sessionIds: ["bg-1", "bg-2"] }),
+          result: "",
+          complete: false,
+        },
+      ],
+      true,
+    );
+    state = reducer(state, bgDone);
+    state = reducer(state, {
+      type: "BG_AGENT_DONE",
+      completion: {
+        sessionId: "bg-2",
+        task: "Run verification",
+        status: "completed",
+        resultState: "completed",
+        resultText: "Canonical verification result.",
+        completedAt: 2,
+      },
+    });
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-results",
+      toolName: "get_background_result",
+      result: JSON.stringify({
+        status: "completed",
+        returnWhen: "all",
+        conditionMet: true,
+        completed: {
+          "bg-1": {
+            result: "Stale review result.",
+            resultState: "failed",
+          },
+          "bg-2": {
+            result: "Canonical verification result.",
+            resultState: "completed",
+          },
+        },
+        pending: {},
+      }),
+      durationMs: 1,
+      input: { sessionIds: ["bg-1", "bg-2"], return_when: "all" },
+    });
+
+    const results = state.messages.flatMap((message) =>
+      message.blocks.filter((block) => block.type === "bg_agent_result"),
+    );
+    expect(results).toHaveLength(2);
+    expect(results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sessionId: "bg-1",
+          resultState: "completed",
+          resultText: "Looks good.",
+          sourceAuthority: "canonical",
+        }),
+        expect.objectContaining({
+          sessionId: "bg-2",
+          resultState: "completed",
+          resultText: "Canonical verification result.",
+          sourceAuthority: "canonical",
+        }),
+      ]),
+    );
+  });
+
   it("moves an early result after get_background_result when the tool completes", () => {
     let state = stateWith(
       [

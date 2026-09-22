@@ -57,6 +57,20 @@ export type ContentBlock =
       resolvedMode?: string;
       /** Task class used for routing. */
       taskClass?: string;
+      requestedModelTier?:
+        | "cheap"
+        | "balanced"
+        | "deep_reasoning"
+        | "foreground";
+      modelTier?: "cheap" | "balanced" | "deep_reasoning";
+      resolvedModelTier?: "cheap" | "balanced" | "deep_reasoning" | "unknown";
+      resolvedModelTierSource?:
+        | "configured"
+        | "builtin"
+        | "heuristic"
+        | "unknown"
+        | "external";
+      modelGroup?: string;
       /** Routing decision reason. */
       routingReason?: string;
     }

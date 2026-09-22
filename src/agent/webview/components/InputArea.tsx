@@ -209,6 +209,7 @@ interface InputAreaProps {
   availableModels?: WebviewModelInfo[];
   onSelectModel?: (modelId: string) => void;
   onSetCondenseThreshold?: (threshold: number) => void;
+  onResetCondenseThreshold?: () => void;
   onSignIn?: ModelSelectorProps["onSignIn"];
   agentWriteApproval?: WriteApprovalSelection;
   onSetAgentWriteApproval?: (mode: WriteApprovalSelection) => void;
@@ -263,6 +264,7 @@ export function InputArea({
   availableModels = [],
   onSelectModel,
   onSetCondenseThreshold,
+  onResetCondenseThreshold,
   onSignIn,
   agentWriteApproval = "prompt",
   onSetAgentWriteApproval,
@@ -1626,6 +1628,7 @@ export function InputArea({
                 models={availableModels}
                 onSelect={onSelectModel}
                 onSetCondenseThreshold={onSetCondenseThreshold}
+                onResetCondenseThreshold={onResetCondenseThreshold}
                 onSignIn={onSignIn}
               />
             )}

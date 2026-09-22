@@ -257,6 +257,7 @@ const NATIVE_NAMES = new Set(Object.keys(TOOL_CAPABILITIES));
 const MODES = new Set([
   "code",
   "architect",
+  "orchestrate",
   "ask",
   "debug",
   "review",

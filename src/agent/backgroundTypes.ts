@@ -1,14 +1,20 @@
 export type {
   AgentBudget,
+  BackgroundModelTier as ModelTier,
+  BackgroundModelTierRequest as ModelTierRequest,
+  BackgroundModelTierSource as ModelTierSource,
   ReviewScope,
   SpawnBackgroundRequest,
   SpawnBackgroundResult,
 } from "../core/capabilities/background.js";
 
-import type { AgentBudget } from "../core/capabilities/background.js";
+import type {
+  AgentBudget,
+  BackgroundModelTier as ModelTier,
+  BackgroundModelTierSource as ModelTierSource,
+} from "../core/capabilities/background.js";
 
 export type ProviderStrategy = "same" | "opposite" | "specific";
-export type ModelTier = "cheap" | "balanced" | "deep_reasoning";
 
 export interface BackgroundRouteResolution {
   resolvedMode: string;
@@ -17,6 +23,10 @@ export interface BackgroundRouteResolution {
   taskClass: string;
   /** Effective routing tier after caller and task-policy resolution. */
   modelTier?: ModelTier;
+  /** Classified tier of the model that was actually selected. */
+  resolvedModelTier?: ModelTier | "unknown";
+  resolvedModelTierSource?: ModelTierSource;
+  modelGroup?: string;
   routingReason: string;
   fallbackUsed: boolean;
   /** Override thinking budget for this task class (undefined = inherit foreground). */

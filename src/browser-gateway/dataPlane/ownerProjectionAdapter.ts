@@ -1433,6 +1433,19 @@ function projectBlock(
         ...(block.taskClass
           ? { taskClass: bounded(block.taskClass, 256) }
           : {}),
+        ...(block.requestedModelTier
+          ? { requestedModelTier: block.requestedModelTier }
+          : {}),
+        ...(block.modelTier ? { modelTier: block.modelTier } : {}),
+        ...(block.resolvedModelTier
+          ? { resolvedModelTier: block.resolvedModelTier }
+          : {}),
+        ...(block.resolvedModelTierSource
+          ? { resolvedModelTierSource: block.resolvedModelTierSource }
+          : {}),
+        ...(block.modelGroup
+          ? { modelGroup: bounded(block.modelGroup, 256) }
+          : {}),
       };
     case "bg_agent_result":
       return {

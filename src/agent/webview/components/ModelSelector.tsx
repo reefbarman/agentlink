@@ -14,6 +14,7 @@ export interface ModelSelectorProps {
   disabled?: boolean;
   onSelect: (modelId: string) => void;
   onSetCondenseThreshold?: (threshold: number) => void;
+  onResetCondenseThreshold?: () => void;
   onSignIn?: (provider: string, action?: CoreModelCatalogAuthAction) => void;
 }
 
@@ -62,6 +63,7 @@ export function ModelSelector({
   disabled,
   onSelect,
   onSetCondenseThreshold,
+  onResetCondenseThreshold,
   onSignIn,
 }: ModelSelectorProps) {
   const [open, setOpen] = useState(false);
@@ -275,6 +277,19 @@ export function ModelSelector({
                         setDraftThreshold(next / 100);
                       }}
                     />
+                    {onResetCondenseThreshold && (
+                      <button
+                        class="model-selector-reset"
+                        type="button"
+                        onClick={() => {
+                          setSliderOpen(false);
+                          onResetCondenseThreshold();
+                        }}
+                      >
+                        <i class="codicon codicon-discard" />
+                        Reset to default
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

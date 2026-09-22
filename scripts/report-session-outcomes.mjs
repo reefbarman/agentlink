@@ -12,6 +12,43 @@ const DEFAULT_INPUT = path.join(
   "session-outcome-telemetry.jsonl",
 );
 const DEFAULT_TOP = 25;
+const GUARDIAN_SHADOW_ACTION_FAMILIES = new Set([
+  "read_only",
+  "mutation",
+  "project_toolchain",
+  "external",
+  "secret",
+  "destructive",
+  "privileged",
+  "opaque",
+  "mixed",
+  "unknown",
+  "unreported",
+]);
+const GUARDIAN_SHADOW_AUTHORIZATION_EVIDENCE = new Set([
+  "missing",
+  "complete",
+  "redacted",
+  "truncated",
+  "redacted_truncated",
+  "unreported",
+]);
+const GUARDIAN_SHADOW_DECISION_BASES = new Set([
+  "authorized",
+  "authorization",
+  "objective_mismatch",
+  "secret_exposure",
+  "unbounded_impact",
+  "security_impact",
+  "incomplete_evidence",
+  "other",
+]);
+const GUARDIAN_AUTHORIZATION_LEVELS = new Set([
+  "unknown",
+  "low",
+  "medium",
+  "high",
+]);
 
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
@@ -245,6 +282,16 @@ function createEmptyReport() {
       shadowDurationsMs: [],
       inputTokens: 0,
       outputTokens: 0,
+      allowDeny: {
+        count: 0,
+        redacted: 0,
+        evidenceWithheld: 0,
+        byActionFamily: {},
+        byPrimaryAuthorization: {},
+        byShadowAuthorization: {},
+        byDecisionBasis: {},
+        byAuthorizationEvidence: {},
+      },
     },
     byVersion: {},
     indicators: {},
@@ -756,6 +803,39 @@ function mergeGuardianShadowComparison(report, record) {
   if (status === "completed" && record.primaryStatus === "reviewed") {
     if (record.outcomesAgree === true) shadow.agreements += 1;
     else if (record.outcomesAgree === false) shadow.disagreements += 1;
+    if (record.primaryOutcome === "allow" && record.shadowOutcome === "deny") {
+      const allowDeny = shadow.allowDeny;
+      allowDeny.count += 1;
+      if (record.shadowInputRedacted === true) allowDeny.redacted += 1;
+      if (record.shadowEvidenceWithheld === true) {
+        allowDeny.evidenceWithheld += 1;
+      }
+      incrementBoundedCategory(
+        allowDeny.byActionFamily,
+        record.actionFamily,
+        GUARDIAN_SHADOW_ACTION_FAMILIES,
+      );
+      incrementBoundedCategory(
+        allowDeny.byPrimaryAuthorization,
+        record.primaryAuthorization,
+        GUARDIAN_AUTHORIZATION_LEVELS,
+      );
+      incrementBoundedCategory(
+        allowDeny.byShadowAuthorization,
+        record.shadowAuthorization,
+        GUARDIAN_AUTHORIZATION_LEVELS,
+      );
+      incrementBoundedCategory(
+        allowDeny.byDecisionBasis,
+        record.shadowDecisionBasis,
+        GUARDIAN_SHADOW_DECISION_BASES,
+      );
+      incrementBoundedCategory(
+        allowDeny.byAuthorizationEvidence,
+        record.authorizationEvidence,
+        GUARDIAN_SHADOW_AUTHORIZATION_EVIDENCE,
+      );
+    }
     if (
       Number.isFinite(record.primaryDurationMs) &&
       Number.isFinite(record.shadowDurationMs)
@@ -768,6 +848,19 @@ function mergeGuardianShadowComparison(report, record) {
   }
   if (typeof record.sessionId === "string")
     report.sessions.add(record.sessionId);
+}
+
+function incrementBoundedCategory(target, value, allowed) {
+  const category =
+    typeof value === "string" && allowed.has(value) ? value : "unreported";
+  target[category] = (target[category] ?? 0) + 1;
+}
+
+function formatCounts(values) {
+  return Object.entries(values)
+    .sort(([, a], [, b]) => b - a)
+    .map(([value, count]) => `${value}:${count}`)
+    .join(" ");
 }
 
 function updateRange(report, value) {
@@ -1154,6 +1247,37 @@ function printSummary(report, inputPath, top) {
         ],
       ],
     );
+    if (shadow.allowDeny.count > 0) {
+      console.log("");
+      console.log("Guardian allow -> TypeSafe deny diagnostics");
+      printTable(
+        ["metric", "value"],
+        [
+          ["comparisons", shadow.allowDeny.count],
+          ["action family", formatCounts(shadow.allowDeny.byActionFamily)],
+          [
+            "Guardian authorization",
+            formatCounts(shadow.allowDeny.byPrimaryAuthorization),
+          ],
+          [
+            "TypeSafe authorization",
+            formatCounts(shadow.allowDeny.byShadowAuthorization),
+          ],
+          [
+            "TypeSafe decision basis",
+            formatCounts(shadow.allowDeny.byDecisionBasis),
+          ],
+          [
+            "authorization evidence",
+            formatCounts(shadow.allowDeny.byAuthorizationEvidence),
+          ],
+          [
+            "input redacted / evidence withheld",
+            `${shadow.allowDeny.redacted}/${shadow.allowDeny.count} / ${shadow.allowDeny.evidenceWithheld}/${shadow.allowDeny.count}`,
+          ],
+        ],
+      );
+    }
   }
 
   if (report.tasks.count > 0) {

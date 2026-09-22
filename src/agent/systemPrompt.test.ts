@@ -510,6 +510,15 @@ describe("buildSystemPrompt", () => {
     );
   });
 
+  it("includes orchestration guidance for 'orchestrate' mode", async () => {
+    const result = await buildSystemPrompt("orchestrate", tmpDir);
+    expect(result).toContain("Orchestrate mode");
+    expect(result).toContain("Keep foreground context clean");
+    expect(result).toContain("Use the lowest sufficient tier");
+    expect(result).toContain("delegate discovery");
+    expect(result).toContain("multi-agent wait");
+  });
+
   it("includes ask mode section for 'ask' mode", async () => {
     const result = await buildSystemPrompt("ask", tmpDir);
     expect(result).toContain("Ask mode");
@@ -533,7 +542,7 @@ describe("buildSystemPrompt", () => {
       );
     }
 
-    for (const mode of ["ask", "review"]) {
+    for (const mode of ["orchestrate", "ask", "review"]) {
       const result = await buildSystemPrompt(mode, tmpDir);
       expect(result).not.toContain("### Task Alignment");
       expect(result).not.toContain(

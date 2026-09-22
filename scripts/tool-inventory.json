@@ -218,7 +218,7 @@
     },
     {
       "name": "get_background_result",
-      "parameters": ["sessionId", "wait_seconds"],
+      "parameters": ["return_when", "sessionId", "sessionIds", "wait_seconds"],
       "cluster": "background",
       "sideEffect": "read",
       "devOnly": false,
@@ -836,5 +836,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "c1f18d484df0c46700f087d4b34a06ffe8a77055f25c89fe287d2684e10d7820"
+  "revision": "9a1152329f25c173cbdc39e37d319e8c125e0951e80802983fbd73b13dd35dd7"
 }

@@ -36,7 +36,11 @@ import type {
   BackgroundAgentRuntimePhase,
   BackgroundResultState,
 } from "@agentlink/protocol/background-result";
-import type { BackgroundAgentResultContent } from "../core/capabilities/background.js";
+import type {
+  BackgroundAgentResultContent,
+  BackgroundAgentResultsContent,
+  BackgroundAgentResultsRequest,
+} from "../core/capabilities/background.js";
 import type { NativeWebToolExecutionRequest } from "../core/capabilities/web.js";
 import type { AutomaticMemoryContext } from "@agentlink/protocol/autonomous-memory";
 import type {
@@ -168,6 +172,9 @@ import {
 } from "../shared/memoryCandidates.js";
 import type {
   AgentBudget,
+  ModelTier,
+  ModelTierRequest,
+  ModelTierSource,
   SpawnBackgroundRequest,
   SpawnBackgroundResult,
 } from "./backgroundTypes.js";
@@ -973,6 +980,11 @@ export class AgentSessionManager {
       resolvedModel: string;
       resolvedProvider: string;
       taskClass: string;
+      requestedModelTier?: ModelTierRequest;
+      modelTier?: ModelTier;
+      resolvedModelTier?: ModelTier | "unknown";
+      resolvedModelTierSource?: ModelTierSource;
+      modelGroup?: string;
       routingReason: string;
       fallbackUsed: boolean;
       toolCalls: number;
@@ -986,7 +998,6 @@ export class AgentSessionManager {
       reviewScopeBytes?: number;
       reviewInlineBytes?: number;
       reviewTargetKind?: "working_tree" | "files" | "commit_range" | "diff";
-      modelTier?: "cheap" | "balanced" | "deep_reasoning";
       phase: BackgroundAgentRuntimePhase;
       phaseStartedAt?: number;
       requestStartedAt?: number;
@@ -1390,15 +1401,10 @@ export class AgentSessionManager {
       config: {
         ...this.config,
         model,
-        autoCondenseThreshold:
-          args.metadata.autoCondenseThreshold ??
-          getEffectiveAutoCondenseThreshold(
-            model,
-            undefined,
-            this.host.providers
-              .tryResolveProvider(model)
-              ?.getCapabilities(model),
-          ),
+        autoCondenseThreshold: this.getCondenseThresholdForModel(
+          model,
+          resolution.status === "available" ? resolution.scope : undefined,
+        ),
       },
       background,
       initialArchitectReviewPending:
@@ -4831,6 +4837,25 @@ export class AgentSessionManager {
       if (!(await this.reconcileSessionReasoningEffort(session))) continue;
       changed = true;
       this.saveSession(session.id);
+    }
+    if (changed) this.notifySessionsChanged();
+  }
+
+  reconcileCondenseThresholdsForModel(model: string): void {
+    let changed = false;
+    for (const session of this.sessions.values()) {
+      if (session.model !== model) continue;
+      const threshold = this.getCondenseThresholdForModel(
+        model,
+        session.projectScope,
+      );
+      if (session.autoCondenseThreshold === threshold) continue;
+      session.autoCondenseThreshold = threshold;
+      if (this.foregroundId === session.id) {
+        this.updateConfig({ autoCondenseThreshold: threshold });
+      }
+      this.saveSession(session.id);
+      changed = true;
     }
     if (changed) this.notifySessionsChanged();
   }
@@ -9011,7 +9036,7 @@ export class AgentSessionManager {
       lastCacheReadTokens: 0,
       reasoningEffort: metadata.reasoningEffort,
       desiredReasoningEffort: metadata.desiredReasoningEffort,
-      autoCondenseThreshold: metadata.autoCondenseThreshold,
+      autoCondenseThreshold: session.autoCondenseThreshold,
       loadedSkills: metadata.loadedSkills ?? [],
       activeSkillState: metadata.activeSkillState,
       runState: interruptedRunRecovery.runState,
@@ -9196,7 +9221,7 @@ export class AgentSessionManager {
         lastCacheReadTokens: 0,
         reasoningEffort: metadata.reasoningEffort,
         desiredReasoningEffort: metadata.desiredReasoningEffort,
-        autoCondenseThreshold: metadata.autoCondenseThreshold,
+        autoCondenseThreshold: session.autoCondenseThreshold,
         loadedSkills: metadata.loadedSkills ?? [],
         activeSkillState: metadata.activeSkillState,
         messages,
@@ -9247,6 +9272,11 @@ export class AgentSessionManager {
           resolvedModel: fleet.resolvedModel,
           resolvedProvider: fleet.resolvedProvider,
           taskClass: fleet.taskClass,
+          requestedModelTier: fleet.requestedModelTier,
+          modelTier: fleet.modelTier,
+          resolvedModelTier: fleet.resolvedModelTier,
+          resolvedModelTierSource: fleet.resolvedModelTierSource,
+          modelGroup: fleet.modelGroup,
           routingReason: fleet.routingReason,
           fallbackUsed: fleet.fallbackUsed,
           toolCalls: 0,
@@ -10530,8 +10560,9 @@ export class AgentSessionManager {
       parent?.providerId ??
       fg?.providerId ??
       this.host.providers.tryResolveProvider(foregroundModel)?.id;
+    const backgroundSettings = this.getBackgroundAgentSettings(inheritedScope);
     const backendRoute = resolveBackgroundBackendRoute(
-      this.getBackgroundAgentSettings(inheritedScope),
+      backgroundSettings,
       request,
       {
         foregroundProvider,
@@ -10552,6 +10583,11 @@ export class AgentSessionManager {
       }
       const resolvedMode = request.mode?.trim() || "review";
       const taskClass = request.taskClass?.trim() || "general";
+      if (request.modelTier === "foreground") {
+        throw new Error(
+          'modelTier "foreground" is not supported by ACP background agents because the external agent controls its own model. Use a native background agent or omit modelTier.',
+        );
+      }
       const modelTier =
         request.modelTier ??
         inferReviewTier({ ...request, taskClass }) ??
@@ -10638,6 +10674,10 @@ export class AgentSessionManager {
         resolvedModel: `acp:${backendRoute.agent.id}`,
         resolvedProvider: "acp",
         taskClass,
+        requestedModelTier: request.modelTier,
+        modelTier,
+        resolvedModelTier: "unknown",
+        resolvedModelTierSource: "external",
         routingReason: acpRoutingReason,
         fallbackUsed: false,
         toolCalls: 0,
@@ -10649,7 +10689,6 @@ export class AgentSessionManager {
         reviewScopeBytes: reviewHandoffBytes,
         reviewInlineBytes: reviewTarget?.inlineBytes,
         reviewTargetKind: reviewTarget?.kind,
-        modelTier,
         phase: "queued",
         phaseStartedAt: Date.now(),
       });
@@ -10662,6 +10701,10 @@ export class AgentSessionManager {
         resolvedModel: `acp:${backendRoute.agent.id}`,
         resolvedProvider: "acp",
         taskClass,
+        requestedModelTier: request.modelTier,
+        modelTier,
+        resolvedModelTier: "unknown",
+        resolvedModelTierSource: "external",
         routingReason: acpRoutingReason,
         fallbackUsed: false,
         delegation: {
@@ -10940,6 +10983,10 @@ export class AgentSessionManager {
         resolvedModel: `acp:${backendRoute.agent.id}`,
         resolvedProvider: "acp",
         taskClass,
+        requestedModelTier: request.modelTier,
+        modelTier,
+        resolvedModelTier: "unknown",
+        resolvedModelTierSource: "external",
         routingReason: acpRoutingReason,
         fallbackUsed: false,
       };
@@ -10963,6 +11010,7 @@ export class AgentSessionManager {
         model: foregroundModel,
         unavailableProviders: this.getCoolingBackgroundProviders(),
       },
+      { modelTiers: backgroundSettings.modelTiers },
     );
     const configuredReviewEffort = backendRoute.configuredReviewEffort
       ? this.resolveConfiguredReviewEffort(
@@ -11083,6 +11131,11 @@ export class AgentSessionManager {
       resolvedModel: route.resolvedModel,
       resolvedProvider: route.resolvedProvider,
       taskClass: route.taskClass,
+      requestedModelTier: request.modelTier,
+      modelTier: route.modelTier,
+      resolvedModelTier: route.resolvedModelTier,
+      resolvedModelTierSource: route.resolvedModelTierSource,
+      modelGroup: route.modelGroup,
       routingReason: backendFallbackReason,
       fallbackUsed: backendFallbackUsed,
       toolCalls: 0,
@@ -11094,11 +11147,6 @@ export class AgentSessionManager {
       reviewScopeBytes: reviewHandoffBytes,
       reviewInlineBytes: reviewTarget?.inlineBytes,
       reviewTargetKind: reviewTarget?.kind,
-      modelTier:
-        route.modelTier ??
-        request.modelTier ??
-        inferReviewTier(request) ??
-        "balanced",
       phase: "queued",
       phaseStartedAt: Date.now(),
     });
@@ -11110,6 +11158,11 @@ export class AgentSessionManager {
       resolvedModel: route.resolvedModel,
       resolvedProvider: route.resolvedProvider,
       taskClass: route.taskClass,
+      requestedModelTier: request.modelTier,
+      modelTier: route.modelTier,
+      resolvedModelTier: route.resolvedModelTier,
+      resolvedModelTierSource: route.resolvedModelTierSource,
+      modelGroup: route.modelGroup,
       routingReason: backendFallbackReason,
       fallbackUsed: backendFallbackUsed,
       delegation: {
@@ -11388,6 +11441,11 @@ export class AgentSessionManager {
       resolvedProvider: route.resolvedProvider,
       reasoningEffort: session.reasoningEffort,
       taskClass: route.taskClass,
+      requestedModelTier: request.modelTier,
+      modelTier: route.modelTier,
+      resolvedModelTier: route.resolvedModelTier,
+      resolvedModelTierSource: route.resolvedModelTierSource,
+      modelGroup: route.modelGroup,
       routingReason: backendFallbackReason,
       fallbackUsed: backendFallbackUsed,
     };
@@ -11722,6 +11780,12 @@ export class AgentSessionManager {
       reasoningEffort:
         meta?.resolvedProvider === "acp" ? undefined : session.reasoningEffort,
       taskClass: meta?.taskClass,
+      requestedModelTier: meta?.requestedModelTier ?? fleet?.requestedModelTier,
+      modelTier: meta?.modelTier ?? fleet?.modelTier,
+      resolvedModelTier: meta?.resolvedModelTier ?? fleet?.resolvedModelTier,
+      resolvedModelTierSource:
+        meta?.resolvedModelTierSource ?? fleet?.resolvedModelTierSource,
+      modelGroup: meta?.modelGroup ?? fleet?.modelGroup,
       toolCalls: meta?.toolCalls,
       tokenUsage: meta?.tokenUsage,
       apiTurns: meta?.apiTurns,
@@ -11983,7 +12047,288 @@ export class AgentSessionManager {
     ) {
       return text;
     }
-    const messages = session.getAllMessages();
+    const images = this.collectBackgroundResultImages([targetSessionId]);
+    return images.length > 0 ? { text, images } : text;
+  }
+
+  /**
+   * Atomically authorize and wait for several background agents. The aggregate
+   * owns one caller concurrency hold, one interruption subscription, and one
+   * bounded-wait timer regardless of the number of targets.
+   */
+  async waitForAuthorizedBackgroundResultsContent(
+    callerSessionId: string,
+    request: BackgroundAgentResultsRequest,
+    signal?: AbortSignal,
+  ): Promise<string | BackgroundAgentResultsContent> {
+    const targetSessionIds = [
+      ...new Set(
+        request.sessionIds.map((sessionId) =>
+          this.resolveBackgroundSessionId(sessionId),
+        ),
+      ),
+    ];
+    if (targetSessionIds.length === 0) {
+      return JSON.stringify({
+        status: "invalid_request",
+        terminalReason: "background_session_ids_required",
+        retrySafe: true,
+        error: "At least one background session id is required",
+      });
+    }
+
+    // Authorize the complete set before registering any waiters or releasing a
+    // caller slot. A denied request therefore has no partial side effects.
+    for (const targetSessionId of targetSessionIds) {
+      const denial = this.getBackgroundManagementDenial(
+        callerSessionId,
+        targetSessionId,
+      );
+      if (denial) {
+        const notFound =
+          denial.terminalReason === "background_session_not_found";
+        return JSON.stringify({
+          status: notFound ? "not_found" : "authorization_lost",
+          sessionId: targetSessionId,
+          terminalReason: denial.terminalReason,
+          retrySafe: notFound,
+          agentRetryable: false,
+          error: denial.error,
+        });
+      }
+    }
+
+    const caller = this.sessions.get(callerSessionId);
+    const shouldReturn = () => {
+      const completedCount = targetSessionIds.filter((sessionId) => {
+        const session = this.sessions.get(sessionId);
+        return (
+          this.bgFinalResults.has(sessionId) ||
+          (session !== undefined && this.getProjectedBgStatus(session).done)
+        );
+      }).length;
+      return request.returnWhen === "any"
+        ? completedCount > 0
+        : completedCount === targetSessionIds.length;
+    };
+    const buildResult = (
+      status:
+        | "completed"
+        | "still_running"
+        | "wait_interrupted"
+        | "wait_cancelled",
+    ) => {
+      const completed: Array<Record<string, unknown>> = [];
+      const pending: Array<Record<string, unknown>> = [];
+      for (const sessionId of targetSessionIds) {
+        const session = this.sessions.get(sessionId)!;
+        const projected = this.getProjectedBgStatus(session);
+        if (this.bgFinalResults.has(sessionId) || projected.done) {
+          const resolution = this.resolveBackgroundResult(
+            session,
+            "(background agent completed without output)",
+            { preferDurableMetadata: true },
+          );
+          completed.push({
+            sessionId,
+            result: this.bgFinalResults.get(sessionId) ?? resolution.resultText,
+            resultState: resolution.resultState,
+            terminalReason: resolution.terminalReason,
+            retrySafe: resolution.retrySafe,
+            agentRetryable: resolution.agentRetryable,
+          });
+        } else {
+          const progress = this.getBackgroundStatus(sessionId);
+          pending.push({
+            sessionId,
+            status: progress.status,
+            phase: progress.phase,
+            displayStatus: progress.displayStatus,
+            currentTool: progress.currentTool,
+            elapsedMs: progress.elapsedMs,
+            idleMs: progress.idleMs,
+            partialOutput: progress.partialOutput,
+          });
+        }
+      }
+      return JSON.stringify({
+        status,
+        returnWhen: request.returnWhen,
+        done: pending.length === 0,
+        completed,
+        pending,
+        ...(status === "still_running"
+          ? {
+              retryAfterMs: 5_000,
+              retrySafe: true,
+              message:
+                "The bounded wait expired and some background agents are still running. Continue independent work before checking again.",
+            }
+          : {}),
+        ...(status === "wait_interrupted"
+          ? {
+              reason: "user_message_pending",
+              retrySafe: true,
+              message:
+                "The wait was interrupted because a user message is pending. The background agents are still running; handle the message before waiting again.",
+            }
+          : {}),
+        ...(status === "wait_cancelled"
+          ? {
+              reason: "tool_call_cancelled",
+              retrySafe: true,
+              message:
+                "The wait was cancelled. The background agents are still running and can be checked again later.",
+            }
+          : {}),
+      });
+    };
+
+    const attachCompletedImages = (text: string) => {
+      const completedSessionIds = targetSessionIds.filter((sessionId) => {
+        const session = this.sessions.get(sessionId);
+        return (
+          this.bgFinalResults.has(sessionId) ||
+          (session !== undefined && this.getProjectedBgStatus(session).done)
+        );
+      });
+      const images = this.collectBackgroundResultImages(completedSessionIds);
+      return images.length > 0 ? { text, images } : text;
+    };
+
+    if (shouldReturn()) return attachCompletedImages(buildResult("completed"));
+    if (caller?.hasPendingInterjections) {
+      return attachCompletedImages(buildResult("wait_interrupted"));
+    }
+    if (signal?.aborted) {
+      return attachCompletedImages(buildResult("wait_cancelled"));
+    }
+
+    const willBlock =
+      caller?.background === true &&
+      targetSessionIds.some((sessionId) => {
+        const session = this.sessions.get(sessionId);
+        return (
+          session !== undefined &&
+          !this.bgFinalResults.has(sessionId) &&
+          !this.getProjectedBgStatus(session).done
+        );
+      });
+    if (willBlock) {
+      this.bgResultWaitHolds.set(
+        callerSessionId,
+        (this.bgResultWaitHolds.get(callerSessionId) ?? 0) + 1,
+      );
+      this.drainBackgroundQueue();
+    }
+
+    const waitStartedAt = Date.now();
+    try {
+      const text = await new Promise<string>((resolve) => {
+        let settled = false;
+        let timerId:
+          | ReturnType<AgentSessionManagerHost["timers"]["setTimeout"]>
+          | undefined;
+        let unsubscribeInterrupt: (() => void) | undefined;
+        const onAbort = () => settle("wait_cancelled");
+        let completionCheckQueued = false;
+        const onTargetCompleted = () => {
+          if (completionCheckQueued) return;
+          completionCheckQueued = true;
+          void Promise.resolve().then(() => {
+            completionCheckQueued = false;
+            if (shouldReturn()) settle("completed");
+          });
+        };
+        const cleanup = () => {
+          unsubscribeInterrupt?.();
+          signal?.removeEventListener("abort", onAbort);
+          if (timerId !== undefined) this.host.timers.clearTimeout(timerId);
+          for (const sessionId of targetSessionIds) {
+            const waiters = this.bgResultWaiters.get(sessionId);
+            if (waiters) {
+              const index = waiters.indexOf(onTargetCompleted);
+              if (index >= 0) waiters.splice(index, 1);
+              if (waiters.length === 0) this.bgResultWaiters.delete(sessionId);
+            }
+          }
+        };
+        const settle = (
+          status:
+            | "completed"
+            | "still_running"
+            | "wait_interrupted"
+            | "wait_cancelled",
+        ) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          const elapsedMs = Math.max(0, Date.now() - waitStartedAt);
+          for (const sessionId of targetSessionIds) {
+            this.bgResultWaitMs.set(
+              sessionId,
+              (this.bgResultWaitMs.get(sessionId) ?? 0) + elapsedMs,
+            );
+          }
+          resolve(buildResult(status));
+        };
+
+        for (const sessionId of targetSessionIds) {
+          const session = this.sessions.get(sessionId)!;
+          if (
+            this.bgFinalResults.has(sessionId) ||
+            this.getProjectedBgStatus(session).done
+          ) {
+            continue;
+          }
+          const waiters = this.bgResultWaiters.get(sessionId) ?? [];
+          waiters.push(onTargetCompleted);
+          this.bgResultWaiters.set(sessionId, waiters);
+        }
+
+        // Close completion and interjection races after all waiter registration.
+        if (shouldReturn()) {
+          settle("completed");
+          return;
+        }
+        if (caller?.hasPendingInterjections) {
+          settle("wait_interrupted");
+          return;
+        }
+        if (signal?.aborted) {
+          settle("wait_cancelled");
+          return;
+        }
+
+        signal?.addEventListener("abort", onAbort, { once: true });
+        const timeoutMs = Math.min(60, Math.max(1, request.waitSeconds)) * 1000;
+        timerId = this.host.timers.setTimeout(
+          () => settle("still_running"),
+          timeoutMs,
+        );
+        if (caller) {
+          unsubscribeInterrupt = caller.onPendingInterjectionQueued(() =>
+            settle("wait_interrupted"),
+          );
+        }
+      });
+      return attachCompletedImages(text);
+    } finally {
+      if (willBlock) {
+        const remaining =
+          (this.bgResultWaitHolds.get(callerSessionId) ?? 1) - 1;
+        if (remaining > 0) {
+          this.bgResultWaitHolds.set(callerSessionId, remaining);
+        } else {
+          this.bgResultWaitHolds.delete(callerSessionId);
+        }
+      }
+    }
+  }
+
+  private collectBackgroundResultImages(
+    sessionIds: readonly string[],
+  ): Array<{ data: string; mimeType: string }> {
     const collectImages = (content: ContentBlock[]) =>
       content
         .filter((block): block is ImageBlock => block.type === "image")
@@ -11991,27 +12336,27 @@ export class AgentSessionManager {
           data: block.source.data,
           mimeType: block.source.media_type,
         }));
-    const directImages = messages.flatMap((message) =>
-      message.role === "assistant" && Array.isArray(message.content)
-        ? collectImages(message.content)
-        : [],
-    );
-    const toolImages = messages.flatMap((message) =>
-      message.role === "user" && Array.isArray(message.content)
-        ? collectImages(
-            message.content.flatMap((block) =>
-              block.type === "tool_result" && Array.isArray(block.content)
-                ? block.content
-                : [],
-            ),
-          )
-        : [],
-    );
-    const images = [...directImages, ...toolImages].slice(
-      0,
-      MAX_ACP_OUTPUT_IMAGES,
-    );
-    return images.length > 0 ? { text, images } : text;
+    const images = sessionIds.flatMap((sessionId) => {
+      const messages = this.sessions.get(sessionId)?.getAllMessages() ?? [];
+      const directImages = messages.flatMap((message) =>
+        message.role === "assistant" && Array.isArray(message.content)
+          ? collectImages(message.content)
+          : [],
+      );
+      const toolImages = messages.flatMap((message) =>
+        message.role === "user" && Array.isArray(message.content)
+          ? collectImages(
+              message.content.flatMap((block) =>
+                block.type === "tool_result" && Array.isArray(block.content)
+                  ? block.content
+                  : [],
+              ),
+            )
+          : [],
+      );
+      return [...directImages, ...toolImages];
+    });
+    return images.slice(0, MAX_ACP_OUTPUT_IMAGES);
   }
 
   killAuthorizedBackground(
@@ -12218,6 +12563,7 @@ export class AgentSessionManager {
         mode: fleet.resolvedMode,
         ...retryRouting,
         taskClass: fleet.taskClass,
+        modelTier: fleet.requestedModelTier ?? fleet.modelTier,
         ownedPaths: fleet.delegation?.ownedPaths,
         forbiddenPaths: fleet.delegation?.forbiddenPaths,
         permissionProfile: fleet.delegation?.permissionProfile as
@@ -13516,6 +13862,15 @@ export class AgentSessionManager {
           reasoningEffort:
             meta?.resolvedProvider === "acp" ? undefined : s.reasoningEffort,
           taskClass: meta?.taskClass,
+          requestedModelTier:
+            meta?.requestedModelTier ?? s.fleetMetadata?.requestedModelTier,
+          modelTier: meta?.modelTier ?? s.fleetMetadata?.modelTier,
+          resolvedModelTier:
+            meta?.resolvedModelTier ?? s.fleetMetadata?.resolvedModelTier,
+          resolvedModelTierSource:
+            meta?.resolvedModelTierSource ??
+            s.fleetMetadata?.resolvedModelTierSource,
+          modelGroup: meta?.modelGroup ?? s.fleetMetadata?.modelGroup,
           routingReason: meta?.routingReason,
           fallbackUsed: meta?.fallbackUsed,
           parentSessionId: this.getBackgroundParentSessionId(s.id),

@@ -9,6 +9,7 @@ import type {
 } from "./providers/types.js";
 import { describe, expect, it } from "vitest";
 
+import type { BackgroundModelTierGroups } from "./background/acpAgentConfig.js";
 import { ProviderRegistry } from "./providers/index.js";
 import type { SpawnBackgroundRequest } from "./backgroundTypes.js";
 import { resolveBackgroundRoute } from "./backgroundModelRouter.js";
@@ -38,7 +39,7 @@ function makeProvider(
       return CAPS;
     },
     listModels() {
-      return models.filter((m) => m.provider === id);
+      return models.filter((model) => model.provider === id);
     },
     async *stream(
       _request: StreamRequest,
@@ -70,791 +71,552 @@ function makeRegistry(providers: ModelProvider[]): ProviderRegistry {
   return registry;
 }
 
+function tierGroup(
+  group: string,
+  tiers: {
+    cheap?: string[];
+    balanced?: string[];
+    deep_reasoning?: string[];
+  },
+): BackgroundModelTierGroups {
+  return {
+    [group]: {
+      cheap: tiers.cheap ?? [],
+      balanced: tiers.balanced ?? [],
+      deep_reasoning: tiers.deep_reasoning ?? [],
+    },
+  };
+}
+
+function generalRequest(
+  overrides: Partial<SpawnBackgroundRequest> = {},
+): SpawnBackgroundRequest {
+  return {
+    task: "Implement change",
+    message: "Implement the requested change",
+    taskClass: "general",
+    ...overrides,
+  };
+}
+
 describe("resolveBackgroundRoute", () => {
-  it("excludes chat-only models from automatic routing but allows an exact override", async () => {
-    const chatOnly = makeModel("chat-only", "custom");
-    chatOnly.capabilities = {
-      ...chatOnly.capabilities,
-      supportsToolUse: false,
-    };
-    const toolModel = makeModel("tool-model", "custom");
+  it("defaults ordinary work to one tier below the foreground model", async () => {
+    const provider = "openai-compatible:claude";
+    const opus = makeModel("custom-opus", provider);
+    const sonnet = makeModel("custom-sonnet", provider);
+    const haiku = makeModel("custom-haiku", provider);
     const registry = makeRegistry([
-      makeProvider("custom", [chatOnly, toolModel], true),
+      makeProvider(provider, [opus, sonnet, haiku]),
+    ]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      generalRequest(),
+      { mode: "code", model: opus.id },
+      {
+        modelTiers: tierGroup("claude", {
+          cheap: [haiku.id],
+          balanced: [sonnet.id],
+          deep_reasoning: [opus.id],
+        }),
+      },
+    );
+
+    expect(route).toMatchObject({
+      resolvedModel: sonnet.id,
+      resolvedProvider: provider,
+      modelTier: "balanced",
+      resolvedModelTier: "balanced",
+      resolvedModelTierSource: "configured",
+      modelGroup: "claude",
+      fallbackUsed: false,
+    });
+  });
+
+  it("uses the cheap tier below a balanced foreground model", async () => {
+    const provider = "openai-compatible:claude";
+    const sonnet = makeModel("custom-sonnet", provider);
+    const haiku = makeModel("custom-haiku", provider);
+    const registry = makeRegistry([makeProvider(provider, [sonnet, haiku])]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      generalRequest(),
+      { mode: "code", model: sonnet.id },
+      {
+        modelTiers: tierGroup("claude", {
+          cheap: [haiku.id],
+          balanced: [sonnet.id],
+        }),
+      },
+    );
+
+    expect(route).toMatchObject({
+      resolvedModel: haiku.id,
+      modelTier: "cheap",
+      resolvedModelTier: "cheap",
+    });
+  });
+
+  it("keeps cheap foreground work on the cheap tier", async () => {
+    const provider = "custom";
+    const cheapA = makeModel("cheap-a", provider);
+    const cheapB = makeModel("cheap-b", provider);
+    const registry = makeRegistry([makeProvider(provider, [cheapA, cheapB])]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      generalRequest(),
+      { mode: "code", model: cheapA.id },
+      { modelTiers: tierGroup("custom", { cheap: [cheapB.id, cheapA.id] }) },
+    );
+
+    expect(route.resolvedModel).toBe(cheapB.id);
+    expect(route.modelTier).toBe("cheap");
+  });
+
+  it("uses the exact foreground model only when explicitly requested", async () => {
+    const provider = "openai-compatible:claude";
+    const opus = makeModel("custom-opus", provider);
+    const sonnet = makeModel("custom-sonnet", provider);
+    const registry = makeRegistry([makeProvider(provider, [opus, sonnet])]);
+    const policy = {
+      modelTiers: tierGroup("claude", {
+        balanced: [sonnet.id],
+        deep_reasoning: [opus.id],
+      }),
+    };
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      generalRequest({ modelTier: "foreground" }),
+      { mode: "code", model: opus.id },
+      policy,
+    );
+
+    expect(route).toMatchObject({
+      resolvedModel: opus.id,
+      modelTier: "deep_reasoning",
+      resolvedModelTier: "deep_reasoning",
+      routingReason: `explicit foreground model (${opus.id})`,
+    });
+  });
+
+  it("rejects a provider that conflicts with the explicit foreground tier", async () => {
+    const foreground = makeModel("foreground-model", "first");
+    const other = makeModel("other-model", "second");
+    const registry = makeRegistry([
+      makeProvider("first", [foreground]),
+      makeProvider("second", [other]),
     ]);
 
     await expect(
       resolveBackgroundRoute(
         registry,
-        { task: "Automatic", message: "Route automatically" },
-        { mode: "code", model: "chat-only" },
-      ),
-    ).resolves.toMatchObject({ resolvedModel: "tool-model" });
-
-    await expect(
-      resolveBackgroundRoute(
-        registry,
+        generalRequest({ modelTier: "foreground", provider: "second" }),
+        { mode: "code", model: foreground.id },
         {
-          task: "Explicit",
-          message: "Use exact model",
-          model: "chat-only",
+          modelTiers: tierGroup("models", {
+            balanced: [foreground.id, other.id],
+          }),
         },
-        { mode: "code", model: "tool-model" },
       ),
-    ).resolves.toMatchObject({
-      resolvedModel: "chat-only",
-      routingReason: "explicit model override (chat-only)",
-    });
+    ).rejects.toThrow(/conflicts with requested provider/);
   });
 
-  it("defaults general task class to foreground model", async () => {
-    const anthModel = makeModel(
-      "claude-sonnet-4-6",
-      "openai-compatible:claude",
-    );
+  it("honors configured ordering for OpenAI-compatible model groups", async () => {
+    const provider = "openai-compatible:local";
+    const preferred = makeModel("local-fast-b", provider);
+    const other = makeModel("local-fast-a", provider);
+    const foreground = makeModel("local-frontier", provider);
     const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [anthModel]),
-    ]);
-
-    const request: SpawnBackgroundRequest = {
-      task: "Investigate",
-      message: "Look into this issue",
-      taskClass: "general",
-    };
-
-    const route = await resolveBackgroundRoute(registry, request, {
-      mode: "code",
-      model: "claude-sonnet-4-6",
-    });
-
-    expect(route.resolvedModel).toBe("claude-sonnet-4-6");
-    expect(route.resolvedProvider).toBe("openai-compatible:claude");
-    expect(route.fallbackUsed).toBe(false);
-    expect(route.routingReason).toContain("defaulted to foreground model");
-  });
-
-  it("review task prefers the opposite provider when available", async () => {
-    const anthModel = makeModel(
-      "claude-sonnet-4-6",
-      "openai-compatible:claude",
-    );
-    const codexModel = makeModel("gpt-5", "codex");
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [anthModel]),
-      makeProvider("codex", [codexModel]),
-    ]);
-
-    const request: SpawnBackgroundRequest = {
-      task: "Review PR",
-      message: "Do a critical review",
-      taskClass: "review_code",
-    };
-
-    const route = await resolveBackgroundRoute(registry, request, {
-      mode: "code",
-      model: "claude-sonnet-4-6",
-    });
-
-    expect(route.resolvedProvider).toBe("codex");
-    expect(route.resolvedModel).toBe("gpt-5");
-    expect(route.fallbackUsed).toBe(false);
-    expect(route.routingReason).toContain("opposite");
-  });
-
-  it("defaults opposite-provider codex reviews to gpt-5.6-sol", async () => {
-    const anthModel = makeModel("claude-opus-4-8", "openai-compatible:claude");
-    const sol = makeModel("gpt-5.6-sol", "codex", { contextWindow: 1_050_000 });
-    const terra = makeModel("gpt-5.6-terra", "codex", {
-      contextWindow: 1_050_000,
-    });
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [anthModel]),
-      makeProvider("codex", [terra, sol]),
+      makeProvider(provider, [other, preferred, foreground]),
     ]);
 
     const route = await resolveBackgroundRoute(
       registry,
+      generalRequest({ modelTier: "cheap" }),
+      { mode: "code", model: foreground.id },
       {
-        task: "Investigate failure",
-        message: "Look into this critical security issue thoroughly",
-        taskClass: "review_code",
+        modelTiers: tierGroup("local", {
+          cheap: [preferred.id, other.id],
+          deep_reasoning: [foreground.id],
+        }),
       },
-      { mode: "code", model: "claude-opus-4-8" },
     );
 
-    expect(route.resolvedProvider).toBe("codex");
-    expect(route.resolvedModel).toBe("gpt-5.6-sol");
-  });
-
-  it("prefers gpt-5.6-luna for cheap opposite-provider codex reviews", async () => {
-    const anthModel = makeModel(
-      "claude-sonnet-4-6",
-      "openai-compatible:claude",
-    );
-    const flagship = makeModel("gpt-5.6-sol", "codex", {
-      contextWindow: 1_050_000,
-    });
-    const mini = makeModel("gpt-5.6-luna", "codex", {
-      contextWindow: 1_050_000,
-    });
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [anthModel]),
-      makeProvider("codex", [flagship, mini]),
-    ]);
-
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "Quick check",
-        message: "Do a lightweight pass",
-        taskClass: "review_code",
-        modelTier: "cheap",
-      },
-      { mode: "code", model: "claude-sonnet-4-6" },
-    );
-
-    expect(route.resolvedProvider).toBe("codex");
-    expect(route.resolvedModel).toBe("gpt-5.6-luna");
-    expect(route.defaultBudget).toEqual({
-      maxToolCalls: 50,
-      maxApiTurns: 25,
-      maxElapsedMs: 900_000,
-      warningThresholdRatio: 0.8,
+    expect(route).toMatchObject({
+      resolvedModel: preferred.id,
+      resolvedModelTierSource: "configured",
+      modelGroup: "local",
     });
   });
 
-  it("uses the newest thinking-capable Sonnet for cheap OpenAI-compatible Claude code reviews", async () => {
-    const haiku = makeModel(
-      "claude-haiku-4-5-20251001",
-      "openai-compatible:claude",
-      {
-        supportsThinking: false,
-      },
-    );
-    const sonnet5 = makeModel("claude-sonnet-5", "openai-compatible:claude");
-    const opus = makeModel("claude-opus-4-8", "openai-compatible:claude");
-    const codexModel = makeModel("gpt-5", "codex");
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [opus, sonnet5, haiku], true),
-      makeProvider("codex", [codexModel], true),
-    ]);
+  it("does not silently upgrade when the requested lower tier is unavailable", async () => {
+    const provider = "custom";
+    const foreground = makeModel("frontier", provider);
+    const registry = makeRegistry([makeProvider(provider, [foreground])]);
 
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "Quick review",
-        message: "Check this small patch",
-        taskClass: "review_code",
-        modelTier: "cheap",
-      },
-      { mode: "code", model: "gpt-5" },
-    );
-
-    expect(route.resolvedModel).toBe("claude-opus-4-8");
-    expect(route.routingReason).not.toContain("policy=review-preference");
-  });
-
-  it("uses Haiku for cheap OpenAI-compatible Claude plan reviews that do not require thinking", async () => {
-    const haiku = makeModel(
-      "claude-haiku-4-5-20251001",
-      "openai-compatible:claude",
-      {
-        supportsThinking: false,
-      },
-    );
-    const sonnet5 = makeModel("claude-sonnet-5", "openai-compatible:claude");
-    const opus = makeModel("claude-opus-4-8", "openai-compatible:claude");
-    const codexModel = makeModel("gpt-5", "codex");
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [opus, sonnet5, haiku], true),
-      makeProvider("codex", [codexModel], true),
-    ]);
-
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "Quick plan review",
-        message: "Check this short plan",
-        taskClass: "review_plan",
-        modelTier: "cheap",
-      },
-      { mode: "architect", model: "gpt-5" },
-    );
-
-    expect(route.resolvedModel).toBe("claude-haiku-4-5-20251001");
-  });
-
-  it("defaults balanced opposite-provider OpenAI-compatible Claude reviews to Sonnet", async () => {
-    const sonnet5 = makeModel("claude-sonnet-5", "openai-compatible:claude");
-    const sonnet46 = makeModel("claude-sonnet-4-6", "openai-compatible:claude");
-    const opus = makeModel("claude-opus-4-8", "openai-compatible:claude");
-    const fable = makeModel("claude-fable-5", "openai-compatible:claude");
-    const codexModel = makeModel("gpt-5-mini", "codex", {
-      supportsThinking: false,
-    });
-    const registry = makeRegistry([
-      makeProvider(
-        "openai-compatible:claude",
-        [sonnet46, opus, fable, sonnet5],
-        true,
+    await expect(
+      resolveBackgroundRoute(
+        registry,
+        generalRequest(),
+        { mode: "code", model: foreground.id },
+        {
+          modelTiers: tierGroup("custom", {
+            deep_reasoning: [foreground.id],
+          }),
+        },
       ),
-      makeProvider("codex", [codexModel], true),
-    ]);
-
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "Review patch",
-        message: "Quick review of these changes",
-        taskClass: "review_code",
-      },
-      { mode: "code", model: "gpt-5" },
-    );
-
-    expect(route.resolvedProvider).toBe("openai-compatible:claude");
-    expect(route.resolvedModel).toBe("claude-opus-4-8");
-    expect(route.fallbackUsed).toBe(false);
-    expect(route.routingReason).toContain("tier=balanced");
-    expect(route.routingReason).not.toContain("policy=review-preference");
-    expect(route.defaultBudget).toEqual({
-      maxToolCalls: 100,
-      maxApiTurns: 50,
-      maxElapsedMs: 1_800_000,
-      warningThresholdRatio: 0.8,
-    });
-    expect(route.thinkingBudget).toBe(6000);
+    ).rejects.toThrow(/will not silently spend a higher tier/);
   });
 
-  it("prefers Claude Sonnet 5 for balanced OpenAI-compatible Claude reviews when Opus is available", async () => {
-    const sonnet5 = makeModel("claude-sonnet-5", "openai-compatible:claude");
-    const opus5 = makeModel("claude-opus-5", "openai-compatible:claude");
-    const opus48 = makeModel("claude-opus-4-8", "openai-compatible:claude");
-    const codexModel = makeModel("gpt-5-mini", "codex", {
-      supportsThinking: false,
-    });
+  it("requires configuration when the foreground tier cannot be inferred", async () => {
+    const provider = "custom";
+    const foreground = makeModel("unclassified-frontier", provider);
+    const worker = makeModel("unclassified-worker", provider);
     const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [opus48, sonnet5, opus5], true),
-      makeProvider("codex", [codexModel], true),
+      makeProvider(provider, [foreground, worker]),
     ]);
 
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "Review patch",
-        message: "Quick review of these changes",
-        taskClass: "review_code",
-      },
-      { mode: "code", model: "gpt-5" },
-    );
-
-    expect(route.resolvedProvider).toBe("openai-compatible:claude");
-    expect(route.resolvedModel).toBe("claude-opus-4-8");
-    expect(route.routingReason).not.toContain("policy=review-preference");
-  });
-
-  it("scores OpenAI-compatible Claude models without built-in vendor preferences", async () => {
-    const sonnet5 = makeModel("claude-sonnet-5", "openai-compatible:claude");
-    const opus5 = makeModel("claude-opus-5", "openai-compatible:claude");
-    const opus48 = makeModel("claude-opus-4-8", "openai-compatible:claude");
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [opus48, sonnet5, opus5], true),
-    ]);
-
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "Research",
-        message: "Investigate the flaky test",
-        taskClass: "research",
-      },
-      // Foreground model is not registered, so routing falls through to the
-      // scored/default pick instead of the foreground fast path.
-      { mode: "ask", model: "gpt-5" },
-    );
-
-    expect(route.resolvedProvider).toBe("openai-compatible:claude");
-    expect(route.resolvedModel).toBe("claude-opus-4-8");
-  });
-
-  it("defaults explicit anthropic provider routing to opus when fable is also available", async () => {
-    const sonnet = makeModel("claude-sonnet-4-6", "openai-compatible:claude");
-    const opus = makeModel("claude-opus-4-8", "openai-compatible:claude");
-    const fable = makeModel("claude-fable-5", "openai-compatible:claude");
-    const codexModel = makeModel("gpt-5", "codex");
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [sonnet, opus, fable], true),
-      makeProvider("codex", [codexModel], true),
-    ]);
-
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "Research",
-        message: "Use OpenAI-compatible Claude for this background task",
-        taskClass: "research",
-        provider: "openai-compatible:claude",
-      },
-      { mode: "code", model: "gpt-5" },
-    );
-
-    expect(route.resolvedProvider).toBe("openai-compatible:claude");
-    expect(route.resolvedModel).toBe("claude-opus-4-8");
-    expect(route.fallbackUsed).toBe(false);
-    expect(route.routingReason).toContain("tier=balanced");
-  });
-
-  it("keeps Sonnet 5 behind Sonnet 4.6 for balanced OpenAI-compatible Claude reviews", async () => {
-    const sonnet = makeModel("claude-sonnet-4-6", "openai-compatible:claude");
-    const fable = makeModel("claude-fable-5", "openai-compatible:claude");
-    const codexModel = makeModel("gpt-5-mini", "codex", {
-      supportsThinking: false,
-    });
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [sonnet, fable], true),
-      makeProvider("codex", [codexModel], true),
-    ]);
-
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "Review patch",
-        message: "Quick review of these changes",
-        taskClass: "review_code",
-      },
-      { mode: "code", model: "gpt-5" },
-    );
-
-    expect(route.resolvedProvider).toBe("openai-compatible:claude");
-    expect(route.resolvedModel).toBe("claude-sonnet-4-6");
-    expect(route.fallbackUsed).toBe(false);
-    expect(route.routingReason).toContain("tier=balanced");
-  });
-
-  it("keeps costly tier selection explicit despite complex review wording", async () => {
-    const sonnet5 = makeModel("claude-sonnet-5", "openai-compatible:claude");
-    const sonnet46 = makeModel("claude-sonnet-4-6", "openai-compatible:claude");
-    const opus = makeModel("claude-opus-4-8", "openai-compatible:claude");
-    const fable = makeModel("claude-fable-5", "openai-compatible:claude");
-    const codexModel = makeModel("gpt-5-mini", "codex", {
-      supportsThinking: false,
-    });
-    const registry = makeRegistry([
-      makeProvider(
-        "openai-compatible:claude",
-        [sonnet46, opus, sonnet5, fable],
-        true,
-      ),
-      makeProvider("codex", [codexModel], true),
-    ]);
-
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "Review critical auth refactor",
-        message:
-          "Do a thorough multi-file review focused on correctness, security, and edge cases.",
-        taskClass: "review_code",
-      },
-      { mode: "code", model: "gpt-5" },
-    );
-
-    expect(route.resolvedProvider).toBe("openai-compatible:claude");
-    expect(route.resolvedModel).toBe("claude-opus-4-8");
-    expect(route.fallbackUsed).toBe(false);
-    expect(route.routingReason).toContain("tier=balanced");
-    expect(route.defaultBudget).toEqual({
-      maxToolCalls: 100,
-      maxApiTurns: 50,
-      maxElapsedMs: 1_800_000,
-      warningThresholdRatio: 0.8,
-    });
-  });
-
-  it("keeps routine review language on the balanced tier", async () => {
-    const sonnet5 = makeModel("claude-sonnet-5", "openai-compatible:claude");
-    const sonnet46 = makeModel("claude-sonnet-4-6", "openai-compatible:claude");
-    const opus = makeModel("claude-opus-4-8", "openai-compatible:claude");
-    const codexModel = makeModel("gpt-5", "codex");
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [sonnet46, opus, sonnet5], true),
-      makeProvider("codex", [codexModel], true),
-    ]);
-
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "Review implementation",
-        message:
-          "Review these multi-file code changes for correctness, edge cases, error handling, and consistency.",
-        taskClass: "review_code",
-      },
-      { mode: "code", model: "gpt-5" },
-    );
-
-    expect(route.resolvedModel).toBe("claude-opus-4-8");
-    expect(route.routingReason).toContain("tier=balanced");
-    expect(route.defaultBudget?.maxToolCalls).toBe(100);
-  });
-
-  it("honors explicit modelTier override for review tasks", async () => {
-    const sonnet = makeModel("claude-sonnet-4-6", "openai-compatible:claude");
-    const opus = makeModel("claude-opus-4-8", "openai-compatible:claude");
-    const codexModel = makeModel("gpt-5-mini", "codex", {
-      supportsThinking: false,
-    });
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [sonnet, opus], true),
-      makeProvider("codex", [codexModel], true),
-    ]);
-
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "Review patch",
-        message: "Quick review",
-        taskClass: "review_code",
-        modelTier: "deep_reasoning",
-      },
-      { mode: "code", model: "gpt-5" },
-    );
-
-    expect(route.resolvedModel).toBe("claude-opus-4-8");
-    expect(route.routingReason).toContain("tier=deep_reasoning");
-  });
-
-  it("falls back to the foreground provider when the opposite provider is unauthenticated", async () => {
-    const anthModel = makeModel(
-      "claude-sonnet-4-6",
-      "openai-compatible:claude",
-    );
-    const codexModel = makeModel("gpt-5", "codex");
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [anthModel], true),
-      makeProvider("codex", [codexModel], false),
-    ]);
-
-    const request: SpawnBackgroundRequest = {
-      task: "Review PR",
-      message: "Do a critical review",
-      taskClass: "review_code",
-    };
-
-    const route = await resolveBackgroundRoute(registry, request, {
-      mode: "code",
-      model: "claude-sonnet-4-6",
-    });
-
-    expect(route.resolvedModel).toBe("claude-sonnet-4-6");
-    expect(route.resolvedProvider).toBe("openai-compatible:claude");
-    expect(route.fallbackUsed).toBe(true);
-    expect(route.routingReason).toContain("fallback");
-  });
-
-  it("routes around a provider on availability cooldown even when authenticated", async () => {
-    const anthModel = makeModel(
-      "claude-sonnet-4-6",
-      "openai-compatible:claude",
-    );
-    const codexModel = makeModel("gpt-5", "codex");
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [anthModel], true),
-      makeProvider("codex", [codexModel], true),
-    ]);
-
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "Review PR",
-        message: "Do a critical review",
-        taskClass: "review_code",
-      },
-      {
+    await expect(
+      resolveBackgroundRoute(registry, generalRequest(), {
         mode: "code",
-        model: "gpt-5",
-        // The opposite provider (anthropic) recently failed with a billing
-        // error, so review routing must fall back instead of failing again.
+        model: foreground.id,
+      }),
+    ).rejects.toThrow(/foreground model tier is unknown/);
+  });
+
+  it("classifies an explicit model independently of the foreground model", async () => {
+    const provider = "custom";
+    const foreground = makeModel("unknown-foreground", provider);
+    const worker = makeModel("worker", provider);
+    const registry = makeRegistry([
+      makeProvider(provider, [foreground, worker]),
+    ]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      generalRequest({ model: worker.id, modelTier: "cheap" }),
+      { mode: "code", model: foreground.id },
+    );
+
+    expect(route).toMatchObject({
+      resolvedModel: worker.id,
+      modelTier: "cheap",
+      resolvedModelTier: "unknown",
+      resolvedModelTierSource: "unknown",
+      routingReason: `explicit model override (${worker.id})`,
+    });
+  });
+
+  it("reports the actual tier of an explicit configured model", async () => {
+    const provider = "custom";
+    const foreground = makeModel("foreground", provider);
+    const worker = makeModel("worker", provider);
+    const registry = makeRegistry([
+      makeProvider(provider, [foreground, worker]),
+    ]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      generalRequest({ model: worker.id }),
+      { mode: "code", model: foreground.id },
+      {
+        modelTiers: tierGroup("custom", {
+          cheap: [worker.id],
+          deep_reasoning: [foreground.id],
+        }),
+      },
+    );
+
+    expect(route).toMatchObject({
+      modelTier: "cheap",
+      resolvedModelTier: "cheap",
+      resolvedModelTierSource: "configured",
+      modelGroup: "custom",
+    });
+  });
+
+  it("excludes chat-only models from automatic routing but allows an exact override", async () => {
+    const provider = "custom";
+    const foreground = makeModel("frontier", provider);
+    const chatOnly = makeModel("chat-only", provider, {
+      supportsToolUse: false,
+    });
+    const worker = makeModel("worker", provider);
+    const registry = makeRegistry([
+      makeProvider(provider, [foreground, chatOnly, worker]),
+    ]);
+    const policy = {
+      modelTiers: tierGroup("custom", {
+        cheap: [chatOnly.id, worker.id],
+        balanced: [foreground.id],
+      }),
+    };
+
+    await expect(
+      resolveBackgroundRoute(
+        registry,
+        generalRequest(),
+        { mode: "code", model: foreground.id },
+        policy,
+      ),
+    ).resolves.toMatchObject({ resolvedModel: worker.id });
+
+    await expect(
+      resolveBackgroundRoute(
+        registry,
+        generalRequest({ model: chatOnly.id }),
+        { mode: "code", model: foreground.id },
+        policy,
+      ),
+    ).resolves.toMatchObject({ resolvedModel: chatOnly.id });
+  });
+
+  it("routes reviews to a lower-tier model on the opposite provider", async () => {
+    const foreground = makeModel("custom-opus", "openai-compatible:claude");
+    const reviewer = makeModel("gpt-5.6-sol", "codex");
+    const registry = makeRegistry([
+      makeProvider(foreground.provider, [foreground]),
+      makeProvider(reviewer.provider, [reviewer]),
+    ]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      generalRequest({ taskClass: "review_code" }),
+      { mode: "code", model: foreground.id },
+      {
+        modelTiers: tierGroup("claude", {
+          deep_reasoning: [foreground.id],
+        }),
+      },
+    );
+
+    expect(route).toMatchObject({
+      resolvedProvider: "codex",
+      resolvedModel: reviewer.id,
+      modelTier: "balanced",
+      resolvedModelTier: "balanced",
+      resolvedModelTierSource: "builtin",
+      fallbackUsed: false,
+      thinkingBudget: 6000,
+    });
+    expect(route.routingReason).toContain("policy=review-preference");
+  });
+
+  it("falls back to the foreground provider at the same lower tier for reviews", async () => {
+    const provider = "openai-compatible:claude";
+    const foreground = makeModel("custom-opus", provider);
+    const reviewer = makeModel("custom-sonnet", provider);
+    const unavailable = makeModel("gpt-5.6-sol", "codex");
+    const registry = makeRegistry([
+      makeProvider(provider, [foreground, reviewer]),
+      makeProvider("codex", [unavailable], false),
+    ]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      generalRequest({ taskClass: "review_code" }),
+      { mode: "code", model: foreground.id },
+      {
+        modelTiers: tierGroup("claude", {
+          balanced: [reviewer.id],
+          deep_reasoning: [foreground.id],
+        }),
+      },
+    );
+
+    expect(route).toMatchObject({
+      resolvedProvider: provider,
+      resolvedModel: reviewer.id,
+      modelTier: "balanced",
+      fallbackUsed: true,
+    });
+  });
+
+  it("routes around a provider on availability cooldown", async () => {
+    const foreground = makeModel("gpt-5.6-terra", "codex");
+    const codexReviewer = makeModel("gpt-5.6-sol", "codex");
+    const claudeReviewer = makeModel(
+      "custom-sonnet",
+      "openai-compatible:claude",
+    );
+    const registry = makeRegistry([
+      makeProvider("codex", [foreground, codexReviewer]),
+      makeProvider("openai-compatible:claude", [claudeReviewer]),
+    ]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      generalRequest({ taskClass: "review_plan" }),
+      {
+        mode: "architect",
+        model: foreground.id,
         unavailableProviders: ["openai-compatible:claude"],
       },
+      {
+        modelTiers: tierGroup("claude", {
+          balanced: [claudeReviewer.id],
+        }),
+      },
     );
 
-    expect(route.resolvedProvider).toBe("codex");
-    expect(route.fallbackUsed).toBe(true);
+    expect(route).toMatchObject({
+      resolvedProvider: "codex",
+      resolvedModel: codexReviewer.id,
+      fallbackUsed: true,
+    });
   });
 
-  it("still honors an explicit provider request during its cooldown", async () => {
-    const anthModel = makeModel(
-      "claude-sonnet-4-6",
-      "openai-compatible:claude",
-    );
-    const codexModel = makeModel("gpt-5", "codex");
+  it("honors an explicit provider request during its cooldown", async () => {
+    const foreground = makeModel("gpt-5.6-terra", "codex");
+    const reviewer = makeModel("custom-sonnet", "openai-compatible:claude");
     const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [anthModel], true),
-      makeProvider("codex", [codexModel], true),
+      makeProvider("codex", [foreground]),
+      makeProvider(reviewer.provider, [reviewer]),
     ]);
 
     const route = await resolveBackgroundRoute(
       registry,
-      {
-        task: "Review PR",
-        message: "Do a critical review",
-        taskClass: "review_code",
-        provider: "openai-compatible:claude",
-      },
-      {
-        mode: "code",
-        model: "gpt-5",
-        unavailableProviders: ["openai-compatible:claude"],
-      },
-    );
-
-    expect(route.resolvedProvider).toBe("openai-compatible:claude");
-  });
-
-  it("routes plan reviews to the opposite provider", async () => {
-    const anthModel = makeModel(
-      "claude-sonnet-4-6",
-      "openai-compatible:claude",
-    );
-    const codexModel = makeModel("gpt-5", "codex");
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [anthModel]),
-      makeProvider("codex", [codexModel]),
-    ]);
-
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "Review architecture plan",
-        message: "Check this plan for gaps and risks",
+      generalRequest({
         taskClass: "review_plan",
+        provider: reviewer.provider,
+      }),
+      {
+        mode: "architect",
+        model: foreground.id,
+        unavailableProviders: [reviewer.provider],
       },
-      { mode: "architect", model: "gpt-5" },
+      {
+        modelTiers: tierGroup("claude", {
+          balanced: [reviewer.id],
+        }),
+      },
     );
 
-    expect(route.resolvedProvider).toBe("openai-compatible:claude");
-    expect(route.resolvedModel).toBe("claude-sonnet-4-6");
-    expect(route.fallbackUsed).toBe(false);
-    expect(route.routingReason).toContain("opposite");
+    expect(route.resolvedProvider).toBe(reviewer.provider);
   });
 
-  it("explicit model override wins and may ignore provider override mismatch", async () => {
-    const anthModel = makeModel(
-      "claude-sonnet-4-6",
-      "openai-compatible:claude",
-    );
-    const codexModel = makeModel("gpt-5", "codex");
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [anthModel]),
-      makeProvider("codex", [codexModel]),
-    ]);
-
-    const request: SpawnBackgroundRequest = {
-      task: "Review PR",
-      message: "Do a critical review",
-      model: "gpt-5",
-      provider: "openai-compatible:claude",
-    };
-
-    const route = await resolveBackgroundRoute(registry, request, {
-      mode: "code",
-      model: "claude-sonnet-4-6",
+  it("requires thinking-capable models for code review", async () => {
+    const foreground = makeModel("gpt-5.6-terra", "codex");
+    const reviewer = makeModel("custom-sonnet", "openai-compatible:claude", {
+      supportsThinking: false,
     });
+    const registry = makeRegistry([
+      makeProvider("codex", [foreground]),
+      makeProvider(reviewer.provider, [reviewer]),
+    ]);
 
-    expect(route.resolvedModel).toBe("gpt-5");
-    expect(route.resolvedProvider).toBe("codex");
-    expect(route.fallbackUsed).toBe(true);
-    expect(route.routingReason).toContain("ignored requested provider");
+    await expect(
+      resolveBackgroundRoute(
+        registry,
+        generalRequest({ taskClass: "review_code" }),
+        { mode: "code", model: foreground.id },
+        {
+          modelTiers: tierGroup("claude", {
+            balanced: [reviewer.id],
+          }),
+        },
+      ),
+    ).rejects.toThrow(/No eligible balanced background model/);
   });
 
-  it("bounds review_code with a reduced thinking budget and no route tool restriction", async () => {
-    const anthModel = makeModel(
-      "claude-sonnet-4-6",
-      "openai-compatible:claude",
-    );
-    const codexModel = makeModel("gpt-5", "codex");
+  it("uses the readonly research mode, profile, lower tier, and budget", async () => {
+    const provider = "custom";
+    const foreground = makeModel("frontier", provider);
+    const worker = makeModel("worker", provider);
     const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [anthModel]),
-      makeProvider("codex", [codexModel]),
+      makeProvider(provider, [foreground, worker]),
     ]);
 
     const route = await resolveBackgroundRoute(
       registry,
+      generalRequest({ taskClass: "readonly-research" }),
+      { mode: "code", model: foreground.id },
       {
-        task: "Review",
-        message: "Review changes",
-        taskClass: "review_code",
+        modelTiers: tierGroup("custom", {
+          balanced: [worker.id],
+          deep_reasoning: [foreground.id],
+        }),
       },
-      { mode: "code", model: "claude-sonnet-4-6" },
     );
 
-    expect(route.thinkingBudget).toBe(6000);
-    expect(route.toolProfile).toBeUndefined();
-    expect(route.defaultBudget).toEqual({
-      maxToolCalls: 100,
-      maxApiTurns: 50,
-      maxElapsedMs: 1_800_000,
-      warningThresholdRatio: 0.8,
-    });
-  });
-
-  it("uses reduced thinking without imposing tool restrictions for review_plan", async () => {
-    const anthModel = makeModel(
-      "claude-sonnet-4-6",
-      "openai-compatible:claude",
-    );
-    const codexModel = makeModel("gpt-5", "codex");
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [anthModel]),
-      makeProvider("codex", [codexModel]),
-    ]);
-
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "Review plan",
-        message: "Review the plan",
-        taskClass: "review_plan",
+    expect(route).toMatchObject({
+      resolvedMode: "ask",
+      resolvedModel: worker.id,
+      modelTier: "balanced",
+      toolProfile: "readonly-research",
+      defaultBudget: {
+        maxToolCalls: 48,
+        maxApiTurns: 16,
+        maxElapsedMs: 600_000,
+        warningThresholdRatio: 0.8,
       },
-      { mode: "architect", model: "claude-sonnet-4-6" },
-    );
-
-    expect(route.thinkingBudget).toBe(6000);
-    expect(route.toolProfile).toBeUndefined();
-    expect(route.defaultBudget?.maxToolCalls).toBe(100);
-  });
-
-  it("does not return turn or tool limits for general task class", async () => {
-    const anthModel = makeModel(
-      "claude-sonnet-4-6",
-      "openai-compatible:claude",
-    );
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [anthModel]),
-    ]);
-
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "General task",
-        message: "Do something",
-        taskClass: "general",
-      },
-      { mode: "code", model: "claude-sonnet-4-6" },
-    );
-
-    expect(route.thinkingBudget).toBeUndefined();
-    expect("maxToolCalls" in route).toBe(false);
-    expect("maxApiTurns" in route).toBe(false);
-    expect(route.toolProfile).toBeUndefined();
-  });
-
-  it("uses ask mode with the readonly research tool profile and an automatic budget", async () => {
-    const anthModel = makeModel(
-      "claude-sonnet-4-6",
-      "openai-compatible:claude",
-    );
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [anthModel]),
-    ]);
-
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "Read docs",
-        message: "Research without edits",
-        taskClass: "readonly-research",
-      },
-      { mode: "code", model: "claude-sonnet-4-6" },
-    );
-
-    expect(route.resolvedMode).toBe("ask");
-    expect(route.defaultBudget).toEqual({
-      maxToolCalls: 48,
-      maxApiTurns: 16,
-      maxElapsedMs: 600_000,
-      warningThresholdRatio: 0.8,
-    });
-    expect(route.toolProfile).toBe("readonly-research");
-  });
-
-  it("applies the automatic budget to research tasks", async () => {
-    const anthModel = makeModel(
-      "claude-sonnet-4-6",
-      "openai-compatible:claude",
-    );
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [anthModel]),
-    ]);
-
-    const route = await resolveBackgroundRoute(
-      registry,
-      {
-        task: "Research behavior",
-        message: "Investigate the background runtime",
-        taskClass: "research",
-      },
-      { mode: "code", model: "claude-sonnet-4-6" },
-    );
-
-    expect(route.resolvedMode).toBe("ask");
-    expect(route.defaultBudget).toEqual({
-      maxToolCalls: 48,
-      maxApiTurns: 16,
-      maxElapsedMs: 600_000,
-      warningThresholdRatio: 0.8,
     });
   });
 
   it.each([
+    ["research", "ask"],
     ["explore", "architect"],
     ["debug", "debug"],
     ["design", "architect"],
+    ["general", "code"],
   ] as const)(
-    "returns mode without a budget for %s task class",
-    async (taskClass, expectedMode) => {
-      const anthModel = makeModel(
-        "claude-sonnet-4-6",
-        "openai-compatible:claude",
-      );
+    "uses lower-tier routing and %s mode policy",
+    async (taskClass, mode) => {
+      const provider = "custom";
+      const foreground = makeModel("frontier", provider);
+      const worker = makeModel("worker", provider);
       const registry = makeRegistry([
-        makeProvider("openai-compatible:claude", [anthModel]),
+        makeProvider(provider, [foreground, worker]),
       ]);
 
       const route = await resolveBackgroundRoute(
         registry,
+        generalRequest({ taskClass }),
+        { mode: "code", model: foreground.id },
         {
-          task: `${taskClass} task`,
-          message: "Do background work",
-          taskClass,
+          modelTiers: tierGroup("custom", {
+            balanced: [worker.id],
+            deep_reasoning: [foreground.id],
+          }),
         },
-        { mode: "code", model: "claude-sonnet-4-6" },
       );
 
-      expect(route.resolvedMode).toBe(expectedMode);
-      expect(route.defaultBudget).toBeUndefined();
-      expect(route.toolProfile).toBeUndefined();
+      expect(route.resolvedMode).toBe(mode);
+      expect(route.resolvedModel).toBe(worker.id);
+      expect(route.modelTier).toBe("balanced");
     },
   );
 
-  it("throws for unavailable explicit model", async () => {
-    const anthModel = makeModel(
-      "claude-sonnet-4-6",
-      "openai-compatible:claude",
-    );
-    const registry = makeRegistry([
-      makeProvider("openai-compatible:claude", [anthModel]),
-    ]);
-
-    const request: SpawnBackgroundRequest = {
-      task: "Review",
-      message: "Review",
-      model: "does-not-exist",
-    };
+  it("throws for an unavailable explicit model", async () => {
+    const foreground = makeModel("gpt-5.6-terra", "codex");
+    const registry = makeRegistry([makeProvider("codex", [foreground])]);
 
     await expect(
-      resolveBackgroundRoute(registry, request, {
-        mode: "code",
-        model: "claude-sonnet-4-6",
-      }),
+      resolveBackgroundRoute(
+        registry,
+        generalRequest({ model: "does-not-exist" }),
+        { mode: "code", model: foreground.id },
+      ),
     ).rejects.toThrow(/Requested model/);
+  });
+
+  it("throws for an unauthenticated explicit model", async () => {
+    const foreground = makeModel("gpt-5.6-terra", "codex");
+    const requested = makeModel("custom-worker", "custom");
+    const registry = makeRegistry([
+      makeProvider("codex", [foreground]),
+      makeProvider("custom", [requested], false),
+    ]);
+
+    await expect(
+      resolveBackgroundRoute(
+        registry,
+        generalRequest({ model: requested.id, modelTier: "cheap" }),
+        { mode: "code", model: foreground.id },
+      ),
+    ).rejects.toThrow(/not authenticated/);
   });
 });

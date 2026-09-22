@@ -3236,6 +3236,109 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
   });
 
+  it("replaces a browser send with its committed transcript row even when the ids differ", async () => {
+    const initial = createSnapshot();
+    initial.session.foreground.projectedMessages = [
+      {
+        id: "previous-user",
+        role: "user",
+        content: "Ship it",
+        timestamp: 1,
+        blocks: [],
+        origin: "browser",
+      },
+    ];
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/send")) return jsonResponse({ ok: true });
+      if (url.includes("/api/ui-state")) return jsonResponse(initial);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands"))
+        return jsonResponse({ commands: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+    await selectWorkspaceTab();
+    await waitFor(() => {
+      expect(screen.queryByText("Loading session…")).toBeNull();
+      expect(screen.getByText("Ship it")).toBeTruthy();
+    });
+    fireEvent.click(await screen.findByTestId("trigger-send"));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).includes("/api/send"),
+        ),
+      ).toBe(true);
+      expect(document.querySelectorAll(".message.user-message")).toHaveLength(
+        2,
+      );
+    });
+
+    const committed = structuredClone(initial);
+    committed.session.foreground.projectedMessages.push(
+      {
+        id: "committed-browser-user",
+        role: "user",
+        content: "Ship it",
+        timestamp: 2,
+        blocks: [],
+        origin: "browser",
+      },
+      {
+        id: "assistant-after-send",
+        role: "assistant",
+        content: "Done",
+        timestamp: 3,
+        blocks: [{ type: "text", text: "Done" }],
+      },
+    );
+    await act(async () => {
+      MockEventSource.instances.at(-1)?.emit("snapshot", committed);
+    });
+    await waitFor(() => {
+      expect(document.querySelectorAll(".message.user-message")).toHaveLength(
+        2,
+      );
+      expect(
+        document.querySelectorAll(".message.user-message .markdown-body p"),
+      ).toHaveLength(2);
+    });
+    const transcript =
+      document.querySelector(".chat-messages") ?? document.body;
+    const committedRow = Array.from(
+      transcript.querySelectorAll(".message.user-message"),
+    ).at(-1);
+    expect(committedRow?.textContent).toContain("Remote");
+    expect(committedRow?.nextElementSibling?.textContent).toContain("Done");
+  });
+
   it("keeps an interjection queued until its different-id transcript turn arrives", async () => {
     const snapshot = createSnapshot();
     snapshot.session.foreground.status = "streaming";

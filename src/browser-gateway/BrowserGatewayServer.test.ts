@@ -296,6 +296,9 @@ function makeChatViewProviderStub() {
       },
     ]),
     submitBrowserSetModel: vi.fn(async (_model: string) => ({ ok: true })),
+    submitBrowserSetCondenseThreshold: vi.fn(
+      async (_threshold: number | null) => ({ ok: true }),
+    ),
     submitBrowserSetWriteApproval: vi.fn(() => ({ ok: true })),
     submitBrowserSetCommandApprovalPolicy: vi.fn(() => ({ ok: true })),
     submitBrowserSetThinkingEnabled: vi.fn(() => ({ ok: true })),
@@ -2331,6 +2334,23 @@ describe("BrowserGatewayServer", () => {
     expect(chatViewProvider.submitBrowserSetModel).toHaveBeenCalledWith(
       "claude-opus-4-8",
     );
+
+    const resetCondenseThreshold = await fetch(
+      `${baseUrl}/api/condense-threshold`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({ threshold: null, sessionId: "session-1" }),
+      },
+    );
+    expect(resetCondenseThreshold.status).toBe(200);
+    expect(await resetCondenseThreshold.json()).toMatchObject({ ok: true });
+    expect(
+      chatViewProvider.submitBrowserSetCondenseThreshold,
+    ).toHaveBeenCalledWith(null, "session-1");
 
     const authorizedWriteApproval = await fetch(
       `${baseUrl}/api/write-approval`,

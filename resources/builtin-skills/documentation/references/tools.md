@@ -96,9 +96,11 @@ Exact session-tool parameters: [orchestration tools](complete-reference.md#built
 
 ## Delegate work
 
-- `spawn_background_agent` starts a bounded background task.
-- `get_background_status`, `get_background_result`, `steer_background_agent`, and `kill_background_agent` supervise it.
+- `spawn_background_agent` starts a bounded background task. `modelTier` accepts `cheap`, `balanced`, `deep_reasoning`, or `foreground`; ordinary native work defaults below the foreground model when a configured tier group can satisfy it.
+- `get_background_status`, `get_background_result`, `steer_background_agent`, and `kill_background_agent` supervise it. `get_background_result` keeps its single-session form and also accepts `sessionIds` with `return_when: "any" | "all"` for one cleanup-safe bounded wait across several agents.
 - Fleet workflows can run structured review, browser verification, best-of-N work, or scheduled goals.
+
+Orchestrate mode is the coordination-first workflow for delegating substantial research, codebase reading, implementation, validation, and review while keeping the frontier foreground model's context small. It chooses the lowest sufficient model tier, assigns non-overlapping writable scopes, monitors without tight polling, and integrates compact results rather than repeating each agent's investigation.
 
 Use clear ownership and a focused review scope for writable or review work. Structured `ownedPaths`/`forbiddenPaths` are included verbatim in the child's task handoff when supplied. Native agents are told these are enforced path restrictions; ACP agents are told they are advisory. Forbidden paths take precedence, and steering or coordinator replies cannot expand the configured scope. Delegate a new scope or let the coordinator handle extra files instead. Native text and structured reviews receive bounded finalization recovery after an output limit or missing result. Empty text and unfinalized native review output are incomplete, not successful; partial output remains available. Explicit unsuccessful provider/ACP stops cannot turn partial output into a completed review. See [background agents](capabilities.md#background-agents-and-orchestration) and the [full background tool reference](complete-reference.md#spawn_background_agent).
 

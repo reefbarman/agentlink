@@ -3084,6 +3084,10 @@ export function App({
     [vscodeApi],
   );
 
+  const handleResetCondenseThreshold = useCallback(() => {
+    vscodeApi.postMessage({ command: "agentResetCondenseThreshold" });
+  }, [vscodeApi]);
+
   const handleSetupAction = useCallback(
     (
       action:
@@ -4828,6 +4832,7 @@ export function App({
               availableModels={state.availableModels}
               onSelectModel={handleSelectModel}
               onSetCondenseThreshold={handleSetCondenseThreshold}
+              onResetCondenseThreshold={handleResetCondenseThreshold}
               onSignIn={handleSignIn}
               onSwitchMode={
                 state.chatState.projects?.length === 0

@@ -6,6 +6,15 @@ import type {
 
 import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 
+export type BackgroundModelTier = "cheap" | "balanced" | "deep_reasoning";
+export type BackgroundModelTierRequest = BackgroundModelTier | "foreground";
+export type BackgroundModelTierSource =
+  | "configured"
+  | "builtin"
+  | "heuristic"
+  | "unknown"
+  | "external";
+
 export type {
   BackgroundAgentBudgetUsage,
   BackgroundAgentRuntimePhase,
@@ -67,7 +76,7 @@ export interface SpawnBackgroundRequest {
   model?: string;
   provider?: string;
   taskClass?: string;
-  modelTier?: "cheap" | "balanced" | "deep_reasoning";
+  modelTier?: BackgroundModelTierRequest;
   ownedPaths?: string[];
   forbiddenPaths?: string[];
   permissionProfile?: "review-only" | "workspace-safe" | "interactive";
@@ -89,6 +98,11 @@ export interface SpawnBackgroundResult {
   resolvedProvider: string;
   reasoningEffort?: CoreReasoningEffort;
   taskClass: string;
+  requestedModelTier?: BackgroundModelTierRequest;
+  modelTier?: BackgroundModelTier;
+  resolvedModelTier?: BackgroundModelTier | "unknown";
+  resolvedModelTierSource?: BackgroundModelTierSource;
+  modelGroup?: string;
   routingReason: string;
   fallbackUsed: boolean;
 }
@@ -110,6 +124,11 @@ export interface BackgroundAgentStatusResult {
   resolvedProvider?: string;
   reasoningEffort?: CoreReasoningEffort;
   taskClass?: string;
+  requestedModelTier?: BackgroundModelTierRequest;
+  modelTier?: BackgroundModelTier;
+  resolvedModelTier?: BackgroundModelTier | "unknown";
+  resolvedModelTierSource?: BackgroundModelTierSource;
+  modelGroup?: string;
   toolCalls?: number;
   tokenUsage?: number;
   apiTurns?: number;
@@ -157,6 +176,19 @@ export interface BackgroundAgentResultContent {
   images: Array<{ data: string; mimeType: string }>;
 }
 
+export type BackgroundAgentWaitMode = "any" | "all";
+
+export interface BackgroundAgentResultsRequest {
+  sessionIds: string[];
+  returnWhen: BackgroundAgentWaitMode;
+  waitSeconds: number;
+}
+
+export interface BackgroundAgentResultsContent {
+  text: string;
+  images: Array<{ data: string; mimeType: string }>;
+}
+
 export interface BackgroundAgentProvider {
   spawn(request: SpawnBackgroundRequest): Promise<SpawnBackgroundResult>;
   getStatus(sessionId: string): BackgroundAgentStatusResult;
@@ -164,5 +196,9 @@ export interface BackgroundAgentProvider {
     sessionId: string,
     waitSeconds: number,
   ): Promise<string | BackgroundAgentResultContent>;
+  getResults?(
+    request: BackgroundAgentResultsRequest,
+    signal?: AbortSignal,
+  ): Promise<string | BackgroundAgentResultsContent>;
   kill(sessionId: string, reason?: string): BackgroundAgentKillResult;
 }

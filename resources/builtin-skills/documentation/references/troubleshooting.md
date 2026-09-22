@@ -35,11 +35,11 @@ AgentLink now uses a shared macOS Keychain account pool for VS Code, AgentLink D
 
 If Keychain is locked or unavailable, AgentLink fails closed and keeps the stored account data intact. Unlock Keychain and retry rather than repeatedly adding the account. macOS may ask once for each distinct AgentLink host executable (for example VS Code and AgentLink Desktop). AgentLink caches successful reads within each host and uses a non-secret local revision marker to notice account changes from another surface, so reopening account menus should not repeatedly access Keychain; continued prompts from the same host after choosing **Always Allow** indicate a Keychain access-control problem rather than a missing login.
 
-## GPT-6 Astra is selected but the request fails
+## A GPT-6 model is selected but the request fails
 
-AgentLink lists `gpt-6-astra` for ChatGPT/Codex OAuth and OpenAI API-key users without probing whether the current subscription account or API project has rollout access. If access is not enabled yet, AgentLink leaves Astra selected and shows the provider's normal error instead of silently changing models or credentials.
+AgentLink lists GPT-6 Astra, Sol, and Luna for ChatGPT/Codex OAuth and OpenAI API-key users without probing whether the current subscription account or API project has rollout access. If access is not enabled yet, AgentLink leaves the selected model unchanged and shows the provider's normal error instead of silently changing models or credentials.
 
-- Confirm the intended ChatGPT account or OpenAI API project has Astra access and available quota.
+- Confirm the intended ChatGPT account or OpenAI API project has access to the selected model and available quota. OpenAI announced a gradual same-day rollout for Sol and Luna, so a newly released model may appear later for some accounts.
 - The ChatGPT backend can return `The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account` after that account exhausts its Codex allowance. AgentLink treats that exact contradiction as a usage limit, rotates to another signed-in account when available, and otherwise shows usage-limit guidance instead of repeating the misleading provider message.
 - A body-less OAuth `400` does not by itself prove an entitlement problem; it can also represent another ChatGPT/Codex backend rejection. For Astra, AgentLink identifies that exact failure, confirms that it sent the Responses Lite contract, explains that the server supplied no exact reason, and includes the OpenAI request ID or Cloudflare Ray when the response exposes one.
 - OAuth exposes Astra's `ultra` preset and sends its catalog-mapped `xhigh` wire effort through Codex's Responses Lite transport. API-key requests clamp a saved `ultra` preference to `max`, and the UI shows that effective effort.

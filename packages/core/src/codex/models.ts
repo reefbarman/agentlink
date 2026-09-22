@@ -45,7 +45,7 @@ export interface CodexModelDef {
   apiAvailable?: boolean;
 }
 
-const GPT_6_ASTRA_API_REASONING_EFFORTS = [
+const GPT_6_API_REASONING_EFFORTS = [
   "none",
   "low",
   "medium",
@@ -55,7 +55,7 @@ const GPT_6_ASTRA_API_REASONING_EFFORTS = [
 ] as const satisfies readonly CoreReasoningEffort[];
 
 const GPT_6_ASTRA_OAUTH_REASONING_EFFORTS = [
-  ...GPT_6_ASTRA_API_REASONING_EFFORTS,
+  ...GPT_6_API_REASONING_EFFORTS,
   "ultra",
 ] as const satisfies readonly CoreReasoningEffort[];
 
@@ -142,10 +142,14 @@ export interface ResponsesCaps {
  * Last verified by live probe on 2026-07-19. gpt-5.4 / gpt-5.4-mini still
  * responded then but are hidden from the official roster with "no longer
  * available" migration notices (5.4 → Terra, 5.4-mini → Luna), i.e. they are
- * in a deprecation grace period — treat them as gone.
+ * in a deprecation grace period — treat them as gone. GPT-6 Sol and Luna were
+ * added from OpenAI's 2026-09-22 launch announcement while their gradual Codex
+ * rollout was still in progress.
  */
 export const CODEX_CHATGPT_BACKEND_MODEL_IDS = [
   "gpt-6-astra",
+  "gpt-6-sol",
+  "gpt-6-luna",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",
@@ -308,8 +312,28 @@ export const CODEX_MODELS: CodexModelDef[] = [
     supportsImages: true,
     supportsThinking: true,
     defaultReasoningEffort: "low",
-    reasoningEfforts: [...GPT_6_ASTRA_API_REASONING_EFFORTS],
+    reasoningEfforts: [...GPT_6_API_REASONING_EFFORTS],
     defaultTextVerbosity: "low",
+  },
+  {
+    id: "gpt-6-sol",
+    displayName: "GPT-6 Sol",
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
+    maxOutputTokens: 128_000,
+    supportsImages: true,
+    supportsThinking: true,
+    defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_6_API_REASONING_EFFORTS],
+  },
+  {
+    id: "gpt-6-luna",
+    displayName: "GPT-6 Luna",
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
+    maxOutputTokens: 128_000,
+    supportsImages: true,
+    supportsThinking: true,
+    defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_6_API_REASONING_EFFORTS],
   },
   {
     id: "gpt-5.6-sol",

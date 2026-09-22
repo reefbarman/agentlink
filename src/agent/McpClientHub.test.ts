@@ -450,9 +450,10 @@ describe("McpClientHub protocol correctness", () => {
 
       mocks.stdioTransports[0]?.onclose?.();
       await vi.advanceTimersByTimeAsync(1_000);
-      await vi.waitFor(() => expect(mocks.connect).toHaveBeenCalledTimes(2));
-
-      expect(hub.getServerInfos()[0]?.status).toBe("connected");
+      await vi.waitFor(() => {
+        expect(mocks.connect).toHaveBeenCalledTimes(2);
+        expect(hub.getServerInfos()[0]?.status).toBe("connected");
+      });
     } finally {
       await hub.disconnectAll();
       vi.useRealTimers();

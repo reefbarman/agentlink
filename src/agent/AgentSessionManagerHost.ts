@@ -263,6 +263,9 @@ export function createDefaultAgentSessionManagerHost(args: {
           defaultAgent: config.get<unknown>("background.defaultAgent"),
           reviewAgent: config.get<unknown>("background.reviewAgent"),
           reviewTarget: config.get<unknown>("background.reviewTarget"),
+          modelTiers: vscode.workspace
+            .getConfiguration("agentlink")
+            .get<unknown>("background.modelTiers"),
           acpAgents: config.get<unknown>("background.acpAgents"),
         };
       },

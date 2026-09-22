@@ -1580,6 +1580,8 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     const oauthIds = oauthProvider.listModels().map((m) => m.id);
     expect(oauthIds).toContain("gpt-6-astra");
+    expect(oauthIds).toContain("gpt-6-sol");
+    expect(oauthIds).toContain("gpt-6-luna");
     expect(oauthIds).toContain("gpt-5.6-sol");
     expect(oauthIds).toContain("gpt-5.6-terra");
     expect(oauthIds).toContain("gpt-5.6-luna");
@@ -1597,6 +1599,8 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     const apiKeyIds = apiKeyProvider.listModels().map((m) => m.id);
     expect(apiKeyIds).toContain("gpt-6-astra");
+    expect(apiKeyIds).toContain("gpt-6-sol");
+    expect(apiKeyIds).toContain("gpt-6-luna");
     expect(apiKeyIds).toContain("gpt-5.6-sol");
     expect(apiKeyIds).toContain("gpt-5.5");
     expect(apiKeyIds).toContain("gpt-5.4-pro");

@@ -1,5 +1,9 @@
 import * as vscode from "vscode";
 
+import {
+  getTargetWindowScale,
+  type CondenseWindowCapabilities,
+} from "./condenseTargetWindow.js";
 import { getUserSessionPreference } from "./sharedSessionPreferences.js";
 
 export const MODEL_THRESHOLD_KEY = "modelCondenseThresholds";
@@ -9,6 +13,10 @@ export const MODEL_THRESHOLD_KEY = "modelCondenseThresholds";
 // next request reprocesses the whole rewritten history uncached. With healthy
 // caching, large contexts are cheap per-request — condense near the limit
 // (like Claude Code/Codex auto-compaction), not as routine hygiene.
+//
+// These fractions are relative to a 256k usable-input target rather than the
+// model's real window (see condenseTargetWindow.ts): quality degrades well
+// before a 1M window fills, so the default scales down for larger models.
 const GPT_5_6_DEFAULT_THRESHOLD = 0.65;
 const LARGE_CONTEXT_DEFAULT_THRESHOLD = 0.85;
 const LEGACY_LARGE_MODEL_DEFAULT_THRESHOLD = 0.8;
@@ -50,9 +58,9 @@ function isLegacyLargeContextFrontierModel(modelId: string): boolean {
   );
 }
 
-export function getDefaultAutoCondenseThreshold(
+function getBaseAutoCondenseThreshold(
   modelId: string,
-  capabilities?: { contextWindow?: number },
+  capabilities?: CondenseWindowCapabilities,
 ): number {
   if (isGpt56Model(modelId)) return GPT_5_6_DEFAULT_THRESHOLD;
   if (
@@ -64,6 +72,16 @@ export function getDefaultAutoCondenseThreshold(
   return isLegacyLargeContextFrontierModel(modelId)
     ? LEGACY_LARGE_MODEL_DEFAULT_THRESHOLD
     : OTHER_MODELS_DEFAULT_THRESHOLD;
+}
+
+export function getDefaultAutoCondenseThreshold(
+  modelId: string,
+  capabilities?: CondenseWindowCapabilities,
+): number {
+  return clampCondenseThreshold(
+    getBaseAutoCondenseThreshold(modelId, capabilities) *
+      getTargetWindowScale(capabilities),
+  );
 }
 
 export function normalizeModelThresholdMap(
@@ -81,7 +99,7 @@ export function normalizeModelThresholdMap(
 export function getEffectiveAutoCondenseThreshold(
   modelId: string,
   overrides?: ModelCondenseThresholdMap,
-  capabilities?: { contextWindow?: number },
+  capabilities?: CondenseWindowCapabilities,
 ): number {
   const explicit = overrides?.[modelId];
   if (typeof explicit === "number") return clampCondenseThreshold(explicit);
@@ -91,7 +109,7 @@ export function getEffectiveAutoCondenseThreshold(
 export function getConfiguredBaseThresholdForModel(
   config: vscode.WorkspaceConfiguration,
   modelId: string,
-  capabilities?: { contextWindow?: number },
+  capabilities?: CondenseWindowCapabilities,
 ): number {
   const overrides = getModelCondenseThresholdMap(config);
   return getEffectiveAutoCondenseThreshold(modelId, overrides, capabilities);

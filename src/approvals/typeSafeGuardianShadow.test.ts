@@ -63,6 +63,21 @@ function typeSafeResponse(overrides: Record<string, unknown> = {}): Response {
         objective_match: { type: "noul", noul: 0.94 },
         secret_exposure: { type: "noul", noul: 0.03 },
         bounded_impact: { type: "noul", noul: 0.89 },
+        decision_basis: {
+          type: "choice",
+          choice: "authorized",
+          confidence: 0.76,
+          probabilities: {
+            authorized: 0.76,
+            authorization: 0.04,
+            objective_mismatch: 0.04,
+            secret_exposure: 0.04,
+            unbounded_impact: 0.04,
+            security_impact: 0.03,
+            incomplete_evidence: 0.03,
+            other: 0.02,
+          },
+        },
       },
       usage: { input_tokens: 321, output_tokens: 45 },
       ...overrides,
@@ -119,7 +134,10 @@ describe("TypeSafe Guardian shadow reviewer", () => {
       outcome: "allow",
       risk: "medium",
       userAuthorization: "high",
+      decisionBasis: "authorized",
       confidencePermille: 820,
+      actionFamily: "destructive",
+      authorizationEvidence: "complete",
       objectiveMatchPermille: 940,
       secretExposurePermille: 30,
       boundedImpactPermille: 890,
@@ -147,6 +165,7 @@ describe("TypeSafe Guardian shadow reviewer", () => {
         objective_match: expect.objectContaining({ type: "noul" }),
         secret_exposure: expect.objectContaining({ type: "noul" }),
         bounded_impact: expect.objectContaining({ type: "noul" }),
+        decision_basis: expect.objectContaining({ type: "choice" }),
       }),
     );
     expect(body.state.action.command).toBe("rm -rf generated");
@@ -282,6 +301,68 @@ describe("TypeSafe Guardian shadow reviewer", () => {
       executable: true,
     });
     expect(body.state.action.inlineFiles[0]).not.toHaveProperty("name");
+  });
+
+  it.each([
+    {
+      label: "missing",
+      content: null,
+      expected: "missing",
+    },
+    {
+      label: "redacted",
+      content: "Use GITHUB_TOKEN=secret-value to run it",
+      expected: "redacted",
+    },
+    {
+      label: "truncated",
+      content: "safe instruction ".repeat(90),
+      expected: "truncated",
+    },
+    {
+      label: "redacted and truncated",
+      content: `GITHUB_TOKEN=secret-value ${"safe instruction ".repeat(90)}`,
+      expected: "redacted_truncated",
+    },
+  ])(
+    "classifies $label direct authorization evidence",
+    async ({ content, expected }) => {
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockResolvedValue(typeSafeResponse());
+      const reviewer = createTypeSafeGuardianShadowReviewer({
+        getConfig: () => ({ enabled: true }),
+        getApiKey: async () => "typesafe-key",
+        fetch,
+      });
+      const input = reviewInput();
+      input.context = content
+        ? [{ role: "user", content, directUserInstruction: true }]
+        : [];
+
+      await expect(reviewer.review(input)).resolves.toMatchObject({
+        status: "completed",
+        authorizationEvidence: expected,
+      });
+    },
+  );
+
+  it("classifies compound command families without recording command text", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+
+    await expect(
+      reviewer.review(reviewInput("git status && rm -rf generated")),
+    ).resolves.toMatchObject({
+      status: "completed",
+      actionFamily: "mixed",
+    });
   });
 
   it("keeps only the latest direct user instruction from verbose context", async () => {
@@ -429,8 +510,10 @@ describe("TypeSafe Guardian shadow reviewer", () => {
       ),
     });
 
-    await expect(reviewer.review(reviewInput())).resolves.toEqual({
+    await expect(reviewer.review(reviewInput())).resolves.toMatchObject({
       status: "invalid_response",
+      actionFamily: "destructive",
+      authorizationEvidence: "complete",
     });
   });
 
@@ -449,8 +532,32 @@ describe("TypeSafe Guardian shadow reviewer", () => {
       ),
     });
 
-    await expect(reviewer.review(reviewInput())).resolves.toEqual({
+    await expect(reviewer.review(reviewInput())).resolves.toMatchObject({
       status: "invalid_response",
+      actionFamily: "destructive",
+      authorizationEvidence: "complete",
+    });
+  });
+
+  it("accepts a valid decision when the diagnostic decision basis is absent", async () => {
+    const response = typeSafeResponse();
+    const payload = (await response.json()) as Record<string, any>;
+    delete payload.answers.decision_basis;
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch: vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    });
+
+    await expect(reviewer.review(reviewInput())).resolves.toMatchObject({
+      status: "completed",
+      outcome: "allow",
+      decisionBasis: undefined,
     });
   });
 
@@ -471,8 +578,10 @@ describe("TypeSafe Guardian shadow reviewer", () => {
       fetch: vi.fn<typeof globalThis.fetch>().mockResolvedValue(response),
     });
 
-    await expect(reviewer.review(reviewInput())).resolves.toEqual({
+    await expect(reviewer.review(reviewInput())).resolves.toMatchObject({
       status: "invalid_response",
+      actionFamily: "destructive",
+      authorizationEvidence: "complete",
       inputTokens: 321,
       outputTokens: 45,
     });
@@ -515,7 +624,13 @@ describe("Guardian shadow comparison telemetry", () => {
       },
     });
 
-    expect(reviewed).toMatchObject({ outcomesAgree: true, shadowFaster: true });
+    expect(reviewed).toMatchObject({
+      outcomesAgree: true,
+      shadowFaster: true,
+      primaryAuthorization: "unknown",
+      actionFamily: "unreported",
+      authorizationEvidence: "unreported",
+    });
     expect(timedOut.outcomesAgree).toBeUndefined();
     expect(timedOut.shadowFaster).toBeUndefined();
   });

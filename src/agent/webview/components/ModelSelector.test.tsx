@@ -76,6 +76,30 @@ describe("ModelSelector", () => {
     expect(screen.getByRole("slider")).toBeTruthy();
   });
 
+  it("resets the active model threshold without selecting the model", () => {
+    const onSelect = vi.fn();
+    const onSetCondenseThreshold = vi.fn();
+    const onResetCondenseThreshold = vi.fn();
+    render(
+      <ModelSelector
+        currentModel="gpt-5.6-sol"
+        currentCondenseThreshold={0.72}
+        models={models}
+        onSelect={onSelect}
+        onSetCondenseThreshold={onSetCondenseThreshold}
+        onResetCondenseThreshold={onResetCondenseThreshold}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle(/Model: GPT-5\.6 Sol/));
+    fireEvent.click(screen.getByTitle(/Auto-condense 72% — click to adjust/));
+    fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
+
+    expect(onResetCondenseThreshold).toHaveBeenCalledOnce();
+    expect(onSetCondenseThreshold).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it("routes an unauthenticated model through its explicit auth action", () => {
     const onSelect = vi.fn();
     const onSignIn = vi.fn();

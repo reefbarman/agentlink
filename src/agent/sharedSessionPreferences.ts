@@ -99,6 +99,27 @@ export async function writeUserSessionPreferenceEntry<T>(
   );
 }
 
+export async function removeUserSessionPreferenceEntry(
+  config: vscode.WorkspaceConfiguration,
+  key: typeof MODEL_CONDENSE_THRESHOLDS_KEY,
+  entryKey: string,
+): Promise<void> {
+  const normalizedKey = entryKey.trim();
+  if (!normalizedKey) throw new Error("Shared session preference key is empty");
+  const legacy = {
+    ...config.inspect?.<Record<string, number>>(key)?.globalValue,
+  };
+  if (normalizedKey in legacy) {
+    delete legacy[normalizedKey];
+    await config.update(key, legacy, true);
+  }
+  const store = sharedPreferencesStore;
+  if (!store) return;
+  sharedPreferences = await store.update({
+    removeModelCondenseThresholds: [normalizedKey],
+  });
+}
+
 export async function rememberSessionMode(mode: string): Promise<void> {
   await writeUserSessionPreference(
     vscode.workspace.getConfiguration("agentlink"),

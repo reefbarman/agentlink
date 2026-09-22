@@ -1065,6 +1065,425 @@ describe("AgentSessionManager background agents", () => {
     }
   });
 
+  it("returns completed and pending progress for returnWhen any with completed-agent images", async () => {
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    mocks.runBehavior
+      .mockReturnValueOnce(
+        (async function* () {
+          await new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+          yield { type: "done" };
+        })(),
+      )
+      .mockReturnValueOnce(
+        (async function* () {
+          await new Promise<void>((resolve) => {
+            releaseSecond = resolve;
+          });
+          yield { type: "done" };
+        })(),
+      );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    const first = await mgr.spawnBackground(
+      { task: "first", message: "run first" },
+      foreground.id,
+    );
+    const second = await mgr.spawnBackground(
+      { task: "second", message: "run second" },
+      foreground.id,
+    );
+    await waitFor(
+      () => releaseSecond,
+      (release) => typeof release === "function",
+    );
+    const firstSession = (mgr as any).sessions.get(first.sessionId);
+    const secondSession = (mgr as any).sessions.get(second.sessionId);
+    firstSession.getLastAssistantText.mockReturnValue("first result");
+    firstSession.getAllMessages.mockReturnValue([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: "completed-image",
+            },
+          },
+        ],
+      },
+    ]);
+    secondSession.getAllMessages.mockReturnValue([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/webp",
+              data: "pending-image",
+            },
+          },
+        ],
+      },
+    ]);
+
+    const waitPromise = mgr.waitForAuthorizedBackgroundResultsContent(
+      foreground.id,
+      {
+        sessionIds: [first.sessionId, second.sessionId],
+        returnWhen: "any",
+        waitSeconds: 30,
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(foreground.onPendingInterjectionQueued).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    const content = await waitPromise;
+    expect(content).toEqual({
+      text: expect.any(String),
+      images: [{ data: "completed-image", mimeType: "image/png" }],
+    });
+    const result = JSON.parse((content as { text: string }).text);
+    expect(result).toMatchObject({
+      status: "completed",
+      returnWhen: "any",
+      done: false,
+      completed: [
+        {
+          sessionId: first.sessionId,
+          result: "first result",
+          resultState: "completed",
+        },
+      ],
+      pending: [{ sessionId: second.sessionId }],
+    });
+    expect((mgr as any).bgResultWaiters.has(first.sessionId)).toBe(false);
+    expect((mgr as any).bgResultWaiters.has(second.sessionId)).toBe(false);
+
+    releaseSecond();
+    await mgr.waitForBackground(second.sessionId);
+  });
+
+  it("waits for every requested result with one background caller hold and one interruption subscription", async () => {
+    let releaseParent!: () => void;
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    mocks.runBehavior
+      .mockReturnValueOnce(
+        (async function* () {
+          await new Promise<void>((resolve) => {
+            releaseParent = resolve;
+          });
+          yield { type: "done" };
+        })(),
+      )
+      .mockReturnValueOnce(
+        (async function* () {
+          await new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+          yield { type: "done" };
+        })(),
+      )
+      .mockReturnValueOnce(
+        (async function* () {
+          await new Promise<void>((resolve) => {
+            releaseSecond = resolve;
+          });
+          yield { type: "done" };
+        })(),
+      );
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+    );
+    mgr.setToolContext(toolCtx);
+    const parent = await mgr.spawnBackground({
+      task: "parent",
+      message: "coordinate",
+      permissionProfile: "review-only",
+    });
+    const first = await mgr.spawnBackground(
+      { task: "first", message: "run first" },
+      parent.sessionId,
+    );
+    const second = await mgr.spawnBackground(
+      { task: "second", message: "run second" },
+      parent.sessionId,
+    );
+    await waitFor(
+      () => releaseSecond,
+      (release) => typeof release === "function",
+    );
+    const parentSession = (mgr as any).sessions.get(parent.sessionId);
+    parentSession.onPendingInterjectionQueued.mockClear();
+
+    const waitPromise = mgr.waitForAuthorizedBackgroundResultsContent(
+      parent.sessionId,
+      {
+        sessionIds: [first.sessionId, second.sessionId],
+        returnWhen: "all",
+        waitSeconds: 30,
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((mgr as any).bgResultWaitHolds.get(parent.sessionId)).toBe(1);
+    expect(parentSession.onPendingInterjectionQueued).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((mgr as any).bgResultWaitHolds.get(parent.sessionId)).toBe(1);
+    let settled = false;
+    void waitPromise.then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    releaseSecond();
+    const content = await waitPromise;
+    expect(typeof content).toBe("string");
+    const result = JSON.parse(content as string);
+    expect(result).toMatchObject({
+      status: "completed",
+      returnWhen: "all",
+      done: true,
+      pending: [],
+    });
+    expect(result.completed.map((item: any) => item.sessionId)).toEqual([
+      first.sessionId,
+      second.sessionId,
+    ]);
+    expect((mgr as any).bgResultWaitHolds.has(parent.sessionId)).toBe(false);
+    expect((mgr as any).bgResultWaiters.has(first.sessionId)).toBe(false);
+    expect((mgr as any).bgResultWaiters.has(second.sessionId)).toBe(false);
+
+    releaseParent();
+    await mgr.waitForBackground(parent.sessionId);
+  });
+
+  it("atomically denies a multi-agent wait before registering authorized targets", async () => {
+    mocks.runBehavior.mockReturnValueOnce(
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    const child = await mgr.spawnBackground(
+      { task: "child", message: "run" },
+      foreground.id,
+    );
+    (
+      foreground.onPendingInterjectionQueued as ReturnType<typeof vi.fn>
+    ).mockClear();
+
+    const content = await mgr.waitForAuthorizedBackgroundResultsContent(
+      foreground.id,
+      {
+        sessionIds: [child.sessionId, "not-a-session"],
+        returnWhen: "all",
+        waitSeconds: 30,
+      },
+    );
+    expect(typeof content).toBe("string");
+    const result = JSON.parse(content as string);
+
+    expect(result).toMatchObject({
+      status: "not_found",
+      sessionId: "not-a-session",
+      terminalReason: "background_session_not_found",
+    });
+    expect((mgr as any).bgResultWaiters.size).toBe(0);
+    expect((mgr as any).bgResultWaitHolds.size).toBe(0);
+    expect(foreground.onPendingInterjectionQueued).not.toHaveBeenCalled();
+  });
+
+  it("cleans every aggregate waiter and the caller hold when interrupted", async () => {
+    mocks.runBehavior
+      .mockReturnValueOnce(
+        (async function* () {
+          await new Promise<never>(() => undefined);
+          yield { type: "done" };
+        })(),
+      )
+      .mockReturnValueOnce(
+        (async function* () {
+          await new Promise<never>(() => undefined);
+          yield { type: "done" };
+        })(),
+      );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    const first = await mgr.spawnBackground(
+      { task: "first", message: "run first" },
+      foreground.id,
+    );
+    const second = await mgr.spawnBackground(
+      { task: "second", message: "run second" },
+      foreground.id,
+    );
+
+    const waitPromise = mgr.waitForAuthorizedBackgroundResultsContent(
+      foreground.id,
+      {
+        sessionIds: [first.sessionId, second.sessionId],
+        returnWhen: "all",
+        waitSeconds: 30,
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    foreground.setPendingInterjection("new instructions", "queue-1");
+
+    const content = await waitPromise;
+    expect(typeof content).toBe("string");
+    const result = JSON.parse(content as string);
+    expect(result).toMatchObject({
+      status: "wait_interrupted",
+      returnWhen: "all",
+      done: false,
+      completed: [],
+    });
+    expect(result.pending.map((item: any) => item.sessionId)).toEqual([
+      first.sessionId,
+      second.sessionId,
+    ]);
+    expect((mgr as any).bgResultWaiters.size).toBe(0);
+    expect((mgr as any).bgResultWaitHolds.size).toBe(0);
+  });
+
+  it("cleans up aggregate waiters and holds immediately when the tool call is cancelled", async () => {
+    mocks.runBehavior
+      .mockReturnValueOnce(
+        (async function* () {
+          await new Promise<never>(() => undefined);
+          yield { type: "done" };
+        })(),
+      )
+      .mockReturnValueOnce(
+        (async function* () {
+          await new Promise<never>(() => undefined);
+          yield { type: "done" };
+        })(),
+      );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const parent = await mgr.createSession("code");
+    (parent as any).background = true;
+    const first = await mgr.spawnBackground(
+      { task: "first", message: "run first" },
+      parent.id,
+    );
+    const second = await mgr.spawnBackground(
+      { task: "second", message: "run second" },
+      parent.id,
+    );
+    const controller = new AbortController();
+
+    const waitPromise = mgr.waitForAuthorizedBackgroundResultsContent(
+      parent.id,
+      {
+        sessionIds: [first.sessionId, second.sessionId],
+        returnWhen: "all",
+        waitSeconds: 30,
+      },
+      controller.signal,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((mgr as any).bgResultWaitHolds.get(parent.id)).toBe(1);
+
+    controller.abort();
+    const content = await waitPromise;
+    expect(JSON.parse(content as string)).toMatchObject({
+      status: "wait_cancelled",
+      reason: "tool_call_cancelled",
+      retrySafe: true,
+    });
+    expect((mgr as any).bgResultWaiters.size).toBe(0);
+    expect((mgr as any).bgResultWaitHolds.size).toBe(0);
+    expect(mgr.getBackgroundStatus(first.sessionId).done).toBe(false);
+    expect(mgr.getBackgroundStatus(second.sessionId).done).toBe(false);
+  });
+
+  it("returns aggregate completed and pending progress after one bounded wait timer", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.runBehavior
+        .mockReturnValueOnce(
+          (async function* () {
+            await new Promise<never>(() => undefined);
+            yield { type: "done" };
+          })(),
+        )
+        .mockReturnValueOnce(
+          (async function* () {
+            await new Promise<never>(() => undefined);
+            yield { type: "done" };
+          })(),
+        );
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const mgr = new AgentSessionManager(config, "/tmp");
+      mgr.setToolContext(toolCtx);
+      const foreground = await mgr.createSession("code");
+      const first = await mgr.spawnBackground(
+        { task: "first", message: "run first" },
+        foreground.id,
+      );
+      const second = await mgr.spawnBackground(
+        { task: "second", message: "run second" },
+        foreground.id,
+      );
+      const timerCountBeforeWait = setTimeoutSpy.mock.calls.length;
+
+      const waitPromise = mgr.waitForAuthorizedBackgroundResultsContent(
+        foreground.id,
+        {
+          sessionIds: [first.sessionId, second.sessionId],
+          returnWhen: "all",
+          waitSeconds: 1,
+        },
+      );
+      expect(setTimeoutSpy.mock.calls.length - timerCountBeforeWait).toBe(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const content = await waitPromise;
+      expect(typeof content).toBe("string");
+      const result = JSON.parse(content as string);
+      expect(result).toMatchObject({
+        status: "still_running",
+        returnWhen: "all",
+        done: false,
+        completed: [],
+        retryAfterMs: 5_000,
+        retrySafe: true,
+      });
+      expect(result.pending.map((item: any) => item.sessionId)).toEqual([
+        first.sessionId,
+        second.sessionId,
+      ]);
+      expect((mgr as any).bgResultWaiters.size).toBe(0);
+      expect((mgr as any).bgResultWaitHolds.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns wait_interrupted immediately when an interjection is already pending", async () => {
     mocks.runBehavior.mockReturnValueOnce(
       (async function* () {

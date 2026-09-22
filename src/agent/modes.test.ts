@@ -30,6 +30,23 @@ describe("built-in modes", () => {
     }
   });
 
+  it("keeps orchestrate focused on coordination rather than direct mutation", () => {
+    const orchestrate = BUILT_IN_MODES.find(
+      (mode) => mode.slug === "orchestrate",
+    );
+    const tools = getToolsForMode(orchestrate!);
+
+    expect(orchestrate?.toolGroups).toEqual(
+      expect.arrayContaining(["read", "language", "search", "memory", "mcp"]),
+    );
+    expect(orchestrate?.toolGroups).not.toContain("edit");
+    expect(orchestrate?.toolGroups).not.toContain("command");
+    expect(tools).toContain("get_repo_map");
+    expect(tools).toContain("get_references");
+    expect(tools).not.toContain("write_file");
+    expect(tools).not.toContain("execute_command");
+  });
+
   it("preserves image generation for custom modes using the edit group", () => {
     expect(
       getToolsForMode({

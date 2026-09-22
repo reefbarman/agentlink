@@ -3082,6 +3082,12 @@ export async function activate(
         sessionId,
         waitSeconds,
       ),
+    onGetBackgroundResults: (callerSessionId, request, signal) =>
+      agentSessionManager.waitForAuthorizedBackgroundResultsContent(
+        callerSessionId,
+        request,
+        signal,
+      ),
     onKillBackground: (callerSessionId, sessionId, reason) =>
       agentSessionManager.killAuthorizedBackground(
         callerSessionId,

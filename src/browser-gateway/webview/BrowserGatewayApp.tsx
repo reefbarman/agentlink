@@ -1790,9 +1790,12 @@ export function BrowserGatewayApp({
     notes: Record<string, string>;
   } | null>(null);
   const [sendStatus, setSendStatus] = useState<string>("");
-  const optimisticUserMessageIdsRef = useRef(new Set<string>());
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<
-    Array<{ sessionId: string; message: ChatMessage }>
+    Array<{
+      sessionId: string;
+      message: ChatMessage;
+      baselineUserMessageCount: number;
+    }>
   >([]);
   const [optimisticQueuedMessages, setOptimisticQueuedMessages] = useState<
     Array<{
@@ -2482,52 +2485,78 @@ export function BrowserGatewayApp({
     messageQueue,
     optimisticQueuedMessages,
   ]);
-  const messages = useMemo<ChatMessage[]>(() => {
-    const confirmedMessages = foregroundProjectedMessages ?? [];
-    const confirmedIds = new Set(
-      confirmedMessages.map((message) => message.id),
+  const pendingUserMessages = useMemo(() => {
+    const confirmedUsers = (foregroundProjectedMessages ?? []).filter(
+      (message) => message.role === "user",
     );
     const queuedIds = new Set(
       (foregroundMessageQueue ?? []).map((message) => message.id),
     );
-    const pendingMessages = optimisticUserMessages
-      .filter(
-        ({ sessionId, message }) =>
-          sessionId === foreground?.sessionId &&
-          !confirmedIds.has(message.id) &&
-          !queuedIds.has(message.id) &&
-          optimisticUserMessageIdsRef.current.has(message.id),
-      )
-      .map(({ message }) => message);
+    const matchedIds = new Set<string>();
+    return optimisticUserMessages.filter(
+      ({ sessionId, message, baselineUserMessageCount }) => {
+        if (sessionId !== foreground?.sessionId) return false;
+        const committed = confirmedUsers.find(
+          (candidate, index) =>
+            !matchedIds.has(candidate.id) &&
+            (candidate.id === message.id ||
+              (index >= baselineUserMessageCount &&
+                candidate.origin === "browser" &&
+                candidate.content === message.content)),
+        );
+        if (committed) matchedIds.add(committed.id);
+        return !committed && !queuedIds.has(message.id);
+      },
+    );
+  }, [
+    foreground?.sessionId,
+    foregroundMessageQueue,
+    foregroundProjectedMessages,
+    optimisticUserMessages,
+  ]);
+  const messages = useMemo<ChatMessage[]>(() => {
     return projectFinalMarkerAutoContinueState(
-      [...confirmedMessages, ...pendingMessages],
+      [
+        ...(foregroundProjectedMessages ?? []),
+        ...pendingUserMessages.map(({ message }) => message),
+      ],
       hiddenFinalContinueMessageIds,
       autoContinueStopReasons,
     );
   }, [
     autoContinueStopReasons,
     foreground?.sessionId,
-    foregroundMessageQueue,
     foregroundProjectedMessages,
     hiddenFinalContinueMessageIds,
-    optimisticUserMessages,
+    pendingUserMessages,
   ]);
 
   useEffect(() => {
-    const confirmedIds = new Set(
-      (foregroundProjectedMessages ?? []).map((message) => message.id),
+    if (!foregroundProjectedMessages) return;
+    const confirmedUsers = foregroundProjectedMessages.filter(
+      (message) => message.role === "user",
     );
-    if (confirmedIds.size === 0) return;
-    for (const messageId of confirmedIds) {
-      optimisticUserMessageIdsRef.current.delete(messageId);
-    }
     setOptimisticUserMessages((current) => {
+      const matchedIds = new Set<string>();
       const next = current.filter(
-        ({ message }) => !confirmedIds.has(message.id),
+        ({ sessionId, message, baselineUserMessageCount }) => {
+          if (sessionId !== foreground?.sessionId) return true;
+          const committed = confirmedUsers.find(
+            (candidate, index) =>
+              !matchedIds.has(candidate.id) &&
+              (candidate.id === message.id ||
+                (index >= baselineUserMessageCount &&
+                  candidate.origin === "browser" &&
+                  candidate.content === message.content)),
+          );
+          if (!committed) return true;
+          matchedIds.add(committed.id);
+          return false;
+        },
       );
       return next.length === current.length ? current : next;
     });
-  }, [foregroundProjectedMessages, optimisticUserMessages]);
+  }, [foreground?.sessionId, foregroundProjectedMessages]);
 
   useEffect(() => {
     if (!foregroundMessageQueue || !foregroundProjectedMessages) return;
@@ -4334,7 +4363,6 @@ export function BrowserGatewayApp({
 
     const userMessageId = randomId();
     const removeOptimisticUserMessage = () => {
-      optimisticUserMessageIdsRef.current.delete(userMessageId);
       setOptimisticUserMessages((current) =>
         current.filter(({ message }) => message.id !== userMessageId),
       );
@@ -4483,12 +4511,14 @@ export function BrowserGatewayApp({
           : {}),
       };
       const addOptimisticUserMessage = () => {
-        optimisticUserMessageIdsRef.current.add(userMessageId);
         setOptimisticUserMessages((current) => [
           ...current.filter(({ message }) => message.id !== userMessageId),
           {
             sessionId: sendForeground.sessionId,
             message: optimisticUserMessage,
+            baselineUserMessageCount: sendForeground.projectedMessages.filter(
+              (message) => message.role === "user",
+            ).length,
           },
         ]);
       };
@@ -5736,8 +5766,53 @@ export function BrowserGatewayApp({
     })();
   };
 
-  const handleSetCondenseThreshold = (_threshold: number): void => {
-    // Keep control visible for parity, but browser does not persist this yet.
+  const updateCondenseThreshold = (threshold: number | null): void => {
+    void (async () => {
+      try {
+        const actionOrigin = { ...snapshotOriginRef.current };
+        const response = await fetch(buildApiPath("/api/condense-threshold"), {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            threshold,
+            sessionId: foreground?.sessionId,
+          }),
+        });
+        const body = (await response.json()) as {
+          ok?: boolean;
+          error?: string;
+          snapshot?: GatewaySnapshot;
+        };
+        if (body.ok && body.snapshot) {
+          commitSnapshot(
+            body.snapshot,
+            actionOrigin.tabId,
+            actionOrigin.generation,
+          );
+        }
+        setModeStatus(
+          body.ok
+            ? threshold === null
+              ? "Auto-condense reset to default"
+              : "Auto-condense updated"
+            : `Auto-condense update failed: ${body.error ?? response.status}`,
+        );
+      } catch (error) {
+        setModeStatus(`Auto-condense update error: ${String(error)}`);
+      }
+    })();
+  };
+
+  const handleSetCondenseThreshold = (threshold: number): void => {
+    updateCondenseThreshold(threshold);
+  };
+
+  const handleResetCondenseThreshold = (): void => {
+    updateCondenseThreshold(null);
   };
 
   const refreshAgentPluginManager = async (
@@ -9464,6 +9539,11 @@ export function BrowserGatewayApp({
                       isAskAgentSelected
                         ? undefined
                         : handleSetCondenseThreshold
+                    }
+                    onResetCondenseThreshold={
+                      isAskAgentSelected
+                        ? undefined
+                        : handleResetCondenseThreshold
                     }
                     onSignIn={isAskAgentSelected ? undefined : handleSignIn}
                     agentWriteApproval={

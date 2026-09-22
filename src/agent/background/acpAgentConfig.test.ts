@@ -16,6 +16,7 @@ describe("ACP background agent config", () => {
     expect(settings.defaultAgent).toBe(NATIVE_BACKGROUND_AGENT);
     expect(settings.reviewAgent).toBe(NATIVE_BACKGROUND_AGENT);
     expect(settings.reviewTarget).toEqual({});
+    expect(settings.modelTiers).toEqual({});
     expect(settings.acpAgents).toEqual([]);
     expect(parseBackgroundReviewTarget(settings)).toEqual({ kind: "native" });
   });
@@ -42,6 +43,7 @@ describe("ACP background agent config", () => {
       defaultAgent: "acp:claude",
       reviewAgent: "acp:claude",
       reviewTarget: {},
+      modelTiers: {},
       acpAgents: [
         {
           id: "claude",
@@ -55,6 +57,59 @@ describe("ACP background agent config", () => {
         },
       ],
     });
+  });
+
+  it("normalizes model tier groups", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      modelTiers: {
+        claude: {
+          cheap: [" custom-haiku "],
+          balanced: ["custom-sonnet"],
+          deep_reasoning: ["custom-opus"],
+        },
+      },
+    });
+
+    expect(settings.modelTiers).toEqual({
+      claude: {
+        cheap: ["custom-haiku"],
+        balanced: ["custom-sonnet"],
+        deep_reasoning: ["custom-opus"],
+      },
+    });
+  });
+
+  it("rejects duplicate model tier memberships", () => {
+    expect(() =>
+      normalizeBackgroundAgentSettings({
+        modelTiers: {
+          first: {
+            cheap: ["shared-model"],
+            balanced: [],
+            deep_reasoning: [],
+          },
+          second: {
+            cheap: [],
+            balanced: ["shared-model"],
+            deep_reasoning: [],
+          },
+        },
+      }),
+    ).toThrow(/assigned to both first\.cheap and second\.balanced/);
+  });
+
+  it("rejects malformed model tier groups", () => {
+    expect(() =>
+      normalizeBackgroundAgentSettings({
+        modelTiers: { custom: { cheap: "model" } },
+      }),
+    ).toThrow(/custom\.cheap must be an array/);
+
+    expect(() =>
+      normalizeBackgroundAgentSettings({
+        modelTiers: { custom: { premium: ["model"] } },
+      }),
+    ).toThrow(/unsupported tier "premium"/);
   });
 
   it("applies ACP agent defaults", () => {

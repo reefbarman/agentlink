@@ -1960,6 +1960,11 @@ function parseTranscriptBlock(
         "reasoningEffort",
         "resolvedMode",
         "taskClass",
+        "requestedModelTier",
+        "modelTier",
+        "resolvedModelTier",
+        "resolvedModelTierSource",
+        "modelGroup",
       ]);
       const resolvedModel = optionalString(object, "resolvedModel", path, 256);
       const resolvedProvider = optionalString(
@@ -1976,6 +1981,37 @@ function parseTranscriptBlock(
       ) as CoreReasoningEffort | undefined;
       const resolvedMode = optionalString(object, "resolvedMode", path, 128);
       const taskClass = optionalString(object, "taskClass", path, 256);
+      const requestedModelTier = optionalEnum(
+        object,
+        "requestedModelTier",
+        path,
+        new Set(["cheap", "balanced", "deep_reasoning", "foreground"]),
+      ) as "cheap" | "balanced" | "deep_reasoning" | "foreground" | undefined;
+      const modelTier = optionalEnum(
+        object,
+        "modelTier",
+        path,
+        new Set(["cheap", "balanced", "deep_reasoning"]),
+      ) as "cheap" | "balanced" | "deep_reasoning" | undefined;
+      const resolvedModelTier = optionalEnum(
+        object,
+        "resolvedModelTier",
+        path,
+        new Set(["cheap", "balanced", "deep_reasoning", "unknown"]),
+      ) as "cheap" | "balanced" | "deep_reasoning" | "unknown" | undefined;
+      const resolvedModelTierSource = optionalEnum(
+        object,
+        "resolvedModelTierSource",
+        path,
+        new Set(["configured", "builtin", "heuristic", "unknown", "external"]),
+      ) as
+        | "configured"
+        | "builtin"
+        | "heuristic"
+        | "unknown"
+        | "external"
+        | undefined;
+      const modelGroup = optionalString(object, "modelGroup", path, 256);
       return {
         type: "bg_agent",
         blockId: nonEmptyString(object.blockId, `${path}.blockId`, 256),
@@ -1986,6 +2022,11 @@ function parseTranscriptBlock(
         ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(resolvedMode ? { resolvedMode } : {}),
         ...(taskClass ? { taskClass } : {}),
+        ...(requestedModelTier ? { requestedModelTier } : {}),
+        ...(modelTier ? { modelTier } : {}),
+        ...(resolvedModelTier ? { resolvedModelTier } : {}),
+        ...(resolvedModelTierSource ? { resolvedModelTierSource } : {}),
+        ...(modelGroup ? { modelGroup } : {}),
       };
     }
     case "bg_agent_result": {

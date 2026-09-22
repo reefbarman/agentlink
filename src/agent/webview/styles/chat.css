@@ -4973,6 +4973,24 @@ body.chat-activity-shelf-resizing * {
   width: 100%;
 }
 
+.model-selector-reset {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 2px 0;
+  border: 0;
+  color: var(--vscode-textLink-foreground);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.model-selector-reset:hover {
+  color: var(--vscode-textLink-activeForeground);
+  text-decoration: underline;
+}
+
 .composer-box {
   position: relative;
 }

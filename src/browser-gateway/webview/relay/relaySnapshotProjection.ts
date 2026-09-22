@@ -477,6 +477,17 @@ function projectBlock(
             : {}),
           ...(block.resolvedMode ? { resolvedMode: block.resolvedMode } : {}),
           ...(block.taskClass ? { taskClass: block.taskClass } : {}),
+          ...(block.requestedModelTier
+            ? { requestedModelTier: block.requestedModelTier }
+            : {}),
+          ...(block.modelTier ? { modelTier: block.modelTier } : {}),
+          ...(block.resolvedModelTier
+            ? { resolvedModelTier: block.resolvedModelTier }
+            : {}),
+          ...(block.resolvedModelTierSource
+            ? { resolvedModelTierSource: block.resolvedModelTierSource }
+            : {}),
+          ...(block.modelGroup ? { modelGroup: block.modelGroup } : {}),
         },
       ];
     case "bg_agent_result":

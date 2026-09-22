@@ -1,4 +1,9 @@
 import type {
+  BackgroundModelTier,
+  BackgroundModelTierRequest,
+  BackgroundModelTierSource,
+} from "../core/capabilities/background.js";
+import type {
   PendingQuestionRecoveryContext,
   SkillAuthoritySnapshot,
 } from "../core/tools/types.js";
@@ -143,6 +148,11 @@ export interface PersistedFleetMetadata {
   resolvedModel: string;
   resolvedProvider: string;
   taskClass: string;
+  requestedModelTier?: BackgroundModelTierRequest;
+  modelTier?: BackgroundModelTier;
+  resolvedModelTier?: BackgroundModelTier | "unknown";
+  resolvedModelTierSource?: BackgroundModelTierSource;
+  modelGroup?: string;
   routingReason: string;
   fallbackUsed: boolean;
   lifecycle: PersistedFleetLifecycle;

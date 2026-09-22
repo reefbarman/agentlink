@@ -1,10 +1,11 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   verifyVsixExcludesDesktop,
   verifyVsixManifestExcludesDesktop,
 } from "./verify-vsix-boundary.mjs";
 
-import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { filterVsceFileCountWarning } from "./package-vsix-output.mjs";
 import path from "node:path";
 import process from "node:process";
 import { readFileSync } from "node:fs";
@@ -40,28 +41,45 @@ function run(command, args, options = {}) {
 }
 
 run(process.execPath, [npmCli, "run", "build"]);
-run(process.execPath, [
-  npmCli,
-  "exec",
-  "--yes",
-  "--package=@vscode/vsce@3.9.2",
-  "--",
-  "vsce",
-  "package",
-  "--no-dependencies",
-  "--allow-star-activation",
-  "--target",
-  target,
-  "--out",
-  outputPath,
-]);
+const packaging = spawnSync(
+  process.execPath,
+  [
+    npmCli,
+    "exec",
+    "--yes",
+    "--package=@vscode/vsce@4.0.0",
+    "--",
+    "vsce",
+    "package",
+    "--no-dependencies",
+    "--allow-star-activation",
+    "--target",
+    target,
+    "--out",
+    outputPath,
+  ],
+  {
+    cwd: repoRoot,
+    env: { ...commandEnvironment, FORCE_COLOR: "0" },
+    encoding: "utf8",
+    stdio: ["inherit", "inherit", "pipe"],
+    maxBuffer: 10 * 1024 * 1024,
+  },
+);
+process.stderr.write(
+  packaging.status === 0
+    ? filterVsceFileCountWarning(packaging.stderr)
+    : packaging.stderr,
+);
+if (packaging.error) throw packaging.error;
+if (packaging.status !== 0) process.exit(packaging.status ?? 1);
 const inventory = run(
   process.execPath,
   [
     npmCli,
     "exec",
     "--yes",
-    "--package=@vscode/vsce@3.9.2",
+    "--package=@vscode/vsce@4.0.0",
     "--",
     "vsce",
     "ls",

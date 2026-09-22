@@ -59,6 +59,21 @@ export interface BgSessionInfo {
   reasoningEffort?: CoreReasoningEffort;
   /** Background task class used for routing profile selection. */
   taskClass?: string;
+  /** Tier intent supplied by the caller, including exact foreground reuse. */
+  requestedModelTier?: "cheap" | "balanced" | "deep_reasoning" | "foreground";
+  /** Effective tier selected by routing policy. */
+  modelTier?: "cheap" | "balanced" | "deep_reasoning";
+  /** Classified tier of the model actually selected. */
+  resolvedModelTier?: "cheap" | "balanced" | "deep_reasoning" | "unknown";
+  /** Evidence used to classify the selected model. */
+  resolvedModelTierSource?:
+    | "configured"
+    | "builtin"
+    | "heuristic"
+    | "unknown"
+    | "external";
+  /** Configured model group used for selection, when known. */
+  modelGroup?: string;
   /** Human-readable reason for the selected route. */
   routingReason?: string;
   /** True when route fallback behavior was used. */

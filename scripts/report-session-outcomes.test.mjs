@@ -243,13 +243,17 @@ test("aggregates turns, tasks, and background lifecycles into indicators", () =>
       reviewKind: "command",
       shadowProvider: "typesafe",
       primaryStatus: "reviewed",
-      primaryOutcome: "deny",
-      primaryRisk: "high",
+      primaryOutcome: "allow",
+      primaryRisk: "low",
+      primaryAuthorization: "medium",
       primaryDurationMs: 1_000,
+      actionFamily: "opaque",
+      authorizationEvidence: "complete",
       shadowStatus: "completed",
-      shadowOutcome: "allow",
-      shadowRisk: "medium",
-      shadowAuthorization: "high",
+      shadowOutcome: "deny",
+      shadowRisk: "high",
+      shadowAuthorization: "low",
+      shadowDecisionBasis: "authorization",
       shadowDurationMs: 200,
       outcomesAgree: false,
       shadowFaster: true,
@@ -336,6 +340,16 @@ test("aggregates turns, tasks, and background lifecycles into indicators", () =>
   assert.deepEqual(report.guardianShadow.shadowDurationsMs, [200]);
   assert.equal(report.guardianShadow.inputTokens, 300);
   assert.equal(report.guardianShadow.outputTokens, 40);
+  assert.deepEqual(report.guardianShadow.allowDeny, {
+    count: 1,
+    redacted: 1,
+    evidenceWithheld: 1,
+    byActionFamily: { opaque: 1 },
+    byPrimaryAuthorization: { medium: 1 },
+    byShadowAuthorization: { low: 1 },
+    byDecisionBasis: { authorization: 1 },
+    byAuthorizationEvidence: { complete: 1 },
+  });
 
   const indicators = report.indicators;
   // Active time = 700k - 100k user wait; 200k blocked on background.
@@ -348,6 +362,40 @@ test("aggregates turns, tasks, and background lifecycles into indicators", () =>
   assert.equal(indicators.taskCompletionRate, 0.5);
   assert.equal(indicators.completedTaskP50Ms, 700_000);
   assert.equal(indicators.autoContinuesPerTurn, 0.5);
+});
+
+test("labels missing TypeSafe diagnostic fields as unreported", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "events.jsonl");
+  writeEvents(inputPath, [
+    event({
+      type: "guardian_shadow_comparison",
+      sessionId: "legacy",
+      reviewKind: "command",
+      shadowProvider: "typesafe",
+      primaryStatus: "reviewed",
+      primaryOutcome: "allow",
+      primaryRisk: "low",
+      primaryDurationMs: 500,
+      shadowStatus: "completed",
+      shadowOutcome: "deny",
+      shadowRisk: "high",
+      shadowDurationMs: 200,
+      outcomesAgree: false,
+    }),
+  ]);
+
+  const report = readSessionOutcomes(inputPath);
+  assert.deepEqual(report.guardianShadow.allowDeny, {
+    count: 1,
+    redacted: 0,
+    evidenceWithheld: 0,
+    byActionFamily: { unreported: 1 },
+    byPrimaryAuthorization: { unreported: 1 },
+    byShadowAuthorization: { unreported: 1 },
+    byDecisionBasis: { unreported: 1 },
+    byAuthorizationEvidence: { unreported: 1 },
+  });
 });
 
 test("reports cache and self-reported completion efficiency with coverage", () => {

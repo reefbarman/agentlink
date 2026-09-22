@@ -196,9 +196,41 @@ export interface ApprovalInterruptionEvent {
   routeReason?: string;
 }
 
+export type GuardianShadowActionFamily =
+  | "read_only"
+  | "mutation"
+  | "project_toolchain"
+  | "external"
+  | "secret"
+  | "destructive"
+  | "privileged"
+  | "opaque"
+  | "mixed"
+  | "unknown"
+  | "unreported";
+
+export type GuardianShadowAuthorizationEvidence =
+  | "missing"
+  | "complete"
+  | "redacted"
+  | "truncated"
+  | "redacted_truncated"
+  | "unreported";
+
+export type GuardianShadowDecisionBasis =
+  | "authorized"
+  | "authorization"
+  | "objective_mismatch"
+  | "secret_exposure"
+  | "unbounded_impact"
+  | "security_impact"
+  | "incomplete_evidence"
+  | "other";
+
 /**
  * One paired TypeSafe shadow/current Guardian observation. This deliberately
  * excludes commands, paths, prompts, evidence, rationale, and API credentials.
+ * Diagnostic dimensions are bounded enums derived before telemetry is written.
  */
 export interface GuardianShadowComparisonEvent {
   type: "guardian_shadow_comparison";
@@ -208,11 +240,15 @@ export interface GuardianShadowComparisonEvent {
   primaryStatus: string;
   primaryOutcome: string;
   primaryRisk: string;
+  primaryAuthorization: string;
   primaryDurationMs: number;
+  actionFamily: GuardianShadowActionFamily;
+  authorizationEvidence: GuardianShadowAuthorizationEvidence;
   shadowStatus: string;
   shadowOutcome?: string;
   shadowRisk?: string;
   shadowAuthorization?: string;
+  shadowDecisionBasis?: GuardianShadowDecisionBasis;
   shadowDurationMs: number;
   outcomesAgree?: boolean;
   shadowFaster?: boolean;

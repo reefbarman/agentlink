@@ -1768,7 +1768,7 @@ describe("getAgentTools", () => {
 
   it("restricts tools when toolProfile is set to 'review'", () => {
     const reviewTools = getAgentTools(
-      BUILT_IN_MODES[4],
+      BUILT_IN_MODES.find((mode) => mode.slug === "review")!,
       ddgMcpTools,
       true,
       "review",
@@ -1830,7 +1830,7 @@ describe("getAgentTools", () => {
 
   it("restricts tools when toolProfile is set to 'readonly-research'", () => {
     const tools = getAgentTools(
-      BUILT_IN_MODES[2],
+      BUILT_IN_MODES.find((mode) => mode.slug === "ask")!,
       ddgMcpTools,
       true,
       "readonly-research",
@@ -1907,9 +1907,9 @@ describe("getAgentTools", () => {
   });
 
   it("exposes the restricted command schema in ask mode and the full schema in code mode", () => {
-    const askCommand = getAgentTools(BUILT_IN_MODES[2]).find(
-      (tool) => tool.name === "execute_command",
-    );
+    const askCommand = getAgentTools(
+      BUILT_IN_MODES.find((mode) => mode.slug === "ask")!,
+    ).find((tool) => tool.name === "execute_command");
     const codeCommand = getAgentTools(BUILT_IN_MODES[0]).find(
       (tool) => tool.name === "execute_command",
     );
@@ -1945,7 +1945,12 @@ describe("getAgentTools", () => {
   });
 
   it("restricts tools when toolProfile is set to 'btw'", () => {
-    const tools = getAgentTools(BUILT_IN_MODES[2], ddgMcpTools, true, "btw");
+    const tools = getAgentTools(
+      BUILT_IN_MODES.find((mode) => mode.slug === "ask")!,
+      ddgMcpTools,
+      true,
+      "btw",
+    );
     const names = tools.map((t) => t.name);
 
     expect(names).toContain("read_file");
@@ -1969,7 +1974,7 @@ describe("getAgentTools", () => {
 
   it("gives worktree setup read-only inspection without write tools", () => {
     const tools = getAgentTools(
-      BUILT_IN_MODES[2],
+      BUILT_IN_MODES.find((mode) => mode.slug === "ask")!,
       ddgMcpTools,
       true,
       "worktree-setup",
@@ -2095,8 +2100,12 @@ describe("getAgentTools", () => {
 
   it("gates MCP discovery and calls to MCP-capable modes", () => {
     const codeNames = getAgentTools(BUILT_IN_MODES[0]).map((t) => t.name);
-    const askNames = getAgentTools(BUILT_IN_MODES[2]).map((t) => t.name);
-    const reviewNames = getAgentTools(BUILT_IN_MODES[4]).map((t) => t.name);
+    const askNames = getAgentTools(
+      BUILT_IN_MODES.find((mode) => mode.slug === "ask")!,
+    ).map((t) => t.name);
+    const reviewNames = getAgentTools(
+      BUILT_IN_MODES.find((mode) => mode.slug === "review")!,
+    ).map((t) => t.name);
 
     expect(codeNames).toContain("find_mcp_tools");
     expect(codeNames).toContain("call_mcp_tool");
@@ -2850,16 +2859,36 @@ describe("spawn_background_agent tool", () => {
     });
   });
 
-  it("requires a bounded wait for get_background_result", () => {
+  it("defines mutually exclusive bounded single-agent and multi-agent result waits", () => {
     const definition = getAgentTools().find(
       (tool) => tool.name === "get_background_result",
     );
 
     expect(definition?.input_schema).toMatchObject({
-      required: ["sessionId", "wait_seconds"],
-      properties: {
-        wait_seconds: { type: "integer", minimum: 1, maximum: 60 },
-      },
+      type: "object",
+      oneOf: [
+        {
+          required: ["sessionId", "wait_seconds"],
+          additionalProperties: false,
+          properties: {
+            sessionId: { type: "string" },
+            wait_seconds: { type: "integer", minimum: 1, maximum: 60 },
+          },
+        },
+        {
+          required: ["sessionIds", "return_when", "wait_seconds"],
+          additionalProperties: false,
+          properties: {
+            sessionIds: {
+              type: "array",
+              minItems: 1,
+              items: { type: "string" },
+            },
+            return_when: { type: "string", enum: ["any", "all"] },
+            wait_seconds: { type: "integer", minimum: 1, maximum: 60 },
+          },
+        },
+      ],
     });
   });
 
@@ -2885,6 +2914,93 @@ describe("spawn_background_agent tool", () => {
       type: "text",
       text: "done output",
     });
+  });
+
+  it("dispatches multi-agent waits through backgroundAgentProvider.getResults", async () => {
+    const getResults = vi.fn().mockResolvedValue("aggregate output");
+    const backgroundAgentProvider = {
+      spawn: vi.fn(),
+      getStatus: vi.fn(),
+      getResult: vi.fn(),
+      getResults,
+      kill: vi.fn(),
+    };
+
+    const controller = new AbortController();
+    const result = await dispatchToolCall(
+      "get_background_result",
+      {
+        sessionIds: ["bg-one", "bg-two"],
+        return_when: "any",
+        wait_seconds: 18,
+      },
+      {
+        ...mockCtx,
+        backgroundAgentProvider,
+        toolAbortSignal: controller.signal,
+      },
+    );
+
+    expect(getResults).toHaveBeenCalledWith(
+      {
+        sessionIds: ["bg-one", "bg-two"],
+        returnWhen: "any",
+        waitSeconds: 18,
+      },
+      controller.signal,
+    );
+    expect(backgroundAgentProvider.getResult).not.toHaveBeenCalled();
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: "aggregate output",
+    });
+  });
+
+  it("dispatches multi-agent waits through the composition callback", async () => {
+    const onGetBackgroundResults = vi.fn().mockResolvedValue({
+      text: "aggregate with image",
+      images: [{ data: "YWJjZA==", mimeType: "image/png" }],
+    });
+
+    const controller = new AbortController();
+    const result = await dispatchToolCall(
+      "get_background_result",
+      {
+        sessionIds: ["bg-one", "bg-two"],
+        return_when: "all",
+        wait_seconds: 22,
+      },
+      {
+        ...mockCtx,
+        onGetBackgroundResults,
+        toolAbortSignal: controller.signal,
+      },
+    );
+
+    expect(onGetBackgroundResults).toHaveBeenCalledWith(
+      "test-session",
+      {
+        sessionIds: ["bg-one", "bg-two"],
+        returnWhen: "all",
+        waitSeconds: 22,
+      },
+      controller.signal,
+    );
+    expect(result.content).toEqual([
+      { type: "text", text: "aggregate with image" },
+      { type: "image", data: "YWJjZA==", mimeType: "image/png" },
+    ]);
+  });
+
+  it("wires the multi-agent callback to the production session manager", () => {
+    const extensionSource = fs.readFileSync("src/extension.ts", "utf8");
+
+    expect(extensionSource).toContain(
+      "onGetBackgroundResults: (callerSessionId, request, signal) =>",
+    );
+    expect(extensionSource).toContain(
+      "agentSessionManager.waitForAuthorizedBackgroundResultsContent(\n        callerSessionId,\n        request,\n        signal,\n      )",
+    );
   });
 
   it("returns background images as tool result content", async () => {

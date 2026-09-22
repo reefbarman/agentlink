@@ -29,6 +29,7 @@ import type {
 import { ToolCallBudget } from "../core/tools/toolCallBudget.js";
 import { createNativeToolDisclosureSnapshot } from "../core/tools/nativeToolDisclosure.js";
 import { measureComposeRequestOccupancy } from "./composeEfficiency.js";
+import { getTargetWindowScale } from "./condenseTargetWindow.js";
 import {
   buildContextLedger,
   DEFAULT_CONTEXT_SAFETY_BUFFER_RATIO,
@@ -630,8 +631,11 @@ function getCondenseBudgetSnapshot(
     session.lastInputTokens > 0
       ? session.lastCacheReadTokens / session.lastInputTokens
       : 0;
+  // The warm-cache bonus is relative to the 256k target window, not the real
+  // one, so a 1M model gets the same absolute headroom a 256k model would.
   const effectiveThreshold = Math.min(
-    session.autoCondenseThreshold + cacheHitRatio * 0.1,
+    session.autoCondenseThreshold +
+      cacheHitRatio * 0.1 * getTargetWindowScale(caps),
     0.95,
   );
   const softThresholdBudget = Math.floor(maxInputTokens * effectiveThreshold);

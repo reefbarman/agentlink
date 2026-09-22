@@ -18,6 +18,8 @@ describe("Codex text verbosity", () => {
     expect(resolveCodexTextVerbosity("gpt-5.6-sol")).toBe("low");
     expect(resolveCodexTextVerbosity("gpt-5.6-terra")).toBe("low");
     expect(resolveCodexTextVerbosity("gpt-5.6-luna")).toBe("low");
+    expect(resolveCodexTextVerbosity("gpt-6-sol")).toBeUndefined();
+    expect(resolveCodexTextVerbosity("gpt-6-luna")).toBeUndefined();
     expect(resolveCodexTextVerbosity("gpt-5.5")).toBeUndefined();
     expect(resolveCodexTextVerbosity("unknown-model")).toBeUndefined();
   });
@@ -50,20 +52,28 @@ describe("Codex model resolution", () => {
   });
 
   it("keeps OAuth-served models unchanged", () => {
+    for (const model of ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]) {
+      expect(resolveCodexEffectiveModel(model, "oauth")).toEqual({
+        model,
+        remapped: false,
+      });
+    }
     expect(resolveCodexEffectiveModel("gpt-5.6-sol", "oauth")).toEqual({
       model: "gpt-5.6-sol",
       remapped: false,
     });
-    expect(resolveCodexEffectiveModel("gpt-6-astra", "oauth")).toEqual({
-      model: "gpt-6-astra",
-      remapped: false,
-    });
   });
 
-  it("lists Astra and GPT-5.6 models without preview labels", () => {
+  it("lists GPT-6 and GPT-5.6 models without preview labels", () => {
     const models = listCodexModels("codex");
     expect(models.find(({ id }) => id === "gpt-6-astra")?.displayName).toBe(
       "GPT-6 Astra",
+    );
+    expect(models.find(({ id }) => id === "gpt-6-sol")?.displayName).toBe(
+      "GPT-6 Sol",
+    );
+    expect(models.find(({ id }) => id === "gpt-6-luna")?.displayName).toBe(
+      "GPT-6 Luna",
     );
     expect(models.find(({ id }) => id === "gpt-5.6-sol")?.displayName).toBe(
       "GPT-5.6 Sol",
@@ -240,9 +250,9 @@ describe("Codex auth-adjusted context windows", () => {
     expect(
       getCodexResponsesRequestHeaders("gpt-6-astra", "apiKey"),
     ).toBeUndefined();
-    expect(
-      getCodexResponsesRequestHeaders("gpt-5.6-sol", "oauth"),
-    ).toBeUndefined();
+    for (const model of ["gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol"]) {
+      expect(getCodexResponsesRequestHeaders(model, "oauth")).toBeUndefined();
+    }
   });
 
   it("uses distinct Astra capabilities for API key and OAuth", () => {
@@ -277,16 +287,32 @@ describe("Codex auth-adjusted context windows", () => {
     expect(caps.maxInputTokens).toBe(272_000);
   });
 
-  it("uses the full advertised GPT-5.6 window over OAuth", () => {
-    for (const model of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+  it("uses the full advertised GPT-6 Sol/Luna and GPT-5.6 windows over OAuth", () => {
+    for (const model of [
+      "gpt-6-sol",
+      "gpt-6-luna",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+    ]) {
       const caps = getCodexModelCapabilities(model, "oauth");
       expect(caps.contextWindow).toBe(1_050_000);
       expect(caps.maxInputTokens).toBeUndefined();
+      expect(caps.maxOutputTokens).toBe(128_000);
+      expect(caps.reasoningEfforts).not.toContain("ultra");
+      expect(caps.reasoningEfforts).toEqual([
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+      ]);
     }
   });
 
   it("keeps the full advertised window over API-key auth", () => {
-    for (const model of ["gpt-5.4", "gpt-5.5", "gpt-5.6-sol"]) {
+    for (const model of ["gpt-5.4", "gpt-5.5", "gpt-6-sol", "gpt-6-luna"]) {
       const caps = getCodexModelCapabilities(model, "apiKey");
       expect(caps.contextWindow).toBe(1_050_000);
       expect(caps.maxInputTokens).toBeUndefined();

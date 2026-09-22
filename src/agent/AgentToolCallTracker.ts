@@ -255,25 +255,37 @@ export class AgentToolCallTracker extends EventEmitter {
 
     if (call.toolName === "get_background_result") {
       let backgroundSessionId: string | undefined;
+      let backgroundSessionIds: string[] | undefined;
       try {
         const params = call.params ? JSON.parse(call.params) : undefined;
         if (typeof params?.sessionId === "string") {
           backgroundSessionId = params.sessionId;
+        } else if (Array.isArray(params?.sessionIds)) {
+          backgroundSessionIds = params.sessionIds.filter(
+            (sessionId: unknown): sessionId is string =>
+              typeof sessionId === "string" && sessionId.length > 0,
+          );
         }
       } catch {
-        // The handoff still works without the session ID in the result payload.
+        // The handoff still works without session IDs in the result payload.
       }
 
+      const plural = Boolean(backgroundSessionIds?.length);
       this.log(
-        `BACKGROUND_RETURN ${call.toolName} (${id.slice(0, 8)}), sessionId=${backgroundSessionId ?? "unknown"}`,
+        `BACKGROUND_RETURN ${call.toolName} (${id.slice(0, 8)}), ${plural ? `sessionIds=${backgroundSessionIds!.join(",")}` : `sessionId=${backgroundSessionId ?? "unknown"}`}`,
       );
       call.forceResolve(
         successResult({
           status: "continued-in-background",
           done: false,
-          ...(backgroundSessionId ? { sessionId: backgroundSessionId } : {}),
-          message:
-            "Returned control to the agent. The background agent is still running; use get_background_status to check progress or get_background_result when ready to wait again.",
+          ...(plural
+            ? { sessionIds: backgroundSessionIds }
+            : backgroundSessionId
+              ? { sessionId: backgroundSessionId }
+              : {}),
+          message: plural
+            ? "Returned control to the agent. The background agents are still running; use get_background_status to check progress or get_background_result when ready to wait again."
+            : "Returned control to the agent. The background agent is still running; use get_background_status to check progress or get_background_result when ready to wait again.",
         }),
       );
       return;

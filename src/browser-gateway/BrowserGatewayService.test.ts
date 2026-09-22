@@ -565,6 +565,55 @@ describe("BrowserGatewayService", () => {
     hub.dispose();
   });
 
+  it("keeps a pending question in tab detail when the foreground projection has not caught up", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const session = sessionManager.getForegroundSession();
+    sessionManager.getSession.mockReturnValue(session);
+    const service = new BrowserGatewayService(
+      hub,
+      sessionManager as never,
+      () => themeSnapshotStub,
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => projectedForeground({ questionRequest: null }) as never,
+      () => [],
+    );
+    service.setChatWorkspaceProvider(
+      () => ({
+        controllerEpoch: "controller-1",
+        focusedTabId: "tab-1",
+        tabs: [
+          {
+            tabId: "tab-1",
+            displayNumber: 1,
+            label: "T1",
+            sessionId: "session-1",
+            placement: "docked",
+            status: "needs_input",
+            busy: true,
+          },
+        ],
+      }),
+      () => ({ dispose: vi.fn() }),
+    );
+    hub.publishQuestionRequest("session-1", "question-1", "Need input.", [
+      { id: "continue", type: "yes_no", question: "Continue?" },
+    ]);
+
+    const detail = service.getSerializableSessionDetail({
+      controllerEpoch: "controller-1",
+      tabId: "tab-1",
+      sessionId: "session-1",
+    });
+    expect(detail?.session.questionRequest).toMatchObject({ id: "question-1" });
+    expect(detail?.ui.question).toMatchObject({ id: "question-1" });
+
+    service.dispose();
+    hub.dispose();
+  });
+
   it("reads detached tab detail without switching, hydrating, or leaking interactions", () => {
     const hub = new InMemoryAgentUiEventHub();
     const sessionManager = makeSessionManagerStub();

@@ -44,6 +44,44 @@ import {
 type DisplayMedia = NonNullable<ChatMessage["displayMedia"]>;
 type RawImageMedia = { name: string; mimeType: string; base64: string };
 type RawDocumentMedia = { name: string; mimeType: string; base64?: string };
+type BackgroundAgentBlock = Extract<ContentBlock, { type: "bg_agent" }>;
+
+function isBackgroundModelTierRequest(
+  value: unknown,
+): value is NonNullable<BackgroundAgentBlock["requestedModelTier"]> {
+  return (
+    value === "cheap" ||
+    value === "balanced" ||
+    value === "deep_reasoning" ||
+    value === "foreground"
+  );
+}
+
+function isBackgroundModelTier(
+  value: unknown,
+): value is NonNullable<BackgroundAgentBlock["modelTier"]> {
+  return (
+    value === "cheap" || value === "balanced" || value === "deep_reasoning"
+  );
+}
+
+function isBackgroundModelTierResolution(
+  value: unknown,
+): value is NonNullable<BackgroundAgentBlock["resolvedModelTier"]> {
+  return isBackgroundModelTier(value) || value === "unknown";
+}
+
+function isBackgroundModelTierSource(
+  value: unknown,
+): value is NonNullable<BackgroundAgentBlock["resolvedModelTierSource"]> {
+  return (
+    value === "configured" ||
+    value === "builtin" ||
+    value === "heuristic" ||
+    value === "unknown" ||
+    value === "external"
+  );
+}
 
 function mediaToDisplayMedia(
   media:
@@ -371,18 +409,20 @@ type ProjectedBackgroundResult = Extract<
   { type: "bg_agent_result" }
 >;
 
+type ParsedBackgroundCompletion = {
+  sessionId?: string;
+  status: ProjectedBackgroundResult["status"];
+  resultState: BackgroundResultState;
+  terminalReason?: string;
+  resultText?: string;
+  partialOutput?: string;
+  retrySafe?: boolean;
+  agentRetryable?: boolean;
+};
+
 type ParsedBackgroundToolResult =
   | { kind: "non_terminal" }
-  | {
-      kind: "terminal";
-      status: ProjectedBackgroundResult["status"];
-      resultState: BackgroundResultState;
-      terminalReason?: string;
-      resultText?: string;
-      partialOutput?: string;
-      retrySafe?: boolean;
-      agentRetryable?: boolean;
-    };
+  | { kind: "terminal"; completions: ParsedBackgroundCompletion[] };
 
 const TERMINAL_BACKGROUND_STATES = new Set<BackgroundResultState>([
   "completed",
@@ -402,6 +442,84 @@ function coarseBackgroundStatus(
   return "error";
 }
 
+function parseTerminalBackgroundCompletion(
+  parsed: Record<string, unknown>,
+  resultText?: string,
+  sessionId?: string,
+): ParsedBackgroundCompletion {
+  const status = parsed.resultState ?? parsed.status;
+  const terminalReason = parsed.terminalReason;
+  const retrySafe = parsed.retrySafe;
+  const agentRetryable = parsed.agentRetryable;
+  const partialOutput = parsed.partialOutput;
+  const valid =
+    typeof status === "string" &&
+    TERMINAL_BACKGROUND_STATES.has(status as BackgroundResultState) &&
+    (terminalReason === undefined || typeof terminalReason === "string") &&
+    (retrySafe === undefined || typeof retrySafe === "boolean") &&
+    (agentRetryable === undefined || typeof agentRetryable === "boolean") &&
+    (partialOutput === undefined || typeof partialOutput === "string") &&
+    (parsed.done === undefined || parsed.done === true);
+  const resultState: BackgroundResultState = valid
+    ? (status as BackgroundResultState)
+    : "failed";
+  return {
+    sessionId,
+    status: coarseBackgroundStatus(resultState),
+    resultState,
+    terminalReason: valid
+      ? (terminalReason as string | undefined)
+      : "Malformed background result metadata",
+    resultText,
+    partialOutput: valid
+      ? (partialOutput as string | undefined)
+      : "The background result could not be classified safely. See the tool details for the exact output.",
+    retrySafe: valid ? (retrySafe as boolean | undefined) : false,
+    agentRetryable: valid ? (agentRetryable as boolean | undefined) : false,
+  };
+}
+
+function parseAggregateBackgroundCompletions(
+  completed: unknown,
+): ParsedBackgroundCompletion[] {
+  const entries: Array<{ sessionId?: string; value: unknown }> = Array.isArray(
+    completed,
+  )
+    ? completed.map((value) => ({
+        sessionId:
+          value && typeof value === "object" && !Array.isArray(value)
+            ? typeof (value as Record<string, unknown>).sessionId === "string"
+              ? ((value as Record<string, unknown>).sessionId as string)
+              : undefined
+            : undefined,
+        value,
+      }))
+    : completed && typeof completed === "object"
+      ? Object.entries(completed as Record<string, unknown>).map(
+          ([sessionId, value]) => ({ sessionId, value }),
+        )
+      : [];
+
+  return entries.flatMap(({ sessionId, value }) => {
+    if (
+      !sessionId ||
+      !value ||
+      typeof value !== "object" ||
+      Array.isArray(value)
+    ) {
+      return [];
+    }
+    const record = value as Record<string, unknown>;
+    const resultText =
+      typeof record.result === "string"
+        ? record.result
+        : typeof record.resultText === "string"
+          ? record.resultText
+          : undefined;
+    return [parseTerminalBackgroundCompletion(record, resultText, sessionId)];
+  });
+}
+
 function parseBackgroundToolResult(
   resultText: string,
 ): ParsedBackgroundToolResult {
@@ -413,10 +531,14 @@ function parseBackgroundToolResult(
       : "failed";
     return {
       kind: "terminal",
-      status: coarseBackgroundStatus(resultState),
-      resultState,
-      terminalReason: trimmed,
-      partialOutput: trimmed,
+      completions: [
+        {
+          status: coarseBackgroundStatus(resultState),
+          resultState,
+          terminalReason: trimmed,
+          partialOutput: trimmed,
+        },
+      ],
     };
   }
 
@@ -424,11 +546,28 @@ function parseBackgroundToolResult(
   if (!parsed) {
     return {
       kind: "terminal",
-      status: "completed",
-      resultState: "completed",
-      resultText: resultText || undefined,
+      completions: [
+        {
+          status: "completed",
+          resultState: "completed",
+          resultText: resultText || undefined,
+        },
+      ],
     };
   }
+
+  const isAggregate =
+    parsed.completed !== undefined &&
+    (parsed.returnWhen === "any" ||
+      parsed.returnWhen === "all" ||
+      typeof parsed.conditionMet === "boolean");
+  if (isAggregate) {
+    const completions = parseAggregateBackgroundCompletions(parsed.completed);
+    return completions.length > 0
+      ? { kind: "terminal", completions }
+      : { kind: "non_terminal" };
+  }
+
   if (
     parsed.done === false ||
     parsed.status === "continued-in-background" ||
@@ -444,53 +583,50 @@ function parseBackgroundToolResult(
   ) {
     return {
       kind: "terminal",
-      status: "completed",
-      resultState: "completed",
-      resultText: resultText || undefined,
+      completions: [
+        {
+          status: "completed",
+          resultState: "completed",
+          resultText: resultText || undefined,
+        },
+      ],
     };
   }
 
-  const terminalReason = parsed.terminalReason;
-  const retrySafe = parsed.retrySafe;
-  const agentRetryable = parsed.agentRetryable;
-  const partialOutput = parsed.partialOutput;
-  const valid =
-    (terminalReason === undefined || typeof terminalReason === "string") &&
-    (retrySafe === undefined || typeof retrySafe === "boolean") &&
-    (agentRetryable === undefined || typeof agentRetryable === "boolean") &&
-    (partialOutput === undefined || typeof partialOutput === "string") &&
-    (parsed.done === undefined || parsed.done === true);
-  const resultState: BackgroundResultState = valid
-    ? (status as BackgroundResultState)
-    : "failed";
   return {
     kind: "terminal",
-    status: coarseBackgroundStatus(resultState),
-    resultState,
-    terminalReason: valid
-      ? (terminalReason as string | undefined)
-      : "Malformed background result metadata",
-    partialOutput: valid
-      ? (partialOutput as string | undefined)
-      : "The background result could not be classified safely. See the tool details for the exact output.",
-    retrySafe: valid ? (retrySafe as boolean | undefined) : false,
-    agentRetryable: valid ? (agentRetryable as boolean | undefined) : false,
+    completions: [parseTerminalBackgroundCompletion(parsed)],
   };
+}
+
+function getBgSessionIdsFromToolInput(
+  input: unknown,
+  fallbackInputJson?: string,
+): string[] {
+  const parseIds = (value: unknown): string[] => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.sessionIds)) {
+      return record.sessionIds.filter(
+        (sessionId): sessionId is string =>
+          typeof sessionId === "string" && sessionId.length > 0,
+      );
+    }
+    return typeof record.sessionId === "string" && record.sessionId
+      ? [record.sessionId]
+      : [];
+  };
+
+  const direct = parseIds(input);
+  if (direct.length > 0 || !fallbackInputJson) return direct;
+  return parseIds(parseJsonObject(fallbackInputJson));
 }
 
 function getBgSessionIdFromToolInput(
   input: unknown,
   fallbackInputJson?: string,
 ): string | undefined {
-  if (input && typeof input === "object" && !Array.isArray(input)) {
-    const sessionId = (input as Record<string, unknown>).sessionId;
-    if (typeof sessionId === "string" && sessionId) return sessionId;
-  }
-
-  if (!fallbackInputJson) return undefined;
-  const parsed = parseJsonObject(fallbackInputJson);
-  const sessionId = parsed?.sessionId;
-  return typeof sessionId === "string" && sessionId ? sessionId : undefined;
+  return getBgSessionIdsFromToolInput(input, fallbackInputJson)[0];
 }
 
 function findBgTaskForSession(
@@ -517,6 +653,95 @@ function findBgTaskForSession(
   }
 
   return "Background Agent";
+}
+
+function reconcileBackgroundToolCompletion(
+  messages: ChatMessage[],
+  targetMessageId: string,
+  toolCallId: string,
+  completion: ParsedBackgroundCompletion,
+  streaming: boolean,
+): ChatMessage[] {
+  const sessionId = completion.sessionId;
+  if (!sessionId) return messages;
+  const target = messages.find((message) => message.id === targetMessageId);
+  if (!target) return messages;
+  const existingResult = messages
+    .flatMap((message) => message.blocks)
+    .find(
+      (block): block is ProjectedBackgroundResult =>
+        block.type === "bg_agent_result" && block.sessionId === sessionId,
+    );
+  const toolResultBlock: ProjectedBackgroundResult = {
+    type: "bg_agent_result",
+    sessionId,
+    task: findBgTaskForSession(messages, target.blocks, sessionId),
+    status: completion.status,
+    resultState: completion.resultState,
+    terminalReason: completion.terminalReason,
+    resultText: completion.resultText,
+    partialOutput: completion.partialOutput,
+    summary: undefined,
+    retrySafe: completion.retrySafe,
+    agentRetryable: completion.agentRetryable,
+    sourceAuthority: "tool",
+  };
+  const toolContentIsCompatible =
+    existingResult?.resultState === toolResultBlock.resultState ||
+    (!existingResult?.resultState &&
+      existingResult?.status === toolResultBlock.status);
+  const bgResultBlock: ContentBlock =
+    existingResult?.sourceAuthority === "canonical"
+      ? {
+          ...existingResult,
+          resultText:
+            existingResult.resultText ??
+            (toolContentIsCompatible ? toolResultBlock.resultText : undefined),
+          partialOutput:
+            existingResult.partialOutput ??
+            (toolContentIsCompatible
+              ? toolResultBlock.partialOutput
+              : undefined),
+        }
+      : { ...toolResultBlock, summary: existingResult?.summary };
+  const reconciledMessages = messages
+    .map((message) => ({
+      ...message,
+      blocks: message.blocks.filter(
+        (block) =>
+          !(block.type === "bg_agent_result" && block.sessionId === sessionId),
+      ),
+    }))
+    .filter(
+      (message, index, allMessages) =>
+        message.id === targetMessageId ||
+        !isEmptyAssistantShell(message) ||
+        (streaming &&
+          index === allMessages.length - 1 &&
+          isEmptyAssistantShell(messages[index])),
+    );
+  const reconciledTargetIndex = reconciledMessages.findIndex(
+    (message) => message.id === targetMessageId,
+  );
+  if (reconciledTargetIndex < 0) return messages;
+  const reconciledTarget = {
+    ...reconciledMessages[reconciledTargetIndex],
+    blocks: [...reconciledMessages[reconciledTargetIndex].blocks],
+  };
+  const toolIndex = reconciledTarget.blocks.findIndex(
+    (block) => block.type === "tool_call" && block.id === toolCallId,
+  );
+  let insertAt =
+    toolIndex >= 0 ? toolIndex + 1 : reconciledTarget.blocks.length;
+  while (
+    insertAt < reconciledTarget.blocks.length &&
+    reconciledTarget.blocks[insertAt].type === "bg_agent_result"
+  ) {
+    insertAt += 1;
+  }
+  reconciledTarget.blocks.splice(insertAt, 0, bgResultBlock);
+  reconciledMessages[reconciledTargetIndex] = reconciledTarget;
+  return reconciledMessages;
 }
 
 export interface LoadedInstructionDebugInfo {
@@ -1280,6 +1505,28 @@ export function agentMessagesToChatMessages(
                   typeof parsedResult?.taskClass === "string"
                     ? parsedResult.taskClass
                     : undefined,
+                requestedModelTier: isBackgroundModelTierRequest(
+                  parsedResult?.requestedModelTier,
+                )
+                  ? parsedResult!.requestedModelTier
+                  : undefined,
+                modelTier: isBackgroundModelTier(parsedResult?.modelTier)
+                  ? parsedResult!.modelTier
+                  : undefined,
+                resolvedModelTier: isBackgroundModelTierResolution(
+                  parsedResult?.resolvedModelTier,
+                )
+                  ? parsedResult!.resolvedModelTier
+                  : undefined,
+                resolvedModelTierSource: isBackgroundModelTierSource(
+                  parsedResult?.resolvedModelTierSource,
+                )
+                  ? parsedResult!.resolvedModelTierSource
+                  : undefined,
+                modelGroup:
+                  typeof parsedResult?.modelGroup === "string"
+                    ? parsedResult.modelGroup
+                    : undefined,
                 routingReason:
                   typeof parsedResult?.routingReason === "string"
                     ? parsedResult.routingReason
@@ -1287,16 +1534,7 @@ export function agentMessagesToChatMessages(
               });
             }
           } else if (toolName === "get_background_result") {
-            const parsedInput =
-              block.input &&
-              typeof block.input === "object" &&
-              !Array.isArray(block.input)
-                ? (block.input as Record<string, unknown>)
-                : null;
-            const sessionId =
-              typeof parsedInput?.sessionId === "string"
-                ? parsedInput.sessionId
-                : undefined;
+            const inputSessionIds = getBgSessionIdsFromToolInput(block.input);
 
             blocks.push({
               type: "tool_call",
@@ -1313,53 +1551,31 @@ export function agentMessagesToChatMessages(
 
             const parsedBackgroundResult =
               parseBackgroundToolResult(toolResult);
-            if (sessionId && parsedBackgroundResult.kind === "terminal") {
-              let task = "Background Agent";
-              for (let i = blocks.length - 1; i >= 0; i--) {
-                const candidate = blocks[i];
-                if (
-                  candidate.type === "bg_agent" &&
-                  candidate.sessionId === sessionId
-                ) {
-                  task = candidate.task;
-                  break;
-                }
-              }
-              if (task === "Background Agent") {
-                for (let msgIdx = result.length - 1; msgIdx >= 0; msgIdx--) {
-                  const prior = result[msgIdx];
-                  if (prior.role !== "assistant") continue;
-                  for (
-                    let blockIdx = prior.blocks.length - 1;
-                    blockIdx >= 0;
-                    blockIdx--
-                  ) {
-                    const candidate = prior.blocks[blockIdx];
-                    if (
-                      candidate.type === "bg_agent" &&
-                      candidate.sessionId === sessionId
-                    ) {
-                      task = candidate.task;
-                      break;
-                    }
-                  }
-                  if (task !== "Background Agent") break;
-                }
-              }
-              blocks.push({
-                type: "bg_agent_result",
-                sessionId,
-                task,
-                status: parsedBackgroundResult.status,
-                resultState: parsedBackgroundResult.resultState,
-                terminalReason: parsedBackgroundResult.terminalReason,
-                resultText: parsedBackgroundResult.resultText,
-                partialOutput: parsedBackgroundResult.partialOutput,
-                summary: undefined,
-                retrySafe: parsedBackgroundResult.retrySafe,
-                agentRetryable: parsedBackgroundResult.agentRetryable,
-                sourceAuthority: "tool",
-              });
+            if (parsedBackgroundResult.kind === "terminal") {
+              parsedBackgroundResult.completions.forEach(
+                (completion, index) => {
+                  const sessionId =
+                    completion.sessionId ??
+                    (parsedBackgroundResult.completions.length === 1
+                      ? inputSessionIds[0]
+                      : inputSessionIds[index]);
+                  if (!sessionId) return;
+                  blocks.push({
+                    type: "bg_agent_result",
+                    sessionId,
+                    task: findBgTaskForSession(result, blocks, sessionId),
+                    status: completion.status,
+                    resultState: completion.resultState,
+                    terminalReason: completion.terminalReason,
+                    resultText: completion.resultText,
+                    partialOutput: completion.partialOutput,
+                    summary: undefined,
+                    retrySafe: completion.retrySafe,
+                    agentRetryable: completion.agentRetryable,
+                    sourceAuthority: "tool",
+                  });
+                },
+              );
             }
           } else {
             blocks.push({
@@ -2266,93 +2482,27 @@ export function reducer(state: AppState, action: AppAction): AppState {
         const toolBlock = target.blocks.find(
           (b) => b.type === "tool_call" && b.id === action.toolCallId,
         );
-        const sessionId = getBgSessionIdFromToolInput(
+        const inputSessionIds = getBgSessionIdsFromToolInput(
           action.input,
           toolBlock?.type === "tool_call" ? toolBlock.inputJson : undefined,
         );
-
-        if (sessionId) {
-          const existingResult = msgs
-            .flatMap((message) => message.blocks)
-            .find(
-              (
-                block,
-              ): block is Extract<ContentBlock, { type: "bg_agent_result" }> =>
-                block.type === "bg_agent_result" &&
-                block.sessionId === sessionId,
-            );
-          const toolResultBlock: ProjectedBackgroundResult = {
-            type: "bg_agent_result",
-            sessionId,
-            task: findBgTaskForSession(msgs, target.blocks, sessionId),
-            status: parsedBackgroundResult.status,
-            resultState: parsedBackgroundResult.resultState,
-            terminalReason: parsedBackgroundResult.terminalReason,
-            resultText: parsedBackgroundResult.resultText,
-            partialOutput: parsedBackgroundResult.partialOutput,
-            summary: undefined,
-            retrySafe: parsedBackgroundResult.retrySafe,
-            agentRetryable: parsedBackgroundResult.agentRetryable,
-            sourceAuthority: "tool",
-          };
-          const toolContentIsCompatible =
-            existingResult?.resultState === toolResultBlock.resultState ||
-            (!existingResult?.resultState &&
-              existingResult?.status === toolResultBlock.status);
-          const bgResultBlock: ContentBlock =
-            existingResult?.sourceAuthority === "canonical"
-              ? {
-                  ...existingResult,
-                  resultText:
-                    existingResult.resultText ??
-                    (toolContentIsCompatible
-                      ? toolResultBlock.resultText
-                      : undefined),
-                  partialOutput:
-                    existingResult.partialOutput ??
-                    (toolContentIsCompatible
-                      ? toolResultBlock.partialOutput
-                      : undefined),
-                }
-              : { ...toolResultBlock, summary: existingResult?.summary };
-          const reconciledMessages = msgs
-            .map((message) => ({
-              ...message,
-              blocks: message.blocks.filter(
-                (block) =>
-                  !(
-                    block.type === "bg_agent_result" &&
-                    block.sessionId === sessionId
-                  ),
-              ),
-            }))
-            .filter(
-              (message, index, messages) =>
-                message.id === target.id ||
-                !isEmptyAssistantShell(message) ||
-                (state.streaming &&
-                  index === messages.length - 1 &&
-                  isEmptyAssistantShell(msgs[index])),
-            );
-          const reconciledTargetIndex = reconciledMessages.findIndex(
-            (message) => message.id === target.id,
+        let reconciledMessages = msgs;
+        parsedBackgroundResult.completions.forEach((completion, index) => {
+          const sessionId =
+            completion.sessionId ??
+            (parsedBackgroundResult.completions.length === 1
+              ? inputSessionIds[0]
+              : inputSessionIds[index]);
+          if (!sessionId) return;
+          reconciledMessages = reconcileBackgroundToolCompletion(
+            reconciledMessages,
+            target.id,
+            action.toolCallId,
+            { ...completion, sessionId },
+            state.streaming,
           );
-          const reconciledTarget = {
-            ...reconciledMessages[reconciledTargetIndex],
-            blocks: [...reconciledMessages[reconciledTargetIndex].blocks],
-          };
-          const toolIndex = reconciledTarget.blocks.findIndex(
-            (block) =>
-              block.type === "tool_call" && block.id === action.toolCallId,
-          );
-          reconciledTarget.blocks.splice(
-            toolIndex >= 0 ? toolIndex + 1 : reconciledTarget.blocks.length,
-            0,
-            bgResultBlock,
-          );
-          reconciledMessages[reconciledTargetIndex] = reconciledTarget;
-          return { ...state, messages: reconciledMessages };
-        }
+        });
+        return { ...state, messages: reconciledMessages };
       }
 
       // When spawn_background_agent completes, add a bg_agent block to track progress
@@ -2420,6 +2570,28 @@ export function reducer(state: AppState, action: AppAction): AppState {
                   : undefined,
                 resolvedMode: parsed.resolvedMode,
                 taskClass: parsed.taskClass,
+                requestedModelTier: isBackgroundModelTierRequest(
+                  parsed.requestedModelTier,
+                )
+                  ? parsed.requestedModelTier
+                  : undefined,
+                modelTier: isBackgroundModelTier(parsed.modelTier)
+                  ? parsed.modelTier
+                  : undefined,
+                resolvedModelTier: isBackgroundModelTierResolution(
+                  parsed.resolvedModelTier,
+                )
+                  ? parsed.resolvedModelTier
+                  : undefined,
+                resolvedModelTierSource: isBackgroundModelTierSource(
+                  parsed.resolvedModelTierSource,
+                )
+                  ? parsed.resolvedModelTierSource
+                  : undefined,
+                modelGroup:
+                  typeof parsed.modelGroup === "string"
+                    ? parsed.modelGroup
+                    : undefined,
                 routingReason: parsed.routingReason,
               },
             ];
