@@ -1,0 +1,266 @@
+src/browser-gateway/helper/StandaloneMcpHubOAuthProvider.ts
+  h_9630b74bdac540 1-139
+resources/builtin-skills/documentation/references/capabilities.md
+  h_9630b74bdac540 30,44,86,88,92,121,145
+src/agent/mcpToolResult.ts
+  h_9630b74bdac540 1
+src/agent/providers/types.ts
+  h_9630b74bdac540 161-162
+src/agent/webview/components/ToolCallGroup.tsx
+  h_9630b74bdac540 22-65
+apps/cli/src/mcpConfig.test.ts
+  h_9630b74bdac540 5,7,63-141
+  h_9630b74bdac540 142-146
+packages/node-host/src/keychainSecretStorage.ts
+  h_9630b74bdac540 149,166
+src/tools/executeCommand.ts
+  h_9630b74bdac540 30,2164,2170-2439,3405-3427,3584,3593,3602,3989-3992,4019-4022,4245-4247
+  h_9630b74bdac540 2165-2169,3586
+src/tools/executeCommand.test.ts
+  h_9630b74bdac540 5-7,2351,2357-2364,2387-2393,8520-8604,8606-8837,8839,8858,8864
+  h_9630b74bdac540 4,8605,8838,8869
+src/util/httpDispatcher.ts
+  h_9630b74bdac540 213-214,220-232
+packages/node-host/src/mcpConfig.ts
+  h_9630b74bdac540 1-236
+src/agent/background/acpAgentConfig.test.ts
+  h_9630b74bdac540 19,46
+src/agent/sharedSessionPreferences.test.ts
+  h_9630b74bdac540 5,82-104,107-137
+  h_9630b74bdac540 105-106
+src/agent/sharedSessionPreferences.ts
+  h_9630b74bdac540 17,25,31,34-45,92-95,118,121-124,143,146-149
+  h_9630b74bdac540 32-33,96
+apps/cli/README.md
+  h_9630b74bdac540 49
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_9630b74bdac540 56-62,125-130,257-261,382-400,574,590,596-637,652-686,738-739,771,810-821,931,999
+src/agent/AgentSessionManager.ts
+  h_9630b74bdac540 7956-7962
+packages/core/src/openAiCompatible/config.ts
+  h_9630b74bdac540 99,107,492-505,613-614
+src/agent/agentPluginMcpRuntime.ts
+  h_9630b74bdac540 15,94
+src/approvals/commandApprovalReview.test.ts
+  h_9630b74bdac540 175,444-454,544-551
+  h_9630b74bdac540 192-194,552
+packages/core/src/codex/providerFactory.ts
+  h_9630b74bdac540 473,535
+  h_9630b74bdac540 533-534,536
+src/agent/providers/openaiCompatible/config.test.ts
+  h_9630b74bdac540 217-230
+packages/workspace-host/src/workspaceHostBackground.test.ts
+  h_9630b74bdac540 4
+src/agent/AgentSessionManagerHost.ts
+  h_9630b74bdac540 17,59,209,269
+packages/workspace-host/src/mcpConfig.test.ts
+  h_9630b74bdac540 76-134
+src/agent/ChatViewProvider.test.ts
+  h_9630b74bdac540 1775-1857,9386-9405
+packages/core/src/turnKernel.test.ts
+  h_9630b74bdac540 292-354,375,378-379,394-396,422,466,1705-1708,1718
+  h_9630b74bdac540 380-393,1709
+src/agent/webview/components/MessageBubble.tsx
+  h_9630b74bdac540 11-16,253-256,418-567,593,766-790
+  h_9630b74bdac540 10,791-794
+src/agent/McpClientHub.ts
+  h_9630b74bdac540 3-7,16,18-31,39-49,51,55-63,65-74
+  h_9630b74bdac540 17,34
+packages/workspace-host/src/index.ts
+  h_9630b74bdac540 17-18
+src/terminal/sandbox/AgentTerminalProviderRouter.test.ts
+  h_9630b74bdac540 7-9,341-367,397,400-402,404,406,527-548,1072-1163,1165,1184-1213
+  h_9630b74bdac540 6,398-399,1164,1166-1167
+src/agent/webview/styles/chat.css
+  h_9630b74bdac540 2768-2788,5425
+src/agent/providers/codex/CodexProvider.ts
+  h_9630b74bdac540 156-157,199-200
+packages/core/src/hostTools.ts
+  h_9630b74bdac540 113-120,127-130,132-134
+  h_9630b74bdac540 131,135
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_9630b74bdac540 488,2738,2740-2768,5943-5969,9155-9157
+src/approvals/webview/components/CommandCard.tsx
+  h_9630b74bdac540 377-378,381-384,464
+  h_9630b74bdac540 379-380,385-386
+package.json
+  h_9630b74bdac540 5
+src/agent/webview/App.chatWorkspace.test.tsx
+  h_9630b74bdac540 100-159,521-601
+packages/core/src/turnKernel.ts
+  h_9630b74bdac540 19,157,502-506,514-524,635,649-651,954-960
+packages/workspace-host/src/sharedMcpTools.test.ts
+  h_9630b74bdac540 1-266,271-507,509-516,518-547,550-595
+  h_9630b74bdac540 267-270,508,517,548-549
+resources/builtin-skills/documentation/references/tools.md
+  h_9630b74bdac540 75
+src/browser-gateway/helper/StandaloneAskAgentMcpRuntime.ts
+  h_9630b74bdac540 5-6,17-23,42-43,118-122,155-171,184-185,194-196,203-210,426-941,1131-1161
+  h_9630b74bdac540 41,44,942-943
+packages/node-host/src/mcpOperationRegistry.ts
+  h_9630b74bdac540 1-87
+src/agent/webview/components/MessageBubble.test.tsx
+  h_9630b74bdac540 179-254
+src/agent/mcpOAuthErrorDiagnostic.test.ts
+  h_9630b74bdac540 1-169
+packages/node-host/src/mcpToolPolicy.test.ts
+  h_9630b74bdac540 1-68
+resources/builtin-skills/documentation/references/mcp.md
+  h_9630b74bdac540 79-80
+src/browser-gateway/helper/StandaloneMcpOAuthRuntime.test.ts
+  h_9630b74bdac540 111-143
+src/agent/mcpAuthCoordinator.ts
+  h_9630b74bdac540 1-13
+src/agent/providers/openaiCompatible/OpenAiCompatibleProvider.ts
+  h_9630b74bdac540 124
+src/agent/webview/App.tsx
+  h_9630b74bdac540 355,1446,1451,3052-3059,3067,3287-3290,3972-3977,3980,3984-3987
+apps/cli/src/cli.test.ts
+  h_9630b74bdac540 87-200,295-365,414-450,454-456
+src/agent/backgroundModelRouter.ts
+  h_9630b74bdac540 102,106,110-111,116-129,169,179,249,291,398
+  h_9630b74bdac540 105,107-109,115
+packages/node-host/src/nodeHostAgent.ts
+  h_9630b74bdac540 17,48,60
+apps/cli/src/CliMcpHubOAuthProvider.test.ts
+  h_9630b74bdac540 1-83
+apps/cli/esbuild.mjs
+  h_9630b74bdac540 78
+src/approvals/webview/components/CommandCard.test.tsx
+  h_9630b74bdac540 144,171-173,178-204
+  h_9630b74bdac540 170,174-177
+apps/cli/src/config.test.ts
+  h_9630b74bdac540 21-22
+src/agent/mcpConfig.ts
+  h_9630b74bdac540 24-39,342-345,466,476-479,484
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_9630b74bdac540 164-166,215,217
+src/agent/webview/components/ToolCallGroup.test.tsx
+  h_9630b74bdac540 7,132-226
+  h_9630b74bdac540 227-230
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_9630b74bdac540 1691-1692,2340,4015,4022,4114-4166,8569
+  h_9630b74bdac540 4167-4169
+src/agent/backgroundModelRouting.config.json
+  h_9630b74bdac540 49-50,56-57
+src/browser-gateway/helper/StandaloneAskAgentMcpRuntime.test.ts
+  h_9630b74bdac540 416-653
+src/agent/AgentSessionManager.test.ts
+  h_9630b74bdac540 568-612
+src/approvals/webview/components/CommandExecutionContext.tsx
+  h_9630b74bdac540 38-40,42-44,138-140,143-145,188-190,193
+  h_9630b74bdac540 137,141,187,191,194
+src/browser-gateway/helper/StandaloneMcpOAuthRuntime.ts
+  h_9630b74bdac540 2,48,130-132,142,145-157
+src/agent/providers/openaiCompatible/OpenAiCompatibleProvider.test.ts
+  h_9630b74bdac540 85-102
+packages/node-host/src/keychainSecretStorage.test.ts
+  h_9630b74bdac540 8-11,63-72,116-194
+apps/cli/src/mcpOAuthRuntime.ts
+  h_9630b74bdac540 112-114
+src/agent/McpOAuthProvider.ts
+  h_9630b74bdac540 16-17,20,25,181,185,191-197
+apps/cli/src/mcpConfig.ts
+  h_9630b74bdac540 6-13,16,74-143,148,152-155
+packages/core/src/agentEngine.ts
+  h_9630b74bdac540 6,95
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_9630b74bdac540 1411
+packages/node-host/src/mcpToolPolicy.ts
+  h_9630b74bdac540 1-22
+packages/node-host/src/McpClientHub.ts
+  h_9630b74bdac540 1-2694
+src/browser-gateway/migration/actionSurfaceInventory.ts
+  h_9630b74bdac540 479
+src/agent/background/acpAgentConfig.ts
+  h_9630b74bdac540 50,58,322
+packages/workspace-host/src/mcpConfig.ts
+  h_9630b74bdac540 4,67-70,121-123,156-159,161-162,173-174,185-186,231-236
+  h_9630b74bdac540 160,172,175,184,187-188,237-238
+src/shared/toolRegistry.ts
+  h_9630b74bdac540 226
+apps/cli/src/cli.ts
+  h_9630b74bdac540 6-8,11,22,34-37,43,69-71,80,82-84,116-120,122-129,298-374,429,587-651,737-823,826-827,1027-1029,1595-1599,1618-1725,1798-1859,1961,2071,2097,2118,2122-2123,2177,2182,2184-2185,2187-2189,2191-2194,2201,2203-2207,2211-2212,2229-2234,2237,2242-2250,2492,2496,2664-2672
+  h_9630b74bdac540 81,121,1860-1869,1960,1962,2070,2117,2186,2202,2209-2210,2213,2491,2493-2495,2673
+src/extension.ts
+  h_9630b74bdac540 97,932-933,939-940
+  h_9630b74bdac540 934-935
+packages/core/src/codex/models.ts
+  h_9630b74bdac540 43,130-131,139-140,146-147,161,630,632
+  h_9630b74bdac540 132-138,631,634
+apps/cli/src/CliMcpHubOAuthProvider.ts
+  h_9630b74bdac540 1-136
+packages/workspace-host/src/workspaceHostMcp.test.ts
+  h_9630b74bdac540 3,10,15-16,18,39-43,172-174,177,182-251
+  h_9630b74bdac540 44,170-171,175-176,178
+src/util/httpDispatcher.test.ts
+  h_9630b74bdac540 34,147-187
+  h_9630b74bdac540 146
+packages/node-host/src/mcpAuthCoordinator.ts
+  h_9630b74bdac540 1-613
+src/agent/ChatViewProvider.ts
+  h_9630b74bdac540 33,39-42,7727-7733,7735-7738,9048,9052-9056,9060-9061,9068-9069,9073,12693-12703
+  h_9630b74bdac540 38,9049-9051,9057-9059,9062-9067,12738,12753-12754
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  h_9630b74bdac540 414,426,499,6651-6751
+resources/builtin-skills/documentation/references/settings.md
+  h_9630b74bdac540 61,86
+src/browser-gateway/helper/helperRouteFamilies.ts
+  h_9630b74bdac540 28,109-113
+packages/node-host/src/mcpOperationRegistry.test.ts
+  h_9630b74bdac540 1-98
+src/agent/backgroundModelRouter.test.ts
+  h_9630b74bdac540 58,64,75-81,98-100,116,121-172,176-177,179-182,185-186,203-205,218-219,237-238,255-257,259-260,263,275,281,333-334,355-356,359,368,375,380,382-383,411-412,436,439,465,467-468,493,496,499,517-518,553-554
+  h_9630b74bdac540 105-108,183-184,187-192,207-210,258,261,285-288,365-367,372-374,381,384,466,469,494-495,497-498,500
+packages/node-host/src/index.ts
+  h_9630b74bdac540 8-12,17
+src/terminal/sandbox/AgentTerminalProviderRouter.ts
+  h_9630b74bdac540 44-62,224-227,294,330-342,403-411,413,415-417,419-426,428,431-434,647-648,656,708-709,744,770,774-775,782-783,790,805-806,808-818,821,892-898,901-903,994-998,1004-1011
+  h_9630b74bdac540 412,418,427,430,435,807
+src/agent/providers/codex/CodexProvider.test.ts
+  h_9630b74bdac540 1578-1587,1590,1598
+packages/workspace-host/src/sharedMcpTools.ts
+  h_9630b74bdac540 1-774
+apps/desktop/src/desktopModelCatalog.test.ts
+  h_9630b74bdac540 57,62-66
+packages/node-host/src/keychainMcpCredentialRepository.ts
+  h_9630b74bdac540 22-24
+src/adapters/vscode/projectSettingsAccessor.ts
+  h_9630b74bdac540 51
+packages/node-host/src/mcpConfig.test.ts
+  h_9630b74bdac540 1-120
+src/approvals/commandApprovalReview.ts
+  h_9630b74bdac540 44-45,131-132,160,167-169,241-243
+  h_9630b74bdac540 170
+src/agent/mcpOAuthErrorDiagnostic.ts
+  h_9630b74bdac540 1-144
+src/agent/McpClientHub.oauth.test.ts
+  h_9630b74bdac540 388-429
+src/agent/McpClientHub.test.ts
+  h_9630b74bdac540 14,515-549
+  h_9630b74bdac540 550
+packages/core/src/codex/models.test.ts
+  h_9630b74bdac540 183-197
+  h_9630b74bdac540 198
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_9630b74bdac540 682-684,689-691,710-712,717-719,727-729,735-737,759-761,767-769
+package-lock.json
+  h_9630b74bdac540 3,9
+packages/node-host/src/mcpToolResult.ts
+  h_9630b74bdac540 1-193
+packages/workspace-host/src/workspaceHostRuntime.test.ts
+  h_9630b74bdac540 4
+resources/builtin-skills/documentation/references/package-contract.md
+  h_9630b74bdac540 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "64e05589704d11c3a84e06e07248bf1e8063ff53",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
