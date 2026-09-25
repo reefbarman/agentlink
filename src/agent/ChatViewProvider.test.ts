@@ -9596,6 +9596,95 @@ describe("chat tab host routing", () => {
     return { ...fixture, address, connection, handleEditor };
   }
 
+  it("delivers MCP manager actions and mutation replies to the requesting editor pane", async () => {
+    const { provider, connection, handleEditor } =
+      await makeEditorRoutingProvider();
+    const projectScope = {
+      projectId: "project-source",
+      rootPath: "/workspace/source",
+    };
+    const snapshot = { profile: "main", statusInfos: [], entries: [] };
+    const hub = {
+      getServerInfos: vi.fn(() => [{ name: "linear" }]),
+      getServerConfig: vi.fn(() => ({ sourceServerName: "linear" })),
+      reconnectServer: vi.fn(async () => undefined),
+    };
+    const internals = provider as unknown as {
+      resolveMcpProjectScope: ReturnType<typeof vi.fn>;
+      getCurrentProjectMcpHub: ReturnType<typeof vi.fn>;
+      buildMcpConfigSnapshot: ReturnType<typeof vi.fn>;
+      refreshMcpConnections: ReturnType<typeof vi.fn>;
+      submitMcpConfigMutation: ReturnType<typeof vi.fn>;
+    };
+    internals.resolveMcpProjectScope = vi.fn(() => projectScope);
+    internals.getCurrentProjectMcpHub = vi.fn(() => hub);
+    internals.buildMcpConfigSnapshot = vi.fn(async () => snapshot);
+    internals.refreshMcpConnections = vi.fn(async () => undefined);
+    internals.submitMcpConfigMutation = vi.fn(async () => ({
+      ok: true,
+      configSnapshot: snapshot,
+    }));
+
+    await handleEditor({
+      command: "agentMcpSelectProject",
+      projectId: "project-source",
+      refresh: true,
+    });
+    expect(internals.refreshMcpConnections).toHaveBeenCalledWith(
+      undefined,
+      projectScope,
+    );
+    expect(connection.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agentMcpStatus",
+        open: true,
+        configSnapshot: snapshot,
+      }),
+    );
+
+    await handleEditor({
+      command: "agentMcpAction",
+      projectId: "project-source",
+      serverName: "linear",
+      action: "reconnect",
+    });
+    expect(hub.reconnectServer).toHaveBeenCalledWith("linear");
+    expect(connection.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agentMcpStatus",
+        configSnapshot: snapshot,
+      }),
+    );
+
+    await handleEditor({
+      command: "agentMcpConfigMutate",
+      mutation: { operationId: "mutation-1" },
+    });
+    expect(connection.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agentMcpConfigMutationResult",
+        result: expect.objectContaining({ ok: true }),
+      }),
+    );
+  });
+
+  it("broadcasts passive MCP updates to editor panes when config changes", async () => {
+    const { provider } = await makeTabRoutingProvider();
+    const postMessage = vi.fn();
+    const internals = provider as unknown as {
+      chatTabPanelHost: { postMessage: typeof postMessage };
+      postMessageToEditorPanes: (message: unknown) => void;
+    };
+    internals.chatTabPanelHost.postMessage = postMessage;
+    const update = {
+      type: "agentMcpStatus",
+      infos: [],
+      configSnapshot: { version: 2 },
+    };
+    internals.postMessageToEditorPanes(update);
+    expect(postMessage).toHaveBeenCalledWith(update);
+  });
+
   it("binds the first send to its exact empty tab before promoting the session", async () => {
     const { chatTabController, coordinator, provider } =
       await makeTabRoutingProvider();

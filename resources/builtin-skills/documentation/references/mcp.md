@@ -8,7 +8,7 @@ This is the owning guide for configuring and using MCP servers. See [Tools](tool
 - `/mcp-config` — configuration-oriented view (guided setup, JSON import, sources)
 - `/mcp-refresh` — explicitly reconnect configured servers (ordinary catalog changes load automatically)
 
-The MCP Manager has four views: **Overview** (config + status + enabled/disabled state), **Sources** (each layered file in precedence order, with read health and editability), **Guided setup** (stdio, HTTP, legacy SSE), and **Import JSON** (paste one or many servers; conflicts require explicit Skip/Replace/Rename). A multi-project workspace uses one Manager with a project selector.
+The MCP Manager has four views: **Overview** (config + status + enabled/disabled state), **Sources** (each layered file in precedence order, with read health and editability), **Guided setup** (stdio, HTTP, legacy SSE), and **Import JSON** (paste one or many servers; conflicts require explicit Skip/Replace/Rename). A multi-project workspace uses one Manager with a project selector. The Manager in both sidebar and editor chat panes updates after MCP config file changes; Refresh, Reconnect, Reauthenticate, and enable/disable actions return their results to the pane where they were requested.
 
 ## Config files and precedence
 

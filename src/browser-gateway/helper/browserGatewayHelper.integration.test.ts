@@ -1116,6 +1116,10 @@ describe("BrowserGatewayHelper proxy routing", () => {
   });
 
   it("keeps a new Ask Agent session active across a helper restart and routes the first send to it", async () => {
+    const modelClient = makeAskAgentToolLoopClient(async () => ({
+      text: "Test response",
+      toolCalls: [],
+    }));
     const extensionRootPath = await makeExtensionRoot();
     const askAgentHistoryPath = path.join(
       await fs.mkdtemp(path.join(os.tmpdir(), ".tmp-ask-agent-history-")),
@@ -1166,6 +1170,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
         },
         firstServer,
         {
+          askAgentModelClient: modelClient,
           askAgentHistoryStore: new BrowserGatewayAskAgentHistoryStore({
             filePath: askAgentHistoryPath,
           }),
@@ -1239,6 +1244,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
         },
         secondServer,
         {
+          askAgentModelClient: modelClient,
           askAgentHistoryStore: new BrowserGatewayAskAgentHistoryStore({
             filePath: askAgentHistoryPath,
           }),
@@ -8283,7 +8289,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
         capabilities: {
           canEditConfig: false,
           canReconnect: false,
-          canReauthenticate: false,
+          canReauthenticate: process.platform === "darwin",
           canWriteSecrets: false,
           canConfigureLocalProcess: false,
         },

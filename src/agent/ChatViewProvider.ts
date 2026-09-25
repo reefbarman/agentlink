@@ -2920,6 +2920,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     infos?: McpServerInfo[];
     projectScope?: SessionProjectScope;
     mainHub?: McpClientHub;
+    connection?: ChatPaneConnection;
   }): Promise<void> {
     const projectScope =
       options.profile === "main"
@@ -2940,13 +2941,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       projectScope,
       mainHub,
     );
-    this.postMessage({
+    const message = {
       type: "agentMcpStatus",
       infos: configSnapshot.statusInfos,
       open: options.open,
       view: options.view,
       configSnapshot,
-    } as ExtensionToWebview);
+    } as ExtensionToWebview;
+    if (options.connection) options.connection.postMessage(message);
+    else this.postMessage(message);
   }
 
   private async openRawMcpConfig(
@@ -8740,6 +8743,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           profile: "main",
           projectScope,
           mainHub: hub,
+          connection: context?.connection,
         });
         break;
       }
@@ -8749,18 +8753,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           msg.mutation as McpConfigBatchMutation,
           { allowMainProfileMutation: true },
         );
-        this.postMessage({
-          type: "agentMcpConfigMutationResult",
-          result,
-        } as ExtensionToWebview);
+        const reply = (message: ExtensionToWebview) =>
+          context?.connection
+            ? context.connection.postMessage(message)
+            : this.postMessage(message);
+        reply({ type: "agentMcpConfigMutationResult", result });
         if (result.configSnapshot) {
-          this.postMessage({
+          reply({
             type: "agentMcpStatus",
             infos: result.configSnapshot.statusInfos,
             open: true,
             view: "config",
             configSnapshot: result.configSnapshot,
-          } as ExtensionToWebview);
+          });
         }
         break;
       }
@@ -8841,6 +8846,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           open: true,
           projectScope,
           mainHub: this.getCurrentProjectMcpHub(projectScope),
+          connection: context?.connection,
         });
         break;
       }
@@ -9174,6 +9180,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             open: true,
             projectScope,
             mainHub: this.getCurrentProjectMcpHub(projectScope),
+            connection: context?.connection,
           });
         } else if (name === "mcp-config") {
           const args = String(msg.args ?? "")
@@ -9194,6 +9201,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               mainHub: this.getCurrentProjectMcpHub(
                 sourceSession?.projectScope,
               ),
+              connection: context?.connection,
             });
           }
         } else if (name === "mcp-refresh") {
@@ -9203,6 +9211,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             profile: "main",
             projectScope,
             mainHub: this.getCurrentProjectMcpHub(projectScope),
+            connection: context?.connection,
           });
           vscode.window.showInformationMessage("MCP servers reconnected.");
         } else if (name === "btw") {
@@ -13173,6 +13182,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     if (
+      (msg.type === "agentMcpStatus" && !msg.open) ||
       msg.type === "chatWorkspaceUpdate" ||
       msg.type === "agentModelsUpdate" ||
       msg.type === "agentSessionList" ||
