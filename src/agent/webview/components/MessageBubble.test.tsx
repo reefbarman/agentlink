@@ -176,6 +176,82 @@ describe("MessageBubble thinking rendering", () => {
   });
 });
 
+describe("MessageBubble Activity grouping", () => {
+  it("collapses three completed cycles during streaming and preserves nested disclosures", () => {
+    const message: ChatMessage = {
+      id: "assistant-activity",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        {
+          type: "tool_call",
+          id: "before",
+          name: "codebase_search",
+          inputJson: "{}",
+          result: JSON.stringify({ ok: true }),
+          complete: true,
+        },
+        ...[0, 1, 2].flatMap((index) => [
+          {
+            type: "thinking" as const,
+            id: `thinking-${index}`,
+            text: `Reasoning ${index}`,
+            complete: true,
+          },
+          {
+            type: "tool_call" as const,
+            id: `tool-${index}`,
+            name: "read_file",
+            inputJson: "{}",
+            result: JSON.stringify({ ok: true }),
+            complete: true,
+          },
+        ]),
+        {
+          type: "tool_call",
+          id: "running",
+          name: "execute_command",
+          inputJson: JSON.stringify({ command: "npm test" }),
+          result: "",
+          complete: false,
+        },
+      ],
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={true} />,
+    );
+    const activity = screen.getByRole("button", {
+      name: /activity 3 thinking steps · 4 tool calls · explored 3 files, 1 search/i,
+    });
+    expect(activity.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      container.querySelectorAll(".activity-group-children .thinking-block"),
+    ).toHaveLength(0);
+    expect(
+      screen.getByRole("button", { name: "Command details" }),
+    ).toBeTruthy();
+    expect(
+      container.querySelector(".activity-group-block .tool-running-command"),
+    ).toBeNull();
+
+    fireEvent.click(activity);
+    expect(activity.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      container.querySelectorAll(".activity-group-children .thinking-block"),
+    ).toHaveLength(3);
+    expect(
+      container.querySelectorAll(".activity-group-children .tool-group-block"),
+    ).toHaveLength(4);
+    expect(
+      container.querySelector(".assistant-blocks > .tool-group-block"),
+    ).toBeNull();
+    fireEvent.click(screen.getAllByRole("button", { name: "Thinking" })[0]);
+    expect(screen.getByText("Reasoning 0")).toBeTruthy();
+  });
+});
+
 describe("MessageBubble slash-command rendering", () => {
   it("renders standalone slash command as a tool-call-style block with args", () => {
     const message: ChatMessage = {

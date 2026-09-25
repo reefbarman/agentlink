@@ -172,9 +172,7 @@ describe("routine approve-for-me command classification", () => {
     "npm test",
     "npm test && npm run lint",
     "cargo check",
-    "git add -A",
-    'git commit -m "update"',
-    'git add src/index.ts && git commit -m "fix"',
+
     "git status",
     "mkdir -p src/generated",
     "mv src/a.ts src/b.ts",
@@ -191,6 +189,9 @@ describe("routine approve-for-me command classification", () => {
     "npm install",
     "npm run deploy",
     "git push origin main",
+    "git add -A",
+    'git commit -m "update"',
+    'git add src/index.ts && git commit -m "fix"',
     "git fetch",
     "git pull",
     "git checkout main",
@@ -440,6 +441,17 @@ describe("command review denial circuit", () => {
     status,
   });
 
+  it("keeps rejected native recoveries scoped to one turn and exact action", () => {
+    const circuit = createCommandReviewTurnCircuit();
+    expect(circuit.hasRejectedRecovery("command-a")).toBe(false);
+    circuit.rejectRecovery("command-a");
+    expect(circuit.hasRejectedRecovery("command-a")).toBe(true);
+    expect(circuit.hasRejectedRecovery("command-b")).toBe(false);
+    expect(
+      createCommandReviewTurnCircuit().hasRejectedRecovery("command-a"),
+    ).toBe(false);
+  });
+
   it("interrupts at three consecutive explicit denials", () => {
     const circuit = createCommandReviewTurnCircuit();
     expect(circuit.record(result("deny")).interrupted).toBe(false);
@@ -528,6 +540,15 @@ describe("one-shot command approval reviewer", () => {
     );
     expect(request?.systemPrompt).toContain(
       "latestUserInstruction is the newest instruction tagged by the host",
+    );
+    expect(request?.systemPrompt).toContain(
+      "staging and committing only task-related changes",
+    );
+    expect(request?.systemPrompt).toContain(
+      "Non-fast-forward pushes or remote ref deletion (including --force, -f, --force-with-lease, --force-if-includes, --mirror, --delete, a +refspec, or a :refspec)",
+    );
+    expect(request?.systemPrompt).toContain(
+      "git commit -a / --all, and git commit -am when other work is present",
     );
     expect(request?.systemPrompt).toContain(
       'commit or push "everything", "all changes", or equivalent broad current-work wording explicitly authorizes repo-wide staging and committing',

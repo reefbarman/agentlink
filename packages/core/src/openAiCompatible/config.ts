@@ -96,6 +96,7 @@ export interface OpenAiCompatibleModelDto {
   supportsImages?: boolean;
   structuredOutput?: "json_schema";
   modelFamily?: OpenAiCompatibleModelFamily;
+  tier?: "cheap" | "balanced" | "deep_reasoning";
 }
 
 export interface NormalizedOpenAiCompatibleModel {
@@ -103,6 +104,7 @@ export interface NormalizedOpenAiCompatibleModel {
   model: string;
   displayName: string;
   modelFamily?: OpenAiCompatibleModelFamily;
+  tier?: "cheap" | "balanced" | "deep_reasoning";
   capabilities: CoreModelCapabilities;
 }
 
@@ -487,6 +489,20 @@ function parseModel(
     `${path}.modelFamily`,
     context,
   );
+  const tier =
+    raw.tier === "cheap" ||
+    raw.tier === "balanced" ||
+    raw.tier === "deep_reasoning"
+      ? raw.tier
+      : undefined;
+  if (raw.tier !== undefined && tier === undefined) {
+    issue(
+      context,
+      `${path}.tier`,
+      "Expected cheap, balanced, or deep_reasoning.",
+    );
+  }
+
   const structuredOutput =
     raw.structuredOutput === undefined || raw.structuredOutput === "json_schema"
       ? raw.structuredOutput
@@ -594,6 +610,8 @@ function parseModel(
     model,
     displayName,
     ...(modelFamily === undefined ? {} : { modelFamily }),
+    ...(tier === undefined ? {} : { tier }),
+
     capabilities: {
       supportsThinking: supportsThinking ?? false,
       supportsCaching: false,

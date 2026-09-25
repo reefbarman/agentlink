@@ -82,6 +82,24 @@ describe("OpenAiCompatibleProvider", () => {
     expect(provider.getCapabilities("local-model").contextWindow).toBe(32_768);
   });
 
+  it("exposes configured tier metadata without changing provider identity", () => {
+    const configured = connection({
+      models: [
+        {
+          ...connection().models[0]!,
+          tier: "cheap",
+        },
+      ],
+    });
+    const provider = new OpenAiCompatibleProvider({
+      connection: configured,
+      secrets: { get: vi.fn().mockResolvedValue("secret") },
+    });
+
+    expect(provider.id).toBe("openai-compatible:test");
+    expect(provider.listModels()[0]).toMatchObject({ tier: "cheap" });
+  });
+
   it("exposes configured model family without changing provider identity", () => {
     const configured = connection({
       models: [

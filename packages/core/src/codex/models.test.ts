@@ -180,13 +180,22 @@ describe("Codex model resolution", () => {
     );
   });
 
-  it("lists Pro-only Spark for OAuth and preserves retired model migrations", () => {
-    const oauthIds = listCodexModels("codex", "oauth").map(({ id }) => id);
-    const apiKeyIds = listCodexModels("codex", "apiKey").map(({ id }) => id);
-    expect(oauthIds).toContain("gpt-5.3-codex-spark");
-    expect(apiKeyIds).not.toContain("gpt-5.3-codex-spark");
-    expect(apiKeyIds).toContain("gpt-5.4-pro");
-    expect(apiKeyIds).toContain("gpt-5.2-codex");
+  it("shows the same official seven models in order for both auth methods", () => {
+    const expected = [
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+    ];
+    expect(listCodexModels("codex", "oauth").map(({ id }) => id)).toEqual(
+      expected,
+    );
+    expect(listCodexModels("codex", "apiKey").map(({ id }) => id)).toEqual(
+      expected,
+    );
     expect(getCodexUnavailableModelFallback("gpt-5.3-codex-spark")).toBe(
       "gpt-5.6-luna",
     );

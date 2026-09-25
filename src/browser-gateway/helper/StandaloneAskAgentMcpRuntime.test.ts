@@ -413,6 +413,244 @@ describe("StandaloneAskAgentMcpRuntime", () => {
     await expect(pending).rejects.toThrow("turn_cancelled");
   });
 
+  it("retains a projectless shared hub across turns and binds tool calls to their turn", async () => {
+    const calls: unknown[] = [];
+    const disconnectAll = vi.fn(async () => {});
+    const connect = vi.fn(async (configs: unknown) => {
+      calls.push(configs);
+    });
+    const callTool = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "shared" }],
+    }));
+    const createHub = vi.fn((host, _version, options) => {
+      expect(host.baseEnvironment()).toEqual({
+        HOME: "/Users/tester",
+        TMPDIR: "/tmp/tester",
+        PATH: "/opt/bin",
+      });
+      expect(host.getRequestContext).toBeTypeOf("function");
+      expect(
+        options.onBeforeToolCall({
+          config: {
+            name: "local",
+            command: "/opt/bin/server",
+            toolPolicy: "ask",
+          },
+          bareToolName: "search",
+          approvedByCaller: false,
+        }),
+      ).toBe("deny");
+      return {
+        connect,
+        disconnectAll,
+        getToolDefs: () => [
+          {
+            name: "local__search",
+            description: "Search",
+            input_schema: { type: "object" },
+          },
+        ],
+        getServerInfos: () => [{ name: "local", status: "connected" }],
+        isToolReadOnly: () => false,
+        getAllResources: () => [
+          { serverName: "local", name: "fixture", uri: "file://fixture" },
+        ],
+        getAllPrompts: () => [{ serverName: "local", name: "summary" }],
+        readResource: async () => ({
+          content: [{ type: "text", text: "resource" }],
+        }),
+        getPrompt: async () => ({
+          content: [{ type: "text", text: "prompt" }],
+        }),
+        callTool,
+      } as unknown as import("@agentlink/node-host").McpClientHub;
+    });
+    const runtime = new StandaloneAskAgentMcpRuntime({
+      loadConfigs: async () => [
+        { name: "local", command: "server", toolPolicy: "ask" },
+      ],
+      resolveExecutable: async () => "/opt/bin/server",
+      environment: { PATH: "/opt/bin" },
+      homeDirectory: "/Users/tester",
+      temporaryDirectory: "/tmp/tester",
+      createHub,
+    });
+    try {
+      const first = await runtime.prepareTurn(request);
+      const second = await runtime.prepareTurn({
+        ...request,
+        turnId: "turn-b",
+      });
+      expect(createHub).toHaveBeenCalledTimes(1);
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(connect).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.objectContaining({
+          interactiveServerNames: new Set(["local"]),
+          userInitiated: true,
+        }),
+      );
+      expect(calls[0]).toEqual([
+        expect.objectContaining({
+          cwd: "/Users/tester",
+          command: "/opt/bin/server",
+        }),
+      ]);
+      expect(
+        second.getApprovalRequirement?.("local__search", {}),
+      ).toMatchObject({ serverName: "local" });
+      expect(
+        await second.execute(
+          "list_mcp_resources",
+          {},
+          new AbortController().signal,
+          { ...request, turnId: "turn-b" },
+        ),
+      ).toMatchObject({ data: [{ serverName: "local" }] });
+      expect(
+        await second.execute(
+          "list_mcp_prompts",
+          {},
+          new AbortController().signal,
+          { ...request, turnId: "turn-b" },
+        ),
+      ).toMatchObject({ data: [{ serverName: "local" }] });
+      await second.execute(
+        "local__search",
+        { query: "now" },
+        new AbortController().signal,
+        { ...request, turnId: "turn-b" },
+        true,
+      );
+      expect(callTool).toHaveBeenCalledWith(
+        "local__search",
+        { query: "now" },
+        expect.objectContaining({
+          authorizedByCaller: true,
+          requestContext: expect.objectContaining({
+            sessionId: request.sessionId,
+            turnId: "turn-b",
+          }),
+        }),
+      );
+      await first.execute(
+        "local__search",
+        {},
+        new AbortController().signal,
+        request,
+        true,
+      );
+      expect(
+        first.getApprovalRequirement?.("local__search", {}),
+      ).toBeUndefined();
+      expect(callTool).toHaveBeenCalledTimes(1);
+    } finally {
+      await runtime.dispose();
+    }
+    expect(disconnectAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes a connection that completes after its session is retired", async () => {
+    let finishConnect!: () => void;
+    const connect = vi.fn(
+      () => new Promise<void>((resolve) => (finishConnect = resolve)),
+    );
+    const disconnectAll = vi.fn(async () => {});
+    const runtime = new StandaloneAskAgentMcpRuntime({
+      loadConfigs: async () => [
+        { name: "local", command: "server", toolPolicy: "allow" },
+      ],
+      resolveExecutable: async () => "/opt/bin/server",
+      createHub: () =>
+        ({
+          connect,
+          disconnectAll,
+        }) as unknown as import("@agentlink/node-host").McpClientHub,
+    });
+    const preparation = runtime.prepareTurn(request);
+    await vi.waitFor(() => expect(connect).toHaveBeenCalledOnce());
+    const retirement = runtime.retireSession(request.sessionId);
+    finishConnect();
+    await expect(preparation).rejects.toThrow(
+      "standalone_mcp_session_disposed",
+    );
+    await retirement;
+    expect(disconnectAll).toHaveBeenCalled();
+    await runtime.dispose();
+  });
+
+  it("waits for a connection still settling after a turn is aborted", async () => {
+    let finishConnect!: () => void;
+    const connect = vi.fn(
+      () => new Promise<void>((resolve) => (finishConnect = resolve)),
+    );
+    const disconnectAll = vi.fn(async () => {});
+    const runtime = new StandaloneAskAgentMcpRuntime({
+      loadConfigs: async () => [
+        { name: "local", command: "server", toolPolicy: "allow" },
+      ],
+      resolveExecutable: async () => "/opt/bin/server",
+      createHub: () =>
+        ({
+          connect,
+          disconnectAll,
+        }) as unknown as import("@agentlink/node-host").McpClientHub,
+    });
+    const controller = new AbortController();
+    const preparation = runtime.prepareTurn({
+      ...request,
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(connect).toHaveBeenCalledOnce());
+    controller.abort();
+    await expect(preparation).rejects.toThrow();
+    const disposal = runtime.dispose();
+    finishConnect();
+    await disposal;
+    expect(disconnectAll).toHaveBeenCalled();
+  });
+
+  it("requires approval before standalone OAuth reauthentication and rejects overlapping attempts", async () => {
+    const invalidateCredentials = vi.fn(async () => undefined);
+    const resolveOAuthProvider = vi.fn(
+      async () =>
+        ({
+          invalidateCredentials,
+        }) as never,
+    );
+    const runtime = new StandaloneAskAgentMcpRuntime({
+      loadConfigs: async () => [
+        { name: "records", type: "http", url: "https://1.1.1.1/mcp" },
+      ],
+      resolveOAuthProvider,
+    });
+    let rejectConfirmation!: (error: Error) => void;
+    const confirmation = new Promise<boolean>((_resolve, reject) => {
+      rejectConfirmation = reject;
+    });
+    try {
+      const pending = runtime.reauthenticateServer(
+        "records",
+        () => confirmation,
+      );
+      await vi.waitFor(() =>
+        expect(resolveOAuthProvider).not.toHaveBeenCalled(),
+      );
+      await expect(
+        runtime.reauthenticateServer("records", async () => true),
+      ).rejects.toThrow("standalone_mcp_oauth_reauthentication_in_progress");
+      rejectConfirmation(new Error("cancelled"));
+      await expect(pending).rejects.toThrow("cancelled");
+      await expect(
+        runtime.reauthenticateServer("records", async () => false),
+      ).rejects.toThrow("standalone_mcp_oauth_reauthentication_denied");
+      expect(resolveOAuthProvider).not.toHaveBeenCalled();
+      expect(invalidateCredentials).not.toHaveBeenCalled();
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("returns a bounded deferred catalog containing only authorized tools", async () => {
     const runtime = new StandaloneAskAgentMcpRuntime({
       loadConfigs: async () => [

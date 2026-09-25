@@ -158,6 +158,8 @@ export interface ModelInfo {
   providerDisplayName?: string;
   supportsToolUse?: boolean;
   supportsImages?: boolean;
+  /** Optional model tier, used by native background routing. */
+  tier?: "cheap" | "balanced" | "deep_reasoning";
   capabilities: ModelCapabilities;
 }
 

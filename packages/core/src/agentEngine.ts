@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 
-import type { HostToolResolver } from "./hostTools.js";
+import type { HostToolLifecycleResolver } from "./hostTools.js";
 import type { AgentModelReference, AgentPrincipal } from "./modelIdentity.js";
 import type {
   CoreModelAuthContext,
@@ -92,7 +92,7 @@ export interface CreateAgentEngineOptions<
   readonly transcriptPolicy?: AgentTranscriptPolicy<TPrincipal>;
   readonly resolveInstructions: ResolveAgentInstructions<TPrincipal>;
   readonly tools?: readonly HeadlessTurnTool<TPrincipal>[];
-  readonly resolveTools?: HostToolResolver<TPrincipal>;
+  readonly resolveTools?: HostToolLifecycleResolver<TPrincipal>;
   readonly authorizeToolCall?: AuthorizeToolCall<TPrincipal>;
   readonly resolveAuthContext?: (
     request: HeadlessTurnAuthRequest<TPrincipal>,

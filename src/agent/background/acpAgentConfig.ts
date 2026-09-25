@@ -47,7 +47,7 @@ export interface BackgroundAgentSettings {
   defaultAgent: string;
   reviewAgent: string;
   reviewTarget: BackgroundReviewTargetSetting;
-  modelTiers: BackgroundModelTierGroups;
+
   acpAgents: AcpBackgroundAgentConfig[];
 }
 
@@ -55,7 +55,7 @@ export interface RawBackgroundAgentSettings {
   defaultAgent?: unknown;
   reviewAgent?: unknown;
   reviewTarget?: unknown;
-  modelTiers?: unknown;
+
   acpAgents?: unknown;
 }
 
@@ -182,72 +182,6 @@ function normalizeReviewTarget(value: unknown): BackgroundReviewTargetSetting {
   return map;
 }
 
-function normalizeModelTiers(value: unknown): BackgroundModelTierGroups {
-  if (value === undefined) return {};
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("agentlink.background.modelTiers must be an object.");
-  }
-
-  const groups: Record<string, Record<BackgroundModelTier, string[]>> = {};
-  const memberships = new Map<
-    string,
-    { group: string; tier: BackgroundModelTier }
-  >();
-  const tiers: BackgroundModelTier[] = ["cheap", "balanced", "deep_reasoning"];
-
-  for (const [rawGroup, rawTiers] of Object.entries(value)) {
-    const group = rawGroup.trim();
-    if (!group) {
-      throw new Error(
-        "agentlink.background.modelTiers group names cannot be empty.",
-      );
-    }
-    if (!rawTiers || typeof rawTiers !== "object" || Array.isArray(rawTiers)) {
-      throw new Error(
-        `agentlink.background.modelTiers.${rawGroup} must be an object with cheap, balanced, and deep_reasoning arrays.`,
-      );
-    }
-    const record = rawTiers as Record<string, unknown>;
-    const unexpected = Object.keys(record).filter(
-      (key) => !tiers.includes(key as BackgroundModelTier),
-    );
-    if (unexpected.length > 0) {
-      throw new Error(
-        `agentlink.background.modelTiers.${rawGroup} has unsupported tier "${unexpected[0]}".`,
-      );
-    }
-
-    const normalized = {} as Record<BackgroundModelTier, string[]>;
-    for (const tier of tiers) {
-      const rawModels = record[tier] ?? [];
-      if (!Array.isArray(rawModels)) {
-        throw new Error(
-          `agentlink.background.modelTiers.${rawGroup}.${tier} must be an array of model IDs.`,
-        );
-      }
-      normalized[tier] = rawModels.map((item, index) => {
-        if (typeof item !== "string" || !item.trim()) {
-          throw new Error(
-            `agentlink.background.modelTiers.${rawGroup}.${tier}[${index}] must be a non-empty model ID.`,
-          );
-        }
-        const modelId = item.trim();
-        const previous = memberships.get(modelId);
-        if (previous) {
-          throw new Error(
-            `Model "${modelId}" is assigned to both ${previous.group}.${previous.tier} and ${group}.${tier}.`,
-          );
-        }
-        memberships.set(modelId, { group, tier });
-        return modelId;
-      });
-    }
-    groups[group] = normalized;
-  }
-
-  return groups;
-}
-
 function normalizeStringArray(value: unknown, field: string): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) {
@@ -370,7 +304,6 @@ export function normalizeBackgroundAgentSettings(
   );
   const reviewAgent = normalizeAgentReference(raw.reviewAgent, "reviewAgent");
   const reviewTarget = normalizeReviewTarget(raw.reviewTarget);
-  const modelTiers = normalizeModelTiers(raw.modelTiers);
 
   const rawAgents = raw.acpAgents ?? [];
   if (!Array.isArray(rawAgents)) {
@@ -386,7 +319,7 @@ export function normalizeBackgroundAgentSettings(
     seen.add(agent.id);
   }
 
-  return { defaultAgent, reviewAgent, reviewTarget, modelTiers, acpAgents };
+  return { defaultAgent, reviewAgent, reviewTarget, acpAgents };
 }
 
 export function resolveAcpBackgroundAgent(

@@ -485,7 +485,7 @@ export type GatewaySnapshot = {
     } | null;
     formElicitation: McpFormElicitationRequest | null;
     urlElicitation: McpUrlElicitationRequest | null;
-    recentEvents: Array<{ type: string }>;
+    recentEvents: Array<{ type: string; id?: string }>;
     memoryCandidateNudge?: AskAgentMemoryCandidateNudge | null;
     projectHandoff?: AskAgentProjectHandoff | null;
     readGrants?: AskAgentReadGrant[];
@@ -2735,8 +2735,37 @@ export function BrowserGatewayApp({
     );
   }
   const pendingApproval = snapshot?.ui.approval ?? null;
-  const pendingQuestion =
+  const snapshotQuestion =
     foreground?.questionRequest ?? snapshot?.ui.question ?? null;
+  const lastPendingQuestionRef = useRef<{
+    sessionId: string;
+    tabId: string;
+    question: NonNullable<typeof snapshotQuestion>;
+  } | null>(null);
+  if (snapshotQuestion && foreground?.sessionId) {
+    lastPendingQuestionRef.current = {
+      sessionId: foreground.sessionId,
+      tabId: selectedTabId,
+      question: snapshotQuestion,
+    };
+  }
+  // Both question sources can briefly disappear while a turn is running. Keep
+  // the card mounted unless its request was explicitly cleared.
+  const lastPendingQuestion = lastPendingQuestionRef.current;
+  const questionWasCleared = snapshot?.ui.recentEvents.some(
+    (event) =>
+      event.type === "agentQuestionCleared" &&
+      event.id === lastPendingQuestion?.question.id,
+  );
+  const pendingQuestion =
+    snapshotQuestion ??
+    ((foreground?.status === "awaiting_approval" || foreground?.streaming) &&
+    lastPendingQuestion?.sessionId === foreground.sessionId &&
+    lastPendingQuestion?.tabId === selectedTabId &&
+    !questionWasCleared
+      ? lastPendingQuestion.question
+      : null);
+  if (!pendingQuestion) lastPendingQuestionRef.current = null;
   const pendingFormElicitation = snapshot?.ui.formElicitation ?? null;
   const pendingUrlElicitation = snapshot?.ui.urlElicitation ?? null;
   const visibleApproval =
@@ -5908,6 +5937,33 @@ export function BrowserGatewayApp({
       setAskAgentMcpStatusError(String(err));
       setMcpManagerSnapshot(null);
       setModeStatus(`Ask Agent MCP status error: ${String(err)}`);
+    }
+  };
+
+  const reauthenticateAskAgentMcpServer = async (
+    serverName: string,
+  ): Promise<void> => {
+    try {
+      const response = await fetch("/api/ask-agent/mcp-reauthenticate", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ serverName }),
+      });
+      const body = (await response.json()) as { ok?: boolean; error?: string };
+      if (!response.ok || !body.ok) {
+        setModeStatus(
+          `MCP reauthentication failed: ${body.error ?? response.status}`,
+        );
+        return;
+      }
+      await refreshAskAgentMcpStatus();
+      setModeStatus(`Reauthenticated ${serverName} for Desktop.`);
+    } catch (error) {
+      setModeStatus(`MCP reauthentication failed: ${String(error)}`);
     }
   };
 
@@ -9096,10 +9152,9 @@ export function BrowserGatewayApp({
                         }}
                         onServerAction={(serverName, action) => {
                           if (isAskAgentSelected) {
-                            if (
-                              action === "reconnect" ||
-                              action === "reauthenticate"
-                            ) {
+                            if (action === "reauthenticate") {
+                              void reauthenticateAskAgentMcpServer(serverName);
+                            } else if (action === "reconnect") {
                               void refreshAskAgentMcpStatus({
                                 reconnect: true,
                               });

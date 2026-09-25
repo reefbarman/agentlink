@@ -121,6 +121,7 @@ export class OpenAiCompatibleProvider implements ModelProvider {
         providerDisplayName: this.displayName,
         supportsToolUse: model.capabilities.supportsToolUse,
         supportsImages: model.capabilities.supportsImages,
+        ...(model.tier ? { tier: model.tier } : {}),
         capabilities: { ...model.capabilities },
       }),
     );

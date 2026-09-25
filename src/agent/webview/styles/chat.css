@@ -2765,6 +2765,27 @@ body.chat-activity-shelf-resizing * {
   gap: 2px;
 }
 
+.activity-group-block {
+  font-size: 12px;
+}
+
+.activity-group-header {
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px 10px;
+  background: color-mix(in srgb, #4ec9b0 8%, transparent);
+  border-radius: 6px;
+}
+
+.activity-group-children {
+  padding: 4px 4px 4px 12px;
+  border-left: 2px solid var(--vscode-panel-border);
+  margin-left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .compose-trace-summary {
   margin: 4px 0 8px;
   color: var(--vscode-descriptionForeground);
@@ -5401,6 +5422,7 @@ body.chat-activity-shelf-resizing * {
 .assistant-blocks > .tool-group-block + .assistant-content,
 .assistant-blocks > .tool-call-block + .assistant-content,
 .assistant-blocks > .thinking-block + .assistant-content,
+.assistant-blocks > .activity-group-block + .assistant-content,
 .assistant-blocks > .bg-agent-result-block + .assistant-content {
   margin-top: 6px;
 }

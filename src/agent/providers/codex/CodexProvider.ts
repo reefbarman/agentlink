@@ -153,9 +153,8 @@ export class CodexProvider implements ModelProvider {
     this.log = log ?? (() => {});
     this.getTextVerbositySetting =
       options?.getTextVerbositySetting ?? (() => undefined);
-    // Warm the auth-method cache so listModels() filters correctly before the
-    // first request (API-key users keep the full model list; OAuth users get
-    // only the ChatGPT-backend-served subset).
+    // Warm the auth-method cache so capabilities reflect the active endpoint
+    // before the first request.
     void this.authManager
       .getPreferredAuthMethod()
       .then((method) => {
@@ -197,10 +196,8 @@ export class CodexProvider implements ModelProvider {
   listModels(): ModelInfo[] {
     const authMethod = this.lastResolvedAuthMethod ?? "oauth";
     const all = listCodexModels(this.id, authMethod);
-    // The ChatGPT/Codex OAuth backend serves only a small current set; hide the
-    // API-key-only models so users can't pick one that 400s. Default to the
-    // OAuth-served subset until we've confirmed an API-key resolution (OAuth is
-    // the common case). The runtime remap still protects anything that slips by.
+    // Keep the OAuth backend gate even if the shared picker list changes; the
+    // runtime remap still protects saved selections the backend no longer serves.
     if (this.lastResolvedAuthMethod === "apiKey") return all;
     return all.filter((m) => isCodexModelServedOnChatgptBackend(m.id));
   }

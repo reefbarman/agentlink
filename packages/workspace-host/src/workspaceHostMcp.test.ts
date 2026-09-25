@@ -1,17 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createWorkspaceHost } from "./workspaceHost.js";
+import { createWorkspaceHost } from "./workspaceHostRuntime.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 const mocks = vi.hoisted(() => ({
   calls: [] as Array<{ name: string; input: unknown }>,
+  connects: 0,
 }));
 
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
   Client: class MockClient {
+    setRequestHandler() {}
+    setNotificationHandler() {}
     async connect(transport: { fetch?: typeof globalThis.fetch; url?: URL }) {
+      mocks.connects += 1;
       if (transport.fetch && transport.url) {
         await transport.fetch(transport.url.href);
       }
@@ -31,6 +35,12 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
           },
         ],
       };
+    }
+    async listResources() {
+      return { resources: [] };
+    }
+    async listPrompts() {
+      return { prompts: [] };
     }
     async callTool(request: { name: string; arguments: unknown }) {
       mocks.calls.push({ name: request.name, input: request.arguments });
@@ -157,10 +167,88 @@ async function fixture() {
         fetch: transportFetch,
       },
     });
-  return { parent, globalConfigPath, transportFetch, createHost };
+  return {
+    parent,
+    projectRoot,
+    dataRoot,
+    providers,
+    globalConfigPath,
+    transportFetch,
+    createHost,
+  };
 }
 
 describe("workspace host MCP composition", () => {
+  it("retains a shared MCP connection through approval and a second turn", async () => {
+    mocks.calls.length = 0;
+    mocks.connects = 0;
+    const test = await fixture();
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(toolCall("records__lookup", { query: "alpha" }))
+      .mockResolvedValueOnce(completion("first reply"))
+      .mockResolvedValueOnce(completion("second reply"));
+
+    const host = await createWorkspaceHost({
+      projectRoot: test.projectRoot,
+      dataRoot: test.dataRoot,
+      ownerId: "shared-mcp-test",
+      providers: test.providers(fetch),
+      defaultModel: { providerId: "fixture", modelId: "fixture-model" },
+      sharedMcp: {
+        resolveConfigs: async () => [
+          {
+            name: "records",
+            type: "streamable-http",
+            url: "https://mcp.example.test/rpc",
+          },
+        ],
+        baseEnvironment: () => ({}),
+        fetch: test.transportFetch,
+        nativeFetch: test.transportFetch,
+        clientVersion: "test",
+        authorizeAdmission: async () => true,
+        authorizeLaunch: async () => true,
+        authorizeNetwork: async () => true,
+      },
+    });
+    try {
+      const sessionId = (await host.createSession()).sessionId;
+      const suspended = await host.runTurn(sessionId, "look up alpha");
+      expect(suspended).toMatchObject({
+        status: "suspended",
+        interaction: {
+          displayContent: { kind: "shared_mcp_tool_call" },
+        },
+      });
+      await expect(
+        host.resumeInteraction(sessionId, "allow"),
+      ).resolves.toMatchObject({ status: "completed", text: "first reply" });
+      expect(mocks.calls).toEqual([
+        { name: "lookup", input: { query: "alpha" } },
+      ]);
+      await expect(host.runTurn(sessionId, "continue")).resolves.toMatchObject({
+        status: "completed",
+        text: "second reply",
+      });
+      expect(mocks.connects).toBe(1);
+      const firstRequest = JSON.parse(
+        String(fetch.mock.calls[0]?.[1]?.body),
+      ) as {
+        messages: Array<{ content: string }>;
+      };
+      expect(firstRequest.messages[0]?.content).toContain(
+        "MCP servers are unsandboxed external capabilities",
+      );
+      expect(firstRequest.messages[0]?.content).not.toContain(
+        "MCP tools are not enabled",
+      );
+    } finally {
+      await host.close();
+      await fs.rm(test.parent, { recursive: true, force: true });
+    }
+  });
+
   it("denies a durable exact MCP call without invoking the server", async () => {
     mocks.calls.length = 0;
     const test = await fixture();

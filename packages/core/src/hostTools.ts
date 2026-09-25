@@ -110,11 +110,28 @@ export interface HostToolResolveRequest<
   readonly input: AgentTurnInput;
 }
 
+export interface HostToolResolution<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+> {
+  readonly tools: readonly HostTool<TPrincipal>[];
+  /** Releases resources on completion, suspension, cancellation, or failure. */
+  readonly dispose: () => void | Promise<void>;
+}
+
 export type HostToolResolver<
   TPrincipal extends AgentPrincipal = AgentPrincipal,
 > = (
   request: HostToolResolveRequest<TPrincipal>,
 ) => readonly HostTool<TPrincipal>[] | Promise<readonly HostTool<TPrincipal>[]>;
+
+export type HostToolLifecycleResolver<
+  TPrincipal extends AgentPrincipal = AgentPrincipal,
+> = (
+  request: HostToolResolveRequest<TPrincipal>,
+) =>
+  | readonly HostTool<TPrincipal>[]
+  | HostToolResolution<TPrincipal>
+  | Promise<readonly HostTool<TPrincipal>[] | HostToolResolution<TPrincipal>>;
 
 export interface HostToolValidationIssue {
   readonly path: string;

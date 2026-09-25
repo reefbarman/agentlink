@@ -141,7 +141,7 @@ describe("CommandCard terminal presentation", () => {
     expect(screen.getByText("Save Rules & Run")).toBeTruthy();
   });
 
-  it("shows first-attempt evidence, immutable command text, and rules for a native recovery", () => {
+  it("shows first-attempt evidence and immutable command text for a native recovery", () => {
     const approval = request("native", "native-escalation");
     approval.subCommands = [{ command: "npm test" }];
     approval.recoveryAttempt = {
@@ -167,10 +167,41 @@ describe("CommandCard terminal presentation", () => {
       screen.getByText(/The sandbox already launched this command/),
     ).toBeTruthy();
     expect(screen.getByText(/may have side effects true/)).toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: /Auto Approval Rules/ }),
-    );
-    expect(screen.getByText("npm test")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /Auto Approval Rules/ }),
+    ).toBeNull();
+    expect(
+      document.querySelector<HTMLTextAreaElement>(".terminal-input"),
+    ).toHaveProperty("readOnly", true);
+  });
+
+  it("labels pre-launch recovery as a first native run without saved rules", () => {
+    const approval = request("native", "native-escalation");
+    approval.recoveryAttempt = {
+      denialOperation: "sandbox-runtime",
+      denialReason: "Sandbox runtime unavailable",
+      firstAttemptRoute: "sandbox",
+      commandSent: false,
+      processLaunched: false,
+      mayHaveSideEffects: false,
+    };
+    renderCard(approval);
+
+    expect(
+      screen.getByText("Sandbox could not start the command"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "The command has not run yet. Approving will run it once with your normal user permissions.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Run in native terminal" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /Auto Approval Rules/ }),
+    ).toBeNull();
+    expect(screen.queryByText("Save Rules & Run")).toBeNull();
     expect(
       document.querySelector<HTMLTextAreaElement>(".terminal-input"),
     ).toHaveProperty("readOnly", true);

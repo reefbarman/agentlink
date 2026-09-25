@@ -25,6 +25,7 @@ export type AskAgentRouteHandler =
   | "mcpConfigOpenRaw"
   | "mcpStatus"
   | "mcpRefresh"
+  | "mcpReauthenticate"
   | "question"
   | "questionProgress"
   | "formElicitation"
@@ -105,6 +106,11 @@ export const ASK_AGENT_ROUTES = [
   },
   { method: "GET", path: "/api/ask-agent/mcp-status", handler: "mcpStatus" },
   { method: "POST", path: "/api/ask-agent/mcp-refresh", handler: "mcpRefresh" },
+  {
+    method: "POST",
+    path: "/api/ask-agent/mcp-reauthenticate",
+    handler: "mcpReauthenticate",
+  },
   { method: "POST", path: "/api/ask-agent/question", handler: "question" },
   {
     method: "POST",

@@ -3,8 +3,17 @@ import {
   type WorkspaceMcpConfiguration,
   loadWorkspaceMcpConfiguration,
 } from "@agentlink/workspace-host";
+import {
+  globalMcpConfigSources,
+  loadMcpConfigsFromSources,
+  projectMcpConfigSources,
+  readMcpConfig,
+} from "@agentlink/node-host";
+import { parseJsonWithComments } from "@agentlink/protocol/jsonc";
+import type { McpServerConfig } from "@agentlink/node-host";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const SERVER_ID_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,40}$/;
@@ -62,14 +71,88 @@ export async function ensureCliMcpGlobalConfig(
   return configPath;
 }
 
+export interface CliMcpProjectConfig {
+  readonly legacyConfigPath?: string;
+  readonly sharedServerNames: readonly string[];
+}
+
+export async function inspectCliMcpProjectConfig(
+  projectRoot: string,
+): Promise<CliMcpProjectConfig> {
+  const projectConfigPath = cliMcpProjectConfigPath(projectRoot);
+  const canonicalRoot = await fs.realpath(projectRoot);
+  let canonicalConfigPath: string;
+  try {
+    canonicalConfigPath = await fs.realpath(projectConfigPath);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return { sharedServerNames: [] };
+    throw error;
+  }
+  const relative = path.relative(canonicalRoot, canonicalConfigPath);
+  if (
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error("Project MCP config escapes the canonical project root");
+  }
+  const read = await readMcpConfig(canonicalConfigPath);
+  if (read.status === "invalid") {
+    throw new Error(`Project MCP config is invalid: ${projectConfigPath}`);
+  }
+  if (read.status === "unreadable") {
+    throw new Error(`Project MCP config is unreadable: ${projectConfigPath}`);
+  }
+  if (read.status === "available" && read.config.mcpServers !== undefined) {
+    return { sharedServerNames: Object.keys(read.config.mcpServers) };
+  }
+  if (read.status === "available") {
+    const value = parseJsonWithComments<Record<string, unknown>>(read.raw);
+    if (value.schemaVersion !== 1 || !Array.isArray(value.servers)) {
+      throw new Error(
+        `Project MCP config has no supported format: ${projectConfigPath}`,
+      );
+    }
+  }
+  return { legacyConfigPath: projectConfigPath, sharedServerNames: [] };
+}
+
+export async function inspectCliSharedMcpServers(
+  projectRoot: string,
+  environment: NodeJS.ProcessEnv = process.env,
+  includeDisabled = false,
+): Promise<readonly string[]> {
+  const configs = await loadCliSharedMcpServerConfigs(projectRoot, environment);
+  return configs
+    .filter((config) => includeDisabled || !config.disabled)
+    .map((config) => config.name);
+}
+
+export async function loadCliSharedMcpServerConfigs(
+  projectRoot: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<readonly McpServerConfig[]> {
+  await inspectCliMcpProjectConfig(projectRoot);
+  const projectSources = projectMcpConfigSources(projectRoot);
+  return await loadMcpConfigsFromSources(
+    [...globalMcpConfigSources(os.homedir()), ...projectSources],
+    environment,
+    { root: await fs.realpath(projectRoot), sources: projectSources },
+  );
+}
+
 export async function loadCliMcpConfiguration(
   dataRoot: string,
   projectRoot: string,
 ): Promise<WorkspaceMcpConfiguration> {
+  const project = await inspectCliMcpProjectConfig(projectRoot);
   return await loadWorkspaceMcpConfiguration({
     globalConfigPath: await ensureCliMcpGlobalConfig(dataRoot),
     projectRoot,
-    projectConfigPath: cliMcpProjectConfigPath(projectRoot),
+    projectConfigPath: project.legacyConfigPath,
+    shadowedLegacyServerIds: new Set(
+      await inspectCliSharedMcpServers(projectRoot, process.env, true),
+    ),
   });
 }
 

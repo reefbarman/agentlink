@@ -41,6 +41,25 @@ export interface AgentTerminalProviderHost {
   workspaceTrusted: boolean;
 }
 
+export type SandboxAvailabilityFailureReason =
+  | "runtime-unavailable"
+  | "attestation-security-failure"
+  | "trust-failure";
+
+/** Indicates required sandbox preparation failed before any user command started. */
+export class SandboxAvailabilityError extends Error {
+  readonly commandStarted = false;
+
+  constructor(
+    readonly reason: SandboxAvailabilityFailureReason,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "SandboxAvailabilityError";
+  }
+}
+
 export type SandboxPreparationAvailability =
   | {
       status: "verified";
@@ -202,9 +221,12 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
   >();
   private activeProvider: TerminalProvider | undefined;
   private sandboxFailure: Error | undefined;
+  private sandboxFailureReason: SandboxAvailabilityFailureReason =
+    "attestation-security-failure";
+  private currentSandboxAttestationId: string | undefined;
+
   private readonly pendingExecutions = new Set<() => void>();
   private generation = 0;
-  private currentAttestationId: string | undefined;
   private disposed = false;
   private logSink: ((message: string) => void) | undefined;
   private readonly now: () => number;
@@ -269,7 +291,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
         suppliedRouteContext,
       ) ?? suppliedRouteContext;
     const generation = this.generation;
-    const decision = await this.decideRoute(effectiveRouteContext);
+    const decision = await this.decideRoute(effectiveRouteContext, generation);
     this.assertGeneration(generation);
 
     const frozenRouteContext: TerminalExecutionRouteContext =
@@ -305,6 +327,19 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
         resultStatus: decision.reason,
         failure,
       });
+      if (effectiveRouteContext?.requiredAuthority === "sandbox") {
+        const reason: SandboxAvailabilityFailureReason =
+          decision.reason === "untrusted"
+            ? "trust-failure"
+            : decision.reason === "required-sandbox-unavailable"
+              ? "runtime-unavailable"
+              : this.sandboxFailureReason;
+        throw new SandboxAvailabilityError(
+          reason,
+          this.unavailableError(decision.reason).message,
+          this.sandboxFailure ? { cause: this.sandboxFailure } : undefined,
+        );
+      }
       throw this.unavailableError(decision.reason);
     }
 
@@ -365,14 +400,39 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       return prepared;
     }
 
-    const provider = this.resolveSandboxProvider();
+    let provider: ConfinementPreparingTerminalProvider;
+    try {
+      provider = this.resolveSandboxProvider();
+    } catch (error) {
+      if (effectiveRouteContext?.requiredAuthority !== "sandbox") throw error;
+      throw new SandboxAvailabilityError(
+        this.sandboxFailureReason,
+        error instanceof Error ? error.message : String(error),
+        { cause: error },
+      );
+    }
     this.assertExecutionTarget(descriptor, provider);
-    const prepared = await provider.prepareConfinementExecution(
-      descriptor,
-      security,
-    );
+    let prepared: PreparedTerminalExecution;
+    try {
+      prepared = await provider.prepareConfinementExecution(
+        descriptor,
+        security,
+      );
+    } catch (error) {
+      if (effectiveRouteContext?.requiredAuthority !== "sandbox") throw error;
+      throw new SandboxAvailabilityError(
+        "attestation-security-failure",
+        error instanceof Error ? error.message : String(error),
+        { cause: error },
+      );
+    }
     this.assertGeneration(generation, prepared);
-    if (this.currentAttestationId !== decision.attestation.attestationId) {
+    if (
+      prepared.security.sandbox?.attestationId !==
+        decision.attestation.attestationId ||
+      this.currentSandboxAttestationId !== decision.attestation.attestationId ||
+      this.sandboxFailure
+    ) {
       prepared.dispose();
       throw new SandboxPreparationDriftError(["attestationId"]);
     }
@@ -581,10 +641,11 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     this.assertActive();
     this.generation += 1;
     this.revokePendingExecutions();
-    this.currentAttestationId = undefined;
     this.retireSandbox();
     this.retireNativeAgent();
     this.sandboxFailure = undefined;
+    this.sandboxFailureReason = "attestation-security-failure";
+    this.currentSandboxAttestationId = undefined;
   }
 
   dispose(): void {
@@ -592,7 +653,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     this.disposed = true;
     this.generation += 1;
     this.revokePendingExecutions();
-    this.currentAttestationId = undefined;
+    this.currentSandboxAttestationId = undefined;
     this.disposeAllChannelProviders();
   }
 
@@ -644,11 +705,11 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
   }
 
   private async decideRoute(
-    routeContext?: TerminalExecutionRouteContext,
+    routeContext: TerminalExecutionRouteContext | undefined,
+    generation: number,
   ): Promise<RouteDecision> {
     const host = this.options.getHost();
     if (routeContext?.requiredAuthority === "native-agent") {
-      this.currentAttestationId = undefined;
       if (!host.workspaceTrusted) {
         return { route: "unavailable", reason: "untrusted" };
       }
@@ -668,7 +729,6 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     }
     if (routeContext?.requiredAuthority === "sandbox") {
       if (!host.workspaceTrusted) {
-        this.currentAttestationId = undefined;
         return { route: "unavailable", reason: "untrusted" };
       }
       if (
@@ -676,16 +736,14 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
         host.remoteName ||
         host.platform !== "darwin"
       ) {
-        this.currentAttestationId = undefined;
         return {
           route: "unavailable",
           reason: "required-sandbox-unavailable",
         };
       }
-      return this.decideSandboxRoute();
+      return this.decideSandboxRoute(false, generation);
     }
     if (!this.options.isEnabled()) {
-      this.currentAttestationId = undefined;
       return {
         route: "native",
         reason: "feature-disabled",
@@ -693,7 +751,6 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       };
     }
     if (host.remoteName) {
-      this.currentAttestationId = undefined;
       return {
         route: "native",
         reason: "remote-host",
@@ -701,7 +758,6 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       };
     }
     if (host.platform !== "darwin") {
-      this.currentAttestationId = undefined;
       return {
         route: "native",
         reason: "unsupported-host",
@@ -709,28 +765,29 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       };
     }
     if (!host.workspaceTrusted) {
-      this.currentAttestationId = undefined;
       return { route: "unavailable", reason: "untrusted" };
     }
-    return this.decideSandboxRoute(true);
+    return this.decideSandboxRoute(true, generation);
   }
 
   private async decideSandboxRoute(
-    allowNativeFallback = false,
+    allowNativeFallback: boolean,
+    generation: number,
   ): Promise<RouteDecision> {
     if (this.sandboxFailure) {
-      this.currentAttestationId = undefined;
       return { route: "unavailable", reason: "attestation-failed" };
     }
 
     const availability = await this.getSandboxAvailability();
+    if (generation !== this.generation)
+      return { route: "unavailable", reason: "attestation-failed" };
     if (availability.status === "runtime-unavailable") {
-      this.currentAttestationId = undefined;
       if (this.sandboxProvider) {
         this.sandboxFailure = new Error(
           availability.detail ??
             "Sandbox runtime became unavailable after sandbox selection",
         );
+        this.sandboxFailureReason = "runtime-unavailable";
         return { route: "unavailable", reason: "attestation-failed" };
       }
       return allowNativeFallback
@@ -745,10 +802,23 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       this.sandboxFailure = new Error(
         availability.detail ?? "Sandbox behavioral attestation failed",
       );
-      this.currentAttestationId = undefined;
+      this.sandboxFailureReason = "attestation-security-failure";
+
       return { route: "unavailable", reason: "attestation-failed" };
     }
-    this.currentAttestationId = availability.attestation.attestationId;
+    if (
+      this.currentSandboxAttestationId &&
+      this.currentSandboxAttestationId !==
+        availability.attestation.attestationId
+    ) {
+      this.sandboxFailure = new Error(
+        "Sandbox attestation changed while prepared commands were pending",
+      );
+      this.sandboxFailureReason = "attestation-security-failure";
+      this.revokePendingExecutions();
+      return { route: "unavailable", reason: "attestation-failed" };
+    }
+    this.currentSandboxAttestationId = availability.attestation.attestationId;
     return { route: "sandbox", attestation: availability.attestation };
   }
 
@@ -819,9 +889,18 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
           });
           throw new Error("Prepared terminal execution is stale");
         }
+        if (!this.options.getHost().workspaceTrusted) {
+          revoke();
+          throw new SandboxAvailabilityError(
+            "trust-failure",
+            "Workspace trust changed before command execution",
+          );
+        }
         if (
           attestationId !== undefined &&
-          this.currentAttestationId !== attestationId
+          (security.sandbox?.attestationId !== attestationId ||
+            this.currentSandboxAttestationId !== attestationId ||
+            this.sandboxFailure !== undefined)
         ) {
           state = "disposed";
           inner.dispose();
@@ -908,22 +987,28 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
         this.sandboxProvider = this.options.createSandboxProvider();
         this.observeSandboxLifecycle(this.sandboxProvider);
       }
-      if (!isConfinementPreparingProvider(this.sandboxProvider)) {
-        throw new Error(
-          "Sandbox provider does not support prepared confinement execution",
-        );
-      }
       this.sandboxProvider.log = this.logSink;
-      return this.sandboxProvider;
     } catch (error) {
       this.sandboxFailure =
         error instanceof Error ? error : new Error(String(error));
-      this.currentAttestationId = undefined;
+      this.sandboxFailureReason =
+        error instanceof SandboxAvailabilityError &&
+        error.reason === "runtime-unavailable"
+          ? "runtime-unavailable"
+          : "attestation-security-failure";
       this.logSink?.(
         `[sandbox-terminal] Initialization failed closed: ${this.sandboxFailure.message}`,
       );
       throw this.unavailableError("attestation-failed");
     }
+    if (!isConfinementPreparingProvider(this.sandboxProvider)) {
+      this.sandboxFailure = new Error(
+        "Sandbox provider does not support prepared confinement execution",
+      );
+      this.sandboxFailureReason = "attestation-security-failure";
+      throw this.unavailableError("attestation-failed");
+    }
+    return this.sandboxProvider;
   }
 
   private assertExecutionTarget(

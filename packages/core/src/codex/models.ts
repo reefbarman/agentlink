@@ -40,7 +40,7 @@ export interface CodexModelDef {
   /**
    * False for models the ChatGPT/Codex OAuth backend serves but the public
    * API-key endpoint does not (e.g. gpt-5.3-codex-spark). Absent means
-   * available on both.
+   * available on both, even when hidden from the picker.
    */
   apiAvailable?: boolean;
 }
@@ -127,13 +127,24 @@ export interface ResponsesCaps {
   supportsTextVerbosity: boolean;
 }
 
+/** Models shown in both Codex OAuth and OpenAI API-key pickers. */
+export const CODEX_PICKER_MODEL_IDS = [
+  "gpt-6-astra",
+  "gpt-6-sol",
+  "gpt-6-luna",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "gpt-5.5",
+] as const;
+
 /**
  * Models the ChatGPT/Codex OAuth backend (chatgpt.com/backend-api/codex)
  * actually serves. Verified by probing the endpoint — it rejects every other
  * model with "<id> is not supported when using Codex with a ChatGPT account",
  * which reaches our SDK as a bare `400 status code (no body)`. The public
- * API-key endpoint (api.openai.com) serves the full CODEX_MODELS set, so this
- * gate only applies to OAuth auth.
+ * API-key endpoint (api.openai.com) supports the maintained models except
+ * those marked apiAvailable: false, so this gate only applies to OAuth auth.
  *
  * The backend only exposes roughly the current generation and rotates older
  * ones out, so keep this list in sync as models ship. The runtime remap in
@@ -147,13 +158,7 @@ export interface ResponsesCaps {
  * rollout was still in progress.
  */
 export const CODEX_CHATGPT_BACKEND_MODEL_IDS = [
-  "gpt-6-astra",
-  "gpt-6-sol",
-  "gpt-6-luna",
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
-  "gpt-5.5",
+  ...CODEX_PICKER_MODEL_IDS,
   "gpt-5.3-codex-spark",
 ] as const;
 
@@ -622,12 +627,10 @@ export function listCodexModels(
   provider: string;
   capabilities: CoreModelCapabilities;
 }> {
-  return CODEX_MODELS.filter(
-    (model) => authMethod !== "apiKey" || model.apiAvailable !== false,
-  ).map((model) => ({
-    id: model.id,
-    displayName: model.displayName,
+  return CODEX_PICKER_MODEL_IDS.map((id) => ({
+    id,
+    displayName: CODEX_MODEL_MAP.get(id)!.displayName,
     provider: providerId,
-    capabilities: getCodexModelCapabilities(model.id, authMethod),
+    capabilities: getCodexModelCapabilities(id, authMethod),
   }));
 }

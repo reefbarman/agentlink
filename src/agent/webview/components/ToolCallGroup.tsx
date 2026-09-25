@@ -19,6 +19,50 @@ export type BlockSegment =
   | { kind: "tool_group"; blocks: ToolBlock[] }
   | { kind: "single"; block: ContentBlock; index: number };
 
+export type ActivitySegment =
+  | BlockSegment
+  | { kind: "activity_group"; segments: BlockSegment[] };
+
+export function groupActivitySegments(
+  segments: BlockSegment[],
+): ActivitySegment[] {
+  const result: ActivitySegment[] = [];
+  let completed: BlockSegment[] = [];
+
+  const flush = () => {
+    const thinkingCount = completed.filter(
+      (segment) => segment.kind === "single",
+    ).length;
+    const toolGroupCount = completed.length - thinkingCount;
+    if (thinkingCount >= 3 && toolGroupCount >= 3) {
+      result.push({ kind: "activity_group", segments: completed });
+    } else {
+      result.push(...completed);
+    }
+    completed = [];
+  };
+
+  for (const segment of segments) {
+    if (
+      (segment.kind === "tool_group" &&
+        !segment.blocks.some(
+          (block) =>
+            block.resultImages?.length || block.resultDocuments?.length,
+        )) ||
+      (segment.kind === "single" &&
+        segment.block.type === "thinking" &&
+        segment.block.complete)
+    ) {
+      completed.push(segment);
+    } else {
+      flush();
+      result.push(segment);
+    }
+  }
+  flush();
+  return result;
+}
+
 interface ToolCallGroupProps {
   blocks: ToolBlock[];
   onOpenFile?: (path: string, line?: number) => void;

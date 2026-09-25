@@ -14,7 +14,7 @@ import {
   type DurableToolInteractionRepository,
   type HeadlessTurnAuthRequest,
   type HostTool,
-  type HostToolResolver,
+  type HostToolLifecycleResolver,
   type ResolveAgentInstructions,
   type TurnExecutionLimits,
   type TurnInteractionTokenService,
@@ -45,7 +45,7 @@ export interface CreateNodeHostToolsOptions<
   TPrincipal extends AgentPrincipal = AgentPrincipal,
 > {
   readonly tools?: readonly HostTool<TPrincipal>[];
-  readonly resolveTools?: HostToolResolver<TPrincipal>;
+  readonly resolveTools?: HostToolLifecycleResolver<TPrincipal>;
 }
 
 /**
@@ -57,7 +57,7 @@ export function createNodeHostTools<
   TPrincipal extends AgentPrincipal = AgentPrincipal,
 >(
   options: CreateNodeHostToolsOptions<TPrincipal>,
-): HostToolResolver<TPrincipal> | undefined {
+): HostToolLifecycleResolver<TPrincipal> | undefined {
   if (options.tools && options.resolveTools) {
     throw new Error(
       "Node host tools must be static or dynamically resolved, not both",

@@ -30,11 +30,16 @@ import {
 import { getConfiguredBaseThresholdForModel } from "./modelCondenseThresholds.js";
 import {
   getNewSessionMode,
+  refreshSharedSessionPreferences,
   rememberSessionMode,
   removeUserSessionPreferenceEntry,
   writeUserSessionPreferenceEntry,
 } from "./sharedSessionPreferences.js";
-import { FALLBACK_AGENT_MODEL } from "./modeModelPreferences.js";
+import {
+  FALLBACK_AGENT_MODEL,
+  resolveModelForMode,
+} from "./modeModelPreferences.js";
+import { resolveReasoningEffortForMode } from "./modeReasoningEffortPreferences.js";
 import type {
   AgentSessionManager,
   CheckpointRevertResult,
@@ -7719,7 +7724,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             msg.effort,
           );
         } else {
+          try {
+            await refreshSharedSessionPreferences();
+          } catch (err) {
+            this.log(
+              `[mode] Could not refresh shared session preferences: ${err}`,
+            );
+          }
           await rememberSessionMode(mode);
+          this.sendOrQueueWebviewMessage({
+            type: "stateUpdate",
+            state: this.buildChatState(undefined),
+          });
         }
         break;
       }
@@ -9029,25 +9045,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           });
           this.drainBrowserQueuedMessage(sourceSession.id);
         } else if (name === "handoff") {
-          const result = await this.sessionManager.prepareSessionHandoff(
-            sourceSession?.id,
-          );
-          if (!result.ok) {
+          try {
+            const result = await this.sessionManager.prepareSessionHandoff(
+              sourceSession?.id,
+            );
+            if (!result.ok) {
+              const message = {
+                type: "agentHandoffResult",
+                ok: false,
+                error: result.message,
+              } as const;
+              if (context?.connection) context.connection.postMessage(message);
+              else this.postMessage(message);
+              break;
+            }
             const message = {
-              type: "agentHandoffResult",
-              ok: false,
-              error: result.message,
+              type: "agentHandoffDraft",
+              draft: result.draft,
             } as const;
             if (context?.connection) context.connection.postMessage(message);
             else this.postMessage(message);
-            break;
+          } catch (error) {
+            this.log(`[handoff] preparation failed: ${String(error)}`);
+            const message = {
+              type: "agentHandoffResult",
+              ok: false,
+              error: `Could not prepare the handoff: ${error instanceof Error ? error.message : String(error)}`,
+            } as const;
+            if (context?.connection) context.connection.postMessage(message);
+            else this.postMessage(message);
           }
-          const message = {
-            type: "agentHandoffDraft",
-            draft: result.draft,
-          } as const;
-          if (context?.connection) context.connection.postMessage(message);
-          else this.postMessage(message);
         } else if (name === "context-doctor") {
           const result = this.runContextDoctor(sourceSession?.id);
           if (!result.ok) {
@@ -12663,8 +12690,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!this.sessionManager) {
       throw new Error("Agent session manager is unavailable");
     }
-    const modelId =
-      session?.model ?? this.sessionManager.getConfig?.().model ?? "";
+    const mode = session?.mode ?? this.getDefaultNewSessionMode();
+    const config = vscode.workspace.getConfiguration("agentlink");
+    const modelId = session
+      ? session.model
+      : resolveModelForMode(
+          config,
+          mode,
+          this.sessionManager.getConfig?.().model ?? FALLBACK_AGENT_MODEL,
+        );
+    const reasoningEffort =
+      session?.reasoningEffort ?? resolveReasoningEffortForMode(config, mode);
     const condenseThreshold =
       session?.autoCondenseThreshold ??
       this.getConfiguredCondenseThreshold(modelId, session?.projectScope);
@@ -12699,7 +12735,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
         : (projects.find((project) => project.projectId === defaultProjectId) ??
           null),
-      mode: session?.mode ?? this.getDefaultNewSessionMode(),
+      mode,
       model: modelId,
       streaming:
         session?.status === "streaming" ||
@@ -12714,8 +12750,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       condenseThreshold,
       contextBudget,
       contextHealth: this.contextHealth,
-      reasoningEffort: session?.reasoningEffort ?? "high",
-      thinkingEnabled: (session?.reasoningEffort ?? "high") !== "none",
+      reasoningEffort,
+      thinkingEnabled: reasoningEffort !== "none",
       // Use the selected session's ID so write approval state remains isolated.
       agentWriteApproval: this.approvalManager?.getAgentWriteApprovalState(
         session?.id ?? "agent",

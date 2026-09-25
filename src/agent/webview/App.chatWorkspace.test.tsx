@@ -97,6 +97,66 @@ function createSnapshot(
 }
 
 describe("App chat workspace integration", () => {
+  it("shows handoff progress and preparation errors without a draft", () => {
+    const vscodeApi = createVsCodeApi();
+    const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot() });
+    deliver(sessionLoaded("session-1", "Existing task"));
+    deliver({
+      type: "agentModelsUpdate",
+      models: [
+        {
+          id: "claude-opus-5",
+          displayName: "Claude Opus",
+          provider: "anthropic",
+          authenticated: true,
+          reasoningEfforts: ["none", "low", "high"],
+        },
+      ],
+    });
+    deliver({
+      type: "agentSlashCommandsUpdate",
+      commands: [{ name: "handoff", source: "builtin", builtin: true }],
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    input.value = "/handoff";
+    fireEvent.input(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(postedCommands(vscodeApi.postMessage, "agentSlashCommand")).toEqual([
+      expect.objectContaining({ name: "handoff" }),
+    ]);
+    expect(screen.getByRole("status").textContent).toContain(
+      "Preparing fresh-session handoff",
+    );
+
+    deliver({
+      type: "agentHandoffResult",
+      ok: false,
+      error: "Wait for the session to become idle.",
+    });
+    expect(screen.queryByText("Preparing fresh-session handoff…")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Wait for the session to become idle.",
+    );
+
+    input.value = "/handoff";
+    fireEvent.input(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    deliver({
+      type: "agentHandoffDraft",
+      draft: {
+        id: "draft-1",
+        sourceTitle: "Existing chat",
+        markdown: "Continue this work",
+      },
+    });
+    expect(screen.queryByText("Preparing fresh-session handoff…")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.getByRole("region", { name: "Continue in a fresh session" }),
+    ).toBeTruthy();
+  });
+
   it("renders a keyed workspace and addresses focus and New Tab commands", () => {
     const vscodeApi = createVsCodeApi();
     const { container } = render(<App vscodeApi={vscodeApi} />);
@@ -456,6 +516,87 @@ describe("App chat workspace integration", () => {
 
     expect(screen.queryByText("Checking model setup")).toBeNull();
     expect(container.querySelector(".chat-input")).not.toBeNull();
+  });
+
+  it("uses the target mode's model when switching an empty chat", () => {
+    const vscodeApi = createVsCodeApi();
+    const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: null,
+        mode: "code",
+        model: "gpt-6-sol",
+        streaming: false,
+        projects: [{ projectId: "project-1", displayName: "Project" }],
+      },
+    });
+    deliver({
+      type: "agentModesUpdate",
+      modes: [
+        { slug: "code", name: "Code", icon: "code" },
+        { slug: "architect", name: "Architect", icon: "symbol-structure" },
+      ],
+    });
+    deliver({
+      type: "agentModelsUpdate",
+      models: [
+        {
+          id: "gpt-6-sol",
+          displayName: "Sol",
+          provider: "codex",
+          authenticated: true,
+        },
+        {
+          id: "gpt-6-astra",
+          displayName: "Astra",
+          provider: "codex",
+          authenticated: true,
+        },
+        {
+          id: "other-model",
+          displayName: "Other",
+          provider: "test",
+          authenticated: true,
+        },
+      ],
+    });
+
+    fireEvent.click(screen.getByTitle("Mode: Code"));
+    fireEvent.click(screen.getByRole("button", { name: "Architect" }));
+    expect(
+      postedCommands(
+        vscodeApi.postMessage,
+        "agentRememberSessionlessSelection",
+      ),
+    ).toEqual([expect.objectContaining({ mode: "architect" })]);
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: null,
+        mode: "architect",
+        model: "gpt-6-astra",
+        streaming: false,
+      },
+    });
+    expect(screen.getByTitle(/Model: Astra/)).toBeTruthy();
+    fireEvent.click(screen.getByTitle(/Model: Astra/));
+    fireEvent.click(screen.getByRole("button", { name: /Other/ }));
+    expect(screen.getByTitle(/Model: Other/)).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle("Mode: Architect"));
+    fireEvent.click(screen.getByRole("button", { name: "Code" }));
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: null,
+        mode: "code",
+        model: "gpt-6-sol",
+        streaming: false,
+      },
+    });
+    expect(screen.getByTitle(/Model: Sol/)).toBeTruthy();
+    expect(container.querySelector(".chat-input")).toBeTruthy();
   });
 
   it("keeps composer selections made before the first message", async () => {

@@ -7,7 +7,13 @@ import {
   imageDownloadName,
   type OpenImageInEditor,
 } from "./ImagePreview";
-import { ToolCallGroup, segmentBlocks } from "./ToolCallGroup";
+import {
+  ToolCallGroup,
+  getToolGroupLabel,
+  groupActivitySegments,
+  segmentBlocks,
+  type ActivitySegment,
+} from "./ToolCallGroup";
 import {
   useCallback,
   useEffect,
@@ -244,6 +250,10 @@ export function MessageBubble({
       }),
     [blocks, streaming, settledToolIds, message.id],
   );
+  const activitySegments = useMemo(
+    () => groupActivitySegments(blockSegments),
+    [blockSegments],
+  );
   const assistantMediaPlacement = useMemo(
     () => placeAssistantDisplayMedia(message.displayMedia, blocks),
     [message.displayMedia, blocks],
@@ -405,6 +415,156 @@ export function MessageBubble({
   }
 
   const lastIdx = blocks.length - 1;
+  const renderSegment = (segment: ActivitySegment): preact.ComponentChild => {
+    if (segment.kind === "activity_group") {
+      const tools = segment.segments.flatMap((child) =>
+        child.kind === "tool_group" ? child.blocks : [],
+      );
+      const thinkingCount = segment.segments.filter(
+        (child) => child.kind === "single" && child.block.type === "thinking",
+      ).length;
+      const summary = `${thinkingCount} thinking steps · ${tools.length} tool calls · ${getToolGroupLabel(tools)}`;
+      const first = segment.segments[0];
+      return (
+        <ActivityGroup
+          key={`activity-${first.kind === "single" ? first.index : first.blocks[0].id}`}
+          summary={summary}
+        >
+          {segment.segments.map(renderSegment)}
+        </ActivityGroup>
+      );
+    }
+    if (segment.kind === "tool_group") {
+      const promotedMedia = combineDisplayMedia(
+        segment.blocks.map((block) =>
+          assistantMediaPlacement.promotedByToolCallId.get(block.id),
+        ),
+      );
+      return (
+        <Fragment key={`group-${segment.blocks[0].id}`}>
+          <ToolCallGroup
+            blocks={segment.blocks}
+            onOpenFile={onOpenFile}
+            onOpenImageInEditor={onOpenImageInEditor}
+            onRevealToolCallTerminal={onRevealToolCallTerminal}
+            onContinueToolCallInBackground={onContinueToolCallInBackground}
+            onCompleteToolCall={onCompleteToolCall}
+            onCancelToolCall={onCancelToolCall}
+            onPromoteMcpToolApproval={onPromoteMcpToolApproval}
+          />
+          {promotedMedia && (
+            <UserAttachments
+              files={[]}
+              mediaLabel={null}
+              displayMedia={promotedMedia}
+              imageLabel="generated image"
+              imageAlt="Generated image"
+              onOpenFile={onOpenFile}
+              onOpenImageInEditor={onOpenImageInEditor}
+            />
+          )}
+        </Fragment>
+      );
+    }
+
+    const block = segment.block;
+    const blockIndex = segment.index;
+    switch (block.type) {
+      case "thinking":
+        return <ThinkingBlock key={block.id} block={block} />;
+      case "tool_call": {
+        const promotedMedia = assistantMediaPlacement.promotedByToolCallId.get(
+          block.id,
+        );
+        return (
+          <Fragment key={block.id}>
+            <ToolCallBlock
+              toolCall={block}
+              onOpenFile={onOpenFile}
+              onOpenImageInEditor={onOpenImageInEditor}
+              onRevealToolCallTerminal={onRevealToolCallTerminal}
+              onContinueToolCallInBackground={onContinueToolCallInBackground}
+              onCompleteToolCall={onCompleteToolCall}
+              onCancelToolCall={onCancelToolCall}
+              onPromoteMcpToolApproval={onPromoteMcpToolApproval}
+            />
+            {promotedMedia && (
+              <UserAttachments
+                files={[]}
+                mediaLabel={null}
+                displayMedia={promotedMedia}
+                imageLabel="generated image"
+                imageAlt="Generated image"
+                onOpenFile={onOpenFile}
+                onOpenImageInEditor={onOpenImageInEditor}
+              />
+            )}
+          </Fragment>
+        );
+      }
+      case "skill_load":
+        return <SkillLoadBlock key={block.id} block={block} />;
+      case "text": {
+        const isActiveStream = streaming && blockIndex === lastIdx;
+        return (
+          <TextBlock
+            key={`text-${blockIndex}`}
+            text={block.text}
+            streaming={isActiveStream}
+            showCopy={!isActiveStream}
+            onOpenFile={onOpenFile}
+            onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
+          />
+        );
+      }
+      case "bg_agent":
+        return (
+          <BgAgentBlock
+            key={`bg-${block.sessionId}`}
+            sessionId={block.sessionId}
+            task={block.task}
+            message={block.message}
+            resolvedModel={block.resolvedModel}
+            resolvedProvider={block.resolvedProvider}
+            reasoningEffort={block.reasoningEffort}
+            resolvedMode={block.resolvedMode}
+            taskClass={block.taskClass}
+            routingReason={block.routingReason}
+            bgSession={bgSessions?.find((s) => s.id === block.sessionId)}
+            onStop={onStopBackground}
+          />
+        );
+      case "bg_agent_result": {
+        const bgSession = bgSessions?.find(
+          (session) => session.id === block.sessionId,
+        );
+        return (
+          <BgAgentResultBlock
+            key={`bgr-${block.sessionId}`}
+            sessionId={block.sessionId}
+            task={block.task}
+            status={block.status}
+            resultState={block.resultState}
+            terminalReason={block.terminalReason}
+            resultText={block.resultText}
+            partialOutput={block.partialOutput}
+            summary={block.summary}
+            resolvedModel={bgSession?.resolvedModel}
+            resolvedProvider={bgSession?.resolvedProvider}
+            reasoningEffort={bgSession?.reasoningEffort}
+            onOpenTranscript={onOpenTranscript}
+            onOpenFile={onOpenFile}
+          />
+        );
+      }
+      case "question_answer":
+        return <QuestionAnswerBlock key={`qa-${blockIndex}`} block={block} />;
+      case "pairing_code":
+        return (
+          <PairingCodeBlock key={`pair-${block.pairingId}`} block={block} />
+        );
+    }
+  };
 
   const finalMarker = !streaming ? message.finalMarker : undefined;
   const finalContinueAction = finalMarker
@@ -430,146 +590,7 @@ export function MessageBubble({
             onOpenImageInEditor={onOpenImageInEditor}
           />
         )}
-        {blockSegments.map((segment) => {
-          if (segment.kind === "tool_group") {
-            const promotedMedia = combineDisplayMedia(
-              segment.blocks.map((block) =>
-                assistantMediaPlacement.promotedByToolCallId.get(block.id),
-              ),
-            );
-            return (
-              <Fragment key={`group-${segment.blocks[0].id}`}>
-                <ToolCallGroup
-                  blocks={segment.blocks}
-                  onOpenFile={onOpenFile}
-                  onOpenImageInEditor={onOpenImageInEditor}
-                  onRevealToolCallTerminal={onRevealToolCallTerminal}
-                  onContinueToolCallInBackground={
-                    onContinueToolCallInBackground
-                  }
-                  onCompleteToolCall={onCompleteToolCall}
-                  onCancelToolCall={onCancelToolCall}
-                  onPromoteMcpToolApproval={onPromoteMcpToolApproval}
-                />
-                {promotedMedia && (
-                  <UserAttachments
-                    files={[]}
-                    mediaLabel={null}
-                    displayMedia={promotedMedia}
-                    imageLabel="generated image"
-                    imageAlt="Generated image"
-                    onOpenFile={onOpenFile}
-                    onOpenImageInEditor={onOpenImageInEditor}
-                  />
-                )}
-              </Fragment>
-            );
-          }
-
-          const block = segment.block;
-          const blockIndex = segment.index;
-          switch (block.type) {
-            case "thinking":
-              return <ThinkingBlock key={block.id} block={block} />;
-            case "tool_call": {
-              const promotedMedia =
-                assistantMediaPlacement.promotedByToolCallId.get(block.id);
-              return (
-                <Fragment key={block.id}>
-                  <ToolCallBlock
-                    toolCall={block}
-                    onOpenFile={onOpenFile}
-                    onOpenImageInEditor={onOpenImageInEditor}
-                    onRevealToolCallTerminal={onRevealToolCallTerminal}
-                    onContinueToolCallInBackground={
-                      onContinueToolCallInBackground
-                    }
-                    onCompleteToolCall={onCompleteToolCall}
-                    onCancelToolCall={onCancelToolCall}
-                    onPromoteMcpToolApproval={onPromoteMcpToolApproval}
-                  />
-                  {promotedMedia && (
-                    <UserAttachments
-                      files={[]}
-                      mediaLabel={null}
-                      displayMedia={promotedMedia}
-                      imageLabel="generated image"
-                      imageAlt="Generated image"
-                      onOpenFile={onOpenFile}
-                      onOpenImageInEditor={onOpenImageInEditor}
-                    />
-                  )}
-                </Fragment>
-              );
-            }
-            case "skill_load":
-              return <SkillLoadBlock key={block.id} block={block} />;
-            case "text": {
-              const isActiveStream = streaming && blockIndex === lastIdx;
-              return (
-                <TextBlock
-                  key={`text-${blockIndex}`}
-                  text={block.text}
-                  streaming={isActiveStream}
-                  showCopy={!isActiveStream}
-                  onOpenFile={onOpenFile}
-                  onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
-                />
-              );
-            }
-            case "bg_agent":
-              return (
-                <BgAgentBlock
-                  key={`bg-${block.sessionId}`}
-                  sessionId={block.sessionId}
-                  task={block.task}
-                  message={block.message}
-                  resolvedModel={block.resolvedModel}
-                  resolvedProvider={block.resolvedProvider}
-                  reasoningEffort={block.reasoningEffort}
-                  resolvedMode={block.resolvedMode}
-                  taskClass={block.taskClass}
-                  routingReason={block.routingReason}
-                  bgSession={bgSessions?.find((s) => s.id === block.sessionId)}
-                  onStop={onStopBackground}
-                />
-              );
-            case "bg_agent_result": {
-              const bgSession = bgSessions?.find(
-                (session) => session.id === block.sessionId,
-              );
-              return (
-                <BgAgentResultBlock
-                  key={`bgr-${block.sessionId}`}
-                  sessionId={block.sessionId}
-                  task={block.task}
-                  status={block.status}
-                  resultState={block.resultState}
-                  terminalReason={block.terminalReason}
-                  resultText={block.resultText}
-                  partialOutput={block.partialOutput}
-                  summary={block.summary}
-                  resolvedModel={bgSession?.resolvedModel}
-                  resolvedProvider={bgSession?.resolvedProvider}
-                  reasoningEffort={bgSession?.reasoningEffort}
-                  onOpenTranscript={onOpenTranscript}
-                  onOpenFile={onOpenFile}
-                />
-              );
-            }
-            case "question_answer":
-              return (
-                <QuestionAnswerBlock key={`qa-${blockIndex}`} block={block} />
-              );
-            case "pairing_code":
-              return (
-                <PairingCodeBlock
-                  key={`pair-${block.pairingId}`}
-                  block={block}
-                />
-              );
-          }
-        })}
+        {activitySegments.map(renderSegment)}
 
         {/* General live activity stays visible through every streaming gap. */}
         {streamingActivity && (
@@ -738,6 +759,35 @@ export function MessageBubble({
           onCondense={onCondense}
         />
       )}
+    </div>
+  );
+}
+
+function ActivityGroup({
+  summary,
+  children,
+}: {
+  summary: string;
+  children: preact.ComponentChildren;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div class="activity-group-block">
+      <button
+        class="tool-call-header activity-group-header"
+        type="button"
+        aria-expanded={expanded}
+        aria-label={`Activity ${summary}`}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        <i
+          class={`codicon codicon-chevron-${expanded ? "down" : "right"} tool-call-chevron`}
+        />
+        <i class="codicon codicon-lightbulb thinking-icon" />
+        <span class="tool-call-name">Activity</span>
+        <span class="tool-call-summary">{summary}</span>
+      </button>
+      {expanded && <div class="activity-group-children">{children}</div>}
     </div>
   );
 }

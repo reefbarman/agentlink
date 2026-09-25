@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createHash } from "node:crypto";
-import { createWorkspaceHost } from "./workspaceHost.js";
+import { createWorkspaceHost } from "./workspaceHostRuntime.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";

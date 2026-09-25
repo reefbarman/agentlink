@@ -374,9 +374,16 @@ export function CommandCard({
       targetProject={request.targetProject}
       targetPath={request.targetPath}
       purpose="Run a terminal command"
-      rulesContent={rulesJsx}
-      rulesModified={rulesModified}
-      primaryLabel={recoveryAttempt ? "Run Again" : "Run"}
+      rulesContent={recoveryAttempt ? undefined : rulesJsx}
+      rulesModified={!recoveryAttempt && rulesModified}
+      primaryLabel={
+        recoveryAttempt
+          ? recoveryAttempt.commandSent === false &&
+            recoveryAttempt.processLaunched === false
+            ? "Run in native terminal"
+            : "Run Again"
+          : "Run"
+      }
       primaryWithRulesLabel="Save Rules & Run"
       onAccept={handleRun}
       onSaveAndAccept={handleSaveAndRun}
@@ -454,7 +461,7 @@ export function CommandCard({
           recoveryAttempt={recoveryAttempt}
           edited={isEdited}
           nativeEscalation={nativeEscalation}
-          approvalRulesSupported={nativeEscalation}
+          approvalRulesSupported={nativeEscalation && !recoveryAttempt}
         />
       )}
     </ApprovalLayout>

@@ -72,7 +72,7 @@ VS Code can save generated PNG, JPEG, and WebP files and use workspace-local edi
 
 ## Run and inspect commands
 
-- `execute_command` runs a command in a managed terminal. Command approval checks are ordered within each chat session, not across tabs: a pending approval in another tab does not block this session's checks or approval card. All authorization and shared workspace scheduling constraints remain in force.
+- `execute_command` runs a command in a managed terminal. Command approval checks are ordered within each chat session, not across tabs: a pending approval in another tab does not block this session's checks or approval card. All authorization and shared workspace scheduling constraints remain in force. For an eligible default Approve for Me command, a confirmed sandbox runtime failure before command start offers one direct native approval, not a retry loop. The user must approve the exact command; rejection cannot be prompted again for that action in the same turn. Trust, security, invalid grants, uncertain launch state, and commands needing sandbox-only capabilities do not receive this fallback.
 - `get_terminal_output` reads retained output or controls an observed command. Pass the `command_id` returned by native/sandbox `execute_command` together with `terminal_id` to read the same command after terminal reuse. Omitting it selects the latest command. An unavailable or expired command ID returns an error rather than another command's output; `kill: true` cannot interrupt a newer command when an older ID is selected.
 - `close_terminals` closes managed terminals when appropriate.
 

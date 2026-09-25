@@ -4,6 +4,7 @@ import {
   ToolCallGroup,
   getToolGroupLabel,
   getToolGroupStatus,
+  groupActivitySegments,
   segmentBlocks,
 } from "./ToolCallGroup";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -124,6 +125,105 @@ describe("segmentBlocks", () => {
       { kind: "tool_group", blocks: [first] },
       { kind: "single", block: mcp, index: 1 },
       { kind: "tool_group", blocks: [second, third] },
+    ]);
+  });
+});
+
+describe("groupActivitySegments", () => {
+  const thinking = (id: string): ContentBlock => ({
+    type: "thinking",
+    id,
+    text: `Reasoning ${id}`,
+    complete: true,
+  });
+  const cycles = (count: number): ContentBlock[] =>
+    Array.from({ length: count }, (_, index) => [
+      thinking(`thinking-${index}`),
+      tool(`tool-${index}`, "read_file"),
+    ]).flat();
+
+  it("groups three completed cycles but not two", () => {
+    const firstTwo = segmentBlocks(cycles(2));
+    expect(groupActivitySegments(firstTwo)).toEqual(firstTwo);
+
+    const three = segmentBlocks(cycles(3));
+    expect(groupActivitySegments(three)).toEqual([
+      { kind: "activity_group", segments: three },
+    ]);
+  });
+
+  it("includes completed tools before and after qualifying thinking cycles", () => {
+    const blocks = [
+      tool("before-1", "codebase_search"),
+      tool("before-2", "read_file"),
+      ...cycles(3),
+      tool("after", "get_context"),
+    ];
+    const segments = segmentBlocks(blocks);
+    expect(groupActivitySegments(segments)).toEqual([
+      { kind: "activity_group", segments },
+    ]);
+  });
+
+  it("keeps tool-only runs outside Activity until there is enough thinking work", () => {
+    const blocks = [
+      tool("before", "codebase_search"),
+      ...cycles(2),
+      tool("after", "read_file"),
+    ];
+    const segments = segmentBlocks(blocks);
+    expect(groupActivitySegments(segments)).toEqual(segments);
+  });
+
+  it("leaves running, failed and approval-bearing tools outside the completed run", () => {
+    const completed = segmentBlocks(cycles(3));
+    const failed = tool("failed", "execute_command", {
+      result: JSON.stringify({ exit_code: 1 }),
+    });
+    const promoted = tool("promoted", "mcp__write", {
+      mcpApprovalPromotion: {
+        serverName: "mcp",
+        bareToolName: "write",
+        scopes: ["session"],
+      },
+    });
+    const running = tool("running", "execute_command", { complete: false });
+    const segments = segmentBlocks([
+      ...cycles(3),
+      thinking("unfinished-cycle"),
+      running,
+      failed,
+      promoted,
+    ]);
+    expect(groupActivitySegments(segments)).toEqual([
+      {
+        kind: "activity_group",
+        segments: [
+          ...completed,
+          { kind: "single", block: thinking("unfinished-cycle"), index: 6 },
+        ],
+      },
+      { kind: "single", block: running, index: 7 },
+      { kind: "single", block: failed, index: 8 },
+      { kind: "single", block: promoted, index: 9 },
+    ]);
+  });
+
+  it("splits on text and keeps media-bearing calls visible", () => {
+    const media = tool("image", "generate_image", {
+      resultImages: [{ mimeType: "image/png", data: "eA==" }],
+    });
+    const blocks = [
+      ...cycles(3),
+      text("Progress update"),
+      ...cycles(2),
+      thinking("image-step"),
+      media,
+    ];
+    const segments = segmentBlocks(blocks);
+    expect(groupActivitySegments(segments)).toEqual([
+      { kind: "activity_group", segments: segments.slice(0, 6) },
+      ...segments.slice(6),
     ]);
   });
 });

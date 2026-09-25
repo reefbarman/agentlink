@@ -73,6 +73,65 @@ describe("workspace MCP configuration", () => {
     ).resolves.toMatchObject({ servers: [] });
   });
 
+  it("shadows legacy declarations even when the shared server is disabled", async () => {
+    const test = await fixture();
+    await writeJson(test.globalConfigPath, {
+      schemaVersion: 1,
+      trustedProjectServerIds: ["collision"],
+      servers: [
+        {
+          id: "global_collision",
+          transport: "streamable-http",
+          url: "https://example.test/mcp",
+        },
+      ],
+    });
+    await writeJson(test.projectConfigPath, {
+      schemaVersion: 1,
+      servers: [
+        {
+          id: "collision",
+          transport: "stdio",
+          command: test.command,
+          cwd: test.cwd,
+        },
+      ],
+    });
+    const config = await loadWorkspaceMcpConfiguration({
+      globalConfigPath: test.globalConfigPath,
+      projectRoot: test.projectRoot,
+      projectConfigPath: test.projectConfigPath,
+      shadowedLegacyServerIds: new Set(["collision", "global_collision"]),
+    });
+    expect(config.servers).toEqual([]);
+  });
+
+  it("rechecks shadowing on every legacy snapshot", async () => {
+    const test = await fixture();
+    await writeJson(test.globalConfigPath, {
+      schemaVersion: 1,
+      trustedProjectServerIds: [],
+      servers: [
+        {
+          id: "collision",
+          transport: "streamable-http",
+          url: "https://example.test/mcp",
+        },
+      ],
+    });
+    let shadow = false;
+    const options = {
+      globalConfigPath: test.globalConfigPath,
+      projectRoot: test.projectRoot,
+      shadowedLegacyServerIds: async () => new Set(shadow ? ["collision"] : []),
+    };
+    expect((await loadWorkspaceMcpConfiguration(options)).servers).toHaveLength(
+      1,
+    );
+    shadow = true;
+    expect((await loadWorkspaceMcpConfiguration(options)).servers).toEqual([]);
+  });
+
   it("loads trusted stdio and HTTPS declarations without secret values", async () => {
     const test = await fixture();
     await writeJson(test.globalConfigPath, {

@@ -476,6 +476,7 @@ function classifyAskAgentRoute(
     case "mcpConfigOpenRaw":
     case "mcpStatus":
     case "mcpRefresh":
+    case "mcpReauthenticate":
     case "questionProgress":
     case "formElicitation":
     case "memory":

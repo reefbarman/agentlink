@@ -35,8 +35,13 @@ export function CommandExecutionContext({
     : protectedTerminal
       ? "Protected Terminal"
       : "AgentLink Terminal";
+  const firstCommandNotStarted =
+    recoveryAttempt?.commandSent === false &&
+    recoveryAttempt.processLaunched === false;
   const shortDescription = recoveryAttempt
-    ? "Second execution · may repeat side effects"
+    ? firstCommandNotStarted
+      ? "First execution · sandbox could not start"
+      : "Second execution · may repeat side effects"
     : nativeEscalation
       ? approvalRulesSupported
         ? "Normal user permissions"
@@ -129,10 +134,15 @@ export function CommandExecutionContext({
         <div class="command-context-detail-row command-recovery-warning">
           <span aria-hidden="true" class="codicon codicon-warning" />
           <div>
-            <strong>Second execution after sandbox denial</strong>
+            <strong>
+              {firstCommandNotStarted
+                ? "Sandbox could not start the command"
+                : "Second execution after sandbox denial"}
+            </strong>
             <div>
-              The sandbox already launched this command. A second run may repeat
-              side effects.
+              {firstCommandNotStarted
+                ? "The command has not run yet. Approving will run it once with your normal user permissions."
+                : "The sandbox already launched this command. A second run may repeat side effects."}
             </div>
           </div>
         </div>
@@ -174,9 +184,14 @@ export function CommandExecutionContext({
               <div class="command-context-detail-row">
                 <span aria-hidden="true" class="codicon codicon-warning" />
                 <div>
-                  <strong>Sandbox denial details</strong>
+                  <strong>
+                    {firstCommandNotStarted
+                      ? "Sandbox startup failure"
+                      : "Sandbox denial details"}
+                  </strong>
                   <div>
-                    Denied {recoveryAttempt.denialOperation}:{" "}
+                    {firstCommandNotStarted ? "Failure" : "Denied"}{" "}
+                    {recoveryAttempt.denialOperation}:{" "}
                     {recoveryAttempt.denialReason}
                   </div>
                   <div>

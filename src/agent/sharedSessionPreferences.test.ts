@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getNewSessionMode,
   initializeSharedSessionPreferences,
+  refreshSharedSessionPreferences,
   removeUserSessionPreferenceEntry,
   resetSharedSessionPreferencesForTesting,
   writeUserSessionPreferenceEntry,
@@ -76,6 +77,62 @@ describe("shared session defaults", () => {
       modeModels: { code: "model-new" },
     });
     expect(resolveModelForMode(config, "code")).toBe("model-new");
+  });
+
+  it("refreshes another window's saved per-mode models before a mode switch", async () => {
+    const store = {
+      read: vi.fn(async () =>
+        preferences({
+          modeModels: { code: "gpt-6-sol", architect: "gpt-6-astra" },
+        }),
+      ),
+    };
+    initializeSharedSessionPreferences(
+      store as never,
+      preferences({ modeModels: { code: "gpt-6-sol" } }),
+    );
+    const config = { inspect: () => undefined } as never;
+    expect(resolveModelForMode(config, "architect", "gpt-6-sol")).toBe(
+      "gpt-6-sol",
+    );
+
+    await refreshSharedSessionPreferences();
+
+    expect(store.read).toHaveBeenCalledOnce();
+    expect(resolveModelForMode(config, "architect", "gpt-6-sol")).toBe(
+      "gpt-6-astra",
+    );
+  });
+
+  it("does not replace a newer picker save with an older refresh", async () => {
+    let finishRead!: (snapshot: SessionPreferencesSnapshot) => void;
+    const store = {
+      read: vi.fn(
+        () =>
+          new Promise<SessionPreferencesSnapshot>((resolve) => {
+            finishRead = resolve;
+          }),
+      ),
+      update: vi.fn(async () =>
+        preferences({ modeModels: { code: "gpt-6-sol" } }),
+      ),
+    };
+    initializeSharedSessionPreferences(
+      store as never,
+      preferences({ modeModels: { code: "old-model" } }),
+    );
+    const config = { inspect: () => undefined } as never;
+    const refresh = refreshSharedSessionPreferences();
+    await writeUserSessionPreferenceEntry(
+      config,
+      "modeModelPreferences",
+      "code",
+      "gpt-6-sol",
+    );
+    finishRead(preferences({ modeModels: { code: "old-model" } }));
+    await refresh;
+
+    expect(resolveModelForMode(config, "code")).toBe("gpt-6-sol");
   });
 
   it("removes picker overrides from shared and legacy storage", async () => {

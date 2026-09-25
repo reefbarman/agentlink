@@ -1,6 +1,7 @@
 import { promises as fs, constants as fsConstants } from "node:fs";
 
 import path from "node:path";
+import { readMcpConfig } from "@agentlink/node-host";
 
 const MAX_CONFIG_BYTES = 1_000_000;
 const MAX_TIMEOUT_MS = 60_000;
@@ -63,6 +64,10 @@ export interface LoadWorkspaceMcpConfigurationOptions {
   readonly projectRoot: string;
   /** Optional explicit declaration. A missing file is treated as no declaration. */
   readonly projectConfigPath?: string;
+  /** Shared definitions shadow legacy entries, even when disabled. Re-read on each snapshot. */
+  readonly shadowedLegacyServerIds?:
+    | ReadonlySet<string>
+    | (() => Promise<ReadonlySet<string>>);
 }
 
 interface ParsedHostConfiguration {
@@ -113,6 +118,9 @@ export async function inspectWorkspaceMcpProjectDeclarations(
   if (projectConfigPath === undefined) {
     return { projectRoot, servers: [] };
   }
+  if (await isSharedMcpConfig(projectConfigPath)) {
+    return { projectRoot, projectConfigPath, servers: [] };
+  }
   const parsed = parseProjectConfiguration(
     await readJsonFile(projectConfigPath),
   );
@@ -145,9 +153,13 @@ export async function loadWorkspaceMcpConfiguration(
     "global MCP config",
   );
   const host = parseHostConfiguration(await readJsonFile(globalConfigPath));
-  const globalServers = host.servers.map((server) =>
-    normalizeGlobalServer(server),
-  );
+  const shadowedLegacyServerIds =
+    typeof options.shadowedLegacyServerIds === "function"
+      ? await options.shadowedLegacyServerIds()
+      : options.shadowedLegacyServerIds;
+  const globalServers = host.servers
+    .filter((server) => !shadowedLegacyServerIds?.has(server.id))
+    .map((server) => normalizeGlobalServer(server));
 
   let projectConfigPath: string | undefined;
   let project: ParsedProjectConfiguration = { servers: [] };
@@ -157,7 +169,10 @@ export async function loadWorkspaceMcpConfiguration(
       projectRoot,
       "project MCP config",
     );
-    if (projectConfigPath !== undefined) {
+    if (
+      projectConfigPath !== undefined &&
+      !(await isSharedMcpConfig(projectConfigPath))
+    ) {
       project = parseProjectConfiguration(
         await readJsonFile(projectConfigPath),
       );
@@ -166,7 +181,11 @@ export async function loadWorkspaceMcpConfiguration(
 
   const projectServers: WorkspaceMcpServerDeclaration[] = [];
   for (const server of project.servers) {
-    if (!host.trustedProjectServerIds.has(server.id)) continue;
+    if (
+      !host.trustedProjectServerIds.has(server.id) ||
+      shadowedLegacyServerIds?.has(server.id)
+    )
+      continue;
     projectServers.push(await normalizeProjectServer(server, projectRoot));
   }
 
@@ -207,6 +226,14 @@ function parseHostConfiguration(value: unknown): ParsedHostConfiguration {
     trustedProjectServerIds: new Set(trustedIds),
     servers: parseServers(record.servers, "global MCP config"),
   };
+}
+
+async function isSharedMcpConfig(filePath: string): Promise<boolean> {
+  const read = await readMcpConfig(filePath);
+  if (read.status === "invalid" || read.status === "unreadable") {
+    throw new Error(`Project MCP config is invalid: ${filePath}`);
+  }
+  return read.status === "available" && read.config.mcpServers !== undefined;
 }
 
 function parseProjectConfiguration(value: unknown): ParsedProjectConfiguration {

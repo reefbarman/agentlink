@@ -7953,6 +7953,13 @@ export class AgentSessionManager {
       opts?.agentMode ?? (await this.resolveSessionMode(sessionId, mode));
     if (!agentMode) return null;
 
+    try {
+      await this.host.config.refreshSessionPreferences?.();
+    } catch (err) {
+      this.log?.(
+        `[mode] Could not refresh shared session preferences: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     const model = this.getModelForMode(mode, session.projectScope);
     const config = this.buildConfigForModel(model, session.projectScope);
     const newProviderId = this.host.providers.tryResolveProvider(model)?.id;
@@ -11010,7 +11017,6 @@ export class AgentSessionManager {
         model: foregroundModel,
         unavailableProviders: this.getCoolingBackgroundProviders(),
       },
-      { modelTiers: backgroundSettings.modelTiers },
     );
     const configuredReviewEffort = backendRoute.configuredReviewEffort
       ? this.resolveConfiguredReviewEffort(

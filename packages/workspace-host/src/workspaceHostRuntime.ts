@@ -53,6 +53,13 @@ import {
   type WorkspaceMcpToolApprovalDisplay,
 } from "./mcpTools.js";
 import type { WorkspaceMcpConfiguration } from "./mcpConfig.js";
+import {
+  createWorkspaceSharedMcpTools,
+  isWorkspaceSharedMcpToolApproval,
+  sameWorkspaceSharedMcpToolApproval,
+  type CreateWorkspaceSharedMcpToolsOptions,
+  type WorkspaceSharedMcpToolApproval,
+} from "./sharedMcpTools.js";
 import { getManagedTypeScriptStatus } from "./managedTypeScriptInstaller.js";
 import { ManagedTypeScriptService } from "./managedTypeScriptService.js";
 import {
@@ -115,6 +122,12 @@ export interface CreateWorkspaceHostOptions {
     }) => void;
   };
   readonly sessionInteractions?: CreateWorkspaceSessionInteractionToolsOptions;
+  readonly sharedMcp?: Omit<CreateWorkspaceSharedMcpToolsOptions, "secret"> & {
+    readonly hasSessionGrant?: (
+      proposal: WorkspaceSharedMcpToolApproval,
+      request: { readonly sessionId: string; readonly turnId: string },
+    ) => boolean | Promise<boolean>;
+  };
   readonly mcp?: Omit<
     CreateWorkspaceMcpToolsOptions,
     "operationDigestSecret" | "projectRoot"
@@ -241,7 +254,11 @@ export async function createWorkspaceHost(
     throw new Error("Background writers require file tools");
   }
   const approvalSecret =
-    options.files || options.commands || options.mcp || options.background
+    options.files ||
+    options.commands ||
+    options.mcp ||
+    options.sharedMcp ||
+    options.background
       ? await readOrCreateApprovalKey(projectDataRoot)
       : undefined;
   const runtime = createWorkspaceModelRuntime({
@@ -360,6 +377,25 @@ export async function createWorkspaceHost(
         supervisor: backgroundSupervisor,
         isForegroundSession: (sessionId) =>
           backgroundSupervisor.getRecordForSession(sessionId) === undefined,
+      })
+    : undefined;
+  const sharedMcpOptions = options.sharedMcp;
+  const sharedMcpTools = sharedMcpOptions
+    ? createWorkspaceSharedMcpTools({
+        ...sharedMcpOptions,
+        secret: approvalSecret!,
+        authorizeAdmission: (proposal, request) =>
+          mutations.outsideExclusive(() =>
+            sharedMcpOptions.authorizeAdmission(proposal, request),
+          ),
+        authorizeLaunch: (proposal, request) =>
+          mutations.outsideExclusive(() =>
+            sharedMcpOptions.authorizeLaunch(proposal, request),
+          ),
+        authorizeNetwork: (proposal, request) =>
+          mutations.outsideExclusive(() =>
+            sharedMcpOptions.authorizeNetwork(proposal, request),
+          ),
       })
     : undefined;
   const mcpTools = options.mcp
@@ -535,7 +571,7 @@ export async function createWorkspaceHost(
     ? createWorkspaceSessionInteractionTools(options.sessionInteractions)
     : undefined;
   const interactionTokens =
-    options.files || options.commands || options.mcp
+    options.files || options.commands || options.mcp || options.sharedMcp
       ? createTurnInteractionTokenService({
           secret: approvalSecret!,
         })
@@ -551,32 +587,54 @@ export async function createWorkspaceHost(
     commandTools ||
     artifactTools ||
     mcpTools ||
+    sharedMcpTools ||
     backgroundTools ||
     languageTools ||
     sessionInteractionTools
       ? {
           tools: {
-            resolveTools: async (request) => [
-              ...(fileTools ? await fileTools.resolveTools(request) : []),
-              ...(commandTools ? await commandTools.resolveTools(request) : []),
-              ...(artifactTools
-                ? await artifactTools.resolveTools(request)
-                : []),
-              ...(mcpTools
-                ? (await mcpTools.resolveTools(request)).map((tool) =>
-                    serializeMcpToolExecution(tool, mutations),
-                  )
-                : []),
-              ...(backgroundTools
-                ? await backgroundTools.resolveTools(request)
-                : []),
-              ...(languageTools
-                ? await languageTools.resolveTools(request)
-                : []),
-              ...(sessionInteractionTools
-                ? await sessionInteractionTools.resolveTools(request)
-                : []),
-            ],
+            resolveTools: async (request) => {
+              const shared = await sharedMcpTools?.resolveTools(request);
+              try {
+                const tools = [
+                  ...(fileTools ? await fileTools.resolveTools(request) : []),
+                  ...(commandTools
+                    ? await commandTools.resolveTools(request)
+                    : []),
+                  ...(artifactTools
+                    ? await artifactTools.resolveTools(request)
+                    : []),
+                  ...(mcpTools
+                    ? (await mcpTools.resolveTools(request)).map((tool) =>
+                        serializeMcpToolExecution(tool, mutations),
+                      )
+                    : []),
+                  ...(backgroundTools
+                    ? await backgroundTools.resolveTools(request)
+                    : []),
+                  ...(languageTools
+                    ? await languageTools.resolveTools(request)
+                    : []),
+                  ...(sessionInteractionTools
+                    ? await sessionInteractionTools.resolveTools(request)
+                    : []),
+                ];
+                return shared
+                  ? {
+                      tools: [
+                        ...tools,
+                        ...shared.tools.map((tool) =>
+                          serializeMcpToolExecution(tool, mutations),
+                        ),
+                      ],
+                      dispose: shared.dispose,
+                    }
+                  : tools;
+              } catch (error) {
+                await shared?.dispose();
+                throw error;
+              }
+            },
           },
         }
       : {}),
@@ -590,6 +648,41 @@ export async function createWorkspaceHost(
                 return commandTools
                   ? await commandTools.authorizeToolCall(request)
                   : { decision: "deny" as const, reason: "Commands disabled" };
+              }
+              if (sharedMcpTools) {
+                const proposal = await sharedMcpTools.toolApproval(
+                  request.toolName,
+                  request.input,
+                );
+                if (proposal) {
+                  const policy = await sharedMcpTools.toolPolicy(proposal);
+                  if (policy === "deny") {
+                    return {
+                      decision: "deny" as const,
+                      reason: "MCP tool policy or configuration changed",
+                    };
+                  }
+                  if (policy === "allow") {
+                    return { decision: "allow" as const };
+                  }
+                  const child = backgroundSupervisor?.getRecordForSession(
+                    request.sessionId,
+                  );
+                  if (
+                    !child &&
+                    (await options.sharedMcp?.hasSessionGrant?.(
+                      proposal,
+                      request,
+                    ))
+                  ) {
+                    return { decision: "allow" as const };
+                  }
+                  return {
+                    decision: "require_user" as const,
+                    summary: `Call MCP tool ${proposal.serverId}/${proposal.serverToolName}`,
+                    displayContent: proposal,
+                  };
+                }
               }
               if (mcpTools) {
                 const proposal = createWorkspaceMcpToolApproval(
@@ -642,8 +735,8 @@ export async function createWorkspaceHost(
         options.artifacts
           ? "Host-approved instructions and rules are active. Use list_artifacts and load_artifact for exact advertised skills or prompt commands."
           : "Instruction and skill artifacts are not enabled.",
-        options.mcp
-          ? "MCP servers are unsandboxed external capabilities. Discovery requires foreground launch or destination trust, and every MCP tool call requires host authorization."
+        options.mcp || options.sharedMcp
+          ? "MCP servers are unsandboxed external capabilities. Discovery requires foreground launch or destination trust, and MCP tool calls follow host authorization and configured policy."
           : "MCP tools are not enabled.",
         options.languageIntelligence
           ? "Optional TypeScript/JavaScript diagnostics, symbols, definition, references, and hover are available through an explicitly installed unsandboxed language server. Treat unavailable, warming, stale, and failed states as incomplete analysis, never as zero findings."
@@ -675,7 +768,7 @@ export async function createWorkspaceHost(
   ): Promise<
     { readonly ok: true } | { readonly ok: false; reason: string }
   > => {
-    if (!fileTools && !commandTools && !mcpTools) {
+    if (!fileTools && !commandTools && !mcpTools && !sharedMcpTools) {
       return { ok: false, reason: "Approval tools are not enabled" };
     }
     const pending = await engine.sessions.inspect({ principal, sessionId });
@@ -714,6 +807,18 @@ export async function createWorkspaceHost(
       input: call.input,
       displayContent: stored.record.request.displayContent,
     };
+    if (isWorkspaceSharedMcpToolApproval(validationRequest.displayContent)) {
+      return sharedMcpTools &&
+        sameWorkspaceSharedMcpToolApproval(
+          validationRequest.displayContent,
+          await sharedMcpTools.toolApproval(call.name, call.input),
+        )
+        ? { ok: true }
+        : {
+            ok: false,
+            reason: "Shared MCP tool proposal no longer matches config",
+          };
+    }
     if (isWorkspaceMcpToolApprovalDisplay(validationRequest.displayContent)) {
       if (!mcpTools) return { ok: false, reason: "MCP is not enabled" };
       return validateWorkspaceMcpToolApproval(
@@ -823,6 +928,7 @@ export async function createWorkspaceHost(
     },
     async close() {
       await backgroundSupervisor?.close();
+      await sharedMcpTools?.close();
       await languageService?.close();
       await supervisor?.close();
     },
@@ -890,6 +996,7 @@ export async function createWorkspaceHost(
     async deleteSession(sessionId) {
       assertForegroundSession(sessionId);
       await engine.sessions.delete({ principal, sessionId });
+      await sharedMcpTools?.closeSession(sessionId);
     },
     async recoverInterrupted(sessionId) {
       assertForegroundSession(sessionId);

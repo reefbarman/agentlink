@@ -16,7 +16,7 @@ import {
   type HostToolAuthorization,
   type HostToolEffect,
   type HostToolResolveRequest,
-  type HostToolResolver,
+  type HostToolLifecycleResolver,
   type HostToolValidationResult,
 } from "./hostTools.js";
 import type { AgentPrincipal } from "./modelIdentity.js";
@@ -154,7 +154,7 @@ export interface HeadlessTurnKernelOptions<
   /** Static E4 compatibility tools. Prefer resolveTools for E5 hosts. */
   readonly tools?: readonly HeadlessTurnTool<TPrincipal>[];
   /** Resolved exactly once per turn with the current principal/session/turn. */
-  readonly resolveTools?: HostToolResolver<TPrincipal>;
+  readonly resolveTools?: HostToolLifecycleResolver<TPrincipal>;
   readonly authorizeToolCall?: AuthorizeToolCall<TPrincipal>;
   readonly interactions?: DurableToolInteractionRepository<TPrincipal>;
   readonly interactionTokens?: TurnInteractionTokenService;
@@ -499,8 +499,11 @@ async function resolveTurnTools<TPrincipal extends AgentPrincipal>(
   options: HeadlessTurnKernelOptions<TPrincipal>,
   staticTools: ReadonlyMap<string, HeadlessTurnTool<TPrincipal>>,
   prepared: PreparedAgentTurnRequest<TPrincipal>,
-): Promise<ReadonlyMap<string, HeadlessTurnTool<TPrincipal>>> {
-  if (!options.resolveTools) return staticTools;
+): Promise<{
+  tools: ReadonlyMap<string, HeadlessTurnTool<TPrincipal>>;
+  dispose?: () => void | Promise<void>;
+}> {
+  if (!options.resolveTools) return { tools: staticTools };
   const request: HostToolResolveRequest<TPrincipal> = {
     principal: prepared.request.principal,
     sessionId: prepared.request.sessionId,
@@ -508,11 +511,18 @@ async function resolveTurnTools<TPrincipal extends AgentPrincipal>(
     input: prepared.request.input,
   };
   const resolved = await options.resolveTools(request);
-  const tools = new Map(staticTools);
-  for (const tool of resolved) {
-    registerResolvedTool(tools, tool);
+  const resolvedTools = "tools" in resolved ? resolved.tools : resolved;
+  const dispose = "tools" in resolved ? resolved.dispose : undefined;
+  try {
+    const tools = new Map(staticTools);
+    for (const tool of resolvedTools) {
+      registerResolvedTool(tools, tool);
+    }
+    return { tools, dispose };
+  } catch (error) {
+    await dispose?.();
+    throw error;
   }
-  return tools;
 }
 
 function registerResolvedTool<TPrincipal extends AgentPrincipal>(
@@ -622,6 +632,7 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
     resolvedModel,
   });
 
+  let disposeTools: (() => void | Promise<void>) | undefined;
   if (continuation) {
     emit({
       type: "interaction.resumed",
@@ -635,7 +646,9 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
 
   try {
     validatePreparedTurn(prepared);
-    const tools = await resolveTurnTools(options, staticTools, prepared);
+    const resolution = await resolveTurnTools(options, staticTools, prepared);
+    disposeTools = resolution.dispose;
+    const tools = resolution.tools;
     resolvedModel = resolveAgentModelSelection({
       turnModel: prepared.request.model,
       sessionModel: prepared.sessionModel,
@@ -938,6 +951,13 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
     };
     emit({ type: "turn.failed", result: failed });
     return failed;
+  } finally {
+    // A failed best-effort release must not replace the committed turn result.
+    try {
+      await disposeTools?.();
+    } catch {
+      // The turn has already settled.
+    }
   }
 }
 

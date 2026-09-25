@@ -94,6 +94,7 @@ import { getConfiguredBaseThresholdForModel } from "./agent/modelCondenseThresho
 import {
   getNewSessionMode,
   initializeSharedSessionPreferences,
+  refreshSharedSessionPreferences,
 } from "./agent/sharedSessionPreferences.js";
 import {
   resolveModelForMode,
@@ -928,23 +929,15 @@ export async function activate(
       path.basename(sessionPreferencesStore.configPath),
     ),
   );
-  const refreshSharedSessionPreferences = () => {
-    void sessionPreferencesStore
-      .read()
-      .then((preferences) => {
-        initializeSharedSessionPreferences(
-          sessionPreferencesStore,
-          preferences,
-        );
-      })
-      .catch((error) => {
-        log(`[preferences] Could not reload shared defaults: ${String(error)}`);
-      });
+  const refreshSessionPreferenceWatcher = () => {
+    void refreshSharedSessionPreferences().catch((error) => {
+      log(`[preferences] Could not reload shared defaults: ${String(error)}`);
+    });
   };
   context.subscriptions.push(
     sessionPreferencesWatcher,
-    sessionPreferencesWatcher.onDidChange(refreshSharedSessionPreferences),
-    sessionPreferencesWatcher.onDidCreate(refreshSharedSessionPreferences),
+    sessionPreferencesWatcher.onDidChange(refreshSessionPreferenceWatcher),
+    sessionPreferencesWatcher.onDidCreate(refreshSessionPreferenceWatcher),
     sessionPreferencesWatcher.onDidDelete(() => {
       initializeSharedSessionPreferences(sessionPreferencesStore, {
         modeModels: {},

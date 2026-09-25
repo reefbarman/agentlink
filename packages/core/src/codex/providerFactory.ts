@@ -466,18 +466,11 @@ class ResponsesModelBackend<
   }
 
   private catalogEntries(authenticated: boolean): CoreModelCatalogEntry[] {
-    const entries = new Map(
-      listCodexModels(this.providerId, this.authMethod).map((entry) => [
-        entry.id,
-        entry,
-      ]),
-    );
     return this.modelIds.map((modelId) => {
-      const entry = entries.get(modelId)!;
       const capabilities = this.getCapabilities(modelId);
       return {
         id: modelId,
-        displayName: entry.displayName,
+        displayName: CODEX_MODEL_MAP.get(modelId)!.displayName,
         providerId: this.providerId,
         providerDisplayName: this.displayName,
         supportsToolUse: capabilities.supportsToolUse,
@@ -537,7 +530,10 @@ function resolveModelIds(
         `Model "${modelId}" is not served by the ChatGPT/Codex OAuth endpoint`,
       );
     }
-    if (authMethod === "apiKey" && !defaults.includes(modelId)) {
+    if (
+      authMethod === "apiKey" &&
+      CODEX_MODEL_MAP.get(modelId)?.apiAvailable === false
+    ) {
       throw new Error(`Model "${modelId}" is not available on the OpenAI API`);
     }
     if (unique.has(modelId))

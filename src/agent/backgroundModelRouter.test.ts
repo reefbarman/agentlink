@@ -9,7 +9,6 @@ import type {
 } from "./providers/types.js";
 import { describe, expect, it } from "vitest";
 
-import type { BackgroundModelTierGroups } from "./background/acpAgentConfig.js";
 import { ProviderRegistry } from "./providers/index.js";
 import type { SpawnBackgroundRequest } from "./backgroundTypes.js";
 import { resolveBackgroundRoute } from "./backgroundModelRouter.js";
@@ -56,11 +55,13 @@ function makeModel(
   id: string,
   provider: string,
   overrides?: Partial<ModelCapabilities>,
+  metadata?: Pick<ModelInfo, "tier">,
 ): ModelInfo {
   return {
     id,
     displayName: id,
     provider,
+    ...metadata,
     capabilities: { ...CAPS, ...overrides },
   };
 }
@@ -71,21 +72,13 @@ function makeRegistry(providers: ModelProvider[]): ProviderRegistry {
   return registry;
 }
 
-function tierGroup(
-  group: string,
-  tiers: {
-    cheap?: string[];
-    balanced?: string[];
-    deep_reasoning?: string[];
-  },
-): BackgroundModelTierGroups {
-  return {
-    [group]: {
-      cheap: tiers.cheap ?? [],
-      balanced: tiers.balanced ?? [],
-      deep_reasoning: tiers.deep_reasoning ?? [],
-    },
-  };
+function tieredModel(
+  id: string,
+  provider: string,
+  tier: NonNullable<ModelInfo["tier"]>,
+  overrides?: Partial<ModelCapabilities>,
+): ModelInfo {
+  return makeModel(id, provider, overrides, { tier });
 }
 
 function generalRequest(
@@ -102,25 +95,17 @@ function generalRequest(
 describe("resolveBackgroundRoute", () => {
   it("defaults ordinary work to one tier below the foreground model", async () => {
     const provider = "openai-compatible:claude";
-    const opus = makeModel("custom-opus", provider);
-    const sonnet = makeModel("custom-sonnet", provider);
-    const haiku = makeModel("custom-haiku", provider);
+    const opus = tieredModel("custom-opus", provider, "deep_reasoning");
+    const sonnet = tieredModel("custom-sonnet", provider, "balanced");
+    const haiku = tieredModel("custom-haiku", provider, "cheap");
     const registry = makeRegistry([
       makeProvider(provider, [opus, sonnet, haiku]),
     ]);
 
-    const route = await resolveBackgroundRoute(
-      registry,
-      generalRequest(),
-      { mode: "code", model: opus.id },
-      {
-        modelTiers: tierGroup("claude", {
-          cheap: [haiku.id],
-          balanced: [sonnet.id],
-          deep_reasoning: [opus.id],
-        }),
-      },
-    );
+    const route = await resolveBackgroundRoute(registry, generalRequest(), {
+      mode: "code",
+      model: opus.id,
+    });
 
     expect(route).toMatchObject({
       resolvedModel: sonnet.id,
@@ -128,28 +113,83 @@ describe("resolveBackgroundRoute", () => {
       modelTier: "balanced",
       resolvedModelTier: "balanced",
       resolvedModelTierSource: "configured",
-      modelGroup: "claude",
+      modelGroup: provider,
       fallbackUsed: false,
     });
   });
 
-  it("uses the cheap tier below a balanced foreground model", async () => {
-    const provider = "openai-compatible:claude";
-    const sonnet = makeModel("custom-sonnet", provider);
-    const haiku = makeModel("custom-haiku", provider);
-    const registry = makeRegistry([makeProvider(provider, [sonnet, haiku])]);
+  it("prefers GPT-6 Luna for cheap Codex work and retains older fallback models", async () => {
+    const models = ["gpt-6-sol", "gpt-6-luna", "gpt-5.6-luna"].map((id) =>
+      makeModel(id, "codex"),
+    );
+    const registry = makeRegistry([makeProvider("codex", models)]);
+
+    const route = await resolveBackgroundRoute(registry, generalRequest(), {
+      mode: "code",
+      model: "gpt-6-sol",
+    });
+    expect(route).toMatchObject({
+      resolvedModel: "gpt-6-luna",
+      modelTier: "cheap",
+      resolvedModelTierSource: "builtin",
+    });
+
+    const fallbackRegistry = makeRegistry([
+      makeProvider(
+        "codex",
+        models.filter((model) => model.id !== "gpt-6-luna"),
+      ),
+    ]);
+    const fallback = await resolveBackgroundRoute(
+      fallbackRegistry,
+      generalRequest(),
+      { mode: "code", model: "gpt-6-sol" },
+    );
+    expect(fallback.resolvedModel).toBe("gpt-5.6-luna");
+  });
+
+  it("prefers GPT-6 Sol for balanced Codex work", async () => {
+    const models = ["gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol"].map((id) =>
+      makeModel(id, "codex"),
+    );
+    const registry = makeRegistry([makeProvider("codex", models)]);
+
+    const route = await resolveBackgroundRoute(registry, generalRequest(), {
+      mode: "code",
+      model: "gpt-6-astra",
+    });
+    expect(route).toMatchObject({
+      resolvedModel: "gpt-6-sol",
+      modelTier: "balanced",
+      resolvedModelTierSource: "builtin",
+    });
+  });
+
+  it("prefers GPT-6 Luna for cheap Codex reviews", async () => {
+    const models = ["gpt-6-sol", "gpt-6-luna", "gpt-5.6-luna"].map((id) =>
+      makeModel(id, "codex"),
+    );
+    const registry = makeRegistry([makeProvider("codex", models)]);
 
     const route = await resolveBackgroundRoute(
       registry,
-      generalRequest(),
-      { mode: "code", model: sonnet.id },
-      {
-        modelTiers: tierGroup("claude", {
-          cheap: [haiku.id],
-          balanced: [sonnet.id],
-        }),
-      },
+      generalRequest({ taskClass: "review_code" }),
+      { mode: "code", model: "gpt-6-sol" },
     );
+    expect(route.resolvedModel).toBe("gpt-6-luna");
+    expect(route.routingReason).toContain("policy=review-preference");
+  });
+
+  it("uses the cheap tier below a balanced foreground model", async () => {
+    const provider = "openai-compatible:claude";
+    const sonnet = tieredModel("custom-sonnet", provider, "balanced");
+    const haiku = tieredModel("custom-haiku", provider, "cheap");
+    const registry = makeRegistry([makeProvider(provider, [sonnet, haiku])]);
+
+    const route = await resolveBackgroundRoute(registry, generalRequest(), {
+      mode: "code",
+      model: sonnet.id,
+    });
 
     expect(route).toMatchObject({
       resolvedModel: haiku.id,
@@ -160,16 +200,14 @@ describe("resolveBackgroundRoute", () => {
 
   it("keeps cheap foreground work on the cheap tier", async () => {
     const provider = "custom";
-    const cheapA = makeModel("cheap-a", provider);
-    const cheapB = makeModel("cheap-b", provider);
-    const registry = makeRegistry([makeProvider(provider, [cheapA, cheapB])]);
+    const cheapA = tieredModel("cheap-a", provider, "cheap");
+    const cheapB = tieredModel("cheap-b", provider, "cheap");
+    const registry = makeRegistry([makeProvider(provider, [cheapB, cheapA])]);
 
-    const route = await resolveBackgroundRoute(
-      registry,
-      generalRequest(),
-      { mode: "code", model: cheapA.id },
-      { modelTiers: tierGroup("custom", { cheap: [cheapB.id, cheapA.id] }) },
-    );
+    const route = await resolveBackgroundRoute(registry, generalRequest(), {
+      mode: "code",
+      model: cheapA.id,
+    });
 
     expect(route.resolvedModel).toBe(cheapB.id);
     expect(route.modelTier).toBe("cheap");
@@ -177,21 +215,14 @@ describe("resolveBackgroundRoute", () => {
 
   it("uses the exact foreground model only when explicitly requested", async () => {
     const provider = "openai-compatible:claude";
-    const opus = makeModel("custom-opus", provider);
-    const sonnet = makeModel("custom-sonnet", provider);
+    const opus = tieredModel("custom-opus", provider, "deep_reasoning");
+    const sonnet = tieredModel("custom-sonnet", provider, "balanced");
     const registry = makeRegistry([makeProvider(provider, [opus, sonnet])]);
-    const policy = {
-      modelTiers: tierGroup("claude", {
-        balanced: [sonnet.id],
-        deep_reasoning: [opus.id],
-      }),
-    };
 
     const route = await resolveBackgroundRoute(
       registry,
       generalRequest({ modelTier: "foreground" }),
       { mode: "code", model: opus.id },
-      policy,
     );
 
     expect(route).toMatchObject({
@@ -203,8 +234,8 @@ describe("resolveBackgroundRoute", () => {
   });
 
   it("rejects a provider that conflicts with the explicit foreground tier", async () => {
-    const foreground = makeModel("foreground-model", "first");
-    const other = makeModel("other-model", "second");
+    const foreground = tieredModel("foreground-model", "first", "balanced");
+    const other = tieredModel("other-model", "second", "balanced");
     const registry = makeRegistry([
       makeProvider("first", [foreground]),
       makeProvider("second", [other]),
@@ -215,59 +246,46 @@ describe("resolveBackgroundRoute", () => {
         registry,
         generalRequest({ modelTier: "foreground", provider: "second" }),
         { mode: "code", model: foreground.id },
-        {
-          modelTiers: tierGroup("models", {
-            balanced: [foreground.id, other.id],
-          }),
-        },
       ),
     ).rejects.toThrow(/conflicts with requested provider/);
   });
 
   it("honors configured ordering for OpenAI-compatible model groups", async () => {
     const provider = "openai-compatible:local";
-    const preferred = makeModel("local-fast-b", provider);
-    const other = makeModel("local-fast-a", provider);
-    const foreground = makeModel("local-frontier", provider);
+    const preferred = tieredModel("local-fast-b", provider, "cheap");
+    const other = tieredModel("local-fast-a", provider, "cheap");
+    const foreground = tieredModel(
+      "local-frontier",
+      provider,
+      "deep_reasoning",
+    );
     const registry = makeRegistry([
-      makeProvider(provider, [other, preferred, foreground]),
+      makeProvider(provider, [preferred, other, foreground]),
     ]);
 
     const route = await resolveBackgroundRoute(
       registry,
       generalRequest({ modelTier: "cheap" }),
       { mode: "code", model: foreground.id },
-      {
-        modelTiers: tierGroup("local", {
-          cheap: [preferred.id, other.id],
-          deep_reasoning: [foreground.id],
-        }),
-      },
     );
 
     expect(route).toMatchObject({
       resolvedModel: preferred.id,
       resolvedModelTierSource: "configured",
-      modelGroup: "local",
+      modelGroup: provider,
     });
   });
 
   it("does not silently upgrade when the requested lower tier is unavailable", async () => {
     const provider = "custom";
-    const foreground = makeModel("frontier", provider);
+    const foreground = tieredModel("frontier", provider, "deep_reasoning");
     const registry = makeRegistry([makeProvider(provider, [foreground])]);
 
     await expect(
-      resolveBackgroundRoute(
-        registry,
-        generalRequest(),
-        { mode: "code", model: foreground.id },
-        {
-          modelTiers: tierGroup("custom", {
-            deep_reasoning: [foreground.id],
-          }),
-        },
-      ),
+      resolveBackgroundRoute(registry, generalRequest(), {
+        mode: "code",
+        model: foreground.id,
+      }),
     ).rejects.toThrow(/will not silently spend a higher tier/);
   });
 
@@ -312,8 +330,8 @@ describe("resolveBackgroundRoute", () => {
 
   it("reports the actual tier of an explicit configured model", async () => {
     const provider = "custom";
-    const foreground = makeModel("foreground", provider);
-    const worker = makeModel("worker", provider);
+    const foreground = tieredModel("foreground", provider, "deep_reasoning");
+    const worker = tieredModel("worker", provider, "cheap");
     const registry = makeRegistry([
       makeProvider(provider, [foreground, worker]),
     ]);
@@ -322,12 +340,6 @@ describe("resolveBackgroundRoute", () => {
       registry,
       generalRequest({ model: worker.id }),
       { mode: "code", model: foreground.id },
-      {
-        modelTiers: tierGroup("custom", {
-          cheap: [worker.id],
-          deep_reasoning: [foreground.id],
-        }),
-      },
     );
 
     expect(route).toMatchObject({
@@ -340,42 +352,36 @@ describe("resolveBackgroundRoute", () => {
 
   it("excludes chat-only models from automatic routing but allows an exact override", async () => {
     const provider = "custom";
-    const foreground = makeModel("frontier", provider);
-    const chatOnly = makeModel("chat-only", provider, {
+    const foreground = tieredModel("frontier", provider, "balanced");
+    const chatOnly = tieredModel("chat-only", provider, "cheap", {
       supportsToolUse: false,
     });
-    const worker = makeModel("worker", provider);
+    const worker = tieredModel("worker", provider, "cheap");
     const registry = makeRegistry([
       makeProvider(provider, [foreground, chatOnly, worker]),
     ]);
-    const policy = {
-      modelTiers: tierGroup("custom", {
-        cheap: [chatOnly.id, worker.id],
-        balanced: [foreground.id],
-      }),
-    };
 
     await expect(
-      resolveBackgroundRoute(
-        registry,
-        generalRequest(),
-        { mode: "code", model: foreground.id },
-        policy,
-      ),
+      resolveBackgroundRoute(registry, generalRequest(), {
+        mode: "code",
+        model: foreground.id,
+      }),
     ).resolves.toMatchObject({ resolvedModel: worker.id });
 
     await expect(
-      resolveBackgroundRoute(
-        registry,
-        generalRequest({ model: chatOnly.id }),
-        { mode: "code", model: foreground.id },
-        policy,
-      ),
+      resolveBackgroundRoute(registry, generalRequest({ model: chatOnly.id }), {
+        mode: "code",
+        model: foreground.id,
+      }),
     ).resolves.toMatchObject({ resolvedModel: chatOnly.id });
   });
 
   it("routes reviews to a lower-tier model on the opposite provider", async () => {
-    const foreground = makeModel("custom-opus", "openai-compatible:claude");
+    const foreground = tieredModel(
+      "custom-opus",
+      "openai-compatible:claude",
+      "deep_reasoning",
+    );
     const reviewer = makeModel("gpt-5.6-sol", "codex");
     const registry = makeRegistry([
       makeProvider(foreground.provider, [foreground]),
@@ -386,11 +392,6 @@ describe("resolveBackgroundRoute", () => {
       registry,
       generalRequest({ taskClass: "review_code" }),
       { mode: "code", model: foreground.id },
-      {
-        modelTiers: tierGroup("claude", {
-          deep_reasoning: [foreground.id],
-        }),
-      },
     );
 
     expect(route).toMatchObject({
@@ -407,8 +408,8 @@ describe("resolveBackgroundRoute", () => {
 
   it("falls back to the foreground provider at the same lower tier for reviews", async () => {
     const provider = "openai-compatible:claude";
-    const foreground = makeModel("custom-opus", provider);
-    const reviewer = makeModel("custom-sonnet", provider);
+    const foreground = tieredModel("custom-opus", provider, "deep_reasoning");
+    const reviewer = tieredModel("custom-sonnet", provider, "balanced");
     const unavailable = makeModel("gpt-5.6-sol", "codex");
     const registry = makeRegistry([
       makeProvider(provider, [foreground, reviewer]),
@@ -419,12 +420,6 @@ describe("resolveBackgroundRoute", () => {
       registry,
       generalRequest({ taskClass: "review_code" }),
       { mode: "code", model: foreground.id },
-      {
-        modelTiers: tierGroup("claude", {
-          balanced: [reviewer.id],
-          deep_reasoning: [foreground.id],
-        }),
-      },
     );
 
     expect(route).toMatchObject({
@@ -438,9 +433,10 @@ describe("resolveBackgroundRoute", () => {
   it("routes around a provider on availability cooldown", async () => {
     const foreground = makeModel("gpt-5.6-terra", "codex");
     const codexReviewer = makeModel("gpt-5.6-sol", "codex");
-    const claudeReviewer = makeModel(
+    const claudeReviewer = tieredModel(
       "custom-sonnet",
       "openai-compatible:claude",
+      "balanced",
     );
     const registry = makeRegistry([
       makeProvider("codex", [foreground, codexReviewer]),
@@ -455,11 +451,6 @@ describe("resolveBackgroundRoute", () => {
         model: foreground.id,
         unavailableProviders: ["openai-compatible:claude"],
       },
-      {
-        modelTiers: tierGroup("claude", {
-          balanced: [claudeReviewer.id],
-        }),
-      },
     );
 
     expect(route).toMatchObject({
@@ -471,7 +462,11 @@ describe("resolveBackgroundRoute", () => {
 
   it("honors an explicit provider request during its cooldown", async () => {
     const foreground = makeModel("gpt-5.6-terra", "codex");
-    const reviewer = makeModel("custom-sonnet", "openai-compatible:claude");
+    const reviewer = tieredModel(
+      "custom-sonnet",
+      "openai-compatible:claude",
+      "balanced",
+    );
     const registry = makeRegistry([
       makeProvider("codex", [foreground]),
       makeProvider(reviewer.provider, [reviewer]),
@@ -488,11 +483,6 @@ describe("resolveBackgroundRoute", () => {
         model: foreground.id,
         unavailableProviders: [reviewer.provider],
       },
-      {
-        modelTiers: tierGroup("claude", {
-          balanced: [reviewer.id],
-        }),
-      },
     );
 
     expect(route.resolvedProvider).toBe(reviewer.provider);
@@ -500,9 +490,14 @@ describe("resolveBackgroundRoute", () => {
 
   it("requires thinking-capable models for code review", async () => {
     const foreground = makeModel("gpt-5.6-terra", "codex");
-    const reviewer = makeModel("custom-sonnet", "openai-compatible:claude", {
-      supportsThinking: false,
-    });
+    const reviewer = tieredModel(
+      "custom-sonnet",
+      "openai-compatible:claude",
+      "balanced",
+      {
+        supportsThinking: false,
+      },
+    );
     const registry = makeRegistry([
       makeProvider("codex", [foreground]),
       makeProvider(reviewer.provider, [reviewer]),
@@ -513,19 +508,14 @@ describe("resolveBackgroundRoute", () => {
         registry,
         generalRequest({ taskClass: "review_code" }),
         { mode: "code", model: foreground.id },
-        {
-          modelTiers: tierGroup("claude", {
-            balanced: [reviewer.id],
-          }),
-        },
       ),
     ).rejects.toThrow(/No eligible balanced background model/);
   });
 
   it("uses the readonly research mode, profile, lower tier, and budget", async () => {
     const provider = "custom";
-    const foreground = makeModel("frontier", provider);
-    const worker = makeModel("worker", provider);
+    const foreground = tieredModel("frontier", provider, "deep_reasoning");
+    const worker = tieredModel("worker", provider, "balanced");
     const registry = makeRegistry([
       makeProvider(provider, [foreground, worker]),
     ]);
@@ -534,12 +524,6 @@ describe("resolveBackgroundRoute", () => {
       registry,
       generalRequest({ taskClass: "readonly-research" }),
       { mode: "code", model: foreground.id },
-      {
-        modelTiers: tierGroup("custom", {
-          balanced: [worker.id],
-          deep_reasoning: [foreground.id],
-        }),
-      },
     );
 
     expect(route).toMatchObject({
@@ -566,8 +550,8 @@ describe("resolveBackgroundRoute", () => {
     "uses lower-tier routing and %s mode policy",
     async (taskClass, mode) => {
       const provider = "custom";
-      const foreground = makeModel("frontier", provider);
-      const worker = makeModel("worker", provider);
+      const foreground = tieredModel("frontier", provider, "deep_reasoning");
+      const worker = tieredModel("worker", provider, "balanced");
       const registry = makeRegistry([
         makeProvider(provider, [foreground, worker]),
       ]);
@@ -576,12 +560,6 @@ describe("resolveBackgroundRoute", () => {
         registry,
         generalRequest({ taskClass }),
         { mode: "code", model: foreground.id },
-        {
-          modelTiers: tierGroup("custom", {
-            balanced: [worker.id],
-            deep_reasoning: [foreground.id],
-          }),
-        },
       );
 
       expect(route.resolvedMode).toBe(mode);

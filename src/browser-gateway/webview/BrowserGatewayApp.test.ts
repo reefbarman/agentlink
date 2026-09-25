@@ -411,7 +411,7 @@ type TestSnapshot = {
       context: string;
       questions: Array<{
         id: string;
-        type: "yes_no";
+        type: "yes_no" | "text";
         question: string;
         recommended?: string;
       }>;
@@ -423,7 +423,7 @@ type TestSnapshot = {
       notes: Record<string, string>;
       origin: string;
     };
-    recentEvents: never[];
+    recentEvents: Array<{ type: string; id?: string }>;
     memoryCandidateNudge: null | {
       id: string;
       sessionId: string;
@@ -496,16 +496,7 @@ type TestSnapshot = {
       lastCacheReadTokens: number;
       estimatedTotalUsed: number;
       messageQueue: AppState["messageQueue"];
-      questionRequest: null | {
-        id: string;
-        context: string;
-        questions: Array<{
-          id: string;
-          type: "yes_no";
-          question: string;
-          recommended?: string;
-        }>;
-      };
+      questionRequest: TestSnapshot["ui"]["question"];
       detectedQuestion: null;
       todos: TodoItem[];
       debugInfo: Record<string, string | number> | null;
@@ -6655,6 +6646,107 @@ describe("BrowserGatewayApp /mcp behavior", () => {
         text: "Ship it",
       });
     });
+  });
+
+  it("keeps an unanswered workspace question mounted across a transient empty snapshot", async () => {
+    const question = {
+      id: "question-1",
+      context: "Need your input before continuing.",
+      questions: [
+        { id: "continue", type: "yes_no" as const, question: "Continue?" },
+        { id: "details", type: "text" as const, question: "What details?" },
+      ],
+    };
+    const pending = createSnapshot();
+    pending.session.foreground.status = "tool_executing";
+    pending.session.foreground.streaming = true;
+    pending.session.foreground.questionRequest = question;
+    pending.ui.question = question;
+    const missing = structuredClone(pending);
+    missing.session.foreground.questionRequest = null;
+    missing.ui.question = null;
+    const completed = structuredClone(missing);
+    completed.session.foreground.status = "idle";
+    completed.session.foreground.streaming = false;
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const pathname = String(input).split("?")[0];
+      if (pathname === "/api/instances") {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+            },
+          ],
+        });
+      }
+      if (pathname === "/api/ui-state") return jsonResponse(pending);
+      if (pathname === "/api/models") return jsonResponse({ models: [] });
+      if (pathname === "/api/sessions") return jsonResponse({ sessions: [] });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+    await selectWorkspaceTab();
+    await screen.findByText("Continue?");
+    const option = screen.getByRole("button", { name: "Yes" });
+    const source = MockEventSource.instances.at(-1)!;
+    expect(source.url).toContain("/events?instanceId=instance-1");
+
+    await act(async () => {
+      source.emit("snapshot", missing);
+    });
+    expect(screen.getByText("Continue?")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Yes" })).toBe(option);
+    fireEvent.click(option);
+    expect(option.classList.contains("selected")).toBe(true);
+
+    await act(async () => {
+      source.emit("snapshot", pending);
+    });
+    expect(screen.getByRole("button", { name: "Yes" })).toBe(option);
+    expect(option.classList.contains("selected")).toBe(true);
+
+    fireEvent.click(screen.getByTestId("trigger-question-primary"));
+    const input = document.querySelector<HTMLTextAreaElement>(
+      ".question-text-input",
+    )!;
+    fireEvent.input(input, { target: { value: "Keep this draft" } });
+    await act(async () => {
+      source.emit("snapshot", missing);
+    });
+    expect(document.querySelector(".question-text-input")).toBe(input);
+    expect((input as HTMLTextAreaElement).value).toBe("Keep this draft");
+
+    await act(async () => {
+      source.emit("snapshot", completed);
+    });
+    await waitFor(() => expect(screen.queryByText("What details?")).toBeNull());
+
+    await act(async () => {
+      source.emit("snapshot", pending);
+    });
+    await screen.findByText("Continue?");
+    const cleared = structuredClone(missing);
+    cleared.ui.recentEvents = [
+      { type: "agentQuestionCleared", id: question.id },
+    ];
+    await act(async () => {
+      source.emit("snapshot", cleared);
+    });
+    await waitFor(() => expect(screen.queryByText("Continue?")).toBeNull());
   });
 
   it("renders Ask Agent question and todo snapshots and routes question responses locally", async () => {

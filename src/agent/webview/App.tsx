@@ -352,6 +352,7 @@ export function App({
     null,
   );
   const [handoffError, setHandoffError] = useState<string | null>(null);
+  const [handoffPreparing, setHandoffPreparing] = useState(false);
   const lastHostHeartbeatRef = useRef(Date.now());
   const inactiveProjectionCacheRef = useRef(new InactiveChatProjectionCache());
   const projectionStateCacheRef = useRef(new ChatProjectionStateCache());
@@ -1442,10 +1443,12 @@ export function App({
           dispatch({ type: "SET_SLASH_COMMANDS", commands: msg.commands });
           break;
         case "agentHandoffDraft":
+          setHandoffPreparing(false);
           setHandoffDraft(msg.draft);
           setHandoffError(null);
           break;
         case "agentHandoffResult":
+          setHandoffPreparing(false);
           if (msg.ok) {
             setHandoffDraft(null);
             setHandoffError(null);
@@ -3046,6 +3049,14 @@ export function App({
         );
       } else {
         setTranscriptView(null);
+        const pending = pendingSessionSelectionsRef.current;
+        if (
+          pending.tabId ===
+          (pinnedTabId ?? workspaceSnapshotRef.current?.focusedTabId ?? null)
+        ) {
+          delete pending.model;
+          delete pending.reasoningEffort;
+        }
         updateSessionlessSelections({ mode: slug });
         vscodeApi.postMessage({
           command: "agentRememberSessionlessSelection",
@@ -3053,7 +3064,7 @@ export function App({
         });
       }
     },
-    [updateSessionlessSelections, vscodeApi],
+    [pinnedTabId, updateSessionlessSelections, vscodeApi],
   );
 
   const handleSelectModel = useCallback(
@@ -3273,6 +3284,10 @@ export function App({
       }
 
       if (isForwardedBuiltinCommand("vscode", name)) {
+        if (name === "handoff") {
+          setHandoffPreparing(true);
+          setHandoffError(null);
+        }
         vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
       }
     },
@@ -3954,14 +3969,22 @@ export function App({
             onDragLeave={handleContainerDragLeave}
             onDrop={handleContainerDrop}
           >
-            {chatTabFailure && (
+            {handoffPreparing && (
+              <div class="chat-tab-failure" role="status">
+                Preparing fresh-session handoff…
+              </div>
+            )}
+            {(chatTabFailure || (handoffDraft ? null : handoffError)) && (
               <div class="chat-tab-failure" role="alert">
                 <i class="codicon codicon-warning" />
-                <span>{chatTabFailure}</span>
+                <span>{chatTabFailure ?? handoffError}</span>
                 <button
                   type="button"
                   class="icon-button"
-                  onClick={() => setChatTabFailure(null)}
+                  onClick={() => {
+                    setChatTabFailure(null);
+                    setHandoffError(null);
+                  }}
                   title="Dismiss"
                   aria-label="Dismiss tab message"
                 >

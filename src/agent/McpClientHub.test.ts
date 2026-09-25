@@ -11,6 +11,7 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
 
 import { McpClientHub } from "./McpClientHub.js";
 import type { McpServerConfig } from "./mcpConfig.js";
@@ -510,6 +511,42 @@ describe("McpClientHub protocol correctness", () => {
       }
     },
   );
+
+  it("passes a safe OAuth registration rejection through the configured HTTP fetch", async () => {
+    const hub = new McpClientHub();
+    const log = vi.fn();
+    hub.onLog = log;
+    await hub.connect([
+      {
+        name: "staff-admin-dev",
+        type: "http",
+        url: "https://mcp.example.test/admin-mcp",
+      },
+    ]);
+    mocks.fetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: "invalid_client_metadata",
+          error_description:
+            "Unsupported client authentication method, secret=hidden",
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    const response = await mocks.httpTransportOptions!.fetch!(
+      "https://auth.example.test/register?code=hidden",
+      { method: "POST", headers: { "content-type": "application/json" } },
+    );
+    const error = await parseErrorResponse(response);
+    expect(error.message).toContain("unsupported_client_authentication_method");
+    expect(error.message).not.toContain("hidden");
+    expect(log).toHaveBeenCalledWith(
+      "[mcp:staff-admin-dev] oauth endpoint=registration status=400 error=invalid_client_metadata description=unsupported_client_authentication_method",
+    );
+    expect(JSON.stringify(log.mock.calls)).not.toContain("hidden");
+    await hub.disconnectAll();
+  });
 
   it("keeps native HTTP transports on the stock SDK path", async () => {
     const hub = new McpClientHub();

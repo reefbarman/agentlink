@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+
 import { execFile } from "node:child_process";
 
 import type {
@@ -44,6 +45,7 @@ export interface StandaloneMcpOAuthRuntimeOptions {
 
 /** Service-owned standalone MCP OAuth coordination for the desktop/helper host. */
 export class StandaloneMcpOAuthRuntime {
+  private readonly activeAuthorizations = new Set<string>();
   private readonly pending = new Map<string, PendingAuthorization>();
   private readonly openExternal: (url: string) => Promise<boolean>;
   private readonly pinnedFetch = createStandaloneMcpOAuthPinnedFetch();
@@ -125,7 +127,9 @@ export class StandaloneMcpOAuthRuntime {
       ? this.options.createCredentialRepository()
       : import("@agentlink/node-host").then(
           ({ createKeychainMcpCredentialRepository }) =>
-            createKeychainMcpCredentialRepository(),
+            createKeychainMcpCredentialRepository({
+              account: "agentlink-desktop-mcp-oauth-v1",
+            }),
         );
     return await this.repositoryPromise;
   }
@@ -135,9 +139,22 @@ export class StandaloneMcpOAuthRuntime {
     serverName: string,
     request: NodeHostMcpOAuthAuthorizationRequest,
   ): Promise<{ callbackUrl: string }> {
-    if (this.pending.has(callbackId)) {
+    if (this.activeAuthorizations.has(callbackId)) {
       throw new Error("standalone_mcp_oauth_authorization_in_progress");
     }
+    this.activeAuthorizations.add(callbackId);
+    try {
+      return await this.authorize(callbackId, serverName, request);
+    } finally {
+      this.activeAuthorizations.delete(callbackId);
+    }
+  }
+
+  private async authorize(
+    callbackId: string,
+    serverName: string,
+    request: NodeHostMcpOAuthAuthorizationRequest,
+  ): Promise<{ callbackUrl: string }> {
     if (request.signal?.aborted) throw abortError();
     const authorizationUrl = new URL(request.authorizationUrl);
     const isSafeDestination =

@@ -14,6 +14,7 @@ export const DEFAULT_MODE_KEY = "defaultMode";
 
 let sharedPreferences: SessionPreferencesSnapshot | undefined;
 let sharedPreferencesStore: SessionPreferencesStore | undefined;
+let sharedPreferencesRevision = 0;
 
 export function initializeSharedSessionPreferences(
   store: SessionPreferencesStore,
@@ -21,11 +22,27 @@ export function initializeSharedSessionPreferences(
 ): void {
   sharedPreferencesStore = store;
   sharedPreferences = preferences;
+  sharedPreferencesRevision++;
 }
 
 export function resetSharedSessionPreferencesForTesting(): void {
   sharedPreferencesStore = undefined;
   sharedPreferences = undefined;
+  sharedPreferencesRevision++;
+}
+
+export async function refreshSharedSessionPreferences(): Promise<void> {
+  const store = sharedPreferencesStore;
+  if (!store) return;
+  const revision = sharedPreferencesRevision;
+  const preferences = await store.read();
+  if (
+    sharedPreferencesStore === store &&
+    sharedPreferencesRevision === revision
+  ) {
+    sharedPreferences = preferences;
+    sharedPreferencesRevision++;
+  }
 }
 
 /** Picker defaults come from the host-neutral shared store after activation. */
@@ -72,7 +89,11 @@ export async function writeUserSessionPreference<T>(
     await config.update(key, value, vscode.ConfigurationTarget.Global);
     return;
   }
-  sharedPreferences = await store.update(preferencePatch(key, value));
+  const preferences = await store.update(preferencePatch(key, value));
+  if (sharedPreferencesStore === store) {
+    sharedPreferences = preferences;
+    sharedPreferencesRevision++;
+  }
 }
 
 export async function writeUserSessionPreferenceEntry<T>(
@@ -94,9 +115,13 @@ export async function writeUserSessionPreferenceEntry<T>(
     );
     return;
   }
-  sharedPreferences = await store.update(
+  const preferences = await store.update(
     preferenceEntryPatch(key, normalizedKey, value),
   );
+  if (sharedPreferencesStore === store) {
+    sharedPreferences = preferences;
+    sharedPreferencesRevision++;
+  }
 }
 
 export async function removeUserSessionPreferenceEntry(
@@ -115,9 +140,13 @@ export async function removeUserSessionPreferenceEntry(
   }
   const store = sharedPreferencesStore;
   if (!store) return;
-  sharedPreferences = await store.update({
+  const preferences = await store.update({
     removeModelCondenseThresholds: [normalizedKey],
   });
+  if (sharedPreferencesStore === store) {
+    sharedPreferences = preferences;
+    sharedPreferencesRevision++;
+  }
 }
 
 export async function rememberSessionMode(mode: string): Promise<void> {

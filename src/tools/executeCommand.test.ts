@@ -2,6 +2,10 @@ import * as fs from "fs";
 import * as os from "node:os";
 
 import {
+  AgentTerminalProviderRouter,
+  SandboxAvailabilityError,
+} from "../terminal/sandbox/AgentTerminalProviderRouter.js";
+import {
   SandboxPreCommandLaunchError,
   SandboxStructuralProtectionError,
 } from "../terminal/sandbox/SandboxRuntimeProvider.js";
@@ -15,7 +19,6 @@ import {
   createRetainedCommandReviewDenials,
 } from "../approvals/commandApprovalReview.js";
 
-import { AgentTerminalProviderRouter } from "../terminal/sandbox/AgentTerminalProviderRouter.js";
 import { SandboxCapabilityLaunchError } from "../core/capabilities/SandboxCapabilityLaunchError.js";
 import { evaluateCommandRulePolicy } from "../approvals/commandRulePolicy.js";
 
@@ -2345,13 +2348,20 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("auto-approves routine repo-local git writes in approve-for-me without the Guardian reviewer", async () => {
+  it("reviews repo-local git writes for task scope in approve-for-me", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
         key === "masterBypass" ? false : fallback,
       ),
     });
-    const review = vi.fn();
+    const review = vi.fn(async () => ({
+      outcome: "deny" as const,
+      risk: "medium" as const,
+      userAuthorization: "unknown" as const,
+      rationale: "Staging scope is not established",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
     const enqueueCommandApproval = vi.fn(() => ({
       promise: Promise.resolve({ decision: "reject" }),
     }));
@@ -2374,11 +2384,13 @@ describe("handleExecuteCommand", () => {
       },
     );
 
-    expect(review).not.toHaveBeenCalled();
-    expect(enqueueCommandApproval).not.toHaveBeenCalled();
-    expect(textPayload(result)).toMatchObject({
-      approval: { by: "routine_tier", tier: "sensitive" },
-    });
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'git add -A && git commit -m "update"',
+      }),
+    );
+    expect(enqueueCommandApproval).toHaveBeenCalledOnce();
+    expect(textPayload(result).status).toBe("rejected_by_user");
   });
 
   it("keeps Guardian review for non-routine commands in approve-for-me", async () => {
@@ -8505,7 +8517,326 @@ describe("handleExecuteCommand", () => {
     expect(JSON.stringify(textPayload(result))).not.toContain("secret");
   });
 
-  it("returns a bounded retry-safe result when sandbox capability activation fails", async () => {
+  it("offers one-shot native approval when the sandbox runtime is unavailable before command start", async () => {
+    const nativeExecute = vi.fn(async () => ({
+      exit_code: 0,
+      output: "native command completed",
+      output_captured: true,
+      terminal_id: "native-recovery",
+      command_sent: true,
+      process_launched: true,
+    }));
+    const prepareExecution = vi.fn(async (_options, routeContext) => {
+      if (routeContext.requiredAuthority === "sandbox") {
+        throw new SandboxAvailabilityError(
+          "runtime-unavailable",
+          "Sandbox runtime unavailable",
+        );
+      }
+      return {
+        security: {
+          auditId: "native-recovery-audit",
+          route: "native" as const,
+          executionSurface: "agentlink-native" as const,
+          confinement: "native-unsandboxed" as const,
+          routeReason: "verified-local-macos" as const,
+          ...routeContext,
+          executionPolicy: "native-legacy-v1" as const,
+          preparedAt: 100,
+        },
+        execute: nativeExecute,
+        dispose: vi.fn(),
+      };
+    });
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "run-once" as const }),
+      commitApprovalRecording: vi.fn(),
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const result = await handleExecuteCommand(
+      { command: "npm test" },
+      {
+        isCommandApproved: () => true,
+        findMatchingCommandRule: vi.fn(() => undefined),
+      } as never,
+      { enqueueCommandApproval } as never,
+      "session-runtime-unavailable",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(prepareExecution).toHaveBeenCalledTimes(2);
+    expect(prepareExecution.mock.calls[1][1]).toMatchObject({
+      requiredAuthority: "native-agent",
+      permissionIntent: "native-escalation",
+    });
+    expect(
+      enqueueCommandApproval,
+      JSON.stringify(textPayload(result)),
+    ).toHaveBeenCalledOnce();
+    expect(enqueueCommandApproval).toHaveBeenCalledWith(
+      "npm test",
+      "npm test",
+      expect.objectContaining({
+        security: expect.objectContaining({ route: "native" }),
+        bypassRecentApproval: true,
+      }),
+    );
+    expect(nativeExecute).toHaveBeenCalledOnce();
+    expect(textPayload(result)).toMatchObject({
+      exit_code: 0,
+      output: "native command completed",
+      approval: { by: "human" },
+      retry_outcome: "completed",
+      retry_safe: false,
+      execution_attempts: [
+        {
+          route: "sandbox",
+          command_sent: false,
+          process_launched: false,
+          retry_safe: false,
+        },
+        { route: "native", process_launched: true },
+      ],
+    });
+  });
+
+  it("does not invite replay when native recovery launch fails with unknown state", async () => {
+    const nativeExecute = vi.fn(async () => {
+      throw new Error("native launch failed");
+    });
+    const prepareExecution = vi.fn(async (_options, routeContext) => {
+      if (routeContext.requiredAuthority === "sandbox") {
+        throw new SandboxAvailabilityError(
+          "runtime-unavailable",
+          "Sandbox runtime unavailable",
+        );
+      }
+      return {
+        security: {
+          auditId: "native-recovery-failed",
+          route: "native" as const,
+          executionSurface: "agentlink-native" as const,
+          confinement: "native-unsandboxed" as const,
+          routeReason: "verified-local-macos" as const,
+          ...routeContext,
+          executionPolicy: "native-legacy-v1" as const,
+          preparedAt: 100,
+        },
+        execute: nativeExecute,
+        dispose: vi.fn(),
+      };
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const result = await handleExecuteCommand(
+      { command: "npm test" },
+      {
+        isCommandApproved: () => true,
+        findMatchingCommandRule: vi.fn(() => undefined),
+      } as never,
+      {
+        enqueueCommandApproval: () => ({
+          promise: Promise.resolve({ decision: "run-once" as const }),
+          commitApprovalRecording: vi.fn(),
+        }),
+      } as never,
+      "session-native-recovery-failed",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(nativeExecute).toHaveBeenCalledOnce();
+    expect(textPayload(result)).toMatchObject({
+      status: "recovery_failed",
+      command_sent: "unknown",
+      process_launched: "unknown",
+      retry_safe: false,
+      execution_attempts: [
+        { route: "sandbox", process_launched: false },
+        {
+          route: "native",
+          command_sent: "unknown",
+          process_launched: "unknown",
+          retry_safe: false,
+        },
+      ],
+    });
+  });
+
+  it("does not execute or save a rule when pre-launch native recovery is rejected", async () => {
+    const nativeExecute = vi.fn();
+    const dispose = vi.fn();
+    const prepareExecution = vi.fn(async (_options, routeContext) => {
+      if (routeContext.requiredAuthority === "sandbox") {
+        throw new SandboxAvailabilityError(
+          "runtime-unavailable",
+          "Sandbox runtime unavailable",
+        );
+      }
+      return {
+        security: {
+          auditId: "native-recovery-rejected",
+          route: "native" as const,
+          executionSurface: "agentlink-native" as const,
+          confinement: "native-unsandboxed" as const,
+          routeReason: "verified-local-macos" as const,
+          ...routeContext,
+          executionPolicy: "native-legacy-v1" as const,
+          preparedAt: 100,
+        },
+        execute: nativeExecute,
+        dispose,
+      };
+    });
+    const addCommandRule = vi.fn();
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({
+        decision: "reject" as const,
+        rules: [
+          {
+            pattern: "npm test",
+            mode: "prefix" as const,
+            decision: "allow" as const,
+            scope: "session" as const,
+          },
+        ],
+      }),
+      commitApprovalRecording: vi.fn(),
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const result = await handleExecuteCommand(
+      { command: "npm test" },
+      {
+        isCommandApproved: () => true,
+        findMatchingCommandRule: vi.fn(() => undefined),
+        addCommandRule,
+      } as never,
+      { enqueueCommandApproval } as never,
+      "session-runtime-rejected",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(enqueueCommandApproval).toHaveBeenCalledOnce();
+    expect(nativeExecute).not.toHaveBeenCalled();
+    expect(addCommandRule).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(textPayload(result)).toMatchObject({
+      status: "rejected_by_user",
+      command_sent: false,
+      process_launched: false,
+    });
+  });
+
+  it("does not offer a second native recovery card after rejection in the same turn", async () => {
+    const circuit = createCommandReviewTurnCircuit();
+    const nativeExecute = vi.fn();
+    const nativeDispose = vi.fn();
+    const prepareExecution = vi.fn(async (_options, routeContext) => {
+      if (routeContext.requiredAuthority === "sandbox") {
+        throw new SandboxAvailabilityError(
+          "runtime-unavailable",
+          "Sandbox runtime unavailable",
+        );
+      }
+      return {
+        security: {
+          auditId: "native-recovery-repeated",
+          route: "native" as const,
+          executionSurface: "agentlink-native" as const,
+          confinement: "native-unsandboxed" as const,
+          routeReason: "verified-local-macos" as const,
+          ...routeContext,
+          executionPolicy: "native-legacy-v1" as const,
+          preparedAt: 100,
+        },
+        execute: nativeExecute,
+        dispose: nativeDispose,
+      };
+    });
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "reject" as const }),
+      commitApprovalRecording: vi.fn(),
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const providers = {
+      terminalProvider: { ...terminalProvider, prepareExecution },
+      getCommandApprovalPolicy: () => "approve-for-me" as const,
+      commandReviewTurnCircuit: circuit,
+    };
+    const approvalManager = {
+      isCommandApproved: () => true,
+      findMatchingCommandRule: vi.fn(() => undefined),
+    };
+    const approvalPanel = { enqueueCommandApproval };
+    await handleExecuteCommand(
+      { command: "npm test" },
+      approvalManager as never,
+      approvalPanel as never,
+      "session-runtime-repeat",
+      undefined,
+      providers,
+    );
+    const second = await handleExecuteCommand(
+      { command: "npm test" },
+      approvalManager as never,
+      approvalPanel as never,
+      "session-runtime-repeat",
+      undefined,
+      providers,
+    );
+
+    expect(enqueueCommandApproval).toHaveBeenCalledOnce();
+    expect(nativeExecute).not.toHaveBeenCalled();
+    expect(nativeDispose).toHaveBeenCalledTimes(2);
+    expect(textPayload(second)).toMatchObject({ status: "rejected" });
+  });
+
+  it.each(["attestation-security-failure", "trust-failure"] as const)(
+    "does not offer native approval after a %s",
+    async (reason) => {
+      const prepareExecution = vi.fn(async () => {
+        throw new SandboxAvailabilityError(reason, "Sandbox was not verified");
+      });
+      const enqueueCommandApproval = vi.fn();
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const result = await handleExecuteCommand(
+        { command: "npm test" },
+        { isCommandApproved: () => true } as never,
+        { enqueueCommandApproval } as never,
+        `session-${reason}`,
+        undefined,
+        {
+          terminalProvider: { ...terminalProvider, prepareExecution },
+          getCommandApprovalPolicy: () => "approve-for-me",
+        },
+      );
+      expect(prepareExecution).toHaveBeenCalledOnce();
+      expect(enqueueCommandApproval).not.toHaveBeenCalled();
+      expect(textPayload(result)).toMatchObject({
+        status: "blocked",
+        error_code: "sandbox_unavailable",
+        failure_reason: reason,
+        command_sent: false,
+        process_launched: false,
+        retry_safe: false,
+      });
+      expect(JSON.stringify(textPayload(result))).not.toContain(
+        "Sandbox was not verified",
+      );
+    },
+  );
+
+  it("does not encourage repeating an invalid sandbox capability grant", async () => {
     executeCommand.mockRejectedValue(
       new SandboxCapabilityLaunchError("expired", {
         cause: new Error("secret grant token and /private/path"),
@@ -8524,18 +8855,18 @@ describe("handleExecuteCommand", () => {
 
     const payload = textPayload(result);
     expect(payload).toMatchObject({
-      status: "retry_required",
+      status: "blocked",
       error_code: "sandbox_capability_launch_failed",
       capability_failure: "expired",
       command: "npm test",
       command_sent: false,
       process_launched: false,
-      retry_safe: true,
+      retry_safe: false,
       failure_stage: "launch",
       retry_guidance: {
         code: "sandbox_capability_launch_failed",
         automatic_retry: false,
-        options: [{ action: "retry_same_command", same_command: true }],
+        options: [],
       },
     });
     expect(executeCommand).toHaveBeenCalledOnce();

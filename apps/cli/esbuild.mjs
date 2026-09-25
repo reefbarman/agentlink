@@ -75,6 +75,7 @@ const unexpectedExternalImports = externalImports.filter(
       "crypto",
       "events",
       "fs",
+      "fs/promises",
       "http",
       "http2",
       "https",

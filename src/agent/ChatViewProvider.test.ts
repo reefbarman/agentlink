@@ -1772,6 +1772,89 @@ describe("ChatViewProvider session state sync", () => {
     });
   });
 
+  it("publishes the remembered model when switching a blank chat's mode", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const {
+      initializeSharedSessionPreferences,
+      resetSharedSessionPreferencesForTesting,
+    } = await import("./sharedSessionPreferences.js");
+    const sharedPreferences = {
+      defaultMode: "code",
+      modeModels: { code: "gpt-6-sol", architect: "gpt-6-astra" },
+      modeReasoningEfforts: {},
+      modelCondenseThresholds: {},
+    };
+    const store = {
+      read: vi.fn(async () => sharedPreferences),
+      update: vi.fn(async () => ({
+        ...sharedPreferences,
+        defaultMode: "architect",
+      })),
+    };
+    initializeSharedSessionPreferences(store as never, sharedPreferences);
+    try {
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
+      provider.setSessionManager({
+        getForegroundSession: () => undefined,
+        getSessionInfos: () => [],
+        getConfig: () => ({ model: "gpt-6-sol" }),
+        getWorkspaceProjects: () => [
+          {
+            id: "project-1",
+            name: "Project",
+            availability: { status: "available" },
+          },
+        ],
+      } as never);
+      const buildChatState = (
+        provider as unknown as {
+          buildChatState: (session: undefined) => ChatState;
+        }
+      ).buildChatState.bind(provider);
+      const sendOrQueueWebviewMessage = vi.spyOn(
+        provider as unknown as {
+          sendOrQueueWebviewMessage: (message: unknown) => void;
+        },
+        "sendOrQueueWebviewMessage",
+      );
+      expect(buildChatState(undefined)).toMatchObject({
+        mode: "code",
+        model: "gpt-6-sol",
+      });
+
+      await (
+        provider as unknown as {
+          handleWebviewMessage: (
+            message: Record<string, unknown>,
+          ) => Promise<void>;
+        }
+      ).handleWebviewMessage({
+        command: "agentRememberSessionlessSelection",
+        mode: "architect",
+      });
+
+      expect(store.read).toHaveBeenCalledOnce();
+      expect(store.update).toHaveBeenCalledWith({ defaultMode: "architect" });
+      expect(buildChatState(undefined)).toMatchObject({
+        mode: "architect",
+        model: "gpt-6-astra",
+      });
+      expect(sendOrQueueWebviewMessage).toHaveBeenCalledWith({
+        type: "stateUpdate",
+        state: expect.objectContaining({
+          sessionId: null,
+          mode: "architect",
+          model: "gpt-6-astra",
+        }),
+      });
+    } finally {
+      resetSharedSessionPreferencesForTesting();
+    }
+  });
+
   it("persists model selection for the active session mode and publishes state", async () => {
     mockWorkspaceFolders.push({
       uri: {
@@ -9299,6 +9382,26 @@ describe("chat tab host routing", () => {
       snapshot,
     };
   }
+
+  it("reports a thrown handoff preparation error to the docked chat", async () => {
+    const { provider, handle, postMessage } = await makeTabRoutingProvider();
+    const prepareSessionHandoff = vi.fn(async () => {
+      throw new Error("History storage unavailable");
+    });
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: vi.fn(() => ({ id: "session-1" })),
+      prepareSessionHandoff,
+    };
+
+    await handle({ command: "agentSlashCommand", name: "handoff", args: "" });
+
+    expect(prepareSessionHandoff).toHaveBeenCalledWith("session-1");
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "agentHandoffResult",
+      ok: false,
+      error: "Could not prepare the handoff: History storage unavailable",
+    });
+  });
 
   it("creates a browser tab without changing foreground presentation", async () => {
     const { provider, coordinator, postMessage } =

@@ -19,6 +19,9 @@ import {
 } from "./keychainSecretStorage.js";
 
 const DEFAULT_KEYCHAIN_ACCOUNT = "agentlink-mcp-oauth-v1";
+export const CLI_MCP_OAUTH_KEYCHAIN_ACCOUNT = "agentlink-cli-mcp-oauth-v1";
+export const DESKTOP_MCP_OAUTH_KEYCHAIN_ACCOUNT =
+  "agentlink-desktop-mcp-oauth-v1";
 const MAX_STORED_ENTRIES = 200;
 
 interface StoredCredential<TPrincipal extends AgentPrincipal> {

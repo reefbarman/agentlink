@@ -40,10 +40,6 @@ interface RoutingConfig {
   fallbackProviderOrder: string[];
 }
 
-export interface BackgroundRoutingPolicy {
-  modelTiers?: BackgroundModelTierGroups;
-}
-
 interface ModelTierClassification {
   tier: ModelTier | "unknown";
   source: ModelTierSource;
@@ -103,24 +99,34 @@ function unique(values: string[]): string[] {
 }
 
 function buildTierMemberships(
-  userGroups: BackgroundModelTierGroups | undefined,
+  models: ModelInfo[],
 ): Map<string, TierMembership> {
   const memberships = new Map<string, TierMembership>();
-  const addGroups = (
-    groups: BackgroundModelTierGroups | undefined,
-    source: Extract<ModelTierSource, "builtin" | "configured">,
-  ) => {
-    for (const [group, tiers] of Object.entries(groups ?? {})) {
-      for (const tier of MODEL_TIERS) {
-        for (const [order, modelId] of (tiers[tier] ?? []).entries()) {
-          if (source === "builtin" && memberships.has(modelId)) continue;
-          memberships.set(modelId, { tier, source, group, order });
+  for (const [group, tiers] of Object.entries(
+    routingConfig.defaultTierGroups ?? {},
+  )) {
+    for (const tier of MODEL_TIERS) {
+      for (const [order, modelId] of (tiers[tier] ?? []).entries()) {
+        if (!memberships.has(modelId)) {
+          memberships.set(modelId, { tier, source: "builtin", group, order });
         }
       }
     }
-  };
-  addGroups(routingConfig.defaultTierGroups, "builtin");
-  addGroups(userGroups, "configured");
+  }
+  const groupOrders = new Map<string, number>();
+  for (const model of models) {
+    if (!model.tier) continue;
+    const group = model.provider;
+    const key = `${group}:${model.tier}`;
+    const order = groupOrders.get(key) ?? 0;
+    memberships.set(model.id, {
+      tier: model.tier,
+      source: "configured",
+      group,
+      order,
+    });
+    groupOrders.set(key, order + 1);
+  }
   return memberships;
 }
 
@@ -160,7 +166,7 @@ function resolveRoutingTier(
   if (request.modelTier === "foreground") {
     if (foregroundClassification.tier === "unknown") {
       throw new Error(
-        `Foreground model "${request.model ?? "current"}" has no configured or inferable tier. Configure agentlink.background.modelTiers or request an exact model.`,
+        `Foreground model "${request.model ?? "current"}" has no configured or inferable tier. For OpenAI-compatible models, configure tier in openai-compatible.json; otherwise request an exact model.`,
       );
     }
     return foregroundClassification.tier;
@@ -170,7 +176,7 @@ function resolveRoutingTier(
   }
   if (foregroundClassification.tier === "unknown") {
     throw new Error(
-      "Cannot select a cheaper background model because the foreground model tier is unknown. Configure agentlink.background.modelTiers or pass modelTier/model explicitly.",
+      "Cannot select a cheaper background model because the foreground model tier is unknown. For OpenAI-compatible models, configure tier in openai-compatible.json; otherwise pass modelTier/model explicitly.",
     );
   }
   return tierBelow(foregroundClassification.tier);
@@ -240,7 +246,7 @@ function tierError(args: {
       ? args.providers.join(", ")
       : "the allowed provider";
   return new Error(
-    `No eligible ${args.tier} background model is available on ${providerText}. Configure agentlink.background.modelTiers, authenticate a model at that tier, or request an explicit model. The router will not silently spend a higher tier than requested (foreground: ${args.foregroundModel}).`,
+    `No eligible ${args.tier} background model is available on ${providerText}. Configure tier for an OpenAI-compatible model, authenticate a model at that tier, or request an explicit model. The router will not silently spend a higher tier than requested (foreground: ${args.foregroundModel}).`,
   );
 }
 
@@ -253,7 +259,6 @@ export async function resolveBackgroundRoute(
     /** Providers recently unavailable for automatic background selection. */
     unavailableProviders?: readonly string[];
   },
-  policy: BackgroundRoutingPolicy = {},
 ): Promise<BackgroundRouteResolution> {
   const registeredModels = registry.listAllModels();
   const requestedProvider = request.provider?.trim();
@@ -283,7 +288,7 @@ export async function resolveBackgroundRoute(
   const foregroundProvider =
     registry.tryResolveProvider(foreground.model)?.id ??
     foregroundModelInfo?.provider;
-  const memberships = buildTierMemberships(policy.modelTiers);
+  const memberships = buildTierMemberships(registeredModels);
   const foregroundClassification: ModelTierClassification = foregroundModelInfo
     ? classifyModel(foregroundModelInfo, memberships)
     : { tier: "unknown", source: "unknown" };
@@ -390,7 +395,7 @@ export async function resolveBackgroundRoute(
 
   if (!modelTier) {
     throw new Error(
-      `Requested model "${requestedModel}" has no configured or inferable tier. Configure agentlink.background.modelTiers or pass modelTier explicitly.`,
+      `Requested model "${requestedModel}" has no configured or inferable tier. For OpenAI-compatible models, configure tier in openai-compatible.json; otherwise pass modelTier explicitly.`,
     );
   }
 

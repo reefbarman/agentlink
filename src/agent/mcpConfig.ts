@@ -21,91 +21,22 @@ import {
 } from "@agentlink/protocol/mcp-config-validation";
 import { createHash, randomUUID } from "crypto";
 
-import { parseJsonWithComments } from "@agentlink/protocol/jsonc";
+import {
+  askAgentMcpConfigSources,
+  globalMcpConfigSources,
+  loadMcpConfigsFromSources,
+  projectMcpConfigSources,
+  readMcpConfig,
+  type McpConfigReadResult,
+  type McpServerConfig,
+  type WorkspaceMcpProject,
+} from "@agentlink/node-host";
 
-export type McpConfigProvenance =
-  | {
-      readonly kind: "native";
-      readonly sourceServerName: string;
-      readonly sourceProjectIds: readonly string[];
-      readonly sourceProjectRoots: readonly string[];
-    }
-  | {
-      readonly kind: "agent-plugin";
-      readonly scope:
-        | { readonly kind: "global" }
-        | { readonly kind: "project"; readonly projectId: string };
-      readonly installInstanceId: string;
-      readonly packageDigest: string;
-      readonly portableServerName: string;
-      readonly runtimeServerName: string;
-    };
-
-export interface McpServerConfig {
-  /** Unique server name (key from config file) */
-  name: string;
-  /** stdio transport */
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  /** sse or streamable-http transport ("http" is an alias for "streamable-http") */
-  type?: "stdio" | "sse" | "streamable-http" | "http";
-  url?: string;
-  /** Per-server timeout in ms (default 60000) */
-  timeout?: number;
-  /** HTTP headers for SSE/streamable-http transports (e.g. Authorization) */
-  headers?: Record<string, string>;
-  /**
-   * Tool approval policy for this server.
-   * "ask" (default) — prompt before each new tool.
-   * "allow"         — auto-approve all tools without prompting.
-   */
-  toolPolicy?: "ask" | "allow";
-  /**
-   * How this server's tool schemas should be disclosed to the model.
-   * Deferred tools are omitted from provider tool arrays and discovered/called
-   * through find_mcp_tools/call_mcp_tool.
-   * "auto" (default) — defer large servers over the disclosure threshold.
-   * "inline"         — always include full tool schemas.
-   * "deferred"       — advertise in a compact catalog instead of inlining schemas.
-   */
-  toolDisclosure?: "inline" | "deferred" | "auto";
-  /** Whether this server safely accepts concurrent tool calls. Default false. */
-  supportsParallelToolCalls?: boolean;
-  /**
-   * Tools that are always auto-approved regardless of toolPolicy.
-   * Use the bare tool name (without server prefix), e.g. "search_issues".
-   */
-  allowedTools?: string[];
-  /** Persistently prevent this server from connecting. */
-  disabled?: boolean;
-  /** Original config key before workspace-level collision disambiguation. */
-  sourceServerName?: string;
-  /** Workspace projects whose effective config produced this runtime server. */
-  sourceProjectIds?: string[];
-  /** Project roots corresponding to sourceProjectIds. */
-  sourceProjectRoots?: string[];
-  /** Plugin-only child process working directory. Native config never populates it. */
-  cwd?: string;
-  /** Canonical mutation and dispatch authority for this runtime server. */
-  provenance?: McpConfigProvenance;
-  /** Plugin package/data roots used only for stdio launch and lifecycle checks. */
-  pluginRoot?: string;
-  pluginData?: string;
-}
-
-export interface WorkspaceMcpProject {
-  projectId: string;
-  displayName: string;
-  rootPath: string;
-}
-
-interface McpConfigFile {
-  mcpServers?: Record<
-    string,
-    Omit<McpServerConfig, "name"> & { type?: string }
-  >;
-}
+export type {
+  McpConfigProvenance,
+  McpServerConfig,
+  WorkspaceMcpProject,
+} from "@agentlink/node-host";
 
 interface SourceDefinition {
   scope: McpManagerScope;
@@ -118,34 +49,8 @@ interface SourceDefinition {
 const BLOCKED_SERVER_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const REDACTED_VALUE = "***";
 
-type McpConfigReadResult =
-  | { status: "available"; config: McpConfigFile; raw: string }
-  | { status: "missing" }
-  | {
-      status: "invalid" | "unreadable";
-      error: "invalid_json" | "permission_denied" | "read_failed";
-      raw?: string;
-    };
-
 function revisionFor(parts: string[]): string {
   return createHash("sha256").update(parts.join("\0")).digest("hex");
-}
-
-function isMcpConfigDocument(value: unknown): value is McpConfigFile {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-  const servers = (value as McpConfigFile).mcpServers;
-  return (
-    servers === undefined ||
-    (typeof servers === "object" &&
-      servers !== null &&
-      !Array.isArray(servers) &&
-      Object.values(servers).every(
-        (entry) =>
-          typeof entry === "object" && entry !== null && !Array.isArray(entry),
-      ))
-  );
 }
 
 function revisionForRead(read: McpConfigReadResult): string {
@@ -155,53 +60,6 @@ function revisionForRead(read: McpConfigReadResult): string {
   if (read.status === "unreadable")
     return revisionFor(["unreadable", read.error]);
   return revisionFor(["missing"]);
-}
-
-function errorCode(error: unknown): string | undefined {
-  return error && typeof error === "object" && "code" in error
-    ? String(error.code)
-    : undefined;
-}
-
-async function readMcpConfig(filePath: string): Promise<McpConfigReadResult> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(filePath, "utf-8");
-  } catch (error) {
-    const code = errorCode(error);
-    if (code === "ENOENT") return { status: "missing" };
-    return {
-      status: "unreadable",
-      error:
-        code === "EACCES" || code === "EPERM"
-          ? "permission_denied"
-          : "read_failed",
-    };
-  }
-
-  try {
-    const config = parseJsonWithComments<unknown>(raw);
-    if (!isMcpConfigDocument(config)) {
-      return { status: "invalid", error: "invalid_json", raw };
-    }
-    return { status: "available", config, raw };
-  } catch {
-    return { status: "invalid", error: "invalid_json", raw };
-  }
-}
-
-function resolveConfigVars(
-  values: Record<string, string> | undefined,
-): Record<string, string> | undefined {
-  if (!values) return undefined;
-  const resolved: Record<string, string> = {};
-  for (const [key, value] of Object.entries(values)) {
-    // Interpolate ${VAR} references from process.env
-    resolved[key] = value.replace(/\$\{([^}]+)\}/g, (_, name: string) => {
-      return process.env[name] ?? "";
-    });
-  }
-  return resolved;
 }
 
 function getGlobalMcpSourceDefinitions(): SourceDefinition[] {
@@ -254,10 +112,6 @@ function getMainMcpSourceDefinitions(cwd: string): SourceDefinition[] {
   ];
 }
 
-function getMainMcpConfigSources(cwd: string): string[] {
-  return getMainMcpSourceDefinitions(cwd).map((source) => source.path);
-}
-
 function getAskAgentMcpSourceDefinitions(): SourceDefinition[] {
   const home = os.homedir();
   return [
@@ -273,10 +127,6 @@ function getAskAgentMcpSourceDefinitions(): SourceDefinition[] {
       editable: true,
     },
   ];
-}
-
-function getAskAgentMcpConfigSources(): string[] {
-  return getAskAgentMcpSourceDefinitions().map((source) => source.path);
 }
 
 function sourceId(profile: McpManagerProfile, index: number): string {
@@ -308,80 +158,6 @@ async function summarizeSources(
       };
     }),
   );
-}
-
-async function loadMcpConfigsFromSources(
-  sources: string[],
-): Promise<McpServerConfig[]> {
-  const merged = new Map<string, McpServerConfig>();
-
-  for (const filePath of sources) {
-    const read = await readMcpConfig(filePath);
-    if (read.status !== "available" || !read.config.mcpServers) continue;
-
-    for (const [name, raw] of Object.entries(read.config.mcpServers)) {
-      const entry = raw as McpServerConfig & {
-        toolPolicy?: string;
-        toolDisclosure?: string;
-        supportsParallelToolCalls?: boolean;
-        allowedTools?: string[];
-      };
-      const existing = merged.get(name);
-
-      // Patch merge: only override fields that are explicitly set in this source.
-      // This allows a project mcp.json to set just toolPolicy/allowedTools
-      // without having to repeat the full server connection config.
-      const next: McpServerConfig = {
-        // Start from existing (lower-priority source) or defaults
-        name,
-        type: existing?.type ?? "stdio",
-        command: existing?.command,
-        args: existing?.args,
-        env: existing?.env,
-        url: existing?.url,
-        timeout: existing?.timeout,
-        headers: existing?.headers,
-        toolPolicy: existing?.toolPolicy ?? "ask",
-        toolDisclosure: existing?.toolDisclosure ?? "auto",
-        supportsParallelToolCalls: existing?.supportsParallelToolCalls ?? false,
-        allowedTools: existing?.allowedTools,
-        disabled: existing?.disabled ?? false,
-      };
-
-      // Apply each field only if explicitly present in this source
-      if (raw.type !== undefined)
-        next.type = raw.type as McpServerConfig["type"];
-      if (raw.command !== undefined) next.command = raw.command;
-      if (raw.args !== undefined) next.args = raw.args;
-      if (raw.env !== undefined) next.env = resolveConfigVars(raw.env);
-      if (raw.url !== undefined) next.url = raw.url;
-      if (raw.timeout !== undefined) next.timeout = raw.timeout;
-      if (raw.headers !== undefined)
-        next.headers = resolveConfigVars(raw.headers);
-      if (entry.toolPolicy !== undefined)
-        next.toolPolicy = entry.toolPolicy === "allow" ? "allow" : "ask";
-      if (entry.toolDisclosure !== undefined) {
-        next.toolDisclosure =
-          entry.toolDisclosure === "inline" ||
-          entry.toolDisclosure === "deferred" ||
-          entry.toolDisclosure === "auto"
-            ? entry.toolDisclosure
-            : "auto";
-      }
-      if (entry.supportsParallelToolCalls !== undefined) {
-        next.supportsParallelToolCalls =
-          entry.supportsParallelToolCalls === true;
-      }
-      if (raw.disabled !== undefined) next.disabled = raw.disabled === true;
-      if (Array.isArray(entry.allowedTools)) {
-        next.allowedTools = [...entry.allowedTools];
-      }
-
-      merged.set(name, next);
-    }
-  }
-
-  return Array.from(merged.values());
 }
 
 function redactRecord(
@@ -563,7 +339,10 @@ async function buildConfigEntries(
  * 6. <cwd>/.agentlink/mcp.json (project, highest)
  */
 export async function loadMcpConfigs(cwd: string): Promise<McpServerConfig[]> {
-  return loadMcpConfigsFromSources(getMainMcpConfigSources(cwd));
+  return loadMcpConfigsFromSources([
+    ...globalMcpConfigSources(os.homedir()),
+    ...projectMcpConfigSources(cwd),
+  ]);
 }
 
 function workspaceConfigFingerprint(config: McpServerConfig): string {
@@ -684,7 +463,7 @@ export async function loadWorkspaceMcpConfigs(
  * 4. ~/.agentlink/ask-agent/mcp.json     (Ask Agent global, highest)
  */
 export async function loadAskAgentMcpConfigs(): Promise<McpServerConfig[]> {
-  return loadMcpConfigsFromSources(getAskAgentMcpConfigSources());
+  return loadMcpConfigsFromSources(askAgentMcpConfigSources(os.homedir()));
 }
 
 /** Paths to watch for global main-agent MCP config changes. */
@@ -694,12 +473,15 @@ export function getGlobalMcpConfigPaths(): string[] {
 
 /** Paths to watch for main-agent MCP config changes */
 export function getMcpConfigPaths(cwd: string): string[] {
-  return getMainMcpConfigSources(cwd);
+  return [
+    ...globalMcpConfigSources(os.homedir()),
+    ...projectMcpConfigSources(cwd),
+  ];
 }
 
 /** Paths to watch for Ask Agent MCP config changes */
 export function getAskAgentMcpConfigPaths(): string[] {
-  return getAskAgentMcpConfigSources();
+  return askAgentMcpConfigSources(os.homedir());
 }
 
 export async function getMcpConfigSources(

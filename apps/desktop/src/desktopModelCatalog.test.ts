@@ -54,15 +54,16 @@ describe("desktop model catalog", () => {
     ).toMatchObject({ authenticated: true, readiness: { status: "ready" } });
   });
 
-  it("keeps the full maintained catalog for OpenAI API keys", () => {
+  it("shows the same seven models for OpenAI API keys", () => {
     const modelIds = buildDesktopCodexCatalog("apiKey").map(
       (model) => model.id,
     );
 
-    expect(modelIds).toContain("gpt-6-astra");
-    expect(modelIds).toContain("gpt-6-sol");
-    expect(modelIds).toContain("gpt-6-luna");
-    expect(modelIds).toContain("gpt-5.4-pro");
+    expect(modelIds).toEqual(
+      buildDesktopCodexCatalog("oauth").map((model) => model.id),
+    );
+    expect(modelIds).toHaveLength(7);
+    expect(modelIds).not.toContain("gpt-5.4-pro");
     expect(modelIds).not.toContain("gpt-5.3-codex-spark");
   });
 });

@@ -3,7 +3,10 @@ import type { TerminalExecutionRouteContext } from "@agentlink/protocol/terminal
 import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 
-import { AgentTerminalProviderRouter } from "./AgentTerminalProviderRouter.js";
+import {
+  AgentTerminalProviderRouter,
+  SandboxAvailabilityError,
+} from "./AgentTerminalProviderRouter.js";
 import {
   SandboxPreparationDriftError,
   TerminalTargetRecoveryError,
@@ -335,7 +338,33 @@ describe("AgentTerminalProviderRouter", () => {
     router.dispose();
   });
 
-  it("reports the changed field when a prepared sandbox attestation becomes stale", async () => {
+  it("keeps sandbox attestation valid across concurrent native preparation", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    const preparedSandbox = await test.router.prepareExecution(
+      { owner: undefined, command: "npm test", cwd: "/workspace" },
+      sandboxRoute,
+    );
+
+    const inFlightSandbox = test.router.prepareExecution(
+      { owner: undefined, command: "npm run lint", cwd: "/workspace" },
+      sandboxRoute,
+    );
+    const nativePrepared = await test.router.prepareExecution(
+      { owner: undefined, command: "pwd", cwd: "/workspace" },
+      nativeAgentRoute,
+    );
+
+    await expect(preparedSandbox.execute()).resolves.toMatchObject({
+      output: "sandbox",
+    });
+    nativePrepared.dispose();
+    const inFlightPrepared = await inFlightSandbox;
+    inFlightPrepared.dispose();
+    test.router.dispose();
+  });
+
+  it("revokes pending sandbox preparations when attestation changes", async () => {
     const test = harness();
     test.setEnabled(true);
     const first = await test.router.prepareExecution(
@@ -365,18 +394,16 @@ describe("AgentTerminalProviderRouter", () => {
         },
       },
     });
-    const second = await test.router.prepareExecution(
-      { owner: undefined, command: "npm run lint", cwd: "/workspace" },
-      sandboxRoute,
-    );
+    await expect(
+      test.router.prepareExecution(
+        { owner: undefined, command: "npm run lint", cwd: "/workspace" },
+        sandboxRoute,
+      ),
+    ).rejects.toMatchObject({ reason: "attestation-security-failure" });
 
-    await expect(first.execute()).rejects.toMatchObject({
-      name: "SandboxPreparationDriftError",
-      code: "sandbox_preparation_changed",
-      changedFields: ["attestationId"],
-    } satisfies Partial<SandboxPreparationDriftError>);
+    await expect(first.execute()).rejects.toThrow("no longer available");
     expect(test.sandbox.executeCommand).not.toHaveBeenCalled();
-    second.dispose();
+    test.router.dispose();
   });
 
   it("reports every changed field returned by the sandbox authorizer", async () => {
@@ -495,6 +522,28 @@ describe("AgentTerminalProviderRouter", () => {
     ).resolves.toMatchObject({ output: "native", terminal_id: "native-1" });
     expect(test.createNativeProvider).toHaveBeenCalledTimes(1);
     expect(test.createSandboxProvider).not.toHaveBeenCalled();
+  });
+
+  it("does not offer native recovery for a sandbox provider missing prepared confinement", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    test.createSandboxProvider.mockImplementationOnce(() => {
+      const incomplete = { ...test.sandbox };
+      delete (incomplete as { prepareConfinementExecution?: unknown })
+        .prepareConfinementExecution;
+      return incomplete;
+    });
+
+    await expect(
+      test.router.prepareExecution(
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
+        sandboxRoute,
+      ),
+    ).rejects.toMatchObject({
+      reason: "attestation-security-failure",
+      commandStarted: false,
+    });
+    expect(test.createNativeAgentProvider).not.toHaveBeenCalled();
   });
 
   it("fails closed when required sandbox runtime is unavailable", async () => {
@@ -1020,6 +1069,102 @@ describe("AgentTerminalProviderRouter", () => {
     expect(test.createNativeProvider).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["runtime-unavailable", { status: "runtime-unavailable" as const }],
+    [
+      "attestation-security-failure",
+      { status: "failed" as const, detail: "attestation rejected" },
+    ],
+  ] as const)(
+    "reports required sandbox availability failure as %s before command start",
+    async (reason, availability) => {
+      const test = harness();
+      test.setEnabled(true);
+      test.getSandboxAvailability.mockImplementation(
+        async () => availability as never,
+      );
+
+      let thrown: unknown;
+      try {
+        await test.router.prepareExecution(
+          { owner: undefined, command: "echo must not run", cwd: "/workspace" },
+          sandboxRoute,
+        );
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(SandboxAvailabilityError);
+      expect(thrown).toMatchObject({ reason, commandStarted: false });
+      expect(test.createNativeProvider).not.toHaveBeenCalled();
+      expect(test.createSandboxProvider).not.toHaveBeenCalled();
+      expect(test.sandbox.executeCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reports required sandbox trust failure before command start", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    test.setHost({ workspaceTrusted: false });
+
+    await expect(
+      test.router.prepareExecution(
+        { owner: undefined, command: "echo must not run", cwd: "/workspace" },
+        sandboxRoute,
+      ),
+    ).rejects.toMatchObject({
+      name: "SandboxAvailabilityError",
+      reason: "trust-failure",
+      commandStarted: false,
+    });
+    expect(test.createNativeProvider).not.toHaveBeenCalled();
+    expect(test.createSandboxProvider).not.toHaveBeenCalled();
+    expect(test.sandbox.executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("revokes prepared native execution if workspace trust changes before launch", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    const prepared = await test.router.prepareExecution(
+      { owner: undefined, command: "echo must not run", cwd: "/workspace" },
+      nativeAgentRoute,
+    );
+    test.setHost({ workspaceTrusted: false });
+
+    await expect(prepared.execute()).rejects.toMatchObject({
+      name: "SandboxAvailabilityError",
+      reason: "trust-failure",
+      commandStarted: false,
+    });
+    expect(test.nativeAgent.executeCommand).not.toHaveBeenCalled();
+    test.router.dispose();
+  });
+
+  it("reports required sandbox runtime loss after selection before command start", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    await (
+      await test.router.prepareExecution(
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
+        sandboxRoute,
+      )
+    ).execute();
+    test.setSandboxAvailable(false);
+
+    await expect(
+      test.router.prepareExecution(
+        { owner: undefined, command: "echo must not run", cwd: "/workspace" },
+        sandboxRoute,
+      ),
+    ).rejects.toMatchObject({
+      name: "SandboxAvailabilityError",
+      reason: "runtime-unavailable",
+      commandStarted: false,
+    });
+    expect(test.createNativeProvider).not.toHaveBeenCalled();
+    expect(test.sandbox.executeCommand).toHaveBeenCalledTimes(1);
+  });
+
   it("fails closed for an untrusted enabled local macOS workspace", async () => {
     const test = harness();
     test.setEnabled(true);
@@ -1035,6 +1180,36 @@ describe("AgentTerminalProviderRouter", () => {
     expect(test.createNativeProvider).not.toHaveBeenCalled();
     expect(test.createSandboxProvider).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [new Error("helper missing"), "attestation-security-failure"],
+    [
+      new SandboxAvailabilityError("runtime-unavailable", "helper missing"),
+      "runtime-unavailable",
+    ],
+  ] as const)(
+    "classifies provider initialization failure %s as %s before command start",
+    async (failure, reason) => {
+      const test = harness();
+      test.setEnabled(true);
+      test.createSandboxProvider.mockImplementation(() => {
+        throw failure;
+      });
+
+      await expect(
+        test.router.prepareExecution(
+          { owner: undefined, command: "echo must not run", cwd: "/workspace" },
+          sandboxRoute,
+        ),
+      ).rejects.toMatchObject({
+        name: "SandboxAvailabilityError",
+        reason,
+        commandStarted: false,
+      });
+      expect(test.createNativeProvider).not.toHaveBeenCalled();
+      expect(test.sandbox.executeCommand).not.toHaveBeenCalled();
+    },
+  );
 
   it("latches sandbox initialization failure without native fallback", async () => {
     const test = harness();

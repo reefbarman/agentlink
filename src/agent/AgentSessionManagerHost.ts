@@ -14,6 +14,7 @@ import {
   getEffectiveAutoCondenseThreshold,
 } from "./modelCondenseThresholds.js";
 import { resolveModelForMode } from "./modeModelPreferences.js";
+import { refreshSharedSessionPreferences } from "./sharedSessionPreferences.js";
 import { resolveReasoningEffortForMode } from "./modeReasoningEffortPreferences.js";
 import { providerRegistry, type ProviderRegistry } from "./providers/index.js";
 import {
@@ -55,6 +56,7 @@ export interface AgentWorkspaceHost {
 }
 
 export interface AgentSessionConfigHost {
+  refreshSessionPreferences?(): Promise<void>;
   resolveAgentConfig?(
     base: import("./types.js").AgentConfig,
     scope: Readonly<SessionProjectScope>,
@@ -204,6 +206,7 @@ export function createDefaultAgentSessionManagerHost(args: {
         })),
     },
     config: {
+      refreshSessionPreferences: refreshSharedSessionPreferences,
       resolveAgentConfig: (base, scope) => {
         const config = configurationFor(scope);
         const configuredDisabledSkillIds =
@@ -263,9 +266,7 @@ export function createDefaultAgentSessionManagerHost(args: {
           defaultAgent: config.get<unknown>("background.defaultAgent"),
           reviewAgent: config.get<unknown>("background.reviewAgent"),
           reviewTarget: config.get<unknown>("background.reviewTarget"),
-          modelTiers: vscode.workspace
-            .getConfiguration("agentlink")
-            .get<unknown>("background.modelTiers"),
+
           acpAgents: config.get<unknown>("background.acpAgents"),
         };
       },

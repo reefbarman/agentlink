@@ -1688,6 +1688,8 @@ export class BrowserGatewayHelper {
         return this.handleAskAgentMcpStatusRequest(req, res);
       case "mcpRefresh":
         return this.handleAskAgentMcpRefreshRequest(req, res);
+      case "mcpReauthenticate":
+        return this.handleAskAgentMcpReauthenticateRequest(req, res);
       case "question":
         return this.handleAskAgentQuestionResponseRequest(req, res);
       case "questionProgress":
@@ -2335,6 +2337,7 @@ export class BrowserGatewayHelper {
       if (!this.askAgentSessionStore.deleteSession(sessionId)) {
         throw new Error("ask_agent_session_delete_race");
       }
+      await this.standaloneMcpRuntime?.retireSession?.(sessionId);
       await this.persistAskAgentHistory();
       this.askAgentController.clearMemoryCandidateNudgeForSession(sessionId);
       const response = await this.buildAskAgentResponse();
@@ -4009,14 +4012,14 @@ export class BrowserGatewayHelper {
         canEditConfig: false,
         canOpenRawConfig: false,
         canReconnect: false,
-        canReauthenticate: false,
+        canReauthenticate: Boolean(this.standaloneMcpOAuthRuntime),
         canDisable: false,
         canUseProjectConfig: false,
         canWriteSecrets: false,
         canConfigureLocalProcess: false,
       },
       unavailableReason:
-        "Desktop MCP servers connect only for an active turn. OAuth opens the system browser when a remote server requires authorization. In-app configuration editing and manual reauthentication remain unavailable.",
+        "Desktop MCP servers connect only for an active turn. OAuth opens the system browser when a remote server requires authorization. In-app configuration editing remains unavailable.",
     };
   }
 
@@ -4105,6 +4108,62 @@ export class BrowserGatewayHelper {
         infos: [],
         error: String(err),
       });
+    }
+  }
+
+  private async handleAskAgentMcpReauthenticateRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.standaloneMcpRuntime || !this.standaloneMcpOAuthRuntime) {
+      writeJson(res, 403, {
+        ok: false,
+        error: "standalone_mcp_oauth_unavailable",
+      });
+      return;
+    }
+    if (this.askAgentController.getActiveTurnMessageId()) {
+      writeJson(res, 409, { ok: false, error: "ask_agent_turn_in_progress" });
+      return;
+    }
+    try {
+      const body = (await readJsonBody(req)) as { serverName?: unknown } | null;
+      if (
+        typeof body?.serverName !== "string" ||
+        !/^[A-Za-z][A-Za-z0-9_-]{0,40}$/.test(body.serverName)
+      ) {
+        writeJson(res, 400, { ok: false, error: "invalid_server_name" });
+        return;
+      }
+      await this.standaloneMcpRuntime.reauthenticateServer(
+        body.serverName,
+        async (origin) => {
+          const signal = new AbortController().signal;
+          const approval: ApprovalRequest = {
+            kind: "mcp",
+            id: `ask-agent-mcp-reauth-${randomUUID()}`,
+            command: `Reauthenticate Desktop MCP server "${body.serverName}"?`,
+            mcpDetail: `This will open your system browser for ${origin}. Only a successful sign-in will replace this server's Desktop credentials.`,
+            mcpServerName: body.serverName as string,
+            mcpToolName: "OAuth reauthentication",
+            toolOrigin: "mcp",
+            mcpChoices: [
+              { label: "Reauthenticate", value: "allow-once", isPrimary: true },
+              { label: "Cancel", value: "deny", isDanger: true },
+            ],
+          };
+          const decision = this.askAgentController.requestApproval(
+            approval,
+            signal,
+          );
+          const response = await this.buildAskAgentResponse();
+          await this.publishAskAgentSnapshot(response.snapshot);
+          return (await decision).decision === "allow-once";
+        },
+      );
+      writeJson(res, 200, { ok: true });
+    } catch (error) {
+      writeJson(res, 400, { ok: false, error: String(error) });
     }
   }
 
@@ -8507,6 +8566,7 @@ export class BrowserGatewayHelper {
 
   async dispose(): Promise<void> {
     this.standaloneMcpFormElicitation.dispose();
+    await this.standaloneMcpRuntime?.dispose?.();
     this.standaloneMcpOAuthRuntime?.dispose();
     await this.askAgentController.dispose();
     await this.askAgentOwnerAdapter.dispose();

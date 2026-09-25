@@ -13,27 +13,16 @@ import type {
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 
-import type { McpAuthEvent } from "../telemetry/McpAuthTelemetry.js";
+import type { McpAuthEvent } from "@agentlink/node-host";
+import { McpOAuthError } from "@agentlink/node-host";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
+import { inspectMcpOAuthResponse } from "./mcpOAuthErrorDiagnostic.js";
 import { renderMcpOAuthCallbackPage } from "../shared/mcpOAuthCallbackPage.js";
 
 export { renderMcpOAuthCallbackPage } from "../shared/mcpOAuthCallbackPage.js";
 
-export class McpOAuthError extends Error {
-  constructor(
-    public readonly kind:
-      | "callback_timeout"
-      | "callback_missing_code"
-      | "authorization_error"
-      | "stale_client_redirect"
-      | "credentials_updated",
-    message: string,
-  ) {
-    super(message);
-    this.name = "McpOAuthError";
-  }
-}
+export { McpOAuthError };
 
 type StorageSuffix = "client" | "tokens";
 
@@ -189,16 +178,23 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
   private readonly authFetch: NonNullable<
     Parameters<typeof auth>[1]["fetchFn"]
-  > = (input, init) => {
+  > = async (input, init) => {
     this.signal.throwIfAborted();
     const requestSignal =
       init?.signal ?? (input instanceof Request ? input.signal : undefined);
-    return fetch(input, {
+    const response = await fetch(input, {
       ...init,
       signal: requestSignal
         ? AbortSignal.any([this.signal, requestSignal])
         : this.signal,
     });
+    return inspectMcpOAuthResponse(
+      input,
+      init,
+      this.serverUrl,
+      response,
+      (message) => this.onLog?.(`[mcp:${this.serverName}] ${message}`),
+    );
   };
   onLog?: (message: string) => void;
   onBeforeAuthorizationOpen?: (

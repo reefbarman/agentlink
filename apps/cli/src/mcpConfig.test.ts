@@ -2,7 +2,9 @@ import {
   cliMcpGlobalConfigPath,
   cliMcpProjectConfigPath,
   ensureCliMcpGlobalConfig,
+  inspectCliMcpProjectConfig,
   loadCliMcpConfiguration,
+  loadCliSharedMcpServerConfigs,
   trustCliProjectMcpServer,
 } from "./mcpConfig.js";
 import { describe, expect, it } from "vitest";
@@ -53,6 +55,90 @@ describe("CLI MCP configuration", () => {
         }),
       ]);
       expect(JSON.stringify(trusted)).not.toContain("secret-value");
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("does not grant legacy authority to a shared project config", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "cli-mcp-config-"));
+    const projectRoot = path.join(parent, "project");
+    const dataRoot = path.join(parent, "data");
+    await fs.mkdir(path.join(projectRoot, ".agentlink"), { recursive: true });
+    try {
+      await fs.writeFile(
+        cliMcpProjectConfigPath(projectRoot),
+        JSON.stringify({
+          mcpServers: { records: { command: "node", args: ["server.js"] } },
+        }),
+      );
+      await trustCliProjectMcpServer(dataRoot, "records");
+      expect(await inspectCliMcpProjectConfig(projectRoot)).toEqual({
+        sharedServerNames: ["records"],
+      });
+      expect(
+        await loadCliMcpConfiguration(dataRoot, projectRoot),
+      ).toMatchObject({
+        servers: [],
+      });
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("marks project patches as project-owned even when they override a global server", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "cli-mcp-config-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(path.join(projectRoot, ".agentlink"), { recursive: true });
+    try {
+      await fs.writeFile(
+        cliMcpProjectConfigPath(projectRoot),
+        JSON.stringify({
+          mcpServers: { records: { command: "node", args: ["server.js"] } },
+        }),
+      );
+      expect(
+        (await loadCliSharedMcpServerConfigs(projectRoot, {})).find(
+          (config) => config.name === "records",
+        ),
+      ).toMatchObject({
+        sourceProjectRoots: [await fs.realpath(projectRoot)],
+      });
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts comments in a legacy project document", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "cli-mcp-config-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(path.join(projectRoot, ".agentlink"), { recursive: true });
+    try {
+      await fs.writeFile(
+        cliMcpProjectConfigPath(projectRoot),
+        '{ // legacy config\n "schemaVersion": 1, "servers": [] }',
+      );
+      expect(await inspectCliMcpProjectConfig(projectRoot)).toMatchObject({
+        legacyConfigPath: cliMcpProjectConfigPath(projectRoot),
+        sharedServerNames: [],
+      });
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects ambiguous shared and legacy declarations", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "cli-mcp-config-"));
+    const projectRoot = path.join(parent, "project");
+    await fs.mkdir(path.join(projectRoot, ".agentlink"), { recursive: true });
+    try {
+      await fs.writeFile(
+        cliMcpProjectConfigPath(projectRoot),
+        JSON.stringify({ schemaVersion: 1, servers: [], mcpServers: {} }),
+      );
+      await expect(inspectCliMcpProjectConfig(projectRoot)).rejects.toThrow(
+        /Project MCP config is invalid/,
+      );
     } finally {
       await fs.rm(parent, { recursive: true, force: true });
     }

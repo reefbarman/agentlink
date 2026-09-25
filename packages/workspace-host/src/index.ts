@@ -14,5 +14,6 @@ export * from "./modelRuntime.js";
 export * from "./mutationCoordinator.js";
 export * from "./projectIdentity.js";
 export * from "./sessionInteractionTools.js";
-export * from "./workspaceHost.js";
+export * from "./sharedMcpTools.js";
+export * from "./workspaceHostRuntime.js";
 export * from "./workspaceOwnership.js";

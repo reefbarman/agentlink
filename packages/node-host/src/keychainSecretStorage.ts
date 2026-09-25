@@ -146,7 +146,7 @@ async function withDirectoryLock<T>(
   options: KeychainSecretStorageOptions,
 ): Promise<T> {
   const lockTimeoutMs = options.lockTimeoutMs ?? 60_000;
-  const staleLockMs = options.staleLockMs ?? 5 * 60_000;
+
   const retryDelayMs = options.retryDelayMs ?? 50;
   const deadline = Date.now() + lockTimeoutMs;
   await fs.mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
@@ -163,16 +163,7 @@ async function withDirectoryLock<T>(
       break;
     } catch (error) {
       if (!isAlreadyExistsError(error)) throw error;
-      try {
-        const stats = await fs.stat(lockPath);
-        if (Date.now() - stats.mtimeMs > staleLockMs) {
-          await fs.rm(lockPath, { recursive: true, force: true });
-          continue;
-        }
-      } catch (statError) {
-        if (!isMissingError(statError)) throw statError;
-        continue;
-      }
+
       if (Date.now() >= deadline) {
         throw new Error("agentlink_keychain_mutation_lock_timeout");
       }

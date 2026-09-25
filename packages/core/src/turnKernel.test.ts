@@ -289,6 +289,69 @@ function tool(
 }
 
 describe("headless E4 turn kernel", () => {
+  it("disposes resolved resources on completion, failure, and invalid tool resolution", async () => {
+    const disposeCompleted = vi.fn();
+    const completed = createHeadlessTurnKernel({
+      models: createRuntime(new ScriptedBackend([finalTurn()])),
+      resolveTools: async () => ({ tools: [], dispose: disposeCompleted }),
+    });
+    expect((await collect(completed.runTurn(prepared()))).result.status).toBe(
+      "completed",
+    );
+    expect(disposeCompleted).toHaveBeenCalledOnce();
+
+    const disposeFailed = vi.fn();
+    const failed = createHeadlessTurnKernel({
+      models: createRuntime(new ScriptedBackend([])),
+      resolveTools: async () => ({ tools: [], dispose: disposeFailed }),
+    });
+    expect((await collect(failed.runTurn(prepared()))).result.status).toBe(
+      "failed",
+    );
+    expect(disposeFailed).toHaveBeenCalledOnce();
+
+    const disposeInvalid = vi.fn();
+    const invalid = createHeadlessTurnKernel({
+      models: createRuntime(new ScriptedBackend([])),
+      resolveTools: async () => ({
+        tools: [
+          defineTool({
+            name: "duplicate_tool",
+            description: "First",
+            inputSchema: { type: "object", properties: {} },
+            effect: "read",
+            handler: async () => ({ modelContent: "" }),
+          }),
+          defineTool({
+            name: "duplicate_tool",
+            description: "Second",
+            inputSchema: { type: "object", properties: {} },
+            effect: "read",
+            handler: async () => ({ modelContent: "" }),
+          }),
+        ],
+        dispose: disposeInvalid,
+      }),
+    });
+    expect((await collect(invalid.runTurn(prepared()))).result.status).toBe(
+      "failed",
+    );
+    expect(disposeInvalid).toHaveBeenCalledOnce();
+
+    const releaseFailure = createHeadlessTurnKernel({
+      models: createRuntime(new ScriptedBackend([finalTurn()])),
+      resolveTools: async () => ({
+        tools: [],
+        dispose: () => {
+          throw new Error("release failed");
+        },
+      }),
+    });
+    expect(
+      (await collect(releaseFailure.runTurn(prepared()))).result.status,
+    ).toBe("completed");
+  });
+
   it("suspends a required authorization durably and resumes an allowed call exactly once", async () => {
     const backend = new ScriptedBackend([
       toolTurn([{ id: "call-write", name: "update_record" }]),
@@ -309,24 +372,28 @@ describe("headless E4 turn kernel", () => {
       summary: "Approve updating this record?",
       displayContent: { risk: "write" },
     }));
+    const disposeTools = vi.fn();
     const kernel = createHeadlessTurnKernel({
       models: createRuntime(backend),
-      resolveTools: async () => [
-        defineTool({
-          name: "update_record",
-          description: "Update a tenant record",
-          inputSchema: {
-            type: "object",
-            properties: { query: { type: "string" } },
-            required: ["query"],
-            additionalProperties: false,
-          },
-          effect: "write",
-          authorization: "required",
-          displayInput: (input) => ({ query: input.query }),
-          handler,
-        }),
-      ],
+      resolveTools: async () => ({
+        tools: [
+          defineTool({
+            name: "update_record",
+            description: "Update a tenant record",
+            inputSchema: {
+              type: "object",
+              properties: { query: { type: "string" } },
+              required: ["query"],
+              additionalProperties: false,
+            },
+            effect: "write",
+            authorization: "required",
+            displayInput: (input) => ({ query: input.query }),
+            handler,
+          }),
+        ],
+        dispose: disposeTools,
+      }),
       authorizeToolCall,
       interactions: repository,
       interactionTokens: tokens,
@@ -352,6 +419,7 @@ describe("headless E4 turn kernel", () => {
       execution: { modelCalls: 1, toolCalls: 1 },
     });
     expect(handler).not.toHaveBeenCalled();
+    expect(disposeTools).toHaveBeenCalledTimes(1);
     expect(repository.record?.continuation.iterationMessages).toContainEqual(
       expect.objectContaining({ role: "assistant" }),
     );
@@ -395,6 +463,7 @@ describe("headless E4 turn kernel", () => {
       execution: { modelCalls: 2, toolCalls: 1 },
     });
     expect(handler).toHaveBeenCalledTimes(1);
+    expect(disposeTools).toHaveBeenCalledTimes(2);
     expect(authorizeToolCall).toHaveBeenCalledTimes(1);
     expect(resumedRun.events[0]).toMatchObject({
       type: "interaction.resumed",
@@ -1633,7 +1702,11 @@ describe("headless E4 turn kernel", () => {
       }
     }
     const backend = new BlockingBackend([]);
-    const kernel = createHeadlessTurnKernel({ models: createRuntime(backend) });
+    const disposeTools = vi.fn();
+    const kernel = createHeadlessTurnKernel({
+      models: createRuntime(backend),
+      resolveTools: async () => ({ tools: [], dispose: disposeTools }),
+    });
     const stream = kernel.runTurn(prepared());
 
     await stream.next();
@@ -1642,6 +1715,7 @@ describe("headless E4 turn kernel", () => {
     await aborted;
 
     expect(observedSignal?.aborted).toBe(true);
+    expect(disposeTools).toHaveBeenCalledOnce();
   });
 
   it("does not start work until the returned stream is consumed", async () => {

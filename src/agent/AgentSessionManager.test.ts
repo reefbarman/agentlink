@@ -565,6 +565,51 @@ describe("AgentSessionManager host injection", () => {
     expect(mgr.getConfig()).toEqual(configBefore);
   });
 
+  it("restores the selected model for each mode when switching an existing session", async () => {
+    let preferencesReady = false;
+    const refreshSessionPreferences = vi.fn(async () => {
+      preferencesReady = true;
+    });
+    const resolveModelForMode = vi.fn((mode: string, fallback: string) =>
+      preferencesReady
+        ? mode === "architect"
+          ? "gpt-6-astra"
+          : "gpt-6-sol"
+        : fallback,
+    );
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          config: { resolveModelForMode, refreshSessionPreferences } as any,
+        },
+      },
+    );
+    const session = await mgr.createSession("code");
+    expect(session.model).toBe(makeConfig().model);
+
+    await mgr.switchSessionMode(session.id, "architect");
+    expect(refreshSessionPreferences).toHaveBeenCalledOnce();
+    expect(session.model).toBe("gpt-6-astra");
+    expect(mgr.getConfig().model).toBe("gpt-6-astra");
+    await mgr.switchSessionMode(session.id, "code", {
+      initialArchitectReviewApproved: true,
+    });
+    expect(session.model).toBe("gpt-6-sol");
+    expect(mgr.getConfig().model).toBe("gpt-6-sol");
+    expect(resolveModelForMode).toHaveBeenLastCalledWith(
+      "code",
+      "gpt-6-astra",
+      session.projectScope,
+    );
+  });
+
   it("updates model and reasoning for an addressed non-foreground session", async () => {
     const defaultCreateSession = mocks.createSession.getMockImplementation();
     if (!defaultCreateSession)

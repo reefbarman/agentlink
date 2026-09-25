@@ -108,6 +108,39 @@ describe("StandaloneMcpOAuthRuntime", () => {
     });
   });
 
+  it("rejects overlapping approval requests without replacing the first callback", async () => {
+    let releaseApproval: ((approved: boolean) => void) | undefined;
+    const { runtime, openExternal, confirmAuthorization, getProviderOptions } =
+      createRuntime();
+    confirmAuthorization.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          releaseApproval = resolve;
+        }),
+    );
+    await runtime.resolveOAuthProvider(remoteRequest);
+    const options = getProviderOptions();
+    if (!options) throw new Error("Missing OAuth provider options");
+
+    const first = options.authorize(authorizationRequest(options));
+    await vi.waitFor(() => expect(confirmAuthorization).toHaveBeenCalledOnce());
+    await expect(
+      options.authorize({
+        ...authorizationRequest(options),
+        transactionId: "transaction-2",
+      }),
+    ).rejects.toThrow("standalone_mcp_oauth_authorization_in_progress");
+    releaseApproval?.(true);
+    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledOnce());
+
+    const callback = new URL(options.redirectUrl);
+    callback.searchParams.set("state", "opaque-state");
+    callback.searchParams.set("code", "code-1");
+    expect(runtime.handleCallback(callback.pathname, callback).ok).toBe(true);
+    await expect(first).resolves.toEqual({ callbackUrl: callback.href });
+    runtime.dispose();
+  });
+
   it("does not launch a browser when authorization is denied", async () => {
     const credentials = new InMemoryMcpCredentialRepository();
     const openExternal = vi.fn(async () => true);

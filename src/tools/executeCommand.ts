@@ -27,6 +27,7 @@ import {
   SandboxPreCommandLaunchError,
   SandboxStructuralProtectionError,
 } from "../terminal/sandbox/SandboxRuntimeProvider.js";
+import { SandboxAvailabilityError } from "../terminal/sandbox/AgentTerminalProviderRouter.js";
 import {
   SandboxPreparationDriftError,
   TerminalTargetRecoveryError,
@@ -2160,11 +2161,282 @@ export async function handleExecuteCommand(
           onCommandFinalized: inlineRun ? cleanupInlineRun : undefined,
         };
       };
-      preparedExecution = await prepareTerminalExecution(
-        providers.terminalProvider,
-        terminalOptions(),
-        routeContext,
-      );
+      try {
+        preparedExecution = await prepareTerminalExecution(
+          providers.terminalProvider,
+          terminalOptions(),
+          routeContext,
+        );
+      } catch (error) {
+        if (
+          !(error instanceof SandboxAvailabilityError) ||
+          error.reason !== "runtime-unavailable" ||
+          routeContext.requiredAuthority !== "sandbox" ||
+          routeContext.commandApprovalPolicySnapshot !== "approve-for-me" ||
+          readOnlyPolicy ||
+          temporaryHome ||
+          managedNetwork ||
+          additionalPermissions ||
+          inlineFiles ||
+          params.terminal_id ||
+          params.terminal_name ||
+          params.split_from ||
+          params.background ||
+          isCommandApprovalCancelled(sessionId, providers) ||
+          hasPolicyDrift(providers, sessionId, routeContext)
+        ) {
+          throw error;
+        }
+
+        const nativeRoute = routeContextFor(
+          approvalModeFor(providers, sessionId),
+          "native-escalation",
+          providers.commandExecutionPolicy,
+        );
+        const nativePreparation = await prepareTerminalExecution(
+          providers.terminalProvider,
+          terminalOptions(nativeRoute),
+          nativeRoute,
+        );
+        try {
+          const releaseGate = await acquireApprovalGate(sessionId);
+          let approval: Awaited<ReturnType<typeof approveSubCommands>>;
+          let ruleFingerprint: string;
+          try {
+            const recoveryKey = commandReviewActionKey({
+              command: commandToRun,
+              cwd,
+              security: nativePreparation.security,
+            });
+            if (
+              providers.commandReviewTurnCircuit?.hasRejectedRecovery(
+                recoveryKey,
+              )
+            ) {
+              return rejectedCommandResult(
+                commandToRun,
+                "Native recovery was already rejected for this command in the current turn.",
+              );
+            }
+            const rulePolicy = commandRulePolicyFor(
+              approvalManager,
+              sessionId,
+              commandToRun,
+              cwd,
+            );
+            ruleFingerprint = commandRulePolicyFingerprint(rulePolicy);
+            approval = await approveSubCommands(
+              splitCompoundCommand(commandToRun),
+              commandToRun,
+              approvalManager,
+              approvalPanel,
+              sessionId,
+              "The sandbox runtime could not start the command. Run this exact command outside the sandbox?",
+              cwd,
+              workspaceRoots,
+              {
+                displayCommand: commandToRun,
+                requireHumanApproval: true,
+                ruleFastPathAllowed: false,
+                allowRuleChanges: false,
+                skipAutomaticReviewer: true,
+                rulePolicy,
+                commandPolicyFingerprint: ruleFingerprint,
+                recoveryAttempt: {
+                  denialOperation: "sandbox-runtime",
+                  denialReason:
+                    "The sandbox runtime was unavailable before the command started.",
+                  firstAttemptRoute: "sandbox",
+                  commandSent: false,
+                  processLaunched: false,
+                  mayHaveSideEffects: false,
+                },
+                routeContext: nativeRoute,
+                providers,
+                security: nativePreparation.security,
+              },
+            );
+          } finally {
+            releaseGate();
+          }
+          if (
+            !approval.approved ||
+            approval.cancelled ||
+            approval.editedCommand ||
+            approval.policyDrift
+          ) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    status: approval.cancelled
+                      ? "cancelled"
+                      : approval.policyDrift
+                        ? "retry_required"
+                        : "rejected_by_user",
+                    command: commandToRun,
+                    cwd,
+                    reason:
+                      approval.reason ??
+                      "Native recovery was not approved for this exact command.",
+                    command_sent: false,
+                    process_launched: false,
+                    retry_safe: false,
+                    failure_stage: "approval",
+                  }),
+                },
+              ],
+            };
+          }
+          if (
+            hasPolicyDrift(providers, sessionId, nativeRoute) ||
+            isCommandApprovalCancelled(sessionId, providers) ||
+            commandRulePolicyFingerprint(
+              commandRulePolicyFor(
+                approvalManager,
+                sessionId,
+                commandToRun,
+                cwd,
+              ),
+            ) !== ruleFingerprint
+          ) {
+            return policyDriftResult(commandToRun, nativePreparation.security);
+          }
+          let nativeResult: TerminalCommandResult;
+          try {
+            nativeResult = await nativePreparation.execute();
+          } catch (error) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    status: "recovery_failed",
+                    error:
+                      error instanceof Error ? error.message : String(error),
+                    command: commandToRun,
+                    security: nativePreparation.security,
+                    command_sent: "unknown",
+                    process_launched: "unknown",
+                    retry_safe: false,
+                    failure_stage: "launch",
+                    execution_attempts: [
+                      {
+                        attempt: 1,
+                        status: "failed",
+                        route: "sandbox",
+                        command_sent: false,
+                        process_launched: false,
+                        retry_safe: false,
+                        may_have_side_effects: false,
+                        failure_stage: "preparation",
+                      },
+                      {
+                        attempt: 2,
+                        status: "failed",
+                        route: "native",
+                        audit_id: nativePreparation.security.auditId,
+                        command_sent: "unknown",
+                        process_launched: "unknown",
+                        retry_safe: false,
+                        may_have_side_effects: "unknown",
+                        failure_stage: "launch",
+                      },
+                    ],
+                  }),
+                },
+              ],
+            };
+          }
+          nativeResult.security = nativePreparation.security;
+          nativeResult.approval = approval.approval;
+          nativeResult.follow_up = approval.followUp;
+          nativeResult.retry_lineage_id = randomUUID();
+          nativeResult.retry_safe = false;
+          const nativeAttempt = executionAttemptSummary(2, nativeResult);
+          nativeResult.retry_outcome =
+            nativeAttempt.status === "running"
+              ? undefined
+              : nativeAttempt.status === "completed"
+                ? "completed"
+                : "failed";
+          nativeResult.execution_attempts = [
+            {
+              attempt: 1,
+              status: "failed",
+              route: "sandbox",
+              command_sent: false,
+              process_launched: false,
+              retry_safe: false,
+              may_have_side_effects: false,
+              failure_stage: "preparation",
+            },
+            nativeAttempt,
+          ];
+          // Recovered output uses the same bounded filter as ordinary execution.
+          const retainedOutput = providers.terminalProvider.getRetainedOutput?.(
+            {
+              owner: undefined,
+              terminalId: nativeResult.terminal_id,
+              ...(nativeResult.command_id
+                ? { commandId: nativeResult.command_id }
+                : {}),
+            },
+          );
+          if (retainedOutput) {
+            nativeResult.output = retainedOutput.output;
+            nativeResult.output_complete = retainedOutput.complete;
+            nativeResult.output_finalized = retainedOutput.finalized;
+            nativeResult.output_total_bytes = retainedOutput.total_bytes;
+            nativeResult.output_retained_bytes = retainedOutput.retained_bytes;
+            nativeResult.output_dropped_bytes = retainedOutput.dropped_bytes;
+          } else if (nativeResult.output_complete === undefined) {
+            nativeResult.output_complete = true;
+            nativeResult.output_finalized = !nativeResult.is_running;
+          }
+          delete nativeResult.terminal_raw_output;
+          if (nativeResult.output_captured && nativeResult.output) {
+            const fullOutput = nativeResult.output;
+            const { filtered, totalLines, linesShown, truncated } =
+              filterOutput(fullOutput, {
+                output_head: params.output_head,
+                output_tail: params.output_tail,
+                output_offset: params.output_offset,
+                output_grep: params.output_grep,
+                output_grep_context: params.output_grep_context,
+              });
+            nativeResult.total_lines = totalLines;
+            nativeResult.lines_shown = linesShown;
+            nativeResult.output_truncated = truncated;
+            nativeResult.total_lines_scope =
+              nativeResult.output_complete === false ||
+              nativeResult.output_finalized === false
+                ? "retained"
+                : "complete";
+            if (nativeResult.output_finalized === false) {
+              nativeResult.output_warning =
+                "Terminal output is still running. Filtering applies only to retained output.";
+            } else if (nativeResult.output_complete === false) {
+              nativeResult.output_warning =
+                "Terminal output exceeded the bounded capture limit. No full-output file is available.";
+            } else if (truncated || linesShown < totalLines) {
+              const outputFile = saveOutputTempFile(fullOutput);
+              if (outputFile) {
+                nativeResult.output_file = outputFile;
+                nativeResult.output_warning =
+                  "Output was truncated. Full output saved to output_file. Do not re-run this command.";
+              }
+            }
+            nativeResult.output = filtered;
+          }
+          return {
+            content: [{ type: "text", text: JSON.stringify(nativeResult) }],
+          };
+        } finally {
+          nativePreparation.dispose();
+        }
+      }
       if (preparedExecution.security.route === "sandbox") {
         const gitRetry = await protectedGitMetadataRetryResult({
           command: commandToRun,
@@ -3130,6 +3402,29 @@ export async function handleExecuteCommand(
     if (err instanceof TerminalAdmissionCancelledError) {
       return cancelledCommandResult(params.command);
     }
+    if (err instanceof SandboxAvailabilityError) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "blocked",
+              error:
+                err.reason === "runtime-unavailable"
+                  ? "The required sandbox runtime is unavailable. This request cannot use one-shot native recovery; inspect the runtime or request native execution separately."
+                  : "The required sandbox could not be verified. Native recovery is not offered for security or trust failures.",
+              error_code: "sandbox_unavailable",
+              failure_reason: err.reason,
+              command: params.command,
+              command_sent: false,
+              process_launched: false,
+              retry_safe: false,
+              failure_stage: "preparation",
+            }),
+          },
+        ],
+      };
+    }
     if (err instanceof SandboxPreparationDriftError) {
       const retryGuidance: ExecuteCommandRetryGuidance = {
         code: err.code,
@@ -3286,16 +3581,16 @@ export async function handleExecuteCommand(
       const retryGuidance: ExecuteCommandRetryGuidance = {
         code: err.code,
         message:
-          "The sandbox capability grant could not be activated before launch, so the command did not start. Retry the same command.",
+          "The sandbox capability grant could not be activated before launch. Inspect the runtime failure before requesting a new execution; a failed or invalid grant is not native authority.",
         automatic_retry: false,
-        options: [{ action: "retry_same_command", same_command: true }],
+        options: [],
       };
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify({
-              status: "retry_required",
+              status: "blocked",
               error:
                 "The sandbox capability grant could not be activated before launch.",
               error_code: err.code,
@@ -3304,7 +3599,7 @@ export async function handleExecuteCommand(
               command: params.command,
               command_sent: false,
               process_launched: false,
-              retry_safe: true,
+              retry_safe: false,
               failure_stage: err.failureStage,
             }),
           },
@@ -3691,11 +3986,10 @@ async function approveSubCommands(
     };
   }
 
-  // In approve-for-me mode, routine development commands (recognized reads,
-  // build/test/lint toolchain runs, workspace-bounded file operations, and
-  // repo-local git writes) auto-approve deterministically instead of paying a
-  // blocking Guardian model round-trip. Network effects, unrecognized
-  // commands, escalations, and retained denials keep the full review below.
+  // Routine reads, toolchain runs, and workspace-bounded file operations skip
+  // Guardian on the default route. Git writes still need task-scope review;
+  // network effects, unrecognized commands, escalations, and retained denials
+  // also keep the full review below.
   const routineApproveForMeApproved =
     policy === "approve-for-me" &&
     rulePolicy.decision !== "prompt" &&
@@ -3722,7 +4016,10 @@ async function approveSubCommands(
   const forceRequested = Boolean(options?.forceRequested);
   let commandReview: CommandReviewSummary | undefined;
   let humanOnlyReason: string | undefined = options?.recoveryAttempt
-    ? "This is a one-time second execution after a sandbox denial and requires your direct approval."
+    ? options.recoveryAttempt.commandSent === false &&
+      options.recoveryAttempt.processLaunched === false
+      ? "The sandbox did not start this command. Running it outside the sandbox requires your direct approval."
+      : "This is a one-time second execution after a sandbox denial and requires your direct approval."
     : circuitInterrupted
       ? "Automatic command review stopped after repeated denials in this turn. Your direct approval is required."
       : undefined;
@@ -3945,6 +4242,9 @@ async function approveSubCommands(
   }
 
   if (response.decision === "reject") {
+    if (options?.recoveryAttempt) {
+      reviewProviders?.commandReviewTurnCircuit?.rejectRecovery(actionKey);
+    }
     return { approved: false, reason: response.rejectionReason };
   }
 

@@ -1575,21 +1575,19 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     expect(createMock).toHaveBeenCalledOnce();
   });
 
-  it("listModels hides API-key-only models on OAuth and keeps them on API key", async () => {
+  it("lists only the official seven models for OAuth and API key", async () => {
+    const expected = [
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+    ];
     const oauthProvider = new CodexProvider(makeAuthManager() as never);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const oauthIds = oauthProvider.listModels().map((m) => m.id);
-    expect(oauthIds).toContain("gpt-6-astra");
-    expect(oauthIds).toContain("gpt-6-sol");
-    expect(oauthIds).toContain("gpt-6-luna");
-    expect(oauthIds).toContain("gpt-5.6-sol");
-    expect(oauthIds).toContain("gpt-5.6-terra");
-    expect(oauthIds).toContain("gpt-5.6-luna");
-    expect(oauthIds).toContain("gpt-5.5");
-    expect(oauthIds).toContain("gpt-5.3-codex-spark");
-    expect(oauthIds).not.toContain("gpt-5.4");
-    expect(oauthIds).not.toContain("gpt-5.4-mini");
-    expect(oauthIds).not.toContain("gpt-5.2-codex");
+    expect(oauthProvider.listModels().map((m) => m.id)).toEqual(expected);
 
     const apiKeyProvider = new CodexProvider(
       makeAuthManager({
@@ -1597,15 +1595,7 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
       }) as never,
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const apiKeyIds = apiKeyProvider.listModels().map((m) => m.id);
-    expect(apiKeyIds).toContain("gpt-6-astra");
-    expect(apiKeyIds).toContain("gpt-6-sol");
-    expect(apiKeyIds).toContain("gpt-6-luna");
-    expect(apiKeyIds).toContain("gpt-5.6-sol");
-    expect(apiKeyIds).toContain("gpt-5.5");
-    expect(apiKeyIds).toContain("gpt-5.4-pro");
-    expect(apiKeyIds).toContain("gpt-5.2-codex");
-    expect(apiKeyIds).not.toContain("gpt-5.3-codex-spark");
+    expect(apiKeyProvider.listModels().map((m) => m.id)).toEqual(expected);
   });
 
   it("retries an unavailable GPT-5.6 model with its older equivalent", async () => {

@@ -3,8 +3,12 @@ import {
   SessionPreferencesStore,
   type CodexOAuthManager,
   type NodeHostMcpOAuthAuthorizationRequest,
+  type NodeHostMcpFormElicitationRequest,
+  type NodeHostMcpFormElicitationResponse,
+  type McpServerInfo,
 } from "@agentlink/node-host";
 import type { CodexCredentialProvider } from "@agentlink/core/codex";
+import { validateAndCoerceMcpElicitationValues } from "@agentlink/protocol/mcp-elicitation";
 import {
   acquireWorkspaceOwnership,
   createWorkspaceHost,
@@ -15,6 +19,7 @@ import {
   installManagedTypeScriptLanguageServer,
   isWorkspaceCommandApprovalDisplay,
   isWorkspaceMcpToolApprovalDisplay,
+  isWorkspaceSharedMcpToolApproval,
   loadWorkspaceMcpConfiguration,
   readManagedTypeScriptProjectEnablement,
   removeManagedTypeScriptLanguageServer,
@@ -26,11 +31,16 @@ import {
   type WorkspaceMcpLaunchProposal,
   type WorkspaceMcpNetworkProposal,
   type WorkspaceMcpToolApprovalDisplay,
+  type WorkspaceSharedMcpAdmissionProposal,
+  type WorkspaceSharedMcpLaunchProposal,
+  type WorkspaceSharedMcpNetworkProposal,
+  type WorkspaceSharedMcpToolApproval,
   type WorkspaceOwnershipHandle,
   type WorkspaceProviderConfig,
   type WorkspaceQuestionRequest,
 } from "@agentlink/workspace-host";
 import { randomUUID } from "node:crypto";
+import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -56,6 +66,9 @@ import {
   cliMcpGlobalConfigPath,
   cliMcpProjectConfigPath,
   ensureCliMcpGlobalConfig,
+  inspectCliMcpProjectConfig,
+  inspectCliSharedMcpServers,
+  loadCliSharedMcpServerConfigs,
   resolveCliMcpCredential,
   setCliMcpCredential,
   trustCliProjectMcpServer,
@@ -64,7 +77,11 @@ import {
   attachmentPathsFromText,
   resolveCliAttachments,
 } from "./attachments.js";
-import { CliMcpOAuthRuntime } from "./mcpOAuthRuntime.js";
+import { CliMcpHubOAuthProvider } from "./CliMcpHubOAuthProvider.js";
+import {
+  CliMcpOAuthRuntime,
+  isSafePublicHttpsDestination,
+} from "./mcpOAuthRuntime.js";
 import {
   InkChatApp,
   controllerStatus,
@@ -96,6 +113,20 @@ interface CliInteractionBroker {
   confirmMcpOAuth(
     request: Readonly<NodeHostMcpOAuthAuthorizationRequest>,
   ): Promise<boolean>;
+  confirmSharedMcpAdmission(
+    proposal: WorkspaceSharedMcpAdmissionProposal,
+  ): Promise<boolean>;
+  confirmSharedMcpLaunch(
+    proposal: WorkspaceSharedMcpLaunchProposal,
+  ): Promise<boolean>;
+  confirmSharedMcpNetwork(
+    proposal: WorkspaceSharedMcpNetworkProposal,
+  ): Promise<boolean>;
+  notifyMcpStatus(message: string): void;
+  notifyMcpServers(servers: McpServerInfo[]): void;
+  elicitMcpForm(
+    request: NodeHostMcpFormElicitationRequest,
+  ): Promise<NodeHostMcpFormElicitationResponse>;
   notifyBackgroundApproval(request: {
     readonly parentSessionId: string;
     readonly childSessionId: string;
@@ -264,6 +295,83 @@ export async function runCli(
   if (parsed.command === "mcp-status") {
     return await printMcpStatus(dataRoot, projectRoot, io);
   }
+  if (parsed.command === "mcp-reauthenticate") {
+    requireTty(io, "MCP reauthentication");
+    const configs = await loadCliSharedMcpServerConfigs(
+      projectRoot,
+      environment,
+    );
+    const server = configs.find(
+      (item) => item.name === parsed.value && !item.disabled,
+    );
+    if (
+      !server?.url ||
+      !["http", "sse", "streamable-http"].includes(server.type ?? "")
+    ) {
+      throw new Error(`Enabled remote MCP server '${parsed.value}' not found`);
+    }
+    const url = new URL(server.url);
+    if (!(await isSafePublicHttpsDestination(url))) {
+      throw new Error("MCP reauthentication destination is not public HTTPS");
+    }
+    const confirmation = `reauthenticate ${server.name}`;
+    if (
+      !(await confirmTyped(
+        io,
+        `Replace CLI OAuth credentials for ${url.origin}. Type ${confirmation}: `,
+        confirmation,
+      ))
+    ) {
+      io.output.write("MCP reauthentication cancelled.\n");
+      return 1;
+    }
+    const runtime = await CliMcpOAuthRuntime.create({
+      openExternal: io.openExternal,
+      confirmAuthorization: async (request) => {
+        io.output.write(
+          `Open OAuth authorization for ${server.name} at ${new URL(request.authorizationUrl).origin}?\n`,
+        );
+        return await confirmTyped(
+          io,
+          `Type open ${server.name}: `,
+          `open ${server.name}`,
+        );
+      },
+    });
+    try {
+      const current = (
+        await loadCliSharedMcpServerConfigs(projectRoot, environment)
+      ).find((item) => item.name === server.name && !item.disabled);
+      if (JSON.stringify(current) !== JSON.stringify(server)) {
+        throw new Error(
+          "MCP server configuration changed during reauthentication",
+        );
+      }
+      const provider = await runtime.resolveOAuthProvider({
+        principal: {
+          tenantId: "local",
+          subjectId: (await resolveWorkspaceProject(projectRoot)).id,
+        },
+        sessionId: "cli-reauthenticate",
+        turnId: "cli-reauthenticate",
+        server: {
+          id: server.name,
+          transport: server.type === "sse" ? "sse" : "streamable-http",
+          url: server.url,
+        },
+        url,
+        fetch: runtime.fetch,
+      });
+      await auth(
+        { ...provider, tokens: async () => undefined },
+        { serverUrl: url, fetchFn: runtime.fetch },
+      );
+      io.output.write(`Reauthenticated ${server.name} for the CLI.\n`);
+      return 0;
+    } finally {
+      await runtime.close();
+    }
+  }
   if (parsed.command === "mcp-trust") {
     requireTty(io, "Project MCP trust review");
     return await trustProjectMcpServer(dataRoot, projectRoot, parsed.value, io);
@@ -318,6 +426,7 @@ export async function runCli(
   >();
   const sessionMcpGrants = new Map<string, Set<string>>();
   const interactionBridge: CliInteractionBridge = {};
+
   const ownership =
     parsed.command === "chat"
       ? await acquireWorkspaceOwnership(
@@ -475,6 +584,71 @@ async function createHost(options: {
     });
   }
   let host: WorkspaceHost | undefined;
+  const projectMcpConfig = options.enableCommands
+    ? await inspectCliMcpProjectConfig(options.projectRoot)
+    : undefined;
+  const shadowedLegacyServerIds = options.enableCommands
+    ? async () =>
+        new Set(
+          await inspectCliSharedMcpServers(
+            options.projectRoot,
+            options.environment,
+            true,
+          ),
+        )
+    : undefined;
+  const authorizeSharedAdmission = async (
+    proposal: WorkspaceSharedMcpAdmissionProposal,
+    sessionId: string,
+  ): Promise<boolean> =>
+    host?.isBackgroundSession(sessionId)
+      ? await host.requestBackgroundApproval({
+          childSessionId: sessionId,
+          toolName: "shared_mcp_project_admission",
+          summary: `Trust project MCP server ${proposal.serverId}`,
+          operationDigest: proposal.operationDigest,
+          displayContent: proposal,
+        })
+      : await requireInteractionBroker(
+          options.interactionBridge,
+        ).confirmSharedMcpAdmission(proposal);
+  const authorizeSharedLaunch = async (
+    proposal: WorkspaceSharedMcpLaunchProposal,
+    sessionId: string,
+  ): Promise<boolean> =>
+    host?.isBackgroundSession(sessionId)
+      ? await host.requestBackgroundApproval({
+          childSessionId: sessionId,
+          toolName: "shared_mcp_server_launch",
+          summary: `Launch MCP server ${proposal.serverId}`,
+          operationDigest: proposal.operationDigest,
+          displayContent: proposal,
+        })
+      : await requireInteractionBroker(
+          options.interactionBridge,
+        ).confirmSharedMcpLaunch(proposal);
+  const authorizeSharedNetwork = async (
+    proposal: WorkspaceSharedMcpNetworkProposal,
+    sessionId: string,
+  ): Promise<boolean> => {
+    if (
+      proposal.oauth &&
+      !(await isSafePublicHttpsDestination(new URL(proposal.destination)))
+    ) {
+      return false;
+    }
+    return host?.isBackgroundSession(sessionId)
+      ? await host.requestBackgroundApproval({
+          childSessionId: sessionId,
+          toolName: "shared_mcp_network_destination",
+          summary: `Connect MCP server ${proposal.serverId} to ${proposal.destination}`,
+          operationDigest: proposal.operationDigest,
+          displayContent: proposal,
+        })
+      : await requireInteractionBroker(
+          options.interactionBridge,
+        ).confirmSharedMcpNetwork(proposal);
+  };
   host = await createWorkspaceHost({
     projectRoot: options.projectRoot,
     dataRoot: options.dataRoot,
@@ -560,9 +734,97 @@ async function createHost(options: {
     },
     ...(options.enableCommands
       ? {
+          sharedMcp: {
+            resolveConfigs: () =>
+              loadCliSharedMcpServerConfigs(
+                options.projectRoot,
+                options.environment,
+              ),
+            baseEnvironment: () =>
+              Object.fromEntries(
+                Object.entries(options.environment).filter(
+                  (entry): entry is [string, string] => entry[1] !== undefined,
+                ),
+              ),
+            fetch: options.mcpOAuth?.fetch ?? globalThis.fetch,
+            nativeFetch: globalThis.fetch,
+            clientVersion: __AGENTLINK_CLI_VERSION__,
+            onStatus: (message: string) =>
+              options.interactionBridge.current?.notifyMcpStatus(message),
+            onServerStatus: (_sessionId: string, servers: McpServerInfo[]) =>
+              options.interactionBridge.current?.notifyMcpServers(servers),
+            onElicitation: (request: NodeHostMcpFormElicitationRequest) =>
+              host?.isBackgroundSession(request.sessionId)
+                ? { action: "cancel" as const }
+                : requireInteractionBroker(
+                    options.interactionBridge,
+                  ).elicitMcpForm(request),
+            authorizeAdmission: (
+              proposal: WorkspaceSharedMcpAdmissionProposal,
+              request: { readonly sessionId: string },
+            ) => authorizeSharedAdmission(proposal, request.sessionId),
+            authorizeLaunch: (
+              proposal: WorkspaceSharedMcpLaunchProposal,
+              request: { readonly sessionId: string },
+            ) => authorizeSharedLaunch(proposal, request.sessionId),
+            authorizeNetwork: (
+              proposal: WorkspaceSharedMcpNetworkProposal,
+              request: { readonly sessionId: string },
+            ) => authorizeSharedNetwork(proposal, request.sessionId),
+            hasSessionGrant: (
+              proposal: WorkspaceSharedMcpToolApproval,
+              request: { readonly sessionId: string },
+            ) =>
+              options.sessionMcpGrants
+                .get(request.sessionId)
+                ?.has(mcpGrantKey(proposal)) ?? false,
+            createOAuthProvider: options.mcpOAuth
+              ? async (config, request, fetch) => {
+                  const provider = await options.mcpOAuth!.resolveOAuthProvider(
+                    {
+                      principal: request.principal,
+                      sessionId: request.sessionId,
+                      turnId: request.turnId,
+                      server: {
+                        id: config.name,
+                        transport:
+                          config.type === "sse" ? "sse" : "streamable-http",
+                        url: config.url!,
+                      },
+                      url: new URL(config.url!),
+                      fetch,
+                    },
+                    async (authorization) =>
+                      host?.isBackgroundSession(request.sessionId)
+                        ? await host.requestBackgroundApproval({
+                            childSessionId: request.sessionId,
+                            toolName: "shared_mcp_oauth_browser",
+                            summary: `Open MCP OAuth browser for ${config.name}`,
+                            displayContent: {
+                              kind: "mcp_oauth_browser",
+                              serverId: config.name,
+                              authorizationOrigin: new URL(
+                                authorization.authorizationUrl,
+                              ).origin,
+                            },
+                            signal: authorization.signal,
+                          })
+                        : await requireInteractionBroker(
+                            options.interactionBridge,
+                          ).confirmMcpOAuth(authorization),
+                  );
+                  return new CliMcpHubOAuthProvider(
+                    provider,
+                    config.url!,
+                    fetch,
+                  );
+                }
+              : undefined,
+          },
           mcp: {
             globalConfigPath: await ensureCliMcpGlobalConfig(options.dataRoot),
-            projectConfigPath: cliMcpProjectConfigPath(options.projectRoot),
+            projectConfigPath: projectMcpConfig?.legacyConfigPath,
+            shadowedLegacyServerIds,
             resolveCredential: ({ credential }) =>
               resolveCliMcpCredential(credential),
             authorizeLaunch: async (request) =>
@@ -762,7 +1024,9 @@ async function runInkInteractiveChat(
       : undefined;
     const mcpProposal = isWorkspaceMcpToolApprovalDisplay(displayContent)
       ? displayContent
-      : undefined;
+      : isWorkspaceSharedMcpToolApproval(displayContent)
+        ? displayContent
+        : undefined;
     const options: TuiControlOption[] = [
       {
         id: "allow_once",
@@ -1328,8 +1592,11 @@ export function createQueuedControlPresenter(
   controller: Pick<StandaloneSessionController, "runPrompt">,
   presentControl: PresentTuiControl,
 ): PresentTuiControl {
-  return (request) =>
-    controller.runPrompt(async (signal) => {
+  return (request, operationSignal) =>
+    controller.runPrompt(async (sessionSignal) => {
+      const signal = operationSignal
+        ? AbortSignal.any([sessionSignal, operationSignal])
+        : sessionSignal;
       if (signal.aborted) throw abortError("Session prompts are cancelled");
       const response = await presentControl(request, signal);
       if (signal.aborted || (response.cancelled && response.terminate)) {
@@ -1348,6 +1615,114 @@ export function createInkInteractionBroker(options: {
   readonly onStatus: (status: string) => void;
 }): CliInteractionBroker {
   return {
+    notifyMcpStatus(message) {
+      options.onStatus(message);
+    },
+    notifyMcpServers(servers) {
+      if (servers.length === 0) return;
+      options.onStatus(
+        servers
+          .map(
+            (server) =>
+              `MCP ${server.name}: ${server.status}${server.error ? ` (${server.error})` : ""}`,
+          )
+          .join("; "),
+      );
+    },
+    async elicitMcpForm(request) {
+      if (request.signal?.aborted) return { action: "cancel" };
+      const values: Record<string, unknown> = {};
+      try {
+        const decision = await options.presentControl(
+          {
+            id: `mcp-elicitation:${request.serverName}:${Date.now()}`,
+            kind: "approval",
+            title: `MCP input requested by ${request.serverName}`,
+            body: [request.message],
+            options: [
+              { id: "accept", label: "Continue" },
+              { id: "decline", label: "Decline" },
+            ],
+            cancellable: true,
+          },
+          request.signal,
+        );
+        if (decision.cancelled || request.signal?.aborted)
+          return { action: "cancel" };
+        if (decision.optionId !== "accept") return { action: "decline" };
+        for (const field of request.fields) {
+          const answer = await options.presentControl(
+            {
+              id: `mcp-elicitation:${request.serverName}:${field.name}:${Date.now()}`,
+              kind: "question",
+              title: field.title || field.name,
+              body: [
+                ...(field.description ? [field.description] : []),
+                `From ${request.serverName}. ${field.required ? "Required" : "Optional"}.`,
+                ...(field.kind === "multi-select"
+                  ? ["Enter comma-separated option values."]
+                  : []),
+              ],
+              ...(field.kind === "boolean"
+                ? {
+                    options: [
+                      { id: "true", label: "Yes" },
+                      { id: "false", label: "No" },
+                    ],
+                  }
+                : field.kind === "single-select"
+                  ? {
+                      options: field.options.map((option) => ({
+                        id: option.value,
+                        label: option.title || option.value,
+                      })),
+                    }
+                  : {
+                      input: {
+                        placeholder: field.name,
+                        initialValue:
+                          field.default === undefined
+                            ? undefined
+                            : String(field.default),
+                      },
+                    }),
+              cancellable: true,
+            },
+            request.signal,
+          );
+          if (answer.cancelled || request.signal?.aborted)
+            return { action: "cancel" };
+          const value = answer.optionId ?? answer.text;
+          if (value === undefined || (value === "" && !field.required))
+            continue;
+          values[field.name] =
+            field.kind === "boolean"
+              ? value === "true"
+              : field.kind === "multi-select"
+                ? value
+                    .split(",")
+                    .map((item) => item.trim())
+                    .filter(Boolean)
+                : value;
+        }
+        const validated = validateAndCoerceMcpElicitationValues(
+          request.fields,
+          values,
+        );
+        if (!validated.ok) {
+          options.onStatus(
+            `MCP input rejected: ${Object.entries(validated.errors)
+              .map(([name, error]) => `${name}: ${error}`)
+              .join("; ")}`,
+          );
+          return { action: "decline" };
+        }
+        if (request.signal?.aborted) return { action: "cancel" };
+        return { action: "accept", content: validated.values };
+      } catch {
+        return { action: "cancel" };
+      }
+    },
     notifyBackgroundApproval(request) {
       options.controller.notifyBackgroundApproval();
       options.onStatus(
@@ -1410,6 +1785,78 @@ export function createInkInteractionBroker(options: {
           `Destination: ${proposal.destination}`,
           `Headers: ${proposal.headerNames.join(", ") || "none"}`,
           `Credential references: ${proposal.credentialIds.join(", ") || "none"}`,
+        ],
+        options: [
+          { id: "allow", label: "Allow for this CLI process" },
+          { id: "deny", label: "Deny", tone: "danger" },
+        ],
+      });
+      const allowed = !response.cancelled && response.optionId === "allow";
+      if (allowed) options.mcpNetworkGrants.add(proposal.operationDigest);
+      return allowed;
+    },
+    async confirmSharedMcpAdmission(proposal) {
+      if (options.mcpLaunchGrants.has(proposal.operationDigest)) return true;
+      const response = await options.presentControl({
+        id: `shared-mcp-admission:${proposal.operationDigest}`,
+        kind: "approval",
+        title: "Trust project MCP server definition",
+        body: [
+          `Project: ${proposal.projectRoot}`,
+          `Server: ${proposal.serverId}`,
+          `Transport: ${proposal.transport}`,
+          ...(proposal.command ? [`Command: ${proposal.command}`] : []),
+          `Arguments: ${proposal.argumentCount} (values omitted; inspect the MCP config before approving)`,
+          ...(proposal.configuredEndpoint
+            ? [`Configured endpoint: ${proposal.configuredEndpoint}`]
+            : []),
+          `Environment keys: ${proposal.environmentKeys.join(", ") || "none"}`,
+          `Header names: ${proposal.headerNames.join(", ") || "none"}`,
+          "Trust this project's effective server definition for this CLI process only. Launch and destination still require separate approval.",
+        ],
+        options: [
+          { id: "allow", label: "Trust for this CLI process" },
+          { id: "deny", label: "Deny", tone: "danger" },
+        ],
+      });
+      const allowed = !response.cancelled && response.optionId === "allow";
+      if (allowed) options.mcpLaunchGrants.add(proposal.operationDigest);
+      return allowed;
+    },
+    async confirmSharedMcpLaunch(proposal) {
+      if (options.mcpLaunchGrants.has(proposal.operationDigest)) return true;
+      const response = await options.presentControl({
+        id: `shared-mcp-launch:${proposal.operationDigest}`,
+        kind: "approval",
+        title: "Review unsandboxed MCP server launch",
+        body: [
+          `Server: ${proposal.serverId}`,
+          `Command: ${proposal.command}`,
+          `Arguments: ${proposal.argumentCount} (values omitted; inspect the MCP config before approving)`,
+          `Working directory: ${proposal.cwd}`,
+          `Environment keys: ${proposal.environmentKeys.join(", ") || "none"}`,
+        ],
+        options: [
+          { id: "allow", label: "Allow for this CLI process" },
+          { id: "deny", label: "Deny", tone: "danger" },
+        ],
+      });
+      const allowed = !response.cancelled && response.optionId === "allow";
+      if (allowed) options.mcpLaunchGrants.add(proposal.operationDigest);
+      return allowed;
+    },
+    async confirmSharedMcpNetwork(proposal) {
+      if (options.mcpNetworkGrants.has(proposal.operationDigest)) return true;
+      const response = await options.presentControl({
+        id: `shared-mcp-network:${proposal.operationDigest}`,
+        kind: "approval",
+        title: "Review MCP network destination",
+        body: [
+          `Server: ${proposal.serverId}`,
+          `Configured endpoint: ${proposal.configuredEndpoint}`,
+          `Destination: ${proposal.destination}`,
+          `Headers: ${proposal.headerNames.join(", ") || "none"}`,
+          `OAuth: ${proposal.oauth ? "yes" : "no"}`,
         ],
         options: [
           { id: "allow", label: "Allow for this CLI process" },
@@ -1510,7 +1957,9 @@ function mcpGrantsForSession(
   return created;
 }
 
-function mcpGrantKey(proposal: WorkspaceMcpToolApprovalDisplay): string {
+function mcpGrantKey(
+  proposal: WorkspaceMcpToolApprovalDisplay | WorkspaceSharedMcpToolApproval,
+): string {
   return JSON.stringify([
     proposal.serverId,
     proposal.serverToolName,
@@ -1618,7 +2067,8 @@ function proposalBody(
   proposal:
     | WorkspaceFileApprovalDisplay
     | WorkspaceCommandApprovalDisplay
-    | WorkspaceMcpToolApprovalDisplay,
+    | WorkspaceMcpToolApprovalDisplay
+    | WorkspaceSharedMcpToolApproval,
 ): readonly string[] {
   if (isWorkspaceFileProposal(proposal)) {
     return [
@@ -1644,7 +2094,7 @@ function proposalBody(
     ];
   }
   return [
-    `Server: ${proposal.serverId} (${proposal.source})`,
+    `Server: ${proposal.serverId}${"source" in proposal ? ` (${proposal.source})` : ""}`,
     `Tool: ${proposal.serverToolName}`,
     "The MCP server is unsandboxed and its result is untrusted external content.",
     formatControlValue(proposal),
@@ -1664,11 +2114,13 @@ function isReviewableProposal(
 ): value is
   | WorkspaceFileApprovalDisplay
   | WorkspaceCommandApprovalDisplay
-  | WorkspaceMcpToolApprovalDisplay {
+  | WorkspaceMcpToolApprovalDisplay
+  | WorkspaceSharedMcpToolApproval {
   return (
     isWorkspaceFileProposal(value) ||
     isWorkspaceCommandApprovalDisplay(value) ||
-    isWorkspaceMcpToolApprovalDisplay(value)
+    isWorkspaceMcpToolApprovalDisplay(value) ||
+    isWorkspaceSharedMcpToolApproval(value)
   );
 }
 
@@ -1722,23 +2174,43 @@ async function printMcpStatus(
 ): Promise<number> {
   const globalConfigPath = await ensureCliMcpGlobalConfig(dataRoot);
   const projectConfigPath = cliMcpProjectConfigPath(projectRoot);
+  const project = await inspectCliMcpProjectConfig(projectRoot);
   const [trusted, declared] = await Promise.all([
     loadWorkspaceMcpConfiguration({
       globalConfigPath,
       projectRoot,
-      projectConfigPath,
+      projectConfigPath: project.legacyConfigPath,
     }),
-    inspectWorkspaceMcpProjectDeclarations(projectRoot, projectConfigPath),
+    project.legacyConfigPath
+      ? inspectWorkspaceMcpProjectDeclarations(
+          projectRoot,
+          project.legacyConfigPath,
+        )
+      : Promise.resolve({ servers: [] }),
   ]);
+  const sharedServerNames = await inspectCliSharedMcpServers(projectRoot);
+  const shadowedLegacyServerIds = new Set(
+    await inspectCliSharedMcpServers(projectRoot, process.env, true),
+  );
   const trustedIds = new Set(trusted.servers.map((server) => server.id));
   io.output.write(
     `${JSON.stringify(
       {
         globalConfigPath: cliMcpGlobalConfigPath(dataRoot),
         projectConfigPath,
-        configured: trusted.servers.map(publicMcpServer),
+        sharedServersConfigured: sharedServerNames,
+        configured: trusted.servers
+          .filter((server) => !shadowedLegacyServerIds.has(server.id))
+          .map(publicMcpServer),
+        shadowedLegacyServerIds: trusted.servers
+          .filter((server) => shadowedLegacyServerIds.has(server.id))
+          .map((server) => server.id),
         untrustedProjectDeclarations: declared.servers
-          .filter((server) => !trustedIds.has(server.id))
+          .filter(
+            (server) =>
+              !trustedIds.has(server.id) &&
+              !shadowedLegacyServerIds.has(server.id),
+          )
           .map(publicMcpServer),
       },
       null,
@@ -1754,13 +2226,28 @@ async function trustProjectMcpServer(
   serverId: string,
   io: CliIo,
 ): Promise<number> {
+  const project = await inspectCliMcpProjectConfig(projectRoot);
+  if (!project.legacyConfigPath) {
+    throw new Error(
+      "Shared MCP server trust is not supported in the CLI yet; no server was trusted",
+    );
+  }
   const declared = await inspectWorkspaceMcpProjectDeclarations(
     projectRoot,
-    cliMcpProjectConfigPath(projectRoot),
+    project.legacyConfigPath,
   );
   const server = declared.servers.find(
     (candidate) => candidate.id === serverId,
   );
+  if (
+    (await inspectCliSharedMcpServers(projectRoot, process.env, true)).includes(
+      serverId,
+    )
+  ) {
+    throw new Error(
+      `Shared MCP server shadows legacy project server: ${serverId}`,
+    );
+  }
   if (!server) {
     throw new Error(`Project MCP server is not declared: ${serverId}`);
   }
@@ -2001,7 +2488,12 @@ type ParsedArguments =
       project?: string;
     }
   | {
-      command: "delete" | "config-model" | "mcp-trust" | "mcp-credential";
+      command:
+        | "delete"
+        | "config-model"
+        | "mcp-trust"
+        | "mcp-credential"
+        | "mcp-reauthenticate";
       value: string;
       project?: string;
     }
@@ -2168,6 +2660,16 @@ function parseArguments(
     .description("review and trust a project MCP declaration")
     .action((value: string, _options: unknown, command: Command) => {
       select({ command: "mcp-trust", value, project: project(command) });
+    });
+  mcp
+    .command("reauthenticate <server-name>")
+    .description("replace this CLI's OAuth credentials for a remote MCP server")
+    .action((value: string, _options: unknown, command: Command) => {
+      select({
+        command: "mcp-reauthenticate",
+        value,
+        project: project(command),
+      });
     });
   mcp
     .command("credential <credential-id>")

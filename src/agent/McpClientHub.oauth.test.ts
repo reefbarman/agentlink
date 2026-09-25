@@ -385,6 +385,48 @@ describe("McpClientHub OAuth recovery", () => {
     );
   });
 
+  it("pauses retries on a rejected OAuth client registration and keeps Reconnect working", async () => {
+    class InvalidClientMetadataError extends Error {
+      readonly errorCode = "invalid_client_metadata";
+      constructor() {
+        super("redacted");
+        this.name = "InvalidClientMetadataError";
+      }
+    }
+    mocks.createTransportConnect.mockRejectedValueOnce(
+      new InvalidClientMetadataError(),
+    );
+
+    const hub = new McpClientHub(new FakeMemento());
+    const logs: string[] = [];
+    hub.onLog = (message) => logs.push(message);
+    await hub.connect([notionCfg]);
+
+    const info = hub.getServerInfos().find((s) => s.name === "notion");
+    expect(info?.status).toBe("error");
+    expect(info?.error).toBe(
+      "OAuth client registration was rejected (invalid_client_metadata) for 'notion'. Automatic retries are paused. Use Reconnect or Reauthenticate to try again.",
+    );
+    expect(logs.some((line) => line.includes("scheduling reconnect"))).toBe(
+      false,
+    );
+    expect(mocks.showErrorMessage).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "OAuth client registration was rejected (invalid_client_metadata)",
+      ),
+      "Reauthenticate",
+    );
+    expect(mocks.createTransportConnect).toHaveBeenCalledTimes(1);
+
+    mocks.createTransportConnect.mockResolvedValue(undefined);
+    await hub.reconnectServer("notion");
+    expect(mocks.createTransportConnect).toHaveBeenCalledTimes(2);
+    expect(hub.getServerInfos().find((s) => s.name === "notion")?.status).toBe(
+      "connected",
+    );
+    await hub.disconnectAll();
+  });
+
   it("stops temporary oauth provider if connect handoff does not reach connected", async () => {
     mocks.providerForceReauth.mockResolvedValue(undefined);
     mocks.createTransportConnect.mockRejectedValue(

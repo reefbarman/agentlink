@@ -5,6 +5,10 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createKeychainSecretStorage } from "./keychainSecretStorage.js";
+import {
+  CLI_MCP_OAUTH_KEYCHAIN_ACCOUNT,
+  DESKTOP_MCP_OAUTH_KEYCHAIN_ACCOUNT,
+} from "./keychainMcpCredentialRepository.js";
 
 const values = new Map<string, string>();
 let getPasswordCalls = 0;
@@ -56,6 +60,16 @@ async function createStorage() {
 }
 
 describe("createKeychainSecretStorage", () => {
+  it("isolates CLI and Desktop OAuth entries from each other and the former default", async () => {
+    expect(
+      new Set([
+        CLI_MCP_OAUTH_KEYCHAIN_ACCOUNT,
+        DESKTOP_MCP_OAUTH_KEYCHAIN_ACCOUNT,
+        "agentlink-mcp-oauth-v1",
+      ]).size,
+    ).toBe(3);
+  });
+
   it("round-trips and deletes one Keychain entry", async () => {
     const storage = await createStorage();
 
@@ -97,6 +111,85 @@ describe("createKeychainSecretStorage", () => {
     await expect(first.get()).resolves.toBe("second-state");
     await expect(first.get()).resolves.toBe("second-state");
     expect(getPasswordCalls).toBe(2);
+  });
+
+  it("does not reclaim an old mutation lock owned by a live process", async () => {
+    const lockRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-keychain-live-lock-"),
+    );
+    temporaryRoots.push(lockRoot);
+    const lockPath = path.join(lockRoot, "test-service--test-account.lock");
+    await fs.mkdir(lockPath);
+    await fs.writeFile(path.join(lockPath, "owner"), `${process.pid}:live`);
+    const old = new Date(Date.now() - 10_000);
+    await fs.utimes(lockPath, old, old);
+
+    const storage = await createKeychainSecretStorage({
+      service: "test-service",
+      account: "test-account",
+      lockRoot,
+      staleLockMs: 1,
+      lockTimeoutMs: 20,
+      retryDelayMs: 1,
+    });
+
+    await expect(
+      storage.withMutationLock(async () => undefined),
+    ).rejects.toThrow("agentlink_keychain_mutation_lock_timeout");
+    await expect(
+      fs.readFile(path.join(lockPath, "owner"), "utf-8"),
+    ).resolves.toBe(`${process.pid}:live`);
+  });
+
+  it("fails closed on a stale mutation lock whose owner is gone", async () => {
+    const lockRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-keychain-dead-lock-"),
+    );
+    temporaryRoots.push(lockRoot);
+    const lockPath = path.join(lockRoot, "test-service--test-account.lock");
+    await fs.mkdir(lockPath);
+    await fs.writeFile(path.join(lockPath, "owner"), "2147483647:dead");
+    const old = new Date(Date.now() - 10_000);
+    await fs.utimes(lockPath, old, old);
+
+    const storage = await createKeychainSecretStorage({
+      service: "test-service",
+      account: "test-account",
+      lockRoot,
+      staleLockMs: 1,
+      lockTimeoutMs: 100,
+      retryDelayMs: 1,
+    });
+    await expect(
+      storage.withMutationLock(async () => "acquired"),
+    ).rejects.toThrow("agentlink_keychain_mutation_lock_timeout");
+    await expect(
+      fs.readFile(path.join(lockPath, "owner"), "utf-8"),
+    ).resolves.toBe("2147483647:dead");
+  });
+
+  it("does not delete a stale lock with no owner record", async () => {
+    const lockRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-keychain-unknown-lock-"),
+    );
+    temporaryRoots.push(lockRoot);
+    const lockPath = path.join(lockRoot, "test-service--test-account.lock");
+    await fs.mkdir(lockPath);
+    const old = new Date(Date.now() - 10_000);
+    await fs.utimes(lockPath, old, old);
+
+    const storage = await createKeychainSecretStorage({
+      service: "test-service",
+      account: "test-account",
+      lockRoot,
+      staleLockMs: 1,
+      lockTimeoutMs: 20,
+      retryDelayMs: 1,
+    });
+    await expect(
+      storage.withMutationLock(async () => undefined),
+    ).rejects.toThrow("agentlink_keychain_mutation_lock_timeout");
+    expect((await fs.stat(lockPath)).isDirectory()).toBe(true);
   });
 
   it("serializes mutation operations through the shared directory lock", async () => {

@@ -214,6 +214,20 @@ describe("normalizeOpenAiCompatibleConnections", () => {
     ).toContain("$[0].reasoningEffortMode");
   });
 
+  it("validates per-model tier metadata", () => {
+    const valid = normalizeOpenAiCompatibleConnections([
+      connection({ models: [model({ tier: "cheap" })] }),
+    ]);
+    expect(valid.issues).toEqual([]);
+    expect(valid.connections[0]?.models[0]?.tier).toBe("cheap");
+    expect(
+      valid.connections[0]?.runtimeProfile.models["local-model"],
+    ).not.toHaveProperty("tier");
+    expect(
+      issuePaths([connection({ models: [model({ tier: "fast" })] })]),
+    ).toContain("$[0].models[0].tier");
+  });
+
   it("accepts per-model prompt family metadata and rejects unknown values", () => {
     const valid = normalizeOpenAiCompatibleConnections([
       connection({ models: [model({ modelFamily: "openai" })] }),

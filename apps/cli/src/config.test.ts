@@ -18,10 +18,8 @@ describe("parseCliConfig", () => {
     expect(DEFAULT_CODEX_MODELS).toEqual(
       expect.arrayContaining(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]),
     );
-    expect(DEFAULT_CODEX_MODELS.length).toBeGreaterThan(1);
-    expect(DEFAULT_OPENAI_MODELS.length).toBeGreaterThan(
-      DEFAULT_CODEX_MODELS.length,
-    );
+    expect(DEFAULT_CODEX_MODELS).toHaveLength(7);
+    expect(DEFAULT_OPENAI_MODELS).toEqual(DEFAULT_CODEX_MODELS);
   });
 
   it("rejects secret-account overrides and unsafe compatible endpoints", () => {

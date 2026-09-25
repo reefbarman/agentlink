@@ -31,7 +31,7 @@ const mocks = vi.hoisted(() => {
       return new MockDispatcher("proxy", options);
     }),
     dns: vi.fn(() => "dns-interceptor"),
-    fetch: vi.fn(() => Promise.resolve("response")),
+    fetch: vi.fn(() => Promise.resolve(new Response("response"))),
     setGlobalDispatcher: vi.fn(),
   };
 });
@@ -142,6 +142,48 @@ describe("installAgentLinkHttpDispatcher", () => {
       connections: MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER,
       allowH2: true,
     });
+  });
+
+  it("preserves OAuth error status and body across response constructors", async () => {
+    const { Response: UndiciResponse } =
+      await vi.importActual<typeof import("undici")>("undici");
+    const oauthBody = JSON.stringify({
+      error: "invalid_client",
+      error_description: "Unsupported client authentication method",
+    });
+    (mocks.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      new UndiciResponse(oauthBody, {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const { agentLinkLongPollingFetch } = await import("./httpDispatcher.js");
+    const { parseErrorResponse } =
+      await import("@modelcontextprotocol/sdk/client/auth.js");
+
+    const response = await agentLinkLongPollingFetch(
+      "https://example.com/register",
+    );
+    expect(response).toBeInstanceOf(globalThis.Response);
+    expect(response.status).toBe(400);
+    expect(response.headers.get("content-type")).toBe("application/json");
+    const error = await parseErrorResponse(response);
+    expect(error.message).toContain("Unsupported client authentication method");
+    expect(error.message).not.toContain("[object Response]");
+  });
+
+  it("leaves non-error responses in their original constructor", async () => {
+    const { Response: UndiciResponse } =
+      await vi.importActual<typeof import("undici")>("undici");
+    const notModified = new UndiciResponse(null, { status: 304 });
+    (mocks.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      notModified,
+    );
+    const { agentLinkLongPollingFetch } = await import("./httpDispatcher.js");
+
+    expect(await agentLinkLongPollingFetch("https://example.com/mcp")).toBe(
+      notModified,
+    );
   });
 
   it("uses the tuned dispatcher for explicit SDK fetch calls", async () => {

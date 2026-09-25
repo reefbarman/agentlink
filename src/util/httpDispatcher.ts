@@ -210,14 +210,26 @@ export function installAgentLinkHttpDispatcher(
 export const agentLinkLongPollingFetch: typeof globalThis.fetch = async (
   input,
   init,
-) =>
-  (await undiciFetch(
+) => {
+  const response = await undiciFetch(
     input as Parameters<typeof undiciFetch>[0],
     {
       ...init,
       dispatcher: getAgentLinkLongPollingHttpDispatcher(),
     } as Parameters<typeof undiciFetch>[1],
-  )) as unknown as globalThis.Response;
+  );
+  // The MCP SDK checks OAuth error responses with instanceof globalThis.Response.
+  // Undici's Response has a different constructor, so convert failures without
+  // buffering the body. Successful MCP streams keep their original response.
+  if (response.status >= 400 && !(response instanceof globalThis.Response)) {
+    return new Response(response.body as unknown as BodyInit | null, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: Object.fromEntries(response.headers.entries()),
+    });
+  }
+  return response as unknown as globalThis.Response;
+};
 
 export const agentLinkFetch: typeof globalThis.fetch = async (input, init) => {
   const listener = activityContext.getStore();
