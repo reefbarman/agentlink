@@ -1,0 +1,27 @@
+resources/builtin-skills/documentation/references/mcp.md
+  h_9630b74bdac540 11
+src/agent/ChatViewProvider.test.ts
+  h_9630b74bdac540 9599-9687
+src/agent/ChatViewProvider.ts
+  h_9630b74bdac540 2923,2944,2950-2952,8746,8756-8760,8762,8849,9183,9204,9214,13185
+  h_9630b74bdac540 8768
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_9630b74bdac540 1119-1122,1173,1247,8292
+package-lock.json
+  h_9630b74bdac540 3,9
+package.json
+  h_9630b74bdac540 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_9630b74bdac540 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3525e4ed29bf418eb7beddea3e75950bafcfcb3a",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
