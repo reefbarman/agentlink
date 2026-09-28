@@ -4502,30 +4502,54 @@ async function dispatchToolCallWithTrackedApprovals(
             : undefined);
         if (!mcpToolDiscoveryProvider)
           return errorResult("MCP hub not available");
-        return mcpDiscoveryResultToToolResult(
-          mcpToolDiscoveryProvider.discoverTools({
-            query:
-              params.query !== undefined ? String(params.query) : undefined,
-            server:
-              params.server !== undefined ? String(params.server) : undefined,
-            includeSchemas:
-              params.includeSchemas === true ||
-              params.includeSchemas === "true",
-            schemaLimit:
-              typeof params.schemaLimit === "number"
-                ? params.schemaLimit
-                : params.schemaLimit !== undefined
-                  ? Number(params.schemaLimit)
-                  : undefined,
-            limit:
-              typeof params.limit === "number"
-                ? params.limit
-                : params.limit !== undefined
-                  ? Number(params.limit)
-                  : undefined,
-            skillAllowlist,
-          }),
-        );
+        const server =
+          typeof params.server === "string" ? params.server.trim() : "";
+        if (
+          currentHub &&
+          server &&
+          currentHub.getPendingServerNames?.().includes(server) &&
+          skillAllowlistAllowsMcpServer(skillAllowlist, server)
+        ) {
+          await currentHub.activatePendingServer(server, toolAbortSignal);
+        }
+        const discovered = mcpToolDiscoveryProvider.discoverTools({
+          query: params.query !== undefined ? String(params.query) : undefined,
+          server:
+            params.server !== undefined ? String(params.server) : undefined,
+          includeSchemas:
+            params.includeSchemas === true || params.includeSchemas === "true",
+          schemaLimit:
+            typeof params.schemaLimit === "number"
+              ? params.schemaLimit
+              : params.schemaLimit !== undefined
+                ? Number(params.schemaLimit)
+                : undefined,
+          limit:
+            typeof params.limit === "number"
+              ? params.limit
+              : params.limit !== undefined
+                ? Number(params.limit)
+                : undefined,
+          skillAllowlist,
+        });
+        const result = mcpDiscoveryResultToToolResult(discovered);
+        const pending = currentHub
+          ?.getPendingServerNames?.()
+          .filter((name) =>
+            skillAllowlistAllowsMcpServer(skillAllowlist, name),
+          );
+        return pending?.length
+          ? {
+              ...result,
+              content: [
+                ...result.content,
+                {
+                  type: "text" as const,
+                  text: `Sign-in needed for: ${pending.join(", ")}. Search with a specific server to connect it.`,
+                },
+              ],
+            }
+          : result;
       } finally {
         currentLease?.release();
       }
@@ -4559,6 +4583,9 @@ async function dispatchToolCallWithTrackedApprovals(
           return errorResult(
             `MCP tool is not allowed by the active skill allowed-tools allowlist: ${toolName}`,
           );
+        }
+        if (currentHub?.getPendingServerNames?.().includes(server)) {
+          await currentHub.activatePendingServer(server, toolAbortSignal);
         }
         if (
           !mcpToolInvocationProvider
@@ -4674,6 +4701,9 @@ async function dispatchToolCallWithTrackedApprovals(
             `MCP server is not allowed by the active skill allowed-tools allowlist: ${server}`,
           );
         }
+        if (currentHub?.getPendingServerNames?.().includes(server)) {
+          await currentHub.activatePendingServer(server, toolAbortSignal);
+        }
         return await mcpResourcePromptProvider.readResource(
           server,
           String(params.uri ?? ""),
@@ -4727,6 +4757,9 @@ async function dispatchToolCallWithTrackedApprovals(
           return errorResult(
             `MCP server is not allowed by the active skill allowed-tools allowlist: ${server}`,
           );
+        }
+        if (currentHub?.getPendingServerNames?.().includes(server)) {
+          await currentHub.activatePendingServer(server, toolAbortSignal);
         }
         const args = params.arguments as Record<string, string> | undefined;
         return await mcpResourcePromptProvider.getPrompt(

@@ -484,6 +484,74 @@ describe("McpClientHub OAuth recovery", () => {
     ).toBe(true);
   });
 
+  it("parks servers requiring browser sign-in until the targeted server is used", async () => {
+    const second: McpServerConfig = {
+      ...notionCfg,
+      name: "second",
+      url: "https://second.example.test/mcp",
+    };
+    mocks.createTransportConnect.mockImplementation(
+      async function (this: {
+        authProvider?: { authorizationAttempt?: { authMode: string } };
+      }) {
+        if (
+          this.authProvider?.authorizationAttempt?.authMode === "noninteractive"
+        )
+          throw new McpOAuthError("interactive_required", "sign-in needed");
+      },
+    );
+    const hub = new McpClientHub(new FakeMemento());
+    try {
+      await hub.connect([notionCfg, second]);
+      expect(hub.getPendingServerNames()).toEqual(["notion", "second"]);
+      expect(mocks.showWarningMessage).not.toHaveBeenCalled();
+      expect(mocks.showErrorMessage).not.toHaveBeenCalled();
+      expect(await hub.activatePendingServer("notion")).toBe(true);
+      expect(hub.getPendingServerNames()).toEqual(["second"]);
+      expect(
+        hub.getServerInfos().find((info) => info.name === "notion")?.status,
+      ).toBe("connected");
+    } finally {
+      await hub.disconnectAll();
+    }
+  });
+
+  it("cancels targeted sign-in with its turn and leaves the server discoverable", async () => {
+    const controller = new AbortController();
+    mocks.createTransportConnect.mockImplementation(
+      async function (this: {
+        authProvider?: { authorizationAttempt?: { authMode: string } };
+      }) {
+        if (
+          this.authProvider?.authorizationAttempt?.authMode === "noninteractive"
+        )
+          throw new McpOAuthError("interactive_required", "sign-in needed");
+        await new Promise<void>((resolve) => {
+          controller.signal.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+        });
+      },
+    );
+    const hub = new McpClientHub(new FakeMemento());
+    try {
+      await hub.connect([notionCfg]);
+      expect(hub.getPendingServerNames()).toEqual(["notion"]);
+      const activation = hub.activatePendingServer("notion", controller.signal);
+      await vi.waitFor(() =>
+        expect(mocks.createTransportConnect).toHaveBeenCalledTimes(2),
+      );
+      controller.abort();
+      expect(await activation).toBe(false);
+      expect(hub.getPendingServerNames()).toEqual(["notion"]);
+      expect(
+        hub.getServerInfos().find((server) => server.name === "notion")?.status,
+      ).toBe("disconnected");
+    } finally {
+      await hub.disconnectAll();
+    }
+  });
+
   it("defers interactive reauth prompt when startup refresh-token fallback needs manual auth", async () => {
     mocks.createTransportConnect.mockImplementationOnce(
       async function (this: {

@@ -25,6 +25,24 @@ function tool(name: string, description = "test tool"): ToolDefinition {
 }
 
 describe("partitionMcpToolsForDisclosure", () => {
+  it("advertises servers awaiting first-use sign-in without connecting them", () => {
+    const partition = partitionMcpToolsForDisclosure([], {
+      pendingServerNames: ["notion", "linear"],
+    });
+    expect(partition.inlineTools).toEqual([]);
+    expect(partition.catalog.map((entry) => entry.serverName)).toEqual([
+      "linear",
+      "notion",
+    ]);
+    expect(partition.catalog.every((entry) => entry.signInNeeded)).toBe(true);
+    expect(buildMcpToolCatalogSection(partition.catalog)).toContain(
+      "- notion: sign-in on first use; tools discoverable after connecting",
+    );
+    expect(buildMcpToolCatalogSection(partition.catalog)).toContain(
+      "request it by name with `find_mcp_tools`",
+    );
+  });
+
   it("keeps small auto-mode servers inline", () => {
     const partition = partitionMcpToolsForDisclosure(
       [tool("small__search"), tool("small__fetch")],

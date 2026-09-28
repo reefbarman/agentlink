@@ -384,6 +384,8 @@ export async function createWorkspaceHost(
     ? createWorkspaceSharedMcpTools({
         ...sharedMcpOptions,
         secret: approvalSecret!,
+        runOutsideExclusive: (operation) =>
+          mutations.outsideExclusive(operation),
         authorizeAdmission: (proposal, request) =>
           mutations.outsideExclusive(() =>
             sharedMcpOptions.authorizeAdmission(proposal, request),

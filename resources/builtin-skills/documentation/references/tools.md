@@ -106,7 +106,7 @@ Use clear ownership and a focused review scope for writable or review work. Stru
 
 ## Connect external capabilities
 
-- `find_mcp_tools` and `call_mcp_tool` discover and invoke configured MCP capabilities.
+- `find_mcp_tools` and `call_mcp_tool` discover and invoke configured MCP capabilities. In the CLI, untargeted discovery lists servers needing sign-in without connecting them; specifying a server connects only that server, and `call_mcp_tool` can invoke its tools in the same turn under the normal approval policy.
 - Resources and prompts use `list_mcp_resources`, `read_mcp_resource`, `list_mcp_prompts`, and `get_mcp_prompt`.
 - Native `web_search` and `web_fetch` may be available according to the configured web-access backend.
 

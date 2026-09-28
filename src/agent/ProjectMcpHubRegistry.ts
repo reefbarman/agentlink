@@ -183,19 +183,14 @@ export class ProjectMcpHubRegistry<
 
     try {
       const configs = await this.loadConfigs(scope);
-      const interactiveServerNames = options.interactiveForNewServers
-        ? new Set(
-            configs
-              .filter((config) => !entry.knownServerNames.has(config.name))
-              .map((config) => config.name),
-          )
-        : undefined;
+      const interactiveServerNames = options.interactiveServerNames;
       // Server identity is config state, not connection success. Remember the
       // snapshot before connecting so a failed first attempt is not repeatedly
       // reclassified as a newly added interactive server on later reloads.
       entry.knownServerNames = new Set(configs.map((config) => config.name));
       await hub.connect(configs, {
         ...options,
+        interactiveForNewServers: false,
         ...(interactiveServerNames ? { interactiveServerNames } : {}),
       });
       if (entry.retired) {

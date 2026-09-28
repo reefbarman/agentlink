@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
     content: [{ type: "text", text: "server result" }],
   })),
   disconnectAll: vi.fn(async () => undefined),
+  activatePendingServer: vi.fn(async () => true),
   readResource: vi.fn(async () => ({
     content: [{ type: "text", text: "resource text" }],
   })),
@@ -36,6 +37,8 @@ vi.mock("@agentlink/node-host", async (importOriginal) => {
         mocks.instance = this;
       }
       connect = mocks.connect;
+      getPendingServerNames = () => [];
+      activatePendingServer = mocks.activatePendingServer;
       getToolDefs = () => [
         {
           name: "records__lookup",
@@ -102,6 +105,65 @@ function fixture(resolveConfigs = async () => [config]) {
 }
 
 describe("shared MCP workspace tools", () => {
+  it("connects a pending server only when targeted for discovery", async () => {
+    vi.clearAllMocks();
+    const { tools } = fixture();
+    const resolved = await tools.resolveTools(request);
+    const hub = mocks.instance as {
+      getPendingServerNames: () => string[];
+      getToolDefs: () => Array<{
+        name: string;
+        description: string;
+        input_schema: { type: string; properties: Record<string, never> };
+      }>;
+    };
+    hub.getPendingServerNames = () =>
+      mocks.activatePendingServer.mock.calls.length ? [] : ["records"];
+    hub.getToolDefs = () =>
+      mocks.activatePendingServer.mock.calls.length
+        ? [
+            {
+              name: "records__lookup",
+              description: "lookup",
+              input_schema: { type: "object", properties: {} },
+            },
+          ]
+        : [];
+    if (Array.isArray(resolved)) throw new Error("Missing lifecycle disposer");
+    const discover = resolved.tools.find(
+      (tool) => tool.definition.name === "find_mcp_tools",
+    )!;
+    const untargeted = await discover.execute({}, executionContext);
+    expect(untargeted.modelContent).toContain('"signInNeeded":["records"]');
+    expect(mocks.activatePendingServer).not.toHaveBeenCalled();
+    const targeted = await discover.execute(
+      { server: "records" },
+      executionContext,
+    );
+    expect(targeted.modelContent).toContain("records__lookup");
+    expect(mocks.activatePendingServer).toHaveBeenCalledExactlyOnceWith(
+      "records",
+    );
+    const call = resolved.tools.find(
+      (tool) => tool.definition.name === "call_mcp_tool",
+    )!;
+    const input = { server: "records", tool: "lookup", input: { id: 1 } };
+    expect(await tools.toolApproval("call_mcp_tool", input)).toMatchObject({
+      serverId: "records",
+      serverToolName: "lookup",
+    });
+    expect((await call.execute(input, executionContext)).modelContent).toBe(
+      "server result",
+    );
+    expect(mocks.callTool).toHaveBeenCalledWith(
+      "records__lookup",
+      { id: 1 },
+      expect.objectContaining({ authorizedByCaller: true }),
+    );
+    await resolved.dispose?.();
+    await tools.close();
+  });
+
   it("lists and reads resources and prompts from the active MCP turn", async () => {
     vi.clearAllMocks();
     const { tools } = fixture();

@@ -693,26 +693,13 @@ export class StandaloneAskAgentMcpRuntime {
         entry = { hub, fingerprint, activeTurn: request, operations };
         this.hubs.set(request.sessionId, entry);
         try {
-          // Connect separately to avoid simultaneous OAuth flows during discovery.
-          // Retain previously configured servers so a later connect does not
-          // disconnect a transport opened earlier in this session.
-          const connected: McpServerConfig[] = [];
-          for (const config of resolved) {
-            if (!isCurrent() || request.signal?.aborted)
-              throw new Error("standalone_mcp_session_disposed");
-            connected.push(config);
-            await hub.connect(connected, {
-              interactiveServerNames: new Set([config.name]),
-              trigger: "tool-use",
-              userInitiated: true,
-            });
-            if (
-              !isCurrent() ||
-              request.signal?.aborted ||
-              this.hubs.get(request.sessionId)?.hub !== hub
-            )
-              throw new Error("standalone_mcp_session_disposed");
-          }
+          await hub.connect(resolved, { trigger: "startup" });
+          if (
+            !isCurrent() ||
+            request.signal?.aborted ||
+            this.hubs.get(request.sessionId)?.hub !== hub
+          )
+            throw new Error("standalone_mcp_session_disposed");
         } catch (error) {
           this.hubs.delete(request.sessionId);
           await hub.disconnectAll();
@@ -737,6 +724,7 @@ export class StandaloneAskAgentMcpRuntime {
       resolved.map((config) => [config.name, config]),
     );
     const definitions = hub.getToolDefs();
+    const pendingServerNames = hub.getPendingServerNames();
     const byName = new Map(
       definitions.map((definition) => [definition.name, definition]),
     );
@@ -753,13 +741,24 @@ export class StandaloneAskAgentMcpRuntime {
       signal: AbortSignal,
       action: () => Promise<ToolResult>,
     ) => hubEntry.operations.run(serverName, request, signal, action);
+    const activate = async (serverName: string, signal: AbortSignal) =>
+      hub.getPendingServerNames().includes(serverName)
+        ? hubEntry.operations.run(serverName, request, signal, () =>
+            hub.activatePendingServer(serverName),
+          )
+        : true;
     return Object.freeze({
       sessionId: request.sessionId,
       turnId: request.turnId,
       tools: Object.freeze([
         ...definitions.map((definition) => structuredClone(definition)),
         ...MCP_META_TOOL_DEFINITIONS.map((definition) =>
-          structuredClone(definition),
+          definition.name === "find_mcp_tools" && pendingServerNames.length
+            ? {
+                ...structuredClone(definition),
+                description: `${definition.description} Servers awaiting first-use sign-in: ${pendingServerNames.join(", ")}. Specify a server only when the task needs it.`,
+              }
+            : structuredClone(definition),
         ),
       ]),
       parallelSafeToolNames: Object.freeze(
@@ -789,7 +788,13 @@ export class StandaloneAskAgentMcpRuntime {
         const call = resolveMcpToolCall(toolName, input);
         if (
           !call ||
-          !byName.has(call.toolName) ||
+          (!byName.has(call.toolName) &&
+            !hub
+              .getToolDefs()
+              .some((definition) => definition.name === call.toolName) &&
+            !hub
+              .getPendingServerNames()
+              .includes(splitMcpToolName(call.toolName)?.serverName ?? "")) ||
           approval(call.toolName) !== "ask"
         )
           return undefined;
@@ -815,7 +820,21 @@ export class StandaloneAskAgentMcpRuntime {
           );
         }
         if (toolName === "find_mcp_tools") {
-          return findMcpToolDefinitions(definitions, input);
+          const server = requiredInputText(input.server);
+          if (
+            server &&
+            configByName.has(server) &&
+            !(await activate(server, signal))
+          )
+            return toolError(`MCP server '${server}' is not connected`);
+          const found = findMcpToolDefinitions(hub.getToolDefs(), input);
+          const pending = hub.getPendingServerNames();
+          if (!pending.length) return found;
+          return jsonToolResult({
+            ...(found.data as Record<string, unknown>),
+            signInNeeded: pending,
+            hint: "Search with a specific server name to connect it and discover its tools.",
+          });
         }
         if (toolName === "list_mcp_resources")
           return jsonToolResult(hub.getAllResources());
@@ -824,27 +843,42 @@ export class StandaloneAskAgentMcpRuntime {
         if (toolName === "read_mcp_resource") {
           const server = requiredInputText(input.server);
           const uri = requiredInputText(input.uri);
-          return server && uri
-            ? withOperation(server, signal, () => hub.readResource(server, uri))
-            : toolError("MCP resource request is invalid");
+          if (!server || !uri || !configByName.has(server))
+            return toolError("MCP resource request is invalid");
+          if (!(await activate(server, signal)))
+            return toolError(`MCP server '${server}' is not connected`);
+          return withOperation(server, signal, () =>
+            hub.readResource(server, uri),
+          );
         }
         if (toolName === "get_mcp_prompt") {
           const server = requiredInputText(input.server);
           const name = requiredInputText(input.name);
           const args = stringRecord(input.arguments);
-          return server && name && args !== null
-            ? withOperation(server, signal, () =>
-                hub.getPrompt(server, name, args),
-              )
-            : toolError("MCP prompt request is invalid");
+          if (!server || !name || args === null || !configByName.has(server))
+            return toolError("MCP prompt request is invalid");
+          if (!(await activate(server, signal)))
+            return toolError(`MCP server '${server}' is not connected`);
+          return withOperation(server, signal, () =>
+            hub.getPrompt(server, name, args),
+          );
         }
         const call = resolveMcpToolCall(toolName, input);
-        if (!call || !byName.has(call.toolName))
+        if (!call) return toolError("MCP tool is not available");
+        const names = splitMcpToolName(call.toolName);
+        if (!names || !configByName.has(names.serverName))
           return toolError("MCP tool is not available");
         if (approval(call.toolName) === "ask" && !approved) {
           return toolError("MCP tool requires user approval");
         }
-        const names = splitMcpToolName(call.toolName)!;
+        if (!(await activate(names.serverName, signal)))
+          return toolError(`MCP server '${names.serverName}' is not connected`);
+        if (
+          !hub
+            .getToolDefs()
+            .some((definition) => definition.name === call.toolName)
+        )
+          return toolError("MCP tool is not available");
         return withOperation(names.serverName, signal, () =>
           hub.callTool(call.toolName, call.input, {
             signal,

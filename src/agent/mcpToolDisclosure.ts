@@ -19,6 +19,8 @@ export interface McpToolDisclosureOptions {
   serverConfigs?: McpToolDisclosureConfig[];
   /** Exact bound tools that must be advertised directly even when siblings are deferred. */
   forceInlineToolNames?: ReadonlySet<string> | readonly string[];
+  /** Servers whose schemas cannot be listed until first-use sign-in. */
+  pendingServerNames?: readonly string[];
 }
 
 export type McpCapabilityClass = "web-search" | "browser-automation";
@@ -36,6 +38,7 @@ export interface McpToolDisclosureCatalogEntry {
   representativeTools: string[];
   capabilities?: McpCapabilityClass[];
   deferred?: boolean;
+  signInNeeded?: boolean;
 }
 
 export interface McpToolDisclosurePartition {
@@ -128,11 +131,13 @@ export function buildMcpToolCatalogSection(
     const capabilities = entry.capabilities?.length
       ? ` Capabilities: ${entry.capabilities.join(", ")}.`
       : "";
-    const status =
-      entry.deferred === false
+    const status = entry.signInNeeded
+      ? "sign-in on first use; tools discoverable after connecting"
+      : entry.deferred === false
         ? "tools available directly"
         : `~${entry.estimatedTokens} schema tokens deferred`;
-    return `- ${entry.serverName}: ${entry.toolCount} tools, ${status}.${representatives}${capabilities}`;
+    const count = entry.signInNeeded ? "" : `${entry.toolCount} tools, `;
+    return `- ${entry.serverName}: ${count}${status}.${representatives}${capabilities}`;
   });
   const capabilityHints = buildCapabilityHints(catalog);
   const hints = capabilityHints.length
@@ -144,7 +149,7 @@ export function buildMcpToolCatalogSection(
         .join("\n")}`
     : "";
 
-  return `\n\n## MCP Tool Catalog\n\nConnected MCP servers are available now. If a server is listed as "tools available directly", call its tools by their full \`server__tool\` names. If a server is listed as deferred, first use \`find_mcp_tools\` to discover the relevant tool and schema, then call it with \`call_mcp_tool\`. Do not tell the user there is no way to interact with a listed MCP server.\n\n${lines.join("\n")}${hints}`;
+  return `\n\n## MCP Tool Catalog\n\nConnected MCP servers are available now. If a server is listed as "tools available directly", call its tools by their full \`server__tool\` names. If a server is listed as deferred, first use \`find_mcp_tools\` to discover the relevant tool and schema, then call it with \`call_mcp_tool\`. A server awaiting sign-in does not connect until you request it by name with \`find_mcp_tools\`; do not connect servers unrelated to the task. Do not tell the user there is no way to interact with a listed MCP server.\n\n${lines.join("\n")}${hints}`;
 }
 
 export function partitionMcpToolsForDisclosure(
@@ -233,6 +238,19 @@ export function partitionMcpToolsForDisclosure(
     inlineTools.push(...forcedInlineTools);
     deferredTools.push(...remainingDeferredTools);
   }
+
+  for (const serverName of options.pendingServerNames ?? []) {
+    if (catalog.some((entry) => entry.serverName === serverName)) continue;
+    catalog.push({
+      serverName,
+      toolCount: 0,
+      estimatedTokens: 0,
+      representativeTools: [],
+      deferred: true,
+      signInNeeded: true,
+    });
+  }
+  catalog.sort((a, b) => a.serverName.localeCompare(b.serverName));
 
   return {
     inlineTools,

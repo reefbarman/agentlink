@@ -2337,9 +2337,6 @@ export class AgentSessionManager {
         this.saveSession(session.id);
         this.notifySessionsChanged();
       }
-      if (context?.mcpHub?.activatePendingInteractiveServers) {
-        await context.mcpHub.activatePendingInteractiveServers();
-      }
       const mcpTools = this.cloneMcpToolDefinitions(context);
       const policy = await this.resolveWebAccessPolicy(
         session,
@@ -2357,6 +2354,7 @@ export class AgentSessionManager {
           serverName,
           mode: context?.mcpHub?.getServerConfig(serverName)?.toolDisclosure,
         })),
+        pendingServerNames: context?.mcpHub?.getPendingServerNames?.(),
       });
       const requestContext =
         context && provider
@@ -4891,7 +4889,8 @@ export class AgentSessionManager {
     const mcpHub = context?.mcpHub;
     if (!mcpHub) return undefined;
     const tools = mcpHub.getToolDefs();
-    if (tools.length === 0) return undefined;
+    const pendingServerNames = mcpHub.getPendingServerNames?.() ?? [];
+    if (tools.length === 0 && pendingServerNames.length === 0) return undefined;
     const serverNames = new Set(
       tools
         .map((tool) => parseMcpToolName(tool.name)?.serverName)
@@ -4901,7 +4900,10 @@ export class AgentSessionManager {
       serverName,
       mode: mcpHub.getServerConfig(serverName)?.toolDisclosure,
     }));
-    return partitionMcpToolsForDisclosure(tools, { serverConfigs });
+    return partitionMcpToolsForDisclosure(tools, {
+      serverConfigs,
+      pendingServerNames,
+    });
   }
 
   private refreshMcpToolDisclosure(

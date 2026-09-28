@@ -166,7 +166,8 @@ export class McpOAuthError extends Error {
       | "callback_missing_code"
       | "authorization_error"
       | "stale_client_redirect"
-      | "credentials_updated",
+      | "credentials_updated"
+      | "interactive_required",
     message: string,
   ) {
     super(message);
@@ -620,6 +621,7 @@ export class McpClientHub {
   private disabledServers = new Map<string, McpServerConfig>();
   private oauthProviders = new Map<string, McpHubOAuthProvider>();
   private pendingInteractiveServers = new Map<string, McpServerConfig>();
+  private pendingActivations = new Map<string, Promise<void>>();
   private connectionAttempts = new Map<
     string,
     { config: McpServerConfig; controller: AbortController }
@@ -819,6 +821,13 @@ export class McpClientHub {
           : Boolean(
               options.interactiveForNewServers && !existingNames.has(cfg.name),
             );
+        const pending = this.pendingInteractiveServers.get(cfg.name);
+        if (
+          !isInteractive &&
+          pending &&
+          JSON.stringify(pending) === JSON.stringify(cfg)
+        )
+          return;
         if (
           !isInteractive &&
           isMcpRemoteConfig(cfg) &&
@@ -1470,6 +1479,26 @@ export class McpClientHub {
         return;
       }
 
+      // A silent connect reached a server that needs browser sign-in. Park it
+      // until an agent actually uses it instead of prompting or retrying now.
+      if (
+        authMode === "noninteractive" &&
+        this.isInteractiveAuthorizationRequired(err)
+      ) {
+        this.log(
+          `[mcp:${cfg.name}] sign-in required; deferring authorization until first use`,
+        );
+        this.authFailureCounts.delete(cfg.name);
+        if (this.connectionAttempts.get(cfg.name)?.controller !== controller)
+          return;
+        await this.disconnectServer(cfg.name);
+        if (await this.configIsCurrent(cfg)) {
+          this.pendingInteractiveServers.set(cfg.name, cfg);
+          this.onStatusChange?.(this.getServerInfos());
+        }
+        return;
+      }
+
       // After a 401, the SDK opens the browser via redirectToAuthorization (which
       // we await fully — it completes the token exchange before returning).
       // Tokens are now saved; retry once immediately without re-triggering auth.
@@ -1697,6 +1726,13 @@ export class McpClientHub {
       normalizedMessage.includes("does not match the active redirect uri") ||
       normalizedMessage.includes("redirect uri/client registration mismatch")
     );
+  }
+
+  private isInteractiveAuthorizationRequired(err: unknown): boolean {
+    if (err instanceof McpOAuthError && err.kind === "interactive_required")
+      return true;
+    const msg = err instanceof Error ? err.message : String(err);
+    return msg.includes("mcp_oauth_interactive_authorization_required");
   }
 
   private isAuthFailureError(err: unknown): boolean {
@@ -2061,24 +2097,59 @@ export class McpClientHub {
     );
   }
 
+  /** Servers waiting for browser sign-in until an agent first uses them. */
+  getPendingServerNames(): string[] {
+    return [...this.pendingInteractiveServers.keys()];
+  }
+
   /**
-   * Starts cache-cold mcp-remote proxies at an active-turn boundary. The proxy
-   * remains authoritative for transport and OAuth, including browser launch.
+   * Start sign-in for one deferred server when an agent first uses it.
+   * Resolves true once the server is connected.
    */
-  async activatePendingInteractiveServers(): Promise<void> {
-    const pending = [...this.pendingInteractiveServers.values()];
-    await Promise.all(
-      pending.map(async (config) => {
-        if (this.pendingInteractiveServers.get(config.name) !== config) return;
-        this.pendingInteractiveServers.delete(config.name);
-        await this.connectServer(config, {
+  async activatePendingServer(
+    name: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    if (signal?.aborted) return false;
+    let activation = this.pendingActivations.get(name);
+    if (!activation) {
+      const config = this.pendingInteractiveServers.get(name);
+      if (config && (await this.configIsCurrent(config))) {
+        if (this.pendingInteractiveServers.get(name) !== config) {
+          const inFlight = this.pendingActivations.get(name);
+          if (inFlight) await inFlight.catch(() => undefined);
+          return this.servers.get(name)?.status === "connected";
+        }
+        if (signal?.aborted) return false;
+        this.pendingInteractiveServers.delete(name);
+        let abortCleanup: Promise<void> | undefined;
+        const onAbort = () => {
+          if (abortCleanup) return;
+          abortCleanup = this.disconnectServer(name).then(async () => {
+            if (await this.configIsCurrent(config)) {
+              this.pendingInteractiveServers.set(name, config);
+              this.onStatusChange?.(this.getServerInfos());
+            }
+          });
+        };
+        signal?.addEventListener("abort", onAbort, { once: true });
+        activation = this.connectServer(config, {
           authMode: "interactive",
           trigger: "tool-use",
           userInitiated: true,
+        }).finally(async () => {
+          signal?.removeEventListener("abort", onAbort);
+          if (abortCleanup) await abortCleanup;
+          if (this.pendingActivations.get(name) === activation)
+            this.pendingActivations.delete(name);
+          this.onStatusChange?.(this.getServerInfos());
         });
-      }),
-    );
-    this.onStatusChange?.(this.getServerInfos());
+        this.pendingActivations.set(name, activation);
+        if (signal?.aborted) onAbort();
+      }
+    }
+    if (activation) await activation.catch(() => undefined);
+    return !signal?.aborted && this.servers.get(name)?.status === "connected";
   }
 
   /** Whether a server has explicitly opted into concurrent tool calls. */
@@ -2295,6 +2366,7 @@ export class McpClientHub {
       ).map((n) => this.disconnectServer(n)),
     );
     this.pendingInteractiveServers.clear();
+    this.pendingActivations.clear();
     this.disabledServers.clear();
     this.onStatusChange?.(this.getServerInfos());
   }
@@ -2380,7 +2452,8 @@ export class McpClientHub {
       ...Array.from(this.pendingInteractiveServers.values()).map((config) => ({
         name: config.name,
         status: "disconnected" as const,
-        error: "Authentication will start when an agent turn first uses MCP.",
+        error:
+          "Sign-in will start the first time an agent turn uses this server.",
         toolCount: 0,
         resourceCount: 0,
         promptCount: 0,

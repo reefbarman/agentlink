@@ -6060,6 +6060,28 @@ describe("dispatchToolCall", () => {
     });
   });
 
+  it("activates only the named pending MCP server on discovery", async () => {
+    const activatePendingServer = vi.fn(async () => true);
+    const mcpHub = {
+      getPendingServerNames: () => ["linear", "notion"],
+      activatePendingServer,
+      getToolDefs: () => [],
+    };
+    const context = { ...mockCtx, mcpHub: mcpHub as any };
+    const list = await dispatchToolCall("find_mcp_tools", {}, context);
+    expect(activatePendingServer).not.toHaveBeenCalled();
+    expect(list.content).toContainEqual(
+      expect.objectContaining({
+        text: expect.stringContaining("linear, notion"),
+      }),
+    );
+    await dispatchToolCall("find_mcp_tools", { server: "linear" }, context);
+    expect(activatePendingServer).toHaveBeenCalledExactlyOnceWith(
+      "linear",
+      undefined,
+    );
+  });
+
   it("restricts read-only MCP discovery to explicitly annotated tools", async () => {
     const readTool = {
       name: "linear__list_issues",

@@ -52,15 +52,15 @@ describe("ProjectMcpHubRegistry", () => {
     expect(a.hub).not.toBe(b.hub);
     expect(a.hub.connect).toHaveBeenCalledWith(
       [{ name: "shared", command: "server-a" }],
-      {},
+      { interactiveForNewServers: false },
     );
     expect(b.hub.connect).toHaveBeenCalledWith(
       [{ name: "shared", command: "server-b" }],
-      {},
+      { interactiveForNewServers: false },
     );
   });
 
-  it("only marks genuinely added servers interactive across generations", async () => {
+  it("keeps config-watcher connections noninteractive across generations", async () => {
     const project = scope("project-a", "/workspace/a");
     let configs: McpServerConfig[] = [
       { name: "linear", url: "https://mcp.linear.app/mcp", type: "http" },
@@ -80,14 +80,14 @@ describe("ProjectMcpHubRegistry", () => {
       trigger: "config-watcher",
     });
     const firstOptions = hubs[0].connect.mock.calls[0]?.[1];
-    expect(firstOptions?.interactiveServerNames).toEqual(new Set(["linear"]));
+    expect(firstOptions?.interactiveServerNames).toBeUndefined();
 
     await registry.reload(project, {
       interactiveForNewServers: true,
       trigger: "config-watcher",
     });
     const secondOptions = hubs[1].connect.mock.calls[0]?.[1];
-    expect(secondOptions?.interactiveServerNames).toEqual(new Set());
+    expect(secondOptions?.interactiveServerNames).toBeUndefined();
 
     configs = [
       ...configs,
@@ -98,7 +98,7 @@ describe("ProjectMcpHubRegistry", () => {
       trigger: "config-watcher",
     });
     const thirdOptions = hubs[2].connect.mock.calls[0]?.[1];
-    expect(thirdOptions?.interactiveServerNames).toEqual(new Set(["notion"]));
+    expect(thirdOptions?.interactiveServerNames).toBeUndefined();
   });
 
   it("remembers configured servers after a failed first connect", async () => {
@@ -132,9 +132,9 @@ describe("ProjectMcpHubRegistry", () => {
       interactiveForNewServers: true,
       trigger: "config-watcher",
     });
-    expect(hubs[1].connect.mock.calls[0]?.[1]?.interactiveServerNames).toEqual(
-      new Set(),
-    );
+    expect(
+      hubs[1].connect.mock.calls[0]?.[1]?.interactiveServerNames,
+    ).toBeUndefined();
   });
 
   it("configures replacement hubs before loading and connecting", async () => {

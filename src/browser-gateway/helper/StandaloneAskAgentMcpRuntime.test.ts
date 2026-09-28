@@ -451,6 +451,7 @@ describe("StandaloneAskAgentMcpRuntime", () => {
           },
         ],
         getServerInfos: () => [{ name: "local", status: "connected" }],
+        getPendingServerNames: () => [],
         isToolReadOnly: () => false,
         getAllResources: () => [
           { serverName: "local", name: "fixture", uri: "file://fixture" },
@@ -486,8 +487,7 @@ describe("StandaloneAskAgentMcpRuntime", () => {
       expect(connect).toHaveBeenCalledWith(
         expect.any(Array),
         expect.objectContaining({
-          interactiveServerNames: new Set(["local"]),
-          userInitiated: true,
+          trigger: "startup",
         }),
       );
       expect(calls[0]).toEqual([
@@ -550,6 +550,125 @@ describe("StandaloneAskAgentMcpRuntime", () => {
     expect(disconnectAll).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps sign-in pending until the agent targets one server", async () => {
+    const activatePendingServer = vi.fn(async (name: string) => {
+      pending.delete(name);
+      return true;
+    });
+    const pending = new Set(["first", "second"]);
+    const runtime = new StandaloneAskAgentMcpRuntime({
+      loadConfigs: async () => [
+        { name: "first", command: "first", toolPolicy: "allow" },
+        { name: "second", command: "second", toolPolicy: "allow" },
+      ],
+      resolveExecutable: async (command) => command,
+      createHub: () =>
+        ({
+          connect: vi.fn(async () => undefined),
+          disconnectAll: vi.fn(async () => undefined),
+          getToolDefs: () =>
+            pending.has("first")
+              ? []
+              : [
+                  {
+                    name: "first__search",
+                    description: "Search",
+                    input_schema: { type: "object" },
+                  },
+                ],
+          getPendingServerNames: () => [...pending],
+          activatePendingServer,
+          getServerInfos: () => [],
+        }) as unknown as import("@agentlink/node-host").McpClientHub,
+    });
+    try {
+      const turn = await runtime.prepareTurn(request);
+      expect(activatePendingServer).not.toHaveBeenCalled();
+      const signal = new AbortController().signal;
+      const untargeted = await turn.execute(
+        "find_mcp_tools",
+        {},
+        signal,
+        request,
+      );
+      expect(untargeted.data).toMatchObject({
+        signInNeeded: ["first", "second"],
+      });
+      expect(activatePendingServer).not.toHaveBeenCalled();
+      const targeted = await turn.execute(
+        "find_mcp_tools",
+        { server: "first" },
+        signal,
+        request,
+      );
+      expect(activatePendingServer).toHaveBeenCalledExactlyOnceWith("first");
+      expect(targeted.data).toMatchObject({ signInNeeded: ["second"] });
+      expect(JSON.stringify(targeted.data)).toContain("first__search");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("offers approval for a tool discovered after first-use sign-in in the same turn", async () => {
+    const pending = new Set(["first"]);
+    const runtime = new StandaloneAskAgentMcpRuntime({
+      loadConfigs: async () => [{ name: "first", command: "first" }],
+      resolveExecutable: async (command) => command,
+      createHub: () =>
+        ({
+          connect: vi.fn(async () => undefined),
+          disconnectAll: vi.fn(async () => undefined),
+          getToolDefs: () =>
+            pending.size
+              ? []
+              : [
+                  {
+                    name: "first__search",
+                    description: "Search",
+                    input_schema: { type: "object" },
+                  },
+                ],
+          getPendingServerNames: () => [...pending],
+          activatePendingServer: vi.fn(async () => {
+            pending.clear();
+            return true;
+          }),
+          getServerInfos: () => [],
+          callTool: vi.fn(async () => ({
+            content: [{ type: "text", text: "found" }],
+          })),
+        }) as unknown as import("@agentlink/node-host").McpClientHub,
+    });
+    try {
+      const turn = await runtime.prepareTurn(request);
+      const signal = new AbortController().signal;
+      await turn.execute(
+        "find_mcp_tools",
+        { server: "first" },
+        signal,
+        request,
+      );
+      expect(
+        turn.getApprovalRequirement?.("call_mcp_tool", {
+          server: "first",
+          tool: "search",
+          input: { query: "now" },
+        }),
+      ).toMatchObject({ serverName: "first", bareToolName: "search" });
+      expect(
+        await turn.execute(
+          "call_mcp_tool",
+          { server: "first", tool: "search", input: { query: "now" } },
+          signal,
+          request,
+          true,
+        ),
+      ).toMatchObject({ content: [{ type: "text", text: "found" }] });
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("skips unavailable stdio executables without failing the desktop turn", async () => {
     const connect = vi.fn(
       async (configs: { name: string; command?: string }[]) => {
@@ -578,6 +697,7 @@ describe("StandaloneAskAgentMcpRuntime", () => {
           connect,
           disconnectAll: async () => undefined,
           getToolDefs: () => [],
+          getPendingServerNames: () => [],
           getServerInfos: () => [],
         }) as unknown as import("@agentlink/node-host").McpClientHub,
     });
@@ -593,7 +713,7 @@ describe("StandaloneAskAgentMcpRuntime", () => {
           }),
         ],
         expect.objectContaining({
-          interactiveServerNames: new Set(["available"]),
+          trigger: "startup",
         }),
       );
     } finally {

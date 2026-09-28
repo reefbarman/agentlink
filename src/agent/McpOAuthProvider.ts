@@ -562,8 +562,8 @@ export class McpOAuthProvider implements OAuthClientProvider {
         `[mcp:${this.serverName}] suppressing interactive OAuth${suffix}; manual reauthentication required`,
       );
       throw new McpOAuthError(
-        "authorization_error",
-        `OAuth authorization blocked for "${this.serverName}": manual reauthentication required${suffix}`,
+        "interactive_required",
+        `OAuth authorization deferred for "${this.serverName}"${suffix}`,
       );
     }
 

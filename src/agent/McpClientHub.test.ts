@@ -291,7 +291,7 @@ describe("McpClientHub protocol correctness", () => {
     ]);
   });
 
-  it("defers cache-cold mcp-remote until an active turn", async () => {
+  it("defers cache-cold mcp-remote until that server is used", async () => {
     const configDirectory = await fs.mkdtemp(
       path.join(os.tmpdir(), "agentlink-mcp-remote-cold-"),
     );
@@ -317,15 +317,15 @@ describe("McpClientHub protocol correctness", () => {
         {
           name: "datadog",
           status: "disconnected",
-          error: expect.stringContaining("agent turn"),
+          error: expect.stringContaining("uses this server"),
         },
       ]);
 
-      await hub.activatePendingInteractiveServers();
+      expect(await hub.activatePendingServer("datadog")).toBe(true);
       expect(mocks.connect).toHaveBeenCalledTimes(1);
       expect(hub.getServerInfos()[0]?.status).toBe("connected");
 
-      await hub.activatePendingInteractiveServers();
+      expect(await hub.activatePendingServer("datadog")).toBe(true);
       expect(mocks.connect).toHaveBeenCalledTimes(1);
     } finally {
       await hub.disconnectAll();

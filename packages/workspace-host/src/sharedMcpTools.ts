@@ -94,6 +94,7 @@ export interface CreateWorkspaceSharedMcpToolsOptions {
   ) => Promise<McpHubOAuthProvider>;
   readonly clientVersion: string;
   readonly onElicitation?: NodeHostMcpFormElicitationHandler;
+  readonly runOutsideExclusive?: <T>(operation: () => Promise<T>) => Promise<T>;
   readonly onStatus?: (message: string) => void;
   readonly onServerStatus?: (
     sessionId: string,
@@ -153,7 +154,13 @@ export function createWorkspaceSharedMcpTools(
     toolName: string,
     input: Readonly<Record<string, unknown>>,
   ): Promise<WorkspaceSharedMcpToolApproval | undefined> => {
-    const parsed = parseMcpToolName(toolName);
+    const parsed = parseMcpToolName(
+      toolName === "call_mcp_tool" &&
+        typeof input.server === "string" &&
+        typeof input.tool === "string"
+        ? `${input.server}__${input.tool}`
+        : toolName,
+    );
     if (!parsed?.serverName || !parsed.bareToolName) return undefined;
     const config = (await options.resolveConfigs()).find(
       (candidate) =>
@@ -537,11 +544,7 @@ export function createWorkspaceSharedMcpTools(
     };
     try {
       await operations.run(request, () =>
-        hub.connect(configs, {
-          interactiveForNewServers: true,
-          trigger: "tool-use",
-          userInitiated: true,
-        }),
+        hub.connect(configs, { trigger: "startup" }),
       );
       const validContext = async (
         context: Pick<Turn, "principal" | "sessionId" | "turnId">,
@@ -559,6 +562,24 @@ export function createWorkspaceSharedMcpTools(
         const config = configs.find((item) => item.name === serverName);
         return Boolean(config && (await current(config)));
       };
+      const activate = (server: string, signal?: AbortSignal) =>
+        hub.getPendingServerNames().includes(server)
+          ? pending.run(
+              server,
+              request,
+              signal ?? new AbortController().signal,
+              () =>
+                options.runOutsideExclusive
+                  ? options.runOutsideExclusive(() =>
+                      operations.run(request, () =>
+                        hub.activatePendingServer(server),
+                      ),
+                    )
+                  : operations.run(request, () =>
+                      hub.activatePendingServer(server),
+                    ),
+            )
+          : Promise.resolve(true);
       const tools: HostTool<AgentPrincipal>[] = hub
         .getToolDefs()
         .filter((definition) => TOOL_NAME.test(definition.name))
@@ -587,6 +608,12 @@ export function createWorkspaceSharedMcpTools(
               ) {
                 return {
                   modelContent: "MCP tool context or configuration changed",
+                  isError: true,
+                };
+              }
+              if (!(await activate(serverId, context.signal))) {
+                return {
+                  modelContent: `MCP server '${serverId}' is not connected`,
                   isError: true,
                 };
               }
@@ -676,6 +703,11 @@ export function createWorkspaceSharedMcpTools(
                 modelContent: "MCP turn or server configuration changed",
                 isError: true,
               };
+            if (!(await activate(server, context.signal)))
+              return {
+                modelContent: `MCP server '${server}' is not connected`,
+                isError: true,
+              };
             return modelResult(
               await pending.run(server, request, context.signal, () =>
                 operations.run(request, () => action(server, input)),
@@ -684,6 +716,108 @@ export function createWorkspaceSharedMcpTools(
           },
         });
       tools.push(
+        defineTool({
+          name: "call_mcp_tool",
+          description:
+            "Call a discovered MCP tool. Use find_mcp_tools with a server name first if it needs sign-in.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              server: { type: "string" },
+              tool: { type: "string" },
+              input: { type: "object" },
+            },
+            required: ["server", "tool", "input"],
+          },
+          effect: "external",
+          authorization: "required",
+          displayInput: (input) => ({ server: input.server, tool: input.tool }),
+          handler: async (input, context) => {
+            const server = input.server;
+            const tool = input.tool;
+            const argumentsInput = input.input;
+            if (
+              typeof server !== "string" ||
+              typeof tool !== "string" ||
+              !argumentsInput ||
+              typeof argumentsInput !== "object" ||
+              Array.isArray(argumentsInput) ||
+              !(await validContext(context, server))
+            )
+              return {
+                modelContent: "MCP tool request is invalid",
+                isError: true,
+              };
+            const name = `${server}__${tool}`;
+            if (
+              !TOOL_NAME.test(name) ||
+              !(await activate(server, context.signal))
+            )
+              return {
+                modelContent: "MCP server is not connected",
+                isError: true,
+              };
+            if (
+              !hub.getToolDefs().some((definition) => definition.name === name)
+            )
+              return {
+                modelContent: "MCP tool is not available",
+                isError: true,
+              };
+            return modelResult(
+              await pending.run(server, request, context.signal, () =>
+                operations.run(request, () =>
+                  hub.callTool(
+                    name,
+                    argumentsInput as Record<string, unknown>,
+                    {
+                      signal: context.signal,
+                      authorizedByCaller: true,
+                      requestContext: request,
+                    },
+                  ),
+                ),
+              ),
+            );
+          },
+        }),
+        defineTool({
+          name: "find_mcp_tools",
+          description:
+            "Discover MCP tools. Specify a server to start its connection and sign-in on first use.",
+          inputSchema: {
+            type: "object",
+            properties: { server: { type: "string" } },
+          },
+          effect: "read",
+          handler: async (input, context) => {
+            if (!(await validContext(context)))
+              return { modelContent: "MCP turn has changed", isError: true };
+            const server =
+              typeof input.server === "string" ? input.server.trim() : "";
+            if (server && !(await validContext(context, server)))
+              return {
+                modelContent: `MCP server '${server}' is not configured for this turn`,
+                isError: true,
+              };
+            if (server && !(await activate(server, context.signal)))
+              return {
+                modelContent: `MCP server '${server}' is not connected`,
+                isError: true,
+              };
+            return {
+              modelContent: JSON.stringify({
+                tools: hub
+                  .getToolDefs()
+                  .filter(
+                    (definition) =>
+                      !server || definition.name.startsWith(`${server}__`),
+                  ),
+                signInNeeded: hub.getPendingServerNames(),
+              }).slice(0, MAX_RESULT_CHARS),
+            };
+          },
+        }),
         catalog(
           "list_mcp_resources",
           "List all resources available from connected MCP servers.",
