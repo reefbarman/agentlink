@@ -24,6 +24,82 @@ describe("filterOutput", () => {
     expect(result.filtered).not.toContain("line 300\n");
   });
 
+  it("redacts data values from Kubernetes Secret YAML", () => {
+    const input = [
+      "apiVersion: v1",
+      "kind: Secret",
+      "metadata:",
+      "  name: synthetic-secret",
+      "data:",
+      "  username: ZmFrZS11c2Vy",
+      "  password: ZmFrZS1wYXNzd29yZA==",
+      "stringData:",
+      "  note: synthetic-plain-secret",
+      "type: Opaque",
+    ].join("\n");
+
+    const result = filterOutput(input, {});
+
+    expect(result.filtered).toContain("username: [REDACTED]");
+    expect(result.filtered).toContain("password: [REDACTED]");
+    expect(result.filtered).toContain("note: [REDACTED]");
+    expect(result.filtered).toContain("name: synthetic-secret");
+    expect(result.filtered).toContain("type: Opaque");
+    expect(result.filtered).not.toContain("ZmFrZS");
+    expect(result.filtered).not.toContain("synthetic-plain-secret");
+  });
+
+  it("redacts only Secret documents in a multi-document YAML stream", () => {
+    const input = [
+      "kind: Secret",
+      "data:",
+      "  token: synthetic-secret-value",
+      "---",
+      "kind: ConfigMap",
+      "data:",
+      "  token: intentionally-visible",
+    ].join("\n");
+
+    const result = filterOutput(input, {});
+
+    expect(result.filtered).toContain("token: [REDACTED]");
+    expect(result.filtered).toContain("token: intentionally-visible");
+  });
+
+  it("redacts a synthetic Secret object echoed by a failing kubectl template", () => {
+    const input =
+      'error: error executing template "{{len .metadata.ownerReferences}}": ' +
+      "template: output:1: unexpected len; raw data was: map[data:map[tls.key:ZmFrZS1rZXk=] " +
+      "kind:Secret metadata:map[name:synthetic-secret]]; object given to template engine was: " +
+      "map[data:map[tls.key:ZmFrZS1rZXk=] kind:Secret]\n";
+
+    const result = filterOutput(input, {});
+
+    expect(result.filtered).toContain("error executing template");
+    expect(result.filtered).toContain("[Kubernetes Secret object redacted]");
+    expect(result.filtered).not.toContain("ZmFrZS1rZXk=");
+  });
+
+  it("redacts Secret data in JSON lists without changing ConfigMaps", () => {
+    const input = JSON.stringify({
+      kind: "List",
+      items: [
+        { kind: "Secret", data: { "tls.key": "synthetic-private-key" } },
+        { kind: "ConfigMap", data: { message: "visible" } },
+      ],
+    });
+    const result = JSON.parse(filterOutput(input, {}).filtered);
+
+    expect(result.items[0].data["tls.key"]).toBe("[REDACTED]");
+    expect(result.items[1].data.message).toBe("visible");
+  });
+
+  it("preserves intentionally selected plain Secret data values", () => {
+    const result = filterOutput("synthetic-secret-value", {});
+
+    expect(result.filtered).toBe("synthetic-secret-value");
+  });
+
   it("handles empty output", () => {
     const result = filterOutput("", {});
     expect(result.totalLines).toBe(0);
@@ -108,6 +184,23 @@ describe("filterOutput", () => {
     );
     expect(result.filtered.endsWith("🙂")).toBe(true);
     expect(result.truncated).toBe(true);
+  });
+
+  it("redacts Kubernetes Secret data before saving full output", async () => {
+    const { readFileSync, unlinkSync } = await import("fs");
+    const { saveOutputTempFile } = await import("./outputFilter.js");
+    const secretOutput =
+      "kind: Secret\ndata:\n  password: synthetic-secret-value\n";
+    const filePath = saveOutputTempFile(secretOutput);
+
+    expect(filePath).not.toBeNull();
+    try {
+      const saved = readFileSync(filePath!, "utf-8");
+      expect(saved).toContain("password: [REDACTED]");
+      expect(saved).not.toContain("synthetic-secret-value");
+    } finally {
+      if (filePath) unlinkSync(filePath);
+    }
   });
 
   // ── output_tail ─────────────────────────────────────────────────────

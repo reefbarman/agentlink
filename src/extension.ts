@@ -1421,7 +1421,7 @@ export async function activate(
   let agentConfig: AgentConfig = {
     model: startupModel,
     composeEnabled: composeEnabledAtStartup,
-    maxTokens: agentConfiguration.get<number>("agentMaxTokens") ?? 8192,
+    maxTokens: 8192,
     thinkingBudget: agentConfiguration.get<number>("thinkingBudget") ?? 10000,
     showThinking: agentConfiguration.get<boolean>("showThinking") ?? true,
     autoCondense: agentConfiguration.get<boolean>("autoCondense") ?? true,
@@ -1929,6 +1929,7 @@ export async function activate(
         }
       }
 
+      agentSessionManager.refreshAgentMaxTokens();
       const currentProviderIds = new Set(
         openAiCompatibleProviderManager
           .listProviders()
@@ -3230,7 +3231,6 @@ export async function activate(
         void applyDisabledProviders();
       }
       if (
-        e.affectsConfiguration("agentlink.agentMaxTokens") ||
         e.affectsConfiguration("agentlink.thinkingBudget") ||
         e.affectsConfiguration("agentlink.showThinking") ||
         e.affectsConfiguration("agentlink.autoCondense") ||
@@ -3251,7 +3251,6 @@ export async function activate(
         );
         const windowConfig = vscode.workspace.getConfiguration("agentlink");
         agentSessionManager.updateConfig({
-          maxTokens: config.get<number>("agentMaxTokens") ?? 8192,
           thinkingBudget: config.get<number>("thinkingBudget") ?? 10000,
           showThinking: windowConfig.get<boolean>("showThinking") ?? true,
           autoCondense: config.get<boolean>("autoCondense") ?? true,

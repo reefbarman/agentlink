@@ -1398,14 +1398,10 @@ export class AgentSessionManager {
     }
     const common = {
       mode: args.summary.mode,
-      config: {
-        ...this.config,
+      config: this.buildConfigForModel(
         model,
-        autoCondenseThreshold: this.getCondenseThresholdForModel(
-          model,
-          resolution.status === "available" ? resolution.scope : undefined,
-        ),
-      },
+        resolution.status === "available" ? resolution.scope : undefined,
+      ),
       background,
       initialArchitectReviewPending:
         args.metadata.initialArchitectReviewPending ?? false,
@@ -2321,6 +2317,7 @@ export class AgentSessionManager {
       if (modelResolution && modelResolution.model !== session.model) {
         const retiredModel = session.model;
         session.model = modelResolution.model;
+        session.maxTokens = this.getAgentMaxTokens(session.model);
         session.providerId = modelResolution.provider.id;
         if (!session.background && this.foregroundId === session.id) {
           this.updateConfig({
@@ -2460,6 +2457,7 @@ export class AgentSessionManager {
                                 reasoningEffort: "low",
                                 state: { store: false },
                                 providerHints: {
+                                  sessionId: `${session.id}:web:${request.kind}`,
                                   codex: {
                                     sessionId: `${session.id}:web:${request.kind}`,
                                   },
@@ -4383,6 +4381,7 @@ export class AgentSessionManager {
     }
     if (session && event.type === "warning" && event.modelFallback) {
       session.model = event.modelFallback.effectiveModel;
+      session.maxTokens = this.getAgentMaxTokens(session.model);
       session.providerId = this.host.providers.tryResolveProvider(
         event.modelFallback.effectiveModel,
       )?.id;
@@ -4616,6 +4615,13 @@ export class AgentSessionManager {
     Object.assign(this.config, config);
   }
 
+  refreshAgentMaxTokens(): void {
+    for (const session of this.sessions.values()) {
+      session.maxTokens = this.getAgentMaxTokens(session.model);
+    }
+    this.config.maxTokens = this.getAgentMaxTokens(this.config.model);
+  }
+
   private getCondenseThresholdForModel(
     model: string,
     scope?: Readonly<SessionProjectScope>,
@@ -4634,6 +4640,14 @@ export class AgentSessionManager {
     }
   }
 
+  private getAgentMaxTokens(model: string): number {
+    return (
+      this.host.providers
+        .tryResolveProvider(model)
+        ?.getAgentMaxTokens?.(model) ?? 8192
+    );
+  }
+
   private buildConfigForModel(
     model: string,
     scope?: Readonly<SessionProjectScope>,
@@ -4642,6 +4656,7 @@ export class AgentSessionManager {
     const base = {
       ...this.config,
       model,
+      maxTokens: this.getAgentMaxTokens(model),
       autoCondenseThreshold:
         autoCondenseThreshold ??
         this.getCondenseThresholdForModel(model, scope),
@@ -4662,6 +4677,7 @@ export class AgentSessionManager {
     effectiveModel: string,
   ): Promise<void> {
     session.model = effectiveModel;
+    session.maxTokens = this.getAgentMaxTokens(effectiveModel);
     this.applyReasoningEffortToSession(
       session,
       this.getDesiredReasoningEffort(session),
@@ -5084,6 +5100,7 @@ export class AgentSessionManager {
     const previousSessionModel = session.model;
     const previousProviderId = session.providerId;
     const previousSessionThreshold = session.autoCondenseThreshold;
+    const previousMaxTokens = session.maxTokens;
     const previousReasoningEffort = session.reasoningEffort;
     const previousThinkingBudget = session.thinkingBudget;
     const foreground = this.foregroundId === session.id;
@@ -5102,6 +5119,7 @@ export class AgentSessionManager {
         workspaceFolders: this.getWorkspaceFolders(),
       });
       session.autoCondenseThreshold = threshold;
+      session.maxTokens = this.getAgentMaxTokens(model);
       this.applyReasoningEffortToSession(
         session,
         this.getDesiredReasoningEffort(session),
@@ -5117,6 +5135,7 @@ export class AgentSessionManager {
       session.model = previousSessionModel;
       session.providerId = previousProviderId;
       session.autoCondenseThreshold = previousSessionThreshold;
+      session.maxTokens = previousMaxTokens;
       session.reasoningEffort = previousReasoningEffort;
       session.thinkingBudget = previousThinkingBudget;
       throw error;
@@ -7965,6 +7984,7 @@ export class AgentSessionManager {
     const newProviderId = this.host.providers.tryResolveProvider(model)?.id;
 
     session.model = model;
+    session.maxTokens = config.maxTokens;
     session.providerId = newProviderId;
     this.applyReasoningEffortToSession(
       session,

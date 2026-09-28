@@ -2577,10 +2577,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const scope = explicitScope ?? this.getCurrentProjectScope();
     if (!scope?.rootPath) return;
     try {
-      const generation = await this.projectMcpHubRegistry.reload(
-        scope,
-        options,
+      const currentStatuses = new Map(
+        this.getCurrentProjectMcpHub(scope)
+          ?.getServerInfos()
+          .map((info) => [info.name, info.status] as const) ?? [],
       );
+      const configs =
+        options?.trigger === "manual-reconnect" && options.userInitiated
+          ? this.agentPluginCatalogProvider
+            ? await loadWorkspaceMcpRuntimeConfigs({
+                requestingScope: scope,
+                workspaceProjects: this.getWorkspaceMcpProjects(),
+                pluginCatalog: this.agentPluginCatalogProvider,
+              })
+            : await loadWorkspaceMcpConfigs(this.getWorkspaceMcpProjects())
+          : [];
+      const generation = await this.projectMcpHubRegistry.reload(scope, {
+        ...options,
+        ...(configs.length
+          ? {
+              interactiveServerNames: new Set(
+                configs
+                  .filter(
+                    (config) =>
+                      !config.disabled &&
+                      (config.sourceProjectIds?.includes(scope.projectId) ||
+                        (config.provenance?.kind === "agent-plugin" &&
+                          (config.provenance.scope.kind === "global" ||
+                            config.provenance.scope.projectId ===
+                              scope.projectId))) &&
+                      currentStatuses.get(config.name) !== "connected" &&
+                      currentStatuses.get(config.name) !== "connecting",
+                  )
+                  .map((config) => config.name),
+              ),
+            }
+          : {}),
+      });
       this.log(
         `[mcp:${scope.projectId}] activated generation ${generation.generation}`,
       );
@@ -5376,7 +5409,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public async submitBrowserMcpAction(
     serverName: string,
-    action: "disable" | "reconnect" | "reauthenticate",
+    action: "connect" | "disable" | "reconnect" | "reauthenticate",
     projectId?: string,
   ): Promise<{
     ok: boolean;
@@ -5388,12 +5421,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const projectScope = this.resolveMcpProjectScope(projectId);
     if (!projectScope?.rootPath) return { ok: false };
     const hub = this.getCurrentProjectMcpHub(projectScope) ?? this.mcpHub;
-    const runtimeServerName = this.resolveProjectMcpRuntimeServerName(
-      hub,
-      projectScope.projectId,
-      serverName,
-    );
-    if (!runtimeServerName) return { ok: false };
     if (action === "disable") {
       const result = await this.persistMcpServerDisabled(
         "main",
@@ -5407,10 +5434,58 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         infos: hub.getServerInfos(),
       };
     }
-    if (action === "reconnect") {
-      await hub.reconnectServer(runtimeServerName);
+    if (action === "connect") {
+      const snapshot = await this.buildMcpConfigSnapshot(
+        "main",
+        undefined,
+        projectScope,
+        hub,
+      );
+      if (
+        !snapshot.entries.some(
+          (entry) => entry.name === serverName && !entry.config.disabled,
+        ) ||
+        this.resolveProjectMcpRuntimeServerName(
+          hub,
+          projectScope.projectId,
+          serverName,
+        )
+      ) {
+        return { ok: false };
+      }
+      const configs = this.agentPluginCatalogProvider
+        ? await loadWorkspaceMcpRuntimeConfigs({
+            requestingScope: projectScope,
+            workspaceProjects: this.getWorkspaceMcpProjects(),
+            pluginCatalog: this.agentPluginCatalogProvider,
+          })
+        : await loadWorkspaceMcpConfigs(this.getWorkspaceMcpProjects());
+      const config = configs.find(
+        (candidate) =>
+          (candidate.provenance?.kind === "agent-plugin"
+            ? candidate.name
+            : (candidate.sourceServerName ?? candidate.name)) === serverName &&
+          (candidate.sourceProjectIds?.includes(projectScope.projectId) ||
+            (candidate.provenance?.kind === "agent-plugin" &&
+              (candidate.provenance.scope.kind === "global" ||
+                candidate.provenance.scope.projectId ===
+                  projectScope.projectId))) &&
+          !candidate.disabled,
+      );
+      if (!config) return { ok: false };
+      await hub.connectConfiguredServer(config);
     } else {
-      await hub.reauthenticateServer(runtimeServerName);
+      const runtimeServerName = this.resolveProjectMcpRuntimeServerName(
+        hub,
+        projectScope.projectId,
+        serverName,
+      );
+      if (!runtimeServerName) return { ok: false };
+      if (action === "reconnect") {
+        await hub.reconnectServer(runtimeServerName);
+      } else {
+        await hub.reauthenticateServer(runtimeServerName);
+      }
     }
     const configSnapshot = await this.buildMcpConfigSnapshot(
       "main",
@@ -5424,6 +5499,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       mainHub: hub,
     });
     return { ok: true, infos: hub.getServerInfos(), configSnapshot };
+  }
+
+  public async submitBrowserMcpRefresh(projectId?: string): Promise<{
+    ok: boolean;
+    configSnapshot?: McpConfigSnapshot;
+  }> {
+    const projectScope = this.resolveMcpProjectScope(projectId);
+    if (!projectScope?.rootPath) return { ok: false };
+    await this.refreshMcpConnections(
+      { trigger: "manual-reconnect", userInitiated: true },
+      projectScope,
+    );
+    return {
+      ok: true,
+      configSnapshot: await this.buildMcpConfigSnapshot(
+        "main",
+        undefined,
+        projectScope,
+        this.getCurrentProjectMcpHub(projectScope),
+      ),
+    };
   }
 
   public async submitBrowserMcpConfigSnapshot(
@@ -8710,39 +8806,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "agentMcpAction": {
         const serverName = msg.serverName as string;
-        const action = msg.action as "disable" | "reconnect" | "reauthenticate";
+        const action = msg.action as
+          | "connect"
+          | "disable"
+          | "reconnect"
+          | "reauthenticate";
         if (!serverName || !action) break;
         const projectScope = this.resolveMcpProjectScope(
           typeof msg.projectId === "string" ? msg.projectId : undefined,
         );
         if (!projectScope?.rootPath) break;
-        const hub = this.getCurrentProjectMcpHub(projectScope) ?? this.mcpHub;
-        const runtimeServerName = this.resolveProjectMcpRuntimeServerName(
-          hub,
-          projectScope.projectId,
+        const result = await this.submitBrowserMcpAction(
           serverName,
+          action,
+          projectScope.projectId,
         );
-        if (!runtimeServerName) break;
-        if (action === "disable") {
-          const result = await this.persistMcpServerDisabled(
-            "main",
-            serverName,
-            projectScope,
+        if (!result.ok) {
+          vscode.window.showErrorMessage(
+            `Failed to ${action} MCP server: ${result.errors?.[0]?.message ?? "server is not available"}`,
           );
-          if (!result.ok) {
-            vscode.window.showErrorMessage(
-              `Failed to disable MCP server: ${result.errors[0]?.message ?? "unknown error"}`,
-            );
-          }
-        } else if (action === "reconnect") {
-          await hub.reconnectServer(runtimeServerName);
-        } else if (action === "reauthenticate") {
-          await hub.reauthenticateServer(runtimeServerName);
         }
         await this.postMcpManagerSnapshot({
           profile: "main",
           projectScope,
-          mainHub: hub,
           connection: context?.connection,
         });
         break;
@@ -8839,7 +8925,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         );
         if (!projectScope?.rootPath) break;
         if (msg.refresh === true) {
-          await this.refreshMcpConnections(undefined, projectScope);
+          await this.refreshMcpConnections(
+            { trigger: "manual-reconnect", userInitiated: true },
+            projectScope,
+          );
         }
         await this.postMcpManagerSnapshot({
           profile: "main",

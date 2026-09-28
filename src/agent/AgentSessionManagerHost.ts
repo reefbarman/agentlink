@@ -223,7 +223,7 @@ export function createDefaultAgentSessionManagerHost(args: {
           // Compose is machine-scoped and startup-frozen by extension.ts; a
           // resource-scoped configuration snapshot must never broaden it.
           composeEnabled: base.composeEnabled,
-          maxTokens: config.get<number>("agentMaxTokens") ?? 8192,
+          maxTokens: base.maxTokens,
           thinkingBudget: config.get<number>("thinkingBudget") ?? 10000,
           autoCondense: config.get<boolean>("autoCondense") ?? true,
           codexStatefulResponses:

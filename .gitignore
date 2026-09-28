@@ -8,6 +8,8 @@ releases/
 desktop-releases/
 apps/desktop/package-stage/
 apps/cli/artifacts/
+apps/cli/package-stage/
+cli-releases/
 .env.local
 plans/*
 .mcp.json

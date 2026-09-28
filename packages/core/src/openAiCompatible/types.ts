@@ -8,6 +8,11 @@ import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
 
 export type OpenAiCompatibleProfileKind = "generic" | "openrouter";
 
+export interface OpenAiCompatibleSessionIdMapping {
+  location: "header" | "body";
+  name: string;
+}
+
 /** Model-vendor behavior used for prompt selection, independent of API transport. */
 export type OpenAiCompatibleModelFamily = "anthropic" | "openai";
 
@@ -36,6 +41,8 @@ export interface OpenAiCompatibleRuntimeProfile {
   timeoutMs: number;
   authRequired: boolean;
   supportsStoreFalse?: boolean;
+  meridianSessionAffinity?: boolean;
+  sessionId?: OpenAiCompatibleSessionIdMapping;
   models: Readonly<Record<string, OpenAiCompatibleRuntimeModel>>;
 }
 

@@ -19,7 +19,7 @@ extraResources:
 mac:
   category: public.app-category.productivity
   icon: ../assets/icon.png
-  identity: null
+  identity: null # Non-MAS Apple Development is signed by afterPack in development mode.
   target:
     - dmg
     - zip

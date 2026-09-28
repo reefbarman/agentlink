@@ -31,13 +31,18 @@ try {
     delete environment.NO_COLOR;
     environment.FORCE_COLOR = "1";
   }
-  const child = pty.spawn(process.execPath, [entry, "--project", projectRoot], {
-    name: "xterm-256color",
-    cols: 100,
-    rows: 30,
-    cwd: projectRoot,
-    env: environment,
-  });
+  const executable = process.argv.includes("--executable");
+  const child = pty.spawn(
+    executable ? entry : process.execPath,
+    executable ? ["--project", projectRoot] : [entry, "--project", projectRoot],
+    {
+      name: "xterm-256color",
+      cols: 100,
+      rows: 30,
+      cwd: projectRoot,
+      env: environment,
+    },
+  );
   let output = "";
   let started = false;
   let exited = false;

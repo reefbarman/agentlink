@@ -27,6 +27,13 @@ const PROMPT_PATTERNS: readonly PromptPattern[] = [
     kind: "confirmation",
     confidence: "high",
     pattern:
+      /mise config files[^\n]*not trusted\. Trust them\?[\s\S]*[←→]\s*\/\s*[←→]\s+toggle[^\n]*\bsubmit\s*$/i,
+    scope: "recent-lines",
+  },
+  {
+    kind: "confirmation",
+    confidence: "high",
+    pattern:
       /(?:\[(?:y\s*\/\s*n|yes\s*\/\s*no)\]|\((?:y\s*\/\s*n|yes\s*\/\s*no)\))\s*[:?]?\s*$/i,
     scope: "tail-line",
   },

@@ -880,6 +880,59 @@ describe("AgentSessionManager host injection", () => {
     expect(mgr.getConfig().model).toBe("gpt-5.6-sol");
   });
 
+  it("uses per-model response limits when switching models and reloading providers", async () => {
+    let agentLimit = 32_768;
+    const capabilities = {
+      supportsThinking: true,
+      supportsCaching: false,
+      supportsImages: true,
+      supportsToolUse: true,
+      contextWindow: 200_000,
+      maxOutputTokens: 65_536,
+    };
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: "openai-compatible:test",
+      displayName: "Test",
+      condenseModel: "opus",
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => capabilities),
+      getAgentMaxTokens: (model: string) =>
+        model === "opus" ? agentLimit : undefined,
+      listModels: vi.fn(() =>
+        ["opus", "sonnet"].map((id) => ({
+          id,
+          displayName: id,
+          provider: "openai-compatible:test",
+          capabilities,
+        })),
+      ),
+      stream: vi.fn(),
+      complete: vi.fn(),
+    });
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      { host: { providers } },
+    );
+
+    const session = await mgr.createSession("code");
+    await mgr.setModel("opus");
+    expect(session.maxTokens).toBe(32_768);
+    agentLimit = 65_536;
+    mgr.refreshAgentMaxTokens();
+    expect(session.maxTokens).toBe(65_536);
+    await mgr.setModel("sonnet");
+    expect(session.maxTokens).toBe(8192);
+    await mgr.setModel("opus");
+    expect(session.maxTokens).toBe(65_536);
+  });
+
   it("accepts an explicit model before providers finish registering", async () => {
     const mgr = new AgentSessionManager(makeConfig(), "/tmp");
     const session = await mgr.createSession("code");

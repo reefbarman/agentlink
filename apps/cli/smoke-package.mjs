@@ -3,31 +3,18 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
+import { packCli } from "./pack.mjs";
 import path from "node:path";
-import { verifyCliPackage } from "../../scripts/verify-cli-package.mjs";
 
 const root = import.meta.dirname;
 const artifacts = path.join(root, "artifacts");
 await rm(artifacts, { recursive: true, force: true });
 await mkdir(artifacts, { recursive: true });
-const json = JSON.parse(
-  execFileSync("npm", ["pack", "--json", "--pack-destination", artifacts], {
-    cwd: root,
-    encoding: "utf8",
-  }),
-);
-const packed = json[0];
-const manifest = JSON.parse(
-  await readFile(path.join(root, "package.json"), "utf8"),
-);
-const runtimeManifest = JSON.parse(
-  await readFile(path.join(root, "dist", "runtime-manifest.json"), "utf8"),
-);
-verifyCliPackage(
-  manifest,
-  packed.files.map((file) => `package/${file.path}`),
-  runtimeManifest,
-);
+execFileSync(process.execPath, [path.join(root, "esbuild.mjs"), "--package"], {
+  cwd: root,
+  stdio: "inherit",
+});
+const { packed, runtimeManifest } = await packCli();
 const installRoot = await mkdtemp(
   path.join(os.tmpdir(), "agentlink-cli-install-"),
 );

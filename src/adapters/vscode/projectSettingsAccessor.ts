@@ -22,7 +22,6 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
   "worktreeDirectorySuffix",
 
   "modelPromptProfiles",
-  "agentMaxTokens",
   "thinkingBudget",
   "autoCondense",
 

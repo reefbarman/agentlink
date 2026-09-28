@@ -2629,6 +2629,238 @@ describe("ChatViewProvider session state sync", () => {
     provider.dispose();
   });
 
+  it("connects an enabled configured-only server for the selected project", async () => {
+    const projectRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-mcp-connect-"),
+    );
+    const otherRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-mcp-connect-other-"),
+    );
+    try {
+      fs.mkdirSync(path.join(otherRoot, ".agentlink"));
+      fs.writeFileSync(
+        path.join(otherRoot, ".agentlink", "mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            "connect-only-test": { command: "node", args: ["other.js"] },
+          },
+        }),
+      );
+      fs.mkdirSync(path.join(projectRoot, ".agentlink"));
+      fs.writeFileSync(
+        path.join(projectRoot, ".agentlink", "mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            "connect-only-test": { command: "node", args: ["server.js"] },
+          },
+        }),
+      );
+      const { ChatViewProvider } = await import("./ChatViewProvider.js");
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
+      const scope = {
+        schemaVersion: 1 as const,
+        kind: "project" as const,
+        projectId: "project-a",
+        workspaceFolderUri: `file://${projectRoot}`,
+        displayName: "project-a",
+        rootPath: projectRoot,
+      };
+      const connectConfiguredServer = vi.fn(async () => undefined);
+      const hub = {
+        connectConfiguredServer,
+        getServerInfos: vi.fn(() => []),
+      };
+      const internals = provider as unknown as {
+        resolveMcpProjectScope(): typeof scope;
+        getCurrentProjectMcpHub(): typeof hub;
+        resolveProjectMcpRuntimeServerName(): undefined;
+        buildMcpConfigSnapshot(): Promise<Record<string, unknown>>;
+        postMcpManagerSnapshot(): Promise<void>;
+        getWorkspaceMcpProjects(): Array<{
+          projectId: string;
+          displayName: string;
+          rootPath: string;
+        }>;
+      };
+      internals.resolveMcpProjectScope = () => scope;
+      internals.getCurrentProjectMcpHub = () => hub;
+      internals.resolveProjectMcpRuntimeServerName = () => undefined;
+      internals.buildMcpConfigSnapshot = async () => ({
+        entries: [{ name: "connect-only-test", config: { disabled: false } }],
+      });
+      internals.postMcpManagerSnapshot = async () => undefined;
+      internals.getWorkspaceMcpProjects = () => [
+        {
+          projectId: "project-b",
+          displayName: "project-b",
+          rootPath: otherRoot,
+        },
+        scope,
+      ];
+
+      await expect(
+        provider.submitBrowserMcpAction(
+          "connect-only-test",
+          "connect",
+          scope.projectId,
+        ),
+      ).resolves.toMatchObject({ ok: true });
+      expect(connectConfiguredServer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceServerName: "connect-only-test",
+          sourceProjectIds: [scope.projectId],
+          command: "node",
+          args: ["server.js"],
+        }),
+      );
+      provider.dispose();
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+      fs.rmSync(otherRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("retries failed and configured-only MCP servers with interactive auth on Refresh", async () => {
+    const projectRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-mcp-refresh-"),
+    );
+    const otherRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-mcp-other-"),
+    );
+    try {
+      fs.mkdirSync(path.join(otherRoot, ".agentlink"));
+      fs.writeFileSync(
+        path.join(otherRoot, ".agentlink", "mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            "other-project-only": { command: "node", args: ["other.js"] },
+          },
+        }),
+      );
+      fs.mkdirSync(path.join(projectRoot, ".agentlink"));
+      fs.writeFileSync(
+        path.join(projectRoot, ".agentlink", "mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            failed: { command: "node", args: ["failed.js"] },
+            configured: { command: "node", args: ["configured.js"] },
+            connected: { command: "node", args: ["connected.js"] },
+          },
+        }),
+      );
+      const { ChatViewProvider } = await import("./ChatViewProvider.js");
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
+      const scope = {
+        schemaVersion: 1 as const,
+        kind: "project" as const,
+        projectId: "project-a",
+        workspaceFolderUri: `file://${projectRoot}`,
+        displayName: "project-a",
+        rootPath: projectRoot,
+      };
+      const hub = {
+        getServerInfos: () => [
+          { name: "failed", status: "error" },
+          { name: "connected", status: "connected" },
+        ],
+      };
+      const internals = provider as unknown as {
+        resolveMcpProjectScope(): typeof scope;
+        getCurrentProjectMcpHub(): typeof hub;
+        getWorkspaceMcpProjects(): Array<{
+          projectId: string;
+          displayName: string;
+          rootPath: string;
+        }>;
+        buildMcpConfigSnapshot(): Promise<Record<string, unknown>>;
+      };
+      internals.resolveMcpProjectScope = () => scope;
+      internals.getCurrentProjectMcpHub = () => hub;
+      internals.buildMcpConfigSnapshot = async () => ({ entries: [] });
+      internals.getWorkspaceMcpProjects = () => [
+        scope,
+        {
+          projectId: "project-b",
+          displayName: "project-b",
+          rootPath: otherRoot,
+        },
+      ];
+      const reload = vi
+        .spyOn(provider.getProjectMcpHubRegistry(), "reload")
+        .mockResolvedValue({
+          projectId: scope.projectId,
+          generation: 1,
+          hub: { getServerInfos: () => [] } as never,
+        });
+      await provider.submitBrowserMcpRefresh(scope.projectId);
+      expect(reload).toHaveBeenCalledWith(
+        scope,
+        expect.objectContaining({
+          trigger: "manual-reconnect",
+          userInitiated: true,
+        }),
+      );
+      const interactive = reload.mock.calls[0]![1]!.interactiveServerNames!;
+      expect(interactive.has("failed")).toBe(true);
+      expect(interactive.has("configured")).toBe(true);
+      expect(interactive.has("connected")).toBe(false);
+      expect(interactive.has("other-project-only")).toBe(false);
+      provider.dispose();
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+      fs.rmSync(otherRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not start a configured-only server absent from the selected project's runtime config", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const scope = {
+      schemaVersion: 1 as const,
+      kind: "project" as const,
+      projectId: "project-a",
+      workspaceFolderUri: "file:///workspace/a",
+      displayName: "project-a",
+      rootPath: "/workspace/a",
+    };
+    const connectConfiguredServer = vi.fn(async () => undefined);
+    const hub = {
+      connectConfiguredServer,
+      getServerInfos: vi.fn(() => []),
+    };
+    const internals = provider as unknown as {
+      resolveMcpProjectScope(): typeof scope;
+      getCurrentProjectMcpHub(): typeof hub;
+      resolveProjectMcpRuntimeServerName(): undefined;
+      buildMcpConfigSnapshot(): Promise<Record<string, unknown>>;
+      postMcpManagerSnapshot(): Promise<void>;
+      getWorkspaceMcpProjects(): [];
+    };
+    internals.resolveMcpProjectScope = () => scope;
+    internals.getCurrentProjectMcpHub = () => hub;
+    internals.resolveProjectMcpRuntimeServerName = () => undefined;
+    internals.buildMcpConfigSnapshot = async () => ({
+      entries: [{ name: "linear", config: { disabled: false } }],
+    });
+    internals.postMcpManagerSnapshot = async () => undefined;
+    internals.getWorkspaceMcpProjects = () => [];
+
+    await expect(
+      provider.submitBrowserMcpAction("linear", "connect", scope.projectId),
+    ).resolves.toMatchObject({ ok: false });
+    expect(connectConfiguredServer).not.toHaveBeenCalled();
+    provider.dispose();
+  });
+
   it("routes browser reauthentication through the project MCP hub", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(
@@ -9631,7 +9863,7 @@ describe("chat tab host routing", () => {
       refresh: true,
     });
     expect(internals.refreshMcpConnections).toHaveBeenCalledWith(
-      undefined,
+      { trigger: "manual-reconnect", userInitiated: true },
       projectScope,
     );
     expect(connection.postMessage).toHaveBeenCalledWith(

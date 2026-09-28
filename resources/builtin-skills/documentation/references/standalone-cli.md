@@ -10,9 +10,25 @@ The private standalone CLI preview runs a local multi-turn AgentLink coding sess
 ## Requirements and packaging
 
 - macOS on Apple Silicon.
-- Node.js 22.19.0 or newer.
+- Node.js 22.19.0 or newer for repository builds and the legacy npm package. The signed standalone bundle includes its own pinned Node runtime.
 - An interactive terminal for coding chat and credential entry.
 - Public npm registry access when installing the tarball, because `@napi-rs/keyring` is an exact runtime dependency.
+
+### Signed local installation
+
+From the repository, run `npm run cli:install` or the AgentLink **Build and install CLI** task. It builds a standalone bundle containing Node 22.23.3, the Keychain runtime, and ripgrep, installs it under `~/.local/lib/agentlink/cli`, and links `~/.local/bin/agentlink`. Add `~/.local/bin` to PATH if needed. The installed command always uses its own Node, not Homebrew or another Node on PATH. The build downloads a checksum-pinned Node archive; running the installed bundle needs no npm install.
+
+Local packaging defaults to `AGENTLINK_MAC_SIGNING=development`. It requires exactly one valid **Apple Development** identity, or an explicit full name/fingerprint in `AGENTLINK_MAC_SIGNING_IDENTITY`. Inspect available identities with `security find-identity -v -p codesigning`. Missing or ambiguous identities fail the build. The signing tool can ask once for private-key access. Do not share private keys or passwords in chat or commit them.
+
+`npm run cli:bundle` packages without installing. `AGENTLINK_MAC_SIGNING=unsigned npm run cli:bundle` creates an unsigned CI preview under `cli-releases/`; the signed local installer refuses that preview. Apple Development signing is local development identity, not Developer ID distribution signing or notarisation.
+
+The signed Node caller uses `com.agentlink.cli.node`. Existing Keychain items may require **Always Allow** once for that caller. Rebuilds with the same signing identity should preserve access, but certificate changes, locked keychains, or item policies can still prompt. No item permissions are changed automatically. The dedicated runtime is still a general-purpose interpreter, so Keychain trust applies to that executable, not exclusively to AgentLink JavaScript.
+
+The installer refuses unrelated existing `agentlink` entrypoints and retains previous bundles for recovery without deleting sessions or credentials. Quit active CLI sessions before replacing the bundle. To remove this installation, remove its `~/.local/bin/agentlink` symlink and `~/.local/lib/agentlink/cli` directory, leaving `~/.agentlink` and Keychain entries intact unless intentionally decommissioning them.
+
+### Source builds and legacy npm tarballs
+
+The legacy npm tarball uses external Node and does not provide a dedicated signing identity. Source compilation is platform-neutral for CI; this does not add Linux or Intel CLI runtime support. macOS ARM64 assets and platform restrictions are applied when packaging, not while installing source workspaces.
 
 Exercise the source-build TUI in real colour and no-colour PTYs, including resize, keyboard controls, Ctrl+Z/SIGCONT job control, Ctrl+C exit, and terminal restoration:
 

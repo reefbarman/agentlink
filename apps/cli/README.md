@@ -2,6 +2,16 @@
 
 Private macOS Apple Silicon preview of AgentLink's standalone local coding host.
 
+## Local signed installation
+
+Use the AgentLink **Build and install CLI** task or `npm run cli:install` on macOS Apple Silicon. It installs a standalone bundle under `~/.local/lib/agentlink/cli` and links `~/.local/bin/agentlink`. The bundle includes pinned Node 22.23.3, Keychain native dependencies, and ripgrep; running it does not require Node on PATH. Building still requires the repository's Node/npm toolchain.
+
+Local packaging requires a valid **Apple Development** signing identity. If exactly one is available, it is selected automatically. Otherwise set `AGENTLINK_MAC_SIGNING_IDENTITY` to its full certificate name or fingerprint from `security find-identity -v -p codesigning`. Signing defaults to `AGENTLINK_MAC_SIGNING=development` and fails rather than silently installing an unsigned build. The signing tool may request permission to use your private key once.
+
+The dedicated runtime uses the stable identifier `com.agentlink.cli.node`. Existing Keychain items may still require **Always Allow** once for this caller. Stable signing aims to preserve that approval across rebuilds; a locked keychain, certificate changes, or item policies can still prompt. The signed runtime remains a general-purpose Node interpreter, not an isolation boundary for JavaScript. No Keychain permissions are broadened automatically.
+
+`npm run cli:bundle` builds the bundle without installing it. `AGENTLINK_MAC_SIGNING=unsigned npm run cli:bundle` creates an explicitly unsigned CI preview, which the local installer refuses. Development signing is not Developer ID signing or notarisation. Archives are written under `cli-releases/`. The installer only replaces recognised AgentLink entrypoints and retains previous bundles for recovery; it does not delete sessions or credentials. Avoid rebuilding/installing while CLI sessions are active.
+
 ## Build and run from the repository
 
 ```sh
@@ -17,7 +27,7 @@ npm run smoke:tui:no-color --workspace @agentlink/cli
 npm run cli:smoke
 ```
 
-Install, replace, or uninstall a built private tarball with:
+The legacy private npm tarball remains available for source development. Unlike the standalone installation, it uses external Node and does not provide an AgentLink-specific signing identity. Install, replace, or uninstall that tarball with:
 
 ```sh
 npm install --global /path/to/agentlink-cli-0.1.0.tgz

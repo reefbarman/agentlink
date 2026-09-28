@@ -303,19 +303,21 @@ Run **AgentLink: Set OpenAI-compatible API Key**, select `openrouter-main`, and 
 
 Connection fields:
 
-| Field                 | Required | Behavior                                                                                                                                                                                       |
-| --------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                  | yes      | Lowercase stable connection key; creates provider ID `openai-compatible:<id>`                                                                                                                  |
-| `displayName`         | yes      | Selector group label                                                                                                                                                                           |
-| `baseUrl`             | yes      | API root, normally `/v1`; no user-info/query/fragment; AgentLink appends `/chat/completions`                                                                                                   |
-| `profile`             | yes      | `generic` sends the portable request; `openrouter` adds verified OpenRouter fields/headers                                                                                                     |
-| `reasoningEffortMode` | no       | Request field for AgentLink's selected effort: `none`, `reasoning_effort`, `reasoning.effort`, or `output_config.effort`; defaults to `none` for generic and `reasoning.effort` for OpenRouter |
-| `authKey`             | no       | SecretStorage key name; omit for no-auth local servers                                                                                                                                         |
-| `timeoutMs`           | no       | Bounded whole-request timeout                                                                                                                                                                  |
-| `headers`             | no       | Bounded non-secret static headers; credential-bearing, transport-controlled, and CR/LF values are rejected                                                                                     |
-| `allowInsecureHttp`   | no       | Required to send a stored credential over non-loopback HTTP; defaults to `false`                                                                                                               |
-| `auxiliaryModel`      | no       | Local model ID from the same connection for condense/polish/detection/review helpers; defaults to the active model                                                                             |
-| `models`              | yes      | Non-empty nested model array                                                                                                                                                                   |
+| Field                     | Required | Behavior                                                                                                                                                                                                                                             |
+| ------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                      | yes      | Lowercase stable connection key; creates provider ID `openai-compatible:<id>`                                                                                                                                                                        |
+| `displayName`             | yes      | Selector group label                                                                                                                                                                                                                                 |
+| `baseUrl`                 | yes      | API root, normally `/v1`; no user-info/query/fragment; AgentLink appends `/chat/completions`                                                                                                                                                         |
+| `profile`                 | yes      | `generic` sends the portable request; `openrouter` adds verified OpenRouter fields/headers                                                                                                                                                           |
+| `reasoningEffortMode`     | no       | Request field for AgentLink's selected effort: `none`, `reasoning_effort`, `reasoning.effort`, or `output_config.effort`; defaults to `none` for generic and `reasoning.effort` for OpenRouter                                                       |
+| `authKey`                 | no       | SecretStorage key name; omit for no-auth local servers                                                                                                                                                                                               |
+| `timeoutMs`               | no       | Bounded whole-request timeout                                                                                                                                                                                                                        |
+| `headers`                 | no       | Bounded non-secret static headers; credential-bearing, transport-controlled, and CR/LF values are rejected                                                                                                                                           |
+| `allowInsecureHttp`       | no       | Required to send a stored credential over non-loopback HTTP; defaults to `false`                                                                                                                                                                     |
+| `auxiliaryModel`          | no       | Local model ID from the same connection for condense/polish/detection/review helpers; defaults to the active model                                                                                                                                   |
+| `meridianSessionAffinity` | no       | Opt in to send a dynamic `x-session-affinity` header with the host conversation ID on Meridian requests; not for OpenRouter                                                                                                                          |
+| `sessionId`               | no       | Generic connections only: `{ "location": "header", "name": "X-Conversation-Id" }` or `{ "location": "body", "name": "conversation_id" }` for a documented endpoint-specific session ID field; off by default and incompatible with Meridian affinity |
+| `models`                  | yes      | Non-empty nested model array                                                                                                                                                                                                                         |
 
 Model fields:
 
@@ -324,7 +326,8 @@ Model fields:
 | `id`, `model`, `displayName` | yes      | Stable local ID, opaque wire ID, and selector label                                                          |
 | `contextWindow`              | yes      | Declared positive context window used for budgeting                                                          |
 | `maxInputTokens`             | no       | Optional stricter positive input limit                                                                       |
-| `maxOutputTokens`            | yes      | Declared positive output limit                                                                               |
+| `maxOutputTokens`            | yes      | Declared positive provider output limit                                                                      |
+| `agentMaxTokens`             | no       | Built-in VS Code agent response limit (positive, at most `maxOutputTokens`); defaults to 8,192               |
 | `supportsToolUse`            | yes      | Controls function definitions and automatic agent/background eligibility; `false` models show **Chat only**  |
 | `supportsThinking`           | no       | Enables reasoning UI; defaults to `false`                                                                    |
 | `reasoningEfforts`           | no       | Allowed AgentLink effort values when thinking is enabled                                                     |
@@ -2102,9 +2105,9 @@ Each VS Code window owns its own built-in agent sessions, approvals, terminals, 
 | `agentlink.modeModelPreferences`           | GPT-5.6 Sol per mode | Startup model by mode slug; the last model selected in each mode becomes that mode's default                                                                                  |
 | `agentlink.modeReasoningEffortPreferences` | `{}`                 | Default thinking level by mode slug; changing the picker in a mode updates that mode's preference                                                                             |
 | `agentlink.modelPromptProfiles`            | `{}`                 | Exact model-ID overrides for `compatibility` or compact `reasoning` prompts; unknown models default to compatibility and automatic reasoning rollout remains evaluation-gated |
-| `agentlink.agentMaxTokens`                 | `8192`               | Maximum output tokens per built-in agent response                                                                                                                             |
-| `agentlink.thinkingBudget`                 | `10000`              | Extended thinking budget for thinking-capable models                                                                                                                          |
-| `agentlink.showThinking`                   | `true`               | Show thinking blocks in the built-in agent chat UI                                                                                                                            |
+
+| `agentlink.thinkingBudget` | `10000` | Extended thinking budget for thinking-capable models |
+| `agentlink.showThinking` | `true` | Show thinking blocks in the built-in agent chat UI |
 
 | `agentlink.disabledProviders` | `[]` | Temporarily remove provider IDs from model selection and automatic routing without clearing credentials |
 | `agentlink.autoCondense` | `true` | Automatically condense built-in agent conversation context when it fills up |

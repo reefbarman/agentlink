@@ -8,7 +8,7 @@ This is the owning guide for configuring and using MCP servers. See [Tools](tool
 - `/mcp-config` — configuration-oriented view (guided setup, JSON import, sources)
 - `/mcp-refresh` — explicitly reconnect configured servers (ordinary catalog changes load automatically)
 
-The MCP Manager has four views: **Overview** (config + status + enabled/disabled state), **Sources** (each layered file in precedence order, with read health and editability), **Guided setup** (stdio, HTTP, legacy SSE), and **Import JSON** (paste one or many servers; conflicts require explicit Skip/Replace/Rename). A multi-project workspace uses one Manager with a project selector. The Manager in both sidebar and editor chat panes updates after MCP config file changes; Refresh, Reconnect, Reauthenticate, and enable/disable actions return their results to the pane where they were requested.
+The MCP Manager has four views: **Overview** (config + status + enabled/disabled state), **Sources** (each layered file in precedence order, with read health and editability), **Guided setup** (stdio, HTTP, legacy SSE), and **Import JSON** (paste one or many servers; conflicts require explicit Skip/Replace/Rename). A multi-project workspace uses one Manager with a project selector. The Manager in both sidebar and editor chat panes updates after MCP config file changes. **Connect** starts an enabled server shown as "Configured · not connected" and may open sign-in. **Refresh** retries connections for the selected project and can initiate sign-in for configured servers without a runtime entry; **Reconnect** retries a server already in the runtime without forcing sign-in; **Reauthenticate** starts a fresh OAuth flow. Enable/disable changes remain configuration mutations. Actions return updated status to the pane where they were requested.
 
 ## Config files and precedence
 
@@ -21,7 +21,7 @@ For each project, server definitions merge from these files in ascending priorit
 5. `<workspace>/.claude/mcp.json`
 6. `<workspace>/.agentlink/mcp.json`
 
-AgentLink writes structured changes only to `.agentlink/mcp.json` sources (project or global). To change an inherited `.agents`/`.claude` server, create an AgentLink-owned override instead of editing those files. Projectless Ask Agent loads global compatibility sources followed by `~/.agentlink/ask-agent/mcp.json`; the standalone Desktop preview uses this same configuration without requiring VS Code.
+AgentLink writes structured changes only to `.agentlink/mcp.json` sources (project or global). To change an inherited `.agents`/`.claude` server, create an AgentLink-owned override instead of editing those files. Projectless Ask Agent loads global compatibility sources followed by `~/.agentlink/ask-agent/mcp.json`; the standalone Desktop preview uses this same configuration without requiring VS Code. On macOS, Desktop starts its helper with the login shell's `PATH` so global stdio servers using commands such as `npx` can resolve even when the app is launched from Finder. If shell startup fails, it keeps the inherited `PATH`; an unavailable executable is omitted from the Desktop turn rather than failing the question. Restart Desktop after changing your shell's executable paths.
 
 The main agent receives the union of every available workspace project's effective servers. Identical definitions are connected once. Different same-name definitions are kept under stable project-qualified runtime names, so one project's MCP config cannot silently hide another's.
 

@@ -378,6 +378,10 @@ function makeChatViewProviderStub() {
     })),
     submitBrowserMcpConfigOpenRaw: vi.fn(async () => ({ ok: true })),
     submitBrowserMcpAction: vi.fn(async () => ({ ok: true, infos: [] })),
+    submitBrowserMcpRefresh: vi.fn(async () => ({
+      ok: true,
+      configSnapshot: makeMcpConfigSnapshot(),
+    })),
     getBrowserAgentPluginManagerSnapshot: vi.fn(async (projectId: string) => ({
       schemaVersion: 1 as const,
       registryRevision: 2,
@@ -1499,6 +1503,38 @@ describe("BrowserGatewayServer", () => {
     expect(chatViewProvider.submitBrowserMcpAction).toHaveBeenCalledWith(
       "linear",
       "reconnect",
+    );
+
+    const browserConnectResponse = await fetch(`${baseUrl}/api/mcp/action`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        serverName: "linear",
+        action: "connect",
+        projectId: "project-a",
+      }),
+    });
+    expect(browserConnectResponse.ok).toBe(true);
+    expect(chatViewProvider.submitBrowserMcpAction).toHaveBeenCalledWith(
+      "linear",
+      "connect",
+      "project-a",
+    );
+
+    const browserRefreshResponse = await fetch(`${baseUrl}/api/mcp/refresh`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ projectId: "project-a" }),
+    });
+    expect(browserRefreshResponse.ok).toBe(true);
+    expect(chatViewProvider.submitBrowserMcpRefresh).toHaveBeenCalledWith(
+      "project-a",
     );
 
     const pageResponse = await fetch(`${baseUrl}/`);

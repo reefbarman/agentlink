@@ -177,6 +177,58 @@ describe("MessageBubble thinking rendering", () => {
 });
 
 describe("MessageBubble Activity grouping", () => {
+  it("collapses completed skill loads with adjacent thinking and tools", () => {
+    const message: ChatMessage = {
+      id: "assistant-skill-activity",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        ...[0, 1, 2].flatMap((index) => [
+          {
+            type: "thinking" as const,
+            id: `thinking-${index}`,
+            text: `Reasoning ${index}`,
+            complete: true,
+          },
+          {
+            type: "tool_call" as const,
+            id: `tool-${index}`,
+            name: "execute_command",
+            inputJson: "{}",
+            result: JSON.stringify({ exit_code: 0 }),
+            complete: true,
+          },
+        ]),
+        {
+          type: "skill_load",
+          id: "skill",
+          skillName: "gram-demo-seed",
+          inputJson: "{}",
+          result: JSON.stringify({ status: "success" }),
+          complete: true,
+        },
+      ],
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+    const activity = screen.getByRole("button", {
+      name: /activity 3 thinking steps · 3 tool calls · ran 3 commands/i,
+    });
+    expect(
+      container.querySelector(".assistant-blocks > .tool-call-block"),
+    ).toBeNull();
+
+    fireEvent.click(activity);
+    expect(
+      container.querySelector(
+        ".activity-group-children .tool-call-block .tool-call-name",
+      )?.textContent,
+    ).toBe("load_skill");
+  });
+
   it("collapses three completed cycles during streaming and preserves nested disclosures", () => {
     const message: ChatMessage = {
       id: "assistant-activity",

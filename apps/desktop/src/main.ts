@@ -25,6 +25,7 @@ import { buildDesktopCodexCatalog } from "./desktopModelCatalog.js";
 import { DesktopOpenAiCompatibleController } from "./desktopOpenAiCompatible.js";
 import { refreshDesktopOwner } from "./desktopOwnerRouting.js";
 import { DesktopRemoteView } from "./DesktopRemoteView.js";
+import { resolveDesktopMcpPath } from "./desktopMcpPath.js";
 
 declare const __AGENTLINK_HOST_VERSION__: string;
 
@@ -78,6 +79,7 @@ async function startLocalService(): Promise<BrowserGatewayHelperDiscoveryRecord>
     configuredPort <= 65_535
       ? configuredPort
       : 47_138;
+  const mcpPath = await resolveDesktopMcpPath();
   const result = await bootstrapModule.bootstrapBrowserGatewayHelper({
     extensionRootPath: getResourceRoot(),
     browserGatewayPort,
@@ -86,6 +88,7 @@ async function startLocalService(): Promise<BrowserGatewayHelperDiscoveryRecord>
     spawnEnv: {
       ELECTRON_RUN_AS_NODE: "1",
       AGENTLINK_BROWSER_GATEWAY_STANDALONE_MCP: "1",
+      ...(mcpPath ? { PATH: mcpPath } : {}),
       ...(app.isPackaged
         ? {
             NODE_PATH: path.join(

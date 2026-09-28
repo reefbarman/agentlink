@@ -5,7 +5,7 @@ import {
   AGENTLINK_RESULT_RUN_PREFIX,
   isAgentlinkTmpArtifact,
 } from "./agentlinkTmpArtifacts.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 describe("isAgentlinkTmpArtifact", () => {
   it("recognizes terminal output files emitted under os.tmpdir", () => {
@@ -35,30 +35,34 @@ describe("isAgentlinkTmpArtifact", () => {
 
   it.runIf(process.platform === "darwin")(
     "recognizes macOS /var and /private/var aliases for terminal output files",
-    () => {
-      // Derive from the real tmpdir so the test matches this machine's prefix
-      // (the folder hash differs per machine), not a hardcoded one.
-      const base = os.tmpdir();
-      const varBase = base.startsWith("/private/")
-        ? base.slice("/private".length)
-        : base;
-      const varPath = path.join(
-        varBase,
-        "agentlink-output-abc123",
-        "output.txt",
-      );
-      const privateVarPath = `/private${varPath}`;
+    async () => {
+      const varBase = "/var/folders/agentlink-test/T";
+      vi.stubEnv("TMPDIR", varBase);
+      vi.resetModules();
+      try {
+        const { isAgentlinkTmpArtifact } =
+          await import("./agentlinkTmpArtifacts.js");
+        const varPath = path.join(
+          varBase,
+          "agentlink-output-abc123",
+          "output.txt",
+        );
+        const privateVarPath = `/private${varPath}`;
 
-      expect(isAgentlinkTmpArtifact(varPath)).toBe(true);
-      expect(isAgentlinkTmpArtifact(privateVarPath)).toBe(true);
+        expect(isAgentlinkTmpArtifact(varPath)).toBe(true);
+        expect(isAgentlinkTmpArtifact(privateVarPath)).toBe(true);
 
-      const resultPath = path.join(
-        varBase,
-        `${AGENTLINK_RESULT_RUN_PREFIX}abc123`,
-        "output.jsonl",
-      );
-      expect(isAgentlinkTmpArtifact(resultPath)).toBe(true);
-      expect(isAgentlinkTmpArtifact(`/private${resultPath}`)).toBe(true);
+        const resultPath = path.join(
+          varBase,
+          `${AGENTLINK_RESULT_RUN_PREFIX}abc123`,
+          "output.jsonl",
+        );
+        expect(isAgentlinkTmpArtifact(resultPath)).toBe(true);
+        expect(isAgentlinkTmpArtifact(`/private${resultPath}`)).toBe(true);
+      } finally {
+        vi.unstubAllEnvs();
+        vi.resetModules();
+      }
     },
   );
 

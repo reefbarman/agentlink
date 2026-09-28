@@ -376,6 +376,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
     "/api/mcp/action",
     "MCP runtime actions require explicit protocol classification before Stage 5.",
   ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
+    "/api/mcp/refresh",
+    "MCP connection refresh requires explicit protocol classification before Stage 5.",
+  ),
   protocolCommand(
     "vscode_gateway",
     "POST",

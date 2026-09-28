@@ -8,6 +8,7 @@ import type {
   OpenAiCompatibleProfileKind,
   OpenAiCompatibleReasoningEffortMode,
   OpenAiCompatibleRuntimeProfile,
+  OpenAiCompatibleSessionIdMapping,
 } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
@@ -22,11 +23,31 @@ const MAX_AUTH_KEY_LENGTH = 256;
 const MAX_TOKEN_LIMIT = 100_000_000;
 const MAX_HEADERS = 32;
 const MAX_HEADER_NAME_LENGTH = 128;
+const MAX_SESSION_BODY_FIELD_NAME_LENGTH = 128;
 const MAX_HEADER_VALUE_LENGTH = 8_192;
 const MAX_HEADER_BYTES = 32_768;
 
 const CONNECTION_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const BODY_FIELD_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
+const RESERVED_BODY_FIELDS = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+  "model",
+  "messages",
+  "max_tokens",
+  "stream",
+  "store",
+  "response_format",
+  "tools",
+  "tool_choice",
+  "reasoning_effort",
+  "reasoning",
+  "output_config",
+  "parallel_tool_calls",
+  "temperature",
+]);
 const CREDENTIAL_HEADER_PATTERN =
   /(?:^|[-_])(?:api[-_]?key|auth(?:entication|orization)?|credential|secret|token)(?:$|[-_])/i;
 
@@ -53,6 +74,8 @@ const RESERVED_HEADERS = new Set([
   "x-api-key",
   "x-openrouter-categories",
   "x-openrouter-title",
+  "x-session-affinity",
+  "x-session-id",
 ]);
 
 export interface OpenAiCompatibleConfigIssue {
@@ -79,6 +102,10 @@ export interface OpenAiCompatibleConnectionDto {
   allowInsecureHttp?: boolean;
   auxiliaryModel?: string;
   supportsStoreFalse?: boolean;
+  /** Resume Meridian SDK sessions using the host's per-conversation identity. */
+  meridianSessionAffinity?: boolean;
+  /** Optional endpoint-specific session ID field for generic connections. */
+  sessionId?: OpenAiCompatibleSessionIdMapping;
   models: OpenAiCompatibleModelDto[];
 }
 
@@ -89,6 +116,7 @@ export interface OpenAiCompatibleModelDto {
   contextWindow: number;
   maxInputTokens?: number;
   maxOutputTokens: number;
+  agentMaxTokens?: number;
   supportsToolUse: boolean;
   supportsThinking?: boolean;
   reasoningEfforts?: CoreReasoningEffort[];
@@ -105,6 +133,7 @@ export interface NormalizedOpenAiCompatibleModel {
   displayName: string;
   modelFamily?: OpenAiCompatibleModelFamily;
   tier?: "cheap" | "balanced" | "deep_reasoning";
+  agentMaxTokens?: number;
   capabilities: CoreModelCapabilities;
 }
 
@@ -121,6 +150,8 @@ export interface NormalizedOpenAiCompatibleConnection {
   allowInsecureHttp: boolean;
   auxiliaryModel?: string;
   supportsStoreFalse?: boolean;
+  meridianSessionAffinity?: boolean;
+  sessionId?: OpenAiCompatibleSessionIdMapping;
   models: readonly NormalizedOpenAiCompatibleModel[];
   runtimeProfile: OpenAiCompatibleRuntimeProfile;
 }
@@ -217,6 +248,10 @@ export function toOpenAiCompatibleRuntimeProfile(
     timeoutMs: connection.timeoutMs,
     authRequired: connection.authKey !== undefined,
     ...(connection.supportsStoreFalse ? { supportsStoreFalse: true } : {}),
+    ...(connection.meridianSessionAffinity
+      ? { meridianSessionAffinity: true }
+      : {}),
+    ...(connection.sessionId ? { sessionId: connection.sessionId } : {}),
     models: Object.fromEntries(
       connection.models.map((model) => [
         model.id,
@@ -307,6 +342,39 @@ function parseConnection(
     `${path}.supportsStoreFalse`,
     context,
   );
+  const meridianSessionAffinity = readOptionalBoolean(
+    raw.meridianSessionAffinity,
+    `${path}.meridianSessionAffinity`,
+    context,
+  );
+  const sessionId = parseSessionIdMapping(
+    raw.sessionId,
+    `${path}.sessionId`,
+    headers,
+    context,
+  );
+
+  if (profile === "openrouter" && raw.sessionId !== undefined) {
+    issue(
+      context,
+      `${path}.sessionId`,
+      "OpenRouter uses its built-in session_id field.",
+    );
+  }
+  if (profile === "openrouter" && meridianSessionAffinity) {
+    issue(
+      context,
+      `${path}.meridianSessionAffinity`,
+      "Meridian affinity is not supported for OpenRouter.",
+    );
+  }
+  if (meridianSessionAffinity && raw.sessionId !== undefined) {
+    issue(
+      context,
+      `${path}.sessionId`,
+      "Choose either Meridian affinity or a custom session ID mapping.",
+    );
+  }
 
   if (!Array.isArray(raw.models)) {
     issue(context, `${path}.models`, "Expected a non-empty array of models.");
@@ -394,6 +462,8 @@ function parseConnection(
     allowInsecureHttp: allowInsecureHttp ?? false,
     ...(auxiliaryModel === undefined ? {} : { auxiliaryModel }),
     ...(supportsStoreFalse ? { supportsStoreFalse: true } : {}),
+    ...(meridianSessionAffinity ? { meridianSessionAffinity: true } : {}),
+    ...(sessionId ? { sessionId } : {}),
     models,
   } satisfies Omit<NormalizedOpenAiCompatibleConnection, "runtimeProfile">;
 
@@ -465,6 +535,13 @@ function parseModel(
   const maxOutputTokens = readRequiredBoundedInteger(
     raw.maxOutputTokens,
     `${path}.maxOutputTokens`,
+    context,
+    1,
+    MAX_TOKEN_LIMIT,
+  );
+  const agentMaxTokens = readOptionalBoundedInteger(
+    raw.agentMaxTokens,
+    `${path}.agentMaxTokens`,
     context,
     1,
     MAX_TOKEN_LIMIT,
@@ -550,6 +627,17 @@ function parseModel(
       "maxOutputTokens cannot exceed contextWindow.",
     );
   }
+  if (
+    agentMaxTokens !== undefined &&
+    maxOutputTokens !== undefined &&
+    agentMaxTokens > maxOutputTokens
+  ) {
+    issue(
+      context,
+      `${path}.agentMaxTokens`,
+      "agentMaxTokens cannot exceed maxOutputTokens.",
+    );
+  }
   if (supportsThinking !== true) {
     if (reasoningEfforts !== undefined) {
       issue(
@@ -611,6 +699,7 @@ function parseModel(
     displayName,
     ...(modelFamily === undefined ? {} : { modelFamily }),
     ...(tier === undefined ? {} : { tier }),
+    ...(agentMaxTokens === undefined ? {} : { agentMaxTokens }),
 
     capabilities: {
       supportsThinking: supportsThinking ?? false,
@@ -719,6 +808,63 @@ function parseModelFamily(
   if (value === "anthropic" || value === "openai") return value;
   issue(context, path, 'Expected "anthropic" or "openai".');
   return undefined;
+}
+
+function parseSessionIdMapping(
+  value: unknown,
+  path: string,
+  headers: Record<string, string> | undefined,
+  context: ParseContext,
+): OpenAiCompatibleSessionIdMapping | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    issue(context, path, "Expected an object with location and name.");
+    return undefined;
+  }
+  if (value.location !== "header" && value.location !== "body") {
+    issue(context, `${path}.location`, 'Expected "header" or "body".');
+  }
+  if (typeof value.name !== "string" || value.name.length === 0) {
+    issue(context, `${path}.name`, "Expected a non-empty field name.");
+  } else if (value.location === "header") {
+    const name = value.name.toLowerCase();
+    if (
+      value.name.length > MAX_HEADER_NAME_LENGTH ||
+      !HEADER_NAME_PATTERN.test(value.name) ||
+      (RESERVED_HEADERS.has(name) &&
+        name !== "x-session-id" &&
+        name !== "x-session-affinity") ||
+      name.startsWith("proxy-") ||
+      name.startsWith("sec-") ||
+      CREDENTIAL_HEADER_PATTERN.test(name) ||
+      Object.keys(headers ?? {}).some((key) => key.toLowerCase() === name)
+    ) {
+      issue(
+        context,
+        `${path}.name`,
+        "Invalid, reserved, or already configured header name.",
+      );
+    }
+  } else if (value.location === "body") {
+    if (
+      value.name.length > MAX_SESSION_BODY_FIELD_NAME_LENGTH ||
+      !BODY_FIELD_PATTERN.test(value.name) ||
+      RESERVED_BODY_FIELDS.has(value.name)
+    ) {
+      issue(
+        context,
+        `${path}.name`,
+        "Invalid or reserved request body field name.",
+      );
+    }
+  }
+  if (value.location !== "header" && value.location !== "body") {
+    return undefined;
+  }
+  if (typeof value.name !== "string" || value.name.length === 0) {
+    return undefined;
+  }
+  return { location: value.location, name: value.name };
 }
 
 function parseHeaders(

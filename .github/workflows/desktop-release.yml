@@ -96,6 +96,7 @@ jobs:
 
       - name: Package standalone desktop app
         env:
+          AGENTLINK_MAC_SIGNING: unsigned
           AGENTLINK_VSCE_TARGET: ${{ matrix.target }}
         run: |
           npm run build

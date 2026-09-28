@@ -52,7 +52,9 @@ export async function* streamOpenAiCompatibleCompletion(
   args: OpenAiCompatibleFacadeRequest,
 ): AsyncGenerator<CoreModelStreamEvent> {
   const model = resolveRuntimeModel(args.profile, args.request.model);
-  const body = buildOpenAiCompatibleChatRequest({
+  const sessionId = args.request.providerHints?.sessionId;
+  const sessionIdMapping = args.profile.sessionId;
+  const chatRequest = buildOpenAiCompatibleChatRequest({
     providerId: args.profile.providerId,
     profile: args.profile.profile,
     reasoningEffortMode: args.profile.reasoningEffortMode,
@@ -67,6 +69,14 @@ export async function* streamOpenAiCompatibleCompletion(
     supportsStoreFalse: args.profile.supportsStoreFalse,
     temperature: args.temperature,
   });
+  const body = {
+    ...chatRequest,
+    ...(sessionId && args.profile.profile === "openrouter"
+      ? { session_id: sessionId }
+      : sessionId && sessionIdMapping?.location === "body"
+        ? { [sessionIdMapping.name]: sessionId }
+        : {}),
+  };
   const estimatedInputTokens = estimateOpenAiCompatibleInputTokens(body);
   const fetchImpl = args.fetch ?? globalThis.fetch;
   const maxRetries = Math.max(
@@ -93,6 +103,7 @@ export async function* streamOpenAiCompatibleCompletion(
           body,
           fetch: fetchImpl,
           signal: abort.signal,
+          sessionId: args.request.providerHints?.sessionId,
           onProviderRequestAttempt: () =>
             args.request.onProviderRequestAttempt?.({ model: model.model }),
           onHeaders: () =>
@@ -279,6 +290,7 @@ async function executeFetch(args: {
   body: unknown;
   fetch: OpenAiCompatibleFetch;
   signal: AbortSignal;
+  sessionId?: string;
   onProviderRequestAttempt?: () => void;
   onHeaders: () => void;
 }): Promise<Response> {
@@ -291,6 +303,11 @@ async function executeFetch(args: {
     });
   }
   const headers = new Headers(args.profile.headers);
+  if (args.sessionId && args.profile.meridianSessionAffinity) {
+    headers.set("x-session-affinity", args.sessionId);
+  } else if (args.sessionId && args.profile.sessionId?.location === "header") {
+    headers.set(args.profile.sessionId.name, args.sessionId);
+  }
   headers.set("Accept", "text/event-stream");
   headers.set("Content-Type", "application/json");
   if (args.apiKey) headers.set("Authorization", `Bearer ${args.apiKey}`);

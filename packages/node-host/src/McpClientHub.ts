@@ -2125,6 +2125,24 @@ export class McpClientHub {
     this.onStatusChange?.(this.getServerInfos());
   }
 
+  /** Start one enabled configured server that is absent from the runtime. */
+  async connectConfiguredServer(cfg: McpServerConfig): Promise<void> {
+    if (
+      cfg.disabled ||
+      this.servers.has(cfg.name) ||
+      this.connectionAttempts.has(cfg.name) ||
+      this.disabledServers.has(cfg.name)
+    )
+      return;
+    this.pendingInteractiveServers.delete(cfg.name);
+    await this.connectServer(cfg, {
+      authMode: "interactive",
+      trigger: "manual-reconnect",
+      userInitiated: true,
+    });
+    this.onStatusChange?.(this.getServerInfos());
+  }
+
   /** Reconnect a server by name using its stored config. */
   async reconnectServer(name: string): Promise<void> {
     const entry = this.servers.get(name);

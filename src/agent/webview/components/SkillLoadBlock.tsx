@@ -33,37 +33,45 @@ function parseHasError(result: string): boolean {
   }
 }
 
+export function getSkillLoadVisualState(
+  block: SkillLoadData,
+): "tool-running" | "tool-error" | "tool-warning" | "tool-success" {
+  if (!block.complete) return "tool-running";
+  const status = parseResultStatus(block.result);
+  if (
+    parseHasError(block.result) ||
+    status === "error" ||
+    status === "failed"
+  ) {
+    return "tool-error";
+  }
+  if (
+    status === "stopped" ||
+    status === "cancelled" ||
+    status === "rejected" ||
+    status === "rejected_by_user" ||
+    status === "timed_out" ||
+    status === "force-completed"
+  ) {
+    return "tool-warning";
+  }
+  return "tool-success";
+}
+
 export function SkillLoadBlock({ block }: SkillLoadBlockProps) {
   const [expanded, setExpanded] = useState(false);
   const summary =
     (block.skillName ?? formatPath(block.path)) || "Loading skill…";
 
-  const status = block.complete ? parseResultStatus(block.result) : null;
-  const hasError = block.complete && parseHasError(block.result);
-  const isError = hasError || status === "error" || status === "failed";
-  const isWarning =
-    !isError &&
-    (status === "stopped" ||
-      status === "cancelled" ||
-      status === "rejected" ||
-      status === "rejected_by_user" ||
-      status === "timed_out" ||
-      status === "force-completed");
-
-  const statusClass = !block.complete
-    ? "tool-running"
-    : isError
-      ? "tool-error"
-      : isWarning
-        ? "tool-warning"
-        : "tool-success";
-  const statusIconClass = !block.complete
-    ? "codicon-loading codicon-modifier-spin"
-    : isError
-      ? "codicon-error"
-      : isWarning
-        ? "codicon-warning"
-        : "codicon-library";
+  const statusClass = getSkillLoadVisualState(block);
+  const statusIconClass =
+    statusClass === "tool-running"
+      ? "codicon-loading codicon-modifier-spin"
+      : statusClass === "tool-error"
+        ? "codicon-error"
+        : statusClass === "tool-warning"
+          ? "codicon-warning"
+          : "codicon-library";
 
   return (
     <div class={`tool-call-block ${statusClass}`}>

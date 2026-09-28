@@ -51,6 +51,27 @@ test("accepts the standalone CLI package boundary", () => {
   });
 });
 
+test("rejects source-only builds and missing distribution platform metadata", () => {
+  assert.throws(
+    () =>
+      verifyCliPackage(
+        { ...manifest, os: undefined, cpu: undefined },
+        files,
+        runtimeManifest,
+      ),
+    /os must be darwin.*cpu must be arm64/u,
+  );
+  assert.throws(
+    () =>
+      verifyCliPackage(manifest, files, {
+        ...runtimeManifest,
+        platform: "source",
+        assets: {},
+      }),
+    /platform|ripgrep/u,
+  );
+});
+
 test("rejects unpublished or repository-relative runtime dependencies", () => {
   assert.throws(
     () =>

@@ -1404,7 +1404,9 @@ describe("getAgentTools", () => {
       expect(command.description).toContain(
         "default execution uses the native terminal",
       );
-      expect(command.description).toContain("public destinations are mediated");
+      expect(command.description).toContain(
+        "Sandbox public destinations pause for exact approval",
+      );
       expect(command.description).toContain("temporary_home=true");
       expect(command.description).toContain("allow_local_binding=true");
       expect(command.description).toContain(

@@ -41,6 +41,16 @@ The desktop chat uses AgentLink's interlocking-link logo in the title bar and we
 
 Download the DMG or ZIP matching your architecture from a `desktop-v*` [GitHub release](https://github.com/reefbarman/agentlink/releases). Desktop artifacts have their own version and release workflow; they are never included in the VSIX. The current preview is unsigned and not notarized, so the first launch may require right-clicking **AgentLink**, choosing **Open**, and confirming macOS's warning.
 
+### Signed local desktop builds
+
+For macOS Apple Silicon development, the AgentLink **Build and install desktop app** task runs `npm run desktop:install`. It packages with your valid **Apple Development** identity, verifies the signatures, and replaces `/Applications/AgentLink.app` only after you quit the app and its desktop helper. The separate VS Code gateway can remain running. Installed contents are verified again, with rollback if replacement fails.
+
+Local packaging defaults to `AGENTLINK_MAC_SIGNING=development`. With multiple signing identities, set `AGENTLINK_MAC_SIGNING_IDENTITY` to the full certificate name or fingerprint shown by `security find-identity -v -p codesigning`. Missing identities cause an error, not an unsigned fallback. The signing tool may request private-key access once. The app keeps the identifier `com.agentlink.desktop`; existing Keychain entries may need **Always Allow** once for the newly signed app. Rebuilding with the same identity should preserve that approval, but a locked keychain or changed certificate/item policy can still prompt. This does not change Keychain permissions automatically.
+
+`AGENTLINK_MAC_SIGNING=unsigned npm run desktop:package -- --target darwin-arm64` explicitly creates a preview without certificate signing; the signed local installer refuses it. CI desktop releases remain unsigned and not notarised. Development signing does not confer Developer ID distribution trust. A future notarised release requires Apple Developer Program membership, a Developer ID Application identity, protected CI signing/notary credentials, a temporary signing keychain with cleanup, and verification that signed releases cannot fall back to unsigned output. Do not upload a personal development private key just to make preview CI green.
+
+For the equivalent signed CLI task and dedicated Node runtime, see [Signed local installation](standalone-cli.md#signed-local-installation).
+
 ## Start your first session
 
 1. Reload VS Code and open the folder you want to work in.

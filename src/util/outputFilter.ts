@@ -30,10 +30,11 @@ export function filterOutput(
   fullOutput: string,
   options: FilterOptions,
 ): FilterResult {
+  const redactedOutput = redactKubernetesSecretData(fullOutput);
   // Strip trailing newline before splitting to avoid off-by-one
-  const trimmed = fullOutput.endsWith("\n")
-    ? fullOutput.slice(0, -1)
-    : fullOutput;
+  const trimmed = redactedOutput.endsWith("\n")
+    ? redactedOutput.slice(0, -1)
+    : redactedOutput;
   const allLines = trimmed.length === 0 ? [] : trimmed.split("\n");
   const totalLines = allLines.length;
 
@@ -66,7 +67,7 @@ export function filterOutput(
     lines = lines.slice(-DEFAULT_OUTPUT_LINES);
   }
 
-  const trailingNewline = fullOutput.endsWith("\n") ? "\n" : "";
+  const trailingNewline = redactedOutput.endsWith("\n") ? "\n" : "";
   const byteBounded = boundOutputBytes(
     lines,
     options,
@@ -204,6 +205,79 @@ function grepLines(
   return result;
 }
 
+function redactKubernetesSecretData(output: string): string {
+  if (/^\s*[{[]/.test(output)) {
+    try {
+      const parsed: unknown = JSON.parse(output);
+      let redacted = false;
+      const redactObject = (value: unknown): void => {
+        if (!value || typeof value !== "object") return;
+        if (Array.isArray(value)) {
+          value.forEach(redactObject);
+          return;
+        }
+        const object = value as Record<string, unknown>;
+        if (object.kind === "Secret") {
+          for (const field of ["data", "stringData"]) {
+            const data = object[field];
+            if (data && typeof data === "object" && !Array.isArray(data)) {
+              for (const key of Object.keys(data)) {
+                (data as Record<string, unknown>)[key] = "[REDACTED]";
+                redacted = true;
+              }
+            }
+          }
+        }
+        if (object.items) redactObject(object.items);
+      };
+      redactObject(parsed);
+      if (redacted)
+        return JSON.stringify(parsed, null, output.includes("\n") ? 2 : 0);
+    } catch {
+      // Ordinary terminal output need not be valid JSON.
+    }
+  }
+  // Go-template errors print the entire object after the useful error detail.
+  // A failed Secret template may include .data even when the command requested
+  // metadata only. Do not try to parse arbitrary shell output as a Secret.
+  if (/kind:Secret\b/i.test(output) && /raw data was:/i.test(output)) {
+    const disclosure =
+      /(?:raw data was:|object given to template engine was:)/i.exec(output);
+    if (disclosure) {
+      output = `${output.slice(0, disclosure.index)}[Kubernetes Secret object redacted]`;
+    }
+  }
+  return output
+    .split(/(---\s*\n)/)
+    .map((document) => {
+      if (!/^\s*kind:\s*Secret\s*(?:#.*)?$/im.test(document)) {
+        return document;
+      }
+
+      const lines = document.split("\n");
+      let inData = false;
+      let dataIndent = -1;
+      return lines
+        .map((line) => {
+          const indentation = line.length - line.trimStart().length;
+          if (/^\s*(?:data|stringData):\s*(?:#.*)?$/.test(line)) {
+            inData = true;
+            dataIndent = indentation;
+            return line;
+          }
+          if (inData && line.trim() && indentation <= dataIndent) {
+            inData = false;
+          }
+          if (inData && /^\s*[^:#][^:]*:\s*\S/.test(line)) {
+            return line.replace(/(:\s*)\S.*$/, "$1[REDACTED]");
+          }
+          return line;
+        })
+        .join("\n");
+    })
+    .join("");
+}
+
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -213,7 +287,8 @@ function escapeRegex(str: string): string {
  * output exceeds MAX_TEMP_FILE_BYTES.
  */
 export function saveOutputTempFile(output: string): string | null {
-  const bytes = Buffer.byteLength(output, "utf-8");
+  const safeOutput = redactKubernetesSecretData(output);
+  const bytes = Buffer.byteLength(safeOutput, "utf-8");
   if (bytes > MAX_TEMP_FILE_BYTES) {
     return null;
   }
@@ -221,7 +296,7 @@ export function saveOutputTempFile(output: string): string | null {
   try {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-output-"));
     const filePath = path.join(tmpDir, "output.txt");
-    fs.writeFileSync(filePath, output, "utf-8");
+    fs.writeFileSync(filePath, safeOutput, "utf-8");
     return filePath;
   } catch {
     return null;

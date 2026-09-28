@@ -220,7 +220,7 @@ test("allows atomic Git ref replacement under structural protection", async () =
 });
 
 test("rejects nested symbolic links under structural protection", async () => {
-  const fixture = await makeRoot("git-structural-symlink");
+  const fixture = await realpath(await makeRoot("git-structural-symlink"));
   try {
     const gitRoot = path.join(fixture, ".git");
     const refRoot = path.join(gitRoot, "refs", "heads");
@@ -252,7 +252,7 @@ test("rejects nested symbolic links under structural protection", async () => {
 });
 
 test("rejects hard-linked files under structural protection", async () => {
-  const fixture = await makeRoot("git-structural-hard-link");
+  const fixture = await realpath(await makeRoot("git-structural-hard-link"));
   try {
     const gitRoot = path.join(fixture, ".git");
     const refRoot = path.join(gitRoot, "refs", "heads");

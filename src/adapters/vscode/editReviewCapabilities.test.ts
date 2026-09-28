@@ -282,7 +282,7 @@ describe("createVscodeEditReviewProvider", () => {
     const doc = {
       getText: vi.fn(() => (dirty ? "new" : "old")),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       get isDirty() {
         return dirty;
       },
@@ -340,7 +340,7 @@ describe("createVscodeEditReviewProvider", () => {
     const doc = {
       getText: vi.fn(() => "old"),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       isDirty: false,
       save: vi.fn(async () => true),
     };
@@ -387,7 +387,7 @@ describe("createVscodeEditReviewProvider", () => {
     const doc = {
       getText: vi.fn(() => documentContent),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       get isDirty() {
         return dirty;
       },
@@ -439,7 +439,7 @@ describe("createVscodeEditReviewProvider", () => {
     const doc = {
       getText: vi.fn(() => "proposed content"),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       isDirty: false,
       save: vi.fn(async () => true),
     };
@@ -480,7 +480,7 @@ describe("createVscodeEditReviewProvider", () => {
     const doc = {
       getText: vi.fn(() => "unsaved editor content"),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       isDirty: true,
       save: vi.fn(async () => true),
     };
@@ -528,7 +528,7 @@ describe("createVscodeEditReviewProvider", () => {
     const doc = {
       getText: vi.fn(() => "proposed content"),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       get isDirty() {
         return dirty;
       },
@@ -577,7 +577,7 @@ describe("createVscodeEditReviewProvider", () => {
     const doc = {
       getText: vi.fn(() => documentContent),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       get isDirty() {
         return dirty;
       },
@@ -629,7 +629,7 @@ describe("createVscodeEditReviewProvider", () => {
     const doc = {
       getText: vi.fn(() => "baseline\n"),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       isDirty: true,
       save: vi.fn(async () => true),
     };
@@ -668,7 +668,7 @@ describe("createVscodeEditReviewProvider", () => {
     const doc = {
       getText: vi.fn(() => "unsaved editor content"),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       isDirty: true,
       save: vi.fn(async () => false),
     };
@@ -710,7 +710,7 @@ describe("createVscodeEditReviewProvider", () => {
     const doc = {
       getText: vi.fn(() => "unchanged"),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       isDirty: false,
       save: vi.fn(async () => true),
     };
@@ -769,7 +769,7 @@ describe("createVscodeEditReviewProvider", () => {
     const doc = {
       getText: vi.fn(() => documentContent),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       get isDirty() {
         return dirty;
       },
@@ -845,7 +845,7 @@ describe("createVscodeMultiFileEditReviewProvider", () => {
   it("auto-applies multi-file replacements through WorkspaceEdit and saves dirty documents", async () => {
     const filePath = "/workspace/src/example.ts";
     const doc = {
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       getText: vi.fn(() => "xoldy"),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
       isDirty: true,
@@ -916,7 +916,7 @@ describe("createVscodeMultiFileEditReviewProvider", () => {
     const filePath = "/outside/project/example.ts";
     const text = "xoldy";
     const doc = {
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       getText: vi.fn(() => text),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
       offsetAt: vi.fn((position: { character: number }) => position.character),
@@ -1008,7 +1008,7 @@ describe("createVscodeMultiFileEditReviewProvider", () => {
   it("falls back to human review when an outside match no longer matches its captured text", async () => {
     const filePath = "/outside/project/example.ts";
     const doc = {
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       getText: vi.fn(() => "xother"),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
       offsetAt: vi.fn((position: { character: number }) => position.character),
@@ -1065,7 +1065,7 @@ describe("createVscodeMultiFileEditReviewProvider", () => {
   it("falls back to human review when an outside replacement document is dirty", async () => {
     const filePath = "/outside/project/example.ts";
     const doc = {
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       getText: vi.fn(() => "xoldy"),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
       offsetAt: vi.fn((position: { character: number }) => position.character),
@@ -1111,7 +1111,7 @@ describe("createVscodeMultiFileEditReviewProvider", () => {
   it("applies only accepted interactive preview matches and reports exclusions", async () => {
     const filePath = "/workspace/src/example.ts";
     const doc = {
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       getText: vi.fn(() => "xoldxxxxold"),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
       isDirty: false,
@@ -1200,13 +1200,13 @@ describe("createVscodeRenameSymbolProvider", () => {
   it("computes rename edits through VS Code, applies them, saves dirty documents, and returns the legacy result", async () => {
     const filePath = "/workspace/src/example.ts";
     const doc = {
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       getWordRangeAtPosition: vi.fn(() => ({ start: 0, end: 3 })),
       getText: vi.fn(() => "oldName"),
       lineAt: vi.fn(() => ({ text: "const oldName = 1;" })),
     };
     const dirtyDoc = {
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       isDirty: true,
       save: vi.fn(async () => true),
     };
@@ -1250,7 +1250,7 @@ describe("createVscodeRenameSymbolProvider", () => {
   it("requests inline approval and persists trust decisions when rename is not auto-approved", async () => {
     const filePath = "/workspace/src/example.ts";
     openTextDocument.mockResolvedValue({
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       getWordRangeAtPosition: vi.fn(() => undefined),
       getText: vi.fn(() => ""),
       lineAt: vi.fn(() => ({ text: "const oldName = 1;" })),
@@ -1306,7 +1306,7 @@ describe("createVscodeRenameSymbolProvider", () => {
   it("does not auto-approve protected memory paths even with masterBypass", async () => {
     const filePath = "/workspace/CLAUDE.md";
     openTextDocument.mockResolvedValue({
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       getWordRangeAtPosition: vi.fn(() => ({ start: 0, end: 3 })),
       getText: vi.fn(() => "oldName"),
       lineAt: vi.fn(() => ({ text: "oldName" })),
@@ -1380,7 +1380,7 @@ describe("createVscodeRenameSymbolProvider", () => {
     const filePath =
       "/workspace/Assets/Scripts/Presentation/CartridgeVisual.cs";
     openTextDocument.mockResolvedValue({
-      uri: { fsPath: filePath },
+      uri: { scheme: "file", fsPath: filePath },
       languageId: "csharp",
       getWordRangeAtPosition: vi.fn(() => ({ start: 0, end: 3 })),
       getText: vi.fn(() => "Overrides"),
@@ -1470,7 +1470,7 @@ describe("createVscodeRenameSymbolProvider", () => {
     async ({ edit, applyResult, expected }) => {
       const filePath = "/workspace/src/example.ts";
       openTextDocument.mockResolvedValue({
-        uri: { fsPath: filePath },
+        uri: { scheme: "file", fsPath: filePath },
         getWordRangeAtPosition: vi.fn(() => ({ start: 0, end: 3 })),
         getText: vi.fn(() => "oldName"),
         lineAt: vi.fn(() => ({ text: "oldName" })),

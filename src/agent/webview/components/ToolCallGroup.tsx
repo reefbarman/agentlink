@@ -2,6 +2,7 @@ import { useMemo, useState } from "preact/hooks";
 
 import type { ContentBlock } from "@agentlink/protocol/chat-transcript";
 import { normalizeProjectedToolName } from "../../../shared/chatProjection";
+import { getSkillLoadVisualState } from "./SkillLoadBlock";
 import {
   ToolCallBlock,
   countResultDocuments,
@@ -31,9 +32,12 @@ export function groupActivitySegments(
 
   const flush = () => {
     const thinkingCount = completed.filter(
-      (segment) => segment.kind === "single",
+      (segment) =>
+        segment.kind === "single" && segment.block.type === "thinking",
     ).length;
-    const toolGroupCount = completed.length - thinkingCount;
+    const toolGroupCount = completed.filter(
+      (segment) => segment.kind === "tool_group",
+    ).length;
     if (thinkingCount >= 3 && toolGroupCount >= 3) {
       result.push({ kind: "activity_group", segments: completed });
     } else {
@@ -50,8 +54,9 @@ export function groupActivitySegments(
             block.resultImages?.length || block.resultDocuments?.length,
         )) ||
       (segment.kind === "single" &&
-        segment.block.type === "thinking" &&
-        segment.block.complete)
+        ((segment.block.type === "thinking" && segment.block.complete) ||
+          (segment.block.type === "skill_load" &&
+            getSkillLoadVisualState(segment.block) === "tool-success")))
     ) {
       completed.push(segment);
     } else {

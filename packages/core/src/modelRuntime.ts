@@ -197,6 +197,8 @@ export interface CoreModelStateOptions {
 }
 
 export interface CoreModelProviderHints {
+  /** Host-owned conversation identity; transports opt in to sending it. */
+  sessionId?: string;
   codex?: {
     sessionId?: string;
     /** In-process turn lifetime only; never persist or send to renderers. */

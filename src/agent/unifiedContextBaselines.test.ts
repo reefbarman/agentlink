@@ -33,9 +33,6 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const isolatedHome = path.join(os.tmpdir(), "agentlink-unified-context-home");
-const PROJECT_LOCAL_SKILL_IDS = [
-  "project:agentlink:.agentlink/skills/agentlink-dogfood-install",
-] as const;
 
 const providerCohorts = [
   { providerId: "anthropic", model: "claude-opus-4-8" },
@@ -67,6 +64,18 @@ function normalizePrompt(value: string): string {
 }
 
 async function buildRuntimeMeasurements() {
+  // Local checkout skills must not make a committed baseline differ from CI.
+  const discoveredSkills = await loadSkillsForModes(
+    fixtureRoot,
+    BUILT_IN_MODES.map((mode) => mode.slug),
+  );
+  const localSkillIds = discoveredSkills
+    .filter(
+      (skill) =>
+        skill.provenance.scope !== "builtin" &&
+        !skill.skillPath.startsWith(`${fixtureRoot}${path.sep}`),
+    )
+    .map((skill) => skill.id);
   const prompts = [];
   const toolsByMode = [];
   const projectedToolsByMode = [];
@@ -109,7 +118,7 @@ async function buildRuntimeMeasurements() {
           model: cohort.model,
           promptProfileOverrides: { [cohort.model]: profile },
           modeInstructionPlacement: "system",
-          disabledSkillIds: PROJECT_LOCAL_SKILL_IDS,
+          disabledSkillIds: localSkillIds,
         });
         const normalized = normalizePrompt(artifacts.systemPrompt);
         prompts.push({
@@ -132,7 +141,7 @@ async function buildRuntimeMeasurements() {
   const skills = await loadSkillsForModes(
     fixtureRoot,
     BUILT_IN_MODES.map((mode) => mode.slug),
-    { disabledSkillIds: PROJECT_LOCAL_SKILL_IDS },
+    { disabledSkillIds: localSkillIds },
   );
   const normalizedSkills = skills
     .map((skill) => ({

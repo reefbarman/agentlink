@@ -13,6 +13,10 @@ describe("detectInteractivePrompt", () => {
       "confirmation",
     ],
     ["Trust this file? Y/N ", "confirmation"],
+    [
+      "mise config files in /home/dev are not trusted. Trust them?\n\n   Yes     No     All  \n\n←/→ toggle • y/n/a/enter submit",
+      "confirmation",
+    ],
     ["Press Enter to continue", "press_enter"],
     ["Enter project name: ", "input_request"],
     ["Select an option: ", "choice_request"],
@@ -21,7 +25,7 @@ describe("detectInteractivePrompt", () => {
     expect(detectInteractivePrompt(output)).toEqual({
       kind,
       confidence: "high",
-      evidence: output.trim(),
+      evidence: output.replace(/\s+/g, " ").trim(),
     });
   });
 

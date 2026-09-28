@@ -550,6 +550,57 @@ describe("StandaloneAskAgentMcpRuntime", () => {
     expect(disconnectAll).toHaveBeenCalledTimes(1);
   });
 
+  it("skips unavailable stdio executables without failing the desktop turn", async () => {
+    const connect = vi.fn(
+      async (configs: { name: string; command?: string }[]) => {
+        for (const config of configs) {
+          if (!config.command)
+            throw new Error(
+              `Server '${config.name}' is stdio but missing 'command'`,
+            );
+        }
+      },
+    );
+    const runtime = new StandaloneAskAgentMcpRuntime({
+      loadConfigs: async () => [
+        { name: "searxng", command: "npx", toolPolicy: "allow" },
+        { name: "incomplete", type: "stdio" },
+        {
+          name: "available",
+          command: "/opt/bin/available",
+          toolPolicy: "allow",
+        },
+      ],
+      resolveExecutable: async (command) =>
+        command === "npx" ? undefined : command,
+      createHub: () =>
+        ({
+          connect,
+          disconnectAll: async () => undefined,
+          getToolDefs: () => [],
+          getServerInfos: () => [],
+        }) as unknown as import("@agentlink/node-host").McpClientHub,
+    });
+    try {
+      const turn = await runtime.prepareTurn(request);
+      expect(turn.tools.map((tool) => tool.name)).toContain("find_mcp_tools");
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(connect).toHaveBeenCalledWith(
+        [
+          expect.objectContaining({
+            name: "available",
+            command: "/opt/bin/available",
+          }),
+        ],
+        expect.objectContaining({
+          interactiveServerNames: new Set(["available"]),
+        }),
+      );
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("closes a connection that completes after its session is retired", async () => {
     let finishConnect!: () => void;
     const connect = vi.fn(

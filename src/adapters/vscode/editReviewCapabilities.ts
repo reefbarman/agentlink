@@ -8,7 +8,10 @@ import {
   diagnoseEditApplyFailure,
   snapshotDiagnostics,
 } from "../../integrations/DiffViewProvider.js";
-import { commitAndVerifyEdit } from "../../integrations/editDurability.js";
+import {
+  commitAndVerifyEdit,
+  documentMatchesTarget,
+} from "../../integrations/editDurability.js";
 import {
   normalizeEditorText,
   type EditReviewDecision,
@@ -367,9 +370,16 @@ function dirtyDocumentConflictResult(params: {
   const targetPath = canonicalizePath(params.absolutePath);
   const trackedDocument = vscode.workspace.textDocuments.find(
     (document) =>
-      canonicalizePath(document.uri.fsPath) === targetPath && document.isDirty,
+      document.uri.scheme === "file" &&
+      !document.isClosed &&
+      canonicalizePath(document.uri.fsPath) === targetPath &&
+      document.isDirty,
   );
   const document = trackedDocument ?? params.document;
+  const inspectable =
+    document.uri.scheme === "file" &&
+    !document.isClosed &&
+    canonicalizePath(document.uri.fsPath) === targetPath;
   const pendingBufferMatchesProposal =
     normalizeEditorText(document.getText()) ===
     normalizeEditorText(params.proposedContent);
@@ -385,9 +395,11 @@ function dirtyDocumentConflictResult(params: {
         : "differs_from_baseline",
     pending_buffer_matches_proposal: pendingBufferMatchesProposal,
     next_steps: [
-      pendingBufferMatchesProposal
-        ? "The unsaved editor buffer already contains the proposed content. Inspect it with get_editor_state, then use save_editor with its hashes/version for a reviewed exact save."
-        : "The unsaved editor buffer differs from the proposed content. Use get_editor_state to compare it with disk. Save the existing buffer with save_editor only if it is correct; otherwise reconcile it in VS Code.",
+      !inspectable
+        ? "This retained buffer is not an open file-backed editor for the target. Inspect it in VS Code before closing or saving anything; get_editor_state cannot inspect this buffer. Re-open the target and compose the edit again only after reconciling it."
+        : pendingBufferMatchesProposal
+          ? "The unsaved editor buffer already contains the proposed content. Inspect it with get_editor_state, then use save_editor with its hashes/version for a reviewed exact save."
+          : "The unsaved editor buffer differs from the proposed content. Use get_editor_state to compare it with disk. Save the existing buffer with save_editor only if it is correct; otherwise reconcile it in VS Code.",
     ],
   };
 }
@@ -445,6 +457,16 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                 baselineContent,
                 proposedContent: content,
               });
+            }
+            if (!documentMatchesTarget(doc, params.absolutePath)) {
+              return {
+                error: "Edit document does not match the target file",
+                path: params.relativePath,
+                reason: "document_target_mismatch",
+                next_steps: [
+                  "Inspect the retained buffer in VS Code, then re-open the target file and compose the edit again.",
+                ],
+              };
             }
             await vscode.window.showTextDocument(
               doc,

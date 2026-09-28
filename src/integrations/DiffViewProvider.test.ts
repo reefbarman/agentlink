@@ -581,6 +581,62 @@ describe("DiffViewProvider durable save lifecycle", () => {
     return { provider, filePath };
   }
 
+  it("does not apply a proposal to a non-file diff editor", async () => {
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-diff-open-"),
+    );
+    tempDirs.push(dir);
+    const filePath = path.join(dir, "file.ts");
+    await fs.writeFile(filePath, "old", "utf-8");
+    const provider = new DiffViewProvider(0, "non-file-diff-editor");
+    vi.spyOn(vscode.Uri, "parse").mockReturnValue({
+      with: () => vscode.Uri.file(filePath),
+    } as unknown as vscode.Uri);
+    vi.spyOn(vscode.commands, "executeCommand").mockResolvedValue(undefined);
+    Object.defineProperty(vscode.window, "visibleTextEditors", {
+      configurable: true,
+      value: [],
+    });
+    vi.spyOn(vscode.window, "showTextDocument").mockResolvedValue({
+      document: {
+        uri: { scheme: "agentlink-diff", fsPath: filePath },
+        lineCount: 1,
+      },
+    } as vscode.TextEditor);
+    const applyEdit = vi.spyOn(vscode.workspace, "applyEdit");
+
+    await expect(
+      provider.open(filePath, "file.ts", "proposed"),
+    ).rejects.toThrow("Review editor does not match the target file");
+    expect(applyEdit).not.toHaveBeenCalled();
+    expect(await fs.readFile(filePath, "utf-8")).toBe("old");
+  });
+
+  it("does not save a closed review document", async () => {
+    const requestId = "closed-review-document";
+    const save = vi.fn(async () => true);
+    const { provider, filePath } = await makeProvider({
+      requestId,
+      save,
+      dirtyAfterSave: () => true,
+    });
+    const editor = (
+      provider as unknown as { activeDiffEditor: vscode.TextEditor }
+    ).activeDiffEditor;
+    Object.assign(editor.document, { isClosed: true });
+
+    const result = await provider.saveChanges();
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "document_target_mismatch",
+    });
+    expect(save).not.toHaveBeenCalled();
+    expect(await fs.readFile(filePath, "utf-8")).toBe("old");
+    expect(diffSnapshotHub.get(requestId)).toBeDefined();
+    diffSnapshotHub.remove(requestId);
+  });
+
   it("retains the pending diff snapshot when the editor save fails", async () => {
     let dirty = true;
     const requestId = "save-failed-snapshot";

@@ -112,6 +112,11 @@ export class OpenAiCompatibleProvider implements ModelProvider {
     return this.backend.getModelFamily(model);
   }
 
+  getAgentMaxTokens(model: string): number | undefined {
+    return this.connection.models.find((entry) => entry.id === model)
+      ?.agentMaxTokens;
+  }
+
   listModels(): ModelInfo[] {
     return this.connection.models.map(
       (model: NormalizedOpenAiCompatibleConnection["models"][number]) => ({

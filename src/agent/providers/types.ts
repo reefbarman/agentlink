@@ -80,6 +80,8 @@ export interface ModelProvider {
   getCatalogAuthAction?(): CoreModelCatalogAuthAction | undefined;
 
   getCapabilities(model: string): ModelCapabilities;
+  /** Optional per-model agent response limit, separate from the provider output ceiling. */
+  getAgentMaxTokens?(model: string): number | undefined;
 
   /**
    * Optional model-vendor behavior used for system prompt selection. This stays

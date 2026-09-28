@@ -1,4 +1,8 @@
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  resolveSigningPolicy,
+  verifyMacSignature,
+} from "../../scripts/macos-signing.mjs";
 
 import { KEYCHAIN_NATIVE_PACKAGES } from "../../scripts/package-keychain-runtime.mjs";
 import { execFileSync } from "node:child_process";
@@ -14,6 +18,7 @@ const stageRoot = path.join(desktopRoot, "package-stage");
 const runtimeRoot = path.join(stageRoot, "runtime");
 const target = resolveTarget(process.argv.slice(2));
 const arch = target.slice("darwin-".length);
+const signing = resolveSigningPolicy();
 const desktopManifest = JSON.parse(
   await readFile(path.join(desktopRoot, "package.json"), "utf8"),
 );
@@ -42,6 +47,9 @@ execFileSync(
     "--config",
     path.join(desktopRoot, "electron-builder.yml"),
     `--config.electronVersion=${desktopManifest.devDependencies.electron}`,
+    ...(signing.mode === "development"
+      ? [`--config.afterPack=${path.join(desktopRoot, "sign.mjs")}`]
+      : []),
     "--mac",
     `--${arch}`,
     "--publish",
@@ -62,6 +70,12 @@ const unpackedOutputDir = path.join(
   arch === "arm64" ? "mac-arm64" : "mac",
 );
 const appPath = await findPackagedApp(unpackedOutputDir);
+if (signing.mode === "development") {
+  verifyMacSignature(appPath, {
+    identifier: "com.agentlink.desktop",
+    deep: true,
+  });
+}
 execFileSync(
   process.execPath,
   [

@@ -172,6 +172,24 @@ describe("McpManagerPanel", () => {
     expect(screen.getAllByText("1", { selector: "strong" })).toHaveLength(3);
   });
 
+  it("offers Connect for configured servers without a runtime entry", () => {
+    const onServerAction = vi.fn();
+    render(
+      <McpManagerPanel snapshot={snapshot()} onServerAction={onServerAction} />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Connect configured-only" }),
+    );
+    expect(onServerAction).toHaveBeenCalledWith("configured-only", "connect");
+    expect(
+      screen.queryByRole("button", { name: "Connect disabled-server" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Connect runtime-only" }),
+    ).toBeNull();
+  });
+
   it("hides runtime actions that would be no-ops and inherited-only removal", () => {
     const inheritedEntry = {
       ...snapshot().entries[0],
@@ -197,6 +215,9 @@ describe("McpManagerPanel", () => {
     expect(
       screen.queryByRole("button", { name: "Reconnect configured-only" }),
     ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Connect configured-only" }),
+    ).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "Reauthenticate disabled-server" }),
     ).toBeNull();

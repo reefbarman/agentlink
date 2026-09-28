@@ -16,7 +16,10 @@ import {
   type EditSaveFailureRecovery,
 } from "../core/capabilities/editReview.js";
 import { classifyEditDurability } from "../core/editDurability.js";
-import { commitAndVerifyEdit } from "./editDurability.js";
+import {
+  commitAndVerifyEdit,
+  documentMatchesTarget,
+} from "./editDurability.js";
 import { DIFF_VIEW_URI_SCHEME } from "./diffViewContentProvider.js";
 import type { OnApprovalRequest } from "@agentlink/protocol/inline-approval";
 import { diffSnapshotHub } from "../browser-gateway/DiffSnapshotHub.js";
@@ -390,8 +393,16 @@ export class DiffViewProvider {
       throw err;
     }
 
-    // Apply new content to the right side
+    // The editor returned by a diff or fallback open can be stale or a
+    // non-file document. Never apply a proposal to it before checking identity.
     const document = this.activeDiffEditor.document;
+    if (!documentMatchesTarget(document, this.absolutePath)) {
+      diffSnapshotHub.remove(this.requestId);
+      if (this.editType === "create") await this.cleanupCreatedFile();
+      throw new Error(
+        "Review editor does not match the target file. Inspect any retained buffer in VS Code before retrying.",
+      );
+    }
     const edit = new vscode.WorkspaceEdit();
     const fullRange = new vscode.Range(0, 0, document.lineCount, 0);
     edit.replace(document.uri, fullRange, newContent);

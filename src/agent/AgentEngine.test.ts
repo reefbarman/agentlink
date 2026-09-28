@@ -5338,6 +5338,8 @@ describe("AgentEngine", () => {
         TEST_MODEL,
       ]);
       expect(nextRequests.map((request) => request.model)).toEqual([nextModel]);
+      expect(firstRequests[0]?.providerHints?.sessionId).toBe(session.id);
+      expect(nextRequests[0]?.providerHints?.sessionId).toBe(session.id);
       expect(
         events
           .filter((event) => event.type === "api_request_start")

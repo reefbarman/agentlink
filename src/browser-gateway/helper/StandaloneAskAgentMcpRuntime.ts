@@ -434,18 +434,18 @@ export class StandaloneAskAgentMcpRuntime {
       turnId: request.turnId,
     };
     // Resolving executables is intentionally done before connection approval.
-    const resolved = await Promise.all(
-      configs.map(async (config) => {
-        if ((config.type ?? "stdio") !== "stdio" || !config.command)
-          return config;
-        const command = await this.resolveExecutable(config.command);
-        return {
-          ...config,
-          command: command ?? "",
-          cwd: this.homeDirectory,
-        };
-      }),
-    );
+    const resolved = (
+      await Promise.all(
+        configs.map(async (config) => {
+          if ((config.type ?? "stdio") !== "stdio") return config;
+          if (!config.command) return undefined;
+          const command = await this.resolveExecutable(config.command);
+          return command
+            ? { ...config, command, cwd: this.homeDirectory }
+            : undefined;
+        }),
+      )
+    ).filter((config): config is McpServerConfig => config !== undefined);
     const fingerprint = createHash("sha256")
       .update(JSON.stringify(resolved))
       .digest("hex");

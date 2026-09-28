@@ -72,7 +72,7 @@ export async function commitAndVerifyEdit(
       },
       ...(disk.status === "readable" ? { finalContent: disk.content } : {}),
       next_steps: [
-        "Close the stale review buffer, re-read the target file, and compose the edit again.",
+        "Inspect any retained buffer in VS Code before closing or saving it. get_editor_state can inspect only an open file-backed target editor; re-read the target and compose the edit again after reconciling the buffer.",
       ],
     };
   }
@@ -370,12 +370,13 @@ function approvedStructuredContentBecameInvalid(
   return false;
 }
 
-function documentMatchesTarget(
+export function documentMatchesTarget(
   document: vscode.TextDocument,
   absolutePath: string,
 ): boolean {
-  if (document.uri.scheme && document.uri.scheme !== "file") return false;
   return (
+    document.uri.scheme === "file" &&
+    !document.isClosed &&
     canonicalizePath(document.uri.fsPath) === canonicalizePath(absolutePath)
   );
 }

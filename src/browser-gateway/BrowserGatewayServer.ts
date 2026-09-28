@@ -667,6 +667,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
         none,
       ),
       route(
+        "POST",
+        pathExact("/api/mcp/refresh"),
+        ({ req, res }) => this.handleMcpRefresh(req, res),
+        internal("mcp refresh failed"),
+      ),
+      route(
         "GET",
         pathExact("/api/mcp/config"),
         ({ req, rawUrl, res }) =>
@@ -2653,6 +2659,21 @@ export class BrowserGatewayServer implements vscode.Disposable {
     this.writeJson(res, 403, { error: "browser_mcp_config_unavailable" });
   }
 
+  private async handleMcpRefresh(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const body = (await readJsonBody(req)) as { projectId?: string };
+    const result = await this.chatViewProvider.submitBrowserMcpRefresh(
+      typeof body?.projectId === "string" ? body.projectId : undefined,
+    );
+    this.writeJson(res, result.ok ? 200 : 400, result);
+  }
+
   private async handleMcpAction(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -2664,13 +2685,14 @@ export class BrowserGatewayServer implements vscode.Disposable {
 
     const body = (await readJsonBody(req)) as {
       serverName?: string;
-      action?: "disable" | "reconnect" | "reauthenticate";
+      action?: "connect" | "disable" | "reconnect" | "reauthenticate";
       projectId?: string;
     };
     if (
       typeof body?.serverName !== "string" ||
       !body.serverName.trim() ||
-      (body.action !== "disable" &&
+      (body.action !== "connect" &&
+        body.action !== "disable" &&
         body.action !== "reconnect" &&
         body.action !== "reauthenticate")
     ) {

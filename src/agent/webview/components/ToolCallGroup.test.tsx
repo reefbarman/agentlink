@@ -165,6 +165,42 @@ describe("groupActivitySegments", () => {
     ]);
   });
 
+  it("includes successful skill loads between thinking and tool runs", () => {
+    const skill: ContentBlock = {
+      type: "skill_load",
+      id: "skill",
+      skillName: "gram-demo-seed",
+      inputJson: "{}",
+      result: JSON.stringify({ status: "success" }),
+      complete: true,
+    };
+    const blocks = [...cycles(2), skill, ...cycles(3)];
+    const segments = segmentBlocks(blocks);
+
+    expect(groupActivitySegments(segments)).toEqual([
+      { kind: "activity_group", segments },
+    ]);
+  });
+
+  it("keeps failed and unfinished skill loads outside Activity", () => {
+    for (const skill of [
+      { complete: false, result: "" },
+      { complete: true, result: JSON.stringify({ status: "failed" }) },
+    ]) {
+      const blocks: ContentBlock[] = [
+        ...cycles(3),
+        { type: "skill_load", id: "skill", inputJson: "{}", ...skill },
+        ...cycles(3),
+      ];
+      const segments = segmentBlocks(blocks);
+      expect(groupActivitySegments(segments)).toEqual([
+        { kind: "activity_group", segments: segments.slice(0, 6) },
+        segments[6],
+        { kind: "activity_group", segments: segments.slice(7) },
+      ]);
+    }
+  });
+
   it("keeps tool-only runs outside Activity until there is enough thinking work", () => {
     const blocks = [
       tool("before", "codebase_search"),

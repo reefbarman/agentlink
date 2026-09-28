@@ -77,6 +77,100 @@ describe("validateOpenAiCompatibleBaseUrl", () => {
 });
 
 describe("normalizeOpenAiCompatibleConnections", () => {
+  it("only enables Meridian affinity for explicitly opted-in connections", () => {
+    const result = normalizeOpenAiCompatibleConnections([
+      connection({ id: "meridian", meridianSessionAffinity: true }),
+      connection({
+        id: "openrouter",
+        profile: "openrouter",
+        models: [model({ id: "openrouter-model" })],
+      }),
+    ]);
+
+    expect(result.issues).toEqual([]);
+    expect(result.connections[0]?.runtimeProfile.meridianSessionAffinity).toBe(
+      true,
+    );
+    expect(
+      result.connections[1]?.runtimeProfile.meridianSessionAffinity,
+    ).toBeUndefined();
+    expect(
+      issuePaths([connection({ meridianSessionAffinity: "yes" })]),
+    ).toContain("$[0].meridianSessionAffinity");
+    expect(
+      issuePaths([connection({ headers: { "x-session-affinity": "fixed" } })]),
+    ).toContain('$[0].headers["x-session-affinity"]');
+  });
+
+  it("normalizes an explicit session ID mapping only for generic connections", () => {
+    const result = normalizeOpenAiCompatibleConnections([
+      connection({
+        sessionId: { location: "header", name: "X-Conversation-Id" },
+      }),
+    ]);
+    expect(result.issues).toEqual([]);
+    expect(result.connections[0]?.runtimeProfile.sessionId).toEqual({
+      location: "header",
+      name: "X-Conversation-Id",
+    });
+
+    const body = normalizeOpenAiCompatibleConnections([
+      connection({ sessionId: { location: "body", name: "conversation_id" } }),
+    ]);
+    expect(body.issues).toEqual([]);
+    expect(body.connections[0]?.runtimeProfile.sessionId).toEqual({
+      location: "body",
+      name: "conversation_id",
+    });
+  });
+
+  it.each([
+    [{ location: "query", name: "session_id" }, "$[0].sessionId.location"],
+    [{ location: "header", name: "Authorization" }, "$[0].sessionId.name"],
+    [{ location: "header", name: "X-API-Key" }, "$[0].sessionId.name"],
+    [{ location: "header", name: "bad header" }, "$[0].sessionId.name"],
+    [{ location: "body", name: "messages" }, "$[0].sessionId.name"],
+    [{ location: "body", name: "__proto__" }, "$[0].sessionId.name"],
+    [{ location: "body", name: "bad-field" }, "$[0].sessionId.name"],
+  ])("rejects unsafe session ID mapping %j", (sessionId, path) => {
+    expect(issuePaths([connection({ sessionId })])).toContain(path);
+  });
+
+  it("rejects conflicting session ID mapping and reserved static headers", () => {
+    expect(
+      issuePaths([
+        connection({
+          profile: "openrouter",
+          sessionId: { location: "body", name: "session_id" },
+        }),
+      ]),
+    ).toContain("$[0].sessionId");
+    expect(
+      issuePaths([
+        connection({ profile: "openrouter", meridianSessionAffinity: true }),
+      ]),
+    ).toContain("$[0].meridianSessionAffinity");
+    expect(
+      issuePaths([
+        connection({
+          meridianSessionAffinity: true,
+          sessionId: { location: "header", name: "X-Conversation-Id" },
+        }),
+      ]),
+    ).toContain("$[0].sessionId");
+    expect(
+      issuePaths([connection({ headers: { "x-session-id": "fixed" } })]),
+    ).toContain('$[0].headers["x-session-id"]');
+    expect(
+      issuePaths([
+        connection({
+          headers: { "X-Conversation-Id": "fixed" },
+          sessionId: { location: "header", name: "x-conversation-id" },
+        }),
+      ]),
+    ).toContain("$[0].sessionId.name");
+  });
+
   it("normalizes multiple connections and converts them to core runtime profiles", () => {
     const result = normalizeOpenAiCompatibleConnections([
       connection({
@@ -97,6 +191,7 @@ describe("normalizeOpenAiCompatibleConnections", () => {
             contextWindow: 131_072,
             maxInputTokens: 120_000,
             maxOutputTokens: 16_384,
+            agentMaxTokens: 12_288,
             supportsThinking: true,
             reasoningEfforts: ["low", "medium", "high"],
             defaultReasoningEffort: "medium",
@@ -168,7 +263,21 @@ describe("normalizeOpenAiCompatibleConnections", () => {
         },
       },
     });
+    expect(result.connections[0].models[0].agentMaxTokens).toBe(12_288);
+    expect(result.connections[0].models[1].agentMaxTokens).toBeUndefined();
+    expect(result.connections[0].runtimeProfile.models.kimi).not.toHaveProperty(
+      "agentMaxTokens",
+    );
     expect(result.connections[1].authKey).toBe("shared-key");
+  });
+
+  it("rejects agent output limits beyond the model ceiling or invalid values", () => {
+    expect(
+      issuePaths([connection({ models: [model({ agentMaxTokens: 4_097 })] })]),
+    ).toContain("$[0].models[0].agentMaxTokens");
+    expect(
+      issuePaths([connection({ models: [model({ agentMaxTokens: 0 })] })]),
+    ).toContain("$[0].models[0].agentMaxTokens");
   });
 
   it("allows generic connections to declare a bounded reasoning effort mapping", () => {

@@ -2,7 +2,15 @@ import {
   createSandboxInteractiveHelper,
   parseSandboxInteractiveControl,
 } from "./sandbox-interactive-helper.mjs";
-import { link, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import {
+  link,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import {
   prepareProtectedRoots,
   revalidateProtectedRoots,
@@ -831,7 +839,7 @@ test("allows host Git ref replacement before late structural validation", async 
 });
 
 test("returns typed structural failure when an integrity root also has a hard-link alias", async (t) => {
-  const fixture = await mkdtemp(path.join(tmpdir(), "al-i-"));
+  const fixture = await realpath(await mkdtemp(path.join(tmpdir(), "al-i-")));
   const gitRoot = path.join(fixture, ".git");
   const config = path.join(gitRoot, "config");
   await mkdir(gitRoot);
@@ -887,7 +895,7 @@ test("returns typed structural failure when an integrity root also has a hard-li
 });
 
 test("fails closed when structural validation finds a Git hard-link alias", async (t) => {
-  const fixture = await mkdtemp(path.join(tmpdir(), "al-a-"));
+  const fixture = await realpath(await mkdtemp(path.join(tmpdir(), "al-a-")));
   const gitRoot = path.join(fixture, ".git");
   const refRoot = path.join(gitRoot, "refs", "heads");
   const ref = path.join(refRoot, "main");

@@ -38,7 +38,7 @@ export interface McpManagerPanelProps {
   onSelectProject?: (projectId: string) => void;
   onServerAction?: (
     serverName: string,
-    action: "disable" | "reconnect" | "reauthenticate",
+    action: "connect" | "disable" | "reconnect" | "reauthenticate",
   ) => void;
   onOpenRawConfig?: (scope: McpManagerScope) => void;
   onMutateConfig?: (
@@ -1516,6 +1516,23 @@ export function McpManagerPanel({
                         {!entry && <code>runtime only</code>}
                       </span>
                       <span class="mcp-status-actions">
+                        {snapshot.capabilities.canReconnect &&
+                          entry &&
+                          !entry.config.disabled &&
+                          !info && (
+                            <button
+                              class="icon-button"
+                              type="button"
+                              aria-label={`Connect ${name}`}
+                              title="Connect"
+                              onClick={() => onServerAction?.(name, "connect")}
+                            >
+                              <i
+                                class="codicon codicon-play"
+                                aria-hidden="true"
+                              />
+                            </button>
+                          )}
                         {snapshot.capabilities.canReconnect &&
                           info &&
                           effectiveStatus !== "connecting" &&

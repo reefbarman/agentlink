@@ -2057,7 +2057,7 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("keeps the Approve for Me sandbox route when an allow rule skips approval", async () => {
+  it("uses the native route under Approve for Me when an allow rule skips approval", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
         key === "masterBypass" ? false : fallback,
@@ -2101,7 +2101,7 @@ describe("handleExecuteCommand", () => {
     expect(terminalProvider.prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({ command: "dotnet build" }),
       expect.objectContaining({
-        requiredAuthority: "sandbox",
+        requiredAuthority: "native-agent",
         permissionIntent: "default",
         authorityReason: "explicit-rule",
       }),
@@ -2111,7 +2111,7 @@ describe("handleExecuteCommand", () => {
     expect(enqueueCommandApproval).not.toHaveBeenCalled();
     expect(textPayload(result)).toMatchObject({
       approval: { by: "explicit_rule" },
-      security: { route: "sandbox", authorityReason: "explicit-rule" },
+      security: { route: "native", authorityReason: "explicit-rule" },
     });
   });
 
@@ -2132,7 +2132,7 @@ describe("handleExecuteCommand", () => {
       },
     },
   ])(
-    "keeps the requested sandbox route for $ruleKind rules while skipping approval",
+    "uses the native route for $ruleKind rules while skipping approval",
     async ({ rule }) => {
       getConfiguration.mockReturnValue({
         get: vi.fn((key: string, fallback?: unknown) =>
@@ -2171,7 +2171,7 @@ describe("handleExecuteCommand", () => {
       expect(terminalProvider.prepareExecution).toHaveBeenCalledWith(
         expect.objectContaining({ command: "npm test" }),
         expect.objectContaining({
-          requiredAuthority: "sandbox",
+          requiredAuthority: "native-agent",
           authorityReason: "explicit-rule",
         }),
       );
@@ -2180,7 +2180,7 @@ describe("handleExecuteCommand", () => {
       expect(enqueueCommandApproval).not.toHaveBeenCalled();
       expect(textPayload(result)).toMatchObject({
         approval: { by: "explicit_rule" },
-        security: { route: "sandbox", authorityReason: "explicit-rule" },
+        security: { route: "native", authorityReason: "explicit-rule" },
       });
     },
   );
@@ -2240,6 +2240,32 @@ describe("handleExecuteCommand", () => {
     },
   );
 
+  it("keeps an unruled command in the sandbox under Approve for Me", async () => {
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const result = await handleExecuteCommand(
+      { command: "npm test" },
+      {
+        evaluateCommandRules: (_sessionId: string, command: string) =>
+          evaluateCommandRulePolicy(
+            { session: [], project: [], global: [] },
+            command,
+          ),
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      { enqueueCommandApproval: vi.fn() } as never,
+      "session-unruled-sandbox",
+      undefined,
+      { terminalProvider, getCommandApprovalPolicy: () => "approve-for-me" },
+    );
+
+    expect(terminalProvider.prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "npm test" }),
+      expect.objectContaining({ requiredAuthority: "sandbox" }),
+    );
+    expect(textPayload(result).security).toMatchObject({ route: "sandbox" });
+  });
+
   it("lets a command allow rule authorize environment overrides without another card", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
@@ -2283,14 +2309,14 @@ describe("handleExecuteCommand", () => {
     expect(terminalProvider.prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({ env: { CUSTOM_BUILD_MODE: "1" } }),
       expect.objectContaining({
-        requiredAuthority: "sandbox",
+        requiredAuthority: "native-agent",
         authorityReason: "explicit-rule",
       }),
     );
     expect(enqueueCommandApproval).not.toHaveBeenCalled();
     expect(textPayload(result)).toMatchObject({
       approval: { by: "explicit_rule" },
-      security: { route: "sandbox", authorityReason: "explicit-rule" },
+      security: { route: "native", authorityReason: "explicit-rule" },
     });
   });
 
@@ -2528,7 +2554,7 @@ describe("handleExecuteCommand", () => {
     expect(textPayload(result)).toMatchObject({ status: "rejected_by_user" });
   });
 
-  it("lets prompt override allow and prevents native rule authority", async () => {
+  it("lets prompt override allow and requires a card on the native route", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
         key === "masterBypass" ? false : fallback,
@@ -2575,10 +2601,58 @@ describe("handleExecuteCommand", () => {
 
     expect(terminalProvider.prepareExecution).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ requiredAuthority: "sandbox" }),
+      expect.objectContaining({ requiredAuthority: "native-agent" }),
     );
     expect(enqueueCommandApproval).toHaveBeenCalledOnce();
     expect(textPayload(result)).toMatchObject({ status: "rejected_by_user" });
+  });
+
+  it("asks for approval before executing a command covered by a prompt rule natively", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const rules = {
+      session: [
+        {
+          pattern: "npm test",
+          mode: "exact" as const,
+          decision: "prompt" as const,
+        },
+      ],
+      project: [],
+      global: [],
+    };
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "run-once" }),
+      commitApprovalRecording: vi.fn(),
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm test" },
+      {
+        evaluateCommandRules: (_sessionId: string, command: string) =>
+          evaluateCommandRulePolicy(rules, command),
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      { enqueueCommandApproval } as never,
+      "session-prompt-native",
+      undefined,
+      { terminalProvider, getCommandApprovalPolicy: () => "approve-for-me" },
+    );
+
+    expect(terminalProvider.prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "npm test" }),
+      expect.objectContaining({ requiredAuthority: "native-agent" }),
+    );
+    expect(enqueueCommandApproval).toHaveBeenCalledOnce();
+    expect(textPayload(result)).toMatchObject({
+      approval: { by: "human" },
+      security: { route: "native" },
+    });
   });
 
   it("rejects forbidden rules before terminal preparation", async () => {
@@ -2762,7 +2836,7 @@ describe("handleExecuteCommand", () => {
     expect(textPayload(result).retry_outcome).toBeUndefined();
   });
 
-  it("requires the human recovery card even when a command rule matches a native retry", async () => {
+  it("requires the human recovery card for a native retry after an unruled sandbox failure", async () => {
     const violation = {
       operation: "ipc-connect" as const,
       target: "NuGet-Migrations",
@@ -2852,18 +2926,13 @@ describe("handleExecuteCommand", () => {
           evaluateCommandRulePolicy(
             {
               session: [],
-              project: [
-                { pattern: "dotnet build", mode: "exact", decision: "allow" },
-              ],
+              project: [],
               global: [],
             },
             command,
           ),
-        isCommandApproved: () => true,
-        findMatchingCommandRule: vi.fn(() => ({
-          rule: { pattern: "dotnet build", mode: "exact" },
-          scope: "project",
-        })),
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
       } as never,
       {
         isRecentlyApproved: () => true,
@@ -2901,14 +2970,7 @@ describe("handleExecuteCommand", () => {
           processLaunched: true,
           mayHaveSideEffects: true,
         }),
-        subCommands: [
-          expect.objectContaining({
-            existingRule: expect.objectContaining({
-              pattern: "dotnet build",
-              scope: "project",
-            }),
-          }),
-        ],
+        subCommands: [expect.objectContaining({ command: "dotnet build" })],
       }),
     );
     expect(sandboxExecute).toHaveBeenCalledOnce();
@@ -4052,6 +4114,13 @@ describe("handleExecuteCommand", () => {
       missing: ["temporary_home"],
       action: "retry_with_missing_sandbox_capabilities",
       option: { temporary_home: true },
+      nativeOption: {
+        action: "reviewed_native_retry_preserving_host_home",
+        same_command: true,
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
     },
     {
       name: "combined listener and host HOME denial",
@@ -4063,6 +4132,70 @@ describe("handleExecuteCommand", () => {
         sandbox_permissions: "with_additional_permissions",
         additional_permissions: { network: { allow_local_binding: true } },
         reason_required: true,
+      },
+      nativeOption: {
+        action: "reviewed_native_retry_preserving_host_home",
+        same_command: true,
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    },
+    {
+      name: "managed-network gcloud credential HOME denial",
+      command: "gcloud auth list",
+      output: `ERROR: failed to write credentials to ${os.homedir()}/.config/gcloud/credentials.db: permission denied`,
+      missing: [],
+      nativeOption: {
+        action: "reviewed_native_retry_preserving_host_home",
+        same_command: true,
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    },
+    {
+      name: "gcloud credential HOME denial",
+      command: "gcloud auth print-access-token",
+      output: `ERROR: failed to write credentials to ${os.homedir()}/.config/gcloud/credentials.db: permission denied`,
+      action: "retry_with_missing_sandbox_capabilities",
+      option: { temporary_home: true },
+      nativeOption: {
+        action: "reviewed_native_retry_preserving_host_home",
+        same_command: true,
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    },
+    {
+      name: "mise credential-backed command HOME denial",
+      command: "mise run deploy",
+      output: `mise: failed to write state to ${os.homedir()}/.local/state/mise/session: operation not permitted`,
+      action: "retry_with_missing_sandbox_capabilities",
+      option: { temporary_home: true },
+      nativeOption: {
+        action: "reviewed_native_retry_preserving_host_home",
+        same_command: true,
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    },
+    {
+      name: "compound gcloud credential HOME denial",
+      command: "npm run prepare && gcloud auth print-access-token",
+      output: `ERROR: failed to write credentials to ${os.homedir()}/.config/gcloud/credentials.db: permission denied`,
+      action: "isolate_failed_step_with_temporary_home",
+      sameCommand: false,
+      option: { temporary_home: true },
+      nativeOption: {
+        action:
+          "isolate_failed_step_for_reviewed_native_retry_preserving_host_home",
+        same_command: false,
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
       },
     },
     {
@@ -4225,6 +4358,7 @@ describe("handleExecuteCommand", () => {
       action,
       code = "sandbox_missing_capabilities",
       option,
+      nativeOption,
       sameCommand = true,
     }) => {
       const execute = vi.fn(async () => ({
@@ -4255,7 +4389,15 @@ describe("handleExecuteCommand", () => {
       const { handleExecuteCommand } = await import("./executeCommand.js");
 
       const result = await handleExecuteCommand(
-        { command },
+        {
+          command,
+          ...(missing?.length === 0
+            ? {
+                sandbox_permissions: "require_managed_network" as const,
+                reason: "Read authenticated cloud metadata",
+              }
+            : {}),
+        },
         { isCommandApproved: () => true } as never,
         { isRecentlyApproved: () => true } as never,
         "session-missing-sandbox-capability",
@@ -4274,11 +4416,10 @@ describe("handleExecuteCommand", () => {
           code,
           automatic_retry: false,
           options: [
-            {
-              action,
-              same_command: sameCommand,
-              ...option,
-            },
+            ...(missing?.length === 0
+              ? []
+              : [{ action, same_command: sameCommand, ...option }]),
+            ...(nativeOption ? [nativeOption] : []),
           ],
         },
       });
@@ -4370,7 +4511,16 @@ describe("handleExecuteCommand", () => {
       retry_guidance: {
         code: "sandbox_missing_capabilities",
         automatic_retry: false,
-        options: [{ temporary_home: true }],
+        options: [
+          { temporary_home: true },
+          {
+            action: "reviewed_native_retry_preserving_host_home",
+            same_command: true,
+            sandbox_permissions: "require_escalated",
+            reason_required: true,
+            reviewed_native_execution: true,
+          },
+        ],
       },
       execution_attempts: [{ attempt: 1, route: "sandbox" }],
     });
@@ -4922,7 +5072,11 @@ describe("handleExecuteCommand", () => {
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
     const result = await handleExecuteCommand(
-      { command: "npm view vite version", sandbox_permissions: "use_default" },
+      {
+        command: "npm view vite version",
+        sandbox_permissions: "require_managed_network",
+        reason: "Inspect public package metadata in the mediated sandbox",
+      },
       {
         evaluateCommandRules: (_sessionId: string, command: string) =>
           evaluateCommandRulePolicy(
@@ -4973,8 +5127,8 @@ describe("handleExecuteCommand", () => {
       }),
       expect.objectContaining({
         requiredAuthority: "sandbox",
-        permissionIntent: "default",
-        approvalRequirement: "policy",
+        permissionIntent: "additional-permissions",
+        approvalRequirement: "explicit-permissions",
         authorityReason: "explicit-rule",
       }),
     );
@@ -4985,10 +5139,10 @@ describe("handleExecuteCommand", () => {
     expect(execute).toHaveBeenCalledWith("allow-once");
     expect(textPayload(result)).toMatchObject({
       exit_code: 0,
-      approval: { by: "master_bypass" },
+      approval: { by: "explicit_rule" },
       security: {
         route: "sandbox",
-        permissionIntent: "default",
+        permissionIntent: "additional-permissions",
         sandbox: {
           capabilities: { network: "proxy-only" },
           grant: { grantId: "grant-1", auditId: "network-audit-1" },

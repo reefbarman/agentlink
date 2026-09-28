@@ -1764,9 +1764,14 @@ export class AgentEngine {
             reasoningMode: isCodex && session.codexProMode ? "pro" : "standard",
             cache: currentCache,
             state: currentState,
-            providerHints: isCodex
-              ? { codex: { sessionId: session.id, turnState: codexTurnState } }
-              : undefined,
+            providerHints: {
+              sessionId: session.id,
+              ...(isCodex
+                ? {
+                    codex: { sessionId: session.id, turnState: codexTurnState },
+                  }
+                : {}),
+            },
             signal: requestController.signal,
             onProviderRequestAttempt: ({ model }) => {
               if (telemetryRequest) {

@@ -33,6 +33,7 @@ import {
   TerminalTargetRecoveryError,
 } from "../core/capabilities/terminalTargetError.js";
 import {
+  commandRuleMatches,
   commandRulePolicyFingerprint,
   type CommandRulePolicyEvaluation,
 } from "../approvals/commandRulePolicy.js";
@@ -303,7 +304,9 @@ function routeContextFor(
     executionPresetSnapshot,
     requiredAuthority: requireSandbox
       ? "sandbox"
-      : explicitEscalation || executionPresetSnapshot === "native-manual"
+      : explicitEscalation ||
+          explicitRuleAuthority ||
+          executionPresetSnapshot === "native-manual"
         ? "native-agent"
         : "sandbox",
     permissionIntent,
@@ -964,8 +967,15 @@ function attachSandboxCapabilityRetryGuidance(input: {
     hostHomeDenial &&
     !isMiseTrustedConfigDenial(output) &&
     (!managedNetwork || npmHomeDenial);
+  const needsReviewedHostHome =
+    allowTemporaryHome && hostHomeDenial && !temporaryHome && !hasHomeOverride;
   const unresolvedLocalBinding = localBinding && turbopackDenial;
-  if (!needsLocalBinding && !needsTemporaryHome && !unresolvedLocalBinding)
+  if (
+    !needsLocalBinding &&
+    !needsTemporaryHome &&
+    !needsReviewedHostHome &&
+    !unresolvedLocalBinding
+  )
     return;
 
   if (unresolvedLocalBinding) {
@@ -1027,13 +1037,25 @@ function attachSandboxCapabilityRetryGuidance(input: {
         }
       : {}),
   };
+  const options = needsTemporaryHome || needsLocalBinding ? [option] : [];
+  if (needsReviewedHostHome) {
+    options.push({
+      action: compound
+        ? "isolate_failed_step_for_reviewed_native_retry_preserving_host_home"
+        : "reviewed_native_retry_preserving_host_home",
+      same_command: !compound,
+      sandbox_permissions: "require_escalated",
+      reason_required: true,
+      reviewed_native_execution: true,
+    });
+  }
   const guidance: ExecuteCommandRetryGuidance = {
     code: "sandbox_missing_capabilities",
     message: compound
-      ? `A step in this compound command failed with bounded evidence that the sandbox is missing ${missingCapabilities.join(" and ")}. Identify and retry only the failed step with the listed capability, and use a disposable HOME only when that step does not need host credentials or configuration.`
-      : `The command failed with bounded evidence that the sandbox is missing ${missingCapabilities.join(" and ")}. Retry only if those capabilities match the intended workflow; use a disposable HOME only when host credentials and configuration are unnecessary. AgentLink will not broaden the sandbox automatically.`,
+      ? `A step in this compound command failed with bounded evidence that the sandbox ${missingCapabilities.length ? `is missing ${missingCapabilities.join(" and ")}` : "denied a host-HOME write"}. Identify and retry only the failed step with the listed capability. If it needs host credentials or configuration, use the separately reviewed native option; a disposable HOME will not preserve them.`
+      : `The command failed with bounded evidence that the sandbox ${missingCapabilities.length ? `is missing ${missingCapabilities.join(" and ")}` : "denied a host-HOME write"}. Use a disposable HOME only when host credentials and configuration are unnecessary. If the command needs host credentials or configuration, use the separately reviewed native option. AgentLink will not broaden the sandbox automatically.`,
     automatic_retry: false,
-    options: [option],
+    options,
   };
   Object.assign(result, {
     retry_guidance: guidance,
@@ -1866,7 +1888,14 @@ export async function handleExecuteCommand(
     let expectedRulePolicyFingerprint =
       commandRulePolicyFingerprint(initialRulePolicy);
     const explicitRuleAuthority =
-      initialRulePolicy.allSegmentsExplicitlyAllowed;
+      initialRulePolicy.segments.length > 0 &&
+      initialRulePolicy.segments.every(
+        (segment) =>
+          (segment.decision === "allow" || segment.decision === "prompt") &&
+          segment.matches.some(({ rule }) =>
+            commandRuleMatches(segment.command, rule),
+          ),
+      );
     const routeContext = routeContextFor(
       approvalMode,
       nativeEscalation
@@ -1876,7 +1905,10 @@ export async function handleExecuteCommand(
           : "default",
       providers.commandExecutionPolicy,
       explicitRuleAuthority,
-      temporaryHome || managedNetwork || additionalPermissions,
+      temporaryHome ||
+        managedNetwork ||
+        additionalPermissions ||
+        providers.commandExecutionPolicy === "read-only",
     );
     const readOnlyPolicy =
       routeContext.commandExecutionPolicySnapshot === "read-only";

@@ -6096,9 +6096,36 @@ export function BrowserGatewayApp({
     );
   };
 
+  const refreshWorkspaceMcpConnections = async (
+    projectId?: string,
+  ): Promise<void> => {
+    try {
+      const response = await fetch(buildApiPath("/api/mcp/refresh"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ projectId }),
+      });
+      const body = (await response.json()) as {
+        ok?: boolean;
+        configSnapshot?: McpConfigSnapshot;
+      };
+      if (body.configSnapshot) setMcpManagerSnapshot(body.configSnapshot);
+      setModeStatus(
+        body.ok
+          ? "Workspace MCP connections refreshed."
+          : `Workspace MCP refresh failed: ${response.status}`,
+      );
+    } catch (error) {
+      setModeStatus(`Workspace MCP refresh failed: ${String(error)}`);
+    }
+  };
+
   const handleMcpAction = (
     serverName: string,
-    action: "disable" | "reconnect" | "reauthenticate",
+    action: "connect" | "disable" | "reconnect" | "reauthenticate",
     projectId?: string,
   ): void => {
     void (async () => {
@@ -6111,10 +6138,18 @@ export function BrowserGatewayApp({
         body: JSON.stringify({ serverName, action, projectId }),
       });
       const body = (await response.json()) as {
+        ok?: boolean;
         configSnapshot?: McpConfigSnapshot;
       };
       if (body.configSnapshot) setMcpManagerSnapshot(body.configSnapshot);
-    })();
+      setModeStatus(
+        body.ok
+          ? `MCP ${action} requested for ${serverName}.`
+          : `MCP ${action} failed for ${serverName}: ${response.status}`,
+      );
+    })().catch((error) => {
+      setModeStatus(`MCP ${action} failed for ${serverName}: ${String(error)}`);
+    });
   };
 
   const handleForwardedApprovalSubmit = (
@@ -9136,9 +9171,8 @@ export function BrowserGatewayApp({
                           if (isAskAgentSelected) {
                             void refreshAskAgentMcpStatus({ reconnect: true });
                           } else {
-                            void refreshWorkspaceMcpStatus(
+                            void refreshWorkspaceMcpConnections(
                               panelSnapshot.project?.projectId,
-                              mcpManagerView,
                             );
                           }
                         }}
@@ -9154,7 +9188,10 @@ export function BrowserGatewayApp({
                           if (isAskAgentSelected) {
                             if (action === "reauthenticate") {
                               void reauthenticateAskAgentMcpServer(serverName);
-                            } else if (action === "reconnect") {
+                            } else if (
+                              action === "connect" ||
+                              action === "reconnect"
+                            ) {
                               void refreshAskAgentMcpStatus({
                                 reconnect: true,
                               });

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added certificate-backed local development signing to the desktop and CLI build-and-install tasks. The CLI now has a standalone bundle with a pinned Node runtime and stable signing identity; installers verify signatures before replacement and do not change Keychain permissions. Existing credentials may require one-time approval. CI previews remain explicitly unsigned and not notarised.
+- Fixed Linux CI dependency installation by separating macOS ARM64 CLI distribution restrictions and native assets from platform-neutral workspace source builds. Added a macOS CLI bundle check and preview artifact.
+
 - Added GPT-6 Sol (`gpt-6-sol`) and GPT-6 Luna (`gpt-6-luna`) to the OpenAI model picker for both ChatGPT/Codex subscription OAuth and OpenAI API keys. Both use OpenAI's documented 1.05M context window, 128K output limit, and `none` through `max` reasoning levels; existing model defaults are unchanged.
 - Added Orchestrate mode for frontier-model coordination with lower-tier background agents. It delegates substantial research, codebase reading, implementation, validation, and review while keeping foreground context compact; native background routing supports configurable model-tier groups, and `get_background_result` can wait for any or all of several agents without leaking waiters or stopping unfinished work.
 - Changed default auto-condense thresholds to target a 256k usable-input window regardless of the model's advertised context. Models with larger usable input now condense at the same absolute point a 256k model would (roughly 25% on a 1M-context model), and the warm-cache headroom bonus scales the same way. Model capability data is unchanged, and explicit per-model overrides are never scaled, so raising the percentage in the model picker still uses the full window. The picker can now remove an override with **Reset to default** in both VS Code and the browser remote.

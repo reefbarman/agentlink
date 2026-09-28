@@ -20,6 +20,15 @@ const require = createRequire(import.meta.url);
 const manifest = JSON.parse(
   await readFile(path.join(root, "package.json"), "utf8"),
 );
+const packageBuild = process.argv.includes("--package");
+if (
+  packageBuild &&
+  (process.platform !== "darwin" || process.arch !== "arm64")
+) {
+  throw new Error(
+    "CLI packaging requires macOS Apple Silicon; source builds are platform-neutral.",
+  );
+}
 const output = path.join(root, "dist", "agentlink.js");
 await rm(path.dirname(output), { recursive: true, force: true });
 await mkdir(path.dirname(output), { recursive: true });
@@ -108,33 +117,43 @@ const ripgrepPackage = "@vscode/ripgrep-darwin-arm64";
 const ripgrepVersion = "1.18.0";
 const ripgrepSha256 =
   "6ef40346bf31fcce79d9614c7745c198542925a0c7d4911e1ffe794c53392ac1";
-const ripgrepManifestPath = require.resolve(`${ripgrepPackage}/package.json`);
-const ripgrepRoot = path.dirname(ripgrepManifestPath);
-const installedRipgrepManifest = JSON.parse(
-  await readFile(ripgrepManifestPath, "utf8"),
-);
-if (installedRipgrepManifest.version !== ripgrepVersion) {
-  throw new Error(
-    `Expected ${ripgrepPackage} ${ripgrepVersion}, found ${installedRipgrepManifest.version}`,
-  );
-}
-const ripgrepSource = path.join(ripgrepRoot, "bin", "rg");
-const ripgrepBytes = await readFile(ripgrepSource);
-const actualRipgrepSha256 = createHash("sha256")
-  .update(ripgrepBytes)
-  .digest("hex");
-if (actualRipgrepSha256 !== ripgrepSha256) {
-  throw new Error(
-    `Pinned ripgrep checksum mismatch: expected ${ripgrepSha256}, found ${actualRipgrepSha256}`,
-  );
-}
-const ripgrepOutput = path.join(root, "dist", "rg");
-await copyFile(ripgrepSource, ripgrepOutput);
-await chmod(ripgrepOutput, 0o755);
 const bundledPackages = await collectBundledPackages(build.metafile);
-const thirdPartyNotices = await renderThirdPartyNotices([
-  ...bundledPackages,
-  {
+const noticePackages = [...bundledPackages];
+let ripgrepManifestPath;
+if (
+  packageBuild ||
+  (process.platform === "darwin" && process.arch === "arm64")
+) {
+  try {
+    ripgrepManifestPath = require.resolve(`${ripgrepPackage}/package.json`);
+  } catch (error) {
+    if (packageBuild || error.code !== "MODULE_NOT_FOUND") throw error;
+  }
+}
+if (ripgrepManifestPath) {
+  const ripgrepRoot = path.dirname(ripgrepManifestPath);
+  const installedRipgrepManifest = JSON.parse(
+    await readFile(ripgrepManifestPath, "utf8"),
+  );
+  if (installedRipgrepManifest.version !== ripgrepVersion) {
+    throw new Error(
+      `Expected ${ripgrepPackage} ${ripgrepVersion}, found ${installedRipgrepManifest.version}`,
+    );
+  }
+  const ripgrepSource = path.join(ripgrepRoot, "bin", "rg");
+  const ripgrepBytes = await readFile(ripgrepSource);
+  const actualRipgrepSha256 = createHash("sha256")
+    .update(ripgrepBytes)
+    .digest("hex");
+  if (actualRipgrepSha256 !== ripgrepSha256) {
+    throw new Error(
+      `Pinned ripgrep checksum mismatch: expected ${ripgrepSha256}, found ${actualRipgrepSha256}`,
+    );
+  }
+  const ripgrepOutput = path.join(root, "dist", "rg");
+  await copyFile(ripgrepSource, ripgrepOutput);
+  await chmod(ripgrepOutput, 0o755);
+  noticePackages.push({
     name: ripgrepPackage,
     version: ripgrepVersion,
     license: "MIT",
@@ -144,8 +163,9 @@ const thirdPartyNotices = await renderThirdPartyNotices([
       `SHA-256: ${ripgrepSha256}`,
     ],
     licenseFiles: [path.join(ripgrepRoot, "LICENSE")],
-  },
-]);
+  });
+}
+const thirdPartyNotices = await renderThirdPartyNotices(noticePackages);
 await writeFile(path.join(root, "THIRD_PARTY_NOTICES.md"), thirdPartyNotices, {
   mode: 0o644,
 });
@@ -154,20 +174,22 @@ await writeFile(
   `${JSON.stringify(
     {
       schemaVersion: 1,
-      platform: "darwin-arm64",
+      platform: packageBuild ? "darwin-arm64" : "source",
       bundle: "agentlink.js",
       externalImports,
       bundledDependencies: bundledDependencyInventory(bundledPackages),
       runtimeDependencies: { "@napi-rs/keyring": "2.0.0" },
-      assets: {
-        ripgrep: {
-          path: "rg",
-          package: ripgrepPackage,
-          packageVersion: ripgrepVersion,
-          binaryVersion: "15.0.0",
-          sha256: ripgrepSha256,
-        },
-      },
+      assets: packageBuild
+        ? {
+            ripgrep: {
+              path: "rg",
+              package: ripgrepPackage,
+              packageVersion: ripgrepVersion,
+              binaryVersion: "15.0.0",
+              sha256: ripgrepSha256,
+            },
+          }
+        : {},
     },
     null,
     2,

@@ -100,6 +100,25 @@ describe("OpenAiCompatibleProvider", () => {
     expect(provider.listModels()[0]).toMatchObject({ tier: "cheap" });
   });
 
+  it("exposes the agent response limit separately from the model output ceiling", () => {
+    const configured = connection({
+      models: [
+        {
+          ...connection().models[0]!,
+          agentMaxTokens: 2_048,
+        },
+      ],
+    });
+    const provider = new OpenAiCompatibleProvider({
+      connection: configured,
+      secrets: { get: vi.fn().mockResolvedValue("secret") },
+    });
+
+    expect(provider.getAgentMaxTokens("local-model")).toBe(2_048);
+    expect(provider.getAgentMaxTokens("unknown")).toBeUndefined();
+    expect(provider.getCapabilities("local-model").maxOutputTokens).toBe(4_096);
+  });
+
   it("exposes configured model family without changing provider identity", () => {
     const configured = connection({
       models: [
@@ -158,6 +177,148 @@ describe("OpenAiCompatibleProvider", () => {
       2,
       getOpenAiCompatibleSecretKey("test-key"),
     );
+  });
+
+  it("sends a stable affinity header only for an opted-in Meridian connection", async () => {
+    const headers: Array<string | null> = [];
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        headers.push(new Headers(init?.headers).get("x-session-affinity"));
+        return new Response(
+          'data: {"id":"response","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    );
+    const base = connection();
+    const enabled = new OpenAiCompatibleProvider({
+      connection: {
+        ...base,
+        meridianSessionAffinity: true,
+        runtimeProfile: {
+          ...base.runtimeProfile,
+          meridianSessionAffinity: true,
+        },
+      },
+      secrets: { get: vi.fn().mockResolvedValue("secret") },
+      fetch,
+    });
+    const disabled = new OpenAiCompatibleProvider({
+      connection: base,
+      secrets: { get: vi.fn().mockResolvedValue("secret") },
+      fetch,
+    });
+    const withIdentity = {
+      ...request(),
+      providerHints: { sessionId: "session-one" },
+    };
+
+    await enabled.complete(withIdentity);
+    await collectOpenAiCompatibleCompletion(enabled.stream(withIdentity));
+    await enabled.complete(request());
+    await disabled.complete(withIdentity);
+
+    expect(headers).toEqual(["session-one", "session-one", null, null]);
+  });
+
+  it("sends OpenRouter's session_id in the body without leaking affinity headers", async () => {
+    const sent: Array<{ body: Record<string, unknown>; headers: Headers }> = [];
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        sent.push({
+          body: JSON.parse(String(init?.body)),
+          headers: new Headers(init?.headers),
+        });
+        return new Response(
+          'data: {"id":"response","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    );
+    const base = connection();
+    const provider = new OpenAiCompatibleProvider({
+      connection: {
+        ...base,
+        profile: "openrouter",
+        runtimeProfile: { ...base.runtimeProfile, profile: "openrouter" },
+      },
+      secrets: { get: vi.fn().mockResolvedValue("secret") },
+      fetch,
+    });
+    const withIdentity = {
+      ...request(),
+      providerHints: { sessionId: "session-one" },
+    };
+
+    await provider.complete(withIdentity);
+    await collectOpenAiCompatibleCompletion(provider.stream(withIdentity));
+    await provider.complete(request());
+
+    expect(sent.map((entry) => entry.body.session_id)).toEqual([
+      "session-one",
+      "session-one",
+      undefined,
+    ]);
+    expect(
+      sent.every(
+        (entry) =>
+          entry.headers.get("x-session-affinity") === null &&
+          entry.headers.get("x-session-id") === null,
+      ),
+    ).toBe(true);
+  });
+
+  it("only sends generic session IDs for an explicitly configured field", async () => {
+    const sent: Array<{ body: Record<string, unknown>; headers: Headers }> = [];
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        sent.push({
+          body: JSON.parse(String(init?.body)),
+          headers: new Headers(init?.headers),
+        });
+        return new Response(
+          'data: {"id":"response","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    );
+    const base = connection();
+    const makeProvider = (sessionId?: {
+      location: "header" | "body";
+      name: string;
+    }) =>
+      new OpenAiCompatibleProvider({
+        connection: {
+          ...base,
+          runtimeProfile: { ...base.runtimeProfile, sessionId },
+        },
+        secrets: { get: vi.fn().mockResolvedValue("secret") },
+        fetch,
+      });
+    const withIdentity = {
+      ...request(),
+      providerHints: { sessionId: "session-two" },
+    };
+
+    await makeProvider({
+      location: "header",
+      name: "X-Conversation-Id",
+    }).complete(withIdentity);
+    await makeProvider({ location: "body", name: "conversation_id" }).complete(
+      withIdentity,
+    );
+    await makeProvider().complete(withIdentity);
+
+    expect(
+      sent.map((entry) => [
+        entry.headers.get("x-conversation-id"),
+        entry.body.conversation_id,
+      ]),
+    ).toEqual([
+      ["session-two", undefined],
+      [null, "session-two"],
+      [null, undefined],
+    ]);
   });
 
   it("checks authentication with the prefixed SecretStorage key", async () => {
