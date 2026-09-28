@@ -428,12 +428,24 @@ function buildProviderMessages(
       };
     },
   );
-  for (let i = modeInsertions.length - 1; i >= 0; i--) {
-    const insertion = modeInsertions[i]!;
-    apiMessages.splice(insertion.beforeIndex, 0, {
-      role: "user",
-      content: insertion.blockText,
-    });
+  for (const insertion of modeInsertions) {
+    const message = apiMessages[insertion.beforeIndex];
+    if (message?.role !== "user") continue;
+    if (typeof message.content === "string") {
+      message.content = `${insertion.blockText}\n\n${message.content}`;
+    } else {
+      const textIndex = message.content.findIndex(
+        (block) => block.type === "text",
+      );
+      message.content =
+        textIndex >= 0
+          ? message.content.map((block, index) =>
+              index === textIndex && block.type === "text"
+                ? { ...block, text: `${insertion.blockText}\n\n${block.text}` }
+                : block,
+            )
+          : [{ type: "text", text: insertion.blockText }, ...message.content];
+    }
   }
   return apiMessages;
 }
@@ -449,7 +461,6 @@ function isToolResultCarrier(message: AgentMessage): boolean {
 function insertAutomaticMemoryContext(
   apiMessages: MessageParam[],
   effectiveMessages: AgentMessage[],
-  modeInsertions: Array<{ beforeIndex: number; blockText: string }>,
   automaticMemoryContext: Readonly<AutomaticMemoryContext>,
   logicalTurnUserMessage?: AgentMessage,
 ): void {
@@ -466,10 +477,7 @@ function insertAutomaticMemoryContext(
     }
   }
   if (sourceIndex < 0) sourceIndex = 0;
-  const modeInsertionsBeforeAnchor = modeInsertions.filter(
-    (insertion) => insertion.beforeIndex <= sourceIndex,
-  ).length;
-  apiMessages.splice(sourceIndex + modeInsertionsBeforeAnchor, 0, {
+  apiMessages.splice(sourceIndex, 0, {
     role: "user",
     content: automaticMemoryContext.rendering,
   });
@@ -1582,6 +1590,7 @@ export class AgentEngine {
             getMessagesStartedAt,
             `messages=${effectiveMessages.length}`,
           );
+          session.pinModeInstructionToUserTurn(effectiveMessages);
 
           const modeInsertions =
             session.buildModeInstructionInsertions?.(effectiveMessages) ?? [];
@@ -1636,7 +1645,6 @@ export class AgentEngine {
             insertAutomaticMemoryContext(
               apiMessages,
               effectiveMessages,
-              modeInsertions,
               opts.automaticMemoryContext,
               logicalTurnUserMessage,
             );

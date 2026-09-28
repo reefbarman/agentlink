@@ -3581,6 +3581,60 @@ describe("AgentEngine", () => {
       },
     );
 
+    it("keeps the mode block attached to a real user message across tool rounds", async () => {
+      const requests: StreamRequest[] = [];
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        if (requests.length < 3) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: `call-${requests.length}`,
+                name: "read_file",
+                input: { path: "package.json" },
+              },
+            ],
+          };
+        } else {
+          yield* makeProviderStream({ text: "done" });
+          return;
+        }
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("read the version");
+      await session.refreshModeInstructionAnchor();
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools: () => [],
+        isParallelSafe: () => true,
+        executeTool: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      } as any);
+      await collectEvents(engine.run(session));
+
+      expect(requests).toHaveLength(3);
+      const firstUser = requests[0].messages[0];
+      expect(firstUser).toEqual({
+        role: "user",
+        content:
+          '<current_mode mode="mock">mock mode block</current_mode>\n\nread the version',
+      });
+      for (let index = 1; index < requests.length; index++) {
+        expect(requests[index].messages[0]).toEqual(firstUser);
+        expect(
+          requests[index].messages.slice(
+            0,
+            requests[index - 1].messages.length,
+          ),
+        ).toEqual(requests[index - 1].messages);
+        expect(requests[index].messages.at(-1)).toMatchObject({ role: "user" });
+      }
+    });
+
     it("rebuilds cached provider tools when same-name tool definitions change", async () => {
       const streamCalls: StreamRequest[] = [];
       let streamCount = 0;
@@ -4279,7 +4333,9 @@ describe("AgentEngine", () => {
       expect(requests).toHaveLength(2);
       for (const request of requests) {
         const stableQuestionIndex = request.messages.findIndex(
-          (message) => message.content === "earlier stable question",
+          (message) =>
+            typeof message.content === "string" &&
+            message.content.endsWith("earlier stable question"),
         );
         expect(stableQuestionIndex).toBeGreaterThanOrEqual(0);
         expect(request.messages[stableQuestionIndex + 1]).toEqual({
@@ -4287,7 +4343,9 @@ describe("AgentEngine", () => {
           content: [{ type: "text", text: "earlier stable answer" }],
         });
         const currentUserIndex = request.messages.findIndex(
-          (message) => message.content === "follow the project preference",
+          (message) =>
+            typeof message.content === "string" &&
+            message.content.endsWith("follow the project preference"),
         );
         expect(currentUserIndex).toBeGreaterThan(0);
         expect(request.messages[currentUserIndex - 1]).toEqual({
@@ -4812,7 +4870,7 @@ describe("AgentEngine", () => {
           ),
           expect.stringMatching(/^\[perf\] getMessages \d+ms messages=1$/),
           expect.stringMatching(
-            /^\[perf\] message assembly \d+ms apiMessages=2$/,
+            /^\[perf\] message assembly \d+ms apiMessages=1$/,
           ),
         ]),
       );
@@ -5121,9 +5179,9 @@ describe("AgentEngine", () => {
       expect(streamCalls[1].messages).toEqual([
         {
           role: "user",
-          content: '<current_mode mode="mock">mock mode block</current_mode>',
+          content:
+            '<current_mode mode="mock">mock mode block</current_mode>\n\nsearch',
         },
-        { role: "user", content: "search" },
         pausedMessage,
       ]);
       expect(session.getAllMessages()).toEqual([
@@ -5715,12 +5773,11 @@ describe("AgentEngine", () => {
       expect(streamCalls[0]?.messages).toEqual([
         {
           role: "user",
-          content: '<current_mode mode="mock">mock mode block</current_mode>',
-        },
-        {
-          role: "user",
           content: [
-            { type: "text", text: "what's in this image?" },
+            {
+              type: "text",
+              text: '<current_mode mode="mock">mock mode block</current_mode>\n\nwhat\'s in this image?',
+            },
             {
               type: "image",
               source: {
@@ -5900,7 +5957,10 @@ describe("AgentEngine", () => {
       const expectedImageMessage = {
         role: "user",
         content: [
-          { type: "text", text: "what's in this image?" },
+          {
+            type: "text",
+            text: '<current_mode mode="mock">mock mode block</current_mode>\n\nwhat\'s in this image?',
+          },
           {
             type: "image",
             source: {
@@ -5912,11 +5972,10 @@ describe("AgentEngine", () => {
         ],
       };
       expect(streamCalls).toHaveLength(3);
-      // messages[0] is the injected mode instruction block.
-      expect(streamCalls[0]?.messages[1]).toEqual(expectedImageMessage);
+      expect(streamCalls[0]?.messages[0]).toEqual(expectedImageMessage);
       // Regression: the API is stateless, so the image must be re-sent after
       // the tool round-trip or the model loses access to it mid-conversation.
-      expect(streamCalls[1]?.messages[1]).toEqual(expectedImageMessage);
+      expect(streamCalls[1]?.messages[0]).toEqual(expectedImageMessage);
     });
 
     it("does not count tool-result image base64 as raw text for auto-condense estimates", async () => {

@@ -266,7 +266,8 @@ describe("AgentSessionManager /btw side questions", () => {
       expect.arrayContaining([
         expect.objectContaining({
           role: "user",
-          content: "Foreground context",
+          content:
+            '<current_mode mode="mock">mock mode block</current_mode>\n\nForeground context',
         }),
         expect.objectContaining({
           role: "assistant",
@@ -506,7 +507,9 @@ describe("AgentSessionManager /btw side questions", () => {
 
   it("allows concurrent /btw questions in different chats", async () => {
     const provider = makeProvider((request) =>
-      textResponse(`answer: ${String(request.messages.at(-1)?.content)}`),
+      textResponse(
+        `answer: ${String(request.messages.at(-1)?.content).split("\n\n").at(-1)}`,
+      ),
     );
     providerRegistry.register(provider);
 
@@ -561,12 +564,11 @@ describe("AgentSessionManager /btw side questions", () => {
 
     expect(provider.requests).toHaveLength(1);
     expect(provider.requests[0]?.messages).toEqual([
-      // Injected mode instruction block always precedes the first user turn.
       expect.objectContaining({
         role: "user",
-        content: '<current_mode mode="mock">mock mode block</current_mode>',
+        content:
+          '<current_mode mode="mock">mock mode block</current_mode>\n\nfirst queued',
       }),
-      expect.objectContaining({ role: "user", content: "first queued" }),
       expect.objectContaining({ role: "user", content: "second queued" }),
     ]);
     expect(

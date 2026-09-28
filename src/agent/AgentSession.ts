@@ -1176,10 +1176,10 @@ export class AgentSession {
 
   /**
    * Resolve anchors against the effective history the engine is about to
-   * send. Returns request-local user-message insertions, ordered ascending by
-   * index. Insertion points are always genuine turn boundaries (immediately
-   * before a string-content user message, or the end of history), so
-   * tool_use/tool_result adjacency can never be broken.
+   * send. An anchor normally belongs to the next user turn. Until that turn
+   * exists, use the latest real user message rather than adding a trailing
+   * message that disappears on the next round. This read is side-effect free;
+   * the send path pins the fallback before dispatch.
    */
   buildModeInstructionInsertions(
     effectiveMessages: readonly AgentMessage[],
@@ -1197,18 +1197,41 @@ export class AgentSession {
         ordinalIndex.push(index);
       }
     });
+    if (ordinalIndex.length === 0) return [];
     const insertions = new Map<number, string>();
     for (const anchor of this.modeInstructionAnchors) {
       const beforeIndex =
-        anchor.userTurnOrdinal < ordinalIndex.length
-          ? ordinalIndex[anchor.userTurnOrdinal]!
-          : effectiveMessages.length;
-      // Later anchors at the same position win (most recent mode).
+        ordinalIndex[
+          Math.min(anchor.userTurnOrdinal, ordinalIndex.length - 1)
+        ]!;
+      // Later anchors at the same user turn win (most recent mode).
       insertions.set(beforeIndex, anchor.blockText);
     }
     return [...insertions.entries()]
       .sort(([a], [b]) => a - b)
       .map(([beforeIndex, blockText]) => ({ beforeIndex, blockText }));
+  }
+
+  /** Commit a fallback anchor only when a provider request is about to send. */
+  pinModeInstructionToUserTurn(
+    effectiveMessages: readonly AgentMessage[],
+  ): void {
+    if (this.modeInstructionPlacement !== "conversation") return;
+    const userTurnCount = countStringUserMessages(effectiveMessages);
+    const lastAnchor = this.modeInstructionAnchors.at(-1);
+    if (
+      !lastAnchor ||
+      !userTurnCount ||
+      lastAnchor.userTurnOrdinal < userTurnCount
+    )
+      return;
+    lastAnchor.userTurnOrdinal = userTurnCount - 1;
+    this.modeInstructionAnchors = this.modeInstructionAnchors.filter(
+      (anchor) =>
+        anchor === lastAnchor ||
+        anchor.userTurnOrdinal !== lastAnchor.userTurnOrdinal,
+    );
+    this.messagesRevision++;
   }
 
   /**

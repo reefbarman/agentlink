@@ -1383,8 +1383,53 @@ describe("AgentSession", () => {
           blockText: '<current_mode mode="code">mock block</current_mode>',
         },
         {
-          // Before the "second" user turn (index 2: first, assistant, second).
           beforeIndex: 2,
+          blockText: '<current_mode mode="architect">mock block</current_mode>',
+        },
+      ]);
+    });
+
+    it("keeps completed turns unchanged when switching modes before the next user turn", async () => {
+      const session = await makeSession();
+      session.addUserMessage("first");
+      session.appendAssistantTurn([{ type: "text", text: "answer" }]);
+      const beforeSwitch = session.buildModeInstructionInsertions(
+        session.getMessages(),
+      );
+      await session.setMode("architect");
+      session.addUserMessage("second");
+      const afterSwitch = session.buildModeInstructionInsertions(
+        session.getMessages(),
+      );
+
+      expect(afterSwitch[0]).toEqual(beforeSwitch[0]);
+      expect(afterSwitch[1]).toEqual({
+        beforeIndex: 2,
+        blockText: '<current_mode mode="architect">mock block</current_mode>',
+      });
+    });
+
+    it("keeps a fallback anchor on its first user turn after another user turn arrives", async () => {
+      const session = await makeSession();
+      session.addUserMessage("first");
+      session.appendAssistantTurn([{ type: "text", text: "tool call" }]);
+      await session.setMode("architect");
+
+      expect(
+        session.buildModeInstructionInsertions(session.getMessages()),
+      ).toEqual([
+        {
+          beforeIndex: 0,
+          blockText: '<current_mode mode="architect">mock block</current_mode>',
+        },
+      ]);
+      session.pinModeInstructionToUserTurn(session.getMessages());
+      session.addUserMessage("second");
+      expect(
+        session.buildModeInstructionInsertions(session.getMessages()),
+      ).toEqual([
+        {
+          beforeIndex: 0,
           blockText: '<current_mode mode="architect">mock block</current_mode>',
         },
       ]);
@@ -1645,7 +1690,12 @@ describe("AgentSession", () => {
         "/test",
         expect.objectContaining({ promptProfile: "reasoning" }),
       );
-      expect(session.buildModeInstructionInsertions([])).toEqual([
+      expect(session.buildModeInstructionInsertions([])).toEqual([]);
+      expect(
+        session.buildModeInstructionInsertions([
+          { role: "user", content: "hello" },
+        ]),
+      ).toEqual([
         {
           beforeIndex: 0,
           blockText: expect.stringContaining('mode="code"'),
