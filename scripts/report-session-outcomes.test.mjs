@@ -8,6 +8,7 @@ import {
   parseArgs,
   percentile,
   readSessionOutcomes,
+  simulateGuardianShadowFastPath,
 } from "./report-session-outcomes.mjs";
 
 import assert from "node:assert/strict";
@@ -401,6 +402,74 @@ test("labels missing TypeSafe diagnostic fields as unreported", () => {
     byShadowAuthorization: { unreported: 1 },
     byDecisionBasis: { unreported: 1 },
     byAuthorizationEvidence: { unreported: 1 },
+  });
+});
+
+test("simulates TypeSafe fast-path thresholds against Guardian decisions", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "events.jsonl");
+  const comparison = (primaryOutcome, allowPermille, highRisk) =>
+    event({
+      type: "guardian_shadow_comparison",
+      sessionId: "s1",
+      reviewKind: "command",
+      shadowProvider: "typesafe",
+      primaryStatus: "reviewed",
+      primaryOutcome,
+      primaryRisk: "medium",
+      primaryDurationMs: 3_000,
+      shadowStatus: "completed",
+      shadowOutcome: allowPermille >= 500 ? "allow" : "deny",
+      shadowRisk: "low",
+      shadowDurationMs: 300,
+      outcomesAgree: (primaryOutcome === "allow") === allowPermille >= 500,
+      shadowAllowProbabilityPermille: allowPermille,
+      ...(highRisk === undefined
+        ? {}
+        : {
+            shadowRiskProbabilitiesPermille: {
+              low: 1_000 - highRisk,
+              medium: 0,
+              high: highRisk,
+              critical: 0,
+            },
+          }),
+    });
+  writeEvents(inputPath, [
+    comparison("allow", 950, 20),
+    comparison("allow", 820, 40),
+    comparison("allow", 300, 50),
+    comparison("deny", 910, 400),
+    comparison("deny", 650, undefined),
+  ]);
+
+  const report = readSessionOutcomes(inputPath);
+  assert.equal(report.guardianShadow.fastPathSamples.length, 5);
+  const simulation = simulateGuardianShadowFastPath(
+    report.guardianShadow.fastPathSamples,
+  );
+  assert.equal(simulation.samples, 5);
+  assert.equal(simulation.denials, 2);
+  assert.equal(simulation.riskScoredSamples, 4);
+  const at = (threshold) =>
+    simulation.rows.find((row) => row.allowThresholdPermille === threshold);
+  assert.deepEqual(at(600).allowOnly, {
+    fastPath: 4,
+    fastPathShare: 0.8,
+    leakedDenials: 2,
+    leakedDenialShare: 1,
+  });
+  assert.deepEqual(at(900).allowOnly, {
+    fastPath: 2,
+    fastPathShare: 0.4,
+    leakedDenials: 1,
+    leakedDenialShare: 0.5,
+  });
+  assert.deepEqual(at(600).allowAndLowHighRisk, {
+    fastPath: 2,
+    fastPathShare: 0.5,
+    leakedDenials: 0,
+    leakedDenialShare: 0,
   });
 });
 

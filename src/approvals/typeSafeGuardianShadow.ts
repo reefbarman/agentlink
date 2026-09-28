@@ -99,6 +99,13 @@ export interface TypeSafeGuardianShadowResult {
   userAuthorization?: CommandReviewUserAuthorization;
   confidencePermille?: number;
   allowProbabilityPermille?: number;
+  riskConfidencePermille?: number;
+  riskProbabilitiesPermille?: Record<CommandReviewRisk, number>;
+  authorizationConfidencePermille?: number;
+  authorizationProbabilitiesPermille?: Record<
+    CommandReviewUserAuthorization,
+    number
+  >;
   actionFamily?: GuardianShadowActionFamily;
   authorizationEvidence?: GuardianShadowAuthorizationEvidence;
   decisionBasis?: GuardianShadowDecisionBasis;
@@ -188,6 +195,13 @@ export function toGuardianShadowComparisonEvent(
       : undefined,
     shadowConfidencePermille: comparison.shadow.confidencePermille,
     shadowAllowProbabilityPermille: comparison.shadow.allowProbabilityPermille,
+    shadowRiskConfidencePermille: comparison.shadow.riskConfidencePermille,
+    shadowRiskProbabilitiesPermille:
+      comparison.shadow.riskProbabilitiesPermille,
+    shadowAuthorizationConfidencePermille:
+      comparison.shadow.authorizationConfidencePermille,
+    shadowAuthorizationProbabilitiesPermille:
+      comparison.shadow.authorizationProbabilitiesPermille,
     shadowInputRedacted: comparison.shadow.inputRedacted,
     shadowEvidenceWithheld: comparison.shadow.evidenceWithheld,
     objectiveMatchPermille: comparison.shadow.objectiveMatchPermille,
@@ -791,6 +805,12 @@ function parseTypeSafeGuardianResponse(
     decisionBasis: decisionBasis?.choice,
     confidencePermille: toPermille(outcome.confidence),
     allowProbabilityPermille: toPermille(outcome.probabilities.allow),
+    riskConfidencePermille: toPermille(risk.confidence),
+    riskProbabilitiesPermille: toPermilleDistribution(risk.probabilities),
+    authorizationConfidencePermille: toPermille(authorization.confidence),
+    authorizationProbabilitiesPermille: toPermilleDistribution(
+      authorization.probabilities,
+    ),
     objectiveMatchPermille: toPermille(objectiveMatch),
     secretExposurePermille: toPermille(secretExposure),
     boundedImpactPermille: toPermille(boundedImpact),
@@ -849,6 +869,17 @@ function probability(value: unknown): value is number {
 
 function toPermille(value: number): number {
   return Math.round(value * 1_000);
+}
+
+function toPermilleDistribution<K extends string>(
+  probabilities: Record<K, number>,
+): Record<K, number> {
+  return Object.fromEntries(
+    Object.entries<number>(probabilities).map(([option, value]) => [
+      option,
+      toPermille(value),
+    ]),
+  ) as Record<K, number>;
 }
 
 function nonNegativeInteger(value: unknown): number | undefined {

@@ -254,6 +254,10 @@ export interface GuardianShadowComparisonEvent {
   shadowFaster?: boolean;
   shadowConfidencePermille?: number;
   shadowAllowProbabilityPermille?: number;
+  shadowRiskConfidencePermille?: number;
+  shadowRiskProbabilitiesPermille?: Record<string, number>;
+  shadowAuthorizationConfidencePermille?: number;
+  shadowAuthorizationProbabilitiesPermille?: Record<string, number>;
   shadowInputRedacted?: boolean;
   shadowEvidenceWithheld?: boolean;
   objectiveMatchPermille?: number;

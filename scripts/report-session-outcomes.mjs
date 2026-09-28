@@ -284,6 +284,7 @@ function createEmptyReport() {
       inputTokens: 0,
       outputTokens: 0,
       byOutcomePair: {},
+      fastPathSamples: [],
       allowDeny: createGuardianShadowDisagreement(),
       denyAllow: createGuardianShadowDisagreement(),
     },
@@ -803,6 +804,17 @@ function mergeGuardianShadowComparison(report, record) {
     ) {
       const pair = `${record.primaryOutcome}/${record.shadowOutcome}`;
       shadow.byOutcomePair[pair] = (shadow.byOutcomePair[pair] ?? 0) + 1;
+      if (Number.isFinite(record.shadowAllowProbabilityPermille)) {
+        const risk = record.shadowRiskProbabilitiesPermille;
+        shadow.fastPathSamples.push({
+          guardianDenied: record.primaryOutcome === "deny",
+          allowPermille: record.shadowAllowProbabilityPermille,
+          highRiskPermille:
+            Number.isFinite(risk?.high) && Number.isFinite(risk?.critical)
+              ? risk.high + risk.critical
+              : undefined,
+        });
+      }
     }
     if (record.primaryOutcome === "allow" && record.shadowOutcome === "deny") {
       mergeGuardianShadowDisagreement(shadow.allowDeny, record);
@@ -893,6 +905,81 @@ function formatCounts(values) {
     .sort(([, a], [, b]) => b - a)
     .map(([value, count]) => `${value}:${count}`)
     .join(" ");
+}
+
+const FAST_PATH_ALLOW_THRESHOLDS = [500, 600, 700, 800, 900, 950];
+const FAST_PATH_MAX_HIGH_RISK_PERMILLE = 100;
+
+export function simulateGuardianShadowFastPath(samples) {
+  const denials = samples.filter((sample) => sample.guardianDenied).length;
+  const riskScored = samples.filter((sample) =>
+    Number.isFinite(sample.highRiskPermille),
+  );
+  const riskScoredDenials = riskScored.filter(
+    (sample) => sample.guardianDenied,
+  ).length;
+  const evaluate = (pool, poolDenials, passes) => {
+    const fast = pool.filter(passes);
+    const leaked = fast.filter((sample) => sample.guardianDenied).length;
+    return {
+      fastPath: fast.length,
+      fastPathShare: pool.length > 0 ? fast.length / pool.length : undefined,
+      leakedDenials: leaked,
+      leakedDenialShare: poolDenials > 0 ? leaked / poolDenials : undefined,
+    };
+  };
+  return {
+    samples: samples.length,
+    denials,
+    riskScoredSamples: riskScored.length,
+    rows: FAST_PATH_ALLOW_THRESHOLDS.map((threshold) => ({
+      allowThresholdPermille: threshold,
+      allowOnly: evaluate(
+        samples,
+        denials,
+        (sample) => sample.allowPermille >= threshold,
+      ),
+      allowAndLowHighRisk: evaluate(
+        riskScored,
+        riskScoredDenials,
+        (sample) =>
+          sample.allowPermille >= threshold &&
+          sample.highRiskPermille < FAST_PATH_MAX_HIGH_RISK_PERMILLE,
+      ),
+    })),
+  };
+}
+
+function printGuardianShadowFastPath(samples) {
+  if (samples.length === 0) return;
+  const simulation = simulateGuardianShadowFastPath(samples);
+  const cell = ({
+    fastPath,
+    fastPathShare,
+    leakedDenials,
+    leakedDenialShare,
+  }) => [
+    `${formatOptionalPercent(fastPathShare)} (${fastPath})`,
+    `${formatOptionalPercent(leakedDenialShare)} (${leakedDenials})`,
+  ];
+  console.log("");
+  console.log(
+    `TypeSafe fast-path simulation (trust a TypeSafe allow above the threshold, otherwise fall back to Guardian; ${simulation.samples} reviews, ${simulation.denials} Guardian denials, ${simulation.riskScoredSamples} with risk probabilities)`,
+  );
+  printTable(
+    [
+      "p(allow) >=",
+      "fast-path",
+      "Guardian denials leaked",
+      `+ p(high|critical) < ${FAST_PATH_MAX_HIGH_RISK_PERMILLE / 10}%: fast-path`,
+      "leaked",
+    ],
+    simulation.rows.map((row) => [
+      `${row.allowThresholdPermille / 10}%`,
+      ...cell(row.allowOnly),
+      ...cell(row.allowAndLowHighRisk),
+    ]),
+  );
 }
 
 function printGuardianShadowDisagreement(title, bucket, [shareLabel, total]) {
@@ -1330,6 +1417,7 @@ function printSummary(report, inputPath, top) {
       shadow.denyAllow,
       ["share of Guardian denials", guardianDenies],
     );
+    printGuardianShadowFastPath(shadow.fastPathSamples);
   }
 
   if (report.tasks.count > 0) {
