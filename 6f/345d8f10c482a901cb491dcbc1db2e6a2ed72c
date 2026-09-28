@@ -1,0 +1,17 @@
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_9630b74bdac540 2857-2858
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_9630b74bdac540 9518-9520,9524-9533,9619-9640
+  h_9630b74bdac540 9641-9642
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6f345d8f10c482a901cb491dcbc1db2e6a2ed72c",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
