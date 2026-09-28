@@ -1,0 +1,29 @@
+src/agent/AgentSessionManager.btw.test.ts
+  h_9630b74bdac540 270,511,570
+  h_9630b74bdac540 269,510,512,569
+resources/builtin-skills/documentation/references/capabilities.md
+  h_9630b74bdac540 18
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_9630b74bdac540 53
+src/agent/AgentEngine.test.ts
+  h_9630b74bdac540 3584-3637,4337-4338,4347-4348,4873,5183,5779,5962,5975,5978
+  h_9630b74bdac540 4336,4346,5182,5777-5778,5780,5960-5961,5963
+src/agent/AgentEngine.ts
+  h_9630b74bdac540 431-448,480,1593
+src/agent/AgentSession.test.ts
+  h_9630b74bdac540 1392-1437,1693-1698
+src/agent/AgentSession.ts
+  h_9630b74bdac540 1179-1182,1200,1204-1205,1207,1215-1236
+  h_9630b74bdac540 1206
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f25ca4e790c8c39415c89c8abe65b3e1cd8b66cf",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
