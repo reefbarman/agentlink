@@ -49,6 +49,7 @@ const GUARDIAN_AUTHORIZATION_LEVELS = new Set([
   "medium",
   "high",
 ]);
+const GUARDIAN_RISK_LEVELS = new Set(["low", "medium", "high", "critical"]);
 
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
@@ -282,16 +283,9 @@ function createEmptyReport() {
       shadowDurationsMs: [],
       inputTokens: 0,
       outputTokens: 0,
-      allowDeny: {
-        count: 0,
-        redacted: 0,
-        evidenceWithheld: 0,
-        byActionFamily: {},
-        byPrimaryAuthorization: {},
-        byShadowAuthorization: {},
-        byDecisionBasis: {},
-        byAuthorizationEvidence: {},
-      },
+      byOutcomePair: {},
+      allowDeny: createGuardianShadowDisagreement(),
+      denyAllow: createGuardianShadowDisagreement(),
     },
     byVersion: {},
     indicators: {},
@@ -803,38 +797,20 @@ function mergeGuardianShadowComparison(report, record) {
   if (status === "completed" && record.primaryStatus === "reviewed") {
     if (record.outcomesAgree === true) shadow.agreements += 1;
     else if (record.outcomesAgree === false) shadow.disagreements += 1;
+    if (
+      (record.primaryOutcome === "allow" || record.primaryOutcome === "deny") &&
+      (record.shadowOutcome === "allow" || record.shadowOutcome === "deny")
+    ) {
+      const pair = `${record.primaryOutcome}/${record.shadowOutcome}`;
+      shadow.byOutcomePair[pair] = (shadow.byOutcomePair[pair] ?? 0) + 1;
+    }
     if (record.primaryOutcome === "allow" && record.shadowOutcome === "deny") {
-      const allowDeny = shadow.allowDeny;
-      allowDeny.count += 1;
-      if (record.shadowInputRedacted === true) allowDeny.redacted += 1;
-      if (record.shadowEvidenceWithheld === true) {
-        allowDeny.evidenceWithheld += 1;
-      }
-      incrementBoundedCategory(
-        allowDeny.byActionFamily,
-        record.actionFamily,
-        GUARDIAN_SHADOW_ACTION_FAMILIES,
-      );
-      incrementBoundedCategory(
-        allowDeny.byPrimaryAuthorization,
-        record.primaryAuthorization,
-        GUARDIAN_AUTHORIZATION_LEVELS,
-      );
-      incrementBoundedCategory(
-        allowDeny.byShadowAuthorization,
-        record.shadowAuthorization,
-        GUARDIAN_AUTHORIZATION_LEVELS,
-      );
-      incrementBoundedCategory(
-        allowDeny.byDecisionBasis,
-        record.shadowDecisionBasis,
-        GUARDIAN_SHADOW_DECISION_BASES,
-      );
-      incrementBoundedCategory(
-        allowDeny.byAuthorizationEvidence,
-        record.authorizationEvidence,
-        GUARDIAN_SHADOW_AUTHORIZATION_EVIDENCE,
-      );
+      mergeGuardianShadowDisagreement(shadow.allowDeny, record);
+    } else if (
+      record.primaryOutcome === "deny" &&
+      record.shadowOutcome === "allow"
+    ) {
+      mergeGuardianShadowDisagreement(shadow.denyAllow, record);
     }
     if (
       Number.isFinite(record.primaryDurationMs) &&
@@ -850,6 +826,62 @@ function mergeGuardianShadowComparison(report, record) {
     report.sessions.add(record.sessionId);
 }
 
+function createGuardianShadowDisagreement() {
+  return {
+    count: 0,
+    redacted: 0,
+    evidenceWithheld: 0,
+    byActionFamily: {},
+    byPrimaryRisk: {},
+    byShadowRisk: {},
+    byPrimaryAuthorization: {},
+    byShadowAuthorization: {},
+    byDecisionBasis: {},
+    byAuthorizationEvidence: {},
+  };
+}
+
+function mergeGuardianShadowDisagreement(target, record) {
+  target.count += 1;
+  if (record.shadowInputRedacted === true) target.redacted += 1;
+  if (record.shadowEvidenceWithheld === true) target.evidenceWithheld += 1;
+  incrementBoundedCategory(
+    target.byActionFamily,
+    record.actionFamily,
+    GUARDIAN_SHADOW_ACTION_FAMILIES,
+  );
+  incrementBoundedCategory(
+    target.byPrimaryRisk,
+    record.primaryRisk,
+    GUARDIAN_RISK_LEVELS,
+  );
+  incrementBoundedCategory(
+    target.byShadowRisk,
+    record.shadowRisk,
+    GUARDIAN_RISK_LEVELS,
+  );
+  incrementBoundedCategory(
+    target.byPrimaryAuthorization,
+    record.primaryAuthorization,
+    GUARDIAN_AUTHORIZATION_LEVELS,
+  );
+  incrementBoundedCategory(
+    target.byShadowAuthorization,
+    record.shadowAuthorization,
+    GUARDIAN_AUTHORIZATION_LEVELS,
+  );
+  incrementBoundedCategory(
+    target.byDecisionBasis,
+    record.shadowDecisionBasis,
+    GUARDIAN_SHADOW_DECISION_BASES,
+  );
+  incrementBoundedCategory(
+    target.byAuthorizationEvidence,
+    record.authorizationEvidence,
+    GUARDIAN_SHADOW_AUTHORIZATION_EVIDENCE,
+  );
+}
+
 function incrementBoundedCategory(target, value, allowed) {
   const category =
     typeof value === "string" && allowed.has(value) ? value : "unreported";
@@ -861,6 +893,35 @@ function formatCounts(values) {
     .sort(([, a], [, b]) => b - a)
     .map(([value, count]) => `${value}:${count}`)
     .join(" ");
+}
+
+function printGuardianShadowDisagreement(title, bucket, [shareLabel, total]) {
+  if (bucket.count === 0) return;
+  console.log("");
+  console.log(title);
+  printTable(
+    ["metric", "value"],
+    [
+      ["comparisons", bucket.count],
+      [
+        shareLabel,
+        total > 0
+          ? `${formatPercent(bucket.count / total)} (${bucket.count}/${total})`
+          : "n/a",
+      ],
+      ["action family", formatCounts(bucket.byActionFamily)],
+      ["Guardian risk", formatCounts(bucket.byPrimaryRisk)],
+      ["TypeSafe risk", formatCounts(bucket.byShadowRisk)],
+      ["Guardian authorization", formatCounts(bucket.byPrimaryAuthorization)],
+      ["TypeSafe authorization", formatCounts(bucket.byShadowAuthorization)],
+      ["TypeSafe decision basis", formatCounts(bucket.byDecisionBasis)],
+      ["authorization evidence", formatCounts(bucket.byAuthorizationEvidence)],
+      [
+        "input redacted / evidence withheld",
+        `${bucket.redacted}/${bucket.count} / ${bucket.evidenceWithheld}/${bucket.count}`,
+      ],
+    ],
+  );
 }
 
 function updateRange(report, value) {
@@ -963,6 +1024,10 @@ function formatOptionalNumber(value) {
 
 function formatOptionalDuration(value) {
   return Number.isFinite(value) ? formatMinutes(value) : "N/A";
+}
+
+function formatOptionalSeconds(value) {
+  return Number.isFinite(value) ? `${formatNumber(value / 1_000)}s` : "N/A";
 }
 
 function printTable(headers, rows) {
@@ -1235,49 +1300,36 @@ function printSummary(report, inputPath, top) {
         ],
         [
           "current Guardian p50 / p95",
-          `${formatOptionalDuration(percentile(shadow.primaryDurationsMs, 0.5))} / ${formatOptionalDuration(percentile(shadow.primaryDurationsMs, 0.95))}`,
+          `${formatOptionalSeconds(percentile(shadow.primaryDurationsMs, 0.5))} / ${formatOptionalSeconds(percentile(shadow.primaryDurationsMs, 0.95))}`,
         ],
         [
           "TypeSafe p50 / p95",
-          `${formatOptionalDuration(percentile(shadow.shadowDurationsMs, 0.5))} / ${formatOptionalDuration(percentile(shadow.shadowDurationsMs, 0.95))}`,
+          `${formatOptionalSeconds(percentile(shadow.shadowDurationsMs, 0.5))} / ${formatOptionalSeconds(percentile(shadow.shadowDurationsMs, 0.95))}`,
         ],
         [
           "TypeSafe input / output tokens",
           `${shadow.inputTokens} / ${shadow.outputTokens}`,
         ],
+        [
+          "outcomes (Guardian/TypeSafe)",
+          formatCounts(shadow.byOutcomePair) || "n/a",
+        ],
       ],
     );
-    if (shadow.allowDeny.count > 0) {
-      console.log("");
-      console.log("Guardian allow -> TypeSafe deny diagnostics");
-      printTable(
-        ["metric", "value"],
-        [
-          ["comparisons", shadow.allowDeny.count],
-          ["action family", formatCounts(shadow.allowDeny.byActionFamily)],
-          [
-            "Guardian authorization",
-            formatCounts(shadow.allowDeny.byPrimaryAuthorization),
-          ],
-          [
-            "TypeSafe authorization",
-            formatCounts(shadow.allowDeny.byShadowAuthorization),
-          ],
-          [
-            "TypeSafe decision basis",
-            formatCounts(shadow.allowDeny.byDecisionBasis),
-          ],
-          [
-            "authorization evidence",
-            formatCounts(shadow.allowDeny.byAuthorizationEvidence),
-          ],
-          [
-            "input redacted / evidence withheld",
-            `${shadow.allowDeny.redacted}/${shadow.allowDeny.count} / ${shadow.allowDeny.evidenceWithheld}/${shadow.allowDeny.count}`,
-          ],
-        ],
-      );
-    }
+    const guardianAllows =
+      (shadow.byOutcomePair["allow/allow"] ?? 0) + shadow.allowDeny.count;
+    const guardianDenies =
+      (shadow.byOutcomePair["deny/deny"] ?? 0) + shadow.denyAllow.count;
+    printGuardianShadowDisagreement(
+      "Guardian allow -> TypeSafe deny diagnostics",
+      shadow.allowDeny,
+      ["share of Guardian allows", guardianAllows],
+    );
+    printGuardianShadowDisagreement(
+      "Guardian deny -> TypeSafe allow diagnostics (would bypass a Guardian denial)",
+      shadow.denyAllow,
+      ["share of Guardian denials", guardianDenies],
+    );
   }
 
   if (report.tasks.count > 0) {

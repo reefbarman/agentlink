@@ -340,11 +340,15 @@ test("aggregates turns, tasks, and background lifecycles into indicators", () =>
   assert.deepEqual(report.guardianShadow.shadowDurationsMs, [200]);
   assert.equal(report.guardianShadow.inputTokens, 300);
   assert.equal(report.guardianShadow.outputTokens, 40);
+  assert.deepEqual(report.guardianShadow.byOutcomePair, { "allow/deny": 1 });
+  assert.equal(report.guardianShadow.denyAllow.count, 0);
   assert.deepEqual(report.guardianShadow.allowDeny, {
     count: 1,
     redacted: 1,
     evidenceWithheld: 1,
     byActionFamily: { opaque: 1 },
+    byPrimaryRisk: { low: 1 },
+    byShadowRisk: { high: 1 },
     byPrimaryAuthorization: { medium: 1 },
     byShadowAuthorization: { low: 1 },
     byDecisionBasis: { authorization: 1 },
@@ -391,10 +395,66 @@ test("labels missing TypeSafe diagnostic fields as unreported", () => {
     redacted: 0,
     evidenceWithheld: 0,
     byActionFamily: { unreported: 1 },
+    byPrimaryRisk: { low: 1 },
+    byShadowRisk: { high: 1 },
     byPrimaryAuthorization: { unreported: 1 },
     byShadowAuthorization: { unreported: 1 },
     byDecisionBasis: { unreported: 1 },
     byAuthorizationEvidence: { unreported: 1 },
+  });
+});
+
+test("breaks down Guardian deny -> TypeSafe allow disagreements", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "events.jsonl");
+  const comparison = (primaryOutcome, shadowOutcome, extra = {}) =>
+    event({
+      type: "guardian_shadow_comparison",
+      sessionId: "s1",
+      reviewKind: "command",
+      shadowProvider: "typesafe",
+      primaryStatus: "reviewed",
+      primaryOutcome,
+      primaryRisk: "medium",
+      primaryAuthorization: "low",
+      primaryDurationMs: 3_000,
+      shadowStatus: "completed",
+      shadowOutcome,
+      shadowRisk: "high",
+      shadowAuthorization: "low",
+      shadowDecisionBasis: "authorized",
+      shadowDurationMs: 300,
+      outcomesAgree: primaryOutcome === shadowOutcome,
+      ...extra,
+    });
+  writeEvents(inputPath, [
+    comparison("deny", "allow", {
+      actionFamily: "external",
+      authorizationEvidence: "complete",
+      shadowInputRedacted: true,
+    }),
+    comparison("deny", "deny"),
+    comparison("allow", "allow"),
+  ]);
+
+  const report = readSessionOutcomes(inputPath);
+  assert.deepEqual(report.guardianShadow.byOutcomePair, {
+    "deny/allow": 1,
+    "deny/deny": 1,
+    "allow/allow": 1,
+  });
+  assert.equal(report.guardianShadow.allowDeny.count, 0);
+  assert.deepEqual(report.guardianShadow.denyAllow, {
+    count: 1,
+    redacted: 1,
+    evidenceWithheld: 0,
+    byActionFamily: { external: 1 },
+    byPrimaryRisk: { medium: 1 },
+    byShadowRisk: { high: 1 },
+    byPrimaryAuthorization: { low: 1 },
+    byShadowAuthorization: { low: 1 },
+    byDecisionBasis: { authorized: 1 },
+    byAuthorizationEvidence: { complete: 1 },
   });
 });
 
