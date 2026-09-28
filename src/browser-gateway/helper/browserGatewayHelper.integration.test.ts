@@ -2854,6 +2854,8 @@ describe("BrowserGatewayHelper proxy routing", () => {
               headers: { "X-Test-Static": "safe-value" },
               timeoutMs: 30_000,
               authRequired: false,
+              supportsStoreFalse: true,
+              meridianSessionAffinity: true,
               models: {
                 "local-gemma": {
                   id: "local-gemma",

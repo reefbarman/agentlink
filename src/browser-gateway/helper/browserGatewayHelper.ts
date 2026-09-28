@@ -9515,9 +9515,22 @@ export class BrowserGatewayHelper {
       "headers",
       "timeoutMs",
       "authRequired",
+      "supportsStoreFalse",
+      "meridianSessionAffinity",
+      "sessionId",
       "models",
     ]);
     if (Object.keys(value).some((key) => !allowedKeys.has(key))) return false;
+    if (
+      (profile.supportsStoreFalse !== undefined &&
+        typeof profile.supportsStoreFalse !== "boolean") ||
+      (profile.meridianSessionAffinity !== undefined &&
+        typeof profile.meridianSessionAffinity !== "boolean") ||
+      (profile.sessionId !== undefined &&
+        !this.isValidOpenAiCompatibleSessionIdMapping(profile.sessionId))
+    ) {
+      return false;
+    }
     let baseUrl: URL;
     try {
       baseUrl = new URL(String(profile.baseUrl));
@@ -9601,6 +9614,30 @@ export class BrowserGatewayHelper {
       }
     }
     return true;
+  }
+
+  private isValidOpenAiCompatibleSessionIdMapping(value: unknown): boolean {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return false;
+    const mapping = value as { location?: unknown; name?: unknown };
+    if (
+      Object.keys(value).some((key) => key !== "location" && key !== "name") ||
+      typeof mapping.name !== "string"
+    ) {
+      return false;
+    }
+    if (mapping.location === "header") {
+      return (
+        /^[!#$%&'*+\-.^_`|~0-9A-Za-z]{1,128}$/.test(mapping.name) &&
+        !/^(authorization|proxy-authorization|cookie|set-cookie|x-api-key)$/i.test(
+          mapping.name,
+        )
+      );
+    }
+    return (
+      mapping.location === "body" &&
+      /^[A-Za-z][A-Za-z0-9_]{0,127}$/.test(mapping.name)
+    );
   }
 
   private async handleModelCredentialGrantRequest(
