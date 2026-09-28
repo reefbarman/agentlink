@@ -1,0 +1,29 @@
+src/telemetry/SessionOutcomeTelemetry.test.ts
+  h_9630b74bdac540 159,242
+resources/builtin-skills/documentation/references/capabilities.md
+  h_9630b74bdac540 90
+src/approvals/typeSafeGuardianShadow.test.ts
+  h_9630b74bdac540 139,172-179,184-185,192-215,327,402,413-414,417,421,429-433,435-486,541,585-664
+CHANGELOG.md
+  h_9630b74bdac540 5
+src/approvals/typeSafeGuardianShadow.ts
+  h_9630b74bdac540 26,42,46-77,101,190,351-352,356,359-360,365,367,369-370,377,380-381,383-384,389,393,397,401,404,406,408,410,412,414,416-417,433,437-442,452,458-459,464,477-480,482,530,596,623-637,650-653,659,661-670,674-699,793,815,817-818,832
+  h_9630b74bdac540 368,379,382,405,409,460-463,638-643,700-701,814,816,819-820
+src/telemetry/SessionOutcomeTelemetry.ts
+  h_9630b74bdac540 256
+resources/builtin-skills/documentation/references/settings.md
+  h_9630b74bdac540 43
+resources/builtin-skills/documentation/references/release-notes.md
+  h_9630b74bdac540 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "66edae0a1bfd0d5c465302d915e04f4e14158235",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
