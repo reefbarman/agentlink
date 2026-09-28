@@ -451,6 +451,7 @@ describe("createWorkspaceHost", () => {
       defaultModel: { providerId: "fixture", modelId: "fixture-model" },
       commands: {
         enabled: true as const,
+        shellExecutable: "/bin/sh",
         resolveEnvironment: () => ({
           PATH: process.env.PATH,
           SECRET_COMMAND_VALUE: "must-not-be-persisted",
