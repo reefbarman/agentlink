@@ -1,0 +1,208 @@
+apps/desktop/electron-builder.yml
+  h_9630b74bdac540 22
+packages/node-host/src/McpClientHub.ts
+  h_9630b74bdac540 2128-2142
+  h_9630b74bdac540 2143-2145
+.gitignore
+  h_9630b74bdac540 11-12
+src/agent/webview/components/ToolCallGroup.tsx
+  h_9630b74bdac540 5,36,38-39,57-59
+  h_9630b74bdac540 35,37
+src/agent/providers/openaiCompatible/OpenAiCompatibleProvider.ts
+  h_9630b74bdac540 115-119
+package.json
+  h_9630b74bdac540 5,1141,1145-1146,1160,1223
+src/integrations/DiffViewProvider.test.ts
+  h_9630b74bdac540 584-639
+src/browser-gateway/helper/StandaloneAskAgentMcpRuntime.ts
+  h_9630b74bdac540 437,440-441,443-445,447-448
+  h_9630b74bdac540 438-439,442,446
+src/extension.ts
+  h_9630b74bdac540 1932
+  h_9630b74bdac540 1424
+apps/cli/smoke-package.mjs
+  h_9630b74bdac540 6,13,15-17
+  h_9630b74bdac540 14
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_9630b74bdac540 6099-6125,6128,6141,6145-6152,9174,9192-9193
+  h_9630b74bdac540 9191,9194
+apps/cli/package.json
+  h_9630b74bdac540 22-23,50-52
+src/integrations/DiffViewProvider.ts
+  h_9630b74bdac540 20-21,396-397,399-405
+  h_9630b74bdac540 19,22
+.github/workflows/ci.yml
+  h_9630b74bdac540 13-38
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_9630b74bdac540 307,312-320,329-330,2108
+  h_9630b74bdac540 306,308-311,2109-2110
+src/terminal/interactivePromptDetector.ts
+  h_9630b74bdac540 30-32
+  h_9630b74bdac540 26-29
+resources/builtin-skills/documentation/references/mcp.md
+  h_9630b74bdac540 11,24
+apps/cli/bundle.mjs
+  h_9630b74bdac540 1-281
+scripts/sandbox-interactive-helper.test.mjs
+  h_9630b74bdac540 6-13,842,898
+  h_9630b74bdac540 5
+resources/builtin-skills/documentation/references/capabilities.md
+  h_9630b74bdac540 87,145
+packages/core/src/modelRuntime.ts
+  h_9630b74bdac540 200-201
+scripts/verify-cli-bundle.test.mjs
+  h_9630b74bdac540 1-148
+src/agent/AgentEngine.test.ts
+  h_9630b74bdac540 5341-5342
+src/adapters/vscode/editReviewCapabilities.test.ts
+  h_9630b74bdac540 285,343,390,442,483,531,580,632,671,713,772,848,919,1011,1068,1114,1203,1209,1253,1309,1383,1473
+src/agent/providers/types.ts
+  h_9630b74bdac540 83-84
+apps/desktop/src/main.ts
+  h_9630b74bdac540 28,82,91
+src/agent/AgentSessionManager.ts
+  h_9630b74bdac540 1401,2320,2460,4384,4618-4622,4643-4650,4659,4680,5103,5122,5138,7987
+  h_9630b74bdac540 1403-1404,4623-4624
+src/agent/providers/openaiCompatible/OpenAiCompatibleProvider.test.ts
+  h_9630b74bdac540 103-121,182-323
+src/agent/toolAdapter.test.ts
+  h_9630b74bdac540 1408
+  h_9630b74bdac540 1407,1409
+src/integrations/editDurability.ts
+  h_9630b74bdac540 75,373,378-379
+scripts/verify-cli-bundle.mjs
+  h_9630b74bdac540 1-187
+packages/core/src/openAiCompatible/config.ts
+  h_9630b74bdac540 11,26,32-50,77-78,105-108,119,136,153-154,251-254,345-377,465-466,542-548,630-638,702,813-867
+  h_9630b74bdac540 639-640,868-869
+.github/workflows/desktop-release.yml
+  h_9630b74bdac540 99
+src/agent/ChatViewProvider.ts
+  h_9630b74bdac540 2580-2583,2585-2616,5412,5437-5448,5452-5476,5484-5486,5488,5504-5524,8810-8811,8819,8821-8822,8824-8826,8929-8930
+  h_9630b74bdac540 5449-5451,5478-5483,5487,8809,8812-8813,8928,8931
+src/agent/AgentSessionManager.test.ts
+  h_9630b74bdac540 883-935
+apps/desktop/src/desktopMcpPath.test.ts
+  h_9630b74bdac540 1-51
+apps/desktop/sign.mjs
+  h_9630b74bdac540 1-58
+src/agent/unifiedContextBaselines.test.ts
+  h_9630b74bdac540 67-78,121,144
+src/agent/ChatViewProvider.test.ts
+  h_9630b74bdac540 2632-2863,9866
+packages/core/src/openAiCompatible/types.ts
+  h_9630b74bdac540 11-15,44-45
+scripts/macos-signing.mjs
+  h_9630b74bdac540 1-120
+resources/builtin-skills/documentation/references/settings.md
+  h_9630b74bdac540 20,86-88
+scripts/verify-cli-package.test.mjs
+  h_9630b74bdac540 54-74
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_9630b74bdac540 13,17-31
+  h_9630b74bdac540 32
+src/tools/executeCommand.test.ts
+  h_9630b74bdac540 2060,2104,2114,2135,2174,2183,2243-2268,2312,2319,2557,2604,2610-2657,2839,2934,2973,4117-4123,4136-4166,4168-4198,4361,4393-4399,4419-4422,4515-4522,5077-5078,5130-5131,5142,5145
+  h_9630b74bdac540 2929,2935,4167,4199,4392,4400,4514,4523,5075-5076,5079
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_9630b74bdac540 70,75
+resources/builtin-skills/documentation/references/tools.md
+  h_9630b74bdac540 75,81
+src/agent/AgentEngine.ts
+  h_9630b74bdac540 1767-1769,1771,1773-1774
+  h_9630b74bdac540 1770,1772
+src/util/outputFilter.ts
+  h_9630b74bdac540 33,35-37,70,208-259,261-280,290-291,299
+  h_9630b74bdac540 260
+scripts/install-desktop.mjs
+  h_9630b74bdac540 1-104
+scripts/install-cli.mjs
+  h_9630b74bdac540 1-183
+src/agent/webview/components/MessageBubble.test.tsx
+  h_9630b74bdac540 180-231
+scripts/sandbox-protected-roots.test.mjs
+  h_9630b74bdac540 223,255
+resources/builtin-skills/documentation/references/package-contract.md
+  h_9630b74bdac540 12
+src/browser-gateway/BrowserGatewayServer.ts
+  h_9630b74bdac540 670-674,2662-2674,2688,2694-2695
+  h_9630b74bdac540 669,2675-2676
+src/util/agentlinkTmpArtifacts.test.ts
+  h_9630b74bdac540 8,38-44,52-53,62-65
+  h_9630b74bdac540 45-50,55-61
+apps/desktop/package.mjs
+  h_9630b74bdac540 2-5,21,50-52,73-78
+src/shared/ui/McpManagerPanel.tsx
+  h_9630b74bdac540 41,1519-1535
+apps/cli/pack.mjs
+  h_9630b74bdac540 1-68
+src/agent/webview/components/SkillLoadBlock.tsx
+  h_9630b74bdac540 36-49,54-60,66,68,70,72
+  h_9630b74bdac540 50-53,67,69,71,73-74
+src/tools/executeCommand.ts
+  h_9630b74bdac540 36,308,970-971,976-977,1040-1051,1055-1056,1891-1898,1910-1911
+  h_9630b74bdac540 307,309,973-975,978,1058,1908-1909
+src/browser-gateway/helper/StandaloneAskAgentMcpRuntime.test.ts
+  h_9630b74bdac540 553-603
+apps/cli/esbuild.mjs
+  h_9630b74bdac540 23-31,121-131,133,156,166-168,177,182-183,191-192
+  h_9630b74bdac540 120,134-136,138-155,184-190
+src/adapters/vscode/editReviewCapabilities.ts
+  h_9630b74bdac540 12-14,373-374,379-382,398-400,461-469
+  h_9630b74bdac540 11,375-376,401-402,470
+src/terminal/interactivePromptDetector.test.ts
+  h_9630b74bdac540 16-19,28
+src/agent/providers/openaiCompatible/config.test.ts
+  h_9630b74bdac540 80-173,194,266-270,274-280
+  h_9630b74bdac540 281-282
+apps/cli/smoke-tui.mjs
+  h_9630b74bdac540 34-37,44
+  h_9630b74bdac540 38-43,45
+src/agent/AgentSessionManagerHost.ts
+  h_9630b74bdac540 226
+resources/builtin-skills/documentation/references/getting-started.md
+  h_9630b74bdac540 44-53
+apps/cli/README.md
+  h_9630b74bdac540 5-14,30
+src/shared/toolRegistry.ts
+  h_9630b74bdac540 226
+src/browser-gateway/BrowserGatewayServer.test.ts
+  h_9630b74bdac540 381-384,1508-1537
+  h_9630b74bdac540 1538-1539
+apps/desktop/src/desktopMcpPath.ts
+  h_9630b74bdac540 1-39
+src/shared/ui/McpManagerPanel.test.tsx
+  h_9630b74bdac540 175-192,218-220
+CHANGELOG.md
+  h_9630b74bdac540 5-7
+src/browser-gateway/migration/actionSurfaceInventory.ts
+  h_9630b74bdac540 379-384
+src/util/outputFilter.test.ts
+  h_9630b74bdac540 27-102,189-203
+  h_9630b74bdac540 204-205
+.agentlink/tasks.json
+  h_9630b74bdac540 17,21
+packages/core/src/openAiCompatible/completionFacade.ts
+  h_9630b74bdac540 55-57,72-79,106,293,306-310
+scripts/macos-signing.test.mjs
+  h_9630b74bdac540 1-197
+src/agent/webview/components/ToolCallGroup.test.tsx
+  h_9630b74bdac540 168-203
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_9630b74bdac540 11-13,28-30,45-47,62-64,79-81,90-92,101-103,112-114,123-125,140-142,157-159,174-176,191-193,202-204,213-215,224-226,235-237,252-254,269-271,286-288,303-305,314-316,325-327,336-338,347-349,364-366,381-383,398-400,415-417,426-428,437-439,448-450,459-461,476-478,493-495,510-512,527-529,538-540,549-551,560-562,571-573,588-590,605-607,622-624,639-641,650-652,661-663,672-674,682-684,689-691,710-712,717-719,727-729,735-737,759-761,767-769,796-798,801
+package-lock.json
+  h_9630b74bdac540 3,9,64,117-119,4782
+resources/builtin-skills/documentation/references/release-notes.md
+  h_9630b74bdac540 5-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "647d056ad59947f191aca653ab98b9e16357d7f2",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
