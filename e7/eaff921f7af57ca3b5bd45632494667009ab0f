@@ -1,0 +1,18 @@
+scripts/report-session-outcomes.test.mjs
+  h_9630b74bdac540 343-344,350-351,398-399,407-457
+  h_9630b74bdac540 458-460
+scripts/report-session-outcomes.mjs
+  h_9630b74bdac540 52,286-288,800-806,808-811,813,829-830,835-849,854-864,869,874,879-882,898-926,1029-1030,1303,1307,1314-1315,1317,1319-1332
+  h_9630b74bdac540 812,831-834,850-853,865-868,870-873,875-878,883-884,1031-1032,1318
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e7eaff921f7af57ca3b5bd45632494667009ab0f",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
