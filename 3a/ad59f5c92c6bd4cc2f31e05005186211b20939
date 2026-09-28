@@ -1,0 +1,18 @@
+src/tools/executeCommand.ts
+  h_9630b74bdac540 876-878,880
+src/tools/executeCommand.test.ts
+  h_9630b74bdac540 27
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_9630b74bdac540 72-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3aad59f5c92c6bd4cc2f31e05005186211b20939",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
