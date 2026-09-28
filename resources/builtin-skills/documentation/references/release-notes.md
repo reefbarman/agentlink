@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Tuned the TypeSafe Guardian shadow request, which denied about two thirds of commands the current Guardian allows. The request now carries a host-authored policy matching the Guardian's joint risk and authorization rules, including implicit authorization for ordinary in-task work, and includes a bounded, redacted tail of the assistant message the latest user instruction replied to so short replies such as "yes" can be interpreted. Classifier codes are described as coverage rather than danger, only withheld script bodies are treated as opaque, and the local secret scan no longer redacts `mkdir -p`, `tsc -p`, `find -print0`, long paths, or Git object IDs in Git commands. Home paths in command text are shortened to `~`, and shadow telemetry records TypeSafe's allow probability. `npm run telemetry:sessions` now also breaks down Guardian-deny/TypeSafe-allow disagreements. Shadow results remain non-authoritative.
 - Added certificate-backed local development signing to the desktop and CLI build-and-install tasks. The CLI now has a standalone bundle with a pinned Node runtime and stable signing identity; installers verify signatures before replacement and do not change Keychain permissions. Existing credentials may require one-time approval. CI previews remain explicitly unsigned and not notarised.
 - Fixed Linux CI dependency installation by separating macOS ARM64 CLI distribution restrictions and native assets from platform-neutral workspace source builds. Added a macOS CLI bundle check and preview artifact.
 

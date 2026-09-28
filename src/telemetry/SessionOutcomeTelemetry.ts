@@ -253,6 +253,7 @@ export interface GuardianShadowComparisonEvent {
   outcomesAgree?: boolean;
   shadowFaster?: boolean;
   shadowConfidencePermille?: number;
+  shadowAllowProbabilityPermille?: number;
   shadowInputRedacted?: boolean;
   shadowEvidenceWithheld?: boolean;
   objectiveMatchPermille?: number;

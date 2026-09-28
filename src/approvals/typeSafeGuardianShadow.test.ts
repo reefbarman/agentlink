@@ -136,6 +136,7 @@ describe("TypeSafe Guardian shadow reviewer", () => {
       userAuthorization: "high",
       decisionBasis: "authorized",
       confidencePermille: 820,
+      allowProbabilityPermille: 910,
       actionFamily: "destructive",
       authorizationEvidence: "complete",
       objectiveMatchPermille: 940,
@@ -168,17 +169,50 @@ describe("TypeSafe Guardian shadow reviewer", () => {
         decision_basis: expect.objectContaining({ type: "choice" }),
       }),
     );
+    expect(body.state.policy).toEqual(
+      expect.objectContaining({
+        trust: expect.any(String),
+        authorization: expect.any(Array),
+        risk: expect.any(Array),
+        evidence: expect.any(Array),
+      }),
+    );
     expect(body.state.action.command).toBe("rm -rf generated");
     expect(body.state.action.latestUserInstruction).toBe(
       "Remove the generated output and rebuild it",
     );
+    expect(body.state.action.precedingAssistantMessage).toBeNull();
+    expect(body.state.action.metadataTruncated).toBe(false);
     expect(body.state.action).not.toHaveProperty("recentContext");
     expect(body.state.action.scripts).toEqual([]);
     expect(body.state.action.inlineFiles).toEqual([]);
     expect(body.state.action.classification.subcommands[0]).not.toHaveProperty(
       "command",
     );
-    expect(String(init?.body).length).toBeLessThan(5_000);
+    expect(JSON.stringify(body.state.action).length).toBeLessThan(2_000);
+  });
+
+  it("does not describe classifier codes or visible commands as opaque evidence", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+
+    await reviewer.review(reviewInput());
+    const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)) as Record<
+      string,
+      any
+    >;
+    const questions = JSON.stringify(body.questions);
+    expect(questions).not.toMatch(/incomplete evidence require a deny/i);
+    expect(questions).not.toMatch(/only latestUserInstruction grants/i);
+    const evidencePolicy = body.state.policy.evidence.join(" ");
+    expect(evidencePolicy).toContain("not whether it is dangerous");
+    expect(evidencePolicy).toContain("Script bodies are withheld");
   });
 
   it.each([
@@ -290,7 +324,7 @@ describe("TypeSafe Guardian shadow reviewer", () => {
     >;
     const serialized = JSON.stringify(body.state.action);
     expect(serialized).not.toContain("must-not-leak");
-    expect(body.state.action.evidenceWithheld).toBe(true);
+    expect(body.state.action.metadataTruncated).toBe(false);
     expect(body.state.action.scripts[0]).toMatchObject({
       path: `${root}/deploy.sh`,
       contentWithheld: true,
@@ -365,7 +399,7 @@ describe("TypeSafe Guardian shadow reviewer", () => {
     });
   });
 
-  it("keeps only the latest direct user instruction from verbose context", async () => {
+  it("keeps the latest direct instruction and a bounded tail of the assistant message it replied to", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
       .mockResolvedValue(typeSafeResponse());
@@ -376,13 +410,15 @@ describe("TypeSafe Guardian shadow reviewer", () => {
     });
     const input = reviewInput();
     input.context = [
-      { role: "assistant", content: "x".repeat(8_000) },
+      { role: "assistant", content: `${"x".repeat(8_000)}Shall I run it?` },
+      { role: "tool", content: "z".repeat(8_000) },
       {
         role: "user",
-        content: "Run the exact harmless smoke test",
+        content: "yes",
         directUserInstruction: true,
       },
       { role: "tool", content: "y".repeat(8_000) },
+      { role: "assistant", content: "Running it now" },
     ];
 
     await expect(reviewer.review(input)).resolves.toMatchObject({
@@ -390,12 +426,64 @@ describe("TypeSafe Guardian shadow reviewer", () => {
     });
     const bodyText = String(fetch.mock.calls[0]?.[1]?.body);
     const body = JSON.parse(bodyText) as Record<string, any>;
-    expect(body.state.action.latestUserInstruction).toBe(
-      "Run the exact harmless smoke test",
-    );
-    expect(bodyText).not.toContain("xxxxxxxx");
+    expect(body.state.action.latestUserInstruction).toBe("yes");
+    const preceding = body.state.action.precedingAssistantMessage as string;
+    expect(preceding).toHaveLength(1_000);
+    expect(preceding.endsWith("Shall I run it?")).toBe(true);
+    expect(bodyText).not.toContain("zzzzzzzz");
     expect(bodyText).not.toContain("yyyyyyyy");
-    expect(bodyText.length).toBeLessThan(5_000);
+    expect(bodyText).not.toContain("Running it now");
+    expect(JSON.stringify(body.state.action).length).toBeLessThan(3_000);
+  });
+
+  it("does not take an assistant message from before an earlier direct instruction", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+    const input = reviewInput();
+    input.context = [
+      { role: "assistant", content: "Want me to force push?" },
+      { role: "user", content: "no", directUserInstruction: true },
+      { role: "user", content: "yes", directUserInstruction: true },
+    ];
+
+    await reviewer.review(input);
+    const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)) as Record<
+      string,
+      any
+    >;
+    expect(body.state.action.latestUserInstruction).toBe("yes");
+    expect(body.state.action.precedingAssistantMessage).toBeNull();
+  });
+
+  it("redacts secrets in the preceding assistant message", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+    const input = reviewInput();
+    input.context = [
+      {
+        role: "assistant",
+        content: "I will export GITHUB_TOKEN=assistant-secret-value, ok?",
+      },
+      { role: "user", content: "ok", directUserInstruction: true },
+    ];
+
+    await expect(reviewer.review(input)).resolves.toMatchObject({
+      inputRedacted: true,
+    });
+    const bodyText = String(fetch.mock.calls[0]?.[1]?.body);
+    expect(bodyText).not.toContain("assistant-secret-value");
   });
 
   it("redacts secrets in paths before sending metadata", async () => {
@@ -450,7 +538,7 @@ describe("TypeSafe Guardian shadow reviewer", () => {
       fetch,
     });
     const input = reviewInput();
-    const secret = "a".repeat(48);
+    const secret = "Zx9Qw4".repeat(8);
     input.reason = `${"x".repeat(390)} ${secret}`;
 
     await expect(reviewer.review(input)).resolves.toMatchObject({
@@ -494,8 +582,86 @@ describe("TypeSafe Guardian shadow reviewer", () => {
     expect(
       body.state.action.classification.subcommands.length,
     ).toBeLessThanOrEqual(24);
-    expect(body.state.action.evidenceWithheld).toBe(true);
-    expect(bodyText.length).toBeLessThan(12_000);
+    expect(body.state.action.metadataTruncated).toBe(true);
+    expect(JSON.stringify(body.state.action).length).toBeLessThan(8_000);
+  });
+
+  const sha1 = "3e28c7a8adc6fd08428f00722aece5c13cac1673";
+  it.each([
+    "mkdir -p src/foo/bar",
+    "npx tsc -p tsconfig.webview.json --noEmit",
+    'find . -name "*.ts" -print0 | xargs -0 wc -l',
+    `git show ${sha1}`,
+    `git diff ${"ab12".repeat(16)} HEAD`,
+    `gh api repos/owner/repo/commits/${sha1}`,
+    "ls /workspace/project/src/browser-gateway/webview/components/transcript/items",
+    "git switch -c tristan-guardian-shadow-tuning-for-jev-model-improvements",
+  ])("does not redact ordinary command text: %s", async (command) => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+
+    const result = await reviewer.review(reviewInput(command));
+    expect(result.inputRedacted).toBeUndefined();
+    const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)) as Record<
+      string,
+      any
+    >;
+    expect(body.state.action.command).toBe(command);
+  });
+
+  it.each([
+    ["mysql -u root -pS3cretPass mydb", "S3cretPass"],
+    [`curl -H "X-App-Key: ${sha1}" https://example.com`, sha1],
+    [`deploy --target prod ${"Zx9Qw4".repeat(8)}`, "Zx9Qw4".repeat(8)],
+  ])("still redacts credential-shaped values: %s", async (command, secret) => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+
+    await expect(reviewer.review(reviewInput(command))).resolves.toMatchObject({
+      inputRedacted: true,
+    });
+    expect(String(fetch.mock.calls[0]?.[1]?.body)).not.toContain(secret);
+  });
+
+  it("compacts home paths inside command text", async () => {
+    vi.stubEnv("HOME", "/Users/tester");
+    try {
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockResolvedValue(typeSafeResponse());
+      const reviewer = createTypeSafeGuardianShadowReviewer({
+        getConfig: () => ({ enabled: true }),
+        getApiKey: async () => "typesafe-key",
+        fetch,
+      });
+
+      await reviewer.review(
+        reviewInput(
+          "cat /Users/tester/project/notes.txt /Users/testers/other.txt",
+        ),
+      );
+      const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)) as Record<
+        string,
+        any
+      >;
+      expect(body.state.action.command).toBe(
+        "cat ~/project/notes.txt /Users/testers/other.txt",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("classifies malformed JSON as an invalid response", async () => {
