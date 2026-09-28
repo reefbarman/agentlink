@@ -69,6 +69,8 @@ For approval behavior and rules, see [approvals](capabilities.md#approvals) and 
 
 Follow the returned `retry_guidance` rather than changing permissions or replaying the command blindly. AgentLink distinguishes narrow TCP listener access from Unix IPC, keeps Docker/Colima sockets behind reviewed native execution, and never recommends disabling TLS verification. A disposable `temporary_home` is suitable only when the failed step does not need your normal credentials or configuration. For a host-HOME write denial in a credential-dependent command, choose the separately reviewed native option instead; it preserves your host HOME but runs outside the sandbox only after independent approval. For compound commands, confirm which step failed and retry that step alone because earlier steps may already have succeeded. If Turbopack still reports a listener denial after local binding was granted, use the unresolved-capability guidance rather than repeating the same grant.
 
+An npm cache denial under `~/.npm/_cacache/tmp` is still a host-HOME write denial, not a write to the system `/tmp` directory. Its recovery guidance follows the same credential requirements above.
+
 ## An approved edit failed to save or conflicts with unsaved work
 
 - Do not overwrite or discard the dirty editor to clear the error. `read_file` and `get_context` show disk content, which can differ from the unsaved buffer.

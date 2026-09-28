@@ -24,7 +24,7 @@ import { evaluateCommandRulePolicy } from "../approvals/commandRulePolicy.js";
 
 vi.mock("node:os", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:os")>();
-  return { ...original, homedir: () => "/Users/test" };
+  return { ...original, homedir: () => "/Users/test", tmpdir: () => "/tmp" };
 });
 
 const {

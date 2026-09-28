@@ -873,11 +873,11 @@ function outputHasHostHomeWriteDenial(
   );
   const lines = output.split(/\r?\n/);
   return lines.some((line, index) => {
-    if (!line.includes(homePrefix)) return false;
+    const homePathStart = line.indexOf(homePrefix);
+    if (homePathStart === -1) return false;
+    const homePath = line.slice(homePathStart);
     if (
-      excludedRoots.some(
-        (root) => line.includes(root) && line.includes(`${root}${path.sep}`),
-      )
+      excludedRoots.some((root) => homePath.startsWith(`${root}${path.sep}`))
     ) {
       return false;
     }
