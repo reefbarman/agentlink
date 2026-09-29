@@ -1,0 +1,21 @@
+src/agent/webview/components/ToolCallGroup.tsx
+  h_9630b74bdac540 55-56,251,275-282,286-287,319-328
+  h_9630b74bdac540 54,283-285,288,329-330
+src/agent/webview/components/MessageBubble.test.tsx
+  h_9630b74bdac540 1755-1757
+src/agent/webview/styles/chat.css
+  h_9630b74bdac540 3143-3160
+src/agent/webview/components/ToolCallGroup.test.tsx
+  h_9630b74bdac540 112,125,212,242,436-483
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "96d4646743a0eb8e7b0826f04ccedb022550a164",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
