@@ -51,7 +51,9 @@ export function groupActivitySegments(
       (segment.kind === "tool_group" &&
         !segment.blocks.some(
           (block) =>
-            block.resultImages?.length || block.resultDocuments?.length,
+            block.resultImages?.length ||
+            block.resultDocuments?.length ||
+            block.mcpApprovalPromotion,
         )) ||
       (segment.kind === "single" &&
         ((segment.block.type === "thinking" && segment.block.complete) ||
@@ -171,7 +173,6 @@ function isGroupableToolCall(block: ContentBlock): block is ToolBlock {
   return (
     block.type === "tool_call" &&
     block.complete &&
-    !block.mcpApprovalPromotion &&
     getToolCallVisualState(block).statusClass === "tool-success"
   );
 }
@@ -247,8 +248,7 @@ export function ToolCallGroup({
   onCancelToolCall,
   onPromoteMcpToolApproval,
 }: ToolCallGroupProps) {
-  const hasMcpPromotion = blocks.some((block) => block.mcpApprovalPromotion);
-  const [expanded, setExpanded] = useState(hasMcpPromotion);
+  const [expanded, setExpanded] = useState(false);
   const label = useMemo(() => getToolGroupLabel(blocks), [blocks]);
   const totalDuration = blocks.reduce(
     (sum, block) => sum + (block.durationMs ?? 0),
@@ -272,7 +272,20 @@ export function ToolCallGroup({
   const mediaCount = imageCount + documentCount;
   const mediaLabel =
     mediaCount > 0 ? formatResultMediaLabel(imageCount, documentCount) : null;
-  const accessibleLabel = ["Tools", label, statusBadge, mediaLabel]
+  const approvalOfferCount = onPromoteMcpToolApproval
+    ? blocks.filter((block) => block.mcpApprovalPromotion).length
+    : 0;
+  const approvalOfferLabel =
+    approvalOfferCount > 0
+      ? `${approvalOfferCount} always-allow offer${approvalOfferCount === 1 ? "" : "s"}`
+      : null;
+  const accessibleLabel = [
+    "Tools",
+    label,
+    statusBadge,
+    mediaLabel,
+    approvalOfferLabel,
+  ]
     .filter(Boolean)
     .join(" ");
 
@@ -301,6 +314,18 @@ export function ToolCallGroup({
           >
             <i class="codicon codicon-file-media" aria-hidden="true" />
             {mediaCount > 1 && mediaCount}
+          </span>
+        )}
+        {approvalOfferLabel && (
+          <span
+            class="tool-approval-offer-badge"
+            role="img"
+            aria-label={approvalOfferLabel}
+            title={`${approvalOfferLabel}, expand to choose a scope`}
+          >
+            <i class="codicon codicon-shield" aria-hidden="true" />
+            always allow
+            {approvalOfferCount > 1 && ` ${approvalOfferCount}`}
           </span>
         )}
         {totalDuration > 0 && (

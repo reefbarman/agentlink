@@ -109,7 +109,7 @@ describe("segmentBlocks", () => {
     ]);
   });
 
-  it("keeps promotion-bearing MCP tool calls out of groups", () => {
+  it("groups promotion-bearing MCP tool calls with neighbouring calls", () => {
     const first = tool("tool-1", "read_file");
     const mcp = tool("tool-2", "notion__search", {
       mcpApprovalPromotion: {
@@ -122,9 +122,7 @@ describe("segmentBlocks", () => {
     const third = tool("tool-4", "list_files");
 
     expect(segmentBlocks([first, mcp, second, third])).toEqual([
-      { kind: "tool_group", blocks: [first] },
-      { kind: "single", block: mcp, index: 1 },
-      { kind: "tool_group", blocks: [second, third] },
+      { kind: "tool_group", blocks: [first, mcp, second, third] },
     ]);
   });
 });
@@ -211,7 +209,7 @@ describe("groupActivitySegments", () => {
     expect(groupActivitySegments(segments)).toEqual(segments);
   });
 
-  it("leaves running, failed and approval-bearing tools outside the completed run", () => {
+  it("leaves running, failed and approval-offer groups outside the completed run", () => {
     const completed = segmentBlocks(cycles(3));
     const failed = tool("failed", "execute_command", {
       result: JSON.stringify({ exit_code: 1 }),
@@ -241,7 +239,7 @@ describe("groupActivitySegments", () => {
       },
       { kind: "single", block: running, index: 7 },
       { kind: "single", block: failed, index: 8 },
-      { kind: "single", block: promoted, index: 9 },
+      { kind: "tool_group", blocks: [promoted] },
     ]);
   });
 
@@ -435,6 +433,54 @@ describe("ToolCallGroup", () => {
     );
 
     expect(container.querySelector(".tool-image-badge")).toBeNull();
+  });
+
+  it("marks collapsed groups containing MCP approval offers with a badge", () => {
+    const onPromote = vi.fn();
+    render(
+      <ToolCallGroup
+        blocks={[
+          tool("tool-1", "read_file"),
+          tool("tool-2", "call_mcp_tool", {
+            mcpApprovalPromotion: {
+              serverName: "chrome-devtools",
+              bareToolName: "evaluate_script",
+              scopes: ["session", "project", "global"],
+            },
+          }),
+        ]}
+        onPromoteMcpToolApproval={onPromote}
+      />,
+    );
+
+    const groupButton = screen.getByRole("button", {
+      name: /1 always-allow offer/i,
+    });
+    expect(groupButton.getAttribute("aria-expanded")).toBe("false");
+    const badge = groupButton.querySelector(".tool-approval-offer-badge");
+    expect(badge?.textContent).toBe("always allow");
+
+    fireEvent.click(groupButton);
+    fireEvent.click(screen.getByRole("button", { name: /^call_mcp_tool/ }));
+    expect(screen.getByText("Remember this approval")).toBeTruthy();
+  });
+
+  it("omits the approval offer badge when the surface cannot promote approvals", () => {
+    const { container } = render(
+      <ToolCallGroup
+        blocks={[
+          tool("tool-1", "notion__search", {
+            mcpApprovalPromotion: {
+              serverName: "notion",
+              bareToolName: "search",
+              scopes: ["session"],
+            },
+          }),
+        ]}
+      />,
+    );
+
+    expect(container.querySelector(".tool-approval-offer-badge")).toBeNull();
   });
 
   it("renders get_context summaries with the same clickable file link as read_file", () => {

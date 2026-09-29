@@ -1752,6 +1752,9 @@ describe("MessageBubble slash-command rendering", () => {
       />,
     );
 
+    fireEvent.click(
+      screen.getByRole("button", { name: /1 always-allow offer/i }),
+    );
     fireEvent.click(screen.getByRole("button", { name: /notion__search/i }));
     expect(screen.getByText("Remember this approval")).toBeTruthy();
 
