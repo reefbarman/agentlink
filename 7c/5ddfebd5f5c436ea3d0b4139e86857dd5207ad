@@ -1,0 +1,17 @@
+src/agent/providers/openaiCompatible/modelDiscovery.test.ts
+  h_9630b74bdac540 190-291
+packages/core/src/openAiCompatible/modelDiscovery.ts
+  h_9630b74bdac540 258-259,261-262,264-271,285,293
+  h_9630b74bdac540 257,260,292
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7c5ddfebd5f5c436ea3d0b4139e86857dd5207ad",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
