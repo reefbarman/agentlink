@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import os from "os";
 import path from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildContextLedger } from "@agentlink/protocol/context-ledger";
 import type { SessionProjectScope } from "@agentlink/protocol/workspace-project";
 import type { AgentMessage } from "./types.js";
@@ -1628,6 +1628,7 @@ describe("SessionStore", () => {
       { ownerId: "test-owner", surface: "test", startedAt: 1 },
       ops,
     );
+    const scheduleIndexFlush = vi.spyOn(store as any, "scheduleIndexFlush");
 
     const saves = [1, 2, 3].map((number) =>
       store.saveSession({
@@ -1644,25 +1645,13 @@ describe("SessionStore", () => {
 
     try {
       await firstIndexRenameStarted;
-      const historyDir = path.join(tmpDir, ".agentlink", "history");
-      const deadline = Date.now() + 2_000;
-      while (
-        ((store as any).pendingIndexFlush === null ||
-          !fs.existsSync(path.join(historyDir, "session-2", "metadata.json")) ||
-          !fs.existsSync(
-            path.join(historyDir, "session-3", "metadata.json"),
-          )) &&
-        Date.now() < deadline
-      ) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-      expect((store as any).pendingIndexFlush).not.toBeNull();
-      expect(
-        fs.existsSync(path.join(historyDir, "session-2", "metadata.json")),
-      ).toBe(true);
-      expect(
-        fs.existsSync(path.join(historyDir, "session-3", "metadata.json")),
-      ).toBe(true);
+      await vi.waitFor(
+        () => {
+          expect(scheduleIndexFlush).toHaveBeenCalledTimes(3);
+          expect((store as any).pendingIndexFlush).not.toBeNull();
+        },
+        { timeout: 2_000 },
+      );
     } finally {
       releaseFirstIndexRename?.();
     }

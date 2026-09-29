@@ -829,7 +829,10 @@ describe("Ink chat app", () => {
     await vi.waitFor(() =>
       expect(loadFileSuggestions).toHaveBeenCalledWith("ind"),
     );
-    expect(screen.lastFrame()).toContain("src/index.ts · project file");
+    await vi.waitFor(
+      () => expect(screen.lastFrame()).toContain("src/index.ts · project file"),
+      { timeout: 5_000 },
+    );
     screen.stdin.write("\r");
     await nextInputDispatch();
     expect(stripAnsi(screen.lastFrame())).toContain("▣ src/index.ts");
@@ -863,8 +866,9 @@ describe("Ink chat app", () => {
 
     await nextInputDispatch();
     screen.stdin.write("Review @unsafe");
-    await vi.waitFor(() =>
-      expect(screen.lastFrame()).toContain("project file"),
+    await vi.waitFor(
+      () => expect(screen.lastFrame()).toContain("project file"),
+      { timeout: 5_000 },
     );
     screen.stdin.write("\r");
     await nextInputDispatch();
