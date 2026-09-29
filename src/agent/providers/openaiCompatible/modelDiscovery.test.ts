@@ -187,6 +187,108 @@ describe("discoverOpenAiCompatibleModels", () => {
     ]);
   });
 
+  it("maps Meridian model metadata on generic connections", async () => {
+    const models = await discoverOpenAiCompatibleModels({
+      baseUrl: "http://127.0.0.1:3456/v1",
+      profile: "generic",
+      fetch: async () =>
+        jsonResponse({
+          object: "list",
+          data: [
+            {
+              id: "claude-opus-5-5",
+              object: "model",
+              created: 1_790_000_000,
+              owned_by: "anthropic",
+              display_name: "Claude Opus 5.5",
+              context_window: 1_000_000,
+              capabilities: {
+                thinking: {
+                  supported: true,
+                  types: {
+                    adaptive: { supported: true },
+                    enabled: { supported: false },
+                  },
+                },
+              },
+            },
+            {
+              id: "claude-haiku-4-5",
+              display_name: "Claude Haiku 4.5",
+              context_window: 200_000,
+              capabilities: { thinking: { supported: false } },
+            },
+          ],
+        }),
+    });
+
+    expect(models).toEqual([
+      {
+        model: "claude-opus-5-5",
+        displayName: "Claude Opus 5.5",
+        contextWindow: 1_000_000,
+        maxOutputTokens: 4_096,
+        supportsToolUse: false,
+        supportsThinking: true,
+        supportsImages: false,
+        provenance: {
+          displayName: "discovered",
+          contextWindow: "discovered",
+          maxOutputTokens: "default",
+          supportsToolUse: "default",
+          supportsThinking: "discovered",
+          supportsImages: "default",
+        },
+      },
+      expect.objectContaining({
+        model: "claude-haiku-4-5",
+        displayName: "Claude Haiku 4.5",
+        contextWindow: 200_000,
+        supportsThinking: false,
+        provenance: expect.objectContaining({
+          supportsThinking: "discovered",
+        }),
+      }),
+    ]);
+  });
+
+  it("prefers context_length and name over Meridian fields and ignores malformed capabilities", async () => {
+    const models = await discoverOpenAiCompatibleModels({
+      baseUrl: "http://127.0.0.1:1234/v1",
+      profile: "generic",
+      fetch: async () =>
+        jsonResponse({
+          data: [
+            {
+              id: "both-fields",
+              name: "Name field",
+              display_name: "Display name field",
+              context_length: 16_384,
+              context_window: 200_000,
+            },
+            {
+              id: "malformed-thinking",
+              context_window: "200000",
+              capabilities: { thinking: { supported: "yes" } },
+            },
+            { id: "array-capabilities", capabilities: [] },
+          ],
+        }),
+    });
+
+    expect(models[0]).toMatchObject({
+      displayName: "Name field",
+      contextWindow: 16_384,
+    });
+    for (const model of models.slice(1)) {
+      expect(model).toMatchObject({
+        contextWindow: 32_768,
+        supportsThinking: false,
+        provenance: { contextWindow: "default", supportsThinking: "default" },
+      });
+    }
+  });
+
   it("discards unusable, duplicate, and non-text-output catalog entries", async () => {
     const models = await discoverOpenAiCompatibleModels({
       baseUrl: "https://openrouter.ai/api/v1",

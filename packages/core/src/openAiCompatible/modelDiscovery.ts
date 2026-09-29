@@ -254,9 +254,21 @@ function parseGenericModel(
   if (!isRecord(value)) return undefined;
   const model = boundedString(value.id, MAX_MODEL_ID_LENGTH);
   if (!model) return undefined;
-  const displayName = boundedString(value.name, MAX_DISPLAY_NAME_LENGTH);
-  const discoveredContext = positiveInteger(value.context_length);
+  const displayName =
+    boundedString(value.name, MAX_DISPLAY_NAME_LENGTH) ??
+    boundedString(value.display_name, MAX_DISPLAY_NAME_LENGTH);
+  const discoveredContext =
+    positiveInteger(value.context_length) ??
+    positiveInteger(value.context_window);
   const contextWindow = discoveredContext ?? DEFAULT_CONTEXT_WINDOW;
+  const capabilities = isRecord(value.capabilities)
+    ? value.capabilities
+    : undefined;
+  const thinking = isRecord(capabilities?.thinking)
+    ? capabilities.thinking
+    : undefined;
+  const discoveredThinking =
+    typeof thinking?.supported === "boolean" ? thinking.supported : undefined;
   const candidateMaxOutput = positiveInteger(value.max_completion_tokens);
   const discoveredMaxOutput =
     candidateMaxOutput && candidateMaxOutput <= contextWindow
@@ -270,14 +282,15 @@ function parseGenericModel(
     maxOutputTokens:
       discoveredMaxOutput ?? Math.min(DEFAULT_MAX_OUTPUT_TOKENS, contextWindow),
     supportsToolUse: false,
-    supportsThinking: false,
+    supportsThinking: discoveredThinking ?? false,
     supportsImages: false,
     provenance: {
       displayName: displayName ? "discovered" : "default",
       contextWindow: discoveredContext ? "discovered" : "default",
       maxOutputTokens: discoveredMaxOutput ? "discovered" : "default",
       supportsToolUse: "default",
-      supportsThinking: "default",
+      supportsThinking:
+        discoveredThinking === undefined ? "default" : "discovered",
       supportsImages: "default",
     },
   };
