@@ -1,6 +1,20 @@
 # AgentLink CLI
 
-Private macOS Apple Silicon preview of AgentLink's standalone local coding host.
+macOS Apple Silicon preview of AgentLink's standalone local coding host. The public GitHub release is unsigned and not notarised; the local source installer creates a separate development-signed bundle.
+
+## GitHub release preview
+
+Download the self-contained `agentlink-cli-darwin-arm64-v0.1.0.tar.gz` and its `.sha256` file from the [CLI preview release](https://github.com/reefbarman/agentlink/releases/tag/cli-v0.1.0). Verify the downloaded archive before extracting and running it:
+
+```sh
+shasum -a 256 -c agentlink-cli-darwin-arm64-v0.1.0.tar.gz.sha256
+tar -xzf agentlink-cli-darwin-arm64-v0.1.0.tar.gz
+./agentlink-cli-darwin-arm64/bin/agentlink --help
+./agentlink-cli-darwin-arm64/bin/agentlink auth codex
+./agentlink-cli-darwin-arm64/bin/agentlink --project /path/to/project
+```
+
+The extracted directory includes pinned Node, ripgrep, and native Keychain dependencies, so no separate Node or npm install is required. Keep the bundle together and run its `bin/agentlink` launcher, or symlink the launcher from a directory on PATH. The unsigned release is not installed by `npm run cli:install` and macOS may warn or block downloaded binaries. Only run it if you trust the release. The [standalone CLI guide](../../resources/builtin-skills/documentation/references/standalone-cli.md) covers provider setup, review controls, and limitations.
 
 ## Local signed installation
 
@@ -22,7 +36,7 @@ node apps/cli/dist/agentlink.js --help
 npm run smoke:tui --workspace @agentlink/cli
 npm run smoke:tui:no-color --workspace @agentlink/cli
 
-# Build the private tarball, verify its closure, install it outside the checkout,
+# Build the legacy private npm tarball, verify its closure, install it outside the checkout,
 # and run the installed no-colour PTY smoke.
 npm run cli:smoke
 ```

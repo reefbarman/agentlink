@@ -1,18 +1,32 @@
 ---
 name: standalone-cli
-description: Install, configure, and use the private macOS Apple Silicon AgentLink CLI preview. Use for standalone CLI tarballs, terminal coding chat, reviewed file edits and commands, managed TypeScript or JavaScript language intelligence, LSP installation and status, diagnostics, symbols, definitions, references, hover, instructions, skills, MCP configuration, trust, credentials, OAuth, sessions, storage, cancellation, or current limits.
+description: Install, configure, and use the macOS Apple Silicon AgentLink CLI preview from a GitHub release or source build. Use for standalone CLI tarballs, terminal coding chat, reviewed file edits and commands, managed TypeScript or JavaScript language intelligence, LSP installation and status, diagnostics, symbols, definitions, references, hover, instructions, skills, MCP configuration, trust, credentials, OAuth, sessions, storage, cancellation, or current limits.
 ---
 
 # Standalone AgentLink CLI
 
-The private standalone CLI preview runs a local multi-turn AgentLink coding session without VS Code or Electron. It supports provider setup, durable project sessions, project-relative file inspection, terminal-reviewed single-file edits, reviewed non-interactive commands with observable retained processes, trusted instructions and skills, approved stdio or HTTPS MCP tools, up to two scoped background writers, and optional managed TypeScript/JavaScript language intelligence.
+The standalone CLI preview runs a local multi-turn AgentLink coding session without VS Code or Electron. It supports provider setup, durable project sessions, project-relative file inspection, terminal-reviewed single-file edits, reviewed non-interactive commands with observable retained processes, trusted instructions and skills, approved stdio or HTTPS MCP tools, up to two scoped background writers, and optional managed TypeScript/JavaScript language intelligence.
 
 ## Requirements and packaging
 
 - macOS on Apple Silicon.
-- Node.js 22.19.0 or newer for repository builds and the legacy npm package. The signed standalone bundle includes its own pinned Node runtime.
+- Node.js 22.19.0 or newer for repository builds and the legacy npm package. The GitHub release bundle includes its own pinned Node runtime.
 - An interactive terminal for coding chat and credential entry.
-- Public npm registry access when installing the tarball, because `@napi-rs/keyring` is an exact runtime dependency.
+- Public npm registry access only when installing the legacy npm tarball, because `@napi-rs/keyring` is an exact runtime dependency. The GitHub release archive is self-contained.
+
+### GitHub release preview
+
+Download `agentlink-cli-darwin-arm64-v0.1.0.tar.gz` and its `.sha256` file from the [CLI preview release](https://github.com/reefbarman/agentlink/releases/tag/cli-v0.1.0). From the directory containing both downloads, verify the archive before extracting:
+
+```sh
+shasum -a 256 -c agentlink-cli-darwin-arm64-v0.1.0.tar.gz.sha256
+tar -xzf agentlink-cli-darwin-arm64-v0.1.0.tar.gz
+./agentlink-cli-darwin-arm64/bin/agentlink --help
+./agentlink-cli-darwin-arm64/bin/agentlink auth codex
+./agentlink-cli-darwin-arm64/bin/agentlink --project /path/to/project
+```
+
+The archive includes Node 22.23.3, the Keychain runtime, and ripgrep. It needs no separate Node or npm installation to run. Keep the extracted directory together; the `bin/agentlink` launcher resolves its sibling runtime. For a command on your PATH, link that launcher from a directory on PATH without moving the bundle's contents. Quit active CLI sessions before replacing an extracted bundle. This public preview is **unsigned and not notarised**; macOS may warn or refuse to run downloaded executables. Only use it if you trust the release and have verified the checksum. It is not a signed installer and does not alter existing CLI installations, sessions, or credentials. There is no Intel macOS, Linux, or Windows build yet.
 
 ### Signed local installation
 
@@ -20,7 +34,7 @@ From the repository, run `npm run cli:install` or the AgentLink **Build and inst
 
 Local packaging defaults to `AGENTLINK_MAC_SIGNING=development`. It requires exactly one valid **Apple Development** identity, or an explicit full name/fingerprint in `AGENTLINK_MAC_SIGNING_IDENTITY`. Inspect available identities with `security find-identity -v -p codesigning`. Missing or ambiguous identities fail the build. The signing tool can ask once for private-key access. Do not share private keys or passwords in chat or commit them.
 
-`npm run cli:bundle` packages without installing. `AGENTLINK_MAC_SIGNING=unsigned npm run cli:bundle` creates an unsigned CI preview under `cli-releases/`; the signed local installer refuses that preview. Apple Development signing is local development identity, not Developer ID distribution signing or notarisation.
+`npm run cli:bundle` packages without installing. `AGENTLINK_MAC_SIGNING=unsigned npm run cli:bundle` creates an unsigned preview under `cli-releases/`, like the public release archive; the signed local installer refuses that preview. Apple Development signing is local development identity, not Developer ID distribution signing or notarisation.
 
 The signed Node caller uses `com.agentlink.cli.node`. Existing Keychain items may require **Always Allow** once for that caller. Rebuilds with the same signing identity should preserve access, but certificate changes, locked keychains, or item policies can still prompt. No item permissions are changed automatically. The dedicated runtime is still a general-purpose interpreter, so Keychain trust applies to that executable, not exclusively to AgentLink JavaScript.
 
@@ -37,7 +51,7 @@ npm run smoke:tui --workspace @agentlink/cli
 npm run smoke:tui:no-color --workspace @agentlink/cli
 ```
 
-Build the private tarball, verify its exact dependency/licence/native-asset closure, install it outside the checkout, and run the installed no-colour PTY smoke:
+Build the legacy private npm tarball, verify its exact dependency/licence/native-asset closure, install it outside the checkout, and run the installed no-colour PTY smoke:
 
 ```sh
 npm run cli:smoke

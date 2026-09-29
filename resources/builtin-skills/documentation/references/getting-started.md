@@ -1,6 +1,6 @@
 # Getting Started with AgentLink
 
-AgentLink is a coding-agent harness built into VS Code. It gives an agent the editor's language intelligence, reviewable diffs, visible terminal work, and approvals you can tune to the task.
+AgentLink is a coding-agent harness built into VS Code, with standalone Desktop and CLI previews for macOS. The extension gives an agent the editor's language intelligence, reviewable diffs, visible terminal work, and approvals you can tune to the task; the standalone surfaces have narrower capabilities.
 
 ## Install
 
@@ -29,7 +29,7 @@ The installer supports `darwin`, `linux`, `alpine`, and `win32` targets on `arm6
 
 ### Standalone CLI preview
 
-A private macOS Apple Silicon CLI tarball provides terminal-native multi-turn coding without VS Code. It supports Codex OAuth, OpenAI API keys, configured OpenAI-compatible endpoints, durable per-project sessions, project-relative file inspection, terminal-reviewed baseline-hash writes and patches, reviewed non-interactive commands with retained process output, approved stdio and HTTPS MCP tools, up to two scoped background writers, optional managed TypeScript/JavaScript intelligence, resume/delete, cancellation, and pre-request context limits. See [Standalone CLI](standalone-cli.md) for build, install, setup, approval, and command details.
+The [CLI preview release](https://github.com/reefbarman/agentlink/releases/tag/cli-v0.1.0) provides a self-contained, unsigned terminal coding agent for macOS Apple Silicon, without VS Code or a separately installed Node runtime. It supports provider setup, durable per-project sessions, reviewed single-file edits and commands, MCP, up to two scoped background writers, and optional managed TypeScript/JavaScript intelligence. Check the archive checksum before installing, and see [Standalone CLI](standalone-cli.md#github-release-preview) for exact setup, approval, and limitations. Intel macOS, Linux, and Windows are not supported by this preview.
 
 ### Standalone desktop preview
 
@@ -39,7 +39,7 @@ Use the desktop sidebar to switch between **Ask AgentLink** and **VS Code**. VS 
 
 The desktop chat uses AgentLink's interlocking-link logo in the title bar and welcome screen, a dark teal palette with subtle teal/violet accents, softly tinted welcome cards, a compact gradient-edged composer, and a collapsible chat sidebar. The theme is independent of your editor; interactive hover effects respect reduced-motion preferences. Use **Search chats** to filter saved conversations and **Manage chats** to rename or delete them. The sidebar opens by default in wider windows; toggle it beside the app title. The title-bar **More** menu contains **Memory**, **File access…** (local read permissions), and **Continue in VS Code**. **New chat** and **Manage chats** live in the sidebar; when it is collapsed, **New chat** appears in the title bar and **Manage chats** is available under **More**. Desktop shows streaming activity in the transcript rather than repeating it in a status bar above the composer. Questions and approval cards remain visible near the input, with desktop-matched styling. The browser gateway shares this styling and Ask Agent / VS Code sidebar navigation, with a collapsed sidebar on mobile. Workspace views retain their existing VS Code-style layout. Browser settings and notifications remain available; native Work mode is reserved for the desktop and is not available in the browser.
 
-Download the DMG or ZIP matching your architecture from a `desktop-v*` [GitHub release](https://github.com/reefbarman/agentlink/releases). Desktop artifacts have their own version and release workflow; they are never included in the VSIX. The current preview is unsigned and not notarized, so the first launch may require right-clicking **AgentLink**, choosing **Open**, and confirming macOS's warning.
+Download the DMG matching your architecture (Apple Silicon `arm64` or Intel `x64`) from the [Desktop preview release](https://github.com/reefbarman/agentlink/releases/tag/desktop-v0.1.1), open it, and drag **AgentLink** to Applications. A ZIP is also available as a fallback. Desktop artifacts have their own version and release workflow; they are never included in the VSIX. The preview is unsigned and not notarised, so the first launch may require right-clicking **AgentLink**, choosing **Open**, and confirming macOS's warning. In Ask AgentLink, sign in with a ChatGPT/Codex account or configure an API-key provider. VS Code integration is optional and requires a local VS Code window running AgentLink with its browser gateway enabled.
 
 ### Signed local desktop builds
 

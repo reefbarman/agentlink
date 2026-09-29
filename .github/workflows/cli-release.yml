@@ -1,0 +1,105 @@
+name: CLI Release
+
+on:
+  push:
+    tags:
+      - "cli-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: CLI version to package (must match apps/cli/package.json)
+        required: true
+        type: string
+      publish:
+        description: Publish the unsigned preview to a GitHub Release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: macos-15
+    env:
+      TMPDIR: /private/tmp/
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - run: npm ci
+      - name: Verify CLI release version
+        env:
+          REQUESTED_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: |
+          VERSION=$(node -p 'require("./apps/cli/package.json").version')
+          test "$REQUESTED_VERSION" = "${{ github.event_name == 'push' && 'cli-v' || '' }}${VERSION}"
+      - run: npm run lint
+      - run: npm test
+      - name: Build unsigned standalone CLI
+        env:
+          AGENTLINK_MAC_SIGNING: unsigned
+        run: npm run cli:bundle
+      - name: Verify archive, launch, and checksum
+        run: |
+          VERSION=$(node -p 'require("./apps/cli/package.json").version')
+          ARCHIVE="cli-releases/agentlink-cli-darwin-arm64-v${VERSION}.tar.gz"
+          test -f "$ARCHIVE"
+          STAGING=$(mktemp -d)
+          trap 'rm -rf "$STAGING"' EXIT
+          tar -xzf "$ARCHIVE" -C "$STAGING"
+          node scripts/verify-cli-bundle.mjs "$STAGING/agentlink-cli-darwin-arm64" --allow-unsigned
+          "$STAGING/agentlink-cli-darwin-arm64/bin/agentlink" --help
+          "$STAGING/agentlink-cli-darwin-arm64/node/bin/node" --input-type=module -e 'await import(process.argv[1])' "$STAGING/agentlink-cli-darwin-arm64/dist/node_modules/@napi-rs/keyring/index.js"
+          node apps/cli/smoke-tui.mjs "$STAGING/agentlink-cli-darwin-arm64/bin/agentlink" --executable --no-color
+          (cd cli-releases && shasum -a 256 "$(basename "$ARCHIVE")" > "$(basename "$ARCHIVE").sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentlink-cli-darwin-arm64-release
+          path: |
+            cli-releases/agentlink-cli-darwin-arm64-v*.tar.gz
+            cli-releases/agentlink-cli-darwin-arm64-v*.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    needs: package
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: agentlink-cli-darwin-arm64-release
+          path: dist
+      - name: Verify release asset set
+        env:
+          RELEASE_VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+        run: |
+          VERSION=${RELEASE_VERSION#cli-v}
+          ARCHIVE="dist/agentlink-cli-darwin-arm64-v${VERSION}.tar.gz"
+          test -f "$ARCHIVE"
+          test -f "$ARCHIVE.sha256"
+          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 2
+          (cd dist && sha256sum -c "$(basename "$ARCHIVE").sha256")
+      - name: Create CLI preview GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'push' && github.ref_name || format('cli-v{0}', inputs.version) }}
+          target_commitish: ${{ github.sha }}
+          name: AgentLink CLI ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+          files: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+          fail_on_unmatched_files: true
+          prerelease: true
+          make_latest: false
+          body: |
+            macOS Apple Silicon preview. This standalone CLI includes Node, ripgrep, and the Keychain runtime. It is unsigned and not notarised. Verify the SHA-256 checksum before extracting, then run `agentlink-cli-darwin-arm64/bin/agentlink --help` from the extracted directory. See the [CLI installation guide](https://github.com/reefbarman/agentlink/blob/main/resources/builtin-skills/documentation/references/standalone-cli.md) for setup and limitations.

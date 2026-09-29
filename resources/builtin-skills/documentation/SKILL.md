@@ -1,6 +1,6 @@
 ---
 name: documentation
-description: Answer questions about AgentLink's VS Code extension and private standalone CLI, including installation, onboarding, providers, settings, tools, MCP, approvals, browser remote, indexing, skills, modes, troubleshooting, and contributing. Use when users ask how AgentLink works, what a feature or setting does, how to configure it, or why an AgentLink behavior occurs.
+description: Answer questions about AgentLink's VS Code extension and standalone Desktop and CLI previews, including installation, onboarding, providers, settings, tools, MCP, approvals, browser remote, indexing, skills, modes, troubleshooting, and contributing. Use when users ask how AgentLink works, what a feature or setting does, how to configure it, or why an AgentLink behavior occurs.
 ---
 
 # AgentLink Documentation
@@ -26,10 +26,10 @@ Load the smallest relevant reference page directly with `load_skill`:
 
 | User question                                                                                                                                                     | Load                                                                                                                  |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Install or use the private standalone CLI; terminal chat, CLI providers, sessions, storage, limits, commands, or current slice boundaries                         | `references/standalone-cli.md`                                                                                        |
+| Install or use the standalone CLI preview; terminal chat, CLI providers, sessions, storage, limits, commands, or current slice boundaries                         | `references/standalone-cli.md`                                                                                        |
 | Embed AgentLink in an app, desktop runtime, CLI, or cloud service; SDK package architecture; host tools, sessions, approvals, or migration from another agent SDK | `references/embedding-agentlink.md`                                                                                   |
 | What AgentLink is, modes, chat surfaces, context, memory, editor entry points, or images                                                                          | `references/capabilities.md`, then `references/complete-reference.md` if it needs detailed behavior                   |
-| Install, update, first run, sign-in, providers, first task, or setup failure                                                                                      | `references/getting-started.md`, then `references/troubleshooting.md` or `references/complete-reference.md` if needed |
+| Install or use the standalone Desktop preview; install/update the VS Code extension, first run, sign-in, providers, first task, or setup failure                  | `references/getting-started.md`, then `references/troubleshooting.md` or `references/complete-reference.md` if needed |
 | Tool parameters, response shape, write-marker grammar, terminal recovery, or background-tool contracts                                                            | `references/tools.md`, then `references/complete-reference.md` for an exact contract                                  |
 | Terminal, indexing, browser remote, MCP, plugin, authentication, or installation failures                                                                         | `references/troubleshooting.md`, then the owning focused guide or `references/complete-reference.md`                  |
 | Settings, exact default, scope, allowed values, or setting name                                                                                                   | `references/package-contract.md`, then `references/settings.md` or `references/complete-reference.md` for behavior    |

@@ -1,10 +1,10 @@
 # Why AgentLink
 
-_Last updated: 2026-09-05._
+_Last updated: 2026-09-29._
 
 Coding agents have become capable enough to do useful work on real codebases. The question is no longer whether to give them autonomy. It is what kind of environment lets them make good decisions, and what kind of control lets you trust the result.
 
-AgentLink is a coding-agent harness built into VS Code. It is not a forked editor, a separate desktop app, or a hosted agent service. Its bet is simple: **agent quality is not just model quality. It also comes from the editor intelligence, feedback, context discipline, and supervision around the model.**
+AgentLink is a coding-agent harness built into VS Code, with standalone macOS Desktop and CLI previews for work that does not need an editor. It is not a forked editor or a hosted agent service. Its bet is simple: **agent quality is not just model quality. It also comes from the editor intelligence, feedback, context discipline, and supervision around the model.**
 
 ## The editor is the runtime
 
@@ -58,11 +58,11 @@ The aim is not to make every capability proprietary. It is to make the capabilit
 
 ## Your machine and your accounts
 
-AgentLink runs as a VS Code extension on your machine. It uses the provider accounts you choose—ChatGPT/Codex, OpenAI, or compatible endpoints—at their provider rates. There is no AgentLink cloud execution service or model middleman.
+AgentLink runs on your machine through the VS Code extension, a standalone Desktop app for Ask Agent, or a terminal CLI for local coding. The standalone previews have narrower capabilities than the extension. They use the provider accounts you choose, ChatGPT/Codex, OpenAI, or compatible endpoints, at their provider rates. There is no AgentLink cloud execution service or model middleman.
 
 Local code indexes, retrieval data, and telemetry stay on-device by default. Provider-backed features send only the inputs they need. The browser remote is a local helper-owned relay over loopback or an explicitly paired LAN connection, not a hosted relay service.
 
-Because AgentLink is an extension rather than an editor replacement, the rest of your VS Code setup keeps working too: language tooling, proprietary extensions, marketplace access, and the completion tools you already prefer.
+Because the main coding surface is an extension rather than an editor replacement, the rest of your VS Code setup keeps working too: language tooling, proprietary extensions, marketplace access, and the completion tools you already prefer.
 
 ## What AgentLink deliberately does not do
 
@@ -73,7 +73,7 @@ Because AgentLink is an extension rather than an editor replacement, the rest of
 
 ## Where it is still maturing
 
-AgentLink is ambitious software and some areas are still being hardened. Best-of-N and scheduled automations are available but maturing. Provider support will broaden over time, and richer provider-native features are not all portable across endpoints. The browser remote remains intentionally narrower than VS Code.
+AgentLink is ambitious software and some areas are still being hardened. Best-of-N and scheduled automations are available but maturing. Provider support will broaden over time, and richer provider-native features are not all portable across endpoints. The browser remote remains intentionally narrower than VS Code. Desktop and CLI are macOS previews distributed unsigned and without notarisation; they do not replace the full editor workflow.
 
 Those limits are part of the product story, not footnotes. The aim is to earn more autonomy by making its boundaries visible and dependable.
 

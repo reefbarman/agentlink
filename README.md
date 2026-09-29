@@ -4,9 +4,9 @@
 
 # AgentLink
 
-> **A coding-agent harness built into VS Code.**
+> **A coding-agent harness built into VS Code, with standalone Desktop and CLI previews.**
 
-Run frontier coding agents with the editor's intelligence, visible execution, reviewable changes, and as much—or as little—supervision as the task needs.
+Run frontier coding agents with the editor's intelligence, visible execution, reviewable changes, and as much, or as little, supervision as the task needs. Use the macOS Desktop app for standalone Ask Agent chat or the Apple Silicon CLI for terminal coding when you do not need an editor.
 
 [Get started](#get-started) · [Documentation](resources/builtin-skills/documentation/README.md) · [Why AgentLink](why-agentlink.md) · [Releases](https://github.com/reefbarman/agentlink/releases)
 
@@ -52,7 +52,9 @@ AgentLink keeps local lexical and structural codebase retrieval on your machine,
 
 ## Get started
 
-### Install the latest release
+Choose the surface that fits your work: the **VS Code extension** has the fullest editor and review integration; **Desktop** offers Ask Agent chat and a view into running VS Code sessions; the **CLI** runs a local coding session in your terminal. Desktop and CLI are separate, narrower macOS previews.
+
+### Install the VS Code extension
 
 The installer selects the target for the VS Code extension host on this machine:
 
@@ -73,13 +75,17 @@ You can also download a matching `.vsix` from the [latest release](https://githu
 code --install-extension agentlink-*.vsix --force
 ```
 
-### Try the standalone desktop preview
+### Try the standalone Desktop preview
 
-AgentLink Desktop is a separate macOS Ask Agent app that does not require the VS Code extension. Download the DMG or ZIP matching your Mac from a `desktop-v*` [GitHub release](https://github.com/reefbarman/agentlink/releases). Desktop binaries are never bundled in the VSIX.
+[Download the Desktop preview](https://github.com/reefbarman/agentlink/releases/tag/desktop-v0.1.1) for macOS Apple Silicon (`arm64`) or Intel (`x64`). Open the matching DMG and drag **AgentLink** to Applications. Desktop runs Ask Agent chat without VS Code, and can also connect to an AgentLink VS Code window on the same Mac to view its existing sessions. Desktop binaries are not included in the VSIX.
 
-The current preview is unsigned and not notarized. macOS may require you to right-click **AgentLink**, choose **Open**, and confirm the first launch. Apple Silicon (`arm64`) and Intel (`x64`) builds are published separately.
+This preview is unsigned and not notarised. macOS may require you to right-click **AgentLink**, choose **Open**, and confirm its first launch. See [Desktop setup and limitations](resources/builtin-skills/documentation/references/getting-started.md#standalone-desktop-preview).
 
-### Start your first session
+### Try the standalone CLI preview
+
+[Download the CLI preview](https://github.com/reefbarman/agentlink/releases/tag/cli-v0.1.0) for macOS Apple Silicon. It is a self-contained terminal coding agent with its own Node runtime, reviewed edits and commands, project sessions, and optional TypeScript/JavaScript intelligence. Verify the provided SHA-256 checksum before extracting. The CLI is unsigned and not notarised, supports neither Intel Macs nor Linux/Windows yet, and has a narrower tool set than the VS Code extension. See [CLI installation and setup](resources/builtin-skills/documentation/references/standalone-cli.md#github-release-preview) for commands and limitations.
+
+### Start your first VS Code session
 
 1. Reload VS Code and open the folder you want to work in.
 2. Open **AgentLink** from the Activity Bar, then choose **Agent**.
@@ -105,7 +111,8 @@ Choose ChatGPT/Codex, OpenAI, or an OpenAI-compatible provider. Connect the tool
 
 ## Documentation
 
-- [Getting started](resources/builtin-skills/documentation/references/getting-started.md)
+- [Getting started, including Desktop](resources/builtin-skills/documentation/references/getting-started.md)
+- [Standalone CLI](resources/builtin-skills/documentation/references/standalone-cli.md)
 - [Capabilities overview](resources/builtin-skills/documentation/references/capabilities.md)
 - [Tools](resources/builtin-skills/documentation/references/tools.md)
 - [Customization](resources/builtin-skills/documentation/references/customization.md)

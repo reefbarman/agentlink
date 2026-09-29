@@ -11,6 +11,10 @@ Use this guide for common setup and runtime problems. For exact settings and lim
 
 See [installation](getting-started.md#install) for commands and [platform notes](complete-reference.md#platform-notes) for target details.
 
+## Desktop or CLI preview will not open on macOS
+
+Desktop and CLI GitHub releases are unsigned and not notarised. Download the build for your Mac (Desktop: Apple Silicon or Intel; CLI: Apple Silicon only). For Desktop, open the DMG, drag the app to Applications, then right-click **AgentLink** and choose **Open** if macOS warns about the first launch. For CLI, verify the archive against its release `.sha256` file before extracting, keep the extracted directory intact, and run its `bin/agentlink` launcher. See [Desktop setup](getting-started.md#standalone-desktop-preview) and [CLI installation](standalone-cli.md#github-release-preview). The local development-signed CLI installer deliberately rejects the unsigned public preview archive.
+
 ## The chat says a model needs setup
 
 Use the setup action shown in the empty chat:
