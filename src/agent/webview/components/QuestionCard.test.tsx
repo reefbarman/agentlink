@@ -1,8 +1,14 @@
 /** @jsxImportSource preact */
 // @vitest-environment jsdom
 
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  waitFor,
+} from "@testing-library/preact";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 
 import { QuestionCard } from "./QuestionCard";
 
@@ -65,6 +71,79 @@ describe("QuestionCard progress publishing", () => {
       step: 0,
       answers: { choice: "B" },
       notes: {},
+    });
+  });
+
+  it("does not echo stale local progress back when remote progress arrives", () => {
+    const published: unknown[] = [];
+    const questions = [
+      {
+        id: "choice",
+        type: "multiple_choice" as const,
+        question: "Which option?",
+        options: ["A", "B"],
+      },
+    ];
+    // Surfaces pass an inline callback, so its identity changes every render.
+    const card = (
+      remoteProgress: Parameters<typeof QuestionCard>[0]["remoteProgress"],
+    ) => (
+      <QuestionCard
+        id="request-1"
+        context="Choose."
+        questions={questions}
+        remoteProgress={remoteProgress}
+        onProgressChange={(progress) => published.push(progress)}
+        onSubmit={vi.fn()}
+      />
+    );
+    const { getByRole, rerender } = render(card(null));
+
+    fireEvent.click(getByRole("button", { name: /^A$/ }));
+    expect(published).toEqual([
+      { step: 0, answers: { choice: "A" }, notes: {} },
+    ]);
+
+    rerender(card({ step: 0, answers: { choice: "B" }, notes: {} }));
+    rerender(card({ step: 0, answers: { choice: "B" }, notes: {} }));
+
+    expect(published).toHaveLength(1);
+  });
+
+  it("does not publish when the composer re-commits an unchanged note", () => {
+    const onProgressChange = vi.fn();
+    const onComposerStateChange = vi.fn();
+    render(
+      <QuestionCard
+        id="request-1"
+        context="Choose."
+        questions={[
+          {
+            id: "choice",
+            type: "multiple_choice",
+            question: "Which option?",
+            options: ["A", "B"],
+          },
+        ]}
+        integratedComposer
+        onComposerStateChange={onComposerStateChange}
+        onProgressChange={onProgressChange}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    act(() => {
+      onComposerStateChange.mock.lastCall?.[0].onCommit("");
+    });
+    expect(onProgressChange).not.toHaveBeenCalled();
+
+    act(() => {
+      onComposerStateChange.mock.lastCall?.[0].onCommit("Real context");
+    });
+    expect(onProgressChange).toHaveBeenCalledWith({
+      step: 0,
+      answers: {},
+      notes: { choice: "Real context" },
     });
   });
 });

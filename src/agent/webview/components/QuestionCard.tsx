@@ -151,31 +151,35 @@ export function QuestionCard({
   const lastAppliedRemoteRef = useRef<string | null>(null);
   const lastPublishedRef = useRef<string | null>(null);
   const hasLocalProgressEditRef = useRef(false);
+  const onProgressChangeRef = useRef(onProgressChange);
+  onProgressChangeRef.current = onProgressChange;
 
+  // Applying remote progress and publishing local progress must share one
+  // effect. As separate effects, the publish pass ran with the pre-apply local
+  // state in the same flush and echoed it back, so two open surfaces bounced
+  // stale states between each other indefinitely.
   useEffect(() => {
-    if (!remoteProgress) return;
-    const serialized = serializeProgress(remoteProgress);
-    if (serialized === lastAppliedRemoteRef.current) return;
-    if (serialized === serializeProgress({ step, answers, notes })) {
-      lastAppliedRemoteRef.current = serialized;
-      return;
+    const local = serializeProgress({ step, answers, notes });
+    if (remoteProgress) {
+      const serialized = serializeProgress(remoteProgress);
+      if (serialized !== lastAppliedRemoteRef.current) {
+        lastAppliedRemoteRef.current = serialized;
+        lastPublishedRef.current = serialized;
+        if (serialized !== local) {
+          setStep(remoteProgress.step);
+          setAnswers({ ...remoteProgress.answers });
+          notesRef.current = { ...remoteProgress.notes };
+          setNotes(notesRef.current);
+          return;
+        }
+      }
     }
-    lastAppliedRemoteRef.current = serialized;
-    lastPublishedRef.current = serialized;
-    setStep(remoteProgress.step);
-    setAnswers({ ...remoteProgress.answers });
-    notesRef.current = { ...remoteProgress.notes };
-    setNotes(notesRef.current);
+    const publish = onProgressChangeRef.current;
+    if (!publish || !hasLocalProgressEditRef.current) return;
+    if (local === lastPublishedRef.current) return;
+    lastPublishedRef.current = local;
+    publish({ step, answers, notes });
   }, [remoteProgress, step, answers, notes]);
-
-  useEffect(() => {
-    if (!onProgressChange || !hasLocalProgressEditRef.current) return;
-    const snapshot: QuestionProgress = { step, answers, notes };
-    const serialized = serializeProgress(snapshot);
-    if (serialized === lastPublishedRef.current) return;
-    lastPublishedRef.current = serialized;
-    onProgressChange(snapshot);
-  }, [step, answers, notes, onProgressChange]);
 
   const q = questions[step];
   const questionContext = q.context?.trim() ?? "";
@@ -207,6 +211,9 @@ export function QuestionCard({
 
   const setNote = useCallback(
     (text: string) => {
+      // Composer draft syncs re-commit unchanged text; that is not a user edit
+      // and must not publish (a late-mounting surface would reset progress).
+      if ((notesRef.current[q.id] ?? "") === text) return;
       hasLocalProgressEditRef.current = true;
       notesRef.current = { ...notesRef.current, [q.id]: text };
       setNotes(notesRef.current);

@@ -2525,3 +2525,24 @@ pre {
     min-height: 0;
   }
 }
+
+/*
+ * iOS Safari zooms the whole page when a focused field's font-size is below
+ * 16px, cutting off the transcript until the user pinches back out. Keep text
+ * fields at 16px on iOS only; user pinch-zoom is unaffected.
+ */
+@supports (-webkit-touch-callout: none) {
+  :is(
+    input:not(
+      [type="checkbox"],
+      [type="radio"],
+      [type="range"],
+      [type="button"],
+      [type="submit"]
+    ),
+    textarea,
+    select
+  ):not(.monaco-editor *) {
+    font-size: 16px !important;
+  }
+}

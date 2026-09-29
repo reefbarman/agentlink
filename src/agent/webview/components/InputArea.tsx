@@ -500,6 +500,9 @@ export function InputArea({
       lastSyncedQuestionDraftRef.current = null;
       return;
     }
+    // A new key means the draft still belongs to the previous question until
+    // the reset effect below loads this question's initial text.
+    if (contextMode.key !== activeContextKeyRef.current) return;
     const submitAttachments = allowAttachments ? attachments : [];
     const submitMedia = allowMediaPaste ? pendingMedia : undefined;
     const signature = JSON.stringify({

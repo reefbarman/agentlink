@@ -3,7 +3,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 
-import { InputArea } from "./InputArea";
+import { InputArea, type ComposerContextMode } from "./InputArea";
 import type { ChatSlashCommandInfo as SlashCommandInfo } from "@agentlink/protocol/chat-catalog";
 
 class ImmediateFileReader {
@@ -910,5 +910,73 @@ describe("InputArea slash popup", () => {
     await waitFor(() => {
       expect(input.value).toBe("Unsent normal draft");
     });
+  });
+
+  it("does not sync the previous question's draft into the next question", async () => {
+    const actions = {
+      canGoBack: false,
+      onBack: vi.fn(),
+      primaryLabel: "Next" as const,
+      primaryDisabled: false,
+      onPrimary: vi.fn(),
+    };
+    const contextMode = (
+      questionId: string,
+      onSubmit: ComposerContextMode["onSubmit"],
+    ): ComposerContextMode => ({
+      key: `question-1:${questionId}`,
+      questionId,
+      title: "Adding context to agent question",
+      placeholder: "Add details…",
+      initialText: "",
+      onSubmit,
+      onCancel: vi.fn(),
+      actions,
+    });
+    const onFirstSubmit = vi.fn();
+    const onSecondSubmit = vi.fn();
+    const { container, rerender } = renderInputArea([], {
+      contextMode: contextMode("first", onFirstSubmit),
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    input.value = "First answer context";
+    fireEvent.input(input);
+    await waitFor(() => {
+      expect(onFirstSubmit).toHaveBeenLastCalledWith(
+        "First answer context",
+        [],
+        undefined,
+        undefined,
+        undefined,
+      );
+    });
+
+    rerender(
+      <InputArea
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        streaming={false}
+        reasoningEffort="none"
+        onSetReasoningEffort={vi.fn()}
+        onExportTranscript={vi.fn()}
+        hasMessages={false}
+        vscodeApi={{ postMessage: vi.fn() }}
+        injection={null}
+        onInjectionConsumed={vi.fn()}
+        slashCommands={[]}
+        contextMode={contextMode("second", onSecondSubmit)}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(input.value).toBe("");
+    });
+    expect(onSecondSubmit).not.toHaveBeenCalledWith(
+      "First answer context",
+      expect.anything(),
+      undefined,
+      undefined,
+      undefined,
+    );
   });
 });
