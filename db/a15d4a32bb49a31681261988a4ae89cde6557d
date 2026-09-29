@@ -1,0 +1,49 @@
+apps/cli/README.md
+  h_9630b74bdac540 3,5-17,39
+  h_9630b74bdac540 4
+README.md
+  h_9630b74bdac540 7,9,55,57,78-80,82,84,86,88,114-115
+  h_9630b74bdac540 56,81
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_9630b74bdac540 3,13,15,17-29,37,54
+  h_9630b74bdac540 8,16
+resources/builtin-skills/documentation/references/getting-started.md
+  h_9630b74bdac540 3,32,42
+.github/workflows/cli-release.yml
+  h_9630b74bdac540 1-105
+.github/workflows/desktop-release.yml
+  h_9630b74bdac540 25-26,147
+resources/builtin-skills/documentation/SKILL.md
+  h_9630b74bdac540 3,29,32
+CHANGELOG.md
+  h_9630b74bdac540 5-6
+why-agentlink.md
+  h_9630b74bdac540 3,7,61,65,76
+apps/desktop/package.json
+  h_9630b74bdac540 3
+resources/builtin-skills/documentation/README.md
+  h_9630b74bdac540 3,7,17
+package.json
+  h_9630b74bdac540 1225
+resources/builtin-skills/documentation/references/capabilities.md
+  h_9630b74bdac540 24,34
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_9630b74bdac540 14-17
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_9630b74bdac540 11-13,28-30,45-47,62-64,79-81,90-92,101-103,112-114,123-125,140-142,157-159,174-176,191-193,202-204,213-215,224-226,235-237,252-254,269-271,286-288,303-305,314-316,325-327,336-338,347-349,364-366,381-383,398-400,415-417,426-428,437-439,448-450,459-461,476-478,493-495,510-512,527-529,538-540,549-551,560-562,571-573,588-590,605-607,622-624,639-641,650-652,661-663,672-674,797-798,801
+package-lock.json
+  h_9630b74bdac540 62,147
+resources/builtin-skills/documentation/references/release-notes.md
+  h_9630b74bdac540 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dba15d4a32bb49a31681261988a4ae89cde6557d",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
