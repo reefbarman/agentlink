@@ -1,0 +1,18 @@
+src/agent/SessionStore.test.ts
+  h_9630b74bdac540 4,1631,1648-1650,1652-1653
+  h_9630b74bdac540 1651,1654
+apps/cli/src/tui/InkChatApp.test.tsx
+  h_9630b74bdac540 832-834,871
+  h_9630b74bdac540 835,869-870
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3cd332e9c36dea1cd818e9b258c83291f19cd986",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
