@@ -1152,17 +1152,30 @@ function buildModePrompt(
 ${role}${customInstructions ? `\n\n### Project Mode Instructions\n\n${customInstructions}` : ""}`;
 }
 
+/**
+ * OpenCode-style environment block for providers that detect the client
+ * working directory from the system prompt. Meridian reads only the first
+ * `Working directory:` line, so multi-root workspaces declare the primary root.
+ */
+function getWorkingDirectoryEnvBlock(cwd: string, model?: string): string {
+  if (!model) return "";
+  const provider = providerRegistry.tryResolveProvider(model);
+  if (!provider?.declaresWorkingDirectoryInPrompt?.()) return "";
+  return `\n\n<env>\nWorking directory: ${cwd}\n</env>`;
+}
+
 function buildLightweightPromptArtifacts(
   mode: string,
   cwd: string,
   promptProfile: Readonly<PromptProfileResolution>,
   workspaceFolders?: WorkspaceFolderInfo[],
   agentMode?: AgentMode,
+  workingDirectoryEnvBlock = "",
 ): Omit<PromptArtifacts, "skills" | "advertisedRules"> {
   const identity = `You are AgentLink, a skilled software engineer running as a background review agent inside a VS Code extension.`;
   const rootSection = `
 - The project root directory is: ${cwd}
-- All file paths should be relative to this directory.${getWorkspaceFoldersSection(workspaceFolders)}`;
+- All file paths should be relative to this directory.${getWorkspaceFoldersSection(workspaceFolders)}${workingDirectoryEnvBlock}`;
   const modePrompt = buildModePrompt(mode, agentMode, promptProfile.profile);
   const backgroundSection = `
 ## Background Agent
@@ -1249,6 +1262,10 @@ export async function buildPromptArtifacts(
   )
     ? options.promptProfile
     : resolvedPromptProfile;
+  const workingDirectoryEnvBlock = getWorkingDirectoryEnvBlock(
+    cwd,
+    options?.model,
+  );
   // Lightweight path: minimal prompt for background review agents
   if (options?.lightweight) {
     return {
@@ -1258,6 +1275,7 @@ export async function buildPromptArtifacts(
         promptProfile,
         options.workspaceFolders,
         options.agentMode,
+        workingDirectoryEnvBlock,
       ),
       skills: [],
       advertisedRules: [],
@@ -1410,7 +1428,10 @@ Approve for Me is enabled for this session: mode switches are normally allowed a
       options?.providerId ? `provider:${options.providerId}` : "provider",
       providerPrompt,
     ),
-    measureContextItem("system info", `${systemInfo}${plansSection}`),
+    measureContextItem(
+      "system info",
+      `${systemInfo}${plansSection}${workingDirectoryEnvBlock}`,
+    ),
     measureContextItem("dev feedback", devFeedback),
     measureContextItem("compose routing", composeRouting),
     measureContextItem("custom instructions", customSection),
@@ -1435,7 +1456,7 @@ Approve for Me is enabled for this session: mode switches are normally allowed a
   const systemPrompt = `${base}
 ${modePrompt}${approveForMeSection}
 ${providerPrompt}
-${systemInfo}${plansSection}
+${systemInfo}${plansSection}${workingDirectoryEnvBlock}
 ${devFeedback}${composeRouting}${customSection}${instructionSections.ruleCatalogSection}${rulesSection}${skillsSection}${mcpToolCatalogSection}${backgroundSection}`.trimEnd();
 
   const promptBreakdown: RequestContextBreakdown["prompt"] =

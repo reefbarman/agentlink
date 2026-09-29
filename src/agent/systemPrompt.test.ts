@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildModeInstructionBlock,
   buildPromptArtifacts,
@@ -10,6 +10,9 @@ import {
   loadCustomInstructions,
   shouldInlineInstructionBlock,
 } from "./systemPrompt.js";
+
+import type { ModelProvider } from "./providers/types.js";
+import { providerRegistry } from "./providers/index.js";
 
 let tmpDir: string;
 let tmpHome: string;
@@ -1521,6 +1524,62 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("Tool selection");
     expect(result).toContain("highest-level code intelligence tool");
     expect(result).not.toContain("Bias for action");
+  });
+
+  describe("working directory env block", () => {
+    function stubProvider(declares: boolean) {
+      return vi.spyOn(providerRegistry, "tryResolveProvider").mockReturnValue({
+        getCapabilities: () => ({}),
+        ...(declares ? { declaresWorkingDirectoryInPrompt: () => true } : {}),
+      } as unknown as ModelProvider);
+    }
+
+    it("declares the project root for providers that request it", async () => {
+      const spy = stubProvider(true);
+      try {
+        const result = await buildSystemPrompt("code", tmpDir, {
+          providerId: "openai-compatible:meridian",
+          model: "meridian-claude",
+        });
+
+        expect(result).toContain(`<env>\nWorking directory: ${tmpDir}\n</env>`);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("declares only the primary root in multi-root background prompts", async () => {
+      const spy = stubProvider(true);
+      try {
+        const result = await buildSystemPrompt("review", tmpDir, {
+          model: "meridian-claude",
+          lightweight: true,
+          workspaceFolders: [
+            { name: "primary", path: tmpDir },
+            { name: "secondary", path: "/tmp/secondary-root" },
+          ],
+        });
+
+        expect(result.match(/Working directory:/g)).toHaveLength(1);
+        expect(result).toContain(`Working directory: ${tmpDir}\n</env>`);
+        expect(result).toContain("  - secondary: /tmp/secondary-root");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("omits the block for other providers", async () => {
+      const spy = stubProvider(false);
+      try {
+        const result = await buildSystemPrompt("code", tmpDir, {
+          model: "other-model",
+        });
+
+        expect(result).not.toContain("<env>");
+      } finally {
+        spy.mockRestore();
+      }
+    });
   });
 
   it("prefers get_context directly when a file path is already known", async () => {

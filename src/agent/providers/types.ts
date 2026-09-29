@@ -90,6 +90,13 @@ export interface ModelProvider {
   getModelFamily?(model: string): "anthropic" | "openai" | undefined;
 
   /**
+   * Whether the system prompt should declare the working directory in an
+   * `<env>` block. Proxies such as Meridian detect the client's project
+   * directory only from that OpenCode-style block.
+   */
+  declaresWorkingDirectoryInPrompt?(): boolean;
+
+  /**
    * Resolve capabilities for the authenticated transport that will own the next
    * request. Providers whose capabilities do not vary by auth may omit this.
    */

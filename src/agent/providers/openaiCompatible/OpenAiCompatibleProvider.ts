@@ -112,6 +112,10 @@ export class OpenAiCompatibleProvider implements ModelProvider {
     return this.backend.getModelFamily(model);
   }
 
+  declaresWorkingDirectoryInPrompt(): boolean {
+    return this.connection.meridianSessionAffinity === true;
+  }
+
   getAgentMaxTokens(model: string): number | undefined {
     return this.connection.models.find((entry) => entry.id === model)
       ?.agentMaxTokens;

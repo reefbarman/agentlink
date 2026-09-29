@@ -82,6 +82,21 @@ describe("OpenAiCompatibleProvider", () => {
     expect(provider.getCapabilities("local-model").contextWindow).toBe(32_768);
   });
 
+  it("declares the prompt working directory only for Meridian affinity connections", () => {
+    const secrets = { get: vi.fn().mockResolvedValue("secret") };
+    const generic = new OpenAiCompatibleProvider({
+      connection: connection(),
+      secrets,
+    });
+    const meridian = new OpenAiCompatibleProvider({
+      connection: connection({ meridianSessionAffinity: true }),
+      secrets,
+    });
+
+    expect(generic.declaresWorkingDirectoryInPrompt()).toBe(false);
+    expect(meridian.declaresWorkingDirectoryInPrompt()).toBe(true);
+  });
+
   it("exposes configured tier metadata without changing provider identity", () => {
     const configured = connection({
       models: [
