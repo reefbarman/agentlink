@@ -1569,36 +1569,43 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   });
 
-  it("sends Astra with the Responses Lite contract and maps ultra to xhigh over OAuth", async () => {
-    const captured = captureBodyOnce();
-    const provider = new CodexProvider(makeAuthManager() as never);
+  it.each(["gpt-6-astra", "gpt-6.1-sol"])(
+    "sends %s thinking summaries through the OAuth Responses Lite contract",
+    async (model) => {
+      const captured = captureBodyOnce();
+      const provider = new CodexProvider(makeAuthManager() as never);
 
-    for await (const _event of provider.stream({
-      model: "gpt-6-astra",
-      systemPrompt: "system",
-      messages: [{ role: "user", content: "ping" }],
-      maxTokens: 64,
-      reasoningEffort: "ultra",
-    })) {
-      // drain
-    }
+      for await (const _event of provider.stream({
+        model,
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "ping" }],
+        maxTokens: 64,
+        reasoningEffort: "ultra",
+      })) {
+        // drain
+      }
 
-    expect(captured.current).toMatchObject({
-      model: "gpt-6-astra",
-      parallel_tool_calls: false,
-      reasoning: { effort: "xhigh", context: "all_turns" },
-      input: [
-        { type: "additional_tools", role: "developer" },
-        { type: "message", role: "developer" },
-        { role: "user" },
-      ],
-    });
-    expect(captured.current).not.toHaveProperty("instructions");
-    expect(captured.current).not.toHaveProperty("tools");
-    expect(captured.options).toMatchObject({
-      headers: { "x-openai-internal-codex-responses-lite": "true" },
-    });
-  });
+      expect(captured.current).toMatchObject({
+        model,
+        parallel_tool_calls: false,
+        reasoning: {
+          effort: "xhigh",
+          summary: "detailed",
+          context: "all_turns",
+        },
+        input: [
+          { type: "additional_tools", role: "developer" },
+          { type: "message", role: "developer" },
+          { role: "user" },
+        ],
+      });
+      expect(captured.current).not.toHaveProperty("instructions");
+      expect(captured.current).not.toHaveProperty("tools");
+      expect(captured.options).toMatchObject({
+        headers: { "x-openai-internal-codex-responses-lite": "true" },
+      });
+    },
+  );
 
   it("clamps Astra ultra reasoning to max for API-key requests", async () => {
     const captured = captureBodyOnce();

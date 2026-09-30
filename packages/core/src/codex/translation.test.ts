@@ -523,88 +523,99 @@ describe("Codex translation", () => {
     });
   });
 
-  it("builds the Responses Lite request contract for OAuth Astra", () => {
-    const tools = translateCodexTools([
-      {
-        name: "demo_tool",
-        description: "Demo tool",
-        input_schema: { type: "object" },
-      },
-    ]);
-    const body = buildCodexEndpointRequestBody({
-      model: "gpt-6-astra",
-      input: [
+  it.each(["gpt-6-astra", "gpt-6.1-sol"])(
+    "requests Responses Lite thinking summaries for %s",
+    (model) => {
+      const tools = translateCodexTools([
         {
-          role: "user",
-          content: [
-            {
-              type: "input_image",
-              image_url: "data:image/png;base64,abc",
-              detail: "auto",
-            },
-          ],
+          name: "demo_tool",
+          description: "Demo tool",
+          input_schema: { type: "object" },
         },
-      ],
-      instructions: "system",
-      reasoningEffort: "xhigh",
-      tools,
-      useResponsesLite: true,
-      caps: {
-        supportsPreviousResponseId: false,
-        supportsPersistedReasoning: false,
-        supportsProMode: false,
-        supportsPromptCacheKey: false,
-        supportsPromptCacheRetention: false,
-        supportsMaxOutputTokens: false,
-        supportsHostedWebSearch: true,
-        supportsTextVerbosity: true,
-      },
-    }) as unknown as Record<string, unknown>;
-
-    expect(body).not.toHaveProperty("instructions");
-    expect(body).not.toHaveProperty("tools");
-    expect(body).toMatchObject({
-      model: "gpt-6-astra",
-      parallel_tool_calls: false,
-      reasoning: { effort: "xhigh", context: "all_turns" },
-      input: [
-        {
-          id: expect.stringMatching(/^at_/),
-          type: "additional_tools",
-          role: "developer",
-          tools: [
-            {
-              type: "namespace",
-              name: "functions",
-              description: "",
-              tools: [
-                expect.objectContaining({
-                  type: "function",
-                  name: "demo_tool",
-                }),
-              ],
-            },
-          ],
-        },
-        {
-          id: expect.stringMatching(/^msg_/),
-          type: "message",
-          role: "developer",
-          content: [{ type: "input_text", text: "system" }],
-          internal_chat_message_metadata_passthrough: {
-            content_item_kinds: ["model.base_instructions"],
+      ]);
+      const body = buildCodexEndpointRequestBody({
+        model,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_image",
+                image_url: "data:image/png;base64,abc",
+                detail: "auto",
+              },
+            ],
           },
+        ],
+        instructions: "system",
+        reasoningEffort: "xhigh",
+        tools,
+        useResponsesLite: true,
+        caps: {
+          supportsPreviousResponseId: false,
+          supportsPersistedReasoning: false,
+          supportsProMode: false,
+          supportsPromptCacheKey: false,
+          supportsPromptCacheRetention: false,
+          supportsMaxOutputTokens: false,
+          supportsHostedWebSearch: true,
+          supportsTextVerbosity: true,
         },
-        {
-          role: "user",
-          content: [
-            { type: "input_image", image_url: "data:image/png;base64,abc" },
-          ],
+      }) as unknown as Record<string, unknown>;
+
+      expect(body).not.toHaveProperty("instructions");
+      expect(body).not.toHaveProperty("tools");
+      expect(body).toMatchObject({
+        model,
+        parallel_tool_calls: false,
+        reasoning: {
+          effort: "xhigh",
+          summary: "detailed",
+          context: "all_turns",
         },
-      ],
-    });
-    expect((body.reasoning as Record<string, unknown>).summary).toBeUndefined();
-  });
+        input: [
+          {
+            id: expect.stringMatching(/^at_/),
+            type: "additional_tools",
+            role: "developer",
+            tools: [
+              {
+                type: "namespace",
+                name: "functions",
+                description: "",
+                tools: [
+                  expect.objectContaining({
+                    type: "function",
+                    name: "demo_tool",
+                  }),
+                ],
+              },
+            ],
+          },
+          {
+            id: expect.stringMatching(/^msg_/),
+            type: "message",
+            role: "developer",
+            content: [{ type: "input_text", text: "system" }],
+            internal_chat_message_metadata_passthrough: {
+              content_item_kinds: ["model.base_instructions"],
+            },
+          },
+          {
+            role: "user",
+            content: [
+              { type: "input_image", image_url: "data:image/png;base64,abc" },
+            ],
+          },
+        ],
+      });
+      expect(body.reasoning).toEqual({
+        effort: "xhigh",
+        summary: "detailed",
+        context: "all_turns",
+      });
+    },
+  );
 
   it("coalesces function tools into the Responses Lite functions namespace", () => {
     expect(

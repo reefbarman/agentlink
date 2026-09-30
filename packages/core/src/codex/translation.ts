@@ -543,7 +543,6 @@ export function buildCodexEndpointRequestBody(args: {
             args.reasoningMode === "pro"
             ? "pro"
             : undefined,
-          !args.useResponsesLite,
         )
       : undefined,
     previousResponseId: args.caps.supportsPreviousResponseId

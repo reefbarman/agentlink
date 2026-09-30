@@ -157,7 +157,7 @@ describe("executeCodexResolvedCompletion", () => {
     expect(capturedBody).toMatchObject({
       model: "gpt-6-astra",
       parallel_tool_calls: false,
-      reasoning: { effort: "xhigh", context: "all_turns" },
+      reasoning: { effort: "xhigh", summary: "detailed", context: "all_turns" },
       input: [
         {
           type: "additional_tools",

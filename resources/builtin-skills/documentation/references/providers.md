@@ -4,6 +4,12 @@ AgentLink has first-class ChatGPT/Codex subscription sign-in and OpenAI API-key 
 
 This guide covers VS Code setup and the shared connection file. AgentLink Desktop reads the same file on the same Mac. Browser Ask Agent can use configured models but cannot create or edit provider configuration. For terminal-specific setup, see [Standalone CLI](standalone-cli.md).
 
+## Codex thinking summaries
+
+AgentLink requests detailed reasoning summaries for reasoning-enabled OpenAI/Codex requests, including GPT-6 Astra and GPT-6.1 Sol through the subscription Responses Lite endpoint. Summaries appear as thinking blocks when the provider returns them, over both WebSocket and HTTP/SSE transport. These are provider-supplied summaries, not the model's full internal reasoning; a request can reason without returning a visible summary.
+
+This is separate from OpenAI-compatible connections such as Meridian. Those connections display visible thinking text returned in streamed `reasoning` or `reasoning_content` fields; reasoning-effort configuration alone does not guarantee visible thinking text.
+
 ## Configure an OpenAI-compatible provider
 
 1. Open the VS Code Command Palette and run **AgentLink: Configure OpenAI-compatible Model**, or choose **Configure another provider** in an empty chat.
