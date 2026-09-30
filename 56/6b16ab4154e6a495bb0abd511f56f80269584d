@@ -1,0 +1,54 @@
+src/agent/todoTool.test.ts
+  h_e08a86bb3a33a2 2,42-56,58-61,63-68,70,152-169,171
+  s_96da7175e7b094::t_ce6e7062addf4c 57,69,170
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 100
+src/browser-gateway/helper/askAgentModelClient.ts
+  h_e08a86bb3a33a2 50-51,421
+  s_baba6d98262cff::t_cf4092da75757b 49,52
+src/browser-gateway/helper/askAgentModelClient.test.ts
+  h_e08a86bb3a33a2 16,39-40
+src/agent/todoTool.ts
+  h_e08a86bb3a33a2 22-50,55-69,75,79-80,102-103,106,133,159,162-163,167,174-178,185,197-206,208-214
+  s_680559e0c528a0::t_cd459e5a873950 51-54,70-74,76-78,160-161,164,207
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "566b16ab4154e6a495bb0abd511f56f80269584d",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_680559e0c528a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "677a5ed1-ecac-45b4-a2d1-4b2f56f38231",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_96da7175e7b094": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "40f20512-15e7-47b0-9528-33875f3e544a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_baba6d98262cff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6872cf79-3d1d-4010-a6ae-94f937a1a9c8",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
