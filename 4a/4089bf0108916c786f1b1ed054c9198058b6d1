@@ -1,0 +1,47 @@
+src/tools/sendFeedback.ts
+  h_9630b74bdac540 10-13,36-51,61-64
+src/agent/toolAdapter.test.ts
+  h_9630b74bdac540 1322-1340
+src/shared/toolSchemas.ts
+  h_9630b74bdac540 77-104
+CHANGELOG.md
+  h_9630b74bdac540 5-6
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_9630b74bdac540 2217,2219-2223,2229,2231,2235,2237
+  h_9630b74bdac540 2216,2218,2224-2225,2230,2236
+src/shared/toolRegistry.ts
+  h_9630b74bdac540 287,293
+src/util/feedbackStore.test.ts
+  h_9630b74bdac540 79-110,154-157,166-175
+src/agent/toolAdapter.feedback.test.ts
+  h_9630b74bdac540 1-136
+src/agent/toolAdapter.ts
+  h_9630b74bdac540 5446-5461
+src/tools/sendFeedback.test.ts
+  h_9630b74bdac540 40-41,62-66,72-115,120-122,132,164
+  h_9630b74bdac540 38-39,42,60-61,67,116-119,123
+src/util/feedbackStore.ts
+  h_9630b74bdac540 41-44,120-123,228-237
+DEVELOPMENT.md
+  h_9630b74bdac540 36,38-42,46-48,52,54
+  h_9630b74bdac540 35,37,43-45,53
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_9630b74bdac540 682-684,689-691,696-698,703-705,710-712,717-719,727-729,735-737,743-745,751-753,759-761,767-769
+resources/builtin-skills/documentation/references/release-notes.md
+  h_9630b74bdac540 5-6
+resources/builtin-skills/documentation/references/tools.md
+  h_9630b74bdac540 117-122
+scripts/tool-inventory.json
+  h_9630b74bdac540 692-694,697-698,843
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4a4089bf0108916c786f1b1ed054c9198058b6d1",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
