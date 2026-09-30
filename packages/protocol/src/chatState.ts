@@ -7,6 +7,7 @@ import type {
 
 import type { CommandApprovalPolicy } from "./commandApprovalPolicy.js";
 import type { ContextHealthSnapshot } from "./contextHealth.js";
+import type { CoreServiceTierSelection } from "./modelCatalog.js";
 import type { RevertRecoveryNotice } from "./sessionHydration.js";
 
 export interface ChatContextBudget {
@@ -31,6 +32,8 @@ export interface ChatStateSnapshot {
   interrupted?: boolean;
   thinkingEnabled?: boolean;
   reasoningEffort?: ChatReasoningEffort;
+  /** Session speed choice; premium tiers apply only where the model supports them. */
+  serviceTier?: CoreServiceTierSelection;
   condenseThreshold?: number;
   contextBudget?: ChatContextBudget;
   contextHealth?: ContextHealthSnapshot | null;

@@ -1770,6 +1770,10 @@ export class AgentEngine {
               : undefined,
             reasoningEffort,
             reasoningMode: isCodex && session.codexProMode ? "pro" : "standard",
+            ...(session.serviceTier !== "standard" &&
+            capabilities.serviceTiers?.includes(session.serviceTier)
+              ? { serviceTier: session.serviceTier }
+              : {}),
             cache: currentCache,
             state: currentState,
             providerHints: {

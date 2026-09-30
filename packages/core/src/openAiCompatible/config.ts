@@ -106,8 +106,42 @@ export interface OpenAiCompatibleConnectionDto {
   meridianSessionAffinity?: boolean;
   /** Optional endpoint-specific session ID field for generic connections. */
   sessionId?: OpenAiCompatibleSessionIdMapping;
+  /** Optional subscription quota source shown by host usage panels. */
+  quota?: OpenAiCompatibleQuotaDto;
   models: OpenAiCompatibleModelDto[];
 }
+
+export type OpenAiCompatibleQuotaFormat = "meridian";
+
+export type OpenAiCompatibleQuotaAuthDto =
+  | { type: "connection" }
+  | { type: "none" }
+  | { type: "apiKey"; authKey: string };
+
+export interface OpenAiCompatibleQuotaDto {
+  format: OpenAiCompatibleQuotaFormat;
+  url: string;
+  auth?: OpenAiCompatibleQuotaAuthDto;
+}
+
+/**
+ * Quota configuration is deliberately non-fatal: an invalid block disables
+ * usage reporting for that connection without affecting model inference.
+ */
+export type NormalizedOpenAiCompatibleQuota =
+  | {
+      status: "configured";
+      format: OpenAiCompatibleQuotaFormat;
+      url: string;
+      /** Named credential sent as a Bearer token; absent for no-auth. */
+      authKey?: string;
+    }
+  | {
+      status: "invalid";
+      reason: string;
+      /** Syntactically valid credential reference, kept for key discovery. */
+      authKey?: string;
+    };
 
 export interface OpenAiCompatibleModelDto {
   id: string;
@@ -152,8 +186,19 @@ export interface NormalizedOpenAiCompatibleConnection {
   supportsStoreFalse?: boolean;
   meridianSessionAffinity?: boolean;
   sessionId?: OpenAiCompatibleSessionIdMapping;
+  quota?: NormalizedOpenAiCompatibleQuota;
   models: readonly NormalizedOpenAiCompatibleModel[];
   runtimeProfile: OpenAiCompatibleRuntimeProfile;
+}
+
+/** Every named credential a connection references, including quota-only keys. */
+export function listOpenAiCompatibleConnectionAuthKeys(
+  connection: Pick<NormalizedOpenAiCompatibleConnection, "authKey" | "quota">,
+): string[] {
+  const keys = new Set<string>();
+  if (connection.authKey) keys.add(connection.authKey);
+  if (connection.quota?.authKey) keys.add(connection.quota.authKey);
+  return [...keys];
 }
 
 export interface NormalizeOpenAiCompatibleConnectionsOptions {
@@ -353,6 +398,11 @@ function parseConnection(
     headers,
     context,
   );
+  const quota = parseQuota(raw.quota, `${path}.quota`, context, {
+    baseUrl,
+    authKey,
+    allowInsecureHttp: allowInsecureHttp === true,
+  });
 
   if (profile === "openrouter" && raw.sessionId !== undefined) {
     issue(
@@ -464,6 +514,7 @@ function parseConnection(
     ...(supportsStoreFalse ? { supportsStoreFalse: true } : {}),
     ...(meridianSessionAffinity ? { meridianSessionAffinity: true } : {}),
     ...(sessionId ? { sessionId } : {}),
+    ...(quota ? { quota } : {}),
     models,
   } satisfies Omit<NormalizedOpenAiCompatibleConnection, "runtimeProfile">;
 
@@ -755,6 +806,136 @@ function parseBaseUrl(
     issue(context, path, "Base URL must not contain a fragment.");
   }
   return url;
+}
+
+const MAX_QUOTA_URL_LENGTH = 2_048;
+
+function parseQuota(
+  raw: unknown,
+  path: string,
+  context: ParseContext,
+  connection: {
+    baseUrl: URL | undefined;
+    authKey: string | undefined;
+    allowInsecureHttp: boolean;
+  },
+): NormalizedOpenAiCompatibleQuota | undefined {
+  if (raw === undefined) return undefined;
+  let referencedAuthKey: string | undefined;
+  const invalid = (
+    fieldPath: string,
+    reason: string,
+  ): NormalizedOpenAiCompatibleQuota => {
+    warning(
+      context,
+      fieldPath,
+      `${reason} Usage reporting is disabled for this connection.`,
+    );
+    return {
+      status: "invalid",
+      reason,
+      ...(referencedAuthKey ? { authKey: referencedAuthKey } : {}),
+    };
+  };
+
+  if (!isRecord(raw)) return invalid(path, "Expected a quota object.");
+
+  let auth: OpenAiCompatibleQuotaAuthDto | undefined;
+  if (raw.auth !== undefined) {
+    const type = isRecord(raw.auth) ? raw.auth.type : undefined;
+    if (type === "connection" || type === "none") {
+      auth = { type };
+    } else if (type === "apiKey" && isRecord(raw.auth)) {
+      const authKey = raw.auth.authKey;
+      if (
+        typeof authKey !== "string" ||
+        authKey.trim().length === 0 ||
+        authKey.length > MAX_AUTH_KEY_LENGTH
+      ) {
+        return invalid(
+          `${path}.auth.authKey`,
+          "Quota apiKey auth requires a named credential.",
+        );
+      }
+      referencedAuthKey = authKey;
+      auth = { type, authKey };
+    } else {
+      return invalid(
+        `${path}.auth`,
+        'Quota auth type must be "connection", "none", or "apiKey".',
+      );
+    }
+  }
+
+  if (raw.format !== "meridian") {
+    return invalid(
+      `${path}.format`,
+      'Unsupported quota format; expected "meridian".',
+    );
+  }
+
+  const text = raw.url;
+  if (
+    typeof text !== "string" ||
+    text.length === 0 ||
+    text.length > MAX_QUOTA_URL_LENGTH ||
+    text !== text.trim()
+  ) {
+    return invalid(`${path}.url`, "Expected an absolute HTTP or HTTPS URL.");
+  }
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return invalid(`${path}.url`, "Expected an absolute HTTP or HTTPS URL.");
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    return invalid(`${path}.url`, "Expected an absolute HTTP or HTTPS URL.");
+  }
+  if (url.username || url.password) {
+    return invalid(
+      `${path}.url`,
+      "Quota URL must not contain user information.",
+    );
+  }
+  if (url.hash) {
+    return invalid(`${path}.url`, "Quota URL must not contain a fragment.");
+  }
+
+  const sameOrigin =
+    connection.baseUrl !== undefined &&
+    url.origin === connection.baseUrl.origin;
+  const effectiveAuth = auth ?? { type: "connection" as const };
+  if (effectiveAuth.type === "connection" && !sameOrigin) {
+    return invalid(
+      `${path}.auth`,
+      auth
+        ? "Connection credentials are only reused for a quota URL with the same origin."
+        : 'The quota URL has a different origin from the connection; set auth to { "type": "none" } or { "type": "apiKey", "authKey": "..." }.',
+    );
+  }
+  const authKey =
+    effectiveAuth.type === "connection"
+      ? connection.authKey
+      : effectiveAuth.type === "apiKey"
+        ? effectiveAuth.authKey
+        : undefined;
+
+  if (authKey && url.protocol === "http:" && !isLoopback(url)) {
+    if (!(sameOrigin && connection.allowInsecureHttp)) {
+      return invalid(
+        `${path}.url`,
+        "Authenticated quota requests require HTTPS or loopback HTTP.",
+      );
+    }
+  }
+
+  return {
+    status: "configured",
+    format: "meridian",
+    url: url.toString(),
+    ...(authKey ? { authKey } : {}),
+  };
 }
 
 function normalizeBaseUrl(url: URL): string {

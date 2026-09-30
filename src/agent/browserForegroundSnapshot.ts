@@ -17,6 +17,7 @@ export interface BrowserForegroundSnapshot {
   estimatedTotalUsed: number;
   thinkingEnabled: boolean;
   reasoningEffort: NonNullable<AppState["chatState"]["reasoningEffort"]>;
+  serviceTier: NonNullable<AppState["chatState"]["serviceTier"]>;
   messageQueue: AppState["messageQueue"];
   questionRequest: AppState["questionRequest"];
   detectedQuestion: AppState["detectedQuestion"];
@@ -60,6 +61,7 @@ export function createBrowserForegroundSnapshot(
     reasoningEffort:
       state.chatState.reasoningEffort ??
       (state.thinkingEnabled ? "high" : "none"),
+    serviceTier: state.chatState.serviceTier ?? "standard",
     messageQueue: state.messageQueue.map((entry) => ({
       ...entry,
       attachments: entry.attachments ? [...entry.attachments] : undefined,

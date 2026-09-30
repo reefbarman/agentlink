@@ -96,7 +96,7 @@ Exact session-tool parameters: [orchestration tools](complete-reference.md#built
 
 ## Delegate work
 
-- `spawn_background_agent` starts a bounded background task. `modelTier` accepts `cheap`, `balanced`, `deep_reasoning`, or `foreground`; ordinary native work defaults below the foreground model when a configured tier group can satisfy it.
+- `spawn_background_agent` starts a bounded background task. `modelTier` accepts `cheap`, `balanced`, `deep_reasoning`, or `foreground`; research defaults to the foreground model's tier, and other ordinary native work defaults below the foreground model when a configured tier group can satisfy it.
 - `get_background_status`, `get_background_result`, `steer_background_agent`, and `kill_background_agent` supervise it. `get_background_result` keeps its single-session form and also accepts `sessionIds` with `return_when: "any" | "all"` for one cleanup-safe bounded wait across several agents.
 - Fleet workflows can run structured review, browser verification, best-of-N work, or scheduled goals.
 

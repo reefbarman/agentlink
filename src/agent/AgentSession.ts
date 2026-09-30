@@ -6,6 +6,11 @@ import type {
   SessionStatus,
 } from "./types.js";
 import type { InFlightAssistantBlock } from "@agentlink/protocol/session-hydration";
+import {
+  isCoreServiceTierSelection,
+  type CoreModelServiceTier,
+  type CoreServiceTierSelection,
+} from "@agentlink/protocol/model-catalog";
 import type {
   RequestContextBreakdown,
   ToolResultContextAttribution,
@@ -138,6 +143,8 @@ export class AgentSession {
   reasoningEffort: ReasoningEffort;
   /** Session preference before the current model's capability clamp. */
   desiredReasoningEffort: ReasoningEffort;
+  /** Speed choice; premium tiers apply only on models that support them. */
+  serviceTier: CoreServiceTierSelection;
   autoCondense: boolean;
   autoCondenseThreshold: number;
   codexStatefulResponses: boolean;
@@ -334,6 +341,7 @@ export class AgentSession {
     this.thinkingBudget = opts.config.thinkingBudget;
     this.reasoningEffort = "high";
     this.desiredReasoningEffort = "high";
+    this.serviceTier = "standard";
     this.autoCondense = opts.config.autoCondense ?? true;
     this.autoCondenseThreshold = opts.config.autoCondenseThreshold ?? 0.9;
     this.codexStatefulResponses = opts.config.codexStatefulResponses ?? true;
@@ -1251,6 +1259,7 @@ export class AgentSession {
     lastCacheReadTokens?: number;
     reasoningEffort?: ReasoningEffort;
     desiredReasoningEffort?: ReasoningEffort;
+    serviceTier?: CoreModelServiceTier;
     autoCondenseThreshold?: number;
     loadedSkills?: string[];
     activeSkillState?: PersistedActiveSkillState;
@@ -1276,6 +1285,9 @@ export class AgentSession {
       data.desiredReasoningEffort ??
       data.reasoningEffort ??
       this.desiredReasoningEffort;
+    this.serviceTier = isCoreServiceTierSelection(data.serviceTier)
+      ? data.serviceTier
+      : "standard";
     this.autoCondenseThreshold =
       data.autoCondenseThreshold ?? this.autoCondenseThreshold;
     // Leave status at its constructed idle value. A restored runState marks the

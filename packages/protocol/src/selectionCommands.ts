@@ -1,5 +1,9 @@
+import type {
+  CoreReasoningEffort,
+  CoreServiceTierSelection,
+} from "./modelCatalog.js";
+
 import type { CommandApprovalPolicy } from "./commandApprovalPolicy.js";
-import type { CoreReasoningEffort } from "./modelCatalog.js";
 
 export type WriteApprovalSelection =
   | "prompt"
@@ -22,6 +26,7 @@ export type SelectionCommand =
   | { type: "mode"; mode: string }
   | { type: "model"; model: string }
   | { type: "reasoningEffort"; effort: CoreReasoningEffort }
+  | { type: "serviceTier"; tier: CoreServiceTierSelection }
   | { type: "writeApproval"; mode: WriteApprovalSelection }
   | {
       type: "commandApprovalPolicy";
@@ -32,6 +37,7 @@ export type VsCodeSelectionMessage =
   | { command: "agentSwitchMode"; mode: string }
   | { command: "agentSetModel"; model: string }
   | { command: "agentSetReasoningEffort"; effort: CoreReasoningEffort }
+  | { command: "agentSetServiceTier"; tier: CoreServiceTierSelection }
   | { command: "agentSetWriteApproval"; mode: WriteApprovalSelection }
   | { command: "agentSetCommandApprovalPolicy"; policy: CommandApprovalPolicy };
 
@@ -39,6 +45,7 @@ export type HttpSelectionRequest =
   | { path: "/api/mode"; body: { mode: string } }
   | { path: "/api/model"; body: { model: string } }
   | { path: "/api/thinking"; body: { effort: CoreReasoningEffort } }
+  | { path: "/api/service-tier"; body: { tier: CoreServiceTierSelection } }
   | {
       path: "/api/write-approval";
       body: { mode: WriteApprovalSelection };
@@ -61,6 +68,8 @@ export function toVsCodeSelectionMessage(
         command: "agentSetReasoningEffort",
         effort: command.effort,
       };
+    case "serviceTier":
+      return { command: "agentSetServiceTier", tier: command.tier };
     case "writeApproval":
       return { command: "agentSetWriteApproval", mode: command.mode };
     case "commandApprovalPolicy":
@@ -81,6 +90,8 @@ export function toHttpSelectionRequest(
       return { path: "/api/model", body: { model: command.model } };
     case "reasoningEffort":
       return { path: "/api/thinking", body: { effort: command.effort } };
+    case "serviceTier":
+      return { path: "/api/service-tier", body: { tier: command.tier } };
     case "writeApproval":
       return { path: "/api/write-approval", body: { mode: command.mode } };
     case "commandApprovalPolicy":

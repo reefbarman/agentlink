@@ -20,7 +20,7 @@ interface TaskRouteRule {
   preferredMode?: string;
   providerStrategy?: ProviderStrategy;
   specificProvider?: string;
-  modelTier?: ModelTier | "below_foreground";
+  modelTier?: ModelTier | "below_foreground" | "same_as_foreground";
   requireReviewCapableModel?: boolean;
   /** Override thinking budget for background agents of this task class. */
   thinkingBudget?: number;
@@ -171,15 +171,21 @@ function resolveRoutingTier(
     }
     return foregroundClassification.tier;
   }
-  if (rule.modelTier && rule.modelTier !== "below_foreground") {
+  if (
+    rule.modelTier &&
+    rule.modelTier !== "below_foreground" &&
+    rule.modelTier !== "same_as_foreground"
+  ) {
     return rule.modelTier;
   }
   if (foregroundClassification.tier === "unknown") {
     throw new Error(
-      "Cannot select a cheaper background model because the foreground model tier is unknown. For OpenAI-compatible models, configure tier in openai-compatible.json; otherwise pass modelTier/model explicitly.",
+      "Cannot select a background model tier because the foreground model tier is unknown. For OpenAI-compatible models, configure tier in openai-compatible.json; otherwise pass modelTier/model explicitly.",
     );
   }
-  return tierBelow(foregroundClassification.tier);
+  return rule.modelTier === "same_as_foreground"
+    ? foregroundClassification.tier
+    : tierBelow(foregroundClassification.tier);
 }
 
 function pickPreferredReviewModel(
@@ -206,6 +212,7 @@ function pickTierModel(
   tier: ModelTier,
   memberships: ReadonlyMap<string, TierMembership>,
   preferredGroup?: string,
+  preferredModelId?: string,
 ): ModelInfo | undefined {
   const eligible = candidates
     .map((model) => ({
@@ -214,6 +221,10 @@ function pickTierModel(
     }))
     .filter(({ classification }) => classification.tier === tier);
   if (eligible.length === 0) return undefined;
+  const preferredModel = preferredModelId
+    ? eligible.find(({ model }) => model.id === preferredModelId)
+    : undefined;
+  if (preferredModel) return preferredModel.model;
 
   const inPreferredGroup = preferredGroup
     ? eligible.filter(
@@ -452,6 +463,9 @@ export async function resolveBackgroundRoute(
         modelTier,
         memberships,
         strategy === "same" ? foregroundClassification.group : undefined,
+        rule.modelTier === "same_as_foreground" && !request.modelTier
+          ? foreground.model
+          : undefined,
       );
     if (!picked) continue;
 

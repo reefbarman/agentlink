@@ -655,6 +655,7 @@ await Promise.all([
     writeFile(
       "dist/cjs/chatState.d.cts",
       content
+        .replaceAll('"./modelCatalog.js"', '"./modelCatalog.cjs"')
         .replaceAll('"./chatCatalog.js"', '"./chatCatalog.cjs"')
         .replaceAll(
           '"./commandApprovalPolicy.js"',

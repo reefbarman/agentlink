@@ -108,8 +108,12 @@ import { registerEditorContextCommands } from "./agent/editorContextCommands.js"
 import { registerModelAuthCommands } from "./agent/modelAuthCommands.js";
 
 import { OpenAiCompatibleProviderManager } from "./agent/providers/openaiCompatible/index.js";
+import { OpenAiCompatibleQuotaService } from "./agent/providers/openaiCompatible/OpenAiCompatibleQuotaService.js";
 import { discoverOpenAiCompatibleModels } from "./agent/providers/openaiCompatible/modelDiscovery.js";
-import { normalizeOpenAiCompatibleConnections } from "@agentlink/core/openai-compatible";
+import {
+  listOpenAiCompatibleConnectionAuthKeys,
+  normalizeOpenAiCompatibleConnections,
+} from "@agentlink/core/openai-compatible";
 import {
   createSharedOpenAiCompatibleCredentialStore,
   SessionPreferencesStore,
@@ -120,6 +124,8 @@ import {
   CodexProvider,
   openAiCodexAuthManager,
   queryCodexUsage,
+  queryProviderUsage,
+  createCodexUsageAdapter,
 } from "./agent/providers/index.js";
 import { CODEX_OAUTH_CREDENTIALS_STORAGE_KEY } from "./agent/providers/codex/CodexOAuthManager.js";
 import { BrowserGatewayService } from "./browser-gateway/BrowserGatewayService.js";
@@ -1592,9 +1598,7 @@ export async function activate(
       getConfiguredAuthKeys: (connections) =>
         normalizeOpenAiCompatibleConnections(connections, {
           builtInModelIds,
-        }).connections.flatMap((connection) =>
-          connection.authKey ? [connection.authKey] : [],
-        ),
+        }).connections.flatMap(listOpenAiCompatibleConnectionAuthKeys),
       log: agentLog,
     });
     openAiCompatibleConnections = sharedStorage.connections;
@@ -1625,6 +1629,18 @@ export async function activate(
   });
   chatViewProvider.setOpenAiCompatibleAuthKeyResolver((providerId) =>
     openAiCompatibleProviderManager.getAuthKey(providerId),
+  );
+  const openAiCompatibleQuota = new OpenAiCompatibleQuotaService({
+    getConnections: () => openAiCompatibleProviderManager.listConnections(),
+    isProviderEnabled: (providerId) =>
+      providerRegistry.isProviderEnabled(providerId),
+    secrets: openAiCompatibleSecrets,
+  });
+  chatViewProvider.setProviderUsageQuery((selection) =>
+    queryProviderUsage(
+      [createCodexUsageAdapter(), ...openAiCompatibleQuota.createAdapters()],
+      selection,
+    ),
   );
   const initialOpenAiCompatibleReconcile =
     openAiCompatibleProviderManager.reconcile();
@@ -1833,6 +1849,7 @@ export async function activate(
   const applyDisabledProviders = async (): Promise<void> => {
     const disabledProviderIds = readDisabledProviderIds();
     providerRegistry.setDisabledProviders(disabledProviderIds);
+    openAiCompatibleQuota.invalidate();
 
     const foregroundModel = agentSessionManager?.getForegroundSession()?.model;
     if (
@@ -1894,6 +1911,7 @@ export async function activate(
         .listProviders()
         .map((provider) => provider.id);
       const result = openAiCompatibleProviderManager.reconcile();
+      if (result.applied) openAiCompatibleQuota.invalidate();
       if (!result.applied) {
         void vscode.window
           .showWarningMessage(
@@ -3435,6 +3453,7 @@ export async function activate(
     ...registerOpenAiCompatibleAuthCommands({
       credentials: openAiCompatibleCredentials,
       onCredentialChanged: async () => {
+        openAiCompatibleQuota.invalidate();
         chatViewProvider.refreshModels();
         await publishBrowserGatewayModelCatalog();
         await grantBrowserGatewayModelCredentials();

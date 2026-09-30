@@ -3,7 +3,10 @@ import type {
   ContentBlock,
   TodoItem,
 } from "@agentlink/protocol/chat-transcript";
-import type { CoreReasoningEffort } from "@agentlink/protocol/model-catalog";
+import type {
+  CoreReasoningEffort,
+  CoreServiceTierSelection,
+} from "@agentlink/protocol/model-catalog";
 import type { ContextHealthSnapshot } from "@agentlink/protocol/context-health";
 import type { BrowserGatewaySnapshotState } from "../BrowserGatewayService.js";
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "../dataPlane/limits.js";
@@ -84,6 +87,7 @@ export interface BrowserGatewayNormalizedSemanticState {
     readonly reasoningEffort: NonNullable<
       BrowserGatewayForegroundControlState["reasoningEffort"]
     >;
+    readonly serviceTier: CoreServiceTierSelection;
     readonly lastInputTokens: number;
     readonly lastOutputTokens: number;
     readonly lastCacheReadTokens: number;
@@ -313,6 +317,7 @@ export function normalizeLegacyBrowserGatewaySnapshot(
           statusOverride: foreground.statusOverride ?? null,
           thinkingEnabled: foreground.thinkingEnabled ?? true,
           reasoningEffort: foreground.reasoningEffort ?? "high",
+          serviceTier: foreground.serviceTier ?? "standard",
           lastInputTokens: foreground.lastInputTokens ?? 0,
           lastOutputTokens: foreground.lastOutputTokens ?? 0,
           lastCacheReadTokens: foreground.lastCacheReadTokens ?? 0,
@@ -943,6 +948,7 @@ function normalizeRelayForeground(
     statusOverride: foreground.statusOverride ?? null,
     thinkingEnabled: foreground.thinkingEnabled ?? true,
     reasoningEffort: foreground.reasoningEffort ?? "high",
+    serviceTier: foreground.serviceTier ?? "standard",
     lastInputTokens: foreground.lastInputTokens ?? 0,
     lastOutputTokens: foreground.lastOutputTokens ?? 0,
     lastCacheReadTokens: foreground.lastCacheReadTokens ?? 0,

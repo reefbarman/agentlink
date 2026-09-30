@@ -3,6 +3,7 @@ import type {
   CoreModelCatalogEntry,
   CoreModelCatalogReadiness,
   CoreModelCatalogSnapshot,
+  CoreModelServiceTier,
   CoreReasoningEffort,
 } from "./modelCatalog.js";
 
@@ -36,6 +37,7 @@ export interface ChatModelInfo {
   maxOutputTokens?: number;
   reasoningEfforts?: ChatReasoningEffort[];
   defaultReasoningEffort?: ChatReasoningEffort;
+  serviceTiers?: CoreModelServiceTier[];
   authenticated: boolean;
   readiness?: CoreModelCatalogReadiness;
   authAction?: CoreModelCatalogAuthAction;
@@ -69,6 +71,9 @@ export function projectCoreModelCatalogEntryToChatModel(
     maxOutputTokens: model.maxOutputTokens,
     reasoningEfforts: model.reasoningEfforts,
     defaultReasoningEffort: model.defaultReasoningEffort,
+    ...(model.serviceTiers?.length
+      ? { serviceTiers: [...model.serviceTiers] }
+      : {}),
     authenticated: readiness.status === "ready",
     readiness,
     authAction: blocked ? readiness.action : undefined,

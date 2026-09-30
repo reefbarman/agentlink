@@ -8,6 +8,7 @@ import type {
   DecisionMessage,
 } from "@agentlink/protocol/approval-transport";
 import type { WorktreeSetupState } from "./types";
+import type { CoreServiceTierSelection } from "@agentlink/protocol/model-catalog";
 import type { ChatSessionHistorySummary as SessionSummary } from "@agentlink/protocol/chat-session-history";
 import type {
   ChatMessage,
@@ -400,6 +401,7 @@ export function App({
     mode?: string;
     model?: string;
     reasoningEffort?: ReasoningEffort;
+    serviceTier?: CoreServiceTierSelection;
     agentWriteApproval?: WriteApprovalSelection;
     commandApprovalPolicy?: CommandApprovalPolicy;
   }>({ tabId: null });
@@ -2634,6 +2636,10 @@ export function App({
             : pendingSessionSelectionsRef.current.reasoningEffort !== "none",
         model:
           pendingSessionSelectionsRef.current.model ?? stateRef.current.model,
+        ...(pendingSessionSelectionsRef.current.serviceTier &&
+        pendingSessionSelectionsRef.current.serviceTier !== "standard"
+          ? { serviceTier: pendingSessionSelectionsRef.current.serviceTier }
+          : {}),
         ...(pendingSessionSelectionsRef.current.agentWriteApproval
           ? {
               agentWriteApproval:
@@ -3023,6 +3029,7 @@ export function App({
           | "mode"
           | "model"
           | "reasoningEffort"
+          | "serviceTier"
           | "thinkingEnabled"
           | "agentWriteApproval"
           | "commandApprovalPolicy"
@@ -3513,6 +3520,20 @@ export function App({
       dispatch({ type: "SET_REASONING_EFFORT", effort });
       vscodeApi.postMessage(
         toVsCodeSelectionMessage({ type: "reasoningEffort", effort }),
+      );
+    },
+    [updateSessionlessSelections, vscodeApi],
+  );
+
+  const handleSetServiceTier = useCallback(
+    (tier: CoreServiceTierSelection) => {
+      if (!stateRef.current.sessionId) {
+        updateSessionlessSelections({ serviceTier: tier });
+        return;
+      }
+      dispatch({ type: "SET_SERVICE_TIER", tier });
+      vscodeApi.postMessage(
+        toVsCodeSelectionMessage({ type: "serviceTier", tier }),
       );
     },
     [updateSessionlessSelections, vscodeApi],
@@ -4841,6 +4862,8 @@ export function App({
                 (state.thinkingEnabled ? "high" : "none")
               }
               onSetReasoningEffort={handleSetReasoningEffort}
+              serviceTier={state.chatState.serviceTier ?? "standard"}
+              onSetServiceTier={handleSetServiceTier}
               onExportTranscript={handleExportTranscript}
               hasMessages={state.messages.length > 0}
               vscodeApi={vscodeApi}

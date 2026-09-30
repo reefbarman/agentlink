@@ -148,8 +148,8 @@ describe("resolveBackgroundRoute", () => {
     expect(fallback.resolvedModel).toBe("gpt-5.6-luna");
   });
 
-  it("prefers GPT-6 Sol for balanced Codex work", async () => {
-    const models = ["gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol"].map((id) =>
+  it("prefers GPT-6.1 Sol for balanced Codex work", async () => {
+    const models = ["gpt-6-astra", "gpt-6.1-sol", "gpt-5.6-sol"].map((id) =>
       makeModel(id, "codex"),
     );
     const registry = makeRegistry([makeProvider("codex", models)]);
@@ -159,7 +159,7 @@ describe("resolveBackgroundRoute", () => {
       model: "gpt-6-astra",
     });
     expect(route).toMatchObject({
-      resolvedModel: "gpt-6-sol",
+      resolvedModel: "gpt-6.1-sol",
       modelTier: "balanced",
       resolvedModelTierSource: "builtin",
     });
@@ -512,7 +512,41 @@ describe("resolveBackgroundRoute", () => {
     ).rejects.toThrow(/No eligible balanced background model/);
   });
 
-  it("uses the readonly research mode, profile, lower tier, and budget", async () => {
+  it.each([["readonly-research"], ["research"]] as const)(
+    "routes %s to the foreground model at the same tier without a default budget",
+    async (taskClass) => {
+      const provider = "custom";
+      const sibling = tieredModel(
+        "another-frontier",
+        provider,
+        "deep_reasoning",
+      );
+      const foreground = tieredModel("frontier", provider, "deep_reasoning");
+      const worker = tieredModel("worker", provider, "balanced");
+      const registry = makeRegistry([
+        makeProvider(provider, [sibling, foreground, worker]),
+      ]);
+
+      const route = await resolveBackgroundRoute(
+        registry,
+        generalRequest({ taskClass }),
+        { mode: "code", model: foreground.id },
+      );
+
+      expect(route).toMatchObject({
+        resolvedMode: "ask",
+        resolvedModel: foreground.id,
+        modelTier: "deep_reasoning",
+        fallbackUsed: false,
+      });
+      expect(route.defaultBudget).toBeUndefined();
+      if (taskClass === "readonly-research") {
+        expect(route.toolProfile).toBe("readonly-research");
+      }
+    },
+  );
+
+  it("lets an explicit tier override the research same-tier default", async () => {
     const provider = "custom";
     const foreground = tieredModel("frontier", provider, "deep_reasoning");
     const worker = tieredModel("worker", provider, "balanced");
@@ -522,26 +556,17 @@ describe("resolveBackgroundRoute", () => {
 
     const route = await resolveBackgroundRoute(
       registry,
-      generalRequest({ taskClass: "readonly-research" }),
+      generalRequest({ taskClass: "research", modelTier: "balanced" }),
       { mode: "code", model: foreground.id },
     );
 
     expect(route).toMatchObject({
-      resolvedMode: "ask",
       resolvedModel: worker.id,
       modelTier: "balanced",
-      toolProfile: "readonly-research",
-      defaultBudget: {
-        maxToolCalls: 48,
-        maxApiTurns: 16,
-        maxElapsedMs: 600_000,
-        warningThresholdRatio: 0.8,
-      },
     });
   });
 
   it.each([
-    ["research", "ask"],
     ["explore", "architect"],
     ["debug", "debug"],
     ["design", "architect"],

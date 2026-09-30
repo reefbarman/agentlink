@@ -51,6 +51,8 @@ import type { QuestionAttachmentDraft } from "./QuestionCard";
 import { ReasoningEffortSelector } from "./ReasoningEffortSelector";
 import { SlashCommandPopup } from "./SlashCommandPopup";
 import { ToolbarControlButton } from "../../../shared/ui/ToolbarSelector";
+import { SpeedTierPicker } from "../../../shared/ui/SpeedTierPicker";
+import type { CoreServiceTierSelection } from "@agentlink/protocol/model-catalog";
 import type { WriteApprovalSelection } from "@agentlink/protocol/selection-commands";
 import { WriteApprovalSelector } from "./WriteApprovalSelector";
 import { randomId } from "../../../shared/randomId";
@@ -194,6 +196,8 @@ interface InputAreaProps {
   streaming: boolean;
   reasoningEffort: ReasoningEffort;
   onSetReasoningEffort: (effort: ReasoningEffort) => void;
+  serviceTier?: CoreServiceTierSelection;
+  onSetServiceTier?: (tier: CoreServiceTierSelection) => void;
   onExportTranscript: () => void;
   hasMessages: boolean;
   vscodeApi: { postMessage: (msg: unknown) => void };
@@ -249,6 +253,8 @@ export function InputArea({
   streaming,
   reasoningEffort,
   onSetReasoningEffort,
+  serviceTier = "standard",
+  onSetServiceTier,
   onExportTranscript,
   hasMessages,
   vscodeApi,
@@ -432,10 +438,23 @@ export function InputArea({
   const canUndoPolish =
     lastPolish !== null && !polishing && text === lastPolish.polished;
 
-  const displaySlashCommands = useMemo(
-    () => slashCommands.map(withSlashCommandDisplayName),
-    [slashCommands],
-  );
+  const displaySlashCommands = useMemo(() => {
+    const modelLabel =
+      availableModels.find((model) => model.id === currentModel)?.displayName ??
+      currentModel;
+    return slashCommands.map((command) =>
+      withSlashCommandDisplayName(
+        command.name === "usage" && command.builtin
+          ? {
+              ...command,
+              description: modelLabel
+                ? `Show usage and reset times for ${modelLabel}`
+                : "Show usage and reset times for the selected model",
+            }
+          : command,
+      ),
+    );
+  }, [slashCommands, currentModel, availableModels]);
 
   const matchedSlashCommand = useMemo(
     () =>
@@ -1641,6 +1660,14 @@ export function InputArea({
                 currentModel={currentModel}
                 models={availableModels}
                 onSelect={onSetReasoningEffort}
+              />
+            )}
+            {!contextMode && onSetServiceTier && (
+              <SpeedTierPicker
+                current={serviceTier}
+                currentModel={currentModel}
+                models={availableModels}
+                onSelect={onSetServiceTier}
               />
             )}
             {!contextMode && onSetAgentWriteApproval && (

@@ -4112,6 +4112,41 @@ describe("AgentEngine", () => {
     });
   });
 
+  describe("service tier", () => {
+    async function captureServiceTier(
+      selected: "standard" | "fast" | "ultrafast",
+      supported: Array<"fast" | "ultrafast">,
+    ) {
+      const requests: StreamRequest[] = [];
+      const base = makeMockProvider();
+      const provider = {
+        ...base,
+        getCapabilities: () => ({
+          ...TEST_CAPABILITIES,
+          ...(supported.length ? { serviceTiers: supported } : {}),
+        }),
+        async *stream(request: StreamRequest) {
+          requests.push(request);
+          yield* base.stream(request);
+        },
+      };
+      const session = await makeSession();
+      session.serviceTier = selected;
+      session.addUserMessage("hello");
+      await collectEvents(new AgentEngine(makeRegistry(provider)).run(session));
+      return requests[0]?.serviceTier;
+    }
+
+    it("requests a premium tier only when selected and supported by the model", async () => {
+      const both: Array<"fast" | "ultrafast"> = ["fast", "ultrafast"];
+      expect(await captureServiceTier("ultrafast", both)).toBe("ultrafast");
+      expect(await captureServiceTier("fast", both)).toBe("fast");
+      expect(await captureServiceTier("standard", both)).toBeUndefined();
+      expect(await captureServiceTier("ultrafast", ["fast"])).toBeUndefined();
+      expect(await captureServiceTier("fast", [])).toBeUndefined();
+    });
+  });
+
   describe("reasoning effort normalization", () => {
     it("downgrades an unsupported effort to the model default and logs it once", async () => {
       const capabilities: ModelCapabilities = {

@@ -3,6 +3,7 @@ import type * as OpenAIResponses from "openai/resources/responses/responses";
 import type {
   CoreModelMessage,
   CoreModelOutputFormat,
+  CoreModelServiceTier,
   CoreModelToolDefinition,
 } from "../modelRuntime.js";
 import type { CoreHostedToolDefinition } from "@agentlink/protocol/web-access-policy";
@@ -14,6 +15,8 @@ import {
   getEndpointCaps,
   resolveCodexEffectiveModel,
   resolveCodexReasoningEffort,
+  supportsCodexServiceTier,
+  toCodexServiceTierWireValue,
   usesCodexResponsesLite,
   type CodexAuthMethod,
   type CodexTextVerbosity,
@@ -433,6 +436,7 @@ export function buildCodexResolvedRequestBody(args: {
   cache?: { key?: string; retention?: CodexPromptCacheRetention };
   reasoningEffort?: CoreReasoningEffort;
   reasoningMode?: "standard" | "pro";
+  serviceTier?: CoreModelServiceTier;
   outputFormat?: CoreModelOutputFormat;
   tools?: CodexTool[];
   hostedTools?: readonly CoreHostedToolDefinition[];
@@ -455,6 +459,7 @@ export function buildCodexResolvedRequestBody(args: {
       requestedEffort: args.reasoningEffort,
     }),
     reasoningMode: args.reasoningMode,
+    serviceTier: args.serviceTier,
     outputFormat: args.outputFormat,
     tools: args.tools,
     hostedTools: args.hostedTools,
@@ -481,6 +486,8 @@ export function buildCodexEndpointRequestBody(args: {
   cache?: { key?: string; retention?: CodexPromptCacheRetention };
   reasoningEffort?: CoreReasoningEffort;
   reasoningMode?: "standard" | "pro";
+  /** Dropped for models without catalog support for the tier. */
+  serviceTier?: CoreModelServiceTier;
   textVerbosity?: CodexTextVerbosity;
   outputFormat?: CoreModelOutputFormat;
   tools?: CodexTool[];
@@ -556,6 +563,10 @@ export function buildCodexEndpointRequestBody(args: {
       args.cache?.retention === "24h" && args.caps.supportsPromptCacheRetention
         ? "24h"
         : undefined,
+    serviceTier:
+      args.serviceTier && supportsCodexServiceTier(args.model, args.serviceTier)
+        ? toCodexServiceTierWireValue(args.serviceTier)
+        : undefined,
   });
 }
 
@@ -574,6 +585,8 @@ export function buildCodexStreamRequestBody(args: {
   include?: CodexRequestBody["include"];
   promptCacheKey?: string;
   promptCacheRetention?: CodexPromptCacheRetention;
+  /** Wire value, already mapped from the core tier. */
+  serviceTier?: string;
 }): CodexRequestBody {
   return {
     model: args.model,
@@ -617,6 +630,9 @@ export function buildCodexStreamRequestBody(args: {
     ...(args.promptCacheKey ? { prompt_cache_key: args.promptCacheKey } : {}),
     ...(args.promptCacheRetention
       ? { prompt_cache_retention: args.promptCacheRetention }
+      : {}),
+    ...(args.serviceTier
+      ? ({ service_tier: args.serviceTier } as Record<string, unknown>)
       : {}),
   } as CodexRequestBody;
 }

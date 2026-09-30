@@ -52,7 +52,7 @@ describe("Codex model resolution", () => {
   });
 
   it("keeps OAuth-served models unchanged", () => {
-    for (const model of ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]) {
+    for (const model of ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"]) {
       expect(resolveCodexEffectiveModel(model, "oauth")).toEqual({
         model,
         remapped: false,
@@ -69,9 +69,10 @@ describe("Codex model resolution", () => {
     expect(models.find(({ id }) => id === "gpt-6-astra")?.displayName).toBe(
       "GPT-6 Astra",
     );
-    expect(models.find(({ id }) => id === "gpt-6-sol")?.displayName).toBe(
-      "GPT-6 Sol",
+    expect(models.find(({ id }) => id === "gpt-6.1-sol")?.displayName).toBe(
+      "GPT-6.1 Sol",
     );
+    expect(models.some(({ id }) => id === "gpt-6-sol")).toBe(false);
     expect(models.find(({ id }) => id === "gpt-6-luna")?.displayName).toBe(
       "GPT-6 Luna",
     );
@@ -84,6 +85,64 @@ describe("Codex model resolution", () => {
     expect(models.find(({ id }) => id === "gpt-5.6-luna")?.displayName).toBe(
       "GPT-5.6 Luna",
     );
+  });
+
+  it("migrates superseded GPT-6 Sol selections to GPT-6.1 Sol", () => {
+    expect(getCodexModelMigration("gpt-6-sol")).toBe("gpt-6.1-sol");
+    expect(resolveCodexEffectiveModel("gpt-6-sol", "oauth")).toEqual({
+      model: "gpt-6.1-sol",
+      remapped: true,
+    });
+    expect(getCodexUnavailableModelFallback("gpt-6.1-sol")).toBeUndefined();
+  });
+
+  it("uses GPT-6.1 Sol's documented API limits and Codex catalog OAuth shape", () => {
+    expect(getCodexModelCapabilities("gpt-6.1-sol", "apiKey")).toMatchObject({
+      contextWindow: 1_050_000,
+      maxInputTokens: 922_000,
+      maxOutputTokens: 128_000,
+      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultReasoningEffort: "medium",
+    });
+    const oauth = getCodexModelCapabilities("gpt-6.1-sol", "oauth");
+    expect(oauth).toMatchObject({
+      contextWindow: 872_000,
+      maxOutputTokens: 128_000,
+      reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      defaultReasoningEffort: "low",
+    });
+    expect(oauth.maxInputTokens).toBeUndefined();
+    expect(getCodexResponsesRequestHeaders("gpt-6.1-sol", "oauth")).toEqual({
+      "x-openai-internal-codex-responses-lite": "true",
+    });
+    expect(
+      getCodexResponsesRequestHeaders("gpt-6.1-sol", "apiKey"),
+    ).toBeUndefined();
+    expect(
+      resolveCodexReasoningEffort({
+        modelId: "gpt-6.1-sol",
+        authMethod: "oauth",
+        requestedEffort: "ultra",
+      }),
+    ).toBe("xhigh");
+    expect(resolveCodexTextVerbosity("gpt-6.1-sol")).toBe("low");
+  });
+
+  it("advertises the service tiers the Codex catalog lists per model", () => {
+    for (const auth of ["apiKey", "oauth"] as const) {
+      expect(
+        getCodexModelCapabilities("gpt-6-astra", auth).serviceTiers,
+      ).toEqual(["fast", "ultrafast"]);
+      expect(
+        getCodexModelCapabilities("gpt-6.1-sol", auth).serviceTiers,
+      ).toEqual(["fast"]);
+      expect(getCodexModelCapabilities("gpt-5.5", auth).serviceTiers).toEqual([
+        "fast",
+      ]);
+      expect(
+        getCodexModelCapabilities("gpt-5.4", auth).serviceTiers,
+      ).toBeUndefined();
+    }
   });
 
   it("does not silently fall back from Astra", () => {
@@ -183,7 +242,7 @@ describe("Codex model resolution", () => {
   it("shows the same official seven models in order for both auth methods", () => {
     const expected = [
       "gpt-6-astra",
-      "gpt-6-sol",
+      "gpt-6.1-sol",
       "gpt-6-luna",
       "gpt-5.6-sol",
       "gpt-5.6-terra",

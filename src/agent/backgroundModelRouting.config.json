@@ -21,11 +21,13 @@
     "readonly-research": {
       "preferredMode": "ask",
       "providerStrategy": "same",
+      "modelTier": "same_as_foreground",
       "toolProfile": "readonly-research"
     },
     "research": {
       "preferredMode": "ask",
-      "providerStrategy": "same"
+      "providerStrategy": "same",
+      "modelTier": "same_as_foreground"
     },
     "explore": {
       "preferredMode": "architect",
@@ -47,14 +49,14 @@
   "defaultTierGroups": {
     "codex": {
       "cheap": ["gpt-6-luna", "gpt-5.6-luna", "gpt-5.4-mini"],
-      "balanced": ["gpt-6-sol", "gpt-5.6-sol", "gpt-5.5", "gpt-5.4"],
+      "balanced": ["gpt-6.1-sol", "gpt-5.6-sol", "gpt-5.5", "gpt-5.4"],
       "deep_reasoning": ["gpt-6-astra", "gpt-5.6-terra", "gpt-5.4-pro"]
     }
   },
   "reviewModelPreferences": {
     "codex": {
       "cheap": ["gpt-6-luna", "gpt-5.6-luna", "gpt-5.4-mini"],
-      "balanced": ["gpt-6-sol", "gpt-5.6-sol", "gpt-5.5", "gpt-5.4"],
+      "balanced": ["gpt-6.1-sol", "gpt-5.6-sol", "gpt-5.5", "gpt-5.4"],
       "deep_reasoning": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5", "gpt-5.4"]
     }
   },

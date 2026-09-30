@@ -11,6 +11,23 @@ export const CORE_REASONING_EFFORTS = [
 
 export type CoreReasoningEffort = (typeof CORE_REASONING_EFFORTS)[number];
 
+/** Premium processing tiers a model may accept, fastest last. */
+export const CORE_MODEL_SERVICE_TIERS = ["fast", "ultrafast"] as const;
+
+export type CoreModelServiceTier = (typeof CORE_MODEL_SERVICE_TIERS)[number];
+
+/** A session speed choice: the standard tier or a premium one. */
+export type CoreServiceTierSelection = "standard" | CoreModelServiceTier;
+
+export function isCoreServiceTierSelection(
+  value: unknown,
+): value is CoreServiceTierSelection {
+  return (
+    value === "standard" ||
+    (CORE_MODEL_SERVICE_TIERS as readonly unknown[]).includes(value)
+  );
+}
+
 export function isCoreReasoningEffort(
   value: unknown,
 ): value is CoreReasoningEffort {
@@ -81,6 +98,8 @@ export interface CoreModelCatalogEntry {
   maxOutputTokens?: number;
   reasoningEfforts?: CoreReasoningEffort[];
   defaultReasoningEffort?: CoreReasoningEffort;
+  /** Premium service tiers the model accepts; omitted when none. */
+  serviceTiers?: CoreModelServiceTier[];
   /** Compatibility field; readiness is the source of truth for new consumers. */
   authenticated: boolean;
   readiness?: CoreModelCatalogReadiness;

@@ -1,6 +1,9 @@
 import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
-import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
+import {
+  isCoreReasoningEffort,
+  type CoreServiceTierSelection,
+} from "@agentlink/protocol/model-catalog";
 import type {
   CoreWebActivity,
   CoreWebCitation,
@@ -826,6 +829,7 @@ export type AppAction =
           | "mode"
           | "model"
           | "reasoningEffort"
+          | "serviceTier"
           | "thinkingEnabled"
           | "agentWriteApproval"
           | "commandApprovalPolicy"
@@ -931,6 +935,7 @@ export type AppAction =
   | { type: "DONE" }
   | { type: "NEW_SESSION" }
   | { type: "SET_REASONING_EFFORT"; effort: ReasoningEffort }
+  | { type: "SET_SERVICE_TIER"; tier: CoreServiceTierSelection }
   | { type: "TOGGLE_THINKING" }
   | { type: "SET_MODES"; modes: ModeInfo[] }
   | { type: "SET_MODELS"; models: WebviewModelInfo[] }
@@ -2880,6 +2885,12 @@ export function reducer(state: AppState, action: AppAction): AppState {
           reasoningEffort: action.effort,
           thinkingEnabled: action.effort !== "none",
         },
+      };
+
+    case "SET_SERVICE_TIER":
+      return {
+        ...state,
+        chatState: { ...state.chatState, serviceTier: action.tier },
       };
 
     case "TOGGLE_THINKING": {

@@ -15,6 +15,7 @@ import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-ga
 import type { ChatStateSnapshot as ChatState } from "@agentlink/protocol/chat-state";
 import type { CommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 import type { ContextHealthSnapshot } from "@agentlink/protocol/context-health";
+import type { CoreServiceTierSelection } from "@agentlink/protocol/model-catalog";
 import type { ReasoningEffort } from "../../agent/providers/types.js";
 import type { RevertRecoveryNotice } from "@agentlink/protocol/session-hydration";
 
@@ -111,6 +112,7 @@ export interface BrowserGatewayOwnerForegroundSource {
   statusOverride: string | null;
   thinkingEnabled: boolean;
   reasoningEffort: ReasoningEffort;
+  serviceTier: CoreServiceTierSelection;
   lastInputTokens: number;
   lastOutputTokens: number;
   lastCacheReadTokens: number;

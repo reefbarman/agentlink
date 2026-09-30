@@ -119,6 +119,7 @@ export interface BrowserGatewaySessionState {
         statusOverride: string | null;
         thinkingEnabled: boolean;
         reasoningEffort: import("../agent/providers/types.js").ReasoningEffort;
+        serviceTier: import("@agentlink/protocol/model-catalog").CoreServiceTierSelection;
         lastInputTokens: number;
         lastOutputTokens: number;
         lastCacheReadTokens: number;
@@ -168,6 +169,7 @@ export interface BrowserGatewayWireSessionState {
     statusOverride: string | null;
     thinkingEnabled: boolean;
     reasoningEffort: import("../agent/providers/types.js").ReasoningEffort;
+    serviceTier: import("@agentlink/protocol/model-catalog").CoreServiceTierSelection;
     lastInputTokens: number;
     lastOutputTokens: number;
     lastCacheReadTokens: number;
@@ -666,6 +668,9 @@ export class BrowserGatewayService implements vscode.Disposable {
         reasoningEffort: projectedMatchesForeground
           ? projected.reasoningEffort
           : this.getReasoningEffortState(),
+        serviceTier: projectedMatchesForeground
+          ? projected.serviceTier
+          : (foreground.serviceTier ?? "standard"),
         lastInputTokens: projectedMatchesForeground
           ? projected.lastInputTokens
           : foreground.lastInputTokens,
@@ -822,6 +827,9 @@ export class BrowserGatewayService implements vscode.Disposable {
         reasoningEffort: projectedMatchesSession
           ? projected.reasoningEffort
           : session.reasoningEffort,
+        serviceTier: projectedMatchesSession
+          ? projected.serviceTier
+          : (session.serviceTier ?? "standard"),
         lastInputTokens: projectedMatchesSession
           ? projected.lastInputTokens
           : session.lastInputTokens,
@@ -927,6 +935,7 @@ export class BrowserGatewayService implements vscode.Disposable {
             statusOverride: sessionState.foreground.statusOverride,
             thinkingEnabled: sessionState.foreground.thinkingEnabled,
             reasoningEffort: sessionState.foreground.reasoningEffort,
+            serviceTier: sessionState.foreground.serviceTier,
             lastInputTokens: sessionState.foreground.lastInputTokens,
             lastOutputTokens: sessionState.foreground.lastOutputTokens,
             lastCacheReadTokens: sessionState.foreground.lastCacheReadTokens,
@@ -1150,6 +1159,7 @@ export class BrowserGatewayService implements vscode.Disposable {
             statusOverride: foreground.statusOverride,
             thinkingEnabled: foreground.thinkingEnabled,
             reasoningEffort: foreground.reasoningEffort,
+            serviceTier: foreground.serviceTier,
             lastInputTokens: foreground.lastInputTokens,
             lastOutputTokens: foreground.lastOutputTokens,
             lastCacheReadTokens: foreground.lastCacheReadTokens,

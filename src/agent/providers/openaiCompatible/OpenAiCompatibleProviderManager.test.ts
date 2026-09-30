@@ -5,10 +5,11 @@ import type {
   ProviderStreamEvent,
   StreamRequest,
 } from "../types.js";
+import { ProviderRegistry, queryProviderUsage } from "../index.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { OpenAiCompatibleProviderManager } from "./OpenAiCompatibleProviderManager.js";
-import { ProviderRegistry } from "../index.js";
+import { OpenAiCompatibleQuotaService } from "./OpenAiCompatibleQuotaService.js";
 
 const capabilities = {
   supportsThinking: false,
@@ -73,6 +74,71 @@ function configuredConnection(id = "custom", modelId = "custom-model") {
 }
 
 describe("OpenAiCompatibleProviderManager", () => {
+  it("keeps models installed when quota is invalid and wires quota through to usage", async () => {
+    const registry = new ProviderRegistry();
+    let configured: unknown = [
+      {
+        ...configuredConnection(),
+        quota: { format: "unsupported", url: "https://example.invalid/q" },
+      },
+    ];
+    const secrets = { get: vi.fn(async () => "distinctive-secret") };
+    const manager = new OpenAiCompatibleProviderManager({
+      registry,
+      builtInProviders: [new BuiltInProvider()],
+      configuration: { get: <T>() => configured as T },
+      secrets,
+    });
+    const fetch = vi.fn(
+      async (_input: string, _init: RequestInit) =>
+        new Response(
+          JSON.stringify({
+            profiles: [
+              {
+                id: "distinctive-profile",
+                windows: [{ type: "five_hour", utilization: 0.5 }],
+                fetchedAt: Date.now(),
+              },
+            ],
+          }),
+        ),
+    );
+    const quota = new OpenAiCompatibleQuotaService({
+      getConnections: () => manager.listConnections(),
+      isProviderEnabled: (id) => registry.isProviderEnabled(id),
+      secrets,
+      fetch,
+    });
+
+    expect(manager.reconcile()).toMatchObject({ applied: true, issues: [] });
+    expect(registry.resolveProvider("custom-model").id).toBe(
+      "openai-compatible:custom",
+    );
+    const invalid = await queryProviderUsage(quota.createAdapters());
+    expect(invalid.providers[0]?.reason).toMatch(/misconfigured/);
+    expect(fetch).not.toHaveBeenCalled();
+
+    configured = [
+      {
+        ...configuredConnection(),
+        quota: {
+          format: "meridian",
+          url: "https://example.invalid/v1/usage/quota/all",
+        },
+      },
+    ];
+    expect(manager.reconcile().applied).toBe(true);
+    quota.invalidate();
+    const usage = await queryProviderUsage(quota.createAdapters());
+
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url).toBe("https://example.invalid/v1/usage/quota/all");
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers.authorization).toBe("Bearer distinctive-secret");
+    expect(usage.providers[0]?.accounts?.[0]?.id).toBe("distinctive-profile");
+    expect(JSON.stringify(manager.getRuntimeProfiles())).not.toContain("quota");
+  });
+
   it("atomically installs and removes custom providers while preserving built-ins", () => {
     const registry = new ProviderRegistry();
     const builtIn = new BuiltInProvider();

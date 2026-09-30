@@ -942,6 +942,7 @@ function projectForeground(
       : null,
     thinkingEnabled: foreground.thinkingEnabled,
     reasoningEffort: foreground.reasoningEffort,
+    serviceTier: foreground.serviceTier,
     lastInputTokens: safeInteger(foreground.lastInputTokens),
     lastOutputTokens: safeInteger(foreground.lastOutputTokens),
     lastCacheReadTokens: safeInteger(foreground.lastCacheReadTokens),

@@ -58,7 +58,9 @@ import {
   isCodexBodylessBadRequest,
   isCodexModelNotFoundError,
   isCodexModelServedOnChatgptBackend,
+  isCodexServiceTierRejectionError,
   isCodexTextVerbosityRejectionError,
+  supportsCodexServiceTier,
   listCodexModels,
   resolveCodexEffectiveModel,
   resolveCodexReasoningEffort,
@@ -110,6 +112,8 @@ export class CodexProvider implements ModelProvider {
    */
   private lastResolvedAuthMethod: OpenAiCodexAuthMethod | undefined;
   private getTextVerbositySetting: () => string | undefined;
+  /** Credential+model+tier keys whose endpoint rejected a premium tier. */
+  private readonly serviceTierRejections = new Set<string>();
 
   constructor(
     authManager?: OpenAiCodexAuthManager,
@@ -316,6 +320,7 @@ export class CodexProvider implements ModelProvider {
       maxTokens,
       reasoningEffort: requestedEffort,
       reasoningMode,
+      serviceTier: requestedServiceTier,
       cache,
       state,
       signal,
@@ -361,6 +366,13 @@ export class CodexProvider implements ModelProvider {
     );
 
     let unavailableModelFallbackAttempted = false;
+    const serviceTierRejectionKey = () =>
+      `${auth.method}:${auth.oauthAccountPoolId ?? ""}:${effectiveModel}:${requestedServiceTier}`;
+    let serviceTier =
+      requestedServiceTier &&
+      !this.serviceTierRejections.has(serviceTierRejectionKey())
+        ? requestedServiceTier
+        : undefined;
 
     while (true) {
       const streamState = { outputStarted: false };
@@ -374,6 +386,7 @@ export class CodexProvider implements ModelProvider {
           cache,
           reasoningEffort,
           reasoningMode,
+          serviceTier,
           textVerbosity,
           tools: codexTools,
           hostedTools,
@@ -386,7 +399,7 @@ export class CodexProvider implements ModelProvider {
           const inputSummary = summarizeCodexRequestInput(requestBody.input);
           const body = requestBody as unknown as Record<string, unknown>;
           this.log(
-            `[codex] request: model=${requestBody.model} auth=${auth.method} input=${inputSummary} tools=${requestBody.tools?.length ?? 0} store=${requestBody.store} previousResponseId=${body.previous_response_id ?? "none"} cacheKey=${body.prompt_cache_key ?? "none"} textVerbosity=${(body.text as { verbosity?: string } | undefined)?.verbosity ?? "none"}`,
+            `[codex] request: model=${requestBody.model} auth=${auth.method} input=${inputSummary} tools=${requestBody.tools?.length ?? 0} store=${requestBody.store} previousResponseId=${body.previous_response_id ?? "none"} cacheKey=${body.prompt_cache_key ?? "none"} textVerbosity=${(body.text as { verbosity?: string } | undefined)?.verbosity ?? "none"} serviceTier=${body.service_tier ?? "default"}`,
           );
         }
 
@@ -453,6 +466,23 @@ export class CodexProvider implements ModelProvider {
           this.log(
             `[codex] stream(): endpoint rejected text.verbosity for "${effectiveModel}"; retrying without it`,
           );
+          continue;
+        }
+
+        // The ChatGPT backend gates premium tiers by plan and often rejects with
+        // a body-less 400, so treat that as a tier rejection when one was sent.
+        if (
+          serviceTier &&
+          supportsCodexServiceTier(effectiveModel, serviceTier) &&
+          !streamState.outputStarted &&
+          (isCodexServiceTierRejectionError(sdkErr) ||
+            (auth.method === "oauth" && isCodexBodylessBadRequest(sdkErr)))
+        ) {
+          this.serviceTierRejections.add(serviceTierRejectionKey());
+          this.log(
+            `[codex] stream(): endpoint rejected service_tier "${serviceTier}" for "${effectiveModel}"; retrying at the standard tier and skipping that tier for this account and model until reload`,
+          );
+          serviceTier = undefined;
           continue;
         }
 

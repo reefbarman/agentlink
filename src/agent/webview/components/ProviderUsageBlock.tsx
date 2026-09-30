@@ -1,3 +1,8 @@
+import type {
+  ProviderUsageAccount,
+  ProviderUsageAccountWindow,
+} from "../../../shared/providerUsage";
+
 import type { ProviderUsageCardData } from "../types";
 
 function formatReset(timestamp: number | null): string {
@@ -27,14 +32,99 @@ function UsageWindow({
   );
 }
 
+function formatAge(observedAtMs: number | null, nowMs: number): string {
+  if (observedAtMs === null) return "reading time unknown";
+  const seconds = Math.max(0, Math.round((nowMs - observedAtMs) / 1_000));
+  if (seconds < 10) return "read just now";
+  if (seconds < 60) return `read ${seconds}s ago`;
+  return `read ${Math.round(seconds / 60)} min ago`;
+}
+
+function AccountWindow({ window }: { window: ProviderUsageAccountWindow }) {
+  if (window.usedPercent === null) {
+    return (
+      <div class="provider-usage-window">
+        <div class="provider-usage-window-header">
+          <span>{window.label}</span>
+          <span>
+            {window.resetSinceObservation
+              ? "reset since last reading"
+              : "usage unknown"}
+          </span>
+        </div>
+        {window.resetsAt !== null && (
+          <div class="provider-usage-reset">{formatReset(window.resetsAt)}</div>
+        )}
+      </div>
+    );
+  }
+  return (
+    <UsageWindow
+      label={window.label}
+      window={{ usedPercent: window.usedPercent, resetsAt: window.resetsAt }}
+    />
+  );
+}
+
+function UsageAccount({
+  account,
+  nowMs,
+}: {
+  account: ProviderUsageAccount;
+  nowMs: number;
+}) {
+  return (
+    <div class="provider-usage-limit provider-usage-account">
+      <div class="provider-usage-limit-name">
+        <i class="codicon codicon-account" /> <span>{account.label}</span>
+        {account.isActive && (
+          <span
+            class="provider-usage-plan"
+            title="Selected as active in the upstream service. This does not mean it served this chat."
+          >
+            active
+          </span>
+        )}
+        {account.stale && <span class="provider-usage-plan">stale</span>}
+      </div>
+      {account.available ? (
+        <>
+          {account.windows.length === 0 && (
+            <div class="provider-usage-reset">No usage windows reported</div>
+          )}
+          {account.windows.map((window) => (
+            <AccountWindow key={window.id} window={window} />
+          ))}
+          <div class="provider-usage-reset">
+            {formatAge(account.observedAtMs, nowMs)}
+          </div>
+        </>
+      ) : (
+        <div class="provider-usage-unavailable">
+          <i class="codicon codicon-info" />
+          <span>{account.reason ?? "Usage is unavailable"}</span>
+        </div>
+      )}
+      {account.statusNote && (
+        <div class="provider-usage-unavailable">
+          <i class="codicon codicon-warning" />
+          <span>{account.statusNote}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ProviderUsagePanel({
   data,
   onClose,
   onRefresh,
+  loading = false,
 }: {
   data: ProviderUsageCardData;
   onClose: () => void;
   onRefresh: () => void;
+  loading?: boolean;
 }) {
   return (
     <div class="provider-usage-card">
@@ -45,8 +135,16 @@ export function ProviderUsagePanel({
           {data.providers.length} provider
           {data.providers.length === 1 ? "" : "s"}
         </span>
-        <button class="icon-button" onClick={onRefresh} title="Refresh usage">
-          <i class="codicon codicon-refresh" />
+        <button
+          class="icon-button"
+          onClick={onRefresh}
+          title="Refresh usage"
+          disabled={loading}
+          aria-busy={loading}
+        >
+          <i
+            class={`codicon codicon-${loading ? "loading codicon-modifier-spin" : "refresh"}`}
+          />
         </button>
         <button class="icon-button" onClick={onClose} title="Dismiss">
           <i class="codicon codicon-close" />
@@ -77,6 +175,12 @@ export function ProviderUsagePanel({
                 </div>
               </div>
             )}
+            {provider.notice && (
+              <div class="provider-usage-unavailable">
+                <i class="codicon codicon-history" />
+                <span>{provider.notice}</span>
+              </div>
+            )}
             {!provider.available ? (
               <div class="provider-usage-unavailable">
                 <i class="codicon codicon-info" />
@@ -96,6 +200,13 @@ export function ProviderUsagePanel({
                       <UsageWindow label="Secondary" window={limit.secondary} />
                     )}
                   </div>
+                ))}
+                {provider.accounts?.map((account) => (
+                  <UsageAccount
+                    key={account.id}
+                    account={account}
+                    nowMs={data.queriedAt}
+                  />
                 ))}
                 <div class="provider-usage-stats">
                   {provider.lifetimeTokens !== undefined && (

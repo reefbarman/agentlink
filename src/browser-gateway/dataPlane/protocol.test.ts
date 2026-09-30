@@ -79,6 +79,7 @@ function checkpoint(
       statusOverride: "Restoring session",
       thinkingEnabled: false,
       reasoningEffort: "medium",
+      serviceTier: "fast",
       lastInputTokens: 11,
       lastOutputTokens: 22,
       lastCacheReadTokens: 33,
@@ -910,6 +911,7 @@ describe("browser gateway owner protocol", () => {
         statusOverride: "Restoring session",
         thinkingEnabled: false,
         reasoningEffort: "medium",
+        serviceTier: "fast",
         lastInputTokens: 11,
         contextBudget: { hardBudget: 175_904 },
         contextHealth: {

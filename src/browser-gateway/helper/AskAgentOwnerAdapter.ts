@@ -520,6 +520,7 @@ function snapshotToReadSet(
       statusOverride: foreground.statusOverride,
       thinkingEnabled: foreground.thinkingEnabled,
       reasoningEffort: foreground.reasoningEffort,
+      serviceTier: "standard",
       lastInputTokens: foreground.lastInputTokens,
       lastOutputTokens: foreground.lastOutputTokens,
       lastCacheReadTokens: foreground.lastCacheReadTokens,

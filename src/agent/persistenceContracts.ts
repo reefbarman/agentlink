@@ -280,6 +280,7 @@ export interface PersistedSessionMetadata {
   lastCacheReadTokens?: number;
   reasoningEffort?: ReasoningEffort;
   desiredReasoningEffort?: ReasoningEffort;
+  serviceTier?: import("@agentlink/protocol/model-catalog").CoreModelServiceTier;
   autoCondenseThreshold?: number;
   /** Legacy display-only skill names retained for older records and condensation. */
   loadedSkills?: string[];

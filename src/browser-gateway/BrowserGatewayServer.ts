@@ -1,7 +1,10 @@
 import * as http from "http";
 import type * as vscode from "vscode";
 
-import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
+import {
+  isCoreReasoningEffort,
+  isCoreServiceTierSelection,
+} from "@agentlink/protocol/model-catalog";
 import type {
   McpFormElicitationResponse,
   McpElicitationValues,
@@ -469,6 +472,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "GET",
+        pathExact("/api/provider-usage"),
+        ({ req, res }) => this.handleProviderUsageRequest(req, res),
+        internal("provider usage request failed"),
+      ),
+      route(
+        "GET",
         match("raw-prefix", "/api/search-files"),
         ({ req, rawUrl, res }) =>
           this.handleSearchFilesRequest(req, rawUrl, res),
@@ -521,6 +530,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
         rawExact("/api/thinking"),
         ({ req, res }) => this.handleThinkingAction(req, res),
         json("thinking action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/service-tier"),
+        ({ req, res }) => this.handleServiceTierAction(req, res),
+        json("service tier action failed"),
       ),
       route(
         "POST",
@@ -1585,6 +1600,31 @@ export class BrowserGatewayServer implements vscode.Disposable {
     this.writeJson(res, 200, { commands });
   }
 
+  /**
+   * On-demand `/usage` data for the selected session. Only trusted local
+   * configuration chooses quota endpoints and credentials.
+   */
+  private async handleProviderUsageRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const parsedUrl = new URL(
+      req.url ?? "/api/provider-usage",
+      "http://127.0.0.1",
+    );
+    const sessionId = parsedUrl.searchParams.get("sessionId") ?? undefined;
+    const usage = await this.chatViewProvider.getProviderUsage(sessionId);
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    });
+    res.end(JSON.stringify(usage));
+  }
+
   private async handleSearchFilesRequest(
     req: http.IncomingMessage,
     url: string,
@@ -1834,6 +1874,33 @@ export class BrowserGatewayServer implements vscode.Disposable {
       : await this.chatViewProvider.submitBrowserSetThinkingEnabled(
           body.enabled,
         );
+    this.writeJson(res, result.ok ? 200 : 400, result);
+  }
+
+  private async handleServiceTierAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as {
+      tier?: unknown;
+      sessionId?: unknown;
+    };
+    const tier = body?.tier;
+    if (!isCoreServiceTierSelection(tier)) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const sessionId = this.parseOptionalSessionId(body.sessionId, res);
+    if (sessionId === false) return;
+
+    const result = sessionId
+      ? await this.chatViewProvider.submitBrowserSetServiceTier(tier, sessionId)
+      : await this.chatViewProvider.submitBrowserSetServiceTier(tier);
     this.writeJson(res, result.ok ? 200 : 400, result);
   }
 

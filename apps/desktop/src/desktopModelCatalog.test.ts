@@ -16,7 +16,8 @@ describe("desktop model catalog", () => {
       .map((model) => model.id);
 
     expect(modelIds).toEqual(expectedModelIds);
-    expect(modelIds).toContain("gpt-6-sol");
+    expect(modelIds).toContain("gpt-6.1-sol");
+    expect(modelIds).not.toContain("gpt-6-sol");
     expect(modelIds).toContain("gpt-6-luna");
     expect(modelIds).not.toContain("gpt-5.4-pro");
   });

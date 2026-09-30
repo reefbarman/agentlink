@@ -253,6 +253,17 @@ function makeChatViewProviderStub() {
       approved: true,
       mode,
     })),
+    getProviderUsage: vi.fn(async () => ({
+      queriedAt: 1,
+      providers: [
+        {
+          providerId: "openai-compatible:meridian",
+          providerName: "Meridian",
+          available: true,
+          accounts: [],
+        },
+      ],
+    })),
     getBrowserSlashCommands: vi.fn(async () => [
       {
         name: "new",
@@ -302,6 +313,9 @@ function makeChatViewProviderStub() {
     submitBrowserSetWriteApproval: vi.fn(() => ({ ok: true })),
     submitBrowserSetCommandApprovalPolicy: vi.fn(() => ({ ok: true })),
     submitBrowserSetThinkingEnabled: vi.fn(() => ({ ok: true })),
+    submitBrowserSetServiceTier: vi.fn(
+      async (_tier: string, _sessionId?: string) => ({ ok: true }),
+    ),
     submitBrowserNewTab: vi.fn(async () => ({
       ok: true,
       controllerEpoch: "controller-1",
@@ -820,6 +834,7 @@ describe("BrowserGatewayServer", () => {
         contextHealth: null,
         thinkingEnabled: true,
         reasoningEffort: "high",
+        serviceTier: "standard",
         messageQueue: [],
         questionRequest: projectedQuestionRequest,
         detectedQuestion: null,
@@ -2297,6 +2312,30 @@ describe("BrowserGatewayServer", () => {
       "project-a",
     );
 
+    const unauthorizedUsage = await fetch(`${baseUrl}/api/provider-usage`);
+    expect(unauthorizedUsage.status).toBe(401);
+    expect(chatViewProvider.getProviderUsage).not.toHaveBeenCalled();
+
+    const authorizedUsage = await fetch(
+      `${baseUrl}/api/provider-usage?url=https://attacker.invalid`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(authorizedUsage.status).toBe(200);
+    expect(authorizedUsage.headers.get("cache-control")).toBe("no-store");
+    expect(await authorizedUsage.json()).toMatchObject({
+      providers: [{ providerId: "openai-compatible:meridian" }],
+    });
+    expect(chatViewProvider.getProviderUsage).toHaveBeenCalledWith(undefined);
+
+    const sessionUsage = await fetch(
+      `${baseUrl}/api/provider-usage?sessionId=session-selected&url=https://attacker.invalid`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(sessionUsage.status).toBe(200);
+    expect(chatViewProvider.getProviderUsage).toHaveBeenLastCalledWith(
+      "session-selected",
+    );
+
     const invalidSearch = await fetch(`${baseUrl}/api/search-files`, {
       headers: { Authorization: "Bearer test-token" },
     });
@@ -2454,6 +2493,34 @@ describe("BrowserGatewayServer", () => {
     expect(
       chatViewProvider.submitBrowserSetThinkingEnabled,
     ).toHaveBeenCalledWith(false);
+
+    const authorizedServiceTier = await fetch(`${baseUrl}/api/service-tier`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ tier: "fast", sessionId: "session-tier-7" }),
+    });
+    expect(authorizedServiceTier.status).toBe(200);
+    expect(await authorizedServiceTier.json()).toEqual({ ok: true });
+    expect(chatViewProvider.submitBrowserSetServiceTier).toHaveBeenCalledWith(
+      "fast",
+      "session-tier-7",
+    );
+
+    const invalidServiceTier = await fetch(`${baseUrl}/api/service-tier`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ tier: "turbo" }),
+    });
+    expect(invalidServiceTier.status).toBe(400);
+    expect(chatViewProvider.submitBrowserSetServiceTier).toHaveBeenCalledTimes(
+      1,
+    );
 
     const authorizedAttach = await fetch(`${baseUrl}/api/attach-file`, {
       method: "POST",

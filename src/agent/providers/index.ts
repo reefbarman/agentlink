@@ -300,6 +300,9 @@ export class ProviderRegistry {
               maxOutputTokens: model.capabilities.maxOutputTokens,
               reasoningEfforts: model.capabilities.reasoningEfforts,
               defaultReasoningEffort: model.capabilities.defaultReasoningEffort,
+              ...(model.capabilities.serviceTiers?.length
+                ? { serviceTiers: [...model.capabilities.serviceTiers] }
+                : {}),
               authenticated,
               readiness,
               condenseThreshold: request.condenseThreshold?.(model.id),

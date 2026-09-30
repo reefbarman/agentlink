@@ -88,8 +88,10 @@ import {
   type BrowserGatewayDetailHandle,
 } from "@agentlink/protocol/browser-gateway-data-plane-identity";
 import {
+  CORE_MODEL_SERVICE_TIERS,
   CORE_REASONING_EFFORTS,
   type CoreReasoningEffort,
+  type CoreServiceTierSelection,
 } from "@agentlink/protocol/model-catalog";
 import {
   BrowserGatewayProtocolError,
@@ -942,6 +944,7 @@ function parseForeground(
     "statusOverride",
     "thinkingEnabled",
     "reasoningEffort",
+    "serviceTier",
     "lastInputTokens",
     "lastOutputTokens",
     "lastCacheReadTokens",
@@ -1064,6 +1067,15 @@ function parseForeground(
           ) as NonNullable<
             BrowserGatewayForegroundControlState["reasoningEffort"]
           >,
+        }
+      : {}),
+    ...(object.serviceTier !== undefined
+      ? {
+          serviceTier: enumValue(
+            object.serviceTier,
+            `${path}.serviceTier`,
+            new Set<string>(["standard", ...CORE_MODEL_SERVICE_TIERS]),
+          ) as CoreServiceTierSelection,
         }
       : {}),
     ...(lastInputTokens !== undefined ? { lastInputTokens } : {}),

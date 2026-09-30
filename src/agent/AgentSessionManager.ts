@@ -29,7 +29,10 @@ import {
 import { hostFlightRecorder } from "../core/hostLiveness.js";
 import { runWatchedProviderStream } from "../core/providerStreamWatchdog.js";
 import { normalizePromptProfileOverrides } from "@agentlink/protocol/prompt-profile";
-import { resolveSupportedReasoningEffort } from "@agentlink/protocol/model-catalog";
+import {
+  resolveSupportedReasoningEffort,
+  type CoreServiceTierSelection,
+} from "@agentlink/protocol/model-catalog";
 import { resolvePromptProfile } from "../core/promptProfilePolicy.js";
 import type {
   BackgroundAgentBudgetUsage,
@@ -5417,6 +5420,20 @@ export class AgentSessionManager {
     return session ? this.setSessionReasoningEffort(session.id, effort) : false;
   }
 
+  setSessionServiceTier(
+    sessionId: string,
+    tier: CoreServiceTierSelection,
+  ): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    if (session.serviceTier !== tier) {
+      session.serviceTier = tier;
+      this.saveSession(session.id);
+      this.notifySessionsChanged();
+    }
+    return true;
+  }
+
   saveAllSessions(): void {
     for (const [id, session] of this.sessions) {
       if (this.isEmptyForegroundSession(session)) continue;
@@ -5534,6 +5551,9 @@ export class AgentSessionManager {
       lastCacheReadTokens: session.lastCacheReadTokens,
       reasoningEffort: session.reasoningEffort,
       desiredReasoningEffort: session.desiredReasoningEffort,
+      ...(session.serviceTier !== "standard"
+        ? { serviceTier: session.serviceTier }
+        : {}),
       autoCondenseThreshold: session.autoCondenseThreshold,
       ...this.getSessionApprovalMode(session.id),
       background: session.background,
@@ -5777,6 +5797,9 @@ export class AgentSessionManager {
         lastCacheReadTokens: session.lastCacheReadTokens,
         reasoningEffort: session.reasoningEffort,
         desiredReasoningEffort: session.desiredReasoningEffort,
+        ...(session.serviceTier !== "standard"
+          ? { serviceTier: session.serviceTier }
+          : {}),
         autoCondenseThreshold: session.autoCondenseThreshold,
         loadedSkills: session.getLoadedSkills?.() ?? [],
         activeSkillState: session.getActiveSkillState?.(),
@@ -9065,6 +9088,7 @@ export class AgentSessionManager {
       lastCacheReadTokens: 0,
       reasoningEffort: metadata.reasoningEffort,
       desiredReasoningEffort: metadata.desiredReasoningEffort,
+      serviceTier: metadata.serviceTier,
       autoCondenseThreshold: session.autoCondenseThreshold,
       loadedSkills: metadata.loadedSkills ?? [],
       activeSkillState: metadata.activeSkillState,
@@ -9250,6 +9274,7 @@ export class AgentSessionManager {
         lastCacheReadTokens: 0,
         reasoningEffort: metadata.reasoningEffort,
         desiredReasoningEffort: metadata.desiredReasoningEffort,
+        serviceTier: metadata.serviceTier,
         autoCondenseThreshold: session.autoCondenseThreshold,
         loadedSkills: metadata.loadedSkills ?? [],
         activeSkillState: metadata.activeSkillState,

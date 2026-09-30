@@ -4780,7 +4780,8 @@ body.chat-activity-shelf-resizing * {
 }
 
 .approve-for-me-toggle.active,
-.auto-continue-toggle.active {
+.auto-continue-toggle.active,
+.speed-tier-toggle.active {
   opacity: 1;
   color: var(--vscode-button-foreground);
   background: var(--vscode-button-background);
@@ -4789,7 +4790,8 @@ body.chat-activity-shelf-resizing * {
     var(--vscode-focusBorder, var(--vscode-button-background));
 }
 
-.auto-continue-toggle.active:hover:not(:disabled) {
+.auto-continue-toggle.active:hover:not(:disabled),
+.speed-tier-toggle.active:hover:not(:disabled) {
   background: var(
     --vscode-button-hoverBackground,
     var(--vscode-button-background)

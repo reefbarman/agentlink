@@ -52,6 +52,51 @@ function renderInputArea(
   );
 }
 
+describe("InputArea usage description", () => {
+  it.each([
+    ["claude", "Claude Sonnet"],
+    ["codex", "GPT Codex"],
+  ])("describes usage for the selected %s model", (currentModel, label) => {
+    const { container, getByText, queryByText } = renderInputArea(
+      [
+        {
+          name: "usage",
+          description: "Show Codex subscription usage and reset times",
+          source: "builtin",
+          builtin: true,
+        },
+      ],
+      {
+        currentModel,
+        availableModels: [
+          {
+            id: currentModel,
+            displayName: label,
+            provider: currentModel,
+            authenticated: true,
+            contextWindow: 100_000,
+          },
+        ],
+      },
+    );
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    input.value = "/";
+    input.setSelectionRange(1, 1);
+    fireEvent.input(input);
+    input.value = "/usa";
+    input.setSelectionRange(4, 4);
+    fireEvent.input(input);
+    expect(getByText(`Show usage and reset times for ${label}`)).toBeTruthy();
+
+    input.value = "/usage";
+    fireEvent.input(input);
+    expect(getByText(`Show usage and reset times for ${label}`)).toBeTruthy();
+    expect(
+      queryByText("Show Codex subscription usage and reset times"),
+    ).toBeNull();
+  });
+});
+
 describe("InputArea placeholder", () => {
   it("uses consumer copy when a surface supplies it", () => {
     const { container } = renderInputArea([], {

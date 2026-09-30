@@ -173,6 +173,7 @@ interface MetadataFile {
   lastCacheReadTokens?: number;
   reasoningEffort?: import("./providers/types.js").ReasoningEffort;
   desiredReasoningEffort?: import("./providers/types.js").ReasoningEffort;
+  serviceTier?: import("@agentlink/protocol/model-catalog").CoreModelServiceTier;
   autoCondenseThreshold?: number;
   loadedSkills?: string[];
   activeSkillState?: PersistedActiveSkillState;
@@ -756,6 +757,7 @@ export class SessionStore implements SessionPersistenceProvider {
     lastCacheReadTokens: number;
     reasoningEffort?: import("./providers/types.js").ReasoningEffort;
     desiredReasoningEffort?: import("./providers/types.js").ReasoningEffort;
+    serviceTier?: import("@agentlink/protocol/model-catalog").CoreServiceTierSelection;
     autoCondenseThreshold?: number;
     commandApprovalPolicy?: import("@agentlink/protocol/terminal").TerminalCommandApprovalPolicySnapshot;
     approvalPolicy?: import("@agentlink/protocol/terminal").TerminalApprovalPolicy;
@@ -809,6 +811,9 @@ export class SessionStore implements SessionPersistenceProvider {
         lastCacheReadTokens: session.lastCacheReadTokens,
         reasoningEffort: session.reasoningEffort,
         desiredReasoningEffort: session.desiredReasoningEffort,
+        ...(session.serviceTier && session.serviceTier !== "standard"
+          ? { serviceTier: session.serviceTier }
+          : {}),
         autoCondenseThreshold: session.autoCondenseThreshold,
         loadedSkills: session.getLoadedSkills?.() ?? [],
         activeSkillState: session.getActiveSkillState?.(),
@@ -1356,6 +1361,7 @@ export class SessionStore implements SessionPersistenceProvider {
       lastCacheReadTokens: file.lastCacheReadTokens,
       reasoningEffort: file.reasoningEffort,
       desiredReasoningEffort: file.desiredReasoningEffort,
+      serviceTier: file.serviceTier,
       autoCondenseThreshold: file.autoCondenseThreshold,
       loadedSkills: file.loadedSkills,
       activeSkillState: file.activeSkillState,
@@ -1406,6 +1412,7 @@ export class SessionStore implements SessionPersistenceProvider {
       lastCacheReadTokens: metadata.lastCacheReadTokens,
       reasoningEffort: metadata.reasoningEffort,
       desiredReasoningEffort: metadata.desiredReasoningEffort,
+      serviceTier: metadata.serviceTier,
       autoCondenseThreshold: metadata.autoCondenseThreshold,
       loadedSkills: metadata.loadedSkills,
       activeSkillState: metadata.activeSkillState,

@@ -39,12 +39,14 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     onSelectModel,
     onSend,
     onSetReasoningEffort,
+    onSetServiceTier,
     onStop,
     slashCommands,
     submitOnEnter,
     contextMode,
     currentModel,
     reasoningEffort,
+    serviceTier,
     injection,
   }: {
     injection?: { type: string; context?: string } | null;
@@ -61,6 +63,8 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
       slashCommandLabel?: string,
     ) => void;
     onSetReasoningEffort?: (effort: "none" | "low" | "medium" | "high") => void;
+    onSetServiceTier?: (tier: "standard" | "fast" | "ultrafast") => void;
+    serviceTier?: string;
     onStop?: () => void;
     slashCommands?: Array<{ name: string }>;
     submitOnEnter?: boolean;
@@ -253,6 +257,18 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
         },
         "Trigger thinking",
       ),
+      onSetServiceTier
+        ? h(
+            "button",
+            {
+              type: "button",
+              "data-testid": "trigger-service-tier",
+              onClick: () => onSetServiceTier("fast"),
+            },
+            "Trigger service tier",
+          )
+        : null,
+      h("span", { "data-testid": "service-tier-state" }, serviceTier ?? ""),
       h("span", { "data-testid": "current-model" }, currentModel ?? ""),
       h("span", { "data-testid": "reasoning-effort" }, reasoningEffort ?? ""),
       h(
@@ -491,6 +507,7 @@ type TestSnapshot = {
         | "high"
         | "xhigh"
         | "max";
+      serviceTier?: "standard" | "fast" | "ultrafast";
       lastInputTokens: number;
       lastOutputTokens: number;
       lastCacheReadTokens: number;
@@ -3328,6 +3345,81 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     ).at(-1);
     expect(committedRow?.textContent).toContain("Remote");
     expect(committedRow?.nextElementSibling?.textContent).toContain("Done");
+  });
+
+  it("sets the speed tier for the foreground VS Code session with optimistic state", async () => {
+    const snapshot = createSnapshot();
+    snapshot.session.foreground.sessionId = "session-tier-browser";
+    snapshot.session.foreground.serviceTier = "standard";
+    let resolveServiceTier: (() => void) | undefined;
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/service-tier")) {
+        await new Promise<void>((resolve) => {
+          resolveServiceTier = resolve;
+        });
+        return jsonResponse({ ok: true });
+      }
+      if (url.includes("/api/ui-state")) return jsonResponse(snapshot);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands")) {
+        return jsonResponse({ commands: [] });
+      }
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    fireEvent.click(await screen.findByTestId("trigger-service-tier"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("service-tier-state").textContent).toBe("fast");
+      const call = fetchMock.mock.calls.find(([input]) =>
+        String(input).includes("/api/service-tier"),
+      );
+      expect(call).toBeTruthy();
+      const init = call?.[1] as RequestInit | undefined;
+      expect(JSON.parse(String(init?.body))).toEqual({
+        tier: "fast",
+        sessionId: "session-tier-browser",
+      });
+    });
+
+    const confirmed = structuredClone(snapshot);
+    confirmed.session.foreground.serviceTier = "fast";
+    await act(async () => {
+      resolveServiceTier?.();
+      MockEventSource.instances.at(-1)?.emit("snapshot", confirmed);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("service-tier-state").textContent).toBe("fast");
+    });
   });
 
   it("keeps an interjection queued until its different-id transcript turn arrives", async () => {

@@ -24,6 +24,7 @@ describe("chat state protocol", () => {
       interrupted: false,
       thinkingEnabled: true,
       reasoningEffort: "high",
+      serviceTier: "fast",
       condenseThreshold: 0.8,
       contextBudget: {
         contextWindow: 200_000,
@@ -84,6 +85,7 @@ describe("chat state protocol", () => {
       | "interrupted"
       | "thinkingEnabled"
       | "reasoningEffort"
+      | "serviceTier"
       | "condenseThreshold"
       | "contextBudget"
       | "contextHealth"

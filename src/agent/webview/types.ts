@@ -52,28 +52,8 @@ export type ReasoningEffort = ChatReasoningEffort;
 export type WebviewModelInfo = ChatModelInfo;
 export type SlashCommandInfo = ChatSlashCommandInfo;
 
-export interface ProviderUsageCardData {
-  providers: Array<{
-    providerId: string;
-    providerName: string;
-    available: boolean;
-    reason?: string;
-    accountLabel?: string;
-    accountSource?: string;
-    switchAccountInstructions?: string;
-    planType?: string;
-    rateLimits?: Array<{
-      id: string;
-      name?: string;
-      primary?: { usedPercent: number; resetsAt: number | null };
-      secondary?: { usedPercent: number; resetsAt: number | null };
-    }>;
-    lifetimeTokens?: number;
-    peakDailyTokens?: number;
-    resetCredits?: number;
-  }>;
-  queriedAt: number;
-}
+export type ProviderUsageCardData =
+  import("../../shared/providerUsage.js").ProviderUsageSnapshot;
 
 /** A question posed by the agent via the ask_user tool. */
 export type Question = UserQuestion;

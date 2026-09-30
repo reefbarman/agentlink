@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  listOpenAiCompatibleConnectionAuthKeys,
   normalizeOpenAiCompatibleConnections,
   validateOpenAiCompatibleBaseUrl,
 } from "@agentlink/core/openai-compatible";
@@ -652,5 +653,143 @@ describe("normalizeOpenAiCompatibleConnections", () => {
     expect(result.connections[0].runtimeProfile.headers).toEqual({
       "HTTP-Referer": "https://example.invalid",
     });
+  });
+});
+
+describe("OpenAI-compatible quota configuration", () => {
+  const meridianUrl = "http://127.0.0.1:1234/v1/usage/quota/all";
+
+  function normalizeOne(overrides: Record<string, unknown>) {
+    return normalizeOpenAiCompatibleConnections([connection(overrides)]);
+  }
+
+  it("is absent unless configured and never reaches the runtime profile", () => {
+    const absent = normalizeOne({});
+    expect(absent.connections[0]?.quota).toBeUndefined();
+
+    const configured = normalizeOne({
+      authKey: "meridian-key",
+      quota: { format: "meridian", url: meridianUrl },
+    });
+    expect(configured.issues).toEqual([]);
+    expect(configured.warnings).toEqual([]);
+    expect(configured.connections[0]?.quota).toEqual({
+      status: "configured",
+      format: "meridian",
+      url: meridianUrl,
+      authKey: "meridian-key",
+    });
+    expect(
+      JSON.stringify(configured.connections[0]?.runtimeProfile),
+    ).not.toContain("quota");
+  });
+
+  it.each([
+    [{ format: "custom", url: meridianUrl }, "$[0].quota.format"],
+    [{ format: "meridian", url: "ftp://x.invalid/q" }, "$[0].quota.url"],
+    [{ format: "meridian", url: "http://u:p@127.0.0.1:1/q" }, "$[0].quota.url"],
+    [{ format: "meridian", url: `${meridianUrl}#frag` }, "$[0].quota.url"],
+    [
+      { format: "meridian", url: meridianUrl, auth: { type: "x" } },
+      "$[0].quota.auth",
+    ],
+    ["nope", "$[0].quota"],
+  ])("keeps models working when quota %j is invalid", (quota, warningPath) => {
+    const result = normalizeOne({ quota });
+    expect(result.issues).toEqual([]);
+    expect(result.connections).toHaveLength(1);
+    expect(result.connections[0]?.quota?.status).toBe("invalid");
+    expect(result.warnings.map((warning) => warning.path)).toContain(
+      warningPath,
+    );
+  });
+
+  it("requires explicit auth for a different origin, including loopback aliases", () => {
+    const omitted = normalizeOne({
+      authKey: "model-key",
+      quota: {
+        format: "meridian",
+        url: "http://localhost:1234/v1/usage/quota/all",
+      },
+    });
+    expect(omitted.connections[0]?.quota).toMatchObject({ status: "invalid" });
+    expect(omitted.connections[0]?.quota?.authKey).toBeUndefined();
+
+    const explicitConnection = normalizeOne({
+      authKey: "model-key",
+      quota: {
+        format: "meridian",
+        url: "https://quota.example.invalid/q",
+        auth: { type: "connection" },
+      },
+    });
+    expect(explicitConnection.connections[0]?.quota?.status).toBe("invalid");
+
+    const none = normalizeOne({
+      authKey: "model-key",
+      quota: {
+        format: "meridian",
+        url: "http://localhost:1234/v1/usage/quota/all",
+        auth: { type: "none" },
+      },
+    });
+    expect(none.connections[0]?.quota).toEqual({
+      status: "configured",
+      format: "meridian",
+      url: "http://localhost:1234/v1/usage/quota/all",
+    });
+  });
+
+  it("does not extend insecure HTTP consent to a different host", () => {
+    const sameOrigin = normalizeOne({
+      baseUrl: "http://models.example.invalid/v1",
+      authKey: "model-key",
+      allowInsecureHttp: true,
+      quota: {
+        format: "meridian",
+        url: "http://models.example.invalid/v1/usage/quota/all",
+      },
+    });
+    expect(sameOrigin.connections[0]?.quota?.status).toBe("configured");
+
+    const crossOrigin = normalizeOne({
+      baseUrl: "http://models.example.invalid/v1",
+      authKey: "model-key",
+      allowInsecureHttp: true,
+      quota: {
+        format: "meridian",
+        url: "http://quota.example.invalid/q",
+        auth: { type: "apiKey", authKey: "quota-key" },
+      },
+    });
+    expect(crossOrigin.connections[0]?.quota).toMatchObject({
+      status: "invalid",
+      authKey: "quota-key",
+    });
+  });
+
+  it("lists quota-only credentials, even when the quota block is invalid", () => {
+    const valid = normalizeOne({
+      authKey: "model-key",
+      quota: {
+        format: "meridian",
+        url: "https://quota.example.invalid/q",
+        auth: { type: "apiKey", authKey: "quota-key" },
+      },
+    });
+    expect(
+      listOpenAiCompatibleConnectionAuthKeys(valid.connections[0]!),
+    ).toEqual(["model-key", "quota-key"]);
+
+    const invalid = normalizeOne({
+      quota: {
+        format: "unknown",
+        url: "https://quota.example.invalid/q",
+        auth: { type: "apiKey", authKey: "quota-key" },
+      },
+    });
+    expect(
+      listOpenAiCompatibleConnectionAuthKeys(invalid.connections[0]!),
+    ).toEqual(["quota-key"]);
   });
 });

@@ -3,6 +3,10 @@ import type {
   BrowserGatewayRevertRecoveryNotice,
 } from "./browserGatewayForegroundControlState.js";
 import type {
+  CoreReasoningEffort,
+  CoreServiceTierSelection,
+} from "./modelCatalog.js";
+import type {
   TerminalApprovalPolicy,
   TerminalApprovalReviewer,
   TerminalExecutionPreset,
@@ -13,7 +17,6 @@ import type { BrowserGatewayContextBudget } from "./browserGatewayContextBudget.
 import type { ChatWorkspaceInteractiveExecutionPhase } from "./chatWorkspace.js";
 import type { CommandApprovalPolicy } from "./commandApprovalPolicy.js";
 import type { ContextHealthSnapshot } from "./contextHealth.js";
-import type { CoreReasoningEffort } from "./modelCatalog.js";
 import type { RevertRecoveryNotice } from "./sessionHydration.js";
 
 it("pins the complete browser gateway foreground-control contract", () => {
@@ -33,6 +36,7 @@ it("pins the complete browser gateway foreground-control contract", () => {
     statusOverride?: string | null;
     thinkingEnabled?: boolean;
     reasoningEffort?: CoreReasoningEffort;
+    serviceTier?: CoreServiceTierSelection;
     lastInputTokens?: number;
     lastOutputTokens?: number;
     lastCacheReadTokens?: number;

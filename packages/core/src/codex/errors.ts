@@ -360,6 +360,20 @@ export function isCodexTextVerbosityRejectionError(
   );
 }
 
+/**
+ * True when the endpoint refused a requested `service_tier` (for example, a
+ * ChatGPT plan without Fast or Ultrafast, or a non-US processing region). Callers
+ * should retry once at the standard tier.
+ */
+export function isCodexServiceTierRejectionError(
+  error: CodexErrorShape,
+): boolean {
+  if (error.status !== 400 && error.status !== 403) return false;
+  return /service[_ ]tier|ultrafast|priority/i.test(
+    extractCodexErrorText(error),
+  );
+}
+
 export function buildCodexUsageLimitExhaustedError(params: {
   attemptedOAuthAccountIds: Iterable<string>;
   sourceError: CodexErrorShape;

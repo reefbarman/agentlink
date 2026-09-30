@@ -41,7 +41,7 @@ If Keychain is locked or unavailable, AgentLink fails closed and keeps the store
 
 ## A GPT-6 model is selected but the request fails
 
-AgentLink lists GPT-6 Astra, Sol, and Luna for ChatGPT/Codex OAuth and OpenAI API-key users without probing whether the current subscription account or API project has rollout access. If access is not enabled yet, AgentLink leaves the selected model unchanged and shows the provider's normal error instead of silently changing models or credentials.
+AgentLink lists GPT-6 Astra, GPT-6.1 Sol, and GPT-6 Luna for ChatGPT/Codex OAuth and OpenAI API-key users without probing whether the current subscription account or API project has rollout access. If access is not enabled yet, AgentLink leaves the selected model unchanged and shows the provider's normal error instead of silently changing models or credentials.
 
 - Confirm the intended ChatGPT account or OpenAI API project has access to the selected model and available quota. OpenAI announced a gradual same-day rollout for Sol and Luna, so a newly released model may appear later for some accounts.
 - The ChatGPT backend can return `The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account` after that account exhausts its Codex allowance. AgentLink treats that exact contradiction as a usage limit, rotates to another signed-in account when available, and otherwise shows usage-limit guidance instead of repeating the misleading provider message.
@@ -49,6 +49,11 @@ AgentLink lists GPT-6 Astra, Sol, and Luna for ChatGPT/Codex OAuth and OpenAI AP
 - OAuth exposes Astra's `ultra` preset and sends its catalog-mapped `xhigh` wire effort through Codex's Responses Lite transport. API-key requests clamp a saved `ultra` preference to `max`, and the UI shows that effective effort.
 - AgentLink budgets OAuth Astra against Codex's 872K catalog maximum context window; the bundled 272K value is the CLI's smaller base window, not its maximum.
 - AgentLink does not retry a different account specifically for Astra entitlement, switch to an API key automatically, or remap Astra to another model.
+- GPT-6.1 Sol replaced GPT-6 Sol, and saved GPT-6 Sol selections migrate to it. If your account does not have GPT-6.1 Sol yet, pick another model; AgentLink does not fall back to GPT-6 Sol automatically.
+
+## Fast or Ultrafast does not seem faster
+
+The Speed control only applies to models that offer OpenAI's premium service tiers: Fast on GPT-6 Astra, GPT-6.1 Sol, GPT-6 Sol, GPT-6 Luna, GPT-5.6 models, and GPT-5.5, and Ultrafast on GPT-6 Astra only. It is hidden for other models, and a session tier the current model does not support runs at Standard. ChatGPT subscriptions allow premium tiers only on eligible plans, and OpenAI supports Ultrafast only for US or global processing. When the endpoint rejects a tier (including a body-less ChatGPT `400` while a premium tier was requested), AgentLink retries that request once at standard speed, records the `service_tier` rejection in the AgentLink output log, and skips that tier for that account and model until the window reloads. A rejected Ultrafast does not stop Fast from being tried. Each request's log line shows `serviceTier=priority` (Fast), `serviceTier=ultrafast`, or `serviceTier=default`. OpenAI recommends WebSocket transport for the full latency benefit; AgentLink currently sends requests over HTTP streaming, so gains can be smaller.
 
 ## AgentLink has no workspace tools
 

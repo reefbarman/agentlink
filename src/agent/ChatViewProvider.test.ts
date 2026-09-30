@@ -71,6 +71,57 @@ const mockGetConfiguration = vi.fn((section?: string) => ({
   update: mockConfigUpdate,
 }));
 
+describe("selected-model provider usage", () => {
+  it("forwards the selected session's provider through the production usage callback", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const { providerRegistry } = await import("./providers/index.js");
+    const resolveProvider = vi
+      .spyOn(providerRegistry, "tryResolveProvider")
+      .mockImplementation(
+        (model) =>
+          ({
+            id:
+              model === "claude" ? "openai-compatible:claude" : "openai-codex",
+            displayName: model === "claude" ? "Claude" : "Codex",
+          }) as never,
+      );
+    try {
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
+      const foreground = { id: "foreground", model: "claude" };
+      const other = { id: "other", model: "codex" };
+      provider.setSessionManager({
+        getForegroundSession: () => foreground,
+        getSession: (id: string) =>
+          id === "other" ? other : id === "foreground" ? foreground : undefined,
+      } as never);
+      const query = vi.fn(async () => ({ providers: [], queriedAt: 123 }));
+      provider.setProviderUsageQuery(query);
+
+      await provider.getProviderUsage();
+      expect(query).toHaveBeenLastCalledWith({
+        providerId: "openai-compatible:claude",
+        providerName: "Claude",
+      });
+      await provider.getProviderUsage("other");
+      expect(query).toHaveBeenLastCalledWith({
+        providerId: "openai-codex",
+        providerName: "Codex",
+      });
+      foreground.model = "codex";
+      await provider.getProviderUsage();
+      expect(query).toHaveBeenLastCalledWith({
+        providerId: "openai-codex",
+        providerName: "Codex",
+      });
+    } finally {
+      resolveProvider.mockRestore();
+    }
+  }, 15_000);
+});
+
 describe("worktree startup prompt policy", () => {
   it("repairs Approve for Me write authority after switching the startup mode", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
@@ -3277,6 +3328,87 @@ describe("ChatViewProvider session state sync", () => {
       { code: "max" },
       1,
     );
+  });
+
+  it("routes the speed tier selection to the session and browser projection", async () => {
+    mockWorkspaceFolders.push({
+      uri: {
+        fsPath: "/workspace/project",
+        toString: () => "file:///workspace/project",
+      },
+    });
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+    const session = {
+      id: "session-uf",
+      title: "Session UF",
+      mode: "code",
+      model: "gpt-6-astra",
+      reasoningEffort: "low",
+      serviceTier: "standard",
+      thinkingBudget: 1024,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      estimatedTotalUsed: 0,
+      projectScope: {
+        projectId: "project-a",
+        workspaceFolderUri: "file:///workspace/project",
+        rootPath: "/workspace/project",
+      },
+      getAllMessages: () => [],
+      appendSurfaceChange: vi.fn(),
+    };
+    const setSessionServiceTier = vi.fn((sessionId: string, tier: string) => {
+      expect(sessionId).toBe(session.id);
+      session.serviceTier = tier;
+      return true;
+    });
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      getSession: vi.fn(() => session),
+      setSessionServiceTier,
+      getConfig: vi.fn(() => ({ thinkingBudget: 1024 })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      saveSession: vi.fn(),
+    } as never);
+
+    await (
+      provider as unknown as {
+        handleWebviewMessage: (msg: Record<string, unknown>) => Promise<void>;
+      }
+    ).handleWebviewMessage({ command: "agentSetServiceTier", tier: "fast" });
+
+    expect(setSessionServiceTier).toHaveBeenCalledWith("session-uf", "fast");
+    expect(provider.getBrowserServiceTierState()).toBe("fast");
+    expect(provider.getBrowserProjectedForegroundState()?.serviceTier).toBe(
+      "fast",
+    );
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "stateUpdate",
+        state: expect.objectContaining({
+          sessionId: "session-uf",
+          serviceTier: "fast",
+        }),
+      }),
+    );
+
+    // Unknown tiers are ignored rather than forwarded.
+    setSessionServiceTier.mockClear();
+    await (
+      provider as unknown as {
+        handleWebviewMessage: (msg: Record<string, unknown>) => Promise<void>;
+      }
+    ).handleWebviewMessage({ command: "agentSetServiceTier", tier: "turbo" });
+    expect(setSessionServiceTier).not.toHaveBeenCalled();
   });
 
   it("couples browser Approve for Me changes to session write approval in order", async () => {
@@ -7799,6 +7931,7 @@ describe("ChatViewProvider session state sync", () => {
         },
         reasoningEffort: "none",
         thinkingEnabled: false,
+        serviceTier: "standard",
         agentWriteApproval: undefined,
         commandApprovalPolicy: "safe",
         approvalPolicy: "on-request",

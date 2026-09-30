@@ -77,6 +77,7 @@ export class RelaySnapshotProjector {
             statusOverride: checkpoint.foreground.statusOverride ?? null,
             thinkingEnabled: checkpoint.foreground.thinkingEnabled ?? true,
             reasoningEffort: checkpoint.foreground.reasoningEffort ?? "high",
+            serviceTier: checkpoint.foreground.serviceTier ?? "standard",
             lastInputTokens: checkpoint.foreground.lastInputTokens ?? 0,
             lastOutputTokens: checkpoint.foreground.lastOutputTokens ?? 0,
             lastCacheReadTokens: checkpoint.foreground.lastCacheReadTokens ?? 0,

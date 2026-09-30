@@ -1,4 +1,5 @@
 import { Fragment, type JSX } from "preact";
+import type { CoreServiceTierSelection } from "@agentlink/protocol/model-catalog";
 import type { ChatSessionHistorySummary as SessionSummary } from "@agentlink/protocol/chat-session-history";
 import type {
   ChatMessage,
@@ -59,6 +60,8 @@ import { ChatView } from "../../agent/webview/components/ChatView";
 import { showFileOpenFailure } from "../../agent/webview/components/fileLinkFeedback";
 import { ContextUsageRow } from "../../agent/webview/components/ContextUsageRow";
 import { EnvironmentPanel } from "../../agent/webview/components/EnvironmentPanel";
+import { ProviderUsagePanel } from "../../agent/webview/components/ProviderUsageBlock";
+import type { ProviderUsageSnapshot } from "../../shared/providerUsage";
 import { BackgroundSessionStrip } from "../../agent/webview/components/BackgroundSessionStrip";
 import { ModelSetupCard } from "../../agent/webview/components/ModelSetupCard";
 import { BrowserDiffViewer } from "./components/BrowserDiffViewer";
@@ -534,6 +537,7 @@ export type GatewaySnapshot = {
       statusOverride: string | null;
       thinkingEnabled?: boolean;
       reasoningEffort?: ReasoningEffort;
+      serviceTier?: CoreServiceTierSelection;
       lastInputTokens: number;
       lastOutputTokens: number;
       lastCacheReadTokens: number;
@@ -1827,6 +1831,10 @@ export function BrowserGatewayApp({
   const [thinkingPending, setThinkingPending] = useState(false);
   const [pendingReasoningEffort, setPendingReasoningEffort] =
     useState<ReasoningEffort | null>(null);
+  const [pendingServiceTier, setPendingServiceTier] = useState<{
+    sessionId: string;
+    tier: CoreServiceTierSelection;
+  } | null>(null);
   const [slashCommands, setSlashCommands] = useState<SlashCommandInfo[]>([]);
   const [modes, setModes] = useState<ModeInfo[]>([]);
   const [models, setModels] = useState<WebviewModelInfo[]>([]);
@@ -1904,6 +1912,16 @@ export function BrowserGatewayApp({
   const [askAgentHandoffPending, setAskAgentHandoffPending] = useState(false);
   const [showMcpStatus, setShowMcpStatus] = useState(false);
   const [environmentPanelOpen, setEnvironmentPanelOpen] = useState(false);
+  const [providerUsage, setProviderUsage] =
+    useState<ProviderUsageSnapshot | null>(null);
+  const [providerUsageLoading, setProviderUsageLoading] = useState(false);
+  const providerUsageRequestRef = useRef(0);
+  useEffect(() => {
+    // Usage belongs to the selected session; never show it under another.
+    providerUsageRequestRef.current += 1;
+    setProviderUsage(null);
+    setProviderUsageLoading(false);
+  }, [selectedTabId, selectedLogicalTab?.sessionId]);
   const [agentPluginManagerOpen, setAgentPluginManagerOpen] = useState(false);
   const [agentPluginManagerSnapshot, setAgentPluginManagerSnapshot] =
     useState<AgentPluginManagerSnapshot | null>(null);
@@ -2601,6 +2619,10 @@ export function BrowserGatewayApp({
     thinkingPending && pendingReasoningEffort !== null
       ? pendingReasoningEffort
       : reasoningEffort;
+  const effectiveServiceTier =
+    pendingServiceTier && pendingServiceTier.sessionId === foreground?.sessionId
+      ? pendingServiceTier.tier
+      : (foreground?.serviceTier ?? "standard");
 
   const diffs = snapshot?.diffs ?? [];
   const snapshotBackground = snapshot?.background;
@@ -2929,6 +2951,17 @@ export function BrowserGatewayApp({
     foreground,
     foreground?.reasoningEffort,
   ]);
+
+  const foregroundServiceTier = foreground?.serviceTier ?? "standard";
+  useEffect(() => {
+    if (!pendingServiceTier) return;
+    if (
+      pendingServiceTier.sessionId === foreground?.sessionId &&
+      foregroundServiceTier === pendingServiceTier.tier
+    ) {
+      setPendingServiceTier(null);
+    }
+  }, [pendingServiceTier, foreground?.sessionId, foregroundServiceTier]);
 
   useEffect(() => {
     if (!pendingApproval) {
@@ -5081,6 +5114,60 @@ export function BrowserGatewayApp({
     })();
   };
 
+  const handleSetServiceTier = (tier: CoreServiceTierSelection): void => {
+    if (!foreground || isAskAgentSelected || pendingServiceTier) return;
+    const sessionId = foreground.sessionId;
+    void (async () => {
+      const actionOrigin = { ...snapshotOriginRef.current };
+      const clearPending = (): void =>
+        setPendingServiceTier((current) =>
+          current?.sessionId === sessionId && current.tier === tier
+            ? null
+            : current,
+        );
+      setPendingServiceTier({ sessionId, tier });
+      const pendingTimeout = window.setTimeout(clearPending, 6000);
+      try {
+        const selectionRequest = toHttpSelectionRequest({
+          type: "serviceTier",
+          tier,
+        });
+        const response = await fetch(buildApiPath(selectionRequest.path), {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({ ...selectionRequest.body, sessionId }),
+        });
+        const body = (await response.json()) as {
+          ok?: boolean;
+          error?: string;
+          snapshot?: GatewaySnapshot;
+        };
+        if (body.ok && body.snapshot) {
+          commitSnapshot(
+            body.snapshot,
+            actionOrigin.tabId,
+            actionOrigin.generation,
+          );
+        }
+        if (!body.ok) {
+          setModeStatus(
+            `Speed update failed: ${body.error ?? response.status}`,
+          );
+          window.clearTimeout(pendingTimeout);
+          clearPending();
+        }
+      } catch (err) {
+        setModeStatus(`Speed update error: ${String(err)}`);
+        window.clearTimeout(pendingTimeout);
+        clearPending();
+      }
+    })();
+  };
+
   const handleExportTranscript = (): void => {
     if (!isAskAgentSelected) {
       setModeStatus(
@@ -6633,6 +6720,11 @@ export function BrowserGatewayApp({
         setShowAskAgentMemory(false);
         void fetchMemoryPanel({ scope: "global", limit: 100 });
         break;
+      case "usage":
+        setModeStatus(
+          "Provider usage is available in VS Code workspace tabs. Select a workspace tab and run /usage there.",
+        );
+        break;
       case "mcp":
         setShowMcpStatus(true);
         void refreshAskAgentMcpStatus({ view: "status" });
@@ -6741,8 +6833,63 @@ export function BrowserGatewayApp({
     });
   };
 
+  const closeProviderUsage = (): void => {
+    providerUsageRequestRef.current += 1;
+    setProviderUsage(null);
+    setProviderUsageLoading(false);
+  };
+
+  const fetchProviderUsage = async (): Promise<void> => {
+    const requestId = ++providerUsageRequestRef.current;
+    const tabId = selectedTabId;
+    const instanceId = selectedInstanceId;
+    const sessionId = selectedLogicalTabRef.current?.sessionId;
+    const isCurrent = () =>
+      providerUsageRequestRef.current === requestId &&
+      selectedTabIdRef.current === tabId &&
+      selectedLogicalTabRef.current?.sessionId === sessionId;
+    setProviderUsageLoading(true);
+    setProviderUsage(
+      (current) => current ?? { providers: [], queriedAt: Date.now() },
+    );
+    try {
+      const response = await fetch(
+        buildApiPathForInstance(
+          `/api/provider-usage${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ""}`,
+          instanceId,
+        ),
+        {
+          credentials: "same-origin",
+          headers: { Authorization: `Bearer ${authToken}` },
+        },
+      );
+      if (!isCurrent()) return;
+      if (!response.ok) {
+        closeProviderUsage();
+        setModeStatus("Provider usage could not be loaded from VS Code.");
+        return;
+      }
+      const body = (await response.json()) as ProviderUsageSnapshot;
+      if (!isCurrent()) return;
+      if (Array.isArray(body.providers)) setProviderUsage(body);
+    } catch {
+      if (!isCurrent()) return;
+      closeProviderUsage();
+      setModeStatus("Provider usage could not be loaded from VS Code.");
+    } finally {
+      if (providerUsageRequestRef.current === requestId) {
+        setProviderUsageLoading(false);
+      }
+    }
+  };
+
   const handleExecuteBuiltinCommand = (name: string, args: string): void => {
     switch (name) {
+      case "usage":
+        setEnvironmentPanelOpen(false);
+        setShowMcpStatus(false);
+        void fetchProviderUsage();
+        return;
       case "new": {
         handleNewSession();
         break;
@@ -9042,6 +9189,14 @@ export function BrowserGatewayApp({
                       onClose={() => setEnvironmentPanelOpen(false)}
                     />
                   )}
+                {!mobileReviewOpen && !isAskAgentSelected && providerUsage && (
+                  <ProviderUsagePanel
+                    data={providerUsage}
+                    loading={providerUsageLoading}
+                    onClose={closeProviderUsage}
+                    onRefresh={() => void fetchProviderUsage()}
+                  />
+                )}
                 {!mobileReviewOpen && isAskAgentSelected && memoryPanelOpen && (
                   <MemoryPanel
                     snapshot={memoryPanelSnapshot}
@@ -9607,6 +9762,12 @@ export function BrowserGatewayApp({
                     submitOnEnter={!mobileLayout && !touchInput}
                     reasoningEffort={effectiveReasoningEffort}
                     onSetReasoningEffort={handleSetReasoningEffort}
+                    serviceTier={effectiveServiceTier}
+                    onSetServiceTier={
+                      isAskAgentSelected || !foreground
+                        ? undefined
+                        : handleSetServiceTier
+                    }
                     onExportTranscript={handleExportTranscript}
                     hasMessages={messages.length > 0}
                     vscodeApi={browserVscodeApi}

@@ -1578,7 +1578,7 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
   it("lists only the official seven models for OAuth and API key", async () => {
     const expected = [
       "gpt-6-astra",
-      "gpt-6-sol",
+      "gpt-6.1-sol",
       "gpt-6-luna",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
@@ -1792,6 +1792,103 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     expect(events).toContainEqual(
       expect.objectContaining({ type: "text_delta", text: "hello" }),
     );
+  });
+
+  it("sends Ultrafast for Astra and retries at the standard tier when rejected", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    createMock
+      .mockImplementationOnce(async (body: Record<string, unknown>) => {
+        bodies.push(body);
+        throw Object.assign(
+          new Error("The requested service_tier 'ultrafast' is not available."),
+          { status: 400 },
+        );
+      })
+      .mockImplementationOnce(async (body: Record<string, unknown>) => {
+        bodies.push(body);
+        return (async function* () {
+          yield { type: "response.output_text.delta", delta: "hello" };
+          yield {
+            type: "response.done",
+            response: {
+              id: "resp",
+              usage: { input_tokens: 1, output_tokens: 1 },
+            },
+          };
+        })();
+      });
+
+    const provider = new CodexProvider(makeAuthManager() as never);
+    const events = [];
+    for await (const event of provider.stream({
+      model: "gpt-6-astra",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+      serviceTier: "ultrafast",
+    })) {
+      events.push(event);
+    }
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toMatchObject({
+      model: "gpt-6-astra",
+      service_tier: "ultrafast",
+    });
+    expect(bodies[1]).not.toHaveProperty("service_tier");
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "text_delta", text: "hello" }),
+    );
+
+    // The rejection is remembered, so later turns skip the doomed attempt.
+    createMock.mockImplementationOnce(async (body: Record<string, unknown>) => {
+      bodies.push(body);
+      return (async function* () {
+        yield {
+          type: "response.done",
+          response: {
+            id: "resp-2",
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        };
+      })();
+    });
+    for await (const _event of provider.stream({
+      model: "gpt-6-astra",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "again" }],
+      maxTokens: 64,
+      serviceTier: "ultrafast",
+    })) {
+      // drain
+    }
+    expect(bodies).toHaveLength(3);
+    expect(bodies[2]).not.toHaveProperty("service_tier");
+
+    // Rejections are per tier: Fast is still requested, as `priority`.
+    createMock.mockImplementationOnce(async (body: Record<string, unknown>) => {
+      bodies.push(body);
+      return (async function* () {
+        yield {
+          type: "response.done",
+          response: {
+            id: "resp-3",
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        };
+      })();
+    });
+    for await (const _event of provider.stream({
+      model: "gpt-6-astra",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "fast" }],
+      maxTokens: 64,
+      serviceTier: "fast",
+    })) {
+      // drain
+    }
+    expect(bodies).toHaveLength(4);
+    expect(bodies[3]).toMatchObject({ service_tier: "priority" });
   });
 
   it("reports auth-specific Astra reasoning and context capabilities", async () => {

@@ -7,27 +7,6 @@ import { isReviewTaskClass, normalizeTaskClass } from "./reviewTaskClass.js";
 
 const RESEARCH_TASK_CLASSES = new Set(["research", "readonly-research"]);
 
-const RESEARCH_BUDGETS: Record<ModelTier, AgentBudget> = {
-  cheap: {
-    maxToolCalls: 24,
-    maxApiTurns: 10,
-    maxElapsedMs: 360_000,
-    warningThresholdRatio: 0.8,
-  },
-  balanced: {
-    maxToolCalls: 48,
-    maxApiTurns: 16,
-    maxElapsedMs: 600_000,
-    warningThresholdRatio: 0.8,
-  },
-  deep_reasoning: {
-    maxToolCalls: 72,
-    maxApiTurns: 24,
-    maxElapsedMs: 900_000,
-    warningThresholdRatio: 0.8,
-  },
-};
-
 const REVIEW_BUDGETS: Record<ModelTier, AgentBudget> = {
   cheap: {
     maxToolCalls: 50,
@@ -73,7 +52,8 @@ export function getAutomaticBackgroundBudget(
   taskClass: string | undefined,
   tier: ModelTier,
 ): AgentBudget | undefined {
+  // Research is expected to be long running and is supervised by the
+  // foreground coordinator, so it only receives caller-supplied budgets.
   if (isReviewTaskClass(taskClass)) return { ...REVIEW_BUDGETS[tier] };
-  if (isResearchTaskClass(taskClass)) return { ...RESEARCH_BUDGETS[tier] };
   return undefined;
 }

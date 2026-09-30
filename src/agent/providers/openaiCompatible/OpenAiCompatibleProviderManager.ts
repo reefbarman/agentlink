@@ -2,6 +2,7 @@ import type { OpenAiCompatibleRuntimeProfile } from "@agentlink/core/openai-comp
 import type { ModelProvider } from "../types.js";
 import type { ProviderRegistry } from "../index.js";
 import {
+  listOpenAiCompatibleConnectionAuthKeys,
   normalizeOpenAiCompatibleConnections,
   type NormalizedOpenAiCompatibleConnection,
   type NormalizeOpenAiCompatibleConnectionsResult,
@@ -108,12 +109,15 @@ export class OpenAiCompatibleProviderManager {
     return this.providers;
   }
 
+  /** Successfully reconciled connections, in configuration order. */
+  listConnections(): readonly NormalizedOpenAiCompatibleConnection[] {
+    return this.connections;
+  }
+
   listConfiguredAuthKeys(): string[] {
     return [
       ...new Set(
-        this.connections.flatMap((connection) =>
-          connection.authKey ? [connection.authKey] : [],
-        ),
+        this.connections.flatMap(listOpenAiCompatibleConnectionAuthKeys),
       ),
     ].sort((left, right) => left.localeCompare(right));
   }

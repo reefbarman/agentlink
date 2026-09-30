@@ -220,6 +220,11 @@ export const BROWSER_GATEWAY_SNAPSHOT_PARITY_CONTRACT = {
         "checkpoint",
         "owner_event",
       ),
+      serviceTier: covered(
+        "Projected into checkpoint.foreground.serviceTier; older owners omit it and the browser defaults to standard.",
+        "checkpoint",
+        "owner_event",
+      ),
       lastInputTokens: covered(
         "Projected into checkpoint.foreground.lastInputTokens.",
         "checkpoint",

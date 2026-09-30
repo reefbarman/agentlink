@@ -684,7 +684,7 @@ const RESPOND_TO_BACKGROUND_QUESTION_TOOL: ToolDefinition = {
 const AGENT_BUDGET_SCHEMA = {
   type: "object",
   description:
-    "Optional resource-cap overrides for review and research task classes. Review agents receive generous tiered safety ceilings with an 80% wrap-up warning and a 1.5x emergency backstop; research agents retain broader soft budgets with a 3x hard backstop. Writable build, debug, design, verification, and general tasks run uncapped. Review token and cost caps remain ignored because explicit diffs may still be large; research callers may override all supported caps.",
+    "Optional resource caps for review and research task classes. Review agents receive generous tiered safety ceilings with an 80% wrap-up warning and a 1.5x emergency backstop. Research agents run uncapped by default (steer or kill them if they run too long); an explicit research budget supports every cap with a 3x hard backstop. Writable build, debug, design, verification, and general tasks run uncapped. Review token and cost caps remain ignored because explicit diffs may still be large.",
   properties: {
     maxTokens: {
       type: "number",
@@ -694,7 +694,7 @@ const AGENT_BUDGET_SCHEMA = {
     maxToolCalls: {
       type: "number",
       description:
-        "Soft cap on successfully committed tool invocations. Interrupted/provisional tool streams are not charged. Research budgets allow substantially more tool calls than API turns; review budgets keep the two allowances closer together.",
+        "Soft cap on successfully committed tool invocations. Interrupted/provisional tool streams are not charged.",
     },
     maxApiTurns: {
       type: "number",
@@ -714,7 +714,7 @@ const AGENT_BUDGET_SCHEMA = {
     warningThresholdRatio: {
       type: "number",
       description:
-        "Usage ratio at which the agent is nudged to start wrapping up. Automatic review and research budgets default to 0.8.",
+        "Usage ratio at which the agent is nudged to start wrapping up. Automatic review budgets default to 0.8.",
     },
     scope: { type: "string", enum: ["session", "subtree", "goal"] },
   },
@@ -828,7 +828,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
           type: "string",
           enum: ["cheap", "balanced", "deep_reasoning", "foreground"],
           description:
-            'Optional routing tier override. Ordinary work defaults below the foreground tier. Use "foreground" only when complexity or useful parallelization justifies the same model; use "deep_reasoning" only when the actual risk justifies the higher-cost model.',
+            'Optional routing tier override. Research defaults to the foreground tier; other ordinary work defaults below it. Use "foreground" only when complexity or useful parallelization justifies the same model; use "deep_reasoning" only when the actual risk justifies the higher-cost model.',
         },
         ownedPaths: {
           type: "array",

@@ -263,7 +263,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   },
   {
     name: "usage",
-    description: "Show Codex subscription usage and reset times",
+    description: "Show usage and reset times for the selected model",
     source: "builtin",
     builtin: true,
   },

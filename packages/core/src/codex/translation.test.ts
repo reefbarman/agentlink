@@ -668,6 +668,63 @@ describe("Codex translation", () => {
     });
   });
 
+  it("sends premium service tiers only for models that support them", () => {
+    const caps = {
+      supportsPreviousResponseId: true,
+      supportsPersistedReasoning: true,
+      supportsProMode: true,
+      supportsPromptCacheKey: true,
+      supportsPromptCacheRetention: true,
+      supportsMaxOutputTokens: true,
+      supportsHostedWebSearch: true,
+      supportsTextVerbosity: true,
+    };
+    expect(
+      buildCodexEndpointRequestBody({
+        model: "gpt-6-astra",
+        input: [],
+        instructions: "system",
+        serviceTier: "ultrafast",
+        caps,
+      }),
+    ).toMatchObject({ service_tier: "ultrafast" });
+    expect(
+      buildCodexEndpointRequestBody({
+        model: "gpt-6.1-sol",
+        input: [],
+        instructions: "system",
+        serviceTier: "ultrafast",
+        caps,
+      }),
+    ).not.toHaveProperty("service_tier");
+    expect(
+      buildCodexEndpointRequestBody({
+        model: "gpt-6.1-sol",
+        input: [],
+        instructions: "system",
+        serviceTier: "fast",
+        caps,
+      }),
+    ).toMatchObject({ service_tier: "priority" });
+    expect(
+      buildCodexEndpointRequestBody({
+        model: "gpt-5.4",
+        input: [],
+        instructions: "system",
+        serviceTier: "fast",
+        caps,
+      }),
+    ).not.toHaveProperty("service_tier");
+    expect(
+      buildCodexEndpointRequestBody({
+        model: "gpt-6-astra",
+        input: [],
+        instructions: "system",
+        caps,
+      }),
+    ).not.toHaveProperty("service_tier");
+  });
+
   it("omits in-memory retention from endpoint-gated request bodies", () => {
     expect(
       buildCodexEndpointRequestBody({

@@ -97,6 +97,49 @@ function createSnapshot(
 }
 
 describe("App chat workspace integration", () => {
+  it("toggles Fast on and off in the active session composer", () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot() });
+    deliver({
+      ...sessionLoaded("session-1", "Existing task"),
+      model: "gpt-6.1-sol",
+    });
+    deliver({
+      type: "agentModelsUpdate",
+      models: [
+        {
+          id: "gpt-6.1-sol",
+          displayName: "GPT-6.1 Sol",
+          provider: "codex",
+          authenticated: true,
+          serviceTiers: ["fast"],
+        },
+      ],
+    });
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: "session-1",
+        model: "gpt-6.1-sol",
+        serviceTier: "standard",
+      },
+    });
+
+    const button = screen.getByRole("button", { name: "Fast" });
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(button);
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(button);
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    expect(
+      postedCommands(vscodeApi.postMessage, "agentSetServiceTier"),
+    ).toEqual([
+      expect.objectContaining({ tier: "fast" }),
+      expect.objectContaining({ tier: "standard" }),
+    ]);
+  });
+
   it("shows handoff progress and preparation errors without a draft", () => {
     const vscodeApi = createVsCodeApi();
     const { container } = render(<App vscodeApi={vscodeApi} />);

@@ -286,6 +286,7 @@ class ResponsesModelBackend<
           cache: request.cache,
           reasoningEffort: request.reasoningEffort,
           reasoningMode: request.reasoningMode,
+          serviceTier: request.serviceTier,
           outputFormat: request.outputFormat,
           tools: request.tools ? translateCodexTools(request.tools) : undefined,
           hostedTools: request.hostedTools,

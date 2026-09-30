@@ -1,5 +1,6 @@
 import {
   resolveSupportedReasoningEffort,
+  type CoreModelServiceTier,
   type CoreReasoningEffort,
 } from "@agentlink/protocol/model-catalog";
 import type { CoreModelCapabilities } from "../modelRuntime.js";
@@ -43,10 +44,27 @@ export interface CodexModelDef {
    * available on both, even when hidden from the picker.
    */
   apiAvailable?: boolean;
+  /**
+   * Premium service tiers the model accepts, per the Codex model catalog.
+   * Fast is sent as `service_tier: "priority"`; Ultrafast is generally
+   * available on the API for GPT-6 Astra. The ChatGPT backend gates both by plan.
+   */
+  serviceTiers?: readonly CoreModelServiceTier[];
 }
+
+const CODEX_FAST_TIER = ["fast"] as const;
+const CODEX_FAST_AND_ULTRAFAST_TIERS = ["fast", "ultrafast"] as const;
 
 const GPT_6_API_REASONING_EFFORTS = [
   "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const satisfies readonly CoreReasoningEffort[];
+
+const GPT_6_1_SOL_REASONING_EFFORTS = [
   "low",
   "medium",
   "high",
@@ -58,6 +76,17 @@ const GPT_6_ASTRA_OAUTH_REASONING_EFFORTS = [
   ...GPT_6_API_REASONING_EFFORTS,
   "ultra",
 ] as const satisfies readonly CoreReasoningEffort[];
+
+const GPT_6_1_SOL_OAUTH_REASONING_EFFORTS = [
+  ...GPT_6_1_SOL_REASONING_EFFORTS,
+  "ultra",
+] as const satisfies readonly CoreReasoningEffort[];
+
+/** OAuth models that Codex's bundled catalog marks `use_responses_lite`. */
+const CODEX_OAUTH_RESPONSES_LITE_MODELS = new Set<string>([
+  "gpt-6-astra",
+  "gpt-6.1-sol",
+]);
 
 const GPT_5_4_REASONING_EFFORTS = [
   "none",
@@ -130,7 +159,7 @@ export interface ResponsesCaps {
 /** Models shown in both Codex OAuth and OpenAI API-key pickers. */
 export const CODEX_PICKER_MODEL_IDS = [
   "gpt-6-astra",
-  "gpt-6-sol",
+  "gpt-6.1-sol",
   "gpt-6-luna",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
@@ -155,7 +184,8 @@ export const CODEX_PICKER_MODEL_IDS = [
  * available" migration notices (5.4 → Terra, 5.4-mini → Luna), i.e. they are
  * in a deprecation grace period — treat them as gone. GPT-6 Sol and Luna were
  * added from OpenAI's 2026-09-22 launch announcement while their gradual Codex
- * rollout was still in progress.
+ * rollout was still in progress. GPT-6.1 Sol replaced GPT-6 Sol in the picker
+ * on 2026-09-30 from OpenAI's DevDay announcement.
  */
 export const CODEX_CHATGPT_BACKEND_MODEL_IDS = [
   ...CODEX_PICKER_MODEL_IDS,
@@ -172,6 +202,14 @@ const CHATGPT_BACKEND_MODEL_MIGRATIONS: Record<string, string> = {
   "gpt-5.4": "gpt-5.6-terra",
   "gpt-5.4-mini": "gpt-5.6-luna",
   "gpt-5.3-codex": "gpt-5.6-sol",
+};
+
+/**
+ * Picker models AgentLink has replaced with a newer release. Saved selections
+ * and preferences follow these on load, and OAuth requests remap to them.
+ */
+const SUPERSEDED_MODEL_MIGRATIONS: Record<string, string> = {
+  "gpt-6-sol": "gpt-6.1-sol",
 };
 
 const CHATGPT_BACKEND_MODEL_SET = new Set<string>(
@@ -199,7 +237,9 @@ export function isCodexModelServedOnChatgptBackend(modelId: string): boolean {
  */
 export function remapToChatgptBackendModel(modelId: string): string {
   if (isCodexModelServedOnChatgptBackend(modelId)) return modelId;
-  const migration = CHATGPT_BACKEND_MODEL_MIGRATIONS[modelId];
+  const migration =
+    SUPERSEDED_MODEL_MIGRATIONS[modelId] ??
+    CHATGPT_BACKEND_MODEL_MIGRATIONS[modelId];
   if (migration && CHATGPT_BACKEND_MODEL_SET.has(migration)) return migration;
   if (
     /mini|nano/.test(modelId) &&
@@ -235,6 +275,7 @@ export function getCodexUnavailableModelFallback(
 
 export function getCodexModelMigration(modelId: string): string | undefined {
   return (
+    SUPERSEDED_MODEL_MIGRATIONS[modelId] ??
     CHATGPT_BACKEND_MODEL_MIGRATIONS[modelId] ??
     getCodexUnavailableModelFallback(modelId)
   );
@@ -254,7 +295,23 @@ export function usesCodexResponsesLite(
   modelId: string,
   authMethod?: CodexAuthMethod,
 ): boolean {
-  return modelId === "gpt-6-astra" && authMethod === "oauth";
+  return (
+    authMethod === "oauth" && CODEX_OAUTH_RESPONSES_LITE_MODELS.has(modelId)
+  );
+}
+
+export function supportsCodexServiceTier(
+  modelId: string,
+  tier: CoreModelServiceTier,
+): boolean {
+  return CODEX_MODEL_MAP.get(modelId)?.serviceTiers?.includes(tier) === true;
+}
+
+/** Responses API `service_tier` value; Codex names the Fast tier `priority`. */
+export function toCodexServiceTierWireValue(
+  tier: CoreModelServiceTier,
+): string {
+  return tier === "fast" ? "priority" : tier;
 }
 
 export function getCodexResponsesRequestHeaders(
@@ -281,8 +338,8 @@ export function resolveCodexReasoningEffort(params: {
         defaultEffort,
       )
     : defaultEffort;
-  // `ultra` is a Codex client preset. Astra's catalog maps that local preset
-  // to xhigh for the actual Responses request.
+  // `ultra` is a Codex client preset. The Astra and 6.1 Sol catalogs map that
+  // local preset to xhigh for the actual Responses request.
   return usesCodexResponsesLite(params.modelId, params.authMethod) &&
     resolvedEffort === "ultra"
     ? "xhigh"
@@ -319,6 +376,21 @@ export const CODEX_MODELS: CodexModelDef[] = [
     defaultReasoningEffort: "low",
     reasoningEfforts: [...GPT_6_API_REASONING_EFFORTS],
     defaultTextVerbosity: "low",
+    serviceTiers: CODEX_FAST_AND_ULTRAFAST_TIERS,
+  },
+  {
+    // Documented 1.05M window with a 922K input cap; no none/minimal effort.
+    id: "gpt-6.1-sol",
+    displayName: "GPT-6.1 Sol",
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
+    maxInputTokens: 922_000,
+    maxOutputTokens: 128_000,
+    supportsImages: true,
+    supportsThinking: true,
+    defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_6_1_SOL_REASONING_EFFORTS],
+    defaultTextVerbosity: "low",
+    serviceTiers: CODEX_FAST_TIER,
   },
   {
     id: "gpt-6-sol",
@@ -329,6 +401,7 @@ export const CODEX_MODELS: CodexModelDef[] = [
     supportsThinking: true,
     defaultReasoningEffort: "medium",
     reasoningEfforts: [...GPT_6_API_REASONING_EFFORTS],
+    serviceTiers: CODEX_FAST_TIER,
   },
   {
     id: "gpt-6-luna",
@@ -339,6 +412,7 @@ export const CODEX_MODELS: CodexModelDef[] = [
     supportsThinking: true,
     defaultReasoningEffort: "medium",
     reasoningEfforts: [...GPT_6_API_REASONING_EFFORTS],
+    serviceTiers: CODEX_FAST_TIER,
   },
   {
     id: "gpt-5.6-sol",
@@ -350,6 +424,7 @@ export const CODEX_MODELS: CodexModelDef[] = [
     defaultReasoningEffort: "medium",
     reasoningEfforts: [...GPT_5_6_REASONING_EFFORTS],
     defaultTextVerbosity: "low",
+    serviceTiers: CODEX_FAST_TIER,
   },
   {
     id: "gpt-5.6-terra",
@@ -361,6 +436,7 @@ export const CODEX_MODELS: CodexModelDef[] = [
     defaultReasoningEffort: "medium",
     reasoningEfforts: [...GPT_5_6_REASONING_EFFORTS],
     defaultTextVerbosity: "low",
+    serviceTiers: CODEX_FAST_TIER,
   },
   {
     id: "gpt-5.6-luna",
@@ -372,6 +448,7 @@ export const CODEX_MODELS: CodexModelDef[] = [
     defaultReasoningEffort: "medium",
     reasoningEfforts: [...GPT_5_6_REASONING_EFFORTS],
     defaultTextVerbosity: "low",
+    serviceTiers: CODEX_FAST_TIER,
   },
   {
     id: "gpt-5.5",
@@ -382,6 +459,7 @@ export const CODEX_MODELS: CodexModelDef[] = [
     supportsThinking: true,
     defaultReasoningEffort: "medium",
     reasoningEfforts: [...GPT_5_4_REASONING_EFFORTS],
+    serviceTiers: CODEX_FAST_TIER,
   },
   {
     id: "gpt-5.4",
@@ -571,6 +649,14 @@ const CODEX_OAUTH_MODEL_OVERRIDES: Record<
     reasoningEfforts: [...GPT_6_ASTRA_OAUTH_REASONING_EFFORTS],
     defaultReasoningEffort: "low",
   },
+  // Codex's bundled catalog (rust-v0.159.1): Responses Lite, 872K max window,
+  // `ultra` preset, and a low default effort over the ChatGPT backend.
+  "gpt-6.1-sol": {
+    contextWindow: CODEX_OAUTH_GPT_6_ASTRA_CONTEXT_TOKENS,
+    maxInputTokens: undefined,
+    reasoningEfforts: [...GPT_6_1_SOL_OAUTH_REASONING_EFFORTS],
+    defaultReasoningEffort: "low",
+  },
   "gpt-5.5": {
     contextWindow: CODEX_OAUTH_GPT_5_5_CONTEXT_TOKENS,
     maxInputTokens: CODEX_400K_INPUT_TOKENS,
@@ -615,6 +701,7 @@ export function getCodexModelCapabilities(
     maxOutputTokens: def?.maxOutputTokens ?? 128_000,
     reasoningEfforts: def?.reasoningEfforts ?? [...GPT_5_REASONING_EFFORTS],
     defaultReasoningEffort: def?.defaultReasoningEffort ?? "medium",
+    ...(def?.serviceTiers?.length ? { serviceTiers: def.serviceTiers } : {}),
   };
 }
 

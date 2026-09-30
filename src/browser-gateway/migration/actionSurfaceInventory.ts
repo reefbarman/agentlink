@@ -192,6 +192,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
   retainedHttp(
     "vscode_gateway",
     "GET",
+    "/api/provider-usage",
+    "On-demand /usage data is non-authoritative host data read over authenticated HTTP.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "GET",
     "/api/search-files*",
     "Bounded file search remains an authenticated HTTP read.",
   ),
@@ -241,6 +247,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
     "vscode_gateway",
     "POST",
     "/api/thinking",
+    "Requires a session-settings command before Stage 5.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
+    "/api/service-tier",
     "Requires a session-settings command before Stage 5.",
   ),
   retainedHttp(

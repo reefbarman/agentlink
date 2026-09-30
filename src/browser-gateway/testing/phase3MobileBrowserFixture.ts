@@ -769,6 +769,7 @@ function createReadSet(): MutableReadSet {
       statusOverride: null,
       thinkingEnabled: true,
       reasoningEffort: "high",
+      serviceTier: "standard",
       lastInputTokens: 0,
       lastOutputTokens: 0,
       lastCacheReadTokens: 0,

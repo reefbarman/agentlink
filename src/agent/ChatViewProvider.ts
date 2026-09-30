@@ -3,12 +3,17 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { randomUUID } from "crypto";
-import { isCoreReasoningEffort } from "@agentlink/protocol/model-catalog";
+import {
+  isCoreReasoningEffort,
+  isCoreServiceTierSelection,
+  type CoreServiceTierSelection,
+} from "@agentlink/protocol/model-catalog";
 import {
   normalizeCoreWebAccessSettings,
   type CoreWebAccessSettings,
 } from "@agentlink/core/web-access";
 import { providerRegistry, queryProviderUsage } from "./providers/index.js";
+import type { ProviderUsageSelection } from "./providers/ProviderUsageService.js";
 import {
   getProviderAuxiliaryModel,
   type ModelProvider,
@@ -1281,6 +1286,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private openAiCompatibleAuthKeyResolver:
     | ((providerId: string) => string | undefined)
     | undefined;
+  private providerUsageQuery:
+    | ((selection: ProviderUsageSelection) => Promise<ProviderUsageCardData>)
+    | undefined;
   private notifyBrowserModelsChanged: (() => void) | undefined;
   private browserGatewayAdminClient:
     | import("../browser-gateway/helper/BrowserGatewayHelperAdminClient.js").BrowserGatewayHelperAdminClient
@@ -2212,6 +2220,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     resolver: (providerId: string) => string | undefined,
   ): void {
     this.openAiCompatibleAuthKeyResolver = resolver;
+  }
+
+  setProviderUsageQuery(
+    query: (
+      selection: ProviderUsageSelection,
+    ) => Promise<ProviderUsageCardData>,
+  ): void {
+    this.providerUsageQuery = query;
+  }
+
+  /** On-demand `/usage` data shared by the VS Code panel and browser reads. */
+  getProviderUsage(sessionId?: string): Promise<ProviderUsageCardData> {
+    const session = sessionId
+      ? this.sessionManager?.getSession(sessionId)
+      : this.sessionManager?.getForegroundSession();
+    const model =
+      session?.model ??
+      (sessionId ? "" : this.sessionManager?.getConfig().model) ??
+      "";
+    const provider = providerRegistry.tryResolveProvider(model);
+    const selection: ProviderUsageSelection = {
+      providerId: provider?.id ?? "unknown",
+      providerName: (provider?.displayName ?? model) || "Selected model",
+    };
+    return (
+      this.providerUsageQuery?.(selection) ??
+      queryProviderUsage(undefined, selection)
+    );
   }
 
   /**
@@ -4725,6 +4761,35 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public getBrowserReasoningEffortState(): import("./providers/types.js").ReasoningEffort {
     const fg = this.sessionManager?.getForegroundSession();
     return fg?.reasoningEffort ?? "high";
+  }
+
+  public getBrowserServiceTierState(): CoreServiceTierSelection {
+    return (
+      this.sessionManager?.getForegroundSession()?.serviceTier ?? "standard"
+    );
+  }
+
+  public async submitBrowserSetServiceTier(
+    tier: CoreServiceTierSelection,
+    sessionId?: string,
+  ): Promise<{ ok: boolean }> {
+    const session = sessionId
+      ? this.sessionManager?.getSession(sessionId)
+      : this.sessionManager?.getForegroundSession();
+    if (!session || !this.sessionManager) return { ok: false };
+    if (!this.sessionManager.setSessionServiceTier(session.id, tier)) {
+      return { ok: false };
+    }
+    if (this.sessionManager.getForegroundSession()?.id === session.id) {
+      this.ensureProjectedForegroundSession(session);
+      this.applyProjectedAction({ type: "SET_SERVICE_TIER", tier });
+    }
+    this.postMessage({
+      type: "stateUpdate",
+      state: this.buildChatState(session),
+    });
+    this.log(`Service tier set to ${tier} for ${session.id}`);
+    return { ok: true };
   }
 
   public async submitBrowserSetThinkingEnabled(
@@ -8028,6 +8093,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               );
             }
           }
+          if (
+            isCoreServiceTierSelection(msg.serviceTier) &&
+            msg.serviceTier !== "standard"
+          ) {
+            mgr.setSessionServiceTier(effectiveSessionId, msg.serviceTier);
+          }
         }
         const effectiveSession = mgr.getSession(effectiveSessionId);
         const projectless = effectiveSession
@@ -8349,6 +8420,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         } else {
           await this.submitBrowserSetReasoningEffort(effort);
         }
+        break;
+      }
+
+      case "agentSetServiceTier": {
+        if (!isCoreServiceTierSelection(msg.tier)) break;
+        await this.submitBrowserSetServiceTier(
+          msg.tier,
+          explicitSourceSessionId,
+        );
         break;
       }
 
@@ -9326,8 +9406,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             await this.handlePairCommand();
           }
         } else if (name === "usage") {
-          const data = await queryProviderUsage();
-          this.postMessage({ type: "agentProviderUsage", data });
+          const data = await this.getProviderUsage(sourceSession?.id);
+          const message = { type: "agentProviderUsage", data } as const;
+          if (context?.connection) context.connection.postMessage(message);
+          else this.postMessage(message);
         } else {
           this.log(`[slash] /${name} not yet implemented`);
           vscode.window.showInformationMessage(
@@ -12850,6 +12932,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       contextHealth: this.contextHealth,
       reasoningEffort,
       thinkingEnabled: reasoningEffort !== "none",
+      serviceTier: session?.serviceTier ?? "standard",
       // Use the selected session's ID so write approval state remains isolated.
       agentWriteApproval: this.approvalManager?.getAgentWriteApprovalState(
         session?.id ?? "agent",

@@ -1,4 +1,8 @@
 import type {
+  CoreReasoningEffort,
+  CoreServiceTierSelection,
+} from "./modelCatalog.js";
+import type {
   TerminalApprovalPolicy,
   TerminalApprovalReviewer,
   TerminalExecutionPreset,
@@ -8,7 +12,6 @@ import type { BrowserGatewayContextBudget } from "./browserGatewayContextBudget.
 import type { ChatWorkspaceInteractiveExecutionPhase } from "./chatWorkspace.js";
 import type { CommandApprovalPolicy } from "./commandApprovalPolicy.js";
 import type { ContextHealthSnapshot } from "./contextHealth.js";
-import type { CoreReasoningEffort } from "./modelCatalog.js";
 import type { RevertRecoveryNotice } from "./sessionHydration.js";
 
 export type BrowserGatewayRevertRecoveryNotice = RevertRecoveryNotice;
@@ -28,6 +31,7 @@ export interface BrowserGatewayForegroundControlState {
   statusOverride?: string | null;
   thinkingEnabled?: boolean;
   reasoningEffort?: CoreReasoningEffort;
+  serviceTier?: CoreServiceTierSelection;
   lastInputTokens?: number;
   lastOutputTokens?: number;
   lastCacheReadTokens?: number;

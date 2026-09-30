@@ -7,6 +7,7 @@ import type {
   CoreModelCatalogAuthAction,
   CoreModelCatalogEntry,
   CoreModelCatalogSnapshot,
+  CoreModelServiceTier,
   CoreReasoningEffort,
 } from "@agentlink/protocol/model-catalog";
 import type {
@@ -184,7 +185,12 @@ export interface CoreModelCapabilities {
   maxOutputTokens: number;
   reasoningEfforts?: CoreReasoningEffort[];
   defaultReasoningEffort?: CoreReasoningEffort;
+  /** Premium service tiers the model accepts; omitted when none. */
+  serviceTiers?: readonly CoreModelServiceTier[];
 }
+
+/** Optional premium processing tier requested for one model call. */
+export type { CoreModelServiceTier };
 
 export interface CoreModelCacheOptions {
   key?: string;
@@ -261,6 +267,8 @@ export interface CoreModelRequestBase {
   maxTokens: number;
   reasoningEffort?: CoreReasoningEffort;
   reasoningMode?: "standard" | "pro";
+  /** Ignored by providers and models that do not support the tier. */
+  serviceTier?: CoreModelServiceTier;
   cache?: CoreModelCacheOptions;
   state?: CoreModelStateOptions;
   outputFormat?: CoreModelOutputFormat;
