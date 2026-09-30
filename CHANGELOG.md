@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed switching conversation tabs in VS Code carrying over the previous transcript's scroll state and cancelling the jump to the latest message. Each selected tab now starts at the bottom; scrolling up within the current tab still pauses automatic following.
+
 - Fixed read-only Git branch queries rejecting reference/filter operands while keeping mutations and unknown options blocked. Compose all-settled batches now retain successful reads when another path needs interactive approval and explain how to request approval directly. Compose listing examples handle newline-separated relative paths, and syntax failures include bounded script-relative line and column locations.
 
 - Development `send_feedback` reports now require an observed task-impact statement and can include workaround, observed recurrence and improvement-signal context. `get_feedback` returns these fields when recorded; older reports and their stable IDs remain unchanged. Reporting guidance separates concrete evidence from priority scores, guessed prevalence and invented savings.

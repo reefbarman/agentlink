@@ -200,6 +200,98 @@ describe("App chat workspace integration", () => {
     ).toBeTruthy();
   });
 
+  it("starts switched transcripts at the bottom without inheriting upward-scroll detection", () => {
+    const animationFrames = new Map<number, FrameRequestCallback>();
+    let nextFrameId = 0;
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        const id = ++nextFrameId;
+        animationFrames.set(id, callback);
+        return id;
+      }),
+    );
+    vi.stubGlobal(
+      "cancelAnimationFrame",
+      vi.fn((id: number) => animationFrames.delete(id)),
+    );
+    const flushFrames = () => {
+      while (animationFrames.size > 0) {
+        const frames = [...animationFrames.values()];
+        animationFrames.clear();
+        frames.forEach((callback) => callback(0));
+      }
+    };
+    const setGeometry = (
+      transcript: HTMLElement,
+      height: number,
+      top: number,
+    ) => {
+      Object.defineProperties(transcript, {
+        clientHeight: { configurable: true, value: 300 },
+        scrollHeight: { configurable: true, writable: true, value: height },
+        scrollTop: {
+          configurable: true,
+          get: () => top,
+          set: (value: number) => {
+            top = Math.max(0, Math.min(value, transcript.scrollHeight - 300));
+          },
+        },
+      });
+    };
+
+    try {
+      const { container } = render(<App vscodeApi={createVsCodeApi()} />);
+      deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot() });
+      deliver(sessionLoaded("session-1", "First conversation"));
+      const firstTranscript =
+        container.querySelector<HTMLElement>(".chat-messages")!;
+      setGeometry(firstTranscript, 1500, 0);
+      flushFrames();
+      expect(firstTranscript.scrollTop).toBe(1200);
+      fireEvent.scroll(firstTranscript);
+
+      deliver({
+        type: "chatWorkspaceUpdate",
+        snapshot: createSnapshot("tab-2"),
+      });
+      deliver(sessionLoaded("session-2", "Second conversation"));
+      const secondTranscript =
+        container.querySelector<HTMLElement>(".chat-messages")!;
+      // A shorter transcript clamps the old scroll position before layout settles.
+      setGeometry(secondTranscript, 900, 600);
+      fireEvent.scroll(secondTranscript);
+      Object.defineProperty(secondTranscript, "scrollHeight", { value: 1100 });
+      flushFrames();
+      expect(secondTranscript.scrollTop).toBe(800);
+
+      secondTranscript.scrollTop = 100;
+      fireEvent.scroll(secondTranscript);
+      deliver({
+        type: "chatWorkspaceUpdate",
+        snapshot: createSnapshot("tab-1"),
+      });
+      const returnedTranscript =
+        container.querySelector<HTMLElement>(".chat-messages")!;
+      setGeometry(returnedTranscript, 1500, 0);
+      flushFrames();
+      expect(returnedTranscript.scrollTop).toBe(1200);
+      expect(returnedTranscript).not.toBe(secondTranscript);
+
+      deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot() });
+      expect(container.querySelector(".chat-messages")).toBe(
+        returnedTranscript,
+      );
+      returnedTranscript.scrollTop = 100;
+      fireEvent.scroll(returnedTranscript);
+      flushFrames();
+      expect(returnedTranscript.scrollTop).toBe(100);
+    } finally {
+      cleanup();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("renders a keyed workspace and addresses focus and New Tab commands", () => {
     const vscodeApi = createVsCodeApi();
     const { container } = render(<App vscodeApi={vscodeApi} />);

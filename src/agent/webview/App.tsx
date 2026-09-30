@@ -4081,6 +4081,7 @@ export function App({
               </div>
             )}
             <ChatView
+              key={selectedTabKey}
               messages={state.messages}
               streaming={state.streaming}
               sessionId={state.chatState.sessionId}
