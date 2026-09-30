@@ -1,0 +1,53 @@
+CHANGELOG.md
+  h_9630b74bdac540 5-6
+resources/builtin-skills/documentation/references/tools.md
+  h_9630b74bdac540 21-22
+src/tools/searchFiles.ts
+  h_9630b74bdac540 14,21-24,423-424,430-451,468-479,481,510-516
+  h_e08a86bb3a33a2 480,482
+src/services/semanticSearch.ts
+  h_9630b74bdac540 21,26-28,500-501,538,546-553,665-666,869-870,902,905-925,934-936
+  h_e08a86bb3a33a2 25,663-664,667
+src/tools/searchFiles.redaction.test.ts
+  h_9630b74bdac540 1-167
+src/util/ripgrep.ts
+  h_9630b74bdac540 219,222
+src/tools/listFiles.ts
+  h_9630b74bdac540 228-230,241,247,251
+src/services/semanticSearch.test.ts
+  h_9630b74bdac540 7,14,598-722
+  h_e08a86bb3a33a2 723
+src/shared/toolRegistry.ts
+  h_9630b74bdac540 86,91,262
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_9630b74bdac540 941,944,949,960-961,1946-1948
+  h_e08a86bb3a33a2 943,945-948,950,1949
+src/tools/listFiles.boundary.test.ts
+  h_9630b74bdac540 1-113
+src/shared/toolSchemas.ts
+  h_9630b74bdac540 386
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 682-684,689-691,696-698,703-705,710-712,717-719,727-729,735-737,743-745,751-753,759-761,767-769
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "882fb20bda01e6246c7f808bfe227feb3977cc92",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
