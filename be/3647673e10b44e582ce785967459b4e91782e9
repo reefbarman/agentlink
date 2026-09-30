@@ -1,0 +1,221 @@
+src/browser-gateway/BrowserGatewayServer.test.ts
+  h_9630b74bdac540 256-266,316-318,837,2315-2321,2323-2337,2497-2523
+  h_9630b74bdac540 2322,2338,2524
+src/agent/providers/ProviderUsageService.ts
+  h_9630b74bdac540 1-5,8-14,16-17,19-38,41,113-136,138-139,141-149,151,153
+  h_9630b74bdac540 15,18,150,152,154-156,158,160,164,170
+src/browser-gateway/testing/phase3ShadowParityGate.ts
+  h_9630b74bdac540 413,550
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  h_9630b74bdac540 42,49,66-67,260-271,510,3350-3422
+  h_9630b74bdac540 3423-3424
+src/browser-gateway/BrowserGatewayServer.ts
+  h_9630b74bdac540 5-6,475-477,536-539,1603-1625,1880-1903
+  h_9630b74bdac540 4,7,473-474,478,534-535,1626-1627,1904-1906
+packages/protocol/src/browserGatewayForegroundControlState.test.ts
+  h_9630b74bdac540 6-8,39
+  h_9630b74bdac540 5
+packages/protocol/src/chatCatalog.ts
+  h_9630b74bdac540 6,40,74-76
+src/agent/webview/styles/chat.css
+  h_9630b74bdac540 4783-4784,4793-4794
+src/agent/backgroundModelRouter.ts
+  h_9630b74bdac540 23,176-177,183,186-188,215,224-227,466-468
+  h_9630b74bdac540 174-175,178
+src/agent/webview/types.ts
+  h_9630b74bdac540 55-56
+src/agent/providers/codex/CodexProvider.test.ts
+  h_9630b74bdac540 1581,1797-1838,1842-1891
+  h_9630b74bdac540 1839-1841,1892-1893
+src/agent/ChatViewProvider.test.ts
+  h_9630b74bdac540 74-124,3333-3413,7934
+packages/core/src/codex/translation.test.ts
+  h_9630b74bdac540 671-727
+packages/core/src/openAiCompatible/config.ts
+  h_9630b74bdac540 109-110,114-145,189,194-203,401-405,517,811-938
+  h_9630b74bdac540 939-940
+src/browser-gateway/dataPlane/ownerProjectionAdapter.ts
+  h_9630b74bdac540 945
+CHANGELOG.md
+  h_9630b74bdac540 5-6,14-15
+src/browser-gateway/migration/actionSurfaceInventory.ts
+  h_9630b74bdac540 195-197,255
+  h_9630b74bdac540 192-194,252-254,256-257
+src/agent/backgroundModelRouting.config.json
+  h_9630b74bdac540 24,29-30,52,59
+src/browser-gateway/dataPlane/protocol.test.ts
+  h_9630b74bdac540 82,914
+resources/builtin-skills/documentation/references/capabilities.md
+  h_9630b74bdac540 30-32,55
+packages/core/src/codex/models.ts
+  h_9630b74bdac540 3,47-52,55-57,67,80-81,85-89,162,187-188,207-212,241,278,298-307,310-314,341-342,379-391,393,404,415,427,439,451,462,652-657,704
+  h_9630b74bdac540 68-74,82-84,90,213-214,240,242,308-309,392,658-659
+src/agent/webview/components/ProviderUsageBlock.test.tsx
+  h_9630b74bdac540 4-5,45-109
+  h_9630b74bdac540 110
+src/agent/webview/App.chatWorkspace.test.tsx
+  h_9630b74bdac540 100-142
+src/shared/providerUsage.ts
+  h_9630b74bdac540 1-64
+src/agent/providers/openaiCompatible/meridianQuota.ts
+  h_9630b74bdac540 1-188
+src/browser-gateway/migration/snapshotParityContract.ts
+  h_9630b74bdac540 223-225
+  h_9630b74bdac540 221-222
+src/browser-gateway/webview/relay/relaySnapshotProjection.test.ts
+  h_9630b74bdac540 82,221,303
+packages/protocol/src/modelCatalog.ts
+  h_9630b74bdac540 14-30,101-102
+src/agent/toolAdapter.ts
+  h_9630b74bdac540 687,697,717,831
+src/browser-gateway/testing/phase3LiveParityGate.ts
+  h_9630b74bdac540 466
+src/shared/ui/SpeedTierPicker.test.tsx
+  h_9630b74bdac540 1-108
+src/browser-gateway/webview/styles.css
+  h_9630b74bdac540 1003-1005,1012-1013
+packages/protocol/src/selectionCommands.ts
+  h_9630b74bdac540 1-5,29,40,48,71-72,93-94
+src/agent/persistenceContracts.ts
+  h_9630b74bdac540 283
+src/browser-gateway/webview/relay/relaySnapshotProjection.ts
+  h_9630b74bdac540 80
+src/agent/background/backgroundBudgetPolicy.ts
+  h_9630b74bdac540 55-56
+resources/builtin-skills/documentation/references/settings.md
+  h_9630b74bdac540 61,93-95,103-105
+src/agent/providers/ProviderUsageService.test.ts
+  h_9630b74bdac540 1,49-95,115-154
+  h_9630b74bdac540 96-97
+src/browser-gateway/testing/stateEquivalenceOracle.test.ts
+  h_9630b74bdac540 112,249
+resources/builtin-skills/documentation/references/tools.md
+  h_9630b74bdac540 99
+src/agent/providers/openaiCompatible/OpenAiCompatibleProviderManager.test.ts
+  h_9630b74bdac540 8,12,77-141
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_9630b74bdac540 44,52-56
+src/agent/providers/openaiCompatible/meridianQuota.test.ts
+  h_9630b74bdac540 1-143
+apps/desktop/src/desktopModelCatalog.test.ts
+  h_9630b74bdac540 19-20
+src/browser-gateway/dataPlane/ownerProjectionAdapter.test.ts
+  h_9630b74bdac540 136,850
+src/agent/webview/App.tsx
+  h_9630b74bdac540 11,404,2639-2642,3032,3528-3536,4865-4866
+  h_9630b74bdac540 3537-3541
+src/agent/backgroundModelRouter.test.ts
+  h_9630b74bdac540 151-152,162,515-549,559
+src/agent/webview/components/InputArea.tsx
+  h_9630b74bdac540 54-55,199-200,256-257,441-457,1665-1670
+  h_9630b74bdac540 1671-1672
+src/agent/AgentEngine.ts
+  h_9630b74bdac540 1773-1776
+src/browser-gateway/helper/AskAgentOwnerAdapter.ts
+  h_9630b74bdac540 523
+src/shared/chatProjection.ts
+  h_9630b74bdac540 4-5,832,938,2890-2893
+  h_9630b74bdac540 3,6,2894-2895
+src/agent/providers/openaiCompatible/OpenAiCompatibleQuotaService.ts
+  h_9630b74bdac540 1-346
+packages/protocol/src/browserGatewayForegroundControlState.ts
+  h_9630b74bdac540 2-4,34
+  h_9630b74bdac540 1
+src/browser-gateway/BrowserGatewayService.ts
+  h_9630b74bdac540 122,172,671-673,830-832,938,1162
+src/extension.ts
+  h_9630b74bdac540 111,114-116,127-128,1601,1633-1643,1852,1914,3456
+  h_9630b74bdac540 113,1644
+src/agent/AgentSessionManager.ts
+  h_9630b74bdac540 33-34,5423-5434,5554-5556,5800-5802,9091,9277
+  h_9630b74bdac540 32,35,5435-5436
+src/agent/webview/components/ProviderUsageBlock.tsx
+  h_9630b74bdac540 1-5,35-113,122,127,142-143,146,178-181,204-209
+  h_9630b74bdac540 114-117,138-141,144-145,147,182-183,210
+src/agent/SlashCommandRegistry.ts
+  h_9630b74bdac540 266
+src/agent/ChatViewProvider.ts
+  h_9630b74bdac540 7-10,16,1289-1290,2225-2230,2233-2250,4766-4792,8096-8100,8426-8431,9409-9412,12935
+  h_9630b74bdac540 6,1291,2231-2232,2251-2252,4793-4794,8101,8432-8434
+src/agent/SessionStore.ts
+  h_9630b74bdac540 176,760,814-816,1364,1415
+packages/protocol/src/chatState.ts
+  h_9630b74bdac540 10,35-36
+packages/core/src/codex/providerFactory.ts
+  h_9630b74bdac540 289
+src/agent/browserForegroundSnapshot.ts
+  h_9630b74bdac540 20,64
+src/browser-gateway/testing/stateEquivalenceOracle.ts
+  h_9630b74bdac540 7-8,90,320,951
+  h_9630b74bdac540 6,9
+src/browser-gateway/testing/phase3MobileBrowserFixture.ts
+  h_9630b74bdac540 772
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_9630b74bdac540 2,63-64,540,1834-1837,1915-1924,2622-2625,2955,2957-2964,5117-5166,6723-6726,6836-6883,6888-6892,9192-9199,9765-9770
+  h_9630b74bdac540 2956,2965,5167-5170,6727,6884-6885
+src/browser-gateway/dataPlane/protocol.ts
+  h_9630b74bdac540 91,94,947,1072-1078
+  h_9630b74bdac540 1079-1080
+src/agent/providers/openaiCompatible/OpenAiCompatibleQuotaService.test.ts
+  h_9630b74bdac540 1-260
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_9630b74bdac540 78,216,319,1559,1561
+packages/protocol/build-cjs.mjs
+  h_9630b74bdac540 658
+src/agent/AgentSession.ts
+  h_9630b74bdac540 9-13,146-147,344,1262,1288-1290
+src/agent/AgentEngine.test.ts
+  h_9630b74bdac540 4115-4149
+packages/core/src/codex/models.test.ts
+  h_9630b74bdac540 55,72-73,75,90-147,245
+src/shared/ui/SpeedTierPicker.tsx
+  h_9630b74bdac540 1-130
+src/agent/webview/components/InputArea.test.tsx
+  h_9630b74bdac540 55-99
+src/agent/providers/codex/CodexProvider.ts
+  h_9630b74bdac540 61,63,115-116,323,369-375,389,402,472-483,485
+  h_9630b74bdac540 484,486-488
+packages/protocol/src/chatState.test.ts
+  h_9630b74bdac540 27,88
+packages/core/src/codex/translation.ts
+  h_9630b74bdac540 6,18-19,439,462,489-490,566-569,588-589,634-635
+  h_9630b74bdac540 636
+src/browser-gateway/testing/ownerDataPlaneLoadFixture.ts
+  h_9630b74bdac540 697
+packages/core/src/modelRuntime.ts
+  h_9630b74bdac540 10,188-189,192-194,270-271
+src/browser-gateway/dataPlane/ownerProjectionSources.ts
+  h_9630b74bdac540 18,115
+src/agent/providers/openaiCompatible/OpenAiCompatibleProviderManager.ts
+  h_9630b74bdac540 5,112-116,120
+src/browser-gateway/BrowserGatewayService.test.ts
+  h_9630b74bdac540 1240,1318,1481,1568,1613,1681
+packages/core/src/codex/errors.ts
+  h_9630b74bdac540 363-376
+src/agent/providers/openaiCompatible/config.test.ts
+  h_9630b74bdac540 3,658-793
+  h_9630b74bdac540 794-795
+src/agent/providers/index.ts
+  h_9630b74bdac540 303-305
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_9630b74bdac540 682-684,689-691,696-698,703-705,710-712,717-719,727-729,735-737,743-745,751-753,759-761,767-769
+package-lock.json
+  h_9630b74bdac540 3,9
+package.json
+  h_9630b74bdac540 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_9630b74bdac540 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_9630b74bdac540 5-6,14-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "be3647673e10b44e582ce785967459b4e91782e9",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
