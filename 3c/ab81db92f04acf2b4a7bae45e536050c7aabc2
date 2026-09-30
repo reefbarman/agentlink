@@ -1,0 +1,283 @@
+apps/desktop/package.json
+  h_9630b74bdac540 3,17-19
+src/browser-gateway/browserGatewayAskAgentPreferences.test.ts
+  h_9630b74bdac540 21,26,50,75,177,180
+packages/protocol/package.json
+  h_9630b74bdac540 3
+packages/core/src/embeddedAgentWeb.ts
+  h_9630b74bdac540 489-497
+packages/core/src/modelRuntime.ts
+  h_9630b74bdac540 212-214,219,228-229,343,345-350,396-409
+  h_9630b74bdac540 344
+src/indexer/indexStorageCommands.test.ts
+  h_9630b74bdac540 1-114
+packages/node-host/src/responsesWebSocket.ts
+  h_9630b74bdac540 1-540
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_9630b74bdac540 56,71-78
+  h_9630b74bdac540 79
+packages/node-host/src/readTools.test.ts
+  h_9630b74bdac540 48,105
+  h_9630b74bdac540 47,49,104,106
+apps/cli/src/cli.ts
+  h_9630b74bdac540 3,12-13,558-563,567,575
+  h_9630b74bdac540 11,14
+src/agent/AgentEngine.test.ts
+  h_9630b74bdac540 4150-4177,6721-6753,6807-6813,6869-6889
+  h_9630b74bdac540 6754-6755,6890-6891
+packages/core/src/codex/responsesTransport.test.ts
+  h_9630b74bdac540 1-326
+packages/core/src/codex/providerFactory.test.ts
+  h_9630b74bdac540 11-15,50-154
+packages/core/src/codex/completionFacade.ts
+  h_9630b74bdac540 73-82,177-179,211-213,232-236
+  h_9630b74bdac540 231
+packages/core/src/nativeWebTools.ts
+  h_9630b74bdac540 191,267-275
+packages/core/src/turnKernel.test.ts
+  h_9630b74bdac540 3,293-351
+src/agent/providers/codex/CodexProvider.ts
+  h_9630b74bdac540 22,57-60,81,121-123,136-138,172-174,395,410-419,439-441,446,519,593-618,621,632-641,653,666-668,674-680,685-687,690,788-790,793-825,845-849,851-852,855,859,861-863,866-867,876
+  h_9630b74bdac540 850,853,865,868-869
+src/agent/webview/components/ApiRequestBlock.tsx
+  h_9630b74bdac540 17,32,57-65
+  h_9630b74bdac540 66
+packages/core/src/codex/completionFacade.test.ts
+  h_9630b74bdac540 358
+packages/core/src/agentToolLoop.ts
+  h_9630b74bdac540 99,157,164-165
+  h_9630b74bdac540 166
+src/browser-gateway/dataPlane/ownerProjectionAdapter.test.ts
+  h_9630b74bdac540 986,994
+packages/workspace-host/src/fileTools.test.ts
+  h_9630b74bdac540 26,80,148,215,487
+  h_9630b74bdac540 25,27,486,488
+src/shared/chatProjection.ts
+  h_9630b74bdac540 885,2680
+packages/core/src/codex/responsesTransport.ts
+  h_9630b74bdac540 1-232
+apps/cli/src/sessionProjection.ts
+  h_9630b74bdac540 127,367,420-432,443-447
+apps/cli/src/sessionProjection.test.ts
+  h_9630b74bdac540 34-70
+src/indexer/indexStorage.ts
+  h_9630b74bdac540 1-430
+resources/builtin-skills/documentation/references/getting-started.md
+  h_9630b74bdac540 96
+apps/cli/src/config.test.ts
+  h_9630b74bdac540 14,18-29
+packages/protocol/src/embeddedAgentTransport.ts
+  h_9630b74bdac540 103-108,873-880,991-996
+  h_9630b74bdac540 102,997
+src/agent/types.ts
+  h_9630b74bdac540 226
+packages/core/src/codex.ts
+  h_9630b74bdac540 15,17-18
+packages/node-host/src/writeTools.test.ts
+  h_9630b74bdac540 95,127,130,191,243,281,319,375,401,470,473,552
+  h_9630b74bdac540 94,96,126,128,242,244,280,282,318,320,374,376,400,402,469,471,551,553
+src/agent/webview/components/ApiRequestBlock.test.tsx
+  h_9630b74bdac540 11-34
+packages/protocol/src/chatTranscript.ts
+  h_9630b74bdac540 224
+src/agent/webview/components/MessageBubble.tsx
+  h_9630b74bdac540 745
+packages/core/src/providerStreamWatchdog.test.ts
+  h_9630b74bdac540 140-178
+  h_9630b74bdac540 179-180
+scripts/verify-retrieval-package.mjs
+  h_9630b74bdac540 34
+src/browser-gateway/dataPlane/protocol.ts
+  h_9630b74bdac540 2397,2399-2404,2443
+packages/workspace-host/src/mcpConfig.test.ts
+  h_9630b74bdac540 12
+src/indexer/indexStorage.test.ts
+  h_9630b74bdac540 1-303
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_9630b74bdac540 9-29,3072,5641,5643,5653,7864-7865,7867-7869
+  h_9630b74bdac540 7866
+packages/core/src/codex/responsesRecovery.test.ts
+  h_9630b74bdac540 1-96
+src/shared/agentErrors.ts
+  h_9630b74bdac540 5,142-150
+src/indexer/worker.ts
+  h_9630b74bdac540 97-98,255,267-277,1454,1908
+packages/core/src/turnContracts.ts
+  h_9630b74bdac540 123,251-256
+  h_9630b74bdac540 257
+packages/core/src/codex/providerFactory.ts
+  h_9630b74bdac540 44,48-50,78-82,103-107,122-126,141,157,177,187,290,317-341,348,374-386,408-417
+src/storage/retrieval/LanceDbRetrievalRepository.contract.test.ts
+  h_9630b74bdac540 505-508,510-568,570
+  s_9be2738c3c6b58::t_150cc2be3a0984 509
+packages/core/src/turnKernel.ts
+  h_9630b74bdac540 1,585,747,769-777,785-799,823,840,848-850,980
+  h_9630b74bdac540 841-847,851
+resources/builtin-skills/documentation/README.md
+  h_9630b74bdac540 13
+packages/workspace-host/src/backgroundSupervisor.test.ts
+  h_9630b74bdac540 79,280
+packages/workspace-host/src/modelRuntime.ts
+  h_9630b74bdac540 18-19,27-31,47-51,191,200
+packages/core/package.json
+  h_9630b74bdac540 3,363
+resources/builtin-skills/documentation/references/settings.md
+  h_9630b74bdac540 84-85,102
+resources/builtin-skills/documentation/references/capabilities.md
+  h_9630b74bdac540 28-31
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_9630b74bdac540 3-4,6,348,1028-1032,1388-1391,2351,5267-5269,5282-5294,5296,5298,5300,5326,5333,5335-5341,5344-5345,5348-5349,5362,5380-5381,5383-5405,5407-5468,5470-5479,5481-5492,5494-5522,5524,5526-5531,5572-5574,5832-5834,5858,5881-5882,5898,5904,8650-8653
+  h_9630b74bdac540 2,5,5270-5271,5301-5325,5327-5328,5330-5331,5334,5342-5343,5361,5469,5480,5532-5571,5879-5880,5883
+packages/core/src/codex/openaiClient.ts
+  h_9630b74bdac540 71-98
+CHANGELOG.md
+  h_9630b74bdac540 7-17
+src/agent/webview/types.ts
+  h_9630b74bdac540 195,604
+apps/cli/src/types.ts
+  h_9630b74bdac540 30
+packages/node-host/package.json
+  h_9630b74bdac540 3,36-39,41-44
+packages/core/src/providerStreamWatchdog.ts
+  h_9630b74bdac540 1-4,30,154-156,173,178
+src/agent/ChatViewProvider.ts
+  h_9630b74bdac540 499,851,5376,5394,10365,10943,11086
+packages/core/src/codex/turnRouting.ts
+  h_9630b74bdac540 1-2,10-15
+packages/core/src/codex/errors.ts
+  h_9630b74bdac540 33,44,58,79-81,110-111,121-122,148-149
+  h_9630b74bdac540 77-78,82
+package.json
+  h_9630b74bdac540 5,198-200,766-770,1193-1196,1242-1243
+  h_9630b74bdac540 197,771
+src/browser-gateway/helper/askAgentModelClient.ts
+  h_9630b74bdac540 59-62,69,156,186-188,210,214-215,546-547,707-719,732,734,737-744,750,775,824-845,847-851
+  h_9630b74bdac540 722-731,735
+packages/node-host/src/responsesWebSocket.test.ts
+  h_9630b74bdac540 1-277
+packages/node-host/src/mcpComposition.test.ts
+  h_9630b74bdac540 253
+src/extension.ts
+  h_9630b74bdac540 57,124,1562,1568-1574,3510-3512
+apps/cli/src/config.ts
+  h_9630b74bdac540 29,85-90,110
+packages/core/src/codex/responsesRecovery.ts
+  h_9630b74bdac540 1-168
+packages/protocol/src/browserGatewayTranscriptMessage.ts
+  h_9630b74bdac540 79
+src/agent/providers/ProviderUsageService.test.ts
+  h_9630b74bdac540 3,7,51-95,102,129
+src/agent/AgentEngine.ts
+  h_9630b74bdac540 3-7,86,1152-1154,1194-1196,1222,1487,1516,1571,1577,1586,1779-1780,1804-1806,1812-1830,1855-1859,1871-1873,1876-1877,1884,1888-1890,1919,1933,2017-2018,2023-2024,2031-2033,2036,2047,2067,2098,2133,2141-2197,2279-2281,2340,3289,3324-3325,3327,3339
+  h_9630b74bdac540 2,8,1802-1803,1807,1860,1878-1879,1881-1883,2034,3326
+resources/builtin-skills/documentation/references/providers.md
+  h_9630b74bdac540 1-158
+packages/workspace-host/src/mcpTools.test.ts
+  h_9630b74bdac540 14
+  h_9630b74bdac540 13,15
+src/shared/agentErrors.test.ts
+  h_9630b74bdac540 18,160-173
+  s_a12bf127de190f::t_e250dffd79ee6f 174-176
+packages/workspace-host/src/commandTools.test.ts
+  h_9630b74bdac540 21
+packages/core/src/codex/streamParser.ts
+  h_9630b74bdac540 29-32,82,368-369,371-373,539-541,595-601,622-630
+  h_9630b74bdac540 374,542,631-632
+src/storage/retrieval/LanceDbRetrievalRepository.ts
+  h_9630b74bdac540 1640-1646,2287-2294,2303-2314,2319-2324,2326
+  h_9630b74bdac540 2315-2318,2325
+src/browser-gateway/browserGatewayAskAgentPreferences.ts
+  h_9630b74bdac540 29,36-38,43,87,99
+src/browser-gateway/helper/askAgentModelClient.test.ts
+  h_9630b74bdac540 18,111,129,134-135,138,148-149,376-402,404-406,694-764,1000-1113
+  h_9630b74bdac540 132-133,136,403,765-766,1114-1115
+packages/workspace-host/src/workspaceHostRuntime.ts
+  h_9630b74bdac540 12,265-293,388-391,404,968-971,978,1042,1063,1075-1079,1122,1153-1155
+  h_9630b74bdac540 387,392,1080,1156
+src/agent/providers/codex/CodexProvider.test.ts
+  h_9630b74bdac540 258-309,912-1015
+scripts/verify-retrieval-package.test.mjs
+  h_9630b74bdac540 30,93-106
+  h_9630b74bdac540 107-109
+packages/workspace-host/package.json
+  h_9630b74bdac540 3,27-29
+src/agent/AgentSession.ts
+  h_9630b74bdac540 2,257-258,1110
+src/adapters/vscode/projectSettingsAccessor.ts
+  h_9630b74bdac540 76
+packages/core/src/client.ts
+  h_9630b74bdac540 169-176,178,274,563-569,928-935
+  h_9630b74bdac540 936
+packages/node-host/src/index.ts
+  h_9630b74bdac540 3
+src/agent/webview/App.tsx
+  h_9630b74bdac540 1273,2140
+apps/cli/package.json
+  h_9630b74bdac540 3,33-36
+packages/core/src/codex/responsesStream.ts
+  h_9630b74bdac540 16-26,28,30-36,81-84,86-89,91-136,139,149-155,157-160,162-200,202-262,264-310,312-331,333-334,336,338-353,357-361,363-364,369,371-372,376-378,380-381,383-398,400-415,417-419,424,462,466
+  h_9630b74bdac540 29,137,161,201,365-368,382,416
+packages/protocol/src/browserGatewayTranscriptMessage.test.ts
+  h_9630b74bdac540 87
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_9630b74bdac540 209-210,222,224,229
+packages/core/src/codex/ResponsesTransportSession.test.ts
+  h_9630b74bdac540 1-120
+src/indexer/indexStorageCommands.ts
+  h_9630b74bdac540 1-137
+packages/core/src/codex/streamParser.test.ts
+  h_9630b74bdac540 33-84
+packages/core/src/codex/responsesStream.test.ts
+  h_9630b74bdac540 322-325,328-331,405
+  h_9630b74bdac540 321,326-327,332
+packages/core/src/codex/ResponsesTransportSession.ts
+  h_9630b74bdac540 1-233
+src/agent/providers/ProviderUsageService.ts
+  h_9630b74bdac540 54
+resources/builtin-skills/documentation/SKILL.md
+  h_9630b74bdac540 41
+  h_9630b74bdac540 42
+src/browser-gateway/dataPlane/ownerProjectionAdapter.ts
+  h_9630b74bdac540 1296-1298
+packages/core/src/codex/responsesRecoveryStream.test.ts
+  h_9630b74bdac540 1-221
+apps/cli/THIRD_PARTY_NOTICES.md
+  h_9630b74bdac540 953-982,1828-1857,3149-3176,3665,3674,3682,3691
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_9630b74bdac540 13,30,47,64,81,92,103,114,125,142,159,176,193,204,215,226,237,254,271,288,305,316,327,338,349,366,383,400,417,428,439,450,461,478,495,512,529,540,551,562,573,590,607,624,641,652,663,674
+package-lock.json
+  h_9630b74bdac540 3,9,17-20,61-62,92,101-104,147,150-152,4220-4228,4263-4271,10996-11004,13634,13637,13650,13653-13654,13656-13661,13669,13677,13680-13682
+resources/builtin-skills/documentation/references/package-contract.md
+  h_9630b74bdac540 12,49,91
+resources/builtin-skills/documentation/references/release-notes.md
+  h_9630b74bdac540 7-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3cab81db92f04acf2b4a7bae45e536050c7aabc2",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  },
+  "sessions": {
+    "s_9be2738c3c6b58": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a4de9877-f52d-40f9-8908-23fa7aa8bb9d",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "s_a12bf127de190f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0efe0-f274-7671-ae96-52081f44de50",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
