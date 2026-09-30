@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added **AgentLink: Install Desktop App** and **AgentLink: Install CLI** to the VS Code Command Palette. They find separate published preview releases, warn about unsigned/not-notarised downloads, and open the matching Desktop DMG or checksum-verify and install the Apple Silicon CLI in a visible terminal without replacing an existing launcher. Local macOS windows only; source-build installers remain separate.
+
 - `/usage` can now show subscription quota for OpenAI-compatible connections backed by a Meridian proxy. Add `"quota": { "format": "meridian", "url": ".../v1/usage/quota/all" }` to a connection in `~/.agentlink/openai-compatible.json` to list each Meridian profile's five-hour and weekly windows, reset times, and reading age. `/usage` follows the selected model in its picker description and queries only that model's provider, so Claude connections no longer show Codex usage and providers without a usage source show an unavailable notice. Quota is fetched only on demand, reuses the connection credential only for a same-origin URL, rejects redirects and oversized responses, and shows failures or rate limits per provider without affecting the connection's models. `/usage` is now also available in browser remote workspace tabs.
 
 - Published separate release paths for the VS Code extension (`v1.22.78`), standalone Desktop preview (`desktop-v0.1.1`), and self-contained macOS Apple Silicon CLI preview (`cli-v0.1.0`). CLI archives are checksum-verified, unsigned, and not notarised; CLI release packaging runs the existing bundle and terminal smoke checks. Updated the README and bundled guides with installation, setup, and platform limits for all three surfaces.

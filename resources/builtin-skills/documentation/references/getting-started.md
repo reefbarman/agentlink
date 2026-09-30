@@ -27,6 +27,15 @@ code --install-extension agentlink-*.vsix --force
 
 The installer supports `darwin`, `linux`, `alpine`, and `win32` targets on `arm64` and `x64`. See the [complete reference](complete-reference.md#installation) for source builds, platform details, and AgentLink Terminal requirements.
 
+### Install standalone previews from VS Code
+
+In a local macOS VS Code window, open the Command Palette:
+
+- **AgentLink: Install Desktop App** finds the latest published Desktop preview for Apple Silicon or Intel and opens its DMG download in your browser. Open the DMG and drag **AgentLink** to Applications, quitting an existing app before replacing it.
+- **AgentLink: Install CLI** finds the latest Apple Silicon CLI preview and, after confirmation, runs a visible terminal installer. It verifies the release SHA-256 checksum before extraction, keeps the bundle in a unique `~/.local/lib/agentlink/cli-preview.*` directory, and links `~/.local/bin/agentlink`. It refuses to replace any existing launcher. Add `~/.local/bin` to PATH if needed, then run `agentlink --help`.
+
+Both commands warn that published previews are unsigned and not notarised. They do not bypass macOS security warnings or change shell profiles, sessions, or credentials. Desktop may require right-click **Open** on first launch; macOS may block CLI executables. These commands are unavailable in remote extension hosts and do not add an install or shell action to the browser surface. They download published releases, not local source builds. For preview CLI removal, delete its launcher symlink and the unique bundle directory it points to, leaving `~/.agentlink` and Keychain entries intact.
+
 ### Standalone CLI preview
 
 The [CLI preview release](https://github.com/reefbarman/agentlink/releases/tag/cli-v0.1.0) provides a self-contained, unsigned terminal coding agent for macOS Apple Silicon, without VS Code or a separately installed Node runtime. It supports provider setup, durable per-project sessions, reviewed single-file edits and commands, MCP, up to two scoped background writers, and optional managed TypeScript/JavaScript intelligence. Check the archive checksum before installing, and see [Standalone CLI](standalone-cli.md#github-release-preview) for exact setup, approval, and limitations. Intel macOS, Linux, and Windows are not supported by this preview.

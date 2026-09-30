@@ -13,6 +13,7 @@ import {
 } from "./integrations/TerminalManager.js";
 import { registerDiffViewCommands } from "./integrations/diffViewCommands.js";
 import { registerDiffViewContentProvider } from "./integrations/diffViewContentProvider.js";
+import { registerStandaloneInstallCommands } from "./integrations/standaloneInstallCommands.js";
 import { SidebarProvider } from "./sidebar/SidebarProvider.js";
 import { ApprovalManager } from "./approvals/ApprovalManager.js";
 import { ApprovalPanelProvider } from "./approvals/ApprovalPanelProvider.js";
@@ -3370,6 +3371,7 @@ export async function activate(
       );
     }),
     ...registerDiffViewCommands(),
+    ...registerStandaloneInstallCommands(),
     ...registerAgentActivityCommands({
       addTrustedCommand: () => addTrustedCommandViaUi(approvalManager),
       approvalPanel,

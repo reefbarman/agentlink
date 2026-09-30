@@ -139,6 +139,14 @@
         "icon": "$(terminal)"
       },
       {
+        "command": "agentlink.installDesktopApp",
+        "title": "AgentLink: Install Desktop App"
+      },
+      {
+        "command": "agentlink.installCli",
+        "title": "AgentLink: Install CLI"
+      },
+      {
         "command": "agentlink.openBrowserGateway",
         "title": "AgentLink: Open Browser Gateway"
       },

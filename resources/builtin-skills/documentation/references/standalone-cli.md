@@ -16,6 +16,8 @@ The standalone CLI preview runs a local multi-turn AgentLink coding session with
 
 ### GitHub release preview
 
+From a local macOS Apple Silicon VS Code window with AgentLink installed, **AgentLink: Install CLI** in the Command Palette finds the latest published CLI preview. After an unsigned-preview warning, a visible terminal downloads and checksum-verifies the archive, extracts into a unique `~/.local/lib/agentlink/cli-preview.*` directory, and links `~/.local/bin/agentlink`. An existing launcher is never replaced. Add `~/.local/bin` to PATH if needed. This is separate from the signed source-build installer below; it does not bypass macOS security checks, change shell profiles, or alter sessions and credentials. To uninstall, remove that symlink and the unique bundle directory it points to.
+
 Download `agentlink-cli-darwin-arm64-v0.1.0.tar.gz` and its `.sha256` file from the [CLI preview release](https://github.com/reefbarman/agentlink/releases/tag/cli-v0.1.0). From the directory containing both downloads, verify the archive before extracting:
 
 ```sh

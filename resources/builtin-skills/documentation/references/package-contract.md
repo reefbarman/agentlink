@@ -43,6 +43,8 @@ This bundled reference is generated from the extension's `package.json` during b
 | `agentlink.explainWithAgent`               | Explain with AgentLink                                     |
 | `agentlink.fixWithAgent`                   | Fix with AgentLink                                         |
 | `agentlink.installAgentPluginFromSource`   | AgentLink: Install Agent Plugin From Source                |
+| `agentlink.installCli`                     | AgentLink: Install CLI                                     |
+| `agentlink.installDesktopApp`              | AgentLink: Install Desktop App                             |
 | `agentlink.manageAgentPlugins`             | AgentLink: Manage Agent Plugins                            |
 | `agentlink.managePairedDevices`            | AgentLink: Manage Paired Browser Devices                   |
 | `agentlink.openBrowserGateway`             | AgentLink: Open Browser Gateway                            |
