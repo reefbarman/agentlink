@@ -1,0 +1,34 @@
+package.json
+  h_9630b74bdac540 141-148
+resources/builtin-skills/documentation/references/getting-started.md
+  h_9630b74bdac540 30-38
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_9630b74bdac540 19-20
+src/integrations/standaloneInstallCommands.ts
+  h_9630b74bdac540 1-84
+src/integrations/standaloneReleaseInstall.test.ts
+  h_9630b74bdac540 1-91
+src/integrations/standaloneReleaseInstall.ts
+  h_9630b74bdac540 1-129
+src/integrations/standaloneInstallCommands.test.ts
+  h_9630b74bdac540 1-105
+src/extension.ts
+  h_9630b74bdac540 16,3374
+CHANGELOG.md
+  h_9630b74bdac540 5-6
+resources/builtin-skills/documentation/references/package-contract.md
+  h_9630b74bdac540 46-47
+resources/builtin-skills/documentation/references/release-notes.md
+  h_9630b74bdac540 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b537ab0b24321a0b648056666c018f8c1f714984",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
