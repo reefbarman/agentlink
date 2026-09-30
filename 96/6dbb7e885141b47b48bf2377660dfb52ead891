@@ -1,0 +1,29 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+resources/builtin-skills/documentation/references/providers.md
+  h_e08a86bb3a33a2 7-12
+packages/core/src/codex/completionFacade.test.ts
+  h_e08a86bb3a33a2 160
+packages/core/src/codex/translation.test.ts
+  h_e08a86bb3a33a2 526-529,531-533,535-540,543-546,564-565,569-574,584-588,595-609,612-617
+  h_e08a86bb3a33a2 541-542,547,549-562,566-568,576-583,589-594,610-611,618
+src/agent/providers/codex/CodexProvider.test.ts
+  h_e08a86bb3a33a2 1572-1574,1579,1589,1592-1594,1607
+  h_e08a86bb3a33a2 1575-1576,1578,1580-1586,1588,1590-1591,1595-1606,1608
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "966dbb7e885141b47b48bf2377660dfb52ead891",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
