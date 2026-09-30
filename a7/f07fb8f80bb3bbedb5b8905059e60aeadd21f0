@@ -1,0 +1,30 @@
+src/agent/webview/components/ToolCallGroup.tsx
+  h_9630b74bdac540 13,53,175-178,180-181,210,214,219,221-222,225,231,239,246,250-258,278
+  s_ef7789d301746a::t_3797b27f6d3722 220,226,259-260
+src/agent/webview/components/ToolCallBlock.tsx
+  h_9630b74bdac540 618-630,632-637
+src/agent/webview/components/ToolCallGroup.test.tsx
+  h_9630b74bdac540 74,76,79-106,243,274-281,283-287,415-447
+  s_ef7789d301746a::t_e28017dbe9149c 107,282,288-289,448-449
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a7f07fb8f80bb3bbedb5b8905059e60aeadd21f0",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  },
+  "sessions": {
+    "s_ef7789d301746a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9bd39e18-13f5-4ee1-8cff-1a8d19c2a993",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
