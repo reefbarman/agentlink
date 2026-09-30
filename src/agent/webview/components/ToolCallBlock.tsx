@@ -615,15 +615,26 @@ function hasToolWarning(payload: Record<string, unknown> | null): boolean {
   const malformedBlocks = payload.malformed_blocks;
   if (typeof malformedBlocks === "number" && malformedBlocks > 0) return true;
 
+  return hasInterruptedStatus(payload);
+}
+
+const INTERRUPTED_RESULT_STATUSES = new Set([
+  "cancelled",
+  "rejected",
+  "rejected_by_user",
+  "timed_out",
+  "force-completed",
+  "stopped",
+]);
+
+function hasInterruptedStatus(payload: Record<string, unknown> | null) {
   const status = getResultStatus(payload);
-  return (
-    status === "cancelled" ||
-    status === "rejected" ||
-    status === "rejected_by_user" ||
-    status === "timed_out" ||
-    status === "force-completed" ||
-    status === "stopped"
-  );
+  return status !== null && INTERRUPTED_RESULT_STATUSES.has(status);
+}
+
+/** True when a completed tool was rejected, cancelled, stopped, or timed out. */
+export function isInterruptedToolResult(result: string): boolean {
+  return hasInterruptedStatus(parseResultObject(result));
 }
 
 export interface ToolCallVisualState {

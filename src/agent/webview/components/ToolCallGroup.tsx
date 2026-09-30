@@ -10,6 +10,7 @@ import {
   fmtDuration,
   formatResultMediaLabel,
   getToolCallVisualState,
+  isInterruptedToolResult,
   type ToolCallData,
 } from "./ToolCallBlock";
 import type { OpenImageInEditor } from "./ImagePreview";
@@ -49,6 +50,7 @@ export function groupActivitySegments(
   for (const segment of segments) {
     if (
       (segment.kind === "tool_group" &&
+        getToolGroupStatus(segment.blocks).statusClass === "tool-success" &&
         !segment.blocks.some(
           (block) =>
             block.resultImages?.length ||
@@ -170,10 +172,13 @@ export function segmentBlocks(
 }
 
 function isGroupableToolCall(block: ContentBlock): block is ToolBlock {
+  if (block.type !== "tool_call" || !block.complete) return false;
+  const { statusClass } = getToolCallVisualState(block);
+  // Soft warnings (non-zero exits, partial edits) are routine and stay grouped;
+  // errors and interruptions (rejected, cancelled, timed out) stay visible.
   return (
-    block.type === "tool_call" &&
-    block.complete &&
-    getToolCallVisualState(block).statusClass === "tool-success"
+    statusClass === "tool-success" ||
+    (statusClass === "tool-warning" && !isInterruptedToolResult(block.result))
   );
 }
 
@@ -202,22 +207,28 @@ export function getToolGroupStatus(blocks: ToolBlock[]): {
   statusIconClass: "codicon-check" | "codicon-warning" | "codicon-error";
   errorCount: number;
   warningCount: number;
+  nonZeroExitCount: number;
 } {
   let errorCount = 0;
   let warningCount = 0;
+  let nonZeroExitCount = 0;
 
   for (const block of blocks) {
     const state = getToolCallVisualState(block);
     if (state.statusClass === "tool-error") errorCount += 1;
-    if (state.statusClass === "tool-warning") warningCount += 1;
+    if (state.statusClass === "tool-warning") {
+      warningCount += 1;
+      if (state.cmdExitBadge !== null) nonZeroExitCount += 1;
+    }
   }
+
+  const counts = { errorCount, warningCount, nonZeroExitCount };
 
   if (errorCount > 0) {
     return {
       statusClass: "tool-error",
       statusIconClass: "codicon-error",
-      errorCount,
-      warningCount,
+      ...counts,
     };
   }
 
@@ -225,17 +236,26 @@ export function getToolGroupStatus(blocks: ToolBlock[]): {
     return {
       statusClass: "tool-warning",
       statusIconClass: "codicon-warning",
-      errorCount,
-      warningCount,
+      ...counts,
     };
   }
 
   return {
     statusClass: "tool-success",
     statusIconClass: "codicon-check",
-    errorCount,
-    warningCount,
+    ...counts,
   };
+}
+
+function formatGroupStatusBadge(
+  status: ReturnType<typeof getToolGroupStatus>,
+): string | null {
+  if (status.errorCount > 0) return `${status.errorCount} failed`;
+  if (status.warningCount === 0) return null;
+  if (status.nonZeroExitCount === status.warningCount) {
+    return `${status.warningCount} non-zero exit${status.warningCount === 1 ? "" : "s"}`;
+  }
+  return `${status.warningCount} warning${status.warningCount === 1 ? "" : "s"}`;
 }
 
 export function ToolCallGroup({
@@ -255,12 +275,7 @@ export function ToolCallGroup({
     0,
   );
   const status = useMemo(() => getToolGroupStatus(blocks), [blocks]);
-  const statusBadge =
-    status.errorCount > 0
-      ? `${status.errorCount} failed`
-      : status.warningCount > 0
-        ? `${status.warningCount} warning${status.warningCount === 1 ? "" : "s"}`
-        : null;
+  const statusBadge = formatGroupStatusBadge(status);
   const imageCount = blocks.reduce(
     (sum, block) => sum + countResultImages(block),
     0,

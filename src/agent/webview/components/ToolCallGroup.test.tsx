@@ -71,11 +71,39 @@ describe("segmentBlocks", () => {
     ]);
   });
 
-  it("keeps failed completed tool calls standalone after a completed group", () => {
+  it("keeps warning tool calls such as non-zero exits inside the group", () => {
+    const first = tool("tool-1", "read_file");
+    const nonZeroExit = tool("tool-2", "execute_command", {
+      result: JSON.stringify({ exit_code: 1 }),
+    });
+    const third = tool("tool-3", "apply_diff");
+
+    expect(segmentBlocks([first, nonZeroExit, third])).toEqual([
+      { kind: "tool_group", blocks: [first, nonZeroExit, third] },
+    ]);
+  });
+
+  it("keeps rejected or timed-out tool calls standalone", () => {
+    const first = tool("tool-1", "read_file");
+    const rejected = tool("tool-2", "apply_diff", {
+      result: JSON.stringify({ status: "rejected_by_user" }),
+    });
+    const timedOut = tool("tool-3", "execute_command", {
+      result: JSON.stringify({ status: "timed_out", exit_code: 1 }),
+    });
+
+    expect(segmentBlocks([first, rejected, timedOut])).toEqual([
+      { kind: "tool_group", blocks: [first] },
+      { kind: "single", block: rejected, index: 1 },
+      { kind: "single", block: timedOut, index: 2 },
+    ]);
+  });
+
+  it("keeps errored tool calls standalone after a completed group", () => {
     const first = tool("tool-1", "read_file");
     const second = tool("tool-2", "search_files");
-    const failed = tool("tool-3", "execute_command", {
-      result: JSON.stringify({ exit_code: 1 }),
+    const failed = tool("tool-3", "read_file", {
+      result: JSON.stringify({ status: "error", error: "not found" }),
     });
 
     expect(segmentBlocks([first, second, failed])).toEqual([
@@ -212,7 +240,7 @@ describe("groupActivitySegments", () => {
   it("leaves running, failed and approval-offer groups outside the completed run", () => {
     const completed = segmentBlocks(cycles(3));
     const failed = tool("failed", "execute_command", {
-      result: JSON.stringify({ exit_code: 1 }),
+      result: JSON.stringify({ status: "error", error: "timed out" }),
     });
     const promoted = tool("promoted", "mcp__write", {
       mcpApprovalPromotion: {
@@ -240,6 +268,22 @@ describe("groupActivitySegments", () => {
       { kind: "single", block: running, index: 7 },
       { kind: "single", block: failed, index: 8 },
       { kind: "tool_group", blocks: [promoted] },
+    ]);
+  });
+
+  it("leaves tool groups containing warnings outside Activity", () => {
+    const nonZeroExit = tool("exit", "execute_command", {
+      result: JSON.stringify({ exit_code: 1 }),
+    });
+    const segments = segmentBlocks([
+      ...cycles(3),
+      thinking("test-run"),
+      nonZeroExit,
+    ]);
+
+    expect(groupActivitySegments(segments)).toEqual([
+      { kind: "activity_group", segments: segments.slice(0, 7) },
+      { kind: "tool_group", blocks: [nonZeroExit] },
     ]);
   });
 
@@ -366,6 +410,41 @@ describe("ToolCallGroup", () => {
     );
 
     expect(screen.getByText("1 failed")).toBeTruthy();
+  });
+
+  it("names non-zero exits in the collapsed badge", () => {
+    render(
+      <ToolCallGroup
+        blocks={[
+          tool("tool-1", "read_file"),
+          tool("tool-2", "execute_command", {
+            result: JSON.stringify({ exit_code: 1 }),
+          }),
+          tool("tool-3", "execute_command", {
+            result: JSON.stringify({ exit_code: 2 }),
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("2 non-zero exits")).toBeTruthy();
+  });
+
+  it("falls back to a warning count when warnings are mixed", () => {
+    render(
+      <ToolCallGroup
+        blocks={[
+          tool("tool-1", "execute_command", {
+            result: JSON.stringify({ exit_code: 1 }),
+          }),
+          tool("tool-2", "apply_diff", {
+            result: JSON.stringify({ status: "partial", partial: true }),
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("2 warnings")).toBeTruthy();
   });
 
   it("marks collapsed groups containing image results with an image badge", () => {
