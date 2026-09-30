@@ -38,6 +38,10 @@ export interface FeedbackEntry {
   timestamp: string;
   tool_name: string;
   feedback: string;
+  observed_impact?: string;
+  workaround?: string;
+  observed_recurrence?: string;
+  improvement_signal?: string;
   session_id?: string;
   workspace?: string;
   extension_version: string;
@@ -113,6 +117,10 @@ function fitFeedbackEntry(
   const fitted = { ...entry };
   const shrinkable = [
     "feedback",
+    "observed_impact",
+    "workaround",
+    "observed_recurrence",
+    "improvement_signal",
     "tool_params",
     "tool_result_summary",
   ] as const;
@@ -217,6 +225,16 @@ export function appendFeedback(entry: FeedbackEntry): FeedbackRecord {
     ...entry,
     id: randomUUID(),
     feedback: truncate(entry.feedback, 2000),
+    observed_impact: entry.observed_impact
+      ? truncate(entry.observed_impact)
+      : undefined,
+    workaround: entry.workaround ? truncate(entry.workaround) : undefined,
+    observed_recurrence: entry.observed_recurrence
+      ? truncate(entry.observed_recurrence)
+      : undefined,
+    improvement_signal: entry.improvement_signal
+      ? truncate(entry.improvement_signal)
+      : undefined,
     tool_params: entry.tool_params ? truncate(entry.tool_params) : undefined,
     tool_result_summary: entry.tool_result_summary
       ? truncate(entry.tool_result_summary)

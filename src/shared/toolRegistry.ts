@@ -284,13 +284,13 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     label: "Submit tool feedback",
     devOnly: true,
     description:
-      "Submit actionable feedback about an AgentLink tool only when you encountered a concrete problem, unexpected behavior, or missing capability. Do not submit routine success, praise, empty reports, or general commentary. For MCP-related work, report only problems with AgentLink's native MCP tools or AgentLink-owned MCP plumbing. Never submit feedback about a specific MCP server or its native server__tool, including that server's bugs, limitations, confusing output, or domain errors. Feedback is stored locally for the extension developer to review.",
+      "Submit actionable feedback about an AgentLink tool only when you encountered a concrete problem, unexpected behavior, or missing capability. Include the observed impact on the current task; optionally describe the workaround, observed recurrence, and an improvement signal. Report evidence, not an importance score or invented savings. Do not submit routine success, praise, empty reports, or general commentary. For MCP-related work, report only problems with AgentLink's native MCP tools or AgentLink-owned MCP plumbing. Never submit feedback about a specific MCP server or its native server__tool, including that server's bugs, limitations, confusing output, or domain errors. Feedback is stored locally for the extension developer to review.",
   },
   get_feedback: {
     label: "Read tool feedback",
     devOnly: true,
     description:
-      "Read active feedback about AgentLink tools. Optionally filter by tool name, triage state, and priority. Every result includes a stable ID, global index, and triage metadata; use the stable ID for triage or deletion.",
+      "Read active feedback about AgentLink tools. Optionally filter by tool name, triage state, and priority. Every result includes a stable ID, global index, and triage metadata; use the stable ID for triage or deletion. Entries include observed_impact, workaround, observed_recurrence, and improvement_signal when recorded; older records may omit them. Treat reporter claims as evidence to validate, not assigned priority or measured product-wide benefit.",
   },
   triage_feedback: {
     label: "Triage feedback entries",

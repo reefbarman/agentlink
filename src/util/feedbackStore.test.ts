@@ -76,6 +76,38 @@ describe("feedbackStore", () => {
     ]);
   });
 
+  it("preserves impact context alongside older records without rewriting them", () => {
+    const legacy = makeEntry({ timestamp: "2026-01-01T00:00:00.000Z" });
+    fs.mkdirSync(path.dirname(feedbackPath), { recursive: true });
+    const legacyLine = JSON.stringify(legacy) + "\n";
+    fs.writeFileSync(feedbackPath, legacyLine, "utf-8");
+    const [before] = readFeedback();
+    const context = {
+      observed_impact: "Task blocked until a direct read succeeded",
+      workaround: "Used read_file, task completed with one extra call",
+      observed_recurrence: "Two failures in three attempts this session",
+      improvement_signal: "First attempt returns usable content",
+    };
+    const appended = appendFeedback(makeEntry(context));
+    triageFeedback({ ids: [before!.id], triaged: true, priority: "P2" });
+    const [oldRecord, newRecord] = readFeedback();
+
+    expect(oldRecord).toMatchObject({
+      id: before!.id,
+      global_index: 0,
+      priority: "P2",
+    });
+    expect(oldRecord).not.toHaveProperty("observed_impact");
+    expect(newRecord).toMatchObject({
+      ...context,
+      id: appended.id,
+      global_index: 1,
+    });
+    expect(fs.readFileSync(feedbackPath, "utf-8").startsWith(legacyLine)).toBe(
+      true,
+    );
+  });
+
   it("preserves global indices when filtering", () => {
     appendFeedback(makeEntry({ tool_name: "tool_a", feedback: "a" }));
     const second = appendFeedback(
@@ -119,6 +151,10 @@ describe("feedbackStore", () => {
       makeEntry({
         feedback: '🌊\n"'.repeat(5000),
         tool_params: "p".repeat(1000),
+        observed_impact: "🌊".repeat(1000),
+        workaround: '🌊\n"'.repeat(1000),
+        observed_recurrence: "r".repeat(1000),
+        improvement_signal: "s".repeat(1000),
       }),
     );
     const [entry] = readFeedback();
@@ -127,6 +163,16 @@ describe("feedbackStore", () => {
     expect(entry?.feedback.length).toBeLessThan(5000);
     expect(entry?.feedback).toContain("…(truncated)");
     expect(entry?.tool_params?.length).toBeLessThanOrEqual(520);
+    for (const field of [
+      "observed_impact",
+      "workaround",
+      "observed_recurrence",
+      "improvement_signal",
+    ] as const) {
+      expect(entry?.[field]?.length).toBeGreaterThan(0);
+      expect(entry?.[field]?.length).toBeLessThanOrEqual(520);
+      expect(entry?.[field]).toContain("…(truncated)");
+    }
     expect(Buffer.byteLength(`${line}\n`, "utf-8")).toBeLessThanOrEqual(4000);
   });
 

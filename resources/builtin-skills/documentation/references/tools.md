@@ -114,6 +114,12 @@ A Codex OAuth `web_fetch` can follow the provider's line-addressed continuation.
 
 MCP configuration and trust behavior: [MCP](mcp.md). Exact native web contracts: [web access](complete-reference.md#web-access).
 
+## Report tool problems in development builds
+
+`send_feedback` records concrete AgentLink-owned issues, not routine success or third-party MCP-server defects. New reports require a non-empty `observed_impact` statement describing the consequence for the current task. Optional `workaround`, `observed_recurrence` and `improvement_signal` fields capture recovery and task outcome, occurrences actually observed in this session, and an observable outcome to check after a fix. Report evidence rather than importance scores, guessed prevalence or invented time/token savings.
+
+`get_feedback` returns this context when recorded. Older records remain readable without these fields, with unchanged IDs and triage/deletion metadata. Validate reporter claims before assigning priority with `triage_feedback`; absence of context means unknown impact, not zero impact. Use the improvement signal for a before/after check, not as a measured product-wide benefit. Exact contracts: [development feedback tools](complete-reference.md#development-feedback-tools).
+
 ## Exact contracts and recovery behavior
 
 The [complete product reference tools section](complete-reference.md#tools) is currently the authoritative exhaustive list of input schemas, response shapes, mode availability, and recovery fields. This focused page is the place to start; use the linked section when an exact tool contract matters.

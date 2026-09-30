@@ -689,9 +689,13 @@
       "name": "send_feedback",
       "parameters": [
         "feedback",
+        "improvement_signal",
+        "observed_impact",
+        "observed_recurrence",
         "tool_name",
         "tool_params",
-        "tool_result_summary"
+        "tool_result_summary",
+        "workaround"
       ],
       "cluster": "dev",
       "sideEffect": "external",
@@ -836,5 +840,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "9a1152329f25c173cbdc39e37d319e8c125e0951e80802983fbd73b13dd35dd7"
+  "revision": "556769d7a2a60a64fb5f4aa26f523b4f839873a1154b4267e23ecec07ab8bee7"
 }

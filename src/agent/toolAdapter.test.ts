@@ -1319,6 +1319,25 @@ describe("getAgentTools", () => {
       expect(sendFeedback?.description).toContain(
         "Never submit feedback about a specific MCP server or its native server__tool",
       );
+      expect(sendFeedback?.input_schema.required).toEqual(
+        expect.arrayContaining(["tool_name", "feedback", "observed_impact"]),
+      );
+      expect(
+        sendFeedback?.input_schema.properties?.observed_impact,
+      ).toMatchObject({
+        type: "string",
+        minLength: 1,
+      });
+      for (const field of [
+        "workaround",
+        "observed_recurrence",
+        "improvement_signal",
+      ]) {
+        expect(sendFeedback?.input_schema.properties?.[field]).toMatchObject({
+          type: "string",
+        });
+        expect(sendFeedback?.input_schema.required).not.toContain(field);
+      }
       expect(feedbackSchema).toMatchObject({ minLength: 1 });
       expect(feedbackSchema?.description).toContain(
         "actionable AgentLink issue",

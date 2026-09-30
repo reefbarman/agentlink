@@ -32,16 +32,26 @@ Submit feedback about an AgentLink tool — report issues, suggest improvements,
 
 For MCP-related work, submit feedback only about AgentLink's native MCP tools (`find_mcp_tools`, `call_mcp_tool`, and the other MCP management helpers) or AgentLink-owned discovery, transport, approval, dispatch, and result handling. Do not submit feedback about a specific MCP server or one of its native `server__tool` tools: that server's bugs, limitations, confusing output, and domain errors are upstream and out of scope. When AgentLink's MCP plumbing is the problem, use the native AgentLink MCP tool actually involved and include server/tool details only when they are needed as reproduction context.
 
-| Parameter             | Type    | Description                                                                |
-| --------------------- | ------- | -------------------------------------------------------------------------- |
-| `tool_name`           | string  | AgentLink tool; never a specific MCP server or its `server__tool`          |
-| `feedback`            | string  | Description of the issue, suggestion, or missing feature                   |
-| `tool_params`         | string? | Parameters passed; include server details only to reproduce AgentLink bugs |
-| `tool_result_summary` | string? | Summary of what happened or the unexpected result received                 |
+| Parameter             | Type    | Description                                                                                  |
+| --------------------- | ------- | -------------------------------------------------------------------------------------------- |
+| `tool_name`           | string  | AgentLink tool; never a specific MCP server or its `server__tool`                            |
+| `feedback`            | string  | Non-empty description of a concrete issue or missing capability                              |
+| `observed_impact`     | string  | Required non-empty consequence for the current task                                          |
+| `workaround`          | string? | Recovery used, whether the task succeeded, and extra steps; none or unknown when appropriate |
+| `observed_recurrence` | string? | Occurrences actually observed in this session, not inferred prevalence                       |
+| `improvement_signal`  | string? | Observable outcome to check after a fix, not a measured benefit                              |
+| `tool_params`         | string? | Parameters passed; include server details only to reproduce AgentLink bugs                   |
+| `tool_result_summary` | string? | Summary of what happened or the unexpected result received                                   |
+
+New submissions must include `observed_impact`, such as "Three failed retries blocked completion until the user intervened" rather than an importance score. Optional context fields are trimmed and omitted when blank. Do not invent severity, engineering effort, time/token savings, or cross-user frequency. Priority remains an independently validated triage decision; rare safety or correctness failures can still warrant urgent fixes.
+
+Impact context is stored with the report and returned by `get_feedback`. Historical records may omit all four fields; they remain readable with unchanged IDs, indices, triage and deletion metadata. No migration or inferred backfill is performed. Impact context fields use the existing 500-character truncation limit, and the complete stored record remains bounded to 4,000 UTF-8 bytes.
 
 ### get_feedback
 
-Read active feedback. Optionally filter by tool name, triage state, and priority. Every returned entry includes a stable `id`, immutable `global_index`, and projected triage metadata; filtered results keep their global indices.
+Read active feedback. Optionally filter by tool name, triage state, and priority. Every returned entry includes a stable `id`, immutable `global_index`, and projected triage metadata; filtered results keep their global indices. `observed_impact`, `workaround`, `observed_recurrence` and `improvement_signal` are included when recorded, not fabricated for older entries.
+
+When triaging, validate the reported consequence, workaround and recurrence against current code and telemetry. Use the improvement signal to define a concrete before/after check. Reporter claims are not verified priority or measured product-wide benefit, and absent context on an older report does not mean zero impact.
 
 | Parameter    | Type     | Description                                                            |
 | ------------ | -------- | ---------------------------------------------------------------------- |

@@ -35,7 +35,11 @@ describe("handleSendFeedback", () => {
   it("rejects empty or whitespace-only feedback without recording it", async () => {
     for (const feedback of ["", " \n\t "]) {
       const result = await handleSendFeedback(
-        { tool_name: "read_file", feedback },
+        {
+          tool_name: "read_file",
+          feedback,
+          observed_impact: "Extra read required",
+        },
         "session-empty",
       );
 
@@ -53,12 +57,70 @@ describe("handleSendFeedback", () => {
 
   it("trims recorded feedback without changing its content", async () => {
     await handleSendFeedback(
-      { tool_name: "read_file", feedback: "  Unexpected result  " },
+      {
+        tool_name: "read_file",
+        feedback: "  Unexpected result  ",
+        observed_impact: "  Required another read  ",
+        workaround: "  Used a direct read  ",
+        observed_recurrence: "  Once in this session  ",
+        improvement_signal: "  First read returns usable content  ",
+      },
       "session-trimmed",
     );
 
     expect(mocks.appendFeedback).toHaveBeenCalledWith(
-      expect.objectContaining({ feedback: "Unexpected result" }),
+      expect.objectContaining({
+        feedback: "Unexpected result",
+        observed_impact: "Required another read",
+        workaround: "Used a direct read",
+        observed_recurrence: "Once in this session",
+        improvement_signal: "First read returns usable content",
+      }),
+    );
+  });
+
+  it("rejects missing, empty or whitespace-only impact without recording", async () => {
+    for (const observed_impact of [undefined, "", " \n\t "]) {
+      const result = await handleSendFeedback(
+        {
+          tool_name: "read_file",
+          feedback: "Unexpected result",
+          observed_impact: observed_impact as string,
+        },
+        "session-empty-impact",
+      );
+
+      expect(result.content[0]).toMatchObject({
+        type: "text",
+        text: JSON.stringify({
+          status: "rejected",
+          error:
+            "observed_impact must describe the concrete consequence for the current task and cannot be missing, empty or whitespace-only",
+        }),
+      });
+    }
+    expect(mocks.appendFeedback).not.toHaveBeenCalled();
+  });
+
+  it("omits blank optional context without inventing values", async () => {
+    await handleSendFeedback(
+      {
+        tool_name: "read_file",
+        feedback: "Unexpected result",
+        observed_impact: "Required another read",
+        workaround: " \n ",
+        observed_recurrence: "",
+        improvement_signal: "\t",
+      },
+      "session-blank-context",
+    );
+
+    expect(mocks.appendFeedback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workaround: undefined,
+        observed_recurrence: undefined,
+        improvement_signal: undefined,
+      }),
     );
   });
 
@@ -67,6 +129,7 @@ describe("handleSendFeedback", () => {
       {
         tool_name: "read_file",
         feedback: "Unexpected result",
+        observed_impact: "Needed another read",
         tool_params: '{"path":"/sensitive/root/file.ts"}',
       },
       "session-1",
@@ -98,6 +161,7 @@ describe("handleSendFeedback", () => {
       {
         tool_name: "search_files",
         feedback: "Suggestion",
+        observed_impact: "Extra search required",
       },
       "session-2",
     );

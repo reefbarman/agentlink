@@ -5443,6 +5443,22 @@ async function dispatchToolCallWithTrackedApprovals(
         {
           tool_name: String(params.tool_name ?? ""),
           feedback: String(params.feedback ?? ""),
+          observed_impact:
+            typeof params.observed_impact === "string"
+              ? params.observed_impact
+              : "",
+          workaround:
+            typeof params.workaround === "string"
+              ? params.workaround
+              : undefined,
+          observed_recurrence:
+            typeof params.observed_recurrence === "string"
+              ? params.observed_recurrence
+              : undefined,
+          improvement_signal:
+            typeof params.improvement_signal === "string"
+              ? params.improvement_signal
+              : undefined,
           tool_params:
             params.tool_params !== undefined
               ? String(params.tool_params)

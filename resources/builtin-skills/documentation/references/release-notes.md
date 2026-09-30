@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Development `send_feedback` reports now require an observed task-impact statement and can include workaround, observed recurrence and improvement-signal context. `get_feedback` returns these fields when recorded; older reports and their stable IDs remain unchanged. Reporting guidance separates concrete evidence from priority scores, guessed prevalence and invented savings.
+
 - Added **AgentLink: Install Desktop App** and **AgentLink: Install CLI** to the VS Code Command Palette. They find separate published preview releases, warn about unsigned/not-notarised downloads, and open the matching Desktop DMG or checksum-verify and install the Apple Silicon CLI in a visible terminal without replacing an existing launcher. Local macOS windows only; source-build installers remain separate.
 
 ## 1.23.0

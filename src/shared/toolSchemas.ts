@@ -74,6 +74,34 @@ export const sendFeedbackSchema = {
     .describe(
       "Concrete, actionable AgentLink issue. Report problems, unexpected behavior, or missing capability; do not submit routine success, praise, or third-party MCP-server defects.",
     ),
+  observed_impact: z
+    .string()
+    .trim()
+    .min(1, "observed_impact must not be empty")
+    .describe(
+      "Concrete task consequence: blocked completion, incorrect output, safety risk, extra steps or confusion. Report observations, not priority or invented savings.",
+    ),
+  workaround: z
+    .string()
+    .trim()
+    .optional()
+    .describe(
+      "Recovery used, task outcome and extra steps. Use none or unknown when appropriate; omit if not observed.",
+    ),
+  observed_recurrence: z
+    .string()
+    .trim()
+    .optional()
+    .describe(
+      "Occurrences or attempts observed in this session, not inferred prevalence. Omit if unknown.",
+    ),
+  improvement_signal: z
+    .string()
+    .trim()
+    .optional()
+    .describe(
+      "Outcome to check after a fix: completion, correct output, fewer retries or approvals. A proposed check, not measured benefit.",
+    ),
   tool_params: z
     .string()
     .optional()

@@ -2213,20 +2213,28 @@ Development builds expose local tools for collecting and managing feedback about
 
 Submits feedback about an AgentLink-owned tool. In development builds, `send_feedback` is always advertised directly to every VS Code-backed built-in agent session, including background agents using restrictive tool profiles or skill allowlists; it never requires `find_native_tools` discovery. Feedback-management tools such as `get_feedback` remain eligible for deferred discovery.
 
-| Parameter             | Type    | Description                                                 |
-| --------------------- | ------- | ----------------------------------------------------------- |
-| `tool_name`           | string  | Exact AgentLink tool name the feedback concerns             |
-| `feedback`            | string  | Non-empty, actionable AgentLink issue or missing capability |
-| `tool_params`         | string? | Optional serialized parameters that help reproduce it       |
-| `tool_result_summary` | string? | Optional summary of the observed or unexpected behavior     |
+| Parameter             | Type    | Description                                                                   |
+| --------------------- | ------- | ----------------------------------------------------------------------------- |
+| `tool_name`           | string  | Exact AgentLink tool name the feedback concerns                               |
+| `feedback`            | string  | Non-empty, actionable AgentLink issue or missing capability                   |
+| `observed_impact`     | string  | Required non-empty consequence for the current task                           |
+| `workaround`          | string? | Recovery used, task outcome and extra steps; none or unknown when appropriate |
+| `observed_recurrence` | string? | Occurrences actually observed in this session, not inferred prevalence        |
+| `improvement_signal`  | string? | Observable outcome to check after a fix, not a measured benefit               |
+| `tool_params`         | string? | Optional serialized parameters that help reproduce it                         |
+| `tool_result_summary` | string? | Optional summary of the observed or unexpected behavior                       |
 
 Use this only for concrete problems, unexpected behavior, or missing capabilities. Routine success, praise, general commentary, and empty or whitespace-only reports are rejected.
 
-The response identifies the recorded entry by stable `id` and immutable `global_index`.
+New reports require `observed_impact`: describe blocked completion, incorrect output, safety risk, extra steps or confusion with concrete evidence. Optional context fields are trimmed and omitted when blank. Do not invent priority, engineering effort, time/token savings or frequency across users. For example, "Missing recovery guidance caused three failed retries and required user intervention" is useful impact evidence; "high impact" is not.
+
+The response identifies the recorded entry by stable `id` and immutable `global_index`. Impact context fields use the existing 500-character truncation limit; the complete stored record remains bounded to 4,000 UTF-8 bytes.
 
 #### `get_feedback`
 
-Reads active feedback. Results include stable `id` and immutable `global_index` fields plus `triaged`, optional `priority`, and optional `triaged_at` metadata.
+Reads active feedback. Results include stable `id` and immutable `global_index` fields plus `triaged`, optional `priority`, and optional `triaged_at` metadata. Entries include `observed_impact`, `workaround`, `observed_recurrence` and `improvement_signal` when recorded. Older records may omit these fields and remain readable with unchanged IDs, indices, triage and deletion metadata; no migration or inferred backfill is performed.
+
+Validate reported consequences, workarounds and recurrence against current evidence before assigning priority. Use the improvement signal to define a before/after check, not as proof of measured product-wide benefit. Missing context on an older record is unknown impact, not zero impact. Rare safety and correctness failures do not need frequent recurrence to warrant attention.
 
 | Parameter    | Type     | Description                                                            |
 | ------------ | -------- | ---------------------------------------------------------------------- |

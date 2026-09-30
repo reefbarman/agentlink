@@ -7,6 +7,10 @@ export async function handleSendFeedback(
   params: {
     tool_name: string;
     feedback: string;
+    observed_impact: string;
+    workaround?: string;
+    observed_recurrence?: string;
+    improvement_signal?: string;
     tool_params?: string;
     tool_result_summary?: string;
   },
@@ -29,6 +33,22 @@ export async function handleSendFeedback(
     };
   }
 
+  const observedImpact = params.observed_impact?.trim();
+  if (!observedImpact) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "rejected",
+            error:
+              "observed_impact must describe the concrete consequence for the current task and cannot be missing, empty or whitespace-only",
+          }),
+        },
+      ],
+    };
+  }
+
   try {
     const ext = vscode.extensions.getExtension("agentlink.agentlink");
     const version =
@@ -38,6 +58,10 @@ export async function handleSendFeedback(
       timestamp: new Date().toISOString(),
       tool_name: params.tool_name,
       feedback,
+      observed_impact: observedImpact,
+      workaround: params.workaround?.trim() || undefined,
+      observed_recurrence: params.observed_recurrence?.trim() || undefined,
+      improvement_signal: params.improvement_signal?.trim() || undefined,
       session_id: sessionId,
       // Keep the legacy storage key, but scoped records carry only opaque project identity.
       workspace: projectId,
