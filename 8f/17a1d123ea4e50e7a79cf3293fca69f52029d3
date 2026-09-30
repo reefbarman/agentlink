@@ -1,0 +1,56 @@
+src/approvals/commandTierClassifier.test.ts
+  h_9630b74bdac540 214-247
+  h_9630b74bdac540 213
+src/agent/compose/composeRuntime.ts
+  h_9630b74bdac540 301-304,729-730,1007-1008,1013-1032,1035,1037
+  h_9630b74bdac540 298-300,305,728
+src/agent/toolAdapter.ts
+  h_9630b74bdac540 2948
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_9630b74bdac540 770,772
+  s_1646772e65f666::t_c29e15bc412399 771,773-774,776,790,792
+src/agent/compose/composeRuntime.test.ts
+  h_9630b74bdac540 26,354-430,433-447
+  h_9630b74bdac540 431-432
+resources/builtin-skills/documentation/references/tools.md
+  h_9630b74bdac540 43,87
+  h_9630b74bdac540 88
+src/shared/toolRegistry.ts
+  h_9630b74bdac540 278
+src/approvals/commandTierClassifier.ts
+  h_9630b74bdac540 577-582,691-692,708,713-744,920-921
+  h_9630b74bdac540 693-707,709-712,745-746,918-919,922
+src/agent/toolAdapter.test.ts
+  h_9630b74bdac540 4061-4120
+CHANGELOG.md
+  h_9630b74bdac540 5-6
+package-lock.json
+  h_9630b74bdac540 3,9
+package.json
+  h_9630b74bdac540 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_9630b74bdac540 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_9630b74bdac540 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8f17a1d123ea4e50e7a79cf3293fca69f52029d3",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  },
+  "sessions": {
+    "s_1646772e65f666": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "08b7e3d6-7866-473a-93b3-5e0cd1cf2929",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
