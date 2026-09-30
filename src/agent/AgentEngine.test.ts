@@ -4147,6 +4147,34 @@ describe("AgentEngine", () => {
     });
   });
 
+  it.each(["http", "websocket"] as const)(
+    "records the final %s transport in model request details",
+    async (transport) => {
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        request.onProviderRequestAttempt?.({
+          model: request.model,
+          dispatchEvidence: { transport: "websocket", phase: "not_sent" },
+        });
+        request.onProviderRequestAttempt?.({
+          model: request.model,
+          dispatchEvidence: { transport, phase: "sent_unacknowledged" },
+        });
+        yield* makeProviderStream();
+      };
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(engine.run(session));
+      expect(
+        events.find((event) => event.type === "api_request"),
+      ).toMatchObject({
+        transport,
+      });
+    },
+  );
+
   describe("reasoning effort normalization", () => {
     it("downgrades an unsupported effort to the model default and logs it once", async () => {
       const capabilities: ModelCapabilities = {
@@ -6690,6 +6718,41 @@ describe("AgentEngine", () => {
       );
     });
 
+    it("keeps context recovery available after a definitive WebSocket failure", async () => {
+      let attempts = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        attempts += 1;
+        if (attempts === 1) {
+          request.onProviderRequestAttempt?.({
+            model: request.model,
+            dispatchEvidence: {
+              transport: "websocket",
+              phase: "terminal",
+              terminalFailure: true,
+            },
+          });
+          throw new Error("Request exceeds the context window");
+        }
+        yield* makeProviderStream({ text: "Recovered" });
+      };
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const condense = vi
+        .spyOn(engine, "condenseSession")
+        .mockImplementation(async function* () {
+          yield { type: "condense_start", isAutomatic: true };
+          return true;
+        });
+      session.autoCondense = false;
+      const events = await collectEvents(engine.run(session));
+      expect(condense).toHaveBeenCalledOnce();
+      expect(attempts).toBe(2);
+      expect(events).toContainEqual({ type: "text_delta", text: "Recovered" });
+      expect(events.some((event) => event.type === "error")).toBe(false);
+    });
+
     it("bounds provider streams that never establish transport activity", async () => {
       let attempts = 0;
       const requestSignals: AbortSignal[] = [];
@@ -6741,6 +6804,13 @@ describe("AgentEngine", () => {
       provider.stream = async function* (request: StreamRequest) {
         attempts += 1;
         if (request.signal) requestSignals.push(request.signal);
+        request.onProviderRequestAttempt?.({
+          model: request.model,
+          dispatchEvidence: {
+            transport: "websocket",
+            phase: "sent_unacknowledged",
+          },
+        });
         // Warm-but-dead stream: keepalive bytes flow, but no parsed events
         // ever arrive. Before the no-progress watchdog this hung forever.
         const heartbeat = setInterval(() => {
@@ -6794,6 +6864,29 @@ describe("AgentEngine", () => {
       } finally {
         backoffSpy.mockRestore();
       }
+    });
+
+    it("maps transport fallback to a warning without treating it as model output", async () => {
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        yield {
+          type: "transport_fallback",
+          message: "Using HTTP instead.",
+        } as unknown as ProviderStreamEvent;
+        yield* makeProviderStream({ text: "Response after fallback" });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const events = await collectEvents(
+        new AgentEngine(makeRegistry(provider)).run(session),
+      );
+
+      expect(events).toContainEqual({
+        type: "warning",
+        message: "Using HTTP instead.",
+      });
+      expect(session.getLastAssistantText()).toBe("Response after fallback");
     });
 
     it("keeps a semantically quiet stream alive while transport activity continues", async () => {

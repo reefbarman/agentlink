@@ -6,7 +6,27 @@ import * as https from "https";
 import * as os from "os";
 import * as path from "path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+
+const testHome = vi.hoisted(() => {
+  const fs = require("node:fs") as typeof import("node:fs");
+  const os = require("node:os") as typeof import("node:os");
+  const path = require("node:path") as typeof import("node:path");
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), ".tmp-helper-integration-home-"),
+  );
+  const originalHome = process.env.HOME;
+  // Registry paths are captured at import time, before per-test hooks run.
+  process.env.HOME = directory;
+  return { directory, originalHome };
+});
+
+// Keep the isolated home active through all helper and discovery cleanup.
+afterAll(async () => {
+  if (testHome.originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = testHome.originalHome;
+  await fs.rm(testHome.directory, { recursive: true, force: true });
+});
 
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import type { AskAgentControllerPublication } from "./AskAgentController.js";
@@ -3049,6 +3069,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       model: "claude-sonnet-4-5",
       modelOwnerId: "vscode-owner",
       reasoningEffort: "high",
+      codexUseWebSocket: true,
       webPolicy: undefined,
     });
 
@@ -5617,7 +5638,9 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(routings).toHaveLength(2);
     expect(routings[0]?.sessionId).toBeTruthy();
     expect(routings[0]?.turnState).toBeDefined();
+    expect(routings[0]?.conversationState).toBeDefined();
     expect(routings[1]?.turnState).toBe(routings[0]?.turnState);
+    expect(routings[1]?.conversationState).toBe(routings[0]?.conversationState);
     expect(finalPublication?.serialized).not.toContain("codexRouting");
     const nextTurn = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
       method: "POST",
@@ -5627,6 +5650,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(nextTurn.ok).toBe(true);
     expect(routings[2]?.sessionId).toBe(routings[0]?.sessionId);
     expect(routings[2]?.turnState).not.toBe(routings[0]?.turnState);
+    expect(routings[2]?.conversationState).toBe(routings[0]?.conversationState);
     expect(finalPublication?.snapshot.session.foreground.streaming).toBe(false);
     expect(
       finalPublication?.snapshot.session.foreground.projectedMessages.find(
@@ -7837,13 +7861,12 @@ describe("BrowserGatewayHelper proxy routing", () => {
       expect.objectContaining({ type: "web_search" }),
     ]);
     expect(completionParams[3]?.hostedTools).toBeUndefined();
-    expect(primaryRequests).toHaveLength(2);
-    expect(primaryRequests).toEqual(
-      expect.arrayContaining([
-        "/internal/ask-agent/web-policy",
-        "/internal/ask-agent/mcp-tools",
-      ]),
-    );
+    expect([...primaryRequests].sort()).toEqual([
+      "/internal/ask-agent/mcp-tools",
+      "/internal/ask-agent/web-policy",
+      "/internal/ask-agent/web-policy",
+      "/internal/ask-agent/web-policy",
+    ]);
     expect(fallbackRequests).toEqual([]);
     expect(sendText).toContain("Final hosted answer.");
     expect(sendText).toContain("native-search-1");

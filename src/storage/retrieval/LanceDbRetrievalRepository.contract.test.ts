@@ -502,7 +502,72 @@ describe("LanceDbRetrievalRepository persistence", () => {
           status: "ready",
         });
         expect(repository.metrics().optimizations).toBe(0);
+
+        await repository.refreshNativeIndexes();
+        await repository.optimize();
+        expect(lexicalRefreshes).toBe(1);
       } finally {
+        await repository.close();
+      }
+    });
+  });
+
+  it("maintains existing native indexes across publications without replacing them", async () => {
+    await withStore(async (root) => {
+      const repository = new LanceDbRetrievalRepository({
+        root,
+        embeddingDimensions: 3,
+        deferNativeIndexRefresh: true,
+      });
+      const first = publication("first-native", "revision-first");
+      const second = publication("second-native", "revision-second");
+      let connection: Awaited<ReturnType<typeof connect>> | undefined;
+      try {
+        await repository.migrate(fingerprint);
+        await repository.preparePublication(first);
+        await repository.commitPublication(first.publicationId);
+        await repository.refreshNativeIndexes();
+        const indexRoot = path.join(root, "retrieval_chunks.lance", "_indices");
+        const initial = new Set(await fs.readdir(indexRoot));
+
+        await repository.preparePublication(second);
+        await repository.commitPublication(second.publicationId);
+        await repository.refreshNativeIndexes();
+        const maintained = await fs.readdir(indexRoot);
+        expect(maintained.some((id) => initial.has(id))).toBe(true);
+
+        connection = await connect(root, { readConsistencyInterval: 0 });
+        const table = await connection.openTable("retrieval_chunks");
+        try {
+          const indices = await table.listIndices();
+          expect(indices).toHaveLength(3);
+          for (const index of indices) {
+            const stats = await table.indexStats(index.name);
+            expect(stats?.numUnindexedRows).toBe(0);
+            expect(stats?.numIndexedRows).toBe(await table.countRows());
+          }
+          await table.dropIndex("retrieval_search_text_fts");
+        } finally {
+          table.close();
+        }
+        const third = publication("third-native", "revision-third");
+        await repository.preparePublication(third);
+        await repository.commitPublication(third.publicationId);
+        await repository.refreshNativeIndexes();
+        const maintainedTable = await connection.openTable("retrieval_chunks");
+        try {
+          for (const index of await maintainedTable.listIndices()) {
+            const stats = await maintainedTable.indexStats(index.name);
+            expect(stats?.numUnindexedRows).toBe(0);
+          }
+        } finally {
+          maintainedTable.close();
+        }
+        expect(await repository.lexicalReadiness()).toEqual({
+          status: "ready",
+        });
+      } finally {
+        connection?.close();
         await repository.close();
       }
     });

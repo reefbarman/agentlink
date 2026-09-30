@@ -100,6 +100,13 @@ export type EmbeddedAgentTurnEvent =
       readonly text: string;
     })
   | (EmbeddedAgentTurnEventBase & {
+      readonly type: "response.retry";
+      readonly attempt: number;
+      readonly phase: "websocket" | "http";
+      readonly delayMs: number;
+      readonly reason: string;
+    })
+  | (EmbeddedAgentTurnEventBase & {
       readonly type: "text.delta";
       readonly text: string;
     })
@@ -863,6 +870,14 @@ export function reduceEmbeddedAgentTurnEvent(
         ...thinking,
         status: "completed",
       }));
+    case "response.retry":
+      return {
+        ...base,
+        blocks: appendText(
+          base.blocks,
+          "\n\n[Response interrupted. Retrying.]\n\n",
+        ),
+      };
     case "text.delta":
       return { ...base, blocks: appendText(base.blocks, event.text) };
     case "tool.requested":
@@ -972,6 +987,13 @@ function isEmbeddedAgentTurnEvent(
     case "thinking.delta":
       return (
         isNonEmptyString(value.thinkingId) && typeof value.text === "string"
+      );
+    case "response.retry":
+      return (
+        Number.isSafeInteger(value.attempt) &&
+        (value.phase === "websocket" || value.phase === "http") &&
+        typeof value.delayMs === "number" &&
+        typeof value.reason === "string"
       );
     case "text.delta":
       return typeof value.text === "string";

@@ -8,6 +8,30 @@ import { ApiRequestBlock } from "./ApiRequestBlock.js";
 afterEach(() => cleanup());
 
 describe("ApiRequestBlock", () => {
+  it.each([
+    ["websocket", "WebSocket"],
+    ["http", "HTTP/SSE"],
+    [undefined, "Not recorded"],
+  ] as const)(
+    "shows actual transport %s without guessing old requests",
+    (transport, label) => {
+      render(
+        <ApiRequestBlock
+          requestId="r"
+          model="test"
+          inputTokens={1}
+          outputTokens={1}
+          durationMs={1}
+          timeToFirstToken={1}
+          transport={transport}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button"));
+      expect(screen.getByText("Transport")).toBeTruthy();
+      expect(screen.getByText(label)).toBeTruthy();
+    },
+  );
+
   it("renders context breakdown details when expanded", () => {
     render(
       <ApiRequestBlock

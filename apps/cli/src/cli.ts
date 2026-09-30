@@ -1,5 +1,6 @@
 import {
   createCodexOAuthRuntime,
+  createResponsesWebSocketConnector,
   SessionPreferencesStore,
   type CodexOAuthManager,
   type NodeHostMcpOAuthAuthorizationRequest,
@@ -7,7 +8,10 @@ import {
   type NodeHostMcpFormElicitationResponse,
   type McpServerInfo,
 } from "@agentlink/node-host";
-import type { CodexCredentialProvider } from "@agentlink/core/codex";
+import {
+  ResponsesTransportPolicy,
+  type CodexCredentialProvider,
+} from "@agentlink/core/codex";
 import { validateAndCoerceMcpElicitationValues } from "@agentlink/protocol/mcp-elicitation";
 import {
   acquireWorkspaceOwnership,
@@ -551,9 +555,16 @@ async function createHost(options: {
   mcpOAuth?: CliMcpOAuthRuntime;
 }): Promise<WorkspaceHost> {
   const providers: WorkspaceProviderConfig[] = [];
+  const policy = new ResponsesTransportPolicy();
+  const transport = {
+    connector: createResponsesWebSocketConnector(),
+    useWebSocket: () => options.config.codexUseWebSocket ?? true,
+    readPolicy: () => policy,
+  };
   if (options.config.codexModels.length > 0) {
     providers.push({
       type: "codex",
+      transport,
       credentialProvider: options.oauthProvider,
       modelIds: options.config.codexModels,
     });
@@ -561,6 +572,7 @@ async function createHost(options: {
   if (options.config.openAiModels.length > 0) {
     providers.push({
       type: "openai",
+      transport,
       modelIds: options.config.openAiModels,
       resolveApiKey: () => getApiKey(OPENAI_API_KEY_ACCOUNT),
     });

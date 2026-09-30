@@ -1,4 +1,5 @@
 import type { AgentRuntimeErrorPresentation } from "@agentlink/protocol/agent-error-presentation";
+import { ResponsesConversationState } from "@agentlink/core/codex";
 import type {
   AgentConfig,
   AgentEvent,
@@ -253,6 +254,8 @@ export class AgentSession {
    * remove or repeat the one-time review boundary.
    */
   initialArchitectReviewPending: boolean;
+  /** Runtime-only Codex Responses fallback preference, scoped to this conversation. */
+  readonly codexConversationState = new ResponsesConversationState();
   /** Last OpenAI/Codex Responses API response ID used for optional stateful chaining. */
   providerResponseId: string | undefined;
 
@@ -1104,6 +1107,7 @@ export class AgentSession {
 
   resetProviderResponseState(): void {
     this.providerResponseId = undefined;
+    this.codexConversationState.reset();
   }
 
   appendToolResults(

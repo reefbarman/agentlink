@@ -206,6 +206,8 @@ Useful command-palette entries include:
 
 ### Configure OpenAI-compatible models
 
+Start with [Providers and OpenAI-compatible setup](providers.md) for the current shared-file format and a worked Claude Code authentication example through Meridian. This section retains additional compatibility details and a legacy Settings JSON example.
+
 Run **AgentLink: Configure OpenAI-compatible Model** for the guided setup path. Each run adds one model backed by one connection so the endpoint/router and credential binding stay explicit:
 
 1. Choose **OpenRouter** or another compatible API root.
@@ -217,14 +219,14 @@ OpenRouter discovery maps bounded catalog metadata such as context length, tool 
 
 Prompt profiles are resolved separately from declared reasoning capability. The full `compatibility` profile is the default for unknown, custom, and OpenAI-compatible models. The compact `reasoning` profile requires an exact model-ID override in `agentlink.modelPromptProfiles` or membership in the evaluated full-size Codex cohort; thinking/reasoning support alone never opts a model in, and small/cheap tiers stay on compatibility. Browser Ask Agent receives the same validated resolution from its connected VS Code owner, and `/context-doctor` reports the profile resolved for the current workspace session.
 
-The wizard is add-only and runs in VS Code. Edit or remove entries in User Settings JSON; use raw settings for advanced multi-model connections, custom headers, timeouts, or a separate auxiliary model. Browser Ask Agent receives the refreshed model catalog and credentials server-side but cannot create or edit configuration.
+The wizard is add-only and runs in VS Code. Edit or remove entries in `~/.agentlink/openai-compatible.json`; use that shared file for advanced multi-model connections, custom headers, timeouts, or a separate auxiliary model. Browser Ask Agent receives the refreshed model catalog and credentials server-side but cannot create or edit configuration.
 
-`agentlink.openaiCompatible.connections` is the underlying machine-scoped array of named OpenAI Chat Completions-compatible connections. Each connection owns its endpoint, auth/profile behavior, headers, timeout, and one or more nested models. Each model has two distinct IDs:
+`agentlink.openaiCompatible.connections` is the legacy machine-scoped array imported when the shared file is absent. New configuration uses the shared file's `connections` array of named OpenAI Chat Completions-compatible connections. Each connection owns its endpoint, auth/profile behavior, headers, timeout, and one or more nested models. Each model has two distinct IDs:
 
 - `id` is AgentLink's globally unique, stable selector/session key and is never sent upstream.
 - `model` is the opaque wire ID sent to that connection.
 
-The following advanced Settings JSON example uses OpenRouter IDs verified against its model catalog on **2026-07-23**: `moonshotai/kimi-k2.7-code`, `deepseek/deepseek-v3.2`, and `google/gemma-4-31b-it`. Provider catalogs change; use the wizard or re-check IDs and declared limits/capabilities before copying this example later.
+The following legacy Settings JSON example uses OpenRouter IDs verified against its model catalog on **2026-07-23**: `moonshotai/kimi-k2.7-code`, `deepseek/deepseek-v3.2`, and `google/gemma-4-31b-it`. Provider catalogs change; use the wizard or re-check IDs and declared limits/capabilities before copying this example later.
 
 ```jsonc
 "agentlink.openaiCompatible.connections": [

@@ -1,5 +1,9 @@
 import * as fsSync from "fs";
-import { CodexTurnState } from "@agentlink/core/codex";
+import {
+  CodexTurnState,
+  ResponsesConversationState,
+} from "@agentlink/core/codex";
+import { createResponsesWebSocketConnector } from "@agentlink/node-host";
 import * as fs from "fs/promises";
 import * as http from "http";
 import * as https from "https";
@@ -341,6 +345,7 @@ import { StandaloneMcpOAuthRuntime } from "./StandaloneMcpOAuthRuntime.js";
 import { renderMcpOAuthCallbackPage } from "../../shared/mcpOAuthCallbackPage.js";
 
 export interface PreparedAskAgentWebAccess {
+  codexUseWebSocket: boolean;
   target: BrowserGatewayInstanceRecord | null;
   standaloneMcpTurn?: StandaloneAskAgentMcpTurn;
   policy: Readonly<CoreResolvedWebAccessPolicy>;
@@ -1020,6 +1025,11 @@ export class BrowserGatewayHelper {
   private readonly standaloneMcpRuntime:
     | StandaloneAskAgentMcpRuntime
     | undefined;
+
+  private readonly askAgentConversationStates = new Map<
+    string,
+    ResponsesConversationState
+  >();
   private readonly askAgentModelClient: Pick<
     BrowserGatewayAskAgentModelClient,
     "complete"
@@ -1375,6 +1385,10 @@ export class BrowserGatewayHelper {
       injectables.askAgentModelClient ??
       new BrowserGatewayAskAgentModelClient({
         sessionId: BROWSER_GATEWAY_ASK_AGENT_SESSION_ID,
+        responsesWebSocketConnector:
+          injectables.askAgentModelClient === undefined
+            ? createResponsesWebSocketConnector()
+            : undefined,
         codexCredentialProvider: this.sharedCodexOAuth?.provider,
       });
     this.askAgentMemoryStore = injectables.askAgentMemoryStore;
@@ -2334,6 +2348,7 @@ export class BrowserGatewayHelper {
       this.standaloneMcpApprovedToolsBySession.delete(sessionId);
       this.standaloneMcpApprovedServersBySession.delete(sessionId);
       this.standaloneMcpFormElicitation.cancelSession(sessionId);
+      this.disposeAskAgentConversationState(sessionId);
       if (!this.askAgentSessionStore.deleteSession(sessionId)) {
         throw new Error("ask_agent_session_delete_race");
       }
@@ -5249,6 +5264,11 @@ export class BrowserGatewayHelper {
     }
   }
 
+  private disposeAskAgentConversationState(sessionId: string): void {
+    this.askAgentConversationStates.get(sessionId)?.dispose();
+    this.askAgentConversationStates.delete(sessionId);
+  }
+
   private async runAskAgentModelTurn(params: {
     modelContext: AskAgentModelExecutionContext;
     assistantMessageId: string;
@@ -5259,100 +5279,74 @@ export class BrowserGatewayHelper {
     theme: BrowserGatewayThemeSnapshot;
     signal: AbortSignal;
   }): Promise<AskAgentToolLoopResult> {
-    const codexRouting = {
-      sessionId: this.askAgentSessionStore.getActiveSessionId(),
-      turnState: new CodexTurnState(),
-    };
-    const completeWithToolCalls =
-      this.askAgentModelClient.completeWithToolCalls?.bind(
-        this.askAgentModelClient,
-      );
-    const buildTurnSnapshot = () =>
-      this.askAgentController.projectState({
-        now: Date.now(),
-        theme: params.theme,
-        modelCredentialStatus: this.getAskAgentModelCredentialStatus(
-          Date.now(),
-          params.modelContext.ownerId,
-        ),
-        approval: this.askAgentController.getPendingApproval(),
-        memoryCandidateNudge: this.askAgentController.getMemoryCandidateNudge(),
-      }).snapshot;
-    const scheduleTurnSnapshot = () => {
-      void this.askAgentController
-        .scheduleProjectedSnapshot(buildTurnSnapshot)
-        .catch((error) => {
-          logHelper(`ask-agent scheduled snapshot failed: ${error}`);
-        });
-    };
-    const publishTurnSnapshot = async () => {
-      await this.askAgentController.publishProjectedSnapshot(buildTurnSnapshot);
-    };
-
-    const preparedWebAccess = await this.prepareAskAgentWebAccess(
-      params.modelContext,
-      params.assistantMessageId,
-      params.signal,
-    );
-    const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
-      ...ASK_AGENT_SAFE_PROJECTLESS_TOOLS,
-      ...preparedWebAccess.tools,
-      ...ASK_AGENT_NATIVE_DISCLOSURE_BRIDGE_TOOLS,
-    ]);
-    const modelTranscriptMessages =
-      this.askAgentSessionStore.getModelTranscriptMessages(
-        params.assistantMessageId,
-      );
-    const memoryContextBeforeIndex = findAskAgentMemoryAnchor(
-      modelTranscriptMessages,
-    );
-
-    if (!completeWithToolCalls) {
-      const assistantText = await this.askAgentModelClient.complete({
-        codexRouting,
-        credential: params.modelContext.credential,
-        providerId: params.modelContext.providerId,
-        openAiCompatibleRuntimeProfile:
-          params.modelContext.openAiCompatibleRuntimeProfile,
-        model: params.modelContext.model,
-        promptProfile: params.modelContext.promptProfile.profile,
-        reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
-        messages: [],
-        memoryContext: params.memoryContext,
-        memoryContextBeforeIndex,
-        iterationMessages: modelTranscriptMessages,
-        signal: params.signal,
-        onDelta: (delta) => {
-          if (this.streamingMetrics.enabled) {
-            this.streamingMetrics.record({
-              type: "delta",
-              surface: "ask-agent-helper",
-              kind: "text",
-              chars: delta.length,
-            });
-          }
-          this.askAgentController.appendAssistantDelta(
-            params.assistantMessageId,
-            delta,
-          );
-          scheduleTurnSnapshot();
-        },
-      });
-      if (assistantText) {
-        return this.finishAskAgentSuccess(params, assistantText);
+    const conversationId = this.askAgentSessionStore.getActiveSessionId();
+    let conversationState = this.askAgentConversationStates.get(conversationId);
+    if (!conversationState) {
+      while (this.askAgentConversationStates.size >= 100) {
+        const oldestSessionId = this.askAgentConversationStates
+          .keys()
+          .next().value;
+        if (!oldestSessionId) break;
+        this.disposeAskAgentConversationState(oldestSessionId);
       }
-      this.finishAskAgentEmptyResponse(params.assistantMessageId);
-      return { outcome: "model_empty", assistantText: "" };
+      conversationState = new ResponsesConversationState();
+      this.askAgentConversationStates.set(conversationId, conversationState);
     }
+    const codexRouting = {
+      sessionId: conversationId,
+      turnState: new CodexTurnState(),
+      conversationState,
+    };
+    try {
+      const completeWithToolCalls =
+        this.askAgentModelClient.completeWithToolCalls?.bind(
+          this.askAgentModelClient,
+        );
+      const buildTurnSnapshot = () =>
+        this.askAgentController.projectState({
+          now: Date.now(),
+          theme: params.theme,
+          modelCredentialStatus: this.getAskAgentModelCredentialStatus(
+            Date.now(),
+            params.modelContext.ownerId,
+          ),
+          approval: this.askAgentController.getPendingApproval(),
+          memoryCandidateNudge:
+            this.askAgentController.getMemoryCandidateNudge(),
+        }).snapshot;
+      const scheduleTurnSnapshot = () => {
+        void this.askAgentController
+          .scheduleProjectedSnapshot(buildTurnSnapshot)
+          .catch((error) => {
+            logHelper(`ask-agent scheduled snapshot failed: ${error}`);
+          });
+      };
+      const publishTurnSnapshot = async () => {
+        await this.askAgentController.publishProjectedSnapshot(
+          buildTurnSnapshot,
+        );
+      };
 
-    // Mirrors the loop's accumulated assistant text so tool handlers (the
-    // set_task_status completion guard) can tell whether the user has been
-    // shown any response this turn.
-    let turnVisibleAssistantText = "";
-    return runAgentToolLoop<AskAgentToolLoopResult, AskAgentToolLoopOutcome>({
-      initialToolMessages: params.initialToolMessages,
-      callModel: async ({ iterationMessages, toolMessages, onText }) => {
-        const result = await completeWithToolCalls({
+      const preparedWebAccess = await this.prepareAskAgentWebAccess(
+        params.modelContext,
+        params.assistantMessageId,
+        params.signal,
+      );
+      const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
+        ...ASK_AGENT_SAFE_PROJECTLESS_TOOLS,
+        ...preparedWebAccess.tools,
+        ...ASK_AGENT_NATIVE_DISCLOSURE_BRIDGE_TOOLS,
+      ]);
+      const modelTranscriptMessages =
+        this.askAgentSessionStore.getModelTranscriptMessages(
+          params.assistantMessageId,
+        );
+      const memoryContextBeforeIndex = findAskAgentMemoryAnchor(
+        modelTranscriptMessages,
+      );
+
+      if (!completeWithToolCalls) {
+        const assistantText = await this.askAgentModelClient.complete({
           codexRouting,
           credential: params.modelContext.credential,
           providerId: params.modelContext.providerId,
@@ -5364,13 +5358,10 @@ export class BrowserGatewayHelper {
           messages: [],
           memoryContext: params.memoryContext,
           memoryContextBeforeIndex,
-          iterationMessages: [...modelTranscriptMessages, ...iterationMessages],
-          toolMessages,
-          tools: nativeToolDisclosure.inlineTools,
+          iterationMessages: modelTranscriptMessages,
+          codexUseWebSocket: preparedWebAccess.codexUseWebSocket,
           signal: params.signal,
           onDelta: (delta) => {
-            onText(delta);
-            turnVisibleAssistantText += delta;
             if (this.streamingMetrics.enabled) {
               this.streamingMetrics.record({
                 type: "delta",
@@ -5386,121 +5377,201 @@ export class BrowserGatewayHelper {
             scheduleTurnSnapshot();
           },
         });
-        // Mirror the loop's fallback: a client that returns text without
-        // streaming deltas still counts as having produced a visible response.
-        if (!turnVisibleAssistantText && result.text) {
-          turnVisibleAssistantText = result.text;
+        if (assistantText) {
+          return this.finishAskAgentSuccess(params, assistantText);
         }
-        return {
-          text: result.text,
-          toolCalls: result.toolCalls,
-          assistantMessage: result.assistantMessage,
-          stopReason: result.stopReason,
-        };
-      },
-      onIterationMessagesComplete: (messages) => {
-        if (
-          messages.some(
-            (message) => message.role === "assistant" && message.providerReplay,
-          )
-        ) {
-          this.askAgentSessionStore.appendPrivateModelTurn(
-            params.assistantMessageId,
-            messages,
-          );
-        }
-      },
-      isParallelSafe: (providerCall) => {
-        const { canonicalCall, resolutionError } = this.resolveAskAgentToolCall(
-          providerCall,
-          nativeToolDisclosure,
-        );
-        if (resolutionError) return false;
-        if (ASK_AGENT_PARALLEL_SAFE_TOOL_NAMES.has(canonicalCall.name)) {
-          return true;
-        }
-        if (
-          preparedWebAccess.parallelSafeMcpToolNames.includes(
-            canonicalCall.name,
-          )
-        ) {
-          return true;
-        }
-        if (canonicalCall.name !== "call_mcp_tool") return false;
-        const serverName =
-          typeof canonicalCall.input.server === "string"
-            ? canonicalCall.input.server.trim()
-            : "";
-        return preparedWebAccess.parallelSafeMcpServerNames.includes(
-          serverName,
-        );
-      },
-      runTool: async (providerCall) => {
-        const toolStartedAt = Date.now();
-        const resolved = this.resolveAskAgentToolCall(
-          providerCall,
-          nativeToolDisclosure,
-        );
-        const { canonicalCall } = resolved;
-        this.recordAskAgentSemanticDelta();
-        this.askAgentController.startAssistantToolCall({
-          messageId: params.assistantMessageId,
-          toolCallId: canonicalCall.id,
-          toolName: canonicalCall.name,
-          input: canonicalCall.input,
-        });
-        await publishTurnSnapshot();
-        const executed = resolved.resolutionError
-          ? this.buildAskAgentToolResolutionError(
-              canonicalCall,
-              resolved.resolutionError,
-            )
-          : canonicalCall.name === "find_native_tools"
-            ? this.executeAskAgentNativeToolDiscovery(
-                canonicalCall,
-                nativeToolDisclosure,
-              )
-            : await this.executeAskAgentSafeProjectlessTool(
-                canonicalCall,
-                preparedWebAccess,
-                params.modelContext.credential,
-                params.modelContext.model,
-                params.modelContext.ownerId,
-                params.signal,
-                { getVisibleAssistantText: () => turnVisibleAssistantText },
-                {
-                  sessionId: this.askAgentSessionStore.getActiveSessionId(),
-                  turnId: params.assistantMessageId,
-                },
-              );
-        this.recordAskAgentSemanticDelta();
-        this.askAgentController.completeAssistantToolCall({
-          messageId: params.assistantMessageId,
-          toolCallId: canonicalCall.id,
-          toolName: canonicalCall.name,
-          input: canonicalCall.input,
-          result: executed.modelResult ?? executed.content,
-          resultImages: executed.resultImages,
-          durationMs: Date.now() - toolStartedAt,
-        });
-        await publishTurnSnapshot();
-        return {
-          toolMessage: this.rebindAskAgentToolResultMessage(
-            executed.toolMessage,
-            providerCall,
-          ),
-          stop: executed.stop,
-          content: executed.content,
-          outcome: executed.outcome,
-        };
-      },
-      finishSuccess: (text, outcome) =>
-        this.finishAskAgentSuccess(params, text, outcome),
-      finishEmpty: () => {
         this.finishAskAgentEmptyResponse(params.assistantMessageId);
         return { outcome: "model_empty", assistantText: "" };
-      },
-    });
+      }
+
+      // Mirrors the loop's accumulated assistant text so tool handlers (the
+      // set_task_status completion guard) can tell whether the user has been
+      // shown any response this turn.
+      let turnVisibleAssistantText = "";
+      return await runAgentToolLoop<
+        AskAgentToolLoopResult,
+        AskAgentToolLoopOutcome
+      >({
+        initialToolMessages: params.initialToolMessages,
+        callModel: async ({
+          iterationMessages,
+          toolMessages,
+          onText,
+          onTextReset,
+        }) => {
+          const textBeforeModelCall = turnVisibleAssistantText;
+          const liveWebSocketPolicy = await this.getAskAgentWebPolicy(
+            preparedWebAccess.target,
+            params.signal,
+          );
+          const result = await completeWithToolCalls({
+            codexRouting,
+            credential: params.modelContext.credential,
+            providerId: params.modelContext.providerId,
+            openAiCompatibleRuntimeProfile:
+              params.modelContext.openAiCompatibleRuntimeProfile,
+            model: params.modelContext.model,
+            promptProfile: params.modelContext.promptProfile.profile,
+            reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
+            messages: [],
+            memoryContext: params.memoryContext,
+            memoryContextBeforeIndex,
+            iterationMessages: [
+              ...modelTranscriptMessages,
+              ...iterationMessages,
+            ],
+            toolMessages,
+            tools: nativeToolDisclosure.inlineTools,
+            codexUseWebSocket:
+              liveWebSocketPolicy?.codexUseWebSocket ??
+              (preparedWebAccess.target
+                ? false
+                : preparedWebAccess.codexUseWebSocket),
+            signal: params.signal,
+            onResponseRetry: () => {
+              onTextReset();
+              turnVisibleAssistantText = textBeforeModelCall;
+              this.askAgentController.appendAssistantDelta(
+                params.assistantMessageId,
+                "\n\n[Response interrupted. Retrying.]\n\n",
+              );
+              scheduleTurnSnapshot();
+            },
+            onDelta: (delta) => {
+              onText(delta);
+              turnVisibleAssistantText += delta;
+              if (this.streamingMetrics.enabled) {
+                this.streamingMetrics.record({
+                  type: "delta",
+                  surface: "ask-agent-helper",
+                  kind: "text",
+                  chars: delta.length,
+                });
+              }
+              this.askAgentController.appendAssistantDelta(
+                params.assistantMessageId,
+                delta,
+              );
+              scheduleTurnSnapshot();
+            },
+          });
+          // Mirror the loop's fallback: a client that returns text without
+          // streaming deltas still counts as having produced a visible response.
+          if (!turnVisibleAssistantText && result.text) {
+            turnVisibleAssistantText = result.text;
+          }
+          return {
+            text: result.text,
+            toolCalls: result.toolCalls,
+            assistantMessage: result.assistantMessage,
+            stopReason: result.stopReason,
+          };
+        },
+        onIterationMessagesComplete: (messages) => {
+          if (
+            messages.some(
+              (message) =>
+                message.role === "assistant" && message.providerReplay,
+            )
+          ) {
+            this.askAgentSessionStore.appendPrivateModelTurn(
+              params.assistantMessageId,
+              messages,
+            );
+          }
+        },
+        isParallelSafe: (providerCall) => {
+          const { canonicalCall, resolutionError } =
+            this.resolveAskAgentToolCall(providerCall, nativeToolDisclosure);
+          if (resolutionError) return false;
+          if (ASK_AGENT_PARALLEL_SAFE_TOOL_NAMES.has(canonicalCall.name)) {
+            return true;
+          }
+          if (
+            preparedWebAccess.parallelSafeMcpToolNames.includes(
+              canonicalCall.name,
+            )
+          ) {
+            return true;
+          }
+          if (canonicalCall.name !== "call_mcp_tool") return false;
+          const serverName =
+            typeof canonicalCall.input.server === "string"
+              ? canonicalCall.input.server.trim()
+              : "";
+          return preparedWebAccess.parallelSafeMcpServerNames.includes(
+            serverName,
+          );
+        },
+        runTool: async (providerCall) => {
+          const toolStartedAt = Date.now();
+          const resolved = this.resolveAskAgentToolCall(
+            providerCall,
+            nativeToolDisclosure,
+          );
+          const { canonicalCall } = resolved;
+          this.recordAskAgentSemanticDelta();
+          this.askAgentController.startAssistantToolCall({
+            messageId: params.assistantMessageId,
+            toolCallId: canonicalCall.id,
+            toolName: canonicalCall.name,
+            input: canonicalCall.input,
+          });
+          await publishTurnSnapshot();
+          const executed = resolved.resolutionError
+            ? this.buildAskAgentToolResolutionError(
+                canonicalCall,
+                resolved.resolutionError,
+              )
+            : canonicalCall.name === "find_native_tools"
+              ? this.executeAskAgentNativeToolDiscovery(
+                  canonicalCall,
+                  nativeToolDisclosure,
+                )
+              : await this.executeAskAgentSafeProjectlessTool(
+                  canonicalCall,
+                  preparedWebAccess,
+                  params.modelContext.credential,
+                  params.modelContext.model,
+                  params.modelContext.ownerId,
+                  params.signal,
+                  { getVisibleAssistantText: () => turnVisibleAssistantText },
+                  {
+                    sessionId: this.askAgentSessionStore.getActiveSessionId(),
+                    turnId: params.assistantMessageId,
+                  },
+                );
+          this.recordAskAgentSemanticDelta();
+          this.askAgentController.completeAssistantToolCall({
+            messageId: params.assistantMessageId,
+            toolCallId: canonicalCall.id,
+            toolName: canonicalCall.name,
+            input: canonicalCall.input,
+            result: executed.modelResult ?? executed.content,
+            resultImages: executed.resultImages,
+            durationMs: Date.now() - toolStartedAt,
+          });
+          await publishTurnSnapshot();
+          return {
+            toolMessage: this.rebindAskAgentToolResultMessage(
+              executed.toolMessage,
+              providerCall,
+            ),
+            stop: executed.stop,
+            content: executed.content,
+            outcome: executed.outcome,
+          };
+        },
+        finishSuccess: (text, outcome) =>
+          this.finishAskAgentSuccess(params, text, outcome),
+        finishEmpty: () => {
+          this.finishAskAgentEmptyResponse(params.assistantMessageId);
+          return { outcome: "model_empty", assistantText: "" };
+        },
+      });
+    } finally {
+      codexRouting.turnState.dispose();
+    }
   }
 
   private resolveAskAgentToolCall(
@@ -5758,6 +5829,9 @@ export class BrowserGatewayHelper {
       await this.askAgentPreferencesStore.update({ webPolicy: nextCache });
     }
 
+    const codexUseWebSocket =
+      remotePolicy?.codexUseWebSocket ??
+      (target ? false : preferences.codexUseWebSocket !== false);
     const providerId = normalizeBrowserGatewayModelCredentialProviderId(
       modelContext.providerId,
     );
@@ -5781,6 +5855,7 @@ export class BrowserGatewayHelper {
     const tools = [...mcpCatalog.tools, ...nativeTools];
     return Object.freeze({
       target,
+      codexUseWebSocket,
       ...(standaloneMcpTurn ? { standaloneMcpTurn } : {}),
       policy: freezeAskAgentValue(policy),
       tools: freezeAskAgentValue(tools),
@@ -5801,7 +5876,11 @@ export class BrowserGatewayHelper {
   private async getAskAgentWebPolicy(
     target: BrowserGatewayInstanceRecord | null,
     signal: AbortSignal,
-  ): Promise<{ settings: CoreWebAccessSettings; revision?: string } | null> {
+  ): Promise<{
+    settings: CoreWebAccessSettings;
+    revision?: string;
+    codexUseWebSocket?: boolean;
+  } | null> {
     if (!target) return null;
     try {
       const response = await fetch(
@@ -5816,11 +5895,13 @@ export class BrowserGatewayHelper {
         ok?: boolean;
         settings?: Partial<CoreWebAccessSettings>;
         revision?: string;
+        codexUseWebSocket?: boolean;
       };
       if (!body.ok || !body.settings) return null;
       return {
         settings: normalizeCoreWebAccessSettings(body.settings),
         revision: typeof body.revision === "string" ? body.revision : undefined,
+        codexUseWebSocket: body.codexUseWebSocket === true,
       };
     } catch (err) {
       this.logAskAgentEvent("ask-agent.web.policy_failed", {
@@ -8566,6 +8647,10 @@ export class BrowserGatewayHelper {
 
   async dispose(): Promise<void> {
     this.standaloneMcpFormElicitation.dispose();
+    for (const state of this.askAgentConversationStates.values()) {
+      state.dispose();
+    }
+    this.askAgentConversationStates.clear();
     await this.standaloneMcpRuntime?.dispose?.();
     this.standaloneMcpOAuthRuntime?.dispose();
     await this.askAgentController.dispose();

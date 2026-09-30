@@ -51,7 +51,7 @@ export interface ProviderUsageAdapter {
 
 export function createCodexUsageAdapter(): ProviderUsageAdapter {
   return {
-    providerId: "openai-codex",
+    providerId: "codex",
     providerName: "Codex",
     async query() {
       const result = await queryCodexUsage();

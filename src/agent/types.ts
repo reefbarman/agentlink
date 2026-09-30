@@ -223,6 +223,7 @@ export type AgentEvent =
       usageEstimated?: boolean;
       durationMs: number;
       timeToFirstToken: number;
+      transport?: "http" | "websocket";
       providerQueueWaitMs?: number;
       usedPreviousResponseId?: boolean;
       previousResponseIdFallback?: boolean;

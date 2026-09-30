@@ -9,7 +9,7 @@ const roots: string[] = [];
 
 async function fixture() {
   const root = await fs.mkdtemp(
-    path.join(os.tmpdir(), "workspace-mcp-config-"),
+    path.join(await fs.realpath(os.tmpdir()), "workspace-mcp-config-"),
   );
   roots.push(root);
   const projectRoot = path.join(root, "project");

@@ -15,6 +15,7 @@ import {
 } from "./agentErrors.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 
+import { ResponsesNonReplayableError } from "@agentlink/core/codex";
 import { createOpenAiCompatibleHttpError } from "@agentlink/core/openai-compatible";
 
 // Trimmed Cloudflare 5xx page: the SVG path digits ("10.4013") historically
@@ -153,6 +154,23 @@ describe("agentErrors", () => {
       retryable: true,
       category: "unknown",
       retryLayer: "stream",
+    });
+  });
+
+  it("treats a non-replayable Responses marker as authoritative over retry hints", () => {
+    const marker = new ResponsesNonReplayableError(
+      Object.assign(new Error("request timed out"), {
+        headers: new Headers({ "x-should-retry": "true" }),
+      }),
+    );
+    const wrapped = Object.assign(new Error("HTTP 503 overloaded"), {
+      headers: new Headers({ "x-should-retry": "true" }),
+      cause: marker,
+    });
+
+    expect(getAgentRetryDecision(wrapped)).toEqual({
+      retryable: false,
+      category: "unknown",
     });
   });
 

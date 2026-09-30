@@ -15,6 +15,7 @@ import type { BrowserGatewayModelCredentialRecord } from "../browserGatewayModel
 import { normalizeCoreWebAccessSettings } from "@agentlink/core/web-access";
 import {
   CodexTurnState,
+  ResponsesConversationState,
   type CodexCredentialProvider,
 } from "@agentlink/core/codex";
 
@@ -107,6 +108,7 @@ describe("BrowserGatewayAskAgentModelClient", () => {
     const codexRouting = {
       sessionId: "browser-conversation",
       turnState: new CodexTurnState(),
+      conversationState: new ResponsesConversationState(),
     };
     const params = {
       credential: { ...baseCredential, method: "oauth" as const },
@@ -124,10 +126,16 @@ describe("BrowserGatewayAskAgentModelClient", () => {
     expect(calls[1].body.prompt_cache_key).toBe(
       "codex:browser:browser-conversation",
     );
+    const anotherTurnState = new CodexTurnState();
     await client.completeWithToolCalls({
       ...params,
-      codexRouting: { ...codexRouting, turnState: new CodexTurnState() },
+      codexRouting: {
+        ...codexRouting,
+        turnState: anotherTurnState,
+        conversationState: undefined,
+      },
     });
+    anotherTurnState.dispose();
     expect(calls[2].headers).not.toHaveProperty("x-codex-turn-state");
     await client.completeWithToolCalls({
       ...params,
@@ -137,6 +145,8 @@ describe("BrowserGatewayAskAgentModelClient", () => {
       },
     });
     expect(calls[3].headers).not.toHaveProperty("x-codex-turn-state");
+    codexRouting.turnState.dispose();
+    codexRouting.conversationState.dispose();
   });
 
   it("advertises autonomous memory as global-only in projectless Ask Agent", () => {
@@ -362,6 +372,37 @@ describe("BrowserGatewayAskAgentModelClient", () => {
 
     return capturedBody as Record<string, unknown>;
   }
+
+  it("forces HTTP when the live Codex WebSocket setting is disabled", async () => {
+    const connector = vi.fn();
+    const client = new BrowserGatewayAskAgentModelClient({
+      sessionId: "session-1",
+      responsesWebSocketConnector: connector as never,
+      createClient: () =>
+        ({
+          responses: {
+            create: async () =>
+              (async function* () {
+                yield { type: "response.output_text.delta", delta: "ok" };
+              })(),
+          },
+        }) as never,
+    });
+
+    await client.complete({
+      codexRouting: {
+        sessionId: "turn-1",
+        turnState: new CodexTurnState(),
+        conversationState: undefined,
+      },
+      codexUseWebSocket: false,
+      credential: { ...baseCredential, method: "oauth" },
+      model: "gpt-5.5",
+      messages: userMessages,
+    });
+
+    expect(connector).not.toHaveBeenCalled();
+  });
 
   it("omits max_output_tokens for OAuth ChatGPT/Codex backend requests", async () => {
     const body = await captureRequestBody("oauth");
@@ -650,6 +691,79 @@ describe("BrowserGatewayAskAgentModelClient", () => {
     expect(JSON.stringify(history)).not.toContain("synthetic recall");
   });
 
+  it("enables incremental WebSocket continuation for canonical helper history", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const client = new BrowserGatewayAskAgentModelClient({
+      sessionId: "session-incremental",
+      responsesWebSocketConnector: {
+        connect: vi.fn(async () => ({
+          isOpen: true,
+          headers: new Headers(),
+          dispatch: async function* (request: {
+            body: Record<string, unknown>;
+          }) {
+            requests.push(request.body);
+            yield {
+              type: "response.completed",
+              response: {
+                id: `resp-${requests.length}`,
+                status: "completed",
+                output: [],
+                usage: {},
+              },
+            };
+          },
+          close: vi.fn(),
+        })),
+      } as never,
+      createClient: () =>
+        ({
+          responses: {
+            create: async () => {
+              throw new Error("HTTP path should not be used");
+            },
+          },
+        }) as never,
+    });
+    const routing = {
+      sessionId: "conversation-incremental",
+      turnState: new CodexTurnState(),
+      conversationState: new ResponsesConversationState(),
+    };
+    const params = {
+      codexRouting: routing,
+      credential: { ...baseCredential, method: "oauth" as const },
+      model: "gpt-5.5",
+      messages: userMessages,
+    };
+
+    await client.completeWithToolCalls(params);
+    await client.completeWithToolCalls({
+      ...params,
+
+      messages: [
+        ...userMessages,
+        {
+          id: "u2",
+          role: "user" as const,
+          content: "next",
+          timestamp: 2,
+          blocks: [{ type: "text" as const, text: "next" }],
+        },
+      ],
+    });
+
+    expect(requests[0]).not.toHaveProperty("previous_response_id");
+    expect(requests[1]).toMatchObject({
+      previous_response_id: "resp-1",
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "next" }] },
+      ],
+    });
+    routing.turnState.dispose();
+    routing.conversationState.dispose();
+  });
+
   it("instructs Ask Agent to use web search proactively and treat results as untrusted", async () => {
     const body = await captureRequestBody("oauth");
 
@@ -881,6 +995,122 @@ describe("BrowserGatewayAskAgentModelClient", () => {
     expect(activateAccount).toHaveBeenCalledWith(
       expect.objectContaining({ accountId: "account-b" }),
     );
+  });
+
+  it("still refreshes OAuth after a previous turn selected HTTP fallback", async () => {
+    const refreshAuth = vi.fn(async () => ({
+      method: "oauth" as const,
+      bearerToken: "fresh",
+      accountId: "chatgpt-a",
+      canRefresh: true,
+    }));
+    const conversationState = new ResponsesConversationState();
+    conversationState.useHttp();
+    let attempts = 0;
+    const client = new BrowserGatewayAskAgentModelClient({
+      sessionId: "http-refresh",
+      codexCredentialProvider: {
+        resolveAuth: async () => ({
+          method: "oauth",
+          bearerToken: "expired",
+          accountId: "chatgpt-a",
+          canRefresh: true,
+        }),
+        refreshAuth,
+      },
+      createClient: () =>
+        ({
+          responses: {
+            create: async () => {
+              attempts += 1;
+              if (attempts === 1)
+                throw Object.assign(new Error("Unauthorized"), { status: 401 });
+              return (async function* () {
+                yield {
+                  type: "response.output_text.delta",
+                  delta: "Refreshed",
+                };
+                yield {
+                  type: "response.completed",
+                  response: { id: "fresh-response", output: [] },
+                };
+              })();
+            },
+          },
+        }) as never,
+    });
+    await expect(
+      client.completeWithToolCalls({
+        credential: {
+          ...baseCredential,
+          method: "oauth",
+          accountId: "chatgpt-a",
+        },
+        model: "gpt-5.5",
+        messages: userMessages,
+        codexRouting: {
+          sessionId: "http-refresh",
+          turnState: new CodexTurnState(),
+          conversationState,
+        },
+      }),
+    ).resolves.toMatchObject({ text: "Refreshed" });
+    expect(refreshAuth).toHaveBeenCalledOnce();
+    expect(attempts).toBe(2);
+  });
+
+  it("does not restart completion recovery after it has been handled", async () => {
+    let attempts = 0;
+    const provider: CodexCredentialProvider<{ sessionId: string }> = {
+      resolveAuth: vi.fn(async () => ({
+        method: "oauth" as const,
+        bearerToken: "token-a",
+        accountId: "chatgpt-a",
+        canRefresh: true,
+      })),
+      refreshAuth: vi.fn(async () => ({
+        method: "oauth" as const,
+        bearerToken: "token-b",
+        accountId: "chatgpt-a",
+        canRefresh: true,
+      })),
+    };
+    const client = new BrowserGatewayAskAgentModelClient({
+      sessionId: "session-recovery-handled",
+      codexCredentialProvider: provider,
+      createClient: () =>
+        ({
+          responses: {
+            create: async () => {
+              attempts += 1;
+              throw Object.assign(new Error("Unauthorized"), {
+                status: 401,
+                recoveryHandled: true,
+              });
+            },
+          },
+        }) as never,
+    });
+
+    await expect(
+      client.completeWithToolCalls({
+        codexRouting: {
+          sessionId: "session-recovery-handled",
+          turnState: new CodexTurnState(),
+          conversationState: new ResponsesConversationState(),
+        },
+        credential: {
+          ...baseCredential,
+          method: "oauth",
+          accountId: "chatgpt-a",
+        },
+        model: "gpt-5.5",
+        messages: userMessages,
+      }),
+    ).rejects.toMatchObject({ recoveryHandled: true });
+
+    expect(attempts).toBe(1);
+    expect(provider.refreshAuth).not.toHaveBeenCalled();
   });
 
   it("does not rotate the shared OAuth pool after visible output starts", async () => {

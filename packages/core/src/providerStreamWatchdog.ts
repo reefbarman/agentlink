@@ -1,9 +1,11 @@
+import type {
+  CoreModelProviderRequestAttempt,
+  CoreModelTransportActivity,
+} from "./modelRuntime.js";
 import {
   clearTimeout as clearNodeTimeout,
   setTimeout as setNodeTimeout,
 } from "node:timers";
-
-import type { CoreModelTransportActivity } from "./modelRuntime.js";
 
 /** Time to first raw transport activity (normally response headers). */
 export const DEFAULT_PROVIDER_FIRST_EVENT_TIMEOUT_MS = 300_000;
@@ -25,6 +27,7 @@ export type ProviderStreamTimeoutKind =
 
 export class ProviderStreamTimeoutError extends Error {
   readonly kind: ProviderStreamTimeoutKind;
+  readonly retryable = true;
 
   constructor(kind: ProviderStreamTimeoutKind, timeoutMs: number) {
     super(
@@ -148,6 +151,9 @@ export async function* runWatchedProviderStream<T>(params: {
   start: (opts: {
     signal: AbortSignal;
     onTransportActivity: (activity: CoreModelTransportActivity) => void;
+    onProviderRequestAttempt: (
+      attempt: CoreModelProviderRequestAttempt,
+    ) => void;
   }) => AsyncIterable<T>;
   signal?: AbortSignal;
   connectionTimeoutMs?: number;
@@ -164,10 +170,12 @@ export async function* runWatchedProviderStream<T>(params: {
     params.noProgressTimeoutMs ?? DEFAULT_PROVIDER_NO_PROGRESS_TIMEOUT_MS,
     requestController,
   );
+
   const iterator = params
     .start({
       signal: requestController.signal,
       onTransportActivity: monitor.recordActivity,
+      onProviderRequestAttempt: () => undefined,
     })
     [Symbol.asyncIterator]();
   try {

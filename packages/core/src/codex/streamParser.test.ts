@@ -30,6 +30,58 @@ async function collect(
 }
 
 describe("parseCodexResponseStreamEvents", () => {
+  it.each([
+    undefined,
+    [],
+    [{ type: "reasoning", id: "reason-a", encrypted_content: "opaque" }],
+  ])(
+    "uses the same complete replay for history and continuation when terminal output is partial (%#)",
+    async (terminalOutput) => {
+      const output = [
+        { type: "reasoning", id: "reason-a", encrypted_content: "opaque" },
+        {
+          type: "function_call",
+          id: "item-a",
+          call_id: "call-a",
+          name: "test",
+          arguments: "{}",
+        },
+      ];
+      let completedOutput: unknown;
+      const events: CoreModelStreamEvent[] = [];
+      for await (const event of parseCodexResponseStreamEvents(
+        toAsyncIterable([
+          ...output.map((item, output_index) => ({
+            type: "response.output_item.done",
+            output_index,
+            item,
+          })),
+          {
+            type: "response.completed",
+            response: {
+              id: "response-a",
+              status: "completed",
+              output: terminalOutput,
+            },
+          },
+        ]),
+        undefined,
+        {
+          onCompletedOutput: (items) => {
+            completedOutput = items;
+          },
+        },
+      ))
+        events.push(event);
+      expect(completedOutput).toEqual(output);
+      const stop = events.find((event) => event.type === "model_stop");
+      expect(
+        stop?.type === "model_stop" &&
+          stop.assistantMessage.providerReplay?.payload,
+      ).toEqual({ output });
+    },
+  );
+
   it("parses text, reasoning, tool calls, usage, and final content blocks", async () => {
     const state = { outputStarted: false };
     const events = await collect(

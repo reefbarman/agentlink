@@ -26,17 +26,21 @@ export interface BrowserGatewayAskAgentPreferencesSnapshot {
   model?: string;
   modelOwnerId?: string;
   reasoningEffort?: ReasoningEffort;
+  codexUseWebSocket?: boolean;
   webPolicy?: BrowserGatewayAskAgentWebPolicyCache;
 }
 
 function normalizePreferences(
   value: unknown,
 ): BrowserGatewayAskAgentPreferencesSnapshot {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { codexUseWebSocket: true };
+  }
   const candidate = value as {
     model?: unknown;
     modelOwnerId?: unknown;
     reasoningEffort?: unknown;
+    codexUseWebSocket?: unknown;
     webPolicy?: unknown;
   };
   let webPolicy: BrowserGatewayAskAgentWebPolicyCache | undefined;
@@ -80,6 +84,7 @@ function normalizePreferences(
     reasoningEffort: isCoreReasoningEffort(candidate.reasoningEffort)
       ? candidate.reasoningEffort
       : undefined,
+    codexUseWebSocket: candidate.codexUseWebSocket !== false,
     webPolicy,
   };
 }
@@ -91,7 +96,7 @@ async function readPreferencesFile(
     const raw = await fs.readFile(filePath, "utf-8");
     return normalizePreferences(JSON.parse(raw) as unknown);
   } catch {
-    return {};
+    return { codexUseWebSocket: true };
   }
 }
 

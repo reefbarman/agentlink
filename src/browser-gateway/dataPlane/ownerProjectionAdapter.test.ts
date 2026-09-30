@@ -983,6 +983,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
       outputTokens: 20,
       durationMs: 500,
       timeToFirstToken: 100,
+      transport: "websocket",
     };
     expect(adapter.getCheckpoint().transcript.messages[0]).toMatchObject({
       role: "assistant",
@@ -990,6 +991,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
         model: "gpt-5.6-sol",
         mode: "architect",
         commandApprovalPolicy: "approve-for-me",
+        transport: "websocket",
       },
     });
   });

@@ -73,6 +73,7 @@ export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
   "memory.mode",
   "showThinking",
   "codex.textVerbosity",
+  "codex.useWebSocket",
 ] as const;
 
 export type ProjectScopedAgentLinkSetting =

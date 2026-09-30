@@ -84,6 +84,7 @@ it("pins the complete browser gateway transcript-message contract", () => {
       outputTokens: number;
       durationMs: number;
       timeToFirstToken: number;
+      transport?: "http" | "websocket";
     };
     condenseInfo?: {
       prevInputTokens: number;

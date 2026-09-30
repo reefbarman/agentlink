@@ -15,6 +15,8 @@ import {
   type CoreModelStreamEvent,
   type CoreModelStreamOperationRequest,
   type CreateOpenAiCompatibleProviderOptions,
+  type ResponsesTransportPolicy,
+  type ResponsesWebSocketConnector,
 } from "@agentlink/core";
 
 export interface WorkspaceOpenAiProviderConfig {
@@ -22,6 +24,11 @@ export interface WorkspaceOpenAiProviderConfig {
   readonly id?: string;
   readonly displayName?: string;
   readonly modelIds: readonly string[];
+  readonly transport?: {
+    readonly connector?: ResponsesWebSocketConnector;
+    readonly useWebSocket?: () => boolean;
+    readonly readPolicy?: () => ResponsesTransportPolicy | undefined;
+  };
   readonly resolveApiKey: () =>
     | string
     | undefined
@@ -37,6 +44,11 @@ export interface WorkspaceCodexProviderConfig {
     principal: AgentPrincipal;
     authContext: undefined;
   }>;
+  readonly transport?: {
+    readonly connector?: ResponsesWebSocketConnector;
+    readonly useWebSocket?: () => boolean;
+    readonly readPolicy?: () => ResponsesTransportPolicy | undefined;
+  };
 }
 
 export interface WorkspaceCompatibleProviderConfig extends Omit<
@@ -176,6 +188,7 @@ function createProvider(config: WorkspaceProviderConfig): CoreModelBackend {
   if (config.type === "codex") {
     return createCodexProvider({
       credentialProvider: config.credentialProvider,
+      transport: config.transport,
       id: config.id,
       displayName: config.displayName,
       modelIds: config.modelIds,
@@ -184,6 +197,7 @@ function createProvider(config: WorkspaceProviderConfig): CoreModelBackend {
   if (config.type === "openai") {
     return createOpenAIProvider({
       apiKey: config.resolveApiKey,
+      transport: config.transport,
       id: config.id,
       displayName: config.displayName,
       modelIds: config.modelIds,

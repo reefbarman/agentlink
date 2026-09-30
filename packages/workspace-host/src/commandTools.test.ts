@@ -18,7 +18,7 @@ async function fixture(
   } = {},
 ) {
   const parent = await fs.mkdtemp(
-    path.join(os.tmpdir(), "workspace-command-tools-"),
+    path.join(await fs.realpath(os.tmpdir()), "workspace-command-tools-"),
   );
   const projectRoot = path.join(parent, "project");
   const stateDirectory = path.join(parent, "state");

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { CodexTurnState } from "./codex/turnRouting.js";
 
 import { defineTool, defineZodTool, HostToolPublicError } from "./hostTools.js";
 import type { AgentPrincipal } from "./modelIdentity.js";
@@ -289,6 +290,65 @@ function tool(
 }
 
 describe("headless E4 turn kernel", () => {
+  it("does not publish or execute tools from a failed response attempt", async () => {
+    const backend = new ScriptedBackend([
+      {
+        events: [
+          {
+            type: "tool_done",
+            toolCallId: "discarded",
+            toolName: "read_file",
+            input: {},
+          },
+          {
+            type: "response_retry",
+            attempt: 1,
+            phase: "http",
+            delayMs: 0,
+            reason: "interrupted",
+          },
+          { type: "text_delta", text: "Recovered" },
+          {
+            type: "model_stop",
+            reason: "end_turn",
+            assistantMessage: { role: "assistant", content: "Recovered" },
+          },
+        ],
+      },
+    ]);
+    const kernel = createHeadlessTurnKernel({
+      models: createRuntime(backend),
+    });
+    const { events, result } = await collect(kernel.runTurn(prepared()));
+    expect(result).toMatchObject({ status: "completed", text: "Recovered" });
+    expect(events.some((event) => event.type === "tool.requested")).toBe(false);
+    expect(events.some((event) => event.type === "tool.started")).toBe(false);
+  });
+
+  it("forwards one runtime transport owner across tool iterations and disposes it on exit", async () => {
+    const dispose = vi.spyOn(CodexTurnState.prototype, "dispose");
+    try {
+      const backend = new ScriptedBackend([
+        toolTurn([{ id: "call-a", name: "test" }]),
+        finalTurn(),
+      ]);
+      const kernel = createHeadlessTurnKernel({
+        models: createRuntime(backend),
+        tools: [tool("test", async () => ({ modelContent: "result" }))],
+      });
+      await collect(kernel.runTurn(prepared()));
+      const first = backend.requests[0].request.providerHints?.codex;
+      expect(first?.sessionId).toBe(prepared().request.sessionId);
+      expect(first?.turnState).toBeInstanceOf(CodexTurnState);
+      expect(backend.requests[1].request.providerHints?.codex?.turnState).toBe(
+        first?.turnState,
+      );
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(dispose.mock.instances[0]).toBe(first?.turnState);
+    } finally {
+      dispose.mockRestore();
+    }
+  });
   it("disposes resolved resources on completion, failure, and invalid tool resolution", async () => {
     const disposeCompleted = vi.fn();
     const completed = createHeadlessTurnKernel({

@@ -2394,7 +2394,14 @@ function parseApiRequest(
     "outputTokens",
     "durationMs",
     "timeToFirstToken",
+    "transport",
   ]);
+  const transport = optionalEnum(
+    object,
+    "transport",
+    path,
+    new Set(["http", "websocket"]),
+  ) as NonNullable<BrowserGatewayTranscriptMessage["apiRequest"]>["transport"];
   const reasoningEffort = optionalEnum(
     object,
     "reasoningEffort",
@@ -2433,6 +2440,7 @@ function parseApiRequest(
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(mode ? { mode } : {}),
     ...(commandApprovalPolicy ? { commandApprovalPolicy } : {}),
+    ...(transport ? { transport } : {}),
     inputTokens: nonNegativeSafeInteger(
       object.inputTokens,
       `${path}.inputTokens`,

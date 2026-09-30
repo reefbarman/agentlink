@@ -1637,6 +1637,13 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
   private async refreshNativeIndexesFromTables(
     tables: RetrievalTables,
   ): Promise<void> {
+    const state = await readNativeIndexState(tables);
+    if (
+      !state.nativeIndexesDirty &&
+      !hasUnavailableNativeCapability(state.nativeCapabilities)
+    ) {
+      return;
+    }
     const operations = this.options.indexOperations ?? defaultIndexOperations;
     const nativeCapabilities: NativeCapabilities = {
       lexical: await runIndexOperation(() =>
@@ -2277,6 +2284,14 @@ function publicationRow(request: RetrievalPublicationRequest): PublicationRow {
 
 const defaultIndexOperations: LanceDbRetrievalIndexOperations = {
   async createLexical(table) {
+    const indexes = await table.listIndices();
+    if (indexes.some((index) => index.name === LEXICAL_INDEX_NAME)) {
+      await table.optimize({
+        cleanupOlderThan: new Date(Date.now() - RETRIEVAL_VERSION_RETENTION_MS),
+        deleteUnverified: false,
+      });
+      return;
+    }
     await table.createIndex("search_text", {
       config: Index.fts({ withPosition: true, lowercase: true }),
       name: LEXICAL_INDEX_NAME,
@@ -2285,18 +2300,30 @@ const defaultIndexOperations: LanceDbRetrievalIndexOperations = {
     });
   },
   async createScalar(table) {
-    await table.createIndex("source_id", {
-      config: Index.btree(),
-      name: SOURCE_INDEX_NAME,
-      replace: true,
-      waitTimeoutSeconds: 30,
-    });
-    await table.createIndex("generation", {
-      config: Index.btree(),
-      name: GENERATION_INDEX_NAME,
-      replace: true,
-      waitTimeoutSeconds: 30,
-    });
+    const indexes = await table.listIndices();
+    let maintenanceRequired = false;
+    for (const [column, name] of [
+      ["source_id", SOURCE_INDEX_NAME],
+      ["generation", GENERATION_INDEX_NAME],
+    ]) {
+      if (indexes.some((index) => index.name === name)) {
+        const stats = await table.indexStats(name);
+        maintenanceRequired ||= (stats?.numUnindexedRows ?? 0) > 0;
+        continue;
+      }
+      await table.createIndex(column, {
+        config: Index.btree(),
+        name,
+        replace: true,
+        waitTimeoutSeconds: 30,
+      });
+    }
+    if (maintenanceRequired) {
+      await table.optimize({
+        cleanupOlderThan: new Date(Date.now() - RETRIEVAL_VERSION_RETENTION_MS),
+        deleteUnverified: false,
+      });
+    }
   },
   async validateVector(table, dimensions) {
     const schema = await table.schema();

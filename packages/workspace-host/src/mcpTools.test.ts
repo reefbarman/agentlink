@@ -10,7 +10,9 @@ import os from "node:os";
 import path from "node:path";
 
 async function fixture() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-mcp-tools-"));
+  const root = await fs.mkdtemp(
+    path.join(await fs.realpath(os.tmpdir()), "workspace-mcp-tools-"),
+  );
   const projectRoot = path.join(root, "project");
   const globalConfigPath = path.join(root, "global-mcp.json");
   const projectConfigPath = path.join(projectRoot, ".agentlink", "mcp.json");

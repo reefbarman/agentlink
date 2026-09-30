@@ -124,6 +124,7 @@ export interface StandaloneSessionProjection {
   readonly mode: "code";
   readonly writePolicy: "prompt";
   readonly transcript: readonly StandaloneTranscriptMessage[];
+  readonly responseTextStart?: number;
   readonly thinking: readonly StandaloneThinkingActivity[];
   readonly tools: readonly StandaloneToolActivity[];
   readonly pendingInteraction?: AgentInteractionRequest;
@@ -363,6 +364,7 @@ function reduceTurnEvent(
         ...state,
         revision,
         phase: "running",
+        responseTextStart: 0,
         transcript: associateLatestUserWithTurn(state.transcript, event.turnId),
       };
     case "model.resolved":
@@ -415,6 +417,19 @@ function reduceTurnEvent(
         }),
       };
     }
+    case "response.retry":
+      return {
+        ...state,
+        revision,
+        transcript: state.transcript.map((message) =>
+          message.role === "assistant" && message.turnId === event.turnId
+            ? {
+                ...message,
+                text: message.text.slice(0, state.responseTextStart ?? 0),
+              }
+            : message,
+        ),
+      };
     case "text.delta":
       return {
         ...state,
@@ -425,6 +440,11 @@ function reduceTurnEvent(
       return {
         ...state,
         revision,
+        responseTextStart:
+          state.transcript.find(
+            (message) =>
+              message.role === "assistant" && message.turnId === event.turnId,
+          )?.text.length ?? 0,
         tools: upsertTool(state.tools, {
           toolCallId: event.toolCallId,
           turnId: event.turnId,

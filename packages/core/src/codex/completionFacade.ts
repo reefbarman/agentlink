@@ -70,7 +70,16 @@ export async function collectCodexCompletionResult(
 
   for await (const event of events) {
     options.onStreamEvent?.(event);
-    if (event.type === "text_delta") {
+    if (event.type === "response_retry") {
+      text = "";
+      usage = undefined;
+      providerResponseId = undefined;
+      assistantMessage = undefined;
+      stopReason = undefined;
+      terminationEvidence = undefined;
+      contentBlocks = undefined;
+      toolCalls.length = 0;
+    } else if (event.type === "text_delta") {
       text += event.text;
       options.onTextDelta?.(event.text);
     } else if (event.type === "tool_done") {
@@ -165,6 +174,9 @@ export async function executeCodexResolvedCompletion(args: {
   maxOutputBytes?: number;
   runRequest?: <T>(operation: () => T) => T;
   trimText?: boolean;
+  webSocket?: import("./responsesTransport.js").ResponsesWebSocketRequestContext;
+  dispatchEvidence?: import("./responsesTransport.js").ResponsesDispatchEvidence;
+  beforeModelDispatch?: (attempt: CoreModelProviderRequestAttempt) => void;
 }): Promise<CodexCompletionResult> {
   const request = buildCodexResolvedRequestBody({
     authMethod: args.authMethod,
@@ -196,6 +208,9 @@ export async function executeCodexResolvedCompletion(args: {
         },
         maxRetries: args.maxRetries,
         runRequest: args.runRequest,
+        webSocket: args.webSocket,
+        dispatchEvidence: args.dispatchEvidence,
+        beforeModelDispatch: args.beforeModelDispatch,
       }),
       {
         trimText: args.trimText,
@@ -213,6 +228,12 @@ export async function executeCodexResolvedCompletion(args: {
       throw error;
     }
     const codexError = toCodexRequestError(error);
+    if (
+      error &&
+      typeof error === "object" &&
+      (error as { recoveryHandled?: unknown }).recoveryHandled === true
+    )
+      Object.assign(codexError, { recoveryHandled: true });
     if (
       args.authMethod === "oauth" &&
       request.model === "gpt-6-astra" &&

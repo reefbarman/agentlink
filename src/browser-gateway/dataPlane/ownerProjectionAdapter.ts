@@ -1293,6 +1293,9 @@ function projectMessage(
                   ),
                 }
               : {}),
+            ...(message.apiRequest.transport
+              ? { transport: message.apiRequest.transport }
+              : {}),
             outputTokens: safeInteger(message.apiRequest.outputTokens),
             durationMs: finiteNonNegative(message.apiRequest.durationMs),
             timeToFirstToken: finiteNonNegative(

@@ -255,6 +255,58 @@ describe("CodexProvider.complete", () => {
     expect(result.text).toBe("ok");
   });
 
+  it.each([401, 429])(
+    "does not redispatch a %i failure after streamed text",
+    async (status) => {
+      createMock.mockImplementationOnce(async () =>
+        (async function* () {
+          yield { type: "response.output_text.delta", delta: "partial" };
+          throw Object.assign(new Error(`${status} interrupted`), { status });
+        })(),
+      );
+      const authManager = makeAuthManager();
+      const provider = new CodexProvider(authManager as never);
+      const events: unknown[] = [];
+      await expect(
+        (async () => {
+          for await (const event of provider.stream({
+            model: "gpt-5.5",
+            systemPrompt: "system",
+            messages: [{ role: "user", content: "ping" }],
+            maxTokens: 64,
+          }))
+            events.push(event);
+        })(),
+      ).rejects.toThrow(`${status} interrupted`);
+      expect(events).toContainEqual({ type: "text_delta", text: "partial" });
+      expect(createMock).toHaveBeenCalledTimes(1);
+      expect(authManager.forceRefreshModelAuth).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the completion dispatch cap across OAuth refresh", async () => {
+    createMock.mockRejectedValue(
+      Object.assign(new Error("Unauthorized"), { status: 401 }),
+    );
+    const authManager = makeAuthManager();
+    const provider = new CodexProvider(authManager as never);
+    await expect(
+      provider.complete({
+        model: "gpt-5.5",
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hello" }],
+        maxTokens: 50,
+        executionControls: {
+          maxRetries: 0,
+          maxOutputBytes: 1024,
+          beforeModelDispatch: () => {},
+        },
+      }),
+    ).rejects.toMatchObject({ recoveryHandled: true });
+    expect(createMock).toHaveBeenCalledOnce();
+    expect(authManager.forceRefreshModelAuth).toHaveBeenCalledOnce();
+  });
+
   it("does not refresh the same oauth account repeatedly on persistent 401", async () => {
     createMock
       .mockRejectedValueOnce(new Error("401 unauthorized"))
@@ -857,6 +909,110 @@ describe("CodexProvider.complete", () => {
 });
 
 describe("CodexProvider.stream", () => {
+  it("keeps previousResponseId requests on HTTP without canonical replay", async () => {
+    createMock.mockImplementationOnce(async () =>
+      (async function* () {
+        yield { type: "response.done", response: { usage: {} } };
+      })(),
+    );
+    const connector = { connect: vi.fn() };
+    const provider = new CodexProvider(makeAuthManager() as never, undefined, {
+      webSocketConnector: connector as never,
+    });
+
+    for await (const _event of provider.stream({
+      model: "gpt-5.5",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "delta only" }],
+      maxTokens: 64,
+      state: { previousResponseId: "resp_previous", store: false },
+    })) {
+      /* drain */
+    }
+
+    expect(connector.connect).not.toHaveBeenCalled();
+    expect(createMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps HTTP when WebSocket is disabled and preserves non-replayable failures", async () => {
+    const connector = {
+      connect: vi.fn().mockResolvedValue({
+        headers: new Headers(),
+        isOpen: true,
+        dispatch: async function* () {
+          yield* [];
+          const error = Object.assign(new Error("401 unauthorized"), {
+            nonReplayable: true,
+            shouldRetry: false,
+            retryable: false,
+          });
+          throw error;
+        },
+        close: vi.fn(),
+      }),
+    };
+    const authManager = makeAuthManager();
+    const provider = new CodexProvider(authManager as never, undefined, {
+      webSocketConnector: connector as never,
+      getUseWebSocketSetting: () => false,
+    });
+    createMock.mockImplementationOnce(async () =>
+      (async function* () {
+        yield { type: "response.done", response: { usage: {} } };
+      })(),
+    );
+
+    for await (const _event of provider.stream({
+      model: "gpt-5.5",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "HTTP only" }],
+      maxTokens: 64,
+    })) {
+      /* drain */
+    }
+
+    expect(connector.connect).not.toHaveBeenCalled();
+    expect(createMock).toHaveBeenCalledTimes(1);
+
+    const websocketProvider = new CodexProvider(
+      authManager as never,
+      undefined,
+      {
+        webSocketConnector: connector as never,
+      },
+    );
+    await expect(
+      (async () => {
+        for await (const _event of websocketProvider.stream({
+          model: "gpt-5.5",
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Do not retry" }],
+          maxTokens: 64,
+        })) {
+          /* drain */
+        }
+      })(),
+    ).rejects.toMatchObject({
+      nonReplayable: true,
+      shouldRetry: false,
+      retryable: false,
+    });
+    await expect(
+      websocketProvider.complete({
+        model: "gpt-5.5",
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "Do not retry complete" }],
+        maxTokens: 64,
+      }),
+    ).rejects.toMatchObject({
+      nonReplayable: true,
+      shouldRetry: false,
+      retryable: false,
+    });
+    expect(authManager.forceRefreshModelAuth).not.toHaveBeenCalled();
+    expect(connector.connect).toHaveBeenCalledTimes(2);
+  });
+
   it("forwards turn routing through the production provider and isolates new turns and accounts", async () => {
     createMock.mockReset();
     const authManager = makeAuthManager();

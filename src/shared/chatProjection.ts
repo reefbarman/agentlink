@@ -882,6 +882,7 @@ export type AppAction =
       usageEstimated?: boolean;
       durationMs: number;
       timeToFirstToken: number;
+      transport?: "http" | "websocket";
       usedPreviousResponseId?: boolean;
       previousResponseIdFallback?: boolean;
       promptCacheKey?: string;
@@ -2676,6 +2677,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           : {}),
         durationMs: action.durationMs,
         timeToFirstToken: action.timeToFirstToken,
+        transport: action.transport,
         usedPreviousResponseId: action.usedPreviousResponseId,
         previousResponseIdFallback: action.previousResponseIdFallback,
         promptCacheKey: action.promptCacheKey,

@@ -1,5 +1,11 @@
 import { createHash, randomUUID } from "crypto";
-import { CodexTurnState } from "@agentlink/core/codex";
+import {
+  decideResponsesRecovery,
+  isResponsesInterruption,
+  isResponsesFatalRecoveryError,
+  isNonReplayableResponsesError,
+  CodexTurnState,
+} from "@agentlink/core/codex";
 import * as fs from "fs/promises";
 import * as path from "path";
 import type { AgentSession } from "./AgentSession.js";
@@ -77,6 +83,7 @@ import type {
   MessageParam,
   ImageBlock,
   ModelCapabilities,
+  ProviderStreamEvent,
   ReasoningEffort,
 } from "./providers/types.js";
 import { toSupportedImageMediaType } from "./providers/types.js";
@@ -1142,6 +1149,9 @@ export class AgentEngine {
     // to return false in this (still-running) loop and allowing spurious API calls.
     const { signal } = ac;
     let codexTurnState = new CodexTurnState();
+    let lastProviderAttempt:
+      | import("../core/modelRuntime.js").CoreModelProviderRequestAttempt
+      | undefined;
 
     // Model selection updates are adopted between provider requests. An in-flight
     // stream completes under the provider/model pair that started it.
@@ -1181,6 +1191,9 @@ export class AgentEngine {
     try {
       let requestRetryCount = 0;
       let streamRetryCount = 0;
+      let responsesRetriesInPhase = 0;
+      let responsesRetriesUsed = 0;
+      let responsesDispatches = 0;
       let visibleTextFromRetriedStream = "";
       let emptyResponseRetryCount = 0;
       let pendingEmptyResponseNudge = false;
@@ -1206,6 +1219,7 @@ export class AgentEngine {
         if (session.modelSelectionRevision !== modelSelectionRevision) {
           activeModel = session.model;
           provider = this.registry.resolveProvider(activeModel);
+          codexTurnState.dispose();
           codexTurnState = new CodexTurnState();
           modelSelectionRevision = session.modelSelectionRevision;
           requestRetryCount = 0;
@@ -1470,6 +1484,7 @@ export class AgentEngine {
               ...(interjection.documents ?? []),
               ...resolvedInterjection.documents,
             ];
+            codexTurnState.dispose();
             codexTurnState = new CodexTurnState();
             session.addUserMessage(resolvedInterjection.text, {
               displayText: interjection.displayText,
@@ -1498,6 +1513,7 @@ export class AgentEngine {
         let timeToFirstToken = 0;
         let providerQueueWaitMs = 0;
 
+        const isCodex = provider.id === "codex";
         const capabilities = provider.getCapabilities(activeModel);
         const reasoningEffort = normalizeReasoningEffort(
           session.reasoningEffort,
@@ -1552,11 +1568,13 @@ export class AgentEngine {
         let retrievedMemoryTokens = 0;
         let modelStopReason: CoreModelStopReason | undefined;
         let firstTokenReceived = false;
+        let openThinkingId: string | undefined;
         let usedPreviousResponseId = false;
         let promptCacheKey: string | undefined;
         let promptCacheRetention: "in_memory" | "24h" | undefined;
         let storeResponseState = false;
         let transportMonitor: ProviderStreamActivityMonitor | undefined;
+        let requestTransport: "http" | "websocket" | undefined;
         const pendingRequestAttributionEvents: Array<
           Extract<AgentEvent, { type: "request_context_attribution" }>
         > = [];
@@ -1565,7 +1583,7 @@ export class AgentEngine {
         // tool card when the stream disconnects partway through its JSON, and
         // makes background accounting charge a tool that was never dispatched.
         const pendingToolInputDeltas = new Map<string, string[]>();
-        const retryTextPrefix = visibleTextFromRetriedStream;
+        const retryTextPrefix = isCodex ? "" : visibleTextFromRetriedStream;
         let retryTextOffset = 0;
         let retryTextDiverged = false;
         let requestPermit: ModelRequestPermit | undefined;
@@ -1671,7 +1689,6 @@ export class AgentEngine {
             }
           }
 
-          const isCodex = provider.id === "codex";
           const useStatefulCodex =
             isCodex &&
             session.codexStatefulResponses &&
@@ -1759,6 +1776,8 @@ export class AgentEngine {
             completed: false,
             providerAttempts: 0,
           };
+          lastProviderAttempt = undefined;
+          requestTransport = undefined;
           const streamGen = provider.stream({
             model: activeModel,
             systemPrompt: requestSystemPrompt,
@@ -1780,12 +1799,35 @@ export class AgentEngine {
               sessionId: session.id,
               ...(isCodex
                 ? {
-                    codex: { sessionId: session.id, turnState: codexTurnState },
+                    codex: {
+                      sessionId: session.id,
+                      turnState: codexTurnState,
+                      fullHistory: true,
+                      conversationState: session.codexConversationState,
+                    },
                   }
                 : {}),
             },
             signal: requestController.signal,
-            onProviderRequestAttempt: ({ model }) => {
+            executionControls: isCodex
+              ? {
+                  maxRetries: 11,
+                  maxOutputBytes: 16 * 1024 * 1024,
+                  beforeModelDispatch: () => {
+                    if (responsesDispatches >= 12) {
+                      throw Object.assign(
+                        new Error("Responses model attempt limit reached"),
+                        { recoveryHandled: true, retryable: false },
+                      );
+                    }
+                    responsesDispatches += 1;
+                  },
+                }
+              : undefined,
+            onProviderRequestAttempt: (attempt) => {
+              lastProviderAttempt = attempt;
+              requestTransport = attempt.dispatchEvidence?.transport;
+              const { model } = attempt;
               if (telemetryRequest) {
                 telemetryRequest = {
                   ...telemetryRequest,
@@ -1810,7 +1852,12 @@ export class AgentEngine {
                 compose: composeRequestOccupancy,
               });
             },
-            onTransportActivity: transportMonitor.recordActivity,
+            onTransportActivity: (activity) => {
+              if (activity.kind === "websocket") requestTransport = "websocket";
+              else if (activity.kind === "headers" || activity.kind === "body")
+                requestTransport = "http";
+              transportMonitor?.recordActivity(activity);
+            },
           });
           const streamIterator = streamGen[Symbol.asyncIterator]();
 
@@ -1821,20 +1868,26 @@ export class AgentEngine {
                 yield pendingRequestAttributionEvents.shift()!;
               }
               if (next.done) break;
-              const event = next.value;
+              const event = next.value as
+                | ProviderStreamEvent
+                | { type: "transport_fallback"; message: string };
               if (signal.aborted) break;
 
-              // A yielded event is both transport liveness (custom/test
-              // providers may not use agentLinkFetch) and parsed progress —
-              // the only signal that re-arms the no-progress timer.
-              transportMonitor.recordProgress();
+              if (event.type !== "transport_fallback") {
+                // A yielded model event is both transport liveness (custom/test
+                // providers may not use agentLinkFetch) and parsed progress.
+                transportMonitor.recordProgress();
 
-              if (!firstTokenReceived) {
-                firstTokenReceived = true;
-                timeToFirstToken = Date.now() - startTime;
+                if (!firstTokenReceived) {
+                  firstTokenReceived = true;
+                  timeToFirstToken = Date.now() - startTime;
+                }
               }
 
               switch (event.type) {
+                case "transport_fallback":
+                  yield { type: "warning", message: event.message };
+                  break;
                 case "model_fallback":
                   activeModel = event.effectiveModel;
                   const fallbackStillSelected =
@@ -1863,6 +1916,7 @@ export class AgentEngine {
                   };
                   break;
                 case "thinking_start":
+                  openThinkingId = event.thinkingId;
                   yield {
                     type: "thinking_start",
                     thinkingId: event.thinkingId,
@@ -1876,6 +1930,7 @@ export class AgentEngine {
                   };
                   break;
                 case "thinking_end":
+                  openThinkingId = undefined;
                   yield { type: "thinking_end", thinkingId: event.thinkingId };
                   break;
                 case "text_delta":
@@ -1959,19 +2014,26 @@ export class AgentEngine {
               // from occupying sockets after timeout/retry.
             }
           }
-        } catch (streamErr: unknown) {
+        } catch (caughtStreamError: unknown) {
+          const streamErr = caughtStreamError;
           while (pendingRequestAttributionEvents.length > 0) {
             yield pendingRequestAttributionEvents.shift()!;
           }
           if (signal.aborted) break;
-          const streamErrMsg = buildErrorMessage(streamErr);
+          if (openThinkingId)
+            yield { type: "thinking_end", thinkingId: openThinkingId };
           if (streamErr instanceof ProviderStreamTimeoutError) {
             const http = getAgentLinkHttpDiagnostics();
             this.log?.(
               `[provider-timeout] ${streamErr.message} transportEstablished=${transportMonitor?.hasTransportActivity ?? false} lastActivityAt=${transportMonitor?.lastActivityAt ?? "none"} lastProgressAt=${transportMonitor?.lastProgressAt ?? "none"} activeHttp=${http.activeRequests} peakHttp=${http.peakActiveRequests} bodyChunks=${http.bodyChunks} transportErrors=${http.transportErrors}`,
             );
           }
+          const dispatchEvidence = lastProviderAttempt?.dispatchEvidence;
+
+          const nonReplayable = isNonReplayableResponsesError(streamErr);
+          const streamErrMsg = buildErrorMessage(streamErr);
           if (
+            !nonReplayable &&
             session.modelSelectionRevision !== requestModelSelectionRevision
           ) {
             continue;
@@ -1982,6 +2044,7 @@ export class AgentEngine {
           // if the repair doesn't converge, surface the error instead of
           // retrying the same rejected payload forever.
           if (
+            !nonReplayable &&
             streamErrMsg.includes("tool_use") &&
             streamErrMsg.includes("tool_result") &&
             toolPairingRepairAttempts < MAX_TOOL_PAIRING_REPAIR_ATTEMPTS
@@ -2001,6 +2064,7 @@ export class AgentEngine {
           // (e.g. non-stored state expired or couldn't be resolved). Clear the
           // local link and retry this turn with full replay.
           if (
+            !nonReplayable &&
             provider.id === "codex" &&
             session.codexStatefulResponses &&
             session.providerId === "codex" &&
@@ -2031,7 +2095,7 @@ export class AgentEngine {
               "code" in streamErr &&
               (streamErr as { code?: string }).code ===
                 "context_window_exceeded");
-          if (isContextTooLong) {
+          if (!nonReplayable && isContextTooLong) {
             if (!contextTooLongCondenseAttempted) {
               contextTooLongCondenseAttempted = true;
               yield {
@@ -2066,7 +2130,7 @@ export class AgentEngine {
             throw streamErr;
           }
 
-          if (isAuthError(streamErr)) {
+          if (!nonReplayable && isAuthError(streamErr)) {
             throw new AuthenticationError(streamErrMsg);
           }
 
@@ -2074,6 +2138,63 @@ export class AgentEngine {
           // already-live stream. This mirrors the official harnesses and
           // prevents one failure class from consuming the other's budget.
           const retry = getAgentRetryDecision(streamErr);
+          if (isCodex && dispatchEvidence) {
+            const phase = dispatchEvidence.transport;
+            const decision = decideResponsesRecovery({
+              phase,
+              retriesInPhase: responsesRetriesInPhase,
+              retriesUsed: responsesRetriesUsed,
+              maxRetries: 11,
+              dispatches: responsesDispatches,
+              maxDispatches: 12,
+              canRedispatch: !isResponsesFatalRecoveryError(streamErr),
+              retryable: isResponsesInterruption(streamErr) || retry.retryable,
+              conversationState: session.codexConversationState,
+            });
+            if (decision.action === "exhausted") {
+              throw Object.assign(
+                streamErr instanceof Error
+                  ? streamErr
+                  : new Error(String(streamErr)),
+                { recoveryHandled: true },
+              );
+            }
+            responsesRetriesUsed += 1;
+            responsesRetriesInPhase =
+              decision.action === "fallback" ? 0 : responsesRetriesInPhase + 1;
+            if (decision.action === "fallback")
+              codexTurnState.transport.useHttp();
+            const delayMs = calculateProviderRetryDelayMs(
+              retry.category,
+              responsesRetriesInPhase || 1,
+              retry.retryAfterMs,
+            );
+            yield {
+              type: "warning",
+              message:
+                decision.action === "fallback"
+                  ? "WebSocket retries exhausted. Continuing this response over HTTP."
+                  : `Response interrupted. Retrying over ${phase === "websocket" ? "WebSocket" : "HTTP"}.`,
+              retryDelayMs: delayMs,
+              retryAt: Date.now() + delayMs,
+              retryAttempt: responsesRetriesUsed,
+              retryMaxAttempts: 11,
+            };
+            requestPermit?.release();
+            requestPermit = undefined;
+            await new Promise<void>((resolve) => {
+              const finish = () => {
+                clearTimeout(timer);
+                signal.removeEventListener("abort", finish);
+                resolve();
+              };
+              const timer = setTimeout(finish, delayMs);
+              signal.addEventListener("abort", finish, { once: true });
+              if (signal.aborted) finish();
+            });
+            if (signal.aborted) break;
+            continue;
+          }
           const isStreamFailure =
             retry.retryLayer === "stream" ||
             (retry.retryLayer !== "request" &&
@@ -2155,6 +2276,9 @@ export class AgentEngine {
         // Successful API response resets both independently budgeted layers.
         requestRetryCount = 0;
         streamRetryCount = 0;
+        responsesRetriesInPhase = 0;
+        responsesRetriesUsed = 0;
+        responsesDispatches = 0;
         visibleTextFromRetriedStream = "";
         pendingFinalStatusNudge = false;
         apiTurnCount++;
@@ -2213,6 +2337,7 @@ export class AgentEngine {
           ...(usageEstimated !== undefined ? { usageEstimated } : {}),
           durationMs,
           timeToFirstToken,
+          ...(requestTransport ? { transport: requestTransport } : {}),
           providerQueueWaitMs,
           usedPreviousResponseId,
           previousResponseIdFallback,
@@ -3161,6 +3286,7 @@ export class AgentEngine {
               ...(interjection.documents ?? []),
               ...resolvedInterjection.documents,
             ];
+            codexTurnState.dispose();
             codexTurnState = new CodexTurnState();
             session.addUserMessage(resolvedInterjection.text, {
               displayText: interjection.displayText,
@@ -3195,9 +3321,10 @@ export class AgentEngine {
       const errorMessage = buildErrorMessage(err);
       const isAuth = err instanceof AuthenticationError || isAuthError(err);
       const retryable =
-        isAuth ||
-        getAgentRetryDecision(err).retryable ||
-        hasAgentRetryableErrorFlag(err);
+        !isNonReplayableResponsesError(err) &&
+        (isAuth ||
+          getAgentRetryDecision(err).retryable ||
+          hasAgentRetryableErrorFlag(err));
       const code = getAgentErrorCode(err);
       const actions = getAgentErrorActions(err);
       yield {
@@ -3209,6 +3336,7 @@ export class AgentEngine {
       };
       return;
     } finally {
+      codexTurnState.dispose();
       session.status = "idle";
     }
 

@@ -1,3 +1,4 @@
+import { CodexTurnState } from "./codex/turnRouting.js";
 import {
   embeddedAgentErrorCategory,
   isEmbeddedAgentToolPresentation,
@@ -581,6 +582,7 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
 ): Promise<AgentTurnResult> {
   const now = options.now ?? Date.now;
   const startedAt = readClock(now);
+  const codexTurnState = new CodexTurnState();
   const limits = {
     ...DEFAULT_HEADLESS_TURN_LIMITS,
     ...options.defaultLimits,
@@ -742,6 +744,7 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
       callModel: async ({
         iterationMessages,
         onText,
+        onTextReset,
         onModelCallAttempt,
         signal,
       }) => {
@@ -763,6 +766,15 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
             temperature: runOptions.modelRequest?.temperature,
             state: runOptions.modelRequest?.state,
             executionControls: runOptions.modelRequest?.executionControls,
+            providerHints: {
+              sessionId: prepared.request.sessionId,
+              codex: {
+                sessionId: prepared.request.sessionId,
+                turnState: codexTurnState,
+                fullHistory: true,
+                conversationState: runOptions.modelRequest?.conversationState,
+              },
+            },
             signal,
             onProviderRequestAttempt: (attempt) => {
               onModelCallAttempt();
@@ -770,7 +782,21 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
             },
           },
         })) {
-          if (event.type === "thinking_start") {
+          if (event.type === "response_retry") {
+            modelResult.text = "";
+            modelResult.toolCalls.length = 0;
+            modelResult.stopReason = undefined;
+            modelResult.assistantMessage = undefined;
+            contentBlocks.length = 0;
+            onTextReset();
+            emit({
+              type: "response.retry",
+              attempt: event.attempt,
+              phase: event.phase,
+              delayMs: event.delayMs,
+              reason: event.reason,
+            });
+          } else if (event.type === "thinking_start") {
             emit({
               type: "thinking.started",
               thinkingId: event.thinkingId,
@@ -794,20 +820,7 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
             emit({ type: "text.delta", text: event.text });
           } else if (event.type === "tool_done") {
             countModelOutput(JSON.stringify(event.input));
-            const call = toToolCall(event);
-            modelResult.toolCalls.push(call);
-            const tool = tools.get(call.name);
-            const displayInput = projectDisplayInput(tool, call.input);
-            emit({
-              type: "tool.requested",
-              toolCallId: call.id,
-              toolName: call.name,
-              effect: tool?.effect ?? "unknown",
-              ...(tool?.presentation
-                ? { presentation: tool.presentation }
-                : {}),
-              ...(displayInput !== undefined ? { displayInput } : {}),
-            });
+            modelResult.toolCalls.push(toToolCall(event));
           } else if (event.type === "content_blocks") {
             contentBlocks.push(...event.blocks);
           } else if (event.type === "model_stop") {
@@ -823,6 +836,18 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
               usage: currentUsage,
             });
           }
+        }
+        for (const call of modelResult.toolCalls) {
+          const tool = tools.get(call.name);
+          const displayInput = projectDisplayInput(tool, call.input);
+          emit({
+            type: "tool.requested",
+            toolCallId: call.id,
+            toolName: call.name,
+            effect: tool?.effect ?? "unknown",
+            ...(tool?.presentation ? { presentation: tool.presentation } : {}),
+            ...(displayInput !== undefined ? { displayInput } : {}),
+          });
         }
         if (!modelResult.assistantMessage && contentBlocks.length > 0) {
           const replayedToolCallIds = new Set(
@@ -952,6 +977,7 @@ async function executeHeadlessTurn<TPrincipal extends AgentPrincipal>(
     emit({ type: "turn.failed", result: failed });
     return failed;
   } finally {
+    codexTurnState.dispose();
     // A failed best-effort release must not replace the committed turn result.
     try {
       await disposeTools?.();

@@ -93,7 +93,7 @@ The browser remote can supervise sessions, answer questions, and inspect read-on
 ## Next steps
 
 - [Capabilities overview](capabilities.md) — what AgentLink can do.
-- [Models, providers, and advanced setup](complete-reference.md#quick-start) — including OpenAI-compatible connections.
+- [Providers and OpenAI-compatible setup](providers.md): connect other providers, including Claude through Meridian using Claude Code authentication.
 - [MCP](mcp.md) — connect the services and tools your workflow already uses.
 - [Customization](customization.md) — instructions, skills, hooks, plugins, and memory.
 - [Troubleshooting](troubleshooting.md) — common setup and runtime problems.

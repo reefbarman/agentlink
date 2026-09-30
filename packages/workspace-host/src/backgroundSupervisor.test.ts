@@ -76,7 +76,7 @@ async function fixture(
   } = {},
 ) {
   const root = await fs.mkdtemp(
-    path.join(os.tmpdir(), "background-supervisor-"),
+    path.join(await fs.realpath(os.tmpdir()), "background-supervisor-"),
   );
   const projectRoot = path.join(root, "project");
   const stateDirectory = path.join(root, "state");
@@ -277,7 +277,7 @@ describe("WorkspaceBackgroundSupervisor", () => {
 
   it("marks persisted active children interrupted without replaying them", async () => {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "background-restart-"),
+      path.join(await fs.realpath(os.tmpdir()), "background-restart-"),
     );
     const projectRoot = path.join(root, "project");
     const stateDirectory = path.join(root, "state");

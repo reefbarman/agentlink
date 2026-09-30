@@ -96,6 +96,7 @@ export interface AgentToolLoopHandlers<
     /** @deprecated Compatibility view containing only tool-result messages. */
     toolMessages: CoreModelMessage[];
     onText: (delta: string) => void;
+    onTextReset: () => void;
     onModelCallAttempt: () => void;
     signal?: AbortSignal;
   }): Promise<AgentToolLoopModelResult>;
@@ -153,11 +154,15 @@ export async function runAgentToolLoop<
       } else {
         execution.beginModelCall();
         let reportedModelAttempts = 0;
+        const textBeforeModelCall = assistantText;
         result = await handlers.callModel({
           iterationMessages,
           toolMessages,
           onText: (delta) => {
             assistantText += delta;
+          },
+          onTextReset: () => {
+            assistantText = textBeforeModelCall;
           },
           onModelCallAttempt: () => {
             reportedModelAttempts += 1;

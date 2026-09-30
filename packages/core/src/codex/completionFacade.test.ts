@@ -355,6 +355,7 @@ describe("executeCodexResolvedCompletion", () => {
         authMethod: "oauth",
         instructions: "Answer.",
         input: [],
+        maxRetries: 0,
       }),
     ).rejects.toMatchObject({
       name: "CodexRequestError",

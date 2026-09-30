@@ -9,6 +9,7 @@ import {
   type CoreReasoningEffort,
   type HostTool,
 } from "@agentlink/core";
+import { ResponsesConversationState } from "@agentlink/core/codex";
 import {
   createFileNodeHostPersistence,
   createNodeHostAgent,
@@ -261,6 +262,35 @@ export async function createWorkspaceHost(
     options.background
       ? await readOrCreateApprovalKey(projectDataRoot)
       : undefined;
+  const responsesConversationStates = new Map<
+    string,
+    ResponsesConversationState
+  >();
+  const getResponsesConversationState = (
+    sessionId: string,
+  ): ResponsesConversationState => {
+    let state = responsesConversationStates.get(sessionId);
+    if (!state) {
+      state = new ResponsesConversationState();
+      responsesConversationStates.set(sessionId, state);
+    }
+    return state;
+  };
+  const disposeResponsesConversationState = (sessionId: string): void => {
+    responsesConversationStates.get(sessionId)?.dispose();
+    responsesConversationStates.delete(sessionId);
+  };
+  const pruneResponsesConversationStates = async (): Promise<void> => {
+    const sessions = await engine.sessions.list({ principal });
+    const liveSessionIds = new Set(
+      sessions.map((session) => session.sessionId),
+    );
+    for (const sessionId of responsesConversationStates.keys()) {
+      if (!liveSessionIds.has(sessionId)) {
+        disposeResponsesConversationState(sessionId);
+      }
+    }
+  };
   const runtime = createWorkspaceModelRuntime({
     ownerId: options.ownerId,
     providers: options.providers,
@@ -354,7 +384,12 @@ export async function createWorkspaceHost(
               input: { text, attachments: undefined },
               model: undefined,
             },
-            { signal: runOptions.signal },
+            {
+              signal: runOptions.signal,
+              modelRequest: {
+                conversationState: getResponsesConversationState(sessionId),
+              },
+            },
           );
           return await collectTurn(stream, runOptions.onEvent);
         },
@@ -366,6 +401,7 @@ export async function createWorkspaceHost(
             decision,
             revalidatePendingInteractionInternal,
             runOptions,
+            getResponsesConversationState(sessionId),
           ),
         cancelSession: async (sessionId, reason) => {
           await engine.sessions.cancel({ principal, sessionId, reason });
@@ -929,12 +965,17 @@ export async function createWorkspaceHost(
       return await backgroundSupervisor.stop(request);
     },
     async close() {
+      for (const state of responsesConversationStates.values()) {
+        state.dispose();
+      }
+      responsesConversationStates.clear();
       await backgroundSupervisor?.close();
       await sharedMcpTools?.close();
       await languageService?.close();
       await supervisor?.close();
     },
     async createSession(sessionOptions = {}) {
+      await pruneResponsesConversationStates();
       const created = await engine.sessions.create({
         principal,
         sessionId: sessionOptions.sessionId,
@@ -998,6 +1039,7 @@ export async function createWorkspaceHost(
     async deleteSession(sessionId) {
       assertForegroundSession(sessionId);
       await engine.sessions.delete({ principal, sessionId });
+      disposeResponsesConversationState(sessionId);
       await sharedMcpTools?.closeSession(sessionId);
     },
     async recoverInterrupted(sessionId) {
@@ -1018,6 +1060,7 @@ export async function createWorkspaceHost(
         decision,
         revalidatePendingInteraction,
         runOptions,
+        getResponsesConversationState(sessionId),
       );
     },
     async runTurn(sessionId, text, runOptions = {}) {
@@ -1029,7 +1072,12 @@ export async function createWorkspaceHost(
           input: { text, attachments: runOptions.attachments },
           model: undefined,
         },
-        { signal: runOptions.signal },
+        {
+          signal: runOptions.signal,
+          modelRequest: {
+            conversationState: getResponsesConversationState(sessionId),
+          },
+        },
       );
       return await collectTurn(stream, runOptions.onEvent);
     },
@@ -1071,6 +1119,7 @@ async function resumeWorkspaceInteraction(
     readonly signal?: AbortSignal;
     readonly onEvent?: (event: AgentTurnEvent) => void;
   },
+  conversationState: ResponsesConversationState,
 ): Promise<AgentTurnResult> {
   const pending = await engine.sessions.inspect({ principal, sessionId });
   if (!pending.pendingInteraction) {
@@ -1101,7 +1150,10 @@ async function resumeWorkspaceInteraction(
       expectedSessionRevision: interaction.sessionRevision,
       decision,
     },
-    { signal: runOptions.signal },
+    {
+      signal: runOptions.signal,
+      modelRequest: { conversationState },
+    },
   );
   return await collectTurn(stream, runOptions.onEvent);
 }

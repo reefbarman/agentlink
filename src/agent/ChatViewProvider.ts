@@ -496,6 +496,7 @@ export type ExtensionToWebview =
       usageEstimated?: boolean;
       durationMs: number;
       timeToFirstToken: number;
+      transport?: "http" | "websocket";
       usedPreviousResponseId?: boolean;
       previousResponseIdFallback?: boolean;
       promptCacheKey?: string;
@@ -847,6 +848,7 @@ export type ExtensionToWebview =
       usageEstimated?: boolean;
       durationMs: number;
       timeToFirstToken: number;
+      transport?: "http" | "websocket";
       usedPreviousResponseId?: boolean;
       previousResponseIdFallback?: boolean;
       promptCacheKey?: string;
@@ -5371,6 +5373,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public submitBrowserAskAgentWebPolicy(): {
     ok: true;
     settings: CoreWebAccessSettings;
+    codexUseWebSocket: boolean;
     revision: string;
   } {
     const config = vscode.workspace.getConfiguration("agentlink");
@@ -5388,6 +5391,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return {
       ok: true,
       settings,
+      codexUseWebSocket: config.get<boolean>("codex.useWebSocket", true),
       revision: JSON.stringify(settings),
     };
   }
@@ -10358,6 +10362,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           usageEstimated: extMsg.usageEstimated,
           durationMs: extMsg.durationMs,
           timeToFirstToken: extMsg.timeToFirstToken,
+          transport: extMsg.transport,
           usedPreviousResponseId: extMsg.usedPreviousResponseId,
           previousResponseIdFallback: extMsg.previousResponseIdFallback,
           promptCacheKey: extMsg.promptCacheKey,
@@ -10935,6 +10940,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           usageEstimated: event.usageEstimated,
           durationMs: event.durationMs,
           timeToFirstToken: event.timeToFirstToken,
+          transport: event.transport,
           usedPreviousResponseId: event.usedPreviousResponseId,
           previousResponseIdFallback: event.previousResponseIdFallback,
           promptCacheKey: event.promptCacheKey,
@@ -11077,6 +11083,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
 
       case "warning":
+        this.deltaBufferFlusher.flushNow();
         this.log(`[agent] warning: ${event.message}`);
         if (event.visible !== false) {
           this.postMessage({

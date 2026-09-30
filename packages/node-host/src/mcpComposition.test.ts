@@ -250,7 +250,7 @@ describe("C0-C4 headless Node-host composition", () => {
     mocks.calls.length = 0;
     mocks.stdioLaunches.length = 0;
     const scratch = await fs.mkdtemp(
-      path.join(os.tmpdir(), "node-host-c0-c4-"),
+      path.join(await fs.realpath(os.tmpdir()), "node-host-c0-c4-"),
     );
     const fixtureFile = path.join(scratch, "fixture.txt");
     const artifactRoot = path.join(scratch, "artifacts");

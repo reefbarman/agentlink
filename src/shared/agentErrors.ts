@@ -2,6 +2,7 @@ import {
   summarizeHtmlErrorText,
   type AgentErrorActions,
 } from "@agentlink/protocol/agent-error-presentation";
+import { isNonReplayableResponsesError } from "@agentlink/core/codex";
 
 export {
   summarizeHtmlErrorText,
@@ -138,6 +139,15 @@ export function isAgentRetryableErrorMessage(msg: string): boolean {
  */
 export function getAgentRetryDecision(err: unknown): AgentRetryDecision {
   const chain = getErrorChain(err);
+  if (
+    chain.some(
+      (value) =>
+        isNonReplayableResponsesError(value) ||
+        getObjectProperty(value, "recoveryHandled") === true,
+    )
+  ) {
+    return { retryable: false, category: "unknown" };
+  }
   const message = buildAgentErrorMessage(err);
   const lower = message.toLowerCase();
   const status = firstNumberProperty(chain, ["status", "statusCode"]);

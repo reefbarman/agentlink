@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createCodexUsageAdapter,
   queryProviderUsage,
   type ProviderUsageAdapter,
 } from "./ProviderUsageService.js";
+import { CodexProvider } from "./codex/CodexProvider.js";
 
 describe("queryProviderUsage", () => {
   it("aggregates multiple provider adapters", async () => {
@@ -46,13 +48,58 @@ describe("queryProviderUsage", () => {
     });
   });
 
+  it("matches the Codex usage adapter to the model provider's identity", async () => {
+    const provider = new CodexProvider({
+      getPreferredAuthMethod: vi.fn().mockResolvedValue("oauth"),
+    } as never);
+    const adapter = createCodexUsageAdapter();
+    const query = vi.spyOn(adapter, "query").mockResolvedValueOnce({
+      available: true,
+      rateLimits: [
+        {
+          id: "codex",
+          primary: { usedPercent: 30, resetsAt: 1_800_000_000 },
+        },
+      ],
+    });
+    const otherQuery = vi.fn(async () => ({ available: true }));
+
+    const result = await queryProviderUsage(
+      [
+        adapter,
+        {
+          providerId: "openai-compatible:other",
+          providerName: "Other",
+          query: otherQuery,
+        },
+      ],
+      { providerId: provider.id, providerName: provider.displayName },
+    );
+
+    expect(query).toHaveBeenCalledOnce();
+    expect(otherQuery).not.toHaveBeenCalled();
+    expect(result.providers).toEqual([
+      {
+        providerId: provider.id,
+        providerName: adapter.providerName,
+        available: true,
+        rateLimits: [
+          {
+            id: "codex",
+            primary: { usedPercent: 30, resetsAt: 1_800_000_000 },
+          },
+        ],
+      },
+    ]);
+  });
+
   it("queries only the selected provider before fetching usage", async () => {
     const codexQuery = vi.fn(async () => ({ available: true }));
     const claudeQuery = vi.fn(async () => ({ available: true }));
     const result = await queryProviderUsage(
       [
         {
-          providerId: "openai-codex",
+          providerId: "codex",
           providerName: "Codex",
           query: codexQuery,
         },
@@ -79,7 +126,7 @@ describe("queryProviderUsage", () => {
   it("reports unsupported selected providers without querying other providers", async () => {
     const query = vi.fn(async () => ({ available: true }));
     const result = await queryProviderUsage(
-      [{ providerId: "openai-codex", providerName: "Codex", query }],
+      [{ providerId: "codex", providerName: "Codex", query }],
       { providerId: "other", providerName: "Other" },
     );
 

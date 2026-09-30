@@ -188,6 +188,7 @@ export async function* continueNativeWebProviderStream(params: {
   for (;;) {
     let pausedMessage: CoreModelMessage | undefined;
     for await (const event of params.stream(messages)) {
+      if (event.type === "response_retry") pausedMessage = undefined;
       if (event.type === "model_stop" && event.reason === "pause_turn") {
         pausedMessage = event.assistantMessage;
       }
@@ -263,6 +264,15 @@ export async function collectNativeWebToolResult(params: {
   let usage: CoreModelUsage | undefined;
 
   for await (const event of params.events) {
+    if (event.type === "response_retry") {
+      activitiesById.clear();
+      citations.length = 0;
+      citationKeys.clear();
+      contentParts.length = 0;
+      streamedText = "";
+      usage = undefined;
+      continue;
+    }
     if (event.type === "text_delta") {
       streamedText += event.text;
       continue;

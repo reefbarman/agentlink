@@ -22,7 +22,9 @@ const model = {
 };
 
 async function fixture() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-files-"));
+  const root = await fs.mkdtemp(
+    path.join(await fs.realpath(os.tmpdir()), "workspace-files-"),
+  );
   const sessionGrants = new Map<
     string,
     { contentHash: string; scopeDigest: string; policyRevision: string }
@@ -75,7 +77,7 @@ function hash(value: string): string {
 describe("workspace file tools", () => {
   it("enriches context without letting unavailable language analysis erase file context", async () => {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "workspace-files-lsp-"),
+      path.join(await fs.realpath(os.tmpdir()), "workspace-files-lsp-"),
     );
     try {
       await fs.writeFile(
@@ -143,7 +145,7 @@ describe("workspace file tools", () => {
 
   it("uses fixed packaged ripgrep arguments and filters protected bounded results", async () => {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "workspace-files-ripgrep-"),
+      path.join(await fs.realpath(os.tmpdir()), "workspace-files-ripgrep-"),
     );
     try {
       const executable = path.join(root, "fake-rg.mjs");
@@ -210,7 +212,7 @@ describe("workspace file tools", () => {
 
   it("waits for post-commit synchronization without making writes depend on it", async () => {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "workspace-files-commit-sync-"),
+      path.join(await fs.realpath(os.tmpdir()), "workspace-files-commit-sync-"),
     );
     try {
       const filePath = path.join(root, "index.ts");
@@ -481,7 +483,9 @@ describe("workspace file tools", () => {
   });
 
   it("enforces exact read and write scopes, including absent files", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-files-"));
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "workspace-files-"),
+    );
     await fs.writeFile(path.join(root, "read.txt"), "readable\n");
     await fs.writeFile(path.join(root, "write.txt"), "before\n");
     const files = createWorkspaceFileTools({

@@ -19,6 +19,7 @@ import {
 import { saveOutputTempFile } from "../../../util/outputFilter.js";
 
 import OpenAI from "openai";
+import type { CoreModelStreamEvent } from "@agentlink/core/model-runtime";
 import type {
   ModelProvider,
   StreamRequest,
@@ -53,6 +54,10 @@ import {
   getCodexModelCapabilities,
   getCodexModelMigration,
   getCodexEndpointConfig,
+  getCodexWebSocketConfig,
+  isNonReplayableResponsesError,
+  ResponsesTransportPolicy,
+  type ResponsesWebSocketConnector,
   getEndpointCaps,
   usesCodexResponsesLite,
   isCodexBodylessBadRequest,
@@ -73,6 +78,7 @@ import {
   type CodexCredentialProvider,
   type CodexErrorShape,
   type CodexRequestBody,
+  type ResponsesTransportDiagnostics,
 } from "@agentlink/core/codex";
 
 import {
@@ -112,6 +118,9 @@ export class CodexProvider implements ModelProvider {
    */
   private lastResolvedAuthMethod: OpenAiCodexAuthMethod | undefined;
   private getTextVerbositySetting: () => string | undefined;
+  private readonly webSocketConnector?: ResponsesWebSocketConnector;
+  private readonly getUseWebSocketSetting: () => boolean;
+  private readonly webSocketPolicy = new ResponsesTransportPolicy();
   /** Credential+model+tier keys whose endpoint rejected a premium tier. */
   private readonly serviceTierRejections = new Set<string>();
 
@@ -124,6 +133,9 @@ export class CodexProvider implements ModelProvider {
        * per stream so configuration changes apply without a reload.
        */
       getTextVerbositySetting?: () => string | undefined;
+      webSocketConnector?: ResponsesWebSocketConnector;
+      /** Live reader for the `agentlink.codex.useWebSocket` setting. */
+      getUseWebSocketSetting?: () => boolean;
     },
   ) {
     this.authManager = authManager ?? openAiCodexAuthManager;
@@ -157,6 +169,9 @@ export class CodexProvider implements ModelProvider {
     this.log = log ?? (() => {});
     this.getTextVerbositySetting =
       options?.getTextVerbositySetting ?? (() => undefined);
+    this.webSocketConnector = options?.webSocketConnector;
+    this.getUseWebSocketSetting =
+      options?.getUseWebSocketSetting ?? (() => true);
     // Warm the auth-method cache so capabilities reflect the active endpoint
     // before the first request.
     void this.authManager
@@ -377,7 +392,7 @@ export class CodexProvider implements ModelProvider {
     while (true) {
       const streamState = { outputStarted: false };
       try {
-        const requestBody = buildCodexEndpointRequestBody({
+        const requestOptions = {
           model: effectiveModel,
           input: codexInput,
           instructions: systemPrompt,
@@ -392,7 +407,16 @@ export class CodexProvider implements ModelProvider {
           hostedTools,
           caps: getEndpointCaps(auth),
           useResponsesLite: usesCodexResponsesLite(effectiveModel, auth.method),
-        });
+        };
+        const requestBody = buildCodexEndpointRequestBody(requestOptions);
+        const fullBody =
+          routingHint?.fullHistory || !state?.previousResponseId
+            ? buildCodexEndpointRequestBody({
+                ...requestOptions,
+                input: translateCodexMessages(messages),
+                state: { ...state, previousResponseId: undefined },
+              })
+            : undefined;
 
         // Log the request shape (not the full body — base64 data can be huge)
         {
@@ -412,10 +436,14 @@ export class CodexProvider implements ModelProvider {
           onTransportActivity,
           routingHint,
           onProviderRequestAttempt,
+          streamState,
+          fullBody,
+          request.executionControls,
         );
         yield* result;
         return;
       } catch (err) {
+        if (isNonReplayableResponsesError(err)) throw err;
         if (
           err instanceof CodexResponsesStreamAbortedError ||
           signal?.aborted
@@ -488,7 +516,7 @@ export class CodexProvider implements ModelProvider {
 
         const action = getCodexErrorHandlingAction({ auth, error: sdkErr });
 
-        if (action === "refresh_oauth_auth") {
+        if (action === "refresh_oauth_auth" && !streamState.outputStarted) {
           if (await credentialSession.refreshOAuth()) {
             this.log("[codex] Auth failure, refreshed active OAuth account");
             auth = credentialSession.auth;
@@ -562,9 +590,35 @@ export class CodexProvider implements ModelProvider {
     });
 
     let unavailableModelFallbackAttempted = false;
+    let dispatches = 0;
+    const maxAttempts = Math.min(
+      12,
+      (request.executionControls?.maxRetries ?? 11) + 1,
+    );
+    const executionControls = {
+      maxRetries: request.executionControls?.maxRetries ?? 11,
+      maxOutputBytes: request.executionControls?.maxOutputBytes ?? Infinity,
+      beforeModelDispatch: (
+        attempt: Parameters<
+          NonNullable<CompleteRequest["onProviderRequestAttempt"]>
+        >[0],
+      ) => {
+        if (dispatches >= maxAttempts) {
+          throw Object.assign(
+            new Error("Responses model attempt limit reached"),
+            {
+              recoveryHandled: true,
+              retryable: false,
+            },
+          );
+        }
+        request.executionControls?.beforeModelDispatch(attempt);
+        dispatches += 1;
+      },
+    };
 
     while (true) {
-      const requestBody = buildCodexEndpointRequestBody({
+      const requestOptions = {
         model: effectiveModel,
         input: codexInput,
         instructions: systemPrompt,
@@ -575,7 +629,16 @@ export class CodexProvider implements ModelProvider {
         reasoningMode,
         caps: getEndpointCaps(auth),
         useResponsesLite: usesCodexResponsesLite(effectiveModel, auth.method),
-      });
+      };
+      const requestBody = buildCodexEndpointRequestBody(requestOptions);
+      const fullBody =
+        request.providerHints?.codex?.fullHistory || !state?.previousResponseId
+          ? buildCodexEndpointRequestBody({
+              ...requestOptions,
+              input: translateCodexMessages(messages),
+              state: { ...state, previousResponseId: undefined },
+            })
+          : undefined;
 
       // Log request shape (mirrors stream() logging)
       {
@@ -587,6 +650,7 @@ export class CodexProvider implements ModelProvider {
       }
 
       let text = "";
+      const completeState = { outputStarted: false };
 
       try {
         const result = await collectCoreModelCompleteResult(
@@ -599,19 +663,31 @@ export class CodexProvider implements ModelProvider {
             request.onTransportActivity,
             request.providerHints?.codex,
             onProviderRequestAttempt,
+            completeState,
+            fullBody,
+            executionControls,
           ),
         );
         text = result.text;
         return result;
       } catch (err) {
+        if (isNonReplayableResponsesError(err)) throw err;
+        if (
+          err &&
+          typeof err === "object" &&
+          (err as { recoveryHandled?: unknown }).recoveryHandled === true
+        )
+          throw err;
         const sdkErr = toCodexRequestError(err);
 
         this.logCodexRequestError("complete()", sdkErr);
 
-        const unavailableModelFallback =
-          getCodexUnavailableModelFallback(effectiveModel);
+        const unavailableModelFallback = completeState.outputStarted
+          ? undefined
+          : getCodexUnavailableModelFallback(effectiveModel);
         if (
           !unavailableModelFallbackAttempted &&
+          !completeState.outputStarted &&
           unavailableModelFallback &&
           isCodexModelNotFoundError(sdkErr)
         ) {
@@ -709,8 +785,44 @@ export class CodexProvider implements ModelProvider {
     onTransportActivity?: StreamRequest["onTransportActivity"],
     routingHint?: NonNullable<StreamRequest["providerHints"]>["codex"],
     onProviderRequestAttempt?: StreamRequest["onProviderRequestAttempt"],
+    outputState?: { outputStarted: boolean },
+    fullBody?: CodexRequestBody,
+    executionControls?: StreamRequest["executionControls"],
   ): Promise<AsyncGenerator<ProviderStreamEvent>> {
     try {
+      const endpoint = getCodexEndpointConfig(auth, this.sessionId);
+      const requestHeaders: Record<string, string> = routingHint?.sessionId
+        ? { session_id: routingHint.sessionId }
+        : {};
+
+      const webSocketEnabled = Boolean(
+        this.webSocketConnector && this.getUseWebSocketSetting() && fullBody,
+      );
+      const webSocketConfig = getCodexWebSocketConfig(
+        auth,
+        endpoint,
+        requestHeaders,
+      );
+      const routingState = routingHint?.turnState;
+
+      const webSocket = this.webSocketConnector
+        ? {
+            connector: this.webSocketConnector,
+            enabled: webSocketEnabled,
+            fullBody,
+            incremental: true,
+            ...webSocketConfig,
+            ...(routingState ? { session: routingState.transport } : {}),
+            policy: this.webSocketPolicy,
+            onDiagnostics: (diagnostics: ResponsesTransportDiagnostics) =>
+              this.log(
+                `[codex] transport=${diagnostics.transport} policy=${diagnostics.policy} reused=${diagnostics.reused} incremental=${diagnostics.incremental ?? false} fallback=${diagnostics.fallbackReason ?? "none"}`,
+              ),
+            onFallback: (message: string) => {
+              this.log(`[codex] ${message}`);
+            },
+          }
+        : undefined;
       const stream = executeCodexResponsesStream({
         client: this.getClient(auth),
         body: requestBody,
@@ -730,23 +842,38 @@ export class CodexProvider implements ModelProvider {
             : undefined,
         signal,
         onProviderRequestAttempt,
-        parserState: streamState,
-        parserOptions: { createThinkingId: randomUUID },
+        recoveryMode: streamState ? "external" : "internal",
+        maxRetries: executionControls?.maxRetries,
+        beforeModelDispatch: executionControls?.beforeModelDispatch,
+        conversationState: routingHint?.conversationState,
+        parserState: outputState ?? streamState,
+        parserOptions: {
+          createThinkingId: randomUUID,
+          maxOutputBytes: executionControls?.maxOutputBytes,
+        },
         onTransportActivity,
+        webSocket,
         runRequest: (operation) =>
           withAgentLinkHttpActivity(onTransportActivity, operation),
       });
-      return (async function* () {
+      return (async function* (): AsyncGenerator<CoreModelStreamEvent> {
         try {
-          yield* stream;
+          for await (const event of stream) {
+            yield event;
+          }
         } catch (error) {
-          if (error instanceof CodexResponsesStreamAbortedError) throw error;
+          if (
+            error instanceof CodexResponsesStreamAbortedError ||
+            isNonReplayableResponsesError(error)
+          )
+            throw error;
           throw toCodexRequestError(
             error instanceof CodexResponsesAuthError ? error.cause : error,
           );
         }
       })();
     } catch (error) {
+      if (isNonReplayableResponsesError(error)) throw error;
       throw toCodexRequestError(
         error instanceof CodexResponsesAuthError ? error.cause : error,
       );

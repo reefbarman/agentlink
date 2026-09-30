@@ -31,6 +31,43 @@ function completed(): AgentTurnResult {
 }
 
 describe("standalone session projection", () => {
+  it("replaces failed response text without losing earlier tool-loop text", () => {
+    let state = initialStandaloneSessionProjection("/project");
+    const events = [
+      { type: "turn.started" },
+      { type: "text.delta", text: "Reading file. " },
+      {
+        type: "tool.requested",
+        toolCallId: "tool-1",
+        toolName: "read_file",
+        effect: "read",
+      },
+      {
+        type: "tool.completed",
+        toolCallId: "tool-1",
+        toolName: "read_file",
+        effect: "read",
+      },
+      { type: "text.delta", text: "Failed partial" },
+      {
+        type: "response.retry",
+        attempt: 1,
+        phase: "websocket",
+        delayMs: 0,
+        reason: "interrupted",
+      },
+      { type: "text.delta", text: "Replacement" },
+    ];
+    for (const [sequence, value] of events.entries()) {
+      state = reduceStandaloneSessionProjection(state, {
+        type: "turn.event",
+        event: event(value, sequence),
+      });
+    }
+    expect(state.transcript[0]?.text).toBe("Reading file. Replacement");
+    expect(state.tools[0]?.status).toBe("completed");
+  });
+
   it("projects streaming transcript, tool activity, usage, and completion", () => {
     let state = initialStandaloneSessionProjection("/project");
     state = reduceStandaloneSessionProjection(state, {

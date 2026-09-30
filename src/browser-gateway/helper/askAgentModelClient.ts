@@ -56,12 +56,17 @@ import {
   CodexResponsesStreamAbortedError,
   executeCodexResolvedCompletion,
   getCodexEndpointConfig,
+  getCodexWebSocketConfig,
+  isNonReplayableResponsesError,
+  ResponsesTransportPolicy,
+  type ResponsesWebSocketConnector,
   getCodexErrorHandlingAction,
   translateCodexMessages,
   usesCodexResponsesLite,
   type CodexCredentialProvider,
   type CodexResolvedAuth,
 } from "@agentlink/core/codex";
+
 import {
   canUseCodexStandaloneWeb,
   executeCodexStandaloneWeb,
@@ -148,6 +153,7 @@ function toCoreMessages(
 export interface BrowserGatewayAskAgentModelClientOptions {
   sessionId: string;
   webFetch?: typeof globalThis.fetch;
+  responsesWebSocketConnector?: ResponsesWebSocketConnector;
   codexCredentialProvider?: CodexCredentialProvider<{
     sessionId: string;
   }>;
@@ -177,6 +183,9 @@ export type BrowserGatewayAskAgentCompletionParams = {
   codexRouting?: {
     sessionId: string;
     turnState: import("@agentlink/core/codex").CodexTurnState;
+    conversationState:
+      | import("@agentlink/core/codex").ResponsesConversationState
+      | undefined;
   };
   credential?: BrowserGatewayModelCredentialRecord;
   providerId?: string;
@@ -198,9 +207,12 @@ export type BrowserGatewayAskAgentCompletionParams = {
   tools?: readonly CoreModelToolDefinition[];
   hostedTools?: readonly CoreHostedToolDefinition[];
   onDelta?: (delta: string) => void;
+  onResponseRetry?: () => void;
   onWebActivity?: (activity: CoreWebActivity) => void;
   onWebCitations?: (citations: CoreWebCitation[]) => void;
   signal?: AbortSignal;
+  codexUseWebSocket?: boolean;
+  onTransportFallback?: (message: string) => void;
 };
 
 export const ASK_AGENT_LOCAL_TOOL_NAMES = [
@@ -531,6 +543,8 @@ function toMutableTools(
 }
 
 export class BrowserGatewayAskAgentModelClient {
+  private readonly responsesTransportPolicy = new ResponsesTransportPolicy();
+
   constructor(
     private readonly options: BrowserGatewayAskAgentModelClientOptions,
   ) {}
@@ -690,26 +704,50 @@ export class BrowserGatewayAskAgentModelClient {
       },
     });
     let visibleOutputStarted = false;
+    let dispatches = 0;
+    const beforeModelDispatch = () => {
+      if (dispatches >= 12) {
+        throw Object.assign(
+          new Error("Responses model attempt limit reached"),
+          {
+            recoveryHandled: true,
+            retryable: false,
+          },
+        );
+      }
+      dispatches += 1;
+    };
     while (true) {
       try {
-        return await this.completeWithCodex({
-          ...params,
-          credential: toBrowserGatewayCredential(
-            params.credential,
-            credentialSession.auth,
-          ),
-          onDelta: (delta) => {
-            if (delta) visibleOutputStarted = true;
-            params.onDelta?.(delta);
+        return await this.completeWithCodex(
+          {
+            ...params,
+            credential: toBrowserGatewayCredential(
+              params.credential,
+              credentialSession.auth,
+            ),
+            onDelta: (delta) => {
+              if (delta) visibleOutputStarted = true;
+              params.onDelta?.(delta);
+            },
           },
-        });
+          beforeModelDispatch,
+        );
       } catch (error) {
+        if (
+          isNonReplayableResponsesError(error) ||
+          (typeof error === "object" &&
+            error !== null &&
+            (error as { recoveryHandled?: unknown }).recoveryHandled === true)
+        ) {
+          throw error;
+        }
         const shape = toCodexErrorShape(error);
         const action = getCodexErrorHandlingAction({
           auth: credentialSession.auth,
           error: shape,
         });
-        if (action === "refresh_oauth_auth") {
+        if (action === "refresh_oauth_auth" && !visibleOutputStarted) {
           if (await credentialSession.refreshOAuth()) continue;
           throw new Error("browser_gateway_ask_agent_model_auth_failed");
         } else if (
@@ -734,6 +772,7 @@ export class BrowserGatewayAskAgentModelClient {
     params: BrowserGatewayAskAgentCompletionParams & {
       credential: BrowserGatewayModelCredentialRecord;
     },
+    beforeModelDispatch?: () => void,
   ): Promise<BrowserGatewayAskAgentCompletionResult> {
     const endpoint = getCodexEndpointConfig(
       params.credential,
@@ -782,8 +821,34 @@ export class BrowserGatewayAskAgentModelClient {
         hostedTools: params.hostedTools,
         signal: params.signal,
         onTextDelta: params.onDelta,
+        beforeModelDispatch,
+        webSocket:
+          this.options.responsesWebSocketConnector && params.codexRouting
+            ? {
+                connector: this.options.responsesWebSocketConnector,
+                enabled: params.codexUseWebSocket !== false,
+                ...getCodexWebSocketConfig(
+                  {
+                    method: params.credential.method,
+                    bearerToken: params.credential.bearerToken,
+                    accountId: params.credential.accountId,
+                    canRefresh: params.credential.canRefresh,
+                  },
+                  endpoint,
+                  {},
+                ),
+                session: params.codexRouting.turnState.transport,
+                conversationState: params.codexRouting.conversationState,
+                incremental: true,
+                policy: this.responsesTransportPolicy,
+              }
+            : undefined,
         onStreamEvent: (event) => {
-          if (event.type === "web_activity") {
+          if (event.type === "response_retry") {
+            params.onResponseRetry?.();
+          } else if (event.type === "transport_fallback") {
+            params.onTransportFallback?.(event.message);
+          } else if (event.type === "web_activity") {
             params.onWebActivity?.(event.activity);
           } else if (event.type === "content_blocks") {
             const citations = event.blocks.flatMap((block) =>

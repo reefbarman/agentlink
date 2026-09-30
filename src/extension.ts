@@ -54,6 +54,7 @@ import { runLegacyAgentIntegrationCleanup } from "./util/legacyAgentIntegrationC
 
 import { IndexerManager } from "./indexer/IndexerManager.js";
 import { registerIndexCommands } from "./indexer/indexCommands.js";
+import { registerIndexStorageCommand } from "./indexer/indexStorageCommands.js";
 import { createCodeRetrievalHealthProvider } from "./indexer/codeRetrievalHealth.js";
 import { AutonomousMemoryToolProvider } from "./storage/retrieval/AutonomousMemoryToolProvider.js";
 import { LanceDbRetrievalRepository } from "./storage/retrieval/LanceDbRetrievalRepository.js";
@@ -120,6 +121,7 @@ import {
   SessionPreferencesStore,
   SharedOpenAiCompatibleConfigStore,
 } from "@agentlink/node-host";
+
 import {
   providerRegistry,
   CodexProvider,
@@ -1557,11 +1559,19 @@ export async function activate(
       );
     }
   }
+
   const codexProvider = new CodexProvider(openAiCodexAuthManager, agentLog, {
     getTextVerbositySetting: () =>
       vscode.workspace
         .getConfiguration("agentlink")
         .get<string>("codex.textVerbosity"),
+    webSocketConnector: await import("@agentlink/node-host").then(
+      ({ nodeResponsesWebSocketConnector }) => nodeResponsesWebSocketConnector,
+    ),
+    getUseWebSocketSetting: () =>
+      vscode.workspace
+        .getConfiguration("agentlink")
+        .get<boolean>("codex.useWebSocket", true),
   });
   providerRegistry.register(codexProvider);
   const readDisabledProviderIds = (): string[] => {
@@ -3497,6 +3507,9 @@ export async function activate(
     semanticIndexEnabled: semanticEnabled,
   });
 
+  context.subscriptions.push(
+    registerIndexStorageCommand(context.globalStorageUri.fsPath),
+  );
   if (semanticEnabled) {
     indexerManager = new IndexerManager(
       context.extensionUri,

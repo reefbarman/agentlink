@@ -10,6 +10,7 @@ These are the shipped product docs for AgentLink's VS Code extension and standal
 
 ## Focused guides
 
+- [Providers](references/providers.md): configure OpenAI-compatible endpoints and use Claude Code authentication through Meridian.
 - [Tools](references/tools.md) — built-in tool families, reviewed changes, commands, orchestration, and exact-contract links.
 - [Settings](references/settings.md) — grouped `agentlink.*` settings and their purpose.
 - [MCP](references/mcp.md) — configure and use Model Context Protocol servers, including servers contributed by Agent Plugins.

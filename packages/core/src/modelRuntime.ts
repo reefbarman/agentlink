@@ -209,11 +209,14 @@ export interface CoreModelProviderHints {
     sessionId?: string;
     /** In-process turn lifetime only; never persist or send to renderers. */
     turnState?: import("./codex/turnRouting.js").CodexTurnState;
+    /** Caller guarantees messages contain the full canonical conversation. */
+    fullHistory?: boolean;
+    conversationState?: import("./codex/responsesRecovery.js").ResponsesConversationState;
   };
 }
 
 export interface CoreModelTransportActivity {
-  kind: "headers" | "body" | "provider_event";
+  kind: "headers" | "body" | "provider_event" | "websocket";
   at: number;
   bytes?: number;
 }
@@ -222,6 +225,8 @@ export interface CoreModelTransportActivity {
 export interface CoreModelProviderRequestAttempt {
   /** Effective wire model for this attempt, after provider-local fallback. */
   model: string;
+  /** Mutable runtime evidence for watchdogs, never persisted or projected. */
+  dispatchEvidence?: import("./codex/responsesTransport.js").ResponsesDispatchEvidence;
 }
 
 export interface CoreModelJsonSchemaOutputFormat {
@@ -335,6 +340,14 @@ export type CoreModelStopReason =
   | "refusal";
 
 export type CoreModelStreamEvent =
+  | { type: "transport_fallback"; message: string }
+  | {
+      type: "response_retry";
+      attempt: number;
+      phase: "websocket" | "http";
+      delayMs: number;
+      reason: string;
+    }
   | {
       type: "model_fallback";
       requestedModel: string;
@@ -380,7 +393,20 @@ export async function collectCoreModelCompleteResult(
   let terminationEvidence: "observed" | "inferred" | undefined;
 
   for await (const event of events) {
-    if (event.type === "text_delta") {
+    if (event.type === "response_retry") {
+      text = "";
+      inputTokens = 0;
+      outputTokens = 0;
+      cacheReadTokens = 0;
+      cacheCreationTokens = 0;
+      inputTokenBreakdownReported = undefined;
+      serverToolUsage = undefined;
+      estimated = undefined;
+      providerResponseId = undefined;
+      assistantMessage = undefined;
+      stopReason = undefined;
+      terminationEvidence = undefined;
+    } else if (event.type === "text_delta") {
       text += event.text;
     } else if (event.type === "usage") {
       inputTokens = event.inputTokens;

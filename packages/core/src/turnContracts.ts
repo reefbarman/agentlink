@@ -120,6 +120,7 @@ export interface AgentTurnDurableState {
 export interface AgentTurnModelRequestOptions {
   readonly temperature?: number;
   readonly state?: CoreModelStateOptions;
+  readonly conversationState?: import("./codex/responsesRecovery.js").ResponsesConversationState;
   readonly executionControls?: CoreModelExecutionControls;
   readonly onProviderRequestAttempt?: (
     attempt: CoreModelProviderRequestAttempt,
@@ -246,6 +247,13 @@ export type AgentTurnEvent =
   | (AgentTurnEventBase & {
       readonly type: "thinking.completed";
       readonly thinkingId: string;
+    })
+  | (AgentTurnEventBase & {
+      readonly type: "response.retry";
+      readonly attempt: number;
+      readonly phase: "websocket" | "http";
+      readonly delayMs: number;
+      readonly reason: string;
     })
   | (AgentTurnEventBase & {
       readonly type: "text.delta";

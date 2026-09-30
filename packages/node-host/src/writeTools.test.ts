@@ -91,7 +91,9 @@ function diff(search: string, replace: string): string {
 
 describe("node host write tools", () => {
   it("requires core authorization metadata and atomically replaces only a hash-pinned granted file", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "node-host-write-"));
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "node-host-write-"),
+    );
     const target = path.join(root, "record.txt");
     await fs.writeFile(target, "before", "utf8");
     const resolver = createNodeHostWriteTools({
@@ -121,9 +123,11 @@ describe("node host write tools", () => {
   });
 
   it("fails closed for absent/mismatched preconditions, ungranted targets, symlink escapes, and implicit paths", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "node-host-write-"));
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "node-host-write-"),
+    );
     const outside = await fs.mkdtemp(
-      path.join(os.tmpdir(), "node-host-write-outside-"),
+      path.join(await fs.realpath(os.tmpdir()), "node-host-write-outside-"),
     );
     const target = path.join(root, "record.txt");
     const escaped = path.join(root, "escaped.txt");
@@ -184,7 +188,7 @@ describe("node host write tools", () => {
 
   it("reclaims only definitely dead same-host write locks", async () => {
     const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "node-host-write-lock-"),
+      path.join(await fs.realpath(os.tmpdir()), "node-host-write-lock-"),
     );
     const target = path.join(root, "record.txt");
     const lockPath = path.join(root, ".record.txt.agentlink-write.lock");
@@ -235,7 +239,9 @@ describe("node host write tools", () => {
   });
 
   it("allows deliberate creation only under a directory grant and preserves exact file grants", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "node-host-write-"));
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "node-host-write-"),
+    );
     const existing = path.join(root, "existing.txt");
     const created = path.join(root, "created.txt");
     await fs.writeFile(existing, "before", "utf8");
@@ -271,7 +277,9 @@ describe("node host write tools", () => {
   });
 
   it("applies canonical unique SEARCH/REPLACE blocks only to a hash-pinned grant", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "node-host-diff-"));
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "node-host-diff-"),
+    );
     const target = path.join(root, "record.txt");
     await fs.writeFile(target, "alpha\nbeta\ngamma", "utf8");
     const resolver = createNodeHostApplyDiffTools({
@@ -307,7 +315,9 @@ describe("node host write tools", () => {
   });
 
   it("fails closed and leaves the file untouched for malformed, ambiguous, missing, or stale patches", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "node-host-diff-"));
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "node-host-diff-"),
+    );
     const target = path.join(root, "record.txt");
     const original = "repeat\nneedle\nrepeat";
     await fs.writeFile(target, original, "utf8");
@@ -361,7 +371,9 @@ describe("node host write tools", () => {
   });
 
   it("does not partially apply a later failing block", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "node-host-diff-"));
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "node-host-diff-"),
+    );
     const target = path.join(root, "record.txt");
     const original = "first\nsecond";
     await fs.writeFile(target, original, "utf8");
@@ -385,7 +397,9 @@ describe("node host write tools", () => {
   });
 
   it("delegates a hash-pinned granted change set to the host transaction and returns its commit", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "node-host-multi-"));
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "node-host-multi-"),
+    );
     const first = path.join(root, "first.txt");
     const second = path.join(root, "second.txt");
     await fs.writeFile(first, "one", "utf8");
@@ -452,9 +466,11 @@ describe("node host write tools", () => {
   });
 
   it("fails before prepare for invalid change sets and surfaces durable recovery IDs", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "node-host-multi-"));
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "node-host-multi-"),
+    );
     const outside = await fs.mkdtemp(
-      path.join(os.tmpdir(), "node-host-multi-outside-"),
+      path.join(await fs.realpath(os.tmpdir()), "node-host-multi-outside-"),
     );
     const first = path.join(root, "first.txt");
     const outsideFile = path.join(outside, "outside.txt");
@@ -532,7 +548,9 @@ describe("node host write tools", () => {
   });
 
   it("scopes a resolved writer to its authenticated principal/session/turn", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "node-host-write-"));
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "node-host-write-"),
+    );
     const target = path.join(root, "record.txt");
     await fs.writeFile(target, "before", "utf8");
     const resolveGrants = async ({

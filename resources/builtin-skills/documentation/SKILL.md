@@ -38,6 +38,8 @@ Load the smallest relevant reference page directly with `load_skill`:
 | Exact contributed command, command-palette title, view, package version, engine requirement, or extension metadata                                                | `references/package-contract.md`                                                                                      |
 | Release history or upgrade notes                                                                                                                                  | `references/release-notes.md`                                                                                         |
 
+For provider configuration, OpenRouter, local endpoints, or Claude Code authentication through Meridian, load `references/providers.md` first. It owns the setup walkthrough and connection-file examples; `references/settings.md` owns advanced connection behavior.
+
 ## Answering checklist
 
 1. Use `load_skill` to load the owning bundled reference before answering a detailed question.

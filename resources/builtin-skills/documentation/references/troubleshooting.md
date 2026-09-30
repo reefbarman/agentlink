@@ -53,7 +53,7 @@ AgentLink lists GPT-6 Astra, GPT-6.1 Sol, and GPT-6 Luna for ChatGPT/Codex OAuth
 
 ## Fast or Ultrafast does not seem faster
 
-The Speed control only applies to models that offer OpenAI's premium service tiers: Fast on GPT-6 Astra, GPT-6.1 Sol, GPT-6 Sol, GPT-6 Luna, GPT-5.6 models, and GPT-5.5, and Ultrafast on GPT-6 Astra only. It is hidden for other models, and a session tier the current model does not support runs at Standard. ChatGPT subscriptions allow premium tiers only on eligible plans, and OpenAI supports Ultrafast only for US or global processing. When the endpoint rejects a tier (including a body-less ChatGPT `400` while a premium tier was requested), AgentLink retries that request once at standard speed, records the `service_tier` rejection in the AgentLink output log, and skips that tier for that account and model until the window reloads. A rejected Ultrafast does not stop Fast from being tried. Each request's log line shows `serviceTier=priority` (Fast), `serviceTier=ultrafast`, or `serviceTier=default`. OpenAI recommends WebSocket transport for the full latency benefit; AgentLink currently sends requests over HTTP streaming, so gains can be smaller.
+The Speed control only applies to models that offer OpenAI's premium service tiers: Fast on GPT-6 Astra, GPT-6.1 Sol, GPT-6 Sol, GPT-6 Luna, GPT-5.6 models, and GPT-5.5, and Ultrafast on GPT-6 Astra only. It is hidden for other models, and a session tier the current model does not support runs at Standard. ChatGPT subscriptions allow premium tiers only on eligible plans, and OpenAI supports Ultrafast only for US or global processing. When the endpoint rejects a tier (including a body-less ChatGPT `400` while a premium tier was requested), AgentLink retries that request once at standard speed, records the `service_tier` rejection in the AgentLink output log, and skips that tier for that account and model until the window reloads. A rejected Ultrafast does not stop Fast from being tried. Each request's log line shows `serviceTier=priority` (Fast), `serviceTier=ultrafast`, or `serviceTier=default`. OpenAI recommends WebSocket transport for the full latency benefit. AgentLink prefers WebSockets for supported first-party Responses requests; expand the request details to check the actual transport. HTTP/SSE may indicate an explicit disable, an unsupported endpoint/history shape, or automatic fallback. See [transport and recovery](capabilities.md#models-and-providers).
 
 ## AgentLink has no workspace tools
 
@@ -67,6 +67,15 @@ Open a folder or workspace in VS Code. Projectless chats intentionally have no w
 - Vector and hybrid retrieval additionally require OpenAI embedding credentials and an explicit `agentlink.semanticEmbeddingsEnabled: true` opt-in.
 
 See [semantic codebase search setup](complete-reference.md#semantic-codebase-search-setup).
+
+## Workspace indexes use too much disk space
+
+In VS Code, run **AgentLink: Manage Index Storage** from the Command Palette, even when indexing is disabled. It lists current-generation workspace caches and their file sizes. Older caches without workspace identity metadata may appear as **Unknown workspace**.
+
+- **Compact and prune** performs database-aware maintenance while retaining one hour of table history. It preserves indexed content and may not reclaim every orphan file.
+- **Remove workspace index** deletes the selected cache and matching index metadata, not source files. Search for that workspace is unavailable until it is indexed again. Enabled embeddings may incur regeneration cost.
+- Close all other VS Code and AgentLink windows before either action, then confirm in the dialog. The current workspace and stores with live writer processes are blocked. This local maintenance command is not available through browser remote.
+- Normal indexing maintains existing search indexes rather than replacing every index after each change. Automatic pruning still retains recent versions for concurrent readers. Do not manually remove files inside a LanceDB table by age.
 
 ## A command or edit is waiting for approval
 

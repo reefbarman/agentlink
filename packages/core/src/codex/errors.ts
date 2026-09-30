@@ -30,6 +30,7 @@ export interface CodexErrorDetails extends CodexErrorShape {
   retryable?: boolean;
   actions?: CodexErrorActions;
   metadata?: Record<string, unknown>;
+  recoveryHandled?: boolean;
 }
 
 export class CodexRequestError extends Error implements CodexErrorDetails {
@@ -40,6 +41,7 @@ export class CodexRequestError extends Error implements CodexErrorDetails {
   readonly body?: unknown;
   readonly code?: string;
   readonly retryable?: boolean;
+  readonly recoveryHandled?: boolean;
   readonly actions?: CodexErrorActions;
   readonly metadata?: Record<string, unknown>;
 
@@ -53,6 +55,7 @@ export class CodexRequestError extends Error implements CodexErrorDetails {
     this.body = details.body;
     this.code = details.code;
     this.retryable = details.retryable;
+    this.recoveryHandled = details.recoveryHandled;
     this.actions = details.actions;
     this.metadata = details.metadata;
   }
@@ -71,7 +74,12 @@ export function toCodexRequestError(error: unknown): Error & CodexErrorShape {
 
   if (error instanceof Error) {
     const shaped = error as Error &
-      CodexErrorShape & { code?: unknown; error?: unknown };
+      CodexErrorShape & {
+        code?: unknown;
+        error?: unknown;
+        recoveryHandled?: boolean;
+        retryable?: boolean;
+      };
     if (shaped.name === "CodexStreamError") {
       return createCodexRequestError({
         message: shaped.message,
@@ -99,6 +107,8 @@ export function toCodexRequestError(error: unknown): Error & CodexErrorShape {
         }),
         headers: shaped.headers,
         metadata: diagnosticsMetadata(shaped),
+        recoveryHandled: shaped.recoveryHandled,
+        retryable: shaped.retryable,
       });
     }
     return shaped;
@@ -108,6 +118,8 @@ export function toCodexRequestError(error: unknown): Error & CodexErrorShape {
     const shaped = error as CodexErrorShape & {
       code?: unknown;
       error?: unknown;
+      recoveryHandled?: boolean;
+      retryable?: boolean;
     };
     if (
       typeof shaped.status === "number" ||
@@ -133,6 +145,8 @@ export function toCodexRequestError(error: unknown): Error & CodexErrorShape {
         }),
         headers: shaped.headers,
         metadata: diagnosticsMetadata(shaped),
+        recoveryHandled: shaped.recoveryHandled,
+        retryable: shaped.retryable,
       });
     }
   }

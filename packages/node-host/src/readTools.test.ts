@@ -44,7 +44,9 @@ function content(result: HostToolResult) {
 
 describe("node host read tools", () => {
   it("reads only a granted directory, redacts structured secrets, and rejects symlink escapes", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "node-host-read-"));
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "node-host-read-"),
+    );
     const granted = path.join(root, "granted");
     const denied = path.join(root, "denied");
     await fs.mkdir(granted);
@@ -99,7 +101,9 @@ describe("node host read tools", () => {
   });
 
   it("keeps file grants exact and bounds directory list/search operations", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "node-host-search-"));
+    const root = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "node-host-search-"),
+    );
     const grantedFile = path.join(root, "granted.txt");
     const siblingFile = path.join(root, "sibling.txt");
     const nested = path.join(root, "nested");

@@ -8,6 +8,11 @@ import type { CodexFetch } from "./openaiClient.js";
 import type { CoreModelCredentialResolver } from "../modelRuntime.js";
 import { createAgentClient } from "../client.js";
 import { z } from "zod";
+import { CodexTurnState } from "./turnRouting.js";
+import {
+  ResponsesNonReplayableError,
+  type ResponsesWebSocketDispatchRequest,
+} from "./responsesTransport.js";
 
 const principal = { tenantId: "tenant-a", subjectId: "subject-a" };
 
@@ -42,6 +47,111 @@ function responsesSse(
 }
 
 describe("standalone Responses provider factories", () => {
+  it("defaults a collected completion to sockets and forwards live rollback", async () => {
+    let enabled: boolean | undefined;
+    const close = vi.fn();
+    const dispatch = vi.fn(async function* (
+      request: ResponsesWebSocketDispatchRequest,
+    ) {
+      request.evidence.phase = "sent_unacknowledged";
+      yield { type: "response.output_text.delta", delta: "socket" };
+      request.evidence.phase = "terminal";
+      yield {
+        type: "response.completed",
+        response: { id: "ws-1", output: [], usage: {} },
+      };
+    });
+    const connect = vi.fn(async () => ({
+      headers: new Headers(),
+      isOpen: true,
+      close,
+      dispatch,
+    }));
+    const fetch = vi.fn<CodexFetch>(async () => responsesSse("http"));
+    const provider = createOpenAIProvider({
+      apiKey: "test-key",
+      modelIds: ["gpt-5.4-mini"],
+      fetch,
+      transport: {
+        connector: { connect },
+        get useWebSocket() {
+          return enabled === undefined ? undefined : () => enabled === true;
+        },
+      },
+    });
+    const turnState = new CodexTurnState();
+    const request = {
+      model: "gpt-5.4-mini",
+      systemPrompt: "test",
+      messages: [{ role: "user" as const, content: "hello" }],
+      maxTokens: 50,
+      state: { store: true },
+      providerHints: { codex: { sessionId: "conversation", turnState } },
+    };
+    expect(
+      (await provider.complete(request, { principal, authContext: undefined }))
+        .text,
+    ).toBe("socket");
+    expect(
+      (await provider.complete(request, { principal, authContext: undefined }))
+        .text,
+    ).toBe("socket");
+    expect(connect).toHaveBeenCalledOnce();
+    expect(dispatch.mock.calls[0]?.[0].body.store).toBe(true);
+    enabled = false;
+    expect(
+      (await provider.complete(request, { principal, authContext: undefined }))
+        .text,
+    ).toBe("http");
+    expect(connect).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    turnState.dispose();
+  });
+
+  it("never refreshes OAuth after an ambiguous connector send", async () => {
+    const refreshAuth = vi.fn();
+    const fetch = vi.fn<CodexFetch>();
+    const provider = createCodexProvider({
+      modelIds: ["gpt-5.5"],
+      fetch,
+      credentialProvider: {
+        resolveAuth: async () => ({
+          method: "oauth",
+          bearerToken: "test",
+          canRefresh: true,
+        }),
+        refreshAuth,
+      },
+      transport: {
+        useWebSocket: () => true,
+        connector: {
+          connect: async () => ({
+            headers: new Headers(),
+            isOpen: true,
+            close: vi.fn(),
+            async *dispatch(request) {
+              yield* [];
+              request.evidence.phase = "sent_unacknowledged";
+              throw new ResponsesNonReplayableError(
+                Object.assign(new Error("auth refresh needed"), {
+                  status: 401,
+                }),
+              );
+            },
+          }),
+        },
+      },
+    });
+    await expect(
+      provider.complete(
+        { model: "gpt-5.5", systemPrompt: "test", messages: [], maxTokens: 50 },
+        { principal, authContext: undefined },
+      ),
+    ).rejects.toMatchObject({ nonReplayable: true });
+    expect(refreshAuth).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("uses the public OpenAI endpoint, exact model, API-key resolver, and text.format schema", async () => {
     let request: Request | undefined;
     const fetch = vi.fn<CodexFetch>(async (input, init) => {

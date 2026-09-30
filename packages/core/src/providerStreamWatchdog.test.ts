@@ -137,6 +137,47 @@ describe("runWatchedProviderStream", () => {
     expect(underlyingSignal?.aborted).toBe(true);
   });
 
+  it("keeps websocket watchdog timeouts retryable for the owning recovery loop", async () => {
+    let capturedAttempt:
+      | {
+          model: string;
+          dispatchEvidence?: {
+            transport: "http" | "websocket";
+            phase:
+              | "not_sent"
+              | "sent_unacknowledged"
+              | "response_started"
+              | "terminal";
+          };
+        }
+      | undefined;
+    const attempt = {
+      model: "gpt-test",
+      dispatchEvidence: {
+        transport: "websocket" as const,
+        phase: "sent_unacknowledged" as const,
+      },
+    };
+    const stream = runWatchedProviderStream<string>({
+      connectionTimeoutMs: 15,
+      start: ({ onProviderRequestAttempt }) => {
+        onProviderRequestAttempt(attempt);
+        capturedAttempt = attempt;
+        return { [Symbol.asyncIterator]: () => neverYields<string>() };
+      },
+    });
+    await expect(async () => {
+      for await (const event of stream) void event;
+    }).rejects.toMatchObject({
+      name: "ProviderStreamTimeoutError",
+      retryable: true,
+    });
+    expect(capturedAttempt?.dispatchEvidence).toMatchObject({
+      transport: "websocket",
+      phase: "sent_unacknowledged",
+    });
+  });
+
   it("forwards an external abort to the underlying request", async () => {
     const external = new AbortController();
     let underlyingSignal: AbortSignal | undefined;

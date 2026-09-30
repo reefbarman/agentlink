@@ -486,6 +486,15 @@ function projectTurnEvent(event: AgentTurnEvent): EmbeddedAgentTurnEvent {
         thinkingId: event.thinkingId,
         text: event.text,
       };
+    case "response.retry":
+      return {
+        ...base,
+        type: event.type,
+        attempt: event.attempt,
+        phase: event.phase,
+        delayMs: event.delayMs,
+        reason: event.reason,
+      };
     case "text.delta":
       return { ...base, type: event.type, text: event.text };
     case "tool.requested":

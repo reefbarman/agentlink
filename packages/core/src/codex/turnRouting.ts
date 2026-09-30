@@ -1,3 +1,5 @@
+import { ResponsesTransportSession } from "./ResponsesTransportSession.js";
+
 export interface CodexTurnRoutingBinding {
   value?: string;
   disabled: boolean;
@@ -5,6 +7,12 @@ export interface CodexTurnRoutingBinding {
 
 /** Runtime-only: create once per turn, never serialize into session state. */
 export class CodexTurnState {
+  readonly transport = new ResponsesTransportSession();
+
+  dispose(): void {
+    this.transport.dispose();
+  }
+
   #identity: string | undefined;
   #binding: CodexTurnRoutingBinding | undefined;
 

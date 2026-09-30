@@ -318,8 +318,18 @@ describe("executeCodexResponsesStream routing", () => {
       expect(withResponse).toHaveBeenCalledOnce();
       expect(create).toHaveBeenCalledTimes(2);
       expect(attempts.mock.calls).toEqual([
-        [{ model: body.model }],
-        [{ model: body.model }],
+        [
+          expect.objectContaining({
+            model: body.model,
+            dispatchEvidence: expect.objectContaining({ transport: "http" }),
+          }),
+        ],
+        [
+          expect.objectContaining({
+            model: body.model,
+            dispatchEvidence: expect.objectContaining({ transport: "http" }),
+          }),
+        ],
       ]);
       expect(create.mock.calls[0][0]).toBe(body);
       expect(create.mock.calls[1][0]).toEqual({
@@ -392,6 +402,7 @@ describe("executeCodexResponsesStream routing", () => {
       authMethod: "oauth",
       routing: createRouting(),
       onProviderRequestAttempt: attempts,
+      maxRetries: 0,
     });
     if (details.status === 401 || details.status === 403) {
       await expect(pending).rejects.toMatchObject({

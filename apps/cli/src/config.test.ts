@@ -11,9 +11,22 @@ const base = {
   defaultModel: { providerId: "codex", modelId: "gpt-5.6-sol" },
   openAiModels: ["gpt-5.6-sol"],
   codexModels: ["gpt-5.6-sol"],
+  compatibleProviders: [],
 };
 
 describe("parseCliConfig", () => {
+  it("defaults sockets on and validates the explicit rollback", () => {
+    expect(parseCliConfig(base).codexUseWebSocket).toBe(true);
+    expect(
+      parseCliConfig({ ...base, codexUseWebSocket: true }).codexUseWebSocket,
+    ).toBe(true);
+    expect(
+      parseCliConfig({ ...base, codexUseWebSocket: false }).codexUseWebSocket,
+    ).toBe(false);
+    expect(() =>
+      parseCliConfig({ ...base, codexUseWebSocket: "false" }),
+    ).toThrow("must be a boolean");
+  });
   it("uses the maintained extension model catalogues for fresh CLI config", () => {
     expect(DEFAULT_CODEX_MODELS).toEqual(
       expect.arrayContaining(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]),

@@ -26,6 +26,7 @@ const defaultConfig: CliConfig = {
   defaultModel: { providerId: "codex", modelId: "gpt-5.6-sol" },
   openAiModels: DEFAULT_OPENAI_MODELS,
   codexModels: DEFAULT_CODEX_MODELS,
+  codexUseWebSocket: true,
   compatibleProviders: [],
 };
 
@@ -81,6 +82,12 @@ export function parseCliConfig(value: unknown): CliConfig {
   if (!isRecord(value) || value.schemaVersion !== 1) {
     throw new Error("Unsupported AgentLink CLI configuration");
   }
+  if (
+    value.codexUseWebSocket !== undefined &&
+    typeof value.codexUseWebSocket !== "boolean"
+  ) {
+    throw new Error("AgentLink CLI codexUseWebSocket must be a boolean");
+  }
   const defaultModel = value.defaultModel;
   if (
     !isRecord(defaultModel) ||
@@ -100,6 +107,7 @@ export function parseCliConfig(value: unknown): CliConfig {
     },
     openAiModels: stringArray(value.openAiModels, "openAiModels"),
     codexModels: stringArray(value.codexModels, "codexModels"),
+    codexUseWebSocket: value.codexUseWebSocket ?? true,
     compatibleProviders: compatibleProviders(value.compatibleProviders),
   };
 }

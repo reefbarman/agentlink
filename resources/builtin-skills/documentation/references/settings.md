@@ -81,6 +81,8 @@ MCP servers are configured in `mcp.json` files, not VS Code settings — see `re
 
 ## OpenAI-compatible connections
 
+For guided setup, example connection files, and Claude Code authentication through Meridian, see [Providers and OpenAI-compatible setup](providers.md).
+
 - Use **AgentLink: Configure OpenAI-compatible Model** for guided add-only setup. It can query OpenRouter or generic `/models` catalogs, uses editable conservative defaults when metadata is unavailable, and creates one model backed by one connection. Edit/remove entries and advanced multi-model/headers/auxiliary configuration in `~/.agentlink/openai-compatible.json`.
 - `~/.agentlink/openai-compatible.json` is the versioned host-neutral source for named Chat Completions-compatible connections and nested models. VS Code and AgentLink Desktop read the same file. Connections own endpoint/auth/profile behavior, including the bounded `reasoningEffortMode` request mapping (`none`, `reasoning_effort`, `reasoning.effort`, or `output_config.effort`); models own stable local IDs, opaque wire IDs, context/output limits, declared tool/thinking/image capabilities, and optional `modelFamily` prompt behavior (`anthropic` or `openai`) for proxy-hosted vendor models.
 - For the VS Code built-in agent, set optional `agentMaxTokens` on a model entry to override the 8,192-token response default (for example, `"agentMaxTokens": 32768`). It must be a positive integer no greater than that model's `maxOutputTokens`. The latter remains the provider capability ceiling, not the requested response size. Existing sessions pick up changes when the connection file reloads; an in-flight response keeps its current request limit. This field does not change Desktop, Browser Ask Agent, or standalone CLI response limits.
@@ -97,6 +99,7 @@ MCP servers are configured in `mcp.json` files, not VS Code settings — see `re
 
 ## Codex / OpenAI provider
 
+- `codex.useWebSocket`: use first-party OpenAI API-key and ChatGPT/Codex OAuth Responses WebSockets (default `true`). Set `false` to force HTTP/SSE on subsequent requests. Browser workspace chats use their VS Code owner's live setting; helper-owned Ask Agent uses its host preference, and the standalone CLI accepts `codexUseWebSocket: false` to disable sockets. Product hosts provide full history for socket continuation across supported tool loops. Custom endpoints, fetch-only integrations and callers supplying only a response ID plus delta history remain HTTP. Safe connection failures and exhausted classified socket retries fall back to HTTP; bounded recovery then stops at the caller's limit or twelve physical dispatches. The live conversation keeps its HTTP preference until identity changes or an observed off/on transition. Expand a model request's details to see its actual transport, `WebSocket` or `HTTP/SSE`; older requests show `Not recorded`. Basic OAuth streaming has been live-tested; the latest continuation/recovery and API-key/other-host paths still need live validation. See [recovery behavior](capabilities.md#models-and-providers).
 - `codexStatefulResponses` — OpenAI Responses chaining via `previous_response_id`
 - `codexStoreResponses` — set `store=true` on Responses requests
 - `codexProMode` — GPT-5.6 Pro reasoning mode for API-key requests

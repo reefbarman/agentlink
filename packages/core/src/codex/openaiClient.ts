@@ -68,6 +68,34 @@ export function getCodexEndpointConfig(
   };
 }
 
+export function getCodexWebSocketConfig(
+  auth: CodexResolvedAuthForClient,
+  endpoint: CodexEndpointConfig,
+  requestHeaders: Record<string, string>,
+): { url: string; headers: Record<string, string>; identity: string } {
+  if (
+    endpoint.baseURL !== CODEX_API_BASE_URL &&
+    endpoint.baseURL !== OPENAI_API_BASE_URL
+  ) {
+    throw new Error("Responses WebSockets require a first-party endpoint");
+  }
+  const url = `${endpoint.baseURL.replace(/^https:/, "wss:")}/responses`;
+  const headers = {
+    ...endpoint.defaultHeaders,
+    ...requestHeaders,
+    Authorization: `Bearer ${auth.bearerToken}`,
+    ...(auth.method === "oauth"
+      ? { "OpenAI-Beta": "responses_websockets=2026-02-06" }
+      : {}),
+  };
+  return {
+    url,
+    headers,
+    // Private in-process identity only, never a diagnostic or serialized field.
+    identity: JSON.stringify([auth.method, auth.accountId, url, headers]),
+  };
+}
+
 export function buildCodexClientCacheKey(
   parts: CodexClientCacheKeyParts,
   fingerprintToken: (bearerToken: string) => string,

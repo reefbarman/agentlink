@@ -41,9 +41,13 @@ import {
 import {
   createOpenAiResponsesClient,
   getCodexEndpointConfig,
+  getCodexWebSocketConfig,
   type CodexFetch,
 } from "./openaiClient.js";
 import { executeCodexResponsesStream } from "./responsesStream.js";
+import { isNonReplayableResponsesError } from "./responsesTransport.js";
+import type { ResponsesWebSocketConnector } from "./responsesTransport.js";
+import type { ResponsesTransportPolicy } from "./ResponsesTransportSession.js";
 import {
   buildCodexResolvedRequestBody,
   translateCodexMessages,
@@ -71,6 +75,11 @@ export interface CreateOpenAIProviderOptions {
   displayName?: string;
   modelIds?: readonly string[];
   fetch?: CodexFetch;
+  transport?: {
+    readonly connector?: ResponsesWebSocketConnector;
+    readonly useWebSocket?: () => boolean;
+    readonly readPolicy?: () => ResponsesTransportPolicy | undefined;
+  };
 }
 
 export interface CodexProviderCredentialContext<
@@ -91,6 +100,11 @@ export interface CreateCodexProviderOptions<
   modelIds?: readonly string[];
   maxOAuthRefreshAttempts?: number;
   fetch?: CodexFetch;
+  transport?: {
+    readonly connector?: ResponsesWebSocketConnector;
+    readonly useWebSocket?: () => boolean;
+    readonly readPolicy?: () => ResponsesTransportPolicy | undefined;
+  };
 }
 
 interface ResponsesProviderOptions<
@@ -105,6 +119,11 @@ interface ResponsesProviderOptions<
   >;
   maxOAuthRefreshAttempts?: number;
   fetch?: CodexFetch;
+  transport?: {
+    readonly connector?: ResponsesWebSocketConnector;
+    readonly useWebSocket?: () => boolean;
+    readonly readPolicy?: () => ResponsesTransportPolicy | undefined;
+  };
 }
 
 /** Creates a standalone OpenAI Responses API backend using API-key credentials. */
@@ -119,6 +138,7 @@ export function createOpenAIProvider(
     modelIds: resolveModelIds(options.modelIds, "apiKey"),
     credentialProvider: apiKeyCredentialProvider(providerId, options.apiKey),
     fetch: options.fetch,
+    transport: options.transport,
   });
 }
 
@@ -134,6 +154,7 @@ export function createCodexProvider<
     credentialProvider: options.credentialProvider,
     maxOAuthRefreshAttempts: options.maxOAuthRefreshAttempts,
     fetch: options.fetch,
+    transport: options.transport,
   });
 }
 
@@ -153,6 +174,7 @@ class ResponsesModelBackend<
   >;
   private readonly maxOAuthRefreshAttempts?: number;
   private readonly fetch?: CodexFetch;
+  private readonly transport?: ResponsesProviderOptions<TPrincipal>["transport"];
 
   constructor(options: ResponsesProviderOptions<TPrincipal>) {
     this.providerId = options.providerId;
@@ -162,6 +184,7 @@ class ResponsesModelBackend<
     this.credentialProvider = options.credentialProvider;
     this.maxOAuthRefreshAttempts = options.maxOAuthRefreshAttempts;
     this.fetch = options.fetch;
+    this.transport = options.transport;
     this.condenseModel = this.modelIds.includes(CODEX_CONDENSE_MODEL)
       ? CODEX_CONDENSE_MODEL
       : this.modelIds[0]!;
@@ -243,7 +266,6 @@ class ResponsesModelBackend<
           ...request,
           tools: undefined,
           hostedTools: undefined,
-          providerHints: undefined,
         },
         context,
         "complete",
@@ -265,7 +287,7 @@ class ResponsesModelBackend<
     let auth = credentialSession.auth;
     let outputStarted = false;
     let dispatches = 0;
-    const maxAttempts = (request.executionControls?.maxRetries ?? 0) + 1;
+    const maxAttempts = (request.executionControls?.maxRetries ?? 11) + 1;
 
     for (;;) {
       this.assertAuthMethod(auth);
@@ -292,12 +314,38 @@ class ResponsesModelBackend<
           hostedTools: request.hostedTools,
         });
         const routingHint = request.providerHints?.codex;
+        const webSocketConfig = this.transport?.connector
+          ? getCodexWebSocketConfig(auth, endpoint, endpoint.defaultHeaders)
+          : undefined;
+        const messagesAreFull =
+          routingHint?.fullHistory === true ||
+          !request.state?.previousResponseId;
+        const fullBody = messagesAreFull
+          ? buildCodexResolvedRequestBody({
+              authMethod: auth.method,
+              model: request.model,
+              instructions: request.systemPrompt,
+              input: translateCodexMessages(request.messages),
+              maxTokens: request.maxTokens,
+              state: { ...request.state, previousResponseId: undefined },
+              cache: request.cache,
+              reasoningEffort: request.reasoningEffort,
+              reasoningMode: request.reasoningMode,
+              serviceTier: request.serviceTier,
+              outputFormat: request.outputFormat,
+              tools: request.tools
+                ? translateCodexTools(request.tools)
+                : undefined,
+              hostedTools: request.hostedTools,
+            }).body
+          : undefined;
         yield* executeCodexResponsesStream({
           client: createOpenAiResponsesClient(auth, endpoint, {
             fetch: this.fetch,
           }),
           body: resolved.body,
           authMethod: auth.method,
+          conversationState: request.providerHints?.codex?.conversationState,
           routing:
             auth.method === "oauth" &&
             routingHint?.sessionId &&
@@ -323,6 +371,19 @@ class ResponsesModelBackend<
           },
           onProviderRequestAttempt: request.onProviderRequestAttempt,
           onTransportActivity: request.onTransportActivity,
+          ...(webSocketConfig && this.transport?.connector
+            ? {
+                webSocket: {
+                  ...webSocketConfig,
+                  connector: this.transport.connector,
+                  enabled: this.transport.useWebSocket?.() ?? true,
+                  session: routingHint?.turnState?.transport,
+                  incremental: messagesAreFull,
+                  policy: this.transport.readPolicy?.(),
+                  ...(fullBody ? { fullBody } : {}),
+                },
+              }
+            : {}),
           parserState: {
             get outputStarted() {
               return outputStarted;
@@ -344,6 +405,16 @@ class ResponsesModelBackend<
         return;
       } catch (error) {
         if (request.signal?.aborted) throw abortError();
+        if (
+          error &&
+          typeof error === "object" &&
+          (error as { recoveryHandled?: unknown }).recoveryHandled === true
+        ) {
+          const normalized = toCodexRequestError(error);
+          Object.assign(normalized, { recoveryHandled: true });
+          throw normalized;
+        }
+        if (isNonReplayableResponsesError(error)) throw error;
         if (
           error instanceof CoreModelAttemptLimitError ||
           isAgentClientError(error)

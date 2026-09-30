@@ -27,5 +27,6 @@ export interface CliConfig {
   };
   readonly openAiModels: readonly string[];
   readonly codexModels: readonly string[];
+  readonly codexUseWebSocket?: boolean;
   readonly compatibleProviders: readonly CliCompatibleProvider[];
 }

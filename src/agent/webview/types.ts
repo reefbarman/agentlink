@@ -192,6 +192,7 @@ export type ExtensionMessage =
       usageEstimated?: boolean;
       durationMs: number;
       timeToFirstToken: number;
+      transport?: "http" | "websocket";
       usedPreviousResponseId?: boolean;
       previousResponseIdFallback?: boolean;
       promptCacheKey?: string;
@@ -600,6 +601,7 @@ export type ExtensionMessage =
       usageEstimated?: boolean;
       durationMs: number;
       timeToFirstToken: number;
+      transport?: "http" | "websocket";
       usedPreviousResponseId?: boolean;
       previousResponseIdFallback?: boolean;
       promptCacheKey?: string;

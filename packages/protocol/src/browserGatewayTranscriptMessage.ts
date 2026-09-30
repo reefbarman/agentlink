@@ -76,6 +76,7 @@ export interface BrowserGatewayTranscriptMessage {
     outputTokens: number;
     durationMs: number;
     timeToFirstToken: number;
+    transport?: "http" | "websocket";
   };
   condenseInfo?: {
     prevInputTokens: number;

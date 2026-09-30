@@ -18,11 +18,12 @@ describe("BrowserGatewayAskAgentPreferencesStore", () => {
     const filePath = await makePreferencesPath();
     const store = new BrowserGatewayAskAgentPreferencesStore({ filePath });
 
-    expect(await store.read()).toEqual({});
+    expect(await store.read()).toMatchObject({ codexUseWebSocket: true });
     await store.update({
       model: " claude-sonnet-4-5 ",
       modelOwnerId: " vscode-owner-1 ",
       reasoningEffort: "high",
+      codexUseWebSocket: false,
       webPolicy: {
         settings: {
           searchBackend: "native",
@@ -46,6 +47,7 @@ describe("BrowserGatewayAskAgentPreferencesStore", () => {
       model: "claude-sonnet-4-5",
       modelOwnerId: "vscode-owner-1",
       reasoningEffort: "high",
+      codexUseWebSocket: false,
       webPolicy: {
         settings: expect.objectContaining({
           searchBackend: "native",
@@ -70,6 +72,7 @@ describe("BrowserGatewayAskAgentPreferencesStore", () => {
       model: "claude-sonnet-4-5",
       modelOwnerId: undefined,
       reasoningEffort: "high",
+      codexUseWebSocket: true,
       webPolicy: undefined,
     });
 
@@ -171,9 +174,10 @@ describe("BrowserGatewayAskAgentPreferencesStore", () => {
       store.update({ reasoningEffort: "high" }),
     ]);
 
-    await expect(store.read()).resolves.toEqual({
+    await expect(store.read()).resolves.toMatchObject({
       model: "gpt-5.3-codex",
       reasoningEffort: "high",
+      codexUseWebSocket: true,
     });
   });
 });

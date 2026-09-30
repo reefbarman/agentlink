@@ -26,6 +26,10 @@ export interface CodexStreamParserOptions {
   maxOutputBytes?: number;
   includeTerminationEvidence?: boolean;
   replayProviderId?: string;
+  onCompletedOutput?: (
+    output: Record<string, unknown>[],
+    responseId: string,
+  ) => void;
 }
 
 export class CodexStreamError extends Error {
@@ -75,6 +79,7 @@ export async function* parseCodexResponseStreamEvents(
   let providerResponseId: string | undefined;
   let stopReason: CoreModelStopReason | undefined;
   let sawAuthoritativeTerminal = false;
+  let responseCompleted = false;
   let outputBytes = 0;
   const addOutputBytes = (value: string) => {
     outputBytes += Buffer.byteLength(value, "utf8");
@@ -360,8 +365,13 @@ export async function* parseCodexResponseStreamEvents(
           status !== "incomplete" || outputLimitReached;
         if (outputLimitReached) stopReason = "max_tokens";
       }
+      responseCompleted =
+        eventType === "response.completed" && resp?.status !== "incomplete";
       if (Array.isArray(resp?.output)) {
-        responseOutput = resp.output.filter(isRecord);
+        responseOutput = selectCodexResponseOutput(
+          resp.output.filter(isRecord),
+          completedOutputItems,
+        );
       }
       providerResponseId =
         (resp?.id as string | undefined) ??
@@ -526,11 +536,10 @@ export async function* parseCodexResponseStreamEvents(
     });
   }
 
-  const output =
-    responseOutput ??
-    [...completedOutputItems.entries()]
-      .sort(([left], [right]) => left - right)
-      .map(([, item]) => item);
+  const output = selectCodexResponseOutput(
+    responseOutput,
+    completedOutputItems,
+  );
   if (
     options.maxOutputBytes !== undefined &&
     Buffer.byteLength(JSON.stringify(output), "utf8") > options.maxOutputBytes
@@ -583,6 +592,13 @@ export async function* parseCodexResponseStreamEvents(
     providerResponseId,
     ...(serverToolUsage ? { serverToolUsage } : {}),
   };
+  if (
+    responseCompleted &&
+    providerResponseId &&
+    (output.length === 0 || (replay && !replay.degraded))
+  ) {
+    options.onCompletedOutput?.(output, providerResponseId);
+  }
   yield { type: "content_blocks", blocks: contentBlocks };
   yield {
     type: "model_stop",
@@ -601,6 +617,17 @@ export async function* parseCodexResponseStreamEvents(
       : {}),
   };
   yield { type: "done" };
+}
+
+function selectCodexResponseOutput(
+  terminal: Record<string, unknown>[] | undefined,
+  streamed: ReadonlyMap<number, Record<string, unknown>>,
+): Record<string, unknown>[] {
+  const output = new Map(streamed);
+  terminal?.forEach((item, index) => output.set(index, item));
+  return [...output.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, item]) => item);
 }
 
 function toStartedWebActivity(item: Record<string, unknown>): CoreWebActivity {

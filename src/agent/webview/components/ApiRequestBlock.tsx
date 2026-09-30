@@ -14,6 +14,7 @@ interface ApiRequestBlockProps {
   usageEstimated?: boolean;
   durationMs: number;
   timeToFirstToken: number;
+  transport?: "http" | "websocket";
   contextBreakdown?: RequestContextBreakdown;
 }
 
@@ -28,6 +29,7 @@ export function ApiRequestBlock({
   usageEstimated,
   durationMs,
   timeToFirstToken,
+  transport,
   contextBreakdown,
 }: ApiRequestBlockProps) {
   const [expanded, setExpanded] = useState(false);
@@ -51,6 +53,16 @@ export function ApiRequestBlock({
             <tr>
               <td class="api-key">Model</td>
               <td class="api-value">{model}</td>
+            </tr>
+            <tr>
+              <td class="api-key">Transport</td>
+              <td class="api-value">
+                {transport === "websocket"
+                  ? "WebSocket"
+                  : transport === "http"
+                    ? "HTTP/SSE"
+                    : "Not recorded"}
+              </td>
             </tr>
             {reasoningEffort && (
               <tr>

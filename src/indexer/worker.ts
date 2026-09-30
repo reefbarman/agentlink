@@ -94,6 +94,8 @@ import type {
 import type { RetrievalRepository } from "../core/retrieval/contracts.js";
 import { classifyRetrievalFingerprint } from "../core/retrieval/fingerprint.js";
 import { LanceDbRetrievalRepository } from "../storage/retrieval/LanceDbRetrievalRepository.js";
+import { writeAtomicJsonFile } from "./atomicJsonFile.js";
+import { canonicalizePath } from "../util/canonicalPath.js";
 import { LanceDbCodeIndexStagingRepository } from "../storage/retrieval/LanceDbCodeIndexStagingRepository.js";
 import { LanceDbCodeIndexActivator } from "../storage/retrieval/LanceDbCodeIndexActivator.js";
 import {
@@ -250,6 +252,7 @@ function createStagedPublicationPort(
 async function acquireWorkerWriterLease(args: {
   storeRoot: string;
   workspaceScopeId: string;
+  workspaceRoot: string;
 }): Promise<{
   lease: CodeIndexWriterLease;
   port: StagedRepositoryPublicationPort;
@@ -261,6 +264,17 @@ async function acquireWorkerWriterLease(args: {
     ownerId: `worker:${process.pid}:${randomUUID()}`,
     protocolVersion: "v4",
   });
+  try {
+    await withCodeIndexWriterFence(lease, async () => {
+      writeAtomicJsonFile(`${args.storeRoot}.workspace.json`, {
+        version: 1,
+        workspaceRoot: canonicalizePath(args.workspaceRoot),
+      });
+    });
+  } catch (error) {
+    await releaseCodeIndexWriterLease(lease);
+    throw error;
+  }
   const heartbeat = setInterval(() => {
     void renewCodeIndexWriterLease(lease).catch((error) => {
       console.error(`Code index writer lease renewal failed: ${error}`);
@@ -1437,6 +1451,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
     writer = await acquireWorkerWriterLease({
       storeRoot: msg.retrievalStoreRoot,
       workspaceScopeId: msg.workspaceScopeId,
+      workspaceRoot: msg.workspaceRoot,
     });
     repository = createRetrievalRepository(
       msg.retrievalStoreRoot,
@@ -1890,6 +1905,7 @@ async function handleIncrementalUpdate(
     writer = await acquireWorkerWriterLease({
       storeRoot: msg.retrievalStoreRoot,
       workspaceScopeId: msg.workspaceScopeId,
+      workspaceRoot: msg.workspaceRoot,
     });
     repository = createRetrievalRepository(
       msg.retrievalStoreRoot,

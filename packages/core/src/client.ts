@@ -166,7 +166,16 @@ export interface AgentClientErrorInfo {
   retryable: boolean;
 }
 
+export type AgentClientResponseRetryEvent = {
+  type: "response.retry";
+  attempt: number;
+  phase: "websocket" | "http";
+  delayMs: number;
+  reason: string;
+};
+
 export type AgentClientTextStreamEvent =
+  | AgentClientResponseRetryEvent
   | { type: "text.delta"; text: string }
   | { type: "usage"; usage: CoreModelUsage }
   | { type: "completed"; result: AgentClientGenerationResult }
@@ -262,6 +271,7 @@ export type AgentClientSafeRunResult =
 export type AgentClientRunEvent =
   | { type: "run.started"; requestId: string }
   | { type: "model.resolved"; model: AgentModelReference }
+  | AgentClientResponseRetryEvent
   | { type: "thinking.started"; thinkingId: string }
   | { type: "thinking.delta"; thinkingId: string; text: string }
   | { type: "thinking.completed"; thinkingId: string }
@@ -550,7 +560,13 @@ function streamTextGeneration(args: {
           },
         },
       })) {
-        if (event.type === "text_delta") {
+        if (event.type === "response_retry") {
+          text = "";
+          usage = undefined;
+          finishReason = undefined;
+          terminationEvidence = undefined;
+          yield { ...event, type: "response.retry" };
+        } else if (event.type === "text_delta") {
           text += event.text;
           yield { type: "text.delta", text: event.text };
         } else if (event.type === "usage") {
@@ -908,6 +924,15 @@ function projectRunEvent(
   }
   if (event.type === "thinking.completed") {
     return { type: "thinking.completed", thinkingId: event.thinkingId };
+  }
+  if (event.type === "response.retry") {
+    return {
+      type: event.type,
+      attempt: event.attempt,
+      phase: event.phase,
+      delayMs: event.delayMs,
+      reason: event.reason,
+    };
   }
   if (event.type === "text.delta") {
     return { type: "text.delta", text: event.text };
