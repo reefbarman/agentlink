@@ -26,6 +26,13 @@ import { diffSnapshotHub } from "../browser-gateway/DiffSnapshotHub.js";
 import { randomUUID } from "crypto";
 import { sleep } from "../util/sleep.js";
 import { waitForDiagnosticsQuiescence } from "./diagnosticsQuiescence.js";
+import {
+  computeLineMapping,
+  formatIntroducedDiagnostics,
+  selectIntroducedDiagnostics,
+  type DiagnosticEntry,
+  type LabeledDiagnosticEntry,
+} from "./newDiagnostics.js";
 import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 
 export { FileLockTimeoutError, withFileLock } from "../util/fileLock.js";
@@ -270,7 +277,7 @@ export class DiffViewProvider {
   private relPath: string | undefined;
   private absolutePath: string | undefined;
   private activeDiffEditor: vscode.TextEditor | undefined;
-  private preDiagnostics: [vscode.Uri, vscode.Diagnostic[]][] = [];
+  private diagnosticBaseline: DiagnosticBaseline | undefined;
   private editType: "create" | "modify" | undefined;
   private createdDirs: string[] = [];
   private documentWasOpen = false;
@@ -334,8 +341,7 @@ export class DiffViewProvider {
       }
     }
 
-    // Capture pre-edit diagnostics
-    this.preDiagnostics = vscode.languages.getDiagnostics();
+    this.diagnosticBaseline = captureDiagnosticBaseline(this.absolutePath);
 
     // Create directories for new files
     if (!fileExists) {
@@ -800,7 +806,14 @@ export class DiffViewProvider {
             onEvent();
           }
         }),
-      collect: () => collectNewDiagnosticErrors(this.preDiagnostics),
+      collect: () =>
+        this.diagnosticBaseline
+          ? collectNewDiagnosticErrors(
+              this.diagnosticBaseline,
+              this.absolutePath!,
+              this.originalContent,
+            )
+          : undefined,
     });
   }
 
@@ -890,57 +903,102 @@ async function createDirectoriesForFile(filePath: string): Promise<string[]> {
   return created;
 }
 
-/**
- * Compare two sets of diagnostics and return only new ones.
- * Adapted from Roo Code's diagnostics integration.
- */
-function getNewDiagnostics(
-  oldDiags: [vscode.Uri, vscode.Diagnostic[]][],
-  newDiags: [vscode.Uri, vscode.Diagnostic[]][],
-): [vscode.Uri, vscode.Diagnostic[]][] {
-  const oldMap = new Map<string, vscode.Diagnostic[]>();
-  for (const [uri, diags] of oldDiags) {
-    oldMap.set(uri.toString(), diags);
-  }
-
-  const result: [vscode.Uri, vscode.Diagnostic[]][] = [];
-
-  for (const [uri, diags] of newDiags) {
-    const oldFileDiags = oldMap.get(uri.toString()) ?? [];
-    const newFileDiags = diags.filter(
-      (newDiag) =>
-        !oldFileDiags.some(
-          (oldDiag) =>
-            oldDiag.message === newDiag.message &&
-            oldDiag.range.start.line === newDiag.range.start.line &&
-            oldDiag.severity === newDiag.severity,
-        ),
-    );
-    if (newFileDiags.length > 0) {
-      result.push([uri, newFileDiags]);
-    }
-  }
-
-  return result;
+interface DiagnosticBaseline {
+  diagnostics: [vscode.Uri, vscode.Diagnostic[]][];
+  /**
+   * Text of the target's open document when the baseline was captured. Its
+   * diagnostics describe this text, which may differ from disk.
+   */
+  targetText: string | undefined;
 }
 
-function collectNewDiagnosticErrors(
-  preDiagnostics: [vscode.Uri, vscode.Diagnostic[]][],
-): string | undefined {
-  const newProblems = getNewDiagnostics(
-    preDiagnostics,
-    vscode.languages.getDiagnostics(),
+function isTargetUri(uri: vscode.Uri, absolutePath: string): boolean {
+  return uri.scheme === "file" && uri.fsPath === absolutePath;
+}
+
+function findTargetDocument(
+  absolutePath: string,
+): vscode.TextDocument | undefined {
+  return vscode.workspace.textDocuments.find((document) =>
+    documentMatchesTarget(document, absolutePath),
   );
-  const lines: string[] = [];
-  for (const [, diagnostics] of newProblems) {
-    for (const diagnostic of diagnostics) {
-      if (diagnostic.severity !== vscode.DiagnosticSeverity.Error) continue;
-      lines.push(
-        `Line ${diagnostic.range.start.line + 1}: ${diagnostic.message}`,
-      );
-    }
+}
+
+function captureDiagnosticBaseline(absolutePath: string): DiagnosticBaseline {
+  return {
+    diagnostics: vscode.languages.getDiagnostics(),
+    targetText: findTargetDocument(absolutePath)?.getText(),
+  };
+}
+
+function errorEntries(
+  diagnostics: readonly vscode.Diagnostic[] | undefined,
+): DiagnosticEntry[] {
+  return (diagnostics ?? [])
+    .filter(
+      (diagnostic) => diagnostic.severity === vscode.DiagnosticSeverity.Error,
+    )
+    .map((diagnostic) => ({
+      line: diagnostic.range.start.line,
+      message: diagnostic.message,
+    }));
+}
+
+/**
+ * Report error diagnostics the edit introduced, bounded for tool results.
+ * Target-file diagnostics are matched through the edit's line shift so
+ * unchanged pre-existing errors below the edit are not re-reported. When the
+ * target had no diagnostics baseline (not open and never diagnosed), only
+ * errors on edited lines are reported.
+ */
+function collectNewDiagnosticErrors(
+  baseline: DiagnosticBaseline,
+  absolutePath: string,
+  baselineContent: string | undefined,
+): string | undefined {
+  const baselineByUri = new Map<string, vscode.Diagnostic[]>();
+  let baselineTarget: vscode.Diagnostic[] | undefined;
+  for (const [uri, diagnostics] of baseline.diagnostics) {
+    baselineByUri.set(uri.toString(), diagnostics);
+    if (isTargetUri(uri, absolutePath)) baselineTarget = diagnostics;
   }
-  return lines.length > 0 ? lines.join("\n") : undefined;
+
+  const targetEntries: LabeledDiagnosticEntry[] = [];
+  const otherEntries: LabeledDiagnosticEntry[] = [];
+  let unbaselinedOmitted = 0;
+  for (const [uri, diagnostics] of vscode.languages.getDiagnostics()) {
+    const current = errorEntries(diagnostics);
+    if (current.length === 0) continue;
+    if (isTargetUri(uri, absolutePath)) {
+      const baselineText = baseline.targetText ?? baselineContent;
+      const finalText = findTargetDocument(absolutePath)?.getText();
+      const hasBaseline =
+        baseline.targetText !== undefined || (baselineTarget?.length ?? 0) > 0;
+      const selection = selectIntroducedDiagnostics({
+        baseline: hasBaseline ? errorEntries(baselineTarget) : undefined,
+        current,
+        mapping:
+          baselineText !== undefined && finalText !== undefined
+            ? computeLineMapping(baselineText, finalText)
+            : undefined,
+      });
+      targetEntries.push(...selection.introduced);
+      unbaselinedOmitted += selection.unbaselinedOmitted;
+      continue;
+    }
+    const { introduced } = selectIntroducedDiagnostics({
+      baseline: errorEntries(baselineByUri.get(uri.toString())),
+      current,
+    });
+    const label = vscode.workspace.asRelativePath(uri, false);
+    otherEntries.push(
+      ...introduced.map((entry) => ({ ...entry, path: label })),
+    );
+  }
+  return formatIntroducedDiagnostics(
+    [...targetEntries, ...otherEntries],
+    unbaselinedOmitted,
+  );
 }
 
 /**
@@ -982,10 +1040,13 @@ async function waitForVisibleFileEditor(
  *   const diagnostics = await snap.collectNewErrors(delay);
  */
 export function snapshotDiagnostics(filePath: string): {
-  collectNewErrors: (delayMs: number) => Promise<string | undefined>;
+  collectNewErrors: (
+    delayMs: number,
+    baselineContent?: string,
+  ) => Promise<string | undefined>;
   dispose(): void;
 } {
-  const preDiagnostics = vscode.languages.getDiagnostics();
+  const baseline = captureDiagnosticBaseline(filePath);
 
   // Track diagnostic events eagerly — before the write happens —
   // so we never miss events that fire during write/open/sync.
@@ -1004,7 +1065,10 @@ export function snapshotDiagnostics(filePath: string): {
   };
 
   return {
-    collectNewErrors(delayMs: number): Promise<string | undefined> {
+    collectNewErrors(
+      delayMs: number,
+      baselineContent?: string,
+    ): Promise<string | undefined> {
       return waitForDiagnosticsQuiescence({
         delayMs,
         hadEvent: gotEvent,
@@ -1014,7 +1078,8 @@ export function snapshotDiagnostics(filePath: string): {
               onEvent();
             }
           }),
-        collect: () => collectNewDiagnosticErrors(preDiagnostics),
+        collect: () =>
+          collectNewDiagnosticErrors(baseline, filePath, baselineContent),
         eagerDisposables: [{ dispose }],
       });
     },

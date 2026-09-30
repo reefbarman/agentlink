@@ -512,6 +512,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
             });
             const newDiagnostics = await snap.collectNewErrors(
               params.diagnosticDelay,
+              baselineContent,
             );
             return {
               ...commit,
@@ -667,6 +668,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                 });
                 const newDiagnostics = await snap.collectNewErrors(
                   params.diagnosticDelay,
+                  baseline.content,
                 );
                 return {
                   ...commit,
