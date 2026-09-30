@@ -767,9 +767,13 @@ The isolated QuickJS-WASM context exposes three synchronous guest helpers backed
 const files = tool("list_files", {
   path: "src",
   pattern: "*.ts",
-}).entries;
+})
+  .entries.split("\n")
+  .filter(Boolean)
+  .slice(0, 8)
+  .map((entry) => "src/" + entry);
 const packs = toolAllSettled(
-  files.slice(0, 8).map((path) => ({
+  files.map((path) => ({
     name: "get_context",
     input: { path, limit: 80 },
   })),
@@ -783,9 +787,9 @@ return packs.map((result, index) =>
 
 - `tool(name, input)` returns the child tool's canonical structured `data` value or throws a structured script error.
 - `toolAll([{ name, input }, ...])` is fail-fast: one child error fails the batch and cancels remaining reads. Reserve it for work where every result is required; prefer `toolAllSettled` for independent reads, especially when files may be missing. It performs one host-side batch with concurrency 4 and preserves descriptor order. Guest `Promise.all` over `tool()` calls is not supported.
-- `toolAllSettled([{ name, input }, ...])` uses the same limits, concurrency, and ordering, returning `{ status: "fulfilled", value }` or `{ status: "rejected", reason: { code, message } }` for recoverable child handler and per-child-size failures. Authorization, mode, deferred-catalog/input, interaction/path policy, cancellation, budget, malformed canonical data, cumulative bridge overflow, memory, and internal failures remain fatal to the whole script.
+- `toolAllSettled([{ name, input }, ...])` uses the same limits, concurrency, and ordering, returning `{ status: "fulfilled", value }` or `{ status: "rejected", reason: { code, message } }` for recoverable child handler, per-child-size and interactive path-approval failures. `interaction_denied` instructs the caller to use the read tool directly to request path approval; compose never obtains approval itself. Other authorization, mode, deferred-catalog/input, path-policy, cancellation, budget, malformed canonical data, cumulative bridge overflow, memory, and internal failures remain fatal to the whole script.
 - Return selected fields and preserve per-child errors rather than returning raw batches. Child shapes differ: `search_files.results` is formatted text, not an array. Final return values omit undefined object properties and serialize undefined array entries as `null`, like JSON; a top-level undefined return and other unsupported values still fail, with a property/index path in the error. Tool inputs and canonical child data remain strictly validated.
-- Script policy checks parsed JavaScript syntax, so comments, string literals, regexes, and template text containing words such as `async function` are accepted as data. Actual async functions, generators, and constructor access remain prohibited, including executable template interpolations.
+- Script policy checks parsed JavaScript syntax, so comments, string literals, regexes, and template text containing words such as `async function` are accepted as data. Actual async functions, generators, and constructor access remain prohibited, including executable template interpolations. Parse failures include a bounded reason and script-relative line/column location, without returning the full script.
 - The compose tool description names the exact composable child set and variant constraints generated from the canonical composability policy and current advertised tool union. `read_file` supports text and extracted PDF only, with `query` omitted; image/document output is rejected before bridging. `list_files` is composable only without `query`; `search_files` only when `semantic` is omitted or false.
 - Each child must be authorized by the frozen provider request that invoked `compose`: either its canonical name was inline, or `call_native_tool` was inline and the exact child appears in that request's immutable deferred native catalog. The current mode, profile, skill allowlist, and path policy can only narrow this authority. Nested compose, MCP, shell, background/fleet, writes, media, transcript recall, editor UI, semantic variants, and interactive controls are rejected.
 - Outside-workspace child paths are limited to AgentLink temporary artifacts and paths already trusted before composition. Compose never opens approval, question, diff, mode, or editor UI.

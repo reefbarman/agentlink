@@ -2945,7 +2945,7 @@ function enforceNonInteractiveReadPathPolicy(
   }
 
   return errorResult(
-    `Compose child path requires interactive approval and was denied: ${absolutePath}`,
+    `Compose child path requires interactive approval: ${absolutePath}. Call ${toolName} directly with this path to request approval; compose cannot ask for it.`,
     { status: "rejected", path: absolutePath, reason: "interaction_denied" },
   );
 }

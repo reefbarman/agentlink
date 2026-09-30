@@ -4058,6 +4058,66 @@ describe("dispatchToolCall", () => {
     },
   );
 
+  it("retains allowed compose siblings through the production path-approval boundary", async () => {
+    const { handleCompose } = await import("./compose/composeRuntime.js");
+    composeRuntimeMocks.handleCompose.mockImplementationOnce((options) =>
+      handleCompose({
+        ...options,
+        wasmPath:
+          require.resolve("@jitl/quickjs-wasmfile-release-asyncify/wasm"),
+        syntaxWasmPaths: {
+          parser: require.resolve("web-tree-sitter/web-tree-sitter.wasm"),
+          javascript:
+            require.resolve("@vscode/tree-sitter-wasm/wasm/tree-sitter-javascript.wasm"),
+        },
+      }),
+    );
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      extensionUri: { fsPath: "/extension" } as any,
+      approvalManager: { isPathTrusted: vi.fn(() => false) } as any,
+    });
+    vi.mocked(handleGetContext).mockClear();
+    vi.mocked(handleGetContext).mockResolvedValueOnce({
+      data: { total_lines: 7 },
+      content: [{ type: "text", text: '{"total_lines":7}' }],
+      isError: false,
+    });
+    mockOnApprovalRequest.mockClear();
+    const result = await runtime.executeTool({
+      name: "compose",
+      input: {
+        script: `return toolAllSettled([
+        { name: "get_context", input: { path: "src/a.ts" } },
+        { name: "get_context", input: { path: "/outside/private.ts" } },
+      ]);`,
+      },
+      context: {
+        sessionId: "test-session",
+        mode: "code",
+        composeEnabled: true,
+        availableToolNames: new Set(["compose", "get_context"]),
+        toolCallBudget: new (
+          await import("../core/tools/toolCallBudget.js")
+        ).ToolCallBudget(4),
+        toolCallId: "compose-path-approval",
+      },
+    });
+    expect(result.isError).toBe(false);
+    expect(result.data).toEqual([
+      { status: "fulfilled", value: { total_lines: 7 } },
+      {
+        status: "rejected",
+        reason: {
+          code: "interaction_denied",
+          message: expect.stringContaining("Call get_context directly"),
+        },
+      },
+    ]);
+    expect(handleGetContext).toHaveBeenCalledOnce();
+    expect(mockOnApprovalRequest).not.toHaveBeenCalled();
+  });
+
   it("denies untrusted nested read paths without invoking the handler", async () => {
     const runtime = createAgentToolRuntime({
       ...mockCtx,

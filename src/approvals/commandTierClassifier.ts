@@ -574,6 +574,12 @@ function validateNarrowReadOnlyGit(
   parsed: ParsedGitInvocation,
 ): NarrowReadOnlyGitValidation {
   const { subcommand, subcommandArgs } = parsed;
+  if (subcommand === "branch") {
+    return {
+      recognized: true,
+      reason: validateReadOnlyBranchArgs(subcommandArgs),
+    };
+  }
   if (subcommand === "merge-base") {
     const options = subcommandArgs.filter((arg) => arg.startsWith("-"));
     const unsupportedOption = options.find(
@@ -680,6 +686,62 @@ function validateNarrowReadOnlyGit(
   }
 
   return { recognized: false };
+}
+
+function validateReadOnlyBranchArgs(args: string[]): string | undefined {
+  const flags = new Set([
+    "-a",
+    "--all",
+    "-r",
+    "--remotes",
+    "-v",
+    "-vv",
+    "--verbose",
+    "--list",
+    "--show-current",
+    "--column",
+    "--no-column",
+    "--color",
+    "--no-color",
+    "--ignore-case",
+  ]);
+  const optionalRefOptions = new Set([
+    "--contains",
+    "--no-contains",
+    "--merged",
+    "--no-merged",
+  ]);
+  const valueOptions = new Set(["--sort", "--format", "--points-at"]);
+  let listing = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (flags.has(arg)) {
+      if (arg === "--list") listing = true;
+      continue;
+    }
+    if (optionalRefOptions.has(arg) || valueOptions.has(arg)) {
+      const next = args[index + 1];
+      if (
+        next !== undefined &&
+        (valueOptions.has(arg) || !next.startsWith("-"))
+      ) {
+        index += 1;
+      } else if (valueOptions.has(arg)) {
+        return `git branch query option requires a value: ${arg}`;
+      }
+      continue;
+    }
+    if (
+      /^--(?:contains|no-contains|merged|no-merged|sort|format|points-at|column|color)=.+/.test(
+        arg,
+      )
+    )
+      continue;
+    if (arg === "--" && listing) return undefined;
+    if (!arg.startsWith("-") && listing) continue;
+    return "git branch mutation or unsupported query option";
+  }
+  return undefined;
 }
 
 function validateReadOnlyGit(args: string[]): string | undefined {
@@ -831,52 +893,6 @@ function classifyGit(args: string[]): CommandTierResult {
     );
   }
 
-  if (subcommand === "branch") {
-    const safeBranchFlags = new Set([
-      "-a",
-      "--all",
-      "-r",
-      "--remotes",
-      "-v",
-      "-vv",
-      "--verbose",
-      "--list",
-      "--show-current",
-      "--contains",
-      "--no-contains",
-      "--merged",
-      "--no-merged",
-      "--sort",
-      "--format",
-      "--column",
-      "--no-column",
-      "--color",
-      "--no-color",
-      "--ignore-case",
-    ]);
-    const hasMutationFlag = subcommandArgs.some((arg) =>
-      [
-        "-c",
-        "-C",
-        "-d",
-        "-D",
-        "-m",
-        "-M",
-        "--copy",
-        "--move",
-        "--delete",
-      ].includes(arg),
-    );
-    const hasUnscopedPositional =
-      !subcommandArgs.includes("--list") &&
-      subcommandArgs.some(
-        (arg) => !arg.startsWith("-") && !safeBranchFlags.has(arg),
-      );
-    if (hasMutationFlag || hasUnscopedPositional) {
-      return sensitive("git branch mutation", "git_mutation", "git");
-    }
-  }
-
   if (subcommand === "remote") {
     const operation = subcommandArgs.find((arg) => !arg.startsWith("-"));
     if (operation) {
@@ -899,7 +915,11 @@ function classifyGit(args: string[]): CommandTierResult {
   const narrowValidation = validateNarrowReadOnlyGit(parsed);
   if (narrowValidation.recognized) {
     return narrowValidation.reason
-      ? sensitive(narrowValidation.reason, "unrecognized_operation", "git")
+      ? sensitive(
+          narrowValidation.reason,
+          subcommand === "branch" ? "git_mutation" : "unrecognized_operation",
+          "git",
+        )
       : safe(`git ${subcommand}`, "read_only", "git");
   }
 

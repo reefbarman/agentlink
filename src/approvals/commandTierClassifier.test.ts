@@ -211,6 +211,41 @@ describe("command tier classifier", () => {
   });
 
   it.each([
+    "git branch",
+    "git branch --all --contains HEAD",
+    "git branch -r --no-contains=HEAD",
+    "git branch --merged HEAD --sort -committerdate",
+    "git branch --no-merged --format '%(refname:short)'",
+    "git branch --points-at HEAD --color=never",
+    "git branch --list 'feature/*'",
+    "git branch --list -- --delete=not-an-option",
+  ])("accepts read-only branch queries: %s", (command) => {
+    expect(tier(command)).toBe("safe");
+    expect(isCommandEligibleForReadOnlyExecution(command, ctx)).toEqual({
+      eligible: true,
+    });
+  });
+
+  it.each([
+    "git branch new-branch",
+    "git branch --contains HEAD new-branch",
+    "git branch --list -D main",
+    "git branch --delete=main",
+    "git branch --move=main",
+    "git branch --copy=main",
+    "git branch -df main",
+    "git branch --set-upstream-to=origin/main",
+    "git branch --edit-description",
+    "git branch --format",
+    "git branch --unknown",
+  ])("rejects branch mutations and unrecognised forms: %s", (command) => {
+    expect(tier(command)).toBe("sensitive");
+    expect(isCommandEligibleForReadOnlyExecution(command, ctx).eligible).toBe(
+      false,
+    );
+  });
+
+  it.each([
     ["git diff", "git diff --no-ext-diff --no-textconv"],
     ["git diff --no-ext-diff", "--no-textconv"],
     ["git --no-ext-diff --no-textconv diff", "after the subcommand"],

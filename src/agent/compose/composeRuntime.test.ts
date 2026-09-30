@@ -23,6 +23,7 @@ import {
   type ComposeExecutionScope,
 } from "./composeScope.js";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
+import { TOOL_REGISTRY } from "../../shared/toolRegistry.js";
 
 const wasmPath =
   require.resolve("@jitl/quickjs-wasmfile-release-asyncify/wasm");
@@ -349,6 +350,100 @@ describe("compose runtime", () => {
     expect(errorKind(cumulative)).toBe("serialization");
     expect(cumulative.error?.message).toContain("cumulative limit");
   });
+
+  it.each(["toolAllSettled", "toolAll"])(
+    "%s preserves path-approval failures without granting access",
+    async (operation) => {
+      const scope = fakeScope((_name, input) => {
+        if (input.path === "/outside/private.ts") {
+          throw new ComposeScopeError(
+            "authorization",
+            "Call read_file directly with this path to request approval",
+            "interaction_denied",
+          );
+        }
+        return success(input.path);
+      });
+      const result = await run(
+        `return ${operation}([
+        { name: "read_file", input: { path: "src/a.ts" } },
+        { name: "read_file", input: { path: "/outside/private.ts" } },
+        { name: "read_file", input: { path: "src/b.ts" } },
+      ]);`,
+        scope,
+      );
+      if (operation === "toolAll") {
+        expect(errorKind(result)).toBe("policy");
+        expect(result.data).toMatchObject({ code: "interaction_denied" });
+      } else {
+        expect(result.isError).toBe(false);
+        expect(result.data).toEqual([
+          { status: "fulfilled", value: "src/a.ts" },
+          {
+            status: "rejected",
+            reason: {
+              code: "interaction_denied",
+              message: expect.stringContaining("Call read_file directly"),
+            },
+          },
+          { status: "fulfilled", value: "src/b.ts" },
+        ]);
+        expect(result.uiMeta.composeTrace).toMatchObject({
+          succeededChildren: 2,
+          failedChildren: 1,
+          cancelledChildren: 0,
+        });
+      }
+    },
+  );
+
+  it("runs the provider-facing example with newline-separated relative listing entries", async () => {
+    const example = TOOL_REGISTRY.compose.description.split("Example: ")[1]!;
+    const execute = vi.fn((name: string, input: Record<string, unknown>) =>
+      success(
+        name === "list_files"
+          ? { entries: "a.ts\nnested/b.ts", count: 2 }
+          : { total_lines: input.path === "src/a.ts" ? 10 : 20 },
+      ),
+    );
+    const result = await run(example, fakeScope(execute));
+    expect(result.isError).toBe(false);
+    expect(result.data).toEqual([
+      { path: "src/a.ts", lines: 10, errors: 0 },
+      { path: "src/nested/b.ts", lines: 20, errors: 0 },
+    ]);
+  });
+
+  it.each([
+    "const value = 1;\nreturn value);",
+    "const value = 1;\nreturn { value;",
+  ])("reports bounded script-relative syntax locations: %s", async (script) => {
+    const execute = vi.fn(() => success(null));
+    const result = await run(script, fakeScope(execute));
+    expect(errorKind(result)).toBe("script_error");
+    expect(result.error?.message).toMatch(
+      /SyntaxError: .+ at line 2, column \d+/,
+    );
+    expect(result.data).toMatchObject({
+      stack: expect.stringMatching(/:2:\d+$/),
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['return "é");', 1, 11],
+    ['return "😀");', 1, 12],
+    ["if (true) {\n  return 1;", 2, 12],
+  ])(
+    "keeps Unicode and wrapper-error columns script-relative: %s",
+    async (script, line, column) => {
+      const result = await run(script);
+      expect(result.data).toMatchObject({
+        code: "script_error",
+        stack: `compose-script.js:${line}:${column}`,
+      });
+    },
+  );
 
   it("keeps toolAllSettled authorization failures fatal before dispatch", async () => {
     const execute = vi.fn(() => success(null));

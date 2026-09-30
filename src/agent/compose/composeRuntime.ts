@@ -295,7 +295,14 @@ function classifyError(error: unknown): ComposeRuntimeError {
           : scopedCode === "tool_not_in_request"
             ? "request_policy"
             : "tool_policy";
-    return new ComposeRuntimeError("policy", message, policyCode, stack);
+    return new ComposeRuntimeError(
+      "policy",
+      message,
+      scopedKind === "authorization" && scopedCode === "interaction_denied"
+        ? "interaction_denied"
+        : policyCode,
+      stack,
+    );
   }
   if (scopedKind === "memory_limit") {
     return new ComposeRuntimeError(
@@ -718,7 +725,9 @@ function rejectedEnvelope(error: ComposeRuntimeError): JsonValue {
 function isSettledChildError(error: ComposeRuntimeError): boolean {
   return (
     (error.kind === "child_failed" && error.code === "child_handler_failed") ||
-    (error.kind === "serialization" && error.code === "child_result_too_large")
+    (error.kind === "serialization" &&
+      error.code === "child_result_too_large") ||
+    (error.kind === "policy" && error.code === "interaction_denied")
   );
 }
 
@@ -995,16 +1004,37 @@ async function validateScriptPolicy(
   const parser = new Parser();
   try {
     parser.setLanguage(await language);
-    const tree = parser.parse(`(function () {\n${script}\n})();`);
+    const wrappedScript = `(function () {\n${script}\n})();`;
+    const tree = parser.parse(wrappedScript);
     if (!tree) throw new Error("Compose syntax parser returned no tree");
     try {
       // Fail closed if the policy parser cannot understand the entire script.
       if (tree.rootNode.hasError) {
+        let invalid = tree.rootNode;
+        while (!invalid.isError && !invalid.isMissing) {
+          const child = invalid.children.find(
+            (node) => node.hasError || node.isError || node.isMissing,
+          );
+          if (!child) break;
+          invalid = child;
+        }
+        const scriptLines = script.split("\n");
+        const row = invalid.startPosition.row;
+        const inScript = row >= 1 && row <= scriptLines.length;
+        // Wrapper errors point to the script's end, never a wrapper column.
+        const line = inScript ? row : scriptLines.length;
+        const column = inScript
+          ? invalid.startIndex -
+            wrappedScript.lastIndexOf("\n", invalid.startIndex - 1)
+          : scriptLines[scriptLines.length - 1]!.length + 1;
+        const reason = invalid.isMissing
+          ? `missing ${invalid.type}`
+          : "unexpected or incomplete syntax";
         throw new ComposeRuntimeError(
           "script_error",
-          "SyntaxError: Compose script could not be parsed",
+          `SyntaxError: ${reason} at line ${line}, column ${column}`,
           "script_error",
-          COMPOSE_FILENAME,
+          `${COMPOSE_FILENAME}:${line}:${column}`,
         );
       }
       const pending = [tree.rootNode];
