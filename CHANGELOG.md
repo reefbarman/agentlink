@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed successful skill loads splitting Tools summaries in VS Code and browser chat. They now join adjacent calls, contribute a loaded-skills count, and retain their ordered details when expanded. Running and unsuccessful loads remain visible separately.
+
 - Fixed switching conversation tabs in VS Code carrying over the previous transcript's scroll state and cancelling the jump to the latest message. Each selected tab now starts at the bottom; scrolling up within the current tab still pauses automatic following.
 
 - Fixed read-only Git branch queries rejecting reference/filter operands while keeping mutations and unknown options blocked. Compose all-settled batches now retain successful reads when another path needs interactive approval and explain how to request approval directly. Compose listing examples handle newline-separated relative paths, and syntax failures include bounded script-relative line and column locations.

@@ -186,7 +186,8 @@ export function MessageBubble({
     () =>
       new Set(
         message.blocks.flatMap((block) =>
-          block.type === "tool_call" && block.complete
+          (block.type === "tool_call" || block.type === "skill_load") &&
+          block.complete
             ? [getToolSettleKey(message.id, block.id)]
             : [],
         ),
@@ -288,7 +289,9 @@ export function MessageBubble({
 
     const visibleToolIds = new Set(
       blocks
-        .filter((block) => block.type === "tool_call")
+        .filter(
+          (block) => block.type === "tool_call" || block.type === "skill_load",
+        )
         .map((block) => getToolSettleKey(message.id, block.id)),
     );
 
@@ -312,7 +315,7 @@ export function MessageBubble({
 
     for (const block of blocks) {
       if (
-        block.type !== "tool_call" ||
+        (block.type !== "tool_call" && block.type !== "skill_load") ||
         !block.complete ||
         settledToolIds.has(getToolSettleKey(message.id, block.id)) ||
         toolSettleTimers.current.has(getToolSettleKey(message.id, block.id))

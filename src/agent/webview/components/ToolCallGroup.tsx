@@ -2,7 +2,7 @@ import { useMemo, useState } from "preact/hooks";
 
 import type { ContentBlock } from "@agentlink/protocol/chat-transcript";
 import { normalizeProjectedToolName } from "../../../shared/chatProjection";
-import { getSkillLoadVisualState } from "./SkillLoadBlock";
+import { getSkillLoadVisualState, SkillLoadBlock } from "./SkillLoadBlock";
 import {
   ToolCallBlock,
   countResultDocuments,
@@ -15,7 +15,8 @@ import {
 } from "./ToolCallBlock";
 import type { OpenImageInEditor } from "./ImagePreview";
 
-type ToolBlock = ToolCallData;
+type SkillLoadData = Extract<ContentBlock, { type: "skill_load" }>;
+type ToolBlock = ToolCallData | SkillLoadData;
 
 export type BlockSegment =
   | { kind: "tool_group"; blocks: ToolBlock[] }
@@ -53,9 +54,10 @@ export function groupActivitySegments(
         getToolGroupStatus(segment.blocks).statusClass === "tool-success" &&
         !segment.blocks.some(
           (block) =>
-            block.resultImages?.length ||
-            block.resultDocuments?.length ||
-            block.mcpApprovalPromotion,
+            block.type === "tool_call" &&
+            (block.resultImages?.length ||
+              block.resultDocuments?.length ||
+              block.mcpApprovalPromotion),
         )) ||
       (segment.kind === "single" &&
         ((segment.block.type === "thinking" && segment.block.complete) ||
@@ -95,6 +97,7 @@ type ToolCategory =
   | "symbols"
   | "commands"
   | "edits"
+  | "skills"
   | "other";
 
 const CATEGORY_BY_TOOL = new Map<string, ToolCategory>([
@@ -124,6 +127,7 @@ const CATEGORY_BY_TOOL = new Map<string, ToolCategory>([
   ["apply_diff", "edits"],
   ["find_and_replace", "edits"],
   ["rename_symbol", "edits"],
+  ["load_skill", "skills"],
 ]);
 
 const EXPLORATION_CATEGORIES: ToolCategory[] = [
@@ -172,6 +176,9 @@ export function segmentBlocks(
 }
 
 function isGroupableToolCall(block: ContentBlock): block is ToolBlock {
+  if (block.type === "skill_load") {
+    return getSkillLoadVisualState(block) === "tool-success";
+  }
   if (block.type !== "tool_call" || !block.complete) return false;
   const { statusClass } = getToolCallVisualState(block);
   // Soft warnings (non-zero exits, partial edits) are routine and stay grouped;
@@ -190,6 +197,7 @@ export function getToolGroupLabel(blocks: ToolBlock[]): string {
   const actions = [
     formatCategoryCount("edits", counts.edits),
     formatCategoryCount("commands", counts.commands),
+    formatCategoryCount("skills", counts.skills),
     formatCategoryCount("other", counts.other),
   ].filter(isPresent);
 
@@ -214,6 +222,12 @@ export function getToolGroupStatus(blocks: ToolBlock[]): {
   let nonZeroExitCount = 0;
 
   for (const block of blocks) {
+    if (block.type === "skill_load") {
+      const statusClass = getSkillLoadVisualState(block);
+      if (statusClass === "tool-error") errorCount += 1;
+      if (statusClass === "tool-warning") warningCount += 1;
+      continue;
+    }
     const state = getToolCallVisualState(block);
     if (state.statusClass === "tool-error") errorCount += 1;
     if (state.statusClass === "tool-warning") {
@@ -277,18 +291,22 @@ export function ToolCallGroup({
   const status = useMemo(() => getToolGroupStatus(blocks), [blocks]);
   const statusBadge = formatGroupStatusBadge(status);
   const imageCount = blocks.reduce(
-    (sum, block) => sum + countResultImages(block),
+    (sum, block) =>
+      sum + (block.type === "tool_call" ? countResultImages(block) : 0),
     0,
   );
   const documentCount = blocks.reduce(
-    (sum, block) => sum + countResultDocuments(block),
+    (sum, block) =>
+      sum + (block.type === "tool_call" ? countResultDocuments(block) : 0),
     0,
   );
   const mediaCount = imageCount + documentCount;
   const mediaLabel =
     mediaCount > 0 ? formatResultMediaLabel(imageCount, documentCount) : null;
   const approvalOfferCount = onPromoteMcpToolApproval
-    ? blocks.filter((block) => block.mcpApprovalPromotion).length
+    ? blocks.filter(
+        (block) => block.type === "tool_call" && block.mcpApprovalPromotion,
+      ).length
     : 0;
   const approvalOfferLabel =
     approvalOfferCount > 0
@@ -349,19 +367,23 @@ export function ToolCallGroup({
       </button>
       {expanded && (
         <div class="tool-group-children">
-          {blocks.map((block) => (
-            <ToolCallBlock
-              key={block.id}
-              toolCall={block}
-              onOpenFile={onOpenFile}
-              onOpenImageInEditor={onOpenImageInEditor}
-              onRevealToolCallTerminal={onRevealToolCallTerminal}
-              onContinueToolCallInBackground={onContinueToolCallInBackground}
-              onCompleteToolCall={onCompleteToolCall}
-              onCancelToolCall={onCancelToolCall}
-              onPromoteMcpToolApproval={onPromoteMcpToolApproval}
-            />
-          ))}
+          {blocks.map((block) =>
+            block.type === "skill_load" ? (
+              <SkillLoadBlock key={block.id} block={block} />
+            ) : (
+              <ToolCallBlock
+                key={block.id}
+                toolCall={block}
+                onOpenFile={onOpenFile}
+                onOpenImageInEditor={onOpenImageInEditor}
+                onRevealToolCallTerminal={onRevealToolCallTerminal}
+                onContinueToolCallInBackground={onContinueToolCallInBackground}
+                onCompleteToolCall={onCompleteToolCall}
+                onCancelToolCall={onCancelToolCall}
+                onPromoteMcpToolApproval={onPromoteMcpToolApproval}
+              />
+            ),
+          )}
         </div>
       )}
     </div>
@@ -371,7 +393,9 @@ export function ToolCallGroup({
 function countCategories(blocks: ToolBlock[]): Record<ToolCategory, number> {
   return blocks.reduce<Record<ToolCategory, number>>(
     (counts, block) => {
-      counts[getToolCategory(block.name)] += 1;
+      counts[
+        block.type === "skill_load" ? "skills" : getToolCategory(block.name)
+      ] += 1;
       return counts;
     },
     {
@@ -381,6 +405,7 @@ function countCategories(blocks: ToolBlock[]): Record<ToolCategory, number> {
       symbols: 0,
       commands: 0,
       edits: 0,
+      skills: 0,
       other: 0,
     },
   );
@@ -409,6 +434,8 @@ function formatCategoryCount(
       return `ran ${count} command${count === 1 ? "" : "s"}`;
     case "edits":
       return `edited ${count} file${count === 1 ? "" : "s"}`;
+    case "skills":
+      return `loaded ${count} skill${count === 1 ? "" : "s"}`;
     case "other":
       return `${count} other call${count === 1 ? "" : "s"}`;
   }

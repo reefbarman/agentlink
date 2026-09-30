@@ -177,6 +177,81 @@ describe("MessageBubble thinking rendering", () => {
 });
 
 describe("MessageBubble Activity grouping", () => {
+  it("settles a newly completed skill load into neighbouring tools during streaming", () => {
+    vi.useFakeTimers();
+    const message: ChatMessage = {
+      id: "assistant-skill-settle",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        {
+          type: "tool_call",
+          id: "read",
+          name: "read_file",
+          inputJson: "{}",
+          result: "{}",
+          complete: true,
+        },
+        {
+          type: "skill_load",
+          id: "skill",
+          skillName: "conventional-commits",
+          inputJson: "{}",
+          result: "",
+          complete: false,
+        },
+        {
+          type: "tool_call",
+          id: "run",
+          name: "execute_command",
+          inputJson: "{}",
+          result: "{}",
+          complete: true,
+        },
+      ],
+    };
+    const { container, rerender } = render(
+      <MessageBubble message={message} streaming={true} />,
+    );
+    expect(container.querySelectorAll(".tool-group-block")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: /load_skill/i })).toBeTruthy();
+    rerender(
+      <MessageBubble
+        message={{
+          ...message,
+          blocks: message.blocks.map((block) =>
+            block.type === "skill_load"
+              ? {
+                  ...block,
+                  complete: true,
+                  result: JSON.stringify({ status: "success" }),
+                }
+              : block,
+          ),
+        }}
+        streaming={true}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /load_skill/i })).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(TOOL_GROUP_SETTLE_MS_FOR_TEST);
+    });
+    expect(container.querySelectorAll(".tool-group-block")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /load_skill/i })).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /tools explored 1 file · ran 1 command · loaded 1 skill/i,
+      }),
+    );
+    expect(
+      Array.from(
+        container.querySelectorAll(".tool-group-children .tool-call-name"),
+        (node) => node.textContent,
+      ),
+    ).toEqual(["read_file", "load_skill", "execute_command"]);
+  });
+
   it("collapses completed skill loads with adjacent thinking and tools", () => {
     const message: ChatMessage = {
       id: "assistant-skill-activity",
@@ -215,18 +290,20 @@ describe("MessageBubble Activity grouping", () => {
       <MessageBubble message={message} streaming={false} />,
     );
     const activity = screen.getByRole("button", {
-      name: /activity 3 thinking steps · 3 tool calls · ran 3 commands/i,
+      name: /activity 3 thinking steps · 4 tool calls · ran 3 commands · loaded 1 skill/i,
     });
     expect(
       container.querySelector(".assistant-blocks > .tool-call-block"),
     ).toBeNull();
 
     fireEvent.click(activity);
-    expect(
-      container.querySelector(
-        ".activity-group-children .tool-call-block .tool-call-name",
-      )?.textContent,
-    ).toBe("load_skill");
+    expect(screen.queryByRole("button", { name: /load_skill/i })).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /tools ran 1 command · loaded 1 skill/i,
+      }),
+    );
+    expect(screen.getByRole("button", { name: /load_skill/i })).toBeTruthy();
   });
 
   it("collapses three completed cycles during streaming and preserves nested disclosures", () => {

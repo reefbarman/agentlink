@@ -34,6 +34,23 @@ function tool(
   };
 }
 
+function skill(
+  overrides: Partial<Extract<ContentBlock, { type: "skill_load" }>> = {},
+): Extract<ContentBlock, { type: "skill_load" }> {
+  return {
+    type: "skill_load",
+    id: "skill",
+    skillName: "conventional-commits",
+    path: "skills/conventional-commits/SKILL.md",
+    content: "Use conventional commit messages.",
+    inputJson: "{}",
+    result: JSON.stringify({ status: "success" }),
+    complete: true,
+    durationMs: 3,
+    ...overrides,
+  };
+}
+
 function text(value = "Done"): ContentBlock {
   return { type: "text", text: value };
 }
@@ -49,6 +66,38 @@ describe("segmentBlocks", () => {
       { kind: "single", block: text(), index: 2 },
     ]);
   });
+
+  it("merges successful skill loads with adjacent tool calls", () => {
+    const first = tool("first", "read_file");
+    const loaded = skill();
+    const last = tool("last", "execute_command");
+    expect(segmentBlocks([first, loaded, last])).toEqual([
+      { kind: "tool_group", blocks: [first, loaded, last] },
+    ]);
+    expect(segmentBlocks([loaded])).toEqual([
+      { kind: "tool_group", blocks: [loaded] },
+    ]);
+    expect(
+      segmentBlocks([loaded], { shouldGroupToolCall: () => false }),
+    ).toEqual([{ kind: "single", block: loaded, index: 0 }]);
+  });
+
+  it.each(["running", "failed", "cancelled", "rejected_by_user", "timed_out"])(
+    "keeps %s skill loads visible and splits tool groups",
+    (status) => {
+      const first = tool("first", "read_file");
+      const loaded = skill({
+        complete: status !== "running",
+        result: JSON.stringify({ status }),
+      });
+      const last = tool("last", "execute_command");
+      expect(segmentBlocks([first, loaded, last])).toEqual([
+        { kind: "tool_group", blocks: [first] },
+        { kind: "single", block: loaded, index: 1 },
+        { kind: "tool_group", blocks: [last] },
+      ]);
+    },
+  );
 
   it("groups single completed successful tool calls", () => {
     const first = tool("tool-1", "read_file");
@@ -307,6 +356,14 @@ describe("groupActivitySegments", () => {
 });
 
 describe("getToolGroupLabel", () => {
+  it("counts skill loads separately from file reads and other calls", () => {
+    expect(getToolGroupLabel([tool("read", "read_file"), skill()])).toBe(
+      "Explored 1 file · Loaded 1 skill",
+    );
+    expect(getToolGroupLabel([skill(), skill({ id: "second" })])).toBe(
+      "Loaded 2 skills",
+    );
+  });
   it("summarizes exploration-only groups", () => {
     expect(
       getToolGroupLabel([
@@ -375,6 +432,37 @@ describe("getToolGroupStatus", () => {
 });
 
 describe("ToolCallGroup", () => {
+  it("preserves skill details and order inside mixed tool groups", () => {
+    const { container } = render(
+      <ToolCallGroup
+        blocks={[
+          tool("read", "read_file"),
+          skill(),
+          tool("run", "execute_command"),
+        ]}
+      />,
+    );
+    const group = screen.getByRole("button", {
+      name: /tools explored 1 file · ran 1 command · loaded 1 skill/i,
+    });
+    expect(screen.queryByRole("button", { name: /load_skill/i })).toBeNull();
+    expect(
+      container.querySelector(".tool-group-header .tool-call-duration")
+        ?.textContent,
+    ).toBe("23ms");
+    fireEvent.click(group);
+    expect(
+      Array.from(
+        container.querySelectorAll(".tool-group-children .tool-call-name"),
+        (node) => node.textContent,
+      ),
+    ).toEqual(["read_file", "load_skill", "execute_command"]);
+    fireEvent.click(screen.getByRole("button", { name: /load_skill/i }));
+    expect(
+      screen.getByText("skills/conventional-commits/SKILL.md"),
+    ).toBeTruthy();
+    expect(screen.getByText("Use conventional commit messages.")).toBeTruthy();
+  });
   it("collapses completed tool calls behind an expandable summary", () => {
     render(
       <ToolCallGroup
