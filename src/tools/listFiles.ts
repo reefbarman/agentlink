@@ -225,6 +225,9 @@ async function listRecursive(
   if (includeIgnored) {
     args.push("--no-ignore");
   }
+  if (path.resolve(dirPath).split(path.sep).includes("node_modules")) {
+    args.push("--no-ignore-parent");
+  }
 
   if (depth !== undefined && depth > 0) {
     args.push("--max-depth", String(depth));
@@ -235,17 +238,17 @@ async function listRecursive(
     args.push("-g", pattern);
   }
 
-  args.push(dirPath);
+  args.push(".");
 
   const {
     files,
     warnings,
     truncated: ripgrepTruncated,
-  } = await execRipgrepFiles(rgPath, args, MAX_ENTRIES + 1);
+  } = await execRipgrepFiles(rgPath, args, MAX_ENTRIES + 1, { cwd: dirPath });
   const truncated = ripgrepTruncated || files.length > MAX_ENTRIES;
   const entries = files
     .slice(0, MAX_ENTRIES)
-    .map((f) => path.relative(dirPath, f));
+    .map((f) => path.relative(dirPath, path.resolve(dirPath, f)));
   entries.sort();
 
   const result = {

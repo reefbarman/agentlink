@@ -18,6 +18,8 @@ For external paths, use `read_file` and `list_files` without `query`, or regex `
 
 `get_context` bounds its symbol outline independently of the content slice: at most 60 entries and 6,000 UTF-8 bytes of serialized symbol JSON. Symbols starting within the requested lines are prioritised, then remaining space provides a whole-file overview. `symbols_truncated` and `symbols_omitted` indicate entries omitted from the supplied outline; use `get_symbols` for a fuller language-service view.
 
+Regex `search_files`, indexed semantic excerpts, and keyword fallback apply the same narrow structured-settings redaction as file reads, including context and multiline values; malformed or unreadable eligible configuration is withheld. This does not detect arbitrary secrets in source files. `codebase_search` and semantic search excerpts are bounded to 4,000 source characters per result plus a truncation marker, with truncation counts. Recursive `list_files` honours an explicit root inside `node_modules` while still excluding nested dependency and Git metadata directories.
+
 Exact parameters: [read and language tools](complete-reference.md#tools).
 
 ## Recover unsaved editor changes

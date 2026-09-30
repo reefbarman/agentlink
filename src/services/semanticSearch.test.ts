@@ -3,14 +3,15 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  MAX_SEARCH_EXCERPT_CHARS,
   rerankResults,
   rrfMerge,
   semanticFileList,
   semanticFileQuery,
   semanticSearch,
 } from "./semanticSearch.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createHash } from "crypto";
 
@@ -593,6 +594,132 @@ describe("semantic retrieval service", () => {
     ]);
     expect(request.filters.pathPrefix).toBeUndefined();
   });
+
+  it.each([
+    {
+      file: "settings.jsonc",
+      content:
+        '{\n"passwords": [\n"synthetic-semantic-secret"\n],\n"theme": "dark"\n}',
+      startLine: 3,
+      endLine: 5,
+    },
+    {
+      file: "mise.toml",
+      content:
+        'api_key = """synthetic-semantic-secret\nsecond-secret-line"""\ntheme = "dark"',
+      startLine: 1,
+      endLine: 3,
+    },
+    {
+      file: "settings.json",
+      content: '{"apiKey":"synthetic-semantic-secret"',
+      startLine: 1,
+      endLine: 1,
+    },
+  ])(
+    "redacts full $file before hydrating a partial excerpt",
+    async (testCase) => {
+      const hit = candidate({
+        file: testCase.file,
+        indexedContent: testCase.content,
+        startLine: testCase.startLine,
+        endLine: testCase.endLine,
+      });
+      readFileMock.mockResolvedValue(hit.liveContent);
+      retrievalQuery.mockResolvedValue(queryResult([hit]));
+      const result = await semanticSearch("/workspace", "theme", 5, undefined, {
+        retrievalStoreRoot,
+      });
+      expect(payload(result)).toMatchObject({ total_results: 1 });
+      expect(JSON.stringify(result)).not.toContain("synthetic-semantic-secret");
+      expect(JSON.stringify(result)).not.toContain("second-secret-line");
+      if (testCase.file === "settings.json") {
+        expect(JSON.stringify(result)).toContain("CONTENT WITHHELD");
+      } else {
+        expect(JSON.stringify(result)).toContain("theme");
+      }
+    },
+  );
+
+  it.each(["valid", "malformed", "unreadable"])(
+    "protects %s structured settings in keyword fallback",
+    async (state) => {
+      retrievalQuery.mockRejectedValue(new Error("fetch failed"));
+      getRipgrepBinPath.mockResolvedValue("rg");
+      const content = '{"theme":"dark","apiKey":"synthetic-fallback-secret"}';
+      if (state === "unreadable")
+        readFileMock.mockRejectedValue(new Error("missing"));
+      else
+        readFileMock.mockResolvedValue(
+          state === "malformed" ? content.slice(0, -1) : content,
+        );
+      execRipgrepSearch.mockResolvedValue(
+        [
+          {
+            type: "begin",
+            data: { path: { text: "/workspace/settings.json" } },
+          },
+          {
+            type: "match",
+            data: {
+              path: { text: "/workspace/settings.json" },
+              lines: { text: content + "\n" },
+              line_number: 1,
+            },
+          },
+          { type: "end", data: { path: { text: "/workspace/settings.json" } } },
+        ]
+          .map((event) => JSON.stringify(event))
+          .join("\n"),
+      );
+      const result = await semanticSearch("/workspace", "theme", 5, undefined, {
+        retrievalStoreRoot,
+      });
+      expect(payload(result)).toMatchObject({
+        semantic: false,
+        total_results: 1,
+      });
+      expect(JSON.stringify(result)).not.toContain("synthetic-fallback-secret");
+      expect(JSON.stringify(result)).toContain(
+        state === "valid" ? "[REDACTED]" : "CONTENT WITHHELD",
+      );
+    },
+  );
+
+  it.each(["lexical", "hybrid"])(
+    "bounds hydrated minified excerpts for %s retrieval",
+    async (mode) => {
+      const content = '{"sprites":"' + "x".repeat(411_499) + '"}';
+      const hit = candidate({
+        file: "Tools/openapi.json",
+        indexedContent: content,
+      });
+      const small = candidate({
+        file: "src/sprites.ts",
+        indexedContent: "export const sprites = [];",
+      });
+      retrievalQuery.mockResolvedValue(queryResult([hit, small], mode));
+      readFileMock.mockImplementation(async (filePath: string) =>
+        filePath.endsWith("openapi.json") ? content : small.liveContent,
+      );
+      const result = payload(
+        await semanticSearch("/workspace", "sprites", 6, undefined, {
+          retrievalStoreRoot,
+        }),
+      );
+      expect(result).toMatchObject({
+        total_results: 2,
+        truncated_results: 1,
+        excerpt_limit: MAX_SEARCH_EXCERPT_CHARS,
+      });
+      expect(String(result.results)).toContain("[truncated...]");
+      expect(String(result.results)).toContain("export const sprites = [];");
+      expect(String(result.results).length).toBeLessThan(
+        MAX_SEARCH_EXCERPT_CHARS + 300,
+      );
+      expect(JSON.stringify(result).length).toBeLessThan(5000);
+    },
+  );
 
   it("suppresses stale and deleted sources while hydrating current snippets", async () => {
     const current = candidate({

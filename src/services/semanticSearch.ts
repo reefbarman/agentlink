@@ -18,9 +18,14 @@ import {
   execRipgrepSearch,
   getRipgrepBinPath,
   parseRipgrepOutput,
+  truncateLine,
 } from "../util/ripgrep.js";
 import { requestEmbeddings } from "../indexer/embeddingClient.js";
 import { resolveContainedCodeIndexPath } from "../indexer/codeIndexPaths.js";
+import {
+  isStructuredConfigPath,
+  redactStructuredSecrets,
+} from "../shared/structuredSecretRedaction.js";
 import {
   getCodeSourceId,
   getCodeWorkspaceScopeId,
@@ -492,6 +497,8 @@ function isUnavailableRetrievalReason(
 
 // --- Result formatting ---
 
+export const MAX_SEARCH_EXCERPT_CHARS = 4000;
+
 interface FormattedResult {
   file: string;
   score: number;
@@ -528,7 +535,7 @@ function buildOutput(
   options: BuildOutputOptions = {},
 ): ToolResult {
   const sections = results.map((r) => {
-    return `## ${r.file} (score: ${r.score.toFixed(4)}, lines ${r.startLine}-${r.endLine})\n${r.codeChunk}`;
+    return `## ${r.file} (score: ${r.score.toFixed(4)}, lines ${r.startLine}-${r.endLine})\n${truncateLine(r.codeChunk, MAX_SEARCH_EXCERPT_CHARS)}`;
   });
 
   const output: Record<string, unknown> = {
@@ -536,6 +543,14 @@ function buildOutput(
     semantic: options.semantic ?? true,
     total_results: results.length,
     results: sections.join("\n\n"),
+    ...(results.some(
+      (result) => result.codeChunk.length > MAX_SEARCH_EXCERPT_CHARS,
+    ) && {
+      truncated_results: results.filter(
+        (result) => result.codeChunk.length > MAX_SEARCH_EXCERPT_CHARS,
+      ).length,
+      excerpt_limit: MAX_SEARCH_EXCERPT_CHARS,
+    }),
   };
 
   if (options.warning) {
@@ -645,7 +660,11 @@ async function readSemanticSourceState(
     }
     const revision = createHash("sha256").update(content).digest("hex");
     return revision === payload.sourceRevision
-      ? { status: "current", content }
+      ? {
+          status: "current",
+          content: redactStructuredSecrets(identity.absolutePath, content)
+            .content,
+        }
       : { status: "stale" };
   } catch (error) {
     return isMissingSourceError(error)
@@ -847,8 +866,8 @@ async function keywordFallbackSearch(
   const workspacePath = tryGetFirstWorkspaceRoot() ?? dirPath;
   const parsed = parseRipgrepOutput(output, dirPath);
 
-  return parsed.results
-    .map((fileResult) => {
+  const results = await Promise.all(
+    parsed.results.map(async (fileResult) => {
       const lines = fileResult.searchResults.flatMap((result) => result.lines);
       const matchLines = lines.filter((line) => line.isMatch);
       if (matchLines.length === 0) {
@@ -880,9 +899,30 @@ async function keywordFallbackSearch(
       const snippetLines = lines.slice(0, 8);
       const startLine = Math.min(...snippetLines.map((line) => line.line));
       const endLine = Math.max(...snippetLines.map((line) => line.line));
-      const codeChunk = snippetLines
+      let codeChunk = snippetLines
         .map((line) => `${line.line} | ${line.text.trimEnd()}`)
         .join("\n");
+      const absoluteFile = path.resolve(workspacePath, fileResult.file);
+      if (isStructuredConfigPath(absoluteFile)) {
+        try {
+          const redacted = redactStructuredSecrets(
+            absoluteFile,
+            await readFile(absoluteFile, "utf8"),
+          );
+          const visibleLines = redacted.content.split("\n");
+          codeChunk = redacted.status
+            ? "[CONTENT WITHHELD: invalid structured configuration]"
+            : snippetLines
+                .map(
+                  (line) =>
+                    `${line.line} | ${truncateLine(visibleLines[line.line - 1] ?? "").trimEnd()}`,
+                )
+                .join("\n");
+        } catch {
+          codeChunk =
+            "[CONTENT WITHHELD: structured configuration could not be read safely]";
+        }
+      }
 
       return {
         file: normalizedFile,
@@ -891,7 +931,9 @@ async function keywordFallbackSearch(
         endLine,
         codeChunk,
       } satisfies FormattedResult;
-    })
+    }),
+  );
+  return results
     .filter((result): result is FormattedResult => result != null)
     .sort((a, b) => b.score - a.score || a.file.localeCompare(b.file))
     .slice(0, limit);

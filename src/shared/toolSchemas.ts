@@ -383,7 +383,7 @@ export const listFilesSchema = {
     .boolean()
     .optional()
     .describe(
-      "Include files/directories ignored by .gitignore/.ignore when using recursive or pattern listing. Still excludes node_modules and .git. Default: false. Pair with pattern when possible to avoid noisy/truncated results.",
+      "Include files/directories ignored by .gitignore/.ignore when using recursive or pattern listing. Still excludes nested node_modules and .git, but an explicit root inside node_modules is honoured. Default: false. Pair with pattern when possible to avoid noisy/truncated results.",
     ),
   query: z
     .string()

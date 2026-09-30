@@ -216,9 +216,10 @@ export async function execRipgrepFiles(
   rgPath: string,
   args: string[],
   limit: number,
+  options: { cwd?: string } = {},
 ): Promise<RipgrepFilesResult> {
   return new Promise((resolve, reject) => {
-    const rgProcess = childProcess.spawn(rgPath, args);
+    const rgProcess = childProcess.spawn(rgPath, args, options);
     const rl = readline.createInterface({
       input: rgProcess.stdout,
       crlfDelay: Infinity,

@@ -11,12 +11,17 @@ import {
   getRipgrepBinPath,
   execRipgrepSearch,
   parseRipgrepOutput,
+  truncateLine,
 } from "../util/ripgrep.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { isAgentInstructionReadPath } from "../approvals/protectedPaths.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
+import {
+  isStructuredConfigPath,
+  redactStructuredSecrets,
+} from "../shared/structuredSecretRedaction.js";
 
 const DEFAULT_MAX_RESULTS = 300;
 
@@ -415,11 +420,35 @@ export async function handleSearchFiles(
     const formatted: string[] = [];
     let matchCount = 0;
     let skipped = 0;
+    let redactionCount = 0;
+    let withheldFiles = 0;
 
     for (const file of fileResults) {
       if (matchCount >= maxResults) break;
 
       const relPath = formatResultPath(file.file, searchDir);
+      const absoluteFile = path.resolve(searchDir, file.file);
+      let visibleLines: string[] | undefined;
+      let withheldMessage: string | undefined;
+      if (isStructuredConfigPath(absoluteFile)) {
+        try {
+          const redacted = redactStructuredSecrets(
+            absoluteFile,
+            await fs.readFile(absoluteFile, "utf8"),
+          );
+          redactionCount += redacted.redactionCount;
+          if (redacted.status) {
+            withheldMessage =
+              "[CONTENT WITHHELD: invalid structured configuration]";
+          } else {
+            visibleLines = redacted.content.split("\n");
+          }
+        } catch {
+          withheldMessage =
+            "[CONTENT WITHHELD: structured configuration could not be read safely]";
+        }
+        if (withheldMessage) withheldFiles += 1;
+      }
       const fileLines: string[] = [];
       let fileMatchCount = 0;
 
@@ -436,7 +465,21 @@ export async function handleSearchFiles(
 
         for (const line of result.lines) {
           const prefix = line.isMatch ? ">" : " ";
-          fileLines.push(`${prefix} ${line.line} | ${line.text.trimEnd()}`);
+          const visibleText =
+            withheldMessage ??
+            (visibleLines
+              ? visibleLines
+                  .slice(
+                    line.line - 1,
+                    line.line -
+                      1 +
+                      Math.max(1, line.text.trimEnd().split("\n").length),
+                  )
+                  .join("\n")
+              : line.text);
+          fileLines.push(
+            `${prefix} ${line.line} | ${truncateLine(visibleText).trimEnd()}`,
+          );
         }
         fileLines.push("---");
 
@@ -464,6 +507,13 @@ export async function handleSearchFiles(
       truncated: totalMatches > maxResults + offset,
       ...(offset > 0 && { offset }),
       results: formatted.join("\n\n"),
+      ...((redactionCount > 0 || withheldFiles > 0) && {
+        redaction: {
+          type: "structured_secret_values",
+          count: redactionCount,
+          withheld_files: withheldFiles,
+        },
+      }),
       ...(warning && { warning }),
     };
 

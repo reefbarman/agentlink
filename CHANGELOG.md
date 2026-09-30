@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed read-tool safety and accuracy: regex and semantic search (including keyword fallback) redact eligible structured-settings secrets before excerpting, withholding malformed or unreadable configuration; semantic search bounds each excerpt to 4,000 source characters plus a truncation marker; and recursive listings honour explicit roots inside `node_modules` while keeping nested dependencies and Git metadata excluded.
+
 - Fixed successful skill loads splitting Tools summaries in VS Code and browser chat. They now join adjacent calls, contribute a loaded-skills count, and retain their ordered details when expanded. Running and unsuccessful loads remain visible separately.
 
 - Fixed switching conversation tabs in VS Code carrying over the previous transcript's scroll state and cancelling the jump to the latest message. Each selected tab now starts at the bottom; scrolling up within the current tab still pauses automatic following.

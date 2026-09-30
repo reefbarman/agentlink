@@ -83,12 +83,12 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   list_files: {
     label: "Directory listing",
     description:
-      "List files and directories at a given path. Directories have a trailing '/' suffix. Use 'pattern' to find files matching a glob (e.g. '*.test.ts'). Set include_ignored=true with recursive/pattern listing to include files hidden by ignore rules; pair it with pattern when possible to avoid noisy/truncated results. Supports optional 'query' param to find files by meaning using the codebase index, returning files ranked by semantic relevance. The query option only works within the current workspace folders; omit query for external directories.",
+      "List files and directories at a given path. Directories have a trailing '/' suffix. Use 'pattern' to find files matching a glob (e.g. '*.test.ts'). Set include_ignored=true with recursive/pattern listing to include files hidden by ignore rules; pair it with pattern to avoid noisy/truncated results. Nested node_modules and .git remain excluded, but an explicit root inside node_modules is honoured. Supports optional 'query' for indexed semantic ranking within the current workspace folders only; omit query for external directories.",
   },
   search_files: {
     label: "Regex & semantic search",
     description:
-      "Search file contents using regex, or perform semantic codebase search. Default: fast ripgrep regex search with context lines. The semantic=true option only works within the current workspace folders; use regex search (semantic=false) for external paths. When semantic=true, uses vector similarity search against the codebase index \u2014 'regex' is interpreted as a natural language query in this mode. When path already names a file, a redundant file_pattern is ignored and returned as a warning instead of failing the search.",
+      "Search file contents using regex, or perform semantic codebase search. Default: fast ripgrep regex search with context lines. High-confidence secret values in eligible structured settings/config matches and context are redacted; malformed or unreadable eligible content is withheld. semantic=true treats 'regex' as a natural-language indexed query within the current workspace folders only, with excerpts capped at 4,000 characters. Use regex search (semantic=false) for external paths. When path names a file, redundant file_pattern is ignored with a warning.",
   },
   search_session_history: {
     label: "Search session history",
@@ -259,7 +259,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   codebase_search: {
     label: "Semantic code search",
     description:
-      'Search the codebase by meaning, not exact text. Uses the embedded local retrieval index with lexical ranking and optional vector/hybrid ranking. Best for exploratory questions like "how does authentication work" or "where are database connections configured". Only works on files/folders within the current workspace folders, not external repositories or other windows. For external paths, use read_file/list_files without query or regex search_files (semantic=false), subject to path permissions. Falls back gracefully with a helpful error if the index is not available.',
+      "Search code by meaning using the local index with lexical or vector/hybrid ranking. Eligible structured-settings secrets are redacted before excerpting, including keyword fallback; invalid content is withheld. Excerpts are capped at 4,000 source characters plus a truncation marker, with counts. Only works within the current workspace folders, not external repositories or other windows. For external paths, use read_file/list_files without query or regex search_files (semantic=false), subject to path permissions.",
   },
 
   // --- Agent coordination ---

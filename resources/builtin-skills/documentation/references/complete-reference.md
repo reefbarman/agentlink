@@ -938,16 +938,16 @@ Returns the rule file content with frontmatter stripped, plus metadata identifyi
 
 ### list_files
 
-List files and directories. Directories have a trailing `/` suffix.
+List files and directories. Directories have a trailing `/` suffix. An explicit listing root inside `node_modules` is honoured, while nested `node_modules` and `.git` directories remain excluded.
 
-| Parameter         | Type     | Description                                                                                                                                                                                   |
-| ----------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `path`            | string   | Directory path                                                                                                                                                                                |
-| `recursive`       | boolean? | List recursively (default: false)                                                                                                                                                             |
-| `depth`           | number?  | Max directory depth for recursive listing                                                                                                                                                     |
-| `pattern`         | string?  | Glob pattern to filter files (e.g. `*.ts`, `*.test.*`). Implies recursive search.                                                                                                             |
-| `include_ignored` | boolean? | Include ignored files/directories in recursive/pattern listing. Still excludes `node_modules` and `.git`. Default: false. Pair with `pattern` when possible to avoid noisy/truncated results. |
-| `query`           | string?  | Semantic search query to find files by meaning (e.g. `"authentication logic"`). Returns files ranked by relevance. Other params ignored when set. Requires codebase index.                    |
+| Parameter         | Type     | Description                                                                                                                                                                                                                                             |
+| ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`            | string   | Directory path                                                                                                                                                                                                                                          |
+| `recursive`       | boolean? | List recursively (default: false)                                                                                                                                                                                                                       |
+| `depth`           | number?  | Max directory depth for recursive listing                                                                                                                                                                                                               |
+| `pattern`         | string?  | Glob pattern to filter files (e.g. `*.ts`, `*.test.*`). Implies recursive search.                                                                                                                                                                       |
+| `include_ignored` | boolean? | Include ignored files/directories in recursive/pattern listing. Still excludes nested `node_modules` and `.git`. Explicit roots inside `node_modules` are honoured. Default: false. Pair with `pattern` when possible to avoid noisy/truncated results. |
+| `query`           | string?  | Semantic search query to find files by meaning (e.g. `"authentication logic"`). Returns files ranked by relevance. Other params ignored when set. Requires codebase index.                                                                              |
 
 Recursive listing uses ripgrep (`--files` mode) for speed and automatic `.gitignore` support by default. AgentLink supports VS Code's legacy and platform-specific `@vscode/ripgrep-universal` package layouts, then falls back to a verified `rg` on the extension host's `PATH`. Use `include_ignored: true` when expected files may live under ignored directories; pair it with `pattern` when possible (for example, `pattern: "*.pdf"`) to avoid noisy/truncated results. If ripgrep encounters unreadable or broken symlink targets after finding usable files, `list_files` returns the partial listing with bounded warnings instead of replacing it with an empty failure.
 
@@ -956,6 +956,8 @@ Recursive listing uses ripgrep (`--files` mode) for speed and automatic `.gitign
 ### search_files
 
 Search file contents using regex, or perform semantic codebase search when `semantic: true`.
+
+Regex content results redact high-confidence secret values in eligible JSON/JSONC and TOML settings/configuration, including context lines and multiline values. Malformed or unreadable eligible files have their content withheld rather than returning raw matches. `redaction` reports the redacted-value count and `withheld_files`; filenames and match counts remain available. Emitted content lines are bounded to 500 source characters plus a truncation marker. This is narrow accidental-disclosure protection, not general secret detection in arbitrary source files.
 
 | Parameter          | Type     | Description                                                                                                                  |
 | ------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -1940,6 +1942,10 @@ Search the codebase by meaning, not exact text.
 | `exclude_globs` | string[]? | Glob patterns to suppress from returned semantic results without rebuilding the index (e.g. `**/dist/**`) |
 
 AgentLink automatically suppresses common `.agentlink` runtime artifacts from semantic results. Use `exclude_globs` when you need to hide additional noisy indexed paths for a specific query.
+
+Eligible structured-settings secrets are redacted from the full document before indexed excerpts are sliced, so partial or multiline values cannot bypass redaction. Keyword fallback applies the same policy, and invalid or unreadable eligible content is withheld. This does not detect arbitrary secrets in source files.
+
+Each result excerpt is limited to 4,000 source characters plus a truncation marker, including lexical and hybrid retrieval and `search_files(semantic=true)`. When excerpts are shortened, `truncated_results` reports their count and `excerpt_limit` reports the source-character limit. File paths, scores, line ranges, and shorter neighbouring results are retained.
 
 ### get_terminal_output
 
