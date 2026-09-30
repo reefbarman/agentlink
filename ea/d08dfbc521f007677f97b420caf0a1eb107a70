@@ -1,0 +1,42 @@
+src/agent/agentToolCompletionStrategies.ts
+  h_9630b74bdac540 8,53-57,61,63-73
+src/terminal/sandbox/SandboxTerminalCoordinator.test.ts
+  h_9630b74bdac540 275,478,482,691,1337,1698,1779,2008,2170,2197,2298
+src/util/outputFilter.ts
+  h_9630b74bdac540 33,208-215,242-246,248,303
+  h_9630b74bdac540 247
+src/tools/getTerminalOutput.test.ts
+  h_9630b74bdac540 263-309
+src/util/outputFilter.test.ts
+  h_9630b74bdac540 103-180
+src/terminal/native/NativeAgentTerminalCoordinator.test.ts
+  h_9630b74bdac540 203,295,389,393,540,599,672,901,1227
+src/tools/executeCommand.test.ts
+  h_9630b74bdac540 6413-6450
+src/agent/AgentToolCallTracker.test.ts
+  h_9630b74bdac540 597-640
+src/integrations/TerminalManager.test.ts
+  h_9630b74bdac540 1033,1058,1079,1179,1254,1309,1371,1382,1548,1577,1723
+resources/builtin-skills/documentation/references/tools.md
+  h_9630b74bdac540 81,83
+  h_9630b74bdac540 82
+src/util/ansi.ts
+  h_9630b74bdac540 111,113-115
+src/util/ansi.test.ts
+  h_9630b74bdac540 168,175-180,189
+CHANGELOG.md
+  h_9630b74bdac540 7-8
+resources/builtin-skills/documentation/references/release-notes.md
+  h_9630b74bdac540 7-8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ead08dfbc521f007677f97b420caf0a1eb107a70",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
