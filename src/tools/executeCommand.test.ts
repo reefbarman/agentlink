@@ -6410,6 +6410,44 @@ describe("handleExecuteCommand", () => {
     expect(payload.terminal_cleanup).toBeUndefined();
   });
 
+  it("redacts immediate command output and full-output spills without exposing raw output", async () => {
+    const { readFileSync, rmSync } = await import("fs");
+    const { dirname } = await import("path");
+    const { cleanTerminalOutput } = await import("../util/ansi.js");
+    const rawOutput =
+      "  header\r\nFOO_TOKEN=synthetic-command-token\r\nlast\r\n";
+    executeCommand.mockImplementation(async () => ({
+      exit_code: 0,
+      output: cleanTerminalOutput(rawOutput),
+      terminal_raw_output: rawOutput,
+      output_captured: true,
+      terminal_id: "term-output-safety",
+      command_sent: true,
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const run = (output_head?: number) =>
+      handleExecuteCommand(
+        { command: "printf fixture", output_head },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-output-safety",
+        undefined,
+        { terminalProvider },
+      );
+    const full = textPayload(await run());
+    expect(full.output).toBe("  header\nFOO_TOKEN=[REDACTED]\nlast\n");
+    expect(full.terminal_raw_output).toBeUndefined();
+    const filtered = textPayload(await run(1));
+    expect(filtered.output).toBe("  header\n");
+    expect(filtered.output_file).toEqual(expect.any(String));
+    try {
+      expect(readFileSync(filtered.output_file, "utf8")).toBe(full.output);
+      expect(JSON.stringify(full)).not.toContain("synthetic-command-token");
+    } finally {
+      rmSync(dirname(filtered.output_file), { recursive: true });
+    }
+  });
+
   it("reports line counts as retained while output is not finalized", async () => {
     executeCommand.mockResolvedValue({
       exit_code: null,

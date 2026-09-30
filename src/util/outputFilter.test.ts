@@ -100,6 +100,84 @@ describe("filterOutput", () => {
     expect(result.filtered).toBe("synthetic-secret-value");
   });
 
+  it("redacts credential-named environment lines before filtering", () => {
+    const input =
+      [
+        "FOO_TOKEN=synthetic-mise-token",
+        "CLIENT_SECRET=synthetic-secret",
+        "SERVICE_API_KEY=synthetic-api-key",
+        "DB_PASSWORD=synthetic-password",
+        "TOKEN=synthetic-token",
+        "export API_KEY='synthetic-export-key'",
+        "lower_token=synthetic-lower-token",
+        "PATH=/synthetic/mise/bin",
+        "TOKEN_COUNT=3",
+        "MY_SECRET_FILE=/synthetic/config",
+        "message FOO_TOKEN=visible-example",
+      ].join("\n") + "\n";
+
+    const result = filterOutput(input, { output_grep: "mise|PATH=" });
+    expect(result.filtered).toBe("PATH=/synthetic/mise/bin\n");
+    const unfiltered = filterOutput(input, {}).filtered;
+    expect(unfiltered).toContain("FOO_TOKEN=[REDACTED]\n");
+    expect(unfiltered).toContain("export API_KEY=[REDACTED]\n");
+    expect(unfiltered).toContain("lower_token=[REDACTED]\n");
+    expect(unfiltered).toContain("TOKEN_COUNT=3\n");
+    expect(unfiltered).toContain("MY_SECRET_FILE=/synthetic/config\n");
+    expect(unfiltered).toContain("message FOO_TOKEN=visible-example\n");
+    for (const value of [
+      "synthetic-mise-token",
+      "synthetic-secret",
+      "synthetic-api-key",
+      "synthetic-password",
+      "synthetic-token",
+      "synthetic-export-key",
+      "synthetic-lower-token",
+    ]) {
+      expect(unfiltered).not.toContain(value);
+    }
+  });
+
+  it("preserves empty credential values and diff context rather than guessing", () => {
+    const input =
+      "FOO_TOKEN=\nSECRET=''\nAPI_KEY=\"\"\n API_TOKEN=diff-context\n+API_TOKEN=diff-added\n-API_TOKEN=diff-removed\n";
+    expect(filterOutput(input, {}).filtered).toBe(input);
+  });
+
+  it("preserves line terminators while redacting environment lines", () => {
+    expect(
+      filterOutput("FOO_TOKEN=fake\r\nPATH=visible\r\n", {}).filtered,
+    ).toBe("FOO_TOKEN=[REDACTED]\r\nPATH=visible\r\n");
+    expect(filterOutput("FOO_TOKEN=fake", {}).filtered).toBe(
+      "FOO_TOKEN=[REDACTED]",
+    );
+  });
+
+  it("saves redacted output with its original whitespace and final newline", async () => {
+    const { readFileSync, rmSync } = await import("fs");
+    const { dirname } = await import("path");
+    const { saveOutputTempFile } = await import("./outputFilter.js");
+    const { cleanTerminalOutput } = await import("./ansi.js");
+    const input =
+      "  diff header\r\n+added line\r\nFOO_TOKEN=synthetic-token\r\n\r\n";
+    const filePath = saveOutputTempFile(cleanTerminalOutput(input));
+    expect(filePath).not.toBeNull();
+    try {
+      expect(readFileSync(filePath!, "utf8")).toBe(
+        "  diff header\n+added line\nFOO_TOKEN=[REDACTED]\n\n",
+      );
+    } finally {
+      if (filePath) rmSync(dirname(filePath), { recursive: true });
+    }
+  });
+
+  it("preserves final newlines when redacting Secret JSON", () => {
+    const input = '{"kind":"Secret","data":{"token":"synthetic-secret"}}\n\n';
+    const output = filterOutput(input, {}).filtered;
+    expect(output.endsWith("\n\n")).toBe(true);
+    expect(JSON.parse(output).data.token).toBe("[REDACTED]");
+  });
+
   it("handles empty output", () => {
     const result = filterOutput("", {});
     expect(result.totalLines).toBe(0);

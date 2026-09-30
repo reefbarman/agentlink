@@ -30,7 +30,7 @@ export function filterOutput(
   fullOutput: string,
   options: FilterOptions,
 ): FilterResult {
-  const redactedOutput = redactKubernetesSecretData(fullOutput);
+  const redactedOutput = redactCommandOutput(fullOutput);
   // Strip trailing newline before splitting to avoid off-by-one
   const trimmed = redactedOutput.endsWith("\n")
     ? redactedOutput.slice(0, -1)
@@ -205,6 +205,14 @@ function grepLines(
   return result;
 }
 
+function redactCommandOutput(output: string): string {
+  return redactKubernetesSecretData(output).replace(
+    /^((?:export[ \t]+)?(?:[A-Z_][A-Z0-9_]*_)?(?:TOKEN|SECRET|API_KEY|PASSWORD)=)([^\r\n]+)/gim,
+    (_match, prefix: string, value: string) =>
+      prefix + (value === "''" || value === '""' ? value : "[REDACTED]"),
+  );
+}
+
 function redactKubernetesSecretData(output: string): string {
   if (/^\s*[{[]/.test(output)) {
     try {
@@ -231,8 +239,13 @@ function redactKubernetesSecretData(output: string): string {
         if (object.items) redactObject(object.items);
       };
       redactObject(parsed);
-      if (redacted)
-        return JSON.stringify(parsed, null, output.includes("\n") ? 2 : 0);
+      if (redacted) {
+        const trailingNewlines = output.match(/(?:\r?\n)+$/)?.[0] ?? "";
+        return (
+          JSON.stringify(parsed, null, output.includes("\n") ? 2 : 0) +
+          trailingNewlines
+        );
+      }
     } catch {
       // Ordinary terminal output need not be valid JSON.
     }
@@ -287,7 +300,7 @@ function escapeRegex(str: string): string {
  * output exceeds MAX_TEMP_FILE_BYTES.
  */
 export function saveOutputTempFile(output: string): string | null {
-  const safeOutput = redactKubernetesSecretData(output);
+  const safeOutput = redactCommandOutput(output);
   const bytes = Buffer.byteLength(safeOutput, "utf-8");
   if (bytes > MAX_TEMP_FILE_BYTES) {
     return null;

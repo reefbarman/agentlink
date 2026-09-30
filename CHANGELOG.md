@@ -4,6 +4,8 @@
 
 - Development `send_feedback` reports now require an observed task-impact statement and can include workaround, observed recurrence and improvement-signal context. `get_feedback` returns these fields when recorded; older reports and their stable IDs remain unchanged. Reporting guidance separates concrete evidence from priority scores, guessed prevalence and invented savings.
 
+- Fixed terminal-output safety and fidelity: `execute_command` and `get_terminal_output` redact credential-named environment lines before filtering and saving output files, and terminal cleanup preserves leading whitespace, blank lines and final newlines so retained patches remain parseable. Recognised Kubernetes Secret JSON redaction also retains final newlines. Raw terminal display and arbitrary unlabelled values are not secret-safe surfaces.
+
 - Added **AgentLink: Install Desktop App** and **AgentLink: Install CLI** to the VS Code Command Palette. They find separate published preview releases, warn about unsigned/not-notarised downloads, and open the matching Desktop DMG or checksum-verify and install the Apple Silicon CLI in a visible terminal without replacing an existing launcher. Local macOS windows only; source-build installers remain separate.
 
 ## 1.23.0

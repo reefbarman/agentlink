@@ -260,6 +260,53 @@ describe("handleGetTerminalOutput", () => {
     expect(payload.terminal_raw_output).toBeUndefined();
   });
 
+  it("redacts credential lines in later reads and spills without losing the final newline", async () => {
+    const { readFileSync, rmSync } = await import("fs");
+    const { dirname } = await import("path");
+    const { cleanTerminalOutput } = await import("../util/ansi.js");
+    const rawOutput =
+      "  retained header\r\nSERVICE_TOKEN=synthetic-retained-token\r\nlast\r\n";
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      command_id: "command-secret",
+      is_running: false,
+      state: "completed",
+      exit_code: 0,
+      output: "last",
+      output_captured: true,
+    });
+    terminalProvider.getRetainedOutput = vi.fn(() => ({
+      output: cleanTerminalOutput(rawOutput),
+      complete: true,
+      finalized: true,
+      total_bytes: Buffer.byteLength(rawOutput),
+      retained_bytes: Buffer.byteLength(rawOutput),
+      dropped_bytes: 0,
+    }));
+    const params = { terminal_id: "term_42", command_id: "command-secret" };
+    const full = textPayload(
+      await handleGetTerminalOutput(params, { terminalProvider }),
+    );
+    expect(full.output).toBe(
+      "  retained header\nSERVICE_TOKEN=[REDACTED]\nlast\n",
+    );
+    const filtered = textPayload(
+      await handleGetTerminalOutput(
+        { ...params, output_head: 1 },
+        { terminalProvider },
+      ),
+    );
+    expect(filtered.output).toBe("  retained header\n");
+    expect(filtered.output_file).toEqual(expect.any(String));
+    try {
+      expect(readFileSync(filtered.output_file, "utf8")).toBe(full.output);
+      expect(JSON.stringify(filtered)).not.toContain(
+        "synthetic-retained-token",
+      );
+    } finally {
+      rmSync(dirname(filtered.output_file), { recursive: true });
+    }
+  });
+
   it("filters exact retained output and saves a truthful full-output file", async () => {
     vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
       is_running: false,

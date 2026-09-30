@@ -165,15 +165,19 @@ describe("cleanTerminalOutput", () => {
   it("cleans Unity JSON output wrapped in terminal mode sequences", () => {
     expect(
       cleanTerminalOutput('\x1B[?1h\x1B=\r{"installed":true}\r\n\x1B[?1l\x1B>'),
-    ).toBe('{"installed":true}');
+    ).toBe('{"installed":true}\n');
   });
 
   it("strips trailing % (zsh PROMPT_EOL_MARK)", () => {
     expect(cleanTerminalOutput("output%  ")).toBe("output");
   });
 
-  it("trims leading and trailing whitespace", () => {
-    expect(cleanTerminalOutput("  hello  ")).toBe("hello");
+  it("preserves leading whitespace, blank lines and final line terminators", () => {
+    expect(cleanTerminalOutput("  hello  \r\n\r\n")).toBe("  hello  \n\n");
+    expect(cleanTerminalOutput("\n\n")).toBe("\n\n");
+    expect(cleanTerminalOutput("  hello  ")).toBe("  hello  ");
+    expect(cleanTerminalOutput("100%\r\n")).toBe("100%\n");
+    expect(cleanTerminalOutput("100%")).toBe("100%");
   });
 
   it("handles empty string", () => {
@@ -182,6 +186,6 @@ describe("cleanTerminalOutput", () => {
 
   it("handles complex terminal output", () => {
     const input = "\x1B]633;A\x07\x1B[32m$ npm test\x1B[0m\r\nPASS\r\n%  ";
-    expect(cleanTerminalOutput(input)).toBe("$ npm test\nPASS");
+    expect(cleanTerminalOutput(input)).toBe("$ npm test\nPASS\n");
   });
 });

@@ -108,10 +108,9 @@ export function cleanTerminalRawOutput(text: string): string {
   return removeVsCodeShellIntegrationSequences(text);
 }
 
-/** Normalize terminal output: strip ANSI, trailing %, normalize line endings */
+/** Normalize terminal controls and line endings without trimming command text. */
 export function cleanTerminalOutput(text: string): string {
-  let result = normalizeCarriageReturns(text);
-  // Strip trailing % (zsh PROMPT_EOL_MARK for lines without trailing newline)
-  result = result.replace(/%\s*$/, "");
-  return result.trim();
+  const result = normalizeCarriageReturns(text);
+  // Legacy zsh PROMPT_EOL_MARK is padded on an unterminated output line.
+  return result.replace(/%[ \t]+$/, "");
 }

@@ -272,7 +272,7 @@ describe("SandboxTerminalCoordinator", () => {
       is_running: false,
     });
     expect(test.coordinator.getRetainedOutput(target)?.output).toBe(
-      "test failure",
+      "test failure\n",
     );
     expect(test.coordinator.interruptTerminal(target)).toBe(false);
     expect(test.processes[1].interrupt).not.toHaveBeenCalled();
@@ -475,11 +475,11 @@ describe("SandboxTerminalCoordinator", () => {
     await finish(test.processes[1], "second\r\n");
     await expect(first).resolves.toMatchObject({
       terminal_id: "sandbox-1",
-      output: "first",
+      output: "first\n",
     });
     await expect(second).resolves.toMatchObject({
       terminal_id: "sandbox-2",
-      output: "second",
+      output: "second\n",
     });
   });
 
@@ -688,7 +688,7 @@ describe("SandboxTerminalCoordinator", () => {
     await finish(test.processes[4], "foreground\r\n");
     await expect(foreground).resolves.toMatchObject({
       terminal_id: "sandbox-5",
-      output: "foreground",
+      output: "foreground\n",
     });
   });
 
@@ -1334,7 +1334,7 @@ describe("SandboxTerminalCoordinator", () => {
     await finish(test.processes[0], "/workspace\r\n");
     await expect(firstPromise).resolves.toMatchObject({
       exit_code: 0,
-      output: "/workspace",
+      output: "/workspace\n",
       terminal_id: "sandbox-1",
       terminal_name: "Agent command",
       execution_mode: "sandbox_pty",
@@ -1695,7 +1695,7 @@ describe("SandboxTerminalCoordinator", () => {
     ).toMatchObject({
       is_running: true,
       state: "running",
-      output: "waiting",
+      output: "waiting\n",
       output_captured: true,
     });
 
@@ -1776,7 +1776,7 @@ describe("SandboxTerminalCoordinator", () => {
       ).toMatchObject({
         is_running: true,
         state: "running",
-        output: "still running\nContinue?",
+        output: "still running\nContinue? ",
       });
 
       process.completionDeferred.resolve({ exitCode: 0, timedOut: false });
@@ -2005,7 +2005,7 @@ describe("SandboxTerminalCoordinator", () => {
         await expect(foreground).resolves.toMatchObject({
           terminal_id: "sandbox-1",
           exit_code: 0,
-          output: `foreground-${iteration}`,
+          output: `foreground-${iteration}\n`,
         });
 
         const interrupted = test.coordinator.executeCommand({
@@ -2167,7 +2167,7 @@ describe("SandboxTerminalCoordinator", () => {
       ).toMatchObject({
         is_running: true,
         state: "running",
-        output: "1\n2\n3",
+        output: "1\n2\n3\n",
       });
 
       const remainder = `${"line x\n".repeat(180_000)}final line\n`;
@@ -2194,7 +2194,7 @@ describe("SandboxTerminalCoordinator", () => {
         finalized: true,
         dropped_bytes: 0,
       });
-      expect(retained?.output).toBe(`1\n2\n3\n${remainder}`.trim());
+      expect(retained?.output).toBe(`1\n2\n3\n${remainder}`);
     } finally {
       vi.useRealTimers();
     }
@@ -2295,7 +2295,7 @@ describe("SandboxTerminalCoordinator", () => {
         terminalId: "sandbox-1",
       }),
     ).toEqual({
-      output: output.trim(),
+      output,
       complete: true,
       finalized: true,
       total_bytes: Buffer.byteLength(output, "utf8"),

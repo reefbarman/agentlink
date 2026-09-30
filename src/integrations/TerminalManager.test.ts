@@ -1030,7 +1030,7 @@ describe("TerminalManager terminal selection", () => {
           owner: undefined,
           terminalId: "term_detach",
           force: true,
-        }) === "watching",
+        }) === "watching\n",
     );
 
     expect(
@@ -1055,7 +1055,7 @@ describe("TerminalManager terminal selection", () => {
       }),
     ).toMatchObject({
       is_running: true,
-      output: "watching",
+      output: "watching\n",
       output_captured: true,
     });
 
@@ -1076,7 +1076,7 @@ describe("TerminalManager terminal selection", () => {
     ).toMatchObject({
       is_running: false,
       exit_code: 0,
-      output: "watching\ndone",
+      output: "watching\ndone\n",
       output_captured: true,
     });
     expect(onCommandFinalized).toHaveBeenCalledTimes(1);
@@ -1176,7 +1176,7 @@ describe("TerminalManager terminal selection", () => {
 
     expect(result).toMatchObject({
       exit_code: 130,
-      output: "starting\n^C",
+      output: "starting\n^C\n",
       output_captured: true,
       terminal_id: "term_prompt",
     });
@@ -1251,7 +1251,7 @@ describe("TerminalManager terminal selection", () => {
 
     await expect(resultPromise).resolves.toMatchObject({
       exit_code: 7,
-      output: "done",
+      output: "done\n",
     });
   });
 
@@ -1306,7 +1306,7 @@ describe("TerminalManager terminal selection", () => {
     expect(Date.now() - startedAt).toBeLessThan(2_000);
     expect(result).toMatchObject({
       exit_code: null,
-      output: "done",
+      output: "done\n",
     });
     expect(
       manager.getBackgroundState({
@@ -1368,7 +1368,7 @@ describe("TerminalManager terminal selection", () => {
 
     expect(result).toMatchObject({
       exit_code: 7,
-      output: "failed output",
+      output: "failed output\n",
       output_captured: true,
     });
     expect(
@@ -1379,7 +1379,7 @@ describe("TerminalManager terminal selection", () => {
     ).toMatchObject({
       state: "completed",
       exit_code: 7,
-      output: "failed output",
+      output: "failed output\n",
     });
   });
 
@@ -1545,7 +1545,7 @@ describe("TerminalManager terminal selection", () => {
         manager.getBackgroundState({
           owner: undefined,
           terminalId: "term_bg_unknown_marker",
-        })?.output === "background done",
+        })?.output === "background done\n",
     );
     expect(
       manager.getBackgroundState({
@@ -1574,7 +1574,7 @@ describe("TerminalManager terminal selection", () => {
       is_running: false,
       state: "completed",
       exit_code: 7,
-      output: "background done",
+      output: "background done\n",
     });
   });
 
@@ -1720,7 +1720,7 @@ describe("TerminalManager terminal selection", () => {
     ).toMatchObject({
       is_running: false,
       exit_code: 130,
-      output: "watching\n^C",
+      output: "watching\n^C\n",
       output_captured: true,
     });
   });

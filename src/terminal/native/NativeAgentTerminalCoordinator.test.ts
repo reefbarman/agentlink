@@ -200,7 +200,7 @@ describe("NativeAgentTerminalCoordinator", () => {
       is_running: false,
     });
     expect(test.coordinator.getRetainedOutput(target)?.output).toBe(
-      "original test output",
+      "original test output\n",
     );
     expect(test.coordinator.interruptTerminal(target)).toBe(false);
     expect(test.runtime.interrupt).not.toHaveBeenCalled();
@@ -292,7 +292,7 @@ describe("NativeAgentTerminalCoordinator", () => {
     await finish(test.processes[0], "native\r\n", 0);
     await expect(completion).resolves.toMatchObject({
       exit_code: 0,
-      output: "native",
+      output: "native\n",
       terminal_id: "native-agent-1",
       execution_mode: "native_pty",
       security,
@@ -386,11 +386,11 @@ describe("NativeAgentTerminalCoordinator", () => {
     await finish(test.processes[1], "second\r\n");
     await expect(first).resolves.toMatchObject({
       terminal_id: "native-agent-1",
-      output: "first",
+      output: "first\n",
     });
     await expect(second).resolves.toMatchObject({
       terminal_id: "native-agent-2",
-      output: "second",
+      output: "second\n",
     });
   });
 
@@ -537,7 +537,7 @@ describe("NativeAgentTerminalCoordinator", () => {
     await finish(test.processes[4], "foreground\r\n");
     await expect(foreground).resolves.toMatchObject({
       terminal_id: "native-agent-5",
-      output: "foreground",
+      output: "foreground\n",
     });
     expect(test.coordinator.listTerminals({ owner: undefined })).toHaveLength(
       5,
@@ -596,7 +596,7 @@ describe("NativeAgentTerminalCoordinator", () => {
     await finish(test.processes[2], "reused\r\n");
     await expect(reused).resolves.toMatchObject({
       terminal_id: "native-agent-1",
-      output: "reused",
+      output: "reused\n",
     });
   });
 
@@ -669,7 +669,7 @@ describe("NativeAgentTerminalCoordinator", () => {
     await finish(test.processes[1], "unset\r\n", 0);
     await expect(second).resolves.toMatchObject({
       terminal_id: "native-agent-1",
-      output: "unset",
+      output: "unset\n",
     });
 
     expect(test.commands).toMatchObject([
@@ -898,7 +898,7 @@ describe("NativeAgentTerminalCoordinator", () => {
       ).toMatchObject({
         is_running: true,
         state: "running",
-        output: "still running",
+        output: "still running\n",
       });
 
       process.completionDeferred.resolve({ exitCode: 0, timedOut: false });
@@ -1224,7 +1224,7 @@ describe("NativeAgentTerminalCoordinator", () => {
       is_running: false,
       state: "completed",
       exit_code: 130,
-      output: "partial",
+      output: "partial\n",
     });
   });
 

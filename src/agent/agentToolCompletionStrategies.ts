@@ -5,6 +5,7 @@ import {
   type ToolResult,
 } from "@agentlink/protocol/tool-result";
 import { handleGetTerminalOutput } from "../tools/getTerminalOutput.js";
+import { filterOutput } from "../util/outputFilter.js";
 
 interface AgentToolCompletionRequest {
   call: TrackedCall;
@@ -49,11 +50,27 @@ const completeExecuteCommand: AgentToolCompletionStrategy = async ({
     });
   }
 
+  const { filtered, totalLines, linesShown, truncated } = filterOutput(
+    partialOutput,
+    {},
+  );
+  const outputTruncated = truncated || linesShown < totalLines;
   call.forceResolve(
     successResult({
       exit_code: null,
-      output: partialOutput || "[No output captured]",
+      output: filtered || "[No output captured]",
       output_captured: !!partialOutput,
+      total_lines: totalLines,
+      lines_shown: linesShown,
+      output_truncated: outputTruncated,
+      output_finalized: false,
+      total_lines_scope: "retained",
+      ...(outputTruncated
+        ? {
+            output_warning:
+              "Partial output was truncated. Read get_terminal_output after the interrupted command finishes; no final output file is available yet.",
+          }
+        : {}),
       terminal_id: call.terminalId ?? null,
       status: "force-completed",
       message: "Command force-completed by user. Process was interrupted.",

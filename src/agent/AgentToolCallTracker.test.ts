@@ -594,6 +594,50 @@ describe("AgentToolCallTracker lifecycle", () => {
     });
   });
 
+  it.each(["current", "background"])(
+    "redacts and bounds force-completed %s command output",
+    async (source) => {
+      const output =
+        Array.from({ length: 240 }, (_, i) => `line ${i}`).join("\n") +
+        "\nFOO_TOKEN=synthetic-force-token\nkind: Secret\ndata:\n  key: synthetic-force-secret\n";
+      mocks.getCurrentOutput.mockReturnValue(
+        source === "current" ? output : undefined,
+      );
+      mocks.getBackgroundState.mockReturnValue({
+        is_running: true,
+        exit_code: null,
+        output_captured: true,
+        output,
+      });
+      const tracker = createTracker();
+      const forceResolve = vi.fn();
+      const context = tracker.registerAgentCall(
+        "call-complete-secret",
+        "execute_command",
+        "printf fixture",
+        "session-a",
+        forceResolve,
+      );
+      context.setTerminalId("term-secret");
+      await tracker.completeCall("call-complete-secret");
+      const payload = JSON.parse(forceResolve.mock.calls[0][0].content[0].text);
+      expect(payload).toMatchObject({
+        output_captured: true,
+        output_truncated: true,
+        output_finalized: false,
+        total_lines_scope: "retained",
+        lines_shown: 200,
+        status: "force-completed",
+      });
+      expect(payload.output).toContain("FOO_TOKEN=[REDACTED]\n");
+      expect(payload.output).toContain("key: [REDACTED]\n");
+      expect(JSON.stringify(payload)).not.toContain("synthetic-force-token");
+      expect(JSON.stringify(payload)).not.toContain("synthetic-force-secret");
+      expect(payload.output_file).toBeUndefined();
+      expect(payload.output_warning).toContain("no final output file");
+    },
+  );
+
   it("returns managed terminal output without forcing a second capture", async () => {
     mocks.getBackgroundState.mockReturnValue({
       is_running: true,
