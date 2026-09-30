@@ -1,0 +1,31 @@
+src/integrations/DiffViewProvider.ts
+  h_9630b74bdac540 29-35,280,344,810-814,816,906-907,909-913,915-923,925-931,934-944,947-953,955-957,959-987,989-996,998-1001,1044-1045,1049,1069-1070,1082
+  s_9bde94e4ce2c26::t_e74b7014b612c1 809,815,908,924,932,1043,1046,1068,1071,1081
+src/integrations/newDiagnostics.ts
+  h_9630b74bdac540 1-180
+src/adapters/vscode/editReviewCapabilities.ts
+  h_9630b74bdac540 515,671
+src/integrations/newDiagnostics.test.ts
+  h_9630b74bdac540 1-135
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8f48d992efc45ba5908fd9bf8c2c1a5dd4e7dd76",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  },
+  "sessions": {
+    "s_9bde94e4ce2c26": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff123147-3266-40f4-a254-d285830cb66d",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
