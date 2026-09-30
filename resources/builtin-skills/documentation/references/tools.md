@@ -97,7 +97,7 @@ Exact command-tool parameters: [terminal tools](complete-reference.md#execute_co
 ## Work with people and the session
 
 - `ask_user` asks structured questions.
-- `todo_write` maintains visible work state. Todo identifiers and labels must contain non-whitespace text; malformed blank rows are ignored with model-visible correction guidance. The list changes only when the agent calls the tool, so multi-step work should update it at each real task transition.
+- `todo_write` maintains visible work state. Every item, including nested children, needs a non-blank `id`, `content`, and `activeForm` plus a `status`; the schema describes these inline for up to three nesting levels so provider conversions keep them visible. Items missing a required field are ignored, and the model-visible correction names the missing fields. The list changes only when the agent calls the tool, so multi-step work should update it at each real task transition.
 - `set_task_status` ends a turn with a truthful result. Clicking its Continue or custom next-step button adds the full prompt to the composer for review and editing, rather than sending it. Existing draft text and attachments are preserved. This applies in VS Code and browser chat, including Ask Agent; the separate Auto Continue setting still sends automatically when enabled.
 - `switch_mode` changes the workflow mode.
 - `search_session_history` and `read_session_excerpt` retrieve prior context when allowed.

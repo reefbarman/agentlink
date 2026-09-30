@@ -13,6 +13,7 @@ import {
 import { createNativeToolDisclosureSnapshot } from "../../core/tools/nativeToolDisclosure.js";
 import type { BrowserGatewayModelCredentialRecord } from "../browserGatewayModelCredentialCache.js";
 import { normalizeCoreWebAccessSettings } from "@agentlink/core/web-access";
+import { TODO_WRITE_INPUT_SCHEMA } from "../../agent/todoTool.js";
 import {
   CodexTurnState,
   ResponsesConversationState,
@@ -35,21 +36,8 @@ describe("BrowserGatewayAskAgentModelClient", () => {
     expect(todoTool?.description).toContain(
       "call todo_write at each real task transition",
     );
-    expect(todoTool?.input_schema).toMatchObject({
-      properties: {
-        todos: { items: { $ref: "#/$defs/todoItem" } },
-      },
-      $defs: {
-        todoItem: {
-          properties: {
-            id: { minLength: 1, pattern: "\\S" },
-            content: { minLength: 1, pattern: "\\S" },
-            activeForm: { minLength: 1, pattern: "\\S" },
-            children: { items: { $ref: "#/$defs/todoItem" } },
-          },
-        },
-      },
-    });
+    expect(todoTool?.input_schema).toBe(TODO_WRITE_INPUT_SCHEMA);
+    expect(JSON.stringify(todoTool?.input_schema)).not.toContain("$ref");
   });
 
   const baseCredential = {

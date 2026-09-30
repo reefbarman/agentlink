@@ -1,4 +1,5 @@
 import {
+  TODO_SCHEMA_NESTING_LEVELS,
   completeTodos,
   getLatestTodoState,
   handleTodoWrite,
@@ -38,18 +39,35 @@ describe("todoTool", () => {
     );
   });
 
-  it("requires non-blank item fields in the tool schema", () => {
-    expect(todoTool.input_schema).toMatchObject({
-      $defs: {
-        todoItem: {
-          properties: {
-            id: { minLength: 1, pattern: "\\S" },
-            content: { minLength: 1, pattern: "\\S" },
-            activeForm: { minLength: 1, pattern: "\\S" },
-          },
+  it("serializes a self-contained item schema at every nesting level", () => {
+    const serialized = JSON.stringify(todoTool.input_schema);
+    expect(serialized).not.toContain("$ref");
+    expect(serialized).not.toContain("$defs");
+
+    const wire = JSON.parse(serialized) as {
+      properties: { todos: { items: Record<string, unknown> } };
+    };
+    let item: Record<string, unknown> | undefined = wire.properties.todos.items;
+    let levels = 0;
+    while (item) {
+      levels += 1;
+      expect(item).toMatchObject({
+        type: "object",
+        required: ["id", "content", "activeForm", "status"],
+        properties: {
+          id: { type: "string", minLength: 1, pattern: "\\S" },
+          content: { type: "string", minLength: 1, pattern: "\\S" },
+          activeForm: { type: "string", minLength: 1, pattern: "\\S" },
+          status: { enum: ["pending", "in_progress", "completed"] },
         },
-      },
-    });
+      });
+      const properties = item.properties as Record<
+        string,
+        { items?: Record<string, unknown> }
+      >;
+      item = properties.children?.items;
+    }
+    expect(levels).toBe(TODO_SCHEMA_NESTING_LEVELS);
   });
 });
 
@@ -130,9 +148,27 @@ describe("handleTodoWrite", () => {
         children: [validChild],
       }),
     ]);
-    expect(content).toContain("Ignored 2 blank todo items");
     expect(content).toContain(
-      "Resubmit the complete list with non-blank id, content, and activeForm values",
+      "Ignored 2 todo items with missing or blank required fields: content (2 items)",
+    );
+    expect(content).toContain(
+      "Resubmit the complete list with non-blank id, content, and activeForm on every item",
+    );
+  });
+
+  it("names the missing field instead of calling well-formed items blank", () => {
+    const { content, todos } = handleTodoWrite({
+      todos: [
+        { id: "1", content: "Run tests", status: "pending" },
+        { id: "2", content: "Ship", status: "pending" },
+        { content: "No id", activeForm: "Missing id", status: "pending" },
+      ] as unknown as TodoItem[],
+    });
+
+    expect(todos).toEqual([]);
+    expect(content).not.toContain("blank todo");
+    expect(content).toContain(
+      "Ignored 3 todo items with missing or blank required fields: activeForm (2 items), id (1 item).",
     );
   });
 

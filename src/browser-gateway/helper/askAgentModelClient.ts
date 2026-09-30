@@ -46,7 +46,10 @@ import {
   CODEX_IMAGE_GENERATION_QUALITIES,
 } from "../../core/model/providers/codex/imageGeneration.js";
 
-import { TODO_COMPACTION_GUIDANCE } from "../../agent/todoTool.js";
+import {
+  TODO_COMPACTION_GUIDANCE,
+  TODO_WRITE_INPUT_SCHEMA,
+} from "../../agent/todoTool.js";
 
 import { normalizeBrowserGatewayModelCredentialProviderId } from "../browserGatewayModelProviderIds.js";
 import { surfaceMessagesToCoreModelMessages } from "../../core/surfaceModelMessages.js";
@@ -415,35 +418,7 @@ export const ASK_AGENT_SAFE_PROJECTLESS_TOOLS: CoreModelToolDefinition[] = [
   {
     name: "todo_write",
     description: `Create and manage a structured task list for the current Ask Agent turn. Replaces the whole visible todo list. This is session UI state only and performs no workspace, shell, or editor side effects. Tool calls and response text do not update it automatically, so call todo_write at each real task transition. ${TODO_COMPACTION_GUIDANCE}`,
-    input_schema: {
-      type: "object",
-      properties: {
-        todos: {
-          type: "array",
-          items: { $ref: "#/$defs/todoItem" },
-        },
-      },
-      required: ["todos"],
-      $defs: {
-        todoItem: {
-          type: "object",
-          properties: {
-            id: { type: "string", minLength: 1, pattern: "\\S" },
-            content: { type: "string", minLength: 1, pattern: "\\S" },
-            activeForm: { type: "string", minLength: 1, pattern: "\\S" },
-            status: {
-              type: "string",
-              enum: ["pending", "in_progress", "completed"],
-            },
-            children: {
-              type: "array",
-              items: { $ref: "#/$defs/todoItem" },
-            },
-          },
-          required: ["id", "content", "activeForm", "status"],
-        },
-      },
-    },
+    input_schema: TODO_WRITE_INPUT_SCHEMA,
   },
   {
     name: "set_task_status",
