@@ -112,6 +112,14 @@ const positives: Array<[PredictableGitMetadataWriterSubcommand, string[]]> = [
   ],
   ["remote", ["git remote add origin git@github-personal:owner/repo.git"]],
   [
+    "config",
+    [
+      "git config --local user.name 'Example User'",
+      "git config --local user.email example@example.com",
+      "git config --local --add user.email example@example.com",
+    ],
+  ],
+  [
     "fetch",
     [
       "git fetch",
@@ -137,6 +145,25 @@ const positives: Array<[PredictableGitMetadataWriterSubcommand, string[]]> = [
 
 const negatives = [
   "git status",
+  "git status --short && git diff --cached --stat",
+  "git config --local --get user.email",
+  "git config --global user.email example@example.com",
+  "git config --local --file alternate user.email example@example.com",
+  "git config --local example.key value",
+  "git config --local core.hooksPath /tmp/hooks",
+  "git config --local core.fsmonitor command",
+  "git config --local core.sshCommand command",
+  "git config --local alias.inspect '!command'",
+  "git config --local include.path /tmp/config",
+  "git config --local includeIf.gitdir:repo.path /tmp/config",
+  "git config --local filter.example.clean command",
+  "git config --local filter.example.smudge command",
+  "git config --local diff.example.textconv command",
+  "git config --local credential.helper command",
+  "git add . && git diff --output result.patch",
+  "git add . && git diff --ext-diff",
+  "git add . && git diff --textconv",
+  "git add . && git ls-files --with-tree HEAD",
   "git diff",
   "git log",
   "git branch",
@@ -245,6 +272,14 @@ describe("classifyPredictableGitMetadataWriter", () => {
     ["git add src/a.ts && git commit -m fix", ["add", "commit"]],
     ["git add src/a.ts && git commit -m 'keep && explain'", ["add", "commit"]],
     ["git fetch origin && git rebase main", ["fetch", "rebase"]],
+    [
+      "git add CHANGELOG.md src/a.ts && git diff --cached --stat && git diff --cached --name-only && git ls-files plans && git commit -m fix",
+      ["add", "commit"],
+    ],
+    [
+      "git status --short --branch && git diff --check && git config --local user.email example@example.com && git remote add origin git@github-personal:owner/repo.git && git var GIT_AUTHOR_IDENT && git var GIT_COMMITTER_IDENT && git remote -v && git add -A && git diff --cached --check",
+      ["config", "remote", "add"],
+    ],
     [
       "git init -b main && git remote add origin git@github-personal:owner/repo.git && git status --short --branch",
       ["init", "remote"],

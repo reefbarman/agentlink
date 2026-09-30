@@ -397,6 +397,53 @@ describe("handleExecuteCommand", () => {
     });
   });
 
+  it.each([
+    {
+      command:
+        "git add src/a.ts && git diff --cached --stat && git diff --cached --name-only && git ls-files plans && git commit -m fix",
+      subcommands: ["add", "commit"],
+    },
+    {
+      command:
+        "git status --short --branch && git config --local user.email example@example.com && git remote add origin git@github-personal:owner/repo.git && git var GIT_AUTHOR_IDENT && git remote -v && git add -A && git diff --cached --check",
+      subcommands: ["config", "remote", "add"],
+    },
+  ])(
+    "preflights a mixed Git chain using the production classifier: $command",
+    async ({ command, subcommands }) => {
+      const actual = await vi.importActual<
+        typeof import("../util/gitMetadataWriterClassifier.js")
+      >("../util/gitMetadataWriterClassifier.js");
+      classifyPredictableGitMetadataWriter.mockImplementation(
+        actual.classifyPredictableGitMetadataWriter,
+      );
+      resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+        marker: "/workspace/.git",
+      });
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const result = await handleExecuteCommand(
+        { command },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-git-chain-preflight",
+        undefined,
+        { terminalProvider, getCommandApprovalPolicy: () => "approve-for-me" },
+      );
+      expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
+      expect(textPayload(result)).toMatchObject({
+        status: "retry_required",
+        command,
+        capability_code: "protected_git_metadata",
+        git_subcommands: subcommands,
+        required_sandbox_permissions: "require_escalated",
+        command_sent: false,
+        process_launched: false,
+        retry_safe: true,
+        failure_stage: "validation",
+      });
+    },
+  );
+
   it("returns native escalation guidance after resolving a protected Git writer to the sandbox", async () => {
     classifyPredictableGitMetadataWriter.mockReturnValue({
       kind: "predictable_git_metadata_writer",
@@ -3909,7 +3956,7 @@ describe("handleExecuteCommand", () => {
       command:
         "gh pr view 42 --repo owner/repo && gh pr checks 42 --repo owner/repo",
       output:
-        "Post https://api.github.com/graphql: tls: failed to verify certificate: x509: OSStatus -26276",
+        'Post "https://api.github.com/graphql": tls: failed to verify certificate: x509: OSStatus -26276',
       code: "managed_network_tls_trust",
     },
     {
@@ -3917,8 +3964,35 @@ describe("handleExecuteCommand", () => {
       command:
         "gh api graphql -f query='query($owner:String!){repository(owner:$owner,name:\"repo\"){id}}' -F owner=agentlink",
       output:
-        "Post https://api.github.com/graphql: tls: failed to verify certificate: x509: OSStatus -26276",
+        'Post "https://api.github.com/graphql": tls: failed to verify certificate: x509: OSStatus -26276',
       code: "managed_network_tls_trust",
+    },
+    {
+      name: "GitHub TLS trust failure after a Git inspection prefix",
+      command:
+        "git status --short && gh api graphql -f query='{viewer{login}}'",
+      output:
+        'Post "https://api.github.com/graphql": tls: failed to verify certificate: x509: OSStatus -26276',
+      code: "managed_network_tls_trust",
+      action: "isolate_failed_step_after_trust_repair",
+      sameCommand: false,
+    },
+    {
+      name: "GitHub TLS trust failure in a review loop",
+      command:
+        'git status --short --branch && for pr in 6430 6464; do gh pr view "$pr" --json number,title; done',
+      output:
+        'Post "https://api.github.com/graphql": tls: failed to verify certificate: x509: OSStatus -26276',
+      code: "managed_network_tls_trust",
+      action: "isolate_failed_step_after_trust_repair",
+      sameCommand: false,
+    },
+    {
+      name: "default mediated-network GitHub TLS failure",
+      command: "gh api /user",
+      output: "tls: failed to verify certificate: x509: OSStatus -26276",
+      code: "managed_network_tls_trust",
+      defaultIntent: true,
     },
     {
       name: "proxy-unaware Node DNS failure",
@@ -3928,7 +4002,7 @@ describe("handleExecuteCommand", () => {
     },
   ])(
     "attaches bounded guidance after a managed-network $name without retrying natively",
-    async ({ command, output, code, action, sameCommand }) => {
+    async ({ command, output, code, action, sameCommand, defaultIntent }) => {
       const execute = vi.fn(async () => ({
         exit_code: 1,
         output,
@@ -3965,7 +4039,9 @@ describe("handleExecuteCommand", () => {
       const result = await handleExecuteCommand(
         {
           command,
-          sandbox_permissions: "require_managed_network",
+          sandbox_permissions: defaultIntent
+            ? undefined
+            : "require_managed_network",
           reason: "Access the reviewed public service.",
         },
         {

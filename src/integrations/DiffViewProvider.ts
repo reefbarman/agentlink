@@ -956,49 +956,31 @@ function collectNewDiagnosticErrors(
   absolutePath: string,
   baselineContent: string | undefined,
 ): string | undefined {
-  const baselineByUri = new Map<string, vscode.Diagnostic[]>();
-  let baselineTarget: vscode.Diagnostic[] | undefined;
-  for (const [uri, diagnostics] of baseline.diagnostics) {
-    baselineByUri.set(uri.toString(), diagnostics);
-    if (isTargetUri(uri, absolutePath)) baselineTarget = diagnostics;
-  }
-
+  const baselineTarget = baseline.diagnostics.find(([uri]) =>
+    isTargetUri(uri, absolutePath),
+  )?.[1];
   const targetEntries: LabeledDiagnosticEntry[] = [];
-  const otherEntries: LabeledDiagnosticEntry[] = [];
   let unbaselinedOmitted = 0;
-  for (const [uri, diagnostics] of vscode.languages.getDiagnostics()) {
-    const current = errorEntries(diagnostics);
-    if (current.length === 0) continue;
-    if (isTargetUri(uri, absolutePath)) {
-      const baselineText = baseline.targetText ?? baselineContent;
-      const finalText = findTargetDocument(absolutePath)?.getText();
-      const hasBaseline =
-        baseline.targetText !== undefined || (baselineTarget?.length ?? 0) > 0;
-      const selection = selectIntroducedDiagnostics({
-        baseline: hasBaseline ? errorEntries(baselineTarget) : undefined,
-        current,
-        mapping:
-          baselineText !== undefined && finalText !== undefined
-            ? computeLineMapping(baselineText, finalText)
-            : undefined,
-      });
-      targetEntries.push(...selection.introduced);
-      unbaselinedOmitted += selection.unbaselinedOmitted;
-      continue;
-    }
-    const { introduced } = selectIntroducedDiagnostics({
-      baseline: errorEntries(baselineByUri.get(uri.toString())),
-      current,
-    });
-    const label = vscode.workspace.asRelativePath(uri, false);
-    otherEntries.push(
-      ...introduced.map((entry) => ({ ...entry, path: label })),
-    );
-  }
-  return formatIntroducedDiagnostics(
-    [...targetEntries, ...otherEntries],
-    unbaselinedOmitted,
+  const current = errorEntries(
+    vscode.languages.getDiagnostics(vscode.Uri.file(absolutePath)),
   );
+  if (current.length > 0) {
+    const baselineText = baseline.targetText ?? baselineContent;
+    const finalText = findTargetDocument(absolutePath)?.getText();
+    const hasBaseline =
+      baseline.targetText !== undefined || (baselineTarget?.length ?? 0) > 0;
+    const selection = selectIntroducedDiagnostics({
+      baseline: hasBaseline ? errorEntries(baselineTarget) : undefined,
+      current,
+      mapping:
+        baselineText !== undefined && finalText !== undefined
+          ? computeLineMapping(baselineText, finalText)
+          : undefined,
+    });
+    targetEntries.push(...selection.introduced);
+    unbaselinedOmitted += selection.unbaselinedOmitted;
+  }
+  return formatIntroducedDiagnostics(targetEntries, unbaselinedOmitted);
 }
 
 /**

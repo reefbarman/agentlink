@@ -15,6 +15,7 @@ export type PredictableGitMetadataWriterSubcommand =
   | "merge-tree"
   | "reset"
   | "remote"
+  | "config"
   | "fetch"
   | "rebase";
 
@@ -44,6 +45,7 @@ const SUBCOMMANDS = new Set<PredictableGitMetadataWriterSubcommand>([
   "merge-tree",
   "reset",
   "remote",
+  "config",
   "fetch",
   "rebase",
 ]);
@@ -573,6 +575,16 @@ function classifyRebase(args: readonly string[]): boolean {
   );
 }
 
+function classifyLocalConfigWrite(args: readonly string[]): boolean {
+  const parsed = parseArguments(args, new Set(["--local", "--add"]), new Set());
+  return Boolean(
+    parsed &&
+    parsed.options.has("--local") &&
+    parsed.operands.length === 2 &&
+    /^(?:user\.name|user\.email)$/i.test(parsed.operands[0]),
+  );
+}
+
 const CLASSIFIERS: Record<
   PredictableGitMetadataWriterSubcommand,
   (args: readonly string[]) => boolean
@@ -591,6 +603,7 @@ const CLASSIFIERS: Record<
   "merge-tree": classifyMergeTree,
   reset: classifyReset,
   remote: classifyRemote,
+  config: classifyLocalConfigWrite,
   fetch: classifyFetch,
   rebase: classifyRebase,
 };
@@ -643,9 +656,47 @@ function isDirectGitStatusFollowup(command: string): boolean {
   );
 }
 
+function isDirectGitInspection(command: string): boolean {
+  if (isDirectGitStatusFollowup(command)) return true;
+  if (!command.trim() || hasUnsupportedShellSyntax(command)) return false;
+  const scan = scanShellLexWords(command);
+  if (scan.words[0]?.raw !== "git") return false;
+  const subcommand = scan.words[1]?.raw;
+  const args = scan.words.slice(2).map(({ raw }) => decodeWord(raw));
+  if (args.some((arg) => arg === null)) return false;
+  if (subcommand === "remote") return args.length === 1 && args[0] === "-v";
+  if (subcommand === "var") {
+    return (
+      args.length === 1 &&
+      ["GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"].includes(args[0]!)
+    );
+  }
+  const flags =
+    subcommand === "diff"
+      ? new Set([
+          "--cached",
+          "--staged",
+          "--stat",
+          "--shortstat",
+          "--numstat",
+          "--name-only",
+          "--name-status",
+          "--check",
+          "--summary",
+          "--quiet",
+          "--exit-code",
+          "--no-ext-diff",
+          "--no-textconv",
+        ])
+      : subcommand === "ls-files"
+        ? new Set(["--cached", "--stage", "--error-unmatch"])
+        : undefined;
+  return Boolean(flags && parseArguments(args as string[], flags, new Set()));
+}
+
 /**
  * Recognizes a deliberately narrow set of direct Git metadata writers, including
- * all-writer chains joined only by top-level `&&`. A match enables guidance only;
+ * Git-only writer/inspection chains joined by top-level `&&`. A match enables guidance only;
  * it never grants or selects execution authority. `null` means unrecognized or
  * ineligible, not safe.
  */
@@ -679,16 +730,24 @@ export function classifyPredictableGitMetadataWriter(
     start = boundary.end;
   }
   segments.push(input.command.slice(start));
+  const writers = segments.map(classifyDirectGitMetadataWriter);
+  const hasInit = writers.includes("init");
   const subcommands: PredictableGitMetadataWriterSubcommand[] = [];
-  for (const segment of segments) {
-    const subcommand = classifyDirectGitMetadataWriter(segment);
+  for (const [index, segment] of segments.entries()) {
+    const subcommand = writers[index];
     if (subcommand) {
       subcommands.push(subcommand);
       continue;
     }
-    if (subcommands.length > 0 && isDirectGitStatusFollowup(segment)) continue;
+    if (
+      hasInit
+        ? subcommands.length > 0 && isDirectGitStatusFollowup(segment)
+        : isDirectGitInspection(segment)
+    )
+      continue;
     return null;
   }
+  if (subcommands.length === 0) return null;
   return {
     kind: "predictable_git_metadata_writer",
     subcommands,

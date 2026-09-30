@@ -664,6 +664,20 @@ function outsideWorkspaceCwdResult(input: {
   };
 }
 
+function isGhTlsFailure(command: string, output: string): boolean {
+  if (isGhOnlyCommand(command)) return true;
+  if (
+    !/\b(?:Get|Post|Put|Patch|Delete|Head) "?https?:\/\/(?:api\.)?github\.com\//i.test(
+      output,
+    )
+  ) {
+    return false;
+  }
+  return splitCompoundCommand(command).some((segment) =>
+    isDirectGhCommand(segment.replace(/^do\s+/, "")),
+  );
+}
+
 function isSpeakeasyTlsFailure(command: string, output: string): boolean {
   if (!TLS_TRUST_FAILURE_PATTERNS.some((pattern) => pattern.test(output)))
     return false;
@@ -705,7 +719,8 @@ function attachManagedNetworkFailureGuidance(input: {
   ) {
     guidance = managedNetworkSshGitGuidance();
   } else if (
-    (isGhOnlyCommand(command) || isSpeakeasyTlsFailure(command, output)) &&
+    (isGhTlsFailure(command, output) ||
+      isSpeakeasyTlsFailure(command, output)) &&
     TLS_TRUST_FAILURE_PATTERNS.some((pattern) => pattern.test(output))
   ) {
     const compound = splitCompoundCommand(command).length > 1;

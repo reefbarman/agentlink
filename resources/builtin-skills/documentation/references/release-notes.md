@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed command recovery and edit attribution: narrow Git write/inspection chains receive protected-metadata native guidance before launch, GitHub TLS failures in mixed workflows and review loops receive failed-step recovery without disabling certificate checks, and write/edit results no longer label unrelated-file diagnostics as introduced errors.
+
 - Restored visible thinking summaries for reasoning-enabled Codex subscription models using Responses Lite, including GPT-6 Astra and GPT-6.1 Sol. Requests now ask for detailed summaries instead of suppressing them, through the shared WebSocket and HTTP/SSE request path.
 
 - Fixed read-tool safety and accuracy: regex and semantic search (including keyword fallback) redact eligible structured-settings secrets before excerpting, withholding malformed or unreadable configuration; semantic search bounds each excerpt to 4,000 source characters plus a truncation marker; and recursive listings honour explicit roots inside `node_modules` while keeping nested dependencies and Git metadata excluded.

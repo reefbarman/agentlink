@@ -13,6 +13,7 @@ import {
   interactiveFallbackEditorOptions,
   isIgnorableTabCloseError,
   revealPendingDiff,
+  snapshotDiagnostics,
 } from "./DiffViewProvider.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -525,6 +526,65 @@ describe("DiffViewProvider rollback", () => {
       next_steps: [expect.stringContaining("preserved")],
     });
     expect(save).not.toHaveBeenCalled();
+  });
+});
+
+describe("snapshotDiagnostics", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    (vscode.workspace.textDocuments as unknown[]).length = 0;
+  });
+
+  it("reports introduced target errors but excludes unrelated workspace and external errors", async () => {
+    const targetPath = "/workspace/target.ts";
+    const targetUri = vscode.Uri.file(targetPath);
+    const workspaceUri = vscode.Uri.file("/workspace/other.ts");
+    const externalUri = vscode.Uri.file("/external/other.ts");
+    let targetText = "before\nuntouched";
+    const document = {
+      uri: targetUri,
+      getText: () => targetText,
+    } as vscode.TextDocument;
+    (vscode.workspace.textDocuments as vscode.TextDocument[]).push(document);
+
+    const diagnostic = (line: number, message: string) =>
+      ({
+        range: { start: { line } },
+        message,
+        severity: vscode.DiagnosticSeverity.Error,
+      }) as vscode.Diagnostic;
+    const targetErrors = [diagnostic(0, "introduced target error")];
+    const workspaceErrors = [diagnostic(0, "unrelated workspace error")];
+    const externalErrors = [diagnostic(0, "unrelated external error")];
+    let changed = false;
+    vi.spyOn(vscode.languages, "getDiagnostics").mockImplementation(((
+      uri?: vscode.Uri,
+    ) => {
+      if (!uri) {
+        return [
+          [targetUri, changed ? targetErrors : []],
+          [workspaceUri, changed ? workspaceErrors : []],
+          [externalUri, changed ? externalErrors : []],
+        ];
+      }
+      if (uri.toString() === targetUri.toString()) return targetErrors;
+      if (uri.toString() === workspaceUri.toString()) {
+        return workspaceErrors;
+      }
+      if (uri.toString() === externalUri.toString()) {
+        return externalErrors;
+      }
+      return [];
+    }) as typeof vscode.languages.getDiagnostics);
+
+    const snapshot = snapshotDiagnostics(targetPath);
+    targetText = "after\nuntouched";
+    changed = true;
+    const result = await snapshot.collectNewErrors(1, "before\nuntouched");
+
+    expect(result).toContain("Line 1: introduced target error");
+    expect(result).not.toContain("unrelated workspace error");
+    expect(result).not.toContain("unrelated external error");
   });
 });
 
