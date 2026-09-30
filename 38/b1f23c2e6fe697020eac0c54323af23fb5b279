@@ -1,0 +1,29 @@
+src/agent/webview/components/MessageBubble.tsx
+  h_9630b74bdac540 189,293,318
+  h_9630b74bdac540 190,292,294
+src/agent/webview/components/MessageBubble.test.tsx
+  h_9630b74bdac540 180-254,293,300-306
+resources/builtin-skills/documentation/references/capabilities.md
+  h_9630b74bdac540 150
+CHANGELOG.md
+  h_9630b74bdac540 5-6
+src/agent/webview/components/ToolCallGroup.tsx
+  h_9630b74bdac540 5,18-19,57-58,60,100,130,179-181,200,225-230,295,300,308,371-373,385,397,408,437-438
+  h_9630b74bdac540 59,294,299,307,309,370,374-384,386,396,398
+src/agent/webview/components/ToolCallGroup.test.tsx
+  h_9630b74bdac540 37-53,70-100,359-366,435-465
+  h_9630b74bdac540 101
+resources/builtin-skills/documentation/references/release-notes.md
+  h_9630b74bdac540 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "38b1f23c2e6fe697020eac0c54323af23fb5b279",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
