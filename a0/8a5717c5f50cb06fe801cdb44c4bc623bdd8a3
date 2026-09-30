@@ -1,0 +1,22 @@
+CHANGELOG.md
+  h_9630b74bdac540 5-6
+src/agent/webview/App.tsx
+  h_9630b74bdac540 4084
+src/agent/webview/App.chatWorkspace.test.tsx
+  h_9630b74bdac540 203-294
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_9630b74bdac540 74
+resources/builtin-skills/documentation/references/release-notes.md
+  h_9630b74bdac540 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a08a5717c5f50cb06fe801cdb44c4bc623bdd8a3",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    }
+  }
+}
