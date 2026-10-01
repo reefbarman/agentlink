@@ -34,6 +34,48 @@ export class SandboxStructuralProtectionError extends Error {
   }
 }
 
+export class SandboxPtyLaunchError extends Error {
+  readonly code = "sandbox_pty_launch_failed" as const;
+
+  constructor(
+    message: string,
+    readonly identity: SandboxCommandIdentity,
+  ) {
+    super(message);
+    this.name = "SandboxPtyLaunchError";
+  }
+}
+
+export type SandboxHelperFailureCategory =
+  | "protocol_validation"
+  | "process_disposed"
+  | "transport_closed"
+  | "transport_error"
+  | "launch_frame_rejected"
+  | "helper_error";
+
+export class SandboxHelperFailure extends Error {
+  readonly code = "sandbox_helper_failed" as const;
+  retainedOutput?: {
+    output: string;
+    complete: boolean;
+    finalized: boolean;
+    total_bytes: number;
+    retained_bytes: number;
+    dropped_bytes: number;
+  };
+
+  constructor(
+    message: string,
+    readonly category: SandboxHelperFailureCategory,
+    readonly identity: SandboxCommandIdentity,
+    readonly processLaunched: true | "unknown",
+  ) {
+    super(message.slice(0, 1000));
+    this.name = "SandboxHelperFailure";
+  }
+}
+
 export interface SandboxCommandReady {
   pid: number;
   pgid: number;

@@ -80,6 +80,35 @@ function projectContext(input: { sessionId?: string; targetPath?: string }) {
 }
 
 describe("forwarded approval session isolation", () => {
+  it("does not report a human request for coordinator resolution or cancelled preflight", async () => {
+    const { provider } = createProvider();
+    const requested = vi.fn();
+    provider.onBeforeApproval = async () => ({
+      action: "resolve",
+      decision: "approve-once",
+    });
+    const resolved = provider.enqueueCommandApproval("pwd", "pwd", {
+      sessionId: "coordinator",
+      onHumanApprovalRequested: requested,
+    });
+    await expect(resolved.promise).resolves.toMatchObject({
+      coordinatorApproval: true,
+    });
+    expect(requested).not.toHaveBeenCalled();
+    const controller = new AbortController();
+    provider.onBeforeApproval = () => new Promise(() => {});
+    const cancelled = provider.enqueueCommandApproval("pwd", "pwd", {
+      sessionId: "cancelled",
+      signal: controller.signal,
+      onHumanApprovalRequested: requested,
+    });
+    controller.abort();
+    await expect(cancelled.promise).resolves.toMatchObject({
+      decision: "reject",
+    });
+    expect(requested).not.toHaveBeenCalled();
+    provider.dispose();
+  });
   it("rejects unattributed approvals without blocking subsequent tabs", async () => {
     const { provider } = createProvider();
     const forwarded = vi.fn();

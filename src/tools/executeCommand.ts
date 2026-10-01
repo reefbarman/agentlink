@@ -24,6 +24,8 @@ import type {
 import { SandboxCapabilityLaunchError } from "../core/capabilities/SandboxCapabilityLaunchError.js";
 import { TerminalAdmissionCancelledError } from "../terminal/terminalAdmissionQueue.js";
 import {
+  SandboxHelperFailure,
+  SandboxPtyLaunchError,
   SandboxPreCommandLaunchError,
   SandboxStructuralProtectionError,
 } from "../terminal/sandbox/SandboxRuntimeProvider.js";
@@ -490,10 +492,44 @@ const NODE_OOM_PATTERNS = [
 
 const PROTECTED_GIT_DENIAL_PATTERNS = [
   /(?:permission denied|operation not permitted|read-only file system|unable to create|could not create|failed to write)/i,
-  /(?:index\.lock|FETCH_HEAD|objects\/tmp_object_)/i,
+  /(?:index\.lock|ORIG_HEAD\.lock|FETCH_HEAD|objects\/tmp_object_)/i,
 ];
 
 const NODE_RUNNER_COMMANDS = new Set(["node", "npm", "npx", "pnpm", "yarn"]);
+
+function sandboxHelperFailureEvidence(error: SandboxHelperFailure) {
+  const retained = error.retainedOutput;
+  const preview = retained ? filterOutput(retained.output, {}) : undefined;
+  return {
+    error: filterOutput(error.message, {}).filtered,
+    error_code: error.code,
+    helper_failure_category: error.category,
+    terminal_id: error.identity.channelId,
+    command_id: error.identity.commandId,
+    generation: error.identity.generation,
+    command_sent: error.processLaunched,
+    process_launched: error.processLaunched,
+    may_have_side_effects: "unknown",
+    retry_safe: false,
+    failure_stage: error.processLaunched === true ? "execution" : "launch",
+    ...(retained
+      ? {
+          output: preview!.filtered.slice(-8000),
+          output_preview_truncated:
+            preview!.truncated ||
+            preview!.linesShown < preview!.totalLines ||
+            preview!.filtered.length > 8000,
+          output_complete: retained.complete,
+          output_finalized: retained.finalized,
+          output_total_bytes: retained.total_bytes,
+          output_retained_bytes: retained.retained_bytes,
+          output_dropped_bytes: retained.dropped_bytes,
+        }
+      : {}),
+    recovery:
+      "Inspect retained output using terminal_id and command_id before deciding whether to run another command. Helper failure does not establish the command's outcome; do not replay automatically.",
+  };
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} bytes`;
@@ -1108,7 +1144,9 @@ async function attachProtectedGitMetadataRetryGuidance(input: {
       .split(/\r?\n/)
       .some(
         (line) =>
-          /(?:index\.lock|FETCH_HEAD|objects\/tmp_object_)/i.test(line) &&
+          /(?:index\.lock|ORIG_HEAD\.lock|FETCH_HEAD|objects\/tmp_object_)/i.test(
+            line,
+          ) &&
           /(?:permission denied|operation not permitted|read-only file system|unable to create|could not create|failed to write)/i.test(
             line,
           ),
@@ -2842,6 +2880,13 @@ export async function handleExecuteCommand(
         ].some((name) => Object.hasOwn(params.env!, name)),
       );
       if (result.output) {
+        await attachProtectedGitMetadataRetryGuidance({
+          result,
+          command: commandToRun,
+          output: result.output,
+          cwd,
+          workspaceRoots,
+        });
         attachSandboxCapabilityRetryGuidance({
           result,
           command: commandToRun,
@@ -2867,13 +2912,6 @@ export async function handleExecuteCommand(
           output: result.output,
           replayable: replayableWithNarrowSandboxCapabilities,
           temporaryHome,
-          cwd,
-          workspaceRoots,
-        });
-        await attachProtectedGitMetadataRetryGuidance({
-          result,
-          command: commandToRun,
-          output: result.output,
           cwd,
           workspaceRoots,
         });
@@ -3234,6 +3272,9 @@ export async function handleExecuteCommand(
                         cwd,
                         error: message,
                         security: retryExecution.security,
+                        ...(error instanceof SandboxHelperFailure
+                          ? sandboxHelperFailureEvidence(error)
+                          : {}),
                         command_sent: firstAttempt.command_sent,
                         process_launched: firstAttempt.process_launched,
                         retry_safe: false,
@@ -3253,6 +3294,9 @@ export async function handleExecuteCommand(
                             retry_safe: false,
                             may_have_side_effects: "unknown",
                             failure_stage: "launch",
+                            ...(error instanceof SandboxHelperFailure
+                              ? sandboxHelperFailureEvidence(error)
+                              : {}),
                           },
                         ],
                       },
@@ -3317,6 +3361,13 @@ export async function handleExecuteCommand(
           command: commandToRun,
           output: result.output,
         });
+        await attachProtectedGitMetadataRetryGuidance({
+          result,
+          command: commandToRun,
+          output: result.output,
+          cwd,
+          workspaceRoots,
+        });
         attachSandboxCapabilityRetryGuidance({
           result,
           command: commandToRun,
@@ -3342,13 +3393,6 @@ export async function handleExecuteCommand(
           output: result.output,
           replayable: replayableWithNarrowSandboxCapabilities,
           temporaryHome,
-          cwd,
-          workspaceRoots,
-        });
-        await attachProtectedGitMetadataRetryGuidance({
-          result,
-          command: commandToRun,
-          output: result.output,
           cwd,
           workspaceRoots,
         });
@@ -3448,6 +3492,27 @@ export async function handleExecuteCommand(
     const message = err instanceof Error ? err.message : String(err);
     if (err instanceof TerminalAdmissionCancelledError) {
       return cancelledCommandResult(params.command);
+    }
+    if (err instanceof SandboxHelperFailure) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                status: "failed",
+                command: commandToRun,
+                ...(commandToRun !== params.command
+                  ? { original_command: params.command, command_modified: true }
+                  : {}),
+                ...sandboxHelperFailureEvidence(err),
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
     }
     if (err instanceof SandboxAvailabilityError) {
       return {
@@ -3692,6 +3757,7 @@ export async function handleExecuteCommand(
       };
     }
     if (
+      err instanceof SandboxPtyLaunchError ||
       lowerMessage.includes(
         "sandbox pty launch failed twice before the command started",
       )
@@ -3704,7 +3770,16 @@ export async function handleExecuteCommand(
               status: "retry_required",
               error: message,
               error_code: "sandbox_pty_launch_failed",
-              command: params.command,
+              command: commandToRun,
+              ...(commandToRun !== params.command
+                ? { original_command: params.command, command_modified: true }
+                : {}),
+              ...(err instanceof SandboxPtyLaunchError
+                ? {
+                    terminal_id: err.identity.channelId,
+                    command_id: err.identity.commandId,
+                  }
+                : {}),
               command_sent: false,
               process_launched: false,
               retry_safe: true,
@@ -4237,6 +4312,7 @@ async function approveSubCommands(
   });
 
   // Show dialog with full command + enriched sub-command entries
+  let humanApprovalRequested = false;
   const { promise, commitApprovalRecording = () => {} } =
     approvalPanel.enqueueCommandApproval(
       options?.displayCommand ?? fullCommand,
@@ -4262,18 +4338,33 @@ async function approveSubCommands(
           options?.hasEnvOverrides ||
           options?.forceRequested,
         skipApprovalRecording: Boolean(options?.recoveryAttempt),
+        onHumanApprovalRequested: () => {
+          humanApprovalRequested = true;
+          if (options?.security && options.providers?.terminalProvider) {
+            recordExecutionAudit(
+              options.providers.terminalProvider,
+              "human_approval_requested",
+              options.security,
+            );
+          }
+        },
       },
     );
   const response = await promise;
   if (
-    !response.coordinatorApproval &&
+    humanApprovalRequested &&
     options?.security &&
     options.providers?.terminalProvider
   ) {
     recordExecutionAudit(
       options.providers.terminalProvider,
-      "human_approval_requested",
+      "human_approval_responded",
       options.security,
+      {
+        resultStatus: isCommandApprovalCancelled(sessionId, reviewProviders)
+          ? "cancelled"
+          : response.decision,
+      },
     );
   }
 

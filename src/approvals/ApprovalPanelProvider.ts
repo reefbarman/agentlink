@@ -318,6 +318,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       bypassRecentApproval?: boolean;
       /** Do not retain this one-time decision for later commands. */
       skipApprovalRecording?: boolean;
+      onHumanApprovalRequested?: () => void;
     },
   ): {
     promise: Promise<CommandApprovalResponse>;
@@ -356,6 +357,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
           response: response as CommandApprovalResponse,
         };
       },
+      options?.onHumanApprovalRequested,
     ) as Promise<CommandApprovalResponse>;
     return {
       promise,
@@ -625,6 +627,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
   private async enqueue(
     request: InternalRequest,
     deferRecording?: (request: InternalRequest, response: unknown) => void,
+    onHumanApprovalRequested?: () => void,
   ): Promise<unknown> {
     const projectContext = this.resolveProjectContext?.({
       sessionId: request.sessionId,
@@ -734,6 +737,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       attributedRequest.signal?.addEventListener("abort", handleAbort, {
         once: true,
       });
+      onHumanApprovalRequested?.();
       this.updatePendingCount();
       this.processQueue();
     });

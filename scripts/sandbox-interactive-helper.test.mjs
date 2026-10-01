@@ -587,6 +587,10 @@ test("reports repeated legacy node-pty spawn failure as pre-launch", async (t) =
     harness.frames().find((frame) => frame.type === "error").message,
     /failed twice before the command started/,
   );
+  assert.equal(
+    harness.frames().find((frame) => frame.type === "error").code,
+    "sandbox_pty_launch_failed",
+  );
   assert.equal(harness.calls.cleanup, 1);
   assert.equal(harness.calls.reset, 1);
 });

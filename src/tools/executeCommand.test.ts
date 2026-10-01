@@ -6,7 +6,9 @@ import {
   SandboxAvailabilityError,
 } from "../terminal/sandbox/AgentTerminalProviderRouter.js";
 import {
+  SandboxHelperFailure,
   SandboxPreCommandLaunchError,
+  SandboxPtyLaunchError,
   SandboxStructuralProtectionError,
 } from "../terminal/sandbox/SandboxRuntimeProvider.js";
 import {
@@ -152,6 +154,263 @@ describe("handleExecuteCommand", () => {
       terminal_id: "term_1",
       command_sent: true,
     });
+  });
+
+  it.each(["run-once", "reject", "cancelled"] as const)(
+    "records human approval wait before %s through the production panel",
+    async (decision) => {
+      getConfiguration.mockReturnValue({
+        get: vi.fn((_key: string, fallback?: unknown) => fallback),
+      });
+      const { ApprovalPanelProvider } =
+        await import("../approvals/ApprovalPanelProvider.js");
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const panel = new ApprovalPanelProvider(
+        {} as never,
+        {
+          setPendingCount: vi.fn(),
+          showAlert: () => ({ dispose: vi.fn() }),
+        } as never,
+      );
+      let card:
+        | {
+            id: string;
+            respond: Parameters<NonNullable<typeof panel.onForwardApproval>>[1];
+          }
+        | undefined;
+      panel.onForwardApproval = ({ request }, respond) => {
+        card = { id: request.id, respond };
+      };
+      const recordExecutionAudit = vi.fn();
+      const controller = new AbortController();
+      const pending = handleExecuteCommand(
+        { command: "npm test" },
+        {
+          isCommandApproved: () => false,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        panel,
+        "audit-wait",
+        undefined,
+        {
+          terminalProvider: { ...terminalProvider, recordExecutionAudit },
+          getCommandApprovalPolicy: () => "manual",
+          toolAbortSignal: controller.signal,
+        },
+      );
+      try {
+        await vi.waitFor(() => expect(card).toBeDefined());
+        const requested = recordExecutionAudit.mock.calls
+          .map(([event]) => event)
+          .find((event) => event.type === "human_approval_requested");
+        expect(requested).toMatchObject({ auditId: "default-audit" });
+        expect(
+          recordExecutionAudit.mock.calls.map(([event]) => event.type),
+        ).not.toContain("human_approval_responded");
+        expect(executeCommand).not.toHaveBeenCalled();
+        if (decision === "cancelled") controller.abort();
+        else
+          card!.respond({
+            type: "decision",
+            id: card!.id,
+            approvalKind: "command",
+            decision,
+          });
+        await pending;
+        const responded = recordExecutionAudit.mock.calls
+          .map(([event]) => event)
+          .find((event) => event.type === "human_approval_responded");
+        expect(responded).toMatchObject({
+          auditId: requested.auditId,
+          resultStatus: decision,
+        });
+        expect(responded.occurredAt).toBeGreaterThanOrEqual(
+          requested.occurredAt,
+        );
+        expect(executeCommand).toHaveBeenCalledTimes(
+          decision === "run-once" ? 1 : 0,
+        );
+      } finally {
+        panel.dispose();
+        await pending;
+      }
+    },
+  );
+
+  it.each([true, "unknown"] as const)(
+    "preserves sandbox helper failure evidence with launch=%s",
+    async (launched) => {
+      const error = new SandboxHelperFailure(
+        "Sandbox helper emitted an invalid event frame",
+        "protocol_validation",
+        {
+          channelId: "channel-failed",
+          commandId: "command-failed",
+          generation: 7,
+        },
+        launched,
+      );
+      error.retainedOutput = {
+        output: "x".repeat(9000) + "last output",
+        complete: true,
+        finalized: true,
+        total_bytes: 9011,
+        retained_bytes: 9011,
+        dropped_bytes: 0,
+      };
+      executeCommand.mockRejectedValueOnce(error);
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const payload = textPayload(
+        await handleExecuteCommand(
+          { command: "npm test" },
+          { isCommandApproved: () => true } as never,
+          { isRecentlyApproved: () => true } as never,
+          "helper-failure",
+          undefined,
+          { terminalProvider },
+        ),
+      );
+      expect(payload).toMatchObject({
+        status: "failed",
+        error_code: "sandbox_helper_failed",
+        helper_failure_category: "protocol_validation",
+        terminal_id: "channel-failed",
+        command_id: "command-failed",
+        process_launched: launched,
+        retry_safe: false,
+        may_have_side_effects: "unknown",
+        output_preview_truncated: true,
+      });
+      expect(payload.output).toHaveLength(8000);
+      expect(payload.output).toMatch(/last output$/);
+      expect(payload.retry_guidance).toBeUndefined();
+    },
+  );
+
+  it("reports the approved edited command on helper failure", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((_key: string, fallback?: unknown) => fallback),
+    });
+    executeCommand.mockRejectedValueOnce(
+      new SandboxHelperFailure(
+        "disposed",
+        "process_disposed",
+        {
+          channelId: "edited-terminal",
+          commandId: "edited-command",
+          generation: 1,
+        },
+        true,
+      ),
+    );
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const payload = textPayload(
+      await handleExecuteCommand(
+        { command: "npm test" },
+        {
+          isCommandApproved: () => false,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        {
+          isRecentlyApproved: () => false,
+          enqueueCommandApproval: () => ({
+            promise: Promise.resolve({
+              decision: "edit",
+              editedCommand: "npm run build",
+            }),
+          }),
+        } as never,
+        "helper-edited",
+        undefined,
+        { terminalProvider, getCommandApprovalPolicy: () => "manual" },
+      ),
+    );
+    expect(payload).toMatchObject({
+      status: "failed",
+      command: "npm run build",
+      original_command: "npm test",
+      command_modified: true,
+      process_launched: true,
+    });
+    expect(executeCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "npm run build" }),
+    );
+  });
+
+  it("redacts helper failure output and transport messages before previewing", async () => {
+    const error = new SandboxHelperFailure(
+      "helper failed\nAPI_TOKEN=private-value\n",
+      "transport_closed",
+      { channelId: "failed", commandId: "failed-command", generation: 1 },
+      true,
+    );
+    error.retainedOutput = {
+      output: "API_TOKEN=private-value\nlast output\n",
+      complete: true,
+      finalized: true,
+      total_bytes: 40,
+      retained_bytes: 40,
+      dropped_bytes: 0,
+    };
+    executeCommand.mockRejectedValueOnce(error);
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const payload = textPayload(
+      await handleExecuteCommand(
+        { command: "npm test" },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "helper-redaction",
+        undefined,
+        { terminalProvider },
+      ),
+    );
+    expect(payload.output).toContain("API_TOKEN=[REDACTED]");
+    expect(payload.error).toContain("API_TOKEN=[REDACTED]");
+    expect(JSON.stringify(payload)).not.toContain("private-value");
+  });
+
+  it.each([
+    "/workspace/.git/ORIG_HEAD.lock",
+    "/parent/.git/worktrees/linked/index.lock",
+  ])("prioritises protected Git recovery for %s", async (lock) => {
+    resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+      marker: "/workspace/.git",
+    });
+    executeCommand.mockResolvedValueOnce({
+      exit_code: 128,
+      output: `fatal: Unable to create '${lock}': Operation not permitted`,
+      output_captured: true,
+      terminal_id: "git-failed",
+      command_sent: true,
+      process_launched: true,
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const payload = textPayload(
+      await handleExecuteCommand(
+        { command: "git merge --ff-only origin/main" },
+        {
+          isCommandApproved: () => true,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        { isRecentlyApproved: () => true } as never,
+        "git-lock-failure",
+        undefined,
+        { terminalProvider, getCommandApprovalPolicy: () => "approve-for-me" },
+      ),
+    );
+    expect(payload.retry_guidance).toMatchObject({
+      code: "protected_git_metadata",
+      automatic_retry: false,
+      options: [
+        expect.objectContaining({
+          action: "reviewed_native_retry",
+          sandbox_permissions: "require_escalated",
+        }),
+      ],
+    });
+    expect(JSON.stringify(payload.retry_guidance)).not.toContain(
+      "temporary_home",
+    );
   });
 
   it("keeps other tabs executable and their approval cards actionable while one tab waits", async () => {
@@ -3359,135 +3618,168 @@ describe("handleExecuteCommand", () => {
     },
   );
 
-  it("does not make a third attempt after the native retry also fails", async () => {
-    const violation = {
-      operation: "ipc-connect" as const,
-      target: "NuGet-Migrations",
-      reason: "Named mutex requires host IPC",
-      occurredAt: 654,
-    };
-    const prepareExecution = vi.fn(async (_options, routeContext) => {
-      const sandbox = routeContext.requiredAuthority === "sandbox";
-      return {
-        security: {
-          auditId: sandbox ? "audit-terminal-first" : "audit-terminal-second",
-          route: sandbox ? ("sandbox" as const) : ("native" as const),
-          executionSurface: sandbox
-            ? ("verified-sandbox" as const)
-            : ("agentlink-native" as const),
-          confinement: sandbox
-            ? ("verified-baseline" as const)
-            : ("native-unsandboxed" as const),
-          routeReason: "verified-local-macos" as const,
-          ...routeContext,
-          executionPolicy: sandbox
-            ? ("sandbox-baseline-v2" as const)
-            : ("native-legacy-v1" as const),
-          preparedAt: sandbox ? 100 : 101,
-        },
-        execute: async () =>
-          sandbox
-            ? {
-                exit_code: 1,
-                output: "sandbox denied named mutex",
-                output_captured: true,
-                terminal_id: "sandbox-terminal-retry",
-                command_sent: true,
-                process_launched: true,
-                execution_mode: "sandbox_pty" as const,
-                sandbox: {
-                  policyVersion: "policy-v1",
-                  profileId: "workspace-write",
-                  backend: "seatbelt",
-                  capabilities: {
-                    backend: "seatbelt",
-                    processTree: true,
-                    filesystemRead: "host-visible" as const,
-                    filesystemWrite: "strict" as const,
-                    network: "blocked" as const,
-                    privateHome: false,
-                    privateTmp: false,
-                    hostIpcBlocked: true,
-                    resourceLimits: "partial" as const,
-                    warnings: [],
-                  },
-                  violations: [violation],
-                },
-              }
-            : {
-                exit_code: 1,
-                output: "native build failed",
-                output_captured: true,
-                terminal_id: "native-terminal-retry",
-                command_sent: true,
-                process_launched: true,
-                execution_mode: "native_pty" as const,
-                sandbox: {
-                  policyVersion: "policy-v1",
-                  profileId: "workspace-write",
-                  backend: "seatbelt",
-                  capabilities: {
-                    backend: "seatbelt",
-                    processTree: true,
-                    filesystemRead: "host-visible" as const,
-                    filesystemWrite: "strict" as const,
-                    network: "blocked" as const,
-                    privateHome: false,
-                    privateTmp: false,
-                    hostIpcBlocked: true,
-                    resourceLimits: "partial" as const,
-                    warnings: [],
-                  },
-                  violations: [violation],
-                },
-              },
-        dispose: vi.fn(),
+  it.each([false, true])(
+    "does not make a third attempt after retry failure (helper=%s)",
+    async (helperFailure) => {
+      const violation = {
+        operation: "ipc-connect" as const,
+        target: "NuGet-Migrations",
+        reason: "Named mutex requires host IPC",
+        occurredAt: 654,
       };
-    });
-    const review = vi.fn(async () => ({
-      outcome: "allow" as const,
-      risk: "medium" as const,
-      userAuthorization: "high" as const,
-      rationale: "The attributed IPC denial justifies one native retry",
-      model: "review-model",
-      status: "reviewed" as const,
-    }));
-    const { handleExecuteCommand } = await import("./executeCommand.js");
+      const prepareExecution = vi.fn(async (_options, routeContext) => {
+        const sandbox = routeContext.requiredAuthority === "sandbox";
+        return {
+          security: {
+            auditId: sandbox ? "audit-terminal-first" : "audit-terminal-second",
+            route: sandbox ? ("sandbox" as const) : ("native" as const),
+            executionSurface: sandbox
+              ? ("verified-sandbox" as const)
+              : ("agentlink-native" as const),
+            confinement: sandbox
+              ? ("verified-baseline" as const)
+              : ("native-unsandboxed" as const),
+            routeReason: "verified-local-macos" as const,
+            ...routeContext,
+            executionPolicy: sandbox
+              ? ("sandbox-baseline-v2" as const)
+              : ("native-legacy-v1" as const),
+            preparedAt: sandbox ? 100 : 101,
+          },
+          execute: async () => {
+            if (!sandbox && helperFailure)
+              throw new SandboxHelperFailure(
+                "disposed",
+                "process_disposed",
+                {
+                  channelId: "retry-terminal",
+                  commandId: "retry-command",
+                  generation: 2,
+                },
+                "unknown",
+              );
+            return sandbox
+              ? {
+                  exit_code: 1,
+                  output: "sandbox denied named mutex",
+                  output_captured: true,
+                  terminal_id: "sandbox-terminal-retry",
+                  command_sent: true,
+                  process_launched: true,
+                  execution_mode: "sandbox_pty" as const,
+                  sandbox: {
+                    policyVersion: "policy-v1",
+                    profileId: "workspace-write",
+                    backend: "seatbelt",
+                    capabilities: {
+                      backend: "seatbelt",
+                      processTree: true,
+                      filesystemRead: "host-visible" as const,
+                      filesystemWrite: "strict" as const,
+                      network: "blocked" as const,
+                      privateHome: false,
+                      privateTmp: false,
+                      hostIpcBlocked: true,
+                      resourceLimits: "partial" as const,
+                      warnings: [],
+                    },
+                    violations: [violation],
+                  },
+                }
+              : {
+                  exit_code: 1,
+                  output: "native build failed",
+                  output_captured: true,
+                  terminal_id: "native-terminal-retry",
+                  command_sent: true,
+                  process_launched: true,
+                  execution_mode: "native_pty" as const,
+                  sandbox: {
+                    policyVersion: "policy-v1",
+                    profileId: "workspace-write",
+                    backend: "seatbelt",
+                    capabilities: {
+                      backend: "seatbelt",
+                      processTree: true,
+                      filesystemRead: "host-visible" as const,
+                      filesystemWrite: "strict" as const,
+                      network: "blocked" as const,
+                      privateHome: false,
+                      privateTmp: false,
+                      hostIpcBlocked: true,
+                      resourceLimits: "partial" as const,
+                      warnings: [],
+                    },
+                    violations: [violation],
+                  },
+                };
+          },
+          dispose: vi.fn(),
+        };
+      });
+      const review = vi.fn(async () => ({
+        outcome: "allow" as const,
+        risk: "medium" as const,
+        userAuthorization: "high" as const,
+        rationale: "The attributed IPC denial justifies one native retry",
+        model: "review-model",
+        status: "reviewed" as const,
+      }));
+      const { handleExecuteCommand } = await import("./executeCommand.js");
 
-    const result = await handleExecuteCommand(
-      { command: "dotnet build" },
-      {
-        isCommandApproved: () => false,
-        findMatchingCommandRule: vi.fn(),
-      } as never,
-      {
-        isRecentlyApproved: () => true,
-        enqueueCommandApproval: vi.fn(() => ({
-          promise: Promise.resolve({ decision: "run-once" as const }),
-          commitApprovalRecording: vi.fn(),
-        })),
-      } as never,
-      "session-terminal-retry",
-      undefined,
-      {
-        terminalProvider: { ...terminalProvider, prepareExecution },
-        getCommandApprovalPolicy: () => "approve-for-me",
-        commandApprovalReviewer: { review },
-      },
-    );
+      const result = await handleExecuteCommand(
+        { command: "dotnet build" },
+        {
+          isCommandApproved: () => false,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        {
+          isRecentlyApproved: () => true,
+          enqueueCommandApproval: vi.fn(() => ({
+            promise: Promise.resolve({ decision: "run-once" as const }),
+            commitApprovalRecording: vi.fn(),
+          })),
+        } as never,
+        "session-terminal-retry",
+        undefined,
+        {
+          terminalProvider: { ...terminalProvider, prepareExecution },
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: { review },
+        },
+      );
 
-    expect(prepareExecution).toHaveBeenCalledTimes(2);
-    expect(review).not.toHaveBeenCalled();
-    expect(textPayload(result)).toMatchObject({
-      exit_code: 1,
-      output: "native build failed",
-      retry_outcome: "completed",
-      execution_attempts: [
-        { attempt: 1, route: "sandbox" },
-        { attempt: 2, route: "native" },
-      ],
-    });
-  });
+      expect(prepareExecution).toHaveBeenCalledTimes(2);
+      expect(review).not.toHaveBeenCalled();
+      if (helperFailure) {
+        expect(textPayload(result)).toMatchObject({
+          status: "retry_failed",
+          command_sent: true,
+          process_launched: true,
+          retry_safe: false,
+          execution_attempts: [
+            expect.objectContaining({ attempt: 1, process_launched: true }),
+            expect.objectContaining({
+              attempt: 2,
+              process_launched: "unknown",
+              terminal_id: "retry-terminal",
+              command_id: "retry-command",
+            }),
+          ],
+        });
+        return;
+      }
+      expect(textPayload(result)).toMatchObject({
+        exit_code: 1,
+        output: "native build failed",
+        retry_outcome: "completed",
+        execution_attempts: [
+          { attempt: 1, route: "sandbox" },
+          { attempt: 2, route: "native" },
+        ],
+      });
+    },
+  );
 
   it("opens the normal human card directly for a native retry", async () => {
     const violation = {
@@ -9280,38 +9572,46 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("returns structured retry guidance when sandbox PTY launch fails twice", async () => {
-    executeCommand.mockRejectedValue(
-      new Error(
-        "Sandbox PTY launch failed twice before the command started (node-pty reported posix_spawnp failed). Retry the same command; if failures continue, reload the VS Code window so AgentLink can recreate its sandbox runtime.",
-      ),
-    );
+  it.each([
+    new Error(
+      "Sandbox PTY launch failed twice before the command started (node-pty reported posix_spawnp failed). Retry the same command; if failures continue, reload the VS Code window so AgentLink can recreate its sandbox runtime.",
+    ),
+    new SandboxPtyLaunchError("PTY could not start", {
+      channelId: "launch-failed",
+      commandId: "launch-command",
+      generation: 1,
+    }),
+  ])(
+    "returns structured retry guidance for known sandbox PTY launch failure: %s",
+    async (error) => {
+      executeCommand.mockRejectedValue(error);
 
-    const { handleExecuteCommand } = await import("./executeCommand.js");
-    const result = await handleExecuteCommand(
-      { command: "git status --short" },
-      { isCommandApproved: () => true } as never,
-      { isRecentlyApproved: () => true } as never,
-      "session-pty-launch-failure",
-      undefined,
-      { terminalProvider },
-    );
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const result = await handleExecuteCommand(
+        { command: "git status --short" },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-pty-launch-failure",
+        undefined,
+        { terminalProvider },
+      );
 
-    expect(textPayload(result)).toMatchObject({
-      status: "retry_required",
-      error_code: "sandbox_pty_launch_failed",
-      command: "git status --short",
-      command_sent: false,
-      process_launched: false,
-      retry_safe: true,
-      failure_stage: "launch",
-      retry_guidance: {
-        code: "sandbox_pty_launch_failed",
-        automatic_retry: false,
-        options: [{ action: "retry_same_command", same_command: true }],
-      },
-    });
-  });
+      expect(textPayload(result)).toMatchObject({
+        status: "retry_required",
+        error_code: "sandbox_pty_launch_failed",
+        command: "git status --short",
+        command_sent: false,
+        process_launched: false,
+        retry_safe: true,
+        failure_stage: "launch",
+        retry_guidance: {
+          code: "sandbox_pty_launch_failed",
+          automatic_retry: false,
+          options: [{ action: "retry_same_command", same_command: true }],
+        },
+      });
+    },
+  );
 
   it("returns actionable newline regex hint on ripgrep newline error", async () => {
     executeCommand.mockRejectedValue(

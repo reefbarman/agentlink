@@ -77,6 +77,13 @@ In VS Code, run **AgentLink: Manage Index Storage** from the Command Palette, ev
 - Close all other VS Code and AgentLink windows before either action, then confirm in the dialog. The current workspace and stores with live writer processes are blocked. This local maintenance command is not available through browser remote.
 - Normal indexing maintains existing search indexes rather than replacing every index after each change. Automatic pruning still retains recent versions for concurrent readers. Do not manually remove files inside a LanceDB table by age.
 
+## A sandbox helper failed during a command
+
+- Read the `sandbox_helper_failed` result's failure category and launch evidence. `unknown` means AgentLink cannot establish whether the command started, not that retrying is safe.
+- Pass its `terminal_id` and `command_id` to `get_terminal_output` to inspect the retained command, not a newer command in the same terminal. The failure result's output is only a bounded preview.
+- Check whether the command changed files or remote state before deciding on a new execution. A helper failure never authorises automatic replay or native fallback.
+- For `protected_git_metadata`, use the exact reviewed native option. Temporary HOME cannot fix protected Git lock writes, including linked-worktree locks.
+
 ## A command or edit is waiting for approval
 
 That is expected when the requested action crosses a configured boundary. Review the operation, edit it or add a follow-up if necessary, then approve or reject it. Use command/path/write rules only when you understand the scope they grant.

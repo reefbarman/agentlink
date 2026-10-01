@@ -8,6 +8,9 @@ import {
   type SandboxHelperLaunchRequest,
 } from "./sandboxHelperProtocol.js";
 import {
+  SandboxHelperFailure,
+  SandboxPtyLaunchError,
+  type SandboxHelperFailureCategory,
   SandboxPreCommandLaunchError,
   SandboxStructuralProtectionError,
   type SandboxCommandDisposable,
@@ -93,7 +96,7 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
     void this.ready.catch(() => undefined);
     this.subscriptions = [
       transport.onLine((line) => this.handleLine(line)),
-      transport.onError((error) => this.fail(error)),
+      transport.onError((error) => this.fail(error, true, "transport_error")),
       transport.onClose((event) => this.handleClose(event)),
     ];
 
@@ -102,7 +105,11 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
         throw new Error("Sandbox helper rejected the launch frame");
       }
     } catch (error) {
-      this.fail(error instanceof Error ? error : new Error(String(error)));
+      this.fail(
+        error instanceof Error ? error : new Error(String(error)),
+        true,
+        "launch_frame_rejected",
+      );
     }
   }
 
@@ -154,7 +161,11 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
     if (this.disposed) return;
     if (this.state === "launching" || this.state === "running") {
       this.send({ ...this.identity, type: "terminate" });
-      this.fail(new Error("Sandbox command process was disposed"), false);
+      this.fail(
+        new Error("Sandbox command process was disposed"),
+        false,
+        "process_disposed",
+      );
       return;
     }
     this.disposed = true;
@@ -176,14 +187,22 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
     try {
       event = parseSandboxHelperEventLine(line);
     } catch (error) {
-      this.fail(error instanceof Error ? error : new Error(String(error)));
+      this.fail(
+        error instanceof Error ? error : new Error(String(error)),
+        true,
+        "protocol_validation",
+      );
       return;
     }
     if (!sameIdentity(event, this.identity)) return;
 
     if (event.type === "ready") {
       if (this.state !== "launching") {
-        this.fail(new Error("Sandbox helper emitted duplicate readiness"));
+        this.fail(
+          new Error("Sandbox helper emitted duplicate readiness"),
+          true,
+          "protocol_validation",
+        );
         return;
       }
       this.state = "running";
@@ -198,6 +217,18 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
       return;
     }
     if (event.type === "error") {
+      if (event.code === "sandbox_pty_launch_failed") {
+        this.fail(
+          this.state === "launching"
+            ? new SandboxPtyLaunchError(event.message, this.identity)
+            : new Error(
+                "Sandbox helper reported a pre-start failure after readiness",
+              ),
+          true,
+          "protocol_validation",
+        );
+        return;
+      }
       const error =
         event.code === "sandbox_environment_too_large" && event.details
           ? new SandboxPreCommandLaunchError(event.message, event.details)
@@ -209,7 +240,11 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
     }
     if (event.type === "exit") {
       if (this.state === "launching") {
-        this.fail(new Error("Sandbox helper exited before readiness"));
+        this.fail(
+          new Error("Sandbox helper exited before readiness"),
+          true,
+          "protocol_validation",
+        );
         return;
       }
       this.state = "completed";
@@ -224,6 +259,8 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
     if (this.state !== "running") {
       this.fail(
         new Error("Sandbox helper emitted command data before readiness"),
+        true,
+        "protocol_validation",
       );
       return;
     }
@@ -267,13 +304,31 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
     const detail = event.stderr?.trim();
     this.fail(
       new Error(
-        `Sandbox helper closed before command completion: code=${event.exitCode} signal=${event.signal}${detail ? `: ${detail}` : ""}`,
+        `Sandbox helper closed before command completion: code=${event.exitCode} signal=${event.signal}${detail ? `: ${detail.slice(0, 800)}` : ""}`,
       ),
+      true,
+      "transport_closed",
     );
   }
 
-  private fail(error: Error, kill = true): void {
+  private fail(
+    error: Error,
+    kill = true,
+    category: SandboxHelperFailureCategory = "helper_error",
+  ): void {
     if (this.state === "completed" || this.state === "failed") return;
+    if (
+      !(error instanceof SandboxPtyLaunchError) &&
+      !(error instanceof SandboxPreCommandLaunchError) &&
+      !(error instanceof SandboxStructuralProtectionError)
+    ) {
+      error = new SandboxHelperFailure(
+        error.message,
+        category,
+        this.identity,
+        this.state === "running" ? true : "unknown",
+      );
+    }
     this.state = "failed";
     if (!this.readySettled) {
       this.readySettled = true;

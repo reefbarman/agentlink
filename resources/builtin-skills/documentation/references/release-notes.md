@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed command reliability: human approval audits now capture the wait before a separate response; sandbox helper failures retain command identity, launch evidence, and bounded output without blind replay; absent protected files stay write-denied; and bounded Git inspection/write chains plus linked-worktree and `ORIG_HEAD` lock denials receive accurate native-recovery guidance.
+
 - Fixed proposal recovery and diff authoring guidance: memory review-opening failures report approval, save, and observed disk state without blindly replaying uncertain buffers; formatter conflicts suggest a new reviewed exact-preservation edit without changing user settings; and diff instructions distinguish renderer comment prefixes from literal markers.
 
 - Fixed recovery details and read accuracy: failed VS Code saves retain bounded, redacted exception messages without discarding dirty buffers; Codex page-access internal errors no longer appear as successful fetched content; and command-substitution input filters no longer trigger terminal output-filter rejection.

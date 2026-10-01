@@ -690,13 +690,32 @@ function isDirectGitInspection(command: string): boolean {
         ])
       : subcommand === "ls-files"
         ? new Set(["--cached", "--stage", "--error-unmatch"])
-        : undefined;
-  return Boolean(flags && parseArguments(args as string[], flags, new Set()));
+        : subcommand === "log" || subcommand === "show"
+          ? new Set([
+              "--oneline",
+              "--decorate",
+              "--no-decorate",
+              "--stat",
+              "--shortstat",
+              "--name-only",
+              "--name-status",
+              "--no-renames",
+              "--no-color",
+              "--no-patch",
+            ])
+          : undefined;
+  if (!flags) return false;
+  const parsed = parseArguments(args as string[], flags, new Set());
+  return Boolean(
+    parsed &&
+    ((subcommand !== "log" && subcommand !== "show") ||
+      parsed.options.size > 0),
+  );
 }
 
 /**
  * Recognizes a deliberately narrow set of direct Git metadata writers, including
- * Git-only writer/inspection chains joined by top-level `&&`. A match enables guidance only;
+ * Git-only writer/inspection chains joined by top-level `&&` or `;`. A match enables guidance only;
  * it never grants or selects execution authority. `null` means unrecognized or
  * ineligible, not safe.
  */
@@ -718,7 +737,9 @@ export function classifyPredictableGitMetadataWriter(
     scan.finalState.quote !== null ||
     scan.finalState.danglingEscape ||
     scan.boundaries.some(
-      (boundary) => boundary.kind === "comment" || boundary.operator !== "&&",
+      (boundary) =>
+        boundary.kind === "comment" ||
+        (boundary.operator !== "&&" && boundary.operator !== ";"),
     )
   ) {
     return null;
@@ -726,10 +747,14 @@ export function classifyPredictableGitMetadataWriter(
   const segments: string[] = [];
   let start = 0;
   for (const boundary of scan.boundaries) {
-    segments.push(input.command.slice(start, boundary.start));
+    const segment = input.command.slice(start, boundary.start);
+    if (!segment.trim()) return null;
+    segments.push(segment);
     start = boundary.end;
   }
-  segments.push(input.command.slice(start));
+  const finalSegment = input.command.slice(start);
+  if (!finalSegment.trim()) return null;
+  segments.push(finalSegment);
   const writers = segments.map(classifyDirectGitMetadataWriter);
   const hasInit = writers.includes("init");
   const subcommands: PredictableGitMetadataWriterSubcommand[] = [];

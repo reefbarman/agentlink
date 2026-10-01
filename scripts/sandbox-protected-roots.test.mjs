@@ -47,6 +47,51 @@ test("canonicalizes, sorts, and deduplicates nested protected roots", async () =
   }
 });
 
+test("prepares and validates absent roots, including missing ancestors", async () => {
+  const fixture = await makeRoot("absent-root");
+  try {
+    const absentRoot = path.join(fixture, "not-created");
+    const missingAncestorRoot = path.join(
+      fixture,
+      "missing-ancestor",
+      "protected",
+    );
+
+    const canonicalFixture = await realpath(fixture);
+    const canonicalAbsentRoot = path.join(canonicalFixture, "not-created");
+    const canonicalMissingAncestorRoot = path.join(
+      canonicalFixture,
+      "missing-ancestor",
+      "protected",
+    );
+    assert.deepEqual(
+      await canonicalizeProtectedRoots([absentRoot, missingAncestorRoot]),
+      [canonicalAbsentRoot, canonicalMissingAncestorRoot].sort(),
+    );
+    assert.deepEqual(await validateStructurallyProtectedRoots([absentRoot]), [
+      canonicalAbsentRoot,
+    ]);
+
+    const prepared = await prepareProtectedRoots([
+      absentRoot,
+      missingAncestorRoot,
+    ]);
+    assert.deepEqual(
+      prepared.snapshots.map(({ root, entries, absent }) => ({
+        root,
+        entries,
+        absent,
+      })),
+      [canonicalAbsentRoot, canonicalMissingAncestorRoot]
+        .sort()
+        .map((root) => ({ root, entries: [], absent: true })),
+    );
+    await revalidateProtectedRoots(prepared);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
 test("rejects a symbolic-link protected root", async () => {
   const fixture = await makeRoot("root-symlink");
   try {
@@ -344,6 +389,31 @@ test("detects a protected root replaced after preparation", async () => {
   }
 });
 
+test("detects absent protected roots created or removed after preparation", async () => {
+  const fixture = await makeRoot("absent-root-change");
+  try {
+    const createdRoot = path.join(fixture, "created");
+    const removedRoot = path.join(fixture, "removed");
+    await mkdir(removedRoot);
+
+    const createdPrepared = await prepareProtectedRoots([createdRoot]);
+    const removedPrepared = await prepareProtectedRoots([removedRoot]);
+    await mkdir(createdRoot);
+    await rm(removedRoot, { recursive: true });
+
+    await assert.rejects(
+      revalidateProtectedRoots(createdPrepared),
+      /root=.*\/created path=\. change=added/,
+    );
+    await assert.rejects(
+      revalidateProtectedRoots(removedPrepared),
+      /root=.*\/removed path=\. change=removed/,
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
 test("rejects trusted-host mutations that overlap an active lease", async () => {
   const fixture = await makeRoot("lease-overlap");
   try {
@@ -362,6 +432,28 @@ test("rejects trusted-host mutations that overlap an active lease", async () => 
     } finally {
       lease.release();
     }
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("rejects trusted-host mutations into an absent protected root lease", async () => {
+  const fixture = await makeRoot("absent-lease-overlap");
+  try {
+    const protectedRoot = path.join(fixture, "not-created");
+    const protectedFile = path.join(protectedRoot, "policy.json");
+    const coordinator = new ProtectedRootLeaseCoordinator();
+
+    await coordinator.withLease([protectedRoot], () =>
+      assert.rejects(
+        coordinator.runMutation([protectedFile], async () => {
+          await mkdir(protectedRoot, { recursive: true });
+          await writeFile(protectedFile, "mutated");
+        }),
+        /overlaps an active protected root lease/,
+      ),
+    );
+    await assert.rejects(access(protectedRoot));
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }

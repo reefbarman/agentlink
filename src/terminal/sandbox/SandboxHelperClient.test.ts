@@ -127,6 +127,64 @@ function ready(
 }
 
 describe("SandboxHelperClient", () => {
+  it.each([false, true])(
+    "recognises known pre-start PTY failure only before readiness (ready=%s)",
+    async (isReady) => {
+      const { client, transports } = harness();
+      const process = client.launch(request);
+      const failure = process.completion.catch((error: unknown) => error);
+      if (isReady) ready(transports[0]);
+      transports[0].emit({
+        ...process.identity,
+        type: "error",
+        code: "sandbox_pty_launch_failed",
+        message: "PTY could not start",
+      });
+      expect(await failure).toMatchObject(
+        isReady
+          ? { code: "sandbox_helper_failed", processLaunched: true }
+          : { code: "sandbox_pty_launch_failed", identity: process.identity },
+      );
+      client.dispose();
+    },
+  );
+  it.each([false, true])(
+    "preserves identity and launch evidence on invalid protocol (ready=%s)",
+    async (isReady) => {
+      const { client, transports } = harness();
+      const process = client.launch(request);
+      const failure = process.completion.catch((error: unknown) => error);
+      if (isReady) ready(transports[0]);
+      transports[0].emitLine('{"type":"data","unexpected":"private payload"}');
+      expect(await failure).toMatchObject({
+        code: "sandbox_helper_failed",
+        category: "protocol_validation",
+        identity: {
+          channelId: request.channelId,
+          commandId: request.commandId,
+          generation: request.generation,
+        },
+        processLaunched: isReady ? true : "unknown",
+      });
+      expect(String(await failure)).not.toContain("private payload");
+      client.dispose();
+    },
+  );
+
+  it("distinguishes disposal from protocol failure without claiming an outcome", async () => {
+    const { client, transports } = harness();
+    const process = client.launch(request);
+    const failure = process.completion.catch((error: unknown) => error);
+    ready(transports[0]);
+    process.dispose();
+    expect(await failure).toMatchObject({
+      code: "sandbox_helper_failed",
+      category: "process_disposed",
+      identity: process.identity,
+      processLaunched: true,
+    });
+    client.dispose();
+  });
   it("sends launch first and enables controls only after trusted readiness", async () => {
     const test = harness();
     const process = test.client.launch(request);

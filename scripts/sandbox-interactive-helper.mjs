@@ -279,7 +279,16 @@ export function calculateSandboxExecSize(
   };
 }
 
+class SandboxPtyLaunchFailure extends Error {}
+
 function preCommandFailureFrame(error) {
+  if (error instanceof SandboxPtyLaunchFailure) {
+    return {
+      type: "error",
+      message: errorMessage(error),
+      code: "sandbox_pty_launch_failed",
+    };
+  }
   if (error instanceof SandboxPreCommandFailure) {
     return {
       type: "error",
@@ -822,7 +831,7 @@ export function createSandboxInteractiveHelper(options = {}) {
           terminal = spawnTerminal();
         } catch (retryError) {
           if (!isLegacyPosixSpawnError(retryError)) throw retryError;
-          throw new Error(
+          throw new SandboxPtyLaunchFailure(
             "Sandbox PTY launch failed twice before the command started (node-pty reported posix_spawnp failed). Retry the same command; if failures continue, reload the VS Code window so AgentLink can recreate its sandbox runtime.",
             { cause: retryError },
           );

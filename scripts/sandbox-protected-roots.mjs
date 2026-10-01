@@ -79,7 +79,24 @@ export async function canonicalizeMutationPath(
 
 async function canonicalizeProtectedRoot(requestedRoot) {
   const requested = path.resolve(requestedRoot);
-  const requestedStat = await lstat(requested, { bigint: true });
+  let requestedStat;
+  try {
+    requestedStat = await lstat(requested, { bigint: true });
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    const canonical = await canonicalizeMutationPath(requested);
+    try {
+      await lstat(canonical, { bigint: true });
+    } catch (canonicalError) {
+      if (canonicalError?.code === "ENOENT") {
+        return { root: canonical, absent: true };
+      }
+      throw canonicalError;
+    }
+    throw new Error(
+      `protected root changed during canonicalization: ${canonical}`,
+    );
+  }
   if (requestedStat.isSymbolicLink()) {
     throw new Error(`protected root must not be a symbolic link: ${requested}`);
   }
@@ -90,27 +107,34 @@ async function canonicalizeProtectedRoot(requestedRoot) {
       `protected root must be a regular file or directory: ${canonical}`,
     );
   }
-  return canonical;
+  return { root: canonical, absent: false };
 }
 
-export async function canonicalizeProtectedRoots(requestedRoots) {
+async function canonicalizeProtectedRootsWithStatus(requestedRoots) {
   const canonicalRoots = [];
   for (const requestedRoot of requestedRoots) {
     const canonical = await canonicalizeProtectedRoot(requestedRoot);
-    if (canonicalRoots.some((root) => isWithin(canonical, root))) {
+    if (canonicalRoots.some(({ root }) => isWithin(canonical.root, root))) {
       continue;
     }
     for (let index = canonicalRoots.length - 1; index >= 0; index -= 1) {
-      if (isWithin(canonicalRoots[index], canonical)) {
+      if (isWithin(canonicalRoots[index].root, canonical.root)) {
         canonicalRoots.splice(index, 1);
       }
     }
     canonicalRoots.push(canonical);
   }
-  return canonicalRoots.sort();
+  return canonicalRoots.sort((left, right) =>
+    left.root < right.root ? -1 : left.root > right.root ? 1 : 0,
+  );
 }
 
-async function validateStructuralNode(root, target, state, isRoot = false) {
+export async function canonicalizeProtectedRoots(requestedRoots) {
+  const roots = await canonicalizeProtectedRootsWithStatus(requestedRoots);
+  return roots.map(({ root }) => root);
+}
+
+async function validateStructuralNode(root, target, state) {
   if (state.entries >= MAX_PROTECTED_ENTRIES) {
     throw new Error(
       `structurally protected tree exceeds ${MAX_PROTECTED_ENTRIES} entries: ${root}`,
@@ -120,7 +144,7 @@ async function validateStructuralNode(root, target, state, isRoot = false) {
   try {
     stat = await lstat(target, { bigint: true });
   } catch (error) {
-    if (!isRoot && error?.code === "ENOENT") return;
+    if (error?.code === "ENOENT") return;
     throw error;
   }
   state.entries += 1;
@@ -151,7 +175,7 @@ async function validateStructuralNode(root, target, state, isRoot = false) {
   try {
     children = await readdir(target);
   } catch (error) {
-    if (!isRoot && error?.code === "ENOENT") return;
+    if (error?.code === "ENOENT") return;
     throw error;
   }
   children.sort();
@@ -163,7 +187,7 @@ async function validateStructuralNode(root, target, state, isRoot = false) {
 export async function validateStructurallyProtectedRoots(requestedRoots) {
   const roots = await canonicalizeProtectedRoots(requestedRoots);
   for (const root of roots) {
-    await validateStructuralNode(root, root, { entries: 0 }, true);
+    await validateStructuralNode(root, root, { entries: 0 });
   }
   return roots;
 }
@@ -230,8 +254,20 @@ async function hashSmallPolicyFile(target, size) {
   return createHash("sha256").update(content).digest("hex");
 }
 
-async function snapshotRoot(root) {
+async function snapshotRoot(root, expectedAbsent) {
   const entries = [];
+  try {
+    await lstat(root, { bigint: true });
+    if (expectedAbsent) {
+      throw new Error(`protected root changed during preparation: ${root}`);
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    if (expectedAbsent === false) {
+      throw new Error(`protected root changed during preparation: ${root}`);
+    }
+    return { root, entries, absent: true };
+  }
   await snapshotNode(root, root, entries);
   for (const entry of entries) {
     if (entry.type === "file") {
@@ -241,10 +277,17 @@ async function snapshotRoot(root) {
       );
     }
   }
-  return { root, entries };
+  return { root, entries, absent: false };
 }
 
 function describeSnapshotChange(before, after) {
+  if (before.absent !== after.absent) {
+    return {
+      root: before.root,
+      path: ".",
+      change: before.absent ? "added" : "removed",
+    };
+  }
   const beforeEntries = new Map(
     before.entries.map((entry) => [entry.path, entry]),
   );
@@ -275,10 +318,12 @@ function describeSnapshotChange(before, after) {
 }
 
 export async function prepareProtectedRoots(requestedRoots) {
-  const roots = await canonicalizeProtectedRoots(requestedRoots);
+  const canonicalRoots =
+    await canonicalizeProtectedRootsWithStatus(requestedRoots);
+  const roots = canonicalRoots.map(({ root }) => root);
   const snapshots = [];
-  for (const root of roots) {
-    snapshots.push(await snapshotRoot(root));
+  for (const { root, absent } of canonicalRoots) {
+    snapshots.push(await snapshotRoot(root, absent));
   }
   return { roots, snapshots };
 }

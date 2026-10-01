@@ -41,6 +41,7 @@ export type TerminalExecutionAuditEventType =
   | "review_started"
   | "review_completed"
   | "human_approval_requested"
+  | "human_approval_responded"
   | "approval_decided"
   | "prepared_execution_consumed"
   | "execution_started"

@@ -8,6 +8,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  SandboxHelperFailure,
   SandboxPreCommandLaunchError,
   SandboxStructuralProtectionError,
   type SandboxCommandDisposable,
@@ -241,6 +242,41 @@ function enableManagedNetworking(test: ReturnType<typeof harness>): void {
 }
 
 describe("SandboxTerminalCoordinator", () => {
+  it("attaches retained command output to helper failure evidence", async () => {
+    const test = harness();
+    const pending = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "npm test",
+      cwd: "/workspace",
+      sandboxSessionId: "session",
+    });
+    const failure = pending.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(test.processes).toHaveLength(1));
+    await flush();
+    const process = test.processes[0];
+    process.emit({ type: "data", data: "before failure\r\n" });
+    const error = new SandboxHelperFailure(
+      "invalid frame",
+      "protocol_validation",
+      process.identity,
+      true,
+    );
+    process.completionDeferred.reject(error);
+    expect(await failure).toBe(error);
+    expect(error.retainedOutput).toMatchObject({
+      output: "before failure\n",
+      finalized: true,
+    });
+    expect(
+      test.coordinator.getRetainedOutput({
+        owner: undefined,
+        terminalId: process.identity.channelId,
+        commandId: process.identity.commandId,
+      })?.output,
+    ).toBe("before failure\n");
+    expect(test.authorizedFinalizer).toHaveBeenCalledOnce();
+    test.coordinator.dispose();
+  });
   it("keeps timed-out command results after reuse without targeting the newer process", async () => {
     const test = harness();
     const first = await test.coordinator.executeCommand({

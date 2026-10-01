@@ -41,6 +41,8 @@ import type {
   SandboxHelperLaunchRequest,
 } from "./sandboxHelperProtocol.js";
 import {
+  SandboxHelperFailure,
+  SandboxPtyLaunchError,
   SandboxPreCommandLaunchError,
   SandboxStructuralProtectionError,
   type SandboxCommandProcess,
@@ -476,6 +478,11 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         return exit;
       },
       (error) => {
+        if (error instanceof SandboxHelperFailure) {
+          error.retainedOutput = this.retainedOutput(
+            channel.session.getCommandOutput(commandId),
+          );
+        }
         this.finishActive(channel, commandId);
         throw error;
       },
@@ -486,6 +493,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         await process.ready;
       } catch (error) {
         if (
+          error instanceof SandboxPtyLaunchError ||
           error instanceof SandboxPreCommandLaunchError ||
           error instanceof SandboxStructuralProtectionError
         ) {
@@ -573,6 +581,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       ]);
     } catch (error) {
       if (
+        error instanceof SandboxPtyLaunchError ||
         error instanceof SandboxPreCommandLaunchError ||
         error instanceof SandboxStructuralProtectionError
       ) {
@@ -597,6 +606,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       options.onCommandFinalizationDeferred?.();
       void completion.catch((error) => {
         if (
+          error instanceof SandboxPtyLaunchError ||
           error instanceof SandboxPreCommandLaunchError ||
           error instanceof SandboxStructuralProtectionError
         ) {

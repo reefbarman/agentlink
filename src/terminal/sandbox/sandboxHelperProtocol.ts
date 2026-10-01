@@ -106,7 +106,7 @@ export type SandboxHelperEventFrame =
   | (SandboxCommandIdentity & {
       type: "error";
       message: string;
-      code?: undefined;
+      code?: "sandbox_pty_launch_failed";
       details?: undefined;
     })
   | (SandboxCommandIdentity & {
@@ -433,7 +433,10 @@ export function isSandboxHelperEventFrame(
     return (
       hasOnlyKeys(value, [...identityKeys, "message", "code", "details"]) &&
       isNonEmptyString(value.message) &&
-      (value.code === undefined || environmentFailure || structuralFailure) &&
+      (value.code === undefined ||
+        value.code === "sandbox_pty_launch_failed" ||
+        environmentFailure ||
+        structuralFailure) &&
       (environmentFailure
         ? isPreCommandFailureDetails(value.details)
         : structuralFailure
