@@ -46,9 +46,7 @@ const BACKGROUND_WAIT_TOOLS = new Set([
  */
 const DIRECT_ACTION_TOOLS = new Set([
   "read_file",
-  "get_context",
   "search_files",
-  "codebase_search",
   "list_files",
   "get_repo_map",
   "get_diagnostics",

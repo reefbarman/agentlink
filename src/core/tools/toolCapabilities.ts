@@ -1,4 +1,5 @@
 import type { ToolResult } from "@agentlink/protocol/tool-result";
+import { getSearchInputError } from "./searchInputValidation.js";
 
 export type ToolSideEffect =
   | "read"
@@ -102,16 +103,21 @@ const BENCHMARK_ONLY_TOOLS = new Set([
   "apply_code_action",
 ]);
 const DORMANT_TOOLS = new Set(["show_notification"]);
+const DEFERRED_BACKGROUND_TOOLS = new Set([
+  "detach_background_agent",
+  "start_fleet_workflow",
+  "schedule_fleet_workflow",
+  "get_fleet_workflow_result",
+  "manage_fleet_automations",
+]);
 const ESSENTIAL_TOOLS = new Set([
   "web_search",
   "web_fetch",
   "read_file",
   "get_context",
   "get_repo_map",
-  "get_module_neighbors",
   "list_files",
   "search_files",
-  "codebase_search",
   "write_file",
   "apply_diff",
   "find_and_replace",
@@ -211,19 +217,12 @@ const toolCapabilities = [
   metadata(
     "search_files",
     "search",
-    ["workspace.read", "search.text"],
+    ["workspace.read", "search.text", "search.semantic"],
     "read",
     "never",
     true,
   ),
-  metadata(
-    "codebase_search",
-    "search",
-    ["search.semantic"],
-    "read",
-    "never",
-    true,
-  ),
+
   metadata(
     "search_session_history",
     "session",
@@ -304,6 +303,14 @@ const toolCapabilities = [
     ["media.present", "session.images.read", "ui.chat.display"],
     "control",
     "never",
+    false,
+  ),
+  metadata(
+    "save_session_image",
+    "media",
+    ["media.save", "session.images.read", "workspace.write"],
+    "write",
+    "policy",
     false,
   ),
   metadata(
@@ -703,28 +710,28 @@ function composabilityPolicy(
 /** Canonical source for every native tool and variant that Compose may bridge. */
 export const COMPOSABILITY_POLICIES = Object.freeze({
   read_file: composabilityPolicy(
-    "query omitted; text or extracted-PDF output only",
-    (input) =>
-      input.query !== undefined
-        ? { message: "query input is not composable" }
-        : undefined,
+    "text or extracted-PDF output only",
+    (input) => {
+      const message = getSearchInputError("read_file", input);
+      return message ? { message } : undefined;
+    },
   ),
   get_context: composabilityPolicy("structured text output only"),
   get_repo_map: composabilityPolicy("structured text output only"),
   get_module_neighbors: composabilityPolicy("structured text output only"),
-  list_files: composabilityPolicy(
-    "query omitted; structured text output only",
-    (input) =>
-      input.query !== undefined
-        ? { message: "query input is not composable" }
-        : undefined,
-  ),
+  list_files: composabilityPolicy("structured text output only", (input) => {
+    const message = getSearchInputError("list_files", input);
+    return message ? { message } : undefined;
+  }),
   search_files: composabilityPolicy(
-    "semantic omitted or false; structured text output only",
-    (input) =>
-      input.semantic === true
-        ? { message: "semantic input is not composable" }
-        : undefined,
+    "regex only; structured text output only",
+    (input) => {
+      const message = getSearchInputError("search_files", input);
+      if (message) return { message };
+      return input.query !== undefined
+        ? { message: "query input is not composable" }
+        : undefined;
+    },
   ),
   get_diagnostics: composabilityPolicy("structured text output only"),
   go_to_definition: composabilityPolicy("structured text output only"),
@@ -851,7 +858,9 @@ function metadata(
     disclosure:
       availability.kind === "dormant"
         ? "dormant"
-        : ESSENTIAL_TOOLS.has(name) || definitionSource === "adapter-definition"
+        : ESSENTIAL_TOOLS.has(name) ||
+            (definitionSource === "adapter-definition" &&
+              !DEFERRED_BACKGROUND_TOOLS.has(name))
           ? "essential"
           : availability.kind === "artifact-loader"
             ? "hidden"

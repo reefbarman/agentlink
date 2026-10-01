@@ -237,6 +237,7 @@ export async function executeCodexResolvedCompletion(args: {
     if (
       args.authMethod === "oauth" &&
       request.model === "gpt-6-astra" &&
+      !args.hostedTools?.length &&
       isCodexBodylessBadRequest(codexError)
     ) {
       throw createCodexRequestError(

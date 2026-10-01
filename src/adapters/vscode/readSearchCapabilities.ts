@@ -106,6 +106,7 @@ export function createVscodeSemanticSearchProvider(
         params.exclude_globs,
         {
           includeAllWorkspaceRoots: false,
+          exactFile: params.exactFile,
           ...(globalStorageUri
             ? {
                 retrievalStoreRootForWorkspace: (workspaceRoot: string) =>

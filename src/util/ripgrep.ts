@@ -241,24 +241,49 @@ export async function execRipgrepFiles(
     });
 
     let errorOutput = "";
+    let errorOutputTruncated = false;
     rgProcess.stderr.on("data", (data: Buffer) => {
-      errorOutput += data.toString();
+      const combined = errorOutput + data.toString();
+      errorOutputTruncated ||= combined.length > 16_384;
+      errorOutput = combined.slice(0, 16_384);
     });
 
     rgProcess.on("close", (exitCode) => {
       if (settled) return;
       settled = true;
       rl.close();
-      const warnings = Array.from(
+      const allWarnings = Array.from(
         new Set(
           errorOutput
             .split(/\r?\n/)
             .map((line) => line.trim())
             .filter(Boolean),
         ),
-      ).slice(0, 20);
-      if (warnings.length > 0 && files.length === 0 && !truncated) {
-        reject(new Error(`ripgrep error: ${warnings.join("\n")}`));
+      );
+      const warnings = allWarnings.slice(0, 20);
+      const traversalWarningsOnly =
+        exitCode === 2 &&
+        !errorOutputTruncated &&
+        allWarnings.length > 0 &&
+        allWarnings.every(
+          (warning) =>
+            /^rg: .+: .+ \(os error \d+\)$/.test(warning) ||
+            /^rg: .+: (?:No such file or directory|Permission denied|Operation not permitted|Too many levels of symbolic links)$/.test(
+              warning,
+            ) ||
+            /^(?:rg: )?File system loop found: /.test(warning),
+        );
+      if (
+        files.length === 0 &&
+        !truncated &&
+        !traversalWarningsOnly &&
+        (warnings.length > 0 || (exitCode !== 0 && exitCode !== 1))
+      ) {
+        reject(
+          new Error(
+            `ripgrep error: ${warnings.join("\n") || `exit code ${exitCode}`}`,
+          ),
+        );
         return;
       }
       resolve({ files, warnings, exitCode, truncated });

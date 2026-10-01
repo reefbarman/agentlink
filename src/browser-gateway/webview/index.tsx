@@ -43,6 +43,11 @@ function BrowserGatewayRoot() {
       workspaceName={config.workspaceName}
       routeByInstance={config.routeByInstance === true}
       askAgentOnly={config.askAgentOnly === true}
+      quickAsk={
+        config.askAgentOnly === true &&
+        Boolean(window.agentlinkDesktopShell) &&
+        query.get("quickAsk") === "1"
+      }
       workspaceOnly={workspaceOnly}
       externalBrowserUnavailable={workspaceOnly && desktopWorkspace}
       browserShell={

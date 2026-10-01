@@ -7,7 +7,15 @@ import {
   executeCodexResponsesStream,
   type CodexResponsesClient,
 } from "./responsesStream.js";
-import type { CodexRequestBody } from "./translation.js";
+import {
+  buildCodexResolvedRequestBody,
+  type CodexRequestBody,
+} from "./translation.js";
+import { ResponsesTransportSession } from "./ResponsesTransportSession.js";
+import type {
+  ResponsesWebSocketConnector,
+  ResponsesWebSocketDispatchRequest,
+} from "./responsesTransport.js";
 import {
   CODEX_TURN_STATE_HEADER,
   CodexTurnState,
@@ -59,6 +67,59 @@ async function collectStream(
 }
 
 describe("executeCodexResponsesStream routing", () => {
+  it("does not reuse a Lite WebSocket for hosted web or vice versa", async () => {
+    const session = new ResponsesTransportSession();
+    const connect = vi.fn<ResponsesWebSocketConnector["connect"]>(async () => ({
+      isOpen: true,
+      headers: new Headers(),
+      close: vi.fn(),
+      async *dispatch(request: ResponsesWebSocketDispatchRequest) {
+        request.evidence.phase = "response_started";
+        yield { type: "response.done", response: { usage: {} } };
+      },
+    }));
+    const create = vi.fn<CodexResponsesClient["responses"]["create"]>();
+    try {
+      for (const hosted of [false, true, true, false]) {
+        const { body } = buildCodexResolvedRequestBody({
+          authMethod: "oauth",
+          model: "gpt-6.1-sol",
+          input: [],
+          instructions: "socket request instructions",
+          hostedTools: hosted ? [{ type: "web_search" }] : undefined,
+        });
+        await collectStream({
+          client: { responses: { create } },
+          body,
+          authMethod: "oauth",
+          webSocket: {
+            enabled: true,
+            connector: { connect },
+            url: "wss://codex.invalid/responses",
+            headers: {},
+            identity: "same-account-session",
+            session,
+          },
+        });
+      }
+      expect(create).not.toHaveBeenCalled();
+      expect(connect).toHaveBeenCalledTimes(3);
+      expect(connect.mock.calls[0][0].headers).toHaveProperty(
+        "x-openai-internal-codex-responses-lite",
+        "true",
+      );
+      expect(connect.mock.calls[1][0].headers).not.toHaveProperty(
+        "x-openai-internal-codex-responses-lite",
+      );
+      expect(connect.mock.calls[2][0].headers).toHaveProperty(
+        "x-openai-internal-codex-responses-lite",
+        "true",
+      );
+    } finally {
+      session.dispose();
+    }
+  });
+
   it("captures and echoes response headers through the real SDK with injected fetch", async () => {
     const requests: Request[] = [];
     const client = new OpenAI({

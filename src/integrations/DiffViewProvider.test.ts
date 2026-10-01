@@ -532,7 +532,134 @@ describe("DiffViewProvider rollback", () => {
 describe("snapshotDiagnostics", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
     (vscode.workspace.textDocuments as unknown[]).length = 0;
+  });
+
+  function undiagnosedTarget() {
+    const uri = vscode.Uri.file("/workspace/fresh.yaml");
+    let text = "before\nuntouched";
+    let errors: vscode.Diagnostic[] = [];
+    const listeners = new Set<(event: vscode.DiagnosticChangeEvent) => void>();
+    const document = { uri, getText: () => text } as vscode.TextDocument;
+    (vscode.workspace.textDocuments as vscode.TextDocument[]).push(document);
+    vi.spyOn(vscode.languages, "getDiagnostics").mockImplementation(((
+      target?: vscode.Uri,
+    ) =>
+      target
+        ? errors
+        : errors.length
+          ? [[uri, errors]]
+          : []) as typeof vscode.languages.getDiagnostics);
+    vi.spyOn(vscode.languages, "onDidChangeDiagnostics").mockImplementation(
+      (listener) => {
+        listeners.add(listener);
+        return { dispose: () => listeners.delete(listener) };
+      },
+    );
+    return {
+      snapshot: snapshotDiagnostics(uri.fsPath),
+      setText(value: string) {
+        text = value;
+      },
+      diagnose(entries: Array<{ line: number; message: string }>) {
+        errors = entries.map(
+          ({ line, message }) =>
+            ({
+              range: { start: { line } },
+              message,
+              severity: vscode.DiagnosticSeverity.Error,
+            }) as vscode.Diagnostic,
+        );
+        for (const listener of listeners) listener({ uris: [uri] });
+      },
+      listeners,
+    };
+  }
+
+  it("captures delayed pre-edit diagnostics before replacing a newly opened file", async () => {
+    vi.useFakeTimers();
+    const target = undiagnosedTarget();
+    const settling = target.snapshot.settleBaseline(25);
+    target.diagnose([{ line: 0, message: "pre-existing template error" }]);
+    await vi.advanceTimersByTimeAsync(25);
+    await settling;
+    target.setText("after\nuntouched");
+    target.diagnose([
+      { line: 0, message: "pre-existing template error" },
+      { line: 0, message: "genuine new error" },
+    ]);
+    const collecting = target.snapshot.collectNewErrors(25);
+    await vi.advanceTimersByTimeAsync(25);
+    const result = await collecting;
+    expect(result).toContain("genuine new error");
+    expect(result).not.toContain("pre-existing template error");
+    expect(result).not.toContain("not confirmed");
+    expect(target.listeners.size).toBe(0);
+  });
+
+  it.each([false, true])(
+    "settles an early partial publish before trusting the baseline (initial errors: %s)",
+    async (withInitialErrors) => {
+      vi.useFakeTimers();
+      const target = undiagnosedTarget();
+      target.diagnose(
+        withInitialErrors ? [{ line: 0, message: "early syntax error" }] : [],
+      );
+      let settled = false;
+      const settling = target.snapshot.settleBaseline(500).then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(settled).toBe(false);
+      target.diagnose([{ line: 1, message: "pre-existing semantic error" }]);
+      await vi.advanceTimersByTimeAsync(300);
+      await settling;
+      target.setText("after\nuntouched");
+      target.diagnose([
+        { line: 0, message: "genuine new error" },
+        { line: 1, message: "pre-existing semantic error" },
+      ]);
+      const collecting = target.snapshot.collectNewErrors(25);
+      await vi.advanceTimersByTimeAsync(25);
+      expect(await collecting).toBe("Line 1: genuine new error");
+    },
+  );
+
+  it("does not treat an open but undiagnosed document as a clean baseline", async () => {
+    vi.useFakeTimers();
+    const target = undiagnosedTarget();
+    const settling = target.snapshot.settleBaseline(25);
+    await vi.advanceTimersByTimeAsync(25);
+    await settling;
+    target.setText("after\nuntouched");
+    target.diagnose([
+      { line: 0, message: "error on edited line" },
+      { line: 1, message: "old untouched error" },
+    ]);
+    const collecting = target.snapshot.collectNewErrors(25);
+    await vi.advanceTimersByTimeAsync(25);
+    const result = await collecting;
+    expect(result).toContain("error on edited line");
+    expect(result).toContain("not confirmed as introduced");
+    expect(result).toContain(
+      "1 error diagnostic outside the edited lines not reported",
+    );
+    expect(result).not.toContain("old untouched error");
+  });
+
+  it("recognizes an empty pre-edit diagnostics event as a clean baseline", async () => {
+    vi.useFakeTimers();
+    const target = undiagnosedTarget();
+    const settling = target.snapshot.settleBaseline(25);
+    target.diagnose([]);
+    await vi.advanceTimersByTimeAsync(25);
+    await settling;
+    target.setText("after\nuntouched");
+    target.diagnose([{ line: 1, message: "new downstream error" }]);
+    const collecting = target.snapshot.collectNewErrors(25);
+    await vi.advanceTimersByTimeAsync(25);
+    expect(await collecting).toBe("Line 2: new downstream error");
   });
 
   it("reports introduced target errors but excludes unrelated workspace and external errors", async () => {
@@ -670,6 +797,44 @@ describe("DiffViewProvider durable save lifecycle", () => {
     ).rejects.toThrow("Review editor does not match the target file");
     expect(applyEdit).not.toHaveBeenCalled();
     expect(await fs.readFile(filePath, "utf-8")).toBe("old");
+  });
+
+  it("preserves a newly created file when its review buffer changes during diagnostic preparation", async () => {
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-diff-open-"),
+    );
+    tempDirs.push(dir);
+    const filePath = path.join(dir, "new.ts");
+    const document = {
+      uri: vscode.Uri.file(filePath),
+      version: 1,
+      lineCount: 1,
+      getText: () => "user edit",
+    };
+    const provider = new DiffViewProvider(1, "concurrent-review-edit");
+    vi.spyOn(vscode.Uri, "parse").mockReturnValue({
+      with: () => vscode.Uri.file(filePath),
+    } as unknown as vscode.Uri);
+    vi.spyOn(vscode.commands, "executeCommand").mockResolvedValue(undefined);
+    Object.defineProperty(vscode.window, "visibleTextEditors", {
+      configurable: true,
+      value: [{ document }],
+    });
+    vi.spyOn(vscode.languages, "getDiagnostics").mockReturnValue([]);
+    vi.spyOn(vscode.languages, "onDidChangeDiagnostics").mockImplementation(
+      () => {
+        document.version++;
+        return { dispose: vi.fn() };
+      },
+    );
+    const applyEdit = vi.spyOn(vscode.workspace, "applyEdit");
+
+    await expect(provider.open(filePath, "new.ts", "proposal")).rejects.toThrow(
+      "Review document changed while preparing diagnostics",
+    );
+    expect(applyEdit).not.toHaveBeenCalled();
+    expect(document.getText()).toBe("user edit");
+    expect(await fs.readFile(filePath, "utf-8")).toBe("");
   });
 
   it("does not save a closed review document", async () => {

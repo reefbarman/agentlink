@@ -1,12 +1,15 @@
 import { afterEach, mock, test } from "node:test";
 import {
+  assertDesktopStopped,
+  quitRunningDesktop,
+} from "./install-desktop.mjs";
+import {
   resolveSigningPolicy,
   signMacBinary,
   verifyMacSignature,
 } from "./macos-signing.mjs";
 
 import assert from "node:assert/strict";
-import { assertDesktopStopped } from "./install-desktop.mjs";
 import childProcess from "node:child_process";
 
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
@@ -193,5 +196,50 @@ test("installer refuses live app and helper processes but not unrelated commands
   assertDesktopStopped(
     " 999 /Applications/AgentLink.app/Contents/MacOS/AgentLink\n",
     999,
+  );
+});
+
+test("installer asks only the main app to quit and waits for helpers to exit", async () => {
+  mock.method(process.stdout, "write", () => true);
+  const running = [
+    " 101 /Applications/AgentLink.app/Contents/MacOS/AgentLink",
+    " 102 /Applications/AgentLink.app/Contents/MacOS/AgentLink /runtime/dist/browser-gateway-helper.js",
+    " 103 /Applications/AgentLink.app/Contents/Frameworks/AgentLink Helper.app/Contents/MacOS/AgentLink Helper --type=gpu-process",
+  ].join("\n");
+  const snapshots = [
+    running,
+    running,
+    " 102 /Applications/AgentLink.app/Contents/MacOS/AgentLink /runtime/dist/browser-gateway-helper.js",
+    "",
+  ];
+  const signalled = [];
+  const quit = await quitRunningDesktop({
+    listProcesses: () => snapshots.shift() ?? "",
+    signal: (pid) => signalled.push(pid),
+    wait: async () => {},
+  });
+  assert.equal(quit, true);
+  assert.deepEqual(signalled, [101]);
+  assert.equal(snapshots.length, 0);
+});
+
+test("installer skips quitting when the app is not running and reports a stuck quit", async () => {
+  mock.method(process.stdout, "write", () => true);
+  assert.equal(
+    await quitRunningDesktop({
+      listProcesses: () => " 123 /usr/bin/node /tmp/other.js\n",
+      signal: () => assert.fail("unexpected signal"),
+    }),
+    false,
+  );
+  await assert.rejects(
+    quitRunningDesktop({
+      listProcesses: () =>
+        " 101 /Applications/AgentLink.app/Contents/MacOS/AgentLink\n",
+      signal: () => {},
+      wait: async () => {},
+      timeoutMs: 1000,
+    }),
+    /did not exit within 1s/,
   );
 });

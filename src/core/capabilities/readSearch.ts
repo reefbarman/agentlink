@@ -31,9 +31,10 @@ export interface PathAccessProvider {
 
 export interface SearchFilesParams {
   path: string;
-  regex: string;
+  regex?: string;
+  query?: string;
+  exclude_globs?: string[];
   file_pattern?: string;
-  semantic?: boolean;
   context?: number;
   context_before?: number;
   context_after?: number;
@@ -44,9 +45,10 @@ export interface SearchFilesParams {
   output_mode?: string;
 }
 
-export interface CodebaseSearchParams {
+export interface IndexedSearchRequest {
   query: string;
-  path?: string;
+  path: string;
+  exactFile: boolean;
   limit?: number;
   exclude_globs?: string[];
 }
@@ -58,7 +60,7 @@ export interface SemanticSearchResult {
 }
 
 export interface SemanticSearchProvider {
-  search(params: CodebaseSearchParams): Promise<SemanticSearchResult>;
+  search(params: IndexedSearchRequest): Promise<SemanticSearchResult>;
 }
 
 export interface ListFilesParams {
@@ -66,7 +68,6 @@ export interface ListFilesParams {
   recursive?: boolean;
   depth?: number;
   pattern?: string;
-  query?: string;
   include_ignored?: boolean;
 }
 
@@ -75,7 +76,6 @@ export interface ReadFileParams {
   offset?: number;
   limit?: number;
   include_symbols?: boolean;
-  query?: string;
   anchor?: string;
   anchor_regex?: string;
   anchor_offset?: number;

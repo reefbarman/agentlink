@@ -1,3 +1,20 @@
+import {
+  acceleratorFromKeyboardEvent,
+  formatQuickAskAccelerator,
+} from "./quickAskShortcut.js";
+
+interface QuickAskShortcutStatus {
+  shortcut: string | null;
+  registered: boolean;
+  defaultShortcut: string;
+}
+
+interface OpenAtLoginStatus {
+  available: boolean;
+  enabled: boolean;
+  requiresApproval: boolean;
+}
+
 interface DesktopOAuthAccount {
   id: string;
   label: string;
@@ -27,6 +44,12 @@ declare global {
       setActiveOAuthAccount(accountId: string): Promise<DesktopAuthStatus>;
       removeOAuthAccount(accountId: string): Promise<DesktopAuthStatus>;
       continueToChat(): Promise<{ ok: true }>;
+      quickAskShortcut(): Promise<QuickAskShortcutStatus>;
+      setQuickAskShortcut(
+        accelerator: string | null,
+      ): Promise<QuickAskShortcutStatus>;
+      openAtLogin(): Promise<OpenAtLoginStatus>;
+      setOpenAtLogin(enabled: boolean): Promise<OpenAtLoginStatus>;
     };
   }
 }
@@ -39,6 +62,19 @@ const oauthButton =
 const continueButton = document.querySelector<HTMLButtonElement>("#continue")!;
 const accountList = document.querySelector<HTMLElement>("#accounts")!;
 const status = document.querySelector<HTMLElement>("#status")!;
+const shortcutValue = document.querySelector<HTMLElement>("#shortcut-value")!;
+const shortcutRecord =
+  document.querySelector<HTMLButtonElement>("#shortcut-record")!;
+const shortcutReset =
+  document.querySelector<HTMLButtonElement>("#shortcut-reset")!;
+const shortcutDisable =
+  document.querySelector<HTMLButtonElement>("#shortcut-disable")!;
+const shortcutNote = document.querySelector<HTMLElement>("#shortcut-note")!;
+const openAtLoginInput =
+  document.querySelector<HTMLInputElement>("#open-at-login")!;
+const loginNote = document.querySelector<HTMLElement>("#login-note")!;
+let shortcutStatus: QuickAskShortcutStatus | null = null;
+let recordingShortcut = false;
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -46,6 +82,131 @@ form.addEventListener("submit", (event) => {
 });
 oauthButton.addEventListener("click", () => void signInOAuth());
 continueButton.addEventListener("click", () => void continueToChat());
+shortcutRecord.addEventListener("click", () => {
+  if (recordingShortcut) stopRecordingShortcut();
+  else startRecordingShortcut();
+});
+shortcutReset.addEventListener("click", () => {
+  if (shortcutStatus) void saveShortcut(shortcutStatus.defaultShortcut);
+});
+shortcutDisable.addEventListener("click", () => void saveShortcut(null));
+openAtLoginInput.addEventListener("change", () => {
+  const enabled = openAtLoginInput.checked;
+  openAtLoginInput.disabled = true;
+  void window.agentlinkDesktop
+    .setOpenAtLogin(enabled)
+    .then(renderOpenAtLogin)
+    .catch(() => {
+      openAtLoginInput.checked = !enabled;
+      openAtLoginInput.disabled = false;
+      showLoginNote("AgentLink could not update the login item.", true);
+    });
+});
+
+function renderOpenAtLogin(next: OpenAtLoginStatus): void {
+  openAtLoginInput.checked = next.enabled;
+  openAtLoginInput.disabled = !next.available;
+  if (!next.available) {
+    showLoginNote("Only available in the installed app.", false);
+  } else if (next.requiresApproval) {
+    showLoginNote(
+      "Allow AgentLink in System Settings → General → Login Items to finish turning this on.",
+      true,
+    );
+  } else {
+    showLoginNote("", false);
+  }
+}
+
+function showLoginNote(message: string, isError: boolean): void {
+  loginNote.textContent = message;
+  loginNote.classList.toggle("error", isError);
+}
+window.addEventListener(
+  "keydown",
+  (event) => {
+    if (!recordingShortcut) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      stopRecordingShortcut();
+      return;
+    }
+    if (["Meta", "Control", "Alt", "Shift"].includes(event.key)) return;
+    const accelerator = acceleratorFromKeyboardEvent(event);
+    if (!accelerator) {
+      showShortcutNote(
+        "Use a key with ⌘, ⌃ or ⌥ (Shift alone isn't enough). Press Esc to cancel.",
+        true,
+      );
+      return;
+    }
+    stopRecordingShortcut();
+    void saveShortcut(accelerator);
+  },
+  true,
+);
+window.addEventListener("blur", () => {
+  if (recordingShortcut) stopRecordingShortcut();
+});
+
+function startRecordingShortcut(): void {
+  recordingShortcut = true;
+  shortcutValue.textContent = "Press keys…";
+  shortcutValue.classList.add("recording");
+  shortcutRecord.textContent = "Cancel";
+  showShortcutNote("Press the new shortcut, or Esc to cancel.", false);
+}
+
+function stopRecordingShortcut(): void {
+  recordingShortcut = false;
+  shortcutValue.classList.remove("recording");
+  shortcutRecord.textContent = "Change";
+  if (shortcutStatus) renderShortcut(shortcutStatus);
+}
+
+async function saveShortcut(accelerator: string | null): Promise<void> {
+  try {
+    renderShortcut(
+      await window.agentlinkDesktop.setQuickAskShortcut(accelerator),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    showShortcutNote(
+      message.includes("shortcut_unavailable")
+        ? "That shortcut is already used by macOS or another app. Try a different one."
+        : "AgentLink could not save that shortcut.",
+      true,
+    );
+  }
+}
+
+function renderShortcut(next: QuickAskShortcutStatus): void {
+  shortcutStatus = next;
+  shortcutValue.textContent = next.shortcut
+    ? formatQuickAskAccelerator(next.shortcut)
+    : "Off";
+  shortcutReset.hidden = next.shortcut === next.defaultShortcut;
+  shortcutDisable.hidden = next.shortcut === null;
+  if (next.shortcut && !next.registered) {
+    showShortcutNote(
+      "This shortcut is in use by macOS or another app, so it won't work. Choose a different one.",
+      true,
+    );
+  } else {
+    showShortcutNote(
+      next.shortcut
+        ? "Send a message from Quick Ask to open it in a new chat here."
+        : "Quick Ask is off.",
+      false,
+    );
+  }
+}
+
+function showShortcutNote(message: string, isError: boolean): void {
+  shortcutNote.textContent = message;
+  shortcutNote.classList.toggle("error", isError);
+}
 
 async function submitApiKey(): Promise<void> {
   const apiKey = apiKeyInput.value.trim();
@@ -218,5 +379,13 @@ void window.agentlinkDesktop
   .credentialStatus()
   .then(renderStatus)
   .catch((error) => showStatus(readError(error), true));
+void window.agentlinkDesktop
+  .quickAskShortcut()
+  .then(renderShortcut)
+  .catch(() => showShortcutNote("Quick Ask settings are unavailable.", true));
+void window.agentlinkDesktop
+  .openAtLogin()
+  .then(renderOpenAtLogin)
+  .catch(() => showLoginNote("Login item settings are unavailable.", true));
 
 export {};

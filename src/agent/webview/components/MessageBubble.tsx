@@ -421,12 +421,24 @@ export function MessageBubble({
   const renderSegment = (segment: ActivitySegment): preact.ComponentChild => {
     if (segment.kind === "activity_group") {
       const tools = segment.segments.flatMap((child) =>
-        child.kind === "tool_group" ? child.blocks : [],
+        child.kind === "tool_group"
+          ? child.blocks
+          : child.block.type === "skill_load"
+            ? [child.block]
+            : [],
       );
       const thinkingCount = segment.segments.filter(
         (child) => child.kind === "single" && child.block.type === "thinking",
       ).length;
-      const summary = `${thinkingCount} thinking steps · ${tools.length} tool calls · ${getToolGroupLabel(tools)}`;
+      const summary = [
+        thinkingCount > 0 &&
+          `${thinkingCount} thinking step${thinkingCount === 1 ? "" : "s"}`,
+        tools.length > 0 &&
+          `${tools.length} tool call${tools.length === 1 ? "" : "s"}`,
+        tools.length > 0 && getToolGroupLabel(tools),
+      ]
+        .filter(Boolean)
+        .join(" · ");
       const first = segment.segments[0];
       return (
         <ActivityGroup

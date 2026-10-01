@@ -8,12 +8,12 @@ import {
   screen,
   waitFor,
 } from "@testing-library/preact";
-
-import { StreamingText } from "./StreamingText";
 import {
   resetFileLinkFeedbackForTests,
   showFileOpenFailure,
 } from "./fileLinkFeedback";
+
+import { StreamingText } from "./StreamingText";
 
 const rendererMocks = vi.hoisted(() => ({
   renderMermaid: vi.fn(),
@@ -32,6 +32,7 @@ afterEach(() => {
   cleanup();
   rendererMocks.renderMermaid.mockReset();
   rendererMocks.renderVega.mockReset();
+  vi.restoreAllMocks();
 });
 
 describe("StreamingText lazy special-block renderers", () => {
@@ -107,9 +108,11 @@ describe("StreamingText lazy special-block renderers", () => {
   });
 
   it("keeps renderer failures localized to the special block", async () => {
-    rendererMocks.renderMermaid.mockRejectedValue(
-      new Error("chunk unavailable"),
-    );
+    const error = new Error("chunk unavailable");
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    rendererMocks.renderMermaid.mockRejectedValue(error);
     render(
       <StreamingText
         text={"Before\n\n```mermaid\ngraph TD\nA --> B\n```\n\nAfter"}
@@ -124,6 +127,10 @@ describe("StreamingText lazy special-block renderers", () => {
         screen.getByText("Failed to render diagram: chunk unavailable"),
       ).toBeTruthy();
     });
+    expect(consoleError).toHaveBeenCalledExactlyOnceWith(
+      "[mermaid] Failed to render diagram 0:",
+      error,
+    );
   });
 });
 
@@ -315,7 +322,14 @@ describe("StreamingText file links", () => {
     ) as HTMLAnchorElement;
     expect(link).toBeTruthy();
     expect(link.getAttribute("href")).toBe("https://example.com/docs");
+    const onExternalClick = vi.fn((event: Event) => {
+      expect(event.defaultPrevented).toBe(false);
+      // Browser navigation is outside this test and is not implemented by jsdom.
+      event.preventDefault();
+    });
+    container.addEventListener("click", onExternalClick, { once: true });
     fireEvent.click(link);
+    expect(onExternalClick).toHaveBeenCalledOnce();
     expect(onOpenFile).not.toHaveBeenCalled();
   });
 

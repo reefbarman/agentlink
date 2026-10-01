@@ -7,6 +7,10 @@ import {
   validateComposableToolInput,
   validateComposableToolOutputContent,
 } from "../../core/tools/toolCapabilities.js";
+import {
+  getPermittedReadFileViews,
+  resolveReadFileView,
+} from "../../core/tools/readFileViews.js";
 
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { randomUUID } from "crypto";
@@ -126,6 +130,7 @@ function childResultError(
     status === "invalid_native_tool_input" ||
     status === "invalid_resolved_native_tool" ||
     status === "native_tool_not_invocable" ||
+    status === "read_view_not_permitted" ||
     reason === "interaction_denied"
   ) {
     return new ComposeScopeError("authorization", message, code);
@@ -186,7 +191,14 @@ function resolveChildRoute(
   const skillAllowedTools =
     parentContext.skillAuthority?.allowedTools ??
     parentContext.skillAllowedTools;
-  if (skillAllowedTools && !skillAllowedTools.includes(toolName)) {
+  // read_file views map to separate operations; the runtime enforces the
+  // exact view, so either reader grant admits the public tool here.
+  const skillGrantNames =
+    toolName === "read_file" ? ["read_file", "get_context"] : [toolName];
+  if (
+    skillAllowedTools &&
+    !skillGrantNames.some((name) => skillAllowedTools.includes(name))
+  ) {
     throw new ComposeScopeError(
       "authorization",
       `Tool '${toolName}' is not available under the active skill policy`,
@@ -246,6 +258,27 @@ export function createComposeExecutionScope(
   ): ComposeChildRoute => {
     const route = resolveChildRoute(toolName, parentContext, isComposable);
     assertComposableInput(toolName, input);
+    if (toolName === "read_file") {
+      // Reject a view outside the skill grant before reserving budget; the
+      // runtime still enforces profile authority and option validity.
+      const skillAllowedTools =
+        parentContext.skillAuthority?.allowedTools ??
+        parentContext.skillAllowedTools;
+      const view = resolveReadFileView(
+        input,
+        getPermittedReadFileViews(
+          (operation) =>
+            !skillAllowedTools || skillAllowedTools.includes(operation),
+        ),
+      );
+      if (!view.ok && view.status === "read_view_not_permitted") {
+        throw new ComposeScopeError(
+          "authorization",
+          view.message,
+          "tool_not_in_skill",
+        );
+      }
+    }
     return route;
   };
 
@@ -358,10 +391,7 @@ export function createComposeExecutionScope(
             `Tool '${toolName}' did not return canonical structured data`,
           );
         }
-        if (
-          (toolName === "read_file" || toolName === "get_context") &&
-          typeof input.path === "string"
-        ) {
+        if (toolName === "read_file" && typeof input.path === "string") {
           parentContext.onComposeFileRead?.(input.path);
         }
         parentContext.onNestedToolComplete?.({

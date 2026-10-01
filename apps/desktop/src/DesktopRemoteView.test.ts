@@ -11,6 +11,7 @@ const electron = vi.hoisted(() => ({
   views: [] as any[],
   ipc: null as any,
   remoteSession: null as any,
+  openExternal: vi.fn(),
 }));
 vi.mock("electron", async () => {
   const { EventEmitter } = await import("node:events");
@@ -22,6 +23,7 @@ vi.mock("electron", async () => {
   });
   return {
     ipcMain: electron.ipc,
+    shell: { openExternal: electron.openExternal },
     session: { fromPartition: vi.fn(() => electron.remoteSession) },
     WebContentsView: class {
       webContents = Object.assign(new EventEmitter(), {
@@ -172,14 +174,21 @@ describe("native desktop remote composition", () => {
   });
 
   it("denies permissions, popups, redirects and unsafe navigation", async () => {
+    electron.openExternal.mockClear();
     const f = fixture();
     f.layout("vscode");
     await flush();
-    expect(
-      f.view.webContents.setWindowOpenHandler.mock.calls[0][0]({
-        url: "https://example.com",
-      }),
-    ).toEqual({ action: "deny" });
+    const openWindow = f.view.webContents.setWindowOpenHandler.mock.calls[0][0];
+    expect(openWindow({ url: "https://example.com/popup" })).toEqual({
+      action: "deny",
+    });
+    expect(openWindow({ url: "http://127.0.0.1:47137/" })).toEqual({
+      action: "deny",
+    });
+    expect(electron.openExternal).toHaveBeenCalledExactlyOnceWith(
+      "https://example.com/popup",
+    );
+    electron.openExternal.mockClear();
     const permission = vi.fn();
     electron.remoteSession.setPermissionRequestHandler.mock.calls.at(-1)[0](
       null,
@@ -205,6 +214,9 @@ describe("native desktop remote composition", () => {
       f.view.webContents.emit("will-navigate", event, url);
       expect(event.preventDefault).toHaveBeenCalled();
     }
+    expect(electron.openExternal).toHaveBeenCalledExactlyOnceWith(
+      "https://example.com/",
+    );
     const event = { preventDefault: vi.fn() };
     f.view.webContents.emit("will-navigate", event, target.url);
     expect(event.preventDefault).not.toHaveBeenCalled();

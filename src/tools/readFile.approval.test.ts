@@ -45,10 +45,6 @@ vi.mock("./pathAccessUI.js", () => ({
   approveOutsideWorkspaceAccess: approveOutsideWorkspaceAccessMock,
 }));
 
-vi.mock("../services/semanticSearch.js", () => ({
-  semanticFileQuery: vi.fn(),
-}));
-
 describe("handleReadFile outside-workspace approval ordering", () => {
   const sessionId = "session-readfile-approval";
   let handleReadFile: typeof import("./readFile.js").handleReadFile;
@@ -62,6 +58,28 @@ describe("handleReadFile outside-workspace approval ordering", () => {
     isBinaryFileMock.mockReturnValue(false);
     getDocumentProxyMock.mockResolvedValue({ numPages: 1 });
     extractTextMock.mockResolvedValue({ totalPages: 1, text: "" });
+  });
+
+  it("rejects retired query before outside-workspace approval or file reads", async () => {
+    resolveAndValidatePathMock.mockReturnValue({
+      absolutePath: "/outside/private.txt",
+      inWorkspace: false,
+    });
+
+    const result = await handleReadFile(
+      { path: "/outside/private.txt", query: "needle" } as never,
+      { isPathTrusted: vi.fn(() => false) } as never,
+      {} as ApprovalPanelProvider,
+      sessionId,
+    );
+
+    expect(result.error?.message).toBe(
+      "Unsupported parameter 'query' for read_file.",
+    );
+    expect(resolveAndValidatePathMock).not.toHaveBeenCalled();
+    expect(approveOutsideWorkspaceAccessMock).not.toHaveBeenCalled();
+    expect(readFileMock).not.toHaveBeenCalled();
+    expect(statMock).not.toHaveBeenCalled();
   });
 
   it("returns rejected status when outside-workspace approval is denied for a missing file", async () => {

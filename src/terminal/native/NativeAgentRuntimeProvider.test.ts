@@ -306,50 +306,56 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     }
   });
 
-  it("keeps the artifact after disposal until a started shell command ends", async () => {
-    const artifactRoot = fs.mkdtempSync(
-      path.join(os.tmpdir(), "agentlink-native-dispose-test-"),
-    );
-    try {
-      const pty = new FakeNodePtyProcess();
-      const runtime = new NodePtyNativeAgentRuntimeProvider(
-        { spawn: vi.fn(() => pty) },
-        { commandFileRoot: artifactRoot },
+  it.each([false, true])(
+    "keeps the artifact after disposal until shell completion (started: %s)",
+    async (shellStarted) => {
+      const artifactRoot = fs.mkdtempSync(
+        path.join(os.tmpdir(), "agentlink-native-dispose-test-"),
       );
-      const channel = launch(runtime);
-      await emitInitialPrompt(pty, channel.ready);
-      const command = runtime.createCommand({
-        channelId: "native-agent-1",
-        commandId: "native-command-disposed",
-        generation: 1,
-        command: "gh pr view",
-      });
-      command.start();
-      const artifactPath = dispatchedArtifactPath(pty);
+      try {
+        const pty = new FakeNodePtyProcess();
+        const runtime = new NodePtyNativeAgentRuntimeProvider(
+          { spawn: vi.fn(() => pty) },
+          { commandFileRoot: artifactRoot },
+        );
+        const channel = launch(runtime);
+        await emitInitialPrompt(pty, channel.ready);
+        const command = runtime.createCommand({
+          channelId: "native-agent-1",
+          commandId: "native-command-disposed",
+          generation: 1,
+          command: "gh pr view",
+        });
+        command.start();
+        const artifactPath = dispatchedArtifactPath(pty);
 
-      pty.emitData(frame("C", "builtin eval"));
-      await expect(command.process.ready).resolves.toMatchObject({
-        pid: 42,
-        backend: "native-pty",
-      });
-      command.process.dispose();
+        if (shellStarted) {
+          pty.emitData(frame("C", "builtin eval"));
+          await expect(command.process.ready).resolves.toMatchObject({
+            pid: 42,
+            backend: "native-pty",
+          });
+        }
+        command.process.dispose();
 
-      expect(fs.existsSync(artifactPath)).toBe(true);
-      expect(pty.kill).not.toHaveBeenCalled();
-      pty.emitData(
-        `${frame("D", "0")}${frame("P", "/workspace")}${frame("A")}➜  workspace ${frame("B")}`,
-      );
-      await expect(command.process.completion).resolves.toEqual({
-        exitCode: 0,
-        timedOut: false,
-      });
-      expect(fs.existsSync(artifactPath)).toBe(false);
-      expect(runtime.hasChannel("native-agent-1")).toBe(true);
-      runtime.dispose();
-    } finally {
-      fs.rmSync(artifactRoot, { recursive: true, force: true });
-    }
-  });
+        expect(fs.existsSync(artifactPath)).toBe(true);
+        expect(pty.kill).not.toHaveBeenCalled();
+        if (!shellStarted) pty.emitData(frame("C", "builtin eval"));
+        pty.emitData(
+          `${frame("D", "0")}${frame("P", "/workspace")}${frame("A")}➜  workspace ${frame("B")}`,
+        );
+        await expect(command.process.completion).resolves.toEqual({
+          exitCode: 0,
+          timedOut: false,
+        });
+        expect(fs.existsSync(artifactPath)).toBe(false);
+        expect(runtime.hasChannel("native-agent-1")).toBe(true);
+        runtime.dispose();
+      } finally {
+        fs.rmSync(artifactRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each(["output callback", "PTY write"])(
     "releases the channel and artifact when dispatch fails in %s",

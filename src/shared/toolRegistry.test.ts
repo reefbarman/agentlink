@@ -1,6 +1,6 @@
 import {
   applyDiffSchema,
-  codebaseSearchSchema,
+  executeCommandSchema,
   getModuleNeighborsSchema,
   getRepoMapSchema,
   listFilesSchema,
@@ -16,10 +16,7 @@ describe("TOOL_REGISTRY", () => {
   it.each([
     ["get_repo_map", getRepoMapSchema.path],
     ["get_module_neighbors", getModuleNeighborsSchema.path],
-    ["codebase_search", codebaseSearchSchema.path],
-    ["read_file", readFileSchema.query],
-    ["list_files", listFilesSchema.query],
-    ["search_files", searchFilesSchema.semantic],
+    ["search_files", searchFilesSchema.query],
   ] as const)(
     "advertises workspace-only indexing for %s",
     (name, parameter) => {
@@ -32,6 +29,18 @@ describe("TOOL_REGISTRY", () => {
       expect(parameter.description).toMatch(/external/i);
     },
   );
+
+  it("exposes one indexed-search entry point without retired fields", () => {
+    expect(TOOL_REGISTRY).not.toHaveProperty("codebase_search");
+    expect(searchFilesSchema).not.toHaveProperty("semantic");
+    expect(readFileSchema).not.toHaveProperty("query");
+    expect(listFilesSchema).not.toHaveProperty("query");
+    expect(searchFilesSchema.regex.isOptional()).toBe(true);
+    expect(searchFilesSchema.query.isOptional()).toBe(true);
+    expect(searchFilesSchema.max_results.description).toContain(
+      "300 for regex, 10 for query",
+    );
+  });
 
   it("distinguishes external dependency names from external repository access", () => {
     expect(getRepoMapSchema.include_external.description).toContain(
@@ -55,6 +64,34 @@ describe("TOOL_REGISTRY", () => {
     expect(TOOL_REGISTRY.execute_command.description).toContain(
       "do not add `GIT_PAGER=cat`",
     );
+  });
+
+  it("limits shell persistence to Native Agent terminals and explains sandbox env", () => {
+    expect(TOOL_REGISTRY.execute_command.description).toContain(
+      "sandbox commands always start fresh shells",
+    );
+    expect(TOOL_REGISTRY.execute_command.description).toContain(
+      "Native Agent terminals retain intentional persistent-shell state",
+    );
+    expect(executeCommandSchema.terminal_name.description).toContain(
+      "sandbox calls start fresh shells even when named or targeted",
+    );
+    expect(executeCommandSchema.env.description).toContain(
+      "Sandbox calls do not retain prior exports",
+    );
+    expect(executeCommandSchema.env.description).toContain(
+      "values are literal, not shell-expanded",
+    );
+    for (const description of [
+      TOOL_REGISTRY.execute_command.description,
+      executeCommandSchema.env.description,
+    ]) {
+      expect(description).toContain("PATH is host-managed");
+      expect(description).toContain("inline");
+      expect(description).toContain('export PATH="/desired/bin:$PATH"');
+      expect(description).toContain("sandbox_preparation_failed");
+      expect(description).not.toContain("including PATH");
+    }
   });
 
   it("uses one apply_diff grammar across the tool and input schema", () => {

@@ -147,6 +147,54 @@ h2 {
   margin: 4px 2px 0;
 }
 
+.shortcut-section {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 22px;
+  border-top: 1px solid #2a302f;
+  padding-top: 18px;
+}
+
+.shortcut-value {
+  padding: 5px 10px;
+  border: 1px solid #3a4542;
+  border-radius: 8px;
+  color: #e9fffa;
+  background: #222827;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.shortcut-value.recording {
+  border-color: #4ec9b0;
+  color: #4ec9b0;
+}
+
+.shortcut-section .field-note {
+  min-height: 18px;
+  margin: 0 2px;
+}
+
+.shortcut-section .field-note.error {
+  color: #ff9b9b;
+}
+
+.toggle-row {
+  font-size: inherit;
+  font-weight: inherit;
+  cursor: pointer;
+}
+
+.toggle-row input[type="checkbox"] {
+  width: 18px;
+  min-height: 18px;
+  flex: none;
+  margin: 0 6px 0 0;
+  accent-color: #4ec9b0;
+  cursor: pointer;
+}
+
 details {
   margin: 8px 0 22px;
   border-top: 1px solid #2a302f;

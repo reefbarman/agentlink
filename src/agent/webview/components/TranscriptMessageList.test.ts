@@ -113,7 +113,7 @@ describe("agent coordination cards", () => {
     );
     expect(screen.getByText("Response failed")).toBeTruthy();
     expect(screen.queryByText("Answered")).toBeNull();
-    expect(container.querySelectorAll(".tool-group-block")).toHaveLength(1);
+    expect(container.querySelectorAll(".tool-call-block")).toHaveLength(1);
     cleanup();
   });
 
@@ -204,8 +204,7 @@ describe("TranscriptMessageList native web tool rendering", () => {
       h(TranscriptMessageList, { messages, streaming: false }),
     );
 
-    expect(container.querySelectorAll(".tool-group-block")).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: /Tools/ }));
+    expect(container.querySelectorAll(".tool-group-block")).toHaveLength(0);
     const toolName = screen.getByText("web_fetch");
     expect(toolName).toBeTruthy();
     expect(screen.getByText("https://docs.example.com/guide")).toBeTruthy();
@@ -1217,7 +1216,6 @@ describe("TranscriptMessageList background result rendering", () => {
     expect(rows[1].textContent).not.toContain("No blocking issues found.");
     expect(rows[1].querySelector(".bg-result-preview")).toBeNull();
     expect(rows[2].textContent).toContain("I will incorporate that result.");
-    fireEvent.click(rows[0].querySelector(".tool-group-header")!);
     const toolCall = rows[0].querySelector(".tool-call-block");
     const resultCard = rows[1].querySelector(".bg-agent-result-block");
     expect(toolCall).toBeTruthy();

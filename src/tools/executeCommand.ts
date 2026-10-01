@@ -32,6 +32,7 @@ import {
   SandboxStructuralProtectionError,
 } from "../terminal/sandbox/SandboxRuntimeProvider.js";
 import { SandboxAvailabilityError } from "../terminal/sandbox/AgentTerminalProviderRouter.js";
+import { SandboxPreparationError } from "../terminal/sandbox/SandboxPreparationError.js";
 import {
   SandboxPreparationDriftError,
   TerminalTargetRecoveryError,
@@ -64,6 +65,7 @@ import {
   commandReviewActionKey,
   getCommandAutoApprovalEligibility,
   isRoutineApproveForMeCommand,
+  isRoutineGitWorkflowNativeCommand,
   type CommandReviewContextEntry,
   type CommandApprovalReviewer,
   type CommandReviewTurnCircuit,
@@ -382,6 +384,7 @@ type ExecuteCommandRetryGuidance = {
     | "sandbox_host_integration"
     | "sandbox_node_oom"
     | "sandbox_preparation_changed"
+    | "sandbox_preparation_failed"
     | "sandbox_capability_launch_failed"
     | "sandbox_pty_launch_failed"
     | "sandbox_environment_too_large"
@@ -393,7 +396,8 @@ type ExecuteCommandRetryGuidance = {
     | "managed_network_proxy_unaware_dns"
     | "managed_network_connect_timeout"
     | "pnpm_store_mismatch"
-    | "native_shell_startup_timeout";
+    | "native_shell_startup_timeout"
+    | "sandbox_unavailable";
   message: string;
   automatic_retry: false;
   options: Array<Record<string, unknown>>;
@@ -1225,10 +1229,15 @@ async function attachProtectedGitMetadataRetryGuidance(input: {
   workspaceRoots: readonly string[];
 }): Promise<void> {
   const { result, command, output, cwd, workspaceRoots } = input;
+  const internalApplyFailure =
+    /^error:\s*['"]?git apply['"]? failed\s*$/im.test(output);
   if (
     hasRetryGuidance(result) ||
     result.security?.route !== "sandbox" ||
-    result.exit_code === 0 ||
+    (result.exit_code === 0 && !internalApplyFailure) ||
+    result.exit_code === null ||
+    result.backgrounded ||
+    result.is_running ||
     !result.process_launched ||
     !PROTECTED_GIT_DENIAL_PATTERNS.every((pattern) => pattern.test(output))
   ) {
@@ -1276,6 +1285,13 @@ async function attachProtectedGitMetadataRetryGuidance(input: {
     } satisfies ExecuteCommandRetryGuidance,
     capability_code: "protected_git_metadata",
     protected_path: protection.marker,
+    ...(internalApplyFailure && {
+      failure_evidence: {
+        code: "git_apply_failed",
+        message:
+          "Git reported an internal apply failure. The shell exit code does not establish that staging succeeded; inspect the index before any reviewed retry.",
+      },
+    }),
   });
 }
 
@@ -3644,7 +3660,61 @@ export async function handleExecuteCommand(
         ],
       };
     }
+    if (err instanceof SandboxPreparationError) {
+      const guidance = {
+        reserved_path_override:
+          'Sandbox PATH is host-managed and cannot be overridden through env. Remove env.PATH and put an inline export such as export PATH="/desired/bin:$PATH" before the command in each reviewed sandbox call. Shell changes do not persist between sandbox calls.',
+        reserved_environment_override:
+          "Remove reserved sandbox environment overrides from env. Host-managed HOME, temporary directories, proxy settings, loader settings, and other reserved entries cannot be replaced through per-call environment input.",
+        unsupported_shell_profile:
+          "The attested sandbox helper does not support shellEnvironment.useProfile. Disable that host sandbox setting and request a fresh reviewed execution; do not bypass the sandbox or silently change host configuration.",
+        preparation_failed:
+          "Sandbox preparation failed before launch, not during the availability attestation. Inspect managed terminal availability, the requested environment, capabilities, workspace/protected-path integrity, and host sandbox policy. The output channel records only the bounded preparation_failed category. Repair the request or host setup before requesting a fresh reviewed execution; do not repeatedly retry or switch to native execution.",
+      }[err.reason];
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "blocked",
+              error:
+                "The sandbox execution could not be prepared before launch.",
+              error_code: err.code,
+              preparation_failure: err.reason,
+              command: params.command,
+              command_sent: false,
+              process_launched: false,
+              retry_safe: false,
+              failure_stage: "preparation",
+              retry_guidance: {
+                code: err.code,
+                message: guidance,
+                automatic_retry: false,
+                options: [
+                  {
+                    action: "repair_sandbox_preparation_request_or_host",
+                    fresh_review_after_repair: true,
+                  },
+                ],
+                prohibited_workarounds: ["native_security_bypass"],
+              } satisfies ExecuteCommandRetryGuidance,
+            }),
+          },
+        ],
+      };
+    }
     if (err instanceof SandboxAvailabilityError) {
+      const category = err.diagnostic?.category;
+      const nodeRepair =
+        err.reason === "runtime-unavailable" &&
+        (category === "runtime_unavailable" ||
+          category === "runtime_node_unavailable");
+      const availabilityRepair =
+        category === "feature_disabled"
+          ? "Enable agentlink.terminal.enabled in the owning host to use sandbox execution, then retry. This is a configuration limit, not a missing Node executable."
+          : category === "remote_host" || category === "unsupported_host"
+            ? "Verified sandbox execution requires a supported local macOS extension host. Use a supported local host for this sandbox request; changing the Node path or repeatedly reloading this host cannot add sandbox support."
+            : "Inspect the owning host's terminal configuration and AgentLink output channel to determine why required sandbox execution is unavailable. Repair the identified host limitation before retrying; do not assume Node is missing.";
       return {
         content: [
           {
@@ -3657,6 +3727,32 @@ export async function handleExecuteCommand(
                   : "The required sandbox could not be verified. Native recovery is not offered for security or trust failures.",
               error_code: "sandbox_unavailable",
               failure_reason: err.reason,
+              ...(err.diagnostic ? { sandbox_diagnostic: err.diagnostic } : {}),
+              retry_guidance: {
+                code: "sandbox_unavailable",
+                message: nodeRepair
+                  ? "Repair the standalone Node runtime on the host: check agentlink.terminal.nodePath, replace a removed version-specific path with an existing executable (or clear it to use discovery), then reload the VS Code window to discard cached runtime resolution. Retry the same sandbox request only after repair."
+                  : err.reason === "runtime-unavailable"
+                    ? availabilityRepair
+                    : "Stop retrying commands. Inspect the AgentLink output channel for the failed sandbox check, verify the installed extension/runtime assets and workspace trust, then repair the host setup and reload. Do not disable checks or request native execution to bypass a security or trust failure.",
+                automatic_retry: false,
+                options: [
+                  {
+                    action: nodeRepair
+                      ? "repair_host_node_runtime_then_reload"
+                      : err.reason !== "runtime-unavailable"
+                        ? "inspect_host_sandbox_diagnostics_then_repair"
+                        : category === "feature_disabled"
+                          ? "enable_host_terminal_feature"
+                          : category === "remote_host" ||
+                              category === "unsupported_host"
+                            ? "use_supported_local_host"
+                            : "inspect_host_sandbox_availability",
+                    same_command_after_repair: true,
+                  },
+                ],
+                prohibited_workarounds: ["native_security_bypass"],
+              } satisfies ExecuteCommandRetryGuidance,
               command: params.command,
               command_sent: false,
               process_launched: false,
@@ -3895,9 +3991,23 @@ export async function handleExecuteCommand(
       const retryGuidance: ExecuteCommandRetryGuidance = {
         code: err.code,
         message:
-          "The sandbox capability grant could not be activated before launch. Inspect the runtime failure before requesting a new execution; a failed or invalid grant is not native authority.",
+          err.reason === "compile_failed"
+            ? "Sandbox policy compilation failed before launch. Stop retrying the command. Review the requested capabilities, command environment, and host sandbox policy for mismatches; then verify the installed runtime assets if the request is valid. The output channel records the bounded compile_failed reason, not the raw compiler exception. Correct the identified request, policy, or runtime problem before requesting a fresh reviewed execution; do not assume reinstalling or repeating the same command will fix it. A failed grant is not native authority."
+            : "The sandbox capability grant could not be activated before launch. Inspect the runtime failure before requesting a new execution; a failed or invalid grant is not native authority.",
         automatic_retry: false,
-        options: [],
+        options:
+          err.reason === "compile_failed"
+            ? [
+                {
+                  action: "inspect_sandbox_request_policy_and_runtime",
+                  fresh_review_after_repair: true,
+                },
+              ]
+            : [],
+        prohibited_workarounds: [
+          "native_security_bypass",
+          "reuse_failed_grant",
+        ],
       };
       return {
         content: [
@@ -3943,13 +4053,12 @@ export async function handleExecuteCommand(
               retry_guidance: {
                 code: "native_shell_startup_timeout",
                 message:
-                  "The Native Agent shell did not become ready before the startup deadline, and the command did not launch. Retry the same command; if startup repeatedly times out, reload the VS Code window so AgentLink can recreate its native terminal runtime.",
+                  "The Native Agent shell did not become ready before the startup deadline; the command did not launch and that terminal was closed. Inspect the AgentLink output channel and the selected host terminal profile. In a normal VS Code terminal, check whether shell startup completes without prompts or hangs (for example in .zshrc/.bashrc or a toolchain initializer). Repair that blocker before retrying the same command in a new terminal. Reloading alone does not repair shell startup; do not repeatedly retry or silently bypass user startup files.",
                 automatic_retry: false,
                 options: [
-                  { action: "retry_same_command", same_command: true },
                   {
-                    action: "reload_window_then_retry",
-                    same_command_after_reload: true,
+                    action: "inspect_host_shell_startup_then_repair",
+                    same_command_after_repair: true,
                   },
                 ],
               } satisfies ExecuteCommandRetryGuidance,
@@ -4310,10 +4419,12 @@ async function approveSubCommands(
     };
   }
 
-  // Routine reads, toolchain runs, and workspace-bounded file operations skip
-  // Guardian on the default route. Git writes still need task-scope review;
-  // network effects, unrecognized commands, escalations, and retained denials
-  // also keep the full review below.
+  // Routine reads, toolchain runs, workspace-bounded file operations, and
+  // routine Git publishing skip Guardian on the default route. Routine Git
+  // workflow may also skip it on native escalation, which it needs for
+  // protected Git metadata and SSH remotes. Force pushes, other network
+  // effects, unrecognized commands, other escalations, and retained denials
+  // keep the full review below.
   const routineApproveForMeApproved =
     policy === "approve-for-me" &&
     rulePolicy.decision !== "prompt" &&
@@ -4325,9 +4436,11 @@ async function approveSubCommands(
     !options?.forceRequested &&
     !options?.recoveryAttempt &&
     !circuitInterrupted &&
-    options?.routeContext.permissionIntent === "default" &&
     workspaceRoots.some((root) => isCommandPathInsideWorkspace(cwd, [root])) &&
-    isRoutineApproveForMeCommand(tierInfo);
+    ((options?.routeContext.permissionIntent === "default" &&
+      isRoutineApproveForMeCommand(tierInfo)) ||
+      (options?.routeContext.permissionIntent === "native-escalation" &&
+        isRoutineGitWorkflowNativeCommand(tierInfo)));
   if (routineApproveForMeApproved) {
     return {
       approved: true,

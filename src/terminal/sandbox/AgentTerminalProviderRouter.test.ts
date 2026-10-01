@@ -11,6 +11,12 @@ import {
   SandboxPreparationDriftError,
   TerminalTargetRecoveryError,
 } from "../../core/capabilities/terminalTargetError.js";
+import { SandboxCapabilityLaunchError } from "../../core/capabilities/SandboxCapabilityLaunchError.js";
+import { SandboxPreparationError } from "./SandboxPreparationError.js";
+import {
+  TerminalAdmissionCancelledError,
+  TerminalAdmissionQueue,
+} from "../terminalAdmissionQueue.js";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -161,6 +167,117 @@ function harness() {
 }
 
 describe("AgentTerminalProviderRouter", () => {
+  it.each([
+    new SandboxPreparationError("reserved_path_override"),
+    new SandboxPreparationError("unsupported_shell_profile"),
+    new SandboxCapabilityLaunchError("compile_failed"),
+    new SandboxPreparationDriftError(["attestationId"]),
+    new SandboxAvailabilityError(
+      "attestation-security-failure",
+      "failed check",
+      {
+        diagnostic: { category: "network_block_failed" },
+      },
+    ),
+  ])(
+    "preserves a typed $name failure during sandbox preparation",
+    async (failure) => {
+      const test = harness();
+      test.setEnabled(true);
+      vi.mocked(test.sandbox.prepareConfinementExecution).mockRejectedValueOnce(
+        failure,
+      );
+      await expect(
+        test.router.prepareExecution(
+          { owner: undefined, command: "npm test", cwd: "/workspace" },
+          sandboxRoute,
+        ),
+      ).rejects.toBe(failure);
+      expect(test.native.executeCommand).not.toHaveBeenCalled();
+      expect(test.nativeAgent.executeCommand).not.toHaveBeenCalled();
+      expect(test.sandbox.executeCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([sandboxRoute, undefined])(
+    "bounds unknown preparation failures without claiming failed attestation",
+    async (route) => {
+      const test = harness();
+      test.setEnabled(true);
+      const cause = new Error("secret-value /private/host/path");
+      vi.mocked(test.sandbox.prepareConfinementExecution).mockRejectedValueOnce(
+        cause,
+      );
+      const failure = await test.router
+        .prepareExecution(
+          { owner: undefined, command: "npm test", cwd: "/workspace" },
+          route,
+        )
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(SandboxPreparationError);
+      expect(failure).toMatchObject({
+        reason: "preparation_failed",
+        cause,
+        commandStarted: false,
+      });
+      expect(String(failure)).not.toContain("secret-value");
+      expect(test.log).toHaveBeenCalledWith(
+        "Sandbox execution preparation failed: preparation_failed",
+      );
+      expect(JSON.stringify(test.log.mock.calls)).not.toContain(
+        "/private/host/path",
+      );
+      expect(test.native.executeCommand).not.toHaveBeenCalled();
+      expect(test.nativeAgent.executeCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves cancellation of an admission wait during preparation", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    const queue = new TerminalAdmissionQueue();
+    const controller = new AbortController();
+    vi.mocked(test.sandbox.prepareConfinementExecution).mockImplementationOnce(
+      async (options) => {
+        await queue.wait({
+          key: "session-1",
+          canAdmit: () => false,
+          timeoutError: () => new Error("Admission timed out"),
+          signal: options.admissionSignal,
+          timeoutMs: 60_000,
+          maxWaiters: 1,
+        });
+        throw new Error("Cancelled admission must not proceed");
+      },
+    );
+    try {
+      const pending = test.router.prepareExecution(
+        {
+          owner: undefined,
+          command: "npm test",
+          cwd: "/workspace",
+          admissionSignal: controller.signal,
+        },
+        sandboxRoute,
+      );
+      const cancelled = expect(pending).rejects.toBeInstanceOf(
+        TerminalAdmissionCancelledError,
+      );
+      await vi.waitFor(() => expect(queue.waiting).toBe(1));
+      controller.abort();
+      await cancelled;
+      expect(queue.waiting).toBe(0);
+      expect(test.audit.mock.calls.map(([event]) => event.type)).not.toContain(
+        "execution_failed",
+      );
+      expect(test.sandbox.executeCommand).not.toHaveBeenCalled();
+      expect(test.nativeAgent.executeCommand).not.toHaveBeenCalled();
+    } finally {
+      queue.retire();
+      test.router.dispose();
+    }
+  });
+
   it("emits token-free prepared and execution audit events", async () => {
     const test = harness();
     test.setEnabled(true);
@@ -1070,14 +1187,26 @@ describe("AgentTerminalProviderRouter", () => {
   });
 
   it.each([
-    ["runtime-unavailable", { status: "runtime-unavailable" as const }],
+    [
+      "runtime-unavailable",
+      {
+        status: "runtime-unavailable" as const,
+        diagnostic: { category: "runtime_node_unavailable" },
+      },
+      "runtime_node_unavailable",
+    ],
     [
       "attestation-security-failure",
-      { status: "failed" as const, detail: "attestation rejected" },
+      {
+        status: "failed" as const,
+        detail: "attestation rejected",
+        diagnostic: { category: "network_block_failed" },
+      },
+      "network_block_failed",
     ],
   ] as const)(
     "reports required sandbox availability failure as %s before command start",
-    async (reason, availability) => {
+    async (reason, availability, category) => {
       const test = harness();
       test.setEnabled(true);
       test.getSandboxAvailability.mockImplementation(
@@ -1095,12 +1224,61 @@ describe("AgentTerminalProviderRouter", () => {
       }
 
       expect(thrown).toBeInstanceOf(SandboxAvailabilityError);
-      expect(thrown).toMatchObject({ reason, commandStarted: false });
+      expect(thrown).toMatchObject({
+        reason,
+        commandStarted: false,
+        diagnostic: { category },
+      });
       expect(test.createNativeProvider).not.toHaveBeenCalled();
       expect(test.createSandboxProvider).not.toHaveBeenCalled();
       expect(test.sandbox.executeCommand).not.toHaveBeenCalled();
     },
   );
+
+  it("uses existing compatibility routing for a missing Node before sandbox selection", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    test.getSandboxAvailability.mockImplementation(async () => ({
+      status: "runtime-unavailable",
+      diagnostic: { category: "runtime_node_unavailable" },
+    }));
+    const result = await test.router.executeCommand({
+      owner: undefined,
+      command: "echo native compatibility",
+      cwd: "/workspace",
+    });
+    expect(result.security).toMatchObject({
+      route: "native",
+      routeReason: "runtime-unavailable",
+      executionSurface: "vscode-compatibility",
+    });
+    expect(test.createNativeProvider).toHaveBeenCalledOnce();
+    expect(test.createSandboxProvider).not.toHaveBeenCalled();
+  });
+
+  it("drops unrecognized diagnostic categories at the availability boundary", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    test.getSandboxAvailability.mockImplementation(
+      async () =>
+        ({
+          status: "failed",
+          detail: "attestation rejected",
+          diagnostic: { category: "raw probe output: secret" },
+        }) as never,
+    );
+
+    await expect(
+      test.router.prepareExecution(
+        { owner: undefined, command: "echo must not run", cwd: "/workspace" },
+        sandboxRoute,
+      ),
+    ).rejects.toMatchObject({
+      name: "SandboxAvailabilityError",
+      reason: "attestation-security-failure",
+      diagnostic: undefined,
+    });
+  });
 
   it("reports required sandbox trust failure before command start", async () => {
     const test = harness();
@@ -1182,14 +1360,17 @@ describe("AgentTerminalProviderRouter", () => {
   });
 
   it.each([
-    [new Error("helper missing"), "attestation-security-failure"],
+    [new Error("helper missing"), "attestation-security-failure", undefined],
     [
-      new SandboxAvailabilityError("runtime-unavailable", "helper missing"),
+      new SandboxAvailabilityError("runtime-unavailable", "helper missing", {
+        diagnostic: { category: "runtime_node_unavailable" },
+      }),
       "runtime-unavailable",
+      "runtime_node_unavailable",
     ],
   ] as const)(
     "classifies provider initialization failure %s as %s before command start",
-    async (failure, reason) => {
+    async (failure, reason, category) => {
       const test = harness();
       test.setEnabled(true);
       test.createSandboxProvider.mockImplementation(() => {
@@ -1205,6 +1386,7 @@ describe("AgentTerminalProviderRouter", () => {
         name: "SandboxAvailabilityError",
         reason,
         commandStarted: false,
+        ...(category ? { diagnostic: { category } } : {}),
       });
       expect(test.createNativeProvider).not.toHaveBeenCalled();
       expect(test.sandbox.executeCommand).not.toHaveBeenCalled();
@@ -1534,7 +1716,11 @@ describe("AgentTerminalProviderRouter", () => {
     );
     test.router.refresh();
 
-    await expect(pending).rejects.toThrow("Terminal provider was retired");
+    await expect(pending).rejects.toMatchObject({
+      name: "SandboxPreparationError",
+      reason: "preparation_failed",
+      cause: { message: "Terminal provider was retired" },
+    });
     expect(test.sandbox.retire).toHaveBeenCalledOnce();
     expect(test.sandbox.dispose).toHaveBeenCalledOnce();
     expect(test.createSandboxProvider).toHaveBeenCalledOnce();

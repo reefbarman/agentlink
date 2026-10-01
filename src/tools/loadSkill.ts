@@ -3,7 +3,7 @@ import * as path from "path";
 import type { AdvertisedArtifactProvider } from "../core/capabilities/readSearch.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import type { ToolResult } from "@agentlink/protocol/tool-result";
+import { errorResult, type ToolResult } from "@agentlink/protocol/tool-result";
 import { createHash } from "crypto";
 import { loadAdvertisedFile } from "./loadAdvertisedFile.js";
 
@@ -122,12 +122,13 @@ export async function handleLoadSkill(
     if (builtInResource) return builtInResource;
   }
 
-  return loadAdvertisedFile({
+  const result = await loadAdvertisedFile({
     path: params.path,
     advertisedFiles: advertisedSkills.map((skill) => ({
       name: skill.name,
       filePath: skill.skillPath,
       resultFields: {
+        skillPath: skill.skillPath,
         skill_id: skill.id,
         revision: skill.revision,
       },
@@ -140,4 +141,33 @@ export async function handleLoadSkill(
     allowlistLabel: "skill",
     artifactProvider,
   });
+  const error =
+    result.data && typeof result.data === "object" && "error" in result.data
+      ? String(result.data.error)
+      : "";
+  if (result.isError && error.includes("not in the current session")) {
+    const requestedName =
+      path.basename(params.path) === "SKILL.md"
+        ? path.basename(path.dirname(params.path))
+        : params.path;
+    const matches = advertisedSkills.filter(
+      (skill) => skill.name === requestedName || skill.id === requestedName,
+    );
+    const candidates = matches.slice(0, 10).map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      path: skill.skillPath,
+      revision: skill.revision,
+    }));
+    return errorResult(error, {
+      path: params.path,
+      status: "skill_not_in_catalog",
+      candidates,
+      omittedCandidates: Math.max(0, matches.length - candidates.length),
+      guidance: candidates.length
+        ? "Retry load_skill with the intended candidate's exact canonical path. No skill has been activated by this lookup."
+        : "No matching skill exists in the current session catalog. Refresh the session catalog or check the skill's enabled state and mode; reading an arbitrary file does not activate it.",
+    });
+  }
+  return result;
 }

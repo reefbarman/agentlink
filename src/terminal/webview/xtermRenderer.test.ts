@@ -26,6 +26,11 @@ import {
 } from "./xtermRenderer.js";
 import { MAX_TERMINAL_LINK_BYTES } from "@agentlink/protocol/terminal-surface";
 
+vi.hoisted(() => {
+  // Exercise xterm's no-canvas fallback without jsdom's unimplemented API notice.
+  HTMLCanvasElement.prototype.getContext = () => null;
+});
+
 function bufferLine(
   cells: readonly { characters: string; width?: number }[],
 ): IBufferLine {

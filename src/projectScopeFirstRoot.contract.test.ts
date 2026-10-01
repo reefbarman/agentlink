@@ -61,13 +61,7 @@ const ALLOWLIST: Record<string, InventoryEntry> = {
     rationale:
       "Worktree intent is a narrow compatibility path; browser/window identity needs deterministic workspace ownership; host-stall telemetry labels records with the first root's name purely for attribution.",
   },
-  "src/services/semanticSearch.ts": {
-    counts: { tryGetFirstWorkspaceRoot: 3 },
-    classification: "compatibility_only",
-    ownerSlices: ["G"],
-    rationale:
-      "Semantic fallback retains direct-call compatibility while request-scoped runtimes pin all workspace helpers to the session project.",
-  },
+
   "src/tools/executeCommand.ts": {
     counts: { tryGetFirstWorkspaceRoot: 2 },
     classification: "compatibility_only",
@@ -133,8 +127,8 @@ describe("project scope first-root source contract", () => {
       Object.values(entry),
     );
 
-    expect(Object.keys(ALLOWLIST)).toHaveLength(9);
-    expect(counts.reduce((total, count) => total + count, 0)).toBe(24);
+    expect(Object.keys(ALLOWLIST)).toHaveLength(8);
+    expect(counts.reduce((total, count) => total + count, 0)).toBe(21);
   });
 });
 

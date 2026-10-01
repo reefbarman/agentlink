@@ -17,10 +17,7 @@
     "storageBytes"
   ],
   "surfaces": [
-    "codebase_search",
-    "search_files_semantic",
-    "list_files_query",
-    "read_file_query",
+    "search_files_query",
     "memory",
     "skill_rule",
     "native_tool",

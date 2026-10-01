@@ -207,6 +207,32 @@ export function extractKeywords(query: string): string[] {
 }
 
 /**
+ * Return adjacent meaningful query terms for phrase-aware lexical ranking.
+ */
+export function extractAdjacentPhrases(query: string): string[] {
+  const words = query.split(/[\s,;:.()[\]{}<>'"]+/).filter(Boolean);
+  const phrases: string[] = [];
+
+  for (let index = 0; index < words.length - 1; index += 1) {
+    const pair = [words[index], words[index + 1]];
+    if (
+      pair.every((word) => {
+        const lower = word.toLowerCase();
+        return (
+          lower.length >= 3 &&
+          !STOP_WORDS.has(lower) &&
+          !CODE_NOISE_WORDS.has(lower)
+        );
+      })
+    ) {
+      phrases.push(pair.join(" "));
+    }
+  }
+
+  return phrases;
+}
+
+/**
  * Expand query text for better embedding recall.
  * Adds split forms of CamelCase and snake_case terms.
  */

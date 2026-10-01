@@ -14,6 +14,7 @@ export type CommandRiskCode =
   | "workspace_mutation"
   | "project_toolchain"
   | "git_mutation"
+  | "git_workflow"
   | "workspace_redirection"
   | "unrecognized_executable"
   | "unrecognized_operation"
@@ -257,11 +258,13 @@ export class StaticCommandTierClassifier implements CommandTierClassifier {
     const semanticClassification =
       command === "git"
         ? classifyGit(args)
-        : command === "mise"
-          ? classifyMise(args)
-          : command === "npm" || command === "pnpm" || command === "yarn"
-            ? classifyPackageManager(command, args)
-            : undefined;
+        : command === "gh"
+          ? classifyGh(args)
+          : command === "mise"
+            ? classifyMise(args)
+            : command === "npm" || command === "pnpm" || command === "yarn"
+              ? classifyPackageManager(command, args)
+              : undefined;
     if (semanticClassification?.tier === "dangerous") {
       return semanticClassification;
     }
@@ -878,6 +881,17 @@ function classifyGit(args: string[]): CommandTierResult {
     );
   }
 
+  if (
+    parsed.globalArgs.length === 0 &&
+    isRoutineGitWorkflow(subcommand, subcommandArgs)
+  ) {
+    return sensitive(
+      `routine git workflow (${subcommand})`,
+      "git_workflow",
+      "git",
+    );
+  }
+
   if (DANGEROUS_GIT_SUBCOMMANDS.has(subcommand)) {
     if (subcommand === "reset" && !args.includes("--hard")) {
       return sensitive(
@@ -939,6 +953,138 @@ function classifyGit(args: string[]): CommandTierResult {
     "unrecognized_operation",
     "git",
   );
+}
+
+const GIT_REMOTE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const GIT_REF_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._/~^-]*$/;
+
+const GIT_PUSH_FLAGS = new Set([
+  "-u",
+  "--set-upstream",
+  "-q",
+  "--quiet",
+  "-v",
+  "--verbose",
+  "--progress",
+  "--no-progress",
+  "--porcelain",
+  "-n",
+  "--dry-run",
+  "--atomic",
+  "--verify",
+  "--no-verify",
+]);
+
+const GIT_FETCH_FLAGS = new Set([
+  "-q",
+  "--quiet",
+  "-v",
+  "--verbose",
+  "--progress",
+  "--no-progress",
+  "-p",
+  "--prune",
+  "--all",
+  "--no-tags",
+]);
+
+const GIT_PULL_FLAGS = new Set([
+  "-q",
+  "--quiet",
+  "-v",
+  "--verbose",
+  "--progress",
+  "--no-progress",
+  "-r",
+  "--rebase",
+  "--no-rebase",
+  "--ff",
+  "--ff-only",
+  "--no-ff",
+  "--autostash",
+  "--no-autostash",
+  "--no-edit",
+]);
+
+function isGitRefName(value: string | undefined): boolean {
+  return (
+    value !== undefined && GIT_REF_NAME_RE.test(value) && !value.includes("..")
+  );
+}
+
+/**
+ * Non-force refspec that only fast-forwards a named destination. Rejects
+ * forced (`+src:dst`) and deletion (`:dst`) refspecs plus tag publication.
+ */
+function isFastForwardRefspec(spec: string): boolean {
+  const parts = spec.split(":");
+  if (parts.length > 2 || parts.some((part) => !isGitRefName(part))) {
+    return false;
+  }
+  return !parts.some((part) => part.startsWith("refs/tags/"));
+}
+
+/**
+ * Routine remote workflow: options come from a closed allowlist and the remote
+ * must be a configured remote name, never a URL or path.
+ */
+function isRoutineRemoteInvocation(
+  args: string[],
+  flags: ReadonlySet<string>,
+): boolean {
+  const operands: string[] = [];
+  for (const arg of args) {
+    if (arg.startsWith("-")) {
+      if (!flags.has(arg)) return false;
+      continue;
+    }
+    operands.push(arg);
+  }
+  const [remote, ...refspecs] = operands;
+  if (remote !== undefined && !GIT_REMOTE_NAME_RE.test(remote)) return false;
+  return refspecs.every(isFastForwardRefspec);
+}
+
+/**
+ * Everyday agent-driven Git publishing: staging, committing, creating or
+ * switching branches, fetching/pulling, and non-force pushes to a configured
+ * remote. Force pushes, ref deletion, URL destinations, and history- or
+ * worktree-discarding operations fall through to the normal classification.
+ */
+function isRoutineGitWorkflow(subcommand: string, args: string[]): boolean {
+  switch (subcommand) {
+    case "add":
+    case "commit":
+      return true;
+    case "push":
+      return isRoutineRemoteInvocation(args, GIT_PUSH_FLAGS);
+    case "fetch":
+      return isRoutineRemoteInvocation(args, GIT_FETCH_FLAGS);
+    case "pull":
+      return isRoutineRemoteInvocation(args, GIT_PULL_FLAGS);
+    case "switch":
+      if (args.length === 1) return isGitRefName(args[0]);
+      return (
+        (args[0] === "-c" || args[0] === "--create") &&
+        (args.length === 2 || args.length === 3) &&
+        args.slice(1).every(isGitRefName)
+      );
+    case "checkout":
+      return (
+        args[0] === "-b" &&
+        (args.length === 2 || args.length === 3) &&
+        args.slice(1).every(isGitRefName)
+      );
+    default:
+      return false;
+  }
+}
+
+function classifyGh(args: string[]): CommandTierResult | undefined {
+  if (args[0] === "pr" && args[1] === "create") {
+    return sensitive("gh pr create", "git_workflow", "gh");
+  }
+  return undefined;
 }
 
 function classifyMise(args: string[]): CommandTierResult {

@@ -10,6 +10,7 @@ const electron = vi.hoisted(() => ({
   send: vi.fn(),
   on: vi.fn(),
   removeListener: vi.fn(),
+  invoke: vi.fn(),
 }));
 vi.mock("electron", () => ({
   contextBridge: { exposeInMainWorld: electron.expose },
@@ -17,6 +18,7 @@ vi.mock("electron", () => ({
     send: electron.send,
     on: electron.on,
     removeListener: electron.removeListener,
+    invoke: electron.invoke,
   },
 }));
 afterEach(() => {
@@ -42,10 +44,15 @@ it("exposes only the shell bridge and strips Electron events from state callback
   const bridge = electron.expose.mock.calls[0][1] as DesktopBridge;
   expect(Object.keys(bridge).sort()).toEqual([
     "askAgentOwnerId",
+    "dismissQuickAsk",
     "onAskAgentOwnerIdChanged",
+    "onQuickAskShown",
+    "onQuickAskSubmission",
     "onRemoteState",
+    "openSettings",
     "retryRemote",
     "setRemoteLayout",
+    "submitQuickAsk",
   ]);
   expect(bridge.askAgentOwnerId).toBe("agentlink-desktop~generation");
   const ownerListener = vi.fn();
@@ -86,6 +93,41 @@ it("exposes only the shell bridge and strips Electron events from state callback
     "agentlink:remote:state",
     handler,
   );
+});
+
+it("drains queued quick-ask submissions on subscribe and when more arrive", async () => {
+  vi.stubGlobal("process", { ...process, isMainFrame: true });
+  const first = { text: "queued before subscribe" };
+  const second = { text: "arrived later" };
+  electron.invoke
+    .mockResolvedValueOnce([first])
+    .mockResolvedValueOnce([second]);
+  await import("./chatPreload.js");
+  const bridge = electron.expose.mock.calls[0][1] as DesktopBridge;
+
+  const listener = vi.fn();
+  const unsubscribe = bridge.onQuickAskSubmission!(listener);
+  await vi.waitFor(() => expect(listener).toHaveBeenCalledWith(first));
+  const available = electron.on.mock.calls.find(
+    ([channel]) => channel === "agentlink:quick-ask:available",
+  )?.[1];
+  available?.({ sender: "privileged" });
+  await vi.waitFor(() => expect(listener).toHaveBeenCalledWith(second));
+  expect(electron.invoke).toHaveBeenCalledWith("agentlink:quick-ask:take");
+
+  unsubscribe();
+  expect(electron.removeListener).toHaveBeenCalledWith(
+    "agentlink:quick-ask:available",
+    available,
+  );
+  bridge.submitQuickAsk!({ text: "hello" });
+  expect(electron.send).toHaveBeenCalledWith("agentlink:quick-ask:submit", {
+    text: "hello",
+  });
+  bridge.dismissQuickAsk!();
+  expect(electron.send).toHaveBeenCalledWith("agentlink:quick-ask:dismiss");
+  bridge.openSettings!();
+  expect(electron.send).toHaveBeenCalledWith("agentlink:open-settings");
 });
 
 it("does not expose the bridge to subframes", async () => {

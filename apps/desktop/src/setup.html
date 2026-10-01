@@ -7,7 +7,7 @@
       content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; form-action 'none'; base-uri 'none'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AgentLink Accounts</title>
+    <title>AgentLink Settings</title>
     <link rel="stylesheet" href="./setup.css" />
   </head>
   <body>
@@ -52,6 +52,54 @@
           <button id="submit" type="submit">Save API key</button>
         </form>
       </details>
+
+      <section class="shortcut-section" aria-labelledby="general-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="general-heading">General</h2>
+            <p>AgentLink stays in the menu bar so Quick Ask is always ready.</p>
+          </div>
+        </div>
+        <div class="account shortcut-row">
+          <div class="account-identity">
+            <strong>Quick Ask shortcut</strong>
+            <span>Ask a quick question from any app</span>
+          </div>
+          <div class="account-actions">
+            <kbd id="shortcut-value" class="shortcut-value">…</kbd>
+            <button
+              id="shortcut-record"
+              class="account-action secondary"
+              type="button"
+            >
+              Change
+            </button>
+            <button
+              id="shortcut-reset"
+              class="account-action quiet"
+              type="button"
+            >
+              Reset
+            </button>
+            <button
+              id="shortcut-disable"
+              class="account-action quiet"
+              type="button"
+            >
+              Turn off
+            </button>
+          </div>
+        </div>
+        <p id="shortcut-note" class="field-note"></p>
+        <label class="account toggle-row" for="open-at-login">
+          <span class="account-identity">
+            <strong>Open at login</strong>
+            <span>Start in the menu bar when you log in</span>
+          </span>
+          <input id="open-at-login" type="checkbox" role="switch" />
+        </label>
+        <p id="login-note" class="field-note"></p>
+      </section>
 
       <button id="continue" class="primary" type="button" hidden>
         Continue to AgentLink

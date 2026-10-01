@@ -644,6 +644,82 @@ describe("tool lifecycle projection", () => {
       expect.objectContaining({ name: "Read", complete: true }),
     );
   });
+
+  it("restores a multi-response turn as one assistant message", () => {
+    const step = (index: number) => [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: `Step ${index}` },
+          {
+            type: "tool_use",
+            id: `tool-${index}`,
+            name: "read_file",
+            input: {},
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: `tool-${index}`, content: "ok" },
+        ],
+      },
+    ];
+
+    const messages = agentMessagesToChatMessages(
+      [
+        { role: "user", content: "first" },
+        ...step(0),
+        ...step(1),
+        { role: "assistant", content: [{ type: "text", text: "Done." }] },
+        { role: "user", content: "second" },
+        ...step(2),
+      ],
+      { baseIndex: 0 },
+    );
+
+    expect(
+      messages.map((message) => [
+        message.id,
+        message.role,
+        message.blocks.map((block) => block.type),
+      ]),
+    ).toEqual([
+      ["t0", "user", []],
+      [
+        "t1",
+        "assistant",
+        ["thinking", "tool_call", "thinking", "tool_call", "text"],
+      ],
+      ["t6", "user", []],
+      ["t7", "assistant", ["thinking", "tool_call"]],
+    ]);
+  });
+
+  it("keeps restored runtime errors as a turn boundary", () => {
+    const messages = agentMessagesToChatMessages([
+      { role: "user", content: "go" },
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "tool-1", name: "read_file", input: {} },
+        ],
+        runtimeError: { message: "Provider failed", retryable: true },
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "tool-1", content: "ok" },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "Retried." }] },
+    ]);
+
+    expect(
+      messages.filter((message) => message.role === "assistant"),
+    ).toHaveLength(2);
+  });
 });
 
 describe("ask_user result projection", () => {

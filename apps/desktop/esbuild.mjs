@@ -62,3 +62,6 @@ await Promise.all([
 for (const asset of ["setup.html", "setup.css"]) {
   copyFileSync(path.join(root, "src", asset), path.join(outdir, asset));
 }
+for (const asset of ["trayTemplate.png", "trayTemplate@2x.png"]) {
+  copyFileSync(path.join(root, "assets", asset), path.join(outdir, asset));
+}

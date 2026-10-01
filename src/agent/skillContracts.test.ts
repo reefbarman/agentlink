@@ -304,6 +304,50 @@ describe("canonical skill catalog", () => {
     }
   });
 
+  it("excludes description-only repository skills until the required name is repaired", async () => {
+    const sourceRoot = path.join(tmpDir, ".agents", "skills");
+    const description =
+      "description: Create a Pull Request for the current changes and/or branch";
+    const skillPath = writeSkill(sourceRoot, "pull-request", description);
+
+    const invalidCatalog = await loadSkillCatalog(tmpDir, "code");
+    expect(
+      invalidCatalog.entries.some((entry) => entry.skillPath === skillPath),
+    ).toBe(false);
+    expect(invalidCatalog.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "invalid-metadata",
+          sourcePath: skillPath,
+          message: expect.stringContaining(
+            "frontmatter field 'name' is required",
+          ),
+        }),
+      ]),
+    );
+
+    writeSkill(
+      sourceRoot,
+      "pull-request",
+      `name: pull-request\n${description}`,
+    );
+    const repairedCatalog = await loadSkillCatalog(tmpDir, "code");
+    expect(repairedCatalog.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "pull-request",
+          skillPath,
+          enabled: true,
+        }),
+      ]),
+    );
+    expect(
+      repairedCatalog.diagnostics.some(
+        (diagnostic) => diagnostic.sourcePath === skillPath,
+      ),
+    ).toBe(false);
+  });
+
   it("reports malformed metadata and missing dependencies without advertising them", async () => {
     writeSkill(
       path.join(tmpDir, ".agentlink", "skills"),

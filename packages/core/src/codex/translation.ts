@@ -505,18 +505,18 @@ export function buildCodexEndpointRequestBody(args: {
       "This Responses endpoint does not support native structured output",
     );
   }
-  // Responses Lite has no provider-hosted tool channel. Omit hosted tools
-  // fail-soft even when a caller's cached capability view is stale; the host
-  // can still use its separately authorized standalone web transport.
-  const hostedTools =
-    args.hostedTools?.length && !args.useResponsesLite
-      ? translateCodexHostedTools(args.hostedTools)
-      : undefined;
+  // Hosted web tools use normal Responses even when ordinary turns use Lite.
+  const useResponsesLite = Boolean(
+    args.useResponsesLite && !args.hostedTools?.length,
+  );
+  const hostedTools = args.hostedTools?.length
+    ? translateCodexHostedTools(args.hostedTools)
+    : undefined;
   const tools = [...(args.tools ?? []), ...(hostedTools ?? [])];
   const include = hostedTools?.length
     ? (["web_search_call.action.sources"] as CodexRequestBody["include"])
     : undefined;
-  const input = args.useResponsesLite
+  const input = useResponsesLite
     ? [
         ...buildCodexResponsesLitePrefix(args.instructions, tools),
         ...stripCodexResponsesLiteImageDetails(args.input),
@@ -525,13 +525,13 @@ export function buildCodexEndpointRequestBody(args: {
   return buildCodexStreamRequestBody({
     model: args.model,
     input,
-    instructions: args.useResponsesLite ? undefined : args.instructions,
+    instructions: useResponsesLite ? undefined : args.instructions,
     store: args.state?.store ?? false,
     maxTokens: args.caps.supportsMaxOutputTokens ? args.maxTokens : undefined,
     reasoning: args.reasoningEffort
       ? buildCodexReasoning(
           args.reasoningEffort,
-          args.useResponsesLite ||
+          useResponsesLite ||
             (args.caps.supportsPersistedReasoning &&
               args.model.startsWith("gpt-5.6") &&
               args.state?.store &&
@@ -552,8 +552,8 @@ export function buildCodexEndpointRequestBody(args: {
       ? args.textVerbosity
       : undefined,
     outputFormat: args.outputFormat,
-    tools: args.useResponsesLite ? undefined : tools,
-    parallelToolCalls: args.useResponsesLite ? false : undefined,
+    tools: useResponsesLite ? undefined : tools,
+    parallelToolCalls: useResponsesLite ? false : undefined,
     include,
     promptCacheKey: args.caps.supportsPromptCacheKey
       ? args.cache?.key

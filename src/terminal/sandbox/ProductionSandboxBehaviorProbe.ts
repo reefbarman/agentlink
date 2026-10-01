@@ -54,6 +54,13 @@ export interface ProductionSandboxFingerprintOptions {
   platform?: NodeJS.Platform;
 }
 
+export class SandboxRuntimeFingerprintNodeUnavailableError extends Error {
+  constructor() {
+    super("Configured sandbox Node runtime is unavailable or nonexecutable");
+    this.name = "SandboxRuntimeFingerprintNodeUnavailableError";
+  }
+}
+
 interface ProbeFixtures {
   root: string;
   workspace: string;
@@ -790,7 +797,26 @@ export async function createProductionSandboxRuntimeFingerprint(
     );
   }
   const extensionRoot = await realpath(options.extensionRoot);
-  const nodeExecutable = await realpath(options.nodeExecutable);
+  let nodeExecutable: string;
+  try {
+    nodeExecutable = await realpath(options.nodeExecutable);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "EACCES") {
+      throw new SandboxRuntimeFingerprintNodeUnavailableError();
+    }
+    throw error;
+  }
+  const nodeMetadata = await stat(nodeExecutable).catch((error: unknown) => {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "EACCES") {
+      throw new SandboxRuntimeFingerprintNodeUnavailableError();
+    }
+    throw error;
+  });
+  if (!nodeMetadata.isFile() || (nodeMetadata.mode & 0o111) === 0) {
+    throw new SandboxRuntimeFingerprintNodeUnavailableError();
+  }
   const helperPath = path.join(
     extensionRoot,
     SANDBOX_INTERACTIVE_HELPER_RELATIVE_PATH,
@@ -807,13 +833,13 @@ export async function createProductionSandboxRuntimeFingerprint(
   if (nativeAssets.length === 0) {
     throw new Error("Packaged node-pty native assets are missing");
   }
-  const [nodeIdentity, helperHash, nodePtyPackageHash, nodePtyPackageJson] =
+  const [helperHash, nodePtyPackageHash, nodePtyPackageJson] =
     await Promise.all([
-      stat(nodeExecutable),
       hashFile(helperPath),
       hashFile(nodePtyPackage),
       readFile(nodePtyPackage, "utf8"),
     ]);
+  const nodeIdentity = nodeMetadata;
   const nativeAssetHashes = await Promise.all(
     nativeAssets.map(async (asset) => ({
       path: path.relative(nodePtyRoot, asset),

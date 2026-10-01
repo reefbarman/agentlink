@@ -199,11 +199,10 @@ export class CodexProvider implements ModelProvider {
     );
   }
 
-  supportsHostedTools(model: string): boolean {
-    return !(
-      this.lastResolvedAuthMethod !== undefined &&
-      usesCodexResponsesLite(model, this.lastResolvedAuthMethod)
-    );
+  supportsHostedTools(_model: string): boolean {
+    return getEndpointCaps({
+      method: this.lastResolvedAuthMethod ?? "oauth",
+    }).supportsHostedWebSearch;
   }
 
   async getRequestCapabilities(model: string): Promise<ModelCapabilities> {
@@ -548,6 +547,7 @@ export class CodexProvider implements ModelProvider {
           );
         }
 
+        if (hostedTools?.length) throw sdkErr;
         throw this.decorateAstraOAuthBodylessError(
           sdkErr,
           effectiveModel,

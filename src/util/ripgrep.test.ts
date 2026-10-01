@@ -2,9 +2,13 @@ import * as path from "path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { accessMock, execFileMock } = vi.hoisted(() => ({
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+
+const { accessMock, execFileMock, spawnMock } = vi.hoisted(() => ({
   accessMock: vi.fn(),
   execFileMock: vi.fn(),
+  spawnMock: vi.fn(),
 }));
 
 vi.mock("fs/promises", () => ({
@@ -17,6 +21,7 @@ vi.mock("child_process", async () => {
   return {
     ...actual,
     execFile: execFileMock,
+    spawn: spawnMock,
   };
 });
 
@@ -89,6 +94,57 @@ describe("getRipgrepBinPath", () => {
     await expect(getRipgrepBinPath()).rejects.toThrow(
       "Could not find a usable ripgrep binary in the VS Code installation or on PATH",
     );
+  });
+});
+
+describe("execRipgrepFiles", () => {
+  function child() {
+    const process = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      kill: vi.fn(),
+    });
+    spawnMock.mockReturnValue(process);
+    return process;
+  }
+
+  it.each([{ files: [] }, { files: ["./src/example.ts"] }])(
+    "preserves listing results $files when a broken symlink is skipped",
+    async ({ files }) => {
+      const process = child();
+      const { execRipgrepFiles } = await import("./ripgrep.js");
+      const result = execRipgrepFiles("rg", ["--files", "--follow"], 500);
+      for (const file of files) process.stdout.write(`${file}\n`);
+      const warning =
+        "rg: ./.claude/skills/typesafe-ai: No such file or directory (os error 2)";
+      process.stderr.write(`${warning}\n`);
+      process.emit("close", 2);
+      await expect(result).resolves.toEqual({
+        files,
+        warnings: [warning],
+        exitCode: 2,
+        truncated: false,
+      });
+    },
+  );
+
+  it("keeps invalid arguments fatal even when there are traversal warnings", async () => {
+    const process = child();
+    const { execRipgrepFiles } = await import("./ripgrep.js");
+    const result = execRipgrepFiles("rg", ["--invalid"], 500);
+    process.stderr.write(
+      "rg: ./broken: No such file or directory\nerror: unrecognized flag --invalid\n",
+    );
+    process.emit("close", 2);
+    await expect(result).rejects.toThrow("unrecognized flag");
+  });
+
+  it("does not turn a process launch failure into an empty listing", async () => {
+    const process = child();
+    const { execRipgrepFiles } = await import("./ripgrep.js");
+    const result = execRipgrepFiles("missing-rg", [], 500);
+    process.emit("error", new Error("spawn ENOENT"));
+    await expect(result).rejects.toThrow("ripgrep process error");
   });
 });
 

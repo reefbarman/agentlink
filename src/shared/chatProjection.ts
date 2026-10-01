@@ -246,10 +246,8 @@ const BUILTIN_TOOL_NAMES = new Set([
   "web_search",
   "web_fetch",
   "read_file",
-  "get_context",
   "open_file",
   "search_files",
-  "codebase_search",
   "list_files",
   "get_symbols",
   "get_hover",
@@ -1198,6 +1196,11 @@ export function agentMessagesToChatMessages(
 
   // Second pass: build ChatMessages
   const result: ChatMessage[] = [];
+  // Live streaming keeps every API response of a turn in one assistant
+  // message; persisted history stores one message per response. Track the
+  // assistant message a tool-result continuation should extend so reloaded
+  // transcripts group tools and activity the same way.
+  let continuationTarget: number | undefined;
   for (let rawIndex = 0; rawIndex < raw.length; rawIndex++) {
     const msg = raw[rawIndex];
     const m = msg as {
@@ -1245,6 +1248,12 @@ export function agentMessagesToChatMessages(
         };
       };
     };
+    if (
+      m.role !== "assistant" &&
+      !(m.role === "user" && Array.isArray(m.content))
+    ) {
+      continuationTarget = undefined;
+    }
     if (m.isSummary) {
       const hint = m.uiHint?.condense;
       result.push({
@@ -1636,6 +1645,37 @@ export function agentMessagesToChatMessages(
           ...(generatedDisplayMedia?.images ?? []),
           ...(presentedDisplayMedia?.images ?? []),
         ];
+        const previous =
+          continuationTarget === undefined
+            ? undefined
+            : result[continuationTarget];
+        if (
+          previous &&
+          !previous.error &&
+          !previous.finalMarker &&
+          !previous.surfaceChange &&
+          !previous.displayMedia &&
+          !m.uiHint?.surfaceChange &&
+          displayImages.length === 0
+        ) {
+          result[continuationTarget!] = {
+            ...previous,
+            blocks: [...previous.blocks, ...visibleBlocks],
+            finalMarker,
+            ...(hasRuntimeError
+              ? {
+                  error: {
+                    message: m.runtimeError!.message,
+                    retryable: m.runtimeError!.retryable,
+                    code: m.runtimeError!.code,
+                    actions: m.runtimeError!.actions,
+                  },
+                }
+              : {}),
+          };
+          continue;
+        }
+        continuationTarget = result.length;
         result.push({
           id: rehydratedMessageId(rawIndex),
           role: "assistant",

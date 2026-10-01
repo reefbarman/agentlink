@@ -126,7 +126,11 @@ describe("command tier classifier", () => {
   it("classifies destructive and external commands as dangerous", () => {
     expect(tier("rm -rf dist")).toBe("dangerous");
     expect(tier("sudo git status")).toBe("dangerous");
-    expect(tier("git push origin main")).toBe("dangerous");
+    expect(tier("git push --force origin main")).toBe("dangerous");
+    expect(tier("git push origin +main")).toBe("dangerous");
+    expect(tier("git push https://example.com/repo.git main")).toBe(
+      "dangerous",
+    );
     expect(tier("curl https://example.com")).toBe("dangerous");
     expect(tier("find src -execdir rm {} ;")).toBe("dangerous");
     expect(tier("find src -fprint generated.txt")).toBe("dangerous");
@@ -540,7 +544,9 @@ describe("command tier classifier", () => {
     ["dotnet build", "sensitive", "project_toolchain", "dotnet"],
     ["npm run custom", "sensitive", "unrecognized_operation", "npm"],
     ["cargo publish", "sensitive", "network_or_external_effect", "cargo"],
-    ["git commit -m test", "sensitive", "git_mutation", "git"],
+    ["git commit -m test", "sensitive", "git_workflow", "git"],
+    ["git branch -D old", "sensitive", "git_mutation", "git"],
+    ["gh pr create --fill", "sensitive", "git_workflow", "gh"],
     ["npm run deploy", "sensitive", "network_or_external_effect", "npm"],
     [
       "custom-tool --flag",
@@ -552,7 +558,13 @@ describe("command tier classifier", () => {
     ["echo ok > generated.txt", "sensitive", "workspace_redirection", "echo"],
     ["rg token ~/.ssh", "dangerous", "secret_path", "rg"],
     ["sudo git status", "dangerous", "privileged", "sudo"],
-    ["git push origin main", "dangerous", "network_or_external_effect", "git"],
+    ["git push origin main", "sensitive", "git_workflow", "git"],
+    [
+      "git push --force origin main",
+      "dangerous",
+      "network_or_external_effect",
+      "git",
+    ],
     ["echo $(whoami)", "dangerous", "opaque_shell", undefined],
     ["python -c 1", "dangerous", "inline_interpreter", "python"],
   ])(

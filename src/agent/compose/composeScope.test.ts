@@ -118,7 +118,11 @@ describe("composability policy", () => {
     ["list_files", { path: ".", query: "meaning" }, false],
     ["list_files", { path: "." }, true],
     ["search_files", { path: ".", regex: "x", semantic: true }, false],
-    ["search_files", { path: ".", regex: "x", semantic: false }, true],
+    ["search_files", { path: ".", regex: "x", semantic: false }, false],
+    ["search_files", { path: ".", query: "meaning" }, false],
+    ["search_files", { path: ".", regex: "x", query: "meaning" }, false],
+    ["search_files", { path: "." }, false],
+    ["search_files", { path: ".", regex: "x" }, true],
   ] as const)(
     "enforces the rendered %s input constraint",
     (name, input, valid) => {
@@ -151,6 +155,40 @@ describe("composability policy", () => {
 });
 
 describe("createComposeExecutionScope", () => {
+  it.each([
+    ["search_files", { path: ".", query: "meaning" }],
+    ["search_files", { path: ".", regex: "x", semantic: true }],
+    ["search_files", { path: ".", regex: "x", semantic: false }],
+    ["search_files", { path: ".", regex: "x", query: "meaning" }],
+    ["search_files", { path: "." }],
+    ["read_file", { path: "x", query: "meaning" }],
+    ["list_files", { path: ".", query: "meaning" }],
+  ])(
+    "rejects invalid %s search inputs before child execution",
+    async (name, input) => {
+      const harness = makeHarness({
+        available: [name, "compose"],
+        composable: [name],
+      });
+      await expect(
+        harness.scope.executeChild(
+          name as string,
+          input as Record<string, unknown>,
+        ),
+      ).rejects.toBeDefined();
+      expect(harness.executeTool).not.toHaveBeenCalled();
+      expect(harness.context.toolCallBudget?.snapshot().used).toBe(0);
+    },
+  );
+
+  it("admits regex-only search children", async () => {
+    const harness = makeHarness({
+      available: ["search_files", "compose"],
+      composable: ["search_files"],
+    });
+    await harness.scope.executeChild("search_files", { path: ".", regex: "x" });
+    expect(harness.executeTool).toHaveBeenCalledOnce();
+  });
   it("dispatches an admitted child through the runtime with frozen authority", async () => {
     const harness = makeHarness();
 
@@ -347,7 +385,25 @@ describe("createComposeExecutionScope", () => {
       kind: "authorization",
       code: "tool_not_in_skill",
     });
+    expect(harness.context.toolCallBudget?.snapshot().used).toBe(0);
     expect(harness.executeTool).not.toHaveBeenCalled();
+  });
+
+  it("admits the read_file view granted by a single-operation skill policy", async () => {
+    const harness = makeHarness({
+      context: {
+        skillAuthority: Object.freeze({
+          schemaVersion: 1 as const,
+          sources: Object.freeze([]),
+          allowedTools: Object.freeze(["get_context"]),
+        }),
+      },
+    });
+
+    await expect(
+      harness.scope.executeChild("read_file", { path: "x", view: "context" }),
+    ).resolves.toBeDefined();
+    expect(harness.executeTool).toHaveBeenCalledTimes(1);
   });
 
   it("preserves structured authorization and handler failure codes", async () => {

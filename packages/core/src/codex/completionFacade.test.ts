@@ -336,6 +336,33 @@ describe("executeCodexResolvedCompletion", () => {
     });
   });
 
+  it("does not label a normal hosted-web Astra 400 as a Lite rejection", async () => {
+    const client = {
+      responses: {
+        create: async () => {
+          throw Object.assign(new Error("400 status code (no body)"), {
+            status: 400,
+            requestID: "req-hosted-astra",
+          });
+        },
+      },
+    } satisfies CodexResponsesClient;
+    await expect(
+      executeCodexResolvedCompletion({
+        client,
+        authMethod: "oauth",
+        model: "gpt-6-astra",
+        instructions: "Read the page.",
+        input: [],
+        hostedTools: [{ type: "web_search" }],
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      message: expect.not.stringContaining("Responses Lite"),
+      metadata: expect.objectContaining({ requestId: "req-hosted-astra" }),
+    });
+  });
+
   it("normalizes non-auth API failures through the shared Codex error shape", async () => {
     const client = {
       responses: {

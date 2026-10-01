@@ -73,6 +73,13 @@ import {
   isConfirmationOptions,
 } from "@agentlink/protocol/question-confirmation";
 import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
+import { getSearchInputError } from "../core/tools/searchInputValidation.js";
+import {
+  getPermittedReadFileViews,
+  resolveReadFileView,
+  type ReadFileView,
+} from "../core/tools/readFileViews.js";
+import { getSearchUsageMetrics } from "./searchUsageMetrics.js";
 import {
   CALL_MCP_TOOL_DEFINITION,
   MCP_META_TOOL_DEFINITIONS,
@@ -93,6 +100,7 @@ import { handleExecuteCommand } from "../tools/executeCommand.js";
 import { handleFindAndReplace } from "../tools/findAndReplace.js";
 import { handleGenerateImage } from "../tools/generateImage.js";
 import { handlePresentImages } from "../tools/presentImages.js";
+import { handleSaveSessionImage } from "../tools/saveSessionImage.js";
 import { handleGetCallHierarchy } from "../tools/getCallHierarchy.js";
 import { handleGetCompletions } from "../tools/getCompletions.js";
 import { handleGetContext } from "../tools/context/getContext.js";
@@ -187,10 +195,8 @@ import type {
   LanguageReferencesProvider,
   LanguageSymbolsProvider,
 } from "../core/capabilities/language.js";
-import type {
-  SemanticSearchProvider,
-  SemanticSearchResult,
-} from "../core/capabilities/readSearch.js";
+import type { SemanticSearchProvider } from "../core/capabilities/readSearch.js";
+import { createVscodeSemanticSearchProvider } from "../adapters/vscode/readSearchCapabilities.js";
 import type { MemoryToolProvider } from "../core/capabilities/memory.js";
 import type {
   ManageMemoryToolInput,
@@ -239,7 +245,7 @@ import {
 } from "../util/paths.js";
 import { isAgentInstructionReadPath } from "../approvals/protectedPaths.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
-import { getCodeRetrievalStoreRoot } from "../indexer/codeRetrievalIdentity.js";
+
 import { createComposeExecutionScope } from "./compose/composeScope.js";
 import type { ComposeParams } from "./compose/composeRuntime.js";
 import { loadComposeRuntime } from "./compose/composeRuntimeLoader.js";
@@ -326,6 +332,7 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   write_file: schemas.writeFileSchema,
   generate_image: schemas.generateImageSchema,
   present_images: schemas.presentImagesSchema,
+  save_session_image: schemas.saveSessionImageSchema,
   manage_memory: schemas.manageMemorySchema,
   recall_memory: schemas.recallMemorySchema,
   apply_diff: schemas.applyDiffSchema,
@@ -352,7 +359,7 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   get_call_hierarchy: schemas.getCallHierarchySchema,
   get_type_hierarchy: schemas.getTypeHierarchySchema,
   get_inlay_hints: schemas.getInlayHintsSchema,
-  codebase_search: schemas.codebaseSearchSchema,
+
   respond_to_background_question: schemas.respondToBackgroundQuestionSchema,
   compose: schemas.composeSchema,
   ...(IS_DEV_BUILD
@@ -365,14 +372,26 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
     : {}),
 };
 
+const DEFERRED_AGENT_TOOL_SCHEMAS: Record<
+  string,
+  Record<string, z.ZodTypeAny>
+> = {
+  detach_background_agent: schemas.detachBackgroundAgentSchema,
+  start_fleet_workflow: schemas.startFleetWorkflowSchema,
+  schedule_fleet_workflow: schemas.scheduleFleetWorkflowSchema,
+  get_fleet_workflow_result: schemas.getFleetWorkflowResultSchema,
+  manage_fleet_automations: schemas.manageFleetAutomationsSchema,
+};
+
 /**
  * Read-only inventory of native adapter schemas. Stage 0 evaluation baselines
  * use this to detect drift across the currently fragmented tool registries
  * without making this adapter mapping a second mutable registry.
  */
-export const NATIVE_TOOL_SCHEMA_NAMES: ReadonlySet<string> = new Set(
-  Object.keys(TOOL_SCHEMAS),
-);
+export const NATIVE_TOOL_SCHEMA_NAMES: ReadonlySet<string> = new Set([
+  ...Object.keys(TOOL_SCHEMAS),
+  ...Object.keys(DEFERRED_AGENT_TOOL_SCHEMAS),
+]);
 
 const CALL_MCP_TOOL: ToolDefinition = CALL_MCP_TOOL_DEFINITION;
 
@@ -682,42 +701,8 @@ const RESPOND_TO_BACKGROUND_QUESTION_TOOL: ToolDefinition = {
 
 /** Shared budget schema for spawn_background_agent and start_fleet_workflow. */
 const AGENT_BUDGET_SCHEMA = {
-  type: "object",
-  description:
-    "Optional resource caps for review and research task classes. Review agents receive generous tiered safety ceilings with an 80% wrap-up warning and a 1.5x emergency backstop. Research agents run uncapped by default (steer or kill them if they run too long); an explicit research budget supports every cap with a 3x hard backstop. Writable build, debug, design, verification, and general tasks run uncapped. Review token and cost caps remain ignored because explicit diffs may still be large.",
-  properties: {
-    maxTokens: {
-      type: "number",
-      description:
-        "Cap on uncached input + output tokens summed across all API turns. Available for research tasks and ignored for review and writable task classes.",
-    },
-    maxToolCalls: {
-      type: "number",
-      description:
-        "Soft cap on successfully committed tool invocations. Interrupted/provisional tool streams are not charged.",
-    },
-    maxApiTurns: {
-      type: "number",
-      description:
-        "Soft cap on successful model API turns. Provider retry attempts are not charged.",
-    },
-    maxElapsedMs: {
-      type: "number",
-      description: "Wall-clock cap in milliseconds.",
-    },
-    maxEstimatedCostUsd: {
-      type: "number",
-      description:
-        "Estimated-cost cap in USD; only enforced when estimatedCostPerMillionTokens is also set.",
-    },
-    estimatedCostPerMillionTokens: { type: "number" },
-    warningThresholdRatio: {
-      type: "number",
-      description:
-        "Usage ratio at which the agent is nudged to start wrapping up. Automatic review budgets default to 0.8.",
-    },
-    scope: { type: "string", enum: ["session", "subtree", "goal"] },
-  },
+  ...zodSchemaToJsonSchema(schemas.agentBudgetSchema),
+  description: schemas.agentBudgetDescription,
 };
 
 const DEFAULT_BACKGROUND_IMAGE_COUNT = 4;
@@ -833,7 +818,8 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         ownedPaths: {
           type: "array",
           items: { type: "string" },
-          description: "Advisory paths delegated for this agent to own.",
+          description:
+            "Write-ownership paths, enforced for native agents and advisory for ACP agents. Fixed when spawned; answers and steering cannot widen this boundary. For additional paths, edit them in the coordinator or spawn a replacement with the required scope.",
         },
         forbiddenPaths: {
           type: "array",
@@ -1039,102 +1025,11 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
       required: ["sessionId", "message"],
     },
   },
-  {
-    name: "detach_background_agent",
-    description:
-      "Detach an authorized child subtree so it becomes an independent root and is not cancelled when its former parent completes.",
-    input_schema: {
-      type: "object",
-      properties: { sessionId: { type: "string" } },
-      required: ["sessionId"],
-    },
-  },
-  {
-    name: "start_fleet_workflow",
-    description:
-      "Start a structured diff review, browser verification, isolated best-of-N run, or persistent goal using the normal fleet scheduler and policies.",
-    input_schema: {
-      type: "object",
-      properties: {
-        kind: {
-          type: "string",
-          enum: [
-            "structured_diff_review",
-            "browser_verification",
-            "best_of_n",
-            "persistent_goal",
-          ],
-        },
-        task: { type: "string" },
-        message: { type: "string" },
-        goalId: { type: "string" },
-        candidates: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              model: { type: "string" },
-              provider: { type: "string" },
-            },
-          },
-        },
-        budget: AGENT_BUDGET_SCHEMA,
-      },
-      required: ["kind", "task", "message"],
-    },
-  },
-  {
-    name: "schedule_fleet_workflow",
-    description:
-      "Persist a recurring or fleet-event-triggered workflow automation.",
-    input_schema: {
-      type: "object",
-      properties: {
-        name: { type: "string" },
-        everyMinutes: { type: "number" },
-        eventType: { type: "string" },
-        workflow: { type: "object" },
-      },
-      required: ["name", "workflow"],
-    },
-  },
-  {
-    name: "get_fleet_workflow_result",
-    description:
-      "Wait for all workflow candidates, collect structured evidence, and select a best-of-N winner when applicable.",
-    input_schema: {
-      type: "object",
-      properties: {
-        workflowId: { type: "string" },
-        kind: {
-          type: "string",
-          enum: [
-            "structured_diff_review",
-            "browser_verification",
-            "best_of_n",
-            "persistent_goal",
-          ],
-        },
-      },
-      required: ["workflowId", "kind"],
-    },
-  },
-  {
-    name: "manage_fleet_automations",
-    description:
-      "List, inspect history, enable, disable, or delete persisted fleet automations.",
-    input_schema: {
-      type: "object",
-      properties: {
-        action: {
-          type: "string",
-          enum: ["list", "history", "enable", "disable", "delete"],
-        },
-        id: { type: "string" },
-      },
-      required: ["action"],
-    },
-  },
+  ...Object.entries(DEFERRED_AGENT_TOOL_SCHEMAS).map(([name, schema]) => ({
+    name,
+    description: TOOL_REGISTRY[name]!.description,
+    input_schema: cachedJsonSchemaFor(name, schema),
+  })),
 ];
 
 /** Unfiltered definitions for the generated, value-free telemetry inventory. */
@@ -1199,6 +1094,8 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "go_to_definition",
     "get_diagnostics",
     "execute_command",
+    "web_search",
+    "web_fetch",
   ]),
   "readonly-research": new Set([
     "read_file",
@@ -1206,7 +1103,6 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "get_repo_map",
     "get_module_neighbors",
     "search_files",
-    "codebase_search",
     "list_files",
     "get_diagnostics",
     "get_hover",
@@ -1231,7 +1127,6 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "get_repo_map",
     "get_module_neighbors",
     "search_files",
-    "codebase_search",
     "list_files",
     "get_diagnostics",
     "get_hover",
@@ -1261,6 +1156,59 @@ export function getAgentToolProfileNames(): string[] {
   return Object.keys(TOOL_PROFILES);
 }
 
+/**
+ * Views of the merged read_file tool permitted by a request's tool profile and
+ * skill allowlist. Modes grant both reader operations together through the
+ * `read` group, so mode authority is enforced on the public read_file name.
+ */
+export function getRequestReadFileViews(
+  context: Pick<
+    AgentToolExecutionRequest["context"],
+    "toolProfile" | "skillAllowedTools" | "skillAuthority"
+  >,
+): ReadFileView[] {
+  const profileAllowlist = context.toolProfile
+    ? (TOOL_PROFILES[context.toolProfile] ?? new Set<string>())
+    : undefined;
+  const skillTools =
+    context.skillAllowedTools ?? context.skillAuthority?.allowedTools;
+  const skillAllowlist = skillTools
+    ? new Set(normalizeSkillToolNames(skillTools))
+    : undefined;
+  return getPermittedReadFileViews(
+    (operation) =>
+      (!profileAllowlist || profileAllowlist.has(operation)) &&
+      (!skillAllowlist || skillAllowlist.has(operation)),
+  );
+}
+
+function getReadFileDefinitionVariant(views: readonly ReadFileView[]): {
+  cacheKey: string;
+  schema: Record<string, z.ZodTypeAny>;
+  descriptionSuffix: string;
+} {
+  if (views.includes("content") && views.includes("context")) {
+    return {
+      cacheKey: "read_file",
+      schema: schemas.readFileSchema,
+      descriptionSuffix: "",
+    };
+  }
+  return views[0] === "context"
+    ? {
+        cacheKey: "read_file:context",
+        schema: schemas.readFileContextViewSchema,
+        descriptionSuffix:
+          ' Only view "context" is permitted for this request; supply it explicitly.',
+      }
+    : {
+        cacheKey: "read_file:content",
+        schema: schemas.readFileContentViewSchema,
+        descriptionSuffix:
+          ' Only view "content" is permitted for this request.',
+      };
+}
+
 // --- Public API ---
 
 /**
@@ -1285,6 +1233,7 @@ export function getAgentTools(
   backgroundExpectedResult?: ExpectedBackgroundResult,
   nativeWebToolKinds: readonly import("../core/webAccess.js").CoreWebToolKind[] = [],
   composeEnabled = false,
+  hasDeferredRules = false,
 ): ToolDefinition[] {
   const mcpToolNames = (mcpToolDefs ?? []).map((t) => t.name);
   const allowed = mode ? getToolsForMode(mode, mcpToolNames) : null;
@@ -1303,7 +1252,7 @@ export function getAgentTools(
   const usesReadOnlyCommand =
     mode?.toolGroups.includes("read-only-command") ||
     (toolProfile !== undefined && READ_ONLY_COMMAND_PROFILES.has(toolProfile));
-  const nativeToolEntries = Object.entries(TOOL_SCHEMAS)
+  const authorizedNativeEntries = Object.entries(TOOL_SCHEMAS)
     .sort(([a], [b]) => a.localeCompare(b))
     .filter(([name]) => !EXCLUDED_TOOLS.has(name))
     .filter(
@@ -1344,6 +1293,25 @@ export function getAgentTools(
         SKILL_SESSION_CONTEXT_TOOLS.has(name) ||
         ALWAYS_AVAILABLE_DEV_TOOLS.has(name),
     );
+  // read_file and get_context are advertised as one read_file tool whose
+  // view enum is limited to the operations that survived the filters above.
+  const permittedReadViews = getPermittedReadFileViews((operation) =>
+    authorizedNativeEntries.some(([name]) => name === operation),
+  );
+  const readFileVariant = getReadFileDefinitionVariant(permittedReadViews);
+  const nativeToolEntries = [
+    ...authorizedNativeEntries.filter(
+      ([name]) => name !== "read_file" && name !== "get_context",
+    ),
+    ...(permittedReadViews.length > 0
+      ? [
+          ["read_file", readFileVariant.schema] as [
+            string,
+            typeof readFileVariant.schema,
+          ],
+        ]
+      : []),
+  ].sort(([a], [b]) => a.localeCompare(b));
   const composableChildNames = nativeToolEntries
     .map(([name]) => name)
     .filter((name) => COMPOSABLE_TOOLS.has(name));
@@ -1356,14 +1324,18 @@ export function getAgentTools(
         ? "Run a recognized read-only command synchronously inside the workspace. Unknown, mutating, redirected, networked, privileged, opaque, background, timed, environment-bearing, forced, and inline-file commands are rejected. AgentLink disables interactive pagers; do not add routine `--no-pager`. Use `rg --no-config <pattern> [path ...]`. Place Git helper guards after the subcommand: `git diff --no-ext-diff --no-textconv ...`, `git show --no-ext-diff --no-textconv ...`, `git log --no-ext-diff --no-textconv ...`, and `git blame --no-textconv ...`. Plain commands such as `git status` and `git grep` need none of these flags."
         : name === "compose"
           ? `${TOOL_REGISTRY.compose.description} Current children and constraints: ${composableConstraints || "none"}.`
-          : (TOOL_REGISTRY[name]?.description ?? name),
+          : name === "read_file"
+            ? `${TOOL_REGISTRY.read_file.description}${readFileVariant.descriptionSuffix}`
+            : (TOOL_REGISTRY[name]?.description ?? name),
     input_schema:
       name === "execute_command" && usesReadOnlyCommand
         ? cachedJsonSchemaFor(
             "execute_command:read-only",
             schemas.readOnlyExecuteCommandSchema,
           )
-        : cachedJsonSchemaFor(name, zodSchema),
+        : name === "read_file"
+          ? cachedJsonSchemaFor(readFileVariant.cacheKey, zodSchema)
+          : cachedJsonSchemaFor(name, zodSchema),
   }));
 
   // Restrictive profiles are authoritative: native tools come from the profile
@@ -1395,30 +1367,29 @@ export function getAgentTools(
     canUseMcpTools && (!skillAllowlist || skillAllowsMcpTargets)
       ? MCP_META_TOOLS
       : [];
-  const hiddenAgentTools = profileAllowlist
-    ? []
-    : [
-        {
-          name: "load_rule",
-          description:
-            TOOL_REGISTRY.load_rule?.description ??
-            "Load the full contents of an advertised local rule file.",
-          input_schema: cachedJsonSchemaFor(
-            "load_rule",
-            schemas.loadRuleSchema,
-          ),
-        },
-        {
-          name: "load_skill",
-          description:
-            TOOL_REGISTRY.load_skill?.description ??
-            "Load the full contents of an advertised skill file.",
-          input_schema: cachedJsonSchemaFor(
-            "load_skill",
-            schemas.loadSkillSchema,
-          ),
-        },
-      ];
+  const hiddenAgentTools = [
+    ...(hasDeferredRules
+      ? [
+          {
+            name: "load_rule",
+            description:
+              TOOL_REGISTRY.load_rule?.description ??
+              "Load the full contents of an advertised local rule file.",
+            input_schema: cachedJsonSchemaFor(
+              "load_rule",
+              schemas.loadRuleSchema,
+            ),
+          },
+        ]
+      : []),
+    {
+      name: "load_skill",
+      description:
+        TOOL_REGISTRY.load_skill?.description ??
+        "Load the full contents of an advertised skill file.",
+      input_schema: cachedJsonSchemaFor("load_skill", schemas.loadSkillSchema),
+    },
+  ];
   return [
     ...nativeTools,
     ...hiddenAgentTools,
@@ -1734,7 +1705,7 @@ export function getExecuteCommandUsageMetrics(
 }
 
 const SEMANTIC_SEARCH_UNAVAILABLE_MESSAGE =
-  "Semantic codebase search is unavailable in this runtime. Provide a SemanticSearchProvider to enable codebase_search.";
+  "Indexed search is unavailable in this runtime. Provide a SemanticSearchProvider to enable search_files query mode.";
 
 export function createUnavailableSemanticSearchProvider(): SemanticSearchProvider {
   return {
@@ -1748,16 +1719,6 @@ export function createUnavailableSemanticSearchProvider(): SemanticSearchProvide
         },
       };
     },
-  };
-}
-
-function semanticSearchResultToToolResult(
-  result: SemanticSearchResult,
-): ToolResult {
-  return {
-    ...jsonResult(result.payload, true),
-    ...(result.isError ? { isError: true } : {}),
-    ...(result.error ? { error: result.error } : {}),
   };
 }
 
@@ -2295,13 +2256,31 @@ export interface ToolDispatchContext {
 export function resolveAgentToolCall(
   request: AgentToolExecutionRequest,
 ): ResolvedAgentToolCall {
+  const targetName =
+    request.name === "call_native_tool"
+      ? String(request.input.name ?? "")
+      : request.name;
+  const rawInput =
+    request.name === "call_native_tool" ? request.input.input : request.input;
+  if (rawInput && typeof rawInput === "object" && !Array.isArray(rawInput)) {
+    const inputError = getSearchInputError(targetName, rawInput);
+    if (inputError)
+      return nativeToolResolutionError(
+        request,
+        inputError,
+        "invalid_search_input",
+      );
+  }
   if (request.name !== "call_native_tool") {
     if (request.context.providerToolName === "call_native_tool") {
       const snapshot = request.context.nativeToolDisclosure;
       const target = snapshot
         ? getDeferredNativeTool(snapshot, request.name)
         : undefined;
-      const targetSchema = target ? TOOL_SCHEMAS[target.name] : undefined;
+      const targetSchema = target
+        ? (TOOL_SCHEMAS[target.name] ??
+          DEFERRED_AGENT_TOOL_SCHEMAS[target.name])
+        : undefined;
       const parsedTarget = targetSchema
         ? z.object(targetSchema).safeParse(request.input)
         : undefined;
@@ -2372,7 +2351,8 @@ export function resolveAgentToolCall(
     );
   }
 
-  const targetSchema = TOOL_SCHEMAS[target.name];
+  const targetSchema =
+    TOOL_SCHEMAS[target.name] ?? DEFERRED_AGENT_TOOL_SCHEMAS[target.name];
   if (!targetSchema) {
     return nativeToolResolutionError(
       request,
@@ -2439,7 +2419,23 @@ function executeNativeToolDiscovery(
       { status: "missing_native_catalog" },
     );
   }
-  const result = discoverNativeTools(request.context.nativeToolDisclosure, {
+  const snapshot = request.context.nativeToolDisclosure;
+  const modeAllowed = request.context.modeAllowedToolNames;
+  const authorizedSnapshot = modeAllowed
+    ? {
+        ...snapshot,
+        inlineTools: snapshot.inlineTools.filter((tool) =>
+          modeAllowed.has(tool.name),
+        ),
+        deferredTools: snapshot.deferredTools.filter((tool) =>
+          modeAllowed.has(tool.name),
+        ),
+        dormantToolNames: snapshot.dormantToolNames.filter((name) =>
+          modeAllowed.has(name),
+        ),
+      }
+    : snapshot;
+  const result = discoverNativeTools(authorizedSnapshot, {
     query: parsed.data.query,
     limit: parsed.data.limit,
     offset: parsed.data.offset,
@@ -2447,6 +2443,11 @@ function executeNativeToolDiscovery(
     schemaLimit: parsed.data.schema_limit,
   });
   return jsonResult(result);
+}
+
+function getReadViewMetric(view: unknown): string {
+  if (view === undefined || view === "content") return "content";
+  return view === "context" ? "context" : "other";
 }
 
 function observeToolInvocation(
@@ -2527,7 +2528,11 @@ function observeToolInvocation(
             : result &&
                 (request.name === "write_file" || request.name === "apply_diff")
               ? getWriteToolUsageMetrics(result)
-              : undefined,
+              : result && request.name === "search_files"
+                ? getSearchUsageMetrics(request.input, result)
+                : request.name === "read_file"
+                  ? { readView: getReadViewMetric(request.input.view) }
+                  : undefined,
       });
     }
   } catch {
@@ -2560,6 +2565,7 @@ export function createAgentToolRuntime(
         request.backgroundExpectedResult,
         request.nativeWebToolKinds ?? ctx.nativeWebToolKinds,
         request.composeEnabled === true,
+        request.hasDeferredRules === true,
       );
     },
     resolveToolCall(request) {
@@ -2617,7 +2623,7 @@ export function createAgentToolRuntime(
             },
             request.name,
             request.context.toolAbortSignal,
-            hookMatcherAliases(request.name),
+            hookMatcherAliases(request.name, request.input),
           );
           preHookContext = preHook.additionalContext;
           if (preHook.preToolUse?.decision === "deny") {
@@ -2636,6 +2642,25 @@ export function createAgentToolRuntime(
               ...(preHook.preToolUse.updatedInput as Record<string, unknown>),
             };
           }
+        }
+        // The public read_file tool selects an existing internal operation.
+        // Resolve it before any authorization, path policy, or file access so
+        // name-keyed policies keep applying to the operation actually run.
+        let operationName = request.name;
+        let operationInput = request.input;
+        if (request.name === "read_file") {
+          const readView = resolveReadFileView(
+            request.input,
+            getRequestReadFileViews(request.context),
+          );
+          if (!readView.ok) {
+            return errorResult(readView.message, {
+              status: readView.status,
+              tool: "read_file",
+            });
+          }
+          operationName = readView.operation;
+          operationInput = readView.input;
         }
         if (
           request.context.availableToolNames &&
@@ -2664,10 +2689,10 @@ export function createAgentToolRuntime(
             },
           );
         }
-        enforceDelegatedPathPolicy(request.name, request.input, ctx);
+        enforceDelegatedPathPolicy(operationName, operationInput, ctx);
         const mutationTarget = resolveWorkspaceMutationTarget(
-          request.name,
-          request.input,
+          operationName,
+          operationInput,
           ctx,
         );
         const isReviewWrite =
@@ -2717,11 +2742,12 @@ export function createAgentToolRuntime(
         if (request.context.interactionPolicy === "deny") {
           const enforceReadPathPolicy = () =>
             enforceNonInteractiveReadPathPolicy(
-              request.name,
-              request.input,
+              operationName,
+              operationInput,
               request.context.sessionId,
               ctx.approvalManager,
               request.context.getAdvertisedSkills,
+              request.name,
             );
           const denied = operationRoots
             ? withWorkspaceRoots(operationRoots, enforceReadPathPolicy)
@@ -2751,7 +2777,7 @@ export function createAgentToolRuntime(
                     "quickjs-release-asyncify.wasm",
                   ),
                 })
-              : await dispatchToolCall(request.name, request.input, {
+              : await dispatchToolCall(operationName, operationInput, {
                   ...ctx,
                   sessionId: request.context.sessionId,
                   mode: request.context.mode,
@@ -2801,7 +2827,7 @@ export function createAgentToolRuntime(
             },
             request.name,
             request.context.toolAbortSignal,
-            hookMatcherAliases(request.name),
+            hookMatcherAliases(request.name, request.input),
           );
           const hookContext = [
             ...preHookContext,
@@ -2882,7 +2908,13 @@ export function createAgentToolRuntime(
   };
 }
 
-function hookMatcherAliases(toolName: string): readonly string[] {
+function hookMatcherAliases(
+  toolName: string,
+  input: Readonly<Record<string, unknown>>,
+): readonly string[] {
+  if (toolName === "read_file" && input.view === "context") {
+    return ["get_context"];
+  }
   if (toolName === "execute_command") return ["Bash", "Shell", "shell_command"];
   if (toolName === "apply_diff" || toolName === "write_file") {
     return ["apply_patch", "Edit", "Write"];
@@ -2928,6 +2960,7 @@ function enforceNonInteractiveReadPathPolicy(
   sessionId: string,
   approvalManager: ApprovalManager,
   getAdvertisedSkills?: AgentToolExecutionRequest["context"]["getAdvertisedSkills"],
+  publicToolName = toolName,
 ): ToolResult | undefined {
   const inputPath = input.path;
   if (typeof inputPath !== "string" || inputPath.trim() === "")
@@ -2945,7 +2978,7 @@ function enforceNonInteractiveReadPathPolicy(
   }
 
   return errorResult(
-    `Compose child path requires interactive approval: ${absolutePath}. Call ${toolName} directly with this path to request approval; compose cannot ask for it.`,
+    `Compose child path requires interactive approval: ${absolutePath}. Call ${publicToolName} directly with this path to request approval; compose cannot ask for it.`,
     { status: "rejected", path: absolutePath, reason: "interaction_denied" },
   );
 }
@@ -2956,6 +2989,7 @@ const PATH_MUTATING_TOOLS = new Set([
   "apply_diff",
   "find_and_replace",
   "generate_image",
+  "save_session_image",
   "execute_command",
   "rename_symbol",
   "apply_code_action",
@@ -3156,7 +3190,7 @@ function writeApprovalPromptReason(reason: string | undefined): string {
 }
 
 function recordWriteApprovalPrompt(
-  toolName: "write_file" | "apply_diff",
+  toolName: "write_file" | "apply_diff" | "save_session_image",
   event: WriteApprovalPromptEvent,
   ctx: ToolDispatchContext,
 ): void {
@@ -3340,6 +3374,9 @@ async function dispatchToolCallWithTrackedApprovals(
   input: Record<string, unknown>,
   ctx: ToolDispatchContext,
 ): Promise<ToolResult> {
+  const inputError = getSearchInputError(toolName, input);
+  if (inputError)
+    return errorResult(inputError, { status: "invalid_search_input" });
   if (!IS_DEV_BUILD && TOOL_REGISTRY[toolName]?.devOnly) {
     return errorResult(`Tool '${toolName}' is available only in dev builds`);
   }
@@ -3911,27 +3948,10 @@ async function dispatchToolCallWithTrackedApprovals(
                           offset: params.anchor_offset,
                         },
                       }
-                    : params.query !== undefined
-                      ? {
-                          selector: {
-                            kind: "query" as const,
-                            value: params.query,
-                            offset: params.anchor_offset,
-                          },
-                        }
-                      : {}
+                    : {}
                 : {}),
             })
           : undefined,
-        ctx.globalStorageUri
-          ? {
-              retrievalStoreRootForWorkspace: (workspaceRoot: string) =>
-                getCodeRetrievalStoreRoot(
-                  ctx.globalStorageUri!.fsPath,
-                  workspaceRoot,
-                ),
-            }
-          : {},
       );
     case "get_context":
       if (ctx.onFileRead && typeof params.path === "string") {
@@ -4047,20 +4067,10 @@ async function dispatchToolCallWithTrackedApprovals(
                   includeIgnored: params.include_ignored === true,
                   depth: params.depth,
                   pattern: params.pattern,
-                  query: params.query,
                 },
               ),
             },
           ),
-          semanticQueryOptions: ctx.globalStorageUri
-            ? {
-                retrievalStoreRootForWorkspace: (workspaceRoot: string) =>
-                  getCodeRetrievalStoreRoot(
-                    ctx.globalStorageUri!.fsPath,
-                    workspaceRoot,
-                  ),
-              }
-            : undefined,
         },
       );
     case "search_files":
@@ -4070,6 +4080,14 @@ async function dispatchToolCallWithTrackedApprovals(
         approvalPanel,
         sessionId,
         {
+          semanticSearchProvider:
+            ctx.semanticSearchProvider ??
+            (ctx.globalStorageUri
+              ? createVscodeSemanticSearchProvider(
+                  ctx.projectRoot,
+                  ctx.globalStorageUri,
+                )
+              : createUnavailableSemanticSearchProvider()),
           workspaceFileProvider: createVscodeWorkspaceFileProvider(),
           pathAccessProvider: createVscodePathAccessProvider(
             approvalManager,
@@ -4085,8 +4103,9 @@ async function dispatchToolCallWithTrackedApprovals(
                 "search_files",
                 {
                   kind: "search",
-                  pattern: params.regex,
-                  patternKind: params.semantic ? "semantic" : "regex",
+                  pattern: params.query ?? params.regex,
+                  patternKind:
+                    params.query !== undefined ? "semantic" : "regex",
                   filePattern: params.file_pattern,
                   caseInsensitive: params.case_insensitive,
                   context: params.context,
@@ -4100,15 +4119,6 @@ async function dispatchToolCallWithTrackedApprovals(
               ),
             },
           ),
-          semanticQueryOptions: ctx.globalStorageUri
-            ? {
-                retrievalStoreRootForWorkspace: (workspaceRoot: string) =>
-                  getCodeRetrievalStoreRoot(
-                    ctx.globalStorageUri!.fsPath,
-                    workspaceRoot,
-                  ),
-              }
-            : undefined,
         },
       );
     case "search_session_history":
@@ -4172,6 +4182,25 @@ async function dispatchToolCallWithTrackedApprovals(
       );
     case "present_images":
       return handlePresentImages(params, ctx.getSessionImages);
+    case "save_session_image":
+      return handleSaveSessionImage(params, {
+        sessionId,
+        mode: ctx.mode,
+        getSessionImages: ctx.getSessionImages,
+        writeApprovalPolicyProvider:
+          ctx.writeApprovalPolicyProvider ??
+          createVscodeWriteApprovalPolicyProvider(
+            approvalManager,
+            ctx.getCommandApprovalMode,
+          ),
+        onApprovalRequest,
+        ...(ctx.toolUsageTelemetry
+          ? {
+              onApprovalPrompt: (event: WriteApprovalPromptEvent) =>
+                recordWriteApprovalPrompt("save_session_image", event, ctx),
+            }
+          : {}),
+      });
     case "apply_diff":
       return handleApplyDiff(
         params,
@@ -4473,21 +4502,6 @@ async function dispatchToolCallWithTrackedApprovals(
           ctx.inlayHintsProvider ??
           createVscodeInlayHintsProvider(approvalManager, approvalPanel),
       });
-
-    // --- Search ---
-    case "codebase_search": {
-      const provider =
-        ctx.semanticSearchProvider ?? createUnavailableSemanticSearchProvider();
-      const result = await provider.search({
-        query: String(params.query),
-        path: params.path ? String(params.path) : undefined,
-        limit: typeof params.limit === "number" ? params.limit : undefined,
-        exclude_globs: Array.isArray(params.exclude_globs)
-          ? params.exclude_globs.map(String)
-          : undefined,
-      });
-      return semanticSearchResultToToolResult(result);
-    }
 
     case "find_mcp_tools": {
       const currentLease = ctx.mcpToolDiscoveryProvider
@@ -5317,7 +5331,17 @@ async function dispatchToolCallWithTrackedApprovals(
         notes: rawNotes,
       });
       return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              ...result,
+              ownershipChanged: false,
+              guidance:
+                "Answers do not change the child's ownedPaths or forbiddenPaths. The coordinator must edit additional paths itself or spawn a replacement with the required scope.",
+            }),
+          },
+        ],
         isError: !result.accepted,
       };
     }

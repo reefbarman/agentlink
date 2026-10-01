@@ -377,6 +377,16 @@ export function readTelemetry(
 
     for (const [toolName, bucket] of Object.entries(record.tools)) {
       mergeToolBucket(report, toolName, bucket);
+      if (toolName === "search_files") {
+        updateSearchUsage(report, record.extensionVersion ?? "unknown", bucket);
+      }
+      if (toolName === "read_file") {
+        updateReadViewUsage(
+          report,
+          record.extensionVersion ?? "unknown",
+          bucket,
+        );
+      }
       const errors = asCount(bucket?.outcomes?.error);
       if (
         errors > 0 &&
@@ -480,6 +490,8 @@ function createEmptyReport() {
     parameters: [],
     knownToolCount: 0,
     unusedToolCount: 0,
+    searchUsage: {},
+    readViewUsage: {},
     compose: {
       instrumentedCalls: 0,
       legacyCallsExcluded: 0,
@@ -552,7 +564,102 @@ export function finalizeReport(report, knownParameters = new Map()) {
         : null;
   }
   report.compose = buildComposeReport(report.tools.compose, report.compose);
+  for (const usage of Object.values(report.searchUsage)) {
+    usage.rankedResults =
+      usage.hybrid +
+      usage.configuredLexical +
+      usage.unexpectedLexical +
+      usage.keywordFallback;
+    usage.failedOrUnobserved = Math.max(
+      0,
+      usage.queryCalls - usage.rankedResults,
+    );
+    usage.rankingCoverage =
+      usage.queryCalls > 0 ? usage.rankedResults / usage.queryCalls : null;
+    usage.rankingShares = Object.fromEntries(
+      [
+        ["hybrid", usage.hybrid],
+        ["configuredLexical", usage.configuredLexical],
+        ["unexpectedLexical", usage.unexpectedLexical],
+        ["keywordFallback", usage.keywordFallback],
+      ].map(([category, count]) => [
+        category,
+        usage.rankedResults > 0 ? count / usage.rankedResults : null,
+      ]),
+    );
+  }
+  report.searchUsage = Object.fromEntries(
+    Object.entries(report.searchUsage).sort(([left], [right]) =>
+      compareVersions(left, right),
+    ),
+  );
+  // Versions before the readView metric existed would only show unrecorded
+  // calls, so they are omitted rather than reported as an unknown split.
+  report.readViewUsage = Object.fromEntries(
+    Object.entries(report.readViewUsage)
+      .filter(([, usage]) => usage.calls > usage.unrecorded)
+      .sort(([left], [right]) => compareVersions(left, right)),
+  );
   report.warnings = buildWarnings(report);
+}
+
+function updateReadViewUsage(report, extensionVersion, bucket) {
+  const usage = report.readViewUsage[extensionVersion] ?? {
+    calls: 0,
+    content: 0,
+    context: 0,
+    other: 0,
+    unrecorded: 0,
+  };
+  report.readViewUsage[extensionVersion] = usage;
+  const metrics = bucket?.categoricalMetrics ?? {};
+  const calls = asCount(bucket?.calls);
+  const content = asCount(metrics["readView:content"]);
+  const context = asCount(metrics["readView:context"]);
+  const other = asCount(metrics["readView:other"]);
+  usage.calls += calls;
+  usage.content += content;
+  usage.context += context;
+  usage.other += other;
+  usage.unrecorded += Math.max(0, calls - content - context - other);
+}
+
+function updateSearchUsage(report, extensionVersion, bucket) {
+  const usage = report.searchUsage[extensionVersion] ?? {
+    calls: 0,
+    regexCalls: 0,
+    queryCalls: 0,
+    unknownModeCalls: 0,
+    hybrid: 0,
+    configuredLexical: 0,
+    unexpectedLexical: 0,
+    keywordFallback: 0,
+    rankedResults: 0,
+    failedOrUnobserved: 0,
+    rankingCoverage: null,
+    rankingShares: {},
+  };
+  report.searchUsage[extensionVersion] = usage;
+  usage.calls += asCount(bucket?.calls);
+
+  const metrics = bucket?.categoricalMetrics ?? {};
+  const metricCount = (key) => asCount(metrics[key]);
+  usage.regexCalls += metricCount("searchMode:regex");
+  usage.queryCalls += metricCount("searchMode:query");
+  usage.unknownModeCalls += Math.max(
+    0,
+    asCount(bucket?.calls) -
+      metricCount("searchMode:regex") -
+      metricCount("searchMode:query"),
+  );
+  usage.hybrid += metricCount("searchRanking:hybrid");
+  usage.keywordFallback += metricCount("searchRanking:keyword_fallback");
+  const lexical = metricCount("searchRanking:lexical");
+  const configuredLexical = metricCount(
+    "searchRankingReason:embeddings_disabled",
+  );
+  usage.configuredLexical += Math.min(lexical, configuredLexical);
+  usage.unexpectedLexical += Math.max(0, lexical - configuredLexical);
 }
 
 function buildComposeReport(tool, compose) {
@@ -1108,6 +1215,67 @@ function printSummary(report, inputPath, top) {
     );
   }
 
+  const searchUsageRows = Object.entries(report.searchUsage);
+  if (searchUsageRows.length > 0) {
+    console.log("");
+    console.log(
+      "Search ranking telemetry by extension version (query calls only)",
+    );
+    printTable(
+      [
+        "version",
+        "query_calls",
+        "hybrid (share_%)",
+        "configured_lexical (share_%)",
+        "unexpected_lexical (share_%)",
+        "keyword_fallback (share_%)",
+        "failed_unobserved",
+        "coverage_%",
+        "unknown_mode_calls",
+      ],
+      searchUsageRows.map(([version, usage]) => [
+        version,
+        usage.queryCalls,
+        `${usage.hybrid} (${formatShare(usage.rankingShares.hybrid)})`,
+        `${usage.configuredLexical} (${formatShare(usage.rankingShares.configuredLexical)})`,
+        `${usage.unexpectedLexical} (${formatShare(usage.rankingShares.unexpectedLexical)})`,
+        `${usage.keywordFallback} (${formatShare(usage.rankingShares.keywordFallback)})`,
+        usage.failedOrUnobserved,
+        usage.rankingCoverage === null
+          ? "N/A"
+          : formatNumber(usage.rankingCoverage * 100),
+        usage.unknownModeCalls,
+      ]),
+    );
+    console.log(
+      "Historical calls without searchMode are shown as unknown-mode, not as failed query calls. Removed codebase_search calls have no ranking observations.",
+    );
+  }
+
+  const readViewRows = Object.entries(report.readViewUsage);
+  if (readViewRows.length > 0) {
+    console.log("");
+    console.log("read_file views by extension version");
+    printTable(
+      [
+        "version",
+        "calls",
+        "content (share_%)",
+        "context (share_%)",
+        "other",
+        "unrecorded",
+      ],
+      readViewRows.map(([version, usage]) => [
+        version,
+        usage.calls,
+        `${usage.content} (${formatShare(usage.calls > 0 ? usage.content / usage.calls : null)})`,
+        `${usage.context} (${formatShare(usage.calls > 0 ? usage.context / usage.calls : null)})`,
+        usage.other,
+        usage.unrecorded,
+      ]),
+    );
+  }
+
   const toolRows = Object.values(report.tools)
     .filter((tool) => tool.calls > 0)
     .slice(0, top);
@@ -1287,6 +1455,50 @@ function printSummary(report, inputPath, top) {
   }
 }
 
+function formatShare(value) {
+  return value === null ? "N/A" : `${formatNumber(value * 100)}%`;
+}
+
+function aggregateSearchUsage(byVersion) {
+  const total = {
+    queryCalls: 0,
+    hybrid: 0,
+    configuredLexical: 0,
+    unexpectedLexical: 0,
+    keywordFallback: 0,
+    failedOrUnobserved: 0,
+    rankingCoverage: null,
+    rankingShares: {},
+  };
+  for (const usage of Object.values(byVersion ?? {})) {
+    total.queryCalls += usage.queryCalls;
+    total.hybrid += usage.hybrid;
+    total.configuredLexical += usage.configuredLexical;
+    total.unexpectedLexical += usage.unexpectedLexical;
+    total.keywordFallback += usage.keywordFallback;
+    total.failedOrUnobserved += usage.failedOrUnobserved;
+  }
+  const ranked =
+    total.hybrid +
+    total.configuredLexical +
+    total.unexpectedLexical +
+    total.keywordFallback;
+  total.rankingCoverage =
+    total.queryCalls > 0 ? ranked / total.queryCalls : null;
+  total.rankingShares = Object.fromEntries(
+    [
+      ["hybrid", total.hybrid],
+      ["configuredLexical", total.configuredLexical],
+      ["unexpectedLexical", total.unexpectedLexical],
+      ["keywordFallback", total.keywordFallback],
+    ].map(([category, count]) => [
+      category,
+      ranked > 0 ? count / ranked : null,
+    ]),
+  );
+  return total;
+}
+
 const COMPARISON_SIGNAL_TOOLS = [
   "spawn_background_agent",
   "get_background_result",
@@ -1379,6 +1591,56 @@ function printComparison(left, right, compare, inputPath, top) {
     ["tool", "calls", "per_1k_calls", "avg_ms", "avg_ms_Δ", "total_min"],
     signalRows,
   );
+
+  const searchUsageA = aggregateSearchUsage(left.searchUsage);
+  const searchUsageB = aggregateSearchUsage(right.searchUsage);
+  if (searchUsageA.queryCalls > 0 || searchUsageB.queryCalls > 0) {
+    console.log("");
+    console.log("search_files query ranking signals");
+    printTable(
+      ["metric", "A", "B"],
+      [
+        ["query calls", searchUsageA.queryCalls, searchUsageB.queryCalls],
+        [
+          "hybrid (count/share)",
+          `${searchUsageA.hybrid} (${formatShare(searchUsageA.rankingShares.hybrid)})`,
+          `${searchUsageB.hybrid} (${formatShare(searchUsageB.rankingShares.hybrid)})`,
+        ],
+        [
+          "configured lexical (count/share)",
+          `${searchUsageA.configuredLexical} (${formatShare(searchUsageA.rankingShares.configuredLexical)})`,
+          `${searchUsageB.configuredLexical} (${formatShare(searchUsageB.rankingShares.configuredLexical)})`,
+        ],
+        [
+          "unexpected lexical (count/share)",
+          `${searchUsageA.unexpectedLexical} (${formatShare(searchUsageA.rankingShares.unexpectedLexical)})`,
+          `${searchUsageB.unexpectedLexical} (${formatShare(searchUsageB.rankingShares.unexpectedLexical)})`,
+        ],
+        [
+          "keyword fallback (count/share)",
+          `${searchUsageA.keywordFallback} (${formatShare(searchUsageA.rankingShares.keywordFallback)})`,
+          `${searchUsageB.keywordFallback} (${formatShare(searchUsageB.rankingShares.keywordFallback)})`,
+        ],
+        [
+          "failed/unobserved",
+          searchUsageA.failedOrUnobserved,
+          searchUsageB.failedOrUnobserved,
+        ],
+        [
+          "ranking coverage %",
+          searchUsageA.rankingCoverage === null
+            ? "N/A"
+            : formatNumber(searchUsageA.rankingCoverage * 100),
+          searchUsageB.rankingCoverage === null
+            ? "N/A"
+            : formatNumber(searchUsageB.rankingCoverage * 100),
+        ],
+      ],
+    );
+    console.log(
+      "A/B values aggregate only their selected versions; see each report's extension-version breakdown for cohort detail.",
+    );
+  }
 
   const approvalCategories = new Set();
   for (const report of [left, right]) {

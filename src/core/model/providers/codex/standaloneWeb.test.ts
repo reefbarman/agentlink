@@ -56,6 +56,28 @@ describe("prepareCodexStandaloneWebRequest", () => {
     expect(inputText).toContain('\\"safe_search\\":\\"strict\\"');
   });
 
+  it.each([0, 400])(
+    "honours explicit start_line=%s when find is also supplied",
+    (startLine) => {
+      const prepared = prepareCodexStandaloneWebRequest({
+        sessionId: "session-focus",
+        model: "gpt-test",
+        operation: "fetch",
+        input: {
+          url: "https://example.com/docs",
+          find: "Identity headers",
+          start_line: startLine,
+        },
+        settings: normalizeCoreWebAccessSettings(),
+      });
+      expect(prepared.body.commands).toEqual({
+        open: [{ ref_id: "https://example.com/docs", lineno: startLine }],
+        response_length: "long",
+      });
+      expect(JSON.stringify(prepared.body.input)).toContain("Identity headers");
+    },
+  );
+
   it("maps fetch find and enforces domain policy before transport", () => {
     const settings = normalizeCoreWebAccessSettings({
       nativeSearchMode: "live",
@@ -258,6 +280,100 @@ describe("executeCodexStandaloneWeb", () => {
     expect(retainOutput).toHaveBeenCalledWith("abcdefghij");
   });
 
+  it("continues a navigation-only find response with open and previews the source match", async () => {
+    const outputs = [
+      'Source: find({"pattern":"Identity headers"}); Total lines: 10\nL0: navigation\nL1: more navigation',
+      "Total lines: 10\nL2: ## IDENTITY HEADERS\nL3: Tailscale-User-Login",
+    ];
+    const requestBodies: Array<{ commands: unknown }> = [];
+    const fetch = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        requestBodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ output: outputs.shift() }), {
+          status: 200,
+        });
+      },
+    );
+    const retainOutput = vi.fn(() => "/tmp/focused-output.txt");
+    const result = await executeCodexStandaloneWeb({
+      auth,
+      sessionId: "session-focus",
+      model: "gpt-test",
+      operation: "fetch",
+      input: { url: "https://example.com/docs", find: "Identity headers" },
+      settings: normalizeCoreWebAccessSettings(),
+      fetch,
+      retainOutput,
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(requestBodies[0]?.commands).toMatchObject({
+      find: [{ pattern: "Identity headers" }],
+    });
+    expect(requestBodies[1]?.commands).toEqual({
+      open: [{ ref_id: "https://example.com/docs", lineno: 2 }],
+      response_length: "long",
+    });
+    expect(result.content).toMatch(/^L2: ## IDENTITY HEADERS/);
+    expect(result.content).toContain("Tailscale-User-Login");
+    expect(result.content).not.toContain("navigation");
+    expect(result.next_start_line).toBe(4);
+    expect(retainOutput).toHaveBeenCalledWith(
+      expect.stringContaining("L0: navigation"),
+    );
+    expect(retainOutput).toHaveBeenCalledWith(
+      expect.stringContaining("L2: ## IDENTITY HEADERS"),
+    );
+  });
+
+  it("keeps a match near the end of a long collapsed source line inside the preview", async () => {
+    const output = `Total lines: 1\nL0: ${"navigation ".repeat(1000)}Identity headers: useful content`;
+    const result = await executeCodexStandaloneWeb({
+      auth,
+      sessionId: "session-focus",
+      model: "gpt-test",
+      operation: "fetch",
+      input: {
+        url: "https://example.com/docs",
+        find: "Identity headers",
+        max_length: 200,
+      },
+      settings: normalizeCoreWebAccessSettings(),
+      fetch: (async () =>
+        new Response(JSON.stringify({ output }), {
+          status: 200,
+        })) as typeof globalThis.fetch,
+      retainOutput: () => "/tmp/retained.txt",
+    });
+    expect(result.content).toContain("Identity headers: useful content");
+    expect(result.content.length).toBeLessThan(250);
+  });
+
+  it("previews a find match instead of the page prefix without output retention", async () => {
+    const result = await executeCodexStandaloneWeb({
+      auth,
+      sessionId: "session-focus",
+      model: "gpt-test",
+      operation: "fetch",
+      input: {
+        url: "https://example.com/docs",
+        find: "Authentication",
+        start_line: 400,
+      },
+      settings: normalizeCoreWebAccessSettings(),
+      fetch: (async () =>
+        new Response(
+          JSON.stringify({
+            output:
+              "Total lines: 402\nL399: navigation\nL400: Authentication\nL401: use a token",
+          }),
+          { status: 200 },
+        )) as typeof globalThis.fetch,
+    });
+    expect(result.content).toMatch(/^L400: Authentication/);
+    expect(result.content).not.toContain("navigation");
+    expect(result.next_start_line).toBeUndefined();
+  });
+
   it("continues line-addressed pages before retaining provider output", async () => {
     const requestBodies: Record<string, unknown>[] = [];
     const retainOutput = vi.fn(() => "/tmp/agentlink-output-test/output.txt");
@@ -322,7 +438,7 @@ describe("executeCodexStandaloneWeb", () => {
   );
 
   it.each([undefined, "GetOwnedGames"])(
-    "does not fabricate progress when an explicit start line is ignored (find: %s)",
+    "fails for hosted fallback when an explicit start line is ignored (find: %s)",
     async (find) => {
       const fetch = vi.fn(
         async () =>
@@ -334,21 +450,42 @@ describe("executeCodexStandaloneWeb", () => {
             { status: 200 },
           ),
       );
-      const result = await executeCodexStandaloneWeb({
-        auth,
-        sessionId: "session-1",
-        model: "gpt-test",
-        operation: "fetch",
-        input: { url: "https://example.com/", start_line: 360, find },
-        settings: normalizeCoreWebAccessSettings(),
-        fetch: fetch as typeof globalThis.fetch,
-        retainOutput: () => "/tmp/retained.txt",
-      });
+      await expect(
+        executeCodexStandaloneWeb({
+          auth,
+          sessionId: "session-1",
+          model: "gpt-test",
+          operation: "fetch",
+          input: { url: "https://example.com/", start_line: 360, find },
+          settings: normalizeCoreWebAccessSettings(),
+          fetch: fetch as typeof globalThis.fetch,
+          retainOutput: () => "/tmp/retained.txt",
+        }),
+      ).rejects.toThrow("provider_page_focus_unavailable");
       expect(fetch).toHaveBeenCalledTimes(1);
-      expect(result.next_start_line).toBeUndefined();
-      expect(result.output_warning).toContain("did not advance");
     },
   );
+
+  it("fails for hosted fallback when find cannot get past repeated navigation", async () => {
+    const output =
+      'Source: find({"pattern":"Identity headers"}); Total lines: 495\nL0: navigation\nL363: introduction';
+    const fetch = vi.fn(
+      async () => new Response(JSON.stringify({ output }), { status: 200 }),
+    );
+    await expect(
+      executeCodexStandaloneWeb({
+        auth,
+        sessionId: "session-focus",
+        model: "gpt-test",
+        operation: "fetch",
+        input: { url: "https://example.com/docs", find: "Identity headers" },
+        settings: normalizeCoreWebAccessSettings(),
+        fetch,
+        retainOutput: () => "/tmp/retained.txt",
+      }),
+    ).rejects.toThrow("provider_page_focus_unavailable");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
 
   it("retains only new line blocks from an overlapping final page", async () => {
     const outputs = [

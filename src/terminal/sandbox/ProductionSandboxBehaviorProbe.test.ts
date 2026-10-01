@@ -14,6 +14,7 @@ import {
 import {
   createProductionSandboxBehaviorProbe,
   createProductionSandboxRuntimeFingerprint,
+  SandboxRuntimeFingerprintNodeUnavailableError,
 } from "./ProductionSandboxBehaviorProbe.js";
 import { describe, expect, it } from "vitest";
 
@@ -161,6 +162,25 @@ describe("createProductionSandboxRuntimeFingerprint", () => {
       await test.dispose();
     }
   });
+
+  it.each(["missing", "nonexecutable"] as const)(
+    "classifies a %s configured Node executable as runtime unavailable",
+    async (failure) => {
+      const test = await fixture();
+      try {
+        if (failure === "missing") {
+          await rm(test.nodeExecutable);
+        } else {
+          await chmod(test.nodeExecutable, 0o644);
+        }
+        await expect(test.fingerprint()).rejects.toBeInstanceOf(
+          SandboxRuntimeFingerprintNodeUnavailableError,
+        );
+      } finally {
+        await test.dispose();
+      }
+    },
+  );
 
   it("fails closed when packaged native assets are absent", async () => {
     const test = await fixture();

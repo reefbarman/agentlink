@@ -18,6 +18,7 @@ import {
   createRetainedCommandReviewDenials,
   getCommandAutoApprovalEligibility,
   isRoutineApproveForMeCommand,
+  isRoutineGitWorkflowNativeCommand,
   parseCommandApprovalReviewResponse,
 } from "./commandApprovalReview.js";
 import { describe, expect, it, vi } from "vitest";
@@ -178,6 +179,17 @@ describe("routine approve-for-me command classification", () => {
     "mv src/a.ts src/b.ts",
     "touch src/new.ts",
     "node --version",
+    "git add -A",
+    'git commit -m "update"',
+    'git add src/index.ts && git commit -m "fix"',
+    "git push",
+    "git push origin main",
+    "git push -u origin HEAD:feature/x",
+    "git fetch",
+    "git pull --rebase origin main",
+    "git switch -c feature/x",
+    "git checkout -b feature/x origin/main",
+    'gh pr create --title "fix" --body-file pr.md',
   ])(
     "treats routine dev workflow as reviewable without Guardian: %s",
     (command) => {
@@ -188,14 +200,25 @@ describe("routine approve-for-me command classification", () => {
   it.each([
     "npm install",
     "npm run deploy",
-    "git push origin main",
-    "git add -A",
-    'git commit -m "update"',
-    'git add src/index.ts && git commit -m "fix"',
-    "git fetch",
-    "git pull",
+    "git push --force",
+    "git push -f origin main",
+    "git push --force-with-lease origin main",
+    "git push origin +main",
+    "git push origin :old-branch",
+    "git push --delete origin old-branch",
+    "git push --mirror origin",
+    "git push --tags",
+    "git push origin refs/tags/v1.0.0",
+    "git push https://example.com/owner/repo.git main",
+    "git push --receive-pack=evil origin main",
+    "git -c core.hooksPath=/tmp push origin main",
+    "git fetch https://example.com/owner/repo.git",
     "git checkout main",
+    "git checkout -- src/index.ts",
+    "git switch --discard-changes main",
     "git clean -fd",
+    "gh release create v1.0.0",
+    "gh api repos/owner/repo",
     "curl https://example.com",
     "rm -rf generated",
     "sudo make install",
@@ -205,6 +228,27 @@ describe("routine approve-for-me command classification", () => {
     "npm test && curl https://example.com",
   ])("keeps Guardian review for non-routine commands: %s", (command) => {
     expect(routine(command)).toBe(false);
+  });
+
+  const gitNative = (command: string) =>
+    isRoutineGitWorkflowNativeCommand(classifyCommand(command, context));
+
+  it.each([
+    'git add -A && git commit -m "fix"',
+    "git status --short && git push",
+    "gh pr create --fill",
+  ])("permits native escalation for routine Git workflow: %s", (command) => {
+    expect(gitNative(command)).toBe(true);
+  });
+
+  it.each([
+    "git status",
+    "npm test",
+    'npm test && git commit -m "fix"',
+    'git commit -m "fix" && git push --force',
+    "mkdir out && git add out",
+  ])("keeps other native escalations reviewed: %s", (command) => {
+    expect(gitNative(command)).toBe(false);
   });
 });
 
@@ -542,19 +586,13 @@ describe("one-shot command approval reviewer", () => {
       "latestUserInstruction is the newest instruction tagged by the host",
     );
     expect(request?.systemPrompt).toContain(
-      "staging and committing only task-related changes",
+      "Ordinary Git and GitHub publishing workflow is authorized by default in any coding session",
+    );
+    expect(request?.systemPrompt).toContain(
+      "a non-force push of any branch (including the default branch) to a configured remote",
     );
     expect(request?.systemPrompt).toContain(
       "Non-fast-forward pushes or remote ref deletion (including --force, -f, --force-with-lease, --force-if-includes, --mirror, --delete, a +refspec, or a :refspec)",
-    );
-    expect(request?.systemPrompt).toContain(
-      "git commit -a / --all, and git commit -am when other work is present",
-    );
-    expect(request?.systemPrompt).toContain(
-      'commit or push "everything", "all changes", or equivalent broad current-work wording explicitly authorizes repo-wide staging and committing',
-    );
-    expect(request?.systemPrompt).toContain(
-      "only the exact argument-free command git push",
     );
     expect(request?.messages).toHaveLength(1);
     expect(request?.messages[0]?.role).toBe("user");

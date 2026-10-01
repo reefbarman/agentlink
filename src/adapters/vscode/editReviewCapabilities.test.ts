@@ -17,6 +17,7 @@ const openTextDocument = vi.hoisted(() => vi.fn());
 const showTextDocument = vi.hoisted(() => vi.fn());
 const getConfiguration = vi.hoisted(() => vi.fn());
 const applyEdit = vi.hoisted(() => vi.fn(async () => true));
+const settleBaseline = vi.hoisted(() => vi.fn(async (_delay: number) => {}));
 const executeCommand = vi.hoisted(() => vi.fn());
 const stat = vi.hoisted(() => vi.fn());
 const resolveAndValidatePath = vi.hoisted(() =>
@@ -146,6 +147,7 @@ vi.mock("../../integrations/DiffViewProvider.js", () => ({
     }),
   ),
   snapshotDiagnostics: vi.fn(() => ({
+    settleBaseline,
     collectNewErrors: vi.fn(async () => undefined),
     dispose: vi.fn(),
   })),
@@ -272,6 +274,57 @@ describe("createVscodeEditReviewProvider", () => {
     workspaceEditInstances.length = 0;
   });
 
+  it.each(["auto", "interactive"] as const)(
+    "preserves a concurrent buffer edit during diagnostic preparation (%s)",
+    async (mode) => {
+      const tempDir = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
+      );
+      const filePath = path.join(tempDir, "file.ts");
+      fs.writeFileSync(filePath, "old", "utf-8");
+      let buffer = "old";
+      const doc = {
+        version: 1,
+        getText: () => buffer,
+        uri: { scheme: "file", fsPath: filePath },
+        isDirty: false,
+        save: vi.fn(async () => true),
+      };
+      openTextDocument.mockResolvedValue(doc);
+      settleBaseline.mockImplementationOnce(async (delay) => {
+        expect(delay).toBe(42);
+        expect(openTextDocument).toHaveBeenCalled();
+        expect(applyEdit).not.toHaveBeenCalled();
+        buffer = "user edit";
+        doc.version++;
+        doc.isDirty = true;
+      });
+      try {
+        const result = await createVscodeEditReviewProvider().reviewAndApply({
+          mode,
+          absolutePath: filePath,
+          relativePath: "file.ts",
+          content: "proposal",
+          outsideWorkspace: mode === "interactive",
+          diagnosticDelay: 42,
+          sessionId: "diagnostic-preparation",
+          prepareOneShotAuthorization: async () => ({
+            authorization: { allowed: true, basis: "guardian" },
+            consume: () => true,
+          }),
+        });
+        expect(result).toMatchObject({ reason: "apply_edit_failed" });
+        expect(settleBaseline).toHaveBeenCalledOnce();
+        expect(applyEdit).not.toHaveBeenCalled();
+        expect(doc.save).not.toHaveBeenCalled();
+        expect(buffer).toBe("user edit");
+        expect(fs.readFileSync(filePath, "utf-8")).toBe("old");
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("returns actionable recovery diagnostics when auto-save returns false", async () => {
     const tempDir = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
@@ -324,6 +377,10 @@ describe("createVscodeEditReviewProvider", () => {
           expect.stringContaining("pre-edit disk baseline"),
         ],
       });
+      expect(settleBaseline).toHaveBeenCalledWith(0);
+      expect(settleBaseline.mock.invocationCallOrder[0]).toBeLessThan(
+        applyEdit.mock.invocationCallOrder[0]!,
+      );
       expect(doc.save).toHaveBeenCalledOnce();
       expect(fs.readFileSync(filePath, "utf-8")).toBe("old");
     } finally {

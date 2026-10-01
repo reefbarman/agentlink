@@ -50,6 +50,73 @@ describe("handleLoadSkill", () => {
     });
   });
 
+  it("returns the canonical activation path when loading an advertised symlink alias", async () => {
+    const content = "# Helper skill";
+    const canonicalPath = "/provider/.agents/skills/helper/SKILL.md";
+    const aliasPath = "/provider/.agentlink/skills/helper/SKILL.md";
+    const realPath = "/provider/shared/helper/SKILL.md";
+    const provider = {
+      resolvePath: vi.fn((input: string) => input),
+      normalizeExistingPath: vi.fn((input: string) =>
+        input === canonicalPath || input === aliasPath ? realPath : input,
+      ),
+      readTextFile: vi.fn(async () => content),
+    };
+    const result = await handleLoadSkill(
+      { path: aliasPath },
+      {} as never,
+      {} as never,
+      "session-1",
+      [
+        {
+          id: "project:agents:helper",
+          name: "helper",
+          revision: createHash("sha256").update(content).digest("hex"),
+          skillPath: canonicalPath,
+          realSkillPath: realPath,
+          sourceScope: "project",
+        },
+      ],
+      provider,
+    );
+    expect(result.isError).not.toBe(true);
+    expect(JSON.parse(textOf(result))).toMatchObject({
+      skillPath: canonicalPath,
+      skill_id: "project:agents:helper",
+    });
+  });
+
+  it("returns bounded canonical candidates without reading or activating an unadvertised path", async () => {
+    const skills = Array.from({ length: 12 }, (_, index) => ({
+      id: `project:agents:helper-${index}`,
+      name: "helper",
+      revision: "a".repeat(64),
+      skillPath: `/provider/${index}/helper/SKILL.md`,
+      realSkillPath: `/provider/${index}/helper/SKILL.md`,
+      sourceScope: "project" as const,
+    }));
+    const provider = {
+      resolvePath: vi.fn((input: string) => input),
+      normalizeExistingPath: vi.fn((input: string) => input),
+      readTextFile: vi.fn(),
+    };
+    const result = await handleLoadSkill(
+      { path: "/unadvertised/helper/SKILL.md" },
+      {} as never,
+      {} as never,
+      "session-1",
+      skills,
+      provider,
+    );
+    expect(result.isError).toBe(true);
+    expect(provider.readTextFile).not.toHaveBeenCalled();
+    const data = JSON.parse(textOf(result));
+    expect(data.status).toBe("skill_not_in_catalog");
+    expect(data.candidates).toHaveLength(10);
+    expect(data.omittedCandidates).toBe(2);
+    expect(data.candidates[0].path).toBe(skills[0].skillPath);
+  });
+
   it("rejects skill content changed after advertisement", async () => {
     const advertisedContent = "# Helper skill\nOriginal workflow.";
     const artifactProvider = {

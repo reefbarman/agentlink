@@ -33,14 +33,17 @@ export function groupActivitySegments(
   let completed: BlockSegment[] = [];
 
   const flush = () => {
-    const thinkingCount = completed.filter(
+    // Tools groups alone already collapse on their own; Activity is for runs
+    // mixing other rows. A standalone successful skill load is only waiting
+    // to settle into its neighbouring Tools group, so it does not count.
+    const rows = completed.filter(
       (segment) =>
-        segment.kind === "single" && segment.block.type === "thinking",
-    ).length;
-    const toolGroupCount = completed.filter(
-      (segment) => segment.kind === "tool_group",
-    ).length;
-    if (thinkingCount >= 3 && toolGroupCount >= 3) {
+        segment.kind === "tool_group" || segment.block.type !== "skill_load",
+    );
+    if (
+      rows.length >= 3 &&
+      rows.some((segment) => segment.kind !== "tool_group")
+    ) {
       result.push({ kind: "activity_group", segments: completed });
     } else {
       result.push(...completed);
@@ -102,10 +105,8 @@ type ToolCategory =
 
 const CATEGORY_BY_TOOL = new Map<string, ToolCategory>([
   ["read_file", "files"],
-  ["get_context", "files"],
   ["open_file", "files"],
   ["search_files", "searches"],
-  ["codebase_search", "searches"],
   ["list_files", "lists"],
   ["get_symbols", "symbols"],
   ["get_hover", "symbols"],
@@ -322,10 +323,30 @@ export function ToolCallGroup({
     .filter(Boolean)
     .join(" ");
 
+  const renderBlock = (block: ToolBlock) =>
+    block.type === "skill_load" ? (
+      <SkillLoadBlock key={block.id} block={block} />
+    ) : (
+      <ToolCallBlock
+        key={block.id}
+        toolCall={block}
+        onOpenFile={onOpenFile}
+        onOpenImageInEditor={onOpenImageInEditor}
+        onRevealToolCallTerminal={onRevealToolCallTerminal}
+        onContinueToolCallInBackground={onContinueToolCallInBackground}
+        onCompleteToolCall={onCompleteToolCall}
+        onCancelToolCall={onCancelToolCall}
+        onPromoteMcpToolApproval={onPromoteMcpToolApproval}
+      />
+    );
+
+  // A lone call gains nothing from a "Tools" summary wrapper.
+  if (blocks.length === 1) return renderBlock(blocks[0]);
+
   return (
-    <div class={`tool-group-block ${status.statusClass}`}>
+    <div class="tool-group-block">
       <button
-        class="tool-call-header tool-group-header"
+        class={`tool-call-header tool-group-header ${status.statusClass}`}
         type="button"
         aria-expanded={expanded}
         aria-label={accessibleLabel}
@@ -366,25 +387,7 @@ export function ToolCallGroup({
         )}
       </button>
       {expanded && (
-        <div class="tool-group-children">
-          {blocks.map((block) =>
-            block.type === "skill_load" ? (
-              <SkillLoadBlock key={block.id} block={block} />
-            ) : (
-              <ToolCallBlock
-                key={block.id}
-                toolCall={block}
-                onOpenFile={onOpenFile}
-                onOpenImageInEditor={onOpenImageInEditor}
-                onRevealToolCallTerminal={onRevealToolCallTerminal}
-                onContinueToolCallInBackground={onContinueToolCallInBackground}
-                onCompleteToolCall={onCompleteToolCall}
-                onCancelToolCall={onCancelToolCall}
-                onPromoteMcpToolApproval={onPromoteMcpToolApproval}
-              />
-            ),
-          )}
-        </div>
+        <div class="tool-group-children">{blocks.map(renderBlock)}</div>
       )}
     </div>
   );

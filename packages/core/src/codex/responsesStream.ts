@@ -137,8 +137,12 @@ export async function* executeCodexResponsesStream(args: {
   try {
     for (;;) {
       if (args.signal?.aborted) throw new CodexResponsesStreamAbortedError();
+      const hostedWebSearch =
+        args.body.tools?.some((tool) => tool.type === "web_search") === true;
       const headers = {
-        ...getCodexResponsesRequestHeaders(args.body.model, args.authMethod),
+        ...(hostedWebSearch
+          ? undefined
+          : getCodexResponsesRequestHeaders(args.body.model, args.authMethod)),
         ...(routing ? { session_id: routing.sessionId } : {}),
         ...(!disabled && binding?.value
           ? { [CODEX_TURN_STATE_HEADER]: binding.value }
@@ -180,7 +184,12 @@ export async function* executeCodexResponsesStream(args: {
                 handshakeTimeoutMs: 15_000,
                 onTransportActivity: args.onTransportActivity,
               },
-              JSON.stringify([ws.identity, args.body.model, disabled]),
+              JSON.stringify([
+                ws.identity,
+                args.body.model,
+                disabled,
+                hostedWebSearch,
+              ]),
             );
             if (binding)
               captureCodexTurnState(

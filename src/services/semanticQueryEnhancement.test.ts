@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { expandQuery, extractKeywords } from "./semanticQueryEnhancement.js";
+import {
+  expandQuery,
+  extractAdjacentPhrases,
+  extractKeywords,
+} from "./semanticQueryEnhancement.js";
 
 describe("extractKeywords", () => {
   it("splits CamelCase identifiers in order", () => {
@@ -34,6 +38,20 @@ describe("extractKeywords", () => {
     expect(
       extractKeywords("how does the server function class interface work"),
     ).toEqual(["server", "work"]);
+  });
+
+  it("extracts adjacent meaningful phrases without bridging stop words", () => {
+    expect(
+      extractAdjacentPhrases(
+        "provider usage quota rate limits display the ProviderUsageService",
+      ),
+    ).toEqual([
+      "provider usage",
+      "usage quota",
+      "quota rate",
+      "rate limits",
+      "limits display",
+    ]);
   });
 
   it("filters tokens shorter than three characters", () => {

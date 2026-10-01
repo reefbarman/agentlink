@@ -2,12 +2,34 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentMessage } from "./types.js";
 import type { AppAction } from "../shared/chatProjection.js";
 import type { ChatStateSnapshot as ChatState } from "@agentlink/protocol/chat-state";
 import type { ChatTab } from "@agentlink/protocol/chat-workspace";
+
+const testHome = vi.hoisted(() => {
+  const fs = require("node:fs") as typeof import("node:fs");
+  const os = require("node:os") as typeof import("node:os");
+  const path = require("node:path") as typeof import("node:path");
+  return fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-chat-view-home-"));
+});
+
+vi.mock("os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("os")>()),
+  // Session-manager startup must not discover or connect to personal MCP servers.
+  homedir: () => testHome,
+}));
+
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  homedir: () => testHome,
+}));
+
+afterAll(() => {
+  fs.rmSync(testHome, { recursive: true, force: true });
+});
 
 type Listener<T> = (value: T) => void;
 

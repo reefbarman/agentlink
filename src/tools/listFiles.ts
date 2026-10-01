@@ -14,10 +14,7 @@ import { isAgentInstructionReadPath } from "../approvals/protectedPaths.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 import { resolveAndValidatePath } from "../util/paths.js";
-import {
-  semanticFileList,
-  type SemanticQueryOptions,
-} from "../services/semanticSearch.js";
+import { getSearchInputError } from "../core/tools/searchInputValidation.js";
 import {
   errorResult,
   handleToolError,
@@ -30,7 +27,6 @@ const MAX_ENTRIES = 500;
 export interface ListFilesProviders {
   workspaceFileProvider: WorkspaceFileProvider;
   pathAccessProvider: PathAccessProvider;
-  semanticQueryOptions?: SemanticQueryOptions;
 }
 
 function createLegacyListFilesProviders(
@@ -78,6 +74,8 @@ export async function handleListFiles(
   providers = createLegacyListFilesProviders(approvalManager, approvalPanel),
 ): Promise<ToolResult> {
   try {
+    const inputError = getSearchInputError("list_files", params);
+    if (inputError) return errorResult(inputError);
     const { absolutePath: dirPath, inWorkspace } =
       providers.workspaceFileProvider.resolvePath(params.path);
 
@@ -103,49 +101,6 @@ export async function handleListFiles(
         "Path is a file, not a directory — use read_file to read its contents",
         { path: params.path },
       );
-    }
-
-    // Semantic file search: query the index and return files ranked by relevance
-    if (params.query) {
-      const result = await semanticFileList(dirPath, params.query, undefined, {
-        includeAllWorkspaceRoots: !params.path,
-        ...providers.semanticQueryOptions,
-      });
-      if (result?.error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                error: result.error,
-                path: params.path,
-              }),
-            },
-          ],
-        };
-      }
-      const files = result?.files ?? [];
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                path: params.path,
-                query: params.query,
-                semantic: true,
-                entries: files
-                  .map((f) => `${f.path} (score: ${f.score.toFixed(4)})`)
-                  .join("\n"),
-                count: files.length,
-                ...(result?.freshness ? { freshness: result.freshness } : {}),
-              },
-              null,
-              2,
-            ),
-          },
-        ],
-      };
     }
 
     // If pattern is provided, always use recursive ripgrep with glob filter

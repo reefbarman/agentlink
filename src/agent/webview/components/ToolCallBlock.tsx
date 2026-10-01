@@ -208,13 +208,10 @@ function getToolSummary(
       return [{ type: "text", text: String(p.url ?? "").slice(0, 140) }];
     case "read_file": {
       const path = String(p.path ?? "");
+      if (p.view === "context") return [filePart(path)];
       const lines = extractField(result, "total_lines");
       const suffix = lines ? ` (${lines} lines)` : "";
       return [filePart(path), { type: "text", text: suffix }];
-    }
-    case "get_context": {
-      const path = String(p.path ?? "");
-      return [filePart(path)];
     }
     case "list_files": {
       const dir = String(p.path ?? ".");
@@ -225,6 +222,16 @@ function getToolSummary(
       return [filePart(dir), { type: "text", text: suffix }];
     }
     case "search_files": {
+      if (p.query !== undefined) {
+        const count = extractField(result, "total_results");
+        const query = String(p.query).slice(0, 60);
+        return [
+          {
+            type: "text",
+            text: count !== null ? `${query} · ${count} results` : query,
+          },
+        ];
+      }
       const pat = String(p.regex ?? "");
       const matches = extractField(result, "total_matches");
       return [
@@ -234,8 +241,7 @@ function getToolSummary(
         },
       ];
     }
-    case "codebase_search":
-      return [{ type: "text", text: String(p.query ?? "").slice(0, 60) }];
+
     case "write_file": {
       const path = String(p.path ?? "");
       if (extractField(result, "error")) {

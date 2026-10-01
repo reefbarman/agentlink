@@ -3360,6 +3360,74 @@ describe("AgentEngine", () => {
     });
   });
 
+  it("keeps the get_context history budget for read_file context-view results", async () => {
+    let streamCall = 0;
+    const provider = makeMockProvider();
+    provider.stream = async function* () {
+      streamCall += 1;
+      yield {
+        type: "content_blocks",
+        blocks:
+          streamCall === 1
+            ? [
+                {
+                  type: "tool_use",
+                  id: "call_content",
+                  name: "read_file",
+                  input: { path: "a.ts" },
+                },
+                {
+                  type: "tool_use",
+                  id: "call_context",
+                  name: "read_file",
+                  input: { path: "a.ts", view: "context" },
+                },
+              ]
+            : [{ type: "text", text: "done" }],
+      };
+      yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+      yield { type: "done" };
+    };
+    mocks.mockMkdir.mockResolvedValue(undefined);
+    mocks.mockWriteFile.mockResolvedValue(undefined);
+    const session = await makeSession();
+    session.addUserMessage("read it");
+    const engine = new AgentEngine(makeRegistry(provider));
+    engine.setToolRuntime({
+      listTools: () => [
+        {
+          name: "read_file",
+          description: "read a file",
+          input_schema: { type: "object", properties: {} },
+        },
+      ],
+      isParallelSafe: () => true,
+      executeTool: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "x".repeat(50_000) }],
+      })),
+    });
+    await collectEvents(engine.run(session));
+
+    const resultLength = (id: string): number => {
+      for (const message of session.getAllMessages()) {
+        if (!Array.isArray(message.content)) continue;
+        for (const block of message.content) {
+          if (block.type === "tool_result" && block.tool_use_id === id) {
+            return JSON.stringify(block.content).length;
+          }
+        }
+      }
+      throw new Error(`missing tool result ${id}`);
+    };
+    // Content view keeps read_file's 80k budget; context view keeps the
+    // 32k default budget that get_context had before the merger.
+    expect(resultLength("call_content")).toBeGreaterThan(50_000);
+    expect(resultLength("call_context")).toBeLessThan(40_000);
+    // Let the truncated result's background save settle so it cannot leak
+    // into later tests' fs mock counts.
+    await vi.waitFor(() => expect(mocks.mockWriteFile).toHaveBeenCalled());
+  });
+
   describe("pending question recovery arming", () => {
     const runAskUserTurn = async (blocks: CoreModelContentBlock[]) => {
       let streamCall = 0;
@@ -3720,6 +3788,59 @@ describe("AgentEngine", () => {
       expect(secondAlpha?.description).toBe("second definition");
       expect(secondAlpha?.input_schema).toBe(secondSchema);
     });
+
+    it.each([false, true])(
+      "forwards deferred-rule presence through the production runtime (catalogue=%s)",
+      async (hasDeferredRules) => {
+        const streamCalls: StreamRequest[] = [];
+        const provider = makeMockProvider();
+        provider.stream = async function* (request: StreamRequest) {
+          streamCalls.push(request);
+          yield* makeProviderStream({ text: "done" });
+        };
+        const session = await makeSession();
+        session.setAdvertisedRules(
+          hasDeferredRules
+            ? [
+                {
+                  source: "project",
+                  filePath: "/test/.agentlink/rules/distinct-rule.md",
+                  loadPath: "/test/.agentlink/rules/distinct-rule.md",
+                  summary: "Distinct deferred rule",
+                },
+              ]
+            : [],
+        );
+        session.addUserMessage("inspect the catalogue");
+        const engine = new AgentEngine(makeRegistry(provider));
+        setEngineToolContext(engine, {
+          approvalManager: {} as ToolDispatchContext["approvalManager"],
+          approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+          sessionId: session.id,
+          extensionUri: {} as ToolDispatchContext["extensionUri"],
+        });
+        await collectEvents(engine.run(session));
+        const tools = streamCalls[0]?.tools ?? [];
+        expect(tools.some((tool) => tool.name === "load_rule")).toBe(
+          hasDeferredRules,
+        );
+        expect(tools.some((tool) => tool.name === "load_skill")).toBe(true);
+        const discovery = tools.find(
+          (tool) => tool.name === "find_native_tools",
+        );
+        for (const name of [
+          "get_module_neighbors",
+          "detach_background_agent",
+          "start_fleet_workflow",
+          "schedule_fleet_workflow",
+          "get_fleet_workflow_result",
+          "manage_fleet_automations",
+        ]) {
+          expect(tools.some((tool) => tool.name === name)).toBe(false);
+          expect(discovery?.description).toContain(name);
+        }
+      },
+    );
 
     it("preserves provider bridge replay while executing and rendering the canonical native tool", async () => {
       const streamCalls: StreamRequest[] = [];

@@ -48,6 +48,7 @@ import {
   renderDeterministicSections,
   type CondenseRecallAnchors,
 } from "./condensePrompt.js";
+import { buildCondensedSessionImageIndex } from "./sessionImages.js";
 import { getLatestTodoState } from "./todoTool.js";
 import type { CondenseForensicMetadata } from "@agentlink/protocol/context-diagnostics";
 
@@ -1370,6 +1371,7 @@ export async function summarizeConversation(
       0,
     ),
   );
+  const sessionImageIndex = buildCondensedSessionImageIndex(messages);
   const summaryContent: ContentBlock[] = [
     {
       type: "text",
@@ -1379,6 +1381,9 @@ export async function summarizeConversation(
       type: "text",
       text: `## Conversation Summary\n\n${summaryText}`,
     } satisfies TextBlock,
+    ...(sessionImageIndex
+      ? [{ type: "text", text: sessionImageIndex } satisfies TextBlock]
+      : []),
     ...foldedEntries.map(
       (entry): TextBlock => ({ type: "text", text: entry.section }),
     ),

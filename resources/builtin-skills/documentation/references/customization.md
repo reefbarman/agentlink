@@ -38,6 +38,8 @@ Directories containing a `SKILL.md` with single-line YAML frontmatter (`name`, `
 - appear in the slash-command picker as `/skill:<name>`
 - can be listed with `/skills` (shows resolved `SKILL.md` paths for the current mode)
 
+Enabled skills omitted from the prompt's bounded list remain in the session catalog. `load_skill` remains available in restricted native profiles and checks the advertised content revision and real path. A rejected path returns up to ten matching canonical candidates without loading or activating them; retry with the intended candidate's exact path. Valid advertised symlink aliases activate the same canonical identity and restrictions.
+
 The optional `allowed-tools` field narrows ordinary tool access while the skill is active. Session continuity controls stay available: the agent can still load another skill, ask the user, finish the task, and use `search_session_history` or `read_session_excerpt` for the current session. A fresh-session handoff may also read only its host-linked direct predecessor with `scope: handoff_source` and the exact source session identity returned by search.
 
 The exact, case-sensitive `Bash` name in `allowed-tools` maps to AgentLink's `execute_command` before active skill restrictions are intersected. This does not grant command approval or bypass mode, parent, or background-profile restrictions. Command-scoped expressions such as `Bash(git:*)` are not expanded into unrestricted shell access. Verified legacy active-skill policies are migrated when restoring a session; inherited empty restrictions remain empty.

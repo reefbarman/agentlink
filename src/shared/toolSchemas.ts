@@ -220,30 +220,22 @@ export const callNativeToolSchema = {
 
 // ─── File tools ──────────────────────────────────────────────────────────────
 
-export const readFileSchema = {
-  path: z
-    .string()
-    .describe("File path (absolute or relative to workspace root)"),
-  offset: z.coerce
-    .number()
-    .optional()
-    .describe("Starting line number (1-indexed, default: 1)"),
-  limit: z.coerce
-    .number()
-    .optional()
-    .describe("Maximum number of lines to read (default: 2000)"),
+const readFilePathSchema = z
+  .string()
+  .describe("File path (absolute or relative to workspace root)");
+const readFileOffsetSchema = z.coerce
+  .number()
+  .optional()
+  .describe("Starting line number (1-indexed, default: 1)");
+
+const readFileContentOptions = {
   include_symbols: z
     .boolean()
     .optional()
     .describe(
       "Include top-level symbol outline (functions, classes, interfaces). Default: true. Set to false to suppress.",
     ),
-  query: z
-    .string()
-    .optional()
-    .describe(
-      "Semantic search query to jump to the most relevant section of a file within the current workspace folders only. Omit query for external files and use offset/limit or an anchor instead. Uses the codebase index to find the best matching code chunk and auto-sets the offset. Ignored if offset is explicitly provided. Requires codebase index.",
-    ),
+
   anchor: z
     .string()
     .optional()
@@ -260,7 +252,7 @@ export const readFileSchema = {
     .number()
     .optional()
     .describe(
-      "Line offset applied after resolving anchor/semantic match (e.g. -20 to show context above).",
+      "Line offset applied after resolving an anchor (e.g. -20 to show context above).",
     ),
   auto_follow_suggestion: z
     .boolean()
@@ -268,6 +260,76 @@ export const readFileSchema = {
     .describe(
       "When true, if path is not found and exactly one high-confidence suggestion exists, automatically read that suggested file and include resolution metadata.",
     ),
+};
+
+const readFileContextOptions = {
+  dedupe_unchanged_content: z
+    .boolean()
+    .optional()
+    .describe(
+      "Context view only. When true, omit content for an unchanged exact range already returned in this session. Default: false.",
+    ),
+  refresh: z
+    .boolean()
+    .optional()
+    .describe(
+      "Context view only. When true, include content even if dedupe_unchanged_content would otherwise omit it.",
+    ),
+};
+
+/**
+ * Full read_file contract. `view` selects an existing internal operation:
+ * content (default) or the context pack. Request-scoped variants below
+ * advertise only the views the caller is permitted to use.
+ */
+export const readFileSchema = {
+  path: readFilePathSchema,
+  view: z
+    .enum(["content", "context"])
+    .optional()
+    .describe(
+      'Read view (default "content"). "content": exact text with optional anchors, images, PDF text, symbols, and suggested-path following. "context": compact first-pass orientation pack with bounded symbols, diagnostics, git status, content hash, and opt-in unchanged-range dedupe.',
+    ),
+  offset: readFileOffsetSchema,
+  limit: z.coerce
+    .number()
+    .optional()
+    .describe(
+      "Maximum number of lines to read (content default: 2000; context default: 200, capped at 400).",
+    ),
+  ...readFileContentOptions,
+  ...readFileContextOptions,
+};
+
+export const readFileContentViewSchema = {
+  path: readFilePathSchema,
+  view: z
+    .enum(["content"])
+    .optional()
+    .describe('Read view. Only "content" is permitted for this request.'),
+  offset: readFileOffsetSchema,
+  limit: z.coerce
+    .number()
+    .optional()
+    .describe("Maximum number of lines to read (default: 2000)"),
+  ...readFileContentOptions,
+};
+
+export const readFileContextViewSchema = {
+  path: readFilePathSchema,
+  view: z
+    .enum(["context"])
+    .describe(
+      'Read view. Required: only "context" is permitted for this request.',
+    ),
+  offset: readFileOffsetSchema,
+  limit: z.coerce
+    .number()
+    .optional()
+    .describe(
+      "Maximum number of content lines to include (default: 200, capped at 400).",
+    ),
+  ...readFileContextOptions,
 };
 
 export const loadSkillSchema = {
@@ -385,24 +447,32 @@ export const listFilesSchema = {
     .describe(
       "Include files/directories ignored by .gitignore/.ignore when using recursive or pattern listing. Still excludes nested node_modules and .git, but an explicit root inside node_modules is honoured. Default: false. Pair with pattern when possible to avoid noisy/truncated results.",
     ),
-  query: z
-    .string()
-    .optional()
-    .describe(
-      "Semantic search query to find files by meaning within the current workspace folders only (e.g. 'authentication logic', 'database migrations'). Omit query for external directories and use ordinary listing/globs instead. Returns files ranked by relevance using the codebase index. Other params (recursive, depth, pattern) are ignored when query is provided. Requires codebase index.",
-    ),
 };
 
 export const searchFilesSchema = {
   path: z
     .string()
     .describe(
-      "Directory to search in (absolute or relative to workspace root)",
+      "File or directory to search (absolute or workspace-relative). Query mode is workspace-only.",
     ),
   regex: z
     .string()
+    .optional()
     .describe(
-      "Regular expression pattern for regex search, or natural language query for semantic search",
+      "Regular expression for exact search. Supply either regex or query, not both.",
+    ),
+  query: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Natural-language indexed search within the current workspace folders only. External paths are unsupported; use regex. Supply either query or regex.",
+    ),
+  exclude_globs: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Glob patterns to exclude from query results after retrieval (e.g. ['**/dist/**']). Query mode only.",
     ),
   file_pattern: z
     .string()
@@ -410,12 +480,7 @@ export const searchFilesSchema = {
     .describe(
       "Glob pattern to filter files (e.g. '*.ts'). Only used for regex search.",
     ),
-  semantic: z
-    .boolean()
-    .optional()
-    .describe(
-      "Use semantic/vector search instead of regex, within the current workspace folders only. For external paths, omit this option or set false to use regex search. Requires a codebase index and OpenAI/Codex authentication (ChatGPT/Codex OAuth or an OpenAI API key). Default: false",
-    ),
+
   context: z.coerce
     .number()
     .optional()
@@ -449,7 +514,9 @@ export const searchFilesSchema = {
   max_results: z.coerce
     .number()
     .optional()
-    .describe("Maximum number of matches to return (default: 300)."),
+    .describe(
+      "Maximum results (default: 300 for regex, 10 for query). Query limits are clamped to integers from 1 to 300.",
+    ),
   offset: z.coerce
     .number()
     .optional()
@@ -724,6 +791,25 @@ export const presentImagesSchema = {
     .optional()
     .describe(
       "Show recent session images in the main chat transcript. Pass true for the most recent image, false to disable recent selection, or a positive number for that many recent images. When both selectors are omitted, the most recent image is shown.",
+    ),
+};
+
+export const saveSessionImageSchema = {
+  image_id: z
+    .string()
+    .describe(
+      "ID of the session image to save, such as image_3. IDs follow image_N session order across user attachments and image tool results; errors list the available IDs.",
+    ),
+  path: z
+    .string()
+    .describe(
+      "Workspace-relative or absolute file path inside the workspace. The extension must match the image type (.png, .jpg/.jpeg, .gif, or .webp); when omitted, the matching extension is added. Missing parent directories are created.",
+    ),
+  overwrite: z
+    .boolean()
+    .optional()
+    .describe(
+      "Replace an existing file at path. Default: false, which refuses to overwrite.",
     ),
 };
 
@@ -1067,7 +1153,7 @@ export const executeCommandSchema = {
     .string()
     .optional()
     .describe(
-      "Run in a named terminal, creating it if needed. Use a short purpose-based name (for example, 'Dev server', 'Unit tests', or 'Build') when the terminal should retain a stable identity; overlapping unnamed commands already allocate separate terminals when needed.",
+      "Run in a named terminal, creating it if needed. Use a short purpose-based name (for example, 'Dev server', 'Unit tests', or 'Build') when the terminal should retain a stable identity; overlapping unnamed commands already allocate separate terminals when needed. Only Native Agent terminals retain shell mutations; sandbox calls start fresh shells even when named or targeted.",
     ),
   split_from: z
     .string()
@@ -1091,7 +1177,7 @@ export const executeCommandSchema = {
     .record(z.string(), z.string())
     .optional()
     .describe(
-      'Environment variables to set for this command (e.g. {"CI":"1"}). Merged with the terminal\'s base execution environment.',
+      'Environment variables to set for this command (e.g. {"CI":"1"}). Merged with the terminal\'s base execution environment. Sandbox calls do not retain prior exports, so pass non-reserved variables on every call; values are literal, not shell-expanded. Sandbox PATH is host-managed: do not pass env.PATH; use an inline export PATH="/desired/bin:$PATH" in each reviewed command instead. Reserved overrides return sandbox_preparation_failed before launch, not an attestation failure, and do not permit native fallback.',
     ),
   temporary_home: z
     .literal(true)
@@ -1288,6 +1374,97 @@ export const closeTerminalsSchema = {
     ),
 };
 
+// ─── Advanced fleet tools ────────────────────────────────────────────────────
+
+export const agentBudgetSchema = {
+  maxTokens: z
+    .number()
+    .optional()
+    .describe(
+      "Cap on uncached input + output tokens summed across all API turns. Available for research tasks and ignored for review and writable task classes.",
+    ),
+  maxToolCalls: z
+    .number()
+    .optional()
+    .describe(
+      "Soft cap on successfully committed tool invocations. Interrupted/provisional tool streams are not charged.",
+    ),
+  maxApiTurns: z
+    .number()
+    .optional()
+    .describe(
+      "Soft cap on successful model API turns. Provider retry attempts are not charged.",
+    ),
+  maxElapsedMs: z
+    .number()
+    .optional()
+    .describe("Wall-clock cap in milliseconds."),
+  maxEstimatedCostUsd: z
+    .number()
+    .optional()
+    .describe(
+      "Estimated-cost cap in USD; only enforced when estimatedCostPerMillionTokens is also set.",
+    ),
+  estimatedCostPerMillionTokens: z.number().optional(),
+  warningThresholdRatio: z
+    .number()
+    .optional()
+    .describe(
+      "Usage ratio at which the agent is nudged to start wrapping up. Automatic review budgets default to 0.8.",
+    ),
+  scope: z.enum(["session", "subtree", "goal"]).optional(),
+};
+
+export const agentBudgetDescription =
+  "Optional resource caps for review and research task classes. Review agents receive generous tiered safety ceilings with an 80% wrap-up warning and a 1.5x emergency backstop. Research agents run uncapped by default (steer or kill them if they run too long); an explicit research budget supports every cap with a 3x hard backstop. Writable build, debug, design, verification, and general tasks run uncapped. Review token and cost caps remain ignored because explicit diffs may still be large.";
+
+const fleetWorkflowKindSchema = z.enum([
+  "structured_diff_review",
+  "browser_verification",
+  "best_of_n",
+  "persistent_goal",
+]);
+
+export const detachBackgroundAgentSchema = {
+  sessionId: z.string(),
+};
+
+export const startFleetWorkflowSchema = {
+  kind: fleetWorkflowKindSchema,
+  task: z.string(),
+  message: z.string(),
+  goalId: z.string().optional(),
+  candidates: z
+    .array(
+      z.object({
+        model: z.string().optional(),
+        provider: z.string().optional(),
+      }),
+    )
+    .optional(),
+  budget: z
+    .object(agentBudgetSchema)
+    .describe(agentBudgetDescription)
+    .optional(),
+};
+
+export const scheduleFleetWorkflowSchema = {
+  name: z.string(),
+  everyMinutes: z.number().optional(),
+  eventType: z.string().optional(),
+  workflow: z.record(z.string(), z.unknown()),
+};
+
+export const getFleetWorkflowResultSchema = {
+  workflowId: z.string(),
+  kind: fleetWorkflowKindSchema,
+};
+
+export const manageFleetAutomationsSchema = {
+  action: z.enum(["list", "history", "enable", "disable", "delete"]),
+  id: z.string().optional(),
+};
+
 // ─── Language tools ──────────────────────────────────────────────────────────
 
 /** Common schema for go_to_definition, go_to_implementation, go_to_type_definition, get_hover */
@@ -1422,31 +1599,5 @@ export const composeSchema = {
     .optional()
     .describe(
       "Optional one-line intent shown in the transcript header (maximum 200 characters).",
-    ),
-};
-
-export const codebaseSearchSchema = {
-  query: z
-    .string()
-    .describe(
-      "Natural language query describing what you're looking for (e.g. 'error handling in API routes', 'how files get uploaded')",
-    ),
-  path: z
-    .string()
-    .optional()
-    .describe(
-      "Directory within the current workspace folders to scope the search to (absolute or workspace-relative). External paths are unsupported; use regex search_files instead. Omit to search the entire workspace.",
-    ),
-  limit: z.coerce
-    .number()
-    .optional()
-    .describe(
-      "Maximum number of results to return (default: 10). Higher values return more results but increase context size.",
-    ),
-  exclude_globs: z
-    .array(z.string())
-    .optional()
-    .describe(
-      "Glob patterns to exclude from semantic results after retrieval (e.g. ['**/.agentlink/**', '**/dist/**']). Useful for suppressing noisy indexed paths without rebuilding the index.",
     ),
 };

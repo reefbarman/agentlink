@@ -530,3 +530,123 @@ test("CLI writes privacy-safe JSON and additive CSV outputs with bounded summari
   assert.match(toolsCsv, /numeric_metrics_json/);
   assert.equal(metricsCsv.includes("DO NOT PRINT THIS FEEDBACK"), false);
 });
+
+test("reports search ranking coverage by extension version without legacy inference", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "telemetry.jsonl");
+  const searchBucket = (calls, categoricalMetrics = {}) =>
+    toolBucket({ calls, categoricalMetrics });
+  writeJsonLines(inputPath, [
+    flushRecord({
+      flushedAt: "2026-09-01T00:00:00Z",
+      extensionVersion: "2.0.0",
+      tools: {
+        search_files: searchBucket(5, {
+          "searchMode:query": 4,
+          "searchMode:regex": 1,
+          "searchRanking:hybrid": 1,
+          "searchRanking:lexical": 2,
+          "searchRankingReason:embeddings_disabled": 1,
+          "searchRanking:keyword_fallback": 1,
+        }),
+        codebase_search: toolBucket({ calls: 100 }),
+      },
+    }),
+    flushRecord({
+      flushedAt: "2026-09-02T00:00:00Z",
+      extensionVersion: "2.1.0",
+      tools: {
+        search_files: searchBucket(2, { "searchMode:query": 1 }),
+      },
+    }),
+  ]);
+
+  const report = readTelemetry(inputPath);
+  assert.deepEqual(report.searchUsage["2.0.0"], {
+    calls: 5,
+    regexCalls: 1,
+    queryCalls: 4,
+    unknownModeCalls: 0,
+    hybrid: 1,
+    configuredLexical: 1,
+    unexpectedLexical: 1,
+    keywordFallback: 1,
+    rankedResults: 4,
+    failedOrUnobserved: 0,
+    rankingCoverage: 1,
+    rankingShares: {
+      hybrid: 0.25,
+      configuredLexical: 0.25,
+      unexpectedLexical: 0.25,
+      keywordFallback: 0.25,
+    },
+  });
+  assert.deepEqual(report.searchUsage["2.1.0"], {
+    calls: 2,
+    regexCalls: 0,
+    queryCalls: 1,
+    unknownModeCalls: 1,
+    hybrid: 0,
+    configuredLexical: 0,
+    unexpectedLexical: 0,
+    keywordFallback: 0,
+    rankedResults: 0,
+    failedOrUnobserved: 1,
+    rankingCoverage: 0,
+    rankingShares: {
+      hybrid: null,
+      configuredLexical: null,
+      unexpectedLexical: null,
+      keywordFallback: null,
+    },
+  });
+  assert.equal(Object.hasOwn(report.searchUsage, "1.0.0"), false);
+});
+
+test("reports the read_file view split and omits versions without the metric", () => {
+  const directory = makeTempDirectory();
+  const inputPath = path.join(directory, "telemetry.jsonl");
+  const feedbackPath = path.join(directory, "feedback.jsonl");
+  writeJsonLines(inputPath, [
+    flushRecord({
+      flushedAt: "2026-09-01T00:00:00Z",
+      extensionVersion: "1.0.0",
+      tools: { read_file: toolBucket({ calls: 9 }) },
+    }),
+    flushRecord({
+      flushedAt: "2026-09-02T00:00:00Z",
+      extensionVersion: "2.0.0",
+      tools: {
+        read_file: toolBucket({
+          calls: 5,
+          categoricalMetrics: {
+            "readView:content": 1,
+            "readView:context": 3,
+            "readView:other": 1,
+          },
+        }),
+      },
+    }),
+  ]);
+  writeJsonLines(feedbackPath, []);
+
+  const report = readTelemetry(inputPath);
+  assert.deepEqual(report.readViewUsage, {
+    "2.0.0": { calls: 5, content: 1, context: 3, other: 1, unrecorded: 0 },
+  });
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      path.resolve("scripts/report-tool-usage-telemetry.mjs"),
+      "--input",
+      inputPath,
+      "--feedback-input",
+      feedbackPath,
+    ],
+    { cwd: path.resolve("."), encoding: "utf-8" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /read_file views by extension version/);
+  assert.match(result.stdout, /2\.0\.0\s+5\s+1 \(20%\)\s+3 \(60%\)/);
+});

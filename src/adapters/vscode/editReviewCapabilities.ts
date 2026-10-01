@@ -476,6 +476,26 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
               }),
             );
 
+            const documentVersion = doc.version;
+            await snap.settleBaseline(params.diagnosticDelay);
+            if (
+              !documentMatchesTarget(doc, params.absolutePath) ||
+              doc.version !== documentVersion
+            ) {
+              return {
+                error: "Edit document changed while preparing diagnostics",
+                path: params.relativePath,
+                reason: "apply_edit_failed",
+                next_steps: [
+                  "The editor buffer is preserved. Re-read the target file before composing the edit again.",
+                  ...(!baselineExists
+                    ? [
+                        "The new file placeholder and any created directories are retained.",
+                      ]
+                    : []),
+                ],
+              };
+            }
             if (doc.getText() !== content) {
               const edit = new vscode.WorkspaceEdit();
               edit.replace(
@@ -633,6 +653,26 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                     preserveFocus: true,
                   }),
                 );
+                const documentVersion = doc.version;
+                await snap.settleBaseline(params.diagnosticDelay);
+                if (
+                  !documentMatchesTarget(doc, params.absolutePath) ||
+                  doc.version !== documentVersion
+                ) {
+                  return {
+                    error: "Edit document changed while preparing diagnostics",
+                    path: params.relativePath,
+                    reason: "apply_edit_failed",
+                    next_steps: [
+                      "The editor buffer is preserved. Re-read the target file before composing the edit again.",
+                      ...(!baseline.exists
+                        ? [
+                            "The new file placeholder and any created directories are retained.",
+                          ]
+                        : []),
+                    ],
+                  };
+                }
                 if (doc.getText() !== content) {
                   const edit = new vscode.WorkspaceEdit();
                   edit.replace(

@@ -127,6 +127,18 @@ describe("formatIntroducedDiagnostics", () => {
     expect(outputLines.at(-1)).toContain("(5000 total)");
   });
 
+  it("does not claim unbaselined errors were introduced even when none were omitted", () => {
+    const output = formatIntroducedDiagnostics(
+      Array.from({ length: 50 }, (_, line) => ({ line, message: "error" })),
+      0,
+      true,
+    );
+    expect(output).toContain("not confirmed as introduced by this edit");
+    expect(output).toContain("30 more error diagnostics not shown (50 total)");
+    expect(output).not.toContain("more new error");
+    expect(formatIntroducedDiagnostics([], 0, true)).toBeUndefined();
+  });
+
   it("summarizes unbaselined omissions", () => {
     expect(formatIntroducedDiagnostics([], 12)).toContain(
       "12 error diagnostics outside the edited lines not reported",

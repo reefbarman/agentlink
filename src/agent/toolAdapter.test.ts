@@ -40,6 +40,7 @@ import { handleGetContext } from "../tools/context/getContext.js";
 import { handleGetCallHierarchy } from "../tools/getCallHierarchy.js";
 import { handleGetModuleNeighbors } from "../tools/getModuleNeighbors.js";
 import { handleGetRepoMap } from "../tools/getRepoMap.js";
+import { handleSaveSessionImage } from "../tools/saveSessionImage.js";
 
 const composeRuntimeMocks = vi.hoisted(() => ({
   handleCompose: vi.fn().mockResolvedValue({
@@ -140,6 +141,11 @@ vi.mock("../tools/generateImage.js", () => ({
   handleGenerateImage: vi
     .fn()
     .mockResolvedValue({ content: [{ type: "text", text: "generated" }] }),
+}));
+vi.mock("../tools/saveSessionImage.js", () => ({
+  handleSaveSessionImage: vi
+    .fn()
+    .mockResolvedValue({ content: [{ type: "text", text: "saved" }] }),
 }));
 vi.mock("../tools/applyDiff.js", () => ({
   handleApplyDiff: vi
@@ -301,6 +307,53 @@ const ddgMcpTools: ToolDefinition[] = [
 ];
 
 describe("tool usage telemetry project attribution", () => {
+  it.each([false, true])(
+    "records actual search ranking across native dispatch (bridge=%s)",
+    async (bridge) => {
+      const { handleSearchFiles } = await import("../tools/searchFiles.js");
+      const payload = {
+        ranking: "lexical",
+        ranking_reason: "embeddings_disabled",
+        total_results: 2,
+      };
+      vi.mocked(handleSearchFiles).mockResolvedValueOnce({
+        content: [{ type: "text", text: JSON.stringify(payload) }],
+        data: payload,
+      });
+      const record = vi.fn();
+      const runtime = createAgentToolRuntime({
+        ...mockCtx,
+        toolUsageTelemetry: { record } as any,
+      });
+      const input = { path: ".", query: "auth flow" };
+      const definition = getAgentTools().find(
+        (tool) => tool.name === "search_files",
+      )!;
+      const nativeToolDisclosure = {
+        schemaVersion: 1 as const,
+        inlineTools: [],
+        deferredTools: [definition],
+        dormantToolNames: [],
+      };
+      await runtime.executeTool({
+        name: bridge ? "call_native_tool" : "search_files",
+        input: bridge ? { name: "search_files", input } : input,
+        context: { sessionId: "test", mode: "code", nativeToolDisclosure },
+      });
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "search_files",
+          params: input,
+          metrics: {
+            searchMode: "query",
+            searchRanking: "lexical",
+            searchRankingReason: "embeddings_disabled",
+            searchResultCount: "2-5",
+          },
+        }),
+      );
+    },
+  );
   it("records early rejections and nested invocations once and isolates recorder failures", async () => {
     const record = vi.fn();
     const runtime = createAgentToolRuntime({
@@ -378,6 +431,30 @@ describe("tool usage telemetry project attribution", () => {
     expect(JSON.stringify(record.mock.calls)).not.toContain(
       "/sensitive/project",
     );
+  });
+
+  it("records read_file under its public name with a bounded readView metric", async () => {
+    const record = vi.fn();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      toolUsageTelemetry: { record } as any,
+    });
+
+    for (const view of [undefined, "context", "bogus"]) {
+      await runtime.executeTool({
+        name: "read_file",
+        input: view ? { path: "README.md", view } : { path: "README.md" },
+        context: { sessionId: "test", mode: "code" },
+      });
+    }
+
+    expect(
+      record.mock.calls.map(([event]) => [event.toolName, event.metrics]),
+    ).toEqual([
+      ["read_file", { readView: "content" }],
+      ["read_file", { readView: "context" }],
+      ["read_file", { readView: "other" }],
+    ]);
   });
 
   it("forwards the exact run-scoped artifact writer into compose", async () => {
@@ -566,6 +643,226 @@ describe("tool usage telemetry project attribution", () => {
     const text = JSON.stringify(result.content);
     expect(text).toContain("not available in ask mode");
     expect(text).toContain("switch_mode");
+  });
+
+  it.each([
+    {
+      name: "detach_background_agent",
+      input: { sessionId: "distinct-child" },
+      callback: "onDetachBackground",
+      expected: ["request-session", "distinct-child"],
+    },
+    {
+      name: "start_fleet_workflow",
+      input: {
+        kind: "best_of_n",
+        task: "Distinct task",
+        message: "Distinct instructions",
+        goalId: "distinct-goal",
+        candidates: [
+          { model: "distinct-model", provider: "distinct-provider" },
+        ],
+        budget: { maxToolCalls: 17, scope: "subtree" },
+      },
+      callback: "onStartFleetWorkflow",
+      expected: [
+        "request-session",
+        {
+          kind: "best_of_n",
+          task: "Distinct task",
+          message: "Distinct instructions",
+          goalId: "distinct-goal",
+          candidates: [
+            { model: "distinct-model", provider: "distinct-provider" },
+          ],
+          budget: { maxToolCalls: 17, scope: "subtree" },
+        },
+        { schemaVersion: 1, sources: [] },
+      ],
+    },
+    {
+      name: "schedule_fleet_workflow",
+      input: {
+        name: "Distinct automation",
+        everyMinutes: 7,
+        eventType: "distinct-event",
+        workflow: {
+          kind: "persistent_goal",
+          task: "Goal",
+          message: "Instructions",
+          budget: { maxApiTurns: 13 },
+        },
+      },
+      callback: "onScheduleFleetAutomation",
+      expected: [
+        {
+          name: "Distinct automation",
+          everyMs: 420000,
+          eventType: "distinct-event",
+          workflow: {
+            kind: "persistent_goal",
+            task: "Goal",
+            message: "Instructions",
+            budget: { maxApiTurns: 13 },
+          },
+        },
+      ],
+    },
+    {
+      name: "get_fleet_workflow_result",
+      input: { workflowId: "distinct-workflow", kind: "best_of_n" },
+      callback: "onCollectFleetWorkflow",
+      expected: ["distinct-workflow", "best_of_n"],
+    },
+    {
+      name: "manage_fleet_automations",
+      input: { action: "disable", id: "distinct-automation" },
+      callback: "onManageFleetAutomations",
+      expected: [{ action: "disable", id: "distinct-automation" }],
+    },
+  ])(
+    "discovers, validates and forwards deferred $name through production dispatch",
+    async ({ name, input, callback, expected }) => {
+      const consumer = vi.fn().mockReturnValue({ ok: true });
+      const runtime = createAgentToolRuntime({
+        ...mockCtx,
+        [callback]: consumer,
+      });
+      const nativeToolDisclosure = createNativeToolDisclosureSnapshot(
+        runtime.listTools({}),
+      );
+      const context = {
+        sessionId: "request-session",
+        availableToolNames: new Set(
+          nativeToolDisclosure.inlineTools.map((tool) => tool.name),
+        ),
+        nativeToolDisclosure,
+        skillAuthority: { schemaVersion: 1 as const, sources: [] },
+      };
+      expect(context.availableToolNames.has(name)).toBe(false);
+      const discovery = await runtime.executeTool({
+        name: "find_native_tools",
+        input: { query: name, include_schemas: true },
+        context,
+      });
+      expect(discovery.data).toMatchObject({
+        tools: [{ name, input_schema: expect.any(Object) }],
+      });
+      const invalid = await runtime.executeTool({
+        name: "call_native_tool",
+        input: { name, input: {} },
+        context,
+      });
+      expect(invalid).toMatchObject({
+        isError: true,
+        data: { status: "invalid_native_tool_input" },
+      });
+      expect(consumer).not.toHaveBeenCalled();
+      const accepted = await runtime.executeTool({
+        name: "call_native_tool",
+        input: { name, input },
+        context,
+      });
+      expect(accepted.isError).not.toBe(true);
+      expect(consumer).toHaveBeenCalledExactlyOnceWith(...expected);
+      const unavailable = createNativeToolDisclosureSnapshot(
+        runtime.listTools({ toolProfile: "review" }),
+      );
+      const excluded = await runtime.executeTool({
+        name: "call_native_tool",
+        input: { name, input },
+        context: { ...context, nativeToolDisclosure: unavailable },
+      });
+      expect(excluded).toMatchObject({
+        isError: true,
+        data: { status: "native_tool_not_available" },
+      });
+      expect(consumer).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("invokes deferred module lookup with its original handler and policy", async () => {
+    vi.mocked(handleGetModuleNeighbors).mockClear();
+    const runtime = createAgentToolRuntime(mockCtx);
+    const nativeToolDisclosure = createNativeToolDisclosureSnapshot(
+      runtime.listTools({}),
+    );
+    const input = { path: "src/distinct.ts", max_results: 19 };
+    const context = { sessionId: "test-session", nativeToolDisclosure };
+    expect(
+      nativeToolDisclosure.inlineTools.some(
+        (tool) => tool.name === "get_module_neighbors",
+      ),
+    ).toBe(false);
+    const accepted = await runtime.executeTool({
+      name: "call_native_tool",
+      input: { name: "get_module_neighbors", input },
+      context,
+    });
+    expect(accepted.isError).not.toBe(true);
+    expect(handleGetModuleNeighbors).toHaveBeenCalledOnce();
+    expect(vi.mocked(handleGetModuleNeighbors).mock.calls[0]?.[0]).toEqual(
+      input,
+    );
+    const blocked = await runtime.executeTool({
+      name: "call_native_tool",
+      input: { name: "get_module_neighbors", input },
+      context: {
+        ...context,
+        mode: "code",
+        modeAllowedToolNames: new Set(["read_file"]),
+      },
+    });
+    expect(blocked).toMatchObject({
+      isError: true,
+      data: { status: "tool_not_in_mode" },
+    });
+    expect(handleGetModuleNeighbors).toHaveBeenCalledOnce();
+  });
+
+  it("does not discover schemas for tools blocked by the active mode", async () => {
+    const runtime = createAgentToolRuntime(mockCtx);
+    const nativeToolDisclosure =
+      createNativeToolDisclosureSnapshot(getAgentTools());
+    const context = {
+      sessionId: "test-session",
+      mode: "architect",
+      nativeToolDisclosure,
+      modeAllowedToolNames: new Set([
+        "find_native_tools",
+        "call_native_tool",
+        "read_file",
+      ]),
+    };
+    const result = await runtime.executeTool({
+      name: "find_native_tools",
+      input: { query: "propose_memory read_file", include_schemas: true },
+      context,
+    });
+    expect(result.data).toMatchObject({
+      tools: [],
+      unavailableTools: ["propose_memory"],
+      directTools: ["read_file"],
+    });
+    expect(
+      nativeToolDisclosure.deferredTools.some(
+        (tool) => tool.name === "propose_memory",
+      ),
+    ).toBe(true);
+    const blocked = await runtime.executeTool({
+      name: "call_native_tool",
+      input: {
+        name: "propose_memory",
+        input: {
+          tier: "instructions",
+          scope: "project",
+          operation: "add",
+          content: "test",
+        },
+      },
+      context,
+    });
+    expect(blocked.isError).toBe(true);
   });
 
   it("keeps deferred image generation behind the active mode gate", async () => {
@@ -886,7 +1183,6 @@ const READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT = [
   "read_session_excerpt",
   "diagnose_activity",
   "recall_memory",
-  "codebase_search",
   "get_diagnostics",
   "get_hover",
   "get_symbols",
@@ -999,7 +1295,7 @@ describe("READ_ONLY_TOOLS", () => {
     expect(READ_ONLY_TOOLS.has("get_hover")).toBe(true);
     expect(READ_ONLY_TOOLS.has("get_symbols")).toBe(true);
     expect(READ_ONLY_TOOLS.has("go_to_definition")).toBe(true);
-    expect(READ_ONLY_TOOLS.has("codebase_search")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("codebase_search")).toBe(false);
     expect(READ_ONLY_TOOLS.has("search_session_history")).toBe(true);
     expect(READ_ONLY_TOOLS.has("read_session_excerpt")).toBe(true);
     expect(READ_ONLY_TOOLS.has("diagnose_activity")).toBe(true);
@@ -1125,6 +1421,24 @@ describe("getAgentTools", () => {
       cluster: "media",
       sideEffect: "control",
       requiresApproval: "never",
+      parallelSafe: false,
+    });
+  });
+
+  it("defines save_session_image as a policy-approved workspace write", () => {
+    const tool = getAgentTools().find(
+      (candidate) => candidate.name === "save_session_image",
+    );
+    expect(tool).toBeDefined();
+    expect(tool?.description).toContain("byte-for-byte");
+    expect(tool?.input_schema.properties).toHaveProperty("image_id");
+    expect(tool?.input_schema.properties).toHaveProperty("path");
+    expect(tool?.input_schema.properties).toHaveProperty("overwrite");
+    expect(tool?.input_schema.required).toEqual(["image_id", "path"]);
+    expect(TOOL_CAPABILITIES.save_session_image).toMatchObject({
+      cluster: "media",
+      sideEffect: "write",
+      requiresApproval: "policy",
       parallelSafe: false,
     });
   });
@@ -1569,7 +1883,9 @@ describe("getAgentTools", () => {
         requiresApproval: "never",
       });
       expect(TOOL_REGISTRY[name]).toBeDefined();
-      expect(definitions.has(name)).toBe(true);
+      // get_context remains an internal composable operation reached through
+      // read_file's context view; it is no longer advertised by name.
+      expect(definitions.has(name)).toBe(name !== "get_context");
     }
     expect(COMPOSABLE_TOOLS.has("compose")).toBe(false);
     expect(COMPOSABLE_TOOLS.has("read_file")).toBe(true);
@@ -1585,7 +1901,6 @@ describe("getAgentTools", () => {
     };
     const ordinaryChildren = [
       "get_call_hierarchy",
-      "get_context",
       "get_diagnostics",
       "get_hover",
       "get_module_neighbors",
@@ -1619,7 +1934,6 @@ describe("getAgentTools", () => {
       "get_call_hierarchy",
       "get_code_actions",
       "get_completions",
-      "get_context",
       "get_diagnostics",
       "get_hover",
       "get_inlay_hints",
@@ -1647,7 +1961,7 @@ describe("getAgentTools", () => {
   it("includes the core file tools and foreground task status tool", () => {
     const names = getAgentTools().map((t) => t.name);
     expect(names).toContain("read_file");
-    expect(names).toContain("load_rule");
+    expect(names).not.toContain("load_rule");
     expect(names).toContain("get_repo_map");
     expect(names).toContain("get_module_neighbors");
     expect(names).toContain("write_file");
@@ -1797,7 +2111,7 @@ describe("getAgentTools", () => {
     const names = reviewTools.map((t) => t.name);
     // Should include read-only review tools
     expect(names).toContain("read_file");
-    expect(names).toContain("get_context");
+    expect(names).not.toContain("get_context");
     expect(names).toContain("get_repo_map");
     expect(names).toContain("get_module_neighbors");
     expect(names).toContain("search_files");
@@ -1846,6 +2160,7 @@ describe("getAgentTools", () => {
     expect(names).not.toContain("apply_diff");
     expect(names).not.toContain("find_and_replace");
     expect(names).not.toContain("load_rule");
+    expect(names).toContain("load_skill");
     expect(names).not.toContain("ask_user");
   });
 
@@ -1859,11 +2174,11 @@ describe("getAgentTools", () => {
     const names = tools.map((t) => t.name);
 
     expect(names).toContain("read_file");
-    expect(names).toContain("get_context");
+    expect(names).not.toContain("get_context");
     expect(names).toContain("get_repo_map");
     expect(names).toContain("get_module_neighbors");
     expect(names).toContain("search_files");
-    expect(names).toContain("codebase_search");
+    expect(names).not.toContain("codebase_search");
     expect(names).toContain("get_diagnostics");
     expect(names).toContain("go_to_type_definition");
     expect(names).toContain("get_call_hierarchy");
@@ -1927,6 +2242,55 @@ describe("getAgentTools", () => {
     expect(names).not.toContain("spawn_background_agent");
   });
 
+  it.each(["review", "readonly-research", "btw", "worktree-setup"])(
+    "keeps advertised artifact loaders available in the %s profile",
+    (profile) => {
+      const names = createAgentToolRuntime(mockCtx)
+        .listTools({
+          isBackground: true,
+          toolProfile: profile,
+          skillAllowedTools: ["read_file"],
+          hasDeferredRules: true,
+        })
+        .map((tool) => tool.name);
+      expect(names).toContain("load_skill");
+      expect(names).toContain("load_rule");
+      expect(names).not.toContain("write_file");
+    },
+  );
+
+  it.each(["review", "readonly-research"])(
+    "exposes public web tools only when configured in the %s profile",
+    (profile) => {
+      const withoutWeb = getAgentTools(undefined, undefined, true, profile);
+      expect(withoutWeb.map((tool) => tool.name)).not.toContain("web_fetch");
+      const withWeb = getAgentTools(
+        undefined,
+        undefined,
+        true,
+        profile,
+        undefined,
+        undefined,
+        undefined,
+        ["fetch", "search"],
+      );
+      expect(withWeb.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(["web_fetch", "web_search"]),
+      );
+      const restricted = getAgentTools(
+        undefined,
+        undefined,
+        true,
+        profile,
+        ["read_file"],
+        undefined,
+        undefined,
+        ["fetch", "search"],
+      );
+      expect(restricted.map((tool) => tool.name)).not.toContain("web_fetch");
+    },
+  );
+
   it("exposes the restricted command schema in ask mode and the full schema in code mode", () => {
     const askCommand = getAgentTools(
       BUILT_IN_MODES.find((mode) => mode.slug === "ask")!,
@@ -1975,10 +2339,10 @@ describe("getAgentTools", () => {
     const names = tools.map((t) => t.name);
 
     expect(names).toContain("read_file");
-    expect(names).toContain("get_context");
+    expect(names).not.toContain("get_context");
     expect(names).toContain("get_repo_map");
     expect(names).toContain("get_module_neighbors");
-    expect(names).toContain("codebase_search");
+    expect(names).not.toContain("codebase_search");
     expect(names).toContain("get_call_hierarchy");
     expect(names).toContain("search_session_history");
     expect(names).toContain("read_session_excerpt");
@@ -2584,6 +2948,44 @@ describe("spawn_background_agent tool", () => {
     ]);
   });
 
+  it("forwards session images, approval seams, and mode to save_session_image", async () => {
+    const sessionImages = [
+      {
+        id: "image_7",
+        name: "distinctive-capture.png",
+        mimeType: "image/png",
+        base64: "ZGlzdGluY3RpdmU=",
+        messageIndex: 4,
+        imageIndex: 0,
+      },
+    ];
+    const writeApprovalPolicyProvider = {
+      canAutoApprove: vi.fn(() => false),
+      recordDecision: vi.fn(),
+    };
+    const onApprovalRequest = vi.fn();
+    const input = { image_id: "image_7", path: "assets/capture.png" };
+
+    const result = await dispatchToolCall("save_session_image", input, {
+      ...mockCtx,
+      mode: "architect",
+      onApprovalRequest,
+      writeApprovalPolicyProvider,
+      getSessionImages: () => sessionImages,
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "saved" }]);
+    const [params, deps] = vi.mocked(handleSaveSessionImage).mock.calls.at(-1)!;
+    expect(params).toEqual(input);
+    expect(deps).toMatchObject({
+      sessionId: "test-session",
+      mode: "architect",
+      onApprovalRequest,
+      writeApprovalPolicyProvider,
+    });
+    expect(deps.getSessionImages?.()).toBe(sessionImages);
+  });
+
   it("dispatches structured request and returns structured result", async () => {
     const onSpawnBackground = vi.fn().mockResolvedValue({
       sessionId: "bg-123",
@@ -2829,6 +3231,8 @@ describe("spawn_background_agent tool", () => {
     expect(result.isError).toBe(false);
     expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual({
       accepted: true,
+      ownershipChanged: false,
+      guidance: expect.stringContaining("do not change the child's ownedPaths"),
     });
   });
 
@@ -3994,7 +4398,6 @@ describe("dispatchToolCall", () => {
       expect.anything(),
       undefined,
       undefined,
-      expect.anything(),
     );
   });
 
@@ -4116,6 +4519,166 @@ describe("dispatchToolCall", () => {
     ]);
     expect(handleGetContext).toHaveBeenCalledOnce();
     expect(mockOnApprovalRequest).not.toHaveBeenCalled();
+  });
+
+  describe("merged read_file views", () => {
+    const readFileSchemaFor = (skillAllowedTools?: string[]) =>
+      getAgentTools(
+        undefined,
+        undefined,
+        false,
+        undefined,
+        skillAllowedTools,
+      ).find((tool) => tool.name === "read_file")?.input_schema as
+        | {
+            properties: Record<string, { enum?: string[] }>;
+            required?: string[];
+          }
+        | undefined;
+
+    it("advertises one read_file tool with both views instead of get_context", () => {
+      const names = getAgentTools().map((tool) => tool.name);
+      expect(names).toContain("read_file");
+      expect(names).not.toContain("get_context");
+      const schema = readFileSchemaFor();
+      expect(schema?.properties.view?.enum).toEqual(["content", "context"]);
+      expect(schema?.properties).toHaveProperty("anchor");
+      expect(schema?.properties).toHaveProperty("dedupe_unchanged_content");
+    });
+
+    it("advertises only the views granted by a single-operation skill allowlist", () => {
+      const contextOnly = readFileSchemaFor(["get_context"]);
+      expect(contextOnly?.properties.view?.enum).toEqual(["context"]);
+      expect(contextOnly?.required).toContain("view");
+      expect(contextOnly?.properties).not.toHaveProperty("anchor");
+
+      const contentOnly = readFileSchemaFor(["read_file"]);
+      expect(contentOnly?.properties.view?.enum).toEqual(["content"]);
+      expect(contentOnly?.properties).not.toHaveProperty("refresh");
+
+      expect(readFileSchemaFor(["search_files"])).toBeUndefined();
+    });
+
+    it("routes view context to the existing context handler without the view key", async () => {
+      const runtime = createAgentToolRuntime(mockCtx);
+      vi.mocked(handleGetContext).mockClear();
+      vi.mocked(handleReadFile).mockClear();
+
+      await runtime.executeTool({
+        name: "read_file",
+        input: { path: "src/foo.ts", view: "context", limit: 40 },
+        context: {
+          sessionId: "test-session",
+          availableToolNames: new Set(["read_file"]),
+        },
+      });
+
+      expect(handleGetContext).toHaveBeenCalledWith(
+        { path: "src/foo.ts", limit: 40 },
+        "test-session",
+        expect.anything(),
+      );
+      expect(handleReadFile).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [["get_context"], { path: "src/foo.ts" }],
+      [["read_file"], { path: "src/foo.ts", view: "context" }],
+    ])(
+      "rejects a view outside skill allowlist %j before file access",
+      async (skillAllowedTools, input) => {
+        const runtime = createAgentToolRuntime(mockCtx);
+        vi.mocked(handleGetContext).mockClear();
+        vi.mocked(handleReadFile).mockClear();
+
+        const result = await runtime.executeTool({
+          name: "read_file",
+          input,
+          context: { sessionId: "test-session", skillAllowedTools },
+        });
+
+        expect(result).toMatchObject({
+          isError: true,
+          data: { status: "read_view_not_permitted" },
+        });
+        expect(handleGetContext).not.toHaveBeenCalled();
+        expect(handleReadFile).not.toHaveBeenCalled();
+      },
+    );
+
+    it("rejects options belonging to the other view before file access", async () => {
+      const runtime = createAgentToolRuntime(mockCtx);
+      vi.mocked(handleGetContext).mockClear();
+
+      const result = await runtime.executeTool({
+        name: "read_file",
+        input: { path: "src/foo.ts", view: "context", anchor: "x" },
+        context: { sessionId: "test-session" },
+      });
+
+      expect(result).toMatchObject({
+        isError: true,
+        data: { status: "read_view_option_mismatch" },
+      });
+      expect(handleGetContext).not.toHaveBeenCalled();
+    });
+
+    it("rejects the unadvertised get_context operation like any unknown tool", async () => {
+      const runtime = createAgentToolRuntime(mockCtx);
+      vi.mocked(handleGetContext).mockClear();
+
+      const result = await runtime.executeTool({
+        name: "get_context",
+        input: { path: "src/foo.ts" },
+        context: {
+          sessionId: "test-session",
+          availableToolNames: new Set(["read_file"]),
+        },
+      });
+
+      expect(result).toMatchObject({
+        isError: true,
+        data: { status: "tool_not_available", tool: "get_context" },
+      });
+      expect(JSON.stringify(result)).not.toContain("replacement");
+      expect(handleGetContext).not.toHaveBeenCalled();
+    });
+
+    it("keeps the context operation's path policy for skill-adjacent files", async () => {
+      const skillPath = "/outside/skills/helper/SKILL.md";
+      const resourcePath = "/outside/skills/helper/references/guide.md";
+      const runtime = createAgentToolRuntime({
+        ...mockCtx,
+        approvalManager: { isPathTrusted: vi.fn(() => false) } as any,
+      });
+      vi.mocked(handleGetContext).mockClear();
+
+      const result = await runtime.executeTool({
+        name: "read_file",
+        input: { path: resourcePath, view: "context" },
+        context: {
+          sessionId: "background-session",
+          interactionPolicy: "deny",
+          getAdvertisedSkills: () => [
+            {
+              id: "global:agentlink:helper",
+              name: "helper",
+              revision: "a".repeat(64),
+              skillPath,
+              realSkillPath: skillPath,
+              sourceScope: "global" as const,
+            },
+          ],
+        },
+      });
+
+      expect(result).toMatchObject({
+        isError: true,
+        data: { reason: "interaction_denied" },
+      });
+      expect(result.error?.message).toContain("Call read_file directly");
+      expect(handleGetContext).not.toHaveBeenCalled();
+    });
   });
 
   it("denies untrusted nested read paths without invoking the handler", async () => {
@@ -4631,7 +5194,6 @@ describe("dispatchToolCall", () => {
       }),
       undefined,
       undefined,
-      {},
     );
     expect(result.content[0]).toMatchObject({
       type: "text",
@@ -4679,97 +5241,88 @@ describe("dispatchToolCall", () => {
     });
   });
 
-  it("dispatches codebase_search through the semantic search provider", async () => {
-    const payload = {
-      query: "auth flow",
-      semantic: true,
-      total_results: 1,
-      results: "semantic results",
-    };
-    const search = vi.fn().mockResolvedValue({ payload });
-
-    const result = await dispatchToolCall(
-      "codebase_search",
-      {
-        query: "auth flow",
-        path: "src/agent",
-        limit: 3,
-        exclude_globs: ["**/dist/**", 42],
-      },
-      { ...mockCtx, semanticSearchProvider: { search } },
-    );
-
-    expect(search).toHaveBeenCalledWith({
-      query: "auth flow",
+  it("injects the indexed search provider into search_files", async () => {
+    const { handleSearchFiles } = await import("../tools/searchFiles.js");
+    const provider = { search: vi.fn() };
+    const input = {
       path: "src/agent",
-      limit: 3,
-      exclude_globs: ["**/dist/**", "42"],
+      query: "auth flow",
+      max_results: 3,
+      exclude_globs: ["**/dist/**"],
+    };
+    await dispatchToolCall("search_files", input, {
+      ...mockCtx,
+      semanticSearchProvider: provider,
     });
-    expect(result.data).toEqual(payload);
-    expect(result.content[0]).toEqual({
-      type: "text",
-      text: JSON.stringify(payload, null, 2),
-    });
+    expect(handleSearchFiles).toHaveBeenCalledWith(
+      input,
+      mockCtx.approvalManager,
+      mockCtx.approvalPanel,
+      mockCtx.sessionId,
+      expect.objectContaining({ semanticSearchProvider: provider }),
+    );
   });
 
-  it("preserves typed semantic provider errors at the tool boundary", async () => {
-    const search = vi.fn().mockResolvedValue({
-      payload: {
-        error: "distinctive semantic failure",
-        reason: "store_unavailable",
-      },
-      isError: true,
-      error: {
-        kind: "semantic_store_unavailable",
-        message: "distinctive semantic failure",
-      },
-    });
-
+  it("does not dispatch the removed codebase_search tool", async () => {
+    const search = vi.fn();
     const result = await dispatchToolCall(
       "codebase_search",
       { query: "auth flow" },
       { ...mockCtx, semanticSearchProvider: { search } },
     );
-
-    expect(result).toMatchObject({
-      data: {
-        error: "distinctive semantic failure",
-        reason: "store_unavailable",
-      },
-      isError: true,
-      error: {
-        kind: "semantic_store_unavailable",
-        message: "distinctive semantic failure",
+    expect(JSON.stringify(result)).toContain("Unknown tool: codebase_search");
+    expect(search).not.toHaveBeenCalled();
+    const unavailable = await createAgentToolRuntime(mockCtx).executeTool({
+      name: "codebase_search",
+      input: { query: "auth flow" },
+      context: {
+        sessionId: "test",
+        availableToolNames: new Set(getAgentTools().map((tool) => tool.name)),
       },
     });
-    expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual(
-      result.data,
-    );
+    expect(unavailable.isError).toBe(true);
   });
 
-  it("returns explicit unavailable behavior for codebase_search without a provider", async () => {
-    const result = await dispatchToolCall(
-      "codebase_search",
-      { query: "auth flow" },
-      mockCtx,
-    );
-
-    const text = (result.content[0] as { type: "text"; text: string }).text;
-    expect(JSON.parse(text)).toMatchObject({
-      error: expect.stringContaining(
-        "Semantic codebase search is unavailable in this runtime",
-      ),
-    });
-    expect(result).toMatchObject({
-      isError: true,
-      error: {
-        kind: "tool_error",
-        message: expect.stringContaining(
-          "Semantic codebase search is unavailable in this runtime",
-        ),
-      },
-    });
-  });
+  it.each([
+    ["search_files", { path: "." }],
+    ["search_files", { path: ".", regex: "x", query: "meaning" }],
+    ["search_files", { path: ".", regex: "x", semantic: false }],
+    ["search_files", { path: ".", query: "meaning", semantic: true }],
+    ["read_file", { path: "x", query: "meaning" }],
+    ["list_files", { path: ".", query: "meaning" }],
+  ] as const)(
+    "rejects invalid %s input before direct or deferred execution",
+    async (name, input) => {
+      const { handleSearchFiles } = await import("../tools/searchFiles.js");
+      const { handleListFiles } = await import("../tools/listFiles.js");
+      vi.mocked(handleSearchFiles).mockClear();
+      vi.mocked(handleReadFile).mockClear();
+      vi.mocked(handleListFiles).mockClear();
+      const runtime = createAgentToolRuntime(mockCtx);
+      const definition = getAgentTools().find((tool) => tool.name === name)!;
+      const nativeToolDisclosure = {
+        schemaVersion: 1 as const,
+        inlineTools: [],
+        deferredTools: [definition],
+        dormantToolNames: [],
+      };
+      for (const request of [
+        { name, input, context: { sessionId: "test", mode: "code" } },
+        {
+          name: "call_native_tool",
+          input: { name, input },
+          context: { sessionId: "test", mode: "code", nativeToolDisclosure },
+        },
+      ]) {
+        const result = await runtime.executeTool(request);
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result)).toContain("invalid_search_input");
+      }
+      expect(handleSearchFiles).not.toHaveBeenCalled();
+      expect(handleReadFile).not.toHaveBeenCalled();
+      expect(handleListFiles).not.toHaveBeenCalled();
+    },
+  );
 
   it("forwards explicit read-only command execution policy", async () => {
     const { handleExecuteCommand } = await import("../tools/executeCommand.js");

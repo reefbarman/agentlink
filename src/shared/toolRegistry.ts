@@ -53,27 +53,27 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   read_file: {
     label: "Read with line numbers",
     description:
-      "Read the contents of a file with line numbers. Use get_context first for orientation on a known source/config file; use read_file when you need exact file content, local images/PDFs, complete temp outputs, a specific large line slice, or semantic in-file jumping via query. The query option only works within the current workspace folders; omit query for external files. Returns content in 'line_number | content' format with metadata, git status, and diagnostics summary when available. High-confidence secret values in eligible settings/config JSON/JSONC are automatically redacted; malformed eligible content is withheld.",
+      'Read a file with line numbers. Use view "context" for first-pass orientation on a known file: a compact pack with metadata, git status, diagnostics summary, bounded symbol outline, bounded numbered content (default 200 lines, max 400), and working-set status, with opt-in unchanged-range omission via dedupe_unchanged_content. Use the default view "content" for exact content, local images/PDFs, complete temp outputs, anchors, or a specific line slice. Eligible structured-settings secrets are redacted; malformed content is withheld.',
   },
   get_context: {
     label: "Context pack",
     description:
-      "Build a compact read-only context pack for an explicit file: metadata, git status, diagnostics summary, symbol outline, bounded numbered content, and working-set status. Prefer this over read_file for first-pass orientation when the file path is already known. Supports opt-in unchanged-content omission via per-session content hashes. High-confidence secret values in eligible settings/config JSON/JSONC are automatically redacted; malformed eligible content is withheld.",
+      'Internal operation behind read_file view "context"; not advertised as a tool.',
   },
   get_module_neighbors: {
     label: "Module neighbors",
     description:
-      "Read the structural code index for a file and return imports, exports, top-level symbols, reverse module dependents, bounded counts, and freshness metadata. Use after get_context when you need module-level blast-radius awareness before editing. Requires the codebase index to be built. Only works on files/folders within the current workspace folders, not external repositories or other windows. For external paths, use read_file/list_files without query or regex search_files (semantic=false), subject to path permissions.",
+      "Read the structural code index for a file and return imports, exports, top-level symbols, reverse module dependents, bounded counts, and freshness metadata. Use after read_file view 'context' when you need module-level blast-radius awareness before editing. Requires the codebase index to be built. Only works on files/folders within the current workspace folders, not external repositories or other windows. For external paths, use read_file/list_files or search_files with regex, subject to path permissions.",
   },
   get_repo_map: {
     label: "Repo map",
     description:
-      "Read the structural code index and return a budgeted whole-project skeleton: store metadata, aggregate counts, directory summaries, external dependency summaries, and prioritized file/module entries. Use before broad edits to understand module boundaries and drill into files with get_module_neighbors. Requires the codebase index to be built. Only works on files/folders within the current workspace folders, not external repositories or other windows. For external paths, use read_file/list_files without query or regex search_files (semantic=false), subject to path permissions.",
+      "Read the structural code index and return a budgeted whole-project skeleton: store metadata, aggregate counts, directory summaries, external dependency summaries, and prioritized file/module entries. Use before broad edits to understand module boundaries and drill into files with get_module_neighbors. Requires the codebase index to be built. Only works on files/folders within the current workspace folders, not external repositories or other windows. For external paths, use read_file/list_files or search_files with regex, subject to path permissions.",
   },
   load_skill: {
     label: "Load advertised skill",
     description:
-      "Load the full contents of a skill file that was explicitly advertised in the current system prompt. Only valid for skill paths from the current session's skill list; not a general-purpose file reader.",
+      "Load an enabled skill from the current session's revisioned catalog, including skills omitted from the bounded prompt list. Use the exact canonical path. A rejected path returns up to ten matching catalog candidates without activating them; retry with the intended candidate's path. Advertised symlink aliases activate the canonical identity. Not a general-purpose file reader.",
   },
   load_rule: {
     label: "Load advertised rule",
@@ -83,12 +83,12 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   list_files: {
     label: "Directory listing",
     description:
-      "List files and directories at a given path. Directories have a trailing '/' suffix. Use 'pattern' to find files matching a glob (e.g. '*.test.ts'). Set include_ignored=true with recursive/pattern listing to include files hidden by ignore rules; pair it with pattern to avoid noisy/truncated results. Nested node_modules and .git remain excluded, but an explicit root inside node_modules is honoured. Supports optional 'query' for indexed semantic ranking within the current workspace folders only; omit query for external directories.",
+      "List files and directories at a path. Directories have a trailing '/' suffix. Use pattern for glob matching. With recursive/pattern listing, include_ignored=true includes ignored files; pair it with pattern to bound results. Nested node_modules and .git remain excluded, but an explicit root inside node_modules is honoured.",
   },
   search_files: {
-    label: "Regex & semantic search",
+    label: "Search code",
     description:
-      "Search file contents using regex, or perform semantic codebase search. Default: fast ripgrep regex search with context lines. High-confidence secret values in eligible structured settings/config matches and context are redacted; malformed or unreadable eligible content is withheld. semantic=true treats 'regex' as a natural-language indexed query within the current workspace folders only, with excerpts capped at 4,000 characters. Use regex search (semantic=false) for external paths. When path names a file, redundant file_pattern is ignored with a warning.",
+      "Search a file or directory using exactly one of regex or query. regex runs ripgrep with pagination and output modes, including on external paths subject to permissions (default max_results: 300). query ranks indexed code within the current workspace folders only (default max_results: 10), with hybrid, lexical, or keyword-fallback ranking reported honestly. Query excerpts are capped at 4,000 source characters plus a truncation marker. Eligible structured-settings secrets are redacted; invalid content is withheld. When path is a file, regex ignores redundant file_pattern with a warning.",
   },
   search_session_history: {
     label: "Search session history",
@@ -118,7 +118,12 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   present_images: {
     label: "Present session images",
     description:
-      "Show one or more images already available in the current session directly in the main chat transcript. Use when the user explicitly asks to see an image, screenshot, or visual output; do not use for routine agent-only image inspection because image-returning tool calls already retain their results. Select exact image_N IDs or recent images; with no selector, presents the most recent image. This is display-only, writes no files, and requires no approval.",
+      "Show one or more images already available in the current session directly in the main chat transcript. Use when the user explicitly asks to see an image, screenshot, or visual output; do not use for routine agent-only image inspection because image-returning tool calls already retain their results. Select exact image_N IDs or recent images; with no selector, presents the most recent image. This is display-only, writes no files, and requires no approval. To write a session image to disk, use save_session_image.",
+  },
+  save_session_image: {
+    label: "Save session image",
+    description:
+      "Write an image already retained in the current session to a workspace file, byte-for-byte without format conversion. Works for user attachments, screenshots, generated images, and other image tool results, selected by image_N ID in session order. The path extension must match the image type (PNG, JPEG, GIF, or WebP); a missing extension is added. Existing files are refused unless overwrite is true. Follows the same write-approval policy as file edits: already-approved writes save directly, otherwise the user is asked. Images from before a context condense keep their IDs and remain available; the condense summary lists them.",
   },
   manage_memory: {
     label: "Manage autonomous memory",
@@ -223,7 +228,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   execute_command: {
     label: "Integrated terminal",
     description:
-      "Run a command in AgentLink's managed terminal. Sequential unnamed calls automatically reuse an idle compatible terminal while isolating each command's shell mutations; overlapping implicit calls allocate separate terminals when needed. Named or explicitly targeted terminals retain intentional persistent-shell state; explicitly targeting a formerly pooled terminal removes it from later unnamed reuse. Use `terminal_name` when a terminal should have a stable purpose-based label such as 'Dev server', 'Unit tests', or 'Build', or `terminal_id` to target a specific existing terminal. Use `background` for long-running processes and `timeout` for quick commands. A Native Agent timeout before shell command-start confirmation closes that terminal and reports a launch-stage failure instead of claiming an unknown process is still running. With Approve for Me off, default execution uses the native terminal and the normal command approval/rule flow. With Approve for Me on, defaults are sandboxed unless every command segment directly matches Allow or Prompt rules; those run natively (Prompt still asks). Sandbox-only requests and read-only execution stay sandboxed. Sandbox public destinations pause for exact approval; private/local destinations remain blocked. Use `temporary_home=true` only for a foreground sandboxed command that needs an empty writable disposable HOME; it requires Approve for Me, is deleted after the command, leaves the host home readable by absolute path, and omits normal user config/credentials. Foreground sandbox and Native Agent commands that stop at a high-confidence interactive prompt are terminated after a short inactivity grace; background commands remain observable with get_terminal_output. Submit the simplest review-friendly command: AgentLink already disables interactive pagers consistently, so do not add `GIT_PAGER=cat`, `PAGER=cat`, or routine `--no-pager` workarounds. If the response includes `output_file`, read that file instead of re-running the command. Piped `grep`/`head`/`tail` patterns are rejected; use `output_grep`, `output_head`, or `output_tail` instead. Use `sandbox_permissions=with_additional_permissions` with `additional_permissions.network.allow_local_binding=true` and a non-empty `reason` for one exact sandboxed command that needs to start a local listener. Use `require_managed_network` for an explicitly sandboxed mediated-network request, or `require_escalated` only when execution must occur outside the sandbox; every non-default intent requires authority from a matching native command rule or fresh approval. Command rules do not bypass unseen-destination approval. Predictable Git metadata writers that cannot run in the workspace sandbox return reviewed native retry parameters before launch instead of failing on `.git` locks. A confirmed pre-launch sandbox runtime outage on an eligible default command opens a one-shot native approval card without reissuing the sandbox command; rejecting it ends recovery for that action in the current turn. Security, trust, invalid capability grants, and uncertain launch state never authorize native fallback. A recognized post-launch sandbox denial that needs native replay opens the normal one-shot human approval card with first-attempt evidence; it never retries automatically. Managed networking does not transparently carry Git-over-SSH: use HTTPS to remain sandboxed or make a separately authorized native SSH request. Outside-workspace sandbox cwd, changed sandbox preparation security, recognized missing HOME/listener capabilities, unsafe filesystem nodes in protected trees, protected snapshot drift, protected Git metadata, managed SSH/TLS/connect or proxy-unaware DNS failures, pnpm store mismatches, and pre-launch native shell startup timeouts return structured `retry_guidance` with stable codes and `automatic_retry: false`; follow its reviewed options instead of repeating the command, broadening permissions, deleting dependencies, or weakening TLS checks.",
+      "Run a command in AgentLink's managed terminal. Sequential unnamed calls automatically reuse an idle compatible terminal while isolating each command's shell mutations; overlapping implicit calls allocate separate terminals when needed. Named or explicitly targeted Native Agent terminals retain intentional persistent-shell state; sandbox commands always start fresh shells, even in named or targeted terminals. Pass non-reserved variables through `env` on each sandbox call, or combine dependent steps in one reviewed command. Sandbox PATH is host-managed: do not pass `env.PATH`; use an inline `export PATH=\"/desired/bin:$PATH\"` in each reviewed command instead. Reserved environment overrides and other preparation failures return bounded `sandbox_preparation_failed` guidance without native fallback. Explicitly targeting a formerly pooled terminal removes it from later unnamed reuse. Use `terminal_name` when a terminal should have a stable purpose-based label such as 'Dev server', 'Unit tests', or 'Build', or `terminal_id` to target a specific existing terminal. Use `background` for long-running processes and `timeout` for quick commands. A Native Agent timeout before shell command-start confirmation closes that terminal and reports a launch-stage failure instead of claiming an unknown process is still running. With Approve for Me off, default execution uses the native terminal and the normal command approval/rule flow. With Approve for Me on, defaults are sandboxed unless every command segment directly matches Allow or Prompt rules; those run natively (Prompt still asks). Sandbox-only requests and read-only execution stay sandboxed. Sandbox public destinations pause for exact approval; private/local destinations remain blocked. Use `temporary_home=true` only for a foreground sandboxed command that needs an empty writable disposable HOME; it requires Approve for Me, is deleted after the command, leaves the host home readable by absolute path, and omits normal user config/credentials. Foreground sandbox and Native Agent commands that stop at a high-confidence interactive prompt are terminated after a short inactivity grace; background commands remain observable with get_terminal_output. Submit the simplest review-friendly command: AgentLink already disables interactive pagers consistently, so do not add `GIT_PAGER=cat`, `PAGER=cat`, or routine `--no-pager` workarounds. If the response includes `output_file`, read that file instead of re-running the command. Piped `grep`/`head`/`tail` patterns are rejected; use `output_grep`, `output_head`, or `output_tail` instead. Use `sandbox_permissions=with_additional_permissions` with `additional_permissions.network.allow_local_binding=true` and a non-empty `reason` for one exact sandboxed command that needs to start a local listener. Use `require_managed_network` for an explicitly sandboxed mediated-network request, or `require_escalated` only when execution must occur outside the sandbox; every non-default intent requires authority from a matching native command rule or fresh approval. Command rules do not bypass unseen-destination approval. Predictable Git metadata writers that cannot run in the workspace sandbox return reviewed native retry parameters before launch instead of failing on `.git` locks. A confirmed pre-launch sandbox runtime outage on an eligible default command opens a one-shot native approval card without reissuing the sandbox command; rejecting it ends recovery for that action in the current turn. Security, trust, invalid capability grants, and uncertain launch state never authorize native fallback. A recognized post-launch sandbox denial that needs native replay opens the normal one-shot human approval card with first-attempt evidence; it never retries automatically. Managed networking does not transparently carry Git-over-SSH: use HTTPS to remain sandboxed or make a separately authorized native SSH request. Outside-workspace sandbox cwd, changed sandbox preparation security, recognized missing HOME/listener capabilities, unsafe filesystem nodes in protected trees, protected snapshot drift, protected Git metadata, managed SSH/TLS/connect or proxy-unaware DNS failures, pnpm store mismatches, and pre-launch native shell startup timeouts return structured `retry_guidance` with stable codes and `automatic_retry: false`; follow its reviewed options instead of repeating the command, broadening permissions, deleting dependencies, or weakening TLS checks.",
   },
   get_terminal_output: {
     label: "Read background terminal output",
@@ -256,18 +261,39 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     description:
       "Show a notification message in VS Code. Use sparingly \u2014 best for important status updates or completion of long-running tasks.",
   },
-  codebase_search: {
-    label: "Semantic code search",
-    description:
-      "Search code by meaning using the local index with lexical or vector/hybrid ranking. Eligible structured-settings secrets are redacted before excerpting, including keyword fallback; invalid content is withheld. Excerpts are capped at 4,000 source characters plus a truncation marker, with counts. Only works within the current workspace folders, not external repositories or other windows. For external paths, use read_file/list_files without query or regex search_files (semantic=false), subject to path permissions.",
-  },
 
   // --- Agent coordination ---
 
   respond_to_background_question: {
     label: "Answer background agent",
     description:
-      "Answer a pending structured question from a background agent. Use only after receiving a background-agent question interjection, and pass its exact request_id plus a complete answer map keyed by question ID. Answer from the current coordinator context when possible. If human judgment or missing human-only information is required, call ask_user first, then pass the resulting answers here. This resolves the background agent's blocked ask_user call; ordinary assistant text does not.",
+      "Answer a pending structured question from a background agent. Use only after receiving a background-agent question interjection, and pass its exact request_id plus a complete answer map keyed by question ID. Answer from the current coordinator context when possible. If human judgment or missing human-only information is required, call ask_user first, then pass the resulting answers here. This resolves the background agent's blocked ask_user call; ordinary assistant text does not. Answers cannot change ownedPaths or forbiddenPaths fixed at spawn. Handle additional files in the coordinator or spawn a replacement with the required scope.",
+  },
+
+  detach_background_agent: {
+    label: "Detach background agent",
+    description:
+      "Detach an authorized child subtree so it becomes an independent root and is not cancelled when its former parent completes.",
+  },
+  start_fleet_workflow: {
+    label: "Start fleet workflow",
+    description:
+      "Start a structured diff review, browser verification, isolated best-of-N run, or persistent goal using the normal fleet scheduler and policies.",
+  },
+  schedule_fleet_workflow: {
+    label: "Schedule fleet workflow",
+    description:
+      "Persist a recurring or fleet-event-triggered workflow automation.",
+  },
+  get_fleet_workflow_result: {
+    label: "Get fleet workflow result",
+    description:
+      "Wait for all workflow candidates, collect structured evidence, and select a best-of-N winner when applicable.",
+  },
+  manage_fleet_automations: {
+    label: "Manage fleet automations",
+    description:
+      "List, inspect history, enable, disable, or delete persisted fleet automations.",
   },
 
   // --- Read-only orchestration ---
@@ -275,7 +301,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   compose: {
     label: "Compose read-only tools",
     description:
-      "Use for 4+ related read-only calls with reduced output. Child results stay out of provider history. Use direct or ordinary parallel calls for one-offs, full results, or exploration where each result determines the next action. Return reduced JSON, not raw batches. JavaScript exposes synchronous tool(name, input), toolAllSettled([...]), and fail-fast toolAll([...]); no Node APIs, imports, filesystem/network globals, eval, or Function. Use toolAllSettled for independent reads: missing files and path-approval errors retain siblings. Use toolAll only when every result is required. Use discovered paths, not guessed filenames, and preserve per-child errors in your summary. Example: const paths = tool('list_files', { path: 'src', pattern: '*.ts' }).entries.split('\\n').filter(Boolean).slice(0, 8).map(entry => 'src/' + entry); const results = toolAllSettled(paths.map(path => ({ name: 'get_context', input: { path, limit: 60 } }))); return results.map((r, i) => r.status === 'fulfilled' ? { path: paths[i], lines: r.value.total_lines, errors: r.value.diagnostics?.errors ?? 0 } : { path: paths[i], error: r.reason });",
+      "Use for 4+ related read-only calls with reduced output. Child results stay out of provider history. Use direct or ordinary parallel calls for one-offs, full results, or exploration where each result determines the next action. Return reduced JSON, not raw batches. JavaScript exposes synchronous tool(name, input), toolAllSettled([...]), and fail-fast toolAll([...]); no Node APIs, imports, filesystem/network globals, eval, or Function. Use toolAllSettled for independent reads: missing files and path-approval errors retain siblings. Use toolAll only when every result is required. Use discovered paths, not guessed filenames, and preserve per-child errors in your summary. Example: const paths = tool('list_files', { path: 'src', pattern: '*.ts' }).entries.split('\\n').filter(Boolean).slice(0, 8).map(entry => 'src/' + entry); const results = toolAllSettled(paths.map(path => ({ name: 'read_file', input: { path, view: 'context', limit: 60 } }))); return results.map((r, i) => r.status === 'fulfilled' ? { path: paths[i], lines: r.value.total_lines, errors: r.value.diagnostics?.errors ?? 0 } : { path: paths[i], error: r.reason });",
   },
 
   // --- Dev-only tools ---

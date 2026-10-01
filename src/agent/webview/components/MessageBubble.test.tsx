@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/preact";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { agentMessagesToChatMessages, initialState, reducer } from "../App";
@@ -14,6 +15,10 @@ import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import { MessageBubble } from "./MessageBubble";
 
 const TOOL_GROUP_SETTLE_MS_FOR_TEST = 350;
+
+vi.mock("./mermaidRenderer", () => ({
+  renderMermaid: vi.fn(async () => "<svg>diagram</svg>"),
+}));
 
 afterEach(() => {
   vi.useRealTimers();
@@ -214,7 +219,7 @@ describe("MessageBubble Activity grouping", () => {
     const { container, rerender } = render(
       <MessageBubble message={message} streaming={true} />,
     );
-    expect(container.querySelectorAll(".tool-group-block")).toHaveLength(2);
+    expect(container.querySelectorAll(".tool-group-block")).toHaveLength(0);
     expect(screen.getByRole("button", { name: /load_skill/i })).toBeTruthy();
     rerender(
       <MessageBubble
@@ -352,7 +357,7 @@ describe("MessageBubble Activity grouping", () => {
       <MessageBubble message={message} streaming={true} />,
     );
     const activity = screen.getByRole("button", {
-      name: /activity 3 thinking steps · 4 tool calls · explored 3 files, 1 search/i,
+      name: /activity 3 thinking steps · 4 tool calls · explored 3 files · 1 other call/i,
     });
     expect(activity.getAttribute("aria-expanded")).toBe("false");
     expect(
@@ -371,11 +376,14 @@ describe("MessageBubble Activity grouping", () => {
       container.querySelectorAll(".activity-group-children .thinking-block"),
     ).toHaveLength(3);
     expect(
-      container.querySelectorAll(".activity-group-children .tool-group-block"),
+      container.querySelectorAll(".activity-group-children .tool-call-block"),
     ).toHaveLength(4);
     expect(
-      container.querySelector(".assistant-blocks > .tool-group-block"),
-    ).toBeNull();
+      container.querySelectorAll(".activity-group-children .tool-group-block"),
+    ).toHaveLength(0);
+    expect(
+      container.querySelectorAll(".assistant-blocks > .tool-call-block"),
+    ).toHaveLength(1);
     fireEvent.click(screen.getAllByRole("button", { name: "Thinking" })[0]);
     expect(screen.getByText("Reasoning 0")).toBeTruthy();
   });
@@ -606,7 +614,7 @@ describe("MessageBubble slash-command rendering", () => {
     );
     expect(
       imagePreviews?.previousElementSibling?.classList.contains(
-        "tool-group-block",
+        "tool-call-block",
       ),
     ).toBe(true);
     expect(
@@ -1337,7 +1345,7 @@ describe("MessageBubble slash-command rendering", () => {
     );
   });
 
-  it("wires final marker special block popouts to the normal special block handler", () => {
+  it("wires final marker special block popouts to the normal special block handler", async () => {
     const onOpenSpecialBlockPanel = vi.fn();
     const message: ChatMessage = {
       id: "assistant-final-special-block",
@@ -1369,6 +1377,11 @@ describe("MessageBubble slash-command rendering", () => {
     expect(onOpenSpecialBlockPanel).toHaveBeenCalledWith({
       kind: "mermaid",
       source: "graph TD\n  A --> B",
+    });
+    await waitFor(() => {
+      expect(
+        container.querySelector(".final-marker-summary .mermaid-render svg"),
+      ).toBeTruthy();
     });
   });
 
@@ -1474,16 +1487,14 @@ describe("MessageBubble slash-command rendering", () => {
       <MessageBubble message={assistant!} streaming={false} />,
     );
     const blocks = container.querySelector(".assistant-blocks");
-    const toolGroup = blocks?.children[0];
+    const toolCall = blocks?.children[0];
     const textBlock = blocks?.children[1];
 
-    expect(
-      screen.getByRole("button", { name: /tools edited 1 file/i }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^apply_diff/i })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /1 other call/i })).toBeNull();
-    expect(toolGroup?.classList.contains("tool-group-block")).toBe(true);
+    expect(toolCall?.classList.contains("tool-call-block")).toBe(true);
     expect(textBlock?.classList.contains("assistant-content")).toBe(true);
-    expect(toolGroup?.nextElementSibling).toBe(textBlock);
+    expect(toolCall?.nextElementSibling).toBe(textBlock);
   });
 
   it("renders restored successful tools collapsed immediately on mount and tab remount", () => {
@@ -1517,11 +1528,9 @@ describe("MessageBubble slash-command rendering", () => {
       const { container, unmount } = render(
         <MessageBubble message={message} streaming={true} />,
       );
-      const group = screen.getByRole("button", {
-        name: /tools explored 1 file/i,
-      });
-      expect(group.getAttribute("aria-expanded")).toBe("false");
-      expect(screen.queryByRole("button", { name: /read_file/i })).toBeNull();
+      const completed = screen.getByRole("button", { name: /^read_file/i });
+      expect(completed.getAttribute("aria-expanded")).toBe("false");
+      expect(container.querySelector(".tool-group-block")).toBeNull();
       expect(
         screen.getByRole("button", { name: "Command details" }),
       ).toBeTruthy();
@@ -1829,9 +1838,6 @@ describe("MessageBubble slash-command rendering", () => {
       />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: /1 always-allow offer/i }),
-    );
     fireEvent.click(screen.getByRole("button", { name: /notion__search/i }));
     expect(screen.getByText("Remember this approval")).toBeTruthy();
 

@@ -56,12 +56,19 @@ describe("foreground/background capability parity contract", () => {
     const unrestricted = getAgentTools(reviewMode, mcpTools, true).map(
       (tool) => tool.name,
     );
-    const reviewOnly = getAgentTools(reviewMode, mcpTools, true, "review").map(
-      (tool) => tool.name,
-    );
+    const reviewTools = getAgentTools(reviewMode, mcpTools, true, "review");
+    const reviewOnly = reviewTools.map((tool) => tool.name);
     expect(unrestricted).toContain("write_file");
     expect(reviewOnly).not.toContain("write_file");
     expect(reviewOnly).not.toContain("example__lookup");
-    expect(reviewOnly).toContain("get_context");
+    const readFile = reviewTools.find((tool) => tool.name === "read_file");
+    expect(readFile).toBeDefined();
+    expect(
+      (
+        readFile!.input_schema as {
+          properties?: { view?: { enum?: string[] } };
+        }
+      ).properties?.view?.enum,
+    ).toContain("context");
   });
 });

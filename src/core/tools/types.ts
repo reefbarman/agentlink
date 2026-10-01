@@ -30,6 +30,8 @@ export interface AgentToolListRequest {
   mcpToolDefs?: CoreToolDefinition[];
   /** Immutable startup/configuration gate for foreground Compose disclosure. */
   composeEnabled?: boolean;
+  /** Whether this immutable request advertises deferred local rules to load. */
+  hasDeferredRules?: boolean;
   /** Native AgentLink web tools exposed for this immutable request snapshot. */
   nativeWebToolKinds?: readonly import("@agentlink/core/web-access").CoreWebToolKind[];
   isBackground?: boolean;

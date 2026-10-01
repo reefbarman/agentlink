@@ -563,6 +563,7 @@ function classifyActionFamily(
         break;
       case "workspace_mutation":
       case "git_mutation":
+      case "git_workflow":
       case "workspace_redirection":
         families.add("mutation");
         break;

@@ -53,7 +53,10 @@ import {
 import { ChatHeader } from "../../agent/webview/components/ChatHeader";
 import { DesktopSidebar } from "./DesktopSidebar";
 import { DesktopRemotePane } from "./DesktopRemotePane";
-import type { DesktopMode } from "../../shared/desktopBridge";
+import type {
+  DesktopMode,
+  DesktopQuickAskSubmission,
+} from "../../shared/desktopBridge";
 import { DesktopMoreActions } from "./DesktopMoreActions";
 import { LiveLinkIndicator } from "../../agent/webview/components/LiveLinkIndicator";
 import { ChatView } from "../../agent/webview/components/ChatView";
@@ -1012,6 +1015,8 @@ interface BrowserGatewayAppProps {
   workspaceName: string;
   routeByInstance?: boolean;
   askAgentOnly?: boolean;
+  /** Desktop quick-ask panel: renders only the composer and hands sends to the main window. */
+  quickAsk?: boolean;
   workspaceOnly?: boolean;
   browserShell?: boolean;
   externalBrowserUnavailable?: boolean;
@@ -1325,6 +1330,7 @@ export function BrowserGatewayApp({
   workspaceName: _workspaceName,
   routeByInstance = false,
   askAgentOnly = false,
+  quickAsk = false,
   workspaceOnly = false,
   browserShell = false,
   externalBrowserUnavailable = false,
@@ -1630,7 +1636,10 @@ export function BrowserGatewayApp({
           ? (next.session.foreground?.sessionId ?? null)
           : null;
       const expectedAskAgentSessionId = askAgentSessionTargetRef.current;
+      // The quick-ask panel never targets a session itself; it follows
+      // whichever Ask Agent chat is current so model/thinking stay in sync.
       if (
+        !quickAsk &&
         incomingAskAgentSessionId &&
         expectedAskAgentSessionId &&
         incomingAskAgentSessionId !== expectedAskAgentSessionId
@@ -1702,26 +1711,27 @@ export function BrowserGatewayApp({
         currentLogicalSelection?.instanceId === currentSelectedTabId
           ? currentLogicalSelection.sessionId
           : (selectedSnapshot?.session.foreground?.sessionId ?? null);
-      void notificationTrackerRef.current.process({
-        scopeKey: `${tabId}:${normalizedNext.session.foreground?.sessionId ?? "none"}`,
-        snapshot: {
-          approval: normalizedNext.ui.approval,
-          question:
-            normalizedNext.session.foreground?.questionRequest ??
-            normalizedNext.ui.question,
-          foreground: normalizedNext.session.foreground,
-          background: normalizedNext.background,
-        },
-        preference: notificationPreferenceRef.current,
-        selectedSessionId,
-        browser: {
-          isDocumentVisible: () =>
-            document.visibilityState === "visible" &&
-            surfaceVisibleRef.current &&
-            !window.frameElement?.hasAttribute("hidden"),
-          show: showBrowserGatewayNotification,
-        },
-      });
+      if (!quickAsk)
+        void notificationTrackerRef.current.process({
+          scopeKey: `${tabId}:${normalizedNext.session.foreground?.sessionId ?? "none"}`,
+          snapshot: {
+            approval: normalizedNext.ui.approval,
+            question:
+              normalizedNext.session.foreground?.questionRequest ??
+              normalizedNext.ui.question,
+            foreground: normalizedNext.session.foreground,
+            background: normalizedNext.background,
+          },
+          preference: notificationPreferenceRef.current,
+          selectedSessionId,
+          browser: {
+            isDocumentVisible: () =>
+              document.visibilityState === "visible" &&
+              surfaceVisibleRef.current &&
+              !window.frameElement?.hasAttribute("hidden"),
+            show: showBrowserGatewayNotification,
+          },
+        });
       if (
         selectedTabIdRef.current !== tabId ||
         selectedTabGenerationRef.current !== generation
@@ -1768,7 +1778,7 @@ export function BrowserGatewayApp({
       );
       return true;
     },
-    [],
+    [quickAsk],
   );
   const commitAskAgentSnapshot = useCallback(
     (next: GatewaySnapshot): boolean =>
@@ -1779,6 +1789,66 @@ export function BrowserGatewayApp({
       ),
     [commitSnapshot],
   );
+  // Main desktop window: quick-ask panel messages start a new Ask Agent chat.
+  // The handler is reassigned every render so it never uses stale state.
+  const quickAskSubmissionHandlerRef = useRef<
+    (submission: DesktopQuickAskSubmission) => void
+  >(() => undefined);
+  const [pendingQuickAskSend, setPendingQuickAskSend] =
+    useState<DesktopQuickAskSubmission | null>(null);
+  useEffect(() => {
+    if (quickAsk || !desktopShell?.onQuickAskSubmission) return;
+    return desktopShell.onQuickAskSubmission((submission) =>
+      quickAskSubmissionHandlerRef.current(submission),
+    );
+  }, [quickAsk, desktopShell]);
+  useEffect(() => {
+    if (!pendingQuickAskSend) return;
+    setPendingQuickAskSend(null);
+    // Runs a render after the new session is committed, so the send uses
+    // that session's model and thinking level rather than the previous chat's.
+    void handleSend(
+      pendingQuickAskSend.text,
+      [],
+      pendingQuickAskSend.displayText,
+      pendingQuickAskSend.slashCommandLabel,
+      pendingQuickAskSend.media,
+    );
+  }, [pendingQuickAskSend]);
+  // Quick-ask panel: focus and refresh on show, Esc to dismiss.
+  useEffect(() => {
+    if (!quickAsk || !desktopShell) return;
+    document.documentElement.classList.add("quick-ask-document");
+    const refreshSession = (): void => {
+      void fetch("/api/ask-agent/session", {
+        credentials: "same-origin",
+        headers: { Authorization: `Bearer ${authToken}` },
+      })
+        .then(async (response) => {
+          if (!response.ok) return;
+          const next = await readGatewaySnapshotResponse(response);
+          commitAskAgentSnapshot(next.snapshot);
+        })
+        .catch(() => undefined);
+    };
+    const unsubscribe = desktopShell.onQuickAskShown?.(() => {
+      document
+        .querySelector<HTMLTextAreaElement>(".quick-ask-panel textarea")
+        ?.focus();
+      refreshSession();
+    });
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape" && !event.defaultPrevented) {
+        desktopShell.dismissQuickAsk?.();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      unsubscribe?.();
+      window.removeEventListener("keydown", onKeyDown);
+      document.documentElement.classList.remove("quick-ask-document");
+    };
+  }, [quickAsk, desktopShell, authToken, commitAskAgentSnapshot]);
   const [questionContextMode, setQuestionContextMode] = useState<{
     requestId: string;
     state: QuestionComposerState;
@@ -7752,6 +7822,76 @@ export function BrowserGatewayApp({
     },
   };
 
+  quickAskSubmissionHandlerRef.current = (submission) => {
+    selectSurfaceMode("ask");
+    const started = startAskAgentSession();
+    void started.ready.then(() => setPendingQuickAskSend(submission));
+  };
+
+  if (quickAsk) {
+    const submitQuickAsk = (
+      text: string,
+      _attachments: string[],
+      displayText?: string,
+      slashCommandLabel?: string,
+      media?: ComposerMedia[],
+    ): void => {
+      void (async () => {
+        // Model changes made in the panel must land before the main window
+        // creates the new chat, since new chats inherit the Ask Agent model.
+        const pendingModelSelection = pendingModelSelectionRef.current;
+        if (pendingModelSelection && !(await pendingModelSelection)) return;
+        desktopShell?.submitQuickAsk?.({
+          text,
+          ...(displayText !== undefined ? { displayText } : {}),
+          ...(slashCommandLabel ? { slashCommandLabel } : {}),
+          ...(media && media.length > 0 ? { media } : {}),
+        });
+      })();
+    };
+    return (
+      <div
+        class="browser-shell browser-shell-consumer browser-shell-desktop quick-ask-panel"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) {
+            desktopShell?.dismissQuickAsk?.();
+          }
+        }}
+      >
+        <div class="browser-chat-composer">
+          <InputArea
+            onSend={submitQuickAsk}
+            placeholder="Ask AgentLink anything"
+            onStop={() => undefined}
+            streaming={false}
+            submitOnEnter={true}
+            reasoningEffort={effectiveReasoningEffort}
+            onSetReasoningEffort={handleSetReasoningEffort}
+            onExportTranscript={() => undefined}
+            hasMessages={false}
+            vscodeApi={browserVscodeApi}
+            injection={null}
+            onInjectionConsumed={() => undefined}
+            modes={[]}
+            currentMode="ask"
+            currentModel={foreground?.model ?? "ask-agent-unavailable"}
+            availableModels={composerModels}
+            onSelectModel={handleSelectModel}
+            allowAttachments={false}
+            allowMediaPaste={true}
+            allowUriAttachments={false}
+            allowThinkingToggle={true}
+            allowExportTranscript={false}
+            allowFileMentions={false}
+            onComposerEvent={(event, fields) =>
+              logAskAgentBrowserEvent(`quick-ask.composer.${event}`, fields)
+            }
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       class={`browser-shell${isAskAgentSelected ? " browser-shell-consumer" : ""}${consumerShell ? " browser-shell-desktop" : ""}${browserShell ? " browser-shell-web" : ""}${consumerShell && desktopSidebarOpen ? " desktop-sidebar-open" : ""}`}
@@ -7886,6 +8026,20 @@ export function BrowserGatewayApp({
                   >
                     <i class="codicon codicon-history" aria-hidden="true" />
                     Manage chats
+                  </button>
+                )}
+                {desktopShell?.openSettings && (
+                  <button
+                    class="desktop-more-item"
+                    type="button"
+                    title="Settings"
+                    onClick={() => desktopShell.openSettings?.()}
+                  >
+                    <i
+                      class="codicon codicon-settings-gear"
+                      aria-hidden="true"
+                    />
+                    Settings…
                   </button>
                 )}
               </DesktopMoreActions>

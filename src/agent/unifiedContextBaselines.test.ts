@@ -199,7 +199,18 @@ async function buildRuntimeMeasurements() {
         undefined,
         ["search", "fetch"],
         true,
-      ).map((tool) => tool.name),
+        true,
+      ).flatMap((tool) => {
+        // get_context is defined through read_file's advertised context view.
+        const views = (
+          tool.input_schema as {
+            properties?: { view?: { enum?: string[] } };
+          }
+        ).properties?.view?.enum;
+        return tool.name === "read_file" && views?.includes("context")
+          ? [tool.name, "get_context"]
+          : [tool.name];
+      }),
     ),
     TODO_TOOL_NAME,
   ]);
@@ -637,10 +648,7 @@ describe("unified context Stage 0 baselines", () => {
     ).toBe(true);
 
     expect(retrievalFixtures.surfaces).toEqual([
-      "codebase_search",
-      "search_files_semantic",
-      "list_files_query",
-      "read_file_query",
+      "search_files_query",
       "memory",
       "skill_rule",
       "native_tool",

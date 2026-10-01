@@ -5442,6 +5442,10 @@ describe("AgentSessionManager background agents", () => {
     expect(prompt).toContain("<background_agent_question");
     expect(prompt).toContain("respond_to_background_question");
     expect(prompt).toContain("Which NUnit test file should I own?");
+    expect(prompt).toContain(
+      "Answers cannot change the child's ownedPaths or forbiddenPaths",
+    );
+    expect(prompt).toContain("spawn a replacement with the required scope");
     expect(displayText).toContain("review task");
     const coordination = setPendingInterjection.mock.calls[0][9];
     expect(coordination).toEqual({
@@ -5487,9 +5491,12 @@ describe("AgentSessionManager background agents", () => {
       },
       context: { sessionId: foreground.id },
     });
-    expect(responseResult.content[0]).toMatchObject({
-      type: "text",
-      text: '{"accepted":true}',
+    expect(
+      JSON.parse((responseResult.content[0] as { text: string }).text),
+    ).toMatchObject({
+      accepted: true,
+      ownershipChanged: false,
+      guidance: expect.stringContaining("do not change the child's ownedPaths"),
     });
 
     const answerResult = await backgroundAnswer;

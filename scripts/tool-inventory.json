@@ -66,15 +66,6 @@
       "definitionSource": "registry-schema"
     },
     {
-      "name": "codebase_search",
-      "parameters": ["exclude_globs", "limit", "path", "query"],
-      "cluster": "search",
-      "sideEffect": "read",
-      "devOnly": false,
-      "availability": "mode-group",
-      "definitionSource": "registry-schema"
-    },
-    {
       "name": "compose",
       "parameters": ["description", "script"],
       "cluster": "read",
@@ -454,7 +445,6 @@
         "include_ignored",
         "path",
         "pattern",
-        "query",
         "recursive"
       ],
       "cluster": "read",
@@ -572,11 +562,13 @@
         "anchor_offset",
         "anchor_regex",
         "auto_follow_suggestion",
+        "dedupe_unchanged_content",
         "include_symbols",
         "limit",
         "offset",
         "path",
-        "query"
+        "refresh",
+        "view"
       ],
       "cluster": "read",
       "sideEffect": "read",
@@ -646,6 +638,15 @@
       "definitionSource": "registry-schema"
     },
     {
+      "name": "save_session_image",
+      "parameters": ["image_id", "overwrite", "path"],
+      "cluster": "media",
+      "sideEffect": "write",
+      "devOnly": false,
+      "availability": "mode-group",
+      "definitionSource": "registry-schema"
+    },
+    {
       "name": "schedule_fleet_workflow",
       "parameters": ["eventType", "everyMinutes", "name", "workflow"],
       "cluster": "background",
@@ -661,14 +662,15 @@
         "context",
         "context_after",
         "context_before",
+        "exclude_globs",
         "file_pattern",
         "max_results",
         "multiline",
         "offset",
         "output_mode",
         "path",
-        "regex",
-        "semantic"
+        "query",
+        "regex"
       ],
       "cluster": "search",
       "sideEffect": "read",
@@ -840,5 +842,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "556769d7a2a60a64fb5f4aa26f523b4f839873a1154b4267e23ecec07ab8bee7"
+  "revision": "df846e39ad30b9492f991866514122bc9342abd3b09282918d550d378fb707ab"
 }

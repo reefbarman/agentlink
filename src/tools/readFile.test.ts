@@ -196,68 +196,25 @@ describe("readFile suggestion-follow helpers", () => {
   });
 });
 
-describe("read_file semantic query metadata", () => {
+describe("read_file retired query parameter", () => {
   const approvalManager = {
     isPathTrusted: vi.fn(() => true),
   } as unknown as ApprovalManager;
   const approvalPanel = {} as ApprovalPanelProvider;
 
-  it("reports not_found when semantic lookup falls back to the default offset", async () => {
-    const workspaceRoot = await makeWorkspace();
-    const filePath = path.join(workspaceRoot, "output.txt");
-    await fs.writeFile(filePath, "first\nsecond\nthird");
-
+  it("rejects the retired query parameter", async () => {
     const result = await handleReadFile(
-      {
-        path: filePath,
-        query: "distinctive missing text",
-        limit: 2,
-        include_symbols: false,
-      },
+      { path: "/missing/file.txt", query: "unused query" } as never,
       approvalManager,
       approvalPanel,
-      "semantic-session",
+      "retired-read-query-session",
       [],
       enrichmentProvider,
     );
-    const item = result.content[0];
-    const payload = JSON.parse(item!.type === "text" ? item!.text : "{}");
 
-    expect(result.data).toEqual(payload);
-    expect(result.isError).toBe(false);
-    expect(payload.content).toBe("1 | first\n2 | second");
-    expect(payload.semantic_match).toEqual({
-      query: "distinctive missing text",
-      status: "not_found",
-      fallback: "default_offset",
-      hint: "Use anchor or anchor_regex to locate exact text in this file.",
-    });
-  });
-
-  it("does not report semantic failure when an explicit offset bypasses lookup", async () => {
-    const workspaceRoot = await makeWorkspace();
-    const filePath = path.join(workspaceRoot, "output.txt");
-    await fs.writeFile(filePath, "first\nsecond\nthird");
-
-    const result = await handleReadFile(
-      {
-        path: filePath,
-        query: "unused query",
-        offset: 2,
-        limit: 1,
-        include_symbols: false,
-      },
-      approvalManager,
-      approvalPanel,
-      "semantic-session",
-      [],
-      enrichmentProvider,
+    expect(result.error?.message).toBe(
+      "Unsupported parameter 'query' for read_file.",
     );
-    const item = result.content[0];
-    const payload = JSON.parse(item!.type === "text" ? item!.text : "{}");
-
-    expect(payload.content).toBe("2 | second");
-    expect(payload.semantic_match).toBeUndefined();
   });
 });
 
@@ -354,7 +311,7 @@ describe("read_file structured secret redaction", () => {
     }
   });
 
-  it("does not run raw semantic lookup for eligible config content", async () => {
+  it("redacts eligible config content", async () => {
     const workspaceRoot = await makeWorkspace();
     const filePath = path.join(workspaceRoot, "settings.json");
     await fs.writeFile(
@@ -365,7 +322,6 @@ describe("read_file structured secret redaction", () => {
     const result = await handleReadFile(
       {
         path: filePath,
-        query: "semantic-only-secret",
         include_symbols: false,
       },
       approvalManager,
@@ -377,10 +333,6 @@ describe("read_file structured secret redaction", () => {
     const item = result.content[0];
     const payload = JSON.parse(item!.type === "text" ? item!.text : "{}");
 
-    expect(payload.semantic_match).toEqual({
-      query: "semantic-only-secret",
-      status: "not_run_structured_redaction",
-    });
     expect(payload.content).not.toContain("semantic-only-secret");
   });
 

@@ -2324,11 +2324,11 @@ describe("webview App reducer background agent launch blocks", () => {
       },
     ] as unknown[]);
 
-    expect(restored).toHaveLength(3);
+    expect(restored).toHaveLength(2);
     expect(restored[0]?.role).toBe("user");
 
     expect(restored[1]?.role).toBe("assistant");
-    expect(restored[1]?.blocks).toEqual([
+    expect(restored[1]?.blocks.slice(0, 2)).toEqual([
       {
         type: "tool_call",
         id: "bg-spawn-tool",
@@ -2359,8 +2359,7 @@ describe("webview App reducer background agent launch blocks", () => {
       },
     ]);
 
-    expect(restored[2]?.role).toBe("assistant");
-    expect(restored[2]?.blocks).toEqual([
+    expect(restored[1]?.blocks.slice(2)).toEqual([
       expect.objectContaining({
         type: "tool_call",
         id: "bg-result-tool",

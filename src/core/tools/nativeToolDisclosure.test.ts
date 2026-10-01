@@ -58,21 +58,22 @@ describe("native tool disclosure snapshots", () => {
     expect(snapshot.dormantToolNames).toEqual(["show_notification"]);
   });
 
-  it("keeps primary indexed retrieval tools inline", () => {
+  it("keeps primary retrieval inline and defers module detail lookup", () => {
     const snapshot = createNativeToolDisclosureSnapshot([
-      definition("codebase_search"),
+      definition("search_files"),
       definition("get_repo_map"),
       definition("get_module_neighbors"),
       definition("search_files"),
     ]);
 
     expect(snapshot.inlineTools.map((tool) => tool.name)).toEqual([
-      "codebase_search",
+      "search_files",
       "get_repo_map",
-      "get_module_neighbors",
       "search_files",
     ]);
-    expect(snapshot.deferredTools).toEqual([]);
+    expect(snapshot.deferredTools.map((tool) => tool.name)).toEqual([
+      "get_module_neighbors",
+    ]);
   });
 
   it("advertises the exact deferred catalog through the discovery bridge", () => {

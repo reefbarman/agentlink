@@ -4,6 +4,7 @@ import * as path from "path";
 import type {
   PathAccessProvider,
   SearchFilesParams,
+  SemanticSearchProvider,
   WorkspaceFileProvider,
 } from "../core/capabilities/readSearch.js";
 import { getRelativePath, resolveAndValidatePath } from "../util/paths.js";
@@ -31,12 +32,12 @@ import {
   jsonResult,
   type ToolResult,
 } from "@agentlink/protocol/tool-result";
-import type { SemanticQueryOptions } from "../services/semanticSearch.js";
+import { getSearchInputError } from "../core/tools/searchInputValidation.js";
 
 export interface SearchFilesProviders {
   workspaceFileProvider: WorkspaceFileProvider;
   pathAccessProvider: PathAccessProvider;
-  semanticQueryOptions?: SemanticQueryOptions;
+  semanticSearchProvider?: SemanticSearchProvider;
 }
 
 function formatResultPath(filePath: string, searchDir: string): string {
@@ -259,8 +260,17 @@ export async function handleSearchFiles(
   providers = createLegacySearchFilesProviders(approvalManager, approvalPanel),
 ): Promise<ToolResult> {
   try {
+    const inputError = getSearchInputError("search_files", params);
+    if (inputError)
+      return errorResult(inputError, { status: "invalid_search_input" });
     const { absolutePath: resolvedPath, inWorkspace } =
       providers.workspaceFileProvider.resolvePath(params.path);
+    if (params.query !== undefined && !inWorkspace) {
+      return errorResult(
+        "Indexed query search is restricted to workspace folders. Use regex for external paths.",
+        { path: params.path },
+      );
+    }
 
     const access = await providers.pathAccessProvider.ensureAccess({
       absolutePath: resolvedPath,
@@ -296,28 +306,53 @@ export async function handleSearchFiles(
       return errorResult("path does not exist", { path: params.path });
     }
 
-    // Semantic search is handled separately
-    if (params.semantic) {
-      const { semanticSearch } = await import("../services/semanticSearch.js");
-      return semanticSearch(
-        resolvedPath,
-        params.regex,
-        params.max_results,
-        undefined,
-        {
-          exactFile: pathIsFile,
-          ...providers.semanticQueryOptions,
-        },
+    if (params.query !== undefined) {
+      if (!providers.semanticSearchProvider) {
+        return errorResult(
+          "Indexed query search is unavailable on this surface.",
+        );
+      }
+      const result = await providers.semanticSearchProvider.search({
+        query: params.query,
+        path: resolvedPath,
+        exactFile: pathIsFile,
+        limit: Math.max(1, Math.min(300, Math.trunc(params.max_results ?? 10))),
+        exclude_globs: params.exclude_globs,
+      });
+      const ignored = [
+        "file_pattern",
+        "case_insensitive",
+        "multiline",
+        "context",
+        "context_before",
+        "context_after",
+        "output_mode",
+        "offset",
+      ].filter((key) => Object.hasOwn(params, key));
+      const output = jsonResult(result.payload, true);
+      if (result.isError) output.isError = true;
+      if (result.error) output.error = result.error;
+      return withWarning(
+        output,
+        ignored.length
+          ? `Ignored regex-only parameters in query mode: ${ignored.join(", ")}`
+          : undefined,
       );
     }
 
-    const warning =
-      pathIsFile && params.file_pattern
-        ? "Ignored file_pattern because path already scopes the search to a single file"
-        : undefined;
-    const effectiveParams = warning
-      ? { ...params, file_pattern: undefined }
-      : params;
+    const warnings = [];
+    if (pathIsFile && params.file_pattern)
+      warnings.push(
+        "Ignored file_pattern because path already scopes the search to a single file",
+      );
+    if (params.exclude_globs !== undefined)
+      warnings.push("Ignored query-only exclude_globs in regex mode");
+    const warning = warnings.length ? warnings.join("; ") : undefined;
+    const effectiveParams = {
+      ...params,
+      regex: params.regex!,
+      ...(pathIsFile ? { file_pattern: undefined } : {}),
+    };
 
     const maxResults = effectiveParams.max_results ?? DEFAULT_MAX_RESULTS;
     const outputMode = effectiveParams.output_mode ?? "content";
@@ -355,7 +390,7 @@ export async function handleSearchFiles(
     const contextBefore = params.context_before ?? params.context ?? 1;
     const contextAfter = params.context_after ?? params.context ?? 1;
     const offset = params.offset ?? 0;
-    const sanitized = sanitizeRegex(params.regex);
+    const sanitized = sanitizeRegex(params.regex!);
     const args = ["--json", "-e", sanitized, "--no-messages"];
 
     // Use asymmetric -B/-A when they differ, symmetric -C when equal
@@ -395,7 +430,7 @@ export async function handleSearchFiles(
     } catch (error) {
       // Ripgrep error — may be invalid regex syntax etc.
       const message = error instanceof Error ? error.message : String(error);
-      const hint = getEscapingHint(params.regex);
+      const hint = getEscapingHint(params.regex!);
       return errorResult(message, {
         regex: params.regex,
         ...(hint && { hint }),
@@ -538,7 +573,7 @@ async function searchFilesOnly(
     offset?: number;
   },
 ): Promise<ToolResult> {
-  const sanitized = sanitizeRegex(params.regex);
+  const sanitized = sanitizeRegex(params.regex!);
   const args = ["--files-with-matches", "-e", sanitized, "--no-messages"];
 
   if (params.case_insensitive) args.push("--ignore-case");
@@ -559,7 +594,7 @@ async function searchFilesOnly(
     output = await execRipgrepSearch(rgPath, args, { cwd: searchDir });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const hint = getEscapingHint(params.regex);
+    const hint = getEscapingHint(params.regex!);
     return errorResult(message, {
       regex: params.regex,
       ...(hint && { hint }),
@@ -598,7 +633,7 @@ async function searchCount(
     offset?: number;
   },
 ): Promise<ToolResult> {
-  const sanitized = sanitizeRegex(params.regex);
+  const sanitized = sanitizeRegex(params.regex!);
   const args = ["--count", "--with-filename", "-e", sanitized, "--no-messages"];
 
   if (params.case_insensitive) args.push("--ignore-case");
@@ -619,7 +654,7 @@ async function searchCount(
     output = await execRipgrepSearch(rgPath, args, { cwd: searchDir });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const hint = getEscapingHint(params.regex);
+    const hint = getEscapingHint(params.regex!);
     return errorResult(message, {
       regex: params.regex,
       ...(hint && { hint }),

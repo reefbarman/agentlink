@@ -1539,20 +1539,59 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     expect(provider.supportsHostedTools("gpt-6-astra")).toBe(true);
   });
 
-  it("disables hosted tools only for resolved OAuth Astra", async () => {
-    const oauthProvider = new CodexProvider(makeAuthManager() as never);
-    await oauthProvider.isAuthenticated();
-    expect(oauthProvider.supportsHostedTools("gpt-6-astra")).toBe(false);
-    expect(oauthProvider.supportsHostedTools("gpt-5.6-sol")).toBe(true);
+  it.each([
+    "gpt-6-astra",
+    "gpt-6.1-sol",
+    "gpt-6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+  ])(
+    "allows hosted fallback for %s after resolving OAuth auth",
+    async (model) => {
+      const provider = new CodexProvider(makeAuthManager() as never);
+      await provider.isAuthenticated();
+      expect(provider.supportsHostedTools(model)).toBe(true);
+    },
+  );
 
-    const apiKeyProvider = new CodexProvider(
-      makeAuthManager({
-        getPreferredAuthMethod: vi.fn().mockResolvedValue("apiKey"),
-      }) as never,
-    );
-    await apiKeyProvider.isAuthenticated();
-    expect(apiKeyProvider.supportsHostedTools("gpt-6-astra")).toBe(true);
-  });
+  it.each(["gpt-6-astra", "gpt-6.1-sol"])(
+    "dispatches %s hosted web requests with normal Responses body and headers",
+    async (model) => {
+      const captured = captureBodyOnce();
+      const provider = new CodexProvider(makeAuthManager() as never);
+      for await (const _event of provider.stream({
+        model,
+        systemPrompt: "distinctive hosted fallback instructions",
+        messages: [{ role: "user", content: "read the identity headers" }],
+        hostedTools: [
+          { type: "web_search", allowedDomains: ["tailscale.com"] },
+        ],
+        maxTokens: 128,
+        reasoningEffort: "low",
+      })) {
+        // drain
+      }
+      expect(captured.current).toMatchObject({
+        model,
+        instructions: "distinctive hosted fallback instructions",
+        input: [{ role: "user" }],
+        tools: [
+          {
+            type: "web_search",
+            filters: { allowed_domains: ["tailscale.com"] },
+          },
+        ],
+        include: ["web_search_call.action.sources"],
+      });
+      expect(captured.options?.headers ?? {}).not.toHaveProperty(
+        "x-openai-internal-codex-responses-lite",
+      );
+      expect(captured.current?.reasoning).not.toHaveProperty("context");
+      expect(provider.supportsHostedTools(model)).toBe(true);
+    },
+  );
 
   it("normalizes package stream aborts to the provider cancellation shape", async () => {
     const controller = new AbortController();
@@ -1669,6 +1708,33 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
         requestId: "req-astra",
         cfRay: "ray-astra",
       },
+    });
+  });
+
+  it("preserves a hosted-web Astra 400 without a misleading Lite explanation", async () => {
+    createMock.mockRejectedValueOnce(
+      Object.assign(new Error("400 status code (no body)"), {
+        status: 400,
+        requestID: "req-hosted-astra",
+      }),
+    );
+    const provider = new CodexProvider(makeAuthManager() as never);
+    await expect(
+      (async () => {
+        for await (const _event of provider.stream({
+          model: "gpt-6-astra",
+          systemPrompt: "Read the page.",
+          messages: [{ role: "user", content: "read the identity headers" }],
+          hostedTools: [{ type: "web_search" }],
+          maxTokens: 128,
+        })) {
+          // drain
+        }
+      })(),
+    ).rejects.toMatchObject({
+      status: 400,
+      message: expect.not.stringContaining("Responses Lite"),
+      metadata: expect.objectContaining({ requestId: "req-hosted-astra" }),
     });
   });
 

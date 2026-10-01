@@ -19,7 +19,6 @@ vi.mock("../util/ripgrep.js", async () => ({
   )),
   getRipgrepBinPath: async () => "rg",
 }));
-vi.mock("../services/semanticSearch.js", () => ({ semanticFileList: vi.fn() }));
 
 describe("listing to ripgrep process boundary", () => {
   let root: string;
@@ -44,6 +43,28 @@ describe("listing to ripgrep process boundary", () => {
 
   afterEach(async () => {
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("rejects retired query input before starting ripgrep", async () => {
+    const result = await handleListFiles(
+      { path: root, query: "needle" } as never,
+      {} as never,
+      {} as never,
+      "boundary-retired-query",
+      {
+        workspaceFileProvider: {
+          resolvePath: () => ({ absolutePath: root, inWorkspace: true }),
+        },
+        pathAccessProvider: {
+          ensureAccess: async () => ({ approved: true }),
+        },
+      } as never,
+    );
+
+    expect(result.error?.message).toBe(
+      "Unsupported parameter 'query' for list_files.",
+    );
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -93,6 +114,49 @@ describe("listing to ripgrep process boundary", () => {
       });
     },
   );
+
+  it("returns an incomplete empty pattern listing rather than failing on an unrelated broken symlink", async () => {
+    spawn.mockImplementation(() => {
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        kill: vi.fn(),
+      });
+      queueMicrotask(() => {
+        child.stdout.end();
+        child.stderr.end(
+          "rg: ./.claude/skills/typesafe-ai: No such file or directory (os error 2)\n",
+        );
+        setImmediate(() => child.emit("close", 2));
+      });
+      return child;
+    });
+    const result = await handleListFiles(
+      {
+        path: root,
+        pattern: ".agentlink-diagnostic-validation*",
+        include_ignored: true,
+      },
+      {} as never,
+      {} as never,
+      "boundary-broken-symlink",
+      {
+        workspaceFileProvider: {
+          resolvePath: () => ({ absolutePath: root, inWorkspace: true }),
+        },
+        pathAccessProvider: { ensureAccess: async () => ({ approved: true }) },
+      },
+    );
+    expect(result.isError).toBe(false);
+    expect(result.data).toMatchObject({
+      entries: "",
+      count: 0,
+      warnings: [
+        "Some paths could not be inspected; partial listing results are shown.",
+        "rg: ./.claude/skills/typesafe-ai: No such file or directory (os error 2)",
+      ],
+    });
+  });
 
   it("does not disable parent ignore rules for ordinary directory roots", async () => {
     const result = await handleListFiles(

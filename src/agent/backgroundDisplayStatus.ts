@@ -46,7 +46,6 @@ export function inferBackgroundDisplayStatus(
   if (
     tool.includes("read_file") ||
     tool.includes("search_files") ||
-    tool.includes("codebase_search") ||
     tool.includes("list_files") ||
     tool.includes("get_symbols") ||
     tool.includes("get_references") ||

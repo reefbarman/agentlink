@@ -24,9 +24,9 @@ const FETCH_CHARS_PER_TOKEN = 4;
 const MAX_FETCH_PAGE_REQUESTS = 64;
 
 class CodexPageAccessError extends Error {
-  constructor() {
+  constructor(reason = "provider_page_internal_error") {
     super(
-      "Codex page access failed (provider_page_internal_error). No successful page result is available. Retry the read or use another approved web transport.",
+      `Codex page access failed (${reason}). No successful page result is available. Retry the read or use another approved web transport.`,
     );
   }
 }
@@ -136,14 +136,14 @@ export async function executeCodexStandaloneWeb(
   const rawOutput = typeof payload.output === "string" ? payload.output : "";
   const initialPagination = paginationMetadata(rawOutput, prepared.startLine);
   const initialNextStartLine = initialPagination.next_start_line;
+  const find = optionalString(request.input.find);
   const paginatedOutput =
-    request.operation === "fetch" &&
-    request.retainOutput &&
-    !optionalString(request.input.find)
+    request.operation === "fetch" && request.retainOutput
       ? await collectFetchPages({
           initialOutput: rawOutput,
           initialStartLine: prepared.startLine,
           maxCharacters: prepared.maxRetainedCharacters,
+          find,
           prepare: (startLine) =>
             prepareCodexStandaloneWebRequest({
               ...request,
@@ -156,11 +156,26 @@ export async function executeCodexStandaloneWeb(
           nextStartLine: initialNextStartLine,
           stalled: initialPagination.stalled,
         };
+  if (
+    request.operation === "fetch" &&
+    (initialPagination.stalled ||
+      (find &&
+        findPageContentOffset(paginatedOutput.output, find) === undefined &&
+        (paginatedOutput.stalled ||
+          paginatedOutput.nextStartLine !== undefined)))
+  ) {
+    throw new CodexPageAccessError("provider_page_focus_unavailable");
+  }
   const visibleContent =
     request.operation === "search" && visibleRecords.length > 0
       ? { content: formatSearchRecords(visibleRecords) }
       : prepareVisibleContent({
-          visible: rawOutput,
+          visible:
+            request.operation === "fetch" && find
+              ? paginatedOutput.output.slice(
+                  findPageContentOffset(paginatedOutput.output, find) ?? 0,
+                )
+              : rawOutput,
           retained: paginatedOutput.output,
           maxCharacters: prepared.maxContentCharacters,
           retainOutput:
@@ -260,20 +275,21 @@ export function prepareCodexStandaloneWebRequest(
   } else {
     url = requiredAllowedHttpUrl(request.input.url, request.settings);
     const find = optionalString(request.input.find);
-    commands = find
-      ? {
-          find: [{ ref_id: url, pattern: find }],
-          response_length: "long",
-        }
-      : {
-          open: [
-            {
-              ref_id: url,
-              ...(startLine !== undefined ? { lineno: startLine } : {}),
-            },
-          ],
-          response_length: "long",
-        };
+    commands =
+      find && startLine === undefined
+        ? {
+            find: [{ ref_id: url, pattern: find }],
+            response_length: "long",
+          }
+        : {
+            open: [
+              {
+                ref_id: url,
+                ...(startLine !== undefined ? { lineno: startLine } : {}),
+              },
+            ],
+            response_length: "long",
+          };
     prompt = buildFetchInputPrompt(url, request.input);
   }
 
@@ -552,10 +568,25 @@ function prepareVisibleContent(params: {
   };
 }
 
+function findPageContentOffset(
+  content: string,
+  find: string,
+): number | undefined {
+  const pattern = find.toLowerCase();
+  for (const line of content.matchAll(/^L\d+:([^\n]*)/gm)) {
+    const matchOffset = line[0].toLowerCase().indexOf(pattern);
+    if (line[1]!.toLowerCase().includes(pattern)) {
+      return line.index + Math.max(0, matchOffset - 120);
+    }
+  }
+  return undefined;
+}
+
 async function collectFetchPages(params: {
   initialOutput: string;
   initialStartLine?: number;
   maxCharacters: number;
+  find?: string;
   prepare: (startLine: number) => Record<string, unknown>;
   executeRequest: (
     body: Record<string, unknown>,
@@ -573,7 +604,13 @@ async function collectFetchPages(params: {
     nextStartLine !== undefined && requestCount < MAX_FETCH_PAGE_REQUESTS;
     requestCount += 1
   ) {
-    if (outputs.join("\n\n").length >= params.maxCharacters) break;
+    const collected = outputs.join("\n\n");
+    if (
+      collected.length >= params.maxCharacters ||
+      (params.find &&
+        findPageContentOffset(collected, params.find) !== undefined)
+    )
+      break;
     const requestedLine = nextStartLine;
     let payload: CodexStandaloneWebResponse;
     try {

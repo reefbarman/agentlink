@@ -884,3 +884,83 @@
     -webkit-text-fill-color: CanvasText;
   }
 }
+
+/* Quick-ask panel: a transparent floating window holding only the composer.
+   The composer sits at the bottom so its menus have room to open upward. */
+html.quick-ask-document,
+html.quick-ask-document body {
+  background: transparent;
+}
+
+.browser-shell.browser-shell-desktop.quick-ask-panel {
+  justify-content: flex-end;
+  background: transparent;
+}
+
+/* A slowly rotating teal/blue/violet edge with a soft halo behind it. */
+@property --quick-ask-glow-angle {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 0deg;
+}
+
+@keyframes quick-ask-glow-spin {
+  to {
+    --quick-ask-glow-angle: 360deg;
+  }
+}
+
+.browser-shell.browser-shell-desktop.quick-ask-panel .browser-chat-composer {
+  position: relative;
+  isolation: isolate;
+  width: calc(100% - 48px);
+  margin: 0 auto 28px;
+  animation: quick-ask-glow-spin 6s linear infinite;
+}
+
+.browser-shell.browser-shell-desktop.quick-ask-panel
+  .browser-chat-composer::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  z-index: -1;
+  border-radius: 24px;
+  background: conic-gradient(
+    from var(--quick-ask-glow-angle),
+    #4ec9b0,
+    #71baff,
+    #b59aff,
+    #4ec9b0
+  );
+  filter: blur(16px);
+  opacity: 0.4;
+  pointer-events: none;
+  transition: opacity 240ms ease;
+}
+
+.browser-shell.browser-shell-desktop.quick-ask-panel
+  .browser-chat-composer:focus-within::before {
+  opacity: 0.7;
+}
+
+.browser-shell.browser-shell-desktop.quick-ask-panel .input-area,
+.browser-shell.browser-shell-desktop.quick-ask-panel .input-area:focus-within {
+  border-width: 1.5px;
+  background:
+    linear-gradient(120deg, #222d2c, #252b31) padding-box,
+    conic-gradient(
+        from var(--quick-ask-glow-angle),
+        #4ec9b0,
+        #71baff,
+        #b59aff,
+        #4ec9b0
+      )
+      border-box;
+  box-shadow: 0 12px 40px #00000066;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .browser-shell.browser-shell-desktop.quick-ask-panel .browser-chat-composer {
+    animation: none;
+  }
+}

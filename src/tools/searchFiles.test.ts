@@ -14,7 +14,6 @@ import {
 const {
   execRipgrepSearch,
   getRipgrepBinPath,
-  semanticSearch,
   resolveAndValidatePath,
   getRelativePath,
   tryGetFirstWorkspaceRoot,
@@ -22,7 +21,6 @@ const {
 } = vi.hoisted(() => ({
   execRipgrepSearch: vi.fn(),
   getRipgrepBinPath: vi.fn(),
-  semanticSearch: vi.fn(),
   resolveAndValidatePath: vi.fn(),
   getRelativePath: vi.fn(),
   tryGetFirstWorkspaceRoot: vi.fn(),
@@ -41,10 +39,6 @@ vi.mock("../util/ripgrep.js", async () => {
   };
 });
 
-vi.mock("../services/semanticSearch.js", () => ({
-  semanticSearch,
-}));
-
 vi.mock("../util/paths.js", () => ({
   resolveAndValidatePath,
   getRelativePath,
@@ -60,9 +54,7 @@ describe("handleSearchFiles ripgrep args", () => {
     vi.clearAllMocks();
     getRipgrepBinPath.mockResolvedValue("rg");
     execRipgrepSearch.mockResolvedValue("");
-    semanticSearch.mockResolvedValue({
-      content: [{ type: "text", text: JSON.stringify({ total_matches: 0 }) }],
-    });
+
     const resolvedPath = path.resolve(".");
     resolveAndValidatePath.mockReturnValue({
       absolutePath: resolvedPath,
@@ -76,7 +68,7 @@ describe("handleSearchFiles ripgrep args", () => {
 
   it("adds default .git and node_modules exclude globs", async () => {
     await handleSearchFiles(
-      { path: ".", regex: "workflowStepIdx", semantic: false },
+      { path: ".", regex: "workflowStepIdx" },
       {
         isPathTrusted: () => true,
       } as never,
@@ -97,7 +89,6 @@ describe("handleSearchFiles ripgrep args", () => {
         path: ".",
         regex: "workflowStepIdx",
         file_pattern: "src/**/*.ts",
-        semantic: false,
       },
       {
         isPathTrusted: () => true,
@@ -119,7 +110,6 @@ describe("handleSearchFiles ripgrep args", () => {
         path: ".",
         regex: "workflowStepIdx",
         file_pattern: "templates/templates/**/*.ts",
-        semantic: false,
       },
       {
         isPathTrusted: () => true,
@@ -176,7 +166,6 @@ describe("handleSearchFiles ripgrep args", () => {
           path: "src",
           regex: "needle",
           output_mode: outputMode,
-          semantic: false,
         },
         { isPathTrusted: () => true } as never,
         {} as never,
@@ -189,7 +178,7 @@ describe("handleSearchFiles ripgrep args", () => {
 
   it("returns canonical data for regex search results", async () => {
     const result = await handleSearchFiles(
-      { path: ".", regex: "missing", semantic: false },
+      { path: ".", regex: "missing" },
       { isPathTrusted: () => true } as never,
       {} as never,
       "session-canonical-regex",
@@ -227,7 +216,7 @@ describe("handleSearchFiles ripgrep args", () => {
     );
 
     const result = await handleSearchFiles(
-      { path: ".", regex: "needle", semantic: false },
+      { path: ".", regex: "needle" },
       { isPathTrusted: () => true } as never,
       {} as never,
       "session-partial-ripgrep-output",
@@ -253,7 +242,6 @@ describe("handleSearchFiles ripgrep args", () => {
       {
         path: "src/tools/searchFiles.ts",
         regex: "handleSearchFiles",
-        semantic: false,
       },
       {
         isPathTrusted: () => true,
@@ -284,7 +272,6 @@ describe("handleSearchFiles ripgrep args", () => {
         path: "src/tools/searchFiles.ts",
         regex: "handleSearchFiles",
         output_mode: "count",
-        semantic: false,
       },
       { isPathTrusted: () => true } as never,
       {} as never,
@@ -318,7 +305,6 @@ describe("handleSearchFiles ripgrep args", () => {
           regex: "handleSearchFiles",
           file_pattern: "**/*.ts",
           output_mode: outputMode,
-          semantic: false,
         },
         {
           isPathTrusted: () => true,
@@ -359,7 +345,6 @@ describe("handleSearchFiles ripgrep args", () => {
       {
         path: "/outside/project",
         regex: "needle",
-        semantic: false,
       },
       approvalManager as never,
       {} as never,
@@ -395,7 +380,6 @@ describe("handleSearchFiles ripgrep args", () => {
       {
         path: instructionPath,
         regex: "instruction",
-        semantic: false,
       },
       approvalManager as never,
       {} as never,
@@ -425,7 +409,6 @@ describe("handleSearchFiles ripgrep args", () => {
       {
         path: tmpArtifactPath,
         regex: "error",
-        semantic: false,
       },
       {
         isPathTrusted: () => false,
@@ -438,35 +421,192 @@ describe("handleSearchFiles ripgrep args", () => {
     expect(execRipgrepSearch).not.toHaveBeenCalled();
   });
 
-  it("preserves exact-file scope for semantic search", async () => {
+  it("routes query mode to indexed search with a default limit of 10", async () => {
     const filePath = path.resolve("src/tools/searchFiles.ts");
     resolveAndValidatePath.mockReturnValue({
       absolutePath: filePath,
       inWorkspace: true,
     });
+    const search = vi.fn().mockResolvedValue({ payload: { results: [] } });
 
     await handleSearchFiles(
-      {
-        path: "src/tools/searchFiles.ts",
-        regex: "semantic query",
-        semantic: true,
-      },
-      {
-        isPathTrusted: () => true,
-      } as never,
+      { path: "src/tools/searchFiles.ts", query: "semantic query" },
+      { isPathTrusted: () => true } as never,
       {} as never,
-      "session-semantic-file-path",
+      "session-search-query",
+      {
+        workspaceFileProvider: {
+          resolvePath: () => ({ absolutePath: filePath, inWorkspace: true }),
+        },
+        pathAccessProvider: {
+          ensureAccess: async () => ({ approved: true }),
+        },
+        semanticSearchProvider: { search },
+      },
     );
 
-    expect(semanticSearch).toHaveBeenCalledTimes(1);
-    expect(semanticSearch).toHaveBeenCalledWith(
-      filePath,
-      "semantic query",
-      undefined,
-      undefined,
-      { exactFile: true },
-    );
+    expect(search).toHaveBeenCalledWith({
+      query: "semantic query",
+      path: filePath,
+      exactFile: true,
+      limit: 10,
+      exclude_globs: undefined,
+    });
     expect(execRipgrepSearch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      { path: "." },
+      "Supply exactly one of 'regex' or 'query' for search_files.",
+    ],
+    [
+      { path: ".", regex: "needle", query: "needle" },
+      "Supply exactly one of 'regex' or 'query' for search_files.",
+    ],
+  ])("requires exactly one search mode for %#", async (params, message) => {
+    const result = await handleSearchFiles(
+      params as never,
+      { isPathTrusted: () => true } as never,
+      {} as never,
+      "session-search-mode-validation",
+    );
+
+    expect(result.error?.message).toBe(message);
+    expect(resolveAndValidatePath).not.toHaveBeenCalled();
+    expect(execRipgrepSearch).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    "rejects retired semantic=%s before path reads or search",
+    async (semantic) => {
+      const result = await handleSearchFiles(
+        { path: ".", regex: "needle", semantic } as never,
+        { isPathTrusted: () => true } as never,
+        {} as never,
+        "session-retired-semantic",
+      );
+
+      expect(result.error?.message).toBe(
+        "Unsupported parameter 'semantic' for search_files.",
+      );
+      expect(resolveAndValidatePath).not.toHaveBeenCalled();
+      expect(execRipgrepSearch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects indexed query search outside workspace before access or search", async () => {
+    const ensureAccess = vi.fn(async () => ({ approved: true }));
+    const search = vi.fn();
+    const result = await handleSearchFiles(
+      { path: "/outside/project", query: "needle" },
+      { isPathTrusted: () => true } as never,
+      {} as never,
+      "session-external-query",
+      {
+        workspaceFileProvider: {
+          resolvePath: () => ({
+            absolutePath: "/outside/project",
+            inWorkspace: false,
+          }),
+        },
+        pathAccessProvider: { ensureAccess },
+        semanticSearchProvider: { search },
+      },
+    );
+
+    expect(result.error?.message).toContain(
+      "Indexed query search is restricted to workspace folders",
+    );
+    expect(ensureAccess).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
+    expect(execRipgrepSearch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [0, 1],
+    [-5, 1],
+    [2.9, 2],
+    [9999, 300],
+  ])("bounds query limit %s to %s", async (max_results, limit) => {
+    const search = vi
+      .fn()
+      .mockResolvedValue({ payload: { ranking: "hybrid", total_results: 0 } });
+    await handleSearchFiles(
+      { path: ".", query: "authentication flow", max_results },
+      {} as never,
+      {} as never,
+      "session",
+      {
+        workspaceFileProvider: { resolvePath: resolveAndValidatePath },
+        pathAccessProvider: { ensureAccess: async () => ({ approved: true }) },
+        semanticSearchProvider: { search },
+      },
+    );
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({ limit }));
+  });
+
+  it("warns when regex-only parameters are supplied in query mode", async () => {
+    const search = vi.fn().mockResolvedValue({ payload: { results: [] } });
+    const result = await handleSearchFiles(
+      {
+        path: ".",
+        query: "needle",
+        file_pattern: "*.ts",
+        case_insensitive: true,
+        output_mode: "count",
+        offset: 2,
+      },
+      { isPathTrusted: () => true } as never,
+      {} as never,
+      "session-query-warning",
+      {
+        workspaceFileProvider: {
+          resolvePath: () => ({
+            absolutePath: path.resolve("."),
+            inWorkspace: true,
+          }),
+        },
+        pathAccessProvider: {
+          ensureAccess: async () => ({ approved: true }),
+        },
+        semanticSearchProvider: { search },
+      },
+    );
+
+    expect(result.data).toMatchObject({
+      warning:
+        "Ignored regex-only parameters in query mode: file_pattern, case_insensitive, output_mode, offset",
+    });
+  });
+
+  it("uses the 300-result default for regex mode", async () => {
+    const filePath = path.resolve("src/tools/searchFiles.ts");
+    const output = [
+      JSON.stringify({ type: "begin", data: { path: { text: filePath } } }),
+      ...Array.from({ length: 301 }, (_, index) =>
+        JSON.stringify({
+          type: "match",
+          data: {
+            path: { text: filePath },
+            lines: { text: `needle ${index}` },
+            line_number: index + 1,
+            absolute_offset: index,
+          },
+        }),
+      ),
+      JSON.stringify({ type: "end", data: { path: { text: filePath } } }),
+    ].join("\n");
+    execRipgrepSearch.mockResolvedValue(output);
+
+    const result = await handleSearchFiles(
+      { path: ".", regex: "needle" },
+      { isPathTrusted: () => true } as never,
+      {} as never,
+      "session-regex-default-limit",
+    );
+
+    expect(result.data).toMatchObject({ total_matches: 300, truncated: true });
   });
 });
 

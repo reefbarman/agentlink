@@ -7,7 +7,9 @@ import {
   dialog,
   ipcMain,
   Menu,
-  shell,
+  nativeImage,
+  Tray,
+  type MenuItemConstructorOptions,
   type WebContents,
 } from "electron";
 import type { BrowserGatewayHelperLeaseClient } from "../../../src/browser-gateway/helper/BrowserGatewayHelperLeaseClient.js";
@@ -23,8 +25,20 @@ import {
 } from "./desktopAuth.js";
 import { buildDesktopCodexCatalog } from "./desktopModelCatalog.js";
 import { DesktopOpenAiCompatibleController } from "./desktopOpenAiCompatible.js";
+import {
+  getOpenAtLoginStatus,
+  initializeOpenAtLogin,
+  setOpenAtLogin,
+  wasOpenedAtLogin,
+} from "./desktopLoginItem.js";
 import { refreshDesktopOwner } from "./desktopOwnerRouting.js";
+import {
+  DesktopQuickAsk,
+  QUICK_ASK_PANEL_HEIGHT,
+  QUICK_ASK_PANEL_WIDTH,
+} from "./DesktopQuickAsk.js";
 import { DesktopRemoteView } from "./DesktopRemoteView.js";
+import { openExternalLink } from "./desktopExternalLinks.js";
 import { resolveDesktopMcpPath } from "./desktopMcpPath.js";
 
 declare const __AGENTLINK_HOST_VERSION__: string;
@@ -46,6 +60,31 @@ let authClient: BrowserGatewayHelperModelAuthLeaseClient | null = null;
 let discovery: BrowserGatewayHelperDiscoveryRecord | null = null;
 let credentialRefreshTimer: NodeJS.Timeout | null = null;
 let cachedCodexAuth: DesktopResolvedModelAuth | null = null;
+let tray: Tray | null = null;
+let quitting = false;
+const preferencesPath = path.join(
+  app.getPath("userData"),
+  "desktop-preferences.json",
+);
+const quickAsk = new DesktopQuickAsk({
+  preferencesPath,
+  createWindow: createQuickAskWindow,
+  openChat: async () => {
+    await showChatWindow();
+    return chatWindow?.webContents ?? null;
+  },
+  canAsk: async () => discovery !== null && (await hasDesktopModel()),
+  openSetup: () => {
+    void showSetupWindow().catch((error) =>
+      log(`setup window failed: ${String(error)}`),
+    );
+  },
+  onShortcutChanged: () => {
+    installApplicationMenu();
+    updateTrayMenu();
+  },
+  log,
+});
 
 function log(message: string): void {
   process.stderr.write(`[agentlink-desktop] ${message}\n`);
@@ -126,9 +165,13 @@ async function startLocalService(): Promise<BrowserGatewayHelperDiscoveryRecord>
         ownerId,
         refresh: publishDesktopModelOwner,
         notify: (nextOwnerId) => {
-          const contents = chatWindow?.webContents;
-          if (contents && !contents.isDestroyed()) {
-            contents.send("agentlink:ask-agent-owner-id", nextOwnerId);
+          for (const contents of [
+            chatWindow?.webContents,
+            quickAsk.getPanelContents(),
+          ]) {
+            if (contents && !contents.isDestroyed()) {
+              contents.send("agentlink:ask-agent-owner-id", nextOwnerId);
+            }
           }
         },
         log,
@@ -246,25 +289,46 @@ function allowOnlyLocalService(
 ): void {
   const allowedOrigin = new URL(serviceUrl).origin;
   contents.on("will-navigate", (event, targetUrl) => {
-    if (new URL(targetUrl).origin !== allowedOrigin) event.preventDefault();
+    if (new URL(targetUrl).origin === allowedOrigin) return;
+    event.preventDefault();
+    openExternalLink(targetUrl, [allowedOrigin]);
   });
   contents.on("will-redirect", (event, targetUrl) => {
     if (new URL(targetUrl).origin !== allowedOrigin) event.preventDefault();
   });
   contents.setWindowOpenHandler(({ url }) => {
-    const target = new URL(url);
-    if (target.protocol === "https:")
-      void shell.openExternal(target.toString());
+    openExternalLink(url, [allowedOrigin]);
     return { action: "deny" };
   });
+}
+
+/**
+ * AgentLink lives in the menu bar; the Dock icon only appears while one of
+ * its regular windows is visible.
+ */
+function syncDockVisibility(): void {
+  const visible = [chatWindow, setupWindow].some(
+    (window) => window && !window.isDestroyed() && window.isVisible(),
+  );
+  if (visible) void app.dock?.show();
+  else app.dock?.hide();
+}
+
+async function revealWindow(window: BrowserWindow): Promise<void> {
+  // Showing the Dock first switches the app back to a regular app, which
+  // macOS requires before a window can take focus from another app.
+  await app.dock?.show();
+  app.focus({ steal: true });
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
 }
 
 async function showChatWindow(): Promise<void> {
   if (!discovery) throw new Error("desktop_service_not_ready");
 
   if (chatWindow) {
-    chatWindow.show();
-    chatWindow.focus();
+    await revealWindow(chatWindow);
     return;
   }
 
@@ -291,8 +355,18 @@ async function showChatWindow(): Promise<void> {
   chatWindow = nextWindow;
   allowOnlyLocalService(nextWindow.webContents, discovery.url);
   new DesktopRemoteView(nextWindow, new URL(discovery.url).origin);
+  // Closing hides the chat so reopening is instant and drafts survive; the
+  // app keeps running in the menu bar for Quick Ask.
+  nextWindow.on("close", (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    nextWindow.hide();
+  });
+  nextWindow.on("show", syncDockVisibility);
+  nextWindow.on("hide", syncDockVisibility);
   nextWindow.on("closed", () => {
     if (chatWindow === nextWindow) chatWindow = null;
+    syncDockVisibility();
   });
 
   try {
@@ -314,8 +388,7 @@ async function showChatWindow(): Promise<void> {
       }
     }
     if (lastError) throw lastError;
-    nextWindow.show();
-    nextWindow.focus();
+    await revealWindow(nextWindow);
     setupWindow?.destroy();
     setupWindow = null;
   } catch (error) {
@@ -325,16 +398,61 @@ async function showChatWindow(): Promise<void> {
   }
 }
 
+async function createQuickAskWindow(): Promise<BrowserWindow> {
+  if (!discovery) throw new Error("desktop_service_not_ready");
+  const panel = new BrowserWindow({
+    title: "Quick Ask",
+    show: false,
+    width: QUICK_ASK_PANEL_WIDTH,
+    height: QUICK_ASK_PANEL_HEIGHT,
+    // A non-activating panel floats over full-screen apps and every Space
+    // without pulling the main window forward.
+    type: "panel",
+    frame: false,
+    transparent: true,
+    hasShadow: false,
+    backgroundColor: "#00000000",
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    webPreferences: {
+      preload: getDesktopAssetPath("chat-preload.cjs"),
+      additionalArguments: [
+        `${AGENTLINK_DESKTOP_OWNER_ARGUMENT_PREFIX}${leaseClient?.getEffectiveOwnerId() ?? OWNER_ID}`,
+      ],
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  allowOnlyLocalService(panel.webContents, discovery.url);
+  const panelUrl = new URL(discovery.url);
+  panelUrl.searchParams.set("surface", "desktop");
+  panelUrl.searchParams.set("quickAsk", "1");
+  try {
+    await panel.loadURL(panelUrl.toString());
+  } catch (error) {
+    if (!panel.isDestroyed()) panel.destroy();
+    throw error;
+  }
+  return panel;
+}
+
 async function showSetupWindow(): Promise<void> {
   if (setupWindow) {
-    setupWindow.show();
-    setupWindow.focus();
+    await revealWindow(setupWindow);
     return;
   }
+  await app.dock?.show();
+  app.focus({ steal: true });
   setupWindow = new BrowserWindow({
-    title: "Set up AgentLink",
+    title: "AgentLink Settings",
     width: 580,
-    height: 620,
+    height: 720,
     minWidth: 500,
     minHeight: 560,
     resizable: true,
@@ -350,8 +468,63 @@ async function showSetupWindow(): Promise<void> {
   setupWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   setupWindow.on("closed", () => {
     setupWindow = null;
+    syncDockVisibility();
   });
   await setupWindow.loadFile(getDesktopAssetPath("setup.html"));
+}
+
+function openSettings(): void {
+  void showSetupWindow().catch((error) =>
+    log(`settings window failed: ${String(error)}`),
+  );
+}
+
+function showQuickAsk(): void {
+  void quickAsk
+    .show()
+    .catch((error) => log(`quick ask failed: ${String(error)}`));
+}
+
+function openMainWindow(): void {
+  void hasDesktopModel()
+    .then((hasModelAuth) =>
+      hasModelAuth ? showChatWindow() : showSetupWindow(),
+    )
+    .catch((error) => log(`window failed: ${String(error)}`));
+}
+
+function quickAskMenuItem(): MenuItemConstructorOptions {
+  const { shortcut, registered } = quickAsk.getShortcutStatus();
+  return {
+    label: "Quick Ask",
+    ...(shortcut && registered
+      ? { accelerator: shortcut, registerAccelerator: false }
+      : {}),
+    click: showQuickAsk,
+  };
+}
+
+function updateTrayMenu(): void {
+  tray?.setContextMenu(
+    Menu.buildFromTemplate([
+      quickAskMenuItem(),
+      { label: "Open AgentLink", click: openMainWindow },
+      { type: "separator" },
+      { label: "Settings…", click: openSettings },
+      { type: "separator" },
+      { label: "Quit AgentLink", click: () => app.quit() },
+    ]),
+  );
+}
+
+function installTray(): void {
+  const image = nativeImage.createFromPath(
+    getDesktopAssetPath("trayTemplate.png"),
+  );
+  image.setTemplateImage(true);
+  tray = new Tray(image);
+  tray.setToolTip("AgentLink");
+  updateTrayMenu();
 }
 
 function registerCredentialIpc(): void {
@@ -425,6 +598,31 @@ function registerCredentialIpc(): void {
     }, 0);
     return { ok: true };
   });
+  ipcMain.handle("agentlink:quick-ask:shortcut:get", (event) => {
+    assertSetupSender(event.sender);
+    return quickAsk.getShortcutStatus();
+  });
+  ipcMain.handle("agentlink:quick-ask:shortcut:set", async (event, value) => {
+    assertSetupSender(event.sender);
+    if (value !== null && typeof value !== "string") {
+      throw new Error("invalid_shortcut");
+    }
+    return await quickAsk.setShortcut(value);
+  });
+  ipcMain.handle("agentlink:open-at-login:get", (event) => {
+    assertSetupSender(event.sender);
+    return getOpenAtLoginStatus(app);
+  });
+  ipcMain.handle("agentlink:open-at-login:set", async (event, value) => {
+    assertSetupSender(event.sender);
+    if (typeof value !== "boolean") throw new Error("invalid_open_at_login");
+    return await setOpenAtLogin(app, preferencesPath, value);
+  });
+  ipcMain.on("agentlink:open-settings", (event) => {
+    if (chatWindow && event.sender.id === chatWindow.webContents.id) {
+      openSettings();
+    }
+  });
 }
 
 function installApplicationMenu(): void {
@@ -436,9 +634,12 @@ function installApplicationMenu(): void {
           { role: "about" },
           { type: "separator" },
           {
-            label: "Manage Accounts…",
-            click: () => void showSetupWindow(),
+            label: "Settings…",
+            accelerator: "Command+,",
+            click: openSettings,
           },
+          { type: "separator" },
+          quickAskMenuItem(),
           { type: "separator" },
           { role: "hide" },
           { role: "hideOthers" },
@@ -461,6 +662,7 @@ function assertSetupSender(sender: WebContents): void {
 }
 
 async function shutdown(): Promise<void> {
+  quickAsk.dispose();
   if (credentialRefreshTimer) clearInterval(credentialRefreshTimer);
   credentialRefreshTimer = null;
   authController.cancelSignIn();
@@ -479,12 +681,20 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Login launches start quietly in the menu bar, ready for Quick Ask.
+  const startInBackground = wasOpenedAtLogin(app);
+  if (startInBackground) app.dock?.hide();
   if (!app.isPackaged) {
     app.dock?.setIcon(path.join(app.getAppPath(), "assets", "icon.png"));
   }
 
   registerCredentialIpc();
+  await quickAsk.initialize();
   installApplicationMenu();
+  installTray();
+  await initializeOpenAtLogin(app, preferencesPath).catch((error) =>
+    log(`open at login setup failed: ${String(error)}`),
+  );
   await Promise.all([
     authController.initialize(),
     compatibleController.initialize().catch((error) => {
@@ -492,28 +702,29 @@ async function main(): Promise<void> {
     }),
   ]);
   await startLocalService();
-  if (await hasDesktopModel()) await showChatWindow();
-  else await showSetupWindow();
+  if (await hasDesktopModel()) {
+    if (!startInBackground) await showChatWindow();
+    quickAsk.prewarm();
+  } else {
+    await showSetupWindow();
+  }
 }
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
 } else {
+  // Opening the app again (Finder, Spotlight, Dock) brings the window back.
   app.on("second-instance", () => {
-    const window = chatWindow ?? setupWindow;
-    if (!window) return;
-    if (window.isMinimized()) window.restore();
-    window.show();
-    window.focus();
+    if (discovery) openMainWindow();
   });
   app.on("activate", () => {
-    if (chatWindow || setupWindow) return;
-    void hasDesktopModel().then((hasModelAuth) =>
-      hasModelAuth ? showChatWindow() : showSetupWindow(),
-    );
+    if (discovery) openMainWindow();
   });
+  // Stay running in the menu bar so the Quick Ask shortcut keeps working.
+  app.on("window-all-closed", () => undefined);
   app.on("before-quit", (event) => {
+    quitting = true;
     if (!leaseClient) return;
     event.preventDefault();
     void shutdown().finally(() => {

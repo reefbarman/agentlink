@@ -341,8 +341,6 @@ export class DiffViewProvider {
       }
     }
 
-    this.diagnosticBaseline = captureDiagnosticBaseline(this.absolutePath);
-
     // Create directories for new files
     if (!fileExists) {
       this.createdDirs = await createDirectoriesForFile(this.absolutePath);
@@ -407,6 +405,23 @@ export class DiffViewProvider {
       if (this.editType === "create") await this.cleanupCreatedFile();
       throw new Error(
         "Review editor does not match the target file. Inspect any retained buffer in VS Code before retrying.",
+      );
+    }
+    const documentVersion = document.version;
+    this.diagnosticBaseline = await settleDiagnosticBaseline(
+      this.absolutePath,
+      this.diagnosticDelay,
+    );
+    if (
+      !documentMatchesTarget(document, this.absolutePath) ||
+      document.version !== documentVersion
+    ) {
+      diffSnapshotHub.remove(this.requestId);
+      throw new Error(
+        "Review document changed while preparing diagnostics. The editor buffer is preserved; re-read the target file before retrying." +
+          (this.editType === "create"
+            ? " The new file placeholder and any created directories are retained."
+            : ""),
       );
     }
     const edit = new vscode.WorkspaceEdit();
@@ -910,6 +925,7 @@ interface DiagnosticBaseline {
    * diagnostics describe this text, which may differ from disk.
    */
   targetText: string | undefined;
+  targetDiagnosed: boolean;
 }
 
 function isTargetUri(uri: vscode.Uri, absolutePath: string): boolean {
@@ -924,11 +940,38 @@ function findTargetDocument(
   );
 }
 
-function captureDiagnosticBaseline(absolutePath: string): DiagnosticBaseline {
+function captureDiagnosticBaseline(
+  absolutePath: string,
+  hadEvent = false,
+): DiagnosticBaseline {
+  const diagnostics = vscode.languages.getDiagnostics();
   return {
-    diagnostics: vscode.languages.getDiagnostics(),
+    diagnostics,
     targetText: findTargetDocument(absolutePath)?.getText(),
+    targetDiagnosed:
+      hadEvent || diagnostics.some(([uri]) => isTargetUri(uri, absolutePath)),
   };
+}
+
+async function settleDiagnosticBaseline(
+  absolutePath: string,
+  delayMs: number,
+  hadEvent = false,
+): Promise<DiagnosticBaseline> {
+  const baseline = captureDiagnosticBaseline(absolutePath, hadEvent);
+  let observed = baseline.targetDiagnosed;
+  return waitForDiagnosticsQuiescence({
+    delayMs,
+    hadEvent: observed,
+    subscribe: (onEvent) =>
+      vscode.languages.onDidChangeDiagnostics((event) => {
+        if (event.uris.some((uri) => isTargetUri(uri, absolutePath))) {
+          observed = true;
+          onEvent();
+        }
+      }),
+    collect: () => captureDiagnosticBaseline(absolutePath, observed),
+  });
 }
 
 function errorEntries(
@@ -967,10 +1010,10 @@ function collectNewDiagnosticErrors(
   if (current.length > 0) {
     const baselineText = baseline.targetText ?? baselineContent;
     const finalText = findTargetDocument(absolutePath)?.getText();
-    const hasBaseline =
-      baseline.targetText !== undefined || (baselineTarget?.length ?? 0) > 0;
     const selection = selectIntroducedDiagnostics({
-      baseline: hasBaseline ? errorEntries(baselineTarget) : undefined,
+      baseline: baseline.targetDiagnosed
+        ? errorEntries(baselineTarget)
+        : undefined,
       current,
       mapping:
         baselineText !== undefined && finalText !== undefined
@@ -980,7 +1023,11 @@ function collectNewDiagnosticErrors(
     targetEntries.push(...selection.introduced);
     unbaselinedOmitted += selection.unbaselinedOmitted;
   }
-  return formatIntroducedDiagnostics(targetEntries, unbaselinedOmitted);
+  return formatIntroducedDiagnostics(
+    targetEntries,
+    unbaselinedOmitted,
+    !baseline.targetDiagnosed,
+  );
 }
 
 /**
@@ -1018,23 +1065,26 @@ async function waitForVisibleFileEditor(
  *
  * Usage:
  *   const snap = snapshotDiagnostics(filePath);
- *   // ... perform the write, open document, etc. ...
+ *   // ... open the pre-edit document ...
+ *   await snap.settleBaseline(delay);
+ *   // ... perform the write ...
  *   const diagnostics = await snap.collectNewErrors(delay);
  */
 export function snapshotDiagnostics(filePath: string): {
+  settleBaseline(delayMs: number): Promise<void>;
   collectNewErrors: (
     delayMs: number,
     baselineContent?: string,
   ) => Promise<string | undefined>;
   dispose(): void;
 } {
-  const baseline = captureDiagnosticBaseline(filePath);
+  let baseline = captureDiagnosticBaseline(filePath);
 
   // Track diagnostic events eagerly — before the write happens —
   // so we never miss events that fire during write/open/sync.
   let gotEvent = false;
   const disposable = vscode.languages.onDidChangeDiagnostics((e) => {
-    if (e.uris.some((u) => u.fsPath === filePath)) {
+    if (e.uris.some((u) => isTargetUri(u, filePath))) {
       gotEvent = true;
     }
   });
@@ -1047,6 +1097,10 @@ export function snapshotDiagnostics(filePath: string): {
   };
 
   return {
+    async settleBaseline(delayMs: number): Promise<void> {
+      baseline = await settleDiagnosticBaseline(filePath, delayMs, gotEvent);
+      gotEvent = false;
+    },
     collectNewErrors(
       delayMs: number,
       baselineContent?: string,
@@ -1056,7 +1110,7 @@ export function snapshotDiagnostics(filePath: string): {
         hadEvent: gotEvent,
         subscribe: (onEvent) =>
           vscode.languages.onDidChangeDiagnostics((event) => {
-            if (event.uris.some((uri) => uri.fsPath === filePath)) {
+            if (event.uris.some((uri) => isTargetUri(uri, filePath))) {
               onEvent();
             }
           }),

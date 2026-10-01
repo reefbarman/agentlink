@@ -60,12 +60,12 @@ import {
   executeCodexResolvedCompletion,
   getCodexEndpointConfig,
   getCodexWebSocketConfig,
+  getEndpointCaps,
   isNonReplayableResponsesError,
   ResponsesTransportPolicy,
   type ResponsesWebSocketConnector,
   getCodexErrorHandlingAction,
   translateCodexMessages,
-  usesCodexResponsesLite,
   type CodexCredentialProvider,
   type CodexResolvedAuth,
 } from "@agentlink/core/codex";
@@ -535,11 +535,11 @@ export class BrowserGatewayAskAgentModelClient {
     credential: BrowserGatewayModelCredentialRecord;
     model: string;
   }): boolean {
-    return !(
+    return (
       normalizeBrowserGatewayModelCredentialProviderId(
         params.credential.providerId,
-      ) === "openai-codex" &&
-      usesCodexResponsesLite(params.model, params.credential.method)
+      ) !== "openai-codex" ||
+      getEndpointCaps(params.credential).supportsHostedWebSearch
     );
   }
 

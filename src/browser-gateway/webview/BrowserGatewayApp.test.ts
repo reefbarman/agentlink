@@ -22,6 +22,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppState } from "../../shared/chatProjection";
+import type { DesktopQuickAskSubmission } from "../../shared/desktopBridge";
 import type { ApprovalRequest } from "@agentlink/protocol/approval-transport";
 import { BROWSER_GATEWAY_ASK_AGENT_OWNER_ID } from "../browserGatewayAskAgentIdentity";
 import type { BgSessionInfo } from "@agentlink/protocol/background-result";
@@ -4269,6 +4270,143 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       cleanup();
       delete window.agentlinkDesktopShell;
       globalThis.ResizeObserver = originalObserver;
+    }
+  });
+
+  it("starts a new Ask Agent chat and sends a desktop quick-ask submission", async () => {
+    let deliver: ((submission: DesktopQuickAskSubmission) => void) | undefined;
+    window.agentlinkDesktopShell = {
+      askAgentOwnerId: "agentlink-desktop",
+      onAskAgentOwnerIdChanged: () => () => {},
+      setRemoteLayout: vi.fn(),
+      retryRemote: vi.fn(),
+      onRemoteState: () => () => {},
+      onQuickAskSubmission: (listener) => {
+        deliver = listener;
+        return () => {
+          deliver = undefined;
+        };
+      },
+    };
+    const fallbackFetch = globalThis.fetch;
+    const newSessionIds: string[] = [];
+    const sendBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const pathname = String(input).split("?")[0];
+        if (pathname === "/api/ask-agent/session/new") {
+          const { sessionId } = JSON.parse(String(init?.body ?? "{}")) as {
+            sessionId: string;
+          };
+          newSessionIds.push(sessionId);
+          const response = createAskAgentSessionResponse();
+          response.snapshot.session.foreground.sessionId = sessionId;
+          return jsonResponse({ ok: true, snapshot: response.snapshot });
+        }
+        if (pathname === "/api/ask-agent/send") {
+          const body = JSON.parse(String(init?.body ?? "{}")) as Record<
+            string,
+            unknown
+          >;
+          sendBodies.push(body);
+          const response = createAskAgentSessionResponse();
+          response.snapshot.session.foreground.sessionId = String(
+            body.sessionId,
+          );
+          return jsonResponse({ ok: true, snapshot: response.snapshot });
+        }
+        return fallbackFetch(input, init);
+      },
+    ) as unknown as typeof fetch;
+    const originalObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as typeof ResizeObserver;
+    try {
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "test-token",
+          currentInstanceId: "instance-1",
+          workspaceName: "Workspace",
+          routeByInstance: true,
+          askAgentOnly: true,
+        }),
+      );
+      await screen.findByRole("heading", { name: "What can I help you with?" });
+      expect(deliver).toBeDefined();
+      act(() =>
+        deliver?.({
+          text: "What's the capital of Australia?",
+          media: [
+            {
+              name: "map.png",
+              mimeType: "image/png",
+              base64: "iVBORw0KGgo=",
+              kind: "image",
+            },
+          ],
+        }),
+      );
+      await waitFor(() => expect(sendBodies).toHaveLength(1));
+      expect(newSessionIds).toHaveLength(1);
+      expect(sendBodies[0]).toMatchObject({
+        sessionId: newSessionIds[0],
+        text: "What's the capital of Australia?",
+        images: [
+          { name: "map.png", mimeType: "image/png", base64: "iVBORw0KGgo=" },
+        ],
+      });
+    } finally {
+      cleanup();
+      delete window.agentlinkDesktopShell;
+      globalThis.ResizeObserver = originalObserver;
+    }
+  });
+
+  it("hands quick-ask panel sends to the desktop shell instead of sending directly", async () => {
+    const submitQuickAsk = vi.fn();
+    window.agentlinkDesktopShell = {
+      askAgentOwnerId: "agentlink-desktop",
+      onAskAgentOwnerIdChanged: () => () => {},
+      setRemoteLayout: vi.fn(),
+      retryRemote: vi.fn(),
+      onRemoteState: () => () => {},
+      submitQuickAsk,
+      dismissQuickAsk: vi.fn(),
+      onQuickAskShown: () => () => {},
+    };
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "test-token",
+          currentInstanceId: "instance-1",
+          workspaceName: "Workspace",
+          routeByInstance: true,
+          askAgentOnly: true,
+          quickAsk: true,
+        }),
+      );
+      fireEvent.click(await screen.findByTestId("trigger-send"));
+      await waitFor(() =>
+        expect(submitQuickAsk).toHaveBeenCalledExactlyOnceWith({
+          text: "Ship it",
+        }),
+      );
+      expect(
+        fetchSpy.mock.calls.some(([input]) =>
+          String(input).includes("/api/ask-agent/send"),
+        ),
+      ).toBe(false);
+      expect(document.querySelector(".browser-sidebar, .browser-header")).toBe(
+        null,
+      );
+    } finally {
+      fetchSpy.mockRestore();
+      cleanup();
+      delete window.agentlinkDesktopShell;
     }
   });
 
@@ -8850,12 +8988,8 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     fireEvent.click(
       await screen.findByTitle("Open this agent's full transcript"),
     );
-    const summary = await screen.findByRole("button", {
-      name: "Tools 1 other call",
-    });
+    const summary = await screen.findByRole("button", { name: /^web_search/ });
     expect(summary.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(summary);
-    expect(screen.getByText("web_search")).toBeTruthy();
 
     const transcriptRequestsBeforeClose = fetchMock.mock.calls.filter(
       ([input]) => String(input).includes("/api/background/open-transcript"),
@@ -8865,7 +8999,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       await screen.findByTitle("Open this agent's full transcript"),
     );
     const reopenedSummary = await screen.findByRole("button", {
-      name: "Tools 1 other call",
+      name: /^web_search/,
     });
     expect(reopenedSummary.getAttribute("aria-expanded")).toBe("false");
     await waitFor(() => {
@@ -8877,7 +9011,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
     expect(
       screen
-        .getByRole("button", { name: "Tools 1 other call" })
+        .getByRole("button", { name: /^web_search/ })
         .getAttribute("aria-expanded"),
     ).toBe("false");
 

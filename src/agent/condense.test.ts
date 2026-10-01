@@ -420,7 +420,7 @@ describe("summarizeConversation", () => {
       systemPrompt: "system prompt",
       isAutomatic: true,
       preservedContext: {
-        toolNames: ["read_file", "codebase_search", "linear__get_issue"],
+        toolNames: ["read_file", "search_files", "linear__get_issue"],
         mcpServerNames: ["linear", "notion"],
         todos: [
           {
@@ -447,7 +447,7 @@ describe("summarizeConversation", () => {
       "## Preserved Runtime Context (reattached outside transcript)",
     );
     expect(String(finalMessage.content)).toContain("- read_file");
-    expect(String(finalMessage.content)).toContain("- codebase_search");
+    expect(String(finalMessage.content)).toContain("- search_files");
     expect(String(finalMessage.content)).toContain("- linear");
     expect(String(finalMessage.content)).toContain("- notion");
     expect(String(finalMessage.content)).toContain(
@@ -516,7 +516,6 @@ describe("summarizeConversation", () => {
       preservedContext: {
         toolNames: [
           "read_file",
-          "codebase_search",
           "search_files",
           "notion__notion-fetch",
           "linear__get_issue",
@@ -651,7 +650,7 @@ User wants to fix the condense resume bug for Codex after summarization.
       systemPrompt: "system prompt",
       isAutomatic: true,
       preservedContext: {
-        toolNames: ["read_file", "codebase_search"],
+        toolNames: ["read_file", "search_files"],
         mcpServerNames: ["linear"],
       },
     });

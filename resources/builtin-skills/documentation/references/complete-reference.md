@@ -569,9 +569,9 @@ To hide both AgentLink-native web tools:
 
 This does not disable unrelated connected MCP tools.
 
-## Semantic Codebase Search Setup
+## Code Search Setup
 
-Semantic search powers `codebase_search` plus the `query` parameter on `read_file` and `list_files`. AgentLink stores each canonical project/workspace-folder index in its own embedded local LanceDB retrieval store; no external database process or service such as Qdrant is required by the current production path.
+Query-mode `search_files` uses the embedded local retrieval index for a workspace file or directory. AgentLink stores each canonical project/workspace-folder index in its own embedded local LanceDB retrieval store; no external database process or service such as Qdrant is required by the current production path.
 
 Local lexical indexing and search work without credentials and are enabled by default. OpenAI vector embeddings and hybrid ranking are separately opt-in. ChatGPT/Codex OAuth authenticates model chat but does not provide embeddings.
 
@@ -612,14 +612,11 @@ You can use an OpenAI API key for both model chat and embeddings, but credential
 
 ### 4. Query the index
 
-Indexed tools only work on files/folders within the current workspace folders. This includes `codebase_search`, the semantic options below, and the structural tools `get_repo_map` and `get_module_neighbors`. An absolute path to another repository does not make its index available, even if it is open in another window or was previously indexed. For external paths, use `read_file` or `list_files` without `query`, or regex `search_files` with `semantic=false`, subject to existing path permissions and approvals.
+Query-mode `search_files` and the structural tools `get_repo_map` and `get_module_neighbors` only work on files/folders within the current workspace folders. An absolute path to another repository does not make its index available, even if it is open in another window or was previously indexed. For external paths, use regex `search_files`, `read_file`, or `list_files` subject to existing path permissions and approvals.
 
-After indexing completes, agents can use:
+Use `search_files` with `query` for ranked search when the location or wording is unknown, or with `regex` for exact text and patterns. Exactly one of `query` and `regex` is required; both or neither is invalid. Query mode requires an explicit file or directory `path`, uses `max_results: 10` by default, and accepts `exclude_globs`. Regex mode retains its ripgrep options and defaults `max_results` to 300. Query mode returns the ranking actually used (`hybrid`, `lexical`, or `keyword_fallback`) and a bounded `ranking_reason` when applicable. `embeddings_disabled` denotes intentional lexical search, not a failure. `read_file` locates known-file content with anchors and line offsets, and `list_files` lists paths without ranked query search.
 
-- `codebase_search` for natural-language code search
-- `read_file` with `query` to jump to the most relevant section of a file
-- `list_files` with `query` to find files by meaning instead of path/glob
-- `search_files` with `semantic: true` to use the same retrieval index
+Browser workspace chat mirrors native search. Projectless Browser Ask Agent has no workspace index and remains regex-only.
 
 ### Notes
 
@@ -634,7 +631,7 @@ After indexing completes, agents can use:
 
 Each provider request gets an immutable model-aware context ledger. It records the context window and input ceiling, reserves output and a safety buffer, measures required layers, allocates bounded retrieved/working-set layers in declared priority order, and reports per-layer omissions plus any required-context overflow. Required prompt material is measured rather than silently truncated, so the ledger can report that a request exceeds its safe envelope instead of claiming every request always fits.
 
-`get_context` complements that request ledger with content-addressed working-set tracking. Unchanged content omission is opt-in through `dedupe_unchanged_content`, applies only to the exact range already returned in the current session, and can be bypassed with `refresh`; overlapping ranges and separate full-file reads are tracked independently.
+The `read_file` context view complements that request ledger with content-addressed working-set tracking. Unchanged content omission is opt-in through `dedupe_unchanged_content`, applies only to the exact range already returned in the current session, and can be bypassed with `refresh`; overlapping ranges and separate full-file reads are tracked independently.
 
 Context Health separately projects autonomous memory, lexical/vector/structural retrieval, and index state. In VS Code it appears in the sidebar Activity section between Tool Calls and Codebase Index; the Browser Gateway keeps it in the Chat Activity Shelf. This operational health display is not part of `/context-doctor`: the doctor reports measured prompt sections, tool schemas, the latest completed request ledger, retained/repeated tool results, and condensation evidence, and labels diagnostics it does not yet instrument rather than guessing.
 
@@ -774,8 +771,8 @@ const files = tool("list_files", {
   .map((entry) => "src/" + entry);
 const packs = toolAllSettled(
   files.map((path) => ({
-    name: "get_context",
-    input: { path, limit: 80 },
+    name: "read_file",
+    input: { path, view: "context", limit: 80 },
   })),
 );
 return packs.map((result, index) =>
@@ -790,8 +787,8 @@ return packs.map((result, index) =>
 - `toolAllSettled([{ name, input }, ...])` uses the same limits, concurrency, and ordering, returning `{ status: "fulfilled", value }` or `{ status: "rejected", reason: { code, message } }` for recoverable child handler, per-child-size and interactive path-approval failures. `interaction_denied` instructs the caller to use the read tool directly to request path approval; compose never obtains approval itself. Other authorization, mode, deferred-catalog/input, path-policy, cancellation, budget, malformed canonical data, cumulative bridge overflow, memory, and internal failures remain fatal to the whole script.
 - Return selected fields and preserve per-child errors rather than returning raw batches. Child shapes differ: `search_files.results` is formatted text, not an array. Final return values omit undefined object properties and serialize undefined array entries as `null`, like JSON; a top-level undefined return and other unsupported values still fail, with a property/index path in the error. Tool inputs and canonical child data remain strictly validated.
 - Script policy checks parsed JavaScript syntax, so comments, string literals, regexes, and template text containing words such as `async function` are accepted as data. Actual async functions, generators, and constructor access remain prohibited, including executable template interpolations. Parse failures include a bounded reason and script-relative line/column location, without returning the full script.
-- The compose tool description names the exact composable child set and variant constraints generated from the canonical composability policy and current advertised tool union. `read_file` supports text and extracted PDF only, with `query` omitted; image/document output is rejected before bridging. `list_files` is composable only without `query`; `search_files` only when `semantic` is omitted or false.
-- Each child must be authorized by the frozen provider request that invoked `compose`: either its canonical name was inline, or `call_native_tool` was inline and the exact child appears in that request's immutable deferred native catalog. The current mode, profile, skill allowlist, and path policy can only narrow this authority. Nested compose, MCP, shell, background/fleet, writes, media, transcript recall, editor UI, semantic variants, and interactive controls are rejected.
+- The compose tool description names the exact composable child set and variant constraints generated from the canonical composability policy and current advertised tool union. `read_file` supports text and extracted PDF only; image/document output is rejected before bridging. `list_files` lists paths without ranked query search; `search_files` is composable only in regex mode.
+- Each child must be authorized by the frozen provider request that invoked `compose`: either its canonical name was inline, or `call_native_tool` was inline and the exact child appears in that request's immutable deferred native catalog. The current mode, profile, skill allowlist, and path policy can only narrow this authority. Nested compose, MCP, shell, background/fleet, writes, media, transcript recall, editor UI, query-mode search, and interactive controls are rejected.
 - Outside-workspace child paths are limited to AgentLink temporary artifacts and paths already trusted before composition. Compose never opens approval, question, diff, mode, or editor UI.
 - Limits: four active QuickJS runtimes per extension host, eight FIFO admission waiters, a five-second admission wait, 64 child calls, 16 descriptors per batch helper, child concurrency 4, 32 MiB QuickJS memory, 60 seconds, 1 MiB bridged data per child/envelope, 8 MiB cumulative bridged data, 40 KiB final serialized return, and a bounded UI-only child trace. Admission overflow or expiry returns `compose_runtime_busy` without dispatching a child.
 - The 40 KiB ceiling applies only to the final serialized value returned to the model, not to child data processed inside the sandbox. It bounds model-context, transcript, persistence, and UI costs and prevents fan-out scripts from returning their full intermediate dataset instead of a reduced answer.
@@ -804,17 +801,20 @@ return packs.map((result, index) =>
 
 Read file contents with line numbers. Returns rich metadata that built-in read tools cannot provide. Supports text files, local images, and PDF text extraction.
 
-| Parameter                | Type     | Description                                                                                                                                        |
-| ------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `path`                   | string   | File path (absolute or relative to workspace root)                                                                                                 |
-| `offset`                 | number?  | Starting line number (1-indexed, default: 1)                                                                                                       |
-| `limit`                  | number?  | Maximum lines to read (default: 2000)                                                                                                              |
-| `include_symbols`        | boolean? | Include top-level symbol outline (default: true)                                                                                                   |
-| `query`                  | string?  | Semantic search query to jump to the most relevant section. Auto-sets offset using the codebase index. Ignored if `offset` is explicitly provided. |
-| `anchor`                 | string?  | Literal anchor text to locate and jump near. Ignored if `offset` is explicitly provided.                                                           |
-| `anchor_regex`           | string?  | Regex anchor pattern to locate and jump near. Ignored if `offset` is explicitly provided.                                                          |
-| `anchor_offset`          | number?  | Line offset applied after anchor/semantic match (e.g. `-20` for context above).                                                                    |
-| `auto_follow_suggestion` | boolean? | If `path` is not found and exactly one high-confidence suggestion exists, automatically read that suggested file and include resolution metadata.  |
+In VS Code workspace sessions and mirrored browser workspace chat, `read_file` has two views. The default `view: "content"` is described in this section. `view: "context"` returns the oriented context pack described under [read_file context view](#read_file-context-view-formerly-get_context). Each view keeps the path policy, Compose limits, and history budget of the reader it replaced. Options that belong to the other view (`include_symbols`, anchors, and `auto_follow_suggestion` for content; `dedupe_unchanged_content` and `refresh` for context) are rejected before the file is read. If a mode, profile, or skill permits only one view, the schema lists only that view; omitting `view` always means content and never falls back to context.
+
+| Parameter         | Type     | Description                                                                      |
+| ----------------- | -------- | -------------------------------------------------------------------------------- |
+| `path`            | string   | File path (absolute or relative to workspace root)                               |
+| `view`            | string?  | `"content"` (default) or `"context"`, when permitted                             |
+| `offset`          | number?  | Starting line number (1-indexed, default: 1)                                     |
+| `limit`           | number?  | Maximum lines to read (content default 2000; context default 200, capped at 400) |
+| `include_symbols` | boolean? | Content view: include top-level symbol outline (default: true)                   |
+
+| `anchor` | string? | Literal anchor text to locate and jump near. Ignored if `offset` is explicitly provided. |
+| `anchor_regex` | string? | Regex anchor pattern to locate and jump near. Ignored if `offset` is explicitly provided. |
+| `anchor_offset` | number? | Line offset applied after an anchor match (e.g. `-20` for context above). |
+| `auto_follow_suggestion` | boolean? | If `path` is not found and exactly one high-confidence suggestion exists, automatically read that suggested file and include resolution metadata. |
 
 **Response includes:**
 
@@ -839,12 +839,15 @@ Fields like `git_status`, `diagnostics`, and `symbols` are omitted when not avai
 
 **Friendly errors:** `ENOENT` → `"File not found: {path}. Working directory: {root}"`, `EACCES` → `"Permission denied"`, `EISDIR` → `"Use list_files instead"`. When `auto_follow_suggestion` succeeds, the response includes suggestion/resolution metadata showing the requested path and followed file.
 
-### get_context
+### read_file context view (formerly get_context)
 
-Build a compact read-only context pack for an explicit file. Prefer this over `read_file` for first-pass orientation when the file path is already known; use `read_file` when you need exact file content, local images/PDFs, complete temp outputs, a specific large line slice, or semantic in-file jumping via `query`. This is intended to collapse the common orientation sequence into one bounded response while tracking whether the same content range has already been returned in the current session.
+Call `read_file` with `view: "context"` to build a compact read-only context pack for an explicit file. Prefer it over the content view for first-pass orientation when the file path is already known; use the content view when you need exact file content, local images/PDFs, complete temp outputs, a specific large line slice, or anchor-based jumping. This is intended to collapse the common orientation sequence into one bounded response while tracking whether the same content range has already been returned in the current session.
+
+VS Code workspace sessions and mirrored browser workspace chat no longer have a separate `get_context` tool. A direct `get_context` call there is rejected like any other unavailable tool, and older transcripts still show recorded `get_context` calls with their file link. The standalone CLI keeps its own `get_context` tool.
 
 | Parameter                  | Type     | Description                                                                                           |
 | -------------------------- | -------- | ----------------------------------------------------------------------------------------------------- |
+| `view`                     | string   | Must be `"context"`.                                                                                  |
 | `path`                     | string   | File path to build context for. Directory paths are not bulk-read.                                    |
 | `offset`                   | number?  | Starting line number for the content slice (1-indexed, default: 1).                                   |
 | `limit`                    | number?  | Maximum content lines to include (default: 200, capped at 400).                                       |
@@ -893,7 +896,7 @@ The tool is intentionally static and budgeted. It is best for orientation, modul
 
 ### get_module_neighbors
 
-Read the structural code index for a single source/config file. Use this after `get_context` when you need module-level blast-radius awareness before editing: what the file imports, what it exports, which indexed modules import it, and what top-level symbols it declares.
+Read the structural code index for a single source/config file. Use this after the `read_file` context view when you need module-level blast-radius awareness before editing: what the file imports, what it exports, which indexed modules import it, and what top-level symbols it declares.
 
 | Parameter     | Type    | Description                                                                                                   |
 | ------------- | ------- | ------------------------------------------------------------------------------------------------------------- |
@@ -947,34 +950,32 @@ List files and directories. Directories have a trailing `/` suffix. An explicit 
 | `depth`           | number?  | Max directory depth for recursive listing                                                                                                                                                                                                               |
 | `pattern`         | string?  | Glob pattern to filter files (e.g. `*.ts`, `*.test.*`). Implies recursive search.                                                                                                                                                                       |
 | `include_ignored` | boolean? | Include ignored files/directories in recursive/pattern listing. Still excludes nested `node_modules` and `.git`. Explicit roots inside `node_modules` are honoured. Default: false. Pair with `pattern` when possible to avoid noisy/truncated results. |
-| `query`           | string?  | Semantic search query to find files by meaning (e.g. `"authentication logic"`). Returns files ranked by relevance. Other params ignored when set. Requires codebase index.                                                                              |
 
 Recursive listing uses ripgrep (`--files` mode) for speed and automatic `.gitignore` support by default. AgentLink supports VS Code's legacy and platform-specific `@vscode/ripgrep-universal` package layouts, then falls back to a verified `rg` on the extension host's `PATH`. Use `include_ignored: true` when expected files may live under ignored directories; pair it with `pattern` when possible (for example, `pattern: "*.pdf"`) to avoid noisy/truncated results. If ripgrep encounters unreadable or broken symlink targets after finding usable files, `list_files` returns the partial listing with bounded warnings instead of replacing it with an empty failure.
 
-**Semantic mode:** When `query` is provided, the response includes `semantic: true`, files ranked by score, and `count`. Other listing params are ignored.
-
 ### search_files
 
-Search file contents using regex, or perform semantic codebase search when `semantic: true`.
+Search file contents with exactly one of `regex` or `query`: regex finds known text or patterns, and query performs ranked code search by intent.
 
 Regex content results redact high-confidence secret values in eligible JSON/JSONC and TOML settings/configuration, including context lines and multiline values. Malformed or unreadable eligible files have their content withheld rather than returning raw matches. `redaction` reports the redacted-value count and `withheld_files`; filenames and match counts remain available. Emitted content lines are bounded to 500 source characters plus a truncation marker. This is narrow accidental-disclosure protection, not general secret detection in arbitrary source files.
 
-| Parameter          | Type     | Description                                                                                                                  |
-| ------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `path`             | string   | File or directory to search in                                                                                               |
-| `regex`            | string   | Regex pattern to search for, or a natural-language query when `semantic=true`                                                |
-| `file_pattern`     | string?  | Glob to filter files (e.g. `*.ts`). Used for regex mode only.                                                                |
-| `semantic`         | boolean? | Use vector/semantic search instead of regex. Requires the codebase index.                                                    |
-| `context`          | number?  | Number of context lines around each match (default: 1). Overridden by `context_before`/`context_after` if specified.         |
-| `context_before`   | number?  | Context lines BEFORE each match (like `grep -B`). Overrides `context` for before-match lines.                                |
-| `context_after`    | number?  | Context lines AFTER each match (like `grep -A`). Overrides `context` for after-match lines.                                  |
-| `case_insensitive` | boolean? | Case-insensitive search (default: false, regex mode only)                                                                    |
-| `multiline`        | boolean? | Enable multiline matching where `.` matches newlines (default: false, regex mode only)                                       |
-| `max_results`      | number?  | Maximum number of matches to return (default: 300)                                                                           |
-| `offset`           | number?  | Skip first N matches before returning results. Use with `max_results` for pagination.                                        |
-| `output_mode`      | string?  | `content` (default, matching lines with context), `files_with_matches` (file paths only), or `count` (match counts per file) |
+| Parameter          | Type      | Description                                                                                                                         |
+| ------------------ | --------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `path`             | string    | File or directory to search in                                                                                                      |
+| `regex`            | string?   | Exact text or regex pattern to search for. Required unless `query` is supplied.                                                     |
+| `file_pattern`     | string?   | Glob to filter files (e.g. `*.ts`). Used for regex mode only.                                                                       |
+| `query`            | string?   | Ranked search query by intent. Required unless `regex` is supplied; workspace-only and requires an explicit file or directory path. |
+| `exclude_globs`    | string[]? | Glob patterns to suppress from query results without rebuilding the index.                                                          |
+| `context`          | number?   | Number of context lines around each match (default: 1). Overridden by `context_before`/`context_after` if specified.                |
+| `context_before`   | number?   | Context lines BEFORE each match (like `grep -B`). Overrides `context` for before-match lines.                                       |
+| `context_after`    | number?   | Context lines AFTER each match (like `grep -A`). Overrides `context` for after-match lines.                                         |
+| `case_insensitive` | boolean?  | Case-insensitive search (default: false, regex mode only)                                                                           |
+| `multiline`        | boolean?  | Enable multiline matching where `.` matches newlines (default: false, regex mode only)                                              |
+| `max_results`      | number?   | Maximum results (default: 300 for regex, 10 for query). Query limits are clamped to integers from 1 to 300.                         |
+| `offset`           | number?   | Skip first N matches before returning results. Use with `max_results` for pagination.                                               |
+| `output_mode`      | string?   | `content` (default, matching lines with context), `files_with_matches` (file paths only), or `count` (match counts per file)        |
 
-Regex mode is powered by ripgrep with context lines and per-file match counts. AgentLink supports VS Code's legacy and platform-specific `@vscode/ripgrep-universal` package layouts, then falls back to a verified `rg` on the extension host's `PATH`. When `path` already names one file, a supplied `file_pattern` is redundant: AgentLink ignores it, completes the search, and returns a warning in every output mode. Count mode forces filename-qualified output and also accepts ripgrep's bare-count single-file shape, so a matching explicit file is not misreported as zero. Semantic mode uses the same embedded local retrieval index as `codebase_search`.
+Regex mode is powered by ripgrep with context lines and per-file match counts. AgentLink supports VS Code's legacy and platform-specific `@vscode/ripgrep-universal` package layouts, then falls back to a verified `rg` on the extension host's `PATH`. When `path` already names one file, a supplied `file_pattern` is redundant: AgentLink ignores it, completes the search, and returns a warning in every output mode. Count mode forces filename-qualified output and also accepts ripgrep's bare-count single-file shape, so a matching explicit file is not misreported as zero. Query mode returns ranked results and reports `ranking` as `hybrid`, `lexical`, or `keyword_fallback`; non-hybrid results include a bounded `ranking_reason`, with optional one-line `guidance` for actionable causes. `embeddings_disabled` is intentional lexical operation and does not indicate a failure.
 
 ### search_session_history
 
@@ -1115,7 +1116,33 @@ The tool is display-only, writes no files, consumes no image-generation quota, a
 
 When both selectors are omitted, the most recent session image is presented. Exact and recent selections can be combined; duplicates are removed while preserving their first selected order.
 
+### Session image IDs
+
+Every image in a VS Code chat session gets an `image_N` ID in conversation order: user attachments, screenshots and other image tool results, and generated images. The same IDs are used by `present_images`, `save_session_image`, `generate_image` reference and edit images, and background-agent image handoff (`imageIds`).
+
+IDs are numbered over the session's stored history, so they do not change when context condensing hides older messages from the model. Condensing keeps the images themselves out of the model's context and adds a short **Session images** list to the condense summary instead: one line per hidden image with its ID, name, type, and where it came from (for example, `returned by computer_use__screen_capture`), plus the next ID that a new image will receive. The list shows the 20 most recent hidden images and a count of older ones, which remain available by ID. An image costs context again only when a tool such as `present_images` returns it.
+
+Rewinding to a checkpoint removes images from the discarded turns; earlier images keep their IDs. Transcript-only diagnostic notes are not counted.
+
 **Response includes:** `status: "presented"`, the selected image count and image metadata (`id`, `name`, and `mimeType`), plus image blocks rendered both on the collapsed tool result and directly in the assistant’s main transcript message. PNG, JPEG, GIF, and WebP session images are supported.
+
+### save_session_image
+
+Write an image that is already in the current session to a workspace file. This covers user attachments, screenshots and other image tool results, and images returned by `generate_image`, so an agent can copy or keep an image after the fact without regenerating it. It is available in VS Code chat in Code and Architect modes. Browser Ask Agent is projectless and does not offer it.
+
+| Parameter   | Type     | Description                                                                                                                 |
+| ----------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `image_id`  | string   | Session image ID such as `image_3`. IDs follow `image_N` session order; unknown-ID errors list the currently available IDs. |
+| `path`      | string   | Workspace-relative or absolute path inside the workspace. Missing parent directories are created.                           |
+| `overwrite` | boolean? | Replace an existing file. Default: `false`, which refuses and leaves the file untouched.                                    |
+
+The image is written byte-for-byte with no format conversion. The extension must match the image type (`.png`, `.jpg`/`.jpeg`, `.gif`, or `.webp`); a path without an extension gets the matching one. Paths outside the workspace are rejected.
+
+Approval follows the same agent write policy as file edits. When writes are already approved for the target (blanket, project, session, or a matching write rule), the image is saved directly. Otherwise a file-write approval card asks to create or overwrite the file, and its trust options save rules the same way as other file writes.
+
+Images from before a context condense remain available. See [Session image IDs](#session-image-ids).
+
+**Response includes:** `status: "saved"`, `image_id`, workspace-relative `path`, `mime_type`, byte count, `overwritten` when an existing file was replaced, and the `authorization` basis. A rejected approval returns `status: "rejected_by_user"` and writes nothing; an existing file without `overwrite` returns an error with `status: "exists"`.
 
 ### Autonomous memory inspection and migration
 
@@ -1420,7 +1447,7 @@ Unnamed terminals come from a small per-chat pool of concurrent foreground termi
 
 Output is capped to the **last 200 lines** by default. Cleaned `output` strips complete ECMA-48 control sequences and applies terminal-style last-write semantics to lone carriage-return redraws, so structured CLI output is not wrapped in PTY mode controls or superseded progress states. `terminal_raw_output` preserves terminal-renderable controls for the terminal UI. AgentLink keeps a bounded display tail and an exact private command-output spool up to 10 MiB for Sandbox and Native Agent PTYs. When line filtering truncates complete, finalized output within that bound, `output_file` contains the full cleaned output for on-demand access via `read_file`. Running commands and captures beyond the bound omit `output_file` and report `output_complete`, `output_finalized`, total/retained/dropped byte counts, and whether line counts describe complete or retained output. While a command is running, byte counts describe the retained snapshot observed so far and can grow or be replaced by finalized spool totals when the command completes. Use `output_head`, `output_tail`, or `output_grep` to customize filtering.
 
-The **Approve for Me** button above the chat input selects AgentLink's sandbox-first command preset with an automatic Guardian reviewer and enables session-scoped writes. While that complete policy is active, `write_file` and `apply_diff` can write beneath the operating system's canonical temporary roots (including the per-user temp root and `/tmp` aliases on macOS) without a separate outside-workspace approval. Manual modes still prompt, and protected instruction/memory files, `.env*`, credential stores, authenticated CLI configuration, unresolved paths, and symlink escapes remain human-reviewed. Turning session writes back to **Prompt** disables Approve for Me; while Approve for Me remains active, both settings survive mode switches, whereas ordinary session writes reset to Prompt on a mode switch. Reloading may restore an existing session's valid approval policy, but creating a new chat always starts with Approve for Me off and never carries session-scoped approval authority forward. With Approve for Me off, default commands use the native terminal and the ordinary command-card/rule flow. With it on, routine commands run in the verified baseline sandbox without a model call. Recognized project verification commands such as tests, builds, lint, formatting, and type checks are auto-approved only after AgentLink has prepared the verified baseline sandbox with default permissions; explicit prompt rules, environment overrides, inline files, additional permissions, native execution, install/publish/deploy operations, and unknown project scripts still require their normal review unless a complete matching Allow command rule already authorizes the invocation. Routine development commands — recognized read-only inspections, version checks, project toolchain runs, workspace-bounded `mkdir`/`mv`/`cp`/`touch` operations — are also auto-approved deterministically on the default route without a Guardian model call when no environment overrides, inline files, forced or escalated execution, retained Guardian denial, or interrupted review circuit applies; Git staging and commits, network-reaching, destructive, privileged, unrecognized, and install/publish/deploy commands keep the full Guardian review. For an active coding task, Guardian may approve task-branch creation, staging and committing task-related changes, a normal push of that branch, and creating its PR without a separate request for each step; force pushes, unrelated changes, and unrelated or protected branches are not implicitly authorized. Commands that request an additional sandbox capability or native host authority, plus dangerous commands that require review, are evaluated against the exact command, user objective, classification, prepared route, bounded recent evidence, and host-measured filesystem evidence: the bounded contents (or metadata, outside the workspace and temp roots) of script files the command would execute, and resolved location, type, size, entry-count, and sample-name facts for `rm`/`rmdir` deletion targets, so a wrapper script is judged by its body and a bounded delete of generated artifacts can be allowed on its merits. Guardian also reviews supported outside-workspace reads/writes; these grants are bound to the current session, policy, canonical targets, operation parameters, and complete bounded write proposal, then consumed once immediately before use. While Approve for Me is active, `switch_mode` changes modes immediately without Guardian or user approval. The agent is instructed to use it instead of asking for mode-switch or plan-approval consent — in architect mode it proceeds to implementation once the plan is self-reviewed — while still asking questions when it genuinely needs your input. Invalid output, provider errors, cancellation, timeout, protected/secret paths, incomplete evidence, or policy/action drift falls back to the normal human approval surface for actions that still require review. Command handoff uses the ordinary command card: **Run** participates in the same session-scoped recent-approval TTL, while **Save Rules & Run** can create session/project/global command policy. Guardian never creates persistent path, write, project, or global trust rules. Three consecutive reviewed denials, or ten of the last fifty, pause further automatic review and hand the circuit-tripping action to the ordinary command card with its Guardian evidence; later commands in the turn also use that direct human path. The most recent ten denied exact command actions may be re-reviewed once; they are never force-approved, and a direct human approval of the same exact action clears its retained denial. The reviewer has no tools, and one-shot grants do not transfer to another action or child agent.
+The **Approve for Me** button above the chat input selects AgentLink's sandbox-first command preset with an automatic Guardian reviewer and enables session-scoped writes. While that complete policy is active, `write_file` and `apply_diff` can write beneath the operating system's canonical temporary roots (including the per-user temp root and `/tmp` aliases on macOS) without a separate outside-workspace approval. Manual modes still prompt, and protected instruction/memory files, `.env*`, credential stores, authenticated CLI configuration, unresolved paths, and symlink escapes remain human-reviewed. Turning session writes back to **Prompt** disables Approve for Me; while Approve for Me remains active, both settings survive mode switches, whereas ordinary session writes reset to Prompt on a mode switch. Reloading may restore an existing session's valid approval policy, but creating a new chat always starts with Approve for Me off and never carries session-scoped approval authority forward. With Approve for Me off, default commands use the native terminal and the ordinary command-card/rule flow. With it on, routine commands run in the verified baseline sandbox without a model call. Recognized project verification commands such as tests, builds, lint, formatting, and type checks are auto-approved only after AgentLink has prepared the verified baseline sandbox with default permissions; explicit prompt rules, environment overrides, inline files, additional permissions, native execution, install/publish/deploy operations, and unknown project scripts still require their normal review unless a complete matching Allow command rule already authorizes the invocation. Routine development commands — recognized read-only inspections, version checks, project toolchain runs, workspace-bounded `mkdir`/`mv`/`cp`/`touch` operations — are also auto-approved deterministically on the default route without a Guardian model call when no environment overrides, inline files, forced or escalated execution, retained Guardian denial, or interrupted review circuit applies. Routine Git publishing is approved the same way, so agents decide when to commit and open PRs: `git add`, `git commit`, `git switch <branch>`, `git switch -c`/`git checkout -b`, `git fetch`/`git pull` from a configured remote, a non-force `git push` to a configured remote (including the default branch), and `gh pr create`. Because the sandbox keeps Git metadata read-only, these Git workflow commands (optionally chained with read-only inspections) are also approved without Guardian on native escalation. Force pushes (`--force`, `-f`, `--force-with-lease`, `+refspec`), ref deletion (`--delete`, `:refspec`), `--mirror`, tag pushes, URL destinations, Git global overrides, work-discarding Git operations, other network-reaching, destructive, privileged, unrecognized, and install/publish/deploy commands keep the full Guardian review. Commands that request an additional sandbox capability or native host authority, plus dangerous commands that require review, are evaluated against the exact command, user objective, classification, prepared route, bounded recent evidence, and host-measured filesystem evidence: the bounded contents (or metadata, outside the workspace and temp roots) of script files the command would execute, and resolved location, type, size, entry-count, and sample-name facts for `rm`/`rmdir` deletion targets, so a wrapper script is judged by its body and a bounded delete of generated artifacts can be allowed on its merits. Guardian also reviews supported outside-workspace reads/writes; these grants are bound to the current session, policy, canonical targets, operation parameters, and complete bounded write proposal, then consumed once immediately before use. While Approve for Me is active, `switch_mode` changes modes immediately without Guardian or user approval. The agent is instructed to use it instead of asking for mode-switch or plan-approval consent — in architect mode it proceeds to implementation once the plan is self-reviewed — while still asking questions when it genuinely needs your input. Invalid output, provider errors, cancellation, timeout, protected/secret paths, incomplete evidence, or policy/action drift falls back to the normal human approval surface for actions that still require review. Command handoff uses the ordinary command card: **Run** participates in the same session-scoped recent-approval TTL, while **Save Rules & Run** can create session/project/global command policy. Guardian never creates persistent path, write, project, or global trust rules. Three consecutive reviewed denials, or ten of the last fifty, pause further automatic review and hand the circuit-tripping action to the ordinary command card with its Guardian evidence; later commands in the turn also use that direct human path. The most recent ten denied exact command actions may be re-reviewed once; they are never force-approved, and a direct human approval of the same exact action clears its retained denial. The reviewer has no tools, and one-shot grants do not transfer to another action or child agent.
 
 Command policy rules use one decision model whether **Approve for Me** is on or off. An `allow` rule runs matching commands without another command approval card, `prompt` always asks, and `forbidden` rejects; stricter matching rules take precedence. **Exact**, **prefix**, and **regex** are match strategies, not separate authority classes, and legacy command rules with no stored decision are interpreted as `allow`. A complete Allow rule authorizes a matching invocation across its requested Protected Terminal, additional-permissions, managed-network, or native route, plus its environment overrides, inline payloads, and validator forcing; those details remain visible in the audit. It does not bypass review for an unseen network destination or the mandatory human card for a post-launch sandbox recovery. Compound commands skip approval only when every safely parsed, wrapper-expanded segment is allowed. Prompt and Forbidden rules, malformed or unsupported input, protected paths and metadata, read-only/delegation boundaries, and route/policy drift still stop execution. Broad shell/interpreter/wrapper prefixes are never suggested automatically; manually entering one remains possible but shows a persistent warning and requires explicit modal confirmation in the command-palette flow. The approval card and rule editor expose **Allow**, **Prompt**, and **Forbidden** with session/project/global scopes. The command-palette and Trusted Commands creation flow adds Project or Global **Allow** rules, which can then be edited.
 
@@ -1929,23 +1956,6 @@ Expected review output format includes:
 - Findings table (severity/category/location/issue/recommendation)
 - Open questions / assumptions
 - Recommended next actions
-
-### codebase_search
-
-Search the codebase by meaning, not exact text.
-
-| Parameter       | Type      | Description                                                                                               |
-| --------------- | --------- | --------------------------------------------------------------------------------------------------------- |
-| `query`         | string    | Natural language query describing what you're looking for                                                 |
-| `path`          | string?   | Directory to scope the search to                                                                          |
-| `limit`         | number?   | Maximum number of semantic results to return (default: 10)                                                |
-| `exclude_globs` | string[]? | Glob patterns to suppress from returned semantic results without rebuilding the index (e.g. `**/dist/**`) |
-
-AgentLink automatically suppresses common `.agentlink` runtime artifacts from semantic results. Use `exclude_globs` when you need to hide additional noisy indexed paths for a specific query.
-
-Eligible structured-settings secrets are redacted from the full document before indexed excerpts are sliced, so partial or multiline values cannot bypass redaction. Keyword fallback applies the same policy, and invalid or unreadable eligible content is withheld. This does not detect arbitrary secrets in source files.
-
-Each result excerpt is limited to 4,000 source characters plus a truncation marker, including lexical and hybrid retrieval and `search_files(semantic=true)`. When excerpts are shortened, `truncated_results` reports their count and `excerpt_limit` reports the source-character limit. File paths, scores, line ranges, and shorter neighbouring results are retained.
 
 ### get_terminal_output
 

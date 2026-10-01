@@ -1,5 +1,17 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+export interface QuickAskShortcutStatus {
+  shortcut: string | null;
+  registered: boolean;
+  defaultShortcut: string;
+}
+
+export interface OpenAtLoginStatus {
+  available: boolean;
+  enabled: boolean;
+  requiresApproval: boolean;
+}
+
 export interface DesktopOAuthAccount {
   id: string;
   label: string;
@@ -32,4 +44,14 @@ contextBridge.exposeInMainWorld("agentlinkDesktop", {
     ipcRenderer.invoke("agentlink:oauth:remove", accountId),
   continueToChat: (): Promise<{ ok: true }> =>
     ipcRenderer.invoke("agentlink:continue-to-chat"),
+  quickAskShortcut: (): Promise<QuickAskShortcutStatus> =>
+    ipcRenderer.invoke("agentlink:quick-ask:shortcut:get"),
+  setQuickAskShortcut: (
+    accelerator: string | null,
+  ): Promise<QuickAskShortcutStatus> =>
+    ipcRenderer.invoke("agentlink:quick-ask:shortcut:set", accelerator),
+  openAtLogin: (): Promise<OpenAtLoginStatus> =>
+    ipcRenderer.invoke("agentlink:open-at-login:get"),
+  setOpenAtLogin: (enabled: boolean): Promise<OpenAtLoginStatus> =>
+    ipcRenderer.invoke("agentlink:open-at-login:set", enabled),
 });

@@ -33,6 +33,7 @@ import type {
   SkillAuthoritySnapshot,
 } from "../core/tools/types.js";
 import { ToolCallBudget } from "../core/tools/toolCallBudget.js";
+import { getReadFileOperationName } from "../core/tools/readFileViews.js";
 import { createNativeToolDisclosureSnapshot } from "../core/tools/nativeToolDisclosure.js";
 import { measureComposeRequestOccupancy } from "./composeEfficiency.js";
 import { getTargetWindowScale } from "./condenseTargetWindow.js";
@@ -109,7 +110,7 @@ import { truncateMiddle } from "../util/truncateMiddle.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 import type { AutomaticMemoryContext } from "@agentlink/protocol/autonomous-memory";
 import { getAgentLinkHttpDiagnostics } from "../util/httpDispatcher.js";
-import { collectSessionImages } from "./sessionImages.js";
+import { collectStoredSessionImages } from "./sessionImages.js";
 import { resolveProjectAttachments } from "./attachmentResolver.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import type { ModelRequestPermit } from "../core/modelRequestScheduler.js";
@@ -710,6 +711,8 @@ interface ResolvedToolUseBlock extends ToolUseBlock {
 interface ToolCallResult {
   tool_use_id: string;
   toolName: string;
+  /** Internal operation used for result budgets when a view selects it. */
+  budgetToolName?: string;
   result: ToolResult;
   historyContent?: CoreModelToolResultBlock["content"];
   durationMs: number;
@@ -808,7 +811,6 @@ const TOOL_RESULT_CHAR_LIMITS: Record<string, number> = {
   read_file: 80_000, // ~20k tokens — self-paginating; every line is high-value
   execute_command: 40_000, // ~10k tokens — VS Code terminal already caps at 200 lines
   search_files: 20_000, // ~5k tokens — results can be repetitive; agent can refine
-  codebase_search: 20_000,
   list_files: 12_000, // ~3k tokens — just file paths
 };
 const DEFAULT_TOOL_RESULT_CHARS = 32_000; // ~8k tokens
@@ -1301,6 +1303,7 @@ export class AgentEngine {
           allMcpToolDefsForSkillAllowlist: connectedMcpToolDefs,
           backgroundExpectedResult: narrowedExpectedResult,
           composeEnabled: opts?.composeEnabled === true,
+          hasDeferredRules: session.getAdvertisedRules().length > 0,
         };
         // Sessions with a cache-stable system prompt also advertise a
         // mode-independent tool union, so switching modes never invalidates
@@ -2804,11 +2807,12 @@ export class AgentEngine {
           hookTurnId: opts?.hookTurnId,
           hookModel: session.model,
           hookCwd: session.requireProjectRoot(),
-          // Number image_N ids over the model-visible history (post-condense,
-          // no diagnostic-only messages): the model counts the images it can
-          // see, so numbering the raw transcript makes ids silently drift onto
-          // older captures after a condense or revert.
-          getSessionImages: () => collectSessionImages(session.getMessages()),
+          // Number image_N ids over the stored history so they stay fixed
+          // when condensing hides older messages; the condense summary lists
+          // the hidden IDs and the next ID so the model's count stays aligned.
+          // Reverting truncates stored history, dropping discarded images.
+          getSessionImages: () =>
+            collectStoredSessionImages(session.getAllMessages()),
         };
         const resolvedToolUseBlocks: ResolvedToolUseBlock[] = toolUseBlocks.map(
           (block) => {
@@ -3126,7 +3130,11 @@ export class AgentEngine {
         for (const tr of toolResults) {
           const canonicalContent =
             tr.historyContent ??
-            toolResultToContent(tr.result, tr.tool_use_id, tr.toolName);
+            toolResultToContent(
+              tr.result,
+              tr.tool_use_id,
+              tr.budgetToolName ?? tr.toolName,
+            );
           tr.historyContent = await retainToolResultHistoryContent(
             tr.result,
             canonicalContent,
@@ -3517,6 +3525,10 @@ export class AgentEngine {
         return {
           tool_use_id: call.id,
           toolName: call.name,
+          budgetToolName: getReadFileOperationName(
+            call.name,
+            call.input as Record<string, unknown> | undefined,
+          ),
           result,
           durationMs: Date.now() - start,
           mcpApprovalPromotion: result.uiMeta?.mcpApprovalPromotion,

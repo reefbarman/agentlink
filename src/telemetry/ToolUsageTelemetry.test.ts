@@ -879,6 +879,40 @@ describe("ToolUsageTelemetry", () => {
     expect(exposure.totals.requests).toBe(60);
   });
 
+  it("records bounded search usage metrics", async () => {
+    const telemetryPath = path.join(tmpDir, "tool-usage.jsonl");
+    const telemetry = new ToolUsageTelemetry({
+      telemetryPath,
+      flushIntervalMs: 0,
+    });
+    telemetry.record({
+      toolName: "search_files",
+      source: "agent",
+      outcome: "ok",
+      metrics: {
+        searchMode: "query",
+        searchRanking: "lexical",
+        searchRankingReason: "embeddings_disabled",
+        searchResultCount: "2-5",
+        privateValue: "must not be recorded",
+      },
+    });
+    await telemetry.flush();
+
+    const [record] = (await readJsonLines(telemetryPath)) as Array<{
+      tools: Record<string, { categoricalMetrics: Record<string, number> }>;
+    }>;
+    expect(record.tools.search_files.categoricalMetrics).toMatchObject({
+      "searchMode:query": 1,
+      "searchRanking:lexical": 1,
+      "searchRankingReason:embeddings_disabled": 1,
+      "searchResultCount:2-5": 1,
+    });
+    expect(record.tools.search_files.categoricalMetrics).not.toHaveProperty(
+      "privateValue:other",
+    );
+  });
+
   it("recovers stale append locks from dead extension hosts", async () => {
     const telemetryPath = path.join(tmpDir, "tool-usage.jsonl");
     await fs.mkdir(`${telemetryPath}.lock`, { recursive: true });

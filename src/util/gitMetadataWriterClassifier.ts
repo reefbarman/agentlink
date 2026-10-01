@@ -199,7 +199,7 @@ function classifyInit(args: readonly string[]): boolean {
   return Boolean(parsed && parsed.operands.length === 0);
 }
 
-function classifyAdd(args: readonly string[]): boolean {
+function classifyAdd(args: readonly string[], allowPatch = false): boolean {
   const parsed = parseArguments(
     args,
     new Set([
@@ -213,6 +213,7 @@ function classifyAdd(args: readonly string[]): boolean {
       "--sparse",
       "-f",
       "--force",
+      ...(allowPatch ? ["-p", "--patch"] : []),
     ]),
     new Set(),
   );
@@ -610,6 +611,7 @@ const CLASSIFIERS: Record<
 
 function classifyDirectGitMetadataWriter(
   command: string,
+  allowPatch = false,
 ): PredictableGitMetadataWriterSubcommand | null {
   if (!command.trim() || hasUnsupportedShellSyntax(command)) return null;
   const wordScan = scanShellLexWords(command);
@@ -617,17 +619,58 @@ function classifyDirectGitMetadataWriter(
     wordScan.finalState.quote !== null ||
     wordScan.finalState.danglingEscape ||
     wordScan.words.length < 2 ||
-    wordScan.words[0].raw !== "git" ||
-    wordScan.words[1].raw !== wordScan.words[1].raw.toLowerCase()
+    wordScan.words[0].raw !== "git"
   ) {
     return null;
   }
-  const subcommand = wordScan.words[1]
-    .raw as PredictableGitMetadataWriterSubcommand;
+  let subcommandIndex = 1;
+  while (wordScan.words[subcommandIndex]?.raw === "-c") {
+    if (
+      decodeWord(wordScan.words[subcommandIndex + 1]?.raw ?? "") !==
+      "color.ui=false"
+    )
+      return null;
+    subcommandIndex += 2;
+  }
+  const subcommand = wordScan.words[subcommandIndex]
+    ?.raw as PredictableGitMetadataWriterSubcommand;
   if (!SUBCOMMANDS.has(subcommand)) return null;
-  const args = wordScan.words.slice(2).map(({ raw }) => decodeWord(raw));
+  const args = wordScan.words
+    .slice(subcommandIndex + 1)
+    .map(({ raw }) => decodeWord(raw));
   if (args.some((argument) => argument === null)) return null;
-  return CLASSIFIERS[subcommand](args as string[]) ? subcommand : null;
+  const recognized =
+    subcommand === "add"
+      ? classifyAdd(args as string[], allowPatch)
+      : CLASSIFIERS[subcommand](args as string[]);
+  return recognized ? subcommand : null;
+}
+
+function classifyInputPipedGitMetadataWriter(
+  command: string,
+): PredictableGitMetadataWriterSubcommand | null {
+  const scan = scanShellLexBoundaries(command, {
+    separators: ["|"],
+    comments: true,
+  });
+  const boundary = scan.boundaries[0];
+  if (
+    scan.boundaries.length !== 1 ||
+    boundary.kind === "comment" ||
+    boundary.operator !== "|"
+  )
+    return null;
+  const producer = command.slice(0, boundary.start).trim();
+  if (hasUnsupportedShellSyntax(producer)) return null;
+  const words = scanShellLexWords(producer).words;
+  if (words[0]?.raw !== "printf" || words.length < 2) return null;
+  const args = words.slice(1).map(({ raw }) => decodeWord(raw));
+  if (args.some((arg) => arg === null) || args[0]?.startsWith("-")) return null;
+  const writer = classifyDirectGitMetadataWriter(
+    command.slice(boundary.end),
+    true,
+  );
+  return writer === "add" ? writer : null;
 }
 
 function isDirectGitStatusFollowup(command: string): boolean {
@@ -715,7 +758,8 @@ function isDirectGitInspection(command: string): boolean {
 
 /**
  * Recognizes a deliberately narrow set of direct Git metadata writers, including
- * Git-only writer/inspection chains joined by top-level `&&` or `;`. A match enables guidance only;
+ * Git-only writer/inspection chains joined by top-level `&&` or `;`, and literal
+ * `printf` input piped to Git add (including patch staging). A match enables guidance only;
  * it never grants or selects execution authority. `null` means unrecognized or
  * ineligible, not safe.
  */
@@ -739,7 +783,9 @@ export function classifyPredictableGitMetadataWriter(
     scan.boundaries.some(
       (boundary) =>
         boundary.kind === "comment" ||
-        (boundary.operator !== "&&" && boundary.operator !== ";"),
+        (boundary.operator !== "&&" &&
+          boundary.operator !== ";" &&
+          boundary.operator !== "|"),
     )
   ) {
     return null;
@@ -747,6 +793,7 @@ export function classifyPredictableGitMetadataWriter(
   const segments: string[] = [];
   let start = 0;
   for (const boundary of scan.boundaries) {
+    if (boundary.kind !== "comment" && boundary.operator === "|") continue;
     const segment = input.command.slice(start, boundary.start);
     if (!segment.trim()) return null;
     segments.push(segment);
@@ -755,7 +802,11 @@ export function classifyPredictableGitMetadataWriter(
   const finalSegment = input.command.slice(start);
   if (!finalSegment.trim()) return null;
   segments.push(finalSegment);
-  const writers = segments.map(classifyDirectGitMetadataWriter);
+  const writers = segments.map(
+    (segment) =>
+      classifyDirectGitMetadataWriter(segment) ??
+      classifyInputPipedGitMetadataWriter(segment),
+  );
   const hasInit = writers.includes("init");
   const subcommands: PredictableGitMetadataWriterSubcommand[] = [];
   for (const [index, segment] of segments.entries()) {

@@ -13,7 +13,6 @@ const {
   execRipgrepFilesMock,
   getRipgrepBinPathMock,
   resolveAndValidatePathMock,
-  semanticFileListMock,
   approveOutsideWorkspaceAccessMock,
 } = vi.hoisted(() => ({
   statMock: vi.fn(),
@@ -21,7 +20,6 @@ const {
   execRipgrepFilesMock: vi.fn(),
   getRipgrepBinPathMock: vi.fn(),
   resolveAndValidatePathMock: vi.fn(),
-  semanticFileListMock: vi.fn(),
   approveOutsideWorkspaceAccessMock: vi.fn(),
 }));
 
@@ -41,10 +39,6 @@ vi.mock("../util/ripgrep.js", () => ({
 
 vi.mock("../util/paths.js", () => ({
   resolveAndValidatePath: resolveAndValidatePathMock,
-}));
-
-vi.mock("../services/semanticSearch.js", () => ({
-  semanticFileList: semanticFileListMock,
 }));
 
 vi.mock("./pathAccessUI.js", () => ({
@@ -214,68 +208,60 @@ describe("handleListFiles", () => {
     });
   });
 
-  it("surfaces semantic source freshness alongside ranked entries", async () => {
-    semanticFileListMock.mockResolvedValue({
-      files: [{ path: "src/changed.ts", score: 0.75 }],
-      freshness: {
-        stale_sources: ["src/changed.ts"],
-        deleted_sources: ["src/deleted.ts"],
-        unverified_sources: [],
-      },
-    });
+  it("rejects retired query before resolving or listing a path", async () => {
     const { handleListFiles } = await import("./listFiles.js");
 
     const result = await handleListFiles(
-      { path: "docs", query: "semantic source" },
+      { path: "docs", query: "semantic source" } as never,
       approvalManager,
       approvalPanel,
       sessionId,
     );
 
-    expect(JSON.parse(textResult(result))).toEqual({
-      path: "docs",
-      query: "semantic source",
-      semantic: true,
-      entries: "src/changed.ts (score: 0.7500)",
-      count: 1,
-      freshness: {
-        stale_sources: ["src/changed.ts"],
-        deleted_sources: ["src/deleted.ts"],
-        unverified_sources: [],
-      },
-    });
-  });
-
-  it("returns partial recursive results with a loop warning", async () => {
-    execRipgrepFilesMock.mockResolvedValue({
-      files: [path.join("/workspace/docs", "NOTICE")],
-      warnings: ["rg: broken-link: No such file or directory (os error 2)"],
-      exitCode: 2,
-      truncated: false,
-    });
-    const { handleListFiles } = await import("./listFiles.js");
-
-    const result = await handleListFiles(
-      {
-        path: "docs",
-        recursive: true,
-        pattern: "NOTICE*",
-        include_ignored: true,
-      },
-      approvalManager,
-      approvalPanel,
-      sessionId,
+    expect(result.error?.message).toBe(
+      "Unsupported parameter 'query' for list_files.",
     );
-
-    expect(JSON.parse(textResult(result))).toMatchObject({
-      entries: "NOTICE",
-      count: 1,
-      warnings: [
-        "Some paths could not be inspected; partial listing results are shown.",
-        "rg: broken-link: No such file or directory (os error 2)",
-      ],
-    });
+    expect(resolveAndValidatePathMock).not.toHaveBeenCalled();
+    expect(statMock).not.toHaveBeenCalled();
+    expect(readdirMock).not.toHaveBeenCalled();
+    expect(execRipgrepFilesMock).not.toHaveBeenCalled();
   });
+
+  it.each(
+    [[], [path.join("/workspace/docs", "NOTICE")]].map((files) => ({ files })),
+  )(
+    "returns partial recursive results $files with a traversal warning",
+    async ({ files }) => {
+      execRipgrepFilesMock.mockResolvedValue({
+        files,
+        warnings: ["rg: broken-link: No such file or directory (os error 2)"],
+        exitCode: 2,
+        truncated: false,
+      });
+      const { handleListFiles } = await import("./listFiles.js");
+
+      const result = await handleListFiles(
+        {
+          path: "docs",
+          recursive: true,
+          pattern: "NOTICE*",
+          include_ignored: true,
+        },
+        approvalManager,
+        approvalPanel,
+        sessionId,
+      );
+
+      expect(JSON.parse(textResult(result))).toMatchObject({
+        entries: files.length ? "NOTICE" : "",
+        count: files.length,
+        warnings: [
+          "Some paths could not be inspected; partial listing results are shown.",
+          "rg: broken-link: No such file or directory (os error 2)",
+        ],
+      });
+    },
+  );
 
   it("passes --no-ignore for recursive listings when include_ignored is true", async () => {
     const { handleListFiles } = await import("./listFiles.js");

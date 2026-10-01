@@ -16,6 +16,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { BaselineSandboxLaunchAuthorizer } from "./BaselineSandboxLaunchAuthorizer.js";
+import { SandboxPreparationError } from "./SandboxPreparationError.js";
 import { CURRENT_SANDBOX_POLICY_VERSION } from "../../core/sandboxPolicy.js";
 import type { SandboxCapabilityGrantTimingEvent } from "./sandboxCapabilityGrantTiming.js";
 import { createHash } from "node:crypto";
@@ -476,6 +477,52 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
     }
   });
 
+  it.each(["PATH", "HOME", "HTTPS_PROXY", "DYLD_INSERT_LIBRARIES"])(
+    "rejects reserved %s input with a bounded reason and cleans up preparation",
+    async (name) => {
+      const test = await fixture();
+      try {
+        const failure = await test.authorizer
+          .authorize(
+            request(test.workspace, { env: { [name]: "secret-value" } }),
+          )
+          .catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(SandboxPreparationError);
+        expect(failure).toMatchObject({
+          reason:
+            name === "PATH"
+              ? "reserved_path_override"
+              : "reserved_environment_override",
+          commandStarted: false,
+        });
+        expect(String(failure)).not.toContain("secret-value");
+        expect(await readdir(test.privateRoot)).toEqual([]);
+      } finally {
+        await test.dispose();
+      }
+    },
+  );
+
+  it("allows an inline PATH export without overriding launch environment", async () => {
+    const test = await fixture();
+    try {
+      const command = 'export PATH="/desired/bin:$PATH" && command -v node';
+      const launch = await test.authorizer.authorize(
+        request(test.workspace, { command }),
+      );
+      try {
+        expect(launch.policy.environment.values.PATH).not.toContain(
+          "/desired/bin",
+        );
+        expect(launch.activate().helperRequest.command).toBe(command);
+      } finally {
+        launch.finalize();
+      }
+    } finally {
+      await test.dispose();
+    }
+  });
+
   it("fails closed when shell profile inheritance is requested", async () => {
     const test = await fixture();
     const authorizer = new BaselineSandboxLaunchAuthorizer({
@@ -487,7 +534,11 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
     try {
       await expect(
         authorizer.authorize(request(test.workspace)),
-      ).rejects.toThrow("useProfile is not supported");
+      ).rejects.toMatchObject({
+        name: "SandboxPreparationError",
+        reason: "unsupported_shell_profile",
+        commandStarted: false,
+      });
     } finally {
       await test.dispose();
     }
@@ -1198,7 +1249,10 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
             env: { SSH_AUTH_SOCK: "/tmp/agent.sock" },
           }),
         ),
-      ).rejects.toThrow("environment override is reserved: SSH_AUTH_SOCK");
+      ).rejects.toMatchObject({
+        name: "SandboxPreparationError",
+        reason: "reserved_environment_override",
+      });
 
       await writeFile(inlinePath, "changed");
       await expect(

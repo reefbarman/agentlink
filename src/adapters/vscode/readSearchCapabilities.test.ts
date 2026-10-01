@@ -12,6 +12,7 @@ import {
   createVscodeReadFileEnrichmentProvider,
   createVscodeSemanticSearchProvider,
   createVscodeStructuralGraphProvider,
+  createVscodeWorkspaceFileProvider,
 } from "./readSearchCapabilities.js";
 import {
   getCodeRetrievalStoreRoot,
@@ -21,6 +22,7 @@ import {
 import { LanceDbRetrievalRepository } from "../../storage/retrieval/LanceDbRetrievalRepository.js";
 import { buildModuleNeighborsPayload } from "../../tools/getModuleNeighbors.js";
 import { createCodeIndexFingerprint } from "../../indexer/retrievalFingerprint.js";
+import { handleSearchFiles } from "../../tools/searchFiles.js";
 import { prepareCodeFilePublication } from "../../indexer/retrievalPublicationTranslation.js";
 
 vi.mock("../../util/agentlinkTmpArtifacts.js", () => ({
@@ -110,6 +112,7 @@ describe("createVscodeSemanticSearchProvider", () => {
       path: "src/agent",
       limit: 4,
       exclude_globs: ["**/dist/**"],
+      exactFile: false,
     });
 
     expect(resolveAndValidatePath).toHaveBeenCalledWith("src/agent");
@@ -118,26 +121,61 @@ describe("createVscodeSemanticSearchProvider", () => {
       "auth flow",
       4,
       ["**/dist/**"],
-      { includeAllWorkspaceRoots: false },
+      { includeAllWorkspaceRoots: false, exactFile: false },
     );
     expect(result).toEqual({
       payload: { query: "auth flow", total_results: 1 },
     });
   });
 
-  it("uses only the pinned project root when no path is provided", async () => {
+  it("forwards exact-file query scope from handleSearchFiles to semanticSearch", async () => {
+    const filePath = path.resolve("src/tools/searchFiles.ts");
+    resolveAndValidatePath.mockReturnValue({
+      absolutePath: filePath,
+      inWorkspace: true,
+    });
+    const result = await handleSearchFiles(
+      { path: filePath, query: "exact file query" },
+      {} as never,
+      {} as never,
+      "adapter-search-session",
+      {
+        workspaceFileProvider: createVscodeWorkspaceFileProvider(),
+        pathAccessProvider: {
+          ensureAccess: async () => ({ approved: true }),
+        },
+        semanticSearchProvider: createVscodeSemanticSearchProvider(),
+      },
+    );
+
+    expect(result.isError).toBe(false);
+    expect(semanticSearch).toHaveBeenCalledWith(
+      filePath,
+      "exact file query",
+      10,
+      undefined,
+      { includeAllWorkspaceRoots: false, exactFile: true },
+    );
+  });
+
+  it("preserves explicit directory scope without widening to other roots", async () => {
     const provider = createVscodeSemanticSearchProvider("/workspace/project-b");
-
-    await provider.search({ query: "auth flow" });
-
-    expect(resolveAndValidatePath).not.toHaveBeenCalled();
+    vi.mocked(resolveAndValidatePath).mockReturnValueOnce({
+      absolutePath: "/workspace/project-b",
+      inWorkspace: true,
+    } as never);
+    await provider.search({
+      query: "auth flow",
+      path: "/workspace/project-b",
+      exactFile: false,
+    });
     expect(tryGetFirstWorkspaceRoot).not.toHaveBeenCalled();
     expect(semanticSearch).toHaveBeenCalledWith(
       "/workspace/project-b",
       "auth flow",
       undefined,
       undefined,
-      { includeAllWorkspaceRoots: false },
+      { includeAllWorkspaceRoots: false, exactFile: false },
     );
   });
 });

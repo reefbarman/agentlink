@@ -10,6 +10,7 @@ import type {
   DesktopRemoteLayout,
   DesktopRemoteState,
 } from "../../../src/shared/desktopBridge.js";
+import { openExternalLink } from "./desktopExternalLinks.js";
 import { discoverDesktopRemote } from "./desktopRemoteDiscovery.js";
 
 const POLL_MS = 3_000;
@@ -114,9 +115,14 @@ export class DesktopRemoteView {
     this.view.setVisible(false);
     window.contentView.addChildView(this.view);
     const contents = this.view.webContents;
-    contents.setWindowOpenHandler(() => ({ action: "deny" }));
+    contents.setWindowOpenHandler(({ url }) => {
+      this.openExternal(url);
+      return { action: "deny" };
+    });
     contents.on("will-navigate", (event, url) => {
-      if (!this.isRemoteDocument(url)) event.preventDefault();
+      if (this.isRemoteDocument(url)) return;
+      event.preventDefault();
+      this.openExternal(url);
     });
     contents.on("will-frame-navigate", (event) => {
       if (!event.isMainFrame || !this.isRemoteDocument(event.url))
@@ -137,6 +143,12 @@ export class DesktopRemoteView {
     window.on("closed", this.dispose);
     window.webContents.on("zoom-changed", this.onResize);
     window.webContents.on("did-start-navigation", this.onShellNavigation);
+  }
+
+  private openExternal(url: string): void {
+    const internal = [this.shellOrigin];
+    if (this.targetUrl) internal.push(new URL(this.targetUrl).origin);
+    openExternalLink(url, internal);
   }
 
   private isRemoteDocument(url: string): boolean {

@@ -7,11 +7,13 @@ import {
   MAX_SEARCH_EXCERPT_CHARS,
   rerankResults,
   rrfMerge,
-  semanticFileList,
-  semanticFileQuery,
   semanticSearch,
 } from "./semanticSearch.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getCodeSourceId,
+  getCodeWorkspaceScopeId,
+} from "../indexer/codeRetrievalIdentity.js";
 
 import { createHash } from "crypto";
 
@@ -217,6 +219,59 @@ describe("rerankResults", () => {
     expect(reranked[0].id).toBe("b");
   });
 
+  it("boosts joined identifiers in indexed ranking without excluding matching fixtures", () => {
+    const results = [
+      makeResult(
+        "scattered",
+        0.5,
+        "src/other.ts",
+        "provider data with usage elsewhere",
+      ),
+      makeResult(
+        "fixture",
+        0.5,
+        "src/__fixtures__/ProviderUsageService.ts",
+        "class ProviderUsageService {}",
+      ),
+      makeResult(
+        "source",
+        0.5,
+        "src/ProviderUsageService.ts",
+        "class ProviderUsageService {}",
+      ),
+    ];
+    const reranked = rerankResults(
+      results,
+      ["provider", "usage"],
+      undefined,
+      "provider usage",
+    );
+    expect(reranked.map((result) => result.id)).toEqual([
+      "source",
+      "fixture",
+      "scattered",
+    ]);
+  });
+
+  it("prefers adjacent terms to equally weighted scattered terms", () => {
+    const results = [
+      makeResult(
+        "scattered",
+        0.5,
+        "src/a.ts",
+        "rate of requests, then limit the result",
+      ),
+      makeResult("phrase", 0.5, "src/b.ts", "apply a rate limit"),
+    ];
+    const reranked = rerankResults(
+      results,
+      ["rate", "limit"],
+      undefined,
+      "rate limit",
+    );
+    expect(reranked[0].id).toBe("phrase");
+  });
+
   it("returns results unchanged when no keywords", () => {
     const results = [
       makeResult("a", 0.9, "a.ts", "code a"),
@@ -338,6 +393,7 @@ describe("semantic retrieval service", () => {
     retrievalStoreRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "semantic-retrieval-store-"),
     );
+
     resolveEmbeddingAuth.mockReset();
     resolveEmbeddingAuth.mockResolvedValue(null);
     fetchMock.mockReset();
@@ -420,6 +476,7 @@ describe("semantic retrieval service", () => {
   function queryResult(
     candidates: ReturnType<typeof candidate>[],
     mode = "lexical",
+    degradedReason?: string,
   ) {
     return {
       query: { text: "test", mode, limit: 10 },
@@ -427,6 +484,7 @@ describe("semantic retrieval service", () => {
         ({ liveContent: _liveContent, ...entry }) => entry,
       ),
       mode,
+      ...(degradedReason ? { degradedReason } : {}),
     };
   }
 
@@ -457,12 +515,120 @@ describe("semantic retrieval service", () => {
           retrievalStoreRoot,
         },
       );
+      expect(result.isError).toBe(true);
+      expect(payload(result)).not.toHaveProperty("ranking");
       expect(payload(result).reason).toBe("disabled");
       expect(retrievalQuery).not.toHaveBeenCalled();
     } finally {
       if (originalImpl) getConfigurationMock.mockImplementation(originalImpl);
     }
   });
+
+  it("retains exact-file hits and rejects sibling hits using a stable source filter", async () => {
+    const hit = candidate({
+      file: "src/target.ts",
+      indexedContent: "export const target = 1;",
+    });
+    const sibling = candidate({
+      file: "src/sibling.ts",
+      indexedContent: "export const sibling = 2;",
+    });
+    readFileMock.mockResolvedValue(hit.liveContent);
+    retrievalQuery.mockResolvedValue(queryResult([hit, sibling]));
+    const result = await semanticSearch(
+      "/workspace/src/target.ts",
+      "target",
+      5,
+      undefined,
+      { retrievalStoreRoot, exactFile: true },
+    );
+    expect(payload(result)).toMatchObject({
+      total_results: 1,
+      ranking: "lexical",
+    });
+    expect(String(payload(result).results)).toContain("src/target.ts");
+    expect(String(payload(result).results)).not.toContain("src/sibling.ts");
+    const filters = retrievalQuery.mock.calls[0][0].filters;
+    expect(filters.sourceIds).toEqual([
+      getCodeSourceId(getCodeWorkspaceScopeId("/workspace"), "src/target.ts"),
+    ]);
+    expect(filters).not.toHaveProperty("pathPrefix");
+    expect(readFileMock).toHaveBeenCalledWith(
+      "/workspace/src/target.ts",
+      "utf8",
+    );
+    expect(readFileMock).not.toHaveBeenCalledWith(
+      "/workspace/src/sibling.ts",
+      "utf8",
+    );
+  });
+
+  it("preserves known store-side embedding auth degradation", async () => {
+    retrievalQuery.mockResolvedValue(
+      queryResult([], "lexical", "missing_embeddings_auth"),
+    );
+    const result = await semanticSearch("/workspace", "target", 5, undefined, {
+      retrievalStoreRoot,
+    });
+    expect(payload(result)).toMatchObject({
+      ranking: "lexical",
+      ranking_reason: "embedding_auth_missing",
+    });
+  });
+
+  it.each(["/workspace", "/second-workspace"])(
+    "retains file-scoped fallback filenames within %s",
+    async (root) => {
+      const originalFolders = vscode.workspace.workspaceFolders;
+      Object.assign(vscode.workspace, {
+        workspaceFolders: [
+          { name: "workspace", uri: { fsPath: "/workspace" } },
+          { name: "second", uri: { fsPath: "/second-workspace" } },
+        ],
+      });
+      const file = `${root}/src/target.ts`;
+      getRipgrepBinPath.mockResolvedValue("rg");
+      execRipgrepSearch.mockResolvedValue(
+        [
+          JSON.stringify({ type: "begin", data: { path: { text: file } } }),
+          JSON.stringify({
+            type: "match",
+            data: {
+              path: { text: file },
+              lines: { text: "target function" },
+              line_number: 1,
+              absolute_offset: 0,
+            },
+          }),
+          JSON.stringify({ type: "end", data: { path: { text: file } } }),
+        ].join("\n"),
+      );
+      try {
+        const result = await semanticSearch(
+          file,
+          "target function",
+          5,
+          undefined,
+          {
+            retrievalStoreRoot: path.join(retrievalStoreRoot, "missing"),
+            exactFile: true,
+          },
+        );
+        expect(payload(result)).toMatchObject({
+          ranking: "keyword_fallback",
+          ranking_reason: "missing_index",
+          total_results: 1,
+        });
+        expect(String(payload(result).results)).toContain("## src/target.ts");
+        expect(execRipgrepSearch).toHaveBeenCalledWith(
+          "rg",
+          expect.arrayContaining([file]),
+        );
+      } finally {
+        Object.assign(vscode.workspace, { workspaceFolders: originalFolders });
+      }
+    },
+  );
 
   it("queries LanceDB lexically without embedding credentials", async () => {
     const hit = candidate({
@@ -481,7 +647,8 @@ describe("semantic retrieval service", () => {
     );
 
     expect(payload(result)).toMatchObject({
-      semantic: true,
+      ranking: "lexical",
+      ranking_reason: "embeddings_disabled",
       total_results: 1,
     });
     expect(String(payload(result).results)).toContain("src/current.ts");
@@ -500,7 +667,7 @@ describe("semantic retrieval service", () => {
     expect(closeRetrievalRepository).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps semantic search local when embeddings are disabled despite available credentials", async () => {
+  it("keeps lexical ranking local when embeddings are disabled despite available credentials", async () => {
     resolveEmbeddingAuth.mockResolvedValue({
       method: "oauth",
       bearerToken: "oauth-token",
@@ -513,15 +680,156 @@ describe("semantic retrieval service", () => {
     readFileMock.mockResolvedValue(hit.liveContent);
     retrievalQuery.mockResolvedValue(queryResult([hit]));
 
-    await semanticSearch("/workspace", "local search", 5, undefined, {
-      retrievalStoreRoot,
-    });
+    const result = await semanticSearch(
+      "/workspace",
+      "local search",
+      5,
+      undefined,
+      {
+        retrievalStoreRoot,
+      },
+    );
 
     expect(resolveEmbeddingAuth).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(payload(result)).toMatchObject({
+      ranking: "lexical",
+      ranking_reason: "embeddings_disabled",
+    });
     expect(retrievalQuery).toHaveBeenCalledWith(
       expect.objectContaining({ mode: "lexical" }),
     );
+  });
+
+  it("reports missing embedding auth while using lexical ranking", async () => {
+    const getConfigurationMock = vscode.workspace
+      .getConfiguration as ReturnType<typeof vi.fn>;
+    const originalImpl = getConfigurationMock.getMockImplementation();
+    getConfigurationMock.mockImplementation(() => ({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "semanticEmbeddingsEnabled" ? true : fallback,
+      ),
+    }));
+    const hit = candidate({
+      file: "src/lexical.ts",
+      indexedContent: "export function lexicalSearch() {}",
+    });
+    readFileMock.mockResolvedValue(hit.liveContent);
+    retrievalQuery.mockResolvedValue(queryResult([hit]));
+
+    try {
+      const result = await semanticSearch(
+        "/workspace",
+        "lexical search",
+        5,
+        undefined,
+        {
+          retrievalStoreRoot,
+        },
+      );
+      expect(payload(result)).toMatchObject({
+        ranking: "lexical",
+        ranking_reason: "embedding_auth_missing",
+        guidance: expect.stringContaining("Configure embedding credentials"),
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      if (originalImpl) getConfigurationMock.mockImplementation(originalImpl);
+    }
+  });
+
+  it("reports embedding request failures while using lexical ranking", async () => {
+    const getConfigurationMock = vscode.workspace
+      .getConfiguration as ReturnType<typeof vi.fn>;
+    const originalImpl = getConfigurationMock.getMockImplementation();
+    getConfigurationMock.mockImplementation(() => ({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "semanticEmbeddingsEnabled" ? true : fallback,
+      ),
+    }));
+    resolveEmbeddingAuth.mockResolvedValue({
+      method: "oauth",
+      bearerToken: "oauth-token",
+      canRefresh: true,
+    });
+    fetchMock.mockRejectedValue(new Error("fetch failed"));
+    const hit = candidate({
+      file: "src/lexical.ts",
+      indexedContent: "export function lexicalSearch() {}",
+    });
+    readFileMock.mockResolvedValue(hit.liveContent);
+    retrievalQuery.mockResolvedValue(queryResult([hit]));
+
+    try {
+      const result = await semanticSearch(
+        "/workspace",
+        "lexical search",
+        5,
+        undefined,
+        {
+          retrievalStoreRoot,
+        },
+      );
+      expect(payload(result)).toMatchObject({
+        ranking: "lexical",
+        ranking_reason: "embedding_network",
+        guidance: expect.stringContaining(
+          "Check embedding service availability",
+        ),
+      });
+      expect(retrievalQuery).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: "lexical" }),
+      );
+    } finally {
+      if (originalImpl) getConfigurationMock.mockImplementation(originalImpl);
+    }
+  });
+
+  it("reports store-side vector downgrade after successful embedding", async () => {
+    const getConfigurationMock = vscode.workspace
+      .getConfiguration as ReturnType<typeof vi.fn>;
+    const originalImpl = getConfigurationMock.getMockImplementation();
+    getConfigurationMock.mockImplementation(() => ({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "semanticEmbeddingsEnabled" ? true : fallback,
+      ),
+    }));
+    resolveEmbeddingAuth.mockResolvedValue({
+      method: "oauth",
+      bearerToken: "oauth-token",
+      canRefresh: true,
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ embedding: [0.1, 0.2] }] }),
+    });
+    const hit = candidate({
+      file: "src/downgraded.ts",
+      indexedContent: "export function lexicalSearch() {}",
+    });
+    readFileMock.mockResolvedValue(hit.liveContent);
+    retrievalQuery.mockResolvedValue(
+      queryResult([hit], "lexical", "vector_index_unavailable"),
+    );
+
+    try {
+      const result = await semanticSearch(
+        "/workspace",
+        "lexical search",
+        5,
+        undefined,
+        {
+          retrievalStoreRoot,
+        },
+      );
+      expect(payload(result)).toMatchObject({
+        ranking: "lexical",
+        ranking_reason: "vector_index_unavailable",
+        guidance: expect.stringContaining("Rebuild the codebase index"),
+      });
+    } finally {
+      if (originalImpl) getConfigurationMock.mockImplementation(originalImpl);
+    }
   });
 
   it("uses hybrid retrieval when embeddings are explicitly enabled", async () => {
@@ -550,10 +858,18 @@ describe("semantic retrieval service", () => {
     retrievalQuery.mockResolvedValue(queryResult([hit], "hybrid"));
 
     try {
-      await semanticSearch("/workspace", "hybrid search", 5, undefined, {
-        retrievalStoreRoot,
-      });
+      const result = await semanticSearch(
+        "/workspace",
+        "hybrid search",
+        5,
+        undefined,
+        {
+          retrievalStoreRoot,
+        },
+      );
 
+      expect(payload(result)).toMatchObject({ ranking: "hybrid" });
+      expect(payload(result)).not.toHaveProperty("ranking_reason");
       expect(retrievalQuery).toHaveBeenCalledWith(
         expect.objectContaining({
           embedding: [0.1, 0.2],
@@ -566,33 +882,6 @@ describe("semantic retrieval service", () => {
     } finally {
       if (originalImpl) getConfigurationMock.mockImplementation(originalImpl);
     }
-  });
-
-  it("uses a stable source id for exact-file semantic lookup", async () => {
-    const content = "line one\nline two";
-    const hit = candidate({
-      file: "src/current.ts",
-      indexedContent: content,
-      startLine: 2,
-      endLine: 2,
-    });
-    retrievalQuery.mockResolvedValue(queryResult([hit]));
-
-    await expect(
-      semanticFileQuery(
-        "src/current.ts",
-        "line two",
-        "/workspace",
-        sha256(content),
-        { retrievalStoreRoot },
-      ),
-    ).resolves.toEqual({ status: "current", startLine: 2, endLine: 2 });
-
-    const request = retrievalQuery.mock.calls[0][0];
-    expect(request.filters.sourceIds).toEqual([
-      expect.stringContaining("src/current.ts"),
-    ]);
-    expect(request.filters.pathPrefix).toBeUndefined();
   });
 
   it.each([
@@ -676,7 +965,11 @@ describe("semantic retrieval service", () => {
         retrievalStoreRoot,
       });
       expect(payload(result)).toMatchObject({
-        semantic: false,
+        ranking: "keyword_fallback",
+        ranking_reason: "embedding_network",
+        guidance: expect.stringContaining(
+          "Check embedding service availability",
+        ),
         total_results: 1,
       });
       expect(JSON.stringify(result)).not.toContain("synthetic-fallback-secret");
@@ -763,29 +1056,6 @@ describe("semantic retrieval service", () => {
     });
   });
 
-  it("deduplicates ranked file results and preserves freshness", async () => {
-    const first = candidate({
-      file: "src/current.ts",
-      indexedContent: "current source",
-      score: 0.9,
-    });
-    const second = candidate({
-      file: "src/current.ts",
-      indexedContent: "current source",
-      startLine: 2,
-      score: 0.8,
-    });
-    readFileMock.mockResolvedValue("current source");
-    retrievalQuery.mockResolvedValue(queryResult([first, second]));
-
-    const result = await semanticFileList("/workspace", "current", 10, {
-      retrievalStoreRoot,
-    });
-    expect(result?.files).toHaveLength(1);
-    expect(result?.files[0]?.path).toBe("src/current.ts");
-    expect(result?.files[0]?.score).toBeCloseTo(0.94);
-  });
-
   it("fans out across workspace roots without mixing scope filters", async () => {
     const workspace = vscode.workspace as unknown as {
       workspaceFolders: Array<{ name: string; uri: { fsPath: string } }>;
@@ -850,7 +1120,7 @@ describe("semantic retrieval service", () => {
       path.join(retrievalStoreRoot, "derived"),
     );
 
-    await semanticFileList("/workspace", "explicit root", 5, {
+    await semanticSearch("/workspace", "explicit root", 5, undefined, {
       retrievalStoreRoot,
       retrievalStoreRootForWorkspace,
     });
@@ -893,9 +1163,87 @@ describe("semantic retrieval service", () => {
     );
     const resultPayload = payload(result);
 
-    expect(resultPayload.semantic).toBe(false);
+    expect(resultPayload.ranking).toBe("keyword_fallback");
+    expect(resultPayload.ranking_reason).toBe("missing_index");
+    expect(resultPayload).not.toHaveProperty("semantic");
     expect(String(resultPayload.warning)).toContain("temporarily unavailable");
     expect(String(resultPayload.results)).toContain("src/searchFiles.ts");
     expect(execRipgrepSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("ranks adjacent phrases and identifiers above scattered fixture matches", async () => {
+    const files = [
+      {
+        file: "/workspace/src/ProviderUsageService.ts",
+        text: "export class ProviderUsageService {}",
+      },
+      {
+        file: "/workspace/src/unrelated.ts",
+        text: "OpenAI compatible connection configuration and provider data are displayed with usage elsewhere.",
+      },
+      {
+        file: "/workspace/src/__snapshots__/provider-usage.snap",
+        text: "OpenAI compatible connection configuration provider usage quota rate limits display",
+      },
+    ];
+    retrievalQuery.mockRejectedValue(new Error("fetch failed"));
+    getRipgrepBinPath.mockResolvedValue("rg");
+    execRipgrepSearch.mockResolvedValue(
+      files
+        .flatMap(({ file, text }) => [
+          { type: "begin", data: { path: { text: file } } },
+          {
+            type: "match",
+            data: {
+              path: { text: file },
+              lines: { text },
+              line_number: 1,
+            },
+          },
+          { type: "end", data: { path: { text: file } } },
+        ])
+        .map((event) => JSON.stringify(event))
+        .join("\n"),
+    );
+
+    const result = payload(
+      await semanticSearch(
+        "/workspace",
+        "OpenAI compatible connection configuration provider usage quota rate limits display",
+        5,
+        undefined,
+        { retrievalStoreRoot },
+      ),
+    );
+
+    expect(result.ranking_reason).toBe("embedding_network");
+    expect(
+      String(result.results).indexOf("src/ProviderUsageService.ts"),
+    ).toBeLessThan(String(result.results).indexOf("src/unrelated.ts"));
+    expect(String(result.results).indexOf("src/unrelated.ts")).toBeLessThan(
+      String(result.results).indexOf("src/__snapshots__/provider-usage.snap"),
+    );
+  });
+
+  it("does not report ranking when keyword fallback also fails", async () => {
+    const missingRoot = path.join(retrievalStoreRoot, "missing");
+    getRipgrepBinPath.mockRejectedValue(new Error("ripgrep unavailable"));
+
+    const output = await semanticSearch(
+      "/workspace",
+      "search files",
+      5,
+      undefined,
+      {
+        retrievalStoreRoot: missingRoot,
+      },
+    );
+    expect(output.isError).toBe(true);
+    const result = payload(output);
+
+    expect(result).toHaveProperty("error");
+    expect(result).toHaveProperty("fallback_error");
+    expect(result).not.toHaveProperty("ranking");
+    expect(result).not.toHaveProperty("ranking_reason");
   });
 });

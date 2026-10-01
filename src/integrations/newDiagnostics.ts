@@ -151,6 +151,7 @@ function formatMessage(message: string): string {
 export function formatIntroducedDiagnostics(
   entries: readonly LabeledDiagnosticEntry[],
   unbaselinedOmitted = 0,
+  baselineUnavailable = false,
 ): string | undefined {
   const lines: string[] = [];
   let chars = 0;
@@ -165,10 +166,16 @@ export function formatIntroducedDiagnostics(
     lines.push(line);
     chars += line.length + 1;
   }
-  const hidden = entries.length - lines.length;
+  const shown = lines.length;
+  if (shown > 0 && baselineUnavailable) {
+    lines.unshift(
+      "Pre-edit diagnostics did not become available. Errors on edited lines follow, but they are not confirmed as introduced by this edit.",
+    );
+  }
+  const hidden = entries.length - shown;
   if (hidden > 0) {
     lines.push(
-      `… ${hidden} more new error diagnostic${hidden === 1 ? "" : "s"} not shown (${entries.length} total). Use get_diagnostics to inspect them.`,
+      `… ${hidden} more ${baselineUnavailable ? "" : "new "}error diagnostic${hidden === 1 ? "" : "s"} not shown (${entries.length} total). Use get_diagnostics to inspect them.`,
     );
   }
   if (unbaselinedOmitted > 0) {

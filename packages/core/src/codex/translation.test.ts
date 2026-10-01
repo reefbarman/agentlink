@@ -653,31 +653,56 @@ describe("Codex translation", () => {
     ]);
   });
 
-  it("omits hosted tools fail-soft from Responses Lite requests", () => {
-    const body = buildCodexEndpointRequestBody({
-      model: "gpt-6-astra",
-      input: [],
-      instructions: "system",
-      hostedTools: [{ type: "web_search" }],
-      useResponsesLite: true,
-      caps: {
-        supportsPreviousResponseId: false,
-        supportsPersistedReasoning: false,
-        supportsProMode: false,
-        supportsPromptCacheKey: false,
-        supportsPromptCacheRetention: false,
-        supportsMaxOutputTokens: false,
-        supportsHostedWebSearch: true,
-        supportsTextVerbosity: true,
-      },
-    });
-    expect(body).not.toHaveProperty("tools");
-    expect(body).not.toHaveProperty("include");
-    expect(body).toMatchObject({
-      model: "gpt-6-astra",
-      parallel_tool_calls: false,
-    });
-  });
+  it.each(["gpt-6-astra", "gpt-6.1-sol"])(
+    "uses normal Responses for %s hosted web requests despite a Lite preference",
+    (model) => {
+      const input = [{ role: "user", content: "read the page" }] as const;
+      const tools = translateCodexTools([
+        {
+          name: "inspect_page",
+          description: "Inspect a page",
+          input_schema: { type: "object" },
+        },
+      ]);
+      const body = buildCodexEndpointRequestBody({
+        model,
+        input: [...input],
+        instructions: "distinctive hosted instructions",
+        tools,
+        hostedTools: [
+          { type: "web_search", allowedDomains: ["tailscale.com"] },
+        ],
+        reasoningEffort: "low",
+        useResponsesLite: true,
+        caps: {
+          supportsPreviousResponseId: false,
+          supportsPersistedReasoning: false,
+          supportsProMode: false,
+          supportsPromptCacheKey: false,
+          supportsPromptCacheRetention: false,
+          supportsMaxOutputTokens: false,
+          supportsHostedWebSearch: true,
+          supportsTextVerbosity: true,
+        },
+      });
+      expect(body).toMatchObject({
+        model,
+        input,
+        instructions: "distinctive hosted instructions",
+        tools: [
+          ...tools,
+          {
+            type: "web_search",
+            filters: { allowed_domains: ["tailscale.com"] },
+          },
+        ],
+        include: ["web_search_call.action.sources"],
+        reasoning: { effort: "low" },
+      });
+      expect(body).not.toHaveProperty("parallel_tool_calls");
+      expect(body.reasoning).not.toHaveProperty("context");
+    },
+  );
 
   it("sends premium service tiers only for models that support them", () => {
     const caps = {

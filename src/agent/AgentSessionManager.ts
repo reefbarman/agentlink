@@ -2215,6 +2215,8 @@ export class AgentSessionManager {
         : undefined,
       preparedTurn.policy.enabledKinds,
       session.composeEnabled,
+      typeof session.getAdvertisedRules === "function" &&
+        session.getAdvertisedRules().length > 0,
     );
     const usesReadOnlyCommand =
       preparedTurn.context.commandExecutionPolicy === "read-only" ||
@@ -8139,6 +8141,8 @@ export class AgentSessionManager {
             undefined,
             nativeWebToolKinds,
             session.composeEnabled,
+            typeof session.getAdvertisedRules === "function" &&
+              session.getAdvertisedRules().length > 0,
           ),
           todoTool,
         ]
@@ -10189,7 +10193,8 @@ export class AgentSessionManager {
       "2. If the answer genuinely requires human judgment or human-only information, call `ask_user` yourself with the necessary self-contained question.",
       "3. For confirmation questions, respond with exactly one of the two displayed labels: `Yes`/`No` by default, or one of the supplied custom options.",
       `4. Then call \`respond_to_background_question\` with request_id \`${args.requestId}\` and a complete answers map keyed by the question IDs above. Ordinary assistant text does not unblock the background agent.`,
-      "4. After responding, resume any still-active foreground work; otherwise finish this coordination turn.",
+      "5. Answers cannot change the child's ownedPaths or forbiddenPaths fixed at spawn. Handle additional paths yourself or spawn a replacement with the required scope; do not promise scope expansion through this answer.",
+      "6. After responding, resume any still-active foreground work; otherwise finish this coordination turn.",
       "</background_agent_question>",
     ].join("\n");
   }

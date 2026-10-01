@@ -80,9 +80,10 @@ export interface InstructionPartitionOptions {
 
 const INDEXED_TOOL_SCOPE_GUIDANCE = `## Indexed tool scope
 
-- \`get_repo_map\`, \`get_module_neighbors\`, \`codebase_search\`, \`read_file(query)\`, \`list_files(query)\`, and \`search_files(semantic=true)\` only work on files/folders within the current workspace folders. An absolute path to another repository does not make its index available, even if that repository is open in another window or was previously indexed.
-- Check that the target belongs to a current workspace folder before choosing indexed tools. The repo-map-first and semantic-search-first rules apply only within that scope.
-- For paths outside the current workspace, use \`read_file\` without \`query\`, \`list_files\` without \`query\`, and regex \`search_files\` (\`semantic=false\`), subject to existing path permissions and approvals. Directory exploration with these non-indexed tools is appropriate for external repositories. Do not retry indexed tools against an external path or silently search the current workspace instead.`;
+- \`search_files\` requires exactly one of two exclusive inputs: use \`query\` for ranked workspace search when the location or wording is not known, and \`regex\` for exact text or patterns. Both or neither input is invalid. Give query searches an explicit file or directory path; query search is workspace-only, including single-file scopes. If the user names a known file, use \`read_file\` with \`view: "context"\` first rather than searching for it.
+- Query results report the ranking actually used: hybrid, lexical, or keyword fallback, with a bounded reason when ranking degraded. \`embeddings_disabled\` means intentional lexical operation, not a failure. Use \`exclude_globs\` to omit noisy paths from a query.
+- For external paths, use regex \`search_files\`, \`read_file\`, and \`list_files\`, subject to existing path permissions and approvals. \`read_file\` has anchors and line offsets, not search queries; \`list_files\` lists paths and does not perform ranked search. Never redirect an external query to the current workspace.
+- Browser workspace chat mirrors this search contract. Projectless Browser Ask Agent has no workspace index and remains regex-only.`;
 
 /**
  * Base system prompt — shared across all modes.
@@ -283,12 +284,11 @@ const PROVIDER_PROMPTS: Record<string, string> = {
 ### Tool selection
 
 - Prefer the highest-level code intelligence tool that fits the question; avoid falling back to repeated file search and bulk reads when a more targeted tool is available.
-- **Known file path beats search** — If the user, an error, a stack trace, a prior tool result, or the task definition already gives you a concrete file path, do not search just to rediscover it. Go directly to \`get_context\` for first-pass orientation on that file.
-- **Known broad scope beats search** — If the task names a concrete directory/package/workspace area within the current workspace folders and requires multi-file understanding or edits, call \`get_repo_map\` for that scope before \`codebase_search\`/\`search_files\`; then drill into selected files with \`get_module_neighbors\` and \`get_context\`.
-- **\`get_context\` for known files** — When you already know the file path and need first-pass orientation, prefer \`get_context\` over \`read_file\`. It returns bounded content plus metadata, git status, diagnostics, symbols, and working-set status in one call.
-- **\`codebase_search\` first for unknown locations** — Use it before \`search_files\` or \`list_files\` when you do not know where relevant code lives within the current workspace folders. It returns semantically relevant results even when you do not know the exact function or variable name.
-- **\`search_files\` for exact matches only** — Use regex search when you need a specific literal string/pattern, or after \`codebase_search\` has identified the relevant area.
-- **\`read_file\` for exact reads** — Use \`read_file\` when you need complete content, a specific large line slice, local image/PDF/temp output content, or semantic in-file jumping via \`query\`.`,
+- **Known file path beats search** — If the user, an error, a stack trace, a prior tool result, or the task definition already gives you a concrete file path, do not search just to rediscover it. Go directly to \`read_file\` with \`view: "context"\` for first-pass orientation on that file.
+- **Known broad scope beats search** — If the task names a concrete directory/package/workspace area within the current workspace folders and requires multi-file understanding or edits, call \`get_repo_map\` for that scope first; then read selected files with \`read_file\` with \`view: "context"\`. Discover \`get_module_neighbors\` through \`find_native_tools\` when you need dependency details.
+- **\`read_file\` with \`view: "context"\` for known files** — When you already know the file path and need first-pass orientation, use \`read_file\` with \`view: "context"\`. It returns bounded content plus metadata, git status, diagnostics, symbols, and working-set status in one call.
+- **\`search_files\` for search** — Use \`query\` for ranked search when the location or wording is unknown within the current workspace; use \`regex\` when you know the text or pattern. Supply a file or directory path. Query is workspace-only; regex also works on external paths subject to path permissions.
+- **\`read_file\` for exact reads** — Use \`read_file\` for complete content, a specific line slice, local image/PDF/temp output content, or a known-file section located with \`anchor\` / \`anchor_regex\` and \`anchor_offset\`. Use \`offset\` for direct line-based reading. Do not use it to search by query.`,
 
   codex: `
 ## Provider-Specific Behavior
@@ -297,10 +297,10 @@ const PROVIDER_PROMPTS: Record<string, string> = {
 
 - Default to acting quickly after task alignment is clear and any mode-specific alignment check has passed. For most aligned tasks, 1–2 targeted orientation calls should give you enough context to attempt an edit. Iterate based on compiler/test feedback rather than reading everything up front.
 - **Use \`get_repo_map\` before search for broad known-scope edits** — when the user gives a concrete directory/scope within the current workspace folders for a refactor, migration, API/tool contract update, or multi-file edit, call \`get_repo_map\` scoped to that path first to get module/file skeletons, imports/exports, and likely blast radius.
-- **Use \`codebase_search\` first for unfamiliar code within the current workspace folders with no known scope** — it is faster and more targeted than grepping or browsing directories when you don't know where something lives.
+- For unfamiliar code within the current workspace folders, use \`search_files\` with \`query\` when the location or wording is unknown, or \`regex\` when you know the exact text/pattern. For a known file, use \`read_file\` with \`view: "context"\` first. For broad known-scope changes, use \`get_repo_map\` first.
 - For straightforward aligned changes, don't over-explore. If you've read several files without finding a clear reason to keep reading, make your best attempt and iterate.
 - If task alignment is clear and you believe you know where the change should go, attempt the edit immediately and refine based on feedback.
-- For complex refactors within the current workspace folders, use \`get_repo_map\` first when the scope is known; use semantic search first only when the relevant scope/files are unknown.
+
 
 ### Narrate your work
 
@@ -311,13 +311,13 @@ const PROVIDER_PROMPTS: Record<string, string> = {
 
 ### Tool rules
 
-- **Known file path beats search** — If the user, an error, a stack trace, a prior tool result, or the task definition already gives you a concrete file path, do not call \`codebase_search\` just to rediscover it. Go directly to \`get_context\` for first-pass orientation on that file.
-- **Known broad scope beats search** — If the task names a concrete directory/package/workspace area within the current workspace folders and requires multi-file understanding or edits, call \`get_repo_map\` for that scope before \`codebase_search\`/\`search_files\`; then drill into selected files with \`get_module_neighbors\` and \`get_context\`.
-- **\`get_context\` for known files** — When you already know the file path and need first-pass orientation, prefer \`get_context\` over \`read_file\`. It returns bounded content plus metadata, git status, diagnostics, symbols, and working-set status in one call.
-- **\`codebase_search\` FIRST for unknown locations** — Use it before \`search_files\` or \`list_files\` only when you don't know exactly where something is within the current workspace folders. It returns semantically relevant results even when you don't know the exact function or variable name.
-- **\`search_files\` for exact matches only** — Use regex search only after \`codebase_search\` has identified the relevant area, or when you need to find a specific literal string/pattern you already know.
-- **Prefer indexed search within the current workspace** — Do not browse workspace directory trees to find code when \`codebase_search\` can find files by meaning. For external repositories, use non-indexed listing, regex search, and direct reads as described under Indexed tool scope.
-- **\`read_file\` for exact reads** — Use \`read_file\` when you need local images/PDFs, complete temp outputs, a specific large line slice, or semantic in-file jumping via \`query\`. When using \`read_file\` for code orientation within the current workspace folders, pass \`query\` to jump to the relevant section rather than reading from line 1. Omit \`query\` for external files.
+- **Known file path beats search** — If the user, an error, a stack trace, a prior tool result, or the task definition already gives you a concrete file path, do not search to rediscover it. Go directly to \`read_file\` with \`view: "context"\` for first-pass orientation on that file.
+- **Known broad scope beats search** — If the task names a concrete directory/package/workspace area within the current workspace folders and requires multi-file understanding or edits, call \`get_repo_map\` for that scope first; then read selected files with \`read_file\` with \`view: "context"\`. Discover \`get_module_neighbors\` through \`find_native_tools\` when you need dependency details.
+- **\`read_file\` with \`view: "context"\` for known files** — When you already know the file path and need first-pass orientation, use \`read_file\` with \`view: "context"\`. It returns bounded content plus metadata, git status, diagnostics, symbols, and working-set status in one call.
+- **\`search_files\` with \`query\` for ranked workspace search** — Use \`query\` for unknown intent, and \`regex\` for exact text or patterns.
+- **\`search_files\` for search** — Use \`query\` for ranked workspace search when the location or wording is unknown; use \`regex\` when you know the text or pattern. Give query searches an explicit file or directory path. Query search is workspace-only; regex search also works on external paths subject to path permissions.
+
+- **\`read_file\` for exact reads** — Use \`read_file\` for local images/PDFs, complete temp outputs, a specific line slice, or a known-file section located with \`anchor\` / \`anchor_regex\` and \`anchor_offset\`. Use \`offset\` for direct line-based reading. Do not use it to search by query.
 - **Terminal reuse by default** — For routine sequential \`execute_command\` calls, omit \`terminal_name\` and \`terminal_id\` so AgentLink reuses the default terminal. When intentionally creating a separate terminal for parallel/background work or temporary environment changes, set \`terminal_name\` to a short human-readable purpose such as \`Dev server\`, \`Unit tests\`, or \`Build\`.
 - **Keep terminal commands reviewable** — Submit the simplest command that performs the task. AgentLink already disables interactive pagers consistently across execution routes, so do not prefix commands with \`GIT_PAGER=cat\`, \`PAGER=cat\`, or routine \`--no-pager\` workarounds.
 - **Close dedicated terminals when done** — If you created named/background terminals, use \`close_terminals\` for targeted cleanup instead of leaving stale terminal tabs.

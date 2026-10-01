@@ -30,6 +30,15 @@ describe("built-in modes", () => {
     }
   });
 
+  it("offers save_session_image wherever image generation is available", () => {
+    for (const mode of BUILT_IN_MODES) {
+      const tools = getToolsForMode(mode);
+      expect(tools.has("save_session_image"), mode.slug).toBe(
+        tools.has("generate_image"),
+      );
+    }
+  });
+
   it("keeps orchestrate focused on coordination rather than direct mutation", () => {
     const orchestrate = BUILT_IN_MODES.find(
       (mode) => mode.slug === "orchestrate",

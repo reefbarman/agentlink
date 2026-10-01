@@ -2,7 +2,6 @@ import type { Dirent } from "fs";
 import * as vscode from "vscode";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { createHash } from "crypto";
 
 import type {
   ReadFileEnrichmentProvider,
@@ -13,7 +12,6 @@ import {
   resolveAndValidatePath,
   isBinaryFile,
   tryGetFirstWorkspaceRoot,
-  getWorkspaceRootForPath,
   getWorkspaceRoots,
 } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
@@ -28,10 +26,8 @@ import { Semaphore } from "../util/Semaphore.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 
 import type { ToolResult } from "@agentlink/protocol/tool-result";
-import {
-  semanticFileQuery,
-  type SemanticQueryOptions,
-} from "../services/semanticSearch.js";
+import { errorResult } from "@agentlink/protocol/tool-result";
+import { getSearchInputError } from "../core/tools/searchInputValidation.js";
 import { convertBmpToPng } from "./bmpToPng.js";
 import { convertPpmToPng } from "./ppmToPng.js";
 import {
@@ -727,8 +723,9 @@ async function handleReadFileImpl(
   enrichmentProvider = createLegacyReadFileEnrichmentProvider(),
   signal?: AbortSignal,
   guardian?: GuardianOutsideReadOptions,
-  semanticQueryOptions: SemanticQueryOptions = {},
 ): Promise<ToolResult> {
+  const inputError = getSearchInputError("read_file", params);
+  if (inputError) return errorResult(inputError);
   const release = await readSemaphore.acquire();
   let released = false;
   try {
@@ -927,67 +924,10 @@ async function handleReadFileImpl(
       }
     }
 
-    // Semantic offset: when query is provided and no explicit/manual anchor,
-    // use the index to jump to the most relevant section of the file.
-    let semanticLookup: Awaited<ReturnType<typeof semanticFileQuery>> = null;
-    let semanticMatchSkippedForRedaction = false;
-    const semanticLookupRequested = Boolean(
-      params.query && params.offset == null && !anchorHit,
-    );
-    if (semanticLookupRequested && params.query) {
-      if (structuredRedaction) {
-        semanticMatchSkippedForRedaction = true;
-      } else {
-        const wsRoot = getWorkspaceRootForPath(filePath);
-        if (wsRoot) {
-          const relPath = path.relative(wsRoot, filePath);
-          semanticLookup = await semanticFileQuery(
-            relPath,
-            params.query,
-            wsRoot,
-            createHash("sha256").update(raw).digest("hex"),
-            semanticQueryOptions,
-          );
-        }
-      }
-    }
-
-    const semanticHit =
-      semanticLookup?.status === "current" ? semanticLookup : null;
-    const semanticMatchMetadata = semanticHit
-      ? {
-          query: params.query,
-          startLine: semanticHit.startLine,
-          endLine: semanticHit.endLine,
-        }
-      : semanticLookup
-        ? {
-            query: params.query,
-            status: semanticLookup.status,
-            fallback: "default_offset",
-            hint: "The indexed match is not current; use live file anchors or exact search.",
-          }
-        : semanticMatchSkippedForRedaction
-          ? {
-              query: params.query,
-              status: "not_run_structured_redaction",
-            }
-          : semanticLookupRequested
-            ? {
-                query: params.query,
-                status: "not_found",
-                fallback: "default_offset",
-                hint: "Use anchor or anchor_regex to locate exact text in this file.",
-              }
-            : undefined;
-
     const baseOffset = anchorHit
       ? anchorHit.line
-      : semanticHit
-        ? Math.max(1, semanticHit.startLine - 5) // 5 lines of context before the semantic match
-        : Math.max(1, params.offset ?? 1);
-    const shouldApplyAnchorOffset =
-      params.offset == null && !!(anchorHit || semanticHit);
+      : Math.max(1, params.offset ?? 1);
+    const shouldApplyAnchorOffset = params.offset == null && !!anchorHit;
     const anchorOffset =
       shouldApplyAnchorOffset && Number.isFinite(params.anchor_offset)
         ? Math.trunc(params.anchor_offset as number)
@@ -1006,9 +946,7 @@ async function handleReadFileImpl(
       const gitStatus = await enrichmentProvider.getGitStatus(filePath);
       if (gitStatus) emptyResult.git_status = gitStatus;
       emptyResult.language = enrichmentProvider.detectLanguage(filePath);
-      if (semanticMatchMetadata) {
-        emptyResult.semantic_match = semanticMatchMetadata;
-      }
+
       const redactionMetadata =
         getStructuredSecretRedactionMetadata(structuredRedaction);
       if (redactionMetadata) emptyResult.redaction = redactionMetadata;
@@ -1076,10 +1014,6 @@ async function handleReadFileImpl(
           pattern: params.anchor_regex,
         }),
       };
-    }
-
-    if (semanticMatchMetadata) {
-      result.semantic_match = semanticMatchMetadata;
     }
 
     // File metadata
@@ -1194,7 +1128,6 @@ export async function handleReadFile(
   enrichmentProvider = createLegacyReadFileEnrichmentProvider(),
   signal?: AbortSignal,
   guardian?: GuardianOutsideReadOptions,
-  semanticQueryOptions: SemanticQueryOptions = {},
 ): Promise<ToolResult> {
   return canonicalizeReadFileResult(
     await handleReadFileImpl(
@@ -1206,7 +1139,6 @@ export async function handleReadFile(
       enrichmentProvider,
       signal,
       guardian,
-      semanticQueryOptions,
     ),
   );
 }

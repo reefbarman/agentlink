@@ -212,24 +212,42 @@ describe("buildSystemPrompt", () => {
       expect(promptProfile.profile).toBe(profile);
       expect(systemPrompt).toContain("## Indexed tool scope");
       expect(systemPrompt).toContain(
-        "only work on files/folders within the current workspace folders",
+        "query search is workspace-only, including single-file scopes",
       );
-      for (const tool of [
-        "get_repo_map",
-        "get_module_neighbors",
-        "codebase_search",
-        "read_file(query)",
-        "list_files(query)",
-        "search_files(semantic=true)",
-      ]) {
-        expect(systemPrompt).toContain(`\`${tool}\``);
-      }
-      expect(systemPrompt).toContain("`read_file` without `query`");
-      expect(systemPrompt).toContain("`list_files` without `query`");
-      expect(systemPrompt).toContain("`semantic=false`");
+      expect(systemPrompt).toContain(
+        "`search_files` requires exactly one of two exclusive inputs",
+      );
+      expect(systemPrompt).toContain("Both or neither input is invalid");
+      expect(systemPrompt).toContain("use `query` for ranked workspace search");
+      expect(systemPrompt).toContain("and `regex` for exact text or patterns");
+      expect(systemPrompt).toContain("including single-file scopes");
+      expect(systemPrompt).toContain(
+        "ranking actually used: hybrid, lexical, or keyword fallback",
+      );
+      expect(systemPrompt).toContain(
+        "`embeddings_disabled` means intentional lexical operation",
+      );
+      expect(systemPrompt).toContain("`exclude_globs`");
+      expect(systemPrompt).toContain(
+        "`read_file` has anchors and line offsets, not search queries",
+      );
+      expect(systemPrompt).toContain(
+        "`list_files` lists paths and does not perform ranked search",
+      );
+      expect(systemPrompt).toContain(
+        "For external paths, use regex `search_files`",
+      );
+      expect(systemPrompt).toContain(
+        "Projectless Browser Ask Agent has no workspace index and remains regex-only",
+      );
+      expect(systemPrompt).not.toContain("codebase_search");
+      expect(systemPrompt).not.toContain("search_files(semantic=true)");
+      expect(systemPrompt).not.toContain("read_file(query)");
+      expect(systemPrompt).not.toContain("list_files(query)");
+      expect(systemPrompt).not.toContain("semantic=false");
       expect(systemPrompt).toContain("subject to existing path permissions");
       expect(systemPrompt).toContain(
-        "Do not retry indexed tools against an external path",
+        "Never redirect an external query to the current workspace",
       );
       expect(systemPrompt).not.toContain("Never use `list_files` to explore");
       if (profile === "compatibility") {
@@ -1433,7 +1451,7 @@ describe("buildSystemPrompt", () => {
     });
     expect(result).toContain("Provider-Specific Behavior");
     expect(result).toContain("Bias for action");
-    expect(result).toContain("codebase_search");
+    expect(result).toContain("`search_files` with `query`");
     expect(result).toContain("Narrate your work");
     expect(result).toContain(
       "Default to acting quickly after task alignment is clear and any mode-specific alignment check has passed",
@@ -1492,10 +1510,16 @@ describe("buildSystemPrompt", () => {
     });
     expect(result).toContain("Tool selection");
     expect(result).toContain("highest-level code intelligence tool");
-    expect(result).toContain("Go directly to `get_context`");
-    expect(result).toContain("prefer `get_context` over `read_file`");
-    expect(result).toContain("`codebase_search` first for unknown locations");
-    expect(result).toContain("`search_files` for exact matches only");
+    expect(result).toContain(
+      'Go directly to `read_file` with `view: "context"`',
+    );
+    expect(result).toContain(
+      '`read_file` with `view: "context"` for known files',
+    );
+    expect(result).not.toContain("`get_context`");
+    expect(result).toContain("`search_files` for search");
+    expect(result).toContain("Use `query` for ranked search");
+    expect(result).toContain("use `regex` when you know the text or pattern");
   });
 
   it("serves the compact reasoning profile to evaluated Codex models", async () => {
@@ -1582,18 +1606,19 @@ describe("buildSystemPrompt", () => {
     });
   });
 
-  it("prefers get_context directly when a file path is already known", async () => {
+  it("prefers the read_file context view directly when a file path is already known", async () => {
     const result = await buildSystemPrompt("code", tmpDir, {
       providerId: "codex",
     });
     expect(result).toContain("Known file path beats search");
+    expect(result).toContain("do not search to rediscover it");
     expect(result).toContain(
-      "do not call `codebase_search` just to rediscover it",
+      'Go directly to `read_file` with `view: "context"`',
     );
-    expect(result).toContain("Go directly to `get_context`");
-    expect(result).toContain("`get_context` for known files");
-    expect(result).toContain("prefer `get_context` over `read_file`");
-    expect(result).toContain("`codebase_search` FIRST for unknown locations");
+    expect(result).toContain(
+      '`read_file` with `view: "context"` for known files',
+    );
+    expect(result).toContain("`search_files` for search");
     expect(result).toContain("`read_file` for exact reads");
   });
 

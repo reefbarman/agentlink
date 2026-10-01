@@ -65,8 +65,10 @@ Open a folder or workspace in VS Code. Projectless chats intentionally have no w
 - Check that local codebase indexing is enabled and allowed to finish.
 - Local lexical and structural retrieval run on-device without credentials.
 - Vector and hybrid retrieval additionally require OpenAI embedding credentials and an explicit `agentlink.semanticEmbeddingsEnabled: true` opt-in.
+- Check the query result's `ranking`, `ranking_reason`, and `guidance`. `embeddings_disabled` means intentional local lexical search. Embedding HTTP/network failures point to service availability or credentials; missing, unavailable, or unhealthy indexes point to local setup, repair, or rebuild. Keyword fallback remains usable while those problems are addressed.
+- Snapshot and fixture paths are downweighted, not hidden. Use query-mode `exclude_globs` when those files are out of scope, or narrow `path` to the relevant source directory.
 
-See [semantic codebase search setup](complete-reference.md#semantic-codebase-search-setup).
+See [indexed query search setup](complete-reference.md#code-search-setup).
 
 ## Workspace indexes use too much disk space
 
@@ -82,7 +84,7 @@ In VS Code, run **AgentLink: Manage Index Storage** from the Command Palette, ev
 - Read the `sandbox_helper_failed` result's failure category and launch evidence. `unknown` means AgentLink cannot establish whether the command started, not that retrying is safe.
 - Pass its `terminal_id` and `command_id` to `get_terminal_output` to inspect the retained command, not a newer command in the same terminal. The failure result's output is only a bounded preview.
 - Check whether the command changed files or remote state before deciding on a new execution. A helper failure never authorises automatic replay or native fallback.
-- For `protected_git_metadata`, use the exact reviewed native option. Temporary HOME cannot fix protected Git lock writes, including linked-worktree locks.
+- For `protected_git_metadata`, use the exact reviewed native option. Temporary HOME cannot fix protected Git lock writes, including linked-worktree locks. An interactive Git staging command can exit zero after printing `git apply` failed. Treat the accompanying `failure_evidence` as a failed staging step and inspect the index before retrying, since some hunks may already have been staged.
 
 ## A command or edit is waiting for approval
 
@@ -103,7 +105,7 @@ An npm cache denial under `~/.npm/_cacache/tmp` is still a host-HOME write denia
 
 ## An approved edit failed to save or conflicts with unsaved work
 
-- Do not overwrite or discard the dirty editor to clear the error. `read_file` and `get_context` show disk content, which can differ from the unsaved buffer.
+- Do not overwrite or discard the dirty editor to clear the error. Both `read_file` views (content and context) show disk content, which can differ from the unsaved buffer.
 - Ask the VS Code workspace agent to inspect `get_editor_state`, then use `save_editor` with the returned hashes/version if the existing buffer is correct. You must approve the exact save once; it skips formatting and preserves the buffer on rejection. These tools only work for an open file-backed target editor. If a review retained a stale, closed, or non-file buffer, inspect it directly in VS Code before closing it, then re-open the target and compose the edit again after reconciling the buffer.
 - If the buffer contains unrelated or incorrect edits, reconcile it in VS Code first. State changes invalidate the old save request.
 - Large files/diffs or protected instructions require native editor or instruction-workflow handling. The tools cannot repair a filesystem/save-participant failure; a failed recovery still reports failure and preserves unsaved work where VS Code allows it.
@@ -132,7 +134,15 @@ See [Agent Plugins](customization.md#agent-plugins).
 
 AgentLink reports recognized launch and environment failures with structured recovery guidance. Foreground commands stopped at an interactive prompt return prompt evidence instead of waiting forever; background commands remain observable through their retained output.
 
-For terminal requirements, recovery codes, and the custom AgentLink Terminal, see [the complete reference](complete-reference.md#agentlink-terminal) and [tool reference](tools.md#terminal-and-command-tools).
+- **`sandbox_unavailable`, runtime unavailable:** check `agentlink.terminal.nodePath` on the host. Replace a removed version-specific Node executable with an existing standalone Node path, or clear the setting to allow discovery. Reload the owning VS Code window after repair to clear cached runtime resolution, then retry. Eligible default Approve for Me requests can still offer one exact native approval; sandbox-only capability requests cannot.
+- **Failed sandbox security/trust check:** inspect the returned `sandbox_diagnostic.category` (when available) and the AgentLink output channel. Verify the installed extension/runtime assets and workspace trust. Repair the host setup before retrying. Raw probe output is not returned to the agent, and neither failed checks nor invalid grants permit native bypass.
+- **Sandbox feature/host unavailable:** `feature_disabled` means enable `agentlink.terminal.enabled` on the owning host. `remote_host` and `unsupported_host` mean this sandbox request requires a supported local macOS extension host. Node-path changes or repeated reloads cannot add sandbox support to an unsupported host.
+- **`sandbox_capability_launch_failed`, `compile_failed`:** stop repeating the command. Check the requested capabilities, command environment and host sandbox policy for mismatches before checking installed runtime assets. The AgentLink output channel records the bounded `compile_failed` reason, not the raw compiler exception. Correct the identified request, policy or runtime problem, then request a fresh reviewed execution. Do not assume reinstalling will fix an invalid request, reuse failed grants or broaden permissions.
+- **`native_shell_startup_timeout`:** no command launched, and the failed terminal is closed. Check the selected host terminal profile in a normal VS Code terminal for startup prompts or hangs, including `.zshrc`/`.bashrc` and toolchain initialisers. Repair startup before retrying in a new terminal. Reloading alone does not repair a shell startup blocker; AgentLink does not silently bypass your startup files.
+- **`sandbox_preparation_failed`:** no command launched. `reserved_path_override` means remove `env.PATH` and use an inline `export PATH="/desired/bin:$PATH" && command` instead. `reserved_environment_override` means remove host-managed overrides (for example HOME, temporary directories, proxy settings, or loader settings). `unsupported_shell_profile` means the host's `agentlink.terminal.shellEnvironment.useProfile` setting is unsupported by the attested helper and must be disabled before a fresh reviewed execution. Generic `preparation_failed` requires checking managed terminal availability, the requested environment, capabilities, workspace/protected-path integrity, and host policy. Untyped integrity failures stay blocked under this generic category. The output channel records only the bounded category, not raw exceptions or environment values. These are preparation failures, not failed availability attestations; they never permit native bypass or automatic replay.
+- **An exported `PATH` disappeared:** sandbox calls use fresh shells even in named or targeted terminals. Include `export PATH="/desired/bin:$PATH" && command` in each reviewed sandbox call, or combine dependent steps in one command. `env.PATH` is reserved and rejected. Only named/targeted Native Agent terminals retain intentional shell changes.
+
+For terminal requirements, recovery codes, and the custom AgentLink Terminal, see [the complete reference](complete-reference.md#agentlink-terminal) and [tool reference](tools.md#run-and-inspect-commands).
 
 ## I need a complete technical reference
 

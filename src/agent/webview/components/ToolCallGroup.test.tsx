@@ -6,6 +6,7 @@ import {
   getToolGroupStatus,
   groupActivitySegments,
   segmentBlocks,
+  type BlockSegment,
 } from "./ToolCallGroup";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
@@ -217,13 +218,22 @@ describe("groupActivitySegments", () => {
       tool(`tool-${index}`, "read_file"),
     ]).flat();
 
-  it("groups three completed cycles but not two", () => {
-    const firstTwo = segmentBlocks(cycles(2));
-    expect(groupActivitySegments(firstTwo)).toEqual(firstTwo);
+  it("groups three completed rows of any mix but not two", () => {
+    const two = segmentBlocks(cycles(1));
+    expect(groupActivitySegments(two)).toEqual(two);
 
-    const three = segmentBlocks(cycles(3));
+    const three = segmentBlocks([...cycles(1), thinking("next")]);
     expect(groupActivitySegments(three)).toEqual([
       { kind: "activity_group", segments: three },
+    ]);
+
+    const toolsAroundThinking = segmentBlocks([
+      tool("before", "read_file"),
+      thinking("middle"),
+      tool("after", "execute_command"),
+    ]);
+    expect(groupActivitySegments(toolsAroundThinking)).toEqual([
+      { kind: "activity_group", segments: toolsAroundThinking },
     ]);
   });
 
@@ -276,14 +286,42 @@ describe("groupActivitySegments", () => {
     }
   });
 
-  it("keeps tool-only runs outside Activity until there is enough thinking work", () => {
-    const blocks = [
-      tool("before", "codebase_search"),
-      ...cycles(2),
-      tool("after", "read_file"),
+  it("groups consecutive thinking steps without tools", () => {
+    const segments = segmentBlocks([
+      thinking("a"),
+      thinking("b"),
+      thinking("c"),
+    ]);
+    expect(groupActivitySegments(segments)).toEqual([
+      { kind: "activity_group", segments },
+    ]);
+  });
+
+  it("does not let a settling skill load turn tool groups into Activity", () => {
+    const segments: BlockSegment[] = [
+      { kind: "tool_group", blocks: [tool("a", "read_file")] },
+      { kind: "single", block: skill(), index: 1 },
+      { kind: "tool_group", blocks: [tool("b", "execute_command")] },
     ];
-    const segments = segmentBlocks(blocks);
     expect(groupActivitySegments(segments)).toEqual(segments);
+  });
+
+  it("never wraps tool groups alone in Activity", () => {
+    const segments: BlockSegment[] = ["a", "b", "c"].map((id) => ({
+      kind: "tool_group",
+      blocks: [tool(id, "read_file")],
+    }));
+    expect(groupActivitySegments(segments)).toEqual(segments);
+  });
+
+  it("groups two thinking steps with three tool groups", () => {
+    const segments = segmentBlocks([
+      tool("first", "execute_command"),
+      ...cycles(2),
+    ]);
+    expect(groupActivitySegments(segments)).toEqual([
+      { kind: "activity_group", segments },
+    ]);
   });
 
   it("leaves running, failed and approval-offer groups outside the completed run", () => {
@@ -343,7 +381,6 @@ describe("groupActivitySegments", () => {
     const blocks = [
       ...cycles(3),
       text("Progress update"),
-      ...cycles(2),
       thinking("image-step"),
       media,
     ];
@@ -372,7 +409,7 @@ describe("getToolGroupLabel", () => {
         tool("tool-3", "search_files"),
         tool("tool-4", "codebase_search"),
       ]),
-    ).toBe("Explored 2 files, 2 searches");
+    ).toBe("Explored 1 file, 1 search · 2 other calls");
   });
 
   it("summarizes mixed exploration and command groups", () => {
@@ -518,6 +555,48 @@ describe("ToolCallGroup", () => {
     expect(screen.getByText("2 non-zero exits")).toBeTruthy();
   });
 
+  it.each([
+    ["tool-warning", { exit_code: 1 }],
+    ["tool-error", { status: "error", error: "failed" }],
+  ])(
+    "scopes %s styling to the group header and affected calls",
+    (statusClass, result) => {
+      const { container } = render(
+        <ToolCallGroup
+          blocks={[
+            tool("edited", "apply_diff"),
+            skill(),
+            tool("affected", "execute_command", {
+              result: JSON.stringify(result),
+            }),
+            tool("successful", "execute_command", {
+              result: JSON.stringify({ exit_code: 0 }),
+            }),
+          ]}
+        />,
+      );
+
+      const groupButton = screen.getByRole("button", { name: /^Tools / });
+      const statusSelector = `.${statusClass} .tool-call-status-icon`;
+      expect(
+        groupButton
+          .querySelector(".tool-call-status-icon")
+          ?.matches(statusSelector),
+      ).toBe(true);
+
+      fireEvent.click(groupButton);
+
+      const successfulIcons = container.querySelectorAll(
+        ".tool-group-children .tool-success .tool-call-status-icon",
+      );
+      expect(successfulIcons).toHaveLength(3);
+      for (const icon of successfulIcons) {
+        expect(icon.matches(statusSelector)).toBe(false);
+      }
+      expect(container.querySelectorAll(statusSelector)).toHaveLength(2);
+    },
+  );
+
   it("falls back to a warning count when warnings are mixed", () => {
     render(
       <ToolCallGroup
@@ -578,6 +657,7 @@ describe("ToolCallGroup", () => {
               },
             ],
           }),
+          tool("tool-2", "read_file"),
         ]}
       />,
     );
@@ -590,6 +670,20 @@ describe("ToolCallGroup", () => {
     expect(screen.getByText("brief.pdf")).toBeTruthy();
     expect(screen.getByText("application/pdf")).toBeTruthy();
     expect(screen.queryByText("[document]")).toBeNull();
+  });
+
+  it("renders a lone call directly without a Tools summary", () => {
+    const { container } = render(
+      <ToolCallGroup blocks={[tool("tool-1", "notion__search")]} />,
+    );
+
+    expect(container.querySelector(".tool-group-block")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Tools/ })).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: /^notion__search/ })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
   });
 
   it("omits the image badge from groups without image results", () => {
@@ -650,7 +744,7 @@ describe("ToolCallGroup", () => {
     expect(container.querySelector(".tool-approval-offer-badge")).toBeNull();
   });
 
-  it("renders get_context summaries with the same clickable file link as read_file", () => {
+  it("renders historical get_context calls with the generic clickable file link", () => {
     const onOpenFile = vi.fn();
     const path = "src/agent/webview/components/ToolCallGroup.test.tsx";
     const { container } = render(
@@ -667,9 +761,7 @@ describe("ToolCallGroup", () => {
       />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: /tools explored 1 file, 1 search/i }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /^tools/i }));
 
     const fileLink = container.querySelector(".tool-file-link");
     expect(fileLink?.textContent).toBe(".../components/ToolCallGroup.test.tsx");

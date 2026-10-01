@@ -251,30 +251,80 @@ describe("BrowserGatewayAskAgentModelClient", () => {
     });
   });
 
-  it("disables hosted-tool fallback only for OAuth Astra", () => {
+  it.each([
+    "gpt-6-astra",
+    "gpt-6.1-sol",
+    "gpt-6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+  ])("allows hosted-tool fallback for %s", (model) => {
     const client = new BrowserGatewayAskAgentModelClient({
       sessionId: "session-1",
     });
-
-    expect(
-      client.supportsHostedTools({
-        credential: { ...baseCredential, method: "oauth" },
-        model: "gpt-6-astra",
-      }),
-    ).toBe(false);
-    expect(
-      client.supportsHostedTools({
-        credential: { ...baseCredential, method: "apiKey" },
-        model: "gpt-6-astra",
-      }),
-    ).toBe(true);
-    expect(
-      client.supportsHostedTools({
-        credential: { ...baseCredential, method: "oauth" },
-        model: "gpt-5.6-sol",
-      }),
-    ).toBe(true);
+    for (const method of ["oauth", "apiKey"] as const) {
+      expect(
+        client.supportsHostedTools({
+          credential: { ...baseCredential, method },
+          model,
+        }),
+      ).toBe(true);
+    }
   });
+
+  it.each(["gpt-6-astra", "gpt-6.1-sol"])(
+    "dispatches %s hosted web requests through the normal Responses facade",
+    async (model) => {
+      const calls: Array<{
+        body: Record<string, unknown>;
+        headers?: Record<string, string>;
+      }> = [];
+      const client = new BrowserGatewayAskAgentModelClient({
+        sessionId: "hosted-web-fallback",
+        createClient: () =>
+          ({
+            responses: {
+              create: (
+                body: Record<string, unknown>,
+                options?: { headers?: Record<string, string> },
+              ) => {
+                calls.push({ body, headers: options?.headers });
+                return (async function* () {
+                  yield { type: "response.done", response: { usage: {} } };
+                })();
+              },
+            },
+          }) as never,
+      });
+      await client.completeWithToolCalls({
+        credential: { ...baseCredential, method: "oauth" },
+        model,
+        messages: userMessages,
+        instructions: "distinctive browser hosted instructions",
+        tools: [],
+        hostedTools: [
+          { type: "web_search", allowedDomains: ["tailscale.com"] },
+        ],
+      });
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body).toMatchObject({
+        model,
+        instructions: "distinctive browser hosted instructions",
+        input: [{ role: "user" }],
+        tools: [
+          {
+            type: "web_search",
+            filters: { allowed_domains: ["tailscale.com"] },
+          },
+        ],
+        include: ["web_search_call.action.sources"],
+      });
+      expect(calls[0].headers ?? {}).not.toHaveProperty(
+        "x-openai-internal-codex-responses-lite",
+      );
+    },
+  );
 
   it("uses the standalone Codex web transport for OAuth credentials", async () => {
     let requestUrl = "";

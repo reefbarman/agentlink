@@ -17,6 +17,47 @@ afterEach(() => {
 });
 
 describe("ToolCallBlock", () => {
+  it("summarizes indexed queries without regex delimiters", () => {
+    const { container } = render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "query-search",
+          name: "search_files",
+          inputJson: JSON.stringify({
+            path: ".",
+            query: "find authentication flow",
+          }),
+          complete: true,
+          result: JSON.stringify({
+            ranking: "lexical",
+            ranking_reason: "embeddings_disabled",
+            total_results: 2,
+          }),
+        },
+      }),
+    );
+    expect(container.textContent).toContain(
+      "find authentication flow · 2 results",
+    );
+    expect(container.textContent).not.toContain("/find authentication flow/");
+  });
+
+  it("keeps retired tool records readable through generic rendering", () => {
+    const { container } = render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "historical-search",
+          name: "codebase_search",
+          inputJson: JSON.stringify({ query: "historical query" }),
+          complete: true,
+          result: JSON.stringify({ total_results: 1 }),
+        },
+      }),
+    );
+    expect(container.textContent).toContain("codebase_search");
+  });
   it("summarizes compose failures without confusing sibling cancellation with failure", () => {
     const script = "const requests = [];\nreturn toolAll(requests);";
     const { container } = render(
@@ -344,6 +385,39 @@ describe("ToolCallBlock", () => {
 
     expect(onOpenFile).toHaveBeenCalledWith("/tmp/tool-result.txt", undefined);
     expect(screen.queryByText("Input")).toBeNull();
+  });
+
+  it("summarizes read_file context views and falls back for historical get_context calls", () => {
+    const summaryFor = (name: string, input: Record<string, unknown>) => {
+      const { container } = render(
+        h(ToolCallBlock, {
+          toolCall: {
+            type: "tool_call",
+            id: `${name}-summary`,
+            name,
+            inputJson: JSON.stringify(input),
+            result: JSON.stringify({ total_lines: 12 }),
+            complete: true,
+          },
+        }),
+      );
+      const text = container.textContent ?? "";
+      cleanup();
+      return text;
+    };
+
+    const contextView = summaryFor("read_file", {
+      path: "src/a.ts",
+      view: "context",
+    });
+    expect(contextView).toContain("src/a.ts");
+    expect(contextView).not.toContain("(12 lines)");
+    expect(summaryFor("read_file", { path: "src/a.ts" })).toContain(
+      "(12 lines)",
+    );
+    expect(summaryFor("get_context", { path: "src/a.ts" })).toContain(
+      "src/a.ts",
+    );
   });
 
   it("linkifies file paths embedded in ACP-native summary text", () => {

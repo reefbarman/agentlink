@@ -228,6 +228,7 @@ import { SandboxBehaviorAttestationService } from "./terminal/sandbox/SandboxBeh
 import {
   createProductionSandboxBehaviorProbe,
   createProductionSandboxRuntimeFingerprint,
+  SandboxRuntimeFingerprintNodeUnavailableError,
 } from "./terminal/sandbox/ProductionSandboxBehaviorProbe.js";
 import {
   resolveSandboxNodeRuntime,
@@ -565,8 +566,9 @@ export async function activate(
     if (sandboxRuntimeWarning === error.message) return;
     sandboxRuntimeWarning = error.message;
     const dependencyFailure =
-      error instanceof SandboxNodeRuntimeUnavailableError;
-    if (dependencyFailure) {
+      error instanceof SandboxNodeRuntimeUnavailableError ||
+      error instanceof SandboxRuntimeFingerprintNodeUnavailableError;
+    if (error instanceof SandboxNodeRuntimeUnavailableError) {
       for (const attempt of error.attempts) {
         log(`[sandbox-terminal] Runtime candidate rejected: ${attempt}`);
       }
@@ -1069,6 +1071,7 @@ export async function activate(
           return {
             status: "runtime-unavailable",
             detail: failure.message,
+            diagnostic: { category: "runtime_unavailable" },
           };
         }
         try {
@@ -1090,7 +1093,11 @@ export async function activate(
             log(
               `[sandbox-terminal] Behavioral attestation failed closed: ${attestation.failureCode}`,
             );
-            return { status: "failed", detail: attestation.failureCode };
+            return {
+              status: "failed",
+              detail: attestation.failureCode,
+              diagnostic: { category: attestation.failureCode },
+            };
           }
           return {
             status: "verified",
@@ -1121,10 +1128,25 @@ export async function activate(
           };
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
+          if (error instanceof SandboxRuntimeFingerprintNodeUnavailableError) {
+            log(
+              `[sandbox-terminal] Node runtime became unavailable before sandbox selection: ${detail}`,
+            );
+            void showSandboxRuntimeUnavailable(error);
+            return {
+              status: "runtime-unavailable",
+              detail,
+              diagnostic: { category: "runtime_node_unavailable" },
+            };
+          }
           log(
             `[sandbox-terminal] Behavioral attestation failed closed: ${detail}`,
           );
-          return { status: "failed", detail };
+          return {
+            status: "failed",
+            detail,
+            diagnostic: { category: "runtime_fingerprint_failed" },
+          };
         }
       },
     recordExecutionAudit: (event) =>

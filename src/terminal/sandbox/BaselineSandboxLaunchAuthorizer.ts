@@ -12,6 +12,7 @@ import {
 } from "../../core/sandboxPolicy.js";
 import type { SandboxExecutionMetadata } from "@agentlink/protocol/terminal-security";
 import { SandboxCapabilityLaunchError } from "../../core/capabilities/SandboxCapabilityLaunchError.js";
+import { SandboxPreparationError } from "./SandboxPreparationError.js";
 import type { TerminalExecuteOptions } from "../../core/capabilities/terminal.js";
 import { buildAgentExecutionEnv } from "../../process/agentExecutionPolicy.js";
 import {
@@ -368,9 +369,7 @@ function buildEnvironment(
 ) {
   const resolved = buildSandboxPolicyEnvironment(hostEnvironment, policy);
   if (resolved.policy.useProfile) {
-    throw new Error(
-      "Sandbox shell environment useProfile is not supported by the attested interactive helper yet.",
-    );
+    throw new SandboxPreparationError("unsupported_shell_profile");
   }
   const agentEnvironment = buildAgentExecutionEnv();
   const environment: Record<string, string> = {};
@@ -392,7 +391,11 @@ function buildEnvironment(
   }
   for (const [name, value] of Object.entries(explicit ?? {})) {
     if (isReservedEnvironmentName(name)) {
-      throw new Error(`Sandbox environment override is reserved: ${name}`);
+      throw new SandboxPreparationError(
+        name === "PATH"
+          ? "reserved_path_override"
+          : "reserved_environment_override",
+      );
     }
     setEntry(name, value, "per-command");
   }

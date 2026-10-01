@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Fixed sandbox PATH recovery guidance: PATH remains host-managed, with inline exports in each reviewed command instead of unsupported `env.PATH` overrides. Preparation input/configuration failures now return bounded reasons rather than being mislabelled as attestation failures. Security checks, reserved environment protections, and non-bypass recovery remain intact.
+
+- Improved terminal preparation recovery: sandbox check categories reach command results without raw probe output, missing Node runtime failures receive host repair guidance, grant compilation failures stop blind retry loops, and native startup timeouts direct users to inspect and repair shell startup rather than only reload. Corrected the persistence contract: named/targeted Native Agent terminals retain shell changes, while sandbox calls always start fresh shells and require explicit per-call environment variables. Security/trust failures remain blocked without native bypass or automatic replay.
+
+- Fixed bounded file listings failing when unrelated broken symlinks produce no matches. Traversal warnings now accompany incomplete results, while invalid arguments and process failures remain errors. Ranked query search boosts adjacent terms and joined identifiers, downweights snapshots/fixtures without excluding them, and reports actionable embedding/index fallback reasons. Protected Git preflight recognises literal input piped to patch staging with `color.ui=false`; internal `git apply` failures retain recovery evidence even when the shell exits zero, without automatic authority or replay.
+
+- Session images now survive context condensing in VS Code chat. `image_N` IDs are numbered over the stored history, so they stay the same after condensing, and the condense summary lists the hidden images by ID (capped at the 20 most recent) with the next ID to expect. Images re-enter context only when a tool such as `present_images` returns them. `present_images`, `save_session_image`, `generate_image` references, and background-agent image handoff can all still reach older images. Rewinding still removes images from discarded turns.
+
+- Added `save_session_image` for VS Code chat in Code and Architect modes. Agents can write an image already in the session (a pasted attachment, screenshot, or generated image) to a workspace file by its `image_N` ID, byte-for-byte. The extension must match the image type, existing files are replaced only with `overwrite: true`, and saving follows the same write approvals as file edits.
+
+- Fixed agents on OpenAI-compatible providers, including Meridian, being unable to see images returned by tools such as `generate_image`, `present_images`, screenshots, and image `read_file`. When the model supports image input, those images are now sent in a user message after the tool results instead of being replaced with an omission placeholder.
+
+- Merged `get_context` into `read_file` for VS Code workspace sessions and mirrored browser workspace chat. `read_file` now takes an optional `view` (`"content"` by default, or `"context"` for the oriented context pack). Each view keeps the path policy, Compose limits, and history budget of the reader it replaced, and options for the other view are rejected before the file is read. Modes, profiles, and skills that grant only one reader advertise only that view. `get_context` is removed there rather than aliased: a call to it is rejected like any unavailable tool, and older transcripts still show its file link. Tool telemetry records the view used, and `npm run telemetry:tools` prints the per-version view split. The standalone CLI and projectless Browser Ask Agent readers are unchanged.
+
+- Reduced the default native tool catalogue by deferring module-neighbour lookup and five advanced fleet controls. They remain available through native discovery with existing validation and permission checks. Rule loading is advertised only when the request has deferred local rules; ordinary spawning, supervision, and skill loading remain available as before.
+
+- Merged ranked code search into `search_files`: `query` and `regex` are mutually exclusive, `query` is workspace-only, and results disclose the ranking actually used. Removed `codebase_search` and query modes from `read_file` and `list_files`; no compatibility aliases remain.
+
 - Fixed command input lifetime and recovery: running native commands retain private input artifacts until completion; protected-file snapshot drift returns non-bypass re-preparation guidance; live Git worktree locks are preserved; credential-backed and mise/asdf workflows avoid unusable disposable-HOME retries; finalized deferred Docker denials receive reviewed failed-step guidance; and evidenced managed curl connection timeouts are distinguished from provider response delays.
 
 - Fixed command reliability: human approval audits now capture the wait before a separate response; sandbox helper failures retain command identity, launch evidence, and bounded output without blind replay; absent protected files stay write-denied; and bounded Git inspection/write chains plus linked-worktree and `ORIG_HEAD` lock denials receive accurate native-recovery guidance.
@@ -10,11 +28,15 @@
 
 - Fixed recovery details and read accuracy: failed VS Code saves retain bounded, redacted exception messages without discarding dirty buffers; Codex page-access internal errors no longer appear as successful fetched content; and command-substitution input filters no longer trigger terminal output-filter rejection.
 
+- Changed Approve for Me to let agents run routine Git publishing without approval prompts. `git add`, `git commit`, branch creation or switching, `git fetch`/`git pull`, non-force `git push` to a configured remote, and `gh pr create` are approved without a Guardian model call, including on the native escalation Git metadata writes need. Force pushes, ref deletion, `--mirror`, tag pushes, URL destinations, and work-discarding Git operations still go through Guardian review.
+
 - Fixed command recovery and edit attribution: narrow Git write/inspection chains receive protected-metadata native guidance before launch, GitHub TLS failures in mixed workflows and review loops receive failed-step recovery without disabling certificate checks, and write/edit results no longer label unrelated-file diagnostics as introduced errors.
 
 - Restored visible thinking summaries for reasoning-enabled Codex subscription models using Responses Lite, including GPT-6 Astra and GPT-6.1 Sol. Requests now ask for detailed summaries instead of suppressing them, through the shared WebSocket and HTTP/SSE request path.
 
 - Fixed read-tool safety and accuracy: regex and semantic search (including keyword fallback) redact eligible structured-settings secrets before excerpting, withholding malformed or unreadable configuration; semantic search bounds each excerpt to 4,000 source characters plus a truncation marker; and recursive listings honour explicit roots inside `node_modules` while keeping nested dependencies and Git metadata excluded.
+
+- Fixed warning and error colours on Tools summaries leaking into successful calls and skill loads when expanded. Group headers retain their aggregate status, while each call keeps its own status colour in VS Code and browser chat.
 
 - Fixed successful skill loads splitting Tools summaries in VS Code and browser chat. They now join adjacent calls, contribute a loaded-skills count, and retain their ordered details when expanded. Running and unsuccessful loads remain visible separately.
 
@@ -27,6 +49,8 @@
 - Fixed terminal-output safety and fidelity: `execute_command` and `get_terminal_output` redact credential-named environment lines before filtering and saving output files, and terminal cleanup preserves leading whitespace, blank lines and final newlines so retained patches remain parseable. Recognised Kubernetes Secret JSON redaction also retains final newlines. Raw terminal display and arbitrary unlabelled values are not secret-safe surfaces.
 
 - Added **AgentLink: Install Desktop App** and **AgentLink: Install CLI** to the VS Code Command Palette. They find separate published preview releases, warn about unsigned/not-notarised downloads, and open the matching Desktop DMG or checksum-verify and install the Apple Silicon CLI in a visible terminal without replacing an existing launcher. Local macOS windows only; source-build installers remain separate.
+
+- Added **Quick Ask** to AgentLink Desktop. Press **⌥Space** from any app to open a floating Ask AgentLink composer with the usual model and thinking controls and image/file paste. Sending opens the main window and starts the message in a new chat; **Esc** or clicking away dismisses it and keeps the draft. Desktop now runs as a menu bar app: closing the chat window hides it and its Dock icon, and the installed app opens at login in the background by default so the shortcut is always ready. A new **Settings…** window (**⌘,**, the menu bar icon, or **More** in the chat) configures the shortcut, **Open at login**, and accounts.
 
 ## 1.23.0
 
