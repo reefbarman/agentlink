@@ -228,14 +228,15 @@ const readFileOffsetSchema = z.coerce
   .optional()
   .describe("Starting line number (1-indexed, default: 1)");
 
-const readFileContentOptions = {
-  include_symbols: z
-    .boolean()
-    .optional()
-    .describe(
-      "Include top-level symbol outline (functions, classes, interfaces). Default: true. Set to false to suppress.",
-    ),
+const readFileIncludeSymbolsSchema = z
+  .boolean()
+  .optional()
+  .describe(
+    "Include the symbol outline in either view. Default: true. Set to false to skip symbol lookup and suppress the outline.",
+  );
 
+const readFileContentOptions = {
+  include_symbols: readFileIncludeSymbolsSchema,
   anchor: z
     .string()
     .optional()
@@ -263,6 +264,7 @@ const readFileContentOptions = {
 };
 
 const readFileContextOptions = {
+  include_symbols: readFileIncludeSymbolsSchema,
   dedupe_unchanged_content: z
     .boolean()
     .optional()
@@ -349,6 +351,7 @@ export const loadRuleSchema = {
 };
 
 export const getContextSchema = {
+  include_symbols: readFileIncludeSymbolsSchema,
   path: z
     .string()
     .describe(
@@ -931,6 +934,12 @@ export const proposeMemorySchema = {
     .optional()
     .describe(
       "Existing entry/section text to replace or remove. Matched with normalized whitespace.",
+    ),
+  skill_directory: z
+    .enum([".agentlink/skills", ".agents/skills"])
+    .optional()
+    .describe(
+      "Project skill destination directory (default: .agentlink/skills). Use .agents/skills for a tracked team skill. Valid only for tier=skill and scope=project; add/update/remove targets this exact directory without fallback.",
     ),
 };
 

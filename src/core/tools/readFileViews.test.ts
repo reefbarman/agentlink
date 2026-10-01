@@ -42,6 +42,22 @@ describe("read_file views", () => {
     });
   });
 
+  it.each(["content", "context"] as const)(
+    "forwards symbol suppression for the %s view",
+    (view) => {
+      expect(
+        resolveReadFileView({ path: "a.ts", view, include_symbols: false }, [
+          "content",
+          "context",
+        ]),
+      ).toMatchObject({
+        ok: true,
+        view,
+        input: { path: "a.ts", include_symbols: false },
+      });
+    },
+  );
+
   it("never falls back to another view when the omitted default is not permitted", () => {
     expect(resolveReadFileView({ path: "a.ts" }, ["context"])).toMatchObject({
       ok: false,

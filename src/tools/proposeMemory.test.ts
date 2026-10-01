@@ -307,6 +307,463 @@ describe("handleProposeMemory", () => {
     });
   });
 
+  it("clears the skill directory when retargeting away from project skills", async () => {
+    const { isSameMemoryProposalDestination, retargetMemoryProposal } =
+      await import("../shared/memoryProposalEngine.js");
+    const selected = {
+      tier: "skill" as const,
+      scope: "project" as const,
+      operation: "add" as const,
+      name: "team-skill",
+      skill_directory: ".agents/skills" as const,
+      title: "Add skill",
+      rationale: "Retarget safely.",
+      content: "skill",
+    };
+    const global = retargetMemoryProposal(
+      selected,
+      { memoryTier: "instructions", memoryScope: "global" },
+      "global instructions",
+    );
+    expect(global.skill_directory).toBeUndefined();
+    const defaultProjectSkill = { ...selected, skill_directory: undefined };
+    expect(isSameMemoryProposalDestination(selected, defaultProjectSkill)).toBe(
+      false,
+    );
+  });
+
+  it("keeps the default project skill target in AgentLink skills", async () => {
+    const { handleProposeMemory } = await import("./proposeMemory.js");
+    const { panel } = approvingPanel();
+    await handleProposeMemory(
+      {
+        tier: "skill",
+        scope: "project",
+        operation: "add",
+        name: "default-skill",
+        title: "Add skill",
+        rationale: "Keep the existing default.",
+        content: "---\nname: default-skill\ndescription: Use in tests.\n---\n",
+      },
+      panel as never,
+    );
+    expect(diffOpen).toHaveBeenCalledWith(
+      path.join(tmpDir, ".agentlink/skills/default-skill/SKILL.md"),
+      ".agentlink/skills/default-skill/SKILL.md",
+      expect.stringContaining("name: default-skill"),
+    );
+  });
+
+  it("writes an explicitly selected team skill target", async () => {
+    const { handleProposeMemory } = await import("./proposeMemory.js");
+    const { panel } = approvingPanel();
+
+    const result = await handleProposeMemory(
+      {
+        tier: "skill",
+        scope: "project",
+        operation: "add",
+        name: "team-skill",
+        skill_directory: ".agents/skills",
+        title: "Add team skill",
+        rationale: "Use the team skill convention.",
+        content:
+          "---\nname: team-skill\ndescription: Use for team work.\n---\n# Team\n",
+      },
+      panel as never,
+    );
+
+    const selectedPath = path.join(
+      tmpDir,
+      ".agents",
+      "skills",
+      "team-skill",
+      "SKILL.md",
+    );
+    expect(diffOpen).toHaveBeenCalledWith(
+      selectedPath,
+      ".agents/skills/team-skill/SKILL.md",
+      expect.stringContaining("name: team-skill"),
+    );
+    expect(fs.existsSync(selectedPath)).toBe(true);
+    expect(
+      fs.existsSync(path.join(tmpDir, ".agentlink/skills/team-skill/SKILL.md")),
+    ).toBe(false);
+    expect(text(result)).toMatchObject({
+      path: ".agents/skills/team-skill/SKILL.md",
+    });
+  });
+
+  it("does not write an explicitly selected skill after approval is rejected", async () => {
+    const { handleProposeMemory } = await import("./proposeMemory.js");
+    const { panel, requests } = approvingPanel({ decision: "reject" });
+    const result = await handleProposeMemory(
+      {
+        tier: "skill",
+        scope: "project",
+        operation: "add",
+        name: "rejected-skill",
+        skill_directory: ".agents/skills",
+        title: "Add skill",
+        rationale: "Wait for approval.",
+        content: "---\nname: rejected-skill\ndescription: Use in tests.\n---\n",
+      },
+      panel as never,
+    );
+    expect(requests[0]).toMatchObject({
+      targetPath: path.join(tmpDir, ".agents/skills/rejected-skill/SKILL.md"),
+    });
+    expect(text(result).status).toBe("rejected_by_user");
+    expect(
+      fs.existsSync(
+        path.join(tmpDir, ".agents/skills/rejected-skill/SKILL.md"),
+      ),
+    ).toBe(false);
+    expect(
+      fs.existsSync(
+        path.join(tmpDir, ".agentlink/skills/rejected-skill/SKILL.md"),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["accept", "missing"],
+    ["reject", "missing"],
+    ["accept", "escape"],
+    ["reject", "escape"],
+  ] as const)(
+    "preserves the review without save or rollback after %s when the target becomes %s",
+    async (decision, failure) => {
+      const { handleProposeMemory } = await import("./proposeMemory.js");
+      const targetPath = path.join(
+        tmpDir,
+        ".agents/skills/retained-skill/SKILL.md",
+      );
+      const outsidePath = path.join(tmpHome, "outside.md");
+      const content = "---\nname: retained-skill\ndescription: Updated.\n---\n";
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, content);
+      fs.writeFileSync(outsidePath, "outside content must remain unchanged");
+      const { panel } = approvingPanel({ decision });
+      panel.enqueueMemoryApproval.mockImplementation(() => {
+        fs.unlinkSync(targetPath);
+        if (failure === "escape") fs.symlinkSync(outsidePath, targetPath);
+        return { id: "approval-1", promise: Promise.resolve({ decision }) };
+      });
+      const result = await handleProposeMemory(
+        {
+          tier: "skill",
+          scope: "project",
+          operation: "update",
+          name: "retained-skill",
+          skill_directory: ".agents/skills",
+          title: "Update skill",
+          rationale: "Do not write or roll back after target validation fails.",
+          content,
+        },
+        panel as never,
+      );
+      expect(result.isError).toBe(true);
+      expect(text(result)).toMatchObject({
+        reason: "proposal_target_validation_failed",
+        path: ".agents/skills/retained-skill/SKILL.md",
+        save_state: "not_attempted",
+        rollback_state: "not_attempted",
+        buffer_state: "retained",
+      });
+      expect(diffSaveChanges).not.toHaveBeenCalled();
+      expect(diffRevertChanges).not.toHaveBeenCalled();
+      expect(fs.readFileSync(outsidePath, "utf-8")).toBe(
+        "outside content must remain unchanged",
+      );
+      if (failure === "missing") expect(fs.existsSync(targetPath)).toBe(false);
+    },
+  );
+
+  it("preserves the retargeted review when its update target disappears after approval", async () => {
+    const { handleProposeMemory } = await import("./proposeMemory.js");
+    const sourcePath = path.join(
+      tmpDir,
+      ".agentlink/commands/source-command.md",
+    );
+    const targetPath = path.join(
+      tmpDir,
+      ".agentlink/skills/final-skill/SKILL.md",
+    );
+    const content = "---\nname: final-skill\ndescription: Updated.\n---\n";
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.writeFileSync(sourcePath, "existing command");
+    fs.writeFileSync(targetPath, content);
+    const { panel } = approvingPanel({
+      memoryTier: "skill",
+      memoryScope: "project",
+      memoryName: "final-skill",
+    });
+    diffWaitForUserDecision.mockImplementation(async () => {
+      fs.unlinkSync(targetPath);
+      return "accept";
+    });
+    const result = await handleProposeMemory(
+      {
+        tier: "command",
+        scope: "project",
+        operation: "update",
+        name: "source-command",
+        title: "Retarget to skill",
+        rationale: "Preserve the final review on target validation failure.",
+        content,
+      },
+      panel as never,
+    );
+    expect(text(result)).toMatchObject({
+      reason: "proposal_target_validation_failed",
+      path: ".agentlink/skills/final-skill/SKILL.md",
+      buffer_state: "retained",
+    });
+    expect(diffRevertChanges).toHaveBeenCalledTimes(1);
+    expect(diffSaveChanges).not.toHaveBeenCalled();
+    expect(fs.existsSync(targetPath)).toBe(false);
+    expect(fs.readFileSync(sourcePath, "utf-8")).toBe("existing command");
+  });
+
+  it.each(["update", "remove"] as const)(
+    "does not retarget a missing %s from the selected project skill directory",
+    async (operation) => {
+      const { handleProposeMemory } = await import("./proposeMemory.js");
+      const alternatePath = path.join(
+        tmpDir,
+        ".agentlink",
+        "skills",
+        "specific-skill",
+        "SKILL.md",
+      );
+      fs.mkdirSync(path.dirname(alternatePath), { recursive: true });
+      fs.writeFileSync(
+        alternatePath,
+        "---\nname: specific-skill\ndescription: Existing.\n---\n",
+      );
+      const { panel } = approvingPanel();
+
+      const result = await handleProposeMemory(
+        {
+          tier: "skill",
+          scope: "project",
+          operation,
+          name: "specific-skill",
+          skill_directory: ".agents/skills",
+          title: "Change skill",
+          rationale: "Target only the selected source.",
+          content:
+            operation === "remove"
+              ? ""
+              : "---\nname: specific-skill\ndescription: Updated.\n---\n",
+        },
+        panel as never,
+      );
+
+      expect(text(result).error).toContain(
+        "Skill target not found: .agents/skills/specific-skill/SKILL.md",
+      );
+      expect(text(result).error).toContain(
+        "same-named skill exists at .agentlink/skills/specific-skill/SKILL.md",
+      );
+      expect(panel.enqueueMemoryApproval).not.toHaveBeenCalled();
+      expect(diffOpen).not.toHaveBeenCalled();
+      expect(fs.existsSync(alternatePath)).toBe(true);
+    },
+  );
+
+  it.each([
+    [
+      { tier: "instructions", scope: "project" },
+      "skill_directory is only valid",
+    ],
+    [{ tier: "skill", scope: "global" }, "skill_directory is only valid"],
+    [
+      { tier: "skill", scope: "project", skill_directory: "other" },
+      "skill_directory must be",
+    ],
+  ] as const)(
+    "rejects invalid skill-directory selection before review",
+    async (base, error) => {
+      const { handleProposeMemory } = await import("./proposeMemory.js");
+      const { panel } = approvingPanel();
+      const result = await handleProposeMemory(
+        {
+          skill_directory: ".agents/skills",
+          name: "test-skill",
+          ...base,
+          operation: "add",
+          title: "Add skill",
+          rationale: "Validate selection.",
+          content: "---\nname: test-skill\ndescription: Use in tests.\n---\n",
+        } as never,
+        panel as never,
+      );
+      expect(text(result).error).toContain(error);
+      expect(panel.enqueueMemoryApproval).not.toHaveBeenCalled();
+      expect(diffOpen).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["update", "remove"] as const)(
+    "checks a retargeted missing skill %s destination under its write lock",
+    async (operation) => {
+      const { handleProposeMemory } = await import("./proposeMemory.js");
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), "Old instruction.\n");
+      const alternatePath = path.join(
+        tmpDir,
+        ".agents",
+        "skills",
+        "retarget-skill",
+        "SKILL.md",
+      );
+      fs.mkdirSync(path.dirname(alternatePath), { recursive: true });
+      fs.writeFileSync(
+        alternatePath,
+        "---\nname: retarget-skill\ndescription: Existing team skill.\n---\n",
+      );
+      const { panel } = approvingPanel({
+        memoryTier: "skill",
+        memoryScope: "project",
+        memoryName: "retarget-skill",
+      });
+
+      const result = await handleProposeMemory(
+        {
+          tier: "instructions",
+          scope: "project",
+          operation,
+          title: "Retarget skill change",
+          rationale: "Validate the final destination too.",
+          content:
+            operation === "remove"
+              ? ""
+              : "---\nname: retarget-skill\ndescription: Updated.\n---\n",
+          replaces: "Old instruction.",
+        },
+        panel as never,
+      );
+
+      expect(text(result).error).toContain(
+        "Skill target not found: .agentlink/skills/retarget-skill/SKILL.md",
+      );
+      expect(text(result).error).toContain(
+        "same-named skill exists at .agents/skills/retarget-skill/SKILL.md",
+      );
+      expect(diffOpen).toHaveBeenCalledTimes(1);
+      expect(fs.existsSync(alternatePath)).toBe(true);
+    },
+  );
+
+  it("does not offer project skill hints for a missing global skill target", async () => {
+    const { handleProposeMemory } = await import("./proposeMemory.js");
+    const alternatePath = path.join(
+      tmpDir,
+      ".agents",
+      "skills",
+      "global-miss",
+      "SKILL.md",
+    );
+    fs.mkdirSync(path.dirname(alternatePath), { recursive: true });
+    fs.writeFileSync(
+      alternatePath,
+      "---\nname: global-miss\ndescription: Project-only skill.\n---\n",
+    );
+    const { panel } = approvingPanel();
+
+    const result = await handleProposeMemory(
+      {
+        tier: "skill",
+        scope: "global",
+        operation: "update",
+        name: "global-miss",
+        title: "Update global skill",
+        rationale: "Do not suggest a project-local target.",
+        content: "---\nname: global-miss\ndescription: Updated.\n---\n",
+      },
+      panel as never,
+    );
+
+    expect(text(result).error).toContain("Skill target not found");
+    expect(text(result).error).not.toContain("same-named skill exists");
+    expect(panel.enqueueMemoryApproval).not.toHaveBeenCalled();
+  });
+
+  it.each(["ancestor", "target"] as const)(
+    "rejects a dangling selected skill %s symlink before review",
+    async (linkType) => {
+      const { handleProposeMemory } = await import("./proposeMemory.js");
+      const outside = path.join(tmpDir, "dangling-destination");
+      const skillDirectory = path.join(
+        tmpDir,
+        ".agents",
+        "skills",
+        "dangling-skill",
+      );
+      if (linkType === "ancestor") {
+        fs.symlinkSync(outside, path.join(tmpDir, ".agents"), "dir");
+      } else {
+        fs.mkdirSync(skillDirectory, { recursive: true });
+        fs.symlinkSync(outside, path.join(skillDirectory, "SKILL.md"));
+      }
+      const { panel } = approvingPanel();
+
+      const result = await handleProposeMemory(
+        {
+          tier: "skill",
+          scope: "project",
+          operation: "add",
+          name: "dangling-skill",
+          skill_directory: ".agents/skills",
+          title: "Add skill",
+          rationale: "Reject dangling links before review.",
+          content:
+            "---\nname: dangling-skill\ndescription: Use in tests.\n---\n",
+        },
+        panel as never,
+      );
+
+      expect(text(result).error).toMatch(
+        /ENOENT|outside the approved workspace/,
+      );
+      expect(panel.enqueueMemoryApproval).not.toHaveBeenCalled();
+      expect(diffOpen).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a selected project skill directory that symlinks outside the workspace", async () => {
+    const { handleProposeMemory } = await import("./proposeMemory.js");
+    const outside = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-skill-outside-"),
+    );
+    fs.symlinkSync(outside, path.join(tmpDir, ".agents"), "dir");
+    const { panel } = approvingPanel();
+
+    const result = await handleProposeMemory(
+      {
+        tier: "skill",
+        scope: "project",
+        operation: "add",
+        name: "escaped-skill",
+        skill_directory: ".agents/skills",
+        title: "Add skill",
+        rationale: "Stay within workspace.",
+        content: "---\nname: escaped-skill\ndescription: Use in tests.\n---\n",
+      },
+      panel as never,
+    );
+
+    expect(text(result).error).toContain("outside the approved workspace");
+    expect(panel.enqueueMemoryApproval).not.toHaveBeenCalled();
+    expect(diffOpen).not.toHaveBeenCalled();
+    expect(
+      fs.existsSync(path.join(outside, "skills/escaped-skill/SKILL.md")),
+    ).toBe(false);
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+
   it("validates skill frontmatter name before requesting approval", async () => {
     const { handleProposeMemory } = await import("./proposeMemory.js");
     const { panel } = approvingPanel();

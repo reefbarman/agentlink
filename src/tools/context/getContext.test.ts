@@ -202,6 +202,88 @@ describe("handleGetContext", () => {
     vscodeMock.getExtension.mockReturnValue(undefined);
   });
 
+  it.each([undefined, true, false])(
+    "preserves context metadata and skips symbol lookup only when include_symbols is %s",
+    async (include_symbols) => {
+      const workspace = makeTempWorkspace();
+      const filePath = path.join(workspace, "example.ts");
+      const content = "class Example {}\n";
+      fs.writeFileSync(filePath, content);
+      const providers = makeProviders(filePath, "example.ts", content);
+      vi.mocked(providers.enrichmentProvider.getGitStatus).mockReturnValue(
+        "modified",
+      );
+      const { handleGetContext } = await import("./getContext.js");
+      const payload = JSON.parse(
+        getText(
+          await handleGetContext(
+            { path: "example.ts", include_symbols },
+            "symbol-preference",
+            providers,
+          ),
+        ),
+      );
+      expect(payload).toMatchObject({
+        path: "example.ts",
+        git_status: "modified",
+        total_lines: 2,
+      });
+      expect(payload.content).toContain("class Example {}");
+      expect(
+        providers.enrichmentProvider.getDiagnosticsSummary,
+      ).toHaveBeenCalledOnce();
+      if (include_symbols === false) {
+        expect(
+          providers.enrichmentProvider.getDocumentSymbols,
+        ).not.toHaveBeenCalled();
+        expect(payload).not.toHaveProperty("symbols");
+        expect(payload).not.toHaveProperty("symbols_truncated");
+      } else {
+        expect(
+          providers.enrichmentProvider.getDocumentSymbols,
+        ).toHaveBeenCalledOnce();
+        expect(payload.symbols.class).toEqual(["Example (line 1)"]);
+      }
+    },
+  );
+
+  it("keeps unchanged-content deduplication when symbol suppression changes", async () => {
+    const workspace = makeTempWorkspace();
+    const filePath = path.join(workspace, "example.ts");
+    const content = "class Example {}\n";
+    fs.writeFileSync(filePath, content);
+    const providers = makeProviders(filePath, "example.ts", content);
+    const { handleGetContext } = await import("./getContext.js");
+    const read = async (include_symbols: boolean) =>
+      JSON.parse(
+        getText(
+          await handleGetContext(
+            {
+              path: "example.ts",
+              include_symbols,
+              dedupe_unchanged_content: true,
+            },
+            "symbol-dedupe",
+            providers,
+          ),
+        ),
+      );
+    const initial = await read(true);
+    const suppressed = await read(false);
+    const restored = await read(true);
+    expect(initial.content).toContain("class Example {}");
+    expect(suppressed).not.toHaveProperty("content");
+    expect(suppressed).not.toHaveProperty("symbols");
+    expect(restored).not.toHaveProperty("content");
+    expect(restored.symbols.class).toEqual(["Example (line 1)"]);
+    expect(suppressed.working_set.content_hash).toBe(
+      initial.working_set.content_hash,
+    );
+    expect(
+      providers.enrichmentProvider.getDocumentSymbols,
+    ).toHaveBeenCalledTimes(2);
+  });
+
   it("bounds a large outline and prioritises symbols in the requested slice", async () => {
     const workspace = makeTempWorkspace();
     const filePath = path.join(workspace, "large.css");

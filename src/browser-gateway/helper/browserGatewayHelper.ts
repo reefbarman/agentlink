@@ -4583,6 +4583,10 @@ export class BrowserGatewayHelper {
         writeJson(res, 400, { error: "invalid_memory_tier" });
         return;
       }
+      if (body.skill_directory !== undefined) {
+        writeJson(res, 400, { error: "project_skill_directory_unavailable" });
+        return;
+      }
       const nudgeId = typeof body.nudgeId === "string" ? body.nudgeId : "";
       const approval = await this.askAgentMemoryProposalBridge.propose({
         tier: body.tier,

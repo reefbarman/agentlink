@@ -261,6 +261,35 @@ describe("BrowserGatewayAskAgentMemoryProposalBridge", () => {
     await fs.rm(homeDir, { recursive: true, force: true });
   });
 
+  it("rejects a project skill-directory selector instead of stripping it", async () => {
+    const homeDir = await makeHome();
+    const bridge = new BrowserGatewayAskAgentMemoryProposalBridge({ homeDir });
+
+    await expect(
+      bridge.propose({
+        tier: "skill",
+        scope: "project",
+        operation: "add",
+        name: "team-skill",
+        skill_directory: ".agents/skills",
+        title: "Add team skill",
+        rationale:
+          "Project skill target cannot be used by projectless Ask Agent.",
+        content:
+          "---\nname: team-skill\ndescription: Use for team work.\n---\n",
+      }),
+    ).rejects.toThrow("Project-scoped durable memory is unavailable here");
+    expect(bridge.getPendingApproval()).toBeNull();
+    await expect(
+      fs.readFile(
+        path.join(homeDir, ".agents/skills/team-skill/SKILL.md"),
+        "utf-8",
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    await fs.rm(homeDir, { recursive: true, force: true });
+  });
+
   it("rejects retargeting approval to project scope", async () => {
     const homeDir = await makeHome();
     const bridge = new BrowserGatewayAskAgentMemoryProposalBridge({ homeDir });

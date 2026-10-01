@@ -4315,6 +4315,74 @@ describe("dispatchToolCall", () => {
     expect(mockOnApprovalRequest).not.toHaveBeenCalled();
   });
 
+  it("activates only canonical skill results, not catalog lookup candidates", async () => {
+    const skillPath = "/tmp/project/.agents/skills/helper/SKILL.md";
+    const skill = {
+      id: "project:agents:helper",
+      name: "helper",
+      revision: "b".repeat(64),
+      skillPath,
+      realSkillPath: skillPath,
+      sourceScope: "project" as const,
+    };
+    const onSkillLoad = vi.fn();
+    const runtime = createAgentToolRuntime(mockCtx);
+    const context = {
+      sessionId: "test-session",
+      getAdvertisedSkills: () => [skill],
+      onSkillLoad,
+    };
+    vi.mocked(handleLoadSkill).mockResolvedValueOnce({
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "skill_not_in_catalog",
+            candidates: [{ id: skill.id, name: skill.name, path: skillPath }],
+          }),
+        },
+      ],
+    });
+    await runtime.executeTool({
+      name: "load_skill",
+      input: { path: "/tmp/project/.claude/skills/helper/SKILL.md" },
+      context,
+    });
+    expect(onSkillLoad).not.toHaveBeenCalled();
+
+    for (const requestPath of [
+      skillPath,
+      "/tmp/project/.agentlink/skills/helper/SKILL.md",
+    ]) {
+      vi.mocked(handleLoadSkill).mockResolvedValueOnce({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              skill_id: skill.id,
+              skill_name: skill.name,
+              revision: skill.revision,
+              skillPath,
+            }),
+          },
+        ],
+      });
+      await runtime.executeTool({
+        name: "load_skill",
+        input: { path: requestPath },
+        context,
+      });
+      expect(onSkillLoad).toHaveBeenLastCalledWith({
+        id: skill.id,
+        name: skill.name,
+        revision: skill.revision,
+        skillPath,
+      });
+    }
+    expect(onSkillLoad).toHaveBeenCalledTimes(2);
+  });
+
   it("allows non-interactive loading of resources from an advertised built-in skill", async () => {
     const skillPath =
       "/extensions/agentlink/resources/builtin-skills/documentation/SKILL.md";
@@ -4551,6 +4619,7 @@ describe("dispatchToolCall", () => {
       expect(contextOnly?.properties.view?.enum).toEqual(["context"]);
       expect(contextOnly?.required).toContain("view");
       expect(contextOnly?.properties).not.toHaveProperty("anchor");
+      expect(contextOnly?.properties).toHaveProperty("include_symbols");
 
       const contentOnly = readFileSchemaFor(["read_file"]);
       expect(contentOnly?.properties.view?.enum).toEqual(["content"]);
@@ -4566,7 +4635,12 @@ describe("dispatchToolCall", () => {
 
       await runtime.executeTool({
         name: "read_file",
-        input: { path: "src/foo.ts", view: "context", limit: 40 },
+        input: {
+          path: "src/foo.ts",
+          view: "context",
+          limit: 40,
+          include_symbols: false,
+        },
         context: {
           sessionId: "test-session",
           availableToolNames: new Set(["read_file"]),
@@ -4574,7 +4648,7 @@ describe("dispatchToolCall", () => {
       });
 
       expect(handleGetContext).toHaveBeenCalledWith(
-        { path: "src/foo.ts", limit: 40 },
+        { path: "src/foo.ts", limit: 40, include_symbols: false },
         "test-session",
         expect.anything(),
       );

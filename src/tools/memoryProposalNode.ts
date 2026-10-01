@@ -6,6 +6,7 @@ import type { MemoryTier } from "@agentlink/protocol/inline-approval";
 import {
   validateMemoryProposalName,
   type MemoryProposalParams,
+  validateMemoryProposalDirectory,
 } from "../shared/memoryProposalEngine.js";
 
 export interface MemoryProposalTarget {
@@ -35,8 +36,67 @@ export async function readMemoryProposalFileIfExists(
   }
 }
 
+async function resolveExistingAncestor(candidate: string): Promise<string> {
+  let current = path.resolve(candidate);
+  while (true) {
+    try {
+      await fs.lstat(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = path.dirname(current);
+      if (parent === current) throw error;
+      current = parent;
+      continue;
+    }
+    return await fs.realpath(current);
+  }
+}
+
+export async function assertMemoryProposalTargetInsideProject(
+  target: MemoryProposalTarget,
+  projectRoot: string,
+): Promise<void> {
+  const [realRoot, realAncestor] = await Promise.all([
+    fs.realpath(projectRoot),
+    resolveExistingAncestor(path.dirname(target.filePath)),
+  ]);
+  const relative = path.relative(realRoot, realAncestor);
+  if (
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error(
+      "Project skill target resolves outside the approved workspace",
+    );
+  }
+  let targetExists = true;
+  try {
+    await fs.lstat(target.filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    targetExists = false;
+  }
+  if (targetExists) {
+    const realTarget = await fs.realpath(target.filePath);
+    const targetRelative = path.relative(realRoot, realTarget);
+    if (
+      targetRelative === ".." ||
+      targetRelative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(targetRelative)
+    ) {
+      throw new Error(
+        "Project skill target resolves outside the approved workspace",
+      );
+    }
+  }
+}
+
 export async function resolveMemoryProposalTarget(
-  params: Pick<MemoryProposalParams, "tier" | "scope" | "name" | "operation">,
+  params: Pick<
+    MemoryProposalParams,
+    "tier" | "scope" | "name" | "operation" | "skill_directory"
+  >,
   options: MemoryProposalTargetOptions = {},
 ): Promise<MemoryProposalTarget> {
   const home = options.homeDir ?? os.homedir();
@@ -81,21 +141,24 @@ export async function resolveMemoryProposalTarget(
       };
     }
     case "skill": {
+      validateMemoryProposalDirectory(params);
       const name = validateMemoryProposalName(params);
-      const filePath = path.join(
-        base,
-        ".agentlink",
-        "skills",
-        name,
-        "SKILL.md",
-      );
-      return {
+      const directory =
+        params.scope === "project"
+          ? (params.skill_directory ?? ".agentlink/skills")
+          : ".agentlink/skills";
+      const filePath = path.join(base, directory, name, "SKILL.md");
+      const target = {
         filePath,
         displayPath:
           params.scope === "global"
             ? `~/.agentlink/skills/${name}/SKILL.md`
-            : `.agentlink/skills/${name}/SKILL.md`,
+            : `${directory}/${name}/SKILL.md`,
       };
+      if (params.scope === "project" && params.skill_directory !== undefined) {
+        await assertMemoryProposalTargetInsideProject(target, cwd);
+      }
+      return target;
     }
     case "command": {
       const name = validateMemoryProposalName(params);

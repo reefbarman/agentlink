@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Project skill proposals can select `skill_directory: ".agents/skills"` for a tracked team destination through the existing explicit approval flow. The default stays `.agentlink/skills`; update/remove targets the selected skill exactly, and projectless/global proposals cannot use the project-only selector.
+
+- `read_file` now supports `include_symbols: false` in both content and context views. Context reads skip symbol-provider work without changing diagnostics, pagination, or unchanged-content deduplication.
+
 - Fixed sandbox PATH recovery guidance: PATH remains host-managed, with inline exports in each reviewed command instead of unsupported `env.PATH` overrides. Preparation input/configuration failures now return bounded reasons rather than being mislabelled as attestation failures. Security checks, reserved environment protections, and non-bypass recovery remain intact.
 
 - Improved terminal preparation recovery: sandbox check categories reach command results without raw probe output, missing Node runtime failures receive host repair guidance, grant compilation failures stop blind retry loops, and native startup timeouts direct users to inspect and repair shell startup rather than only reload. Corrected the persistence contract: named/targeted Native Agent terminals retain shell changes, while sandbox calls always start fresh shells and require explicit per-call environment variables. Security/trust failures remain blocked without native bypass or automatic replay.

@@ -15,7 +15,6 @@ export const READ_FILE_VIEW_OPERATIONS: Readonly<
 const VIEW_ONLY_OPTIONS: Readonly<Record<ReadFileView, readonly string[]>> =
   Object.freeze({
     content: [
-      "include_symbols",
       "anchor",
       "anchor_regex",
       "anchor_offset",

@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import * as vscode from "vscode";
 
 import type {
@@ -17,12 +18,14 @@ import {
   retargetMemoryProposal,
   validateMemoryProposalName,
   validateMemoryProposalSkill,
+  validateMemoryProposalDirectory,
   type MemoryProposalParams,
 } from "../shared/memoryProposalEngine.js";
 import {
   deleteMemoryProposalTarget,
   readMemoryProposalFileIfExists,
   resolveMemoryProposalTarget,
+  assertMemoryProposalTargetInsideProject,
   type MemoryProposalTarget,
 } from "./memoryProposalNode.js";
 import {
@@ -49,6 +52,29 @@ class MemorySaveError extends Error {
   constructor(readonly result: DiffResult) {
     super(result.error ?? "Approved memory proposal was not durably saved");
     this.name = "MemorySaveError";
+  }
+}
+
+class MemoryTargetValidationError extends Error {
+  constructor(
+    error: unknown,
+    readonly target: Target,
+    readonly reviewOpened: boolean,
+  ) {
+    super(error instanceof Error ? error.message : String(error));
+    this.name = "MemoryTargetValidationError";
+  }
+}
+
+async function validateReviewTarget(
+  target: Target,
+  validate: (() => Promise<void>) | undefined,
+  reviewOpened: boolean,
+): Promise<void> {
+  try {
+    await validate?.();
+  } catch (error) {
+    throw new MemoryTargetValidationError(error, target, reviewOpened);
   }
 }
 
@@ -140,6 +166,39 @@ async function resolveTarget(params: ProposeMemoryParams): Promise<Target> {
   });
 }
 
+async function assertSkillTargetExists(
+  target: Target,
+  params: ProposeMemoryParams,
+): Promise<void> {
+  try {
+    await fs.access(target.filePath);
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  let hint = "";
+  if (params.scope === "project") {
+    const otherDirectory =
+      (params.skill_directory ?? ".agentlink/skills") === ".agentlink/skills"
+        ? ".agents/skills"
+        : ".agentlink/skills";
+    const otherTarget = path.join(
+      projectRoot(),
+      otherDirectory,
+      params.name ?? "",
+      "SKILL.md",
+    );
+    try {
+      await fs.access(otherTarget);
+      hint = ` A same-named skill exists at ${otherDirectory}/${params.name}/SKILL.md; select that directory to target it.`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  throw new Error(`Skill target not found: ${target.displayPath}.${hint}`);
+}
+
 function retargetedFromDecision(
   params: ProposeMemoryParams,
   decision: MemoryApprovalResponse,
@@ -200,6 +259,7 @@ async function reviewProposedContentInDiff(
     onApprovalRequest?: OnApprovalRequest;
     sessionId?: string;
     validateContent?: (content: string) => void;
+    validateTarget?: () => Promise<void>;
   },
 ): Promise<{
   decision: "accept" | "reject";
@@ -214,13 +274,16 @@ async function reviewProposedContentInDiff(
     let reverted = false;
     const revert = async (reason?: string) => {
       if (reverted) return;
+      await validateReviewTarget(target, options?.validateTarget, true);
       reverted = true;
       await diffView.revertChanges(reason);
     };
 
+    await validateReviewTarget(target, options?.validateTarget, false);
     await openMemoryReview(diffView, target, proposedContent, true);
 
     try {
+      await validateReviewTarget(target, options?.validateTarget, true);
       const decision = await diffView.waitForUserDecision(
         approvalPanel,
         options?.onApprovalRequest,
@@ -239,6 +302,7 @@ async function reviewProposedContentInDiff(
       options?.validateContent?.(
         diffView.getEditedContent() ?? proposedContent,
       );
+      await validateReviewTarget(target, options?.validateTarget, true);
       const saved = await diffView.saveChanges();
       return {
         decision: "accept",
@@ -246,8 +310,16 @@ async function reviewProposedContentInDiff(
         followUp: saved.follow_up,
       };
     } catch (err) {
-      if (!(err instanceof MemorySaveError)) {
-        await revert().catch(() => undefined);
+      if (
+        !(err instanceof MemorySaveError) &&
+        !(err instanceof MemoryTargetValidationError)
+      ) {
+        try {
+          await revert();
+        } catch (revertError) {
+          if (revertError instanceof MemoryTargetValidationError)
+            throw revertError;
+        }
       }
       throw err;
     }
@@ -262,6 +334,7 @@ async function reviewMemoryProposalInDiff(
   options?: {
     sessionId?: string;
     validateContent?: (content: string) => void;
+    validateTarget?: () => Promise<void>;
     shouldSave?: (
       decision: MemoryApprovalResponse,
     ) => Promise<boolean> | boolean;
@@ -280,10 +353,12 @@ async function reviewMemoryProposalInDiff(
     let reverted = false;
     const revert = async (reason?: string) => {
       if (reverted) return;
+      await validateReviewTarget(target, options?.validateTarget, true);
       reverted = true;
       await diffView.revertChanges(reason);
     };
 
+    await validateReviewTarget(target, options?.validateTarget, false);
     await openMemoryReview(diffView, target, proposedContent);
 
     try {
@@ -328,6 +403,7 @@ async function reviewMemoryProposalInDiff(
       options?.validateContent?.(
         diffView.getEditedContent() ?? proposedContent,
       );
+      await validateReviewTarget(target, options?.validateTarget, true);
       const saved = await diffView.saveChanges();
       return {
         decision: "accept",
@@ -336,8 +412,16 @@ async function reviewMemoryProposalInDiff(
         followUp: saved.follow_up ?? approval.followUp,
       };
     } catch (err) {
-      if (!(err instanceof MemorySaveError)) {
-        await revert().catch(() => undefined);
+      if (
+        !(err instanceof MemorySaveError) &&
+        !(err instanceof MemoryTargetValidationError)
+      ) {
+        try {
+          await revert();
+        } catch (revertError) {
+          if (revertError instanceof MemoryTargetValidationError)
+            throw revertError;
+        }
       }
       throw err;
     }
@@ -352,10 +436,19 @@ export async function handleProposeMemory(
 ): Promise<ToolResult> {
   try {
     assertAuthoritativeTier(params);
+    validateMemoryProposalDirectory(params);
     validateSkill(params);
     if (params.tier === "command") validateName(params);
 
     const target = await resolveTarget(params);
+    if (
+      params.tier === "skill" &&
+      (params.operation === "update" || params.operation === "remove")
+    ) {
+      await withFileLock(target.filePath, async () =>
+        assertSkillTargetExists(target, params),
+      );
+    }
     const existing = await readFileIfExists(target.filePath);
     const proposedContent = applyProposal(existing, params);
 
@@ -396,6 +489,27 @@ export async function handleProposeMemory(
         params,
         {
           sessionId,
+          validateTarget:
+            params.tier === "skill" &&
+            params.scope === "project" &&
+            (params.skill_directory ||
+              params.operation === "update" ||
+              params.operation === "remove")
+              ? async () => {
+                  if (params.skill_directory) {
+                    await assertMemoryProposalTargetInsideProject(
+                      target,
+                      projectRoot(),
+                    );
+                  }
+                  if (
+                    params.operation === "update" ||
+                    params.operation === "remove"
+                  ) {
+                    await assertSkillTargetExists(target, params);
+                  }
+                }
+              : undefined,
           validateContent: (content) => {
             if (params.tier === "skill") validateSkill({ ...params, content });
           },
@@ -441,13 +555,32 @@ export async function handleProposeMemory(
     }
 
     finalTarget = await resolveTarget(retargeted);
+    if (
+      retargeted.tier === "skill" &&
+      (retargeted.operation === "update" || retargeted.operation === "remove")
+    ) {
+      await withFileLock(finalTarget.filePath, async () =>
+        assertSkillTargetExists(finalTarget, retargeted),
+      );
+    }
     followUp = followUp ?? decision.followUp;
 
     if (
       retargeted.operation === "remove" &&
       (retargeted.tier === "skill" || retargeted.tier === "command")
     ) {
-      await deleteTarget(finalTarget.filePath, retargeted.tier);
+      await withFileLock(finalTarget.filePath, async () => {
+        if (retargeted.tier === "skill") {
+          await assertSkillTargetExists(finalTarget, retargeted);
+        }
+        if (retargeted.skill_directory) {
+          await assertMemoryProposalTargetInsideProject(
+            finalTarget,
+            projectRoot(),
+          );
+        }
+        await deleteTarget(finalTarget.filePath, retargeted.tier);
+      });
     } else if (finalTarget.filePath !== target.filePath) {
       const latestExisting = await readFileIfExists(finalTarget.filePath);
       const proposedFinalContent = applyProposal(latestExisting, retargeted);
@@ -460,6 +593,27 @@ export async function handleProposeMemory(
         {
           onApprovalRequest,
           sessionId,
+          validateTarget:
+            retargeted.tier === "skill" &&
+            retargeted.scope === "project" &&
+            (retargeted.skill_directory ||
+              retargeted.operation === "update" ||
+              retargeted.operation === "remove")
+              ? async () => {
+                  if (retargeted.skill_directory) {
+                    await assertMemoryProposalTargetInsideProject(
+                      finalTarget,
+                      projectRoot(),
+                    );
+                  }
+                  if (
+                    retargeted.operation === "update" ||
+                    retargeted.operation === "remove"
+                  ) {
+                    await assertSkillTargetExists(finalTarget, retargeted);
+                  }
+                }
+              : undefined,
           validateContent: (content) => {
             if (retargeted.tier === "skill")
               validateSkill({ ...retargeted, content });
@@ -494,6 +648,21 @@ export async function handleProposeMemory(
         .map((d) => ({ message: d.message, source: d.source })),
     });
   } catch (err) {
+    if (err instanceof MemoryTargetValidationError) {
+      return errorResult(err.message, {
+        status: "error",
+        reason: "proposal_target_validation_failed",
+        path: err.target.displayPath,
+        save_state: "not_attempted",
+        rollback_state: "not_attempted",
+        buffer_state: err.reviewOpened ? "retained" : "unknown",
+        next_steps: [
+          err.reviewOpened
+            ? "The review buffer is retained. No save or rollback was attempted after target validation failed. Inspect it in VS Code and reconcile the target before retrying; do not blindly save the retained buffer."
+            : "The target failed validation before review opened. Reconcile its path and existence before proposing the change again.",
+        ],
+      });
+    }
     if (err instanceof MemoryReviewOpenError) {
       return errorResult(err.message, { ...err.evidence, status: "error" });
     }

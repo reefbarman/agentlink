@@ -16,6 +16,29 @@ export interface MemoryProposalParams {
   content: string;
   name?: string;
   replaces?: string;
+  skill_directory?: ProjectSkillDirectory;
+}
+
+export type ProjectSkillDirectory = ".agentlink/skills" | ".agents/skills";
+
+export function validateMemoryProposalDirectory(
+  params: Pick<MemoryProposalParams, "tier" | "scope" | "skill_directory">,
+): void {
+  if (
+    params.skill_directory !== undefined &&
+    params.skill_directory !== ".agentlink/skills" &&
+    params.skill_directory !== ".agents/skills"
+  ) {
+    throw new Error(
+      "skill_directory must be .agentlink/skills or .agents/skills",
+    );
+  }
+  if (
+    params.skill_directory !== undefined &&
+    (params.tier !== "skill" || params.scope !== "project")
+  ) {
+    throw new Error("skill_directory is only valid for project-scoped skills");
+  }
 }
 
 function todayIso(): string {
@@ -164,22 +187,29 @@ export function retargetMemoryProposal(
   },
   content: string,
 ): MemoryProposalParams {
+  const tier = decision.memoryTier ?? params.tier;
+  const scope = decision.memoryScope ?? params.scope;
   return {
     ...params,
-    tier: decision.memoryTier ?? params.tier,
-    scope: decision.memoryScope ?? params.scope,
+    tier,
+    scope,
     name: decision.memoryName ?? params.name,
+    ...(tier === "skill" && scope === "project"
+      ? {}
+      : { skill_directory: undefined }),
     content,
   };
 }
 
 export function isSameMemoryProposalDestination(
-  a: Pick<MemoryProposalParams, "tier" | "scope" | "name">,
-  b: Pick<MemoryProposalParams, "tier" | "scope" | "name">,
+  a: Pick<MemoryProposalParams, "tier" | "scope" | "name" | "skill_directory">,
+  b: Pick<MemoryProposalParams, "tier" | "scope" | "name" | "skill_directory">,
 ): boolean {
   return (
     a.tier === b.tier &&
     a.scope === b.scope &&
-    (a.name ?? "") === (b.name ?? "")
+    (a.name ?? "") === (b.name ?? "") &&
+    (a.skill_directory ?? ".agentlink/skills") ===
+      (b.skill_directory ?? ".agentlink/skills")
   );
 }

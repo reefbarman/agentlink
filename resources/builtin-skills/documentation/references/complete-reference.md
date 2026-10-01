@@ -801,15 +801,15 @@ return packs.map((result, index) =>
 
 Read file contents with line numbers. Returns rich metadata that built-in read tools cannot provide. Supports text files, local images, and PDF text extraction.
 
-In VS Code workspace sessions and mirrored browser workspace chat, `read_file` has two views. The default `view: "content"` is described in this section. `view: "context"` returns the oriented context pack described under [read_file context view](#read_file-context-view-formerly-get_context). Each view keeps the path policy, Compose limits, and history budget of the reader it replaced. Options that belong to the other view (`include_symbols`, anchors, and `auto_follow_suggestion` for content; `dedupe_unchanged_content` and `refresh` for context) are rejected before the file is read. If a mode, profile, or skill permits only one view, the schema lists only that view; omitting `view` always means content and never falls back to context.
+In VS Code workspace sessions and mirrored browser workspace chat, `read_file` has two views. The default `view: "content"` is described in this section. `view: "context"` returns the oriented context pack described under [read_file context view](#read_file-context-view-formerly-get_context). Each view keeps the path policy, Compose limits, and history budget of the reader it replaced. Options that belong to the other view (anchors and `auto_follow_suggestion` for content; `dedupe_unchanged_content` and `refresh` for context) are rejected before the file is read. `include_symbols` is supported in both views; false skips symbol lookup and omits the outline without changing diagnostics or unchanged-content deduplication. If a mode, profile, or skill permits only one view, the schema lists only that view; omitting `view` always means content and never falls back to context.
 
-| Parameter         | Type     | Description                                                                      |
-| ----------------- | -------- | -------------------------------------------------------------------------------- |
-| `path`            | string   | File path (absolute or relative to workspace root)                               |
-| `view`            | string?  | `"content"` (default) or `"context"`, when permitted                             |
-| `offset`          | number?  | Starting line number (1-indexed, default: 1)                                     |
-| `limit`           | number?  | Maximum lines to read (content default 2000; context default 200, capped at 400) |
-| `include_symbols` | boolean? | Content view: include top-level symbol outline (default: true)                   |
+| Parameter         | Type     | Description                                                                         |
+| ----------------- | -------- | ----------------------------------------------------------------------------------- |
+| `path`            | string   | File path (absolute or relative to workspace root)                                  |
+| `view`            | string?  | `"content"` (default) or `"context"`, when permitted                                |
+| `offset`          | number?  | Starting line number (1-indexed, default: 1)                                        |
+| `limit`           | number?  | Maximum lines to read (content default 2000; context default 200, capped at 400)    |
+| `include_symbols` | boolean? | Both views: include symbol outline (default: true); false skips lookup and omits it |
 
 | `anchor` | string? | Literal anchor text to locate and jump near. Ignored if `offset` is explicitly provided. |
 | `anchor_regex` | string? | Regex anchor pattern to locate and jump near. Ignored if `offset` is explicitly provided. |
@@ -851,6 +851,7 @@ VS Code workspace sessions and mirrored browser workspace chat no longer have a 
 | `path`                     | string   | File path to build context for. Directory paths are not bulk-read.                                    |
 | `offset`                   | number?  | Starting line number for the content slice (1-indexed, default: 1).                                   |
 | `limit`                    | number?  | Maximum content lines to include (default: 200, capped at 400).                                       |
+| `include_symbols`          | boolean? | Include symbol outline (default true); false skips lookup and omits it.                               |
 | `dedupe_unchanged_content` | boolean? | When true, omit content for an unchanged exact range already returned in this session. Default false. |
 | `refresh`                  | boolean? | When true, include content even if unchanged-content dedupe would otherwise omit it.                  |
 
@@ -1191,23 +1192,26 @@ When autonomous memory is enabled, AgentLink also performs a separate bounded au
 
 Propose a reviewed authoritative configuration update. This remains the sanctioned path for durable instructions, reusable skills, and slash commands: the tool resolves the correct target, validates skill/command names and skill frontmatter, and always requires explicit user approval before writing. Approval can retarget tier/scope/name in the approval card; add/update proposals then open an editable diff view for reviewing or editing the final target file content before it is saved. Skill/command removals delete the target only after approval. Use `manage_memory` instead for low-authority preferences, facts, gotchas, decisions, workflow hints, and corrections.
 
-| Parameter   | Type                                     | Description                                                             |
-| ----------- | ---------------------------------------- | ----------------------------------------------------------------------- |
-| `tier`      | `"instructions" \| "skill" \| "command"` | Authoritative destination tier.                                         |
-| `scope`     | `"global" \| "project"`                  | Write to user-global AgentLink config or the current project.           |
-| `operation` | `"add" \| "update" \| "remove"`          | Add new content, update existing content, or remove stale content.      |
-| `title`     | string                                   | Short approval-card label.                                              |
-| `rationale` | string                                   | Why this should be persisted; shown to the user.                        |
-| `content`   | string                                   | Markdown entry/body. For `skill`, this must be the complete `SKILL.md`. |
-| `name`      | string?                                  | Required for `skill` and `command`; lowercase hyphen identifier.        |
-| `replaces`  | string?                                  | Existing text to update/remove, matched with normalized whitespace.     |
+| Parameter         | Type                                         | Description                                                                             |
+| ----------------- | -------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `tier`            | `"instructions" \| "skill" \| "command"`     | Authoritative destination tier.                                                         |
+| `scope`           | `"global" \| "project"`                      | Write to user-global AgentLink config or the current project.                           |
+| `operation`       | `"add" \| "update" \| "remove"`              | Add new content, update existing content, or remove stale content.                      |
+| `title`           | string                                       | Short approval-card label.                                                              |
+| `rationale`       | string                                       | Why this should be persisted; shown to the user.                                        |
+| `content`         | string                                       | Markdown entry/body. For `skill`, this must be the complete `SKILL.md`.                 |
+| `name`            | string?                                      | Required for `skill` and `command`; lowercase hyphen identifier.                        |
+| `replaces`        | string?                                      | Existing text to update/remove, matched with normalized whitespace.                     |
+| `skill_directory` | `".agentlink/skills"` or `".agents/skills"`? | Project skill destination only. Defaults to `.agentlink/skills`; no same-name fallback. |
 
 Targets:
 
 - `instructions` + `project` → existing root `AGENTS.md` / `AGENT.md` / `CLAUDE.md`, or creates `AGENTS.md`
 - `instructions` + `global` → `~/.agentlink/CLAUDE.md`
-- `skill` → `{scope}/.agentlink/skills/<name>/SKILL.md`
+- `skill` → `{scope}/.agentlink/skills/<name>/SKILL.md` by default; a project skill can select `skill_directory: ".agents/skills"` to propose `<workspace>/.agents/skills/<name>/SKILL.md`
 - `command` → `{scope}/.agentlink/commands/<name>.md` for adds; updates/removals edit an existing same-scope `.agentlink`, `.claude`, or `.agents` command using normal command precedence
+
+The skill directory selector is valid only for `tier: "skill"`, `scope: "project"`. It selects the exact add/update/remove target and is rejected for other tiers or global scope, including projectless Browser Ask Agent. Updates/removals of missing skill targets fail; if the skill exists in the other supported project directory, retry with an explicit selector. Changing the tier or moving to global scope during approval clears the project selector and requires review of the new target. Explicit project destinations cannot escape the workspace through symlinks; all destinations retain normal human review and durability checks. Selecting `.agents/skills` does not override repository ignore rules.
 
 Responses include `status`, `path`, `tier`, `scope`, `operation`, and any new diagnostics. If `replaces` cannot be found, the error includes the current target content so the agent can retry accurately. Rejected approvals return `status: "rejected_by_user"`, plus `reason` and `follow_up` when supplied.
 

@@ -264,6 +264,7 @@
       "name": "get_context",
       "parameters": [
         "dedupe_unchanged_content",
+        "include_symbols",
         "limit",
         "offset",
         "path",
@@ -546,6 +547,7 @@
         "rationale",
         "replaces",
         "scope",
+        "skill_directory",
         "tier",
         "title"
       ],
@@ -842,5 +844,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "df846e39ad30b9492f991866514122bc9342abd3b09282918d550d378fb707ab"
+  "revision": "c323f294f567a93e03f3c896c431763791bde8a6c4acd315db0a71f6d92a60f7"
 }

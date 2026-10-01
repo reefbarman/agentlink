@@ -30,6 +30,7 @@ export interface GetContextParams {
   path: string;
   offset?: number;
   limit?: number;
+  include_symbols?: boolean;
   dedupe_unchanged_content?: boolean;
   refresh?: boolean;
 }
@@ -143,11 +144,14 @@ export async function handleGetContext(
       await providers.enrichmentProvider.getGitStatus(absolutePath);
     if (gitStatus) result.git_status = gitStatus;
 
-    const symbols = await getDocumentSymbolsWithTimeout(
-      providers.enrichmentProvider,
-      document,
-      providers.symbolTimeoutMs ?? SYMBOL_TIMEOUT_MS,
-    );
+    const symbols =
+      params.include_symbols === false
+        ? undefined
+        : await getDocumentSymbolsWithTimeout(
+            providers.enrichmentProvider,
+            document,
+            providers.symbolTimeoutMs ?? SYMBOL_TIMEOUT_MS,
+          );
     if (symbols) {
       const outline = boundSymbolOutline(symbols, range);
       result.symbols = outline.symbols;

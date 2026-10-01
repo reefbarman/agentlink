@@ -17,6 +17,7 @@ import {
   retargetMemoryProposal,
   validateMemoryProposalName,
   validateMemoryProposalSkill,
+  validateMemoryProposalDirectory,
   type MemoryProposalParams,
 } from "../../shared/memoryProposalEngine.js";
 import {
@@ -150,6 +151,7 @@ async function writeFileAtomic(
 }
 
 function validateProposal(params: MemoryProposalParams): void {
+  validateMemoryProposalDirectory(params);
   validateMemoryProposalSkill(params);
   if (params.tier === "skill" || params.tier === "command") {
     validateMemoryProposalName(params);
@@ -275,6 +277,9 @@ export class BrowserGatewayAskAgentMemoryProposalBridge {
       content: request.content,
       ...(request.name ? { name: request.name.trim() } : {}),
       ...(request.replaces ? { replaces: request.replaces } : {}),
+      ...(request.skill_directory !== undefined
+        ? { skill_directory: request.skill_directory }
+        : {}),
     };
   }
 

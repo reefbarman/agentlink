@@ -790,6 +790,32 @@ describe("BrowserGatewayHelper proxy routing", () => {
       const cookie = bootstrap.headers.get("set-cookie")?.split(";")[0] ?? "";
       expect(cookie).toContain("agentlink_bg_session=");
 
+      for (const scope of [undefined, "global", "project"]) {
+        const invalidProposal = await fetch(
+          `${helperBase}/api/ask-agent/memory/proposal`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Cookie: cookie },
+            body: JSON.stringify({
+              tier: "skill",
+              scope,
+              operation: "add",
+              name: "team-skill",
+              skill_directory: ".agents/skills",
+              content:
+                "---\nname: team-skill\ndescription: Example workflow.\n---\n",
+            }),
+          },
+        );
+        expect(invalidProposal.status).toBe(400);
+        expect(await invalidProposal.json()).toEqual({
+          error: "project_skill_directory_unavailable",
+        });
+      }
+      await expect(
+        fs.access(path.join(homeDir, ".agentlink", "skills")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+
       const instructionsPath = path.join(homeDir, ".agentlink", "CLAUDE.md");
       const proposal = await fetch(
         `${helperBase}/api/ask-agent/memory/proposal`,
