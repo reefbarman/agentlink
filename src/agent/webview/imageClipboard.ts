@@ -60,3 +60,41 @@ export async function copyImageToClipboard(src: string): Promise<void> {
     new ClipboardItem({ "image/png": toPngBlob(src) }),
   ]);
 }
+
+// VS Code's webview context menu only offers Cut/Copy/Paste, and its Copy runs
+// `execCommand("copy")` against the text selection. Right-clicking an image
+// selects nothing, so that Copy wrote nothing. Remember the image under the
+// context menu and copy it when Copy fires without a text selection.
+export function installImageContextMenuCopy(): void {
+  if (!canCopyImageToClipboard()) return;
+  let contextImageSrc: string | null = null;
+
+  document.addEventListener(
+    "contextmenu",
+    (event) => {
+      contextImageSrc =
+        event.target instanceof HTMLImageElement
+          ? event.target.currentSrc || event.target.src
+          : null;
+    },
+    true,
+  );
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (event.button !== 2) contextImageSrc = null;
+    },
+    true,
+  );
+  document.addEventListener("copy", (event) => {
+    const src = contextImageSrc;
+    contextImageSrc = null;
+    if (!src) return;
+    const selection = document.getSelection();
+    if (selection && !selection.isCollapsed) return;
+    event.preventDefault();
+    copyImageToClipboard(src).catch((error: unknown) => {
+      console.warn("[AgentLink] Failed to copy image", error);
+    });
+  });
+}
