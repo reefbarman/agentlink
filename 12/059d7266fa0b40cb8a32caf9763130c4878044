@@ -1,0 +1,44 @@
+src/shared/toolRegistry.test.ts
+  h_e08a86bb3a33a2 66-67
+  h_e08a86bb3a33a2 65
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 56,62
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+src/core/editDurability.ts
+  h_e08a86bb3a33a2 135-138,142,169
+src/tools/proposeMemory.ts
+  h_e08a86bb3a33a2 1,55-110,221,287,497-499
+src/tools/proposeMemory.test.ts
+  h_e08a86bb3a33a2 184-285
+src/core/editDurability.test.ts
+  h_e08a86bb3a33a2 81-84,152-157,231-233
+resources/builtin-skills/documentation/references/customization.md
+  h_e08a86bb3a33a2 86-87
+src/shared/applyDiffFormat.ts
+  h_e08a86bb3a33a2 11
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 682-684,689-691,727-729,735-737
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "12059d7266fa0b40cb8a32caf9763130c4878044",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
