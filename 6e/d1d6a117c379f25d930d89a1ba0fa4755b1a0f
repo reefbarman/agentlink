@@ -1,0 +1,67 @@
+src/tools/context/getContext.test.ts
+  h_e08a86bb3a33a2 205-286
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_e08a86bb3a33a2 793-818
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 804,807,812,854,1196,1204-1205,1211,1214
+  h_e08a86bb3a33a2 806,808-811,1195,1197-1203,1215
+src/shared/toolSchemas.ts
+  h_e08a86bb3a33a2 231,235-236,238-239,267,354,938-943
+  h_e08a86bb3a33a2 232-234
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_e08a86bb3a33a2 4586-4589
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 23,74
+  h_e08a86bb3a33a2 75
+src/tools/context/getContext.ts
+  h_e08a86bb3a33a2 33,148-150
+  h_e08a86bb3a33a2 147,151-154
+src/core/tools/readFileViews.test.ts
+  h_e08a86bb3a33a2 45-60
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 4318-4385,4622,4641-4642,4651
+  h_e08a86bb3a33a2 4638-4640,4643
+src/shared/toolRegistry.ts
+  h_e08a86bb3a33a2 56,141
+src/browser-gateway/helper/browserGatewayAskAgentMemoryProposal.ts
+  h_e08a86bb3a33a2 20,154,280-282
+src/tools/memoryProposalNode.ts
+  h_e08a86bb3a33a2 9,39-94,98,144,146-151,156,158-161
+  h_e08a86bb3a33a2 96-97,99
+src/tools/proposeMemory.ts
+  h_e08a86bb3a33a2 2,21,28,58-80,169-201,262,277,282,286,305,314-322,337,356,361,406,416-424,439,444-451,492-512,558-565,572-583,596-616,651-665
+  h_e08a86bb3a33a2 313,415
+resources/builtin-skills/documentation/references/customization.md
+  h_e08a86bb3a33a2 87-88,91-93,95-96
+  h_e08a86bb3a33a2 94
+src/tools/proposeMemory.test.ts
+  h_e08a86bb3a33a2 310-766
+src/shared/memoryProposalEngine.ts
+  h_e08a86bb3a33a2 19,22-41,190-191,197-199,205-206,211-213
+  h_e08a86bb3a33a2 20-21,194-195
+src/browser-gateway/helper/browserGatewayAskAgentMemoryProposal.test.ts
+  h_e08a86bb3a33a2 264-289
+  h_e08a86bb3a33a2 261-263
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-8
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 682-684,689-691,696-698,703-705,710-712,717-719,727-729,735-737,743-745,751-753,759-761,767-769
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-8
+scripts/tool-inventory.json
+  h_e08a86bb3a33a2 267,550,847
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6ed1d6a117c379f25d930d89a1ba0fa4755b1a0f",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
