@@ -1,3 +1,7 @@
+import {
+  canCopyImageToClipboard,
+  copyImageToClipboard,
+} from "../imageClipboard";
 import { useEffect, useRef, useState } from "preact/hooks";
 
 import { createPortal } from "preact/compat";
@@ -36,9 +40,32 @@ export function ImagePreview({
   showDownload = false,
 }: ImagePreviewProps) {
   const [expanded, setExpanded] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
+    "idle",
+  );
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const label = image.name || alt;
+  const canCopy = canCopyImageToClipboard();
+
+  useEffect(() => {
+    if (copyState === "idle") return;
+    const timer = window.setTimeout(() => setCopyState("idle"), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
+
+  const copyImage = () => {
+    copyImageToClipboard(image.src).then(
+      () => setCopyState("copied"),
+      () => setCopyState("failed"),
+    );
+  };
+  const copyTitle =
+    copyState === "copied"
+      ? "Copied"
+      : copyState === "failed"
+        ? "Copy failed"
+        : "Copy image";
 
   useEffect(() => {
     if (!expanded) return;
@@ -108,6 +135,25 @@ export function ImagePreview({
                     }}
                   >
                     <i class="codicon codicon-open-preview" />
+                  </button>
+                )}
+                {canCopy && (
+                  <button
+                    class="icon-button user-image-lightbox-copy"
+                    type="button"
+                    title={copyTitle}
+                    aria-label={copyTitle}
+                    onClick={copyImage}
+                  >
+                    <i
+                      class={`codicon ${
+                        copyState === "copied"
+                          ? "codicon-check"
+                          : copyState === "failed"
+                            ? "codicon-error"
+                            : "codicon-copy"
+                      }`}
+                    />
                   </button>
                 )}
                 {showDownload && (

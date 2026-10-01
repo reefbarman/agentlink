@@ -1715,7 +1715,8 @@ body.chat-activity-shelf-resizing * {
   color: var(--vscode-descriptionForeground);
 }
 
-.user-image-lightbox-open-editor {
+.user-image-lightbox-open-editor,
+.user-image-lightbox-copy {
   flex-shrink: 0;
 }
 
