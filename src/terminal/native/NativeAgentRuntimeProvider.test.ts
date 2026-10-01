@@ -306,6 +306,101 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     }
   });
 
+  it("keeps the artifact after disposal until a started shell command ends", async () => {
+    const artifactRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-native-dispose-test-"),
+    );
+    try {
+      const pty = new FakeNodePtyProcess();
+      const runtime = new NodePtyNativeAgentRuntimeProvider(
+        { spawn: vi.fn(() => pty) },
+        { commandFileRoot: artifactRoot },
+      );
+      const channel = launch(runtime);
+      await emitInitialPrompt(pty, channel.ready);
+      const command = runtime.createCommand({
+        channelId: "native-agent-1",
+        commandId: "native-command-disposed",
+        generation: 1,
+        command: "gh pr view",
+      });
+      command.start();
+      const artifactPath = dispatchedArtifactPath(pty);
+
+      pty.emitData(frame("C", "builtin eval"));
+      await expect(command.process.ready).resolves.toMatchObject({
+        pid: 42,
+        backend: "native-pty",
+      });
+      command.process.dispose();
+
+      expect(fs.existsSync(artifactPath)).toBe(true);
+      expect(pty.kill).not.toHaveBeenCalled();
+      pty.emitData(
+        `${frame("D", "0")}${frame("P", "/workspace")}${frame("A")}➜  workspace ${frame("B")}`,
+      );
+      await expect(command.process.completion).resolves.toEqual({
+        exitCode: 0,
+        timedOut: false,
+      });
+      expect(fs.existsSync(artifactPath)).toBe(false);
+      expect(runtime.hasChannel("native-agent-1")).toBe(true);
+      runtime.dispose();
+    } finally {
+      fs.rmSync(artifactRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["output callback", "PTY write"])(
+    "releases the channel and artifact when dispatch fails in %s",
+    async (failure) => {
+      const artifactRoot = fs.mkdtempSync(
+        path.join(os.tmpdir(), "agentlink-native-dispatch-failure-"),
+      );
+      const pty = new FakeNodePtyProcess();
+      const runtime = new NodePtyNativeAgentRuntimeProvider(
+        { spawn: vi.fn(() => pty) },
+        { commandFileRoot: artifactRoot },
+      );
+      try {
+        const channel = launch(runtime);
+        await emitInitialPrompt(pty, channel.ready);
+        const command = runtime.createCommand({
+          channelId: "native-agent-1",
+          commandId: "failed-dispatch",
+          generation: 1,
+          command: "gh pr view",
+        });
+        const dispatchFailure = () => {
+          throw new Error("dispatch failed");
+        };
+        if (failure === "output callback") {
+          vi.spyOn(channel.rawData, "push").mockImplementationOnce(
+            dispatchFailure,
+          );
+        } else {
+          vi.spyOn(pty, "write").mockImplementationOnce(dispatchFailure);
+        }
+        expect(() => command.start()).toThrow("dispatch failed");
+        await expect(command.process.completion).resolves.toEqual({
+          timedOut: false,
+        });
+        expect(fs.readdirSync(artifactRoot)).toEqual([]);
+        const next = runtime.createCommand({
+          channelId: "native-agent-1",
+          commandId: "after-failed-dispatch",
+          generation: 2,
+          command: "pwd",
+        });
+        next.process.dispose();
+        expect(pty.kill).not.toHaveBeenCalled();
+      } finally {
+        runtime.dispose();
+        fs.rmSync(artifactRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.each(["/bin/bash", "/bin/zsh"])(
     "preserves top-level eval semantics through the artifact in %s",
     async (shell) => {

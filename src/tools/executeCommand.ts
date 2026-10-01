@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as path from "path";
 import * as os from "os";
+import fs from "node:fs";
 
 import { getConfiguredMasterBypass } from "../adapters/vscode/agentLinkConfig.js";
 
@@ -27,6 +28,7 @@ import {
   SandboxHelperFailure,
   SandboxPtyLaunchError,
   SandboxPreCommandLaunchError,
+  SandboxProtectedRootDriftError,
   SandboxStructuralProtectionError,
 } from "../terminal/sandbox/SandboxRuntimeProvider.js";
 import { SandboxAvailabilityError } from "../terminal/sandbox/AgentTerminalProviderRouter.js";
@@ -76,6 +78,8 @@ import type {
 } from "@agentlink/protocol/approval-transport";
 import type { NetworkApprovalReviewer } from "../approvals/networkApprovalReview.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
+import { sandboxDockerRecovery } from "./sandboxDockerRecovery.js";
+import { buildSandboxPolicyEnvironment } from "../terminal/sandbox/sandboxEnvironmentPolicy.js";
 import { validateCommand } from "../util/pipeValidator.js";
 import { validateInteractiveCommand } from "../util/interactiveValidator.js";
 import { resolveBaselineProtectedGitMetadataForCwd } from "../terminal/sandbox/gitMetadataProtection.js";
@@ -382,10 +386,12 @@ type ExecuteCommandRetryGuidance = {
     | "sandbox_pty_launch_failed"
     | "sandbox_environment_too_large"
     | "sandbox_structural_protection"
+    | "sandbox_protected_root_drift"
     | "protected_git_metadata"
     | "managed_network_ssh_git_transport"
     | "managed_network_tls_trust"
     | "managed_network_proxy_unaware_dns"
+    | "managed_network_connect_timeout"
     | "pnpm_store_mismatch"
     | "native_shell_startup_timeout";
   message: string;
@@ -750,6 +756,43 @@ function attachManagedNetworkFailureGuidance(input: {
   const gitTokens = directGitNetworkCommandTokens(command);
   let guidance: ExecuteCommandRetryGuidance | undefined;
   if (
+    isDirectCommand(command, "curl") &&
+    result.exit_code === 28 &&
+    /curl:\s*\(28\)/i.test(output) &&
+    /\bhttp_status=000\b/.test(output) &&
+    /\bconnect_seconds=0(?:\.0+)?(?:\s|$)/.test(output) &&
+    /\btls_seconds=0(?:\.0+)?(?:\s|$)/.test(output)
+  ) {
+    guidance = {
+      code: "managed_network_connect_timeout",
+      message:
+        "curl timed out on the managed-network route and reported no established connection or TLS handshake. This does not establish provider latency or prove a proxy fault. Inspect managed-proxy connectivity and the client configuration; use a separately reviewed native connectivity check only if necessary, without replaying authenticated or mutating requests blindly.",
+      automatic_retry: false,
+      options: [
+        { action: "inspect_managed_proxy_connectivity", same_command: false },
+        {
+          action: "reviewed_native_connectivity_check",
+          same_command: false,
+          sandbox_permissions: "require_escalated",
+          reason_required: true,
+          reviewed_native_execution: true,
+        },
+      ],
+      prohibited_workarounds: [
+        "disable_tls_verification",
+        "blindly_replay_mutating_requests",
+      ],
+    };
+    Object.assign(result, {
+      network_failure_evidence: {
+        client: "curl",
+        exit_code: 28,
+        connection_established: false,
+        tls_handshake_established: false,
+        cause: "undetermined",
+      },
+    });
+  } else if (
     gitTokens &&
     SSH_GIT_FAILURE_PATTERNS.some((pattern) => pattern.test(output))
   ) {
@@ -954,10 +997,45 @@ function outputHasHostHomeWriteDenial(
   });
 }
 
+function resolvesThroughToolchainShim(
+  executable: string,
+  cwd: string,
+  searchPath: string | undefined,
+): boolean {
+  const shimPath = /(?:^|[\\/])\.?(?:mise|asdf)[\\/](?:shims|bin)[\\/]/i;
+  if (executable.includes(path.sep)) return shimPath.test(executable);
+  if (!searchPath) return false;
+  for (const directory of searchPath.split(path.delimiter)) {
+    const candidate = path.resolve(cwd, directory, executable);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      if (!fs.statSync(candidate).isFile()) continue;
+      return shimPath.test(candidate);
+    } catch {
+      // Shell PATH lookup skips absent or non-executable candidates.
+    }
+  }
+  return false;
+}
+
+function knownSandboxSearchPath(
+  environment: Record<string, string> | undefined,
+  security: TerminalExecutionSecuritySummary | undefined,
+): string | undefined {
+  if (environment?.PATH !== undefined) return environment.PATH;
+  const policy = security?.sandbox?.environmentPolicy;
+  if (!policy || policy.useProfile || policy.setKeys.includes("PATH"))
+    return undefined;
+  return buildSandboxPolicyEnvironment({ PATH: process.env.PATH }, policy)
+    .environment.PATH;
+}
+
 function attachSandboxCapabilityRetryGuidance(input: {
   result: TerminalCommandResult;
   command: string;
   output: string;
+  cwd: string;
+  toolchainPath?: string;
   temporaryHome: boolean;
   localBinding: boolean;
   replayable: boolean;
@@ -1011,7 +1089,26 @@ function attachSandboxCapabilityRetryGuidance(input: {
       const tokens = singleCommandTokens(segment);
       return tokens?.[0] === "npm";
     });
+  const needsHostConfiguration =
+    splitCompoundCommand(command).some((segment) => {
+      const executable = singleCommandTokens(segment)?.[0];
+      return (
+        ["mise", "asdf", "gcloud", "kubectl", "aws", "az", "gh"].includes(
+          path.basename(executable ?? ""),
+        ) ||
+        (!!executable &&
+          resolvesThroughToolchainShim(
+            executable,
+            input.cwd,
+            input.toolchainPath,
+          ))
+      );
+    }) ||
+    /(?:\bcredentials\.db\b|\bmise\b[^\r\n]*trust|[\\/](?:mise|\.asdf)[\\/]shims[\\/])/i.test(
+      output,
+    );
   const needsTemporaryHome =
+    !needsHostConfiguration &&
     allowTemporaryHome &&
     !temporaryHome &&
     !hasHomeOverride &&
@@ -1111,6 +1208,12 @@ function attachSandboxCapabilityRetryGuidance(input: {
   Object.assign(result, {
     retry_guidance: guidance,
     missing_sandbox_capabilities: missingCapabilities,
+    ...(hostHomeDenial && needsHostConfiguration
+      ? {
+          temporary_home_unsuitable:
+            "The command or failure output identifies credential-backed configuration or mise/asdf toolchain state. A disposable HOME does not preserve that state; use the separately reviewed native option for the failed step.",
+        }
+      : {}),
   });
 }
 
@@ -1239,6 +1342,29 @@ function attachSandboxHostIntegrationRetryGuidance(input: {
     cwd,
     workspaceRoots,
   } = input;
+  if (
+    !hasRetryGuidance(result) &&
+    !result.timed_out &&
+    !result.backgrounded &&
+    result.termination_reason !== "interactive_prompt"
+  ) {
+    const guidance = sandboxDockerRecovery({
+      command,
+      cwd,
+      output,
+      security: result.security,
+      temporaryHome,
+      replayable,
+      exitCode: result.exit_code,
+      running: result.is_running,
+      complete: result.output_complete,
+      finalized: result.output_finalized,
+    });
+    if (guidance) {
+      Object.assign(result, { retry_guidance: guidance });
+      return;
+    }
+  }
   const tsxUnixIpcEvidence = TSX_UNIX_SOCKET_DENIAL_PATTERN.test(output);
   if (
     hasRetryGuidance(result) ||
@@ -2891,6 +3017,7 @@ export async function handleExecuteCommand(
           result,
           command: commandToRun,
           output: result.output,
+          cwd,
           temporaryHome,
           localBinding,
           replayable: replayableWithNarrowSandboxCapabilities,
@@ -2899,6 +3026,7 @@ export async function handleExecuteCommand(
             approvalMode.commandApprovalPolicy === "approve-for-me",
           managedNetwork,
           workspaceRoots,
+          toolchainPath: knownSandboxSearchPath(params.env, result.security),
         });
         attachSandboxNodeOomRetryGuidance({
           result,
@@ -3372,6 +3500,7 @@ export async function handleExecuteCommand(
           result,
           command: commandToRun,
           output: result.output,
+          cwd,
           temporaryHome,
           localBinding,
           replayable: replayableWithNarrowSandboxCapabilities,
@@ -3380,6 +3509,7 @@ export async function handleExecuteCommand(
             approvalMode.commandApprovalPolicy === "approve-for-me",
           managedNetwork,
           workspaceRoots,
+          toolchainPath: knownSandboxSearchPath(params.env, result.security),
         });
         attachSandboxNodeOomRetryGuidance({
           result,
@@ -3595,34 +3725,106 @@ export async function handleExecuteCommand(
         ],
       };
     }
+    if (err instanceof SandboxProtectedRootDriftError) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "retry_required",
+              error: err.message,
+              error_code: err.code,
+              protected_root_change: err.details,
+              command: commandToRun,
+              ...(commandToRun !== params.command
+                ? { original_command: params.command, command_modified: true }
+                : {}),
+              command_sent: false,
+              process_launched: false,
+              retry_safe: true,
+              failure_stage: "launch",
+              retry_guidance: {
+                code: err.code,
+                message:
+                  "A protected file changed after this command's sandbox snapshot was prepared. The command did not start. Inspect the change and retry the same command to prepare and verify a fresh snapshot. If drift repeats, stop retrying and resolve the concurrent host mutation; do not bypass protection or use native execution just to ignore the change.",
+                automatic_retry: false,
+                options: [
+                  {
+                    action: "inspect_change_then_reprepare_same_command",
+                    same_command: true,
+                  },
+                ],
+                prohibited_workarounds: [
+                  "ignore_protected_root_changes",
+                  "native_security_bypass",
+                ],
+              } satisfies ExecuteCommandRetryGuidance,
+            }),
+          },
+        ],
+      };
+    }
     if (err instanceof SandboxStructuralProtectionError) {
       const isGitMetadata = err.details.path
         .split(path.sep)
         .some((entry) => entry === ".git");
       const hardLink = err.details.kind === "hard_link";
+      const worktreeLock =
+        err.details.kind === "symbolic_link" &&
+        /(?:^|[\\/])\.git[\\/]worktrees[\\/][^\\/]+[\\/][^\\/]+(?:\.lock|-lock)$/.test(
+          err.details.path,
+        );
+      const allowReviewedWorktreeRetry =
+        worktreeLock &&
+        providers.commandExecutionPolicy !== "read-only" &&
+        !params.temporary_home &&
+        !params.files?.length;
       const retryGuidance: ExecuteCommandRetryGuidance = {
         code: err.code,
-        message: hardLink
-          ? `The sandbox found a protected ${isGitMetadata ? "Git metadata " : ""}file with an unexpected hard-link count before launch. Inspect all links to the reported protected file with a trusted host tool, remove only the unintended extra link, then retry the same command. Do not delete the reported protected file itself. AgentLink will not clean or ignore protected content automatically.`
-          : `The sandbox found an unsafe filesystem node inside ${isGitMetadata ? "protected Git metadata" : "a protected tree"} before launch. Inspect and remove the reported unexpected node with a trusted host tool, then retry the same command. AgentLink will not clean or ignore protected content automatically.`,
+        message: worktreeLock
+          ? "A symbolic-link lock in shared Git worktree metadata blocked sandbox preparation. It may belong to an active process. Inspect its ownership with a trusted host tool and preserve live locks; do not remove it just to run this command. Where offered, the exact command can instead receive a separate native review without changing the lock or sandbox policy."
+          : hardLink
+            ? `The sandbox found a protected ${isGitMetadata ? "Git metadata " : ""}file with an unexpected hard-link count before launch. Inspect all links to the reported protected file with a trusted host tool, remove only the unintended extra link, then retry the same command. Do not delete the reported protected file itself. AgentLink will not clean or ignore protected content automatically.`
+            : `The sandbox found an unsafe filesystem node inside ${isGitMetadata ? "protected Git metadata" : "a protected tree"} before launch. Inspect and remove the reported unexpected node with a trusted host tool, then retry the same command. AgentLink will not clean or ignore protected content automatically.`,
         automatic_retry: false,
         options: [
-          hardLink
+          ...(allowReviewedWorktreeRetry
+            ? [
+                {
+                  action: "reviewed_native_retry_preserving_worktree_lock",
+                  command: commandToRun,
+                  ...(params.cwd ? { cwd: params.cwd } : {}),
+                  same_command: true,
+                  sandbox_permissions: "require_escalated",
+                  reason_required: true,
+                  reviewed_native_execution: true,
+                  preserve_reported_node: true,
+                },
+              ]
+            : []),
+          worktreeLock
             ? {
-                action: "inspect_hard_links_and_remove_extra_link",
-                protected_file: err.details.path,
-                alias_kind: err.details.kind,
-                preserve_reported_file: true,
-                same_command_after_cleanup: true,
+                action: "inspect_worktree_lock_ownership",
+                protected_path: err.details.path,
+                preserve_reported_node: true,
                 trusted_host_action_required: true,
               }
-            : {
-                action: "inspect_and_remove_unexpected_node",
-                protected_path: err.details.path,
-                alias_kind: err.details.kind,
-                same_command_after_cleanup: true,
-                trusted_host_action_required: true,
-              },
+            : hardLink
+              ? {
+                  action: "inspect_hard_links_and_remove_extra_link",
+                  protected_file: err.details.path,
+                  alias_kind: err.details.kind,
+                  preserve_reported_file: true,
+                  same_command_after_cleanup: true,
+                  trusted_host_action_required: true,
+                }
+              : {
+                  action: "inspect_and_remove_unexpected_node",
+                  protected_path: err.details.path,
+                  alias_kind: err.details.kind,
+                  same_command_after_cleanup: true,
+                  trusted_host_action_required: true,
+                },
         ],
       };
       return {

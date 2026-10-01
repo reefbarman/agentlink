@@ -12,6 +12,7 @@ import {
   SandboxPtyLaunchError,
   type SandboxHelperFailureCategory,
   SandboxPreCommandLaunchError,
+  SandboxProtectedRootDriftError,
   SandboxStructuralProtectionError,
   type SandboxCommandDisposable,
   type SandboxCommandEvent,
@@ -234,7 +235,9 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
           ? new SandboxPreCommandLaunchError(event.message, event.details)
           : event.code === "sandbox_structural_protection" && event.details
             ? new SandboxStructuralProtectionError(event.message, event.details)
-            : new Error(event.message);
+            : event.code === "sandbox_protected_root_drift" && event.details
+              ? new SandboxProtectedRootDriftError(event.message, event.details)
+              : new Error(event.message);
       this.fail(error);
       return;
     }
@@ -320,7 +323,8 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
     if (
       !(error instanceof SandboxPtyLaunchError) &&
       !(error instanceof SandboxPreCommandLaunchError) &&
-      !(error instanceof SandboxStructuralProtectionError)
+      !(error instanceof SandboxStructuralProtectionError) &&
+      !(error instanceof SandboxProtectedRootDriftError)
     ) {
       error = new SandboxHelperFailure(
         error.message,

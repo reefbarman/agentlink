@@ -236,6 +236,13 @@ describe("sandbox helper event protocol", () => {
       {
         ...identity,
         type: "error",
+        message: "Protected root contents changed before spawn",
+        code: "sandbox_protected_root_drift",
+        details: { path: "config.json", category: "modified" },
+      },
+      {
+        ...identity,
+        type: "error",
         message: "protected tree contains a symbolic link",
         code: "sandbox_structural_protection",
         details: {
@@ -248,6 +255,24 @@ describe("sandbox helper event protocol", () => {
     for (const event of events) {
       expect(isSandboxHelperEventFrame(event), event.type).toBe(true);
       expect(parseSandboxHelperEventLine(JSON.stringify(event))).toEqual(event);
+    }
+  });
+
+  it("rejects invalid protected-root drift details", () => {
+    for (const details of [
+      { path: "/workspace/.git/config", category: "modified" },
+      { path: "config.json", category: "secret contents" },
+      { path: "x".repeat(2049), category: "modified" },
+    ]) {
+      expect(
+        isSandboxHelperEventFrame({
+          ...identity,
+          type: "error",
+          message: "Protected root contents changed before spawn",
+          code: "sandbox_protected_root_drift",
+          details,
+        }),
+      ).toBe(false);
     }
   });
 

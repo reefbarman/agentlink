@@ -273,9 +273,10 @@ function createHarness({
       .map((line) => JSON.parse(line));
   const send = (frame) => input.write(`${JSON.stringify(frame)}\n`);
   const waitFor = async (predicate, message = "expected helper state") => {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
       if (predicate()) return;
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setTimeout(resolve, 1));
     }
     assert.fail(`timed out waiting for ${message}`);
   };
@@ -1005,9 +1006,14 @@ test("fails closed when a protected file changes after the late snapshot", async
   );
   await harness.waitFor(() => harness.frames()[0]?.type === "error");
 
-  assert.match(
+  assert.equal(harness.frames()[0].code, "sandbox_protected_root_drift");
+  assert.deepEqual(harness.frames()[0].details, {
+    path: ".",
+    category: "modified",
+  });
+  assert.doesNotMatch(
     harness.frames()[0].message,
-    /protected root contents changed before spawn: root=.*policy\.json path=\. change=modified/,
+    /policy-original|policy-mutated/,
   );
   assert.equal(harness.calls.spawn.length, 0);
   assert.deepEqual(harness.calls.order, [

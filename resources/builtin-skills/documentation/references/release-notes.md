@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed command input lifetime and recovery: running native commands retain private input artifacts until completion; protected-file snapshot drift returns non-bypass re-preparation guidance; live Git worktree locks are preserved; credential-backed and mise/asdf workflows avoid unusable disposable-HOME retries; finalized deferred Docker denials receive reviewed failed-step guidance; and evidenced managed curl connection timeouts are distinguished from provider response delays.
+
 - Fixed command reliability: human approval audits now capture the wait before a separate response; sandbox helper failures retain command identity, launch evidence, and bounded output without blind replay; absent protected files stay write-denied; and bounded Git inspection/write chains plus linked-worktree and `ORIG_HEAD` lock denials receive accurate native-recovery guidance.
 
 - Fixed proposal recovery and diff authoring guidance: memory review-opening failures report approval, save, and observed disk state without blindly replaying uncertain buffers; formatter conflicts suggest a new reviewed exact-preservation edit without changing user settings; and diff instructions distinguish renderer comment prefixes from literal markers.

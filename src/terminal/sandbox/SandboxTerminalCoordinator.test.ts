@@ -1,5 +1,6 @@
 import type { TerminalExecutionOwner } from "../../core/capabilities/terminal.js";
 import { CURRENT_SANDBOX_POLICY_VERSION } from "../../core/sandboxPolicy.js";
+import { handleGetTerminalOutput } from "../../tools/getTerminalOutput.js";
 import type { SandboxExecutionMetadata } from "@agentlink/protocol/terminal-security";
 import { createHash } from "node:crypto";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
@@ -392,6 +393,89 @@ describe("SandboxTerminalCoordinator", () => {
     });
     expect(test.authorizedFinalizer).toHaveBeenCalledTimes(1);
     await expect(prepared.execute()).rejects.toThrow("no longer available");
+  });
+
+  it("carries Docker recovery context through deferred output and terminal closure", async () => {
+    const test = harness();
+    const prepared = await test.coordinator.prepareConfinementExecution(
+      {
+        owner: undefined,
+        command: "mise run prepare && mise run test:server",
+        cwd: "/workspace/distinct-project",
+        terminal_name: "Docker checks",
+        background: true,
+        sandboxSessionId: "docker-session",
+      },
+      {
+        auditId: "docker-audit",
+        route: "sandbox",
+        confinement: "verified-baseline",
+        routeReason: "verified-local-macos",
+        executionSurface: "verified-sandbox",
+        requiredAuthority: "sandbox",
+        permissionIntent: "default",
+        approvalRequirement: "policy",
+        authorityReason: "approval-policy",
+        approvalPolicySnapshot: "on-request",
+        approvalReviewerSnapshot: "auto-review",
+        executionPresetSnapshot: "workspace-write",
+        commandApprovalPolicySnapshot: "approve-for-me",
+        executionPolicy: "sandbox-baseline-v2",
+        preparedAt: 100,
+      },
+    );
+    const launched = prepared.execute();
+    await flush();
+    const initial = await launched;
+    await finish(
+      test.processes[0],
+      "permission denied while trying to connect to the docker API at unix:///Users/test/.colima/default/docker.sock",
+      1,
+    );
+    const read = async () => {
+      const result = await handleGetTerminalOutput(
+        {
+          terminal_id: initial.terminal_id,
+          command_id: initial.command_id,
+          output_head: 1,
+        },
+        { terminalProvider: test.coordinator },
+      );
+      const content = result.content[0];
+      if (content.type !== "text") throw new Error("expected text output");
+      return JSON.parse(content.text);
+    };
+    expect(await read()).toMatchObject({
+      exit_code: 1,
+      retry_guidance: {
+        automatic_retry: false,
+        options: [
+          {
+            action: "isolate_failed_step_for_reviewed_native_retry",
+            same_command: false,
+            cwd: "/workspace/distinct-project",
+            sandbox_permissions: "require_escalated",
+          },
+        ],
+      },
+    });
+    const context = test.coordinator.getBackgroundState({
+      owner: undefined,
+      terminalId: initial.terminal_id,
+    })?.executionContext;
+    if (!context) throw new Error("expected execution context");
+    context.security.route = "native";
+    expect(await read()).toHaveProperty("retry_guidance");
+    test.coordinator.closeTerminals({
+      owner: undefined,
+      names: ["Docker checks"],
+    });
+    expect(await read()).toMatchObject({
+      recently_closed: true,
+      retry_guidance: { code: "sandbox_host_integration" },
+    });
+    expect(test.runtime.launch).toHaveBeenCalledOnce();
+    test.coordinator.dispose();
   });
 
   it("rejects sandbox inline-file tampering before launch and releases preparation", async () => {

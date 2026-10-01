@@ -94,7 +94,12 @@ For approval behavior and rules, see [approvals](capabilities.md#approvals) and 
 
 Follow the returned `retry_guidance` rather than changing permissions or replaying the command blindly. AgentLink distinguishes narrow TCP listener access from Unix IPC, keeps Docker/Colima sockets behind reviewed native execution, and never recommends disabling TLS verification. A disposable `temporary_home` is suitable only when the failed step does not need your normal credentials or configuration. For a host-HOME write denial in a credential-dependent command, choose the separately reviewed native option instead; it preserves your host HOME but runs outside the sandbox only after independent approval. For compound commands, confirm which step failed and retry that step alone because earlier steps may already have succeeded. If Turbopack still reports a listener denial after local binding was granted, use the unresolved-capability guidance rather than repeating the same grant.
 
-An npm cache denial under `~/.npm/_cacache/tmp` is still a host-HOME write denial, not a write to the system `/tmp` directory. Its recovery guidance follows the same credential requirements above.
+An npm cache denial under `~/.npm/_cacache/tmp` is still a host-HOME write denial, not a write to the system `/tmp` directory. Its recovery guidance follows the same credential requirements above. If the command or failure output identifies mise/asdf shims, a disposable HOME can lose toolchain trust state too; use the separately reviewed host-HOME option instead of automatically trusting the host configuration. An unrelated shim directory on PATH alone does not establish that dependency.
+
+- For `sandbox_protected_root_drift`, inspect the reported snapshot change and retry with a new preparation. If changes continue, resolve the concurrent mutation before retrying. This does not authorise native bypass.
+- For a symbolic-link lock in `.git/worktrees/`, check its owner and keep live locks intact. Use the exact separately reviewed native option when offered, not lock deletion as a workaround.
+- For Docker socket denials in deferred tests, collect finalized output with both command and terminal IDs. Eligible results include failed-step native guidance; it never changes socket permissions or replays successful prefixes.
+- For `managed_network_connect_timeout`, curl's timing evidence says no connection or TLS handshake was established, not that the provider was slow or the proxy was necessarily broken. Inspect managed connectivity or request a reviewed native connectivity check without disabling TLS verification.
 
 ## An approved edit failed to save or conflicts with unsaved work
 

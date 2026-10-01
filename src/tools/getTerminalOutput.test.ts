@@ -30,6 +30,73 @@ describe("handleGetTerminalOutput", () => {
     vi.mocked(terminalProvider.getRecentlyClosedTerminals).mockReturnValue([]);
   });
 
+  it.each([
+    { name: "native output", route: "native" as const },
+    { name: "read-only session", readOnly: true },
+    { name: "unfinalized output", finalized: false },
+    { name: "truncated retained output", complete: false },
+    { name: "running command", running: true },
+    { name: "inline command files", replayable: false },
+    { name: "wrong command context", contextId: "other-command" },
+    { name: "explicit kill request", kill: true },
+    {
+      name: "interactive prompt termination",
+      terminationReason: "interactive_prompt" as const,
+    },
+  ])("does not recommend Docker replay for $name", async (scenario) => {
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      command_id: "docker-command",
+      exit_code: 1,
+      is_running: scenario.running ?? false,
+      state: scenario.running ? "running" : "completed",
+      output:
+        "permission denied while trying to connect to the docker API at unix:///Users/test/.colima/default/docker.sock",
+      output_captured: true,
+      output_complete: scenario.complete ?? true,
+      output_finalized: scenario.finalized ?? true,
+      termination_reason: scenario.terminationReason,
+      executionContext: {
+        commandId: scenario.contextId ?? "docker-command",
+        command: "mise run test",
+        cwd: "/workspace",
+        temporaryHome: false,
+        replayable: scenario.replayable ?? true,
+        security: {
+          auditId: "docker-audit",
+          route: scenario.route ?? "sandbox",
+          confinement: "verified-baseline",
+          routeReason: "verified-local-macos",
+          executionSurface: "verified-sandbox",
+          requiredAuthority: "sandbox",
+          permissionIntent: "default",
+          approvalRequirement: "policy",
+          authorityReason: "approval-policy",
+          approvalPolicySnapshot: "on-request",
+          approvalReviewerSnapshot: "auto-review",
+          executionPresetSnapshot: "workspace-write",
+          commandApprovalPolicySnapshot: "approve-for-me",
+          executionPolicy: "sandbox-baseline-v2",
+          preparedAt: 100,
+          ...(scenario.readOnly
+            ? { commandExecutionPolicySnapshot: "read-only" as const }
+            : {}),
+        },
+      },
+    });
+    const payload = textPayload(
+      await handleGetTerminalOutput(
+        {
+          terminal_id: "docker-terminal",
+          command_id: "docker-command",
+          kill: scenario.kill,
+        },
+        { terminalProvider },
+      ),
+    );
+    expect(payload.retry_guidance).toBeUndefined();
+    expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
+  });
+
   it("forwards an exact command ID and preserves its signal result", async () => {
     vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
       command_id: "command-old",

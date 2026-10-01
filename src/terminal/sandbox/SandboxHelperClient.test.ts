@@ -393,6 +393,28 @@ describe("SandboxHelperClient", () => {
     });
   });
 
+  it("surfaces typed protected-root snapshot drift without generic wrapping", async () => {
+    const test = harness();
+    const process = test.client.launch(request);
+    test.transports[0].emit({
+      ...process.identity,
+      type: "error",
+      message: "Protected root contents changed before spawn",
+      code: "sandbox_protected_root_drift",
+      details: { path: "config.json", category: "modified" },
+    });
+
+    await expect(process.ready).rejects.toMatchObject({
+      name: "SandboxProtectedRootDriftError",
+      code: "sandbox_protected_root_drift",
+      details: { path: "config.json", category: "modified" },
+    });
+    await expect(process.completion).rejects.toMatchObject({
+      name: "SandboxProtectedRootDriftError",
+      code: "sandbox_protected_root_drift",
+    });
+  });
+
   it("surfaces typed structural protection failures", async () => {
     const test = harness();
     const process = test.client.launch(request);

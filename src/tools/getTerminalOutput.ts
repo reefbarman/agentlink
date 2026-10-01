@@ -3,6 +3,7 @@ import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { detectInteractivePrompt } from "../terminal/interactivePromptDetector.js";
+import { sandboxDockerRecovery } from "./sandboxDockerRecovery.js";
 import { sleep } from "../util/sleep.js";
 
 function formatBytes(bytes: number): string {
@@ -243,6 +244,26 @@ export async function handleGetTerminalOutput(
           "Waiting stopped because a user message is pending for your session. The terminal command was not interrupted and may still be running. Handle the user's message first, then call get_terminal_output again when ready to wait.",
       }),
   };
+
+  const context = state.executionContext;
+  if (
+    context &&
+    context.commandId === state.command_id &&
+    state.output_captured &&
+    !state.termination_reason &&
+    !params.kill
+  ) {
+    const guidance = sandboxDockerRecovery({
+      ...context,
+      output,
+      exitCode: state.exit_code,
+      running: state.is_running,
+      complete: outputComplete,
+      finalized: outputFinalized,
+      state: state.state,
+    });
+    if (guidance) result.retry_guidance = guidance;
+  }
 
   if (state.is_running && state.output_captured) {
     const prompt = detectInteractivePrompt(output);

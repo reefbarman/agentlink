@@ -1,4 +1,5 @@
 import {
+  ProtectedRootSnapshotDriftError,
   StructuralProtectionError,
   prepareProtectedRoots,
   revalidateProtectedRoots,
@@ -295,6 +296,14 @@ function preCommandFailureFrame(error) {
       message: errorMessage(error),
       code: "sandbox_environment_too_large",
       details: error.failure,
+    };
+  }
+  if (error instanceof ProtectedRootSnapshotDriftError) {
+    return {
+      type: "error",
+      message: errorMessage(error),
+      code: error.code,
+      details: error.details,
     };
   }
   if (error instanceof StructuralProtectionError) {

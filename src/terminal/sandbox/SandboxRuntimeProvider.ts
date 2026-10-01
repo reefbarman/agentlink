@@ -3,6 +3,7 @@ import type {
   SandboxHelperLaunchRequest,
   SandboxManagedNetworkDestination,
   SandboxPreCommandFailureDetails,
+  SandboxProtectedRootDriftDetails,
   SandboxStructuralProtectionFailureDetails,
 } from "./sandboxHelperProtocol.js";
 
@@ -16,6 +17,17 @@ export class SandboxPreCommandLaunchError extends Error {
   constructor(message: string, details: SandboxPreCommandFailureDetails) {
     super(message);
     this.name = "SandboxPreCommandLaunchError";
+    this.details = details;
+  }
+}
+
+export class SandboxProtectedRootDriftError extends Error {
+  readonly code = "sandbox_protected_root_drift" as const;
+  readonly details: SandboxProtectedRootDriftDetails;
+
+  constructor(message: string, details: SandboxProtectedRootDriftDetails) {
+    super(message);
+    this.name = "SandboxProtectedRootDriftError";
     this.details = details;
   }
 }

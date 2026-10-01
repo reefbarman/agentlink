@@ -253,10 +253,11 @@ class PersistentNativeCommandProcess implements SandboxCommandProcess {
 
   dispose(): void {
     if (this.disposed) return;
-    this.commandArtifact.cleanup();
     this.disposed = true;
     this.listeners.clear();
     this.pendingEvents.length = 0;
+    if (this.state === "running") return;
+    this.commandArtifact.cleanup();
     this.channel.abandon(this);
     this.complete({ timedOut: false });
   }
@@ -338,7 +339,9 @@ class PersistentNativeChannel {
           this.onData(`${request.command}\r\n`);
           this.pty.write(`${commandArtifact.dispatchCommand}\r`);
         } catch (error) {
+          this.abandon(process);
           process.dispose();
+          process.complete({ timedOut: false });
           throw error;
         }
       },

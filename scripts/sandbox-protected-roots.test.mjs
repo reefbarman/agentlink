@@ -160,13 +160,34 @@ test("detects protected content mutations during pre-spawn revalidation", async 
     await writeFile(protectedFile, "mutated");
 
     await assert.rejects(revalidateProtectedRoots(prepared), (error) => {
-      assert.match(
-        error.message,
-        /protected root contents changed before spawn: root=.*\/protected path=policy\.json change=modified/,
-      );
+      assert.equal(error.name, "ProtectedRootSnapshotDriftError");
+      assert.equal(error.code, "sandbox_protected_root_drift");
+      assert.deepEqual(error.details, {
+        path: "policy.json",
+        category: "modified",
+      });
       assert.doesNotMatch(error.message, /original|mutated/);
       return true;
     });
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("accepts host mutations captured by a fresh command preparation", async () => {
+  const fixture = await makeRoot("fresh-preparation");
+  try {
+    const protectedRoot = path.join(fixture, "protected");
+    const protectedFile = path.join(protectedRoot, "policy.json");
+    await mkdir(protectedRoot);
+    await writeFile(protectedFile, "before-command");
+    const firstCommand = await prepareProtectedRoots([protectedRoot]);
+    await revalidateProtectedRoots(firstCommand);
+
+    await writeFile(protectedFile, "approved-host-update");
+
+    const secondCommand = await prepareProtectedRoots([protectedRoot]);
+    await assert.doesNotReject(revalidateProtectedRoots(secondCommand));
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }
@@ -181,10 +202,10 @@ test("reports structural additions without exposing protected content", async ()
     await writeFile(path.join(protectedRoot, "secret.txt"), "sensitive-value");
 
     await assert.rejects(revalidateProtectedRoots(prepared), (error) => {
-      assert.match(
-        error.message,
-        /root=.*\/protected path=secret\.txt change=added/,
-      );
+      assert.deepEqual(error.details, {
+        path: "secret.txt",
+        category: "added",
+      });
       assert.doesNotMatch(error.message, /sensitive-value/);
       return true;
     });
@@ -204,10 +225,10 @@ test("reports structural removals without exposing protected content", async () 
     await rm(protectedFile);
 
     await assert.rejects(revalidateProtectedRoots(prepared), (error) => {
-      assert.match(
-        error.message,
-        /root=.*\/protected path=secret\.txt change=removed/,
-      );
+      assert.deepEqual(error.details, {
+        path: "secret.txt",
+        category: "removed",
+      });
       assert.doesNotMatch(error.message, /sensitive-value/);
       return true;
     });
@@ -235,10 +256,9 @@ test("allows volatile history replacement when only stable AgentLink children ar
     await revalidateProtectedRoots(prepared);
 
     await writeFile(policyFile, "policy-mutated");
-    await assert.rejects(
-      revalidateProtectedRoots(prepared),
-      /protected root contents changed before spawn/,
-    );
+    await assert.rejects(revalidateProtectedRoots(prepared), {
+      code: "sandbox_protected_root_drift",
+    });
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }
@@ -337,10 +357,9 @@ test("detects protected metadata-only mutations during revalidation", async () =
 
     await chmod(protectedFile, 0o640);
 
-    await assert.rejects(
-      revalidateProtectedRoots(prepared),
-      /protected root contents changed before spawn/,
-    );
+    await assert.rejects(revalidateProtectedRoots(prepared), {
+      code: "sandbox_protected_root_drift",
+    });
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }
@@ -358,10 +377,9 @@ test("detects mutations to protected files above the hash threshold", async () =
 
     await writeFile(protectedFile, Buffer.alloc(1024 * 1024 + 1, 0x62));
 
-    await assert.rejects(
-      revalidateProtectedRoots(prepared),
-      /protected root contents changed before spawn/,
-    );
+    await assert.rejects(revalidateProtectedRoots(prepared), {
+      code: "sandbox_protected_root_drift",
+    });
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }
@@ -380,10 +398,9 @@ test("detects a protected root replaced after preparation", async () => {
     await mkdir(protectedRoot);
     await writeFile(path.join(protectedRoot, "policy.json"), "replacement");
 
-    await assert.rejects(
-      revalidateProtectedRoots(prepared),
-      /protected root contents changed before spawn/,
-    );
+    await assert.rejects(revalidateProtectedRoots(prepared), {
+      code: "sandbox_protected_root_drift",
+    });
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }
@@ -401,14 +418,14 @@ test("detects absent protected roots created or removed after preparation", asyn
     await mkdir(createdRoot);
     await rm(removedRoot, { recursive: true });
 
-    await assert.rejects(
-      revalidateProtectedRoots(createdPrepared),
-      /root=.*\/created path=\. change=added/,
-    );
-    await assert.rejects(
-      revalidateProtectedRoots(removedPrepared),
-      /root=.*\/removed path=\. change=removed/,
-    );
+    await assert.rejects(revalidateProtectedRoots(createdPrepared), {
+      code: "sandbox_protected_root_drift",
+      details: { path: ".", category: "added" },
+    });
+    await assert.rejects(revalidateProtectedRoots(removedPrepared), {
+      code: "sandbox_protected_root_drift",
+      details: { path: ".", category: "removed" },
+    });
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }

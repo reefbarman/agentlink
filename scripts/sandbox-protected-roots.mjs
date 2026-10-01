@@ -5,6 +5,19 @@ import path from "node:path";
 
 const MAX_PROTECTED_ENTRIES = 100_000;
 const MAX_HASHED_FILE_BYTES = 1024 * 1024;
+const MAX_DIAGNOSTIC_PATH_LENGTH = 512;
+
+export class ProtectedRootSnapshotDriftError extends Error {
+  constructor(relativePath, category) {
+    super("Protected root contents changed before spawn");
+    this.name = "ProtectedRootSnapshotDriftError";
+    this.code = "sandbox_protected_root_drift";
+    this.details = {
+      path: relativePath.slice(0, MAX_DIAGNOSTIC_PATH_LENGTH),
+      category,
+    };
+  }
+}
 
 export class StructuralProtectionError extends Error {
   constructor(kind, target, message) {
@@ -331,11 +344,18 @@ export async function prepareProtectedRoots(requestedRoots) {
 export async function revalidateProtectedRoots(prepared) {
   const roots = await canonicalizeProtectedRoots(prepared.roots);
   if (JSON.stringify(roots) !== JSON.stringify(prepared.roots)) {
-    throw new Error("protected roots changed after preparation");
+    throw new ProtectedRootSnapshotDriftError(".", "root_changed");
   }
   const snapshots = [];
   for (const root of roots) {
-    snapshots.push(await snapshotRoot(root));
+    try {
+      snapshots.push(await snapshotRoot(root));
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        throw new ProtectedRootSnapshotDriftError(".", "removed");
+      }
+      throw error;
+    }
   }
   if (JSON.stringify(snapshots) !== JSON.stringify(prepared.snapshots)) {
     const changed = prepared.snapshots
@@ -347,10 +367,10 @@ export async function revalidateProtectedRoots(prepared) {
           JSON.stringify(prepared.snapshots[index]) !==
           JSON.stringify(snapshots[index]),
       );
-    const detail = changed
-      ? `: root=${changed.root} path=${changed.path} change=${changed.change}`
-      : "";
-    throw new Error(`protected root contents changed before spawn${detail}`);
+    throw new ProtectedRootSnapshotDriftError(
+      changed?.path ?? ".",
+      changed?.change ?? "unknown",
+    );
   }
 }
 

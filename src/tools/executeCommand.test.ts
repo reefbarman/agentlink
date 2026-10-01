@@ -1,4 +1,3 @@
-import * as fs from "fs";
 import * as os from "node:os";
 
 import {
@@ -8,6 +7,7 @@ import {
 import {
   SandboxHelperFailure,
   SandboxPreCommandLaunchError,
+  SandboxProtectedRootDriftError,
   SandboxPtyLaunchError,
   SandboxStructuralProtectionError,
 } from "../terminal/sandbox/SandboxRuntimeProvider.js";
@@ -15,7 +15,7 @@ import {
   SandboxPreparationDriftError,
   TerminalTargetRecoveryError,
 } from "../core/capabilities/terminalTargetError.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createCommandReviewTurnCircuit,
   createRetainedCommandReviewDenials,
@@ -23,6 +23,7 @@ import {
 
 import { SandboxCapabilityLaunchError } from "../core/capabilities/SandboxCapabilityLaunchError.js";
 import { evaluateCommandRulePolicy } from "../approvals/commandRulePolicy.js";
+import fs from "node:fs";
 
 vi.mock("node:os", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:os")>();
@@ -131,7 +132,12 @@ function textPayload(result: {
 }
 
 describe("handleExecuteCommand", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
   beforeEach(() => {
+    vi.stubEnv("PATH", "/usr/bin:/bin");
     vi.clearAllMocks();
     terminalProvider.listTerminals.mockReset();
     terminalProvider.listTerminals.mockReturnValue([]);
@@ -4526,8 +4532,7 @@ describe("handleExecuteCommand", () => {
       name: "gcloud credential HOME denial",
       command: "gcloud auth print-access-token",
       output: `ERROR: failed to write credentials to ${os.homedir()}/.config/gcloud/credentials.db: permission denied`,
-      action: "retry_with_missing_sandbox_capabilities",
-      option: { temporary_home: true },
+      missing: [],
       nativeOption: {
         action: "reviewed_native_retry_preserving_host_home",
         same_command: true,
@@ -4540,8 +4545,7 @@ describe("handleExecuteCommand", () => {
       name: "mise credential-backed command HOME denial",
       command: "mise run deploy",
       output: `mise: failed to write state to ${os.homedir()}/.local/state/mise/session: operation not permitted`,
-      action: "retry_with_missing_sandbox_capabilities",
-      option: { temporary_home: true },
+      missing: [],
       nativeOption: {
         action: "reviewed_native_retry_preserving_host_home",
         same_command: true,
@@ -4554,9 +4558,8 @@ describe("handleExecuteCommand", () => {
       name: "compound gcloud credential HOME denial",
       command: "npm run prepare && gcloud auth print-access-token",
       output: `ERROR: failed to write credentials to ${os.homedir()}/.config/gcloud/credentials.db: permission denied`,
-      action: "isolate_failed_step_with_temporary_home",
+      missing: [],
       sameCommand: false,
-      option: { temporary_home: true },
       nativeOption: {
         action:
           "isolate_failed_step_for_reviewed_native_retry_preserving_host_home",
@@ -4793,6 +4796,183 @@ describe("handleExecuteCommand", () => {
       });
     },
   );
+
+  it.each([
+    {
+      name: "pre-connect timeout",
+      connect: "0.000000",
+      code: 28,
+      expected: true,
+    },
+    {
+      name: "response timeout after connection",
+      connect: "0.010000",
+      code: 28,
+      expected: false,
+    },
+    {
+      name: "non-timeout failure",
+      connect: "0.000000",
+      code: 7,
+      expected: false,
+    },
+  ])(
+    "classifies only evidenced managed curl $name",
+    async ({ connect, code, expected }) => {
+      executeCommand.mockResolvedValue({
+        exit_code: code,
+        output: `curl: (${code}) Connection timed out after 15000 milliseconds\nhttp_status=000 connect_seconds=${connect} tls_seconds=0.000000 total_seconds=15.006557\n`,
+        output_captured: true,
+        output_complete: true,
+        output_finalized: true,
+        terminal_id: "managed-connect",
+        command_sent: true,
+        process_launched: true,
+      });
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const payload = textPayload(
+        await handleExecuteCommand(
+          {
+            command: "curl --max-time 15 https://example.com/status",
+            sandbox_permissions: "require_managed_network",
+            reason: "Inspect public endpoint connectivity",
+          },
+          { isCommandApproved: () => true } as never,
+          { isRecentlyApproved: () => true } as never,
+          "managed-connect",
+          undefined,
+          {
+            terminalProvider,
+            getCommandApprovalPolicy: () => "approve-for-me",
+          },
+        ),
+      );
+      if (expected) {
+        expect(payload).toMatchObject({
+          network_failure_evidence: {
+            connection_established: false,
+            tls_handshake_established: false,
+            cause: "undetermined",
+          },
+          retry_guidance: {
+            code: "managed_network_connect_timeout",
+            automatic_retry: false,
+          },
+        });
+        expect(payload.retry_guidance.options[1]).toMatchObject({
+          same_command: false,
+          sandbox_permissions: "require_escalated",
+          reason_required: true,
+        });
+      } else expect(payload.retry_guidance).toBeUndefined();
+      expect(executeCommand).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    {
+      command: "npm test",
+      toolchainPath: "/Users/test/.local/share/mise/shims:/usr/bin",
+    },
+    { command: "npm test", toolchainPath: "/Users/test/.asdf/shims:/usr/bin" },
+    {
+      command: "/Users/test/.local/share/mise/shims/npm test",
+      toolchainPath: "/usr/bin",
+    },
+    { command: "/Users/test/.asdf/shims/npm test", toolchainPath: "/usr/bin" },
+    { command: "gcloud auth list", toolchainPath: "/usr/bin" },
+    { command: "mise run test", toolchainPath: "/usr/bin" },
+  ])(
+    "does not recommend disposable HOME for $command using $toolchainPath",
+    async ({ command, toolchainPath }) => {
+      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+      vi.spyOn(fs, "statSync").mockReturnValue({
+        isFile: () => true,
+      } as fs.Stats);
+      executeCommand.mockResolvedValue({
+        exit_code: 1,
+        output: `failed to write ${os.homedir()}/.agentlink/log: permission denied`,
+        output_captured: true,
+        output_complete: true,
+        output_finalized: true,
+        terminal_id: "host-config",
+        command_sent: true,
+        process_launched: true,
+      });
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const payload = textPayload(
+        await handleExecuteCommand(
+          { command, env: { PATH: toolchainPath } },
+          { isCommandApproved: () => true } as never,
+          { isRecentlyApproved: () => true } as never,
+          "host-config",
+          undefined,
+          {
+            terminalProvider,
+            getCommandApprovalPolicy: () => "approve-for-me",
+          },
+        ),
+      );
+      expect(payload).toMatchObject({
+        temporary_home_unsuitable: expect.any(String),
+        missing_sandbox_capabilities: [],
+        retry_guidance: {
+          automatic_retry: false,
+          options: [
+            {
+              action: "reviewed_native_retry_preserving_host_home",
+              sandbox_permissions: "require_escalated",
+            },
+          ],
+        },
+      });
+      expect(JSON.stringify(payload.retry_guidance)).not.toContain(
+        '"temporary_home":true',
+      );
+      expect(executeCommand).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not treat an unrelated shim PATH or Promise diagnostic as host toolchain evidence", async () => {
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    vi.spyOn(fs, "statSync").mockReturnValue({
+      isFile: () => true,
+    } as fs.Stats);
+    executeCommand.mockResolvedValue({
+      exit_code: 1,
+      output: `Promise rejected for untrusted config: failed to write ${os.homedir()}/.npm/log: permission denied`,
+      output_captured: true,
+      output_complete: true,
+      output_finalized: true,
+      terminal_id: "unrelated-shim-path",
+      command_sent: true,
+      process_launched: true,
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const payload = textPayload(
+      await handleExecuteCommand(
+        {
+          command: "npm test",
+          env: { PATH: "/usr/bin:/Users/test/.asdf/shims" },
+        },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "unrelated-shim-path",
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "approve-for-me",
+        },
+      ),
+    );
+    expect(payload.temporary_home_unsuitable).toBeUndefined();
+    expect(payload.missing_sandbox_capabilities).toEqual(["temporary_home"]);
+    expect(payload.retry_guidance.options).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ temporary_home: true }),
+      ]),
+    );
+  });
 
   it("suppresses generic native retry when a structured HOME denial has a narrow sandbox retry", async () => {
     const violation = {
@@ -8941,6 +9121,49 @@ describe("handleExecuteCommand", () => {
     });
   });
 
+  it("returns non-bypass recovery for protected-root drift before launch", async () => {
+    executeCommand.mockRejectedValue(
+      new SandboxProtectedRootDriftError(
+        "protected root contents changed before spawn",
+        {
+          path: "config",
+          category: "modified",
+        },
+      ),
+    );
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const payload = textPayload(
+      await handleExecuteCommand(
+        { command: "git status --short", cwd: "/workspace" },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "protected-drift",
+        undefined,
+        { terminalProvider },
+      ),
+    );
+    expect(payload).toMatchObject({
+      error_code: "sandbox_protected_root_drift",
+      process_launched: false,
+      command_sent: false,
+      retry_safe: true,
+      protected_root_change: { path: "config", category: "modified" },
+      retry_guidance: {
+        automatic_retry: false,
+        options: [
+          {
+            action: "inspect_change_then_reprepare_same_command",
+            same_command: true,
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(payload.retry_guidance.options)).not.toContain(
+      "require_escalated",
+    );
+    expect(executeCommand).toHaveBeenCalledOnce();
+  });
+
   it("returns safe cleanup guidance for a protected Git alias before launch", async () => {
     executeCommand.mockRejectedValue(
       new SandboxStructuralProtectionError(
@@ -8989,6 +9212,64 @@ describe("handleExecuteCommand", () => {
       },
     });
   });
+
+  it.each([false, true])(
+    "preserves active worktree locks (disposable HOME: %s)",
+    async (temporaryHome) => {
+      executeCommand.mockRejectedValue(
+        new SandboxStructuralProtectionError(
+          "structurally protected tree contains a symbolic link",
+          {
+            kind: "symbolic_link",
+            path: "/workspace/.git/worktrees/other-live-worktree/gram-stack-lock",
+          },
+        ),
+      );
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const payload = textPayload(
+        await handleExecuteCommand(
+          {
+            command: "git status --short",
+            cwd: "/workspace",
+            ...(temporaryHome ? { temporary_home: true as const } : {}),
+          },
+          { isCommandApproved: () => true } as never,
+          { isRecentlyApproved: () => true } as never,
+          "worktree-lock",
+          undefined,
+          {
+            terminalProvider,
+            getCommandApprovalPolicy: () => "approve-for-me",
+          },
+        ),
+      );
+      expect(payload.retry_guidance.options).toEqual([
+        ...(!temporaryHome
+          ? [
+              expect.objectContaining({
+                action: "reviewed_native_retry_preserving_worktree_lock",
+                command: "git status --short",
+                cwd: "/workspace",
+                sandbox_permissions: "require_escalated",
+                preserve_reported_node: true,
+              }),
+            ]
+          : []),
+        expect.objectContaining({
+          action: "inspect_worktree_lock_ownership",
+          preserve_reported_node: true,
+        }),
+      ]);
+      expect(payload).toMatchObject({
+        process_launched: false,
+        retry_safe: true,
+      });
+      expect(executeCommand).toHaveBeenCalledOnce();
+      expect(JSON.stringify(payload.retry_guidance.options)).not.toContain(
+        "remove",
+      );
+    },
+  );
 
   it("preserves the reported protected file in hard-link cleanup guidance", async () => {
     executeCommand.mockRejectedValue(

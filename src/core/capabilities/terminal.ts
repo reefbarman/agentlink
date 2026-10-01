@@ -276,7 +276,17 @@ export type TerminalLifecycleState =
   | "completed"
   | "unknown_termination";
 
+export interface TerminalCommandExecutionContext {
+  commandId: string;
+  command: string;
+  cwd: string;
+  security: TerminalExecutionSecuritySummary;
+  temporaryHome: boolean;
+  replayable: boolean;
+}
+
 export interface TerminalBackgroundState {
+  executionContext?: TerminalCommandExecutionContext;
   command_id?: string;
   signal?: number;
   is_running: boolean;

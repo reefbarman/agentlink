@@ -1,4 +1,5 @@
 import {
+  ProtectedRootSnapshotDriftError,
   canonicalizeMutationPath,
   canonicalizeProtectedRoots,
   prepareProtectedRoots,
@@ -770,6 +771,9 @@ async function main() {
       `${JSON.stringify({
         ok: false,
         error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof ProtectedRootSnapshotDriftError
+          ? { code: error.code, details: error.details }
+          : {}),
       })}\n`,
     );
     process.exitCode = 1;

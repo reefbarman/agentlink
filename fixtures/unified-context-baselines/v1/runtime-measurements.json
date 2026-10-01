@@ -679,16 +679,16 @@
     {
       "mode": "code",
       "toolCount": 64,
-      "chars": 94201,
-      "estimatedTokens": 23551,
-      "sha256": "98feeb2257254e6e9c8967db618b26a2dfaa398a519c49a53de14c10e0a8c2c4"
+      "chars": 94210,
+      "estimatedTokens": 23553,
+      "sha256": "8ff6115b3f87056ac14019a0aabbbebf334a6762d0eba84100974563b26635b1"
     },
     {
       "mode": "architect",
       "toolCount": 59,
-      "chars": 88922,
-      "estimatedTokens": 22231,
-      "sha256": "30e256f36f7f09f92e93984bf4dd975ab384510981de70ae71880bd40439d70c"
+      "chars": 88931,
+      "estimatedTokens": 22233,
+      "sha256": "6bb6a2e911dbae271632c4a41b7d62783be77ebd052570dab1d59cd9e370cdd4"
     },
     {
       "mode": "orchestrate",
@@ -707,16 +707,16 @@
     {
       "mode": "debug",
       "toolCount": 57,
-      "chars": 78952,
-      "estimatedTokens": 19738,
-      "sha256": "2dd3d842d32c055b0414dcf7087811fc8d2706080381abf4fb28d8f1c2a1bc1a"
+      "chars": 78961,
+      "estimatedTokens": 19741,
+      "sha256": "f3395cf6717fbaaca5da6d3cc5c71db996a7c466166a840485b60a586254ca25"
     },
     {
       "mode": "review",
       "toolCount": 51,
-      "chars": 75729,
-      "estimatedTokens": 18933,
-      "sha256": "ae1bb0bb1c5fd39cf3a5bff5c8c8364ef71edcf0944c262fe6947fe4598c6480"
+      "chars": 75738,
+      "estimatedTokens": 18935,
+      "sha256": "890a900cfa1b0a52b1c0004eac7cdad2c5cea6a7cfda2292f77c8a70cf4916b9"
     }
   ],
   "projectedToolsByMode": [
@@ -724,17 +724,17 @@
       "mode": "code",
       "toolCount": 38,
       "deferredToolCount": 26,
-      "chars": 65792,
-      "estimatedTokens": 16448,
-      "sha256": "9abdbd989b577c36c7d960fb701862381d69d88ba037f3cda951b79498e19d0b"
+      "chars": 65801,
+      "estimatedTokens": 16451,
+      "sha256": "0cf77c9fdb126a5758cd5c8a48bf3164de6f58b9845879104dc3672753095bd7"
     },
     {
       "mode": "architect",
       "toolCount": 37,
       "deferredToolCount": 22,
-      "chars": 64458,
-      "estimatedTokens": 16115,
-      "sha256": "e64556bfab2044e5e253ff7e2a4f03e364349758e156ab940c83cd013dd17b76"
+      "chars": 64467,
+      "estimatedTokens": 16117,
+      "sha256": "1ca12b7b8016f3f31f99dcf4e9644a67002af3569d1d158a8c2a0cdaf67e1cb1"
     },
     {
       "mode": "orchestrate",
@@ -756,17 +756,17 @@
       "mode": "debug",
       "toolCount": 35,
       "deferredToolCount": 22,
-      "chars": 59296,
-      "estimatedTokens": 14824,
-      "sha256": "7442e988aa7bf8659b17b9035e532c4c8bda5504eaa5e15548069f88b87ce139"
+      "chars": 59305,
+      "estimatedTokens": 14827,
+      "sha256": "355881cb0fa9e83269ceb0c29e8d53b837d061ddfcfa622b08243dffaa92ed1b"
     },
     {
       "mode": "review",
       "toolCount": 30,
       "deferredToolCount": 21,
-      "chars": 58058,
-      "estimatedTokens": 14515,
-      "sha256": "9322bd3a5801636f3066627a7e7e4fac86372c865493f658cd185ce92e34f319"
+      "chars": 58067,
+      "estimatedTokens": 14517,
+      "sha256": "be169c25830ce4f8425dfacd1afaa0ffd65f0320f8d89451a2a657266f4d0028"
     }
   ],
   "profileMatrix": {

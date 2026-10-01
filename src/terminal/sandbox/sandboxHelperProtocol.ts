@@ -41,6 +41,11 @@ export interface SandboxStructuralProtectionFailureDetails {
   path: string;
 }
 
+export interface SandboxProtectedRootDriftDetails {
+  path: string;
+  category: "added" | "removed" | "modified" | "root_changed" | "unknown";
+}
+
 export interface SandboxHelperLaunchRequest extends SandboxCommandIdentity {
   version: typeof SANDBOX_HELPER_PROTOCOL_VERSION;
   type: "launch";
@@ -120,6 +125,12 @@ export type SandboxHelperEventFrame =
       message: string;
       code: "sandbox_structural_protection";
       details: SandboxStructuralProtectionFailureDetails;
+    })
+  | (SandboxCommandIdentity & {
+      type: "error";
+      message: string;
+      code: "sandbox_protected_root_drift";
+      details: SandboxProtectedRootDriftDetails;
     });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -255,6 +266,22 @@ function isManagedNetworkDestination(
         (answer.family === 4 || answer.family === 6),
     ) &&
     value.destinationClass === "public"
+  );
+}
+
+function isProtectedRootDriftDetails(
+  value: unknown,
+): value is SandboxProtectedRootDriftDetails {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["path", "category"]) &&
+    isNonEmptyString(value.path) &&
+    new TextEncoder().encode(value.path).byteLength <= 2048 &&
+    !value.path.startsWith("/") &&
+    !value.path.split("/").includes("..") &&
+    ["added", "removed", "modified", "root_changed", "unknown"].includes(
+      String(value.category),
+    )
   );
 }
 
@@ -430,18 +457,22 @@ export function isSandboxHelperEventFrame(
   if (value.type === "error") {
     const environmentFailure = value.code === "sandbox_environment_too_large";
     const structuralFailure = value.code === "sandbox_structural_protection";
+    const protectedRootDrift = value.code === "sandbox_protected_root_drift";
     return (
       hasOnlyKeys(value, [...identityKeys, "message", "code", "details"]) &&
       isNonEmptyString(value.message) &&
       (value.code === undefined ||
         value.code === "sandbox_pty_launch_failed" ||
         environmentFailure ||
-        structuralFailure) &&
+        structuralFailure ||
+        protectedRootDrift) &&
       (environmentFailure
         ? isPreCommandFailureDetails(value.details)
         : structuralFailure
           ? isStructuralProtectionFailureDetails(value.details)
-          : value.details === undefined)
+          : protectedRootDrift
+            ? isProtectedRootDriftDetails(value.details)
+            : value.details === undefined)
     );
   }
   if (value.type === "ready") {

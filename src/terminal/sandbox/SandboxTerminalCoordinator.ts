@@ -6,6 +6,7 @@ import {
   type TerminalBackgroundState,
   type TerminalCloseResult,
   type TerminalCommandResult,
+  type TerminalCommandExecutionContext,
   type TerminalExecuteOptions,
   type TerminalExecutionOwner,
   type TerminalInteractivePromptDetection,
@@ -44,6 +45,7 @@ import {
   SandboxHelperFailure,
   SandboxPtyLaunchError,
   SandboxPreCommandLaunchError,
+  SandboxProtectedRootDriftError,
   SandboxStructuralProtectionError,
   type SandboxCommandProcess,
   type SandboxRuntimeProvider,
@@ -143,6 +145,7 @@ interface ManagedSandboxChannel {
     detachedFromPool: boolean;
   };
   latestMetadata?: SandboxExecutionMetadata;
+  latestExecutionContext?: TerminalCommandExecutionContext;
   latestTermination?: {
     commandId: string;
     reason: "interactive_prompt";
@@ -456,6 +459,16 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       detachedFromPool: false,
     };
     channel.latestMetadata = activeLaunch.metadata;
+    channel.latestExecutionContext = security
+      ? {
+          commandId,
+          command: options.command,
+          cwd: options.cwd,
+          security,
+          temporaryHome: options.temporaryHome === true,
+          replayable: !options.sandboxInlineFiles?.length,
+        }
+      : undefined;
     channel.latestTermination = undefined;
 
     try {
@@ -495,6 +508,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         if (
           error instanceof SandboxPtyLaunchError ||
           error instanceof SandboxPreCommandLaunchError ||
+          error instanceof SandboxProtectedRootDriftError ||
           error instanceof SandboxStructuralProtectionError
         ) {
           this.reclaimFailedLaunchChannel(channel);
@@ -583,6 +597,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       if (
         error instanceof SandboxPtyLaunchError ||
         error instanceof SandboxPreCommandLaunchError ||
+        error instanceof SandboxProtectedRootDriftError ||
         error instanceof SandboxStructuralProtectionError
       ) {
         this.reclaimFailedLaunchChannel(channel);
@@ -608,6 +623,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         if (
           error instanceof SandboxPtyLaunchError ||
           error instanceof SandboxPreCommandLaunchError ||
+          error instanceof SandboxProtectedRootDriftError ||
           error instanceof SandboxStructuralProtectionError
         ) {
           this.reclaimFailedLaunchChannel(channel);
@@ -786,6 +802,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       snapshot,
       false,
       channel.latestTermination,
+      channel.latestExecutionContext,
     );
   }
 
@@ -905,6 +922,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         channel.owner,
         outputLease,
         channel.latestTermination,
+        channel.latestExecutionContext,
       );
       closed += 1;
     }
@@ -1281,7 +1299,14 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     channel.active = undefined;
     this.clearReservation(snapshot.channelId);
     this.channels.delete(snapshot.channelId);
-    if (commandId) this.rememberClosed(snapshot, channel.owner, outputLease);
+    if (commandId)
+      this.rememberClosed(
+        snapshot,
+        channel.owner,
+        outputLease,
+        channel.latestTermination,
+        channel.latestExecutionContext,
+      );
   }
 
   private reclaimImplicitChannel(channel: ManagedSandboxChannel): void {
@@ -1297,7 +1322,14 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     channel.active = undefined;
     this.clearReservation(snapshot.channelId);
     this.channels.delete(snapshot.channelId);
-    if (commandId) this.rememberClosed(snapshot, channel.owner, outputLease);
+    if (commandId)
+      this.rememberClosed(
+        snapshot,
+        channel.owner,
+        outputLease,
+        channel.latestTermination,
+        channel.latestExecutionContext,
+      );
   }
 
   private originFor(sandboxSessionId: string): SandboxCommandOrigin {
@@ -1544,6 +1576,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     snapshot: SandboxTerminalSessionSnapshot,
     closed = false,
     termination?: ManagedSandboxChannel["latestTermination"],
+    executionContext?: TerminalCommandExecutionContext,
   ): TerminalBackgroundState {
     const command = snapshot.commands.at(-1);
     if (!command) {
@@ -1560,6 +1593,9 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       command.status === "launching" || command.status === "running";
     return {
       command_id: command.commandId,
+      ...(executionContext?.commandId === command.commandId
+        ? { executionContext: structuredClone(executionContext) }
+        : {}),
       ...(command.signal ? { signal: command.signal } : {}),
       is_running: !closed && running,
       state:
@@ -1680,6 +1716,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     owner: TerminalExecutionOwner | undefined,
     outputLease?: SandboxTerminalCommandOutputLease,
     termination?: ManagedSandboxChannel["latestTermination"],
+    executionContext?: TerminalCommandExecutionContext,
   ): void {
     if (outputLease)
       this.recentlyClosedOutput.set(snapshot.channelId, outputLease);
@@ -1688,7 +1725,12 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       name: snapshot.title,
       closedAt: this.now(),
       ...(owner ? { owner: { ...owner } } : {}),
-      ...this.backgroundStateFromSnapshot(snapshot, true, termination),
+      ...this.backgroundStateFromSnapshot(
+        snapshot,
+        true,
+        termination,
+        executionContext,
+      ),
       ...this.outputMetadata(outputLease?.metadata()),
     });
     const removed = this.recentlyClosed.splice(DEFAULT_RECENTLY_CLOSED_LIMIT);
