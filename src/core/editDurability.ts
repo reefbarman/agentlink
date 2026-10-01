@@ -132,10 +132,14 @@ export function createFormatOnSaveReport(
   }
 
   const report: FormatOnSaveReport = { format_on_save: true };
+  if (normalizedExpected !== normalizedFinal) {
+    report.hint =
+      "If the saved formatting conflicts with the repository formatter, inspect the saved file and save-participant configuration. Compose a new reviewed edit with save_without_formatting=true when exact preservation is intended; do not repeat the same ordinary save or change the user's formatter settings automatically.";
+  }
   if (originalContent !== undefined && finalContent === originalContent) {
     report.format_on_save_reverted_proposal = true;
     report.hint =
-      "Format-on-save restored the pre-edit file content. The proposed edit is not durable; re-read the file before composing another diff.";
+      "A save participant restored the pre-edit file content. The proposed edit is not durable. Re-read the file and inspect save-participant configuration, then compose a new reviewed edit with save_without_formatting=true if exact preservation is intended. Do not repeat the same ordinary save or change the user's formatter settings automatically.";
   }
   if (getEditDurabilityPolicy(relativePath) === "preserve_exact") {
     report.warnings = [
@@ -162,7 +166,7 @@ export function createFormatOnSaveReport(
       report.format_on_save_edits_omitted = "size_cap";
       if (!report.format_on_save_reverted_proposal) {
         report.hint =
-          "Format-on-save changed the file substantially; re-read the file before composing further diffs.";
+          "Save participants changed the file substantially; re-read it before composing further diffs. If the saved formatting conflicts with the repository formatter, inspect save-participant configuration and compose a new reviewed edit with save_without_formatting=true when exact preservation is intended.";
       }
     }
   }

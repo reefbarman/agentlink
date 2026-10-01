@@ -63,6 +63,9 @@ describe("TOOL_REGISTRY", () => {
     );
     expect(applyDiffSchema.diff.description).toBe(APPLY_DIFF_INPUT_GRAMMAR);
     expect(APPLY_DIFF_INPUT_GRAMMAR).toContain(
+      "Strip renderer // marker prefixes, not payload comments.",
+    );
+    expect(APPLY_DIFF_INPUT_GRAMMAR).toContain(
       "bare ======= line is literal payload",
     );
     expect(APPLY_DIFF_INPUT_GRAMMAR).toContain(

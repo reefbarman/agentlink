@@ -78,6 +78,10 @@ describe("edit durability classification", () => {
     expect(result.formatOnSaveReport?.format_on_save_edits).toContain(
       "+const value = { a: 1 };",
     );
+    expect(result.formatOnSaveReport?.hint).toContain(
+      "save_without_formatting=true",
+    );
+    expect(result.formatOnSaveReport?.hint).toContain("new reviewed edit");
   });
 
   it("treats EOL-only changes as transformed rather than divergent", () => {
@@ -145,6 +149,12 @@ describe("edit durability classification", () => {
       requires_reread: true,
     });
     expect(result.failureReason).toBe("save_reverted_edit");
+    expect(result.formatOnSaveReport?.hint).toContain(
+      "save_without_formatting=true",
+    );
+    expect(result.formatOnSaveReport?.hint).toContain(
+      "Do not repeat the same ordinary save",
+    );
   });
 
   it("fails on genuine normalized editor/disk divergence", () => {
@@ -218,6 +228,9 @@ describe("edit durability classification", () => {
     expect(result.formatOnSaveReport).toMatchObject({
       format_on_save_edits_omitted: "size_cap",
     });
+    expect(result.formatOnSaveReport?.hint).toContain(
+      "save_without_formatting=true",
+    );
   });
 });
 

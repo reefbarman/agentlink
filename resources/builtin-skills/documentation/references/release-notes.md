@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed proposal recovery and diff authoring guidance: memory review-opening failures report approval, save, and observed disk state without blindly replaying uncertain buffers; formatter conflicts suggest a new reviewed exact-preservation edit without changing user settings; and diff instructions distinguish renderer comment prefixes from literal markers.
+
 - Fixed recovery details and read accuracy: failed VS Code saves retain bounded, redacted exception messages without discarding dirty buffers; Codex page-access internal errors no longer appear as successful fetched content; and command-substitution input filters no longer trigger terminal output-filter rejection.
 
 - Fixed command recovery and edit attribution: narrow Git write/inspection chains receive protected-metadata native guidance before launch, GitHub TLS failures in mixed workflows and review loops receive failed-step recovery without disabling certificate checks, and write/edit results no longer label unrelated-file diagnostics as introduced errors.

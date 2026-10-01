@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as vscode from "vscode";
 
 import type {
@@ -48,6 +49,62 @@ class MemorySaveError extends Error {
   constructor(readonly result: DiffResult) {
     super(result.error ?? "Approved memory proposal was not durably saved");
     this.name = "MemorySaveError";
+  }
+}
+
+class MemoryReviewOpenError extends Error {
+  constructor(
+    message: string,
+    readonly evidence: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "MemoryReviewOpenError";
+  }
+}
+
+async function openMemoryReview(
+  diffView: DiffViewProvider,
+  target: Target,
+  proposedContent: string,
+  priorRetargetApproval = false,
+): Promise<void> {
+  const baseline = await fs
+    .readFile(target.filePath, "utf-8")
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+  try {
+    await diffView.open(target.filePath, target.displayPath, proposedContent);
+  } catch (error) {
+    let diskState: "unchanged" | "changed" | "missing" | "unreadable";
+    try {
+      const current = await fs.readFile(target.filePath, "utf-8");
+      diskState = current === baseline ? "unchanged" : "changed";
+    } catch (error) {
+      diskState =
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+          ? "missing"
+          : "unreadable";
+    }
+    throw new MemoryReviewOpenError(
+      error instanceof Error ? error.message : String(error),
+      {
+        path: target.displayPath,
+        reason: "review_open_failed",
+        failure_stage: "review_open",
+        approval_state: priorRetargetApproval
+          ? "retarget_accepted_review_not_requested"
+          : "not_requested",
+        save_state: "not_attempted",
+        disk_state: diskState,
+        buffer_state: "unknown",
+        retryable: false,
+        next_steps: [
+          "Approval for this target's content review was not requested and no save was attempted. Review setup may have changed the editor buffer or created an empty target. Inspect the retained editor and re-read the target before composing a new reviewed proposal; do not blindly replay or save the buffer.",
+        ],
+      },
+    );
   }
 }
 
@@ -161,7 +218,7 @@ async function reviewProposedContentInDiff(
       await diffView.revertChanges(reason);
     };
 
-    await diffView.open(target.filePath, target.displayPath, proposedContent);
+    await openMemoryReview(diffView, target, proposedContent, true);
 
     try {
       const decision = await diffView.waitForUserDecision(
@@ -227,7 +284,7 @@ async function reviewMemoryProposalInDiff(
       await diffView.revertChanges(reason);
     };
 
-    await diffView.open(target.filePath, target.displayPath, proposedContent);
+    await openMemoryReview(diffView, target, proposedContent);
 
     try {
       const { promise } = approvalPanel.enqueueMemoryApproval({
@@ -437,6 +494,9 @@ export async function handleProposeMemory(
         .map((d) => ({ message: d.message, source: d.source })),
     });
   } catch (err) {
+    if (err instanceof MemoryReviewOpenError) {
+      return errorResult(err.message, { ...err.evidence, status: "error" });
+    }
     if (err instanceof MemorySaveError) {
       const {
         finalContent: _finalContent,

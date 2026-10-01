@@ -181,6 +181,108 @@ describe("handleProposeMemory", () => {
     );
   });
 
+  it.each(["unchanged", "changed", "missing", "unreadable"] as const)(
+    "reports %s disk evidence when memory review cannot open",
+    async (diskState) => {
+      const { handleProposeMemory } = await import("./proposeMemory.js");
+      const target = path.join(tmpDir, "AGENTS.md");
+      fs.writeFileSync(target, "- Existing\n");
+      const { panel } = approvingPanel();
+      diffOpen.mockImplementationOnce(async () => {
+        if (diskState === "changed")
+          fs.writeFileSync(target, "concurrent content");
+        if (diskState === "missing") fs.unlinkSync(target);
+        if (diskState === "unreadable") {
+          fs.unlinkSync(target);
+          fs.mkdirSync(target);
+        }
+        throw new Error("Unable to apply proposed editor changes");
+      });
+
+      const result = await handleProposeMemory(
+        {
+          tier: "instructions",
+          scope: "project",
+          operation: "add",
+          title: "Add guidance",
+          rationale: "User-requested guidance.",
+          content: "- New guidance",
+        },
+        panel as never,
+      );
+
+      expect(result.isError).toBe(true);
+      expect(text(result)).toMatchObject({
+        reason: "review_open_failed",
+        failure_stage: "review_open",
+        approval_state: "not_requested",
+        save_state: "not_attempted",
+        disk_state: diskState,
+        buffer_state: "unknown",
+        retryable: false,
+      });
+      expect(text(result).next_steps[0]).toContain("do not blindly replay");
+      expect(panel.enqueueMemoryApproval).not.toHaveBeenCalled();
+      expect(diffSaveChanges).not.toHaveBeenCalled();
+      expect(diffRevertChanges).not.toHaveBeenCalled();
+    },
+  );
+
+  it("distinguishes a newly created empty review target from an unchanged absent file", async () => {
+    const { handleProposeMemory } = await import("./proposeMemory.js");
+    const { panel } = approvingPanel();
+    diffOpen.mockImplementationOnce(async (filePath: string) => {
+      fs.writeFileSync(filePath, "");
+      throw new Error("Unable to apply proposed editor changes");
+    });
+    const result = await handleProposeMemory(
+      {
+        tier: "instructions",
+        scope: "project",
+        operation: "add",
+        title: "Add guidance",
+        rationale: "User-requested guidance.",
+        content: "- New guidance",
+      },
+      panel as never,
+    );
+    expect(text(result)).toMatchObject({
+      disk_state: "changed",
+      save_state: "not_attempted",
+    });
+    expect(fs.readFileSync(path.join(tmpDir, "AGENTS.md"), "utf-8")).toBe("");
+  });
+
+  it("preserves prior retarget approval when the destination review fails to open", async () => {
+    const { handleProposeMemory } = await import("./proposeMemory.js");
+    const { panel } = approvingPanel({ memoryScope: "global" });
+    diffOpen
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("Review open failed"));
+    const result = await handleProposeMemory(
+      {
+        tier: "instructions",
+        scope: "project",
+        operation: "add",
+        title: "Add guidance",
+        rationale: "User-requested guidance.",
+        content: "- New guidance",
+      },
+      panel as never,
+    );
+    expect(text(result)).toMatchObject({
+      failure_stage: "review_open",
+      approval_state: "retarget_accepted_review_not_requested",
+      save_state: "not_attempted",
+      disk_state: "missing",
+      path: "~/.agentlink/CLAUDE.md",
+    });
+    expect(panel.enqueueMemoryApproval).toHaveBeenCalledTimes(1);
+    expect(diffWaitForUserDecision).not.toHaveBeenCalled();
+    expect(diffSaveChanges).not.toHaveBeenCalled();
+    expect(diffRevertChanges).toHaveBeenCalledTimes(1);
+  });
+
   it("returns current content when update replacement cannot be found", async () => {
     const { handleProposeMemory } = await import("./proposeMemory.js");
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), "- Existing\n");
