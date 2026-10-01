@@ -1,0 +1,31 @@
+src/core/model/providers/openaiCompatible/translation.test.ts
+  h_e08a86bb3a33a2 242,250,295-358,360-406
+  s_871caac04c28ef::t_ceb7b91c9e8b18 359
+packages/core/src/openAiCompatible/translation.ts
+  h_e08a86bb3a33a2 191-198,214-216,220,222-233,242,249,253-275,279-280,287-289,296
+  s_871caac04c28ef::t_fe0b3226a47eaf 234,276-278,281,286,295
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "085b1ee1d33ebb86342c146208c3e33b737abde0",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_871caac04c28ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf796bc9-76cf-4740-a086-731c8702c555",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
