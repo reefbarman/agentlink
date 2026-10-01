@@ -1,0 +1,45 @@
+src/util/pipeValidator.ts
+  h_e08a86bb3a33a2 38-39,757-829,831
+  h_e08a86bb3a33a2 37
+src/integrations/editDurability.ts
+  h_e08a86bb3a33a2 83-84,96,98-99,120-121,411-437,447-448,475,490-492,508-510
+  h_e08a86bb3a33a2 438-439
+src/util/pipeValidator.test.ts
+  h_e08a86bb3a33a2 611,616,619,622-653,655-657,686
+  h_e08a86bb3a33a2 654
+src/core/model/providers/codex/standaloneWeb.ts
+  h_e08a86bb3a33a2 26-33,100,102,106-123,578-586
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 70-71,97-98,129
+  h_e08a86bb3a33a2 130
+src/integrations/editDurability.test.ts
+  h_e08a86bb3a33a2 170-266
+src/core/capabilities/editReview.ts
+  h_e08a86bb3a33a2 67-69
+src/core/model/providers/codex/standaloneWeb.test.ts
+  h_e08a86bb3a33a2 162-235
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2e278e9fa96743d9daeaee08f2a630ecf35746bf",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
