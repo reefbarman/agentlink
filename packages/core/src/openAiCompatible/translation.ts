@@ -188,6 +188,14 @@ function translateUserMessage(
   }
 
   let userParts: OpenAiCompatibleWireContentPart[] = [];
+  // Chat Completions only accepts text in `tool` messages, and every tool
+  // message must directly follow the assistant tool call. Tool-result images
+  // are therefore deferred into the user message that follows the tool group.
+  let pendingToolMedia: OpenAiCompatibleWireContentPart[] = [];
+  const movePendingToolMedia = () => {
+    userParts.push(...pendingToolMedia);
+    pendingToolMedia = [];
+  };
   const flushUserParts = () => {
     if (userParts.length === 0) return;
     result.push({
@@ -203,12 +211,27 @@ function translateUserMessage(
   for (const block of message.content) {
     if (block.type === "tool_result") {
       flushUserParts();
+      const images = supportsImages
+        ? collectToolResultImages(block.content)
+        : [];
       result.push({
         role: "tool",
         tool_call_id: block.tool_use_id,
-        content: flattenToolResult(block.content),
+        content: flattenToolResult(block.content, images.length > 0),
       });
-    } else if (block.type === "text") {
+      if (images.length > 0) {
+        pendingToolMedia.push(
+          {
+            type: "text",
+            text: `Media output of tool call ${block.tool_use_id}:`,
+          },
+          ...images.map(toImagePart),
+        );
+      }
+      continue;
+    }
+    movePendingToolMedia();
+    if (block.type === "text") {
       userParts.push({ type: "text", text: block.text });
     } else if (block.type === "image") {
       if (!supportsImages) {
@@ -216,33 +239,61 @@ function translateUserMessage(
           "The selected OpenAI-compatible model does not support image input",
         );
       }
-      userParts.push({
-        type: "image_url",
-        image_url: {
-          url: `data:${block.source.media_type};base64,${block.source.data}`,
-        },
-      });
+      userParts.push(toImagePart(block));
     } else if (block.type === "document") {
       throw new OpenAiCompatibleCapabilityError(
         "OpenAI-compatible Chat Completions does not support document input",
       );
     }
   }
+  movePendingToolMedia();
   flushUserParts();
 }
 
-function flattenToolResult(content: string | CoreModelContentBlock[]): string {
+type CoreModelImageBlock = Extract<CoreModelContentBlock, { type: "image" }>;
+
+function toImagePart(
+  image: CoreModelImageBlock,
+): OpenAiCompatibleWireContentPart {
+  return {
+    type: "image_url",
+    image_url: {
+      url: `data:${image.source.media_type};base64,${image.source.data}`,
+    },
+  };
+}
+
+function collectToolResultImages(
+  content: string | CoreModelContentBlock[],
+): CoreModelImageBlock[] {
+  if (typeof content === "string") return [];
+  return content.flatMap((block) => {
+    if (block.type === "image") return [block];
+    if (block.type === "tool_result")
+      return collectToolResultImages(block.content);
+    return [];
+  });
+}
+
+function flattenToolResult(
+  content: string | CoreModelContentBlock[],
+  imagesForwarded: boolean,
+): string {
   if (typeof content === "string") return content;
   return content
     .map((block) => {
       if (block.type === "text") return block.text;
-      if (block.type === "image") return "[Image omitted from tool result]";
+      if (block.type === "image")
+        return imagesForwarded
+          ? "[Image attached in the following user message]"
+          : "[Image omitted from tool result]";
       if (block.type === "document")
         return "[Document omitted from tool result]";
       if (block.type === "thinking") return block.thinking;
       if (block.type === "tool_use")
         return `[Nested tool call ${block.name} omitted]`;
-      if (block.type === "tool_result") return flattenToolResult(block.content);
+      if (block.type === "tool_result")
+        return flattenToolResult(block.content, imagesForwarded);
       return "[Provider activity omitted from tool result]";
     })
     .join("\n");

@@ -239,7 +239,7 @@ describe("translateOpenAiCompatibleMessages", () => {
                 source: {
                   type: "base64",
                   media_type: "image/png",
-                  data: "must-not-leak",
+                  data: "tool-image",
                 },
               },
               {
@@ -247,7 +247,7 @@ describe("translateOpenAiCompatibleMessages", () => {
                 source: {
                   type: "base64",
                   media_type: "application/pdf",
-                  data: "must-not-leak-either",
+                  data: "must-not-leak",
                 },
               },
             ],
@@ -292,9 +292,119 @@ describe("translateOpenAiCompatibleMessages", () => {
         role: "tool",
         tool_call_id: "call_1",
         content:
-          "result\n[Image omitted from tool result]\n[Document omitted from tool result]",
+          "result\n[Image attached in the following user message]\n[Document omitted from tool result]",
       },
-      { role: "user", content: "continue" },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Media output of tool call call_1:" },
+          {
+            type: "image_url",
+            image_url: { url: "data:image/png;base64,tool-image" },
+          },
+          { type: "text", text: "continue" },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps parallel tool messages contiguous and forwards their images afterwards", () => {
+    const image = (data: string) => ({
+      type: "image" as const,
+      source: {
+        type: "base64" as const,
+        media_type: "image/png" as const,
+        data,
+      },
+    });
+    const messages: CoreModelMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "call_a", name: "shot", input: {} },
+          { type: "tool_use", id: "call_b", name: "lookup", input: {} },
+          { type: "tool_use", id: "call_c", name: "shot", input: {} },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "call_a", content: [image("a")] },
+          { type: "tool_result", tool_use_id: "call_b", content: "text only" },
+          {
+            type: "tool_result",
+            tool_use_id: "call_c",
+            content: [{ type: "text", text: "two" }, image("c1"), image("c2")],
+          },
+        ],
+      },
+    ];
+
+    const wire = translateOpenAiCompatibleMessages({
+      providerId: "openai-compatible:test",
+      messages,
+      supportsImages: true,
+    });
+
+    expect(wire.slice(1)).toEqual([
+      {
+        role: "tool",
+        tool_call_id: "call_a",
+        content: "[Image attached in the following user message]",
+      },
+      { role: "tool", tool_call_id: "call_b", content: "text only" },
+      {
+        role: "tool",
+        tool_call_id: "call_c",
+        content:
+          "two\n[Image attached in the following user message]\n[Image attached in the following user message]",
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Media output of tool call call_a:" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,a" } },
+          { type: "text", text: "Media output of tool call call_c:" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,c1" } },
+          { type: "image_url", image_url: { url: "data:image/png;base64,c2" } },
+        ],
+      },
+    ]);
+  });
+
+  it("omits tool-result images without failing when the model lacks image input", () => {
+    const wire = translateOpenAiCompatibleMessages({
+      providerId: "openai-compatible:test",
+      supportsImages: false,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "call_1",
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/png",
+                    data: "must-not-leak",
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(wire).toEqual([
+      {
+        role: "tool",
+        tool_call_id: "call_1",
+        content: "[Image omitted from tool result]",
+      },
     ]);
   });
 
