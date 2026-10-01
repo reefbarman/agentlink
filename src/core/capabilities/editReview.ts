@@ -64,7 +64,9 @@ export interface EditSaveFailureRecovery {
     | "matches_save_attempt"
     | "changed_after_save_attempt"
     | "unavailable";
-  vscode_error_detail: "unavailable";
+  vscode_error_detail: "available" | "unavailable";
+  vscode_error_message?: string;
+  save_outcome?: "returned_false" | "exception";
   retryable: true;
   retry_target: "editor_save";
   disk_error_code?: string;

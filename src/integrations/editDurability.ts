@@ -80,6 +80,8 @@ export async function commitAndVerifyEdit(
   if (request.document.isDirty) {
     const saveAttemptContent = request.document.getText();
     let saved = false;
+    let saveException: unknown;
+    let saveOutcome: "returned_false" | "exception" = "returned_false";
     let saveReason: "save_failed" | "preserving_save_failed" = "save_failed";
 
     try {
@@ -91,8 +93,10 @@ export async function commitAndVerifyEdit(
       } else {
         saved = await request.document.save();
       }
-    } catch {
+    } catch (error) {
       saved = false;
+      saveException = error;
+      saveOutcome = "exception";
     }
 
     if (!saved) {
@@ -113,6 +117,8 @@ export async function commitAndVerifyEdit(
         saveAttemptContent,
         currentDocumentContent: request.document.getText(),
         reviewState: request.reviewState,
+        saveException,
+        saveOutcome,
       });
       return {
         status: "error",
@@ -402,6 +408,35 @@ async function observeDisk(absolutePath: string): Promise<EditDiskObservation> {
   }
 }
 
+function boundedSaveErrorMessage(error: unknown): string | undefined {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : undefined;
+  if (!message?.trim()) return undefined;
+  return message
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*/g, "[REDACTED]")
+    .replace(/\b(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[REDACTED]@")
+    .replace(
+      /\b(authorization\s*[:=]\s*)(?:"[^"]*"|'[^']*'|(?:bearer\s+|basic\s+)?[^\s,;]+)/gi,
+      "$1[REDACTED]",
+    )
+    .replace(/\b(bearer\s+)[^\s,;]+/gi, "$1[REDACTED]")
+    .replace(/\b((?:set-cookie|cookie)\s*:\s*)[^\r\n]*/gi, "$1[REDACTED]")
+    .replace(
+      /(\b[\w-]*(?:api[_-]?key|private[_-]?key|token|secret|password|passwd|credential)[\w-]*\s*["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+      "$1[REDACTED]",
+    )
+    .replace(
+      /\b(?:sk-[A-Za-z0-9_-]+|ghp_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|xox[abposr]-[A-Za-z0-9-]+|AKIA[0-9A-Z]{16})\b/g,
+      "[REDACTED]",
+    )
+    .replace(/\p{Cc}/gu, " ")
+    .slice(0, 500);
+}
+
 export async function diagnoseEditSaveFailure(params: {
   absolutePath: string;
   baselineContent: string;
@@ -409,6 +444,8 @@ export async function diagnoseEditSaveFailure(params: {
   saveAttemptContent?: string;
   currentDocumentContent?: string;
   reviewState: EditSaveFailureRecovery["review_state"];
+  saveException?: unknown;
+  saveOutcome?: EditSaveFailureRecovery["save_outcome"];
 }): Promise<{
   save_failure: EditSaveFailureRecovery;
   next_steps: string[];
@@ -435,6 +472,7 @@ export async function diagnoseEditSaveFailure(params: {
       : diskState === "unchanged"
         ? false
         : "unknown";
+  const saveErrorMessage = boundedSaveErrorMessage(params.saveException);
   const dirtyDocumentState =
     params.saveAttemptContent === undefined ||
     params.currentDocumentContent === undefined
@@ -449,7 +487,9 @@ export async function diagnoseEditSaveFailure(params: {
       concurrent_change: concurrentChange,
       review_state: params.reviewState,
       dirty_document_state: dirtyDocumentState,
-      vscode_error_detail: "unavailable",
+      vscode_error_detail: saveErrorMessage ? "available" : "unavailable",
+      ...(saveErrorMessage ? { vscode_error_message: saveErrorMessage } : {}),
+      ...(params.saveOutcome ? { save_outcome: params.saveOutcome } : {}),
       retryable: true,
       retry_target: "editor_save",
       ...(diskErrorCode ? { disk_error_code: diskErrorCode } : {}),
@@ -465,7 +505,9 @@ export async function diagnoseEditSaveFailure(params: {
       concurrentChange === true
         ? "The file changed on disk after the edit baseline was captured; re-read it before composing another diff."
         : concurrentChange === false
-          ? "The file still matches the pre-edit disk baseline; VS Code returned false without exposing an underlying save exception."
+          ? params.saveOutcome === "exception"
+            ? "The file still matches the pre-edit disk baseline; the save threw an exception. Inspect any reported save error detail before retrying."
+            : "The file still matches the pre-edit disk baseline; VS Code returned false without exposing an underlying save exception."
           : "Disk state could not be compared with the pre-edit baseline; use read_file before retrying.",
     ],
   };

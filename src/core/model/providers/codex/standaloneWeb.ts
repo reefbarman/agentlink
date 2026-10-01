@@ -23,6 +23,14 @@ const MAX_STANDALONE_OUTPUT_TOKENS = 16_384;
 const FETCH_CHARS_PER_TOKEN = 4;
 const MAX_FETCH_PAGE_REQUESTS = 64;
 
+class CodexPageAccessError extends Error {
+  constructor() {
+    super(
+      "Codex page access failed (provider_page_internal_error). No successful page result is available. Retry the read or use another approved web transport.",
+    );
+  }
+}
+
 interface CodexStandaloneWebResponse {
   output?: unknown;
   results?: unknown;
@@ -89,11 +97,30 @@ export async function executeCodexStandaloneWeb(
         `Codex standalone web request failed (${response.status}): ${summarizeErrorResponse(responseText)}`,
       );
     }
+    let payload: CodexStandaloneWebResponse;
     try {
-      return JSON.parse(responseText) as CodexStandaloneWebResponse;
+      payload = JSON.parse(responseText) as CodexStandaloneWebResponse;
     } catch {
       throw new Error("Codex standalone web returned invalid JSON.");
     }
+    if (request.operation === "fetch" && typeof payload.output === "string") {
+      const bodyLines = payload.output
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(
+          (line) =>
+            line && !/^(?:【[^\n]*|Source:|Total lines:\s*\d+\s*$)/.test(line),
+        );
+      if (
+        bodyLines.length > 0 &&
+        bodyLines.every((line) =>
+          /^(?:L\d+:\s*)?Internal Error\s*\(\)\s*$/i.test(line),
+        )
+      ) {
+        throw new CodexPageAccessError();
+      }
+    }
+    return payload;
   };
 
   const payload = await executeRequest(prepared.body);
@@ -548,7 +575,15 @@ async function collectFetchPages(params: {
   ) {
     if (outputs.join("\n\n").length >= params.maxCharacters) break;
     const requestedLine = nextStartLine;
-    const payload = await params.executeRequest(params.prepare(requestedLine));
+    let payload: CodexStandaloneWebResponse;
+    try {
+      payload = await params.executeRequest(params.prepare(requestedLine));
+    } catch (error) {
+      if (!(error instanceof CodexPageAccessError)) throw error;
+      stalled = true;
+      nextStartLine = undefined;
+      break;
+    }
     const output =
       typeof payload.output === "string" ? payload.output.trim() : "";
     const progress = paginationMetadata(output, requestedLine);

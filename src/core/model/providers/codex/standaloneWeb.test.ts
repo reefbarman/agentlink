@@ -159,6 +159,80 @@ describe("executeCodexStandaloneWeb", () => {
     });
   });
 
+  it.each([
+    "Internal Error ()",
+    "\n L0: Internal Error ()\n",
+    "Total lines: 1\nL0: Internal Error ()",
+    '【turn0view0】 Source: open({"ref_id":"https://example.com"}); Total lines: 1\nL0: Internal Error ()',
+    'Internal Error ()\n【turn0view0】 Source: open({"ref_id":"https://example.com"}); Total lines: 1',
+  ])(
+    "rejects provider page-access errors instead of completing with error text: %s",
+    async (output) => {
+      const retainOutput = vi.fn(() => "/tmp/not-content.txt");
+      await expect(
+        executeCodexStandaloneWeb({
+          auth,
+          sessionId: "session-1",
+          model: "gpt-test",
+          operation: "fetch",
+          input: { url: "https://example.com", find: "previous_response_id" },
+          settings: normalizeCoreWebAccessSettings(),
+          fetch: (async () =>
+            new Response(JSON.stringify({ output }), {
+              status: 200,
+            })) as typeof globalThis.fetch,
+          retainOutput,
+        }),
+      ).rejects.toThrow("provider_page_internal_error");
+      expect(retainOutput).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains partial content when a continuation page fails internally", async () => {
+    const outputs = ["Total lines: 4\nL0: zero\nL1: one", "Internal Error ()"];
+    const retainOutput = vi.fn(() => "/tmp/not-complete.txt");
+    const result = await executeCodexStandaloneWeb({
+      auth,
+      sessionId: "session-1",
+      model: "gpt-test",
+      operation: "fetch",
+      input: { url: "https://example.com" },
+      settings: normalizeCoreWebAccessSettings(),
+      fetch: (async () =>
+        new Response(JSON.stringify({ output: outputs.shift() }), {
+          status: 200,
+        })) as typeof globalThis.fetch,
+      retainOutput,
+    });
+    expect(result.content_truncated).toBe(true);
+    expect(result.output_warning).toContain("did not advance");
+    expect(result.next_start_line).toBeUndefined();
+    expect(result.content).toContain("L0: zero");
+    expect(result.content).not.toContain("Internal Error");
+    expect(retainOutput).toHaveBeenCalledWith(
+      "Total lines: 4\nL0: zero\nL1: one",
+    );
+  });
+
+  it("does not mistake an article discussing internal errors for a failed read", async () => {
+    const output =
+      "Troubleshooting\nThe provider may return Internal Error () when it is unavailable.";
+    const result = await executeCodexStandaloneWeb({
+      auth,
+      sessionId: "session-1",
+      model: "gpt-test",
+      operation: "fetch",
+      input: { url: "https://example.com" },
+      settings: normalizeCoreWebAccessSettings(),
+      fetch: (async () =>
+        new Response(JSON.stringify({ output }), {
+          status: 200,
+        })) as typeof globalThis.fetch,
+    });
+    expect(result.content).toBe(output);
+    expect(result.activities[0]?.status).toBe("completed");
+  });
+
   it("retains fetched content beyond the visible preview", async () => {
     const retainOutput = vi.fn(() => "/tmp/agentlink-output-test/output.txt");
     const result = await executeCodexStandaloneWeb({

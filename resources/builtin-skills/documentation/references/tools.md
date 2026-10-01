@@ -67,6 +67,8 @@ VS Code write/edit results report `new_diagnostics` only for the edited file. Th
 
 Exact write-tool parameters and marker grammar: [write tools](complete-reference.md#write_file). Standalone CLI details: [Standalone CLI](standalone-cli.md).
 
+When a VS Code edit save fails, `save_failure.save_outcome` distinguishes `returned_false` from `exception`. A supplied exception message is capped at 500 characters, with recognised credentials redacted, and returned as `vscode_error_message` with `vscode_error_detail: "available"`; missing messages remain `"unavailable"`. This is narrow redaction, not a guarantee that arbitrary formatter output is secret-free. The dirty buffer remains available for inspection and reviewed recovery.
+
 ## Generate and present images
 
 - `generate_image` is available in Code and Architect modes and defaults to GPT-Image-2.5 Flare for fast visual exploration. Use Sunburst when editing precision or final polish matters. OpenAI API-key sessions can select validated dimensions, quality through `max`, input fidelity, background transparency, PNG/JPEG/WebP output and compression, or explicitly edit a selected image with an optional PNG mask. ChatGPT/Codex OAuth keeps legacy generation and reference-led refinement; advanced controls are rejected before spending quota until that backend is verified.
@@ -91,6 +93,8 @@ Command route, network access, shell persistence, and approval behavior depend o
 Protected Git metadata preflight also recognises narrow Git-only `&&` workflows mixing writes (`add`, `commit`, local `user.name`/`user.email` setters) with inspections (`status`, supported `diff`/`ls-files`, author/committer `var`, and `remote -v`). A match only offers reviewed native execution before launch, never automatic permission or replay. GitHub TLS recovery recognises a `gh` step in a mixed workflow or review loop when the failure output identifies a GitHub request; it requires isolating the failed step and keeps certificate checks intact.
 
 Read-only command profiles recognise bounded Git branch queries, including `git branch --all --contains HEAD`, optional reference filters, sort/format values, and explicit `--list` patterns. Branch creation, deletion, renaming, copying, upstream changes and unknown options remain rejected; query recognition does not grant network or write access.
+
+Output-filter checks distinguish balanced `$()` command substitutions used to compute arguments or select inputs from visible terminal pipelines. For example, `files=$(list | head -3)` is not an output-filter violation, while `command | head -3` still requires `output_head`. Nested or quoted substitutions preserve this distinction; unresolved syntax remains conservative. File-write checks and command approval still apply.
 
 Exact command-tool parameters: [terminal tools](complete-reference.md#execute_command).
 
@@ -121,6 +125,8 @@ Use clear ownership and a focused review scope for writable or review work. Stru
 - Native `web_search` and `web_fetch` may be available according to the configured web-access backend.
 
 A Codex OAuth `web_fetch` can follow the provider's line-addressed continuation. The VS Code host keeps the inline result bounded and returns an AgentLink temp `output_file` for additional retained content; read it with `read_file` rather than repeating the fetch. If the provider still has more than AgentLink retained, continue from `next_start_line` with `start_line`. Browser Ask Agent does not expose host temp-file paths. Continuation is based on returned line numbers, not the requested offset. Overlapping continuation pages retain only new line blocks. If a requested page returns no advancing numbered content, AgentLink stops, marks the result truncated, explains the stall in `output_warning`, and omits `next_start_line` rather than inviting a repeat loop.
+
+A Codex page-access response consisting of the provider's `Internal Error ()` marker (with optional provider headers) is a failed read, not successful page content. Existing hosted fallback may recover an initial failure; otherwise the error names `provider_page_internal_error` and advises retrying the read or using another approved web transport. If only a continuation page fails, earlier content is retained with truncation/pagination-warning metadata, without appending the error text or claiming completion. An article that merely discusses the error is not rejected.
 
 MCP configuration and trust behavior: [MCP](mcp.md). Exact native web contracts: [web access](complete-reference.md#web-access).
 

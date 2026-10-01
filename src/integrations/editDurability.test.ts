@@ -167,6 +167,103 @@ describe("commitAndVerifyEdit", () => {
     });
   });
 
+  it.each([
+    [new Error("Formatter unavailable"), "Formatter unavailable"],
+    ["Save cancelled by provider", "Save cancelled by provider"],
+    [
+      new Error(
+        "aws_secret_access_key=synthetic-value private_key=synthetic-private",
+      ),
+      "aws_secret_access_key=[REDACTED] private_key=[REDACTED]",
+    ],
+    [
+      new Error(
+        "Cookie: session=synthetic-session; other=synthetic-other\nSet-Cookie: session=synthetic-session; HttpOnly",
+      ),
+      "Cookie: [REDACTED] Set-Cookie: [REDACTED]",
+    ],
+    [
+      new Error('Authorization: "Bearer synthetic-private-token"'),
+      "Authorization: [REDACTED]",
+    ],
+    [
+      new Error("formatter: " + "x".repeat(1000)),
+      ("formatter: " + "x".repeat(1000)).slice(0, 500),
+    ],
+    [
+      new Error(
+        'password="synthetic private value" api_key=synthetic-key Authorization: Bearer synthetic-token',
+      ),
+      "password=[REDACTED] api_key=[REDACTED] Authorization: [REDACTED]",
+    ],
+    [
+      new Error(
+        "Cannot save https://user:synthetic-password@example.com/path\nTry again",
+      ),
+      "Cannot save https://[REDACTED]@example.com/path Try again",
+    ],
+  ])(
+    "retains bounded sanitised save exception details",
+    async (exception, message) => {
+      const target = await makeFile("example.ts", "old");
+      const document = makeDocument(target.absolutePath, "new", {
+        save: async () => {
+          throw exception;
+        },
+      });
+      const result = await commitAndVerifyEdit(
+        request(document, target.absolutePath, target.relativePath, "old"),
+      );
+      expect(result).toMatchObject({
+        status: "error",
+        reason: "save_failed",
+        save_failure: {
+          save_outcome: "exception",
+          vscode_error_detail: "available",
+          vscode_error_message: message,
+          document_dirty: true,
+          disk_state: "unchanged",
+        },
+      });
+      expect(await fs.readFile(target.absolutePath, "utf-8")).toBe("old");
+      expect(document.content).toBe("new");
+      expect(result.next_steps?.join(" ")).not.toContain("returned false");
+    },
+  );
+
+  it("distinguishes save false from an exception without inventing details", async () => {
+    const target = await makeFile("example.ts", "old");
+    const document = makeDocument(target.absolutePath, "new", {
+      save: async () => false,
+    });
+    const result = await commitAndVerifyEdit(
+      request(document, target.absolutePath, target.relativePath, "old"),
+    );
+    expect(result.save_failure).toMatchObject({
+      save_outcome: "returned_false",
+      vscode_error_detail: "unavailable",
+    });
+    expect(result.save_failure).not.toHaveProperty("vscode_error_message");
+  });
+
+  it("records a thrown non-message value as an exception with unavailable detail", async () => {
+    const target = await makeFile("example.ts", "old");
+    const document = makeDocument(target.absolutePath, "new", {
+      save: async () => {
+        throw undefined;
+      },
+    });
+    const result = await commitAndVerifyEdit(
+      request(document, target.absolutePath, target.relativePath, "old"),
+    );
+    expect(result.save_failure).toMatchObject({
+      save_outcome: "exception",
+      vscode_error_detail: "unavailable",
+    });
+    expect(result.save_failure).not.toHaveProperty("vscode_error_message");
+    expect(result.next_steps?.join(" ")).not.toContain("returned false");
+  });
+
   it("uses the normal document save and verifies exact disk content", async () => {
     const target = await makeFile("example.ts", "old");
     const document = makeDocument(target.absolutePath, "new");

@@ -34,7 +34,9 @@ interface ValidationResult {
  */
 export function validateCommand(command: string): ValidationResult | null {
   // Check 1: Direct file-reading commands (head/tail/cat/grep used standalone)
-  const directViolation = checkDirectFileCommands(command);
+  const directViolation =
+    checkDirectFileCommands(command) ??
+    checkDirectFileCommands(maskCommandSubstitutions(command));
   if (directViolation) return directViolation;
 
   // Check 2: Inline scripting used to write files outside write_file/apply_diff
@@ -752,12 +754,81 @@ function splitOnCompoundOperators(command: string): string[] {
   );
 }
 
-/**
- * Scan a command for unquoted pipes to head, tail, or grep.
- * Returns null if the command is clean, or a result with a rejection message.
- */
+/** Masks balanced substitutions for validation only, never for execution or approval. */
+function maskCommandSubstitutions(command: string): string {
+  const masked = command.split("");
+  const frames: Array<{
+    start: number;
+    depth: number;
+    quote: "single" | "double" | null;
+  }> = [];
+  let quote: "single" | "double" | null = null;
+  for (let index = 0; index < command.length; index++) {
+    const frame = frames.at(-1);
+    const currentQuote: "single" | "double" | null = frame
+      ? frame.quote
+      : quote;
+    const ch = command[index];
+    if (ch === "\\" && currentQuote !== "single") {
+      index++;
+      continue;
+    }
+    if (
+      currentQuote !== "single" &&
+      (ch === "`" ||
+        command.startsWith("<<", index) ||
+        command.startsWith("$'", index) ||
+        command.startsWith("${", index))
+    ) {
+      return command;
+    }
+    if (
+      currentQuote === null &&
+      ch === "#" &&
+      (index === 0 || /[\s;&|]/.test(command[index - 1]))
+    ) {
+      const newline = command.indexOf("\n", index);
+      index = newline < 0 ? command.length : newline;
+      continue;
+    }
+    if (
+      frame &&
+      currentQuote === null &&
+      command.startsWith("case", index) &&
+      /[\s;&|(]/.test(command[index - 1] ?? "") &&
+      /[\s]/.test(command[index + 4] ?? "")
+    ) {
+      return command;
+    }
+    if (currentQuote !== "single" && command.startsWith("$(", index)) {
+      frames.push({ start: index, depth: 1, quote: null });
+      index++;
+      continue;
+    }
+    if (ch === "'" && currentQuote !== "double") {
+      if (frame) frame.quote = currentQuote === "single" ? null : "single";
+      else quote = currentQuote === "single" ? null : "single";
+    } else if (ch === '"' && currentQuote !== "single") {
+      if (frame) frame.quote = currentQuote === "double" ? null : "double";
+      else quote = currentQuote === "double" ? null : "double";
+    } else if (frame && currentQuote === null) {
+      if (ch === "(") frame.depth++;
+      if (ch === ")" && --frame.depth === 0) {
+        frames.pop();
+        if (frames.length === 0) {
+          masked.fill("_", frame.start, index + 1);
+          // Preserve the dynamic-path exemption in direct file-read checks.
+          masked[frame.start] = "$";
+        }
+      }
+    }
+  }
+  return frames.length === 0 && quote === null ? masked.join("") : command;
+}
+
+/** Rejects visible output filters without treating substitution input as terminal output. */
 function detectPipedFiltering(command: string): ValidationResult | null {
-  const segments = splitOnUnquotedPipes(command);
+  const segments = splitOnUnquotedPipes(maskCommandSubstitutions(command));
   if (segments.length < 2) return null;
 
   const violations: PipeViolation[] = [];

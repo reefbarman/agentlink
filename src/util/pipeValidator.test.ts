@@ -608,26 +608,53 @@ describe("validateCommand", () => {
       expect(result!.strippedCommand).toBe("npm ls");
     });
 
-    it("omits grep suggestions contaminated by command-substitution syntax", () => {
+    it("allows grep used to compute a substituted value", () => {
       const result = validateCommand(
         "result=$(printf '%s\\n' \"$frame\" | grep -E -C 2 'EDGE|FINAL'); printf '%s\\n' \"$result\"",
       );
 
-      expect(result?.type).toBe("pipe");
-      expect(result?.message).toContain("output_grep_context: 2");
-      expect(result?.message).toContain("Set output_grep explicitly");
-      expect(result?.message).not.toContain("'EDGE|FINAL');");
-      expect(result?.message).not.toContain("Run this command instead:");
-      expect(result?.strippedCommand).toBeUndefined();
+      expect(result).toBeNull();
     });
 
-    it("omits contaminated suggestions after concatenated quoted fragments", () => {
+    it("allows quoted parentheses inside a substitution filter", () => {
       const result = validateCommand("result=$(command | grep 'EDGE'')');");
 
-      expect(result?.type).toBe("pipe");
-      expect(result?.message).toContain("Set output_grep explicitly");
-      expect(result?.message).not.toContain(`output_grep: "'EDGE'')');"`);
-      expect(result?.strippedCommand).toBeUndefined();
+      expect(result).toBeNull();
+    });
+
+    it.each([
+      "f=$(ls -t */messages.json | head -3); for x in $f; do inspect $x; done",
+      'inspect "$(list | head -3)"',
+      'value=$(inspect "$(list | head -3)" | tail -1)',
+      "value=$((1 + $(list | head -1)))",
+      "value=$(list | grep ')' | head -3)",
+      "value=$(list # ignore ) here\n | head -3)",
+      "value=$(list | head -1); other=$(list | tail -1)",
+    ])("allows input-selection pipelines: %s", (command) => {
+      expect(validateCommand(command)).toBeNull();
+    });
+
+    it.each([
+      "value=$(list | head -3); command | tail -1",
+      'command "$(list | head -3)" | grep error',
+      "value=$(list | head -3",
+      String.raw`echo $'a\'$(b' | head -1; echo ')'`,
+      "value=$(list ${pattern:-')}'} | head -3); command | tail -1",
+      "value=$(case word in pattern) list | head -3;; esac)",
+      "(list | head -3)",
+      "value='$(list | head -3)'; command | tail -1",
+      "value=\\$(list | head -3)",
+    ])("still rejects visible or unresolved output filters: %s", (command) => {
+      expect(validateCommand(command)?.type).toBe("pipe");
+    });
+
+    it("does not bypass file-write checks when substitutions are present", () => {
+      expect(validateCommand("echo $(list | head -3) > out.txt")?.type).toBe(
+        "direct",
+      );
+      expect(
+        validateCommand("inspect $(list | head -3) | tee out.txt")?.type,
+      ).toBe("direct");
     });
 
     it("preserves valid quoted grep regex punctuation", () => {
@@ -656,7 +683,7 @@ describe("validateCommand", () => {
     it.each([
       "git diff --check -- plans | grep . && echo staged plans found",
       "if git diff --check -- plans | grep .; then exit 1; fi",
-      "result=$(git status --short | grep plans)",
+
       "{ git status --short | grep plans; }",
       "git ls-files | grep generated | xargs rm",
       "git log | grep fix |",
