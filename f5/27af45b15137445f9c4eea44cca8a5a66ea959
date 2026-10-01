@@ -1,0 +1,32 @@
+src/agent/webview/components/ImagePreview.tsx
+  h_e08a86bb3a33a2 1-4,43-45,49,52-68,140-156
+  s_d700bd6c1cc906::t_0dba0d2e7aaef5 50-51,157-158
+src/agent/webview/styles/chat.css
+  h_e08a86bb3a33a2 1718-1719
+src/agent/webview/imageClipboard.ts
+  h_e08a86bb3a33a2 1-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f527af45b15137445f9c4eea44cca8a5a66ea959",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_d700bd6c1cc906": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7addf89b-1465-45f0-9379-e8d1351f2558",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
