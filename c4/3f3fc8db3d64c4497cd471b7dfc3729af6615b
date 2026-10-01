@@ -1,0 +1,110 @@
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+src/tools/sandboxDockerRecovery.ts
+  h_e08a86bb3a33a2 1-67
+src/terminal/sandbox/SandboxRuntimeProvider.ts
+  h_e08a86bb3a33a2 6,24-30
+  h_e08a86bb3a33a2 31-34
+src/terminal/sandbox/sandboxHelperProtocol.test.ts
+  h_e08a86bb3a33a2 239-242,261-275
+  s_1ee8afef3c9dd1::t_e0504e7c596520 236-238,276-278
+scripts/sandbox-protected-roots.mjs
+  h_e08a86bb3a33a2 8-20,347,351,353-358,370-372
+  h_e08a86bb3a33a2 352,373
+src/tools/executeCommand.ts
+  h_e08a86bb3a33a2 4,31,81-82,389,394,759-795,1000-1032,1037-1038,1092-1109,1111,1211-1216,1345-1367,3020,3029,3503,3512,3728-3761,3772-3781,3784-3786,3791-3805,3807,3809,3812-3813,3823-3827
+  h_e08a86bb3a33a2 3762-3766,3787-3788,3811,3814-3822
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 10,18,26,135-138,140,4800-4920,4923-4963,9124-9141,9216-9250
+  h_e08a86bb3a33a2 4535,4548,4561,4921-4922,4964-4976,9142-9166,9251-9273
+src/terminal/sandbox/sandboxHelperProtocol.ts
+  h_e08a86bb3a33a2 44-48,128-133,272-284,460,467-468,473-475
+  s_2ffcd009995e5f::t_8d421827755fdb 285-287
+src/terminal/native/NativeAgentRuntimeProvider.test.ts
+  h_e08a86bb3a33a2 309-403
+src/tools/getTerminalOutput.ts
+  h_e08a86bb3a33a2 6,248-266
+  h_e08a86bb3a33a2 267
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 97-102
+src/terminal/native/NativeAgentRuntimeProvider.ts
+  h_e08a86bb3a33a2 259-260,342,344
+scripts/sandbox-runtime-helper.mjs
+  h_e08a86bb3a33a2 2,774-776
+src/shared/toolRegistry.ts
+  h_e08a86bb3a33a2 226,231
+scripts/sandbox-interactive-helper.test.mjs
+  h_e08a86bb3a33a2 276-277,279,1009-1014,1016
+src/terminal/sandbox/SandboxHelperClient.test.ts
+  h_e08a86bb3a33a2 396-417
+scripts/sandbox-protected-roots.test.mjs
+  h_e08a86bb3a33a2 163-168,177-195,205-208,228-231,259-261,360-362,380-382,401-403,421-428
+src/terminal/sandbox/SandboxTerminalCoordinator.test.ts
+  h_e08a86bb3a33a2 3,398-478
+  s_2ffcd009995e5f::t_e9274c757e3f00 479-480
+src/terminal/sandbox/SandboxHelperClient.ts
+  h_e08a86bb3a33a2 15,238-240,326-327
+scripts/sandbox-interactive-helper.mjs
+  h_e08a86bb3a33a2 2,301-306
+  s_1ee8afef3c9dd1::t_415c42d46a13be 307-308
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 91,97-101
+  h_e08a86bb3a33a2 102
+src/tools/getTerminalOutput.test.ts
+  h_e08a86bb3a33a2 33-99
+src/terminal/sandbox/SandboxTerminalCoordinator.ts
+  h_e08a86bb3a33a2 9,48,148,462-471,511,600,626,805,925,1306-1308,1329-1331,1579,1596-1598,1719,1731-1732
+  s_307b40717453ce::t_df253cd2ed621e 1302-1305,1309,1325-1328,1332,1728-1730,1733
+src/core/capabilities/terminal.ts
+  h_e08a86bb3a33a2 279-287,289
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 682-684,689-691,710-712,717-719,727-729,735-737,759-761,767-769
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c43f3fc8db3d64c4497cd471b7dfc3729af6615b",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_1ee8afef3c9dd1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fca1d54e-fe88-4024-a524-b89a37c06163",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_2ffcd009995e5f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6de6f537-8140-4fd5-b545-7db32f8f726a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_307b40717453ce": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "be4faa0a-d319-494e-bab8-a742afba37fa",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
