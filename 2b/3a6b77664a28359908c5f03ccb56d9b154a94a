@@ -1,0 +1,70 @@
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 93-95
+src/tools/executeCommand.ts
+  h_e08a86bb3a33a2 27-28,495,500-533,1147-1148,3275-3277,3297-3299,3364,3368-3369,3496-3515,3760,3773-3782,4341-4344,4349,4355,4361
+  h_e08a86bb3a33a2 1149,2883-2889,3365-3367,3370,3516,4315,4345-4348,4350,4363-4367
+src/terminal/sandbox/SandboxTerminalCoordinator.test.ts
+  h_e08a86bb3a33a2 11,245-279
+scripts/sandbox-protected-roots.mjs
+  h_e08a86bb3a33a2 82-97,99,110,113,117,121,127-128,132-134,178,257,259-270,280,284-290,321-323,325-326
+  h_e08a86bb3a33a2 98,129-131,137,147,190
+src/terminal/sandbox/SandboxHelperClient.ts
+  h_e08a86bb3a33a2 11-13,99,109-111,166-167,191-193,202-204,220-231,244-246,262-263,307,309-310,316-317,320-331
+  h_e08a86bb3a33a2 108,112,164-165,168,190,194,201,205,243,247,314-315,318
+scripts/sandbox-interactive-helper.mjs
+  h_e08a86bb3a33a2 282-283,285-291,834
+scripts/sandbox-interactive-helper.test.mjs
+  h_e08a86bb3a33a2 590-593
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 9,11,159-413,3638-3650,3663-3664,3674-3675,3690-3691,3701-3702,3704,3743-3750,3752-3760,3770,9590
+  h_e08a86bb3a33a2 414-415,3621-3637,3651-3662,3665-3672,3676-3686,3688-3689,3692-3699,3703,3705-3713,3715-3728,3730-3742,3761-3769,3771-3782,9575-9587,9589,9591-9597,9599-9614
+src/approvals/ApprovalPanelProvider.ts
+  h_e08a86bb3a33a2 321,360,630,740
+src/terminal/sandbox/SandboxTerminalCoordinator.ts
+  h_e08a86bb3a33a2 44-45,481-485,496,584,609
+src/approvals/ApprovalPanelProvider.test.ts
+  h_e08a86bb3a33a2 83-111
+scripts/sandbox-protected-roots.test.mjs
+  h_e08a86bb3a33a2 50-94,392-410,440-456
+  h_e08a86bb3a33a2 411-416,457-461
+src/terminal/sandbox/SandboxRuntimeProvider.ts
+  h_e08a86bb3a33a2 37-78
+src/core/capabilities/terminal.ts
+  h_e08a86bb3a33a2 44
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 80-86
+src/terminal/sandbox/SandboxHelperClient.test.ts
+  h_e08a86bb3a33a2 130-187
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+src/util/gitMetadataWriterClassifier.test.ts
+  h_e08a86bb3a33a2 149-153,247-250,284-287
+src/terminal/sandbox/sandboxHelperProtocol.ts
+  h_e08a86bb3a33a2 109,437
+  h_e08a86bb3a33a2 436,438-439
+src/util/gitMetadataWriterClassifier.ts
+  h_e08a86bb3a33a2 693-712,718,742,750-752,755-757
+  h_e08a86bb3a33a2 713,740-741
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2b3a6b77664a28359908c5f03ccb56d9b154a94a",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
