@@ -19,6 +19,44 @@ import type { OpenImageInEditor } from "./ImagePreview";
 import { TranscriptMessageList } from "./TranscriptMessageList";
 import { useAutoScroll } from "./useAutoScroll";
 
+const JUMP_TO_LATEST_MIN_DISTANCE = 24;
+const USER_MESSAGE_ANCHOR_TOLERANCE = 4;
+const USER_MESSAGE_JUMP_OFFSET = 8;
+
+function scrollPaddingTop(container: HTMLElement): number {
+  const value = Number.parseFloat(getComputedStyle(container).scrollPaddingTop);
+  return Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * Finds the nearest rendered user message whose top sits above the current
+ * reading position. User messages are in document order, so a binary search
+ * keeps scroll handling cheap for long transcripts.
+ */
+function findPreviousUserMessage(
+  container: HTMLElement,
+  content: HTMLElement,
+): HTMLElement | null {
+  const userMessages = content.querySelectorAll<HTMLElement>(".user-message");
+  const readingTop =
+    container.getBoundingClientRect().top +
+    scrollPaddingTop(container) -
+    USER_MESSAGE_ANCHOR_TOLERANCE;
+  let low = 0;
+  let high = userMessages.length - 1;
+  let found: HTMLElement | null = null;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (userMessages[mid].getBoundingClientRect().top < readingTop) {
+      found = userMessages[mid];
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return found;
+}
+
 interface ChatViewProps {
   messages: ChatMessage[];
   streaming: boolean;
@@ -110,10 +148,15 @@ export function ChatView({
     contentRef,
     shouldAutoScrollRef,
     markProgrammaticScroll,
+    scrollToBottom,
     scrollToBottomAfterLayout,
     cancelPendingScrolls,
     handleScroll,
   } = useAutoScroll({ contentPresent: hasMessages });
+  const [jumpTargets, setJumpTargets] = useState({
+    previousUserMessage: false,
+    latest: false,
+  });
   const normalizedInitialMessageLimit =
     initialMessageLimit !== undefined && initialMessageLimit > 0
       ? initialMessageLimit
@@ -214,6 +257,82 @@ export function ChatView({
     el.scrollTop = 0;
   }, [containerRef, markProgrammaticScroll]);
 
+  const updateJumpTargets = useCallback(() => {
+    const container = containerRef.current;
+    const content = contentRef.current;
+    if (!container || !content) return;
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    const latest =
+      !shouldAutoScrollRef.current &&
+      distanceFromBottom > JUMP_TO_LATEST_MIN_DISTANCE;
+    const previousUserMessage =
+      findPreviousUserMessage(container, content) !== null;
+    setJumpTargets((current) =>
+      current.latest === latest &&
+      current.previousUserMessage === previousUserMessage
+        ? current
+        : { latest, previousUserMessage },
+    );
+  }, [containerRef, contentRef, shouldAutoScrollRef]);
+
+  const handleTranscriptScroll = useCallback(() => {
+    handleScroll();
+    updateJumpTargets();
+  }, [handleScroll, updateJumpTargets]);
+
+  useEffect(() => {
+    updateJumpTargets();
+  }, [scrollKey, visibleMessages, updateJumpTargets]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const content = contentRef.current;
+    if (!container || !content || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => updateJumpTargets());
+    observer.observe(container);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [hasMessages, containerRef, contentRef, updateJumpTargets]);
+
+  const jumpToPreviousUserMessage = useCallback(() => {
+    const container = containerRef.current;
+    const content = contentRef.current;
+    if (!container || !content) return;
+    const target = findPreviousUserMessage(container, content);
+    if (!target) return;
+    shouldAutoScrollRef.current = false;
+    cancelPendingScrolls();
+    const offset =
+      target.getBoundingClientRect().top -
+      container.getBoundingClientRect().top -
+      Math.max(scrollPaddingTop(container), USER_MESSAGE_JUMP_OFFSET);
+    container.scrollTop = Math.max(0, container.scrollTop + offset);
+    markProgrammaticScroll(container.scrollTop);
+    updateJumpTargets();
+  }, [
+    containerRef,
+    contentRef,
+    shouldAutoScrollRef,
+    cancelPendingScrolls,
+    markProgrammaticScroll,
+    updateJumpTargets,
+  ]);
+
+  const jumpToLatest = useCallback(() => {
+    shouldAutoScrollRef.current = true;
+    scrollToBottom();
+    scrollToBottomAfterLayout();
+    updateJumpTargets();
+  }, [
+    shouldAutoScrollRef,
+    scrollToBottom,
+    scrollToBottomAfterLayout,
+    updateJumpTargets,
+  ]);
+
   if (!hasMessages) {
     return (
       <div class="chat-messages empty">
@@ -239,7 +358,24 @@ export function ChatView({
           <span class="prompt-preview-text">{previewLabel}</span>
         </button>
       )}
-      <div class="chat-messages" ref={containerRef} onScroll={handleScroll}>
+      <div
+        class="chat-messages"
+        ref={containerRef}
+        onScroll={handleTranscriptScroll}
+      >
+        {jumpTargets.previousUserMessage && (
+          <div class="transcript-jump transcript-jump-top">
+            <button
+              type="button"
+              class="transcript-jump-button"
+              onClick={jumpToPreviousUserMessage}
+              title="Previous user message"
+              aria-label="Jump to previous user message"
+            >
+              <i class="codicon codicon-arrow-up" />
+            </button>
+          </div>
+        )}
         <div class="chat-message-list" ref={contentRef}>
           {hiddenMessageCount > 0 && normalizedInitialMessageLimit && (
             <button
@@ -318,6 +454,19 @@ export function ChatView({
             streamingMetricsScope={streamingMetricsScope}
           />
         </div>
+        {jumpTargets.latest && (
+          <div class="transcript-jump transcript-jump-bottom">
+            <button
+              type="button"
+              class="transcript-jump-button"
+              onClick={jumpToLatest}
+              title="Jump to latest"
+              aria-label="Jump to latest message"
+            >
+              <i class="codicon codicon-arrow-down" />
+            </button>
+          </div>
+        )}
       </div>
     </>
   );

@@ -19,6 +19,8 @@ Switch with `/mode <slug>` or the mode selector. Default mode: `agentlink.defaul
 
 Consecutive model, thinking-level, mode, and command-approval change dividers share one row in VS Code and browser chat, including changes delivered by separate events. Intervening transcript content keeps changes separate; repeated adjacent changes to the same setting show its original and final values.
 
+Scrolling a chat transcript shows small floating jump buttons in VS Code and browser chat. The ↑ button at the top appears when one of your earlier messages is above the current view; each click jumps to the nearest one, stepping backwards through your prompts and pausing automatic following. The ↓ button at the bottom appears when you are away from the latest output; clicking it returns to the bottom and resumes following. Navigation covers loaded messages only; use **Show earlier messages** to load older history.
+
 ## Standalone CLI preview
 
 The [macOS Apple Silicon CLI preview](standalone-cli.md#github-release-preview) can run multi-turn coding sessions without VS Code or Electron. It supports Codex OAuth, OpenAI API keys, configured OpenAI-compatible endpoints, durable sessions partitioned by canonical project identity, project-relative bounded file inspection, terminal-reviewed baseline-hash writes and patches, exact durability evidence, reviewed non-interactive commands with observable retained processes, approved stdio and HTTPS MCP tools, up to two scoped background writers, optional managed TypeScript/JavaScript intelligence, overlapping CLI-writer rejection, explicit resume/delete, Ctrl+C cancellation, and conservative limits checked before every provider dispatch. See [Standalone CLI](standalone-cli.md).

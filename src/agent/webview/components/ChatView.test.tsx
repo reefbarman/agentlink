@@ -327,8 +327,11 @@ describe("ChatView message windowing", () => {
       }),
     );
 
-    expect(resizeObserverInstances).toHaveLength(1);
+    // Auto-scroll follows content growth; jump navigation watches both the
+    // viewport and content so its buttons track layout changes.
+    expect(resizeObserverInstances).toHaveLength(2);
     expect(resizeObserverInstances[0]?.observe).toHaveBeenCalledTimes(1);
+    expect(resizeObserverInstances[1]?.observe).toHaveBeenCalledTimes(2);
   });
 
   it("restores the complete transcript when the responsive limit is removed", () => {
@@ -370,5 +373,108 @@ describe("ChatView message windowing", () => {
     expect(
       screen.queryByRole("button", { name: /earlier messages/ }),
     ).toBeNull();
+  });
+});
+
+describe("ChatView jump navigation", () => {
+  const MESSAGE_HEIGHT = 100;
+  const VIEWPORT_HEIGHT = 300;
+
+  beforeEach(() => {
+    globalThis.requestAnimationFrame = vi.fn(
+      (callback: FrameRequestCallback) => {
+        callback(0);
+        return 1;
+      },
+    );
+    globalThis.cancelAnimationFrame = vi.fn();
+    globalThis.ResizeObserver = class {
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+    } as unknown as typeof ResizeObserver;
+  });
+
+  afterEach(() => cleanup());
+
+  function renderWithGeometry(messageCount: number) {
+    const { container } = render(
+      h(ChatView, {
+        messages: makeMessages(messageCount),
+        streaming: false,
+        sessionId: "session-1",
+      }),
+    );
+    const transcript = container.querySelector<HTMLElement>(".chat-messages")!;
+    const scrollHeight = messageCount * MESSAGE_HEIGHT;
+    const maxScrollTop = Math.max(0, scrollHeight - VIEWPORT_HEIGHT);
+    let scrollTop = 0;
+    Object.defineProperties(transcript, {
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+      clientHeight: { configurable: true, get: () => VIEWPORT_HEIGHT },
+      scrollTop: {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = Math.min(Math.max(0, value), maxScrollTop);
+        },
+      },
+    });
+    transcript.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+    transcript
+      .querySelectorAll<HTMLElement>(".user-message")
+      .forEach((message, index) => {
+        message.getBoundingClientRect = () =>
+          ({ top: index * MESSAGE_HEIGHT - scrollTop }) as DOMRect;
+      });
+    const scrollTo = (value: number) => {
+      scrollTop = value;
+      fireEvent.scroll(transcript);
+    };
+    return { transcript, scrollTo };
+  }
+
+  const previousButton = () =>
+    screen.queryByRole("button", { name: "Jump to previous user message" });
+  const latestButton = () =>
+    screen.queryByRole("button", { name: "Jump to latest message" });
+
+  it("hides both buttons when the whole transcript fits in view", () => {
+    const { scrollTo } = renderWithGeometry(3);
+    scrollTo(0);
+
+    expect(previousButton()).toBeNull();
+    expect(latestButton()).toBeNull();
+  });
+
+  it("shows only the previous-message button while following the latest output", () => {
+    const { scrollTo } = renderWithGeometry(10);
+    scrollTo(700);
+
+    expect(previousButton()).toBeTruthy();
+    expect(latestButton()).toBeNull();
+  });
+
+  it("steps backwards through user messages and pauses auto-follow", () => {
+    const { transcript, scrollTo } = renderWithGeometry(10);
+    scrollTo(350);
+    expect(latestButton()).toBeTruthy();
+
+    fireEvent.click(previousButton()!);
+    expect(transcript.scrollTop).toBe(292);
+
+    fireEvent.click(previousButton()!);
+    expect(transcript.scrollTop).toBe(192);
+    expect(latestButton()).toBeTruthy();
+  });
+
+  it("returns to the latest output and hides the jump-to-latest button", () => {
+    const { transcript, scrollTo } = renderWithGeometry(10);
+    scrollTo(350);
+
+    fireEvent.click(latestButton()!);
+
+    expect(transcript.scrollTop).toBe(700);
+    expect(latestButton()).toBeNull();
   });
 });
