@@ -1,0 +1,275 @@
+apps/desktop/src/DesktopMcpWindow.ts
+  h_e08a86bb3a33a2 1-187
+packages/node-host/src/McpClientHub.ts
+  h_e08a86bb3a33a2 102-105,109,494,803,811-822,857,1120-1131,1136,2243-2244
+  h_e08a86bb3a33a2 463,465,493,495,647,804,823,858,1132,1134,1137,1145,2245-2246,2256,2265,2279
+src/agent/AgentEngine.test.ts
+  h_e08a86bb3a33a2 354-497
+src/browser-gateway/helper/StandaloneAskAgentMcpRuntime.test.ts
+  h_e08a86bb3a33a2 122,204-206,485,558-704,759-760,881,896-898,905-907,909
+  h_e08a86bb3a33a2 207,705-706,758,761
+src/browser-gateway/helper/StandaloneMcpOAuthRuntime.test.ts
+  h_e08a86bb3a33a2 24,33,111-220,223-254,288-352
+  h_e08a86bb3a33a2 221-222,353-355
+src/agent/ChatViewProvider.ts
+  h_e08a86bb3a33a2 245-247,1242,3894-3905,3916,3924-3925,3945,4115-4120,4159-4161,4169-4174
+  h_e08a86bb3a33a2 244,248
+src/browser-gateway/helper/StandaloneAskAgentMcpRuntime.integration.test.ts
+  h_e08a86bb3a33a2 1-349
+src/agent/AgentSessionManager.ts
+  h_e08a86bb3a33a2 4358,7610-7612,7661-7662,7706-7721,7775
+  h_e08a86bb3a33a2 7659-7660
+packages/protocol/src/toolResult.ts
+  h_e08a86bb3a33a2 2,50-51
+src/browser-gateway/helper/StandaloneMcpManagerOperations.test.ts
+  h_e08a86bb3a33a2 1-144
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 804,849,854,867-868,1222
+  h_e08a86bb3a33a2 848,850-853,855-857
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 93,95-96,109-110
+src/integrations/newDiagnostics.test.ts
+  h_e08a86bb3a33a2 108,111-114
+  h_e08a86bb3a33a2 109-110,115
+src/browser-gateway/helper/standaloneMcpApprovalPolicy.test.ts
+  h_e08a86bb3a33a2 1-179
+src/integrations/diagnosticsQuiescence.ts
+  h_e08a86bb3a33a2 9-10,29,41-44,56,62,64,66
+  s_81d91e1e158397::t_83c688f8c7dc71 39-40,45
+src/tools/executeCommand.ts
+  h_e08a86bb3a33a2 163-164,431-432,757-813,904-905,2350-2351,2910,4878,4906
+  h_e08a86bb3a33a2 2349,2352
+src/browser-gateway/helper/StandaloneMcpOAuthRuntime.ts
+  h_e08a86bb3a33a2 9,16,31-41,48,59,61,63,75-86,88-95,106,113-134,139-141,144-177,208-209,233,235-236,246-248,250-252,261,263-264,266-269,273,277,282,287-288,318,349
+  h_e08a86bb3a33a2 87,136-138,142,243-245,249,272,310,314
+src/browser-gateway/helper/standaloneMcpApprovalPolicy.ts
+  h_e08a86bb3a33a2 1-63
+src/tools/proposeMemory.ts
+  h_e08a86bb3a33a2 296-302,309-311,323,325,327-328,397-406,408-412,414,416-417,419,429,431,433-434
+  h_e08a86bb3a33a2 275-281,283-295,303-307,313-322,358-364,366-396,420-428
+src/approvals/webview/components/McpCard.tsx
+  h_e08a86bb3a33a2 54-60,99,104,111,121-122,130,141-149
+src/browser-gateway/browserGatewayRequestTrust.test.ts
+  h_e08a86bb3a33a2 7,91-130
+  h_e08a86bb3a33a2 131-132
+src/browser-gateway/webview/index.tsx
+  h_e08a86bb3a33a2 7-8,36-44,50-59
+  h_e08a86bb3a33a2 60
+src/agent/skillToolExposure.test.ts
+  h_e08a86bb3a33a2 21-37,41-42,44-49,204-220
+  h_e08a86bb3a33a2 38-40,43
+apps/desktop/src/main.ts
+  h_e08a86bb3a33a2 11,42-46,49,76-81,323,489-497,643-652,654-682,704-706
+  h_e08a86bb3a33a2 653,683,707
+src/agent/persistenceContracts.ts
+  h_e08a86bb3a33a2 90
+apps/desktop/src/DesktopMcpWindow.test.ts
+  h_e08a86bb3a33a2 1-170
+src/browser-gateway/webview/desktop.css
+  h_e08a86bb3a33a2 2-315,411-426,820-935
+  h_e08a86bb3a33a2 427-428,936-949
+src/approvals/commandApprovalReview.test.ts
+  h_e08a86bb3a33a2 183-184,220-223,245-246,258-260,329-474,754-767
+  h_e08a86bb3a33a2 768
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_e08a86bb3a33a2 4,32-35,37,40-41,8275-8300,8302-8332,8334-8338,8341-8559,8561-8566,8568-8572,8576-8577,8579-8585,8587-8616,8618-8620,8622-8633,8636-8648,8650-8654,8656-8660,8662-8678,8680-8743,8745-8769,8777-8831,8833-8862,8864-8875,8877,8879-8920,8922-8968,8970-8973,8975-8978,8980-8983,8985-8987,8990-9029,9031-9033,9035-9036,9038,9058,9063,9076-9079,9081
+  h_e08a86bb3a33a2 8770-8776,8863,8876,8878,8921,8969,8974,8979,8984,8988-8989,9030,9034,9037,9039-9057,9059-9062,9064-9075,9080,9082
+src/agent/types.ts
+  h_e08a86bb3a33a2 53-54,134
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 23-24,35,39,41,47,88,90,107-108,137-138,149,159
+  h_e08a86bb3a33a2 89,160
+src/browser-gateway/helper/HelperHttpRouter.ts
+  h_e08a86bb3a33a2 106-107
+  h_e08a86bb3a33a2 104-105,108
+resources/builtin-skills/documentation/references/mcp.md
+  h_e08a86bb3a33a2 13-26,91-93,95
+src/tools/readFile.ts
+  h_e08a86bb3a33a2 267-268,270-272,278-282,292-294,1066-1083
+  h_e08a86bb3a33a2 269,273-274,290-291,295
+src/approvals/commandTierClassifier.ts
+  h_e08a86bb3a33a2 1048-1074,1076,1086-1087
+src/tools/readFile.test.ts
+  h_e08a86bb3a33a2 262-299
+src/browser-gateway/helper/StandaloneMcpHubOAuthProvider.ts
+  h_e08a86bb3a33a2 93-94
+src/browser-gateway/browserGatewayRequestTrust.ts
+  h_e08a86bb3a33a2 43-69
+resources/builtin-skills/documentation/references/getting-started.md
+  h_e08a86bb3a33a2 51-52
+src/approvals/typeSafeGuardianShadow.test.ts
+  h_e08a86bb3a33a2 194-203
+src/shared/desktopBridge.ts
+  h_e08a86bb3a33a2 31-35,55-64
+src/agent/AgentEngine.ts
+  h_e08a86bb3a33a2 719,3037,3173,3206,3538-3539
+packages/protocol/build-cjs.mjs
+  h_e08a86bb3a33a2 866
+src/browser-gateway/webview/DesktopMcpManager.test.tsx
+  h_e08a86bb3a33a2 1-339
+packages/protocol/src/structuredQuestion.ts
+  h_e08a86bb3a33a2 62-79,84-145
+src/approvals/webview/styles/approval.css
+  h_e08a86bb3a33a2 920-926
+src/agent/ChatViewProvider.test.ts
+  h_e08a86bb3a33a2 4246-4256
+src/browser-gateway/helper/StandaloneAskAgentMcpRuntime.ts
+  h_e08a86bb3a33a2 24,42,49,117-122,160-163,165,174-176,197-198,206-231,238-241,254-256,301,303,474,476,493,498,500-502,504-508,513-516,518,522,544,568,572-577,579-615,617,624,627,630-631,635-641,644,650,667-668,670,695,713,735-736,746,758-762,764,766-769,771,774,778-795,798,801-802,806-808,835-849,851-858,893,923-924,938,958,970,984,995-999,1006-1054,1057-1062,1068,1072,1089,1091,1094,1100-1115,1119-1126,1128-1132,1136-1137,1143,1148-1150,1152-1153,1155-1159,1165-1171,1175,1543,1587-1596
+  h_e08a86bb3a33a2 164,232-233,494,535,567,569-571,616,618-623,625-626,628-629,632-634,642-643,645-649,651-653,755-757,763,770,1055-1056,1063-1064,1070-1071,1073,1116-1118,1127,1133-1135,1138-1140,1151,1154,1172-1173,1544-1545,1597
+src/shared/toolRegistry.ts
+  h_e08a86bb3a33a2 56,247,252
+src/tools/context/getContext.test.ts
+  h_e08a86bb3a33a2 169,902,904-906,910-957
+  h_e08a86bb3a33a2 903,907,958
+src/browser-gateway/BrowserGatewayServer.ts
+  h_e08a86bb3a33a2 32,36,2607-2623,2627,2629,2651,2673-2693
+  h_e08a86bb3a33a2 2694
+src/util/pipeValidator.ts
+  h_e08a86bb3a33a2 36-37,41,43-44,115-132,139-140,171,277,322-326,328,330-332,361,454,469-471
+  h_e08a86bb3a33a2 35,38,42,45,133,138,141
+src/approvals/commandApprovalReview.ts
+  h_e08a86bb3a33a2 45-47,49,51,89,246,518,523-525,560,573,577,596-597,645-700
+  h_e08a86bb3a33a2 521-522,526
+src/integrations/editorRecoveryPolicy.ts
+  h_e08a86bb3a33a2 1
+src/integrations/diagnosticsQuiescence.test.ts
+  h_e08a86bb3a33a2 9-11,13-14,31-32,75,148
+  h_e08a86bb3a33a2 6-8,12,30,33
+src/browser-gateway/helper/helperRouteFamilies.ts
+  h_e08a86bb3a33a2 29,115-124,292,338-341
+  h_e08a86bb3a33a2 291,342
+src/browser-gateway/helper/StandaloneMcpManagerOperations.ts
+  h_e08a86bb3a33a2 1-153
+src/tools/editorState.ts
+  h_e08a86bb3a33a2 16,25-31,60,62,66,86,88,156,172-174,176-177,262,264,266-270,284-285
+  h_e08a86bb3a33a2 175,265
+src/browser-gateway/helper/standaloneMcpOAuthPolicy.ts
+  h_e08a86bb3a33a2 1-2,4-6
+src/browser-gateway/helper/HelperHttpRouter.test.ts
+  h_e08a86bb3a33a2 122-172
+src/agent/AgentSession.ts
+  h_e08a86bb3a33a2 1118,1124-1130,1133-1136
+  h_e08a86bb3a33a2 1131-1132,1137
+src/agent/backgroundModelRouter.ts
+  h_e08a86bb3a33a2 90-100
+src/tools/editorState.test.ts
+  h_e08a86bb3a33a2 9,174,200-337
+  h_e08a86bb3a33a2 173,338
+src/shared/toolSchemas.ts
+  h_e08a86bb3a33a2 244,250,256,302,1068
+src/tools/proposeMemory.test.ts
+  h_e08a86bb3a33a2 15,26,67,1128,1157
+src/adapters/vscode/editReviewCapabilities.ts
+  h_e08a86bb3a33a2 500,524,679,702,741,748,758-761,768,771,778-779
+  h_e08a86bb3a33a2 742-747,749-757,762-767,769
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 24,2764-2768,2803-2808,2840,2843-2855,2860,2873,2893,4479-4485,4488-4493,4512,4587,4589,4592-4602,4604-4608,4633-4636,4639-4641,6607
+  h_e08a86bb3a33a2 2779,2809-2811,2813-2832,2834-2839,2841,2856-2859,2861-2867,2869-2872,2874-2888,2890-2892,2894,4486-4487,4494,4588,4590-4591,4603,4609-4610,4637-4638,4642
+src/agent/backgroundModelRouter.test.ts
+  h_e08a86bb3a33a2 96-135
+apps/desktop/src/chatPreload.ts
+  h_e08a86bb3a33a2 7,58-84
+src/approvals/webview/components/McpCard.test.tsx
+  h_e08a86bb3a33a2 110-178
+src/integrations/editDurability.ts
+  h_e08a86bb3a33a2 18,460,481,516,518
+  h_e08a86bb3a33a2 459,480
+CHANGELOG.md
+  h_e08a86bb3a33a2 7-15,24-26
+  h_e08a86bb3a33a2 27
+src/core/tools/types.ts
+  h_e08a86bb3a33a2 98
+src/browser-gateway/BrowserGatewayServer.test.ts
+  h_e08a86bb3a33a2 1437-1510
+src/approvals/typeSafeGuardianShadow.ts
+  h_e08a86bb3a33a2 61-62
+src/integrations/DiffViewProvider.test.ts
+  h_e08a86bb3a33a2 542,547-550,572-583,612-613,617,643-648,683-715,717-750,752-766
+  h_e08a86bb3a33a2 545-546,551,584,751
+apps/desktop/src/chatPreload.test.ts
+  h_e08a86bb3a33a2 49,53-54,57,135-164
+src/approvals/commandTierClassifier.test.ts
+  h_e08a86bb3a33a2 37-79
+src/agent/AgentSessionManager.background.test.ts
+  h_e08a86bb3a33a2 301-389,5580-5599,5612
+src/core/capabilities/readSearch.ts
+  h_e08a86bb3a33a2 97,99-101,196-197,199-202
+  h_e08a86bb3a33a2 96,98,102-103,198,203-204
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 59,6350,6356-6357,6360-6364,6809-6817,6819-6826,7995-8005,8007-8009
+  h_e08a86bb3a33a2 6358-6359,6818,8006,8010
+src/browser-gateway/webview/DesktopMcpManager.tsx
+  h_e08a86bb3a33a2 1-522
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 780-783,824,828-844,4628,4645-4657,4854-4893,6264-6349
+  h_e08a86bb3a33a2 845-846,4626-4627,4629,4658-4659,4894,6350
+src/agent/toolAdapter.ts
+  h_e08a86bb3a33a2 26,218-219,814,1438-1440,1520-1537,1540,2025-2026,2377,2412-2416,2419-2437,2741-2750,2849-2851,4416,4980-4982
+  h_e08a86bb3a33a2 217,220,2417-2418,2438-2439
+src/browser-gateway/helper/browserGatewayHelper.ts
+  h_e08a86bb3a33a2 49,95-98,107-109,111,354,1038-1070,1072,1114,1184-1189,1315-1318,1326-1329,1335-1338,1609,1770-1771,2037-2038,2519,2621,4074-4234,4244-4249,4257-4259,4266,4269,4271,4273,4275-4276,4281-4427,4440-4443,4460,4488,4493-4495,4540,4544-4546,4556-4557,4560,4564,4586,4591-4596,4605-4609,4615,4620-4622,5154-5156,5158-5219,5226-5236,5238,6305-6307,6521-6522,6531-6532,6546-6554,6591-6594,6678-6680,8486,8575,8753,8832,8884,9036,9163-9168,10765-10770
+  h_e08a86bb3a33a2 94,1071,4235-4238,4256,4260-4265,4267,4428-4429,4437-4439,4444,4485-4487,4489-4492,4496,4558-4559,4612-4614,4616-4619,4623,5157,5220,5237,6311,6520,6523,6530,6533,6555,6595,10771
+src/browser-gateway/helper/standaloneMcpOAuthPolicy.test.ts
+  h_e08a86bb3a33a2 1,3,5,7-13,16-22,24-31
+  h_e08a86bb3a33a2 15,32
+src/util/pipeValidator.test.ts
+  h_e08a86bb3a33a2 3,5-10,15-74,462-463,598-599,603,608-609,612-613,618-619
+  h_e08a86bb3a33a2 4,461,464,597,600,607,610,617,620
+src/agent/AgentSessionManager.test.ts
+  h_e08a86bb3a33a2 4862-4960
+src/agent/systemPrompt.ts
+  h_e08a86bb3a33a2 223
+src/extension.ts
+  h_e08a86bb3a33a2 3103
+src/core/tools/nativeToolDisclosure.ts
+  h_e08a86bb3a33a2 262-298
+src/integrations/newDiagnostics.ts
+  h_e08a86bb3a33a2 172,174-176,182
+  h_e08a86bb3a33a2 173
+src/tools/context/getContext.ts
+  h_e08a86bb3a33a2 423,425-428,431,433,448-456
+  h_e08a86bb3a33a2 422,424,429-430,446-447,457
+src/adapters/vscode/editReviewCapabilities.test.ts
+  h_e08a86bb3a33a2 151-152
+src/integrations/DiffViewProvider.ts
+  h_e08a86bb3a33a2 280-281,283,306-308,419-420,425-426,435,440-441,448,719-720,737-741,749-750,1001-1005,1034-1037,1083-1084,1096-1097,1115-1116,1118-1125,1134-1139,1146-1150
+  h_e08a86bb3a33a2 282,309-310,1117,1151
+src/core/tools/nativeToolDisclosure.test.ts
+  h_e08a86bb3a33a2 6,29-58
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 11-13,45-47,79-81,101-103,123-125,157-159,191-193,213-215,235-237,269-271,303-305,325-327,347-349,381-383,415-417,437-439,459-461,493-495,527-529,549-551,571-573,605-607,639-641,661-663,682-684,689-691,696-698,703-705,710-712,717-719,727-729,735-737,743-745,751-753,759-761,767-769
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 7-15,24-27
+src/agent/McpClientHub.oauth.test.ts
+  h_e08a86bb3a33a2 506
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bd164d435aab87b0e245084fe7c6991e4075fe21",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_81d91e1e158397": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8d36d4ce-eccc-4e33-bca9-79757179e156",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
