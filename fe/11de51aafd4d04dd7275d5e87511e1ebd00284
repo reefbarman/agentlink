@@ -1,0 +1,51 @@
+src/terminal/native/NativeAgentTerminalCoordinator.test.ts
+  h_e08a86bb3a33a2 316,683,685,689,698,708-709
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 748-755,783,788-790,792-793
+  h_e08a86bb3a33a2 746-747
+src/shared/toolSchemas.ts
+  h_e08a86bb3a33a2 1163
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 76,107-108,129
+src/util/gitMetadataWriterClassifier.ts
+  h_e08a86bb3a33a2 702-762,765,823-825,871-872
+src/tools/applyDiff.handler.test.ts
+  h_e08a86bb3a33a2 296-334
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-8
+src/terminal/native/NativeAgentTerminalCoordinator.ts
+  h_e08a86bb3a33a2 626
+src/util/gitMetadataWriterClassifier.test.ts
+  h_e08a86bb3a33a2 160-170,331-345
+  h_e08a86bb3a33a2 346
+src/terminal/native/NativeAgentRuntimeProvider.ts
+  h_e08a86bb3a33a2 39,80,101-103,336
+src/tools/applyDiff.ts
+  h_e08a86bb3a33a2 102-109
+src/shared/applyDiffFormat.ts
+  h_e08a86bb3a33a2 13
+src/terminal/native/NativeAgentRuntimeProvider.test.ts
+  h_e08a86bb3a33a2 149,180,207,263,300,314,343,395,417,447,569,587-683,692,720,752,788,820,833
+src/tools/applyDiff.test.ts
+  h_e08a86bb3a33a2 1061-1087
+src/shared/toolRegistry.ts
+  h_e08a86bb3a33a2 231
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 682-684,689-691,710-712,717-719,727-729,735-737,759-761,767-769
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fe11de51aafd4d04dd7275d5e87511e1ebd00284",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
