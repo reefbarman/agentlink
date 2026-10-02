@@ -1,0 +1,94 @@
+src/terminal/native/NativeAgentTerminalCoordinator.ts
+  h_e08a86bb3a33a2 749,1139,1151-1152,1154,1174-1182,1184-1185
+  h_e08a86bb3a33a2 1183
+src/integrations/editDurability.ts
+  h_e08a86bb3a33a2 279,290-292,455,458,469,472-480,510-512
+  h_e08a86bb3a33a2 513-518
+src/tools/context/getContext.ts
+  h_e08a86bb3a33a2 33,41-42,82-90,111-112,116-117,140-157,160-162,164,172-175,178-192,284-290,292-297,299-334,336
+  h_e08a86bb3a33a2 109-110,113,158-159,171
+src/terminal/native/NativeAgentRuntimeProvider.test.ts
+  h_e08a86bb3a33a2 28-40,188,293,309,313,347,442,448,451,569,593,625-626
+  s_0ada5ce64f7388::t_c88f8686b957ad 592,594,627
+src/terminal/native/NativeAgentTerminalCoordinator.test.ts
+  h_e08a86bb3a33a2 175-204,897-898,905,1277-1278,1285,1287
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-12
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 25-26,35,119,129-130
+  h_e08a86bb3a33a2 36
+src/core/tools/readFileViews.ts
+  h_e08a86bb3a33a2 23
+src/tools/context/getContext.test.ts
+  h_e08a86bb3a33a2 181-283
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 4615,4624,4629,4645,4655,4692-4697
+  h_e08a86bb3a33a2 4656-4660,4698-4706
+src/tools/executeCommand.ts
+  h_e08a86bb3a33a2 421-422,592-602,759-770,774,825,828-840,842,848,852
+  h_e08a86bb3a33a2 841
+src/core/capabilities/readSearch.ts
+  h_e08a86bb3a33a2 153
+src/terminal/sandbox/SandboxTerminalSession.ts
+  h_e08a86bb3a33a2 472-473,475-476
+  s_0ada5ce64f7388::t_835a84f9ae27d1 474,477-478
+src/terminal/sandbox/SandboxTerminalSession.test.ts
+  h_e08a86bb3a33a2 693-707
+  s_0ada5ce64f7388::t_e8a37a52dfc23d 708-722
+src/shared/toolRegistry.ts
+  h_e08a86bb3a33a2 56
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 4345-4348,4465,4475
+  h_e08a86bb3a33a2 4344,4349-4354,4410-4420,4464,4466-4473,4536,4547-4555,4581-4589
+src/tools/editorState.test.ts
+  h_e08a86bb3a33a2 7-8,116-194
+  h_e08a86bb3a33a2 195-197
+src/tools/context/WorkingSetStore.ts
+  h_e08a86bb3a33a2 15,221
+src/shared/toolSchemas.ts
+  h_e08a86bb3a33a2 268-270
+  h_e08a86bb3a33a2 271-276,364
+src/terminal/native/NativeAgentRuntimeProvider.ts
+  h_e08a86bb3a33a2 17,73,80,82,99,110,133,142,154,156,174-175,178,180,225-229,231,333,445-448
+  h_e08a86bb3a33a2 230
+src/adapters/vscode/editReviewCapabilities.test.ts
+  h_e08a86bb3a33a2 376
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 141
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  s_0ada5ce64f7388::t_360e6cb9212be4 682-684,689-691,696-698,703-705,710-712,717-719,727-729,735-737,743-745,751-753,759-761,767-769
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-12
+scripts/tool-inventory.json
+  h_e08a86bb3a33a2 266,568,849
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "df5bdb70ce637a1d9b2ef988743319f828d82a98",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0ada5ce64f7388": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "424645af-cd03-4b66-afd7-5b9957b2905a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
