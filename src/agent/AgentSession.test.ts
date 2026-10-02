@@ -893,6 +893,7 @@ describe("AgentSession", () => {
       expect(messages[0]).toEqual({
         role: "user",
         content: "hello from phone",
+        humanInputId: expect.any(String),
         uiHint: {
           userMessage: {
             origin: "browser",
@@ -1983,6 +1984,65 @@ describe("AgentSession", () => {
       expect(session.humanInputRevision).toBe(start + 2);
       session.addUserMessage("typed", { origin: "vscode" });
       expect(session.humanInputRevision).toBe(start + 3);
+    });
+
+    it("keeps a private human decision record through condensation and prunes it on rewind", async () => {
+      const session = await makeSession();
+      session.addUserMessage("never push to main", { origin: "vscode" });
+      session.addUserMessage("coordinator relay", {
+        coordination: { kind: "steer" } as never,
+      });
+      session.appendToolResults([
+        {
+          type: "tool_result",
+          tool_use_id: "call-1",
+          content: "ok",
+          humanQuestionAnswer: {
+            source: "human_ui",
+            binding: {
+              schemaVersion: 1,
+              sessionId: session.id,
+              questionRequestId: "request-1",
+              toolCallId: "call-1",
+              context: "Release",
+              questions: [{ id: "q", type: "yes_no", question: "Tag it?" }],
+            },
+            answers: { q: false },
+            notes: {},
+          },
+        },
+      ]);
+      expect(
+        session.getHumanDecisionRecord().entries.map((entry) => entry.kind),
+      ).toEqual(["instruction", "question"]);
+
+      // Condensation never discards verified human input, even if a future
+      // condense strategy drops the source messages entirely.
+      session.replaceMessages([{ role: "user", content: "summary" }], {
+        preserveHumanDecisionRecord: true,
+      });
+      expect(session.getHumanDecisionRecord().entries).toHaveLength(2);
+
+      const persisted = session.getPersistedHumanDecisionRecord();
+      expect(persisted?.sessionId).toBe(session.id);
+
+      // Rewind removes evidence along with its source history.
+      session.replaceMessages([]);
+      expect(session.getHumanDecisionRecord().entries).toEqual([]);
+
+      // A different session never adopts another session's record.
+      const other = await makeSession();
+      other.restoreFromStore({
+        id: "other-session",
+        title: "copy",
+        createdAt: 1,
+        lastActiveAt: 1,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        messages: [],
+        humanDecisionRecord: persisted,
+      });
+      expect(other.getHumanDecisionRecord().entries).toEqual([]);
     });
 
     it("hasPendingInterjections reflects the queue state", async () => {

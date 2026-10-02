@@ -238,6 +238,49 @@ describe("SessionStore", () => {
     ).toBe(undefined);
   });
 
+  it("persists the private human decision record in metadata, not the transcript", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    const humanDecisionRecord = {
+      schemaVersion: 1 as const,
+      sessionId: "decision-record",
+      nextSequence: 2,
+      entries: [
+        {
+          kind: "instruction" as const,
+          sequence: 1,
+          recordedAt: 1,
+          inputId: "input-1",
+          text: "never push to main",
+        },
+      ],
+    };
+    await store.saveSession({
+      session: createRecord({
+        summary: createSummary({ id: "decision-record" }),
+        metadata: { humanDecisionRecord },
+      }),
+      expectedRevision: null,
+    });
+    await store.flush();
+
+    const restored = await new SessionStore(tmpDir).readSession(
+      "decision-record",
+    );
+    expect(restored.ok && restored.value.metadata.humanDecisionRecord).toEqual(
+      humanDecisionRecord,
+    );
+    const transcriptFiles = fs
+      .readdirSync(tmpDir, { recursive: true, encoding: "utf8" })
+      .filter((file) => file.endsWith("messages.json"));
+    expect(transcriptFiles.length).toBeGreaterThan(0);
+    for (const file of transcriptFiles) {
+      expect(fs.readFileSync(path.join(tmpDir, file), "utf8")).not.toContain(
+        "never push to main",
+      );
+    }
+  });
+
   it("stores namespaced sessions separately from the legacy single-folder history", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
     const legacyStore = new SessionStore(tmpDir);

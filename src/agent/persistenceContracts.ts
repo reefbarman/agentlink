@@ -293,6 +293,11 @@ export interface PersistedSessionMetadata {
   fleet?: PersistedFleetMetadata;
   /** Optional forward-compatible fresh-session handoff relationship. */
   lineage?: PersistedSessionLineage;
+  /**
+   * Private verified human input for this session ID only. Never copied into
+   * successor, forked or imported sessions.
+   */
+  humanDecisionRecord?: import("./HumanDecisionRecord.js").PersistedHumanDecisionRecord;
 }
 
 export interface PersistedSessionRecord {

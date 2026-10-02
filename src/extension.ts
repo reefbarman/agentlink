@@ -3097,6 +3097,7 @@ export async function activate(
             session.getAllMessages(),
             sessionId,
             session.getPendingHumanInterjections(),
+            session.getHumanDecisionRecord(),
           )
         : [];
     },

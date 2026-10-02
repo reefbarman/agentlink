@@ -50,6 +50,11 @@ export type AgentMessage = MessageParam & {
     images: Array<{ name: string; mimeType: string; base64: string }>;
     documents: Array<{ name: string; mimeType: string; base64: string }>;
   };
+  /**
+   * Opaque host ID linking a typed human message to the session's private
+   * human decision record. Grants nothing by itself.
+   */
+  humanInputId?: string;
   /** Host-only decision evidence tied to tool results in this source message. */
   humanQuestionAnswers?: import("@agentlink/protocol/structured-question").HumanQuestionAnswer[];
   isSummary?: boolean;

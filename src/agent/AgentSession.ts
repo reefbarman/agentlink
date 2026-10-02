@@ -51,6 +51,11 @@ import type {
   PersistedFleetMetadata,
   PersistedSessionRunState,
 } from "./persistenceContracts.js";
+import {
+  HumanDecisionRecord,
+  type HumanDecisionRecordSnapshot,
+  type PersistedHumanDecisionRecord,
+} from "./HumanDecisionRecord.js";
 import type { AgentPluginCatalogProvider } from "./AgentPluginCatalog.js";
 import type { PersistedSessionLineage } from "./sessionHandoff.js";
 import {
@@ -303,6 +308,8 @@ export class AgentSession {
   private _pendingInterjections: PendingInterjection[] = [];
   /** Advances whenever direct human input is received, queued, edited or retracted. */
   private _humanInputRevision = 0;
+  /** Private verified human input; never copied into other sessions. */
+  private humanDecisionRecord = new HumanDecisionRecord();
   private readonly _pendingInterjectionQueuedListeners = new Set<() => void>();
   // Transient per-surface counts of messages sitting in UI send queues
   // (VS Code webview / browser remote). Not persisted; used to give queued
@@ -841,7 +848,11 @@ export class AgentSession {
     const last = this.messages[this.messages.length - 1];
     if (last?.role === role) {
       this.messagesRevision++;
-      return this.messages.pop();
+      const popped = this.messages.pop();
+      if (popped?.humanInputId || popped?.humanQuestionAnswers?.length) {
+        this.humanDecisionRecord.prune(this.messages);
+      }
+      return popped;
     }
     return undefined;
   }
@@ -862,10 +873,16 @@ export class AgentSession {
   ): void {
     this.activeSkillIds.clear();
     this.messagesRevision++;
-    if (opts?.origin && !opts.hidden) this._humanInputRevision++;
+    let humanInputId: string | undefined;
+    if (opts?.origin && !opts.hidden) {
+      this._humanInputRevision++;
+      humanInputId = randomUUID();
+      this.humanDecisionRecord.recordInstruction(humanInputId, text);
+    }
     this.messages.push({
       role: "user",
       content: text,
+      ...(humanInputId ? { humanInputId } : {}),
       ...(opts?.images?.length || opts?.documents?.length
         ? {
             media: {
@@ -1134,6 +1151,9 @@ export class AgentSession {
         : [];
     });
     if (humanQuestionAnswers.length) this._humanInputRevision++;
+    for (const evidence of humanQuestionAnswers) {
+      this.humanDecisionRecord.recordQuestion(evidence);
+    }
     this.messages.push({
       role: "user",
       content: results.map(
@@ -1144,10 +1164,20 @@ export class AgentSession {
     this.lastActiveAt = Date.now();
   }
 
-  /** Replace full message history after condensing */
-  replaceMessages(messages: AgentMessage[]): void {
+  /**
+   * Replace full message history (condensing, rewind, repair). Verified human
+   * decisions whose source messages were removed are dropped, except for
+   * condensation, which must never discard earlier human restrictions.
+   */
+  replaceMessages(
+    messages: AgentMessage[],
+    opts?: { preserveHumanDecisionRecord?: boolean },
+  ): void {
     this.messagesRevision++;
     this.messages = messages;
+    if (!opts?.preserveHumanDecisionRecord) {
+      this.humanDecisionRecord.prune(messages);
+    }
     // History positions are no longer valid; re-seed the current mode block at
     // the top of the rewritten history. The cache is rebuilt after a condense
     // or revert anyway, so position zero costs nothing extra.
@@ -1293,6 +1323,7 @@ export class AgentSession {
     messages: AgentMessage[];
     modeInstructionAnchors?: ModeInstructionAnchor[];
     initialArchitectReviewPending?: boolean;
+    humanDecisionRecord?: PersistedHumanDecisionRecord;
   }): void {
     this.id = data.id;
     this.title = data.title;
@@ -1323,6 +1354,11 @@ export class AgentSession {
       data.initialArchitectReviewPending ?? false;
     this.messagesRevision++;
     this.messages = data.messages;
+    this.humanDecisionRecord = HumanDecisionRecord.restore(
+      data.id,
+      data.humanDecisionRecord,
+      data.messages,
+    );
     if (data.modeInstructionAnchors?.length) {
       this.modeInstructionAnchors = data.modeInstructionAnchors;
       this.currentModeBlockText =
@@ -1733,6 +1769,16 @@ export class AgentSession {
   /** Revision of direct human input, including input still queued mid-run. */
   get humanInputRevision(): number {
     return this._humanInputRevision;
+  }
+
+  /** Ordered verified human input for reviewers, including condensed history. */
+  getHumanDecisionRecord(): HumanDecisionRecordSnapshot {
+    return this.humanDecisionRecord.snapshot();
+  }
+
+  /** Session-metadata form, bound to this session's ID. */
+  getPersistedHumanDecisionRecord(): PersistedHumanDecisionRecord | undefined {
+    return this.humanDecisionRecord.toPersisted(this.id);
   }
 
   /** Direct human messages queued but not yet drained into the transcript. */

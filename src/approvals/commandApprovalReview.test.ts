@@ -751,34 +751,171 @@ describe("command review context", () => {
     });
   });
 
-  it("drops older decisions with an explicit marker once a newer decision misses the budget", () => {
+  it("keeps human decisions that later tool activity pushes out of the recent window", () => {
     const messages: import("../agent/types.js").AgentMessage[] = [
       {
         role: "user",
         content: "prepare the release",
         uiHint: { userMessage: { origin: "vscode" } },
       },
-      ...decision("older", "Push the release?", true),
-      ...decision("newer", `Push now? ${"detail ".repeat(200)}`, false),
-      ...Array.from({ length: 6 }, (_, index) => ({
+      ...decision("refusal", "Push to main?", false),
+      ...Array.from({ length: 20 }, (_, index) => ({
         role: "assistant" as const,
         content: `${index}:${"x".repeat(1_950)}`,
       })),
     ];
     const context = buildCommandReviewContext(messages, "session");
-    const decisions = context.filter((entry) => entry.humanDecisionEvidence);
-    expect(decisions).toHaveLength(1);
-    expect(JSON.parse(decisions[0]!.content).evidenceOmitted).toContain(
-      "Current consent is unknown",
-    );
-    expect(context[0]).toMatchObject({
-      content: "prepare the release",
-      directUserInstruction: true,
-    });
-    expect(context.length).toBeLessThanOrEqual(12);
     expect(
-      context.reduce((total, entry) => total + entry.content.length, 0),
+      context
+        .filter((entry) => entry.humanDecisionEvidence)
+        .map((entry) => JSON.parse(entry.content).humanAnswer),
+    ).toEqual([false]);
+    const recent = context.filter((entry) => !entry.humanDecisionEvidence);
+    expect(recent.length).toBeLessThanOrEqual(12);
+    expect(
+      recent.reduce((total, entry) => total + entry.content.length, 0),
     ).toBeLessThanOrEqual(12_000);
+    expect(recent.at(-1)?.content).toContain("19:");
+  });
+
+  it("keeps the newest decisions and marks older ones omitted when the decision budget overflows", () => {
+    const messages = Array.from({ length: 12 }, (_, index) =>
+      decision(
+        `call-${index}`,
+        `Step ${index}? ${"detail ".repeat(150)}`,
+        true,
+      ),
+    ).flat();
+    const context = buildCommandReviewContext(messages, "session");
+    const decisions = context.filter((entry) => entry.humanDecisionEvidence);
+    expect(JSON.parse(decisions[0]!.content).evidenceOmitted).toContain(
+      "Earlier restrictions may still apply",
+    );
+    const kept = decisions
+      .slice(1)
+      .map((entry) => JSON.parse(entry.content).toolCallId);
+    expect(kept.at(-1)).toBe("call-11");
+    expect(kept).toEqual(
+      Array.from(
+        { length: kept.length },
+        (_, index) => `call-${12 - kept.length + index}`,
+      ),
+    );
+    expect(decisions.length).toBeLessThanOrEqual(8);
+    expect(
+      decisions.reduce((total, entry) => total + entry.content.length, 0),
+    ).toBeLessThanOrEqual(8_000);
+  });
+
+  it("restores earlier typed instructions from the private record without duplicating the window", () => {
+    const messages: import("../agent/types.js").AgentMessage[] = [
+      {
+        role: "user",
+        content: "never push to main",
+        humanInputId: "input-1",
+        uiHint: { userMessage: { origin: "vscode" } },
+      },
+      ...Array.from({ length: 20 }, (_, index) => ({
+        role: "assistant" as const,
+        content: `${index}:${"x".repeat(1_950)}`,
+        condenseParent: "summary-1",
+      })),
+      {
+        role: "user",
+        content: "summary",
+        isSummary: true,
+        condenseId: "summary-1",
+      },
+      {
+        role: "user",
+        content: "commit the fix",
+        humanInputId: "input-2",
+        uiHint: { userMessage: { origin: "browser" } },
+      },
+    ];
+    const context = buildCommandReviewContext(messages, "session", [], {
+      incomplete: false,
+      entries: [
+        {
+          kind: "instruction",
+          sequence: 1,
+          recordedAt: 1,
+          inputId: "input-1",
+          text: "never push to main",
+        },
+        {
+          kind: "instruction",
+          sequence: 2,
+          recordedAt: 2,
+          inputId: "input-2",
+          text: "commit the fix",
+        },
+      ],
+    });
+    expect(context[0]).toMatchObject({
+      role: "user",
+      humanDecisionEvidence: true,
+    });
+    expect(JSON.parse(context[0]!.content)).toEqual({
+      recordSequence: 1,
+      humanInstruction: "never push to main",
+    });
+    expect(
+      context.filter((entry) => entry.content.includes("commit the fix")),
+    ).toEqual([
+      { role: "user", content: "commit the fix", directUserInstruction: true },
+    ]);
+  });
+
+  it("restores recorded decisions whose transcript source is gone, oldest first", () => {
+    const [assistant, result] = decision("lost", "Deploy to prod?", false);
+    const context = buildCommandReviewContext(
+      [
+        {
+          role: "user",
+          content: "continue",
+          uiHint: { userMessage: { origin: "vscode" } },
+        },
+      ],
+      "session",
+      [],
+      {
+        incomplete: false,
+        entries: [
+          {
+            kind: "question",
+            sequence: 4,
+            recordedAt: 1,
+            evidence: result!.humanQuestionAnswers![0]!,
+          },
+        ],
+      },
+    );
+    expect(assistant).toBeDefined();
+    expect(JSON.parse(context[0]!.content)).toMatchObject({
+      toolCallId: "lost",
+      humanAnswer: false,
+    });
+    expect(context[1]).toMatchObject({ content: "continue" });
+  });
+
+  it("marks an incomplete record explicitly", () => {
+    const context = buildCommandReviewContext(
+      [
+        {
+          role: "user",
+          content: "go",
+          uiHint: { userMessage: { origin: "vscode" } },
+        },
+      ],
+      "session",
+      [],
+      { incomplete: true, entries: [] },
+    );
+    expect(
+      JSON.parse(context.find((entry) => entry.humanDecisionEvidence)!.content)
+        .evidenceOmitted,
+    ).toContain("no longer available");
   });
 
   it("keeps ordered decisions when they fit", () => {

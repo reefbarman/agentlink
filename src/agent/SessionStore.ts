@@ -183,6 +183,7 @@ interface MetadataFile {
   runState?: PersistedSessionRunState;
   fleet?: PersistedFleetMetadata;
   lineage?: PersistedSessionLineage;
+  humanDecisionRecord?: PersistedSessionMetadata["humanDecisionRecord"];
 }
 
 // Narrow async seam for testing atomic JSON writes without mocking Node's ESM
@@ -1373,6 +1374,7 @@ export class SessionStore implements SessionPersistenceProvider {
       runState: file.runState,
       fleet: file.fleet,
       lineage: normalizePersistedSessionLineage(file.lineage),
+      humanDecisionRecord: file.humanDecisionRecord,
     };
   }
 
@@ -1422,6 +1424,7 @@ export class SessionStore implements SessionPersistenceProvider {
       runState: metadata.runState,
       fleet: metadata.fleet,
       lineage,
+      humanDecisionRecord: metadata.humanDecisionRecord,
     };
   }
 

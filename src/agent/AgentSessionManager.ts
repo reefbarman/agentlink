@@ -5832,6 +5832,7 @@ export class AgentSessionManager {
             }
           : undefined,
         lineage: session.lineage ? structuredClone(session.lineage) : undefined,
+        humanDecisionRecord: session.getPersistedHumanDecisionRecord?.(),
       },
     };
   }
@@ -9125,6 +9126,7 @@ export class AgentSessionManager {
       modeInstructionAnchors: readResult.value.modeInstructionAnchors,
       initialArchitectReviewPending:
         metadata.initialArchitectReviewPending ?? false,
+      humanDecisionRecord: metadata.humanDecisionRecord,
     });
     this.applyReasoningEffortToSession(
       session,
@@ -9308,6 +9310,7 @@ export class AgentSessionManager {
         messages,
         fleetMetadata: metadata.fleet,
         lineage: metadata.lineage,
+        humanDecisionRecord: metadata.humanDecisionRecord,
       });
       const restoredReasoningEffort = this.getDesiredReasoningEffort(session);
       this.applyReasoningEffortToSession(session, restoredReasoningEffort);

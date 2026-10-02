@@ -3889,7 +3889,9 @@ export class AgentEngine {
       ),
       ...concurrentTranscriptMessages,
     ];
-    session.replaceMessages(messagesWithUiHints);
+    session.replaceMessages(messagesWithUiHints, {
+      preserveHumanDecisionRecord: true,
+    });
     const projection = buildPostCondenseProjection(
       session,
       resolvedProvider,
