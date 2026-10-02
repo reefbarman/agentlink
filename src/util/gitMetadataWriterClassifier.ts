@@ -699,8 +699,70 @@ function isDirectGitStatusFollowup(command: string): boolean {
   );
 }
 
+function isReadOnlyGitSubstitutionTest(command: string): boolean {
+  const match =
+    /^test[ \t]+-z[ \t]+"\$\((git[ \t]+(?:ls-files|diff)[^\r\n]*)\)"$/.exec(
+      command.trim(),
+    );
+  return Boolean(match && isDirectGitInspection(match[1]));
+}
+
+function classifyLsFilesPipedGitAdd(
+  command: string,
+): PredictableGitMetadataWriterSubcommand | null {
+  const scan = scanShellLexBoundaries(command, {
+    separators: ["|"],
+    comments: true,
+  });
+  const boundary = scan.boundaries[0];
+  if (
+    scan.boundaries.length !== 1 ||
+    boundary.kind === "comment" ||
+    boundary.operator !== "|"
+  )
+    return null;
+  const producerText = command.slice(0, boundary.start).trim();
+  const consumerText = command.slice(boundary.end).trim();
+  if (
+    hasUnsupportedShellSyntax(producerText) ||
+    hasUnsupportedShellSyntax(consumerText)
+  )
+    return null;
+  const producer = scanShellLexWords(producerText);
+  const consumer = scanShellLexWords(consumerText);
+  if (
+    producer.finalState.quote !== null ||
+    producer.finalState.danglingEscape ||
+    consumer.finalState.quote !== null ||
+    consumer.finalState.danglingEscape
+  )
+    return null;
+  const decodedSource = producer.words.map(({ raw }) => decodeWord(raw));
+  const decodedSink = consumer.words.map(({ raw }) => decodeWord(raw));
+  if (
+    decodedSource.some((word) => word === null) ||
+    decodedSink.some((word) => word === null)
+  )
+    return null;
+  const source = decodedSource as string[];
+  const sink = decodedSink as string[];
+  const sourceOperands = source[3] === "--" ? source.slice(4) : source.slice(3);
+  if (
+    source[0] !== "git" ||
+    source[1] !== "ls-files" ||
+    source[2] !== "-z" ||
+    (source[3] === "--" && sourceOperands.length === 0) ||
+    sourceOperands.some((word) => word.startsWith("-")) ||
+    sink.length !== 5 ||
+    sink.join(" ") !== "xargs -0 git add --"
+  )
+    return null;
+  return "add";
+}
+
 function isDirectGitInspection(command: string): boolean {
   if (isDirectGitStatusFollowup(command)) return true;
+  if (isReadOnlyGitSubstitutionTest(command)) return true;
   if (!command.trim() || hasUnsupportedShellSyntax(command)) return false;
   const scan = scanShellLexWords(command);
   if (scan.words[0]?.raw !== "git") return false;
@@ -758,8 +820,9 @@ function isDirectGitInspection(command: string): boolean {
 
 /**
  * Recognizes a deliberately narrow set of direct Git metadata writers, including
- * Git-only writer/inspection chains joined by top-level `&&` or `;`, and literal
- * `printf` input piped to Git add (including patch staging). A match enables guidance only;
+ * writer/inspection chains joined by top-level `&&` or `;`, read-only Git
+ * substitutions inside `test -z`, and constrained `printf` or `git ls-files -z`
+ * input piped to Git add (including patch staging). A match enables guidance only;
  * it never grants or selects execution authority. `null` means unrecognized or
  * ineligible, not safe.
  */
@@ -805,7 +868,8 @@ export function classifyPredictableGitMetadataWriter(
   const writers = segments.map(
     (segment) =>
       classifyDirectGitMetadataWriter(segment) ??
-      classifyInputPipedGitMetadataWriter(segment),
+      classifyInputPipedGitMetadataWriter(segment) ??
+      classifyLsFilesPipedGitAdd(segment),
   );
   const hasInit = writers.includes("init");
   const subcommands: PredictableGitMetadataWriterSubcommand[] = [];

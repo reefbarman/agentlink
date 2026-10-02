@@ -146,6 +146,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     await emitInitialPrompt(pty, channel.ready);
 
     const first = runtime.createCommand({
+      cwd: "/workspace",
       channelId: "native-agent-1",
       commandId: "native-command-1",
       generation: 1,
@@ -176,6 +177,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     });
 
     const second = runtime.createCommand({
+      cwd: "/workspace",
       channelId: "native-agent-1",
       commandId: "native-command-2",
       generation: 2,
@@ -202,6 +204,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     expect(nodePty.spawn).toHaveBeenCalledOnce();
 
     const third = runtime.createCommand({
+      cwd: "/workspace",
       channelId: "native-agent-1",
       commandId: "native-command-3",
       generation: 3,
@@ -257,6 +260,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     await emitInitialPrompt(pty, channel.ready);
 
     const command = runtime.createCommand({
+      cwd: "/workspace",
       channelId: "native-agent-1",
       commandId: "native-command-1",
       generation: 1,
@@ -293,6 +297,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
         "",
       ].join("\n");
       const command = runtime.createCommand({
+        cwd: "/workspace",
         channelId: "native-agent-1",
         commandId: "native-command-complex",
         generation: 1,
@@ -306,7 +311,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
       expect(fs.statSync(path.dirname(artifactPath)).mode & 0o777).toBe(0o700);
       expect(fs.statSync(artifactPath).mode & 0o777).toBe(0o600);
       expect(fs.readFileSync(artifactPath, "utf8")).toBe(
-        `builtin printf '\\033]697;AgentLink;${nonce};C;${nativeStartMarker(pty)}\\007' >/dev/tty\nbuiltin eval ${shellQuote(` (\n${commandText}\n)`)}\n`,
+        `builtin printf '\\033]697;AgentLink;${nonce};C;${nativeStartMarker(pty)}\\007' >/dev/tty\n{ builtin test . -ef '/workspace' || builtin cd -L -- '/workspace'; } && builtin eval ${shellQuote(` (\n${commandText}\n)`)}\n`,
       );
 
       pty.emitData(
@@ -335,6 +340,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
         const channel = launch(runtime);
         await emitInitialPrompt(pty, channel.ready);
         const command = runtime.createCommand({
+          cwd: "/workspace",
           channelId: "native-agent-1",
           commandId: "native-command-disposed",
           generation: 1,
@@ -386,6 +392,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
         const channel = launch(runtime);
         await emitInitialPrompt(pty, channel.ready);
         const command = runtime.createCommand({
+          cwd: "/workspace",
           channelId: "native-agent-1",
           commandId: "failed-dispatch",
           generation: 1,
@@ -407,6 +414,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
         });
         expect(fs.readdirSync(artifactRoot)).toEqual([]);
         const next = runtime.createCommand({
+          cwd: "/workspace",
           channelId: "native-agent-1",
           commandId: "after-failed-dispatch",
           generation: 2,
@@ -436,6 +444,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
         const channel = launch(runtime);
         await emitInitialPrompt(pty, channel.ready);
         const command = runtime.createCommand({
+          cwd: artifactRoot,
           channelId: "native-agent-1",
           commandId: "native-command-semantics",
           generation: 1,
@@ -557,6 +566,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     await emitInitialPrompt(pty, channel.ready);
 
     const command = runtime.createCommand({
+      cwd: "/workspace",
       channelId: "native-agent-1",
       commandId: "native-command-1",
       generation: 1,
@@ -574,6 +584,103 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     });
   });
 
+  it.each([
+    ["/bin/bash", false],
+    ["/bin/bash", true],
+    ["/bin/zsh", false],
+    ["/bin/zsh", true],
+  ] as const)(
+    "re-enters recreated directories and skips payloads for missing cwd in %s (isolated: %s)",
+    async (shell, isolateShellState) => {
+      const root = fs.mkdtempSync(
+        path.join(os.tmpdir(), "agentlink-native-cwd-"),
+      );
+      const cwd = path.join(root, "fixture's directory");
+      fs.mkdirSync(cwd);
+      const pty = new FakeNodePtyProcess();
+      const runtime = new NodePtyNativeAgentRuntimeProvider({
+        spawn: vi.fn(() => pty),
+      });
+      try {
+        const channel = launch(runtime);
+        await emitInitialPrompt(pty, channel.ready);
+        const command = runtime.createCommand({
+          channelId: "native-agent-1",
+          commandId: "native-command-cwd",
+          generation: 1,
+          cwd,
+          command: "printf 'payload:%s' \"$PWD\"",
+          isolateShellState,
+        });
+        command.start();
+        const dispatch = pty.writes.at(-1)!.trim();
+        const enterAndRemove = `builtin cd -P -- ${shellQuote(cwd)}\nrmdir -- ${shellQuote(cwd)}\n`;
+        const recreated = spawnSync(
+          shell,
+          ["-c", `${enterAndRemove}mkdir -- ${shellQuote(cwd)}\n${dispatch}`],
+          { encoding: "utf8" },
+        );
+        expect(recreated.status).toBe(0);
+        expect(recreated.stdout).toBe(`payload:${cwd}`);
+        const missing = spawnSync(
+          shell,
+          ["-c", `${enterAndRemove}${dispatch}`],
+          { encoding: "utf8" },
+        );
+        expect(missing.status).not.toBe(0);
+        expect(missing.stdout).not.toContain("payload:");
+        expect(missing.stderr).toContain("fixture's directory");
+      } finally {
+        runtime.dispose();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["/bin/bash", "/bin/zsh"])(
+    "preserves a matching logical cwd, OLDPWD, and directory hooks in %s",
+    async (shell) => {
+      const root = fs.mkdtempSync(
+        path.join(os.tmpdir(), "agentlink-native-cwd-state-"),
+      );
+      const target = path.join(root, "target");
+      const cwd = path.join(root, "logical link");
+      fs.mkdirSync(target);
+      fs.symlinkSync(target, cwd);
+      const pty = new FakeNodePtyProcess();
+      const runtime = new NodePtyNativeAgentRuntimeProvider({
+        spawn: vi.fn(() => pty),
+      });
+      try {
+        const channel = launch(runtime);
+        await emitInitialPrompt(pty, channel.ready);
+        const command = runtime.createCommand({
+          channelId: "native-agent-1",
+          commandId: "native-command-cwd-state",
+          generation: 1,
+          cwd,
+          command: "printf 'payload:%s\\n' \"$PWD\"",
+        });
+        command.start();
+        const dispatch = pty.writes.at(-1)!.trim();
+        const zshSetup = shell.endsWith("zsh") ? "setopt AUTO_PUSHD\n" : "";
+        const zshSnapshot = shell.endsWith("zsh")
+          ? "saved_depth=${#dirstack}\n"
+          : "";
+        const zshCheck = shell.endsWith("zsh")
+          ? ' && builtin test "${#dirstack}" = "$saved_depth"'
+          : "";
+        const script = `${zshSetup}builtin cd -L -- ${shellQuote(cwd)}\nsaved_oldpwd=$OLDPWD\n${zshSnapshot}chpwd() { printf unexpected-hook; }\n${dispatch}\n${dispatch}\nbuiltin test "$PWD" = ${shellQuote(cwd)} && builtin test "$OLDPWD" = "$saved_oldpwd"${zshCheck}\n`;
+        const result = spawnSync(shell, ["-c", script], { encoding: "utf8" });
+        expect(result.status).toBe(0);
+        expect(result.stdout).toBe(`payload:${cwd}\npayload:${cwd}\n`);
+      } finally {
+        runtime.dispose();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("completes from the exit marker when cwd metadata is absent", async () => {
     const pty = new FakeNodePtyProcess();
     const runtime = new NodePtyNativeAgentRuntimeProvider({
@@ -582,6 +689,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     const channel = launch(runtime);
     await emitInitialPrompt(pty, channel.ready);
     const command = runtime.createCommand({
+      cwd: "/workspace",
       channelId: "native-agent-1",
       commandId: "native-command-1",
       generation: 1,
@@ -609,6 +717,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     await emitInitialPrompt(pty, channel.ready);
 
     const command = runtime.createCommand({
+      cwd: "/workspace",
       channelId: "native-agent-1",
       commandId: "native-command-1",
       generation: 1,
@@ -640,6 +749,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
 
     const onShellCommandEnd = vi.fn();
     const command = runtime.createCommand({
+      cwd: "/workspace",
       channelId: "native-agent-1",
       commandId: "native-command-1",
       generation: 1,
@@ -675,6 +785,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     await emitInitialPrompt(pty, channel.ready);
 
     const command = runtime.createCommand({
+      cwd: "/workspace",
       channelId: "native-agent-1",
       commandId: "native-command-1",
       generation: 1,
@@ -706,6 +817,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     pty.emitData(`${frame("B")}${frame("C", "sleep 1")}`);
     expect(() =>
       runtime.createCommand({
+        cwd: "/workspace",
         channelId: "native-agent-1",
         commandId: "native-command-1",
         generation: 1,
@@ -718,6 +830,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     );
     expect(() =>
       runtime.createCommand({
+        cwd: "/workspace",
         channelId: "native-agent-1",
         commandId: "native-command-1",
         generation: 1,

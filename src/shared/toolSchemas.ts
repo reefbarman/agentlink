@@ -1160,7 +1160,7 @@ export const executeCommandSchema = {
     .string()
     .optional()
     .describe(
-      'Working directory (absolute or relative to workspace root). Reused unnamed terminals are only selected when their current tracked cwd matches this value; otherwise a new terminal is created. Sandbox routes require cwd inside an active workspace root; an outside path returns retry_guidance code "sandbox_cwd_outside_workspace" before launch, with reviewed native execution offered only when policy permits.',
+      'Working directory (absolute or relative to workspace root). Reused unnamed terminals are only selected when their current tracked cwd matches this value; otherwise a new terminal is created. Native commands compare directory identity, not just the path string, and re-enter stale directories while preserving logical paths. The payload does not run if recovery fails. Sandbox routes require cwd inside an active workspace root; an outside path returns retry_guidance code "sandbox_cwd_outside_workspace" before launch, with reviewed native execution offered only when policy permits.',
     ),
   terminal_id: z
     .string()

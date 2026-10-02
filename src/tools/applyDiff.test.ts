@@ -1058,6 +1058,33 @@ world
     expect(isUnifiedDiff(input)).toBe(false);
   });
 
+  it.each(["<<<<<<< SEARCH", "  <<<<<<< SEARCH>  "])(
+    "keeps patch hunk headers as SEARCH/REPLACE payload after %s",
+    (opener) => {
+      const search = "--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new";
+      const replace = search.replace("+new", "+fixed");
+      const input = diff({ search, replace }).replace("<<<<<<< SEARCH", opener);
+      expect(isUnifiedDiff(input)).toBe(false);
+      const parsed = parseSearchReplaceBlocks(input);
+      expect(parsed.malformedBlocks).toBe(0);
+      expect(applyBlocks(search, parsed.blocks).result).toBe(replace);
+    },
+  );
+
+  it("keeps prefixed SEARCH markers inside unified hunks as payload", () => {
+    const input = "@@ -1,2 +1,2 @@\n <<<<<<< SEARCH\n-old\n+new";
+    expect(isUnifiedDiff(input)).toBe(true);
+    expect(parseUnifiedDiff(input).malformedBlocks).toBe(0);
+  });
+
+  it("keeps malformed SEARCH blocks with hunk payload in their own grammar", () => {
+    const input = "<<<<<<< SEARCH\n@@ -1 +1 @@\n-old\n+new";
+    expect(isUnifiedDiff(input)).toBe(false);
+    expect(parseSearchReplaceBlocks(input).malformedBlockDetails).toEqual([
+      { index: 0, line: 4, reason: "missing_divider" },
+    ]);
+  });
+
   it("rejects plain text", () => {
     expect(isUnifiedDiff("just some text")).toBe(false);
   });

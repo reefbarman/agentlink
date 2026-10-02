@@ -313,6 +313,7 @@ describe("NativeAgentTerminalCoordinator", () => {
       commandId: "native-command-1",
       generation: 1,
       command: "printf native",
+      cwd: "/workspace",
       isolateShellState: true,
       onShellCommandEnd: expect.any(Function),
     });
@@ -679,12 +680,13 @@ describe("NativeAgentTerminalCoordinator", () => {
     await expect(pending).resolves.toMatchObject({ terminal_name: "Server" });
   });
 
-  it("reuses one implicit shell while isolating each command's shell state", async () => {
+  it("reuses one implicit shell while forwarding cwd and isolating each command's shell state", async () => {
     const test = harness();
+    const cwd = "/workspace/generated fixture's directory";
     const first = test.coordinator.executeCommand({
       owner: undefined,
       command: "export NATIVE_STATE=ready",
-      cwd: "/workspace",
+      cwd,
     });
     await flush();
     await finish(test.processes[0], "", 0);
@@ -693,7 +695,7 @@ describe("NativeAgentTerminalCoordinator", () => {
     const second = test.coordinator.executeCommand({
       owner: undefined,
       command: "printf ${NATIVE_STATE-unset}",
-      cwd: "/workspace",
+      cwd,
     });
     await flush();
     await finish(test.processes[1], "unset\r\n", 0);
@@ -703,8 +705,8 @@ describe("NativeAgentTerminalCoordinator", () => {
     });
 
     expect(test.commands).toMatchObject([
-      { command: "export NATIVE_STATE=ready", isolateShellState: true },
-      { command: "printf ${NATIVE_STATE-unset}", isolateShellState: true },
+      { command: "export NATIVE_STATE=ready", cwd, isolateShellState: true },
+      { command: "printf ${NATIVE_STATE-unset}", cwd, isolateShellState: true },
     ]);
     expect(test.prepareShell).toHaveBeenCalledOnce();
     expect(test.runtime.prepareChannel).toHaveBeenCalledOnce();

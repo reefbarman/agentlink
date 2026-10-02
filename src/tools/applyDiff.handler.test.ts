@@ -293,6 +293,45 @@ describe("handleApplyDiff", () => {
     );
   });
 
+  it("reviews SEARCH/REPLACE edits to patch files containing hunk headers", async () => {
+    const search = "@@ -1 +1 @@\n-old\n+new";
+    const replacement = "@@ -1 +1 @@\n-old\n+fixed";
+    fs.writeFileSync(
+      path.join(workspaceDir, "delivery.patch"),
+      search,
+      "utf-8",
+    );
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "accepted" as const,
+        path: "delivery.patch",
+        operation: "modified" as const,
+        ...durable(replacement),
+      })),
+    };
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      {
+        path: "delivery.patch",
+        diff: searchReplaceDiff(search, replacement),
+        atomic: true,
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+    expect(toolJson(result)).toMatchObject({ status: "accepted" });
+    expect(editReviewProvider.reviewAndApply).toHaveBeenCalledWith(
+      expect.objectContaining({ content: replacement }),
+    );
+  });
+
   it("forwards save_without_formatting to the edit-review boundary", async () => {
     const filePath = path.join(workspaceDir, "src", "exact.ts");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });

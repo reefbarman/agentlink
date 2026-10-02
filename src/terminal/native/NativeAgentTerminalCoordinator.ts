@@ -623,6 +623,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       commandId,
       generation: before.nextGeneration,
       command: options.command,
+      cwd: options.cwd,
       ...(isolateShellState ? { isolateShellState: true } : {}),
       onShellCommandEnd: () => {
         if (channel.active?.commandId === commandId) {

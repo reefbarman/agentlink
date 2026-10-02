@@ -36,6 +36,7 @@ export interface NativeAgentChannelRequest {
 
 export interface NativeAgentCommandRequest extends SandboxCommandIdentity {
   command: string;
+  cwd: string;
   /** Run inside a shell subshell so mutations cannot leak to later commands. */
   isolateShellState?: boolean;
   /** Fires at the shell command-end marker, before prompt rendering completes. */
@@ -76,6 +77,7 @@ interface NativeCommandArtifact {
 
 function createNativeCommandArtifact(
   command: string,
+  cwd: string,
   root: string,
   nonce: string,
 ): NativeCommandArtifact {
@@ -96,7 +98,9 @@ function createNativeCommandArtifact(
   };
   try {
     fs.chmodSync(directory, 0o700);
-    const content = `builtin printf '\\033]697;AgentLink;${nonce};C;${startMarker}\\007' >/dev/tty\nbuiltin eval ${shellQuote(` ${command}`)}\n`;
+    // Path equality cannot detect a deleted/recreated cwd. Avoid redundant cd
+    // when its filesystem identity still matches, preserving OLDPWD and hooks.
+    const content = `builtin printf '\\033]697;AgentLink;${nonce};C;${startMarker}\\007' >/dev/tty\n{ builtin test . -ef ${shellQuote(cwd)} || builtin cd -L -- ${shellQuote(cwd)}; } && builtin eval ${shellQuote(` ${command}`)}\n`;
     fs.writeFileSync(filePath, content, {
       encoding: "utf8",
       flag: "wx",
@@ -329,6 +333,7 @@ class PersistentNativeChannel {
       : request.command;
     const commandArtifact = createNativeCommandArtifact(
       evaluatedCommand,
+      request.cwd,
       this.commandFileRoot,
       this.launch.nonce,
     );

@@ -157,6 +157,17 @@ const negatives = [
   "git status",
   "git status --short && git diff --cached --stat",
   "git status --short; git diff --check",
+  'test -z "$(git status --short)" && git commit -m fix',
+  'test -z "$(printf plans)" && git commit -m fix',
+  'test -z "$(git ls-files $(touch marker))" && git commit -m fix',
+  'test -z "$(git ls-files docs; touch marker)" && git commit -m fix',
+  "git ls-files -z > paths | xargs -0 git add --",
+  "git ls-files -z * | xargs -0 git add --",
+  "git ls-files -z | 'xargs -0 git add --'",
+
+  "git ls-files -z | xargs -0 sh -c 'git add -- \"$@\"' sh && git commit -m fix",
+  "cd sub && git ls-files -z plans | xargs -0 git add -- && git commit -m fix",
+  "GIT_DIR=.git git ls-files -z plans | xargs -0 git add -- && git commit -m fix",
   "git log --oneline",
   "git show --stat",
   "git add . && git log --format=fuller",
@@ -316,6 +327,22 @@ describe("classifyPredictableGitMetadataWriter", () => {
     [
       "git init -b main && git remote add origin git@github-personal:owner/repo.git && git status --short --branch",
       ["init", "remote"],
+    ],
+    [
+      'git diff --cached --check && git diff --cached --stat && git diff --stat && test -z "$(git ls-files plans)" && test -z "$(git diff --cached --name-only -- plans)" && git commit -m "feat: add desktop MCP management and harden agent recovery"',
+      ["commit"],
+    ],
+    [
+      'test -z "$(git ls-files docs)" && test -z "$(git diff --cached --name-only -- docs)" && git commit -m fix',
+      ["commit"],
+    ],
+    [
+      "git ls-files -z plans | xargs -0 git add -- && git commit -m 'stage tracked plan files'",
+      ["add", "commit"],
+    ],
+    [
+      "git ls-files -z -- plans | xargs -0 git add -- && git commit -m 'stage tracked plan files'",
+      ["add", "commit"],
     ],
   ] as const)("classifies writer chain: %s", (command, subcommands) => {
     expect(classify(command)).toEqual({

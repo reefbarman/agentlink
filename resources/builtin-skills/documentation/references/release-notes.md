@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Protected Git metadata preflight now recognises read-only `test -z` Git inspection guards before a writer and constrained `git ls-files -z | xargs -0 git add --` pipelines. These workflows receive exact reviewed native recovery guidance before sandbox launch, without expanding execution authority or permitting arbitrary substitutions.
+- Native commands now check working-directory filesystem identity before running, so reused terminals recover deleted-and-recreated directories. Missing directories fail without running the payload; matching directories preserve logical paths, `OLDPWD`, directory hooks and the stack. Named-terminal state and unnamed-command isolation remain unchanged.
+- Fixed `apply_diff` misclassifying SEARCH/REPLACE edits to patch files when their payload contains `@@` hunk headers. Unified hunks still support properly prefixed reserved marker content and retain malformed-input diagnostics.
+
 - Restored full expandable tool-call and skill details in Desktop and Browser Ask Agent using the shared VS Code cards. Inputs, outputs, errors, approval information and returned media load on demand, with explicit unavailable, update-required and oversized states instead of silently empty details.
 
 - Editor recovery now supports files and unsaved buffers up to 8 MiB while keeping previews, diff computation and complete human save approvals bounded. Recovery approvals explicitly identify skipped formatting and ordinary save participants; incomplete or oversized diffs never authorise a save.

@@ -745,6 +745,16 @@ describe("handleExecuteCommand", () => {
     },
     {
       command:
+        'git diff --cached --check && git diff --cached --stat && git diff --stat && test -z "$(git ls-files plans)" && test -z "$(git diff --cached --name-only -- plans)" && git commit -m "feat: add desktop MCP management and harden agent recovery"',
+      subcommands: ["commit"],
+    },
+    {
+      command:
+        "git ls-files -z plans | xargs -0 git add -- && git commit -m 'stage tracked plan files'",
+      subcommands: ["add", "commit"],
+    },
+    {
+      command:
         "git status --short --branch && git config --local user.email example@example.com && git remote add origin git@github-personal:owner/repo.git && git var GIT_AUTHOR_IDENT && git remote -v && git add -A && git diff --cached --check",
       subcommands: ["config", "remote", "add"],
     },
@@ -770,12 +780,17 @@ describe("handleExecuteCommand", () => {
         { terminalProvider, getCommandApprovalPolicy: () => "approve-for-me" },
       );
       expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
+      expect(executeCommand).not.toHaveBeenCalled();
       expect(textPayload(result)).toMatchObject({
         status: "retry_required",
         command,
         capability_code: "protected_git_metadata",
-        git_subcommands: subcommands,
+        ...(subcommands.length === 1
+          ? { git_subcommand: subcommands[0] }
+          : { git_subcommands: subcommands }),
         required_sandbox_permissions: "require_escalated",
+        reason:
+          "The workspace sandbox keeps this repository's Git metadata read-only. Retry the exact command with native escalation; an applicable native allow rule or fresh review must authorize it.",
         command_sent: false,
         process_launched: false,
         retry_safe: true,

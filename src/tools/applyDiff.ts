@@ -99,10 +99,14 @@ const LEGACY_DIVIDER = "=======";
  * Detect whether a diff string is in unified diff format (--- / +++ / @@ headers).
  */
 export function isUnifiedDiff(diff: string): boolean {
-  // Detect unified diff by the presence of hunk headers (@@ -N,N +N,N @@).
-  // File headers (--- / +++) are optional — many tools emit abbreviated diffs
-  // with only hunk headers, so we don't require them.
-  return /^@@\s+[+-]/m.test(diff);
+  // The first structural opener owns the grammar. Hunk headers inside a
+  // SEARCH/REPLACE block are payload, just as prefixed markers inside a hunk are.
+  for (const line of diff.split("\n")) {
+    if (isSearchMarkerLine(line)) return false;
+    // File headers are optional for abbreviated unified diffs.
+    if (/^@@\s+[+-]/.test(line)) return true;
+  }
+  return false;
 }
 
 /**
