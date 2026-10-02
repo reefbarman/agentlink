@@ -1,0 +1,99 @@
+scripts/release-plan.mjs
+  h_e08a86bb3a33a2 1-371
+scripts/release-coordinator.test.mjs
+  h_e08a86bb3a33a2 1-30
+.github/workflows/cli-release.yml
+  h_e08a86bb3a33a2 7-20,27-30,48,62,96-97,99-102,115-121,123-129
+  h_e08a86bb3a33a2 59,122
+scripts/release-plan.test.mjs
+  h_e08a86bb3a33a2 1-338
+scripts/install.sh
+  h_e08a86bb3a33a2 2-9,13-17,19-36,38-54,57-65,67-76,78,80,82-83,85-89,92,95-96,98-105,107-119,121-126,128,131-135,137-165,168-171,175-227,229-230,232-237,239-247,249-270,272-277
+  h_e08a86bb3a33a2 66,106,127,136,238,271
+.release/README.md
+  h_e08a86bb3a33a2 1-55
+scripts/release.sh
+  h_e08a86bb3a33a2 9-11,13,34-47
+README.md
+  h_e08a86bb3a33a2 72,80,82-86,92-106,108,138
+  s_4a36d4dcae6499::t_08fe79e65548f4 81,107
+resources/builtin-skills/documentation/references/embedding-agentlink.md
+  h_e08a86bb3a33a2 351-366
+scripts/release-publish.mjs
+  h_e08a86bb3a33a2 1-171
+.github/workflows/sdk-release.yml
+  h_e08a86bb3a33a2 1-119
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/standalone-cli.md
+  h_e08a86bb3a33a2 21,24-31
+scripts/release-classify.mjs
+  h_e08a86bb3a33a2 1-260
+.release/sdk-bootstrap.json
+  h_e08a86bb3a33a2 1-7
+package.json
+  h_e08a86bb3a33a2 1154,1179
+.github/workflows/release.yml
+  h_e08a86bb3a33a2 7-20,27-29,46,64,92,175-176,178-182,204-217
+  h_e08a86bb3a33a2 30
+resources/builtin-skills/documentation/references/getting-started.md
+  h_e08a86bb3a33a2 28,30-42,55,71
+  s_ae414d772b98be::t_5be0e07591d2f6 29
+scripts/install-sdk.mjs
+  h_e08a86bb3a33a2 1-208
+scripts/release-classify.test.mjs
+  h_e08a86bb3a33a2 1-196
+scripts/release-coordinator.mjs
+  h_e08a86bb3a33a2 1-494
+.github/workflows/release-coordinator.yml
+  h_e08a86bb3a33a2 1-205
+scripts/install.test.mjs
+  h_e08a86bb3a33a2 1-179
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 98
+.github/workflows/desktop-release.yml
+  h_e08a86bb3a33a2 7-20,27-29,48,59,85,142-143,145-149,168-183
+  h_e08a86bb3a33a2 30
+resources/builtin-skills/documentation/references/release-notes.md
+  s_4a58490c0d6d61::t_dd84adb63f7e32 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a5e3d2859074dd901d28f10bad8a1df8b955eacc",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_4a36d4dcae6499": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8a7211c9-0166-4757-b74a-f080457df977",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_4a58490c0d6d61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c4f19a45-12e6-43b3-8029-10b317d4ddd1",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_ae414d772b98be": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a5eecde3-9913-42f0-a5ab-f3f67dcaa360",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
