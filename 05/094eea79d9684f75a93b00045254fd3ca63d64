@@ -1,0 +1,162 @@
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 152
+src/agent/AgentEngine.ts
+  h_e08a86bb3a33a2 1496,3307
+src/terminal/sandbox/SandboxTerminalCoordinator.ts
+  h_e08a86bb3a33a2 406
+src/approvals/typeSafeGuardianShadow.test.ts
+  h_e08a86bb3a33a2 156-158,222-332,1009-1078
+  s_c92481e373cb88::t_904354c42f4849 333-334
+src/approvals/commandApprovalReview.ts
+  h_e08a86bb3a33a2 20,51,85-89,97-98,101-105,533,535-536,541-542,544-551,566-584,591,596-597,599,602-603,605-608,610-611,620,629-630,635-637,641-663,666-670,753-757,765-766,803-830
+  s_7d5fce10b7e88e::t_c47b15498a556b 537-540,604,609,624-628,631-634,638,664-665,671,831-832
+src/approvals/typeSafeGuardianShadow.ts
+  h_e08a86bb3a33a2 1-9,16,31-36,68-69,92-101,135-137,163-165,204-208,211-221,274,281-282,286-289,401-405,503-504,547-548,555-558,619-620,624-690,692-703
+  s_7bdc8429d69b56::t_34be7f74a2824c 102,284-285,290,309,691,704-705
+src/agent/AgentSession.ts
+  h_e08a86bb3a33a2 112-113,304-305,865,1136,1643,1647,1661-1663,1722-1726,1728,1733-1742,1781-1783
+  s_103385ef9a5217::t_f8deb7aa392310 1727,1729,1743-1744
+resources/builtin-skills/documentation/references/settings.md
+  h_e08a86bb3a33a2 43
+src/agent/AgentSession.test.ts
+  h_e08a86bb3a33a2 1942-1987
+src/core/capabilities/TerminalDispatchRevokedError.ts
+  h_e08a86bb3a33a2 1-12
+src/core/capabilities/terminal.ts
+  h_e08a86bb3a33a2 243-248
+src/tools/executeCommand.ts
+  h_e08a86bb3a33a2 26,72,146,148-149,151-166,182-183,2106-2111,2483-2487,2873,2876-2877,2917-2919,3148-3162,3455-3457,3805-3807,4363-4378,4381,4509,4520-4522,4650,4708-4719,4726,4729,4739-4740,4742-4747,4755-4758,4766-4775,4786,4810-4818,4826,4830,4934-4935,4971-4972,4991-4992
+  s_82892bfc8bac78::t_8fbd4cd5bb2728 150,4379-4380,4382-4387,4720-4725,4727-4728,4732-4738,4741,4748-4754,4776-4785,4787-4809,4819-4824,4828-4829,4932-4933,4936,4970,4973,4990,4993
+src/terminal/native/NativeAgentTerminalCoordinator.test.ts
+  h_e08a86bb3a33a2 19,363-384
+  s_f7255a9730d51b::t_7c7b33632802ae 385-386
+src/approvals/commandApprovalReview.test.ts
+  h_e08a86bb3a33a2 23,434-435,437-438,628-815
+  s_71c9ebbc586907::t_e4a256eb4e569d 436,816
+src/agent/ChatViewProvider.test.ts
+  h_e08a86bb3a33a2 5965-5966,6077,6090,6113
+  h_e08a86bb3a33a2 6112
+src/agent/toolAdapter.ts
+  h_e08a86bb3a33a2 2069-2070,4429
+src/extension.ts
+  h_e08a86bb3a33a2 25,3091,3094-3099,3103-3104
+  s_103385ef9a5217::t_7444626269b44a 3100-3101
+src/terminal/native/NativeAgentTerminalCoordinator.ts
+  h_e08a86bb3a33a2 611-613
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 4089-4121
+src/agent/AgentEngine.test.ts
+  h_e08a86bb3a33a2 1729-1804
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 8148-8309,8360,8362-8371
+  s_21eb2e41bd469d::t_28bb6439010655 8361,8372
+src/integrations/TerminalManager.ts
+  h_e08a86bb3a33a2 522-528
+src/terminal/sandbox/SandboxTerminalCoordinator.test.ts
+  h_e08a86bb3a33a2 2,787-816
+  s_02a9cde17a7dbe::t_e9d41c1f4d2a80 817-822
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 98,100
+src/agent/ChatViewProvider.ts
+  h_e08a86bb3a33a2 4468,6196,6229-6230,6362,8573
+src/telemetry/SessionOutcomeTelemetry.ts
+  h_e08a86bb3a33a2 220-227,246-250,253-258
+CHANGELOG.md
+  h_e08a86bb3a33a2 20
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "05094eea79d9684f75a93b00045254fd3ca63d64",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_02a9cde17a7dbe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4dc6c9a9-4f9c-4800-9081-774696f265e8",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_103385ef9a5217": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1effe983-f548-41a5-b8fc-752b6424f374",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_21eb2e41bd469d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c7f8da49-cb4c-478b-a3c7-71f4421a6efc",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_71c9ebbc586907": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "77d84682-0414-4f98-9fcc-c09a6ecf7191",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_7bdc8429d69b56": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5fd9aa5b-960f-478f-94ab-80eb3bb1bc4d",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_7d5fce10b7e88e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "71113be8-001f-43ce-b4f1-9de05090c169",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_82892bfc8bac78": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9a17b548-efd3-4925-a0a8-81321ec2eff5",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_c92481e373cb88": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "44b3e67d-7c24-4e9e-b918-8c57fbf6f20e",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_f7255a9730d51b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e60fb4a9-66ab-4bb1-9890-aa0e4a5366ec",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
