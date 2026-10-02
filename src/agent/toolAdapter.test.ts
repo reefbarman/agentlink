@@ -4086,6 +4086,39 @@ describe("dispatchToolCall", () => {
     expect(handleExecuteCommand).toHaveBeenCalledOnce();
   });
 
+  it("forwards session review context and human-input revision to command review", async () => {
+    const { handleExecuteCommand } = await import("../tools/executeCommand.js");
+    vi.mocked(handleExecuteCommand).mockClear();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      getCommandReviewContext: (sessionId) => [
+        {
+          role: "user",
+          content: `queued for ${sessionId}`,
+          directUserInstruction: true,
+          queuedHumanInput: true,
+        },
+      ],
+      getHumanInputRevision: (sessionId) =>
+        sessionId === "session-a" ? 41 : undefined,
+    });
+
+    await runtime.executeTool({
+      name: "execute_command",
+      input: { command: "git push", cwd: "/tmp/project" },
+      context: { sessionId: "session-a", mode: "code" },
+    });
+
+    const providers = vi.mocked(handleExecuteCommand).mock.calls[0]![5]!;
+    expect(providers.getHumanInputRevision?.("session-a")).toBe(41);
+    expect(providers.getReviewContext?.("session-a")).toEqual([
+      expect.objectContaining({
+        content: "queued for session-a",
+        queuedHumanInput: true,
+      }),
+    ]);
+  });
+
   it("searches and hydrates the current session transcript with append-safe snapshots", async () => {
     const messages = [
       {

@@ -23,6 +23,7 @@ import type {
   TerminalExecutionSecuritySummary,
 } from "@agentlink/protocol/terminal-security";
 import { SandboxCapabilityLaunchError } from "../core/capabilities/SandboxCapabilityLaunchError.js";
+import { TerminalDispatchRevokedError } from "../core/capabilities/TerminalDispatchRevokedError.js";
 import { TerminalAdmissionCancelledError } from "../terminal/terminalAdmissionQueue.js";
 import {
   SandboxHelperFailure,
@@ -68,6 +69,7 @@ import {
   isRoutineGitWorkflowNativeCommand,
   type CommandReviewContextEntry,
   type CommandApprovalReviewer,
+  type CommandApprovalReviewResult,
   type CommandReviewTurnCircuit,
   type RetainedCommandReviewDenials,
 } from "../approvals/commandApprovalReview.js";
@@ -141,9 +143,27 @@ type CommandApprovalAudit =
       risk: "low" | "medium" | "high" | "critical";
       user_authorization: "unknown" | "low" | "medium" | "high";
       rationale: string;
+      review_id?: string;
     }
-  | { by: "human" }
-  | { by: "human_edited" };
+  | { by: "human"; prior_review?: PriorCommandReview }
+  | { by: "human_edited"; prior_review?: PriorCommandReview };
+
+/**
+ * The original automatic review a human then decided on. Kept immutable in
+ * the tool result so a later human override never replaces the denial.
+ */
+interface PriorCommandReview {
+  review_id: string;
+  status: CommandApprovalReviewResult["status"] | "stale";
+  outcome: CommandApprovalReviewResult["outcome"];
+  model: string;
+}
+
+/** Bounded re-reviews when human input arrives while a review is running. */
+const MAX_FRESH_REVIEW_ATTEMPTS = 2;
+
+const STALE_REVIEW_HUMAN_ONLY_REASON =
+  "New input from you arrived while this command was being reviewed. Your direct approval is required.";
 
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 
@@ -159,6 +179,8 @@ export interface ExecuteCommandProviders {
   toolAbortSignal?: AbortSignal;
   getUserObjective?: (sessionId: string) => string | undefined;
   getReviewContext?: (sessionId: string) => CommandReviewContextEntry[];
+  /** Advances on every direct human input, including input queued mid-run. */
+  getHumanInputRevision?: (sessionId: string) => number | undefined;
   commandExecutionPolicy?: CommandExecutionPolicy;
   /** Tools allowed in the originating provider request, for rejection guidance only. */
   availableToolNames?: ReadonlySet<string>;
@@ -2081,6 +2103,12 @@ export async function handleExecuteCommand(
   providers: ExecuteCommandProviders = {},
 ): Promise<ToolResult> {
   let commandToRun = params.command;
+  // Set only for automatic reviewer approvals: the human-input revision that
+  // review saw. Dispatch is revoked if newer human input has arrived since.
+  let reviewedHumanInputRevision: number | undefined;
+  const humanInputIsStale = () =>
+    reviewedHumanInputRevision !== undefined &&
+    providers.getHumanInputRevision?.(sessionId) !== reviewedHumanInputRevision;
   try {
     if (!params.command || params.command.trim().length === 0) {
       return {
@@ -2452,6 +2480,11 @@ export async function handleExecuteCommand(
           background: params.background,
           timeout: params.timeout ? params.timeout * 1000 : undefined,
           admissionSignal: providers.toolAbortSignal,
+          assertDispatchAllowed: () => {
+            if (humanInputIsStale()) {
+              throw new TerminalDispatchRevokedError(STALE_DISPATCH_REASON);
+            }
+          },
           env: params.env,
           temporaryHome: temporaryHome || undefined,
           sandboxSessionId: sessionId,
@@ -2837,8 +2870,11 @@ export async function handleExecuteCommand(
               routeContext,
               providers,
               security: preparedExecution.security,
+              toolCallId: trackerCtx?.toolCallId,
             },
           );
+          reviewedHumanInputRevision =
+            approvalResult.reviewedHumanInputRevision;
 
           if (approvalResult.policyDrift) {
             const driftedPreparation = preparedExecution;
@@ -2878,6 +2914,9 @@ export async function handleExecuteCommand(
                     status: "rejected_by_user",
                     command: params.command,
                     reason: approvalResult.reason,
+                    ...(approvalResult.priorReview
+                      ? { prior_review: approvalResult.priorReview }
+                      : {}),
                     security: preparedExecution.security,
                     command_sent: false,
                   }),
@@ -3106,6 +3145,21 @@ export async function handleExecuteCommand(
         );
       }
 
+      if (humanInputIsStale()) {
+        const stalePreparation = preparedExecution;
+        preparedExecution = undefined;
+        stalePreparation.dispose();
+        recordExecutionAudit(
+          providers.terminalProvider,
+          "preparation_revoked",
+          stalePreparation.security,
+          { resultStatus: "authorization_stale" },
+        );
+        return staleAuthorizationResult(
+          commandToRun,
+          stalePreparation.security,
+        );
+      }
       commitApprovalMutations?.();
       const execution = preparedExecution;
       preparedExecution = undefined;
@@ -3398,6 +3452,9 @@ export async function handleExecuteCommand(
               };
             }
 
+            // The one-shot retry has its own human decision.
+            reviewedHumanInputRevision =
+              retryApproval.reviewedHumanInputRevision;
             if (
               hasPolicyDrift(providers, sessionId, retryRouteContext) ||
               isCommandApprovalCancelled(sessionId, providers)
@@ -3744,6 +3801,9 @@ export async function handleExecuteCommand(
     const message = err instanceof Error ? err.message : String(err);
     if (err instanceof TerminalAdmissionCancelledError) {
       return cancelledCommandResult(params.command);
+    }
+    if (err instanceof TerminalDispatchRevokedError) {
+      return staleAuthorizationResult(commandToRun);
     }
     if (err instanceof SandboxHelperFailure) {
       return {
@@ -4300,6 +4360,31 @@ function readOnlyRejectedCommandResult(
   };
 }
 
+const STALE_DISPATCH_REASON =
+  "New input from the user arrived after automatic review approved this command, so it was not run. Read the new input, then decide whether to run the command again.";
+
+function staleAuthorizationResult(
+  command: string,
+  security?: TerminalExecutionSecuritySummary,
+): ToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          status: "authorization_stale",
+          command,
+          reason: STALE_DISPATCH_REASON,
+          ...(security ? { security } : {}),
+          command_sent: false,
+          process_launched: false,
+          retry_safe: true,
+        }),
+      },
+    ],
+  };
+}
+
 function cancelledCommandResult(
   command: string,
   security?: TerminalExecutionSecuritySummary,
@@ -4421,6 +4506,7 @@ async function approveSubCommands(
     routeContext: TerminalExecutionRouteContext;
     providers?: ExecuteCommandProviders;
     security?: TerminalExecutionSecuritySummary;
+    toolCallId?: string;
   },
 ): Promise<{
   approved: boolean;
@@ -4431,6 +4517,9 @@ async function approveSubCommands(
   autoApprovedByTier?: { tier: CommandTier; threshold: "safe" | "sensitive" };
   cancelled?: boolean;
   policyDrift?: boolean;
+  /** Human-input revision an automatic reviewer approval was based on. */
+  reviewedHumanInputRevision?: number;
+  priorReview?: PriorCommandReview;
 
   commitMutations?: () => void;
 }> {
@@ -4558,6 +4647,7 @@ async function approveSubCommands(
   const hasEnvOverrides = Boolean(options?.hasEnvOverrides);
   const forceRequested = Boolean(options?.forceRequested);
   let commandReview: CommandReviewSummary | undefined;
+  let priorReview: PriorCommandReview | undefined;
   let humanOnlyReason: string | undefined = options?.recoveryAttempt
     ? options.recoveryAttempt.commandSent === false &&
       options.recoveryAttempt.processLaunched === false
@@ -4615,37 +4705,57 @@ async function approveSubCommands(
       humanOnlyReason = eligibility.reason;
     } else {
       const reviewedCommand = fullCommand;
-      if (options?.security && reviewProviders.terminalProvider) {
-        recordExecutionAudit(
-          reviewProviders.terminalProvider,
-          "review_started",
-          options.security,
-        );
-      }
-      const review = await reviewProviders.commandApprovalReviewer.review({
-        sessionId,
-        command: reviewedCommand,
-        cwd,
-        workspaceRoots,
-        reason,
-        userObjective: reviewProviders.getUserObjective?.(sessionId),
-        context: reviewProviders.getReviewContext?.(sessionId),
-        classified: tierInfo,
-        security: options?.security,
-        inlineFiles,
-        evidence: collectCommandReviewEvidence(reviewedCommand, {
+      const currentHumanInputRevision = () =>
+        reviewProviders.getHumanInputRevision?.(sessionId);
+      let review!: CommandApprovalReviewResult;
+      let reviewId = "";
+      let reviewedRevision: number | undefined;
+      let staleReview = false;
+      // Context is read when each review starts. Human input received while a
+      // review is in flight makes that decision stale, so review once more
+      // against the newer context instead of approving under old authority.
+      for (let attempt = 0; attempt < MAX_FRESH_REVIEW_ATTEMPTS; attempt += 1) {
+        reviewId = randomUUID();
+        reviewedRevision = currentHumanInputRevision();
+        if (options?.security && reviewProviders.terminalProvider) {
+          recordExecutionAudit(
+            reviewProviders.terminalProvider,
+            "review_started",
+            options.security,
+          );
+        }
+        review = await reviewProviders.commandApprovalReviewer.review({
+          sessionId,
+          command: reviewedCommand,
           cwd,
           workspaceRoots,
-        }),
-        signal: reviewProviders.toolAbortSignal,
-      });
-      if (options?.security && reviewProviders.terminalProvider) {
-        recordExecutionAudit(
-          reviewProviders.terminalProvider,
-          "review_completed",
-          options.security,
-          { resultStatus: review.status },
-        );
+          reason,
+          userObjective: reviewProviders.getUserObjective?.(sessionId),
+          context: reviewProviders.getReviewContext?.(sessionId),
+          classified: tierInfo,
+          security: options?.security,
+          inlineFiles,
+          evidence: collectCommandReviewEvidence(reviewedCommand, {
+            cwd,
+            workspaceRoots,
+          }),
+          signal: reviewProviders.toolAbortSignal,
+          reviewId,
+          ...(reviewedRevision !== undefined
+            ? { humanInputRevision: reviewedRevision }
+            : {}),
+          ...(options?.toolCallId ? { toolCallId: options.toolCallId } : {}),
+        });
+        if (options?.security && reviewProviders.terminalProvider) {
+          recordExecutionAudit(
+            reviewProviders.terminalProvider,
+            "review_completed",
+            options.security,
+            { resultStatus: review.status },
+          );
+        }
+        staleReview = currentHumanInputRevision() !== reviewedRevision;
+        if (!staleReview || reviewProviders.toolAbortSignal?.aborted) break;
       }
       if (
         options?.routeContext &&
@@ -4653,56 +4763,71 @@ async function approveSubCommands(
       ) {
         return { approved: false, policyDrift: true };
       }
-      const sessionActive =
-        reviewProviders.isSessionActive?.(sessionId) ??
-        !reviewProviders.toolAbortSignal?.aborted;
-      const circuitDecision =
-        reviewProviders.commandReviewTurnCircuit?.record(review);
-      if (circuitDecision?.explicitDenial) {
-        reviewProviders.retainedCommandReviewDenials?.retain(
-          sessionId,
-          actionKey,
-        );
-      }
-      if (circuitDecision?.interrupted) {
-        circuitInterrupted = true;
-        humanOnlyReason =
-          "Automatic command review stopped after repeated denials in this turn. Your direct approval is required.";
-      }
-      const reviewerApproved =
-        review.status === "reviewed" && review.outcome === "allow";
-      if (
-        reviewerApproved &&
-        sessionActive &&
-        !reviewProviders.toolAbortSignal?.aborted &&
-        reviewedCommand === fullCommand
-      ) {
-        reviewProviders.retainedCommandReviewDenials?.clear(
-          sessionId,
-          actionKey,
-        );
-        return {
-          approved: true,
-          approval: {
-            by: "model_reviewer",
-            model: review.model,
-            tier: tierInfo.tier,
-            outcome: "allow",
+      priorReview = {
+        review_id: reviewId,
+        status: staleReview ? "stale" : review.status,
+        outcome: review.outcome,
+        model: review.model,
+      };
+      if (staleReview) {
+        // A decision made against superseded context is not a denial signal.
+        humanOnlyReason = STALE_REVIEW_HUMAN_ONLY_REASON;
+      } else {
+        const sessionActive =
+          reviewProviders.isSessionActive?.(sessionId) ??
+          !reviewProviders.toolAbortSignal?.aborted;
+        const circuitDecision =
+          reviewProviders.commandReviewTurnCircuit?.record(review);
+        if (circuitDecision?.explicitDenial) {
+          reviewProviders.retainedCommandReviewDenials?.retain(
+            sessionId,
+            actionKey,
+          );
+        }
+        if (circuitDecision?.interrupted) {
+          circuitInterrupted = true;
+          humanOnlyReason =
+            "Automatic command review stopped after repeated denials in this turn. Your direct approval is required.";
+        }
+        const reviewerApproved =
+          review.status === "reviewed" && review.outcome === "allow";
+        if (
+          reviewerApproved &&
+          sessionActive &&
+          !reviewProviders.toolAbortSignal?.aborted &&
+          reviewedCommand === fullCommand
+        ) {
+          reviewProviders.retainedCommandReviewDenials?.clear(
+            sessionId,
+            actionKey,
+          );
+          return {
+            approved: true,
+            approval: {
+              by: "model_reviewer",
+              model: review.model,
+              tier: tierInfo.tier,
+              outcome: "allow",
+              risk: review.risk,
+              user_authorization: review.userAuthorization,
+              rationale: review.rationale.slice(0, 500),
+              review_id: reviewId,
+            },
+            ...(reviewedRevision !== undefined
+              ? { reviewedHumanInputRevision: reviewedRevision }
+              : {}),
+          };
+        }
+        if (!reviewerApproved) {
+          commandReview = {
+            status: review.status,
+            outcome: review.outcome,
             risk: review.risk,
-            user_authorization: review.userAuthorization,
+            userAuthorization: review.userAuthorization,
             rationale: review.rationale.slice(0, 500),
-          },
-        };
-      }
-      if (!reviewerApproved) {
-        commandReview = {
-          status: review.status,
-          outcome: review.outcome,
-          risk: review.risk,
-          userAuthorization: review.userAuthorization,
-          rationale: review.rationale.slice(0, 500),
-          model: review.model,
-        };
+            model: review.model,
+          };
+        }
       }
     }
   }
@@ -4804,7 +4929,11 @@ async function approveSubCommands(
     if (options?.recoveryAttempt) {
       reviewProviders?.commandReviewTurnCircuit?.rejectRecovery(actionKey);
     }
-    return { approved: false, reason: response.rejectionReason };
+    return {
+      approved: false,
+      reason: response.rejectionReason,
+      ...(priorReview ? { priorReview } : {}),
+    };
   }
 
   let mutationsCommitted = false;
@@ -4838,7 +4967,10 @@ async function approveSubCommands(
   if (response.editedCommand) {
     return {
       approved: true,
-      approval: { by: "human_edited" },
+      approval: {
+        by: "human_edited",
+        ...(priorReview ? { prior_review: priorReview } : {}),
+      },
       editedCommand: response.editedCommand,
       followUp: response.followUp,
       commitMutations,
@@ -4855,7 +4987,10 @@ async function approveSubCommands(
       ? { by: "coordinator" }
       : response.recentApproval
         ? { by: "recent_approval" }
-        : { by: "human" },
+        : {
+            by: "human",
+            ...(priorReview ? { prior_review: priorReview } : {}),
+          },
     followUp: response.followUp,
     commitMutations,
   };

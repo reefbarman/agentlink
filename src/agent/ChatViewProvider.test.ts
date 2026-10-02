@@ -5962,6 +5962,8 @@ describe("ChatViewProvider session state sync", () => {
       undefined,
       undefined,
       undefined,
+      undefined,
+      "browser",
     );
     expect(
       provider.getBrowserProjectedForegroundState()?.messageQueue,
@@ -6072,6 +6074,7 @@ describe("ChatViewProvider session state sync", () => {
     const accepted = (
       provider as unknown as {
         interjectQueuedMessageFromUi(input: {
+          origin: "vscode" | "browser";
           sessionId: string;
           queueId: string;
           text: string;
@@ -6084,6 +6087,7 @@ describe("ChatViewProvider session state sync", () => {
         }): boolean;
       }
     ).interjectQueuedMessageFromUi({
+      origin: "vscode",
       sessionId: "session-1",
       queueId: "queue-1",
       text: "interject this",
@@ -6105,6 +6109,8 @@ describe("ChatViewProvider session state sync", () => {
       ["note.md"],
       undefined,
       undefined,
+      undefined,
+      "vscode",
     );
   });
 

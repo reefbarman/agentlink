@@ -22,6 +22,7 @@ import { ConfigStore } from "./approvals/ConfigStore.js";
 import {
   buildCommandReviewContext,
   createCommandApprovalReviewer,
+  selectCommandReviewObjective,
 } from "./approvals/commandApprovalReview.js";
 import { createNetworkApprovalReviewer } from "./approvals/networkApprovalReview.js";
 import { createActionApprovalReviewer } from "./approvals/actionApprovalReview.js";
@@ -3087,21 +3088,20 @@ export async function activate(
       const messages = agentSessionManager
         .getSession(sessionId)
         ?.getAllMessages();
-      if (!messages) return undefined;
-      for (let i = messages.length - 1; i >= 0; i -= 1) {
-        const message = messages[i];
-        if (message?.role === "user" && typeof message.content === "string") {
-          return message.content;
-        }
-      }
-      return undefined;
+      return messages ? selectCommandReviewObjective(messages) : undefined;
     },
     getCommandReviewContext: (sessionId) => {
-      const messages = agentSessionManager
-        .getSession(sessionId)
-        ?.getAllMessages();
-      return messages ? buildCommandReviewContext(messages, sessionId) : [];
+      const session = agentSessionManager.getSession(sessionId);
+      return session
+        ? buildCommandReviewContext(
+            session.getAllMessages(),
+            sessionId,
+            session.getPendingHumanInterjections(),
+          )
+        : [];
     },
+    getHumanInputRevision: (sessionId) =>
+      agentSessionManager.getSession(sessionId)?.humanInputRevision,
     onModeSwitch: (sessionId, mode, reason, silent) =>
       chatViewProvider.handleModeSwitch(mode, reason, silent, sessionId),
     onApprovalRequest: (request, sessionId) =>

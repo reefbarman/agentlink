@@ -109,6 +109,8 @@ function countStringUserMessages(messages: readonly AgentMessage[]): number {
 
 export interface PendingInterjection {
   coordination?: import("@agentlink/protocol/chat-transcript").BackgroundCoordination;
+  /** Host-assigned only by direct UI send handlers; absent means non-human. */
+  origin?: "vscode" | "browser";
   text: string;
   queueId: string;
   messageId?: string;
@@ -299,6 +301,8 @@ export class AgentSession {
   private _abortSignal: AbortSignal | undefined;
   private _abortGeneration = 0;
   private _pendingInterjections: PendingInterjection[] = [];
+  /** Advances whenever direct human input is received, queued, edited or retracted. */
+  private _humanInputRevision = 0;
   private readonly _pendingInterjectionQueuedListeners = new Set<() => void>();
   // Transient per-surface counts of messages sitting in UI send queues
   // (VS Code webview / browser remote). Not persisted; used to give queued
@@ -858,6 +862,7 @@ export class AgentSession {
   ): void {
     this.activeSkillIds.clear();
     this.messagesRevision++;
+    if (opts?.origin && !opts.hidden) this._humanInputRevision++;
     this.messages.push({
       role: "user",
       content: text,
@@ -1128,6 +1133,7 @@ export class AgentSession {
         ? [structuredClone(evidence)]
         : [];
     });
+    if (humanQuestionAnswers.length) this._humanInputRevision++;
     this.messages.push({
       role: "user",
       content: results.map(
@@ -1634,9 +1640,11 @@ export class AgentSession {
     images?: Array<{ name: string; mimeType: string; base64: string }>,
     documents?: Array<{ name: string; mimeType: string; base64: string }>,
     coordination?: PendingInterjection["coordination"],
+    origin?: PendingInterjection["origin"],
   ): boolean {
     const entry: PendingInterjection = {
       coordination,
+      ...(origin ? { origin } : {}),
       text,
       queueId,
       messageId,
@@ -1650,6 +1658,9 @@ export class AgentSession {
     const index = this._pendingInterjections.findIndex(
       (item) => item.queueId === queueId,
     );
+    if (origin || this._pendingInterjections[index]?.origin) {
+      this._humanInputRevision++;
+    }
     if (index >= 0) this._pendingInterjections[index] = entry;
     else this._pendingInterjections.push(entry);
     for (const listener of this._pendingInterjectionQueuedListeners) {
@@ -1708,8 +1719,27 @@ export class AgentSession {
       (item) => item.queueId === queueId,
     );
     if (index < 0) return false;
-    this._pendingInterjections[index] = { queueId, ...updates };
+    const existing = this._pendingInterjections[index]!;
+    if (existing.origin) this._humanInputRevision++;
+    this._pendingInterjections[index] = {
+      ...(existing.coordination ? { coordination: existing.coordination } : {}),
+      ...(existing.origin ? { origin: existing.origin } : {}),
+      queueId,
+      ...updates,
+    };
     return true;
+  }
+
+  /** Revision of direct human input, including input still queued mid-run. */
+  get humanInputRevision(): number {
+    return this._humanInputRevision;
+  }
+
+  /** Direct human messages queued but not yet drained into the transcript. */
+  getPendingHumanInterjections(): string[] {
+    return this._pendingInterjections.flatMap((item) =>
+      item.origin && item.text.trim() ? [item.text] : [],
+    );
   }
 
   /**
@@ -1748,7 +1778,9 @@ export class AgentSession {
       (item) => item.queueId === queueId,
     );
     if (index < 0) return null;
-    return this._pendingInterjections.splice(index, 1)[0];
+    const [removed] = this._pendingInterjections.splice(index, 1);
+    if (removed?.origin) this._humanInputRevision++;
+    return removed ?? null;
   }
 
   queuePendingModeResume(

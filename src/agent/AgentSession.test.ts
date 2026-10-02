@@ -1939,6 +1939,52 @@ describe("AgentSession", () => {
       expect(session.consumePendingInterjection()).toBeNull();
     });
 
+    it("tracks direct human input separately from agent-generated interjections", async () => {
+      const session = await makeSession();
+      const start = session.humanInputRevision;
+
+      session.setPendingInterjection("coordinator steer", "steer-1");
+      expect(session.humanInputRevision).toBe(start);
+      expect(session.getPendingHumanInterjections()).toEqual([]);
+
+      session.setPendingInterjection(
+        "don't push",
+        "q1",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "browser",
+      );
+      expect(session.humanInputRevision).toBe(start + 1);
+      expect(session.getPendingHumanInterjections()).toEqual(["don't push"]);
+
+      // Editing preserves host-assigned origin and is new human input.
+      session.updatePendingInterjection("q1", { text: "don't push or tag" });
+      expect(session.humanInputRevision).toBe(start + 2);
+      expect(session.getPendingHumanInterjections()).toEqual([
+        "don't push or tag",
+      ]);
+      expect(session.consumePendingInterjection()).toMatchObject({
+        text: "coordinator steer",
+      });
+      expect(session.consumePendingInterjection()).toMatchObject({
+        origin: "browser",
+      });
+
+      session.addUserMessage("hidden continuation", {
+        origin: "vscode",
+        hidden: true,
+      });
+      expect(session.humanInputRevision).toBe(start + 2);
+      session.addUserMessage("typed", { origin: "vscode" });
+      expect(session.humanInputRevision).toBe(start + 3);
+    });
+
     it("hasPendingInterjections reflects the queue state", async () => {
       const session = await makeSession();
       expect(session.hasPendingInterjections).toBe(false);

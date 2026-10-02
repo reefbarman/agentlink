@@ -217,6 +217,14 @@ export type GuardianShadowAuthorizationEvidence =
   | "redacted_truncated"
   | "unreported";
 
+/** Completeness of host-verified human UI decisions supplied to the shadow. */
+export type GuardianShadowHumanDecisionEvidence =
+  | "none"
+  | "complete"
+  | "omitted"
+  | "redacted"
+  | "unreported";
+
 export type GuardianShadowDecisionBasis =
   | "authorized"
   | "authorization"
@@ -235,8 +243,19 @@ export type GuardianShadowDecisionBasis =
 export interface GuardianShadowComparisonEvent {
   type: "guardian_shadow_comparison";
   sessionId: string;
+  /** Generated before primary and shadow dispatch; joins both to one review. */
+  reviewId?: string;
+  toolCallId?: string;
+  /** Session human-input revision the review context reflected. */
+  authorizationRevision?: number;
   reviewKind: "command";
   shadowProvider: "typesafe";
+  primaryModel?: string;
+  primaryPolicyFingerprint?: string;
+  shadowModel?: string;
+  shadowPolicyFingerprint?: string;
+  humanDecisionEvidence?: GuardianShadowHumanDecisionEvidence;
+  humanDecisionCount?: number;
   primaryStatus: string;
   primaryOutcome: string;
   primaryRisk: string;

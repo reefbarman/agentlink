@@ -153,6 +153,9 @@ describe("TypeSafe Guardian shadow reviewer", () => {
       },
       actionFamily: "destructive",
       authorizationEvidence: "complete",
+      humanDecisionEvidence: "none",
+      humanDecisionCount: 0,
+      model: "jev-latest",
       objectiveMatchPermille: 940,
       secretExposurePermille: 30,
       boundedImpactPermille: 890,
@@ -214,6 +217,119 @@ describe("TypeSafe Guardian shadow reviewer", () => {
       "command",
     );
     expect(JSON.stringify(body.state.action).length).toBeLessThan(2_000);
+  });
+
+  it("sends host-verified human decisions in order, including a later refusal", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+    const decision = (answer: string) =>
+      JSON.stringify({
+        questionRequestId: `request-${answer}`,
+        toolCallId: `tool-${answer}`,
+        agentAuthoredSubject: {
+          context: "Publishing",
+          question: { id: "push", question: "Push the branch?" },
+        },
+        humanAnswer: answer,
+      });
+    const input = reviewInput("git push origin feature");
+    input.context = [
+      {
+        role: "user",
+        content: "Prepare the release branch",
+        directUserInstruction: true,
+      },
+      { role: "tool", content: decision("Yes"), humanDecisionEvidence: true },
+      {
+        role: "tool",
+        content: decision("No, don't push"),
+        humanDecisionEvidence: true,
+      },
+    ];
+
+    const result = await reviewer.review(input);
+    expect(result).toMatchObject({
+      humanDecisionEvidence: "complete",
+      humanDecisionCount: 2,
+    });
+    const body = JSON.parse(String(fetch.mock.calls[0]![1]?.body));
+    expect(
+      body.state.action.humanDecisions.map(
+        (item: { humanAnswer: string }) => item.humanAnswer,
+      ),
+    ).toEqual(["Yes", "No, don't push"]);
+    expect(body.state.action.humanDecisions[1]).toMatchObject({
+      afterLatestUserInstruction: true,
+      agentAuthoredSubject: { context: "Publishing" },
+    });
+    expect(body.state.policy.authorization.join(" ")).toContain(
+      "`action.humanDecisions`",
+    );
+  });
+
+  it("marks an unrepresentable or omitted human decision instead of dropping it", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+    const input = reviewInput();
+    input.context = [
+      ...input.context!,
+      {
+        role: "tool",
+        content: JSON.stringify({
+          humanAnswer: "No",
+          humanNote: "token=ghp_abcdefghijklmnopqrstuvwxyz123456",
+        }),
+        humanDecisionEvidence: true,
+      },
+    ];
+
+    const result = await reviewer.review(input);
+    expect(result.humanDecisionEvidence).toBe("redacted");
+    const body = JSON.parse(String(fetch.mock.calls[0]![1]?.body));
+    expect(body.state.action.humanDecisions).toEqual([
+      expect.objectContaining({ evidenceOmitted: expect.any(String) }),
+    ]);
+    expect(JSON.stringify(body)).not.toContain("ghp_");
+  });
+
+  it("flags a queued human message as the latest instruction", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(typeSafeResponse());
+    const reviewer = createTypeSafeGuardianShadowReviewer({
+      getConfig: () => ({ enabled: true }),
+      getApiKey: async () => "typesafe-key",
+      fetch,
+    });
+    const input = reviewInput();
+    input.context = [
+      ...input.context!,
+      {
+        role: "user",
+        content: "Actually, don't delete anything",
+        directUserInstruction: true,
+        queuedHumanInput: true,
+      },
+    ];
+
+    await reviewer.review(input);
+    const body = JSON.parse(String(fetch.mock.calls[0]![1]?.body));
+    expect(body.state.action.latestUserInstruction).toBe(
+      "Actually, don't delete anything",
+    );
+    expect(body.state.action.latestUserInstructionQueued).toBe(true);
   });
 
   it("does not describe classifier codes or visible commands as opaque evidence", async () => {
@@ -889,5 +1005,75 @@ describe("shadowing command reviewer", () => {
     await reviewer.review(reviewInput());
     await Promise.resolve();
     expect(record).not.toHaveBeenCalled();
+  });
+
+  it("joins concurrent reviews with delayed shadow results by review identity", async () => {
+    const primaryResult = (model: string): CommandApprovalReviewResult => ({
+      outcome: "deny",
+      risk: "high",
+      userAuthorization: "unknown",
+      rationale: "Private primary rationale",
+      model,
+      status: "reviewed",
+    });
+    const resolvers: Array<(value: { status: "completed" }) => void> = [];
+    const record = vi.fn();
+    const reviewer = createShadowingCommandApprovalReviewer({
+      primary: {
+        review: vi.fn(async (input: CommandApprovalReviewInput) =>
+          primaryResult(`guardian-${input.reviewId}`),
+        ),
+      },
+      shadow: {
+        review: vi.fn(
+          () =>
+            new Promise<{ status: "completed" }>((resolve) => {
+              resolvers.push(resolve);
+            }),
+        ),
+      },
+      record,
+    });
+
+    await Promise.all([
+      reviewer.review({
+        ...reviewInput(),
+        reviewId: "review-a",
+        toolCallId: "tool-a",
+        humanInputRevision: 3,
+      }),
+      reviewer.review({
+        ...reviewInput(),
+        reviewId: "review-b",
+        toolCallId: "tool-b",
+        humanInputRevision: 4,
+      }),
+    ]);
+    // Shadow results complete out of order, after both primaries returned.
+    resolvers[1]!({ status: "completed" });
+    resolvers[0]!({ status: "completed" });
+    await vi.waitFor(() => expect(record).toHaveBeenCalledTimes(2));
+
+    const events = record.mock.calls.map(([comparison]) =>
+      toGuardianShadowComparisonEvent(comparison),
+    );
+    const byReview = Object.fromEntries(
+      events.map((event) => [event.reviewId, event]),
+    );
+    expect(byReview["review-a"]).toMatchObject({
+      toolCallId: "tool-a",
+      authorizationRevision: 3,
+      primaryModel: "guardian-review-a",
+      primaryPolicyFingerprint: expect.stringMatching(/^[0-9a-f]{16}$/),
+      shadowPolicyFingerprint: expect.stringMatching(/^[0-9a-f]{16}$/),
+    });
+    expect(byReview["review-b"]).toMatchObject({
+      toolCallId: "tool-b",
+      authorizationRevision: 4,
+      primaryModel: "guardian-review-b",
+    });
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain("rm -rf");
+    expect(serialized).not.toContain("Private primary rationale");
   });
 });

@@ -8145,6 +8145,168 @@ describe("handleExecuteCommand", () => {
     expect(textPayload(result).auto_approved).toBeUndefined();
   });
 
+  describe("human input received during automatic review", () => {
+    const allowReview = () => ({
+      outcome: "allow" as const,
+      risk: "medium" as const,
+      userAuthorization: "high" as const,
+      rationale: "Requested fetch",
+      model: "review-model",
+      status: "reviewed" as const,
+    });
+    const run = async (
+      providers: Record<string, unknown>,
+      enqueueCommandApproval = vi.fn(() => ({
+        promise: Promise.resolve({ decision: "reject" }),
+      })),
+    ) => {
+      getConfiguration.mockReturnValue({
+        get: vi.fn((key: string, fallback?: unknown) =>
+          key === "masterBypass" ? false : fallback,
+        ),
+      });
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      return handleExecuteCommand(
+        { command: "git fetch --depth=1 origin" },
+        {
+          isCommandApproved: () => false,
+          findMatchingCommandRule: () => undefined,
+        } as never,
+        { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+        "session-human-input",
+        { toolCallId: "tool-call-1", setTerminalId: () => {} },
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "approve-for-me",
+          isSessionActive: () => true,
+          ...providers,
+        },
+      );
+    };
+
+    it("re-reviews against the newer context and links the review to the tool call", async () => {
+      let revision = 4;
+      const contexts: string[] = [];
+      const review = vi.fn(async () => {
+        if (review.mock.calls.length === 1) revision += 1;
+        return allowReview();
+      });
+      const result = await run({
+        commandApprovalReviewer: { review },
+        getHumanInputRevision: () => revision,
+        getReviewContext: () => {
+          contexts.push(`revision-${revision}`);
+          return [];
+        },
+      });
+
+      expect(review).toHaveBeenCalledTimes(2);
+      expect(contexts).toEqual(["revision-4", "revision-5"]);
+      expect(review.mock.calls[1]).toEqual([
+        expect.objectContaining({
+          humanInputRevision: 5,
+          toolCallId: "tool-call-1",
+          reviewId: expect.any(String),
+        }),
+      ]);
+      const payload = textPayload(result);
+      expect(payload.approval).toMatchObject({
+        by: "model_reviewer",
+        review_id: (
+          review.mock.calls[1] as unknown as [{ reviewId: string }]
+        )[0].reviewId,
+      });
+      expect(executeCommand).toHaveBeenCalledTimes(1);
+    });
+
+    it("requires direct approval when input keeps arriving during review", async () => {
+      let revision = 0;
+      const review = vi.fn(async () => {
+        revision += 1;
+        return allowReview();
+      });
+      const enqueueCommandApproval = vi.fn(() => ({
+        promise: Promise.resolve({ decision: "reject" }),
+      }));
+      const result = await run(
+        {
+          commandApprovalReviewer: { review },
+          getHumanInputRevision: () => revision,
+        },
+        enqueueCommandApproval,
+      );
+
+      expect(review).toHaveBeenCalledTimes(2);
+      expect(enqueueCommandApproval).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.objectContaining({
+          humanOnlyReason: expect.stringContaining("arrived while"),
+        }),
+      );
+      expect(textPayload(result)).toMatchObject({
+        status: "rejected_by_user",
+        prior_review: { status: "stale", outcome: "allow" },
+      });
+      expect(executeCommand).not.toHaveBeenCalled();
+    });
+
+    it("revokes dispatch when input arrives after approval but before the command is sent", async () => {
+      let revision = 2;
+      executeCommand.mockImplementationOnce(
+        async (options: { assertDispatchAllowed?: () => void }) => {
+          // Simulates input queued while waiting for terminal admission.
+          revision += 1;
+          options.assertDispatchAllowed?.();
+          throw new Error("dispatch guard did not run");
+        },
+      );
+      const result = await run({
+        commandApprovalReviewer: { review: vi.fn(async () => allowReview()) },
+        getHumanInputRevision: () => revision,
+      });
+
+      expect(textPayload(result)).toMatchObject({
+        status: "authorization_stale",
+        command_sent: false,
+        process_launched: false,
+        retry_safe: true,
+      });
+    });
+
+    it("does not revoke a human-approved command for later input", async () => {
+      let revision = 0;
+      executeCommand.mockImplementationOnce(
+        async (options: { assertDispatchAllowed?: () => void }) => {
+          revision += 1;
+          options.assertDispatchAllowed?.();
+          return {
+            exit_code: 0,
+            output: "",
+            output_captured: true,
+            terminal_id: "t1",
+            command_sent: true,
+          };
+        },
+      );
+      const result = await run(
+        {
+          commandApprovalReviewer: {
+            review: vi.fn(async () => ({
+              ...allowReview(),
+              outcome: "deny" as const,
+            })),
+          },
+          getHumanInputRevision: () => revision,
+        },
+        vi.fn(() => ({ promise: Promise.resolve({ decision: "accept" }) })),
+      );
+
+      expect(textPayload(result).status).not.toBe("authorization_stale");
+      expect(textPayload(result).approval).toMatchObject({ by: "human" });
+    });
+  });
+
   it("falls through to the human card when the reviewer asks the user", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
@@ -8195,7 +8357,19 @@ describe("handleExecuteCommand", () => {
         }),
       }),
     );
-    expect(textPayload(result).approval).toEqual({ by: "human" });
+    // The human override is recorded beside, never in place of, the denial.
+    expect(textPayload(result).approval).toEqual({
+      by: "human",
+      prior_review: {
+        review_id: expect.any(String),
+        status: "reviewed",
+        outcome: "deny",
+        model: "review-model",
+      },
+    });
+    expect(textPayload(result).approval.prior_review.review_id).toBe(
+      (review.mock.calls[0] as unknown as [{ reviewId: string }])[0].reviewId,
+    );
   });
 
   it("hands the circuit-tripping Guardian denial to the human card with its evidence", async () => {

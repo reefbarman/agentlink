@@ -2066,6 +2066,8 @@ export interface ToolDispatchContext {
   getCommandReviewContext?: (
     sessionId: string,
   ) => import("../approvals/commandApprovalReview.js").CommandReviewContextEntry[];
+  /** Advances on every direct human input, including input queued mid-run. */
+  getHumanInputRevision?: (sessionId: string) => number | undefined;
   delegationPolicy?: {
     ownedPaths?: string[];
     forbiddenPaths?: string[];
@@ -4424,6 +4426,7 @@ async function dispatchToolCallWithTrackedApprovals(
           toolAbortSignal,
           getUserObjective: ctx.getCommandReviewObjective,
           getReviewContext: ctx.getCommandReviewContext,
+          getHumanInputRevision: ctx.getHumanInputRevision,
           commandExecutionPolicy:
             ctx.commandExecutionPolicy ??
             (ctx.mode === "ask" ? "read-only" : undefined),

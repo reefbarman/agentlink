@@ -608,6 +608,9 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     if (!this.isReservedTarget(channel, before, reservation)) {
       throw new Error("Native Agent terminal target changed during startup");
     }
+    // Last host check after admission and shell startup waits; nothing below
+    // yields before the command is written to the shell.
+    options.assertDispatchAllowed?.();
     // Untargeted commands may reuse an implicit logical terminal for low startup
     // overhead, but each command runs in a shell subshell so aliases, exports,
     // PATH changes, `cd`, and `exit` cannot mutate the next unrelated command.

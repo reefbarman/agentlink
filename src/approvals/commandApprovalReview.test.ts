@@ -20,6 +20,7 @@ import {
   isRoutineApproveForMeCommand,
   isRoutineGitWorkflowNativeCommand,
   parseCommandApprovalReviewResponse,
+  selectCommandReviewObjective,
 } from "./commandApprovalReview.js";
 import { describe, expect, it, vi } from "vitest";
 
@@ -430,8 +431,11 @@ describe("command review context", () => {
 
   it("marks oversized human decisions unknown rather than clipping away the subject or denial", () => {
     const messages = humanHistory();
-    messages[1]!.humanQuestionAnswers![0]!.binding.context =
-      "large literal subject ".repeat(1000);
+    const largeContext = "large literal subject ".repeat(1000);
+    messages[1]!.humanQuestionAnswers![0]!.binding.context = largeContext;
+    (
+      messages[0]!.content as unknown as Array<{ input: { context: string } }>
+    )[0]!.input.context = largeContext;
     const entry = buildCommandReviewContext(messages, "session").find(
       (item) => item.humanDecisionEvidence,
     )!;
@@ -620,6 +624,195 @@ describe("command review context", () => {
         directUserInstruction: true,
       },
     ]);
+  });
+
+  const decision = (
+    toolCallId: string,
+    question: string,
+    answer: boolean,
+  ): import("../agent/types.js").AgentMessage[] => {
+    const questions = [{ id: "q", type: "yes_no" as const, question }];
+    return [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: toolCallId,
+            name: "ask_user",
+            input: { context: "Release", questions },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: toolCallId, content: "ok" },
+        ],
+        humanQuestionAnswers: [
+          {
+            source: "human_ui",
+            binding: {
+              schemaVersion: 1,
+              sessionId: "session",
+              questionRequestId: `request-${toolCallId}`,
+              toolCallId,
+              context: "Release",
+              questions,
+            },
+            answers: { q: answer },
+            notes: {},
+          },
+        ],
+      },
+    ];
+  };
+
+  it.each(["edited question", "edited context", "reordered questions"])(
+    "rejects evidence rebound to a different literal subject: %s",
+    (scenario) => {
+      const messages = humanHistory();
+      const input = (
+        messages[0]!.content as unknown as Array<{
+          input: {
+            context: string;
+            questions: Array<{ id: string; question: string }>;
+          };
+        }>
+      )[0]!.input;
+      switch (scenario) {
+        case "edited question":
+          input.questions[0]!.question = "Delete the whole repo?";
+          break;
+        case "edited context":
+          input.context = "Unbounded cleanup";
+          break;
+        case "reordered questions":
+          input.questions.unshift({ id: "other", question: "Other?" });
+          break;
+      }
+      expect(
+        buildCommandReviewContext(messages, "session").some(
+          (entry) => entry.humanDecisionEvidence,
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("survives condensation only while the source ask_user call is adjacent", () => {
+    const messages = humanHistory();
+    messages.splice(1, 0, {
+      role: "user",
+      content: "summary of earlier work",
+      isSummary: true,
+    });
+    expect(
+      buildCommandReviewContext(messages, "session").some(
+        (entry) => entry.humanDecisionEvidence,
+      ),
+    ).toBe(false);
+  });
+
+  it("appends queued human input as the newest direct instruction", () => {
+    const messages = humanHistory();
+    messages.unshift({
+      role: "user",
+      content: "ship it",
+      uiHint: { userMessage: { origin: "vscode" } },
+    });
+    const context = buildCommandReviewContext(messages, "session", [
+      "wait, do not push",
+    ]);
+    expect(context.at(-1)).toEqual({
+      role: "user",
+      content: "wait, do not push",
+      directUserInstruction: true,
+      queuedHumanInput: true,
+    });
+    expect(context.find((entry) => entry.content === "ship it")).toEqual({
+      role: "user",
+      content: "ship it",
+      directUserInstruction: true,
+    });
+  });
+
+  it("keeps queued human input when earlier tool activity fills the budget", () => {
+    const context = buildCommandReviewContext(
+      Array.from({ length: 20 }, (_, index) => ({
+        role: "assistant" as const,
+        content: `${index}:${"x".repeat(1_900)}`,
+      })),
+      "session",
+      ["stop before deploying"],
+    );
+    expect(context.at(-1)).toMatchObject({
+      content: "stop before deploying",
+      queuedHumanInput: true,
+    });
+  });
+
+  it("drops older decisions with an explicit marker once a newer decision misses the budget", () => {
+    const messages: import("../agent/types.js").AgentMessage[] = [
+      {
+        role: "user",
+        content: "prepare the release",
+        uiHint: { userMessage: { origin: "vscode" } },
+      },
+      ...decision("older", "Push the release?", true),
+      ...decision("newer", `Push now? ${"detail ".repeat(200)}`, false),
+      ...Array.from({ length: 6 }, (_, index) => ({
+        role: "assistant" as const,
+        content: `${index}:${"x".repeat(1_950)}`,
+      })),
+    ];
+    const context = buildCommandReviewContext(messages, "session");
+    const decisions = context.filter((entry) => entry.humanDecisionEvidence);
+    expect(decisions).toHaveLength(1);
+    expect(JSON.parse(decisions[0]!.content).evidenceOmitted).toContain(
+      "Current consent is unknown",
+    );
+    expect(context[0]).toMatchObject({
+      content: "prepare the release",
+      directUserInstruction: true,
+    });
+    expect(context.length).toBeLessThanOrEqual(12);
+    expect(
+      context.reduce((total, entry) => total + entry.content.length, 0),
+    ).toBeLessThanOrEqual(12_000);
+  });
+
+  it("keeps ordered decisions when they fit", () => {
+    const context = buildCommandReviewContext(
+      [
+        ...decision("older", "Push the release?", true),
+        ...decision("newer", "Push now?", false),
+      ],
+      "session",
+    );
+    expect(
+      context
+        .filter((entry) => entry.humanDecisionEvidence)
+        .map((entry) => JSON.parse(entry.content).humanAnswer),
+    ).toEqual([true, false]);
+  });
+});
+
+describe("command review objective", () => {
+  it("skips summaries, resume context and hidden continuations", () => {
+    expect(
+      selectCommandReviewObjective([
+        { role: "user", content: "real objective" },
+        { role: "user", content: "summary", isSummary: true },
+        { role: "user", content: "resume", isResumeContext: true },
+        {
+          role: "user",
+          content: "hidden",
+          uiHint: { userMessage: { origin: "vscode", hidden: true } },
+        },
+        { role: "assistant", content: "working" },
+      ]),
+    ).toBe("real objective");
+    expect(selectCommandReviewObjective([])).toBeUndefined();
   });
 });
 

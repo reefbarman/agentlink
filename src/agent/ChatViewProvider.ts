@@ -4465,6 +4465,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
       const interjected = input.interject
         ? this.interjectQueuedMessageFromUi({
+            origin: "browser",
             sessionId: effectiveSessionId,
             queueId,
             text,
@@ -6192,6 +6193,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private interjectQueuedMessageFromUi(input: {
+    origin: "vscode" | "browser";
     sessionId: string;
     queueId: string;
     text: string;
@@ -6224,6 +6226,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       input.attachments.length > 0 ? input.attachments : undefined,
       input.images.length > 0 ? input.images : undefined,
       input.documents.length > 0 ? input.documents : undefined,
+      undefined,
+      input.origin,
     );
     if (accepted) {
       this.applyProjectedAction({
@@ -6355,6 +6359,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     );
     if (!queued) return { ok: false, error: "queued_message_not_found" };
     const accepted = this.interjectQueuedMessageFromUi({
+      origin: "browser",
       sessionId: input.sessionId,
       queueId: input.queueId,
       text: input.text,
@@ -8565,6 +8570,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "agentInterjectQueuedMessage": {
         const accepted = this.interjectQueuedMessageFromUi({
+          origin: "vscode",
           sessionId: msg.sessionId as string,
           queueId: msg.queueId as string,
           text: msg.text as string,

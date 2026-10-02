@@ -519,6 +519,13 @@ export class TerminalManager {
           ? [detachPromise.then(() => ({ kind: "detach" }) as const)]
           : []),
       ]);
+      // Last host check after the shell readiness wait, before anything is sent.
+      try {
+        options.assertDispatchAllowed?.();
+      } catch (error) {
+        shellReadinessController.abort();
+        throw error;
+      }
 
       if (readiness.kind === "detach") {
         shellReadinessController.abort();

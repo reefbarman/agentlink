@@ -1493,6 +1493,7 @@ export class AgentEngine {
             session.addUserMessage(resolvedInterjection.text, {
               displayText: interjection.displayText,
               coordination: interjection.coordination,
+              origin: interjection.origin,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
               images: images.length > 0 ? images : undefined,
@@ -3303,6 +3304,7 @@ export class AgentEngine {
             session.addUserMessage(resolvedInterjection.text, {
               displayText: interjection.displayText,
               coordination: interjection.coordination,
+              origin: interjection.origin,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
               images: images.length > 0 ? images : undefined,

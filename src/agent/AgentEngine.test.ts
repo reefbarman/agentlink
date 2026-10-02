@@ -1726,6 +1726,82 @@ describe("AgentEngine", () => {
       });
     });
 
+    it("keeps host-assigned human origin when draining queued interjections", async () => {
+      const { buildCommandReviewContext } =
+        await import("../approvals/commandApprovalReview.js");
+      let callCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        callCount += 1;
+        if (callCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "call_read",
+                name: "read_file",
+                input: { path: "src/a.ts" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+      const session = await AgentSession.createForLegacyCwd({
+        mode: "code",
+        config: testConfig,
+        cwd: await fs.mkdtemp(path.join(os.tmpdir(), "agent-engine-")),
+      });
+      session.addUserMessage("start", { origin: "vscode" });
+      const engine = new AgentEngine(makeRegistry(provider));
+      setEngineToolContext(
+        engine,
+        {
+          approvalManager: {} as ToolDispatchContext["approvalManager"],
+          approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+          sessionId: session.id,
+          extensionUri: {} as ToolDispatchContext["extensionUri"],
+        },
+        async () => {
+          session.setPendingInterjection("coordinator steering", "steer-1");
+          session.setPendingInterjection(
+            "do not push",
+            "queue-1",
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            "browser",
+          );
+          return {
+            content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+          };
+        },
+      );
+
+      await collectEvents(engine.run(session));
+
+      const context = buildCommandReviewContext(
+        session.getAllMessages(),
+        session.id,
+      );
+      expect(
+        context.find((entry) => entry.content === "do not push"),
+      ).toMatchObject({ directUserInstruction: true });
+      expect(
+        context.find((entry) => entry.content === "coordinator steering")
+          ?.directUserInstruction,
+      ).toBeUndefined();
+    });
+
     it("injects queued image path attachments as image media instead of text", async () => {
       const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "agent-engine-"));
       const imageBytes = Buffer.from([

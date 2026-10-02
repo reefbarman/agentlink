@@ -403,6 +403,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     let networkAuditId: string | undefined;
     let process: SandboxCommandProcess;
     try {
+      options.assertDispatchAllowed?.();
       activeLaunch = preparedLaunch.activate();
       networkAuditId =
         security?.auditId ?? activeLaunch.metadata.grant?.auditId;

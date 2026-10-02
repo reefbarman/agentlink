@@ -240,6 +240,12 @@ export interface TerminalExecuteOptions {
   timeout?: number;
   /** Cancels terminal admission before command launch. */
   admissionSignal?: AbortSignal;
+  /**
+   * Called synchronously immediately before the command is dispatched, after
+   * admission and shell startup. Throws (typically TerminalDispatchRevokedError)
+   * to revoke the launch; the command is then never sent.
+   */
+  assertDispatchAllowed?: () => void;
   env?: Record<string, string>;
   /** Use a fresh writable per-command HOME. Requires sandbox execution. */
   temporaryHome?: true;

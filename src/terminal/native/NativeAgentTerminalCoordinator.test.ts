@@ -16,6 +16,7 @@ import { INTERACTIVE_PROMPT_GRACE_MS } from "../interactivePromptWatchdog.js";
 import type { MaterializedHostShellBootstrap } from "../hostShellBootstrap.js";
 import { NativeAgentTerminalCoordinator } from "./NativeAgentTerminalCoordinator.js";
 import type { NodePtyModuleLoader } from "../deferredNodePtyLoader.js";
+import { TerminalDispatchRevokedError } from "../../core/capabilities/TerminalDispatchRevokedError.js";
 import type { TerminalExecutionOwner } from "../../core/capabilities/terminal.js";
 import type { TerminalExecutionSecuritySummary } from "@agentlink/protocol/terminal-security";
 
@@ -357,6 +358,30 @@ describe("NativeAgentTerminalCoordinator", () => {
     expect(test.runtime.prepareChannel).not.toHaveBeenCalled();
     expect(test.runtime.createCommand).not.toHaveBeenCalled();
     expect(test.liveChannels).toEqual(new Set());
+  });
+
+  it("re-checks dispatch authority after shell startup and never writes a revoked command", async () => {
+    const test = harness();
+    const preparation = deferred<MaterializedHostShellBootstrap>();
+    test.prepareShell.mockImplementationOnce(() => preparation.promise);
+    let revoked = false;
+    const assertDispatchAllowed = vi.fn(() => {
+      if (revoked) throw new TerminalDispatchRevokedError("human input");
+    });
+
+    const result = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "git push",
+      cwd: "/workspace",
+      assertDispatchAllowed,
+    });
+    await flush();
+    revoked = true;
+    preparation.resolve(bootstrap("/workspace"));
+
+    await expect(result).rejects.toBeInstanceOf(TerminalDispatchRevokedError);
+    expect(assertDispatchAllowed).toHaveBeenCalledOnce();
+    expect(test.runtime.createCommand).not.toHaveBeenCalled();
   });
 
   it("closes a runtime channel created after its terminal closes during preparation", async () => {

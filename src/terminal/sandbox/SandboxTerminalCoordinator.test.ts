@@ -1,4 +1,5 @@
 import type { TerminalExecutionOwner } from "../../core/capabilities/terminal.js";
+import { TerminalDispatchRevokedError } from "../../core/capabilities/TerminalDispatchRevokedError.js";
 import { CURRENT_SANDBOX_POLICY_VERSION } from "../../core/sandboxPolicy.js";
 import { handleGetTerminalOutput } from "../../tools/getTerminalOutput.js";
 import type { SandboxExecutionMetadata } from "@agentlink/protocol/terminal-security";
@@ -777,6 +778,42 @@ describe("SandboxTerminalCoordinator", () => {
     expect(test.processes).toHaveLength(4);
 
     await finish(test.processes[0], "first\r\n");
+    await Promise.all(
+      test.processes.slice(1).map((process) => finish(process)),
+    );
+    await Promise.all(running);
+  });
+
+  it("re-checks dispatch authority after admission and never launches a revoked command", async () => {
+    const test = harness();
+    const running = Array.from({ length: 4 }, (_, index) =>
+      test.coordinator.executeCommand({
+        owner: undefined,
+        command: `printf ${index}`,
+        cwd: `/workspace/${index}`,
+        sandboxSessionId: "agent-session",
+      }),
+    );
+    await flush();
+    let revoked = false;
+    const assertDispatchAllowed = vi.fn(() => {
+      if (revoked) throw new TerminalDispatchRevokedError("human input");
+    });
+    const queued = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "git push",
+      cwd: "/workspace/queued",
+      sandboxSessionId: "agent-session",
+      assertDispatchAllowed,
+    });
+    await flush();
+    revoked = true;
+
+    await finish(test.processes[0]);
+    await expect(queued).rejects.toBeInstanceOf(TerminalDispatchRevokedError);
+    expect(assertDispatchAllowed).toHaveBeenCalledOnce();
+    expect(test.runtime.launch).toHaveBeenCalledTimes(4);
+
     await Promise.all(
       test.processes.slice(1).map((process) => finish(process)),
     );
