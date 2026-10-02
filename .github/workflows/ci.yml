@@ -48,6 +48,13 @@ jobs:
           node-version: 22.x
           cache: npm
 
+      - name: Install shells used by terminal tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zsh
+          /bin/bash --version | head -1
+          /bin/zsh --version
+
       - run: npm ci
       - run: npm run lint
       - run: npm run build

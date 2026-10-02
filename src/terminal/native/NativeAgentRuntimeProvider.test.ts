@@ -463,6 +463,10 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
         const artifact = spawnSync(shell, ["-c", pty.writes.at(-1)!.trim()], {
           encoding: "utf8",
         });
+        // Both launches failing would otherwise compare equal (null status).
+        expect(direct.error).toBeUndefined();
+        expect(artifact.error).toBeUndefined();
+        expect(direct.status).not.toBeNull();
         expect({ status: artifact.status, stdout: artifact.stdout }).toEqual({
           status: direct.status,
           stdout: direct.stdout,
@@ -620,6 +624,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
           ["-c", `${enterAndRemove}mkdir -- ${shellQuote(cwd)}\n${dispatch}`],
           { encoding: "utf8" },
         );
+        expect(recreated.error).toBeUndefined();
         expect(recreated.status).toBe(0);
         expect(recreated.stdout).toBe(`payload:${cwd}`);
         const missing = spawnSync(
@@ -627,6 +632,8 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
           ["-c", `${enterAndRemove}${dispatch}`],
           { encoding: "utf8" },
         );
+        expect(missing.error).toBeUndefined();
+        expect(missing.status).not.toBeNull();
         expect(missing.status).not.toBe(0);
         expect(missing.stdout).not.toContain("payload:");
         expect(missing.stderr).toContain("fixture's directory");
@@ -672,6 +679,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
           : "";
         const script = `${zshSetup}builtin cd -L -- ${shellQuote(cwd)}\nsaved_oldpwd=$OLDPWD\n${zshSnapshot}chpwd() { printf unexpected-hook; }\n${dispatch}\n${dispatch}\nbuiltin test "$PWD" = ${shellQuote(cwd)} && builtin test "$OLDPWD" = "$saved_oldpwd"${zshCheck}\n`;
         const result = spawnSync(shell, ["-c", script], { encoding: "utf8" });
+        expect(result.error).toBeUndefined();
         expect(result.status).toBe(0);
         expect(result.stdout).toBe(`payload:${cwd}\npayload:${cwd}\n`);
       } finally {

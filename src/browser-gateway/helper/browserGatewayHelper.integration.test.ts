@@ -8575,6 +8575,11 @@ describe("BrowserGatewayHelper proxy routing", () => {
     servers.push(harness.helperServer);
     // Assert mutation-triggered refreshes independently of background polling.
     for (const file of paths) unwatchFile(file);
+    // watchFile reports missing config files on its first poll, which can
+    // queue a debounced (100 ms) refresh before unwatching. Let it settle so
+    // counts reflect only the mutations.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const baselineRefreshes = vi.mocked(runtime.refresh).mock.calls.length;
 
     try {
       const getSnapshot = async () => {
@@ -8638,7 +8643,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       const disabled = await submit(initial, true, "disable-inherited");
       const disabledResult = await disabled.json();
       expect(disabledResult).toMatchObject({ ok: true, configSaved: true });
-      expect(runtime.refresh).toHaveBeenCalledTimes(1);
+      expect(runtime.refresh).toHaveBeenCalledTimes(baselineRefreshes + 1);
       const disabledEntry = disabledResult.configSnapshot.entries.find(
         (entry: { name: string }) => entry.name === "inherited",
       );
@@ -8655,7 +8660,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       );
       const enabledResult = await enabled.json();
       expect(enabledResult).toMatchObject({ ok: true, configSaved: true });
-      expect(runtime.refresh).toHaveBeenCalledTimes(2);
+      expect(runtime.refresh).toHaveBeenCalledTimes(baselineRefreshes + 2);
       const enabledEntry = enabledResult.configSnapshot.entries.find(
         (entry: { name: string }) => entry.name === "inherited",
       );
@@ -8678,7 +8683,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
         "no-op-inherited",
       );
       expect(await noOp.json()).toMatchObject({ ok: true, configSaved: false });
-      expect(runtime.refresh).toHaveBeenCalledTimes(2);
+      expect(runtime.refresh).toHaveBeenCalledTimes(baselineRefreshes + 2);
       const requestTrust = await import("../browserGatewayRequestTrust.js");
       const origin = vi
         .spyOn(requestTrust, "classifyBrowserGatewayClientOrigin")
@@ -8729,7 +8734,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
           });
         }
         expect(await fs.readFile(overridePath, "utf-8")).toBe(override);
-        expect(runtime.refresh).toHaveBeenCalledTimes(2);
+        expect(runtime.refresh).toHaveBeenCalledTimes(baselineRefreshes + 2);
       } finally {
         origin.mockRestore();
       }
