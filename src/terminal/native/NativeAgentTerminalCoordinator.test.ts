@@ -172,6 +172,36 @@ async function finish(process: FakeProcess, output = "ok\r\n", exitCode = 0) {
 }
 
 describe("NativeAgentTerminalCoordinator", () => {
+  it("reports an unconfirmed native launch as unknown and preserves dispatch output", async () => {
+    const test = harness();
+    const resultPromise = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "mutating command",
+      cwd: "/workspace",
+      background: false,
+    });
+    await vi.waitFor(() => expect(test.starts[0]).toHaveBeenCalledOnce());
+    const process = test.processes[0]!;
+    process.emit({ type: "data", data: "shell dispatch diagnostic\\r\\n" });
+    process.readyDeferred.reject(
+      new Error(
+        "Native Agent shell ended before confirming whether the user command started",
+      ),
+    );
+    process.completionDeferred.resolve({ exitCode: 1, timedOut: false });
+
+    const result = await resultPromise;
+    expect(result).toMatchObject({
+      exit_code: null,
+      output: "shell dispatch diagnostic\\r\\n",
+      command_sent: true,
+      retry_safe: false,
+      failure_stage: "launch",
+      output_warning: expect.stringContaining("Execution state is unknown"),
+    });
+    expect(result).not.toHaveProperty("process_launched");
+  });
+
   it("keeps timed-out output addressable after reuse and cannot interrupt the newer command", async () => {
     const test = harness();
     const first = await test.coordinator.executeCommand({
@@ -864,14 +894,15 @@ describe("NativeAgentTerminalCoordinator", () => {
       });
       await flush();
 
-      await expect(resultPromise).resolves.toMatchObject({
+      const result = await resultPromise;
+      expect(result).toMatchObject({
         terminal_id: "native-agent-1",
         backgrounded: true,
         is_running: true,
         command_sent: true,
-        process_launched: false,
         retry_safe: false,
       });
+      expect(result).not.toHaveProperty("process_launched");
       expect(detached).toBe(true);
       expect(test.starts[0]).toHaveBeenCalledOnce();
       expect(
@@ -1243,18 +1274,17 @@ describe("NativeAgentTerminalCoordinator", () => {
       await flush();
 
       await vi.advanceTimersByTimeAsync(25);
-      await expect(resultPromise).resolves.toMatchObject({
+      const result = await resultPromise;
+      expect(result).toMatchObject({
         timed_out: true,
         is_running: false,
         command_sent: true,
-        process_launched: false,
         retry_safe: false,
         failure_stage: "launch",
         execution_mode: "native_pty",
-        output_warning: expect.stringContaining(
-          "shell integration never confirmed command start",
-        ),
+        output_warning: expect.stringContaining("Execution state is unknown"),
       });
+      expect(result).not.toHaveProperty("process_launched");
       expect(test.runtime.closeChannel).toHaveBeenCalledWith("native-agent-1");
       expect(test.coordinator.listTerminals({ owner: undefined })).toEqual([]);
       expect(finalized).toHaveBeenCalledOnce();

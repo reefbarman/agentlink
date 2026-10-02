@@ -373,7 +373,7 @@ describe("createVscodeEditReviewProvider", () => {
           retryable: true,
         },
         next_steps: [
-          expect.stringContaining("dirty editor is preserved"),
+          expect.stringContaining("Inspect and reconcile it in VS Code"),
           expect.stringContaining("pre-edit disk baseline"),
         ],
       });

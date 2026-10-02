@@ -469,7 +469,13 @@ export class SandboxTerminalSession {
       });
       return;
     }
-    if (active.command.status !== "running") return;
+    // Retain launch diagnostics without treating output as proof of readiness.
+    // CWD and violation events still require a confirmed running command.
+    if (
+      active.command.status !== "running" &&
+      !(active.command.status === "launching" && event.type === "data")
+    )
+      return;
     if (event.type === "data") {
       this.appendCommandOutput(active.command.commandId, event.data);
       active.outputTail.append(event.data);

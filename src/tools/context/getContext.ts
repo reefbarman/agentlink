@@ -30,6 +30,7 @@ export interface GetContextParams {
   path: string;
   offset?: number;
   limit?: number;
+  character_offset?: number;
   include_symbols?: boolean;
   dedupe_unchanged_content?: boolean;
   refresh?: boolean;
@@ -37,6 +38,8 @@ export interface GetContextParams {
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 400;
+const MAX_LINE_CHARS = 2_000;
+const MAX_CONTENT_CHARS = 20_000;
 const SYMBOL_TIMEOUT_MS = 5_000;
 const MAX_OUTLINE_SYMBOLS = 60;
 const MAX_OUTLINE_BYTES = 6_000;
@@ -76,6 +79,15 @@ export async function handleGetContext(
       );
     }
 
+    const characterOffset = params.character_offset ?? 0;
+    if (!Number.isSafeInteger(characterOffset) || characterOffset < 0) {
+      return errorResult(
+        "Invalid character_offset: must be a non-negative safe integer.",
+        {
+          path: params.path,
+        },
+      );
+    }
     const offset = Math.max(1, Math.trunc(params.offset ?? 1));
     let diskLines: string[] = [];
     let totalLines = 0;
@@ -94,10 +106,15 @@ export async function handleGetContext(
           return { startLine: 0, endLine: 0 };
         }
         const limit = Math.min(rawLimit, MAX_LIMIT, totalLines - offset + 1);
-        return { startLine: offset, endLine: offset + limit - 1 };
+        return {
+          startLine: offset,
+          endLine: offset + limit - 1,
+          ...(characterOffset > 0 ? { characterOffset } : {}),
+        };
       },
       dedupeUnchangedContent: params.dedupe_unchanged_content,
-      refresh: params.refresh,
+      // An explicit continuation requests content even if its page was seen.
+      refresh: params.refresh || params.character_offset !== undefined,
     });
 
     const range = workingSet.range ?? { startLine: 0, endLine: 0 };
@@ -120,16 +137,58 @@ export async function handleGetContext(
       });
     }
 
+    if (characterOffset > (diskLines[range.startLine - 1]?.length ?? 0)) {
+      return errorResult("character_offset is beyond the starting line.", {
+        path: params.path,
+        reason: "character_offset_out_of_range",
+      });
+    }
+    const startingLine = diskLines[range.startLine - 1] ?? "";
+    if (
+      characterOffset > 0 &&
+      /[\uD800-\uDBFF]/.test(startingLine[characterOffset - 1]) &&
+      /[\uDC00-\uDFFF]/.test(startingLine[characterOffset] ?? "")
+    ) {
+      return errorResult(
+        "character_offset must not split a UTF-16 surrogate pair.",
+        { path: params.path },
+      );
+    }
+    const preview = buildNumberedContent(
+      diskLines,
+      range.startLine,
+      range.endLine,
+      characterOffset,
+    );
     const content = workingSet.shouldIncludeContent
-      ? buildNumberedContent(diskLines, range.startLine, range.endLine)
+      ? preview.content
       : undefined;
 
     const result: Record<string, unknown> = {
       path: relPath,
       total_lines: totalLines,
       showing: `${range.startLine}-${range.endLine}`,
-      ...(range.startLine !== 1 || range.endLine !== totalLines
+      ...(range.startLine !== 1 ||
+      range.endLine !== totalLines ||
+      characterOffset > 0 ||
+      preview.omittedBytes > 0 ||
+      preview.omittedLines > 0
         ? { truncated: true }
+        : {}),
+      ...(preview.omittedBytes > 0 || preview.omittedLines > 0
+        ? {
+            content_truncation: {
+              max_line_chars: MAX_LINE_CHARS,
+              max_content_chars: MAX_CONTENT_CHARS,
+              omitted_bytes: preview.omittedBytes,
+              omitted_lines: preview.omittedLines,
+              next_read: {
+                path: relPath,
+                view: "context",
+                ...preview.nextRead,
+              },
+            },
+          }
         : {}),
       size: workingSet.size,
       modified: new Date(workingSet.modifiedMs).toISOString(),
@@ -222,12 +281,59 @@ function buildNumberedContent(
   sourceLines: string[],
   startLine: number,
   endLine: number,
-): string {
+  characterOffset: number,
+): {
+  content: string;
+  omittedBytes: number;
+  omittedLines: number;
+  nextRead?: { offset: number; character_offset: number; limit: number };
+} {
   const lines: string[] = [];
+  let remaining = MAX_CONTENT_CHARS;
+  let omittedBytes = 0;
+  let omittedLines = 0;
+  let nextRead:
+    | { offset: number; character_offset: number; limit: number }
+    | undefined;
   for (let line = startLine; line <= endLine; line++) {
-    lines.push(`${line} | ${sourceLines[line - 1] ?? ""}`);
+    const source = sourceLines[line - 1] ?? "";
+    const start = line === startLine ? characterOffset : 0;
+    const prefix = `${line} | `;
+    const separatorLength = lines.length > 0 ? 1 : 0;
+    const available = Math.max(0, remaining - prefix.length - separatorLength);
+    let end = Math.min(
+      source.length,
+      start + MAX_LINE_CHARS,
+      start + available,
+    );
+    // Do not cut a surrogate pair at the end of a preview.
+    if (
+      end > start &&
+      /[\uD800-\uDBFF]/.test(source[end - 1]) &&
+      /[\uDC00-\uDFFF]/.test(source[end] ?? "")
+    )
+      end--;
+    const excerpt = source.slice(start, end);
+    const canInclude = remaining >= prefix.length + separatorLength;
+    if (canInclude) {
+      lines.push(prefix + excerpt);
+      remaining -= prefix.length + separatorLength + excerpt.length;
+    }
+    if (!canInclude) {
+      omittedLines++;
+      if (line > startLine) omittedBytes++;
+    }
+    const omitted = canInclude ? source.slice(end) : source.slice(start);
+    omittedBytes += Buffer.byteLength(omitted, "utf8");
+    if ((!canInclude || end < source.length) && !nextRead) {
+      nextRead = {
+        offset: line,
+        character_offset: canInclude ? end : start,
+        limit: 1,
+      };
+    }
   }
-  return lines.join("\n");
+  return { content: lines.join("\n"), omittedBytes, omittedLines, nextRead };
 }
 
 function buildWorkingSetPayload(

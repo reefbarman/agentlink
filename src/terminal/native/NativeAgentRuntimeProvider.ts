@@ -14,6 +14,7 @@ import { createShellIntegrationParser } from "../shellIntegration.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 const PROMPT_IDLE_READY_DELAY_MS = 25;
 
@@ -69,13 +70,16 @@ function shellQuote(value: string): string {
 
 interface NativeCommandArtifact {
   dispatchCommand: string;
+  startMarker: string;
   cleanup(): void;
 }
 
 function createNativeCommandArtifact(
   command: string,
   root: string,
+  nonce: string,
 ): NativeCommandArtifact {
+  const startMarker = `agentlink_native_start_${randomUUID().replaceAll("-", "")}`;
   const directory = fs.mkdtempSync(
     path.join(root, "agentlink-native-command-"),
   );
@@ -92,7 +96,7 @@ function createNativeCommandArtifact(
   };
   try {
     fs.chmodSync(directory, 0o700);
-    const content = `builtin eval ${shellQuote(` ${command}`)}\n`;
+    const content = `builtin printf '\\033]697;AgentLink;${nonce};C;${startMarker}\\007' >/dev/tty\nbuiltin eval ${shellQuote(` ${command}`)}\n`;
     fs.writeFileSync(filePath, content, {
       encoding: "utf8",
       flag: "wx",
@@ -103,6 +107,7 @@ function createNativeCommandArtifact(
     }
     return {
       dispatchCommand: `builtin eval "$(<${shellQuote(filePath)})"`,
+      startMarker,
       cleanup,
     };
   } catch (error) {
@@ -125,6 +130,7 @@ class PersistentNativeCommandProcess implements SandboxCommandProcess {
   readonly identity: SandboxCommandIdentity;
   readonly ready: Promise<SandboxCommandReady>;
   readonly completion: Promise<SandboxCommandExit>;
+  readonly startMarker: string;
 
   private readonly readyDeferred = deferred<SandboxCommandReady>();
   private readonly completionDeferred = deferred<SandboxCommandExit>();
@@ -133,6 +139,7 @@ class PersistentNativeCommandProcess implements SandboxCommandProcess {
   private deliveryReady = false;
   private outputCaptureStopped = false;
   private completionPending = false;
+  private scriptStarted = false;
   private state: "prepared" | "running" | "completed" = "prepared";
   private disposed = false;
 
@@ -144,7 +151,9 @@ class PersistentNativeCommandProcess implements SandboxCommandProcess {
     private readonly onShellCommandEnd?: () => void,
   ) {
     this.identity = { ...identity };
+    this.startMarker = commandArtifact.startMarker;
     this.ready = this.readyDeferred.promise;
+    void this.ready.catch(() => undefined);
     this.completion = this.completionDeferred.promise;
   }
 
@@ -162,10 +171,13 @@ class PersistentNativeCommandProcess implements SandboxCommandProcess {
       throw new Error("Native Agent command is no longer prepared");
     }
     this.state = "running";
+    // Dispatch diagnostics must remain observable even without script readiness.
+    this.enableDelivery();
   }
 
-  markReady(pid: number): void {
+  markScriptStarted(pid: number): void {
     if (this.state !== "running" || this.disposed) return;
+    this.scriptStarted = true;
     this.readyDeferred.resolve({ pid, pgid: pid, backend: "native-pty" });
     queueMicrotask(() => {
       if (this.disposed || this.state !== "running") return;
@@ -210,11 +222,13 @@ class PersistentNativeCommandProcess implements SandboxCommandProcess {
     }
     this.state = "completed";
     this.commandArtifact.cleanup();
-    this.readyDeferred.resolve({
-      pid: this.channel.pid,
-      pgid: this.channel.pid,
-      backend: "native-pty",
-    });
+    if (!this.scriptStarted) {
+      this.readyDeferred.reject(
+        new Error(
+          "Native Agent shell ended before confirming whether the user command started",
+        ),
+      );
+    }
     this.completionDeferred.resolve(exit);
   }
 
@@ -316,6 +330,7 @@ class PersistentNativeChannel {
     const commandArtifact = createNativeCommandArtifact(
       evaluatedCommand,
       this.commandFileRoot,
+      this.launch.nonce,
     );
     const process = new PersistentNativeCommandProcess(
       this,
@@ -427,9 +442,10 @@ class PersistentNativeChannel {
           this.externalCommandRunning = true;
           continue;
         }
-        if (this.commandStarted) continue;
-        this.commandStarted = true;
-        this.active.markReady(this.pid);
+        if (!this.commandStarted) this.commandStarted = true;
+        if (event.command === this.active.startMarker) {
+          this.active.markScriptStarted(this.pid);
+        }
         continue;
       }
       if (event.type === "command-output-end") {

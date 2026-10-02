@@ -4612,6 +4612,7 @@ describe("dispatchToolCall", () => {
       expect(schema?.properties.view?.enum).toEqual(["content", "context"]);
       expect(schema?.properties).toHaveProperty("anchor");
       expect(schema?.properties).toHaveProperty("dedupe_unchanged_content");
+      expect(schema?.properties).toHaveProperty("character_offset");
     });
 
     it("advertises only the views granted by a single-operation skill allowlist", () => {
@@ -4620,10 +4621,12 @@ describe("dispatchToolCall", () => {
       expect(contextOnly?.required).toContain("view");
       expect(contextOnly?.properties).not.toHaveProperty("anchor");
       expect(contextOnly?.properties).toHaveProperty("include_symbols");
+      expect(contextOnly?.properties).toHaveProperty("character_offset");
 
       const contentOnly = readFileSchemaFor(["read_file"]);
       expect(contentOnly?.properties.view?.enum).toEqual(["content"]);
       expect(contentOnly?.properties).not.toHaveProperty("refresh");
+      expect(contentOnly?.properties).not.toHaveProperty("character_offset");
 
       expect(readFileSchemaFor(["search_files"])).toBeUndefined();
     });
@@ -4639,6 +4642,7 @@ describe("dispatchToolCall", () => {
           path: "src/foo.ts",
           view: "context",
           limit: 40,
+          character_offset: 1_701,
           include_symbols: false,
         },
         context: {
@@ -4648,7 +4652,12 @@ describe("dispatchToolCall", () => {
       });
 
       expect(handleGetContext).toHaveBeenCalledWith(
-        { path: "src/foo.ts", limit: 40, include_symbols: false },
+        {
+          path: "src/foo.ts",
+          limit: 40,
+          character_offset: 1_701,
+          include_symbols: false,
+        },
         "test-session",
         expect.anything(),
       );
@@ -4679,6 +4688,21 @@ describe("dispatchToolCall", () => {
         expect(handleReadFile).not.toHaveBeenCalled();
       },
     );
+
+    it("rejects character paging in content view before file access", async () => {
+      const runtime = createAgentToolRuntime(mockCtx);
+      vi.mocked(handleReadFile).mockClear();
+      const result = await runtime.executeTool({
+        name: "read_file",
+        input: { path: "src/foo.ts", character_offset: 0 },
+        context: { sessionId: "test-session" },
+      });
+      expect(result).toMatchObject({
+        isError: true,
+        data: { status: "read_view_option_mismatch" },
+      });
+      expect(handleReadFile).not.toHaveBeenCalled();
+    });
 
     it("rejects options belonging to the other view before file access", async () => {
       const runtime = createAgentToolRuntime(mockCtx);

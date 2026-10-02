@@ -276,6 +276,7 @@ async function saveWithoutFormatting(
   absolutePath: string,
   validate?: () => Promise<boolean>,
 ): Promise<boolean> {
+  if (!documentMatchesTarget(document, absolutePath)) return false;
   const previousEditor = vscode.window.activeTextEditor;
   const targetPath = canonicalizePath(absolutePath);
   // The save command needs an active editor, not keyboard focus. Keeping focus
@@ -286,10 +287,9 @@ async function saveWithoutFormatting(
   });
 
   if (
-    canonicalizePath(targetEditor.document.uri.fsPath) !== targetPath ||
-    canonicalizePath(
-      vscode.window.activeTextEditor?.document.uri.fsPath ?? "",
-    ) !== targetPath
+    targetEditor.document !== document ||
+    vscode.window.activeTextEditor?.document !== document ||
+    !documentMatchesTarget(document, absolutePath)
   ) {
     return false;
   }
@@ -452,8 +452,10 @@ export async function diagnoseEditSaveFailure(params: {
 }> {
   let diskState: EditSaveFailureRecovery["disk_state"];
   let diskErrorCode: string | undefined;
+  let diskRecoverable = false;
   try {
     const diskContent = await fs.readFile(params.absolutePath, "utf-8");
+    diskRecoverable = Buffer.byteLength(diskContent, "utf8") <= 256 * 1024;
     diskState =
       diskContent === params.baselineContent ? "unchanged" : "changed";
   } catch (error) {
@@ -464,8 +466,18 @@ export async function diagnoseEditSaveFailure(params: {
         ? (error as { code: string }).code
         : undefined;
     diskState = diskErrorCode === "ENOENT" ? "missing" : "unreadable";
+    diskRecoverable = diskState === "missing";
   }
 
+  const recoveryDocument = vscode.workspace.textDocuments.find((document) =>
+    documentMatchesTarget(document, params.absolutePath),
+  );
+  const editorRecoverable = Boolean(
+    diskRecoverable &&
+    recoveryDocument &&
+    Buffer.byteLength(recoveryDocument.getText(), "utf8") <= 256 * 1024 &&
+    recoveryDocument.getText() === params.currentDocumentContent,
+  );
   const concurrentChange =
     diskState === "changed"
       ? true
@@ -495,13 +507,15 @@ export async function diagnoseEditSaveFailure(params: {
       ...(diskErrorCode ? { disk_error_code: diskErrorCode } : {}),
     },
     next_steps: [
-      dirtyDocumentState === "matches_save_attempt"
-        ? "The dirty editor is preserved with the exact content submitted to the failed save. Use get_editor_state to inspect it, then save_editor with the returned hashes/version for a human-reviewed exact save. Do not overwrite the buffer to retry."
-        : dirtyDocumentState === "changed_after_save_attempt"
-          ? "The dirty editor changed during the failed save. Use get_editor_state to compare the buffer with disk. Use save_editor only if the current buffer is what should be saved; otherwise reconcile it in VS Code."
-          : params.reviewState === "diff_snapshot_preserved"
-            ? "The review snapshot and dirty editor are preserved. Inspect the file/editor state before retrying the editor save."
-            : "The dirty editor is preserved. Inspect the file/editor state before retrying the editor save.",
+      !editorRecoverable
+        ? `${params.reviewState === "diff_snapshot_preserved" ? "The review snapshot and retained buffer are preserved. " : "The retained buffer is preserved. "}${dirtyDocumentState === "changed_after_save_attempt" ? "The dirty editor changed during the failed save. " : ""}Automated editor recovery cannot inspect this exact state. Inspect and reconcile it in VS Code before saving or closing it. Do not repeat the edit before reconciling the buffer and disk.`
+        : dirtyDocumentState === "matches_save_attempt"
+          ? "The dirty editor is preserved with the exact content submitted to the failed save. Use get_editor_state to inspect it, then save_editor with the returned hashes/version for a human-reviewed exact save. Do not overwrite the buffer to retry."
+          : dirtyDocumentState === "changed_after_save_attempt"
+            ? "The dirty editor changed during the failed save. Use get_editor_state to compare the buffer with disk. Use save_editor only if the current buffer is what should be saved; otherwise reconcile it in VS Code."
+            : params.reviewState === "diff_snapshot_preserved"
+              ? "The review snapshot and dirty editor are preserved. Inspect the file/editor state before retrying the editor save."
+              : "The dirty editor is preserved. Inspect the file/editor state before retrying the editor save.",
       concurrentChange === true
         ? "The file changed on disk after the edit baseline was captured; re-read it before composing another diff."
         : concurrentChange === false

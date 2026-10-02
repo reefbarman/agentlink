@@ -12,6 +12,7 @@ export type WorkingSetStatus =
 export interface WorkingSetRange {
   startLine: number;
   endLine: number;
+  characterOffset?: number;
 }
 
 export interface WorkingSetCheckOptions {
@@ -217,7 +218,7 @@ function getRangeKey(range: WorkingSetRange | undefined): string {
   if (!range) {
     return FULL_FILE_RANGE_KEY;
   }
-  return `${range.startLine}:${range.endLine}`;
+  return `${range.startLine}:${range.endLine}:${range.characterOffset ?? 0}`;
 }
 
 function hashBytes(bytes: Buffer): string {

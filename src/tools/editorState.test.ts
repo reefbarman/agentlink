@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TextDocument } from "vscode";
+import { commitAndVerifyEdit } from "../integrations/editDurability.js";
 import {
   handleGetEditorState,
   handleSaveEditor,
@@ -110,6 +112,88 @@ describe("editor recovery", () => {
     editor_hash: digest(doc.text),
     editor_version: doc.version,
   });
+
+  it("does not dispatch an exact save to a different document with the same fsPath", async () => {
+    state.show.mockImplementation(async () => {
+      state.active = {
+        document: { ...doc, uri: { ...doc.uri, scheme: "untitled" } },
+      };
+      return state.active;
+    });
+    const result = await commitAndVerifyEdit({
+      document: doc as unknown as TextDocument,
+      absolutePath: file,
+      relativePath: "example.ts",
+      baselineExists: true,
+      baselineContent: "old\n",
+      approvedContent: doc.text,
+      reviewState: "dirty_document_preserved",
+      saveWithoutFormatting: true,
+    });
+    expect(result.reason).toBe("preserving_save_failed");
+    expect(state.command).not.toHaveBeenCalled();
+    expect(doc.text).toBe("new\n");
+    expect(await fs.readFile(file, "utf8")).toBe("old\n");
+  });
+
+  it("makes preserving-save failure guidance usable by the actual recovery tool", async () => {
+    state.command.mockResolvedValue(undefined);
+    const result = await commitAndVerifyEdit({
+      document: doc as unknown as TextDocument,
+      absolutePath: file,
+      relativePath: "example.ts",
+      baselineExists: true,
+      baselineContent: "old\n",
+      approvedContent: doc.text,
+      reviewState: "dirty_document_preserved",
+      saveWithoutFormatting: true,
+    });
+    expect(result.reason).toBe("preserving_save_failed");
+    expect(result.next_steps?.join(" ")).toContain("Use get_editor_state");
+    const inspected = payload(
+      await handleGetEditorState({ path: file }, context),
+    );
+    expect(inspected).toMatchObject({
+      source: "editor_buffer",
+      editor_hash: digest(doc.text),
+      disk_hash: digest("old\n"),
+      document_dirty: true,
+    });
+    expect(await fs.readFile(file, "utf8")).toBe("old\n");
+  });
+
+  it.each(["missing", "closed", "non-file", "oversized"])(
+    "does not advertise unavailable recovery after a failed save (%s)",
+    async (kind) => {
+      state.command.mockImplementation(async () => {
+        if (kind === "missing") state.documents = [];
+        if (kind === "closed") doc.isClosed = true;
+        if (kind === "non-file") doc.uri.scheme = "untitled";
+        if (kind === "oversized") doc.text = "x".repeat(256 * 1024 + 1);
+      });
+      const result = await commitAndVerifyEdit({
+        document: doc as unknown as TextDocument,
+        absolutePath: file,
+        relativePath: "example.ts",
+        baselineExists: true,
+        baselineContent: "old\n",
+        approvedContent: doc.text,
+        reviewState: "dirty_document_preserved",
+        saveWithoutFormatting: true,
+      });
+      expect(result.reason).toBe("preserving_save_failed");
+      expect(result.next_steps?.join(" ")).not.toMatch(
+        /get_editor_state|save_editor/,
+      );
+      expect(result.next_steps?.join(" ")).toContain(
+        "Inspect and reconcile it in VS Code",
+      );
+      expect(
+        payload(await handleGetEditorState({ path: file }, context)),
+      ).toHaveProperty("error");
+      expect(await fs.readFile(file, "utf8")).toBe("old\n");
+    },
+  );
 
   it("returns labelled buffer content and independent hashes without changing it", async () => {
     const result = payload(await handleGetEditorState({ path: file }, context));

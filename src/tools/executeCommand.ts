@@ -418,6 +418,8 @@ const SSH_GIT_FAILURE_PATTERNS = [
   /permission denied \(publickey\)/i,
   /could not read from remote repository/i,
   /could not resolve hostname/i,
+  /authentication method negotiation failed/i,
+  /connection closed by unknown port/i,
 ];
 
 const TLS_TRUST_FAILURE_PATTERNS = [
@@ -587,6 +589,17 @@ function directGitNetworkCommandTokens(command: string): string[] | undefined {
   return tokens;
 }
 
+function compoundGitNetworkCommandTokens(command: string): string[][] {
+  return splitCompoundCommand(command)
+    .map(singleCommandTokens)
+    .filter(
+      (tokens): tokens is string[] =>
+        tokens !== undefined &&
+        tokens[0] === "git" &&
+        GIT_NETWORK_SUBCOMMANDS.has(tokens[1] ?? ""),
+    );
+}
+
 function hasUnquotedShellControlSyntax(command: string): boolean {
   let quote: "single" | "double" | null = null;
   for (let index = 0; index < command.length; index++) {
@@ -743,10 +756,22 @@ function attachManagedNetworkFailureGuidance(input: {
   output: string;
 }): void {
   const { result, command, output } = input;
+  const segments = splitCompoundCommand(command);
+  const isCompound = segments.length > 1;
+  const hasSshGitFailure =
+    compoundGitNetworkCommandTokens(command).length > 0 &&
+    SSH_GIT_FAILURE_PATTERNS.some((pattern) => pattern.test(output));
+  const hasGhTlsFailure =
+    isGhTlsFailure(command, output) &&
+    TLS_TRUST_FAILURE_PATTERNS.some((pattern) => pattern.test(output));
+  const successfulCompoundFailureEvidence =
+    result.exit_code === 0 &&
+    isCompound &&
+    (hasSshGitFailure || hasGhTlsFailure);
   if (
     hasRetryGuidance(result) ||
     result.security?.route !== "sandbox" ||
-    result.exit_code === 0 ||
+    (result.exit_code === 0 && !successfulCompoundFailureEvidence) ||
     result.exit_code === null ||
     result.backgrounded ||
     result.is_running ||
@@ -797,20 +822,34 @@ function attachManagedNetworkFailureGuidance(input: {
       },
     });
   } else if (
-    gitTokens &&
+    (gitTokens || compoundGitNetworkCommandTokens(command).length > 0) &&
     SSH_GIT_FAILURE_PATTERNS.some((pattern) => pattern.test(output))
   ) {
-    guidance = managedNetworkSshGitGuidance();
+    if (isCompound) {
+      guidance = {
+        ...managedNetworkSshGitGuidance(),
+        message:
+          "The output matches a Git-over-SSH transport failure during this compound command, but does not establish which segment failed or the status of each segment. Identify and isolate the candidate Git network step before retrying; do not replay successful prefixes blindly.",
+        options: managedNetworkSshGitGuidance().options.map((option) => ({
+          ...option,
+          action: "isolate_candidate_git_network_step",
+          same_command: false,
+        })),
+        prohibited_workarounds: ["blindly_replay_successful_prefixes"],
+      };
+    } else {
+      guidance = managedNetworkSshGitGuidance();
+    }
   } else if (
     (isGhTlsFailure(command, output) ||
       isSpeakeasyTlsFailure(command, output)) &&
     TLS_TRUST_FAILURE_PATTERNS.some((pattern) => pattern.test(output))
   ) {
-    const compound = splitCompoundCommand(command).length > 1;
+    const compound = isCompound;
     guidance = {
       code: "managed_network_tls_trust",
       message: compound
-        ? "Managed networking preserved server TLS, but a step in this compound command hit a trust failure. Repair the host/client trust configuration, identify the failed step, and retry only that step; do not replay successful prefixes blindly or disable certificate verification."
+        ? "Managed networking preserved server TLS, and the output contains a client trust failure. This does not establish which segment failed or the status of each segment. Repair host/client trust, identify and isolate the candidate step, then retry only that step; do not replay successful prefixes blindly or disable certificate verification."
         : "Managed networking preserves server TLS and does not provide a replacement CA. Repair the host/client trust configuration before retrying; do not disable certificate verification or install an unverified proxy CA.",
       automatic_retry: false,
       options: [

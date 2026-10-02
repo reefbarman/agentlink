@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Native commands now confirm script consumption before reporting readiness, rather than treating shell-wrapper start as proof the approved command launched. Unconfirmed completion preserves launch diagnostics and reports unknown execution state without automatic retry. Private command artifacts retain their existing lifetime protection through completion or terminal closure.
+
+- Bounded `read_file` context previews for minified and very long-line files: at most 2,000 characters per source line and 20,000 total, with omitted-byte counts and `character_offset` continuation arguments. Exact content reads are unchanged.
+
+- Reviewed exact saves now verify the returned and active document identity, not just its path. Failed-save guidance only recommends automated editor recovery when the retained buffer is actually inspectable; unavailable buffers stay preserved for manual reconciliation.
+
+- Compound commands now report recognised GitHub TLS and Git SSH failures even when their final segment exits successfully, including remote aliases and SSH negotiation errors. Guidance preserves the final exit code, leaves segment outcomes uncertain, and requires isolating the candidate step without replaying successful prefixes or weakening TLS.
+
 - Project skill proposals can select `skill_directory: ".agents/skills"` for a tracked team destination through the existing explicit approval flow. The default stays `.agentlink/skills`; update/remove targets the selected skill exactly, and projectless/global proposals cannot use the project-only selector.
 
 - `read_file` now supports `include_symbols: false` in both content and context views. Context reads skip symbol-provider work without changing diagnostics, pagination, or unchanged-content deduplication.

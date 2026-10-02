@@ -25,6 +25,19 @@ function dispatchedArtifactPath(pty: FakeNodePtyProcess): string {
   return match[1];
 }
 
+function nativeStartMarker(pty: FakeNodePtyProcess): string {
+  const content = fs.readFileSync(dispatchedArtifactPath(pty), "utf8");
+  const marker = content.match(
+    /AgentLink;[^;]+;C;(agentlink_native_start_[A-Za-z0-9]+)/,
+  );
+  if (!marker?.[1]) throw new Error("Native artifact has no start marker");
+  return marker[1];
+}
+
+function scriptStartFrame(pty: FakeNodePtyProcess): string {
+  return frame("C", nativeStartMarker(pty));
+}
+
 function frame(kind: string, value?: string): string {
   return `\x1b]697;AgentLink;${nonce};${kind}${value === undefined ? "" : `;${value}`}\x07`;
 }
@@ -172,7 +185,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     second.process.onEvent((event) => secondEvents.push(event));
     second.start();
     pty.emitData(
-      `${frame("C", "printf $NATIVE_STATE")}ready${frame("D", "0")}${frame("P", "/workspace")}${frame("A")}➜  workspace ${frame("B")}`,
+      `${frame("C", "printf $NATIVE_STATE")}${scriptStartFrame(pty)}ready${frame("D", "0")}${frame("P", "/workspace")}${frame("A")}➜  workspace ${frame("B")}`,
     );
 
     await expect(second.process.ready).resolves.toMatchObject({
@@ -277,6 +290,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
       const commandText = [
         "curl -w 'status=%{http_code}\\n' http://127.0.0.1:18888/config; docker inspect service --format '{{.State.Status}}'",
         "git push --atomic --force-with-lease=refs/heads/main:2a0cb3f120d76fb5fe378c92d50202d4c4de7241 origin refs/heads/main",
+        "",
       ].join("\n");
       const command = runtime.createCommand({
         channelId: "native-agent-1",
@@ -292,11 +306,11 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
       expect(fs.statSync(path.dirname(artifactPath)).mode & 0o777).toBe(0o700);
       expect(fs.statSync(artifactPath).mode & 0o777).toBe(0o600);
       expect(fs.readFileSync(artifactPath, "utf8")).toBe(
-        `builtin eval ${shellQuote(` (\n${commandText}\n)`)}\n`,
+        `builtin printf '\\033]697;AgentLink;${nonce};C;${nativeStartMarker(pty)}\\007' >/dev/tty\nbuiltin eval ${shellQuote(` (\n${commandText}\n)`)}\n`,
       );
 
       pty.emitData(
-        `${frame("C", "builtin eval")}${frame("D", "0")}${frame("P", "/workspace")}${frame("A")}${frame("B")}`,
+        `${frame("C", "builtin eval")}${scriptStartFrame(pty)}${frame("D", "0")}${frame("P", "/workspace")}${frame("A")}${frame("B")}`,
       );
       await command.process.completion;
       expect(fs.existsSync(path.dirname(artifactPath))).toBe(false);
@@ -330,7 +344,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
         const artifactPath = dispatchedArtifactPath(pty);
 
         if (shellStarted) {
-          pty.emitData(frame("C", "builtin eval"));
+          pty.emitData(`${frame("C", "builtin eval")}${scriptStartFrame(pty)}`);
           await expect(command.process.ready).resolves.toMatchObject({
             pid: 42,
             backend: "native-pty",
@@ -425,15 +439,16 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
           channelId: "native-agent-1",
           commandId: "native-command-semantics",
           generation: 1,
-          command: "return 0; printf reached",
+          command: "return 0; printf reached\n\n",
           isolateShellState: false,
         });
         command.process.onEvent(() => undefined);
         command.start();
 
+        const commandText = "return 0; printf reached\n\n";
         const direct = spawnSync(
           shell,
-          ["-c", "builtin eval ' return 0; printf reached'"],
+          ["-c", `builtin eval ${shellQuote(` ${commandText}`)}`],
           { encoding: "utf8" },
         );
         const artifact = spawnSync(shell, ["-c", pty.writes.at(-1)!.trim()], {
@@ -551,7 +566,7 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     command.start();
     expect(pty.writes).toEqual([artifactDispatch]);
     pty.emitData(
-      `${frame("C", "builtin eval")}firstsecond${frame("D", "0")}${frame("P", "/workspace")}${frame("A")}${frame("B")}`,
+      `${frame("C", "builtin eval")}${scriptStartFrame(pty)}firstsecond${frame("D", "0")}${frame("P", "/workspace")}${frame("A")}${frame("B")}`,
     );
     await expect(command.process.completion).resolves.toEqual({
       exitCode: 0,
@@ -574,7 +589,9 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
     });
     command.process.onEvent(() => undefined);
     command.start();
-    pty.emitData(`${frame("C", "builtin eval")}${frame("D", "0")}`);
+    pty.emitData(
+      `${frame("C", "builtin eval")}${scriptStartFrame(pty)}${frame("D", "0")}`,
+    );
     await new Promise<void>((resolve) => setImmediate(resolve));
     pty.emitData(`${frame("P", "/workspace")}${frame("A")}${frame("B")}`);
     await expect(command.process.completion).resolves.toEqual({
@@ -605,10 +622,9 @@ describe("NodePtyNativeAgentRuntimeProvider", () => {
       exitCode: 7,
       timedOut: false,
     });
-    await expect(command.process.ready).resolves.toMatchObject({
-      pid: 42,
-      backend: "native-pty",
-    });
+    await expect(command.process.ready).rejects.toThrow(
+      "Native Agent shell ended before confirming whether the user command started",
+    );
     await flush();
     expect(channel.closed).toHaveBeenCalledOnce();
     expect(channel.cleanup).toHaveBeenCalledOnce();

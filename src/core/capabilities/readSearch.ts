@@ -150,6 +150,7 @@ export interface ContextDocumentProvider {
 export interface ContextWorkingSetRange {
   startLine: number;
   endLine: number;
+  characterOffset?: number;
 }
 
 export interface ContextWorkingSetCheckRequest {

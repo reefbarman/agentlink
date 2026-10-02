@@ -53,7 +53,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   read_file: {
     label: "Read with line numbers",
     description:
-      'Read a file with line numbers. Use view "context" for first-pass orientation on a known file: a compact pack with metadata, git status, diagnostics summary, bounded symbol outline, bounded numbered content (default 200 lines, max 400), and working-set status, with opt-in unchanged-range omission via dedupe_unchanged_content. Use the default view "content" for exact content, local images/PDFs, complete temp outputs, anchors, or a specific line slice. Set include_symbols=false in either view to skip symbol lookup and omit the outline. Eligible structured-settings secrets are redacted; malformed content is withheld.',
+      'Read a file with line numbers. Use view "context" for first-pass orientation on a known file: a compact pack with metadata, git status, diagnostics summary, bounded symbol outline, numbered content (default 200 lines, max 400; 2,000 characters per line and 20,000 total), and working-set status, with opt-in unchanged-range omission via dedupe_unchanged_content. Truncated previews report omitted bytes and next_read arguments for character_offset paging. Use the default view "content" for exact content, local images/PDFs, complete temp outputs, anchors, or a specific line slice. Set include_symbols=false in either view to skip symbol lookup and omit the outline. Eligible structured-settings secrets are redacted; malformed content is withheld.',
   },
   get_context: {
     label: "Context pack",

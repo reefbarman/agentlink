@@ -263,6 +263,7 @@
     {
       "name": "get_context",
       "parameters": [
+        "character_offset",
         "dedupe_unchanged_content",
         "include_symbols",
         "limit",
@@ -564,6 +565,7 @@
         "anchor_offset",
         "anchor_regex",
         "auto_follow_suggestion",
+        "character_offset",
         "dedupe_unchanged_content",
         "include_symbols",
         "limit",
@@ -844,5 +846,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "c323f294f567a93e03f3c896c431763791bde8a6c4acd315db0a71f6d92a60f7"
+  "revision": "c4b4dd2880b8567d445cda730625fdff99fa546fa5c2616778eda3f4bb115be6"
 }

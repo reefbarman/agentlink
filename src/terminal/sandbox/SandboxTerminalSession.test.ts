@@ -690,6 +690,36 @@ describe("SandboxTerminalSession", () => {
     expect(test.session.snapshot().commands[0].violations).toHaveLength(1);
   });
 
+  it("retains bounded launch diagnostics without confirming readiness or changing cwd", async () => {
+    const test = session();
+    const failing = process("command-1", 1);
+    test.session.startCommand({
+      command: "false",
+      cwd: "/workspace",
+      origin: "agent",
+      process: failing,
+    });
+    failing.emit({ type: "data", data: "launch diagnostic\r\n" });
+    failing.emit({ type: "cwd", cwd: "/private/tmp", nonce: "nonce" });
+    expect(test.session.snapshot()).toMatchObject({
+      status: "launching",
+      cwd: "/workspace",
+    });
+    expect(test.session.snapshot().commands[0].readyAt).toBeUndefined();
+    failing.readyDeferred.reject(new Error("unconfirmed launch"));
+    failing.completionDeferred.resolve({ exitCode: 1, timedOut: false });
+    await flush();
+    expect(test.session.snapshot().commands[0]).toMatchObject({
+      status: "failed",
+      output: "launch diagnostic\r\n",
+    });
+    expect(test.session.getCommandOutput("command-1")).toMatchObject({
+      output: "launch diagnostic\r\n",
+      finalized: true,
+      totalBytes: Buffer.byteLength("launch diagnostic\r\n"),
+    });
+  });
+
   it("fails the active command once and closes all process authority", async () => {
     const test = session();
     const failing = process("command-1", 1);

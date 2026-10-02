@@ -178,6 +178,109 @@ afterEach(() => {
 });
 
 describe("handleGetContext", () => {
+  it("bounds minified content and pages the same line without dedupe suppressing it", async () => {
+    const dir = makeTempWorkspace();
+    const filePath = path.join(dir, "messages.json");
+    const content = "a".repeat(2_000) + "b".repeat(2_000) + "c".repeat(700_000);
+    fs.writeFileSync(filePath, content);
+    const providers = makeProviders(filePath, "messages.json", content);
+    const { handleGetContext } = await import("./getContext.js");
+    const first = JSON.parse(
+      getText(
+        await handleGetContext(
+          { path: "messages.json", limit: 40 },
+          "long-line",
+          providers,
+        ),
+      ),
+    );
+    expect(first.content).toBe("1 | " + "a".repeat(2_000));
+    expect(first.truncated).toBe(true);
+    expect(first.content_truncation).toMatchObject({
+      omitted_bytes: 702_000,
+      next_read: {
+        path: "messages.json",
+        view: "context",
+        offset: 1,
+        character_offset: 2_000,
+        limit: 1,
+      },
+    });
+    const { view: _view, ...nextRead } = first.content_truncation.next_read;
+    const second = JSON.parse(
+      getText(
+        await handleGetContext(
+          { ...nextRead, dedupe_unchanged_content: true },
+          "long-line",
+          providers,
+        ),
+      ),
+    );
+    expect(second.content).toBe("1 | " + "b".repeat(2_000));
+    expect(second.working_set.should_include_content).toBe(true);
+    expect(second.content_truncation.omitted_bytes).toBe(700_000);
+  });
+
+  it("bounds total numbered content and counts omitted UTF-8 bytes", async () => {
+    const dir = makeTempWorkspace();
+    const filePath = path.join(dir, "large.ts");
+    const content = Array.from({ length: 100 }, () => "é".repeat(1_000)).join(
+      "\n",
+    );
+    fs.writeFileSync(filePath, content);
+    const { handleGetContext } = await import("./getContext.js");
+    const result = JSON.parse(
+      getText(
+        await handleGetContext(
+          { path: "large.ts" },
+          "total-budget",
+          makeProviders(filePath, "large.ts", content),
+        ),
+      ),
+    );
+    expect(result.content.length).toBeLessThanOrEqual(20_000);
+    const shownText = result.content
+      .split("\n")
+      .map((line: string) => line.slice(line.indexOf(" | ") + 3))
+      .join("\n");
+    expect(result.content_truncation.omitted_bytes).toBe(
+      Buffer.byteLength(content) - Buffer.byteLength(shownText),
+    );
+    expect(result.content_truncation.omitted_lines).toBeGreaterThan(0);
+    expect(result.content_truncation.next_read.offset).toBe(20);
+  });
+
+  it("does not split Unicode pairs in a long-line continuation", async () => {
+    const dir = makeTempWorkspace();
+    const filePath = path.join(dir, "unicode.ts");
+    const content = "a".repeat(1_999) + "😀" + "end";
+    fs.writeFileSync(filePath, content);
+    const { handleGetContext } = await import("./getContext.js");
+    const providers = makeProviders(filePath, "unicode.ts", content);
+    const first = JSON.parse(
+      getText(
+        await handleGetContext({ path: "unicode.ts" }, "unicode", providers),
+      ),
+    );
+    expect(first.content_truncation.next_read.character_offset).toBe(1_999);
+    const second = JSON.parse(
+      getText(
+        await handleGetContext(
+          { path: "unicode.ts", character_offset: 1_999 },
+          "unicode",
+          providers,
+        ),
+      ),
+    );
+    expect(second.content).toBe("1 | 😀end");
+    const invalid = await handleGetContext(
+      { path: "unicode.ts", character_offset: 2_000 },
+      "unicode",
+      providers,
+    );
+    expect(invalid.isError).toBe(true);
+  });
+
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();

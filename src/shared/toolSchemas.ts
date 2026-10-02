@@ -265,6 +265,15 @@ const readFileContentOptions = {
 
 const readFileContextOptions = {
   include_symbols: readFileIncludeSymbolsSchema,
+  character_offset: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(Number.MAX_SAFE_INTEGER)
+    .optional()
+    .describe(
+      "Context view only. Zero-based UTF-16 character offset within the starting line (default: 0). Use content_truncation.next_read to page a long line; explicit character pages bypass unchanged-range omission.",
+    ),
   dedupe_unchanged_content: z
     .boolean()
     .optional()
@@ -352,6 +361,7 @@ export const loadRuleSchema = {
 
 export const getContextSchema = {
   include_symbols: readFileIncludeSymbolsSchema,
+  character_offset: readFileContextOptions.character_offset,
   path: z
     .string()
     .describe(

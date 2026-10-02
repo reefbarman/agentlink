@@ -4342,6 +4342,17 @@ describe("handleExecuteCommand", () => {
       code: "managed_network_ssh_git_transport",
     },
     {
+      name: "compound Git alias SSH failure with successful final status",
+      command: "git status --short && git fetch origin || echo handled",
+      output:
+        "nc: authentication method negotiation failed\\nConnection closed by UNKNOWN port 65535",
+      code: "managed_network_ssh_git_transport",
+      exitCode: 0,
+      action: "isolate_candidate_git_network_step",
+      sameCommand: false,
+      uncertainSegment: true,
+    },
+    {
       name: "GitHub CLI TLS trust failure",
       command: "gh api /user",
       output: "x509: certificate signed by unknown authority",
@@ -4397,6 +4408,17 @@ describe("handleExecuteCommand", () => {
       code: "managed_network_tls_trust",
     },
     {
+      name: "GitHub TLS trust failure with successful compound final status",
+      command: "gh api /user || echo handled",
+      output:
+        'Post "https://api.github.com/user": x509: certificate signed by unknown authority',
+      code: "managed_network_tls_trust",
+      exitCode: 0,
+      action: "isolate_failed_step_after_trust_repair",
+      sameCommand: false,
+      uncertainSegment: true,
+    },
+    {
       name: "GraphQL TLS trust failure with quoted variables",
       command:
         "gh api graphql -f query='query($owner:String!){repository(owner:$owner,name:\"repo\"){id}}' -F owner=agentlink",
@@ -4439,9 +4461,18 @@ describe("handleExecuteCommand", () => {
     },
   ])(
     "attaches bounded guidance after a managed-network $name without retrying natively",
-    async ({ command, output, code, action, sameCommand, defaultIntent }) => {
+    async ({
+      command,
+      output,
+      code,
+      action,
+      sameCommand,
+      defaultIntent,
+      exitCode = 1,
+      uncertainSegment,
+    }) => {
       const execute = vi.fn(async () => ({
-        exit_code: 1,
+        exit_code: exitCode,
         output,
         output_captured: true,
         terminal_id: "sandbox-managed-failure",
@@ -4502,7 +4533,7 @@ describe("handleExecuteCommand", () => {
       expect(execute).toHaveBeenCalledOnce();
       const payload = textPayload(result);
       expect(payload).toMatchObject({
-        exit_code: 1,
+        exit_code: exitCode,
         output,
         security: { route: "sandbox" },
         retry_guidance: { code, automatic_retry: false },
@@ -4512,6 +4543,15 @@ describe("handleExecuteCommand", () => {
           action,
           same_command: sameCommand,
         });
+      }
+      if (uncertainSegment) {
+        expect(payload.retry_guidance.message).toMatch(
+          /does not establish which segment failed or the status of each segment/i,
+        );
+
+        expect(payload.retry_guidance.prohibited_workarounds).toContain(
+          "blindly_replay_successful_prefixes",
+        );
       }
       expect(payload.retry_lineage_id).toBeUndefined();
     },
@@ -4537,6 +4577,15 @@ describe("handleExecuteCommand", () => {
     {
       command: "npm run fetch-fixture",
       output: "TypeError: fetch failed: getaddrinfo ENOTFOUND unpkg.com",
+    },
+    {
+      command: "echo 'x509: certificate signed by unknown authority'",
+      output: "x509: certificate signed by unknown authority",
+    },
+    {
+      command: "echo 'Connection closed by UNKNOWN port 65535' && npm test",
+      output:
+        "nc: authentication method negotiation failed\\nConnection closed by UNKNOWN port 65535",
     },
     {
       command: "node app.mjs",

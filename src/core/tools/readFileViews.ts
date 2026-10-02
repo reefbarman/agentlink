@@ -20,7 +20,7 @@ const VIEW_ONLY_OPTIONS: Readonly<Record<ReadFileView, readonly string[]>> =
       "anchor_offset",
       "auto_follow_suggestion",
     ],
-    context: ["dedupe_unchanged_content", "refresh"],
+    context: ["dedupe_unchanged_content", "refresh", "character_offset"],
   });
 
 /** Views whose underlying operation is permitted by the caller's authority. */

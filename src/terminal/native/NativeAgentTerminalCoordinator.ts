@@ -743,11 +743,10 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
           is_running: false,
           execution_mode: "native_pty",
           command_sent: true,
-          process_launched: false,
           retry_safe: false,
           failure_stage: "launch",
           output_warning:
-            "The command was submitted to the Native Agent terminal, but shell integration never confirmed command start before the timeout. The terminal was closed to avoid leaving an unknown running process.",
+            "The command was submitted to the Native Agent terminal, but script consumption was not confirmed before the timeout. Execution state is unknown. The terminal was closed to avoid leaving an unknown running process.",
         };
         this.closeTerminals({
           owner: channel.owner,
@@ -1137,7 +1136,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
         command?.status === "launching" || command?.status === "running",
       execution_mode: "native_pty",
       command_sent: command !== undefined,
-      process_launched: command?.readyAt !== undefined,
+      ...(command?.readyAt !== undefined ? { process_launched: true } : {}),
       retry_safe: command === undefined,
     };
   }
@@ -1149,8 +1148,10 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     retained: SandboxTerminalCommandOutput | undefined,
   ): TerminalCommandResult {
     const output = retained?.output ?? command.output;
+    const launchUnconfirmed =
+      command.status === "failed" && command.readyAt === undefined;
     return {
-      exit_code: command.exitCode ?? null,
+      exit_code: launchUnconfirmed ? null : (command.exitCode ?? null),
       ...(command.signal ? { signal: command.signal } : {}),
       command_id: command.commandId,
       output: cleanTerminalOutput(output),
@@ -1170,8 +1171,18 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       is_running: false,
       execution_mode: "native_pty",
       command_sent: true,
-      process_launched: command.readyAt !== undefined,
-      retry_safe: false,
+      ...(launchUnconfirmed
+        ? {
+            command_sent: true,
+            retry_safe: false,
+            failure_stage: "launch" as const,
+            output_warning:
+              "Native shell dispatch ended without confirmation that the user command started. Execution state is unknown, so automatic retry is unsafe.",
+          }
+        : {
+            process_launched: command.readyAt !== undefined,
+            retry_safe: false,
+          }),
     };
   }
 
