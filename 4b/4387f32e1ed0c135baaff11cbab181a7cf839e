@@ -1,0 +1,23 @@
+.github/workflows/ci.yml
+  h_e08a86bb3a33a2 51-57
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_e08a86bb3a33a2 8578-8582,8646,8663,8686,8737
+src/terminal/native/NativeAgentRuntimeProvider.test.ts
+  h_e08a86bb3a33a2 466-469,627,635-636,682
+.github/workflows/release.yml
+  h_e08a86bb3a33a2 35-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4b4387f32e1ed0c135baaff11cbab181a7cf839e",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
