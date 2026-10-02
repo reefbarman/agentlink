@@ -4,11 +4,29 @@ on:
   push:
     tags:
       - "v*"
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact commit SHA to build and release
+        required: true
+        type: string
+      version:
+        description: Extension version (must match package.json at ref)
+        required: true
+        type: string
+      publish:
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       version:
         description: Extension version to package (must match package.json)
         required: true
+        type: string
+      ref:
+        description: Commit SHA to build (defaults to the selected branch head)
+        required: false
         type: string
       publish:
         description: Publish artifacts to a GitHub Release
@@ -25,6 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@v5
@@ -42,7 +61,7 @@ jobs:
       - run: npm ci
       - name: Verify release version
         env:
-          REQUESTED_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+          REQUESTED_VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           VERSION=$(node -p 'require("./package.json").version')
           REQUESTED_VERSION=${REQUESTED_VERSION#v}
@@ -70,6 +89,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@v5
@@ -152,7 +172,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
       - uses: actions/download-artifact@v4
         with:
           pattern: agentlink-*
@@ -160,8 +187,6 @@ jobs:
           merge-multiple: true
 
       - name: Verify release asset set
-        env:
-          RELEASE_VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
         run: |
           VERSION=${RELEASE_VERSION#v}
           TARGETS=(
@@ -176,11 +201,17 @@ jobs:
           ACTUAL_COUNT=$(find dist -maxdepth 1 -type f -name '*.vsix' | wc -l | tr -d ' ')
           test "$ACTUAL_COUNT" -eq "${#TARGETS[@]}"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event_name == 'push' && github.ref_name || format('v{0}', inputs.version) }}
-          name: AgentLink ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
-          files: dist/*.vsix
-          fail_on_unmatched_files: true
-          generate_release_notes: true
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          VERSION=${RELEASE_VERSION#v}
+          TARGET=$(git rev-parse HEAD)
+          if ! node scripts/release-coordinator.mjs notes --unit vscode --version "$VERSION" > notes.md; then
+            printf 'See the [changelog](https://github.com/%s/blob/%s/CHANGELOG.md).\n' "$GITHUB_REPOSITORY" "$TARGET" > notes.md
+          fi
+          node scripts/release-publish.mjs \
+            --tag "v${VERSION}" --target "$TARGET" \
+            --title "AgentLink v${VERSION}" \
+            --notes-file notes.md --dir dist --latest

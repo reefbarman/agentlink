@@ -1,0 +1,119 @@
+name: SDK Release
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact commit SHA to build and release
+        required: true
+        type: string
+      version:
+        description: Matched SDK version (must match every packages/* manifest at ref)
+        required: true
+        type: string
+      publish:
+        required: false
+        default: false
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Matched SDK version (must match every packages/* manifest)
+        required: true
+        type: string
+      ref:
+        description: Commit SHA to build (defaults to the selected branch head)
+        required: false
+        type: string
+      publish:
+        description: Publish the SDK archives to a GitHub Release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - run: npm ci
+      - name: Verify matched SDK version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          for PACKAGE in protocol core node-host workspace-host; do
+            VERSION=$(node -p "require('./packages/${PACKAGE}/package.json').version")
+            test "$VERSION" = "$REQUESTED_VERSION"
+          done
+      - name: Verify packed core SDK consumer
+        run: npm run test:core-sdk-consumer
+      - name: Pack verified SDK archive set
+        run: npm run vendor:core-sdk -- --destination sdk-dist --include-node-host
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentlink-sdk
+          path: sdk-dist/*
+          if-no-files-found: error
+
+  release:
+    needs: package
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      SDK_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: agentlink-sdk
+          path: dist
+
+      - name: Verify SDK asset set
+        run: |
+          test -f dist/agentlink-sdk-artifacts.json
+          node -e '
+            const fs = require("fs");
+            const manifest = JSON.parse(fs.readFileSync("dist/agentlink-sdk-artifacts.json", "utf8"));
+            const names = manifest.packages.map((entry) => entry.name).sort();
+            const expected = ["@agentlink/core", "@agentlink/node-host", "@agentlink/protocol"];
+            if (JSON.stringify(names) !== JSON.stringify(expected)) throw new Error(`Unexpected SDK packages: ${names}`);
+            for (const entry of manifest.packages) {
+              if (entry.version !== process.env.SDK_VERSION) throw new Error(`${entry.name} is ${entry.version}`);
+              const digest = require("crypto").createHash("sha256").update(fs.readFileSync(`dist/${entry.filename}`)).digest("hex");
+              if (digest !== entry.sha256) throw new Error(`${entry.filename} digest mismatch`);
+            }
+            if (fs.readdirSync("dist").length !== manifest.packages.length + 1) throw new Error("Unexpected extra SDK assets");
+          '
+
+      - name: Publish SDK GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TARGET=$(git rev-parse HEAD)
+          {
+            node scripts/release-coordinator.mjs notes --unit sdk --version "$SDK_VERSION" && printf '\n' || true
+            printf '%s\n' 'Pre-1.0 Node SDK preview: matched `@agentlink/protocol`, `@agentlink/core`, and `@agentlink/node-host` archives. Not published to npm. Vendor them into a Node server project with `curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install-sdk.mjs | node --input-type=module - --version '"$SDK_VERSION"'`. See the [embedding guide](https://github.com/reefbarman/agentlink/blob/main/resources/builtin-skills/documentation/references/embedding-agentlink.md).'
+          } > notes.md
+          node scripts/release-publish.mjs \
+            --tag "sdk-v${SDK_VERSION}" --target "$TARGET" \
+            --title "AgentLink SDK v${SDK_VERSION}" \
+            --notes-file notes.md --dir dist --prerelease

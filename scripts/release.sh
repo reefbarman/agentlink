@@ -6,10 +6,11 @@ INSTALL=false
 
 usage() {
   echo "Usage: $0 [--major|--minor|--patch] [--install]"
-  echo "  --major    Bump major version"
-  echo "  --minor    Bump minor version"
-  echo "  --patch    Bump patch version (default)"
+  echo "  --major    Bump major version and record it as release intent"
+  echo "  --minor    Bump minor version and record it as release intent"
+  echo "  --patch    Bump patch version (default; a local reservation CI may raise)"
   echo "  --install  Install the VSIX into VS Code after building"
+  echo "Only the VS Code extension version changes. See .release/README.md."
   exit 1
 }
 
@@ -29,6 +30,20 @@ cd "$(dirname "$0")/.."
 # Bump version (--no-git-tag-version to avoid creating a commit/tag)
 NEW_VERSION=$(npm version "$BUMP" --no-git-tag-version)
 echo "Bumped version to $NEW_VERSION"
+
+# Patch bumps are ordinary dogfood reservations that CI reuses. Minor/major
+# bumps are explicit release intent: record the exact target so the release
+# coordinator publishes it rather than treating it as an accidental jump.
+if [[ "$BUMP" != "patch" ]]; then
+  mkdir -p .release/intents
+  node -e 'require("fs").writeFileSync(".release/intents/vscode.json", JSON.stringify({ version: process.argv[1], recordedBy: "scripts/release.sh" }, null, 2) + "\n")' "${NEW_VERSION#v}"
+  echo "Recorded release intent ${NEW_VERSION#v} in .release/intents/vscode.json; commit it with the version bump."
+  if [[ "$BUMP" == "major" ]]; then
+    echo "WARNING: committing this intent authorises a public VS Code major release (${NEW_VERSION#v})." >&2
+  fi
+else
+  echo "Patch bumps are local reservations; the release coordinator reuses ${NEW_VERSION} or raises it to a minor if the published changes warrant one."
+fi
 
 TARGET=$(node scripts/package-retrieval-runtime.mjs --print-target)
 echo "Packaging retrieval runtime for $TARGET"

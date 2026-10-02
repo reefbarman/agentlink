@@ -1,0 +1,7 @@
+{
+  "unit": "sdk",
+  "version": "0.2.0",
+  "commit": "3cab81db92f04acf2b4a7bae45e536050c7aabc2",
+  "published": false,
+  "note": "Internal 0.2.0 library boundary shipped inside desktop-v0.2.0, cli-v0.2.0 and v1.23.0. It was never published as SDK archives. The first sdk-v* release needs .release/intents/sdk.json (planned as 0.3.0). The planner ignores this record once any sdk-v* release exists."
+}

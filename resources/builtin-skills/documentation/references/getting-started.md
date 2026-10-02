@@ -25,7 +25,21 @@ You can also download the matching `.vsix` from the [latest release](https://git
 code --install-extension agentlink-*.vsix --force
 ```
 
-The installer supports `darwin`, `linux`, `alpine`, and `win32` targets on `arm64` and `x64`. See the [complete reference](complete-reference.md#installation) for source builds, platform details, and AgentLink Terminal requirements.
+The installer supports `darwin`, `linux`, `alpine`, and `win32` targets on `arm64` and `x64`. It verifies the release's SHA-256 checksum when one is published (releases before checksums were added skip verification with a notice). Add `--version X.Y.Z` to install a specific release or `--dry-run` to print the selected release without installing. See the [complete reference](complete-reference.md#installation) for source builds, platform details, and AgentLink Terminal requirements.
+
+### Install standalone previews from a terminal
+
+The same installer handles the macOS Desktop and CLI previews. Each surface has its own release series (`desktop-vX.Y.Z`, `cli-vX.Y.Z`), and the installer picks the newest published release for that surface:
+
+```sh
+# Desktop: downloads the DMG for this Mac to ~/Downloads and opens it
+curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash -s -- --surface desktop
+
+# CLI (Apple Silicon only): verifies the checksum and links ~/.local/bin/agentlink
+curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash -s -- --surface cli
+```
+
+For Desktop, drag **AgentLink** from the opened DMG to Applications; add `--arch x64` or `--arch arm64` to download the other Mac build. The CLI install extracts into a unique `~/.local/lib/agentlink/cli-preview.*` directory. It upgrades a launcher that points at an earlier preview from this installer (keeping the old bundle until you delete it) and refuses to replace any other `agentlink` command. Both previews are unsigned and not notarised.
 
 ### Install standalone previews from VS Code
 
@@ -38,7 +52,7 @@ Both commands warn that published previews are unsigned and not notarised. They 
 
 ### Standalone CLI preview
 
-The [CLI preview release](https://github.com/reefbarman/agentlink/releases/tag/cli-v0.1.0) provides a self-contained, unsigned terminal coding agent for macOS Apple Silicon, without VS Code or a separately installed Node runtime. It supports provider setup, durable per-project sessions, reviewed single-file edits and commands, MCP, up to two scoped background writers, and optional managed TypeScript/JavaScript intelligence. Check the archive checksum before installing, and see [Standalone CLI](standalone-cli.md#github-release-preview) for exact setup, approval, and limitations. Intel macOS, Linux, and Windows are not supported by this preview.
+The [CLI preview releases](https://github.com/reefbarman/agentlink/releases?q=cli-v&expanded=true) provide a self-contained, unsigned terminal coding agent for macOS Apple Silicon, without VS Code or a separately installed Node runtime. It supports provider setup, durable per-project sessions, reviewed single-file edits and commands, MCP, up to two scoped background writers, and optional managed TypeScript/JavaScript intelligence. Install with `install.sh --surface cli` (above), or check the archive checksum yourself before a manual install, and see [Standalone CLI](standalone-cli.md#github-release-preview) for exact setup, approval, and limitations. Intel macOS, Linux, and Windows are not supported by this preview.
 
 ### Standalone desktop preview
 
@@ -54,7 +68,7 @@ The desktop chat uses AgentLink's interlocking-link logo in the title bar and we
 
 **Menu bar and Settings:** Desktop runs as a menu bar app. Closing the chat window hides it (your drafts are kept) and removes the Dock icon, while the menu bar icon keeps **Quick Ask**, **Open AgentLink**, **Settings…** and **Quit AgentLink** available. Open **Settings…** with **⌘,**, from the menu bar icon, or from **More** in the chat. It holds the Quick Ask shortcut (change, reset or turn off), **Open at login**, and your accounts. The installed app turns on Open at login the first time it runs, so it starts quietly in the menu bar after you log in. If you turn it off in Settings or remove it under **System Settings → General → Login Items**, AgentLink leaves it off. Development builds never register a login item. Quit with **⌘Q** or **Quit AgentLink**; the shortcut is unavailable until AgentLink runs again.
 
-Download the DMG matching your architecture (Apple Silicon `arm64` or Intel `x64`) from the [Desktop preview release](https://github.com/reefbarman/agentlink/releases/tag/desktop-v0.1.1), open it, and drag **AgentLink** to Applications. A ZIP is also available as a fallback. Desktop artifacts have their own version and release workflow; they are never included in the VSIX. The preview is unsigned and not notarised, so the first launch may require right-clicking **AgentLink**, choosing **Open**, and confirming macOS's warning. In Ask AgentLink, sign in with a ChatGPT/Codex account or configure an API-key provider. VS Code integration is optional and requires a local VS Code window running AgentLink with its browser gateway enabled.
+Install with `install.sh --surface desktop` (above), or download the DMG matching your architecture (Apple Silicon `arm64` or Intel `x64`) from the newest [Desktop preview release](https://github.com/reefbarman/agentlink/releases?q=desktop-v&expanded=true), open it, and drag **AgentLink** to Applications. A ZIP is also available as a fallback. Desktop artifacts have their own version and release workflow; they are never included in the VSIX. The preview is unsigned and not notarised, so the first launch may require right-clicking **AgentLink**, choosing **Open**, and confirming macOS's warning. In Ask AgentLink, sign in with a ChatGPT/Codex account or configure an API-key provider. VS Code integration is optional and requires a local VS Code window running AgentLink with its browser gateway enabled.
 
 ### Signed local desktop builds
 

@@ -69,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/i
   | AGENTLINK_VSCE_TARGET=linux-x64 bash
 ```
 
-You can also download a matching `.vsix` from the [latest release](https://github.com/reefbarman/agentlink/releases/latest):
+The installer verifies the release checksum when one is published. Add `--version X.Y.Z` to pin a release or `--dry-run` to preview what it would install. You can also download a matching `.vsix` from the [latest release](https://github.com/reefbarman/agentlink/releases/latest):
 
 ```sh
 code --install-extension agentlink-*.vsix --force
@@ -77,13 +77,35 @@ code --install-extension agentlink-*.vsix --force
 
 ### Try the standalone Desktop preview
 
-[Download the Desktop preview](https://github.com/reefbarman/agentlink/releases/tag/desktop-v0.1.1) for macOS Apple Silicon (`arm64`) or Intel (`x64`). Open the matching DMG and drag **AgentLink** to Applications. Desktop runs Ask Agent chat without VS Code, and can also connect to an AgentLink VS Code window on the same Mac to view its existing sessions. Desktop binaries are not included in the VSIX.
+Desktop runs Ask Agent chat without VS Code, and can also connect to an AgentLink VS Code window on the same Mac to view its existing sessions. The installer downloads the newest DMG for your Mac (Apple Silicon or Intel) and opens it so you can drag **AgentLink** to Applications:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash -s -- --surface desktop
+```
+
+You can also download the DMG from the [Desktop releases](https://github.com/reefbarman/agentlink/releases?q=desktop-v&expanded=true). Desktop binaries are not included in the VSIX.
 
 This preview is unsigned and not notarised. macOS may require you to right-click **AgentLink**, choose **Open**, and confirm its first launch. See [Desktop setup and limitations](resources/builtin-skills/documentation/references/getting-started.md#standalone-desktop-preview).
 
 ### Try the standalone CLI preview
 
-[Download the CLI preview](https://github.com/reefbarman/agentlink/releases/tag/cli-v0.1.0) for macOS Apple Silicon. It is a self-contained terminal coding agent with its own Node runtime, reviewed edits and commands, project sessions, and optional TypeScript/JavaScript intelligence. Verify the provided SHA-256 checksum before extracting. The CLI is unsigned and not notarised, supports neither Intel Macs nor Linux/Windows yet, and has a narrower tool set than the VS Code extension. See [CLI installation and setup](resources/builtin-skills/documentation/references/standalone-cli.md#github-release-preview) for commands and limitations.
+The CLI is a self-contained terminal coding agent for macOS Apple Silicon, with its own Node runtime, reviewed edits and commands, project sessions, and optional TypeScript/JavaScript intelligence. The installer verifies the SHA-256 checksum and links `~/.local/bin/agentlink`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash -s -- --surface cli
+```
+
+The CLI is unsigned and not notarised, supports neither Intel Macs nor Linux/Windows yet, and has a narrower tool set than the VS Code extension. See [CLI installation and setup](resources/builtin-skills/documentation/references/standalone-cli.md#github-release-preview) for manual installation and limitations.
+
+### Build on the Node SDK preview
+
+The `@agentlink/protocol`, `@agentlink/core`, and `@agentlink/node-host` libraries let you run the AgentLink agent loop inside your own Node server, for example as the core of a web agent. They are versioned together and published as GitHub Release archives (not npm yet). From your project directory:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install-sdk.mjs | node --input-type=module - --install
+```
+
+This vendors checksum-verified archives into `vendor/agentlink/` and adds them to `package.json`. The first SDK release is still pending; until then, vendor the libraries from a source checkout. See [Embedding AgentLink](resources/builtin-skills/documentation/references/embedding-agentlink.md).
 
 ### Start your first VS Code session
 
@@ -113,6 +135,7 @@ Choose ChatGPT/Codex, OpenAI, or an OpenAI-compatible provider. Connect the tool
 
 - [Getting started, including Desktop](resources/builtin-skills/documentation/references/getting-started.md)
 - [Standalone CLI](resources/builtin-skills/documentation/references/standalone-cli.md)
+- [Embedding AgentLink with the Node SDK](resources/builtin-skills/documentation/references/embedding-agentlink.md)
 - [Capabilities overview](resources/builtin-skills/documentation/references/capabilities.md)
 - [Tools](resources/builtin-skills/documentation/references/tools.md)
 - [Customization](resources/builtin-skills/documentation/references/customization.md)

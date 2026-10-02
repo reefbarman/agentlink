@@ -348,7 +348,22 @@ A cloud host can use non-interactive approval policy for fully automated actions
 
 ## Consume private package artifacts reproducibly
 
-The packages are not currently a public stable npm release. From an AgentLink checkout, generate a matched content-addressed set directly in the consumer:
+The packages are not currently a public stable npm release. `@agentlink/protocol`, `@agentlink/core`, and `@agentlink/node-host` share one pre-1.0 version, released as a GitHub Release tagged `sdk-vX.Y.Z`. While the SDK is 0.x, a minor version can contain breaking changes; the release notes call them out. `@agentlink/workspace-host` is not part of the released set.
+
+### Install a published SDK release
+
+From the consumer project directory:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install-sdk.mjs \
+  | node --input-type=module - --install
+```
+
+The installer selects the newest `sdk-vX.Y.Z` release (or `--version X.Y.Z`), checks the archive manifest and every tarball against the release's `SHA256SUMS`, writes them to `vendor/agentlink/` with `agentlink-sdk-artifacts.json`, then runs `npm install` for the tarballs and required peers. Without `--install` it prints that command instead, for other package managers. `--dir <path>` targets another project and `--dry-run` only reports the selection. Commit `vendor/agentlink/` with your lockfile. Until the first SDK release is published, use the checkout method below.
+
+### Vendor from an AgentLink checkout
+
+From an AgentLink checkout, generate a matched content-addressed set directly in the consumer:
 
 ```sh
 npm run vendor:core-sdk -- --destination /path/to/consumer/vendor/agentlink

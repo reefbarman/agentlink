@@ -4,11 +4,29 @@ on:
   push:
     tags:
       - "desktop-v*"
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact commit SHA to build and release
+        required: true
+        type: string
+      version:
+        description: Desktop version (must match apps/desktop/package.json at ref)
+        required: true
+        type: string
+      publish:
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       version:
         description: Desktop version to package (must match apps/desktop/package.json)
         required: true
+        type: string
+      ref:
+        description: Commit SHA to build (defaults to the selected branch head)
+        required: false
         type: string
       publish:
         description: Publish artifacts to a GitHub Release
@@ -27,6 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@v5
@@ -37,7 +56,7 @@ jobs:
       - run: npm ci
       - name: Verify desktop version
         env:
-          REQUESTED_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+          REQUESTED_VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           VERSION=$(node -p 'require("./apps/desktop/package.json").version')
           REQUESTED_VERSION=${REQUESTED_VERSION#desktop-v}
@@ -63,6 +82,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@v5
@@ -119,7 +139,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      DESKTOP_VERSION: ${{ inputs.version || github.ref_name }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
       - uses: actions/download-artifact@v4
         with:
           pattern: agentlink-desktop-*
@@ -127,8 +154,6 @@ jobs:
           merge-multiple: true
 
       - name: Verify release asset set
-        env:
-          DESKTOP_VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
         run: |
           VERSION=${DESKTOP_VERSION#desktop-v}
           for ARCH in arm64 x64; do
@@ -140,19 +165,19 @@ jobs:
           ACTUAL_COUNT=$(find dist -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.blockmap' \) | wc -l | tr -d ' ')
           test "$ACTUAL_COUNT" -eq 8
 
-      - name: Create standalone desktop GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event_name == 'push' && github.ref_name || format('desktop-v{0}', inputs.version) }}
-          target_commitish: ${{ github.sha }}
-          name: AgentLink Desktop ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
-          files: |
-            dist/*.dmg
-            dist/*.zip
-            dist/*.blockmap
-          fail_on_unmatched_files: true
-          body: |
-            Standalone AgentLink Desktop preview for macOS. Download the DMG matching your Mac: `arm64` for Apple Silicon or `x64` for Intel.
-
-            This preview is unsigned and not notarized. Prefer the DMG and use **Open** from Finder's context menu on first launch. ZIP files are provided as an advanced fallback and may require removing quarantine with `xattr -dr com.apple.quarantine AgentLink.app` after extraction.
-          prerelease: true
+      - name: Publish standalone desktop GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          VERSION=${DESKTOP_VERSION#desktop-v}
+          TARGET=$(git rev-parse HEAD)
+          {
+            node scripts/release-coordinator.mjs notes --unit desktop --version "$VERSION" && printf '\n' || true
+            printf '%s\n\n' 'Standalone AgentLink Desktop preview for macOS. Install with `curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash -s -- --surface desktop`, or download the DMG matching your Mac: `arm64` for Apple Silicon or `x64` for Intel.'
+            printf '%s\n' "This preview is unsigned and not notarized. Prefer the DMG and use **Open** from Finder's context menu on first launch. ZIP files are provided as an advanced fallback and may require removing quarantine with \`xattr -dr com.apple.quarantine AgentLink.app\` after extraction."
+          } > notes.md
+          node scripts/release-publish.mjs \
+            --tag "desktop-v${VERSION}" --target "$TARGET" \
+            --title "AgentLink Desktop v${VERSION}" \
+            --notes-file notes.md --dir dist --prerelease

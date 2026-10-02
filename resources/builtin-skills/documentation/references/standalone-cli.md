@@ -18,11 +18,17 @@ The standalone CLI preview runs a local multi-turn AgentLink coding session with
 
 From a local macOS Apple Silicon VS Code window with AgentLink installed, **AgentLink: Install CLI** in the Command Palette finds the latest published CLI preview. After an unsigned-preview warning, a visible terminal downloads and checksum-verifies the archive, extracts into a unique `~/.local/lib/agentlink/cli-preview.*` directory, and links `~/.local/bin/agentlink`. An existing launcher is never replaced. Add `~/.local/bin` to PATH if needed. This is separate from the signed source-build installer below; it does not bypass macOS security checks, change shell profiles, or alter sessions and credentials. To uninstall, remove that symlink and the unique bundle directory it points to.
 
-Download `agentlink-cli-darwin-arm64-v0.1.0.tar.gz` and its `.sha256` file from the [CLI preview release](https://github.com/reefbarman/agentlink/releases/tag/cli-v0.1.0). From the directory containing both downloads, verify the archive before extracting:
+From a terminal, the release installer does the same without VS Code. It selects the newest `cli-vX.Y.Z` release (or `--version X.Y.Z`), verifies the SHA-256 checksum, and links `~/.local/bin/agentlink`. It upgrades a launcher that points at an earlier `cli-preview.*` bundle, keeping the old bundle until you delete it, and refuses to replace any other `agentlink` command. Use `--dry-run` to see the selected release first:
 
 ```sh
-shasum -a 256 -c agentlink-cli-darwin-arm64-v0.1.0.tar.gz.sha256
-tar -xzf agentlink-cli-darwin-arm64-v0.1.0.tar.gz
+curl -fsSL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash -s -- --surface cli
+```
+
+To install manually, download `agentlink-cli-darwin-arm64-vX.Y.Z.tar.gz` and its checksum from the newest [CLI preview release](https://github.com/reefbarman/agentlink/releases?q=cli-v&expanded=true). Releases have a `.sha256` file for the archive; newer releases also have a `SHA256SUMS` file covering every asset. From the directory containing both downloads, verify the archive before extracting (replace `X.Y.Z` with the release version):
+
+```sh
+shasum -a 256 -c agentlink-cli-darwin-arm64-vX.Y.Z.tar.gz.sha256
+tar -xzf agentlink-cli-darwin-arm64-vX.Y.Z.tar.gz
 ./agentlink-cli-darwin-arm64/bin/agentlink --help
 ./agentlink-cli-darwin-arm64/bin/agentlink auth codex
 ./agentlink-cli-darwin-arm64/bin/agentlink --project /path/to/project

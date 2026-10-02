@@ -1,0 +1,205 @@
+name: Release Coordinator
+
+# Plans independent VS Code, Desktop, CLI and SDK releases after CI passes on
+# main. Publication is off unless the repository variable RELEASE_AUTOMATION
+# is "publish" or a manual run selects mode=publish; otherwise the run only
+# writes the plan to the job summary.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: plan (dry run) or publish
+        required: true
+        default: plan
+        type: choice
+        options: [plan, publish]
+
+permissions:
+  contents: read
+
+# Top-level only: reusable release workflows must not join this group.
+concurrency:
+  group: release-coordinator
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    if: >-
+      github.repository == 'reefbarman/agentlink' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+      publish: ${{ steps.mode.outputs.publish }}
+      units: ${{ steps.plan.outputs.units }}
+      vscode_version: ${{ steps.plan.outputs.vscode_version }}
+      desktop_version: ${{ steps.plan.outputs.desktop_version }}
+      cli_version: ${{ steps.plan.outputs.cli_version }}
+      sdk_version: ${{ steps.plan.outputs.sdk_version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Require current main with passing CI
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          HEAD=$(git rev-parse HEAD)
+          if [ -n "$RUN_SHA" ] && [ "$RUN_SHA" != "$HEAD" ]; then
+            echo "main moved past $RUN_SHA; the newer CI run will plan instead."
+            exit 0
+          fi
+          CONCLUSION=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+            --commit "$HEAD" --event push --json conclusion --jq '.[0].conclusion')
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "CI has not passed for $HEAD (status: ${CONCLUSION:-none})." >&2
+            exit 1
+          fi
+          echo "sha=$HEAD" >> "$GITHUB_OUTPUT"
+
+      - name: Select mode
+        id: mode
+        if: steps.source.outputs.sha
+        env:
+          DISPATCH_MODE: ${{ inputs.mode }}
+          AUTOMATION: ${{ vars.RELEASE_AUTOMATION }}
+        run: |
+          if [ "$DISPATCH_MODE" = "publish" ] || { [ -z "$DISPATCH_MODE" ] && [ "$AUTOMATION" = "publish" ]; }; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Dry run: set RELEASE_AUTOMATION=publish or dispatch mode=publish to release."
+          fi
+
+      - uses: actions/setup-node@v5
+        if: steps.source.outputs.sha
+        with:
+          node-version: 22.x
+
+      - name: Plan releases
+        id: plan
+        if: steps.source.outputs.sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          RELEASE_AI_MODEL: ${{ vars.RELEASE_AI_MODEL }}
+          RELEASE_AI_FALLBACK_MODEL: ${{ vars.RELEASE_AI_FALLBACK_MODEL }}
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 \
+            --json tagName,isDraft --jq '[.[] | select(.isDraft | not) | .tagName]' \
+            > published-tags.json
+          CLASSIFY=()
+          if [ -n "$OPENROUTER_API_KEY" ]; then CLASSIFY=(--classify); fi
+          node scripts/release-coordinator.mjs plan "${CLASSIFY[@]}" \
+            --published-tags-file published-tags.json \
+            --out release-plan.json --github-output
+
+      - uses: actions/upload-artifact@v4
+        if: steps.source.outputs.sha
+        with:
+          name: release-plan
+          path: release-plan.json
+          if-no-files-found: error
+
+  prepare:
+    needs: plan
+    if: needs.plan.outputs.publish == 'true' && needs.plan.outputs.units != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.plan.outputs.source_sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-plan
+
+      - name: Apply versions, pins, and changelogs
+        run: node scripts/release-coordinator.mjs apply --plan release-plan.json
+
+      - name: Commit and push release preparation
+        id: commit
+        env:
+          SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          TAGS=$(node -p 'const p=require("./.release/last-plan.json"); Object.values(p.units).filter(u=>u.status==="release").map(u=>u.tag).join(", ")')
+          git add -A -- . ':!release-plan.json'
+          git commit -m "chore(release): ${TAGS}" -m "Prepared from ${SOURCE_SHA}."
+          # Fast-forward only: if main moved, this fails and the next CI run replans.
+          git push origin "HEAD:refs/heads/main"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  vscode:
+    needs: [plan, prepare]
+    if: contains(format(',{0},', needs.plan.outputs.units), ',vscode,')
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      ref: ${{ needs.prepare.outputs.sha }}
+      version: ${{ needs.plan.outputs.vscode_version }}
+      publish: true
+
+  desktop:
+    needs: [plan, prepare]
+    if: contains(format(',{0},', needs.plan.outputs.units), ',desktop,')
+    permissions:
+      contents: write
+    uses: ./.github/workflows/desktop-release.yml
+    with:
+      ref: ${{ needs.prepare.outputs.sha }}
+      version: ${{ needs.plan.outputs.desktop_version }}
+      publish: true
+
+  cli:
+    needs: [plan, prepare]
+    if: contains(format(',{0},', needs.plan.outputs.units), ',cli,')
+    permissions:
+      contents: write
+    uses: ./.github/workflows/cli-release.yml
+    with:
+      ref: ${{ needs.prepare.outputs.sha }}
+      version: ${{ needs.plan.outputs.cli_version }}
+      publish: true
+
+  sdk:
+    needs: [plan, prepare]
+    if: contains(format(',{0},', needs.plan.outputs.units), ',sdk,')
+    permissions:
+      contents: write
+    uses: ./.github/workflows/sdk-release.yml
+    with:
+      ref: ${{ needs.prepare.outputs.sha }}
+      version: ${{ needs.plan.outputs.sdk_version }}
+      publish: true

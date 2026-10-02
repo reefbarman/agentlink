@@ -95,7 +95,7 @@ flowchart LR
 
 ### Install script (recommended)
 
-Download and install the latest release from GitHub. The script selects the local `code` installation's platform/architecture; set `AGENTLINK_VSCE_TARGET` explicitly for remote or emulated extension hosts.
+Download and install the latest release from GitHub. The script selects the local `code` installation's platform/architecture; set `AGENTLINK_VSCE_TARGET` explicitly for remote or emulated extension hosts. It verifies the release checksum when one is published, accepts `--version X.Y.Z` and `--dry-run`, and installs the macOS Desktop and CLI previews with `--surface desktop` or `--surface cli` (see [Getting started](getting-started.md#install-standalone-previews-from-a-terminal)).
 
 ```sh
 curl -sL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash
