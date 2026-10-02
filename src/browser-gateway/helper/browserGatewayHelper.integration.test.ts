@@ -1,6 +1,7 @@
 /** @vitest-environment node */
 
 import * as fs from "fs/promises";
+import { unwatchFile } from "fs";
 import * as http from "http";
 import * as https from "https";
 import * as os from "os";
@@ -28,9 +29,16 @@ afterAll(async () => {
   await fs.rm(testHome.directory, { recursive: true, force: true });
 });
 
+import {
+  loadAskAgentMcpConfigs,
+  loadMcpConfigs,
+} from "../../agent/mcpConfig.js";
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
+import type { McpConfigBatchMutation } from "@agentlink/protocol/mcp-manager";
 import type { AskAgentControllerPublication } from "./AskAgentController.js";
 import type { StandaloneAskAgentMcpRuntime } from "./StandaloneAskAgentMcpRuntime.js";
+import { StandaloneMcpOAuthRuntime } from "./StandaloneMcpOAuthRuntime.js";
+import type { StandaloneMcpManagerOperation } from "./StandaloneMcpManagerOperations.js";
 import {
   BrowserGatewayHelper,
   type HelperRuntimeOptions,
@@ -8264,193 +8272,814 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(fallbackRequests).toEqual([]);
   });
 
-  it("executes desktop standalone MCP without a VS Code instance", async () => {
-    const execute = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "standalone-result" }],
-    }));
-    const standaloneMcpRuntime = {
-      prepareTurn: vi.fn(
-        async (request: { sessionId: string; turnId: string }) => ({
-          sessionId: request.sessionId,
-          turnId: request.turnId,
-          tools: [
-            {
-              name: "local__search",
-              description: "Search the local MCP fixture.",
-              input_schema: {
-                type: "object",
-                properties: { query: { type: "string" } },
-              },
-            },
-          ],
-          parallelSafeToolNames: ["local__search"],
-          parallelSafeServerNames: ["local"],
-          getApprovalRequirement: (
-            toolName: string,
-            input: Record<string, unknown>,
-          ) =>
-            toolName === "local__search"
-              ? { serverName: "local", bareToolName: "search", input }
-              : undefined,
-          execute,
-        }),
-      ),
+  it("starts Desktop MCP before a turn and returns real connection status", async () => {
+    const configDirectory = path.join(os.homedir(), ".agentlink", "ask-agent");
+    await fs.mkdir(configDirectory, { recursive: true });
+    const configFile = path.join(configDirectory, "mcp.json");
+    await fs.writeFile(
+      configFile,
+      JSON.stringify({ mcpServers: { local: { command: "fixture" } } }),
+    );
+    const start = vi.fn(async () => {});
+    const refresh = vi.fn(async () => {});
+    const prepareTurn = vi.fn();
+    const runtime = {
+      start,
+      refresh,
+      prepareTurn,
+      getServerInfos: () => [
+        {
+          name: "local",
+          status: "connected",
+          toolCount: 2,
+          resourceCount: 1,
+          promptCount: 3,
+          tools: [{ name: "search" }, { name: "read" }],
+        },
+      ],
+      dispose: vi.fn(async () => {}),
     } as unknown as StandaloneAskAgentMcpRuntime;
-    const modelToolNames: string[][] = [];
-    const modelClient = makeAskAgentToolLoopClient(
-      async ({ toolMessages, tools }) => {
-        modelToolNames.push((tools ?? []).map((tool) => tool.name));
-        if (toolMessages?.length) {
-          expect(JSON.stringify(toolMessages)).toContain("standalone-result");
-          return { text: "Standalone MCP result received.", toolCalls: [] };
-        }
-        return {
-          text: "Calling standalone MCP.",
-          toolCalls: [
-            {
-              id: "standalone-mcp-call",
-              name: "local__search",
-              input: {
-                query: "AgentLink",
-                access_token: "approval-secret-value",
-              },
-            },
-          ],
-        };
+    const port = await getAvailablePort();
+    const server = http.createServer();
+    servers.push(server);
+    helper = await createIsolatedHelper(
+      {
+        port,
+        helperVersion: "test-version",
+        idleShutdownMs: 120_000,
+        extensionRootPath: await makeExtensionRoot(),
+        standaloneMcp: true,
+      },
+      server,
+      {
+        standaloneMcpRuntime: runtime,
+        askAgentModelClient: { complete: vi.fn() },
       },
     );
+    server.on("request", helper.handleRequest);
+    await helper.start();
+    const base = `http://127.0.0.1:${port}`;
+    const root = await fetch(base);
+    const cookie = String(root.headers.get("set-cookie")?.split(";")[0] ?? "");
+    try {
+      expect(start).toHaveBeenCalledOnce();
+      const response = await fetch(`${base}/api/ask-agent/mcp-config`, {
+        headers: { Cookie: cookie },
+      });
+      expect(await response.json()).toMatchObject({
+        ok: true,
+        configSnapshot: {
+          statusInfos: [
+            {
+              name: "local",
+              status: "connected",
+              toolCount: 2,
+              resourceCount: 1,
+              promptCount: 3,
+            },
+          ],
+          capabilities: {
+            canEditConfig: true,
+            canReconnect: true,
+            canWriteSecrets: true,
+            canConfigureLocalProcess: true,
+          },
+        },
+      });
+      const status = await fetch(`${base}/api/ask-agent/mcp-status`, {
+        headers: { Cookie: cookie },
+      });
+      expect(await status.json()).toMatchObject({
+        configSnapshot: {
+          capabilities: {
+            canWriteSecrets: true,
+            canConfigureLocalProcess: true,
+          },
+        },
+      });
+      const refreshed = await fetch(`${base}/api/ask-agent/mcp-refresh`, {
+        method: "POST",
+        headers: { Cookie: cookie },
+      });
+      expect(await refreshed.json()).toMatchObject({
+        configSnapshot: {
+          capabilities: {
+            canWriteSecrets: true,
+            canConfigureLocalProcess: true,
+          },
+        },
+      });
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(prepareTurn).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(configFile, { force: true });
+    }
+  });
+
+  it.runIf(process.platform === "darwin")(
+    "opens manual Desktop sign-in directly without an approval and keeps cancellation ownership",
+    async () => {
+      const port = await getAvailablePort();
+      const server = http.createServer();
+      servers.push(server);
+      const openExternal = vi.fn(async () => true);
+      let connectionSignal: AbortSignal | undefined;
+      helper = await createIsolatedHelper(
+        {
+          port,
+          helperVersion: "test-version",
+          idleShutdownMs: 120_000,
+          extensionRootPath: await makeExtensionRoot(),
+          standaloneMcp: true,
+        },
+        server,
+        {
+          askAgentModelClient: { complete: vi.fn() },
+          createStandaloneMcpOAuthRuntime: (options) =>
+            new StandaloneMcpOAuthRuntime({
+              ...options,
+              openExternal,
+              isSafeDestination: async () => true,
+              createCredentialRepository: async () => ({}) as never,
+              createOAuthProvider: (sdkOptions) => ({
+                redirectUrl: sdkOptions.redirectUrl,
+                clientMetadata: { redirect_uris: [sdkOptions.redirectUrl] },
+                clientInformation: async () => undefined,
+                tokens: async () => undefined,
+                saveTokens: async () => {},
+                saveCodeVerifier: async () => {},
+                codeVerifier: async () => "test-verifier",
+                redirectToAuthorization: async (url) => {
+                  await sdkOptions.authorize({
+                    principal: sdkOptions.principal,
+                    serverId: sdkOptions.serverId,
+                    serverUrl: sdkOptions.serverUrl,
+                    authorizationUrl: url.href,
+                    redirectUrl: sdkOptions.redirectUrl,
+                    transactionId: "manager-transaction",
+                    state: "manager-state",
+                    timeoutMs: 5_000,
+                  });
+                },
+              }),
+            }),
+          createStandaloneMcpRuntime: (options) =>
+            ({
+              start: vi.fn(async () => {}),
+              getServerInfos: () => [],
+              dispose: vi.fn(async () => {}),
+              connectServer: async (
+                serverName: string,
+                signal: AbortSignal,
+              ) => {
+                connectionSignal = signal;
+                const provider = await options!.resolveConnectionOAuthProvider!(
+                  {
+                    principal: {
+                      tenantId: "agentlink-desktop",
+                      subjectId: "ask-agent",
+                    },
+                    server: {
+                      id: serverName,
+                      transport: "streamable-http",
+                      url: "https://mcp.example.com/",
+                    },
+                    url: new URL("https://mcp.example.com/"),
+                    fetch: globalThis.fetch,
+                    getAuthorizationSignal: () => signal,
+                    assertConfigurationCurrent: undefined,
+                  },
+                );
+                await provider!.redirectToAuthorization(
+                  new URL("https://auth.example.com/authorize"),
+                );
+              },
+            }) as unknown as StandaloneAskAgentMcpRuntime,
+        },
+      );
+      server.on("request", helper.handleRequest);
+      await helper.start();
+      const base = `http://127.0.0.1:${port}`;
+      const root = await fetch(base);
+      const cookie = String(
+        root.headers.get("set-cookie")?.split(";")[0] ?? "",
+      );
+      const operationId = "manager-operation-one";
+      const started = await fetch(
+        `${base}/api/ask-agent/mcp-manager-operation`,
+        {
+          method: "POST",
+          headers: { Cookie: cookie, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "start",
+            operationId,
+            serverName: "remote",
+            mode: "connect",
+          }),
+        },
+      );
+      expect(started.ok).toBe(true);
+      let operation: StandaloneMcpManagerOperation | undefined;
+      await waitForExpectation(async () => {
+        const response = await fetch(
+          `${base}/api/ask-agent/mcp-manager-operation?operationId=${operationId}`,
+          { headers: { Cookie: cookie } },
+        );
+        operation = (await response.json()).operation;
+        expect(operation?.status).toBe("running");
+        expect(operation?.approval).toBeNull();
+        expect(openExternal).toHaveBeenCalledExactlyOnceWith(
+          "https://auth.example.com/authorize",
+        );
+      });
+      const session = await fetch(`${base}/api/ask-agent/session`, {
+        headers: { Cookie: cookie },
+      });
+      expect((await session.json()).snapshot.ui.approval).toBeNull();
+      const unauthorized = await fetch(
+        `${base}/internal/desktop/mcp-manager/cancel`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ operationId }),
+        },
+      );
+      expect(unauthorized.status).toBe(401);
+      const cancelled = await fetch(
+        `${base}/internal/desktop/mcp-manager/cancel`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${helper.getClientSharedSecret()}`,
+          },
+          body: JSON.stringify({ operationId }),
+        },
+      );
+      expect(await cancelled.json()).toMatchObject({
+        ok: true,
+        cancelled: true,
+      });
+      expect(connectionSignal?.aborted).toBe(true);
+      const late = await fetch(`${base}/api/ask-agent/mcp-manager-operation`, {
+        method: "POST",
+        headers: { Cookie: cookie, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "approve",
+          operationId,
+          approvalId: "old-approval",
+          decision: "allow-once",
+        }),
+      });
+      expect(late.status).toBe(409);
+      expect(openExternal).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("saves projectless MCP overrides without copying inherited secrets", async () => {
+    const paths = (
+      await import("../../agent/mcpConfig.js")
+    ).getAskAgentMcpConfigPaths();
+    const inheritedPath = paths[2];
+    const overridePath = paths.at(-1)!;
+    const inheritedBefore = await fs.readFile(inheritedPath).catch(() => null);
+    const overrideBefore = await fs.readFile(overridePath).catch(() => null);
+    await fs.mkdir(path.dirname(inheritedPath), { recursive: true });
+    await fs.writeFile(
+      inheritedPath,
+      JSON.stringify({
+        mcpServers: {
+          inherited: {
+            type: "streamable-http",
+            url: "https://mcp.example.com",
+            headers: { Authorization: "inherited-header-secret" },
+            env: { TOKEN: "inherited-env-secret" },
+          },
+        },
+      }),
+    );
+    const runtime = {
+      start: vi.fn(async () => undefined),
+      refresh: vi.fn(async () => undefined),
+      getServerInfos: () => [],
+      dispose: vi.fn(async () => undefined),
+    } as unknown as StandaloneAskAgentMcpRuntime;
     const harness = await makeAskAgentToolLoopTestHarness({
-      modelClient,
-      standaloneMcpRuntime,
+      modelClient: makeAskAgentToolLoopClient(async () => ({
+        text: "Ready.",
+        toolCalls: [],
+      })),
+      standaloneMcpRuntime: runtime,
     });
     helper = harness.helper;
     servers.push(harness.helperServer);
+    // Assert mutation-triggered refreshes independently of background polling.
+    for (const file of paths) unwatchFile(file);
 
-    const mcpConfig = await fetch(
-      `${harness.helperBase}/api/ask-agent/mcp-config`,
-      { headers: { Cookie: harness.cookie } },
-    );
-    const mcpConfigBody = (await mcpConfig.json()) as {
-      ok?: boolean;
-      error?: string;
-      configSnapshot?: {
-        profile?: string;
-        capabilities?: Record<string, boolean>;
+    try {
+      const getSnapshot = async () => {
+        const response = await fetch(
+          `${harness.helperBase}/api/ask-agent/mcp-config`,
+          { headers: { Cookie: harness.cookie } },
+        );
+        return (await response.json()).configSnapshot;
       };
-    };
-    expect(mcpConfig.ok).toBe(true);
-    expect(mcpConfigBody).toMatchObject({
-      ok: true,
-      configSnapshot: {
-        profile: "ask-agent",
-        capabilities: {
-          canEditConfig: false,
-          canReconnect: false,
-          canReauthenticate: process.platform === "darwin",
+      const submit = async (
+        snapshot: { revision: string },
+        disabled: boolean,
+        operationId: string,
+      ) =>
+        await fetch(`${harness.helperBase}/api/ask-agent/mcp-config/server`, {
+          method: "POST",
+          headers: {
+            Cookie: harness.cookie,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            operationId,
+            profile: "ask-agent",
+            scope: "ask-agent-global",
+            expectedRevision: snapshot.revision,
+            operations: [
+              {
+                kind: "upsert",
+                server: {
+                  name: "inherited",
+                  type: "streamable-http",
+                  url: "https://mcp.example.com",
+                  disabled,
+                },
+                conflictAction: "replace",
+              },
+            ],
+          } satisfies McpConfigBatchMutation),
+        });
+
+      const initial = await getSnapshot();
+      const invalidScope = await fetch(
+        `${harness.helperBase}/api/ask-agent/mcp-config/server`,
+        {
+          method: "POST",
+          headers: {
+            Cookie: harness.cookie,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            operationId: "invalid-scope",
+            profile: "main",
+            scope: "global",
+            expectedRevision: initial.revision,
+            operations: [],
+          }),
+        },
+      );
+      expect(invalidScope.status).toBe(400);
+
+      const disabled = await submit(initial, true, "disable-inherited");
+      const disabledResult = await disabled.json();
+      expect(disabledResult).toMatchObject({ ok: true, configSaved: true });
+      expect(runtime.refresh).toHaveBeenCalledTimes(1);
+      const disabledEntry = disabledResult.configSnapshot.entries.find(
+        (entry: { name: string }) => entry.name === "inherited",
+      );
+      expect(disabledEntry).toMatchObject({
+        config: { disabled: true },
+        envKeys: ["TOKEN"],
+        headerKeys: ["Authorization"],
+      });
+
+      const enabled = await submit(
+        disabledResult.configSnapshot,
+        false,
+        "enable-inherited",
+      );
+      const enabledResult = await enabled.json();
+      expect(enabledResult).toMatchObject({ ok: true, configSaved: true });
+      expect(runtime.refresh).toHaveBeenCalledTimes(2);
+      const enabledEntry = enabledResult.configSnapshot.entries.find(
+        (entry: { name: string }) => entry.name === "inherited",
+      );
+      expect(enabledEntry).toMatchObject({
+        config: { disabled: false },
+        envKeys: ["TOKEN"],
+        headerKeys: ["Authorization"],
+      });
+      const override = await fs.readFile(overridePath, "utf-8");
+      expect(override).not.toContain("inherited-header-secret");
+      expect(override).not.toContain("inherited-env-secret");
+      expect(JSON.parse(override).mcpServers.inherited).toMatchObject({
+        type: "http",
+        url: "https://mcp.example.com",
+        disabled: false,
+      });
+      const noOp = await submit(
+        enabledResult.configSnapshot,
+        false,
+        "no-op-inherited",
+      );
+      expect(await noOp.json()).toMatchObject({ ok: true, configSaved: false });
+      expect(runtime.refresh).toHaveBeenCalledTimes(2);
+      const requestTrust = await import("../browserGatewayRequestTrust.js");
+      const origin = vi
+        .spyOn(requestTrust, "classifyBrowserGatewayClientOrigin")
+        .mockReturnValue("non-loopback");
+      try {
+        const remoteSnapshot = await getSnapshot();
+        expect(remoteSnapshot.capabilities).toMatchObject({
           canWriteSecrets: false,
           canConfigureLocalProcess: false,
-        },
-      },
-    });
-    expect(mcpConfigBody.error).not.toBe("mcp_host_unavailable");
+        });
+        const post = (operations: unknown[]) =>
+          fetch(`${harness.helperBase}/api/ask-agent/mcp-config/server`, {
+            method: "POST",
+            headers: {
+              Cookie: harness.cookie,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              operationId: "remote-edit",
+              profile: "ask-agent",
+              scope: "ask-agent-global",
+              expectedRevision: remoteSnapshot.revision,
+              operations,
+            }),
+          });
+        const redirected = await post([
+          {
+            kind: "upsert",
+            conflictAction: "replace",
+            server: {
+              name: "inherited",
+              type: "http",
+              url: "https://attacker.invalid/mcp",
+              headers: { mode: "preserve" },
+              env: { mode: "preserve" },
+            },
+          },
+        ]);
+        expect(redirected.status).toBe(403);
+        expect(await redirected.json()).toMatchObject({
+          error: "browser_mcp_credential_redirect_requires_loopback",
+        });
+        for (const operation of [null, { kind: "upsert" }]) {
+          const malformed = await post([operation]);
+          expect(malformed.status).toBe(400);
+          expect(await malformed.json()).toMatchObject({
+            error: "invalid_mcp_config_mutation",
+          });
+        }
+        expect(await fs.readFile(overridePath, "utf-8")).toBe(override);
+        expect(runtime.refresh).toHaveBeenCalledTimes(2);
+      } finally {
+        origin.mockRestore();
+      }
+    } finally {
+      await harness.helper.stop();
+      if (inheritedBefore) await fs.writeFile(inheritedPath, inheritedBefore);
+      else await fs.rm(inheritedPath, { force: true });
+      if (overrideBefore) await fs.writeFile(overridePath, overrideBefore);
+      else await fs.rm(overridePath, { force: true });
+    }
+  });
 
-    const sendFirst = fetch(`${harness.helperBase}/api/ask-agent/send`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
-      body: JSON.stringify({ text: "Use local MCP" }),
-    });
-    let approvalId = "";
-    await waitForExpectation(async () => {
-      const session = await fetch(
-        `${harness.helperBase}/api/ask-agent/session`,
-        {
-          headers: { Cookie: harness.cookie },
+  it.each([
+    "always-tool-session",
+    "always-tool-global",
+    "always-server-global",
+    "save-failure",
+  ])(
+    "executes Desktop MCP with %s approval and shares Global rules with VS Code",
+    async (approvalMode) => {
+      const configPath = path.join(os.homedir(), ".agentlink", "mcp.json");
+      const previous = await fs
+        .readFile(configPath, "utf-8")
+        .catch(() => undefined);
+      const initialConfig = JSON.stringify({
+        mcpServers: {
+          local: {
+            command: "node",
+            args: ["fixture"],
+            env: { KEEP: "original" },
+            allowedTools: ["existing"],
+          },
         },
-      );
-      const sessionBody = (await session.json()) as {
-        snapshot: {
-          ui: {
-            approval: {
-              id?: string;
-              kind?: string;
-              mcpServerName?: string;
-              mcpToolName?: string;
-              mcpDetail?: string;
-            } | null;
+      });
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, initialConfig);
+      try {
+        const execute = vi.fn(async () => ({
+          content: [{ type: "text" as const, text: "standalone-result" }],
+        }));
+        const standaloneMcpRuntime = {
+          prepareTurn: vi.fn(
+            async (request: { sessionId: string; turnId: string }) => ({
+              sessionId: request.sessionId,
+              turnId: request.turnId,
+              tools: [
+                {
+                  name: "local__search",
+                  description: "Search the local MCP fixture.",
+                  input_schema: {
+                    type: "object",
+                    properties: { query: { type: "string" } },
+                  },
+                },
+              ],
+              parallelSafeToolNames: ["local__search"],
+              parallelSafeServerNames: ["local"],
+              getApprovalRequirement: (
+                toolName: string,
+                input: Record<string, unknown>,
+              ) =>
+                toolName === "local__search"
+                  ? { serverName: "local", bareToolName: "search", input }
+                  : undefined,
+              execute,
+            }),
+          ),
+        } as unknown as StandaloneAskAgentMcpRuntime;
+        const modelToolNames: string[][] = [];
+        const modelClient = makeAskAgentToolLoopClient(
+          async ({ toolMessages, tools }) => {
+            modelToolNames.push((tools ?? []).map((tool) => tool.name));
+            if (toolMessages?.length) {
+              expect(JSON.stringify(toolMessages)).toContain(
+                "standalone-result",
+              );
+              return { text: "Standalone MCP result received.", toolCalls: [] };
+            }
+            return {
+              text: "Calling standalone MCP.",
+              toolCalls: [
+                {
+                  id: "standalone-mcp-call",
+                  name: "local__search",
+                  input: {
+                    query: "AgentLink",
+                    access_token: "approval-secret-value",
+                  },
+                },
+              ],
+            };
+          },
+        );
+        const harness = await makeAskAgentToolLoopTestHarness({
+          modelClient,
+          standaloneMcpRuntime,
+        });
+        helper = harness.helper;
+        servers.push(harness.helperServer);
+
+        const mcpConfig = await fetch(
+          `${harness.helperBase}/api/ask-agent/mcp-config`,
+          { headers: { Cookie: harness.cookie } },
+        );
+        const mcpConfigBody = (await mcpConfig.json()) as {
+          ok?: boolean;
+          error?: string;
+          configSnapshot?: {
+            profile?: string;
+            capabilities?: Record<string, boolean>;
           };
         };
-      };
-      expect(sessionBody.snapshot.ui.approval).toMatchObject({
-        kind: "mcp",
-        mcpServerName: "local",
-        mcpToolName: "search",
-      });
-      expect(sessionBody.snapshot.ui.approval?.mcpDetail).toContain(
-        "AgentLink",
-      );
-      expect(sessionBody.snapshot.ui.approval?.mcpDetail).toContain(
-        "[REDACTED]",
-      );
-      expect(sessionBody.snapshot.ui.approval?.mcpDetail).not.toContain(
-        "approval-secret-value",
-      );
-      approvalId = sessionBody.snapshot.ui.approval?.id ?? "";
-      expect(approvalId).toMatch(/^ask-agent-mcp-/);
-    });
-    const approval = await fetch(
-      `${harness.helperBase}/api/ask-agent/approval`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
-        body: JSON.stringify({
-          id: approvalId,
-          approvalKind: "mcp",
-          decision: "always-tool-session",
-        }),
-      },
-    );
-    expect(approval.ok).toBe(true);
+        expect(mcpConfig.ok).toBe(true);
+        expect(mcpConfigBody).toMatchObject({
+          ok: true,
+          configSnapshot: {
+            profile: "ask-agent",
+            capabilities: {
+              canEditConfig: true,
+              canOpenRawConfig: false,
+              canReconnect: true,
+              canReauthenticate: process.platform === "darwin",
+              canDisable: true,
+              canUseProjectConfig: false,
+              canWriteSecrets: true,
+              canConfigureLocalProcess: true,
+            },
+          },
+        });
+        expect(mcpConfigBody.error).not.toBe("mcp_host_unavailable");
 
-    const first = await sendFirst;
-    const firstBody = (await first.json()) as {
-      snapshot: {
-        session: { foreground: { projectedMessages: ChatMessage[] } };
-      };
-    };
-    expect(first.ok).toBe(true);
-    expect(modelToolNames[0]).toContain("local__search");
-    expect(execute).toHaveBeenCalledWith(
-      "local__search",
-      { query: "AgentLink", access_token: "approval-secret-value" },
-      expect.any(AbortSignal),
-      expect.objectContaining({
-        sessionId: expect.any(String),
-        turnId: expect.any(String),
-      }),
-      true,
-    );
-    expect(
-      firstBody.snapshot.session.foreground.projectedMessages.find(
-        (message) => message.role === "assistant",
-      )?.content,
-    ).toContain("Standalone MCP result received.");
+        const sendFirst = fetch(`${harness.helperBase}/api/ask-agent/send`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: harness.cookie,
+          },
+          body: JSON.stringify({ text: "Use local MCP" }),
+        });
+        let approvalId = "";
+        await waitForExpectation(async () => {
+          const session = await fetch(
+            `${harness.helperBase}/api/ask-agent/session`,
+            {
+              headers: { Cookie: harness.cookie },
+            },
+          );
+          const sessionBody = (await session.json()) as {
+            snapshot: {
+              ui: {
+                approval: {
+                  id?: string;
+                  kind?: string;
+                  mcpServerName?: string;
+                  mcpToolName?: string;
+                  mcpDetail?: string;
+                  mcpChoices?: Array<{ value: string }>;
+                } | null;
+              };
+            };
+          };
+          expect(sessionBody.snapshot.ui.approval).toMatchObject({
+            kind: "mcp",
+            mcpServerName: "local",
+            mcpToolName: "search",
+          });
+          expect(sessionBody.snapshot.ui.approval?.mcpDetail).toContain(
+            "AgentLink",
+          );
+          expect(sessionBody.snapshot.ui.approval?.mcpDetail).toContain(
+            "[REDACTED]",
+          );
+          expect(sessionBody.snapshot.ui.approval?.mcpDetail).not.toContain(
+            "approval-secret-value",
+          );
+          const choices = sessionBody.snapshot.ui.approval?.mcpChoices?.map(
+            (choice) => choice.value,
+          );
+          expect(choices).toContain("always-tool-global");
+          expect(choices).toContain("always-server-global");
+          expect(choices?.some((choice) => choice.endsWith("-project"))).toBe(
+            false,
+          );
+          approvalId = sessionBody.snapshot.ui.approval?.id ?? "";
+          expect(approvalId).toMatch(/^ask-agent-mcp-/);
+        });
+        const stale = await fetch(
+          `${harness.helperBase}/api/ask-agent/approval`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Cookie: harness.cookie,
+            },
+            body: JSON.stringify({
+              id: "stale-approval",
+              decision: "always-server-global",
+            }),
+          },
+        );
+        expect(stale.status).toBe(404);
+        expect(await fs.readFile(configPath, "utf-8")).toBe(initialConfig);
+        if (approvalMode === "always-tool-global") {
+          const trust = await import("../browserGatewayRequestTrust.js");
+          const origin = vi
+            .spyOn(trust, "classifyBrowserGatewayClientOrigin")
+            .mockReturnValue("non-loopback");
+          try {
+            const remote = await fetch(
+              `${harness.helperBase}/api/ask-agent/approval`,
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Cookie: harness.cookie,
+                },
+                body: JSON.stringify({
+                  id: approvalId,
+                  decision: "always-tool-global",
+                }),
+              },
+            );
+            expect(remote.status).toBe(403);
+            expect(await remote.json()).toMatchObject({
+              error: "mcp_global_approval_requires_loopback",
+            });
+            expect(await fs.readFile(configPath, "utf-8")).toBe(initialConfig);
+            expect(execute).not.toHaveBeenCalled();
+          } finally {
+            origin.mockRestore();
+          }
+        }
+        if (approvalMode === "save-failure") {
+          await fs.writeFile(configPath, "invalid JSON");
+          const failed = await fetch(
+            `${harness.helperBase}/api/ask-agent/approval`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Cookie: harness.cookie,
+              },
+              body: JSON.stringify({
+                id: approvalId,
+                decision: "always-tool-global",
+              }),
+            },
+          );
+          expect(failed.status).toBe(500);
+          expect(await failed.json()).toMatchObject({
+            error: "mcp_approval_save_failed",
+          });
+          expect(execute).not.toHaveBeenCalled();
+          const pending = await fetch(
+            `${harness.helperBase}/api/ask-agent/session`,
+            { headers: { Cookie: harness.cookie } },
+          );
+          expect((await pending.json()).snapshot.ui.approval?.id).toBe(
+            approvalId,
+          );
+          await fs.writeFile(configPath, initialConfig);
+        }
+        const approval = await fetch(
+          `${harness.helperBase}/api/ask-agent/approval`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Cookie: harness.cookie,
+            },
+            body: JSON.stringify({
+              id: approvalId,
+              approvalKind: "mcp",
+              decision:
+                approvalMode === "save-failure"
+                  ? "always-tool-global"
+                  : approvalMode,
+            }),
+          },
+        );
+        expect(approval.ok).toBe(true);
+        if (approvalMode !== "always-tool-session") {
+          const saved = JSON.parse(await fs.readFile(configPath, "utf-8"));
+          expect(saved.mcpServers.local.command).toBe("node");
+          expect(saved.mcpServers.local.env).toEqual({ KEEP: "original" });
+          const expectedPolicy =
+            approvalMode === "always-server-global"
+              ? { toolPolicy: "allow", allowedTools: ["existing"] }
+              : { allowedTools: ["existing", "search"] };
+          expect(saved.mcpServers.local).toMatchObject(expectedPolicy);
+          const desktopConfigs = await loadAskAgentMcpConfigs();
+          const vscodeConfigs = await loadMcpConfigs(
+            path.join(os.homedir(), "workspace"),
+          );
+          expect(
+            desktopConfigs.find((config) => config.name === "local"),
+          ).toMatchObject(expectedPolicy);
+          expect(
+            vscodeConfigs.find((config) => config.name === "local"),
+          ).toMatchObject(expectedPolicy);
+        }
 
-    const second = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
-      body: JSON.stringify({ text: "Use local MCP again" }),
-    });
-    expect(second.ok).toBe(true);
-    expect(execute).toHaveBeenCalledTimes(2);
-    const sessionAfterSecond = await fetch(
-      `${harness.helperBase}/api/ask-agent/session`,
-      { headers: { Cookie: harness.cookie } },
-    );
-    const sessionAfterSecondBody = (await sessionAfterSecond.json()) as {
-      snapshot: { ui: { approval: unknown } };
-    };
-    expect(sessionAfterSecondBody.snapshot.ui.approval).toBeNull();
-  });
+        const first = await sendFirst;
+        const firstBody = (await first.json()) as {
+          snapshot: {
+            session: { foreground: { projectedMessages: ChatMessage[] } };
+          };
+        };
+        expect(first.ok).toBe(true);
+        expect(modelToolNames[0]).toContain("local__search");
+        expect(execute).toHaveBeenCalledWith(
+          "local__search",
+          { query: "AgentLink", access_token: "approval-secret-value" },
+          expect.any(AbortSignal),
+          expect.objectContaining({
+            sessionId: expect.any(String),
+            turnId: expect.any(String),
+          }),
+          true,
+        );
+        expect(
+          firstBody.snapshot.session.foreground.projectedMessages.find(
+            (message) => message.role === "assistant",
+          )?.content,
+        ).toContain("Standalone MCP result received.");
+
+        const second = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: harness.cookie,
+          },
+          body: JSON.stringify({ text: "Use local MCP again" }),
+        });
+        expect(second.ok).toBe(true);
+        expect(execute).toHaveBeenCalledTimes(2);
+        const sessionAfterSecond = await fetch(
+          `${harness.helperBase}/api/ask-agent/session`,
+          { headers: { Cookie: harness.cookie } },
+        );
+        const sessionAfterSecondBody = (await sessionAfterSecond.json()) as {
+          snapshot: { ui: { approval: unknown } };
+        };
+        expect(sessionAfterSecondBody.snapshot.ui.approval).toBeNull();
+      } finally {
+        if (previous !== undefined) await fs.writeFile(configPath, previous);
+        else await fs.rm(configPath, { force: true });
+      }
+    },
+  );
 
   it("resumes desktop standalone MCP after shared form elicitation", async () => {
     const execute = vi.fn(

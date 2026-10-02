@@ -87,7 +87,17 @@ function pickMode(
   foregroundMode: string,
   rule: TaskRouteRule,
 ): string {
-  return request.mode?.trim() || rule.preferredMode || foregroundMode || "code";
+  const explicitMode = request.mode?.trim();
+  if (explicitMode) return explicitMode;
+  if (
+    foregroundMode === "code" &&
+    request.taskClass?.trim() === "debug" &&
+    request.ownedPaths?.length &&
+    request.permissionProfile !== "review-only"
+  ) {
+    return "code";
+  }
+  return rule.preferredMode || foregroundMode || "code";
 }
 
 function unique(values: string[]): string[] {

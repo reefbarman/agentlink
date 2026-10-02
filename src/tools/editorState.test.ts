@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TextDocument } from "vscode";
 import { commitAndVerifyEdit } from "../integrations/editDurability.js";
+import { MAX_EDITOR_RECOVERY_BYTES } from "../integrations/editorRecoveryPolicy.js";
 import {
   handleGetEditorState,
   handleSaveEditor,
@@ -169,7 +170,8 @@ describe("editor recovery", () => {
         if (kind === "missing") state.documents = [];
         if (kind === "closed") doc.isClosed = true;
         if (kind === "non-file") doc.uri.scheme = "untitled";
-        if (kind === "oversized") doc.text = "x".repeat(256 * 1024 + 1);
+        if (kind === "oversized")
+          doc.text = "x".repeat(MAX_EDITOR_RECOVERY_BYTES + 1);
       });
       const result = await commitAndVerifyEdit({
         document: doc as unknown as TextDocument,
@@ -194,6 +196,145 @@ describe("editor recovery", () => {
       expect(await fs.readFile(file, "utf8")).toBe("old\n");
     },
   );
+
+  it("recovers a failed ordinary save for a large file through inspected hashes and explicit exact-save approval", async () => {
+    const lines = Array.from(
+      { length: 9_000 },
+      (_, index) => `const item${index} = "${"baseline".repeat(6)}";`,
+    );
+    const baseline = `${lines.join("\n")}\n`;
+    lines[7_710] = 'const item7710 = "approved change";';
+    doc.text = `${lines.join("\n")}\n`;
+    await fs.writeFile(file, baseline);
+    expect(Buffer.byteLength(baseline)).toBeGreaterThan(256 * 1024);
+    const document = Object.assign(doc, { save: vi.fn(async () => false) });
+    const failed = await commitAndVerifyEdit({
+      document: document as unknown as TextDocument,
+      absolutePath: file,
+      relativePath: "example.ts",
+      baselineExists: true,
+      baselineContent: baseline,
+      approvedContent: doc.text,
+      reviewState: "dirty_document_preserved",
+    });
+    expect(failed).toMatchObject({
+      status: "error",
+      reason: "save_failed",
+      save_failure: {
+        save_outcome: "returned_false",
+        dirty_document_state: "matches_save_attempt",
+        vscode_error_detail: "unavailable",
+      },
+    });
+    expect(failed.next_steps?.join(" ")).toContain("Use get_editor_state");
+    expect(failed.next_steps?.join(" ")).toContain("skips formatting");
+    const inspected = payload(
+      await handleGetEditorState(
+        { path: file, offset: 7_700, limit: 40 },
+        context,
+      ),
+    );
+    expect(inspected).toMatchObject({
+      editor_hash: digest(doc.text),
+      disk_hash: digest(baseline),
+      editor_version: doc.version,
+      document_dirty: true,
+    });
+    expect(inspected.content.split("\n")).toHaveLength(40);
+    expect(inspected.content).toContain("7711 | const item7710");
+    expect(inspected.disk_to_editor_diff).toContain("approved change");
+    expect(inspected.diff_truncated).toBe(false);
+    context.onApprovalRequest = vi.fn(async (request) => {
+      expect(request.title).toContain("without formatting");
+      expect(request.detail).toContain(
+        "skips formatting and ordinary save participants",
+      );
+      expect(state.command).not.toHaveBeenCalled();
+      expect(await fs.readFile(file, "utf8")).toBe(baseline);
+      return "accept";
+    });
+    const saved = payload(
+      await handleSaveEditor(
+        {
+          path: file,
+          editor_hash: inspected.editor_hash,
+          disk_hash: inspected.disk_hash,
+          editor_version: inspected.editor_version,
+        },
+        context,
+      ),
+    );
+    expect(saved).toMatchObject({
+      status: "accepted",
+      durability: { outcome: "exact", final_content_hash: digest(doc.text) },
+    });
+    expect(state.command).toHaveBeenCalledTimes(1);
+    expect(await fs.readFile(file, "utf8")).toBe(doc.text);
+  });
+
+  it.each(["disk", "buffer"])(
+    "retains the snapshot ceiling for oversized %s",
+    async (kind) => {
+      const oversized = "x".repeat(MAX_EDITOR_RECOVERY_BYTES + 1);
+      if (kind === "disk") await fs.writeFile(file, oversized);
+      else doc.text = oversized;
+      expect(
+        payload(await handleGetEditorState({ path: file, limit: 1 }, context))
+          .error,
+      ).toContain("8 MiB");
+      expect(
+        payload(await handleSaveEditor(params(), context)).error,
+      ).toContain("8 MiB");
+      expect(context.onApprovalRequest).not.toHaveBeenCalled();
+      expect(state.command).not.toHaveBeenCalled();
+      expect(doc.isDirty).toBe(true);
+    },
+  );
+
+  it.each(["replacement", "eol"])(
+    "returns inspection hashes but refuses save approval when a %s diff exceeds its computation budget",
+    async (kind) => {
+      const baseline = "const before = 1;\r\n".repeat(3_000);
+      doc.text =
+        kind === "eol"
+          ? baseline.replaceAll("\r\n", "\n")
+          : "const after = 2;\n".repeat(3_000);
+      await fs.writeFile(file, baseline);
+      const inspected = payload(
+        await handleGetEditorState({ path: file, limit: 1 }, context),
+      );
+      expect(inspected).toMatchObject({
+        editor_hash: digest(doc.text),
+        disk_hash: digest(baseline),
+        diff_omitted_reason: "computation_limit",
+      });
+      expect(inspected).not.toHaveProperty("disk_to_editor_diff");
+      const result = payload(
+        await handleSaveEditor(
+          { ...params(), disk_hash: digest(baseline) },
+          context,
+        ),
+      );
+      expect(result.reason).toBe("editor_approval_diff_unavailable");
+      expect(context.onApprovalRequest).not.toHaveBeenCalled();
+      expect(state.command).not.toHaveBeenCalled();
+      expect(await fs.readFile(file, "utf8")).toBe(baseline);
+    },
+  );
+
+  it("does not approve a truncated save diff even when diff computation succeeds", async () => {
+    doc.text = "x".repeat(17_000);
+    const inspected = payload(
+      await handleGetEditorState({ path: file }, context),
+    );
+    expect(inspected.content.length).toBeLessThanOrEqual(16_000);
+    expect(inspected.diff_truncated).toBe(true);
+    expect(payload(await handleSaveEditor(params(), context)).reason).toBe(
+      "editor_approval_too_large",
+    );
+    expect(context.onApprovalRequest).not.toHaveBeenCalled();
+    expect(state.command).not.toHaveBeenCalled();
+  });
 
   it("returns labelled buffer content and independent hashes without changing it", async () => {
     const result = payload(await handleGetEditorState({ path: file }, context));

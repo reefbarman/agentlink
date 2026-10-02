@@ -1045,8 +1045,35 @@ function isRoutineRemoteInvocation(
   return refspecs.every(isFastForwardRefspec);
 }
 
+function isRoutineGitUnstage(args: string[]): boolean {
+  // Raw shell words can disguise options or expand to option-looking filenames.
+  if (args.some((arg) => /['"\\$`]/.test(arg))) return false;
+  let staged = false;
+  let pathsOnly = false;
+  let pathCount = 0;
+  for (const arg of args) {
+    if (pathsOnly) {
+      pathCount++;
+    } else if (arg === "--") {
+      pathsOnly = true;
+    } else if (arg === "--staged" || arg === "-S") {
+      staged = true;
+    } else if (["--quiet", "-q", "--progress", "--no-progress"].includes(arg)) {
+      continue;
+    } else if (
+      arg.startsWith("-") ||
+      ["*", "?", "[", "{", "~"].some((character) => arg.includes(character))
+    ) {
+      return false;
+    } else {
+      pathCount++;
+    }
+  }
+  return staged && pathCount > 0;
+}
+
 /**
- * Everyday agent-driven Git publishing: staging, committing, creating or
+ * Everyday agent-driven Git publishing: staging, unstaging, committing, creating or
  * switching branches, fetching/pulling, and non-force pushes to a configured
  * remote. Force pushes, ref deletion, URL destinations, and history- or
  * worktree-discarding operations fall through to the normal classification.
@@ -1056,6 +1083,8 @@ function isRoutineGitWorkflow(subcommand: string, args: string[]): boolean {
     case "add":
     case "commit":
       return true;
+    case "restore":
+      return isRoutineGitUnstage(args);
     case "push":
       return isRoutineRemoteInvocation(args, GIT_PUSH_FLAGS);
     case "fetch":

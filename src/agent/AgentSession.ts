@@ -1115,12 +1115,26 @@ export class AgentSession {
       type: "tool_result";
       tool_use_id: string;
       content: string | ContentBlock[];
+      humanQuestionAnswer?: import("@agentlink/protocol/structured-question").HumanQuestionAnswer;
       mcpApprovalPromotion?: import("@agentlink/protocol/tool-result").McpApprovalPromotionMeta;
       composeTrace?: import("@agentlink/protocol/compose").ComposeTrace;
     }>,
   ): void {
     this.messagesRevision++;
-    this.messages.push({ role: "user", content: results } as AgentMessage);
+    const humanQuestionAnswers = results.flatMap((result) => {
+      const evidence = result.humanQuestionAnswer;
+      return evidence?.binding.sessionId === this.id &&
+        evidence.binding.toolCallId === result.tool_use_id
+        ? [structuredClone(evidence)]
+        : [];
+    });
+    this.messages.push({
+      role: "user",
+      content: results.map(
+        ({ humanQuestionAnswer: _humanQuestionAnswer, ...result }) => result,
+      ),
+      ...(humanQuestionAnswers.length ? { humanQuestionAnswers } : {}),
+    } as AgentMessage);
     this.lastActiveAt = Date.now();
   }
 

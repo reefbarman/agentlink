@@ -169,13 +169,17 @@ export function formatIntroducedDiagnostics(
   const shown = lines.length;
   if (shown > 0 && baselineUnavailable) {
     lines.unshift(
-      "Pre-edit diagnostics did not become available. Errors on edited lines follow, but they are not confirmed as introduced by this edit.",
+      "These are cached or intermediate language-service observations. Their source version is unconfirmed, so they are not confirmed as introduced by this edit.",
+    );
+  } else if (shown > 0) {
+    lines.unshift(
+      "Observed language-service error sample after the edit. VS Code does not expose its source version, so this is not proof the edit caused these errors.",
     );
   }
   const hidden = entries.length - shown;
   if (hidden > 0) {
     lines.push(
-      `… ${hidden} more ${baselineUnavailable ? "" : "new "}error diagnostic${hidden === 1 ? "" : "s"} not shown (${entries.length} total). Use get_diagnostics to inspect them.`,
+      `… ${hidden} more error diagnostic${hidden === 1 ? "" : "s"} not shown (${entries.length} total). Use get_diagnostics to inspect them.`,
     );
   }
   if (unbaselinedOmitted > 0) {

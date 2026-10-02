@@ -277,7 +277,10 @@ export class DiffViewProvider {
   private relPath: string | undefined;
   private absolutePath: string | undefined;
   private activeDiffEditor: vscode.TextEditor | undefined;
-  private diagnosticBaseline: DiagnosticBaseline | undefined;
+  private diagnosticSnapshot:
+    | ReturnType<typeof snapshotDiagnostics>
+    | undefined;
+
   private editType: "create" | "modify" | undefined;
   private createdDirs: string[] = [];
   private documentWasOpen = false;
@@ -298,6 +301,11 @@ export class DiffViewProvider {
     this.diagnosticDelay = diagnosticDelay ?? DEFAULT_DIAGNOSTIC_DELAY_MS;
     this.requestId = requestId ?? randomUUID();
     this.saveWithoutFormatting = saveWithoutFormatting;
+  }
+
+  dispose(): void {
+    this.diagnosticSnapshot?.dispose();
+    this.diagnosticSnapshot = undefined;
   }
 
   async open(
@@ -408,14 +416,14 @@ export class DiffViewProvider {
       );
     }
     const documentVersion = document.version;
-    this.diagnosticBaseline = await settleDiagnosticBaseline(
-      this.absolutePath,
-      this.diagnosticDelay,
-    );
+    this.diagnosticSnapshot = snapshotDiagnostics(this.absolutePath);
+    await this.diagnosticSnapshot.settleBaseline(this.diagnosticDelay);
     if (
       !documentMatchesTarget(document, this.absolutePath) ||
       document.version !== documentVersion
     ) {
+      this.diagnosticSnapshot.dispose();
+      this.diagnosticSnapshot = undefined;
       diffSnapshotHub.remove(this.requestId);
       throw new Error(
         "Review document changed while preparing diagnostics. The editor buffer is preserved; re-read the target file before retrying." +
@@ -424,16 +432,20 @@ export class DiffViewProvider {
             : ""),
       );
     }
+    this.diagnosticSnapshot?.beginPostChangeObservation();
     const edit = new vscode.WorkspaceEdit();
     const fullRange = new vscode.Range(0, 0, document.lineCount, 0);
     edit.replace(document.uri, fullRange, newContent);
     if (!(await vscode.workspace.applyEdit(edit))) {
+      this.diagnosticSnapshot?.dispose();
+      this.diagnosticSnapshot = undefined;
       diffSnapshotHub.remove(this.requestId);
       if (this.editType === "create") {
         await this.cleanupCreatedFile();
       }
       throw new Error("Unable to apply proposed editor changes");
     }
+    this.diagnosticSnapshot?.recordPostChangeDocumentVersion();
 
     // Scroll to the first change
     const firstChangeLine = findFirstChangeLine(
@@ -704,6 +716,8 @@ export class DiffViewProvider {
     // A failed save keeps the dirty editor and review snapshot intact so the
     // user can resolve the save problem without losing the approved content.
     if (commit.status === "error" && document.isDirty) {
+      this.diagnosticSnapshot?.dispose();
+      this.diagnosticSnapshot = undefined;
       return result;
     }
 
@@ -720,7 +734,11 @@ export class DiffViewProvider {
     );
     await this.closeAllDiffViews();
 
-    const newProblems = await this.waitForDiagnostics();
+    const newProblems = await this.diagnosticSnapshot?.collectNewErrors(
+      this.diagnosticDelay,
+      this.originalContent,
+    );
+    this.diagnosticSnapshot?.dispose();
     if (newProblems) {
       result.new_diagnostics = newProblems;
     }
@@ -728,6 +746,8 @@ export class DiffViewProvider {
   }
 
   async revertChanges(reason?: string): Promise<DiffResult> {
+    this.diagnosticSnapshot?.dispose();
+    this.diagnosticSnapshot = undefined;
     if (!this.absolutePath || !this.relPath) {
       return {
         status: "rejected",
@@ -810,26 +830,6 @@ export class DiffViewProvider {
         break;
       }
     }
-  }
-
-  private async waitForDiagnostics(): Promise<string | undefined> {
-    return waitForDiagnosticsQuiescence({
-      delayMs: this.diagnosticDelay,
-      subscribe: (onEvent) =>
-        vscode.languages.onDidChangeDiagnostics((event) => {
-          if (event.uris.some((uri) => uri.fsPath === this.absolutePath)) {
-            onEvent();
-          }
-        }),
-      collect: () =>
-        this.diagnosticBaseline
-          ? collectNewDiagnosticErrors(
-              this.diagnosticBaseline,
-              this.absolutePath!,
-              this.originalContent,
-            )
-          : undefined,
-    });
   }
 
   private async closeAllDiffViews(): Promise<void> {
@@ -998,6 +998,11 @@ function collectNewDiagnosticErrors(
   baseline: DiagnosticBaseline,
   absolutePath: string,
   baselineContent: string | undefined,
+  observation: {
+    eventObserved: boolean;
+    stateCurrent: boolean;
+    quiescent: boolean;
+  },
 ): string | undefined {
   const baselineTarget = baseline.diagnostics.find(([uri]) =>
     isTargetUri(uri, absolutePath),
@@ -1026,7 +1031,10 @@ function collectNewDiagnosticErrors(
   return formatIntroducedDiagnostics(
     targetEntries,
     unbaselinedOmitted,
-    !baseline.targetDiagnosed,
+    !baseline.targetDiagnosed ||
+      !observation.eventObserved ||
+      !observation.stateCurrent ||
+      !observation.quiescent,
   );
 }
 
@@ -1072,6 +1080,8 @@ async function waitForVisibleFileEditor(
  */
 export function snapshotDiagnostics(filePath: string): {
   settleBaseline(delayMs: number): Promise<void>;
+  beginPostChangeObservation(): void;
+  recordPostChangeDocumentVersion(): void;
   collectNewErrors: (
     delayMs: number,
     baselineContent?: string,
@@ -1083,6 +1093,8 @@ export function snapshotDiagnostics(filePath: string): {
   // Track diagnostic events eagerly — before the write happens —
   // so we never miss events that fire during write/open/sync.
   let gotEvent = false;
+  let observedDocument = findTargetDocument(filePath);
+  let observedVersion = observedDocument?.version;
   const disposable = vscode.languages.onDidChangeDiagnostics((e) => {
     if (e.uris.some((u) => isTargetUri(u, filePath))) {
       gotEvent = true;
@@ -1100,6 +1112,17 @@ export function snapshotDiagnostics(filePath: string): {
     async settleBaseline(delayMs: number): Promise<void> {
       baseline = await settleDiagnosticBaseline(filePath, delayMs, gotEvent);
       gotEvent = false;
+      observedDocument = findTargetDocument(filePath);
+      observedVersion = observedDocument?.version;
+    },
+    beginPostChangeObservation(): void {
+      gotEvent = false;
+      observedDocument = findTargetDocument(filePath);
+      observedVersion = observedDocument?.version;
+    },
+    recordPostChangeDocumentVersion(): void {
+      observedDocument = findTargetDocument(filePath);
+      observedVersion = observedDocument?.version;
     },
     collectNewErrors(
       delayMs: number,
@@ -1108,14 +1131,24 @@ export function snapshotDiagnostics(filePath: string): {
       return waitForDiagnosticsQuiescence({
         delayMs,
         hadEvent: gotEvent,
+        isCurrent: () => {
+          const current = findTargetDocument(filePath);
+          return (
+            current === observedDocument && current?.version === observedVersion
+          );
+        },
         subscribe: (onEvent) =>
           vscode.languages.onDidChangeDiagnostics((event) => {
             if (event.uris.some((uri) => isTargetUri(uri, filePath))) {
               onEvent();
             }
           }),
-        collect: () =>
-          collectNewDiagnosticErrors(baseline, filePath, baselineContent),
+        collect: (eventObserved, stateCurrent, quiescent) =>
+          collectNewDiagnosticErrors(baseline, filePath, baselineContent, {
+            eventObserved,
+            stateCurrent,
+            quiescent,
+          }),
         eagerDisposables: [{ dispose }],
       });
     },

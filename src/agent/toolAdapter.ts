@@ -23,6 +23,7 @@ import {
 import {
   discoverNativeTools,
   getDeferredNativeTool,
+  getNativeToolRequestGuidance,
 } from "../core/tools/nativeToolDisclosure.js";
 import type {
   SpawnBackgroundRequest,
@@ -213,7 +214,10 @@ import type {
   BackgroundAgentWaitMode,
 } from "../core/capabilities/background.js";
 import type { NativeWebToolExecutionProvider } from "../core/capabilities/web.js";
-import type { UserQuestionResponse } from "@agentlink/protocol/structured-question";
+import {
+  collectHumanQuestionAnswer,
+  type UserQuestionResponse,
+} from "@agentlink/protocol/structured-question";
 import type {
   ModeSwitchProvider,
   SessionStatusProvider,
@@ -807,7 +811,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         taskClass: {
           type: "string",
           description:
-            "Task class used for routing policy (e.g. review_code, review_plan, readonly-research, research, explore, debug, design, general). Use readonly-research for pure read-only lookup/exploration; use general or debug for non-conflicting writable lanes (general selects code mode by default).",
+            "Task class used for routing policy (e.g. review_code, review_plan, readonly-research, research, explore, debug, design, general). Use readonly-research for pure read-only lookup/exploration. Native debug from a Code-mode parent with non-empty ownedPaths defaults to Code unless mode is explicitly set or permissionProfile is review-only; debug without writable ownership remains Debug. Explicit mode=code is reliable for writable debugging, subject to all inherited restrictions. General defaults to Code. ACP routing is unchanged.",
         },
         modelTier: {
           type: "string",
@@ -1431,6 +1435,9 @@ export async function buildAskUserToolResult(args: {
   context: string;
   questions: Question[];
   response: QuestionResponse;
+  sessionId?: string;
+  toolCallId?: string;
+  questionRequestId?: string;
   modeSwitchProvider?: ModeSwitchProvider;
 }): Promise<ToolResult> {
   const { context, questions, response, modeSwitchProvider } = args;
@@ -1510,8 +1517,27 @@ export async function buildAskUserToolResult(args: {
       }
     }
   }
+  const evidence = response.humanQuestionAnswer;
+  const binding = evidence?.binding;
+  const humanQuestionAnswer =
+    evidence?.source === "human_ui" &&
+    binding?.schemaVersion === 1 &&
+    binding.sessionId === args.sessionId &&
+    binding.toolCallId === args.toolCallId &&
+    !!binding.questionRequestId &&
+    binding.questionRequestId === args.questionRequestId &&
+    binding.context === context &&
+    JSON.stringify(binding.questions) === JSON.stringify(questions)
+      ? collectHumanQuestionAnswer(binding, response)
+      : undefined;
+  const boundHumanAnswer =
+    humanQuestionAnswer &&
+    JSON.stringify(humanQuestionAnswer) === JSON.stringify(evidence)
+      ? humanQuestionAnswer
+      : undefined;
   return {
     content: [{ type: "text", text: JSON.stringify(payload) }, ...media],
+    ...(boundHumanAnswer ? { humanQuestionAnswer: boundHumanAnswer } : {}),
   };
 }
 
@@ -1996,6 +2022,8 @@ export interface ToolDispatchContext {
   approvalManager: ApprovalManager;
   approvalPanel: ApprovalPanelProvider;
   sessionId: string;
+  /** Request-scoped tools usable for command-validation recovery advice. */
+  availableToolNames?: ReadonlySet<string>;
   /** Whether this request belongs to an in-process background session. */
   isBackgroundSession?: boolean;
   /** Waits briefly for a user interjection without consuming it. */
@@ -2346,7 +2374,7 @@ export function resolveAgentToolCall(
   if (!target) {
     return nativeToolResolutionError(
       request,
-      `Native tool '${parsedBridge.data.name}' was not available in the deferred catalog for this provider request`,
+      `Native tool '${parsedBridge.data.name}' was not available in the deferred catalog for this provider request. ${getNativeToolRequestGuidance(snapshot, parsedBridge.data.name, request.context.modeAllowedToolNames, getNativeToolSkillAllowance(request.context))}`,
       "native_tool_not_available",
     );
   }
@@ -2379,6 +2407,34 @@ export function resolveAgentToolCall(
     canonicalInput: parsedTarget.data,
     route: "native-deferred",
   };
+}
+
+function getNativeToolSkillAllowance(
+  context: AgentToolExecutionRequest["context"],
+): ReadonlySet<string> | undefined {
+  const allowedTools = normalizeSkillToolNames(context.skillAllowedTools);
+  return allowedTools ? new Set(allowedTools) : undefined;
+}
+
+function getRequestRecoveryToolNames(
+  context: AgentToolExecutionRequest["context"],
+): ReadonlySet<string> | undefined {
+  const names = context.nativeToolDisclosure
+    ? context.nativeToolDisclosure.inlineTools.map((tool) => tool.name)
+    : context.availableToolNames
+      ? [...context.availableToolNames]
+      : undefined;
+  if (!names) return undefined;
+  const skillAllowance = getNativeToolSkillAllowance(context);
+  return new Set(
+    names.filter(
+      (name) =>
+        (!context.availableToolNames || context.availableToolNames.has(name)) &&
+        (!context.modeAllowedToolNames ||
+          context.modeAllowedToolNames.has(name)) &&
+        (!skillAllowance || skillAllowance.has(name)),
+    ),
+  );
 }
 
 function nativeToolResolutionError(
@@ -2682,7 +2738,16 @@ export function createAgentToolRuntime(
           !request.context.modeAllowedToolNames.has(request.name)
         ) {
           return errorResult(
-            `Tool '${request.name}' is not available in ${request.context.mode ?? "the current"} mode. If this capability is genuinely needed, use switch_mode to change to a mode that allows it.`,
+            `Tool '${request.name}' is not available in ${request.context.mode ?? "the current"} mode. ${
+              request.context.providerToolName === "call_native_tool"
+                ? getNativeToolRequestGuidance(
+                    request.context.nativeToolDisclosure,
+                    request.name,
+                    request.context.modeAllowedToolNames,
+                    getNativeToolSkillAllowance(request.context),
+                  )
+                : "If this capability is genuinely needed, use switch_mode to change to a mode that allows it."
+            }`,
             {
               status: "tool_not_in_mode",
               tool: request.name,
@@ -2781,6 +2846,9 @@ export function createAgentToolRuntime(
                   ...ctx,
                   sessionId: request.context.sessionId,
                   mode: request.context.mode,
+                  availableToolNames: getRequestRecoveryToolNames(
+                    request.context,
+                  ),
                   commandExecutionPolicy:
                     request.context.commandExecutionPolicy ??
                     ctx.commandExecutionPolicy,
@@ -4345,6 +4413,7 @@ async function dispatchToolCallWithTrackedApprovals(
         trackerCtx,
         {
           terminalProvider: ctx.terminalProvider,
+          availableToolNames: ctx.availableToolNames,
           getCommandApprovalPolicy: ctx.getCommandApprovalPolicy,
           getCommandApprovalMode: ctx.getCommandApprovalMode,
           commandApprovalReviewer: ctx.commandApprovalReviewer,
@@ -4908,6 +4977,9 @@ async function dispatchToolCallWithTrackedApprovals(
         context,
         questions,
         response,
+        sessionId: ctx.sessionId,
+        toolCallId: ctx.toolCallId ?? ctx.pendingQuestionRecovery?.toolUseId,
+        questionRequestId: response.questionRequestId,
         modeSwitchProvider,
       });
     }

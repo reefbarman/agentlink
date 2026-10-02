@@ -160,6 +160,8 @@ export interface ExecuteCommandProviders {
   getUserObjective?: (sessionId: string) => string | undefined;
   getReviewContext?: (sessionId: string) => CommandReviewContextEntry[];
   commandExecutionPolicy?: CommandExecutionPolicy;
+  /** Tools allowed in the originating provider request, for rejection guidance only. */
+  availableToolNames?: ReadonlySet<string>;
 }
 
 function prepareTerminalExecution(
@@ -426,6 +428,8 @@ const TLS_TRUST_FAILURE_PATTERNS = [
   /x509: certificate signed by unknown authority/i,
   /tls: failed to verify certificate: x509: OSStatus -26276\b/i,
 ];
+const GO_DEPENDENCY_SUBCOMMANDS = new Set(["build", "get", "run", "test"]);
+const GO_MOD_DEPENDENCY_SUBCOMMANDS = new Set(["download", "tidy", "vendor"]);
 const NODE_UNDICI_DNS_FAILURE_PATTERN =
   /(?:TypeError:\s*)?fetch failed[\s\S]{0,1024}(?:\bENOTFOUND\b|\bEAI_AGAIN\b|getaddrinfo[^\n]*(?:failed|not known|temporary failure))/i;
 const PNPM_STORE_MISMATCH_PATTERN = /\bERR_PNPM_UNEXPECTED_STORE\b/i;
@@ -750,6 +754,63 @@ function isSpeakeasyTlsFailure(command: string, output: string): boolean {
   });
 }
 
+function isGoDependencyTlsFailure(command: string, output: string): boolean {
+  if (
+    !TLS_TRUST_FAILURE_PATTERNS.some((pattern) => pattern.test(output)) ||
+    !/\bproxy\.golang\.org\//i.test(output)
+  ) {
+    return false;
+  }
+  return splitCompoundCommand(command).some((segment) => {
+    const tokens = singleCommandTokens(segment);
+    if (!tokens) return false;
+    let commandIndex = 0;
+    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[commandIndex] ?? "")) {
+      commandIndex++;
+    }
+    if (tokens[commandIndex] !== "go") return false;
+    const subcommand = tokens[commandIndex + 1];
+    return (
+      GO_DEPENDENCY_SUBCOMMANDS.has(subcommand ?? "") ||
+      (subcommand === "mod" &&
+        GO_MOD_DEPENDENCY_SUBCOMMANDS.has(tokens[commandIndex + 2] ?? ""))
+    );
+  });
+}
+
+function goDependencyTlsGuidance(): ExecuteCommandRetryGuidance {
+  return {
+    code: "managed_network_tls_trust",
+    message:
+      "The completed Go command output shows a TLS validation failure while accessing proxy.golang.org. This identifies the client and reported failure, not its underlying cause. Go tests and dependency commands may have changed files before failing: inspect the command results and partial workspace changes first, then choose an exact reviewed retry only if needed. Do not replay the original command blindly or disable certificate verification.",
+    automatic_retry: false,
+    options: [
+      {
+        action: "inspect_partial_results_and_workspace_changes",
+        same_command: false,
+      },
+      {
+        action: "retry_exact_reviewed_go_step_after_inspection",
+        sandbox_permissions: "require_managed_network",
+        same_command: false,
+        inspect_partial_changes_first: true,
+      },
+      {
+        action: "request_exact_reviewed_native_go_step_after_inspection",
+        sandbox_permissions: "require_escalated",
+        same_command: false,
+        reason_required: true,
+        reviewed_native_execution: true,
+        inspect_partial_changes_first: true,
+      },
+    ],
+    prohibited_workarounds: [
+      "blindly_replay_original_command",
+      "disable_tls_verification",
+    ],
+  };
+}
+
 function attachManagedNetworkFailureGuidance(input: {
   result: TerminalCommandResult;
   command: string;
@@ -840,6 +901,8 @@ function attachManagedNetworkFailureGuidance(input: {
     } else {
       guidance = managedNetworkSshGitGuidance();
     }
+  } else if (isGoDependencyTlsFailure(command, output)) {
+    guidance = goDependencyTlsGuidance();
   } else if (
     (isGhTlsFailure(command, output) ||
       isSpeakeasyTlsFailure(command, output)) &&
@@ -2283,7 +2346,10 @@ export async function handleExecuteCommand(
       }
 
       // Reject disallowed command patterns (direct head/tail/cat/grep, piped filtering)
-      const commandViolation = validateCommand(commandToRun);
+      const commandViolation = validateCommand(
+        commandToRun,
+        providers.availableToolNames,
+      );
       if (commandViolation) {
         // force=true can only bypass "direct" violations (shell expansion false positives),
         // never "pipe" violations — those have dedicated output_* params with no false positives.
@@ -2841,6 +2907,7 @@ export async function handleExecuteCommand(
               commandToRun,
               cwd,
               params.command,
+              providers.availableToolNames,
             );
             if (editedValidation) return editedValidation;
             if (
@@ -4808,6 +4875,7 @@ function validateCommandBeforeExecution(
   command: string,
   cwd: string,
   originalCommand?: string,
+  availableToolNames?: ReadonlySet<string>,
 ): ToolResult | null {
   const malformedCommandReason = validateMalformedShellCommand(command);
   if (malformedCommandReason) {
@@ -4835,7 +4903,7 @@ function validateCommandBeforeExecution(
     };
   }
 
-  const commandViolation = validateCommand(command);
+  const commandViolation = validateCommand(command, availableToolNames);
   if (commandViolation) {
     return {
       content: [

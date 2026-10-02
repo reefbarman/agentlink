@@ -26,6 +26,7 @@ export type AskAgentRouteHandler =
   | "mcpStatus"
   | "mcpRefresh"
   | "mcpReauthenticate"
+  | "mcpManagerOperation"
   | "question"
   | "questionProgress"
   | "formElicitation"
@@ -110,6 +111,16 @@ export const ASK_AGENT_ROUTES = [
     method: "POST",
     path: "/api/ask-agent/mcp-reauthenticate",
     handler: "mcpReauthenticate",
+  },
+  {
+    method: "GET",
+    path: "/api/ask-agent/mcp-manager-operation",
+    handler: "mcpManagerOperation",
+  },
+  {
+    method: "POST",
+    path: "/api/ask-agent/mcp-manager-operation",
+    handler: "mcpManagerOperation",
   },
   { method: "POST", path: "/api/ask-agent/question", handler: "question" },
   {
@@ -277,7 +288,8 @@ export type InternalCoreRouteHandler =
   | "modelCredentialClear"
   | "modelAuthLease"
   | "modelAuthLeaseValidate"
-  | "modelAuthLeaseRevoke";
+  | "modelAuthLeaseRevoke"
+  | "desktopMcpManagerCancel";
 
 export const INTERNAL_CORE_ROUTES = [
   { method: "POST", path: "/internal/client/lease", handler: "clientLease" },
@@ -322,6 +334,11 @@ export const INTERNAL_CORE_ROUTES = [
     method: "POST",
     path: "/internal/model-auth/leases/revoke",
     handler: "modelAuthLeaseRevoke",
+  },
+  {
+    method: "POST",
+    path: "/internal/desktop/mcp-manager/cancel",
+    handler: "desktopMcpManagerCancel",
   },
 ] as const satisfies readonly HelperExactRoute<InternalCoreRouteHandler>[];
 

@@ -863,6 +863,7 @@ await Promise.all([
       "dist/cjs/toolResult.d.cts",
       content
         .replaceAll('"./compose.js"', '"./compose.cjs"')
+        .replaceAll('"./structuredQuestion.js"', '"./structuredQuestion.cjs"')
         .replaceAll('"./mcpManager.js"', '"./mcpManager.cjs"'),
     ),
   ),

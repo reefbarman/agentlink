@@ -51,6 +51,13 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
     choices.find((choice) => choice.isPrimary)?.value ?? "allow-once";
   const deny = choices.find((choice) => choice.isDanger)?.value ?? "deny";
   const choiceValues = new Set(choices.map((choice) => choice.value));
+  const visibleScopes = SCOPES.filter(
+    (candidate) =>
+      candidate !== "project" ||
+      TARGETS.some((candidateTarget) =>
+        choiceValues.has(`always-${candidateTarget}-project`),
+      ),
+  );
 
   const [target, setTarget] = useState<(typeof TARGETS)[number]>("tool");
   const [scope, setScope] = useState<(typeof SCOPES)[number]>("skip");
@@ -89,18 +96,19 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
   );
 
   const rulesJsx = (
-    <div class="rule-row">
+    <div class="rule-row mcp-rule-row">
       <div class="rule-row-header">
         <code class="rule-row-label">{`${serverName} / ${toolName}`}</code>
       </div>
       <div class="rule-row-toggles">
-        <div class="toggle-group">
+        <div class="toggle-group" role="group" aria-label="Approval target">
           {TARGETS.map((candidate) => (
             <button
               key={candidate}
               type="button"
               class={`mode-btn ${target === candidate ? "active" : ""}`}
               onClick={() => setTarget(candidate)}
+              aria-pressed={target === candidate}
               disabled={
                 scope !== "skip" &&
                 !choiceValues.has(`always-${candidate}-${scope}`)
@@ -110,8 +118,8 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
             </button>
           ))}
         </div>
-        <div class="toggle-group">
-          {SCOPES.map((candidate) => (
+        <div class="toggle-group" role="group" aria-label="Approval scope">
+          {visibleScopes.map((candidate) => (
             <button
               key={candidate}
               type="button"
@@ -119,6 +127,7 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
                 candidate === "skip" ? "mode-btn-skip" : ""
               }`}
               onClick={() => setScope(candidate)}
+              aria-pressed={scope === candidate}
               disabled={
                 candidate !== "skip" &&
                 !choiceValues.has(`always-${target}-${candidate}`)
@@ -129,6 +138,15 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
           ))}
         </div>
       </div>
+      <p class="mcp-rule-scope-hint">
+        {scope === "global"
+          ? "Save for future conversations in Desktop and VS Code. More-specific MCP settings can override this rule."
+          : scope === "project"
+            ? "Save for future conversations in this project."
+            : scope === "session"
+              ? "Allow for this conversation only."
+              : "No rule saved. Ask again next time."}
+      </p>
     </div>
   );
 

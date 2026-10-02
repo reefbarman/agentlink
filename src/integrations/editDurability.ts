@@ -15,6 +15,7 @@ import {
   type EditDiskObservation,
 } from "../core/editDurability.js";
 import { canonicalizePath } from "../util/canonicalPath.js";
+import { MAX_EDITOR_RECOVERY_BYTES } from "./editorRecoveryPolicy.js";
 
 export interface CommitAndVerifyEditRequest {
   document: vscode.TextDocument;
@@ -455,7 +456,8 @@ export async function diagnoseEditSaveFailure(params: {
   let diskRecoverable = false;
   try {
     const diskContent = await fs.readFile(params.absolutePath, "utf-8");
-    diskRecoverable = Buffer.byteLength(diskContent, "utf8") <= 256 * 1024;
+    diskRecoverable =
+      Buffer.byteLength(diskContent, "utf8") <= MAX_EDITOR_RECOVERY_BYTES;
     diskState =
       diskContent === params.baselineContent ? "unchanged" : "changed";
   } catch (error) {
@@ -475,7 +477,8 @@ export async function diagnoseEditSaveFailure(params: {
   const editorRecoverable = Boolean(
     diskRecoverable &&
     recoveryDocument &&
-    Buffer.byteLength(recoveryDocument.getText(), "utf8") <= 256 * 1024 &&
+    Buffer.byteLength(recoveryDocument.getText(), "utf8") <=
+      MAX_EDITOR_RECOVERY_BYTES &&
     recoveryDocument.getText() === params.currentDocumentContent,
   );
   const concurrentChange =
@@ -510,9 +513,9 @@ export async function diagnoseEditSaveFailure(params: {
       !editorRecoverable
         ? `${params.reviewState === "diff_snapshot_preserved" ? "The review snapshot and retained buffer are preserved. " : "The retained buffer is preserved. "}${dirtyDocumentState === "changed_after_save_attempt" ? "The dirty editor changed during the failed save. " : ""}Automated editor recovery cannot inspect this exact state. Inspect and reconcile it in VS Code before saving or closing it. Do not repeat the edit before reconciling the buffer and disk.`
         : dirtyDocumentState === "matches_save_attempt"
-          ? "The dirty editor is preserved with the exact content submitted to the failed save. Use get_editor_state to inspect it, then save_editor with the returned hashes/version for a human-reviewed exact save. Do not overwrite the buffer to retry."
+          ? "The dirty editor is preserved with the exact content submitted to the failed save. Use get_editor_state to inspect it, then save_editor with the returned hashes/version for a human-reviewed exact save. This recovery skips formatting and ordinary save participants; check any required formatting separately afterwards. Do not overwrite the buffer to retry."
           : dirtyDocumentState === "changed_after_save_attempt"
-            ? "The dirty editor changed during the failed save. Use get_editor_state to compare the buffer with disk. Use save_editor only if the current buffer is what should be saved; otherwise reconcile it in VS Code."
+            ? "The dirty editor changed during the failed save. Use get_editor_state to compare the buffer with disk. Use save_editor only if the current buffer is what should be saved; otherwise reconcile it in VS Code. The reviewed recovery skips formatting and ordinary save participants; check any required formatting separately afterwards."
             : params.reviewState === "diff_snapshot_preserved"
               ? "The review snapshot and dirty editor are preserved. Inspect the file/editor state before retrying the editor save."
               : "The dirty editor is preserved. Inspect the file/editor state before retrying the editor save.",

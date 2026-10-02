@@ -46,11 +46,15 @@ it("exposes only the shell bridge and strips Electron events from state callback
     "askAgentOwnerId",
     "dismissQuickAsk",
     "onAskAgentOwnerIdChanged",
+    "onMcpManagerOpen",
     "onQuickAskShown",
     "onQuickAskSubmission",
     "onRemoteState",
+    "openMcpConfig",
+    "openMcpManager",
     "openSettings",
     "retryRemote",
+    "setMcpOperation",
     "setRemoteLayout",
     "submitQuickAsk",
   ]);
@@ -128,6 +132,36 @@ it("drains queued quick-ask submissions on subscribe and when more arrive", asyn
   expect(electron.send).toHaveBeenCalledWith("agentlink:quick-ask:dismiss");
   bridge.openSettings!();
   expect(electron.send).toHaveBeenCalledWith("agentlink:open-settings");
+  await bridge.openMcpConfig!("ask-agent-global");
+  expect(electron.invoke).toHaveBeenCalledWith(
+    "agentlink:mcp-manager:open-config",
+    "ask-agent-global",
+  );
+  bridge.openMcpManager!({ view: "config", action: "refresh" });
+  expect(electron.send).toHaveBeenCalledWith("agentlink:mcp-manager:open", {
+    view: "config",
+    action: "refresh",
+  });
+  const managerListener = vi.fn();
+  const unsubscribeManager = bridge.onMcpManagerOpen!(managerListener);
+  const managerHandler = electron.on.mock.calls.find(
+    ([channel]) => channel === "agentlink:mcp-manager:open",
+  )?.[1];
+  managerHandler?.(
+    { sender: "privileged" },
+    { view: "status", action: "open" },
+  );
+  managerHandler?.({ sender: "privileged" }, { view: "other", action: "open" });
+  expect(managerListener).toHaveBeenCalledExactlyOnceWith({
+    view: "status",
+    action: "open",
+  });
+  unsubscribeManager();
+  bridge.setMcpOperation!("123e4567-e89b-42d3-a456-426614174000");
+  expect(electron.send).toHaveBeenCalledWith(
+    "agentlink:mcp-manager:operation",
+    "123e4567-e89b-42d3-a456-426614174000",
+  );
 });
 
 it("does not expose the bridge to subframes", async () => {

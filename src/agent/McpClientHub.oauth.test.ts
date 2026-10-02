@@ -503,7 +503,7 @@ describe("McpClientHub OAuth recovery", () => {
     const hub = new McpClientHub(new FakeMemento());
     try {
       await hub.connect([notionCfg, second]);
-      expect(hub.getPendingServerNames()).toEqual(["notion", "second"]);
+      expect(hub.getPendingServerNames().sort()).toEqual(["notion", "second"]);
       expect(mocks.showWarningMessage).not.toHaveBeenCalled();
       expect(mocks.showErrorMessage).not.toHaveBeenCalled();
       expect(await hub.activatePendingServer("notion")).toBe(true);

@@ -241,19 +241,19 @@ const readFileContentOptions = {
     .string()
     .optional()
     .describe(
-      "Literal anchor text to locate in the file and jump near it. Ignored if offset is explicitly provided.",
+      'Content view only. Literal anchor text to locate in the file and jump near it. Ignored if offset is explicitly provided. For view "context", use numeric offset instead.',
     ),
   anchor_regex: z
     .string()
     .optional()
     .describe(
-      "Regex anchor pattern to locate in the file and jump near it. Ignored if offset is explicitly provided.",
+      'Content view only. Regex anchor pattern to locate in the file and jump near it. Ignored if offset is explicitly provided. For view "context", use numeric offset instead.',
     ),
   anchor_offset: z.coerce
     .number()
     .optional()
     .describe(
-      "Line offset applied after resolving an anchor (e.g. -20 to show context above).",
+      "Content view only. Line offset applied after resolving an anchor (e.g. -20 to show context above).",
     ),
   auto_follow_suggestion: z
     .boolean()
@@ -299,7 +299,7 @@ export const readFileSchema = {
     .enum(["content", "context"])
     .optional()
     .describe(
-      'Read view (default "content"). "content": exact text with optional anchors, images, PDF text, symbols, and suggested-path following. "context": compact first-pass orientation pack with bounded symbols, diagnostics, git status, content hash, and opt-in unchanged-range dedupe.',
+      'Read view (default "content"). "content": exact text with optional anchors, images, PDF text, symbols, and suggested-path following. "context": compact first-pass orientation pack with bounded symbols, diagnostics, git status, content hash, and opt-in unchanged-range dedupe. anchor, anchor_regex and anchor_offset require "content"; use numeric offset for "context".',
     ),
   offset: readFileOffsetSchema,
   limit: z.coerce
@@ -1065,7 +1065,7 @@ export const getEditorStateSchema = {
     .max(200)
     .optional()
     .describe(
-      "Buffer lines to return, default 100; output is independently byte-bounded",
+      "Buffer lines to return, default 100; previews are independently capped at 16,000 characters",
     ),
 };
 

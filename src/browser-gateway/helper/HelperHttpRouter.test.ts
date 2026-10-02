@@ -119,6 +119,57 @@ describe("HelperHttpRouter", () => {
     expect(host.handleInternalDataPlane).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps native MCP window cancellation loopback-only with an exact path", async () => {
+    const res = response();
+    const req = request("POST", "/internal/desktop/mcp-manager/cancel");
+    router.handle(req, res);
+    await Promise.resolve();
+    expect(host.handleInternalCore).toHaveBeenCalledWith(
+      "desktopMcpManagerCancel",
+      req,
+      res,
+    );
+    vi.mocked(host.isOwnerPlaneLoopback).mockReturnValue(false);
+    router.handle(req, res);
+    await Promise.resolve();
+    expect(host.writeJson).toHaveBeenCalledWith(res, 403, {
+      error: "loopback_required",
+    });
+    vi.mocked(host.isOwnerPlaneLoopback).mockReturnValue(true);
+    router.handle(
+      request("POST", "/internal/ignored/../desktop/mcp-manager/cancel"),
+      res,
+    );
+    await Promise.resolve();
+    expect(host.writeJson).toHaveBeenCalledWith(res, 404, {
+      error: "not_found",
+    });
+    expect(host.handleInternalCore).toHaveBeenCalledTimes(1);
+  });
+
+  it("authenticates the manager operation before dispatch", async () => {
+    const res = response();
+    router.handle(
+      request("GET", "/api/ask-agent/mcp-manager-operation?operationId=test"),
+      res,
+    );
+    await vi.waitFor(() =>
+      expect(host.handleAskAgent).toHaveBeenCalledWith(
+        "mcpManagerOperation",
+        expect.anything(),
+        res,
+      ),
+    );
+    vi.mocked(host.authenticate).mockResolvedValue(null);
+    router.handle(request("POST", "/api/ask-agent/mcp-manager-operation"), res);
+    await vi.waitFor(() =>
+      expect(host.writeJson).toHaveBeenCalledWith(res, 401, {
+        error: "unauthorized",
+      }),
+    );
+    expect(host.handleAskAgent).toHaveBeenCalledTimes(1);
+  });
+
   it("routes pairing and public assets without browser authentication", async () => {
     const res = response();
     router.handle(request("GET", "/pair"), res);

@@ -241,7 +241,11 @@ import {
   type SessionProjectScope,
 } from "@agentlink/protocol/workspace-project";
 import { createWorkspaceProjectId } from "../core/workspaceProjects.js";
-import { normalizeUserQuestionAttachments } from "@agentlink/protocol/structured-question";
+import {
+  collectHumanQuestionAnswer,
+  normalizeUserQuestionAttachments,
+  type HumanQuestionBinding,
+} from "@agentlink/protocol/structured-question";
 import type { MemoryInspectionProvider } from "../core/capabilities/memory.js";
 import type {
   ManageMemoryToolInput,
@@ -1235,6 +1239,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       response: import("@agentlink/protocol/structured-question").UserQuestionResponse,
     ) => void
   >();
+  private questionBindings = new Map<string, HumanQuestionBinding>();
   /** Tracks which pending-question IDs belong to each session, for scoped cancellation on stop */
   private questionSessionIndex = new Map<string, Set<string>>();
   private questionSessionById = new Map<string, string>();
@@ -3886,6 +3891,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ): Promise<import("./toolAdapter.js").QuestionResponse> {
     const { randomUUID } = require("crypto") as typeof import("crypto");
     const id = randomUUID();
+    const issuedToolCallId = toolCallId ?? pendingQuestionRecovery?.toolUseId;
+    const binding: HumanQuestionBinding | undefined = issuedToolCallId
+      ? {
+          schemaVersion: 1,
+          sessionId,
+          questionRequestId: id,
+          toolCallId: issuedToolCallId,
+          context,
+          questions: structuredClone(questions),
+        }
+      : undefined;
+    if (binding) this.questionBindings.set(id, binding);
     // Register in the session index so agentStop can cancel only this session's questions
     const sessionSet = this.questionSessionIndex.get(sessionId) ?? new Set();
     sessionSet.add(id);
@@ -3896,6 +3913,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.pendingQuestions.set(id, (raw) => {
         this.questionSessionIndex.get(sessionId)?.delete(id);
         this.questionSessionById.delete(id);
+        this.questionBindings.delete(id);
         this.clearQuestionAttention(id);
         this.sessionManager?.clearPendingQuestionRecovery(sessionId, id);
         resolve({
@@ -3903,6 +3921,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             raw.answers as import("./toolAdapter.js").QuestionResponse["answers"],
           notes: (raw.notes as Record<string, string>) ?? {},
           attachments: raw.attachments,
+          humanQuestionAnswer: raw.humanQuestionAnswer,
+          ...(raw.humanQuestionAnswer ? { questionRequestId: id } : {}),
         });
       });
       const foregroundSession = this.sessionManager?.getForegroundSession();
@@ -3922,7 +3942,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             id,
             context,
             questions,
-            pendingQuestionRecovery,
+            { ...pendingQuestionRecovery, humanQuestionBinding: binding },
           );
         }
       }
@@ -4092,6 +4112,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               answers: msg.answers,
               notes: msg.notes ?? {},
               attachments,
+              humanQuestionAnswer: pendingQuestion.humanQuestionBinding
+                ? collectHumanQuestionAnswer(
+                    pendingQuestion.humanQuestionBinding,
+                    { answers: msg.answers, notes: msg.notes ?? {} },
+                  )
+                : undefined,
             },
             {
               switchMode: (request) =>
@@ -4130,7 +4156,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return false;
     }
     const sessionId = this.questionSessionById.get(msg.id);
-    if (!sessionId) return false;
+    if (!sessionId || (msg.sessionId && msg.sessionId !== sessionId))
+      return false;
+    const binding = this.questionBindings.get(msg.id);
     this.pendingQuestions.delete(msg.id);
     this.questionSessionById.delete(msg.id);
     this.clearQuestionAttention(msg.id);
@@ -4138,6 +4166,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       answers: msg.answers,
       notes: msg.notes ?? {},
       attachments,
+      humanQuestionAnswer: binding
+        ? collectHumanQuestionAnswer(binding, {
+            answers: msg.answers,
+            notes: msg.notes ?? {},
+          })
+        : undefined,
     });
     this.applyProjectedAction({
       type: "SUBMIT_QUESTION",

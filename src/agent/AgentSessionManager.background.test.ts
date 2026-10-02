@@ -298,6 +298,95 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it.each([
+    {
+      mode: undefined,
+      permissionProfile: undefined,
+      ownedPaths: ["src/owned.ts"],
+      expectedMode: "code",
+      hasEdits: true,
+    },
+    {
+      mode: "debug",
+      permissionProfile: undefined,
+      ownedPaths: ["src/owned.ts"],
+      expectedMode: "debug",
+      hasEdits: false,
+    },
+    {
+      mode: undefined,
+      permissionProfile: "review-only" as const,
+      ownedPaths: ["src/owned.ts"],
+      expectedMode: "debug",
+      hasEdits: false,
+    },
+    {
+      mode: undefined,
+      permissionProfile: undefined,
+      ownedPaths: undefined,
+      expectedMode: "debug",
+      hasEdits: false,
+    },
+  ])(
+    "uses native debug routing before the child tool inventory ($expectedMode, edits=$hasEdits)",
+    async ({ mode, permissionProfile, ownedPaths, expectedMode, hasEdits }) => {
+      const real = await vi.importActual<
+        typeof import("./backgroundModelRouter.js")
+      >("./backgroundModelRouter.js");
+      mocks.resolveBackgroundRoute.mockImplementationOnce(
+        real.resolveBackgroundRoute as never,
+      );
+      const providers = new ProviderRegistry();
+      providers.register(
+        makeReviewProvider("anthropic", [{ id: config.model }]),
+      );
+      const mgr = new AgentSessionManager(
+        config,
+        "/tmp",
+        undefined,
+        false,
+        undefined,
+        undefined,
+        { maxConcurrent: 3 },
+        { host: { config: configHost, providers } },
+      );
+      const parent = await mgr.createSession("code");
+      parent.providerId = "anthropic";
+      mgr.setToolContext(toolCtx);
+      const spawned = await mgr.spawnBackground(
+        {
+          task: "repair owned source",
+          message: "investigate and fix",
+          taskClass: "debug",
+          model: config.model,
+          mode,
+          permissionProfile,
+          ownedPaths,
+        },
+        parent.id,
+      );
+      expect(spawned.resolvedMode).toBe(expectedMode);
+      await waitFor(
+        () => mocks.runArgs.mock.calls.length,
+        (calls) => calls === 1,
+      );
+      const [child, options] = mocks.runArgs.mock.calls[0]!;
+      const runtime = mocks.setToolRuntime.mock.calls.at(
+        -1,
+      )![0] as import("../core/tools/types.js").AgentToolRuntime;
+      const names = runtime
+        .listTools({
+          mode: child.agentMode,
+          isBackground: true,
+          toolProfile: options.toolProfile,
+          skillAllowedTools: child.getActiveSkillAllowedTools(),
+        })
+        .map((tool) => tool.name);
+      expect(names.includes("write_file")).toBe(hasEdits);
+      expect(names.includes("apply_diff")).toBe(hasEdits);
+    },
+  );
+
   it("includes a live pending tool turn in background transcript snapshots", () => {
     const mgr = new AgentSessionManager(
       config,
@@ -5488,6 +5577,26 @@ describe("AgentSessionManager background agents", () => {
       input: {
         request_id: requestId,
         answers: { path: "tests/CoordinatorOwnedTests.cs" },
+        // Even a coordinator carrying a prior human decision cannot relay its authority.
+        humanQuestionAnswer: {
+          source: "human_ui",
+          binding: {
+            schemaVersion: 1,
+            sessionId: foreground.id,
+            questionRequestId: requestId,
+            toolCallId: "human-tool",
+            context: "Human was asked in the root session",
+            questions: [
+              {
+                id: "path",
+                type: "text",
+                question: "Choose the root task path",
+              },
+            ],
+          },
+          answers: { path: "tests/CoordinatorOwnedTests.cs" },
+          notes: {},
+        },
       },
       context: { sessionId: foreground.id },
     });
@@ -5500,6 +5609,7 @@ describe("AgentSessionManager background agents", () => {
     });
 
     const answerResult = await backgroundAnswer;
+    expect(answerResult.humanQuestionAnswer).toBeUndefined();
     expect(answerResult.content[0]).toMatchObject({
       type: "text",
       text: expect.stringContaining("tests/CoordinatorOwnedTests.cs"),

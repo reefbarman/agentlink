@@ -86,12 +86,12 @@ export class StandaloneMcpHubOAuthProvider implements McpHubOAuthProvider {
 
   async redirectToAuthorization(url: URL): Promise<void> {
     this.signal.throwIfAborted();
-    if (!this.hasActiveTurn())
-      throw new Error("standalone_mcp_oauth_no_active_turn");
     const attempt = this.authorizationAttempt;
     if (!attempt || attempt.authMode !== "interactive") {
       throw new Error("mcp_oauth_interactive_authorization_required");
     }
+    if (!this.hasActiveTurn())
+      throw new Error("standalone_mcp_oauth_no_active_turn");
     const decision = await this.onBeforeAuthorizationOpen?.(attempt);
     if (!decision?.allowed)
       throw new Error("mcp_oauth_browser_authorization_denied");

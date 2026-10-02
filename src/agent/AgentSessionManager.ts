@@ -4355,6 +4355,7 @@ export class AgentSessionManager {
           event.toolCallId,
           event.toolName,
         ),
+      humanQuestionAnswer: event.humanQuestionAnswer,
       mcpApprovalPromotion: event.mcpApprovalPromotion,
       composeTrace: event.composeTrace,
     };
@@ -7606,6 +7607,9 @@ export class AgentSessionManager {
       question: {
         ...pendingQuestionRecovery,
         questionRequestId,
+        humanQuestionBinding: pendingQuestionRecovery.humanQuestionBinding
+          ? structuredClone(pendingQuestionRecovery.humanQuestionBinding)
+          : undefined,
         context,
         questions: structuredClone(questions),
       },
@@ -7652,7 +7656,10 @@ export class AgentSessionManager {
       return false;
     }
     return question.assistantContent.some(
-      (block) => block.type === "tool_use" && block.id === question.toolUseId,
+      (block) =>
+        block.type === "tool_use" &&
+        block.id === question.toolUseId &&
+        block.name === "ask_user",
     );
   }
 
@@ -7696,7 +7703,22 @@ export class AgentSessionManager {
       toolResult = await buildAskUserToolResult({
         context: question.context,
         questions: question.questions,
-        response,
+        response: {
+          ...response,
+          humanQuestionAnswer:
+            question.humanQuestionBinding &&
+            isDeepStrictEqual(
+              response.humanQuestionAnswer?.binding,
+              question.humanQuestionBinding,
+            ) &&
+            question.humanQuestionBinding.questionRequestId ===
+              questionRequestId
+              ? response.humanQuestionAnswer
+              : undefined,
+        },
+        sessionId: session.id,
+        toolCallId: question.toolUseId,
+        questionRequestId,
         modeSwitchProvider,
       });
     } catch (error) {
@@ -7750,6 +7772,7 @@ export class AgentSessionManager {
                 type: "tool_result" as const,
                 tool_use_id: question.toolUseId,
                 content: toolResultText,
+                humanQuestionAnswer: toolResult.humanQuestionAnswer,
               }
             : (savedSiblingResults.get(block.id) ?? {
                 type: "tool_result" as const,

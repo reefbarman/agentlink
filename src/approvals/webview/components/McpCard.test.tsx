@@ -107,6 +107,75 @@ describe("McpCard", () => {
     });
   });
 
+  it.each(["tool", "server"])(
+    "offers a Global %s rule without project controls in projectless Desktop",
+    (target) => {
+      const submit = vi.fn();
+      render(
+        h(McpCard, {
+          request: {
+            ...request,
+            mcpChoices: [
+              ...request.mcpChoices!.filter(
+                (choice) => !choice.value.endsWith("-project"),
+              ),
+              {
+                label: "Always allow tool (global)",
+                value: "always-tool-global",
+              },
+              {
+                label: "Always allow server (global)",
+                value: "always-server-global",
+              },
+            ],
+          },
+          submit,
+          followUpRef: { current: "" },
+        }),
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: /Auto Approval Rules/ }),
+      );
+      expect(screen.queryByRole("button", { name: "Project" })).toBeNull();
+      expect(
+        screen.getByRole("group", { name: "Approval target" }),
+      ).toBeTruthy();
+      if (target === "server")
+        fireEvent.click(screen.getByRole("button", { name: "Whole MCP" }));
+      const global = screen.getByRole("button", { name: "Global" });
+      expect(global.hasAttribute("disabled")).toBe(false);
+      fireEvent.click(global);
+      expect(global.getAttribute("aria-pressed")).toBe("true");
+      expect(
+        screen.getByText(/future conversations in Desktop and VS Code/),
+      ).toBeTruthy();
+      expect(submit).not.toHaveBeenCalled();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Save Rule & Allow" }),
+      );
+      expect(submit).toHaveBeenCalledWith({
+        id: "mcp-approval",
+        decision: `always-${target}-global`,
+        followUp: undefined,
+      });
+    },
+  );
+
+  it("retains Project when the MCP host offers project approvals", () => {
+    const submit = vi.fn();
+    render(h(McpCard, { request, submit, followUpRef: { current: "" } }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Auto Approval Rules/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Rule & Allow" }));
+    expect(submit).toHaveBeenCalledWith({
+      id: "mcp-approval",
+      decision: "always-tool-project",
+      followUp: undefined,
+    });
+  });
+
   it("renders agent-tool copy without MCP rules for ACP-origin requests", () => {
     render(
       h(McpCard, {

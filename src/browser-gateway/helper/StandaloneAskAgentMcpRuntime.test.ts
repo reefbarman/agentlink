@@ -119,7 +119,7 @@ describe("StandaloneAskAgentMcpRuntime", () => {
           toolPolicy: "allow",
         },
         {
-          name: "insecure",
+          name: "local-http",
           type: "sse",
           url: "http://127.0.0.1:9000/mcp",
           toolPolicy: "allow",
@@ -200,6 +200,10 @@ describe("StandaloneAskAgentMcpRuntime", () => {
       expect.objectContaining({
         id: "remote",
         url: "https://mcp.example.test/path",
+      }),
+      expect.objectContaining({
+        id: "local-http",
+        url: "http://127.0.0.1:9000/mcp",
       }),
     ]);
 
@@ -478,6 +482,7 @@ describe("StandaloneAskAgentMcpRuntime", () => {
     });
     try {
       const first = await runtime.prepareTurn(request);
+      runtime.releaseTurn(request.sessionId, request.turnId);
       const second = await runtime.prepareTurn({
         ...request,
         turnId: "turn-b",
@@ -550,6 +555,155 @@ describe("StandaloneAskAgentMcpRuntime", () => {
     expect(disconnectAll).toHaveBeenCalledTimes(1);
   });
 
+  it("starts an idle shared profile, reports live status, and admits manager connect with its signal", async () => {
+    const config = {
+      name: "local",
+      command: "/opt/mcp/local",
+      toolPolicy: "allow" as const,
+    };
+    const connect = vi.fn(async () => undefined);
+    const connectConfiguredServer = vi.fn(async () => undefined);
+    const reconnectServer = vi.fn(async () => undefined);
+    const disconnectAll = vi.fn(async () => undefined);
+    const hub = {
+      connect,
+      connectConfiguredServer,
+      reconnectServer,
+      disconnectAll,
+      getServerConfig: () => config,
+      getServerInfos: () => [
+        {
+          name: "local",
+          status: "connected",
+          toolCount: 1,
+          resourceCount: 0,
+          promptCount: 0,
+          tools: [{ name: "local__search" }],
+        },
+      ],
+      getPendingServerNames: () => [],
+      getToolDefs: () => [],
+    };
+    const runtime = new StandaloneAskAgentMcpRuntime({
+      loadConfigs: async () => [config],
+      resolveExecutable: async (command) => command,
+      createHub: () =>
+        hub as unknown as import("@agentlink/node-host").McpClientHub,
+    });
+    try {
+      await runtime.start();
+      expect(connect).toHaveBeenCalledOnce();
+      expect(connect).toHaveBeenCalledWith(
+        [expect.objectContaining({ name: "local" })],
+        expect.objectContaining({ requireUnexpiredMcpRemoteTokens: true }),
+      );
+      expect(runtime.getServerInfos()).toMatchObject([
+        { name: "local", status: "connected", toolCount: 1 },
+      ]);
+      const controller = new AbortController();
+      await runtime.connectServer("local", controller.signal);
+      expect(connectConfiguredServer).toHaveBeenCalledWith(
+        config,
+        controller.signal,
+      );
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("activates pending authentication with the manager signal and verifies connection", async () => {
+    const config = {
+      name: "remote",
+      type: "streamable-http" as const,
+      url: "https://mcp.example.test/",
+    };
+    const controller = new AbortController();
+    const activatePendingServer = vi.fn(
+      async (_name: string, signal?: AbortSignal) => {
+        expect(signal).toBe(controller.signal);
+        return true;
+      },
+    );
+    const info = {
+      name: "remote",
+      status: "disconnected" as const,
+      toolCount: 0,
+      resourceCount: 0,
+      promptCount: 0,
+      tools: [],
+    };
+    const hub = {
+      connect: vi.fn(async () => undefined),
+      disconnectAll: vi.fn(async () => undefined),
+      getServerConfig: () => config,
+      getServerInfos: () => [info],
+      getPendingServerNames: () => ["remote"],
+      activatePendingServer: async (name: string, signal?: AbortSignal) => {
+        const connected = await activatePendingServer(name, signal);
+        if (connected)
+          (info as { status: "connected" | "disconnected" }).status =
+            "connected";
+        return connected;
+      },
+      getToolDefs: () => [],
+    };
+    const runtime = new StandaloneAskAgentMcpRuntime({
+      loadConfigs: async () => [config],
+      createHub: () =>
+        hub as unknown as import("@agentlink/node-host").McpClientHub,
+    });
+    try {
+      await runtime.connectServer("remote", controller.signal, true);
+      expect(activatePendingServer).toHaveBeenCalledOnce();
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("reconciles changed definitions on the same profile hub", async () => {
+    let configs = [{ name: "local", command: "/opt/mcp/local" }];
+    const connect = vi.fn(async () => undefined);
+    const disconnectAll = vi.fn(async () => undefined);
+    const hub = {
+      connect,
+      disconnectAll,
+      getToolDefs: () => [],
+      getPendingServerNames: () => [],
+      getServerInfos: () => [
+        {
+          name: "local",
+          status: "connected",
+          toolCount: 0,
+          resourceCount: 0,
+          promptCount: 0,
+          tools: [],
+        },
+      ],
+    };
+    const createHub = vi.fn(
+      () => hub as unknown as import("@agentlink/node-host").McpClientHub,
+    );
+    const runtime = new StandaloneAskAgentMcpRuntime({
+      loadConfigs: async () => configs,
+      resolveExecutable: async (command) => command,
+      createHub,
+    });
+    try {
+      await runtime.start();
+      configs = [{ name: "local", command: "/opt/mcp/local-v2" }];
+      await runtime.refresh();
+      expect(createHub).toHaveBeenCalledOnce();
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(connect).toHaveBeenLastCalledWith(
+        [expect.objectContaining({ command: "/opt/mcp/local-v2" })],
+        expect.objectContaining({ reconcileChangedServers: true }),
+      );
+      expect(disconnectAll).not.toHaveBeenCalled();
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("keeps sign-in pending until the agent targets one server", async () => {
     const activatePendingServer = vi.fn(async (name: string) => {
       pending.delete(name);
@@ -601,7 +755,10 @@ describe("StandaloneAskAgentMcpRuntime", () => {
         signal,
         request,
       );
-      expect(activatePendingServer).toHaveBeenCalledExactlyOnceWith("first");
+      expect(activatePendingServer).toHaveBeenCalledExactlyOnceWith(
+        "first",
+        signal,
+      );
       expect(targeted.data).toMatchObject({ signInNeeded: ["second"] });
       expect(JSON.stringify(targeted.data)).toContain("first__search");
     } finally {
@@ -721,7 +878,7 @@ describe("StandaloneAskAgentMcpRuntime", () => {
     }
   });
 
-  it("closes a connection that completes after its session is retired", async () => {
+  it("keeps the shared connection when its session is retired during startup", async () => {
     let finishConnect!: () => void;
     const connect = vi.fn(
       () => new Promise<void>((resolve) => (finishConnect = resolve)),
@@ -736,17 +893,20 @@ describe("StandaloneAskAgentMcpRuntime", () => {
         ({
           connect,
           disconnectAll,
+          getToolDefs: () => [],
+          getPendingServerNames: () => [],
+          getServerInfos: () => [],
         }) as unknown as import("@agentlink/node-host").McpClientHub,
     });
     const preparation = runtime.prepareTurn(request);
     await vi.waitFor(() => expect(connect).toHaveBeenCalledOnce());
     const retirement = runtime.retireSession(request.sessionId);
     finishConnect();
-    await expect(preparation).rejects.toThrow(
-      "standalone_mcp_session_disposed",
-    );
+    await expect(preparation).resolves.toMatchObject({
+      sessionId: request.sessionId,
+    });
     await retirement;
-    expect(disconnectAll).toHaveBeenCalled();
+    expect(disconnectAll).not.toHaveBeenCalled();
     await runtime.dispose();
   });
 

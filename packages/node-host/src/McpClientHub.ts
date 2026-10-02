@@ -99,9 +99,14 @@ export interface McpConnectOptions {
   readonly interactiveServerNames?: ReadonlySet<string>;
   readonly trigger?: McpAuthTrigger;
   readonly userInitiated?: boolean;
+  /** Require an unexpired mcp-remote access token for every unattended launch. */
+  readonly requireUnexpiredMcpRemoteTokens?: boolean;
+  /** Disconnect only definitions that changed before reconciling them. */
+  readonly reconcileChangedServers?: boolean;
 }
 
 interface ConnectServerOptions {
+  signal?: AbortSignal;
   retryCount?: number;
   afterAuth?: boolean;
   authMode?: McpAuthMode;
@@ -455,8 +460,9 @@ async function mcpRemoteCacheHash(
   return createHash("md5").update(parts.join("|")).digest("hex");
 }
 
-async function hasMcpRemoteCachedTokens(
+export async function hasMcpRemoteCachedTokens(
   config: Readonly<McpServerConfig>,
+  requireUnexpired = false,
 ): Promise<boolean> {
   const invocation = parseMcpRemoteInvocation(config);
   if (!invocation) return false;
@@ -484,7 +490,9 @@ async function hasMcpRemoteCachedTokens(
           Number.isFinite(expiresAt) && Date.now() >= expiresAt - 60_000;
         if (
           !isExpired ||
-          (typeof tokens.refresh_token === "string" && tokens.refresh_token)
+          (!requireUnexpired &&
+            typeof tokens.refresh_token === "string" &&
+            Boolean(tokens.refresh_token))
         ) {
           return true;
         }
@@ -636,6 +644,7 @@ export class McpClientHub {
 
   private readonly options: Readonly<McpClientHubOptions>;
   private readonly authCoordinator: McpAuthCoordinator;
+  private requireUnexpiredMcpRemoteTokens = false;
 
   constructor(
     private readonly host: Readonly<McpHubHost>,
@@ -791,12 +800,27 @@ export class McpClientHub {
     configs: McpServerConfig[],
     options: McpConnectOptions = {},
   ): Promise<void> {
+    this.requireUnexpiredMcpRemoteTokens =
+      options.requireUnexpiredMcpRemoteTokens ?? false;
     const existingNames = new Set([
       ...this.servers.keys(),
       ...this.disabledServers.keys(),
       ...this.pendingInteractiveServers.keys(),
     ]);
     const newNames = new Set(configs.map((config) => config.name));
+    if (options.reconcileChangedServers) {
+      await Promise.all(
+        configs.map(async (config) => {
+          const existing =
+            this.servers.get(config.name)?.config ??
+            this.connectionAttempts.get(config.name)?.config ??
+            this.pendingInteractiveServers.get(config.name) ??
+            this.disabledServers.get(config.name);
+          if (existing && JSON.stringify(existing) !== JSON.stringify(config))
+            await this.disconnectServer(config.name);
+        }),
+      );
+    }
     for (const name of new Set([
       ...this.servers.keys(),
       ...this.connectionAttempts.keys(),
@@ -830,6 +854,8 @@ export class McpClientHub {
           return;
         if (
           !isInteractive &&
+          this.servers.get(cfg.name)?.status !== "connected" &&
+          !this.connectionAttempts.has(cfg.name) &&
           isMcpRemoteConfig(cfg) &&
           parseMcpRemoteInvocation(cfg) !== undefined &&
           !(await hasMcpRemoteCachedTokens(cfg))
@@ -1091,8 +1117,24 @@ export class McpClientHub {
     cfg: McpServerConfig,
     options: ConnectServerOptions = {},
   ): Promise<void> {
+    if (
+      options.authMode !== "interactive" &&
+      this.servers.get(cfg.name)?.status !== "connected" &&
+      !this.connectionAttempts.has(cfg.name) &&
+      this.requireUnexpiredMcpRemoteTokens &&
+      isMcpRemoteConfig(cfg) &&
+      !(await hasMcpRemoteCachedTokens(cfg, true))
+    ) {
+      await this.disconnectServer(cfg.name);
+      this.pendingInteractiveServers.set(cfg.name, cfg);
+      this.onStatusChange?.(this.getServerInfos());
+      return;
+    }
     if (this.connectionAttempts.has(cfg.name)) return;
+    if (options.signal?.aborted) throw options.signal.reason;
     const controller = new AbortController();
+    const relayAbort = () => controller.abort(options.signal?.reason);
+    options.signal?.addEventListener("abort", relayAbort, { once: true });
     const attempt = { config: cfg, controller };
     this.connectionAttempts.set(cfg.name, attempt);
     try {
@@ -1100,6 +1142,7 @@ export class McpClientHub {
     } catch (error) {
       if (!controller.signal.aborted) throw error;
     } finally {
+      options.signal?.removeEventListener("abort", relayAbort);
       if (this.connectionAttempts.get(cfg.name) === attempt) {
         this.connectionAttempts.delete(cfg.name);
       }
@@ -2197,7 +2240,10 @@ export class McpClientHub {
   }
 
   /** Start one enabled configured server that is absent from the runtime. */
-  async connectConfiguredServer(cfg: McpServerConfig): Promise<void> {
+  async connectConfiguredServer(
+    cfg: McpServerConfig,
+    signal?: AbortSignal,
+  ): Promise<void> {
     if (
       cfg.disabled ||
       this.servers.has(cfg.name) ||
@@ -2207,6 +2253,7 @@ export class McpClientHub {
       return;
     this.pendingInteractiveServers.delete(cfg.name);
     await this.connectServer(cfg, {
+      signal,
       authMode: "interactive",
       trigger: "manual-reconnect",
       userInitiated: true,
@@ -2215,7 +2262,7 @@ export class McpClientHub {
   }
 
   /** Reconnect a server by name using its stored config. */
-  async reconnectServer(name: string): Promise<void> {
+  async reconnectServer(name: string, signal?: AbortSignal): Promise<void> {
     const entry = this.servers.get(name);
     const cfg = entry?.config ?? this.pendingInteractiveServers.get(name);
     if (!cfg) return;
@@ -2229,6 +2276,7 @@ export class McpClientHub {
     }
     await this.disconnectServer(name);
     await this.connectServer(cfg, {
+      signal,
       authMode: "noninteractive",
       trigger: "manual-reconnect",
       userInitiated: true,

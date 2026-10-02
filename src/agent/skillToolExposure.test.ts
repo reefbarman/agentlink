@@ -18,11 +18,35 @@ vi.mock("./systemPrompt.js", () => ({
   buildPromptArtifacts: vi.fn(),
   buildModeInstructionBlock: vi.fn().mockResolvedValue(""),
 }));
-vi.mock("../tools/executeCommand.js", () => ({
-  handleExecuteCommand: vi.fn().mockResolvedValue({
-    content: [{ type: "text", text: "command reached executor" }],
-  }),
-}));
+vi.mock("../tools/executeCommand.js", async () => {
+  const { validateCommand } = await import("../util/pipeValidator.js");
+  return {
+    handleExecuteCommand: vi.fn(
+      async (
+        input: { command: string },
+        _approvalManager: unknown,
+        _approvalPanel: unknown,
+        _sessionId: string,
+        _trackerCtx: unknown,
+        providers?: { availableToolNames?: ReadonlySet<string> },
+      ) => {
+        const violation = validateCommand(
+          input.command,
+          providers?.availableToolNames,
+        );
+        return {
+          content: [
+            {
+              type: "text",
+              text: violation?.message ?? "command reached executor",
+            },
+          ],
+          ...(violation ? { isError: true } : {}),
+        };
+      },
+    ),
+  };
+});
 
 const skill: SkillEntry = {
   id: "project:agentlink:.agentlink/skills/bash-only",
@@ -177,6 +201,23 @@ describe("Bash skill production tool exposure", () => {
     });
     expect(denied.isError).toBe(true);
     expect(handleExecuteCommand).toHaveBeenCalledTimes(1);
+
+    const rejectedFileRead = await runtime.executeTool({
+      name: "execute_command",
+      input: { command: "cat README.md" },
+      context,
+    });
+    expect(rejectedFileRead.isError).toBe(true);
+    expect(JSON.stringify(rejectedFileRead)).toContain(
+      "No authorized file-reading tool for this operation is available",
+    );
+    expect(JSON.stringify(rejectedFileRead)).not.toMatch(
+      /read_file|search_files/,
+    );
+    expect(JSON.stringify(rejectedFileRead)).not.toContain(
+      "command reached executor",
+    );
+    expect(handleExecuteCommand).toHaveBeenCalledTimes(2);
   });
 
   it("does not override a mode that excludes shell execution", async () => {

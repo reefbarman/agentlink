@@ -21,6 +21,7 @@ import {
   type McpHubHost,
 } from "@agentlink/node-host";
 import { StandaloneMcpHubOAuthProvider } from "./StandaloneMcpHubOAuthProvider.js";
+import type { StandaloneMcpConnectionOAuthRequest } from "./StandaloneMcpOAuthRuntime.js";
 import type {
   AgentPrincipal,
   AgentResolvedModelSelection,
@@ -38,16 +39,14 @@ import {
   CALL_MCP_TOOL_DEFINITION,
   MCP_META_TOOL_DEFINITIONS,
 } from "../../shared/mcpToolDefinitions.js";
-import {
-  isSafeStandaloneMcpOAuthDestination,
-  createStandaloneMcpOAuthPinnedFetch,
-} from "./standaloneMcpOAuthPolicy.js";
+import { isSupportedStandaloneMcpOAuthDestination } from "./standaloneMcpOAuthPolicy.js";
 
 const STANDALONE_MCP_PRINCIPAL: AgentPrincipal = {
   tenantId: "agentlink-desktop",
   subjectId: "ask-agent",
 };
 const DEFAULT_MCP_TIMEOUT_MS = 60_000;
+const DESKTOP_MCP_PROFILE = "desktop-profile";
 const FIND_MCP_TOOLS_DEFINITION = MCP_META_TOOL_DEFINITIONS.find(
   (tool) => tool.name === "find_mcp_tools",
 )!;
@@ -115,6 +114,12 @@ interface StandaloneAskAgentMcpRuntimeOptions {
   readonly temporaryDirectory?: string;
   readonly clientVersion?: string;
   readonly resolveOAuthProvider?: ResolveNodeHostMcpRemoteOAuthProvider;
+  readonly resolveConnectionOAuthProvider?: (
+    request: StandaloneMcpConnectionOAuthRequest,
+  ) => Promise<
+    | import("@modelcontextprotocol/sdk/client/auth.js").OAuthClientProvider
+    | undefined
+  >;
   readonly createHub?: (
     host: McpHubHost,
     clientVersion: string,
@@ -152,6 +157,12 @@ export class StandaloneAskAgentMcpRuntime {
   private readonly resolveOAuthProvider:
     | ResolveNodeHostMcpRemoteOAuthProvider
     | undefined;
+  private readonly resolveConnectionOAuthProvider:
+    | NonNullable<
+        StandaloneAskAgentMcpRuntimeOptions["resolveConnectionOAuthProvider"]
+      >
+    | undefined;
+  private readonly oauthOperationSignals = new Map<string, AbortSignal>();
   private readonly createHub: NonNullable<
     StandaloneAskAgentMcpRuntimeOptions["createHub"]
   >;
@@ -160,6 +171,9 @@ export class StandaloneAskAgentMcpRuntime {
     {
       hub: McpClientHub;
       fingerprint: string;
+      configs: McpServerConfig[];
+      configByName: Map<string, McpServerConfig>;
+      sourceConfigByName: Map<string, McpServerConfig>;
       activeTurn?: PrepareStandaloneAskAgentMcpTurnRequest;
       operations: McpOperationRegistry<PrepareStandaloneAskAgentMcpTurnRequest>;
     }
@@ -168,7 +182,6 @@ export class StandaloneAskAgentMcpRuntime {
   private readonly sessionGenerations = new Map<string, number>();
   private disposed = false;
   private reauthenticating = false;
-  private readonly oauthFetch = createStandaloneMcpOAuthPinnedFetch();
 
   constructor(options: StandaloneAskAgentMcpRuntimeOptions = {}) {
     this.loadConfigs = options.loadConfigs ?? loadAskAgentMcpConfigs;
@@ -181,6 +194,8 @@ export class StandaloneAskAgentMcpRuntime {
     this.temporaryDirectory = options.temporaryDirectory ?? os.tmpdir();
     this.clientVersion = options.clientVersion?.trim() || "dev";
     this.resolveOAuthProvider = options.resolveOAuthProvider;
+    this.resolveConnectionOAuthProvider =
+      options.resolveConnectionOAuthProvider;
     this.createHub =
       options.createHub ?? ((...args) => new McpClientHub(...args));
     this.resolveExecutable =
@@ -188,12 +203,42 @@ export class StandaloneAskAgentMcpRuntime {
       ((command) => resolveConfiguredExecutable(command, this.environment));
   }
 
+  async start(): Promise<void> {
+    if (this.disposed) throw new Error("standalone_mcp_runtime_disposed");
+    const configs = (await this.loadConfigs()).filter(
+      (config) => !config.disabled && isSafeServerName(config.name),
+    );
+    await this.prepareSharedTurn(undefined, configs);
+  }
+
+  async refresh(): Promise<void> {
+    await this.start();
+    const hub = this.hubs.get(DESKTOP_MCP_PROFILE)?.hub;
+    if (!hub) return;
+    const pending = new Set(hub.getPendingServerNames());
+    await Promise.allSettled(
+      hub
+        .getServerInfos()
+        .filter(
+          (server) =>
+            server.status !== "connected" && !pending.has(server.name),
+        )
+        .map((server) => hub.reconnectServer(server.name)),
+    );
+  }
+
+  getServerInfos(): import("@agentlink/node-host").McpServerInfo[] {
+    return this.hubs.get(DESKTOP_MCP_PROFILE)?.hub.getServerInfos() ?? [];
+  }
+
   async prepareTurn(
     request: PrepareStandaloneAskAgentMcpTurnRequest,
   ): Promise<StandaloneAskAgentMcpTurn> {
     if (this.disposed) throw new Error("standalone_mcp_runtime_disposed");
-    const sessionGeneration =
-      this.sessionGenerations.get(request.sessionId) ?? 0;
+    const current = this.hubs.get(DESKTOP_MCP_PROFILE)?.activeTurn;
+    if (current && current !== request && !current.signal?.aborted)
+      throw new Error("standalone_mcp_turn_already_attached");
+
     const configs = (await this.loadConfigs()).filter(
       (config) => !config.disabled && isSafeServerName(config.name),
     );
@@ -206,7 +251,9 @@ export class StandaloneAskAgentMcpRuntime {
       !this.createStdioResourcePrompts &&
       !this.createRemoteResourcePrompts
     ) {
-      return this.prepareSharedTurn(request, configs, sessionGeneration);
+      const turn = await this.prepareSharedTurn(request, configs);
+      if (!turn) throw new Error("standalone_mcp_profile_not_ready");
+      return turn;
     }
     const stdioServers = await this.resolveStdioServers(configs);
     const remoteServers = resolveRemoteServers(configs);
@@ -251,9 +298,9 @@ export class StandaloneAskAgentMcpRuntime {
             safeOrigin(server.url) !== undefined &&
             safeOrigin(server.url) === url.origin,
         ),
-      authorizeOAuthNetwork: async ({ serverId, url }) =>
+      authorizeOAuthNetwork: ({ serverId, url }) =>
         remoteServers.some((server) => server.id === serverId) &&
-        (await isSafeStandaloneMcpOAuthDestination(url)),
+        isSupportedStandaloneMcpOAuthDestination(url),
       clientName: "agentlink-desktop",
       clientVersion: this.clientVersion,
       signal: request.signal,
@@ -424,15 +471,9 @@ export class StandaloneAskAgentMcpRuntime {
   }
 
   private async prepareSharedTurn(
-    request: PrepareStandaloneAskAgentMcpTurnRequest,
+    request: PrepareStandaloneAskAgentMcpTurnRequest | undefined,
     configs: McpServerConfig[],
-    sessionGeneration: number,
-  ): Promise<StandaloneAskAgentMcpTurn> {
-    const context = {
-      principal: STANDALONE_MCP_PRINCIPAL,
-      sessionId: request.sessionId,
-      turnId: request.turnId,
-    };
+  ): Promise<StandaloneAskAgentMcpTurn | undefined> {
     // Resolving executables is intentionally done before connection approval.
     const resolved = (
       await Promise.all(
@@ -449,34 +490,36 @@ export class StandaloneAskAgentMcpRuntime {
     const fingerprint = createHash("sha256")
       .update(JSON.stringify(resolved))
       .digest("hex");
-    const previous = this.preparations.get(request.sessionId);
-    const isCurrent = () =>
-      !this.disposed &&
-      (this.sessionGenerations.get(request.sessionId) ?? 0) ===
-        sessionGeneration;
+    const previous = this.preparations.get(DESKTOP_MCP_PROFILE);
+    const isCurrent = () => !this.disposed;
     const preparation = (async () => {
       if (previous) await Promise.allSettled([previous]);
       if (!isCurrent()) throw new Error("standalone_mcp_session_disposed");
-      let entry = this.hubs.get(request.sessionId);
-      if (entry && entry.fingerprint !== fingerprint) {
-        this.hubs.delete(request.sessionId);
-        await entry.hub.disconnectAll();
-        entry = undefined;
-      }
+      let entry = this.hubs.get(DESKTOP_MCP_PROFILE);
       if (entry) {
-        if (entry.activeTurn && entry.activeTurn !== request)
+        if (request && entry.activeTurn && entry.activeTurn !== request) {
+          if (!entry.activeTurn.signal?.aborted)
+            throw new Error("standalone_mcp_turn_already_attached");
           entry.operations.cancelOwner(entry.activeTurn);
-        entry.activeTurn = request;
+        }
+        if (request) entry.activeTurn = request;
+        entry.sourceConfigByName.clear();
+        for (const config of configs)
+          entry.sourceConfigByName.set(config.name, config);
       }
       if (!entry) {
         const operations =
           new McpOperationRegistry<PrepareStandaloneAskAgentMcpTurnRequest>();
+        const profileConfigs = [...resolved];
+        const sourceConfigByName = new Map(
+          configs.map((config) => [config.name, config]),
+        );
         const configByName = new Map(
-          resolved.map((config) => [config.name, config]),
+          profileConfigs.map((config) => [config.name, config]),
         );
         const host: McpHubHost = {
           getRequestContext: () => {
-            const active = this.hubs.get(request.sessionId)?.activeTurn;
+            const active = this.hubs.get(DESKTOP_MCP_PROFILE)?.activeTurn;
             return active?.signal?.aborted
               ? undefined
               : active
@@ -489,13 +532,7 @@ export class StandaloneAskAgentMcpRuntime {
           },
           authorizeNativeConnection: async (connection) => {
             const current = configByName.get(connection.config.name);
-            if (
-              !current ||
-              current !== connection.config ||
-              this.disposed ||
-              !this.hubs.get(request.sessionId)?.activeTurn ||
-              this.hubs.get(request.sessionId)?.activeTurn?.signal?.aborted
-            )
+            if (!current || current !== connection.config || this.disposed)
               return false;
             const latest = (await this.loadConfigs()).find(
               (candidate) =>
@@ -504,9 +541,7 @@ export class StandaloneAskAgentMcpRuntime {
             if (
               !latest ||
               JSON.stringify(latest) !==
-                JSON.stringify(
-                  configs.find((candidate) => candidate.name === current.name),
-                )
+                JSON.stringify(sourceConfigByName.get(current.name))
             )
               return false;
             if (connection.transport === "stdio") {
@@ -529,49 +564,93 @@ export class StandaloneAskAgentMcpRuntime {
               safeOrigin(connection.url) !== undefined
             );
           },
-          createOAuthProvider: this.resolveOAuthProvider
-            ? async (name, url) => {
-                const config = configByName.get(name);
-                if (!config || config.url !== url || !safeOrigin(url)) {
-                  throw new Error("standalone_mcp_oauth_config_changed");
-                }
-                const active = this.hubs.get(request.sessionId)?.activeTurn;
-                if (!active || active.signal?.aborted || this.disposed) {
-                  throw new Error("standalone_mcp_oauth_no_active_turn");
-                }
-                const provider = await this.resolveOAuthProvider!({
-                  principal: STANDALONE_MCP_PRINCIPAL,
-                  sessionId: active.sessionId,
-                  turnId: active.turnId,
-                  server: {
-                    id: name,
-                    transport:
-                      config.type === "sse" ? "sse" : "streamable-http",
-                    url,
-                  },
-                  url: new URL(url),
-                  fetch: (input, init) =>
-                    this.oauthFetch.fetch(globalThis.fetch, input, init),
-                });
-                if (!provider)
-                  throw new Error("standalone_mcp_oauth_provider_unavailable");
-                return new StandaloneMcpHubOAuthProvider(
-                  provider,
-                  url,
-                  (input, init) =>
-                    this.oauthFetch.fetch(globalThis.fetch, input, init),
-                  () => {
-                    const currentTurn = this.hubs.get(
-                      request.sessionId,
-                    )?.activeTurn;
-                    return (
-                      !this.disposed &&
-                      Boolean(currentTurn && !currentTurn.signal?.aborted)
+          createOAuthProvider:
+            this.resolveOAuthProvider || this.resolveConnectionOAuthProvider
+              ? async (name, url) => {
+                  const config = configByName.get(name);
+                  if (!config || config.url !== url || !safeOrigin(url)) {
+                    throw new Error("standalone_mcp_oauth_config_changed");
+                  }
+                  const assertConfigurationCurrent = async () => {
+                    const latest = (await this.loadConfigs()).find(
+                      (candidate) =>
+                        candidate.name === name && !candidate.disabled,
                     );
-                  },
-                );
-              }
-            : undefined,
+                    if (
+                      this.disposed ||
+                      configByName.get(name) !== config ||
+                      !latest ||
+                      JSON.stringify(latest) !==
+                        JSON.stringify(sourceConfigByName.get(name))
+                    ) {
+                      throw new Error("standalone_mcp_oauth_config_changed");
+                    }
+                  };
+                  const fetch: typeof globalThis.fetch = async (
+                    input,
+                    init,
+                  ) => {
+                    await assertConfigurationCurrent();
+                    return globalThis.fetch(input, init);
+                  };
+                  const getAuthorizationSignal = () =>
+                    this.oauthOperationSignals.get(name);
+                  const provider = this.resolveConnectionOAuthProvider
+                    ? await this.resolveConnectionOAuthProvider({
+                        principal: STANDALONE_MCP_PRINCIPAL,
+                        server: {
+                          id: name,
+                          transport:
+                            config.type === "sse" ? "sse" : "streamable-http",
+                          url,
+                        },
+                        url: new URL(url),
+                        fetch,
+                        assertConfigurationCurrent,
+                        getAuthorizationSignal: ({ serverName }) =>
+                          serverName === name
+                            ? getAuthorizationSignal()
+                            : undefined,
+                      })
+                    : await (async () => {
+                        const active =
+                          this.hubs.get(DESKTOP_MCP_PROFILE)?.activeTurn;
+                        if (
+                          !active ||
+                          active.signal?.aborted ||
+                          this.disposed
+                        ) {
+                          throw new Error(
+                            "standalone_mcp_oauth_no_active_turn",
+                          );
+                        }
+                        return await this.resolveOAuthProvider!({
+                          principal: STANDALONE_MCP_PRINCIPAL,
+                          sessionId: active.sessionId,
+                          turnId: active.turnId,
+                          signal: active.signal,
+                          server: {
+                            id: name,
+                            transport:
+                              config.type === "sse" ? "sse" : "streamable-http",
+                            url,
+                          },
+                          url: new URL(url),
+                          fetch,
+                        });
+                      })();
+                  if (!provider)
+                    throw new Error(
+                      "standalone_mcp_oauth_provider_unavailable",
+                    );
+                  return new StandaloneMcpHubOAuthProvider(
+                    provider,
+                    url,
+                    fetch,
+                    () => Boolean(getAuthorizationSignal()?.aborted === false),
+                  );
+                }
+              : undefined,
           notify: async () => undefined,
           baseEnvironment: () =>
             buildStandaloneMcpEnvironment(
@@ -585,26 +664,10 @@ export class StandaloneAskAgentMcpRuntime {
           },
           fetch: globalThis.fetch,
           createNativeFetch: (config, baseFetch) => async (input, init) => {
-            const current = configByName.get(config.name);
-            const destination = new URL(
-              input instanceof Request ? input.url : String(input),
-            );
-            if (
-              !current ||
-              current !== config ||
-              safeOrigin(current.url ?? "") !== destination.origin
-            ) {
-              throw new Error("standalone_mcp_destination_not_authorized");
+            if (this.disposed || configByName.get(config.name) !== config) {
+              throw new Error("standalone_mcp_oauth_config_changed");
             }
-            const response = await baseFetch(input, {
-              ...init,
-              redirect: "manual",
-            });
-            if (response.status >= 300 && response.status < 400) {
-              await response.body?.cancel();
-              throw new Error("standalone_mcp_redirect_not_authorized");
-            }
-            return response;
+            return baseFetch(input, init);
           },
           createPluginFetch: () => {
             throw new Error("No plugin MCP in Desktop");
@@ -629,9 +692,7 @@ export class StandaloneAskAgentMcpRuntime {
             return Boolean(
               latest &&
               JSON.stringify(latest) ===
-                JSON.stringify(
-                  configs.find((candidate) => candidate.name === config.name),
-                ),
+                JSON.stringify(sourceConfigByName.get(config.name)),
             );
           },
           onBeforeToolCall: ({ config, bareToolName, approvedByCaller }) =>
@@ -649,7 +710,7 @@ export class StandaloneAskAgentMcpRuntime {
             !turn ||
             claim.signal.aborted ||
             turn.signal?.aborted ||
-            this.hubs.get(request.sessionId)?.activeTurn !== turn ||
+            this.hubs.get(DESKTOP_MCP_PROFILE)?.activeTurn !== turn ||
             !turn.onElicitation
           ) {
             cancel();
@@ -671,7 +732,8 @@ export class StandaloneAskAgentMcpRuntime {
           void Promise.resolve()
             .then(() =>
               turn.onElicitation!({
-                ...context,
+                principal: STANDALONE_MCP_PRINCIPAL,
+                sessionId: turn.sessionId,
                 turnId: turn.turnId,
                 signal,
                 ...elicitation,
@@ -681,7 +743,7 @@ export class StandaloneAskAgentMcpRuntime {
               (response) => {
                 if (
                   signal.aborted ||
-                  this.hubs.get(request.sessionId)?.activeTurn !== turn
+                  this.hubs.get(DESKTOP_MCP_PROFILE)?.activeTurn !== turn
                 )
                   finish();
                 else if (response.action === "accept") finish(response.content);
@@ -690,33 +752,60 @@ export class StandaloneAskAgentMcpRuntime {
               () => finish(),
             );
         };
-        entry = { hub, fingerprint, activeTurn: request, operations };
-        this.hubs.set(request.sessionId, entry);
+        entry = {
+          hub,
+          fingerprint,
+          configs: profileConfigs,
+          configByName,
+          sourceConfigByName,
+          ...(request ? { activeTurn: request } : {}),
+          operations,
+        };
+        this.hubs.set(DESKTOP_MCP_PROFILE, entry);
         try {
-          await hub.connect(resolved, { trigger: "startup" });
-          if (
-            !isCurrent() ||
-            request.signal?.aborted ||
-            this.hubs.get(request.sessionId)?.hub !== hub
-          )
+          await hub.connect(profileConfigs, {
+            trigger: "startup",
+            requireUnexpiredMcpRemoteTokens: true,
+            reconcileChangedServers: true,
+          });
+          if (!isCurrent() || this.hubs.get(DESKTOP_MCP_PROFILE)?.hub !== hub)
             throw new Error("standalone_mcp_session_disposed");
         } catch (error) {
-          this.hubs.delete(request.sessionId);
+          this.hubs.delete(DESKTOP_MCP_PROFILE);
           await hub.disconnectAll();
           throw error;
         }
+      } else if (entry.fingerprint !== fingerprint) {
+        const currentConfigs = entry.configByName;
+        const nextConfigs = resolved.map((config) => {
+          const current = currentConfigs.get(config.name);
+          return current && JSON.stringify(current) === JSON.stringify(config)
+            ? current
+            : config;
+        });
+        entry.configs.splice(0, entry.configs.length, ...nextConfigs);
+        entry.configByName.clear();
+        for (const config of entry.configs)
+          entry.configByName.set(config.name, config);
+        entry.fingerprint = fingerprint;
+        await entry.hub.connect(entry.configs, {
+          trigger: "config-watcher",
+          requireUnexpiredMcpRemoteTokens: true,
+          reconcileChangedServers: true,
+        });
       }
     })();
-    this.preparations.set(request.sessionId, preparation);
+    this.preparations.set(DESKTOP_MCP_PROFILE, preparation);
     void preparation
       .finally(() => {
-        if (this.preparations.get(request.sessionId) === preparation) {
-          this.preparations.delete(request.sessionId);
+        if (this.preparations.get(DESKTOP_MCP_PROFILE) === preparation) {
+          this.preparations.delete(DESKTOP_MCP_PROFILE);
         }
       })
       .catch(() => undefined);
-    await waitForAbortable(preparation, request.signal);
-    const hubEntry = this.hubs.get(request.sessionId);
+    await waitForAbortable(preparation, request?.signal);
+    if (!request) return undefined;
+    const hubEntry = this.hubs.get(DESKTOP_MCP_PROFILE);
     const hub = hubEntry?.hub;
     if (!hub || !hubEntry || this.disposed || request.signal?.aborted)
       throw new Error("standalone_mcp_session_disposed");
@@ -743,10 +832,30 @@ export class StandaloneAskAgentMcpRuntime {
     ) => hubEntry.operations.run(serverName, request, signal, action);
     const activate = async (serverName: string, signal: AbortSignal) =>
       hub.getPendingServerNames().includes(serverName)
-        ? hubEntry.operations.run(serverName, request, signal, () =>
-            hub.activatePendingServer(serverName),
-          )
+        ? hubEntry.operations.run(serverName, request, signal, async () => {
+            const operationSignal = request.signal ?? signal;
+            this.oauthOperationSignals.set(serverName, operationSignal);
+            try {
+              return await hub.activatePendingServer(
+                serverName,
+                operationSignal,
+              );
+            } finally {
+              if (
+                this.oauthOperationSignals.get(serverName) === operationSignal
+              )
+                this.oauthOperationSignals.delete(serverName);
+            }
+          })
         : true;
+    const activationFailure = (serverName: string) => {
+      const server = hub
+        .getServerInfos()
+        .find((info) => info.name === serverName);
+      return toolError(
+        `MCP server '${serverName}' is not connected (${server?.status ?? "unknown"}${server?.error ? `: ${server.error}` : ""})`,
+      );
+    };
     return Object.freeze({
       sessionId: request.sessionId,
       turnId: request.turnId,
@@ -781,7 +890,7 @@ export class StandaloneAskAgentMcpRuntime {
         input: Record<string, unknown>,
       ) => {
         if (
-          this.hubs.get(request.sessionId)?.activeTurn !== request ||
+          this.hubs.get(DESKTOP_MCP_PROFILE)?.activeTurn !== request ||
           request.signal?.aborted
         )
           return undefined;
@@ -811,8 +920,8 @@ export class StandaloneAskAgentMcpRuntime {
         if (
           invocation.sessionId !== request.sessionId ||
           invocation.turnId !== request.turnId ||
-          this.hubs.get(request.sessionId)?.hub !== hub ||
-          this.hubs.get(request.sessionId)?.activeTurn !== request ||
+          this.hubs.get(DESKTOP_MCP_PROFILE)?.hub !== hub ||
+          this.hubs.get(DESKTOP_MCP_PROFILE)?.activeTurn !== request ||
           request.signal?.aborted
         ) {
           return toolError(
@@ -826,7 +935,7 @@ export class StandaloneAskAgentMcpRuntime {
             configByName.has(server) &&
             !(await activate(server, signal))
           )
-            return toolError(`MCP server '${server}' is not connected`);
+            return activationFailure(server);
           const found = findMcpToolDefinitions(hub.getToolDefs(), input);
           const pending = hub.getPendingServerNames();
           if (!pending.length) return found;
@@ -846,7 +955,7 @@ export class StandaloneAskAgentMcpRuntime {
           if (!server || !uri || !configByName.has(server))
             return toolError("MCP resource request is invalid");
           if (!(await activate(server, signal)))
-            return toolError(`MCP server '${server}' is not connected`);
+            return activationFailure(server);
           return withOperation(server, signal, () =>
             hub.readResource(server, uri),
           );
@@ -858,7 +967,7 @@ export class StandaloneAskAgentMcpRuntime {
           if (!server || !name || args === null || !configByName.has(server))
             return toolError("MCP prompt request is invalid");
           if (!(await activate(server, signal)))
-            return toolError(`MCP server '${server}' is not connected`);
+            return activationFailure(server);
           return withOperation(server, signal, () =>
             hub.getPrompt(server, name, args),
           );
@@ -872,7 +981,7 @@ export class StandaloneAskAgentMcpRuntime {
           return toolError("MCP tool requires user approval");
         }
         if (!(await activate(names.serverName, signal)))
-          return toolError(`MCP server '${names.serverName}' is not connected`);
+          return activationFailure(names.serverName);
         if (
           !hub
             .getToolDefs()
@@ -883,18 +992,85 @@ export class StandaloneAskAgentMcpRuntime {
           hub.callTool(call.toolName, call.input, {
             signal,
             authorizedByCaller: approved,
-            requestContext: context,
+            requestContext: {
+              principal: STANDALONE_MCP_PRINCIPAL,
+              sessionId: request.sessionId,
+              turnId: request.turnId,
+            },
           }),
         );
       },
     });
   }
 
+  async connectServer(
+    serverName: string,
+    signal: AbortSignal,
+    reconnect = false,
+  ): Promise<void> {
+    if (this.disposed) throw new Error("standalone_mcp_runtime_disposed");
+    if (signal.aborted) throw signal.reason ?? new Error("aborted");
+    await this.start();
+    const entry = this.hubs.get(DESKTOP_MCP_PROFILE);
+    if (!entry) throw new Error("standalone_mcp_profile_not_started");
+    const configured = (await this.loadConfigs()).find(
+      (candidate) => candidate.name === serverName && !candidate.disabled,
+    );
+    const serverConfig = entry.hub.getServerConfig(serverName);
+    if (!configured || !serverConfig || !safeConfiguredServer(configured))
+      throw new Error("standalone_mcp_server_unavailable");
+    this.oauthOperationSignals.set(serverName, signal);
+    try {
+      if (entry.hub.getPendingServerNames().includes(serverName)) {
+        const activated = await entry.hub.activatePendingServer(
+          serverName,
+          signal,
+        );
+        if (!activated) {
+          if (signal.aborted) throw signal.reason ?? new Error("aborted");
+          this.throwConnectStatusError(entry.hub, serverName);
+        }
+      } else if (reconnect) {
+        await entry.hub.reconnectServer(serverName, signal);
+      } else {
+        await entry.hub.connectConfiguredServer(serverConfig, signal);
+      }
+      if (signal.aborted) throw signal.reason ?? new Error("aborted");
+      this.assertServerConnected(entry.hub, serverName);
+    } finally {
+      if (this.oauthOperationSignals.get(serverName) === signal)
+        this.oauthOperationSignals.delete(serverName);
+    }
+  }
+
+  private assertServerConnected(hub: McpClientHub, serverName: string): void {
+    const info = hub
+      .getServerInfos()
+      .find((server) => server.name === serverName);
+    if (info?.status !== "connected") {
+      throw new Error(
+        `standalone_mcp_connect_failed:${serverName}:${info?.status ?? "missing"}:${info?.error ?? "unknown"}`,
+      );
+    }
+  }
+
+  private throwConnectStatusError(
+    hub: McpClientHub,
+    serverName: string,
+  ): never {
+    this.assertServerConnected(hub, serverName);
+    throw new Error(`standalone_mcp_connect_failed:${serverName}:pending`);
+  }
+
   async reauthenticateServer(
     serverName: string,
     confirm: (origin: string) => Promise<boolean>,
+    signal?: AbortSignal,
   ): Promise<void> {
-    if (this.disposed || !this.resolveOAuthProvider)
+    if (
+      this.disposed ||
+      (!this.resolveOAuthProvider && !this.resolveConnectionOAuthProvider)
+    )
       throw new Error("standalone_mcp_oauth_unavailable");
     if (this.reauthenticating)
       throw new Error("standalone_mcp_oauth_reauthentication_in_progress");
@@ -910,56 +1086,95 @@ export class StandaloneAskAgentMcpRuntime {
         throw new Error("standalone_mcp_oauth_server_unavailable");
       const url = new URL(config.url);
       const origin = safeOrigin(config.url);
-      if (!origin || !(await isSafeStandaloneMcpOAuthDestination(url)))
+      if (!origin || !isSupportedStandaloneMcpOAuthDestination(url))
         throw new Error("standalone_mcp_oauth_destination_not_authorized");
+      if (signal?.aborted) throw signal.reason ?? new Error("aborted");
       if (!(await confirm(origin)))
         throw new Error("standalone_mcp_oauth_reauthentication_denied");
+      if (signal?.aborted) throw signal.reason ?? new Error("aborted");
       const latest = (await this.loadConfigs()).find(
         (candidate) => candidate.name === serverName,
       );
       if (JSON.stringify(latest) !== JSON.stringify(config))
         throw new Error("standalone_mcp_oauth_config_changed");
-      const fetch: typeof globalThis.fetch = (input, init) =>
-        this.oauthFetch.fetch(globalThis.fetch, input, init);
-      const provider = await this.resolveOAuthProvider({
-        principal: STANDALONE_MCP_PRINCIPAL,
-        sessionId: "desktop-reauthenticate",
-        turnId: "desktop-reauthenticate",
-        server: {
-          id: serverName,
-          transport: config.type === "sse" ? "sse" : "streamable-http",
-          url: config.url,
-        },
-        url,
-        fetch,
-      });
+      const assertConfigurationCurrent = async () => {
+        const current = (await this.loadConfigs()).find(
+          (candidate) => candidate.name === serverName && !candidate.disabled,
+        );
+        if (
+          this.disposed ||
+          JSON.stringify(current) !== JSON.stringify(config)
+        ) {
+          throw new Error("standalone_mcp_oauth_config_changed");
+        }
+      };
+      const fetch: typeof globalThis.fetch = async (input, init) => {
+        await assertConfigurationCurrent();
+        return globalThis.fetch(input, init);
+      };
+      const server = {
+        id: serverName,
+        transport:
+          config.type === "sse"
+            ? ("sse" as const)
+            : ("streamable-http" as const),
+        url: config.url,
+      };
+      const provider = this.resolveConnectionOAuthProvider
+        ? await this.resolveConnectionOAuthProvider({
+            principal: STANDALONE_MCP_PRINCIPAL,
+            server,
+            url,
+            fetch,
+            assertConfigurationCurrent,
+            getAuthorizationSignal: () => signal,
+          })
+        : await this.resolveOAuthProvider!({
+            principal: STANDALONE_MCP_PRINCIPAL,
+            sessionId: "desktop-reauthenticate",
+            turnId: "desktop-reauthenticate",
+            signal,
+            server,
+            url,
+            fetch,
+          });
       if (!provider)
         throw new Error("standalone_mcp_oauth_provider_unavailable");
+      if (signal?.aborted) throw signal.reason ?? new Error("aborted");
       await auth(
         { ...provider, tokens: async () => undefined },
         { serverUrl: url, fetchFn: fetch },
       );
-      await Promise.all(
-        [...this.hubs.keys()].map((sessionId) => this.retireSession(sessionId)),
-      );
+      if (signal?.aborted) throw signal.reason ?? new Error("aborted");
+      if (signal) this.oauthOperationSignals.set(serverName, signal);
+      try {
+        await Promise.all(
+          [...this.hubs.values()].map(({ hub }) =>
+            hub.reconnectServer(serverName, signal),
+          ),
+        );
+      } finally {
+        if (signal && this.oauthOperationSignals.get(serverName) === signal)
+          this.oauthOperationSignals.delete(serverName);
+      }
     } finally {
       this.reauthenticating = false;
     }
   }
 
+  releaseTurn(sessionId: string, turnId?: string): void {
+    const entry = this.hubs.get(DESKTOP_MCP_PROFILE);
+    const active = entry?.activeTurn;
+    if (!entry || !active || active.sessionId !== sessionId) return;
+    if (turnId !== undefined && active.turnId !== turnId) return;
+    entry.activeTurn = undefined;
+    entry.operations.cancelOwner(active);
+  }
+
   async retireSession(sessionId: string): Promise<void> {
-    this.sessionGenerations.set(
-      sessionId,
-      (this.sessionGenerations.get(sessionId) ?? 0) + 1,
-    );
+    this.releaseTurn(sessionId);
     const pending = this.preparations.get(sessionId);
     if (pending) await Promise.allSettled([pending]);
-    const entry = this.hubs.get(sessionId);
-    this.hubs.delete(sessionId);
-    if (entry) {
-      if (entry.activeTurn) entry.operations.cancelOwner(entry.activeTurn);
-      await entry.hub.disconnectAll();
-    }
   }
 
   async dispose(): Promise<void> {
@@ -972,7 +1187,6 @@ export class StandaloneAskAgentMcpRuntime {
       }),
     );
     this.hubs.clear();
-    await this.oauthFetch.dispose();
   }
 
   private async resolveStdioServers(
@@ -1326,7 +1540,9 @@ function serverNameForTool(toolName: string): string {
 function safeOrigin(value: string): string | undefined {
   try {
     const url = new URL(value);
-    return url.protocol === "https:" ? url.origin : undefined;
+    return isSupportedStandaloneMcpOAuthDestination(url)
+      ? url.origin
+      : undefined;
   } catch {
     return undefined;
   }
@@ -1367,4 +1583,15 @@ function stringRecord(
 
 function isSafeServerName(value: string): boolean {
   return /^[A-Za-z][A-Za-z0-9_-]{0,40}$/.test(value) && !value.includes("__");
+}
+
+function safeConfiguredServer(config: Readonly<McpServerConfig>): boolean {
+  if (!isSafeServerName(config.name)) return false;
+  if ((config.type ?? "stdio") === "stdio") return Boolean(config.command);
+  return (
+    (config.type === "sse" ||
+      config.type === "http" ||
+      config.type === "streamable-http") &&
+    Boolean(config.url && safeOrigin(config.url))
+  );
 }

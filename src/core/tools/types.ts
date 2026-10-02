@@ -95,6 +95,7 @@ export interface AdvertisedRuleReference {
 
 export interface PendingQuestionRecoveryContext {
   schemaVersion: 1;
+  humanQuestionBinding?: import("@agentlink/protocol/structured-question").HumanQuestionBinding;
   assistantContent: CoreModelContentBlock[];
   toolUseId: string;
   toolName: "ask_user";

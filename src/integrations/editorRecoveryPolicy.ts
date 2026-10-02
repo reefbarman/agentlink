@@ -1,0 +1,1 @@
+export const MAX_EDITOR_RECOVERY_BYTES = 8 * 1024 * 1024;

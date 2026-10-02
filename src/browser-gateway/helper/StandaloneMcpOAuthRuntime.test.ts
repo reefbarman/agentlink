@@ -21,7 +21,7 @@ const remoteRequest = {
   fetch: vi.fn<typeof globalThis.fetch>(),
 };
 
-function createRuntime() {
+function createRuntime(useDefaultPolicy = false) {
   const credentials = new InMemoryMcpCredentialRepository();
   const openExternal = vi.fn(async () => true);
   const confirmAuthorization = vi.fn(async () => true);
@@ -30,7 +30,7 @@ function createRuntime() {
     port: 47_138,
     openExternal,
     confirmAuthorization,
-    isSafeDestination: async () => true,
+    isSafeDestination: useDefaultPolicy ? undefined : async () => true,
     createCredentialRepository: async () => credentials,
     createOAuthProvider: (options) => {
       providerOptions = options;
@@ -108,6 +108,150 @@ describe("StandaloneMcpOAuthRuntime", () => {
     });
   });
 
+  it("allows configured private metadata, token requests, and approved browser authorization", async () => {
+    const { runtime, openExternal, confirmAuthorization, getProviderOptions } =
+      createRuntime(true);
+    const origin = "https://100.64.0.2";
+    const fetch = vi.fn<typeof globalThis.fetch>(
+      async () => new Response("ok"),
+    );
+    const provider = await runtime.resolveConnectionOAuthProvider({
+      principal,
+      server: { ...remoteRequest.server, url: `${origin}/admin-mcp` },
+      url: new URL(`${origin}/admin-mcp`),
+      fetch,
+      assertConfigurationCurrent: undefined,
+      getAuthorizationSignal: () => undefined,
+    });
+    const options = getProviderOptions();
+    if (!options?.fetch) throw new Error("Missing OAuth provider fetch");
+    await options.fetch(
+      `${origin}/.well-known/oauth-authorization-server/admin-mcp`,
+    );
+    await options.fetch(`${origin}/token`, { method: "POST" });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenLastCalledWith(
+      `${origin}/token`,
+      expect.objectContaining({ method: "POST" }),
+    );
+    const authorization = options.authorize({
+      ...authorizationRequest(options),
+      authorizationUrl: `${origin}/authorize?state=opaque-state`,
+    });
+    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledOnce());
+    expect(confirmAuthorization).toHaveBeenCalledOnce();
+    const callback = new URL(String(provider.redirectUrl));
+    callback.searchParams.set("state", "opaque-state");
+    callback.searchParams.set("code", "private-code");
+    expect(runtime.handleCallback(callback.pathname, callback).ok).toBe(true);
+    await expect(authorization).resolves.toEqual({
+      callbackUrl: callback.href,
+    });
+    runtime.dispose();
+  });
+
+  it.each([
+    "http://localhost:3000/authorize",
+    "https://accounts.tailnet.test/authorize",
+  ])(
+    "allows an approved private identity-provider URL like VS Code: %s",
+    async (authorizationUrl) => {
+      const {
+        runtime,
+        openExternal,
+        confirmAuthorization,
+        getProviderOptions,
+      } = createRuntime(true);
+      const provider = await runtime.resolveOAuthProvider({
+        ...remoteRequest,
+        server: { ...remoteRequest.server, url: "http://localhost:3001/mcp" },
+        url: new URL("http://localhost:3001/mcp"),
+      });
+      const options = getProviderOptions();
+      if (!options) throw new Error("Missing OAuth provider options");
+      const authorization = options.authorize({
+        ...authorizationRequest(options),
+        authorizationUrl,
+      });
+      await vi.waitFor(() =>
+        expect(openExternal).toHaveBeenCalledWith(authorizationUrl),
+      );
+      expect(confirmAuthorization).toHaveBeenCalledOnce();
+      const callback = new URL(String(provider.redirectUrl));
+      callback.searchParams.set("state", "opaque-state");
+      callback.searchParams.set("code", "private-code");
+      expect(runtime.handleCallback(callback.pathname, callback).ok).toBe(true);
+      await expect(authorization).resolves.toEqual({
+        callbackUrl: callback.href,
+      });
+      runtime.dispose();
+    },
+  );
+
+  it("rechecks configuration after approval before using the configured origin", async () => {
+    const { runtime, openExternal, confirmAuthorization, getProviderOptions } =
+      createRuntime(true);
+    let current = true;
+    const assertConfigurationCurrent = vi.fn(async () => {
+      if (!current) throw new Error("config_retired");
+    });
+    await runtime.resolveConnectionOAuthProvider({
+      principal,
+      server: { ...remoteRequest.server, url: "https://100.64.0.2/mcp" },
+      url: new URL("https://100.64.0.2/mcp"),
+      fetch: remoteRequest.fetch,
+      assertConfigurationCurrent,
+      getAuthorizationSignal: () => undefined,
+    });
+    const options = getProviderOptions();
+    if (!options) throw new Error("Missing OAuth provider options");
+    confirmAuthorization.mockImplementation(async () => {
+      current = false;
+      return true;
+    });
+    await expect(
+      options.authorize({
+        ...authorizationRequest(options),
+        authorizationUrl: "https://100.64.0.2/authorize",
+      }),
+    ).rejects.toThrow("config_retired");
+    expect(assertConfigurationCurrent).toHaveBeenCalledTimes(2);
+    expect(openExternal).not.toHaveBeenCalled();
+    runtime.dispose();
+  });
+
+  it("uses the current operation signal for approval and callback cancellation", async () => {
+    const controller = new AbortController();
+    const { runtime, openExternal, confirmAuthorization, getProviderOptions } =
+      createRuntime();
+    const provider = await runtime.resolveConnectionOAuthProvider({
+      principal,
+      server: remoteRequest.server,
+      url: remoteRequest.url,
+      fetch: remoteRequest.fetch,
+      assertConfigurationCurrent: undefined,
+      getAuthorizationSignal: ({ serverName }) =>
+        serverName === "records" ? controller.signal : undefined,
+    });
+    const options = getProviderOptions();
+    if (!options) throw new Error("Missing OAuth provider options");
+    let releaseApproval: ((approved: boolean) => void) | undefined;
+    confirmAuthorization.mockImplementation(
+      () => new Promise<boolean>((resolve) => (releaseApproval = resolve)),
+    );
+    const authorization = options.authorize(authorizationRequest(options));
+    await vi.waitFor(() => expect(confirmAuthorization).toHaveBeenCalledOnce());
+    expect(confirmAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+    controller.abort();
+    releaseApproval?.(true);
+    await expect(authorization).rejects.toThrow();
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(provider.redirectUrl).toMatch(/mcp\/oauth\/callback/);
+    runtime.dispose();
+  });
+
   it("rejects overlapping approval requests without replacing the first callback", async () => {
     let releaseApproval: ((approved: boolean) => void) | undefined;
     const { runtime, openExternal, confirmAuthorization, getProviderOptions } =
@@ -138,6 +282,74 @@ describe("StandaloneMcpOAuthRuntime", () => {
     callback.searchParams.set("code", "code-1");
     expect(runtime.handleCallback(callback.pathname, callback).ok).toBe(true);
     await expect(first).resolves.toEqual({ callbackUrl: callback.href });
+    runtime.dispose();
+  });
+
+  it("keeps the interactive attempt signal through token exchange after callback delivery", async () => {
+    const controller = new AbortController();
+    const { runtime, openExternal, getProviderOptions } = createRuntime();
+    const provider = await runtime.resolveConnectionOAuthProvider({
+      principal,
+      server: remoteRequest.server,
+      url: remoteRequest.url,
+      fetch: remoteRequest.fetch,
+      assertConfigurationCurrent: undefined,
+      getAuthorizationSignal: () => controller.signal,
+    });
+    const options = getProviderOptions();
+    if (!options?.fetch) throw new Error("Missing OAuth provider fetch");
+    const authorization = options.authorize(authorizationRequest(options));
+    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledOnce());
+
+    const callback = new URL(String(provider.redirectUrl));
+    callback.searchParams.set("state", "opaque-state");
+    callback.searchParams.set("code", "code-1");
+    expect(runtime.handleCallback(callback.pathname, callback).ok).toBe(true);
+    await expect(authorization).resolves.toEqual({
+      callbackUrl: callback.href,
+    });
+
+    controller.abort();
+    await expect(
+      options.fetch("https://mcp.example.test/token"),
+    ).rejects.toThrow();
+    expect(remoteRequest.fetch).not.toHaveBeenCalled();
+    await expect(
+      provider.saveTokens({ access_token: "late", token_type: "Bearer" }),
+    ).rejects.toThrow();
+    runtime.dispose();
+    await expect(
+      provider.saveTokens({ access_token: "late", token_type: "Bearer" }),
+    ).rejects.toThrow();
+  });
+
+  it("does not retain cancelled authorization authority for the next sign-in", async () => {
+    let controller = new AbortController();
+    const { runtime, openExternal, getProviderOptions } = createRuntime();
+    const provider = await runtime.resolveConnectionOAuthProvider({
+      principal,
+      server: remoteRequest.server,
+      url: remoteRequest.url,
+      fetch: remoteRequest.fetch,
+      assertConfigurationCurrent: undefined,
+      getAuthorizationSignal: () => controller.signal,
+    });
+    const options = getProviderOptions();
+    if (!options) throw new Error("Missing OAuth provider options");
+    const authorization = options.authorize(authorizationRequest(options));
+    const cancelled = expect(authorization).rejects.toThrow();
+    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledOnce());
+    controller.abort();
+    await cancelled;
+    controller = new AbortController();
+    await expect(
+      provider.redirectToAuthorization(
+        new URL("https://accounts.example.test/authorize"),
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      provider.saveTokens({ access_token: "new", token_type: "Bearer" }),
+    ).resolves.toBeUndefined();
     runtime.dispose();
   });
 

@@ -148,6 +148,8 @@ vi.mock("../../integrations/DiffViewProvider.js", () => ({
   ),
   snapshotDiagnostics: vi.fn(() => ({
     settleBaseline,
+    beginPostChangeObservation: vi.fn(),
+    recordPostChangeDocumentVersion: vi.fn(),
     collectNewErrors: vi.fn(async () => undefined),
     dispose: vi.fn(),
   })),

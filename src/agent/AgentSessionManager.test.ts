@@ -4859,6 +4859,105 @@ describe("AgentSessionManager in-flight persistence", () => {
     expect(session.runState?.phase).toBe("running");
   });
 
+  it.each([
+    "human",
+    "legacy",
+    "coordinator",
+    "wrong session",
+    "wrong tool",
+    "wrong request",
+    "changed subject",
+    "unanswered",
+  ])(
+    "recovered human evidence fails closed unless host binding matches: %s",
+    async (scenario) => {
+      const { collectHumanQuestionAnswer } =
+        await import("@agentlink/protocol/structured-question");
+      const store = {
+        saveSession: vi.fn(async () => ({ ok: true, revision: "1" })),
+        list: vi.fn(() => []),
+        get: vi.fn(),
+        loadMessages: vi.fn(),
+        loadMetadata: vi.fn(),
+      } as any;
+      const mgr = new AgentSessionManager(
+        makeConfig(),
+        "/tmp",
+        undefined,
+        false,
+        store,
+      );
+      const session = await mgr.createSession("code");
+      const append = vi.fn();
+      (session as any).appendAssistantMessage = vi.fn();
+      (session as any).appendToolResults = append;
+      vi.spyOn(mgr, "retrySession").mockResolvedValue(undefined);
+      const binding: import("@agentlink/protocol/structured-question").HumanQuestionBinding =
+        {
+          schemaVersion: 1,
+          sessionId: session.id,
+          questionRequestId: "host-request",
+          toolCallId: "tool-human",
+          context: "Bounded cleanup",
+          questions: [
+            { id: "q", type: "yes_no", question: "Delete only scratch?" },
+          ],
+        };
+      await mgr.persistPendingQuestionRecovery(
+        session.id,
+        "host-request",
+        binding.context,
+        binding.questions,
+        {
+          schemaVersion: 1,
+          assistantContent: [
+            { type: "tool_use", id: "tool-human", name: "ask_user", input: {} },
+          ],
+          toolUseId: "tool-human",
+          toolName: "ask_user",
+          toolInput: {},
+          ...(scenario === "legacy" ? {} : { humanQuestionBinding: binding }),
+        },
+      );
+      // Normal JSON save/reload keeps host records; it cannot invent one for legacy questions.
+      session.runState = JSON.parse(
+        JSON.stringify(session.runState),
+      ) as PersistedSessionRunState;
+      const response: import("@agentlink/protocol/structured-question").UserQuestionResponse =
+        { answers: { q: false }, notes: { q: "Keep scratch" } };
+      response.humanQuestionAnswer = collectHumanQuestionAnswer(
+        binding,
+        response,
+      );
+      if (scenario === "coordinator") delete response.humanQuestionAnswer;
+      if (scenario === "unanswered") {
+        response.answers = {};
+        response.notes = {};
+        delete response.humanQuestionAnswer;
+      }
+      if (scenario === "wrong session")
+        response.humanQuestionAnswer!.binding.sessionId = "other";
+      if (scenario === "wrong tool")
+        response.humanQuestionAnswer!.binding.toolCallId = "other";
+      if (scenario === "wrong request")
+        response.humanQuestionAnswer!.binding.questionRequestId = "other";
+      if (scenario === "changed subject")
+        response.humanQuestionAnswer!.binding.questions[0]!.question =
+          "Delete all source?";
+      expect(
+        await mgr.answerRecoveredQuestion(session.id, "host-request", response),
+      ).toBe(true);
+      const evidence = append.mock.calls[0]![0][0].humanQuestionAnswer;
+      if (scenario === "human")
+        expect(evidence).toMatchObject({
+          binding,
+          answers: { q: false },
+          notes: { q: "Keep scratch" },
+        });
+      else expect(evidence).toBeUndefined();
+    },
+  );
+
   it("answers a recovered ask_user by appending the saved tool turn and continuing", async () => {
     const store = {
       saveSession: vi.fn(async () => ({ ok: true, revision: "1" })),

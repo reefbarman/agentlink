@@ -259,6 +259,44 @@ describe("read_file structured secret redaction", () => {
     expect(payload.content).not.toContain("nested-token");
   });
 
+  it("labels cached diagnostic counts and a dirty matching editor buffer", async () => {
+    const workspaceRoot = await makeWorkspace();
+    const filePath = path.join(workspaceRoot, "dirty.ts");
+    await fs.writeFile(filePath, "const disk = true;\\n");
+    const provider: ReadFileEnrichmentProvider = {
+      ...enrichmentProvider,
+      getDiagnosticsSummary: () => ({
+        errors: 1,
+        warnings: 0,
+        sourceFreshness: "unverified",
+        openDocumentDirty: true,
+      }),
+    };
+
+    const result = await handleReadFile(
+      { path: filePath, include_symbols: false },
+      approvalManager,
+      approvalPanel,
+      "dirty-diagnostic-session",
+      [],
+      provider,
+    );
+    const item = result.content[0];
+    const payload = JSON.parse(item!.type === "text" ? item!.text : "{}");
+
+    expect(payload.diagnostics).toMatchObject({
+      errors: 1,
+      warnings: 0,
+      open_document_dirty: true,
+    });
+    expect(payload.diagnostics.note).toContain(
+      "source freshness is unverified",
+    );
+    expect(payload.diagnostics.buffer_note).toContain(
+      "may differ from the disk text",
+    );
+  });
+
   it("redacts secrets even when the requested slice is narrow", async () => {
     const workspaceRoot = await makeWorkspace();
     const filePath = path.join(workspaceRoot, "app.config.json");

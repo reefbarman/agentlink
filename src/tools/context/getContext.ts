@@ -419,10 +419,18 @@ function addSymbol(
 
 export function getContextDiagnosticsSummary(
   document: ContextResolvedDocument,
-): { errors: number; warnings: number } | undefined {
-  const { uri } = getVscodeContextDocument(document);
+):
+  | {
+      errors: number;
+      warnings: number;
+      note: string;
+      open_document_dirty: boolean;
+      buffer_note?: string;
+    }
+  | undefined {
+  const { uri, document: editorDocument } = getVscodeContextDocument(document);
   const diagnostics = vscode.languages.getDiagnostics(uri);
-  if (!diagnostics.length) {
+  if (!diagnostics.length && !editorDocument.isDirty) {
     return undefined;
   }
 
@@ -435,7 +443,18 @@ export function getContextDiagnosticsSummary(
       warnings++;
     }
   }
-  return { errors, warnings };
+  return {
+    errors,
+    warnings,
+    note: "Cached language-service counts; source freshness is unverified and counts are not tied to a specific document version.",
+    open_document_dirty: editorDocument.isDirty,
+    ...(editorDocument.isDirty
+      ? {
+          buffer_note:
+            "The matching file-backed editor is dirty, so its buffer may differ from the disk text returned here.",
+        }
+      : {}),
+  };
 }
 
 export function getContextGitStatus(

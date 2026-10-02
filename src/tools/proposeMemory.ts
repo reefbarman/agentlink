@@ -271,57 +271,61 @@ async function reviewProposedContentInDiff(
 
   return await withFileLock(target.filePath, async () => {
     const diffView = new DiffViewProvider(diagnosticDelay, requestId);
-    let reverted = false;
-    const revert = async (reason?: string) => {
-      if (reverted) return;
-      await validateReviewTarget(target, options?.validateTarget, true);
-      reverted = true;
-      await diffView.revertChanges(reason);
-    };
-
-    await validateReviewTarget(target, options?.validateTarget, false);
-    await openMemoryReview(diffView, target, proposedContent, true);
-
     try {
-      await validateReviewTarget(target, options?.validateTarget, true);
-      const decision = await diffView.waitForUserDecision(
-        approvalPanel,
-        options?.onApprovalRequest,
-        options?.sessionId,
-      );
-
-      if (decision === "reject") {
-        await revert(diffView.writeApprovalResponse?.rejectionReason);
-        return {
-          decision: "reject",
-          rejectionReason: diffView.writeApprovalResponse?.rejectionReason,
-          followUp: diffView.writeApprovalResponse?.followUp,
-        };
-      }
-
-      options?.validateContent?.(
-        diffView.getEditedContent() ?? proposedContent,
-      );
-      await validateReviewTarget(target, options?.validateTarget, true);
-      const saved = await diffView.saveChanges();
-      return {
-        decision: "accept",
-        finalContent: requireDurableMemorySave(saved),
-        followUp: saved.follow_up,
+      let reverted = false;
+      const revert = async (reason?: string) => {
+        if (reverted) return;
+        await validateReviewTarget(target, options?.validateTarget, true);
+        reverted = true;
+        await diffView.revertChanges(reason);
       };
-    } catch (err) {
-      if (
-        !(err instanceof MemorySaveError) &&
-        !(err instanceof MemoryTargetValidationError)
-      ) {
-        try {
-          await revert();
-        } catch (revertError) {
-          if (revertError instanceof MemoryTargetValidationError)
-            throw revertError;
+
+      await validateReviewTarget(target, options?.validateTarget, false);
+      await openMemoryReview(diffView, target, proposedContent, true);
+
+      try {
+        await validateReviewTarget(target, options?.validateTarget, true);
+        const decision = await diffView.waitForUserDecision(
+          approvalPanel,
+          options?.onApprovalRequest,
+          options?.sessionId,
+        );
+
+        if (decision === "reject") {
+          await revert(diffView.writeApprovalResponse?.rejectionReason);
+          return {
+            decision: "reject",
+            rejectionReason: diffView.writeApprovalResponse?.rejectionReason,
+            followUp: diffView.writeApprovalResponse?.followUp,
+          };
         }
+
+        options?.validateContent?.(
+          diffView.getEditedContent() ?? proposedContent,
+        );
+        await validateReviewTarget(target, options?.validateTarget, true);
+        const saved = await diffView.saveChanges();
+        return {
+          decision: "accept",
+          finalContent: requireDurableMemorySave(saved),
+          followUp: saved.follow_up,
+        };
+      } catch (err) {
+        if (
+          !(err instanceof MemorySaveError) &&
+          !(err instanceof MemoryTargetValidationError)
+        ) {
+          try {
+            await revert();
+          } catch (revertError) {
+            if (revertError instanceof MemoryTargetValidationError)
+              throw revertError;
+          }
+        }
+        throw err;
       }
-      throw err;
+    } finally {
+      diffView.dispose();
     }
   });
 }
@@ -350,80 +354,84 @@ async function reviewMemoryProposalInDiff(
 
   return await withFileLock(target.filePath, async () => {
     const diffView = new DiffViewProvider(diagnosticDelay);
-    let reverted = false;
-    const revert = async (reason?: string) => {
-      if (reverted) return;
-      await validateReviewTarget(target, options?.validateTarget, true);
-      reverted = true;
-      await diffView.revertChanges(reason);
-    };
-
-    await validateReviewTarget(target, options?.validateTarget, false);
-    await openMemoryReview(diffView, target, proposedContent);
-
     try {
-      const { promise } = approvalPanel.enqueueMemoryApproval({
-        tier: params.tier,
-        scope: params.scope,
-        operation: params.operation,
-        name: params.name,
-        title: params.title,
-        rationale: params.rationale,
-        targetPath: target.filePath,
-        id: diffView.requestId,
-        sessionId: options?.sessionId,
-      });
-
-      const approval = await waitForMemoryApproval(
-        approvalPanel,
-        diffView.requestId,
-        target.filePath,
-        promise,
-      );
-      if (approval.decision === "reject") {
-        await revert(approval.rejectionReason);
-        return {
-          decision: "reject",
-          memoryDecision: approval,
-          rejectionReason: approval.rejectionReason,
-          followUp: approval.followUp,
-        };
-      }
-
-      const shouldSave = (await options?.shouldSave?.(approval)) ?? true;
-      if (!shouldSave) {
-        await revert();
-        return {
-          decision: "retarget",
-          memoryDecision: approval,
-          followUp: approval.followUp,
-        };
-      }
-
-      options?.validateContent?.(
-        diffView.getEditedContent() ?? proposedContent,
-      );
-      await validateReviewTarget(target, options?.validateTarget, true);
-      const saved = await diffView.saveChanges();
-      return {
-        decision: "accept",
-        memoryDecision: approval,
-        finalContent: requireDurableMemorySave(saved),
-        followUp: saved.follow_up ?? approval.followUp,
+      let reverted = false;
+      const revert = async (reason?: string) => {
+        if (reverted) return;
+        await validateReviewTarget(target, options?.validateTarget, true);
+        reverted = true;
+        await diffView.revertChanges(reason);
       };
-    } catch (err) {
-      if (
-        !(err instanceof MemorySaveError) &&
-        !(err instanceof MemoryTargetValidationError)
-      ) {
-        try {
-          await revert();
-        } catch (revertError) {
-          if (revertError instanceof MemoryTargetValidationError)
-            throw revertError;
+
+      await validateReviewTarget(target, options?.validateTarget, false);
+      await openMemoryReview(diffView, target, proposedContent);
+
+      try {
+        const { promise } = approvalPanel.enqueueMemoryApproval({
+          tier: params.tier,
+          scope: params.scope,
+          operation: params.operation,
+          name: params.name,
+          title: params.title,
+          rationale: params.rationale,
+          targetPath: target.filePath,
+          id: diffView.requestId,
+          sessionId: options?.sessionId,
+        });
+
+        const approval = await waitForMemoryApproval(
+          approvalPanel,
+          diffView.requestId,
+          target.filePath,
+          promise,
+        );
+        if (approval.decision === "reject") {
+          await revert(approval.rejectionReason);
+          return {
+            decision: "reject",
+            memoryDecision: approval,
+            rejectionReason: approval.rejectionReason,
+            followUp: approval.followUp,
+          };
         }
+
+        const shouldSave = (await options?.shouldSave?.(approval)) ?? true;
+        if (!shouldSave) {
+          await revert();
+          return {
+            decision: "retarget",
+            memoryDecision: approval,
+            followUp: approval.followUp,
+          };
+        }
+
+        options?.validateContent?.(
+          diffView.getEditedContent() ?? proposedContent,
+        );
+        await validateReviewTarget(target, options?.validateTarget, true);
+        const saved = await diffView.saveChanges();
+        return {
+          decision: "accept",
+          memoryDecision: approval,
+          finalContent: requireDurableMemorySave(saved),
+          followUp: saved.follow_up ?? approval.followUp,
+        };
+      } catch (err) {
+        if (
+          !(err instanceof MemorySaveError) &&
+          !(err instanceof MemoryTargetValidationError)
+        ) {
+          try {
+            await revert();
+          } catch (revertError) {
+            if (revertError instanceof MemoryTargetValidationError)
+              throw revertError;
+          }
+        }
+        throw err;
       }
-      throw err;
+    } finally {
+      diffView.dispose();
     }
   });
 }

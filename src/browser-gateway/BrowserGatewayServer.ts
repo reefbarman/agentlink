@@ -29,9 +29,11 @@ import {
 } from "./browserGatewayRegistry.js";
 import {
   hasBrowserGatewayMcpSecretWrite,
+  hasBrowserGatewayMcpCredentialRedirect,
   verifyBrowserGatewayHelperTrust,
 } from "./browserGatewayRequestTrust.js";
 
+import { loadAskAgentMcpConfigs } from "../agent/mcpConfig.js";
 import type { BrowserGatewayInstanceStatusSummary } from "./protocol.js";
 import type {
   BrowserGatewayService,
@@ -2602,10 +2604,29 @@ export class BrowserGatewayServer implements vscode.Disposable {
         this.writeJson(res, 403, { error: "helper_trust_required" });
         return;
       }
+      if (
+        isBatch &&
+        (body.operations as unknown[]).some(
+          (operation) =>
+            !operation ||
+            typeof operation !== "object" ||
+            Array.isArray(operation) ||
+            ((operation as { kind?: unknown }).kind === "upsert" &&
+              (!(operation as { server?: unknown }).server ||
+                typeof (operation as { server?: unknown }).server !==
+                  "object" ||
+                Array.isArray((operation as { server?: unknown }).server))),
+        )
+      ) {
+        this.writeJson(res, 400, { error: "invalid_request" });
+        return;
+      }
       const operations = isBatch
         ? (body.operations as Array<{
             kind?: unknown;
+            renameTo?: unknown;
             server?: {
+              name?: unknown;
               type?: unknown;
               env?: unknown;
               headers?: unknown;
@@ -2627,6 +2648,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
             .map((operation) => operation.server)
         : [
             body.server as {
+              name?: unknown;
               type?: unknown;
               env?: unknown;
               headers?: unknown;
@@ -2647,6 +2669,28 @@ export class BrowserGatewayServer implements vscode.Disposable {
             : "browser_local_process_requires_loopback",
         });
         return;
+      }
+      if (origin === "non-loopback") {
+        const existing = await loadAskAgentMcpConfigs();
+        if (
+          servers.some((server) =>
+            existing.some(
+              (config) =>
+                (config.name === server?.name ||
+                  operations?.some(
+                    (operation) =>
+                      operation.server === server &&
+                      operation.renameTo === config.name,
+                  )) &&
+                hasBrowserGatewayMcpCredentialRedirect(server, config),
+            ),
+          )
+        ) {
+          this.writeJson(res, 403, {
+            error: "browser_mcp_credential_redirect_requires_loopback",
+          });
+          return;
+        }
       }
     }
     const result = isBatch

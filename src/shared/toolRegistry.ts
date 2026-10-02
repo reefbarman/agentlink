@@ -53,7 +53,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   read_file: {
     label: "Read with line numbers",
     description:
-      'Read a file with line numbers. Use view "context" for first-pass orientation on a known file: a compact pack with metadata, git status, diagnostics summary, bounded symbol outline, numbered content (default 200 lines, max 400; 2,000 characters per line and 20,000 total), and working-set status, with opt-in unchanged-range omission via dedupe_unchanged_content. Truncated previews report omitted bytes and next_read arguments for character_offset paging. Use the default view "content" for exact content, local images/PDFs, complete temp outputs, anchors, or a specific line slice. Set include_symbols=false in either view to skip symbol lookup and omit the outline. Eligible structured-settings secrets are redacted; malformed content is withheld.',
+      'Read a file with line numbers. Use view "context" for first-pass orientation on a known file: a compact pack with metadata, git status, diagnostics summary, bounded symbol outline, numbered content (default 200 lines, max 400; 2,000 characters per line and 20,000 total), and working-set status, with opt-in unchanged-range omission via dedupe_unchanged_content. Truncated previews report omitted bytes and next_read arguments for character_offset paging. Use the default view "content" for exact content, local images/PDFs, complete temp outputs, anchors, or a specific line slice. anchor, anchor_regex and anchor_offset are content-only; use numeric offset in context view. Set include_symbols=false in either view to skip symbol lookup and omit the outline. Eligible structured-settings secrets are redacted; malformed content is withheld.',
   },
   get_context: {
     label: "Context pack",
@@ -244,12 +244,12 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   get_editor_state: {
     label: "Inspect unsaved editor state",
     description:
-      "Inspect an existing file-backed VS Code editor without changing it. Returns bounded buffer content and disk-to-buffer differences, editor version, and disk/editor SHA-256 hashes for save recovery. Eligible configuration secrets are redacted. Files/buffers above 256 KiB require native editor inspection. Disk read tools do not expose unsaved buffer content.",
+      "Inspect an existing file-backed VS Code editor without changing it. Returns bounded buffer content and disk-to-buffer differences, editor version, and whole-snapshot disk/editor SHA-256 hashes for save recovery. Eligible configuration secrets are redacted. Files/buffers up to 8 MiB are supported; previews are capped at 16,000 characters, and a computation-limited diff is explicitly omitted without withholding the inspected lines or hashes. Larger snapshots require native editor inspection. Disk read tools do not expose unsaved buffer content.",
   },
   save_editor: {
     label: "Save reviewed editor buffer",
     description:
-      "Save an existing VS Code editor buffer without formatting, replacement, or reversion. Requires hashes and version from get_editor_state and fresh human approval of the complete save diff. Stale state or unsupported/protected targets fail safely; rejection leaves unsaved work intact. Does not grant persistent write trust. Large diffs require manual VS Code save.",
+      "Save an existing VS Code editor buffer without formatting, replacement, or reversion. Requires hashes and version from get_editor_state and fresh human approval of the complete save diff. Supports snapshots up to 8 MiB only when the complete approval fits 16,000 characters and bounded diff computation succeeds. Skips ordinary save participants; check required formatting separately afterwards. Stale state or unsupported/protected targets fail safely; rejection leaves unsaved work intact. Does not grant persistent write trust. Large or computation-limited diffs require manual VS Code save.",
   },
   open_file: {
     label: "Open in editor",

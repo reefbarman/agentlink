@@ -32,11 +32,17 @@ interface ValidationResult {
  * Validate a command for disallowed patterns.
  * Returns null if the command is clean, or a result with a rejection message.
  */
-export function validateCommand(command: string): ValidationResult | null {
+export function validateCommand(
+  command: string,
+  availableToolNames?: ReadonlySet<string>,
+): ValidationResult | null {
   // Check 1: Direct file-reading commands (head/tail/cat/grep used standalone)
   const directViolation =
-    checkDirectFileCommands(command) ??
-    checkDirectFileCommands(maskCommandSubstitutions(command));
+    checkDirectFileCommands(command, availableToolNames) ??
+    checkDirectFileCommands(
+      maskCommandSubstitutions(command),
+      availableToolNames,
+    );
   if (directViolation) return directViolation;
 
   // Check 2: Inline scripting used to write files outside write_file/apply_diff
@@ -106,11 +112,33 @@ const PDF_READING_COMMANDS = new Set([
   "qpdf",
 ]);
 
+function readToolGuidance(
+  preferredTool: "read_file" | "search_files",
+  availableToolNames?: ReadonlySet<string>,
+  allowAlternative = true,
+): string {
+  if (availableToolNames?.has(preferredTool)) {
+    return `Use the ${preferredTool} tool, which is available in this provider request.`;
+  }
+  if (!availableToolNames) {
+    return "No request-scoped tool inventory is available, so do not assume a file reader is callable. Keep this rejection and hand control back to the foreground/user.";
+  }
+  const alternative =
+    preferredTool === "read_file" ? "search_files" : "read_file";
+  if (allowAlternative && availableToolNames.has(alternative)) {
+    return `The preferred reader is unavailable. The ${alternative} tool is available for its permitted read/search operations; use its advertised schema.`;
+  }
+  return "No authorized file-reading tool for this operation is available in this provider request. Do not retry through another route or use force to bypass this rejection. Hand control back to the foreground/user.";
+}
+
 /**
  * Check if any sub-command in a compound command starts with head/tail/cat/grep.
  * Splits on && ; || but NOT on | (pipe case is handled separately).
  */
-function checkDirectFileCommands(command: string): ValidationResult | null {
+function checkDirectFileCommands(
+  command: string,
+  availableToolNames?: ReadonlySet<string>,
+): ValidationResult | null {
   const subCommands = splitOnCompoundOperators(command);
 
   // Redirect targets written by sub-commands before the current one. A later
@@ -140,6 +168,7 @@ function checkDirectFileCommands(command: string): ValidationResult | null {
       const pdfReadViolation = checkPdfReadingCommand(
         segmentCmd,
         segmentTokens,
+        availableToolNames,
       );
       if (pdfReadViolation) return pdfReadViolation;
 
@@ -245,8 +274,7 @@ function checkDirectFileCommands(command: string): ValidationResult | null {
           message: [
             `Command rejected: "sed -n" reads/filters file content in the terminal.`,
             ``,
-            `• To read specific lines: use read_file with offset and limit`,
-            `• To find lines matching a pattern: use search_files with regex`,
+            readToolGuidance("read_file", availableToolNames),
           ].join("\n"),
         };
       }
@@ -291,9 +319,17 @@ function checkDirectFileCommands(command: string): ValidationResult | null {
 
     // Build a helpful message
     const lines: string[] = [];
-    lines.push(
-      `Command rejected: "${cmd}" should not be run in the terminal. Use the ${info.tool} tool to ${info.description} — ${info.reason}.`,
+    const readerAvailable = availableToolNames?.has(info.tool) === true;
+    const readerGuidance = readToolGuidance(
+      info.tool === "search_files" ? "search_files" : "read_file",
+      availableToolNames,
     );
+    lines.push(
+      `Command rejected: "${cmd}" should not be run in the terminal. ${readerAvailable ? `Use the ${info.tool} tool to ${info.description}: ${info.reason}.` : readerGuidance}`,
+    );
+    if (!readerAvailable) {
+      return { type: "direct", message: lines.join("\n") };
+    }
 
     // Add specific guidance based on the command
     if (cmd === "cat" && tokens.length >= 2) {
@@ -322,7 +358,7 @@ function checkDirectFileCommands(command: string): ValidationResult | null {
       );
       if (file) {
         lines.push(
-          `An exact file path works even when the file is ignored. To inspect the whole known file instead, use read_file with path: "${file}".`,
+          `An exact file path works even when the file is ignored.${availableToolNames?.has("read_file") ? ` To inspect the whole known file instead, use read_file with path: "${file}".` : ""}`,
         );
       }
     }
@@ -415,6 +451,7 @@ function checkInlineScriptFileWriters(
 function checkPdfReadingCommand(
   cmd: string,
   tokens: string[],
+  availableToolNames?: ReadonlySet<string>,
 ): ValidationResult | null {
   if (!PDF_READING_COMMANDS.has(cmd)) return null;
 
@@ -429,7 +466,9 @@ function checkPdfReadingCommand(
     message: [
       `Command rejected: "${cmd}" should not be used to read local PDFs in the terminal.`,
       ``,
-      `Use read_file with path: "${path}" instead — it supports PDF text extraction and keeps file reads in AgentLink's structured tool flow.`,
+      availableToolNames?.has("read_file")
+        ? `Use read_file with path: "${path}" instead, following its advertised schema for PDF text extraction.`
+        : readToolGuidance("read_file", availableToolNames, false),
     ].join("\n"),
   };
 }

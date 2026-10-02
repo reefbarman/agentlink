@@ -93,9 +93,14 @@ export interface ReadFileEnrichmentProvider {
   ): string | undefined | Promise<string | undefined>;
   detectLanguage(filePath: string): string | undefined;
   getSymbolOutline(filePath: string): Promise<ReadFileSymbolOutlineResult>;
-  getDiagnosticsSummary(
-    filePath: string,
-  ): { errors: number; warnings: number } | undefined;
+  getDiagnosticsSummary(filePath: string):
+    | {
+        errors: number;
+        warnings: number;
+        sourceFreshness?: "unverified";
+        openDocumentDirty?: boolean;
+      }
+    | undefined;
 }
 
 export interface AdvertisedArtifactProvider {
@@ -188,7 +193,13 @@ export interface ContextEnrichmentProvider {
   getDocumentSymbols(
     document: ContextResolvedDocument,
   ): Promise<Record<string, string[]> | undefined>;
-  getDiagnosticsSummary(
-    document: ContextResolvedDocument,
-  ): { errors: number; warnings: number } | undefined;
+  getDiagnosticsSummary(document: ContextResolvedDocument):
+    | {
+        errors: number;
+        warnings: number;
+        note?: string;
+        open_document_dirty?: boolean;
+        buffer_note?: string;
+      }
+    | undefined;
 }

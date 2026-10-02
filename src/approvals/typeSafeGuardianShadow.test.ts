@@ -191,6 +191,16 @@ describe("TypeSafe Guardian shadow reviewer", () => {
         evidence: expect.any(Array),
       }),
     );
+    const authorizationPolicy = body.state.policy.authorization.join(" ");
+    expect(authorizationPolicy).toContain(
+      "Index-only unstaging (git restore --staged or -S, without --worktree/-W or a source override)",
+    );
+    expect(authorizationPolicy).toContain(
+      "with no pre-existing, user-authored, or concurrent edits mixed in",
+    );
+    expect(authorizationPolicy).toContain(
+      "Do not infer ownership from withheld task history or inspected changes",
+    );
     expect(body.state.action.command).toBe("rm -rf generated");
     expect(body.state.action.latestUserInstruction).toBe(
       "Remove the generated output and rebuild it",

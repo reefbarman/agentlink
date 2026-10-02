@@ -21,9 +21,9 @@ import {
   createRetainedCommandReviewDenials,
 } from "../approvals/commandApprovalReview.js";
 
+import type { ConfinementPreparingTerminalProvider } from "../core/capabilities/terminal.js";
 import { SandboxCapabilityLaunchError } from "../core/capabilities/SandboxCapabilityLaunchError.js";
 import { SandboxPreparationError } from "../terminal/sandbox/SandboxPreparationError.js";
-import type { ConfinementPreparingTerminalProvider } from "../core/capabilities/terminal.js";
 import { evaluateCommandRulePolicy } from "../approvals/commandRulePolicy.js";
 import fs from "node:fs";
 
@@ -2761,7 +2761,11 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("approves routine git workflow without Guardian in approve-for-me", async () => {
+  it.each([
+    'git add -A && git commit -m "update" && git push',
+    "git restore --staged -- src/index.ts",
+    "git restore -S -- .",
+  ])("approves routine git workflow without Guardian: %s", async (command) => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
         key === "masterBypass" ? false : fallback,
@@ -2772,7 +2776,7 @@ describe("handleExecuteCommand", () => {
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
     const result = await handleExecuteCommand(
-      { command: 'git add -A && git commit -m "update" && git push' },
+      { command },
       {
         isCommandApproved: () => false,
         findMatchingCommandRule: vi.fn(),
@@ -2796,79 +2800,98 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("approves routine git workflow on native escalation without Guardian", async () => {
-    const review = vi.fn();
-    const enqueueCommandApproval = vi.fn();
-    const { handleExecuteCommand } = await import("./executeCommand.js");
+  it.each([
+    'git commit -m "fix" && git push origin HEAD:feature/x',
+    "git status --short && git restore --staged -- src/index.ts",
+  ])(
+    "approves routine git workflow on native escalation: %s",
+    async (command) => {
+      const review = vi.fn();
+      const enqueueCommandApproval = vi.fn();
+      const { handleExecuteCommand } = await import("./executeCommand.js");
 
-    const result = await handleExecuteCommand(
-      {
-        command: 'git commit -m "fix" && git push origin HEAD:feature/x',
-        sandbox_permissions: "require_escalated",
-        reason: "Git metadata is read-only in the sandbox.",
-      },
-      {
-        isCommandApproved: () => false,
-        findMatchingCommandRule: vi.fn(),
-      } as never,
-      { enqueueCommandApproval } as never,
-      "session-routine-git-native",
-      undefined,
-      {
-        terminalProvider,
-        getCommandApprovalPolicy: () => "approve-for-me",
-        commandApprovalReviewer: { review },
-        isSessionActive: () => true,
-      },
-    );
+      const result = await handleExecuteCommand(
+        {
+          command,
+          sandbox_permissions: "require_escalated",
+          reason: "Git metadata is read-only in the sandbox.",
+        },
+        {
+          isCommandApproved: () => false,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        { enqueueCommandApproval } as never,
+        "session-routine-git-native",
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: { review },
+          isSessionActive: () => true,
+        },
+      );
 
-    expect(review).not.toHaveBeenCalled();
-    expect(enqueueCommandApproval).not.toHaveBeenCalled();
-    expect(textPayload(result)).toMatchObject({
-      approval: { by: "routine_tier", tier: "sensitive" },
-      security: { permissionIntent: "native-escalation" },
-    });
-  });
+      expect(review).not.toHaveBeenCalled();
+      expect(enqueueCommandApproval).not.toHaveBeenCalled();
+      expect(textPayload(result)).toMatchObject({
+        approval: { by: "routine_tier", tier: "sensitive" },
+        security: { permissionIntent: "native-escalation" },
+      });
+    },
+  );
 
-  it("keeps Guardian review for force pushes on native escalation", async () => {
-    const review = vi.fn(async () => ({
-      outcome: "deny" as const,
-      risk: "high" as const,
-      userAuthorization: "unknown" as const,
-      rationale: "Force push was not requested",
-      model: "review-model",
-      status: "reviewed" as const,
-    }));
-    const enqueueCommandApproval = vi.fn(() => ({
-      promise: Promise.resolve({ decision: "reject" }),
-    }));
-    const { handleExecuteCommand } = await import("./executeCommand.js");
+  it.each([
+    "git push --force origin main",
+    "git restore -- src/index.ts",
+    "git restore -SW -- src/index.ts",
+    "git restore --staged --source=HEAD~1 -- src/index.ts",
+    String.raw`git restore --staged \--worktree src/index.ts`,
+    'git restore --staged "-"W src/index.ts',
+    String.raw`git restore --staged \--source=HEAD~3 src/index.ts`,
+    "git restore --staged *",
+    "git restore --staged -- src/index.ts && git restore -- src/index.ts",
+  ])(
+    "keeps Guardian review for non-routine Git on native escalation: %s",
+    async (command) => {
+      const review = vi.fn(async () => ({
+        outcome: "deny" as const,
+        risk: "high" as const,
+        userAuthorization: "unknown" as const,
+        rationale: "Discarding unrelated work was not requested",
+        model: "review-model",
+        status: "reviewed" as const,
+      }));
+      const enqueueCommandApproval = vi.fn(() => ({
+        promise: Promise.resolve({ decision: "reject" }),
+      }));
+      const { handleExecuteCommand } = await import("./executeCommand.js");
 
-    const result = await handleExecuteCommand(
-      {
-        command: "git push --force origin main",
-        sandbox_permissions: "require_escalated",
-        reason: "Rewrite the remote branch.",
-      },
-      {
-        isCommandApproved: () => false,
-        findMatchingCommandRule: vi.fn(),
-      } as never,
-      { enqueueCommandApproval } as never,
-      "session-force-push",
-      undefined,
-      {
-        terminalProvider,
-        getCommandApprovalPolicy: () => "approve-for-me",
-        commandApprovalReviewer: { review },
-        isSessionActive: () => true,
-      },
-    );
+      const result = await handleExecuteCommand(
+        {
+          command,
+          sandbox_permissions: "require_escalated",
+          reason: "Clean up task changes.",
+        },
+        {
+          isCommandApproved: () => false,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        { enqueueCommandApproval } as never,
+        "session-force-push",
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: { review },
+          isSessionActive: () => true,
+        },
+      );
 
-    expect(review).toHaveBeenCalledOnce();
-    expect(enqueueCommandApproval).toHaveBeenCalledOnce();
-    expect(textPayload(result).status).toBe("rejected_by_user");
-  });
+      expect(review).toHaveBeenCalledOnce();
+      expect(enqueueCommandApproval).toHaveBeenCalledOnce();
+      expect(textPayload(result).status).toBe("rejected_by_user");
+    },
+  );
 
   it("keeps Guardian review for non-routine commands in approve-for-me", async () => {
     getConfiguration.mockReturnValue({
@@ -4454,6 +4477,22 @@ describe("handleExecuteCommand", () => {
       defaultIntent: true,
     },
     {
+      name: "Go test TLS failure with leading snapshot assignment",
+      command: "UPDATE_SNAPS=1 go test ./...",
+      output:
+        'go: downloading example.com/dependency v1.2.3: Get "https://proxy.golang.org/example.com/dependency/@v/v1.2.3.zip": tls: failed to verify certificate: x509: OSStatus -26276',
+      code: "managed_network_tls_trust",
+      goGuidance: true,
+    },
+    {
+      name: "Go module download TLS failure",
+      command: "go mod download",
+      output:
+        'Get "https://proxy.golang.org/example.com/dependency/@v/v1.2.3.zip": x509: certificate signed by unknown authority',
+      code: "managed_network_tls_trust",
+      goGuidance: true,
+    },
+    {
       name: "proxy-unaware Node DNS failure",
       command: "node fetch-package.mjs",
       output: "TypeError: fetch failed: getaddrinfo ENOTFOUND unpkg.com",
@@ -4470,6 +4509,7 @@ describe("handleExecuteCommand", () => {
       defaultIntent,
       exitCode = 1,
       uncertainSegment,
+      goGuidance,
     }) => {
       const execute = vi.fn(async () => ({
         exit_code: exitCode,
@@ -4544,6 +4584,30 @@ describe("handleExecuteCommand", () => {
           same_command: sameCommand,
         });
       }
+      if (goGuidance) {
+        expect(payload.retry_guidance.message).toMatch(
+          /inspect the command results and partial workspace changes first/i,
+        );
+        expect(payload.retry_guidance.prohibited_workarounds).toContain(
+          "blindly_replay_original_command",
+        );
+        expect(payload.retry_guidance.prohibited_workarounds).toContain(
+          "disable_tls_verification",
+        );
+        expect(payload.retry_guidance.options).toHaveLength(3);
+        for (const option of payload.retry_guidance.options) {
+          expect(option.same_command).toBe(false);
+        }
+        expect(JSON.stringify(payload.retry_guidance)).not.toContain(
+          '"same_command":true',
+        );
+        expect(payload.retry_guidance.options[2]).toMatchObject({
+          sandbox_permissions: "require_escalated",
+          reason_required: true,
+          reviewed_native_execution: true,
+          inspect_partial_changes_first: true,
+        });
+      }
       if (uncertainSegment) {
         expect(payload.retry_guidance.message).toMatch(
           /does not establish which segment failed or the status of each segment/i,
@@ -4565,6 +4629,16 @@ describe("handleExecuteCommand", () => {
     {
       command: "npm view vite version",
       output: "x509: certificate signed by unknown authority",
+    },
+    {
+      command: "go test ./...",
+      output:
+        "Get https://proxy.golang.org/example/@v/v1.zip: connection reset",
+    },
+    {
+      command: "npm test",
+      output:
+        "Get https://proxy.golang.org/example/@v/v1.zip: x509: certificate signed by unknown authority",
     },
     {
       command: "gh api /user && echo done",
@@ -6530,6 +6604,7 @@ describe("handleExecuteCommand", () => {
 
     expect(validateCommand).toHaveBeenCalledWith(
       expect.stringMatching(/^gh pr comment 1 --body-file '\/.*\/body\.md'$/),
+      undefined,
     );
     expect(executeCommand).toHaveBeenCalledTimes(1);
     const executedOptions = executeCommand.mock.calls[0][0];

@@ -4,6 +4,8 @@ import "./styles.css";
 import { BrowserGatewayApp } from "./BrowserGatewayApp";
 import type { BrowserGatewayDataPlaneMode } from "../browserGatewayDataPlaneMode";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
+import { DesktopMcpManager } from "./DesktopMcpManager";
+import type { DesktopMcpManagerOpenRequest } from "../../shared/desktopBridge";
 import { ErrorBoundary } from "../../shared/ui/ErrorBoundary";
 import { installClipboardShim } from "./installClipboardShim";
 import { render } from "preact";
@@ -31,10 +33,30 @@ function BrowserGatewayRoot() {
   if (!config) throw new Error("Browser gateway config missing");
   const query = new URLSearchParams(window.location.search);
   const desktopWorkspace = query.get("desktopWorkspace") === "1";
+  const desktopMcpManager =
+    Boolean(window.agentlinkDesktopShell) &&
+    query.get("surface") === "desktop" &&
+    query.get("mcpManager") === "1";
+  const mcpView = query.get("mcpView") === "config" ? "config" : "status";
+  const initialMcpRequest: DesktopMcpManagerOpenRequest = {
+    view: mcpView,
+    action: query.get("mcpAction") === "refresh" ? "refresh" : "open",
+  };
   const workspaceOnly =
     config.routeByInstance === true &&
     config.askAgentOnly !== true &&
     (desktopWorkspace || query.get("browserWorkspace") === "1");
+
+  if (desktopMcpManager) {
+    return (
+      <DesktopMcpManager
+        authToken={config.authToken}
+        initialRequest={initialMcpRequest}
+        initialTheme={config.initialTheme}
+        onClose={() => window.close()}
+      />
+    );
+  }
 
   return (
     <BrowserGatewayApp

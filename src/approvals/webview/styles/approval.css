@@ -917,6 +917,13 @@ body {
   padding: 8px 4px 4px;
 }
 
+.mcp-rule-scope-hint {
+  margin-top: 10px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  line-height: 16px;
+}
+
 /* ── Rule row ────────────────────────────────────────────────────────── */
 
 .rule-row {

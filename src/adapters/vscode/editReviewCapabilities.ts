@@ -497,6 +497,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
               };
             }
             if (doc.getText() !== content) {
+              snap.beginPostChangeObservation();
               const edit = new vscode.WorkspaceEdit();
               edit.replace(
                 doc.uri,
@@ -520,6 +521,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                 };
               }
             }
+            snap.recordPostChangeDocumentVersion();
             const commit = await commitAndVerifyEdit({
               document: doc,
               absolutePath: params.absolutePath,
@@ -674,6 +676,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                   };
                 }
                 if (doc.getText() !== content) {
+                  snap.beginPostChangeObservation();
                   const edit = new vscode.WorkspaceEdit();
                   edit.replace(
                     doc.uri,
@@ -696,6 +699,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                     };
                   }
                 }
+                snap.recordPostChangeDocumentVersion();
                 const commit = await commitAndVerifyEdit({
                   document: doc,
                   absolutePath: params.absolutePath,
@@ -734,37 +738,46 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
           params.saveWithoutFormatting,
         );
 
-        await diffView.open(params.absolutePath, params.relativePath, content, {
-          outsideWorkspace: params.outsideWorkspace,
-        });
-        const decision = (await diffView.waitForUserDecision(
-          params.approvalPanel as ApprovalPanelProvider,
-          params.onApprovalRequest,
-          params.sessionId,
-          params.onApprovalPresented,
-        )) as EditReviewDecision;
+        try {
+          await diffView.open(
+            params.absolutePath,
+            params.relativePath,
+            content,
+            {
+              outsideWorkspace: params.outsideWorkspace,
+            },
+          );
+          const decision = (await diffView.waitForUserDecision(
+            params.approvalPanel as ApprovalPanelProvider,
+            params.onApprovalRequest,
+            params.sessionId,
+            params.onApprovalPresented,
+          )) as EditReviewDecision;
 
-        if (decision === "reject") {
+          if (decision === "reject") {
+            return {
+              ...(await diffView.revertChanges(
+                diffView.writeApprovalResponse?.rejectionReason,
+              )),
+              decision,
+              writeApprovalResponse: diffView.writeApprovalResponse,
+              ...(recoveredDirtyBuffer
+                ? { recovered_dirty_buffer: recoveredDirtyBuffer }
+                : {}),
+            };
+          }
+
           return {
-            ...(await diffView.revertChanges(
-              diffView.writeApprovalResponse?.rejectionReason,
-            )),
+            ...(await diffView.saveChanges()),
             decision,
             writeApprovalResponse: diffView.writeApprovalResponse,
             ...(recoveredDirtyBuffer
               ? { recovered_dirty_buffer: recoveredDirtyBuffer }
               : {}),
           };
+        } finally {
+          diffView.dispose();
         }
-
-        return {
-          ...(await diffView.saveChanges()),
-          decision,
-          writeApprovalResponse: diffView.writeApprovalResponse,
-          ...(recoveredDirtyBuffer
-            ? { recovered_dirty_buffer: recoveredDirtyBuffer }
-            : {}),
-        };
       });
     },
   };

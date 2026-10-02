@@ -716,6 +716,7 @@ interface ToolCallResult {
   result: ToolResult;
   historyContent?: CoreModelToolResultBlock["content"];
   durationMs: number;
+  humanQuestionAnswer?: import("@agentlink/protocol/structured-question").HumanQuestionAnswer;
   mcpApprovalPromotion?: McpApprovalPromotionMeta;
   composeTrace?: import("@agentlink/protocol/compose").ComposeTrace;
 }
@@ -3033,6 +3034,7 @@ export class AgentEngine {
                 result: tr.result.content,
                 durationMs: tr.durationMs,
                 input: toolUseBlock?.input,
+                humanQuestionAnswer: tr.humanQuestionAnswer,
                 mcpApprovalPromotion: tr.mcpApprovalPromotion,
                 composeTrace: tr.composeTrace,
               });
@@ -3168,6 +3170,7 @@ export class AgentEngine {
             type: "tool_result" as const,
             tool_use_id: tr.tool_use_id,
             content: toolResultContents[index]!,
+            humanQuestionAnswer: tr.humanQuestionAnswer,
             mcpApprovalPromotion: tr.mcpApprovalPromotion,
             composeTrace: tr.composeTrace,
           })),
@@ -3200,6 +3203,7 @@ export class AgentEngine {
             result: tr.result.content,
             durationMs: tr.durationMs,
             input: toolUseBlock?.input,
+            humanQuestionAnswer: tr.humanQuestionAnswer,
             mcpApprovalPromotion: tr.mcpApprovalPromotion,
           };
         }
@@ -3531,6 +3535,8 @@ export class AgentEngine {
           ),
           result,
           durationMs: Date.now() - start,
+          humanQuestionAnswer:
+            call.name === "ask_user" ? result.humanQuestionAnswer : undefined,
           mcpApprovalPromotion: result.uiMeta?.mcpApprovalPromotion,
           composeTrace: result.uiMeta?.composeTrace,
         };

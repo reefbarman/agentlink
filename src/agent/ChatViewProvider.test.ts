@@ -4243,7 +4243,17 @@ describe("ChatViewProvider session state sync", () => {
       expect.any(String),
       "Pick one.",
       questions,
-      pendingQuestionRecovery,
+      expect.objectContaining({
+        ...pendingQuestionRecovery,
+        humanQuestionBinding: expect.objectContaining({
+          schemaVersion: 1,
+          sessionId: "session-1",
+          questionRequestId: expect.any(String),
+          toolCallId: "toolu-1",
+          context: "Pick one.",
+          questions,
+        }),
+      }),
     );
     const questionRequestId = persistPendingQuestionRecovery.mock.calls[0]?.[1];
     if (typeof questionRequestId !== "string") {

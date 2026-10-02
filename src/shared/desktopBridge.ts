@@ -28,6 +28,11 @@ export interface DesktopQuickAskSubmission {
   media?: DesktopQuickAskMedia[];
 }
 
+export interface DesktopMcpManagerOpenRequest {
+  view: "status" | "config";
+  action: "open" | "refresh";
+}
+
 /** Narrow shell-only API. The remote workspace renderer never receives this bridge. */
 export interface DesktopBridge {
   readonly askAgentOwnerId: string;
@@ -47,6 +52,16 @@ export interface DesktopBridge {
   onQuickAskSubmission?(
     listener: (submission: DesktopQuickAskSubmission) => void,
   ): () => void;
+  /** Open or focus the native MCP manager with a validated view/action. */
+  openMcpManager?(request: DesktopMcpManagerOpenRequest): void;
+  /** MCP window: receive later opens without reloading the active auth flow. */
+  onMcpManagerOpen?(
+    listener: (request: DesktopMcpManagerOpenRequest) => void,
+  ): () => void;
+  /** MCP window: open one fixed Ask Agent config file in the native editor. */
+  openMcpConfig?(scope: "global" | "ask-agent-global"): Promise<void>;
+  /** MCP window: register the operation that native close/crash must cancel. */
+  setMcpOperation?(operationId: string | null): void;
 }
 
 declare global {

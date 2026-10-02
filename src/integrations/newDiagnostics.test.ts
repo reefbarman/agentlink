@@ -105,12 +105,14 @@ describe("formatIntroducedDiagnostics", () => {
   });
 
   it("keeps the legacy line format and labels other files", () => {
-    expect(
-      formatIntroducedDiagnostics([
-        { line: 2, message: "Cannot find name 'x'." },
-        { line: 9, message: "Type error", path: "src/other.ts" },
-      ]),
-    ).toBe("Line 3: Cannot find name 'x'.\nsrc/other.ts: Line 10: Type error");
+    const output = formatIntroducedDiagnostics([
+      { line: 2, message: "Cannot find name 'x'." },
+      { line: 9, message: "Type error", path: "src/other.ts" },
+    ]);
+    expect(output).toContain("Observed language-service error sample");
+    expect(output).toContain(
+      "Line 3: Cannot find name 'x'.\nsrc/other.ts: Line 10: Type error",
+    );
   });
 
   it("caps entry count and message length with an omitted summary", () => {

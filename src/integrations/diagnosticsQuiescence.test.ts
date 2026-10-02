@@ -3,7 +3,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForDiagnosticsQuiescence } from "./diagnosticsQuiescence.js";
 
 interface Harness {
-  collect: ReturnType<typeof vi.fn<() => string>>;
+  collect: ReturnType<
+    typeof vi.fn<
+      (
+        eventObserved?: boolean,
+        stateCurrent?: boolean,
+        quiescent?: boolean,
+      ) => string
+    >
+  >;
   dispose: ReturnType<typeof vi.fn<() => void>>;
   eagerDispose: ReturnType<typeof vi.fn<() => void>>;
   emit(): void;
@@ -19,7 +27,10 @@ function createHarness(
   } = {},
 ): Harness {
   let listener: (() => void) | undefined;
-  const collect = vi.fn(() => "collected");
+  const collect = vi.fn(
+    (_eventObserved?: boolean, _stateCurrent?: boolean, _quiescent?: boolean) =>
+      "collected",
+  );
   const dispose = vi.fn();
   const eagerDispose = vi.fn();
   const wait = waitForDiagnosticsQuiescence({
@@ -61,6 +72,7 @@ describe("waitForDiagnosticsQuiescence", () => {
     await vi.advanceTimersByTimeAsync(1);
     await expect(harness.wait).resolves.toBe("collected");
     expect(harness.collect).toHaveBeenCalledOnce();
+    expect(harness.collect).toHaveBeenCalledWith(false, true, false);
     expect(harness.dispose).toHaveBeenCalledOnce();
     expect(harness.eagerDispose).toHaveBeenCalledOnce();
   });
@@ -133,6 +145,7 @@ describe("waitForDiagnosticsQuiescence", () => {
 
     await expect(harness.wait).resolves.toBe("collected");
     expect(harness.collect).toHaveBeenCalledOnce();
+    expect(harness.collect).toHaveBeenCalledWith(true, true, false);
   });
 
   it("settles and disposes exactly once when timers race", async () => {

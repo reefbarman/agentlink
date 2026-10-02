@@ -3100,7 +3100,7 @@ export async function activate(
       const messages = agentSessionManager
         .getSession(sessionId)
         ?.getAllMessages();
-      return messages ? buildCommandReviewContext(messages) : [];
+      return messages ? buildCommandReviewContext(messages, sessionId) : [];
     },
     onModeSwitch: (sessionId, mode, reason, silent) =>
       chatViewProvider.handleModeSwitch(mode, reason, silent, sessionId),

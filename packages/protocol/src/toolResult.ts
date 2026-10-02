@@ -1,4 +1,5 @@
 import type { ComposeTrace } from "./compose.js";
+import type { HumanQuestionAnswer } from "./structuredQuestion.js";
 import type { McpConfigMutationTarget } from "./mcpManager.js";
 
 /** Durable MCP approval authority retained across transcript and UI round trips. */
@@ -46,6 +47,8 @@ export interface McpToolResultMeta {
 }
 
 export interface ToolResult {
+  /** Host metadata, separate from arbitrary tool/MCP result data. */
+  humanQuestionAnswer?: HumanQuestionAnswer;
   data?: unknown;
   content: Array<
     | { type: "text"; text: string }

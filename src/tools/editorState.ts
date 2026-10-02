@@ -13,6 +13,7 @@ import { deriveExpectedDiskContent } from "../core/editDurability.js";
 import { isMemoryProtectedPath } from "../approvals/protectedPaths.js";
 import { redactStructuredSecrets } from "../shared/structuredSecretRedaction.js";
 import { saveVerifiedEditorDocument } from "../integrations/editDurability.js";
+import { MAX_EDITOR_RECOVERY_BYTES } from "../integrations/editorRecoveryPolicy.js";
 import {
   canonicalizePath,
   getRelativePath,
@@ -20,8 +21,14 @@ import {
 } from "../util/paths.js";
 import { withFileLock } from "../util/fileLock.js";
 
-const MAX_CONTENT_BYTES = 256 * 1024;
 const MAX_PREVIEW_CHARS = 16_000;
+const EXACT_SAVE_NOTICE =
+  "This exact save skips formatting and ordinary save participants. Check any required formatting separately afterwards.";
+const RECOVERY_DIFF_OPTIONS = {
+  context: 3,
+  maxEditLength: 2_000,
+  timeout: 250,
+};
 
 export interface GetEditorStateParams {
   path: string;
@@ -50,13 +57,13 @@ function hash(content: string): string {
 async function readDisk(absolutePath: string): Promise<string | null> {
   try {
     const stat = await fs.stat(absolutePath);
-    if (!stat.isFile() || stat.size > MAX_CONTENT_BYTES) {
+    if (!stat.isFile() || stat.size > MAX_EDITOR_RECOVERY_BYTES) {
       throw new Error(
-        "Editor recovery requires a regular file no larger than 256 KiB. Review and save it in VS Code.",
+        "Editor recovery requires a regular file no larger than 8 MiB. Review and save it in VS Code.",
       );
     }
     const bytes = await fs.readFile(absolutePath);
-    if (bytes.length > MAX_CONTENT_BYTES)
+    if (bytes.length > MAX_EDITOR_RECOVERY_BYTES)
       throw new Error("File grew beyond the editor recovery limit");
     return bytes.toString("utf8");
   } catch (error) {
@@ -76,9 +83,9 @@ function findDocument(absolutePath: string): vscode.TextDocument | undefined {
 
 function bufferContent(document: vscode.TextDocument): string {
   const content = document.getText();
-  if (Buffer.byteLength(content) > MAX_CONTENT_BYTES) {
+  if (Buffer.byteLength(content) > MAX_EDITOR_RECOVERY_BYTES) {
     throw new Error(
-      "Editor recovery requires a buffer no larger than 256 KiB. Review and save it in VS Code.",
+      "Editor recovery requires a buffer no larger than 8 MiB. Review and save it in VS Code.",
     );
   }
   return content;
@@ -146,7 +153,7 @@ export async function handleGetEditorState(
         visibleEditor.content,
         "disk",
         "editor",
-        { context: 3 },
+        RECOVERY_DIFF_OPTIONS,
       );
       return jsonResult({
         path: getRelativePath(absolutePath),
@@ -162,8 +169,12 @@ export async function handleGetEditorState(
         content_truncated:
           content.length > MAX_PREVIEW_CHARS ||
           offset - 1 + limit < lines.length,
-        disk_to_editor_diff: diff.slice(0, MAX_PREVIEW_CHARS),
-        diff_truncated: diff.length > MAX_PREVIEW_CHARS,
+        ...(diff === undefined
+          ? { diff_omitted_reason: "computation_limit" }
+          : {
+              disk_to_editor_diff: diff.slice(0, MAX_PREVIEW_CHARS),
+              diff_truncated: diff.length > MAX_PREVIEW_CHARS,
+            }),
         redacted:
           visibleEditor.redactionCount > 0 ||
           visibleDisk.redactionCount > 0 ||
@@ -248,9 +259,15 @@ export async function handleSaveEditor(
         expected,
         "disk",
         "editor (save without formatting)",
-        { context: 3 },
+        RECOVERY_DIFF_OPTIONS,
       );
-      if (detail.length > MAX_PREVIEW_CHARS) {
+      if (detail === undefined) {
+        return errorResult(
+          "The complete save diff exceeded the computation limit. Review and save in VS Code.",
+          { reason: "editor_approval_diff_unavailable" },
+        );
+      }
+      if (detail.length + EXACT_SAVE_NOTICE.length + 2 > MAX_PREVIEW_CHARS) {
         return errorResult(
           "The complete save diff exceeds the approval limit. Review and save in VS Code.",
           { reason: "editor_approval_too_large" },
@@ -264,8 +281,8 @@ export async function handleSaveEditor(
       {
         kind: "write",
         id: randomUUID(),
-        title: `Save existing editor buffer for \`${getRelativePath(absolutePath)}\`?`,
-        detail,
+        title: `Save existing editor buffer for \`${getRelativePath(absolutePath)}\` without formatting?`,
+        detail: `${EXACT_SAVE_NOTICE}\n\n${detail}`,
         targetPath: absolutePath,
         writeChoices: [
           {

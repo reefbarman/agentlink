@@ -264,13 +264,22 @@ function isPathInGitRepository(filePath: string, repoRoot: string): boolean {
 
 // --- Diagnostics summary ---
 
-export function getDiagnosticsSummary(
-  filePath: string,
-): { errors: number; warnings: number } | undefined {
+export function getDiagnosticsSummary(filePath: string):
+  | {
+      errors: number;
+      warnings: number;
+      sourceFreshness: "unverified";
+      openDocumentDirty?: boolean;
+    }
+  | undefined {
   try {
     const uri = vscode.Uri.file(filePath);
     const diags = vscode.languages.getDiagnostics(uri);
-    if (diags.length === 0) return undefined;
+    const openDocument = vscode.workspace.textDocuments.find(
+      (document) =>
+        document.uri.scheme === "file" && document.uri.fsPath === filePath,
+    );
+    if (diags.length === 0 && !openDocument?.isDirty) return undefined;
 
     let errors = 0;
     let warnings = 0;
@@ -278,7 +287,12 @@ export function getDiagnosticsSummary(
       if (d.severity === vscode.DiagnosticSeverity.Error) errors++;
       else if (d.severity === vscode.DiagnosticSeverity.Warning) warnings++;
     }
-    return { errors, warnings };
+    return {
+      errors,
+      warnings,
+      sourceFreshness: "unverified",
+      ...(openDocument ? { openDocumentDirty: openDocument.isDirty } : {}),
+    };
   } catch {
     return undefined;
   }
@@ -1049,7 +1063,24 @@ async function handleReadFileImpl(
 
     // Diagnostics — check after symbols so the language server has analyzed the file
     const diagSummary = enrichmentProvider.getDiagnosticsSummary(filePath);
-    if (diagSummary) result.diagnostics = diagSummary;
+    if (diagSummary) {
+      result.diagnostics = {
+        errors: diagSummary.errors,
+        warnings: diagSummary.warnings,
+        note: "Cached language-service counts; source freshness is unverified and counts are not tied to a specific document version.",
+        ...(diagSummary.openDocumentDirty !== undefined
+          ? {
+              open_document_dirty: diagSummary.openDocumentDirty,
+              ...(diagSummary.openDocumentDirty
+                ? {
+                    buffer_note:
+                      "The matching file-backed editor is dirty, so its buffer may differ from the disk text returned here.",
+                  }
+                : {}),
+            }
+          : {}),
+      };
+    }
 
     // Content last so metadata is visible at the top
     result.content = numbered;

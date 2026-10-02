@@ -40,6 +40,33 @@ export function hasBrowserGatewayMcpSecretWrite(server: unknown): boolean {
   );
 }
 
+/** Remote edits must not carry stored credentials to a different endpoint. */
+export function hasBrowserGatewayMcpCredentialRedirect(
+  server: unknown,
+  existing: {
+    type?: string;
+    url?: string;
+    env?: Record<string, string>;
+    headers?: Record<string, string>;
+  },
+): boolean {
+  if (!server || typeof server !== "object" || Array.isArray(server))
+    return false;
+  if (
+    !Object.keys(existing.env ?? {}).length &&
+    !Object.keys(existing.headers ?? {}).length
+  ) {
+    return false;
+  }
+  const draft = server as { type?: string; url?: string };
+  const transport = (type?: string) =>
+    type === "streamable-http" ? "http" : (type ?? "stdio");
+  return (
+    draft.url !== existing.url ||
+    transport(draft.type) !== transport(existing.type)
+  );
+}
+
 export function applyBrowserGatewayMcpClientCapabilities(
   value: unknown,
   origin: BrowserGatewayClientOrigin,

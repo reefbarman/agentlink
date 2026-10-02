@@ -259,6 +259,43 @@ export function discoverNativeTools(
   });
 }
 
+export function getNativeToolRequestGuidance(
+  snapshot: NativeToolDisclosureSnapshot | undefined,
+  name: string,
+  modeAllowedToolNames?: ReadonlySet<string>,
+  skillAllowedToolNames?: ReadonlySet<string>,
+): string {
+  if (!snapshot) {
+    return `No immutable tool inventory was captured for this provider request, so availability cannot be inferred. Do not retry through another route; hand control back to the foreground/user to clarify the current restriction.`;
+  }
+
+  const skillAllowsTool =
+    !skillAllowedToolNames || skillAllowedToolNames.has(name);
+  const directlyAvailable =
+    skillAllowsTool && snapshot.inlineTools.some((tool) => tool.name === name);
+  const deferredAvailable =
+    skillAllowsTool &&
+    snapshot.deferredTools.some((tool) => tool.name === name);
+  const dormant = skillAllowsTool && snapshot.dormantToolNames.includes(name);
+  if (
+    (directlyAvailable || deferredAvailable || dormant) &&
+    modeAllowedToolNames &&
+    !modeAllowedToolNames.has(name)
+  ) {
+    return `The current mode does not allow '${name}'. Changing mode will not override active skill, profile, or surface restrictions; hand control back to the foreground/user if the restriction needs to change.`;
+  }
+  if (directlyAvailable) {
+    return `'${name}' is directly available in this provider request. Call it by its own name, not through call_native_tool.`;
+  }
+  if (deferredAvailable) {
+    return `'${name}' is deferred in this provider request. Discover it with find_native_tools, then invoke it through call_native_tool.`;
+  }
+  if (dormant) {
+    return `'${name}' is intentionally dormant and is not callable in this runtime. Hand control back to the foreground/user; changing mode will not enable it.`;
+  }
+  return `'${name}' is excluded from this provider request${skillAllowsTool ? "" : " by the active skill allowance"}. Do not retry via another route or assume a mode change will fix skill, profile, or surface restrictions. Use an authorized alternative or hand control back to the foreground/user.`;
+}
+
 export function getDeferredNativeTool(
   snapshot: NativeToolDisclosureSnapshot,
   name: string,

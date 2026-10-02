@@ -166,6 +166,7 @@ function makeDocument(filePath: string, content: string) {
   return {
     uri: { scheme: "file", fsPath: filePath },
     languageId: "typescript",
+    isDirty: false,
     lineCount: lines.length,
     lineAt: (line: number) => ({ text: lines[line] ?? "" }),
   };
@@ -898,8 +899,62 @@ describe("handleGetContext", () => {
         languageId: "typescript",
         hostDocument: { uri: document.uri, document },
       }),
-    ).toEqual({ errors: 1, warnings: 2 });
+    ).toMatchObject({
+      errors: 1,
+      warnings: 2,
+      open_document_dirty: false,
+      note: expect.stringContaining("source freshness is unverified"),
+    });
   });
+
+  it.each([true, false])(
+    "forwards cached diagnostics and dirty-buffer context through a disk context read (errors=%s)",
+    async (hasErrors) => {
+      const workspace = makeTempWorkspace();
+      const filePath = path.join(workspace, "example.ts");
+      const diskText = "const value = 1;\n";
+      fs.writeFileSync(filePath, diskText);
+      const editorDocument = {
+        ...makeDocument(filePath, "unsaved editor text"),
+        isDirty: true,
+      };
+      const providers = makeProviders(filePath, "example.ts", diskText);
+      providers.documentProvider.resolveDocument = async () => ({
+        absolutePath: filePath,
+        relPath: "example.ts",
+        languageId: "typescript",
+        hostDocument: { uri: editorDocument.uri, document: editorDocument },
+      });
+      vscodeMock.getDiagnostics.mockReturnValue(
+        hasErrors ? [{ severity: 0 }] : [],
+      );
+      const { getContextDiagnosticsSummary, handleGetContext } =
+        await import("./getContext.js");
+      providers.enrichmentProvider.getDiagnosticsSummary =
+        getContextDiagnosticsSummary;
+      const result = JSON.parse(
+        getText(
+          await handleGetContext(
+            { path: "example.ts", include_symbols: false },
+            "dirty-diagnostics",
+            providers,
+          ),
+        ),
+      );
+      expect(result.content).toContain("1 | const value = 1;");
+      expect(result.diagnostics).toMatchObject({
+        errors: hasErrors ? 1 : 0,
+        warnings: 0,
+        open_document_dirty: true,
+        note: expect.stringContaining(
+          "not tied to a specific document version",
+        ),
+        buffer_note: expect.stringContaining("may differ from the disk text"),
+      });
+      expect(fs.readFileSync(filePath, "utf8")).toBe(diskText);
+      expect(editorDocument.isDirty).toBe(true);
+    },
+  );
 
   it("groups constructor symbols without colliding with Object.prototype", async () => {
     const workspace = makeTempWorkspace();

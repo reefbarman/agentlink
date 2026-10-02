@@ -4,6 +4,7 @@ import {
   type DesktopBridge,
   type DesktopQuickAskSubmission,
   type DesktopRemoteState,
+  type DesktopMcpManagerOpenRequest,
 } from "../../../src/shared/desktopBridge.js";
 import { contextBridge, ipcRenderer } from "electron";
 
@@ -54,6 +55,33 @@ if (process.isMainFrame) {
       return () =>
         ipcRenderer.removeListener("agentlink:quick-ask:shown", handler);
     },
+    openMcpManager: (request) => {
+      ipcRenderer.send("agentlink:mcp-manager:open", request);
+    },
+    onMcpManagerOpen: (listener) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        request: unknown,
+      ): void => {
+        if (
+          request &&
+          typeof request === "object" &&
+          ((request as DesktopMcpManagerOpenRequest).view === "status" ||
+            (request as DesktopMcpManagerOpenRequest).view === "config") &&
+          ((request as DesktopMcpManagerOpenRequest).action === "open" ||
+            (request as DesktopMcpManagerOpenRequest).action === "refresh")
+        ) {
+          listener(request as DesktopMcpManagerOpenRequest);
+        }
+      };
+      ipcRenderer.on("agentlink:mcp-manager:open", handler);
+      return () =>
+        ipcRenderer.removeListener("agentlink:mcp-manager:open", handler);
+    },
+    openMcpConfig: (scope) =>
+      ipcRenderer.invoke("agentlink:mcp-manager:open-config", scope),
+    setMcpOperation: (operationId) =>
+      ipcRenderer.send("agentlink:mcp-manager:operation", operationId),
     onQuickAskSubmission: (listener) => {
       let active = true;
       // Submissions queue in the main process, so a window that subscribes

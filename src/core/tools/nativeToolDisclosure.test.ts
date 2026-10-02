@@ -3,6 +3,7 @@ import {
   createNativeToolDisclosureSnapshot,
   discoverNativeTools,
   getDeferredNativeTool,
+  getNativeToolRequestGuidance,
 } from "./nativeToolDisclosure.js";
 import { describe, expect, it } from "vitest";
 
@@ -25,6 +26,36 @@ function definition(
 }
 
 describe("native tool disclosure snapshots", () => {
+  it("gives route-specific guidance only from the captured request and allowance", () => {
+    const snapshot = createNativeToolDisclosureSnapshot([
+      definition("read_file"),
+      definition("get_call_hierarchy"),
+      definition("show_notification"),
+    ]);
+
+    expect(getNativeToolRequestGuidance(snapshot, "read_file")).toContain(
+      "directly available",
+    );
+    expect(
+      getNativeToolRequestGuidance(snapshot, "get_call_hierarchy"),
+    ).toContain("deferred");
+    expect(
+      getNativeToolRequestGuidance(snapshot, "show_notification"),
+    ).toContain("intentionally dormant");
+    expect(getNativeToolRequestGuidance(snapshot, "write_file")).toContain(
+      "excluded from this provider request",
+    );
+    expect(
+      getNativeToolRequestGuidance(snapshot, "get_call_hierarchy", new Set()),
+    ).toContain("current mode does not allow");
+    expect(
+      getNativeToolRequestGuidance(snapshot, "read_file", undefined, new Set()),
+    ).toContain("active skill allowance");
+    expect(getNativeToolRequestGuidance(undefined, "read_file")).toContain(
+      "cannot be inferred",
+    );
+  });
+
   it("partitions canonical tools without changing source order", () => {
     const dynamicMcp = definition("demo__search");
     const snapshot = createNativeToolDisclosureSnapshot([

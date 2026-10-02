@@ -8,6 +8,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  shell,
   Tray,
   type MenuItemConstructorOptions,
   type WebContents,
@@ -38,8 +39,14 @@ import {
   QUICK_ASK_PANEL_WIDTH,
 } from "./DesktopQuickAsk.js";
 import { DesktopRemoteView } from "./DesktopRemoteView.js";
+import {
+  DesktopMcpWindow,
+  isDesktopMcpManagerOpenRequest,
+  isDesktopMcpConfigScope,
+} from "./DesktopMcpWindow.js";
 import { openExternalLink } from "./desktopExternalLinks.js";
 import { resolveDesktopMcpPath } from "./desktopMcpPath.js";
+import { getAskAgentMcpConfigPaths } from "../../../src/agent/mcpConfig.js";
 
 declare const __AGENTLINK_HOST_VERSION__: string;
 
@@ -66,6 +73,12 @@ const preferencesPath = path.join(
   app.getPath("userData"),
   "desktop-preferences.json",
 );
+const mcpManagerWindow = new DesktopMcpWindow({
+  getDiscovery: () => discovery,
+  getPreloadPath: () => getDesktopAssetPath("chat-preload.cjs"),
+  onVisibilityChange: syncDockVisibility,
+  log,
+});
 const quickAsk = new DesktopQuickAsk({
   preferencesPath,
   createWindow: createQuickAskWindow,
@@ -307,7 +320,7 @@ function allowOnlyLocalService(
  * its regular windows is visible.
  */
 function syncDockVisibility(): void {
-  const visible = [chatWindow, setupWindow].some(
+  const visible = [chatWindow, setupWindow, mcpManagerWindow].some(
     (window) => window && !window.isDestroyed() && window.isVisible(),
   );
   if (visible) void app.dock?.show();
@@ -473,6 +486,15 @@ async function showSetupWindow(): Promise<void> {
   await setupWindow.loadFile(getDesktopAssetPath("setup.html"));
 }
 
+function openMcpManager(request: {
+  view: "status" | "config";
+  action: "open" | "refresh";
+}): void {
+  void mcpManagerWindow
+    .open(request)
+    .catch((error) => log(`MCP manager window failed: ${String(error)}`));
+}
+
 function openSettings(): void {
   void showSetupWindow().catch((error) =>
     log(`settings window failed: ${String(error)}`),
@@ -618,6 +640,47 @@ function registerCredentialIpc(): void {
     if (typeof value !== "boolean") throw new Error("invalid_open_at_login");
     return await setOpenAtLogin(app, preferencesPath, value);
   });
+  ipcMain.on("agentlink:mcp-manager:open", (event, request) => {
+    if (
+      !chatWindow ||
+      event.sender.id !== chatWindow.webContents.id ||
+      event.senderFrame !== event.sender.mainFrame ||
+      !isDesktopMcpManagerOpenRequest(request)
+    ) {
+      return;
+    }
+    openMcpManager(request);
+  });
+  ipcMain.handle("agentlink:mcp-manager:open-config", async (event, scope) => {
+    if (
+      !mcpManagerWindow.ownsSender(event.sender) ||
+      event.senderFrame !== event.sender.mainFrame ||
+      !isDesktopMcpConfigScope(scope)
+    ) {
+      throw new Error("unauthorized_desktop_ipc_sender");
+    }
+    const configPath = path.join(
+      app.getPath("home"),
+      ".agentlink",
+      ...(scope === "ask-agent-global" ? ["ask-agent"] : []),
+      "mcp.json",
+    );
+    if (!getAskAgentMcpConfigPaths().includes(configPath)) {
+      throw new Error("desktop_mcp_config_path_unavailable");
+    }
+    const openError = await shell.openPath(configPath);
+    if (openError) throw new Error(openError);
+    return { ok: true };
+  });
+  ipcMain.on("agentlink:mcp-manager:operation", (event, operationId) => {
+    if (
+      !mcpManagerWindow.ownsSender(event.sender) ||
+      event.senderFrame !== event.sender.mainFrame
+    ) {
+      return;
+    }
+    mcpManagerWindow.setOperation(operationId);
+  });
   ipcMain.on("agentlink:open-settings", (event) => {
     if (chatWindow && event.sender.id === chatWindow.webContents.id) {
       openSettings();
@@ -637,6 +700,10 @@ function installApplicationMenu(): void {
             label: "Settings…",
             accelerator: "Command+,",
             click: openSettings,
+          },
+          {
+            label: "MCP Servers…",
+            click: () => openMcpManager({ view: "status", action: "open" }),
           },
           { type: "separator" },
           quickAskMenuItem(),

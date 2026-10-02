@@ -12,6 +12,7 @@ const {
   diffSaveChanges,
   diffRevertChanges,
   diffGetEditedContent,
+  diffDispose,
   onDidChangeTabs,
   tabs,
 } = vi.hoisted(() => ({
@@ -22,6 +23,7 @@ const {
   diffSaveChanges: vi.fn(),
   diffRevertChanges: vi.fn(),
   diffGetEditedContent: vi.fn(),
+  diffDispose: vi.fn(),
   onDidChangeTabs: vi.fn(),
   tabs: [] as unknown[],
 }));
@@ -62,6 +64,7 @@ vi.mock("../integrations/DiffViewProvider.js", () => ({
       saveChanges: diffSaveChanges,
       revertChanges: diffRevertChanges,
       getEditedContent: diffGetEditedContent,
+      dispose: diffDispose,
     };
   }),
 }));
@@ -1122,6 +1125,7 @@ describe("handleProposeMemory", () => {
       });
       expect(text(result)).not.toHaveProperty("finalContent");
       expect(diffRevertChanges).not.toHaveBeenCalled();
+      expect(diffDispose).toHaveBeenCalledOnce();
     },
   );
 
@@ -1150,5 +1154,6 @@ describe("handleProposeMemory", () => {
     expect(text(result)).toMatchObject({ status: "error" });
     expect(text(result)).not.toHaveProperty("finalContent");
     expect(diffRevertChanges).not.toHaveBeenCalled();
+    expect(diffDispose).toHaveBeenCalledOnce();
   });
 });

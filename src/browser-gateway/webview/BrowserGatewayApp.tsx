@@ -56,6 +56,7 @@ import { DesktopRemotePane } from "./DesktopRemotePane";
 import type {
   DesktopMode,
   DesktopQuickAskSubmission,
+  DesktopMcpManagerOpenRequest,
 } from "../../shared/desktopBridge";
 import { DesktopMoreActions } from "./DesktopMoreActions";
 import { LiveLinkIndicator } from "../../agent/webview/components/LiveLinkIndicator";
@@ -6346,16 +6347,21 @@ export function BrowserGatewayApp({
       const body = (await response.json()) as {
         ok?: boolean;
         error?: string;
+        message?: string;
         snapshot?: GatewaySnapshot;
       };
       if (!relayClientEnabled && body.ok && body.snapshot) {
         commitSnapshot(body.snapshot, origin.tabId, origin.generation);
       }
-      if (!body.ok && selectedTabIdRef.current === origin.tabId) {
-        setLocalDismissedApprovalId(null);
-        setModeStatus(
-          `Approval action failed: ${body.error ?? response.status}`,
-        );
+      if (selectedTabIdRef.current === origin.tabId) {
+        if (!body.ok) {
+          setLocalDismissedApprovalId(null);
+          setModeStatus(
+            `Approval action failed: ${body.message ?? body.error ?? response.status}`,
+          );
+        } else if (body.message) {
+          setModeStatus(body.message);
+        }
       }
     })();
   };
@@ -6800,18 +6806,26 @@ export function BrowserGatewayApp({
         );
         break;
       case "mcp":
-        setShowMcpStatus(true);
-        void refreshAskAgentMcpStatus({ view: "status" });
-        break;
-      case "mcp-config": {
-        setShowMcpStatus(true);
-        void refreshAskAgentMcpStatus({ view: "config" });
+      case "mcp-config":
+      case "mcp-refresh": {
+        if (desktopShell?.openMcpManager) {
+          const request: DesktopMcpManagerOpenRequest = {
+            view: name === "mcp-config" ? "config" : "status",
+            action: name === "mcp-refresh" ? "refresh" : "open",
+          };
+          desktopShell.openMcpManager(request);
+        } else if (name === "mcp") {
+          setShowMcpStatus(true);
+          void refreshAskAgentMcpStatus({ view: "status" });
+        } else if (name === "mcp-config") {
+          setShowMcpStatus(true);
+          void refreshAskAgentMcpStatus({ view: "config" });
+        } else {
+          setShowMcpStatus(true);
+          void refreshAskAgentMcpStatus({ reconnect: true });
+        }
         break;
       }
-      case "mcp-refresh":
-        setShowMcpStatus(true);
-        void refreshAskAgentMcpStatus({ reconnect: true });
-        break;
       case "plugin":
       case "plugins":
         setModeStatus(
@@ -7978,6 +7992,22 @@ export function BrowserGatewayApp({
                 </button>
               )}
               <DesktopMoreActions>
+                {!quickAsk && desktopShell?.openMcpManager && (
+                  <button
+                    class="desktop-more-item"
+                    type="button"
+                    title="MCP"
+                    onClick={() =>
+                      desktopShell.openMcpManager?.({
+                        view: "status",
+                        action: "open",
+                      })
+                    }
+                  >
+                    <i class="codicon codicon-plug" aria-hidden="true" />
+                    MCP
+                  </button>
+                )}
                 <button
                   class={`desktop-more-item${showAskAgentMemory ? " active" : ""}`}
                   type="button"

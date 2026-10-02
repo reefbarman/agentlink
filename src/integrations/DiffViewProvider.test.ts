@@ -539,9 +539,16 @@ describe("snapshotDiagnostics", () => {
   function undiagnosedTarget() {
     const uri = vscode.Uri.file("/workspace/fresh.yaml");
     let text = "before\nuntouched";
+    let version = 1;
     let errors: vscode.Diagnostic[] = [];
     const listeners = new Set<(event: vscode.DiagnosticChangeEvent) => void>();
-    const document = { uri, getText: () => text } as vscode.TextDocument;
+    const document = {
+      uri,
+      getText: () => text,
+      get version() {
+        return version;
+      },
+    } as vscode.TextDocument;
     (vscode.workspace.textDocuments as vscode.TextDocument[]).push(document);
     vi.spyOn(vscode.languages, "getDiagnostics").mockImplementation(((
       target?: vscode.Uri,
@@ -561,6 +568,19 @@ describe("snapshotDiagnostics", () => {
       snapshot: snapshotDiagnostics(uri.fsPath),
       setText(value: string) {
         text = value;
+      },
+      setVersion(value: number) {
+        version = value;
+      },
+      cache(entries: Array<{ line: number; message: string }>) {
+        errors = entries.map(
+          ({ line, message }) =>
+            ({
+              range: { start: { line } },
+              message,
+              severity: vscode.DiagnosticSeverity.Error,
+            }) as vscode.Diagnostic,
+        );
       },
       diagnose(entries: Array<{ line: number; message: string }>) {
         errors = entries.map(
@@ -589,12 +609,12 @@ describe("snapshotDiagnostics", () => {
       { line: 0, message: "pre-existing template error" },
       { line: 0, message: "genuine new error" },
     ]);
-    const collecting = target.snapshot.collectNewErrors(25);
-    await vi.advanceTimersByTimeAsync(25);
+    const collecting = target.snapshot.collectNewErrors(500);
+    await vi.advanceTimersByTimeAsync(500);
     const result = await collecting;
     expect(result).toContain("genuine new error");
     expect(result).not.toContain("pre-existing template error");
-    expect(result).not.toContain("not confirmed");
+    expect(result).toContain("Observed language-service error sample");
     expect(target.listeners.size).toBe(0);
   });
 
@@ -620,9 +640,12 @@ describe("snapshotDiagnostics", () => {
         { line: 0, message: "genuine new error" },
         { line: 1, message: "pre-existing semantic error" },
       ]);
-      const collecting = target.snapshot.collectNewErrors(25);
-      await vi.advanceTimersByTimeAsync(25);
-      expect(await collecting).toBe("Line 1: genuine new error");
+      const collecting = target.snapshot.collectNewErrors(500);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(await collecting).toContain(
+        "Observed language-service error sample",
+      );
+      expect(await collecting).toContain("Line 1: genuine new error");
     },
   );
 
@@ -657,9 +680,90 @@ describe("snapshotDiagnostics", () => {
     await settling;
     target.setText("after\nuntouched");
     target.diagnose([{ line: 1, message: "new downstream error" }]);
-    const collecting = target.snapshot.collectNewErrors(25);
+    const collecting = target.snapshot.collectNewErrors(500);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await collecting).toContain(
+      "Observed language-service error sample",
+    );
+    expect(await collecting).toContain("Line 2: new downstream error");
+  });
+
+  it("qualifies samples after a save-time document version change", async () => {
+    vi.useFakeTimers();
+    const target = undiagnosedTarget();
+    const settling = target.snapshot.settleBaseline(25);
     await vi.advanceTimersByTimeAsync(25);
-    expect(await collecting).toBe("Line 2: new downstream error");
+    await settling;
+    target.snapshot.beginPostChangeObservation();
+    target.setText("after\nuntouched");
+    target.setVersion(2);
+    target.snapshot.recordPostChangeDocumentVersion();
+    target.diagnose([{ line: 0, message: "sample before save transform" }]);
+    const collecting = target.snapshot.collectNewErrors(500);
+    await vi.advanceTimersByTimeAsync(100);
+    target.setVersion(3);
+    await vi.advanceTimersByTimeAsync(400);
+    const result = await collecting;
+    expect(result).toContain("source version is unconfirmed");
+    expect(result).toContain("sample before save transform");
+    target.snapshot.dispose();
+  });
+
+  it("uses the final empty sample when an error update clears during debounce", async () => {
+    vi.useFakeTimers();
+    const target = undiagnosedTarget();
+    const settling = target.snapshot.settleBaseline(25);
+    await vi.advanceTimersByTimeAsync(25);
+    await settling;
+    target.snapshot.beginPostChangeObservation();
+    target.setText("after\nuntouched");
+    target.diagnose([{ line: 0, message: "intermediate error" }]);
+    const collecting = target.snapshot.collectNewErrors(100);
+    await vi.advanceTimersByTimeAsync(50);
+    target.diagnose([]);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await collecting).toBeUndefined();
+    target.snapshot.dispose();
+  });
+
+  it("keeps a clean edit quiet when no post-change diagnostic event arrives", async () => {
+    vi.useFakeTimers();
+    const target = undiagnosedTarget();
+    const settling = target.snapshot.settleBaseline(25);
+    await vi.advanceTimersByTimeAsync(25);
+    await settling;
+    target.snapshot.beginPostChangeObservation();
+    target.setText("after\nuntouched");
+    const collecting = target.snapshot.collectNewErrors(
+      500,
+      "before\nuntouched",
+    );
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await collecting).toBeUndefined();
+    target.snapshot.dispose();
+    expect(target.listeners.size).toBe(0);
+  });
+
+  it("qualifies cached errors when no post-change diagnostic event arrives", async () => {
+    vi.useFakeTimers();
+    const target = undiagnosedTarget();
+    const settling = target.snapshot.settleBaseline(25);
+    await vi.advanceTimersByTimeAsync(25);
+    await settling;
+    target.snapshot.beginPostChangeObservation();
+    target.setText("after\nuntouched");
+    target.cache([{ line: 0, message: "cached old error" }]);
+    const collecting = target.snapshot.collectNewErrors(
+      25,
+      "before\nuntouched",
+    );
+    await vi.advanceTimersByTimeAsync(25);
+    const result = await collecting;
+    expect(result).toContain("source version is unconfirmed");
+    expect(result).toContain("cached old error");
+    expect(result).toContain("not confirmed as introduced");
+    target.snapshot.dispose();
+    expect(target.listeners.size).toBe(0);
   });
 
   it("reports introduced target errors but excludes unrelated workspace and external errors", async () => {

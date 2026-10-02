@@ -46,6 +46,7 @@ import {
   buildBrowserGatewayHelperTrustHeaders,
   classifyBrowserGatewayClientOrigin,
   hasBrowserGatewayMcpSecretWrite,
+  hasBrowserGatewayMcpCredentialRedirect,
 } from "../browserGatewayRequestTrust.js";
 import {
   AskAgentController,
@@ -90,7 +91,11 @@ import {
 } from "../protocol.js";
 import type { BrowserGatewayThemeSnapshot } from "@agentlink/protocol/browser-gateway-theme";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
-import type { McpConfigSnapshot } from "@agentlink/protocol/mcp-manager";
+import type {
+  McpConfigBatchMutation,
+  McpConfigMutationResult,
+  McpConfigSnapshot,
+} from "@agentlink/protocol/mcp-manager";
 import type {
   McpFormElicitationInput,
   McpFormElicitationResponse,
@@ -99,7 +104,11 @@ import {
   buildMcpConfigEntries,
   buildMcpConfigRevision,
   getMcpConfigSources,
+  getAskAgentMcpConfigPaths,
+  loadAskAgentMcpConfigs,
+  mutateMcpConfigBatch,
 } from "../../agent/mcpConfig.js";
+import { persistStandaloneMcpGlobalApproval } from "./standaloneMcpApprovalPolicy.js";
 import {
   getStructuredSecretRedactionMetadata,
   isStructuredConfigPath,
@@ -342,6 +351,7 @@ import {
   type StandaloneAskAgentMcpTurn,
 } from "./StandaloneAskAgentMcpRuntime.js";
 import { StandaloneMcpOAuthRuntime } from "./StandaloneMcpOAuthRuntime.js";
+import { StandaloneMcpManagerOperations } from "./StandaloneMcpManagerOperations.js";
 import { renderMcpOAuthCallbackPage } from "../../shared/mcpOAuthCallbackPage.js";
 
 export interface PreparedAskAgentWebAccess {
@@ -1025,6 +1035,41 @@ export class BrowserGatewayHelper {
   private readonly standaloneMcpRuntime:
     | StandaloneAskAgentMcpRuntime
     | undefined;
+  private readonly standaloneMcpManagerOperations =
+    new StandaloneMcpManagerOperations({
+      canStart: () =>
+        !this.shuttingDown &&
+        !this.hasAskAgentWork() &&
+        !this.askAgentController.getPendingApproval(),
+      connect: (serverName, signal, reconnect) => {
+        if (!this.standaloneMcpRuntime)
+          throw new Error("standalone_mcp_unavailable");
+        return this.standaloneMcpRuntime.connectServer(
+          serverName,
+          signal,
+          reconnect,
+        );
+      },
+      reauthenticate: (serverName, confirm, signal) => {
+        if (!this.standaloneMcpRuntime)
+          throw new Error("standalone_mcp_unavailable");
+        return this.standaloneMcpRuntime.reauthenticateServer(
+          serverName,
+          confirm,
+          signal,
+        );
+      },
+      onSettled: () => {
+        if (!this.shuttingDown) void this.drainAskAgentMessageQueue();
+      },
+    });
+  private readonly standaloneMcpWatchedPaths = new Set<string>();
+  private standaloneMcpConfigDebounce: NodeJS.Timeout | undefined;
+  private standaloneMcpConfigMutationQueue: Promise<void> = Promise.resolve();
+  private standaloneMcpTurnOwner:
+    | { sessionId: string; turnId: string }
+    | undefined;
+  private standaloneMcpLegacyReauth: AbortController | undefined;
 
   private readonly askAgentConversationStates = new Map<
     string,
@@ -1066,6 +1111,7 @@ export class BrowserGatewayHelper {
     string,
     string
   >();
+  private readonly standaloneMcpPolicyApprovalsInFlight = new Set<string>();
   private readonly standaloneMcpApprovedToolsBySession = new Map<
     string,
     Set<string>
@@ -1135,6 +1181,12 @@ export class BrowserGatewayHelper {
       askAgentHistoryStore?: BrowserGatewayAskAgentHistoryStore;
       standaloneMcpRuntime?: StandaloneAskAgentMcpRuntime;
       standaloneMcpOAuthRuntime?: StandaloneMcpOAuthRuntime;
+      createStandaloneMcpRuntime?: (
+        options: ConstructorParameters<typeof StandaloneAskAgentMcpRuntime>[0],
+      ) => StandaloneAskAgentMcpRuntime;
+      createStandaloneMcpOAuthRuntime?: (
+        options: ConstructorParameters<typeof StandaloneMcpOAuthRuntime>[0],
+      ) => StandaloneMcpOAuthRuntime;
       streamingMetrics?: StreamingBaselineMetrics;
       beforeAskAgentSnapshotPublish?: (
         publication: AskAgentControllerPublication,
@@ -1260,7 +1312,10 @@ export class BrowserGatewayHelper {
     this.standaloneMcpOAuthRuntime =
       options.standaloneMcp && process.platform === "darwin"
         ? (injectables.standaloneMcpOAuthRuntime ??
-          new StandaloneMcpOAuthRuntime({
+          (
+            injectables.createStandaloneMcpOAuthRuntime ??
+            ((request) => new StandaloneMcpOAuthRuntime(request))
+          )({
             port: options.port,
             confirmAuthorization: (request) =>
               this.confirmStandaloneMcpOAuthAuthorization(request),
@@ -1268,12 +1323,19 @@ export class BrowserGatewayHelper {
         : undefined;
     this.standaloneMcpRuntime = options.standaloneMcp
       ? (injectables.standaloneMcpRuntime ??
-        new StandaloneAskAgentMcpRuntime({
+        (
+          injectables.createStandaloneMcpRuntime ??
+          ((request) => new StandaloneAskAgentMcpRuntime(request))
+        )({
           clientVersion: options.helperVersion,
           ...(this.standaloneMcpOAuthRuntime
             ? {
                 resolveOAuthProvider: (request) =>
                   this.standaloneMcpOAuthRuntime!.resolveOAuthProvider(request),
+                resolveConnectionOAuthProvider: (request) =>
+                  this.standaloneMcpOAuthRuntime!.resolveConnectionOAuthProvider(
+                    request,
+                  ),
               }
             : {}),
         }))
@@ -1544,6 +1606,7 @@ export class BrowserGatewayHelper {
       await this.closeStartupServers();
       throw error;
     }
+    this.startStandaloneMcp();
     this.discoveryHeartbeatTimer = setInterval(() => {
       void this.writeDiscovery().catch((error) => {
         logHelper(`discovery heartbeat failed: ${String(error)}`);
@@ -1704,6 +1767,8 @@ export class BrowserGatewayHelper {
         return this.handleAskAgentMcpRefreshRequest(req, res);
       case "mcpReauthenticate":
         return this.handleAskAgentMcpReauthenticateRequest(req, res);
+      case "mcpManagerOperation":
+        return this.handleStandaloneMcpManagerOperation(req, res);
       case "question":
         return this.handleAskAgentQuestionResponseRequest(req, res);
       case "questionProgress":
@@ -1969,6 +2034,8 @@ export class BrowserGatewayHelper {
     res: http.ServerResponse,
   ): Promise<void> {
     switch (handler) {
+      case "desktopMcpManagerCancel":
+        return this.handleStandaloneMcpManagerCancel(req, res);
       case "clientLease":
         return this.handleLeaseRequest(req, res);
       case "clientRelease":
@@ -2449,7 +2516,7 @@ export class BrowserGatewayHelper {
         writeJson(res, 409, { error: "credential_missing" });
         return;
       }
-      if (this.askAgentController.hasActiveTurn()) {
+      if (this.hasAskAgentWork()) {
         this.logAskAgentEvent("ask-agent.question.response", {
           id,
           ok: false,
@@ -2551,7 +2618,7 @@ export class BrowserGatewayHelper {
 
       let response: ReturnType<typeof this.buildAskAgentSnapshotResponse>;
       let sendOutcome = "model_success";
-      activeTurn = this.askAgentController.beginTurn(answerResult.messageId);
+      activeTurn = this.beginAskAgentTurn(answerResult.messageId);
       if (!activeTurn) throw new Error("ask_agent_turn_in_progress");
       try {
         const transcriptMessages =
@@ -4004,38 +4071,360 @@ export class BrowserGatewayHelper {
     }
   }
 
+  private hasAskAgentWork(): boolean {
+    return (
+      this.askAgentController.hasActiveTurn() ||
+      this.standaloneMcpManagerOperations.isRunning() ||
+      Boolean(this.standaloneMcpLegacyReauth)
+    );
+  }
+
+  private beginAskAgentTurn(messageId: string): AskAgentControllerTurn | null {
+    return this.standaloneMcpManagerOperations.isRunning() ||
+      this.standaloneMcpLegacyReauth
+      ? null
+      : this.askAgentController.beginTurn(messageId);
+  }
+
+  private startStandaloneMcp(): void {
+    if (!this.standaloneMcpRuntime) return;
+    void this.standaloneMcpRuntime
+      .start?.()
+      .catch((error: unknown) =>
+        logHelper(`Desktop MCP startup failed: ${String(error)}`),
+      );
+    for (const file of getAskAgentMcpConfigPaths()) {
+      this.standaloneMcpWatchedPaths.add(file);
+      fsSync.watchFile(file, { persistent: false, interval: 1_000 }, () => {
+        if (this.shuttingDown) return;
+        if (this.standaloneMcpConfigDebounce)
+          clearTimeout(this.standaloneMcpConfigDebounce);
+        this.standaloneMcpConfigDebounce = setTimeout(() => {
+          this.standaloneMcpConfigDebounce = undefined;
+          void this.standaloneMcpRuntime
+            ?.refresh?.()
+            .catch((error: unknown) =>
+              logHelper(
+                `Desktop MCP configuration refresh failed: ${String(error)}`,
+              ),
+            );
+        }, 100);
+        this.standaloneMcpConfigDebounce.unref();
+      });
+    }
+  }
+
+  private async handleStandaloneMcpManagerCancel(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    try {
+      const body = (await readJsonBody(req)) as {
+        operationId?: unknown;
+      } | null;
+      if (
+        !this.standaloneMcpRuntime ||
+        typeof body?.operationId !== "string" ||
+        !/^[A-Za-z0-9_-]{8,80}$/.test(body.operationId)
+      ) {
+        writeJson(res, 400, { ok: false, error: "invalid_mcp_operation" });
+        return;
+      }
+      writeJson(res, 200, {
+        ok: true,
+        cancelled: this.standaloneMcpManagerOperations.cancel(body.operationId),
+      });
+    } catch {
+      writeJson(res, 400, { ok: false, error: "invalid_json" });
+    }
+  }
+
+  private async handleStandaloneMcpManagerOperation(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (
+      !this.standaloneMcpRuntime ||
+      classifyBrowserGatewayClientOrigin(req.socket.remoteAddress) !==
+        "loopback"
+    ) {
+      writeJson(res, 403, { ok: false, error: "standalone_mcp_unavailable" });
+      return;
+    }
+    try {
+      if (req.method === "GET") {
+        const operationId =
+          new URL(req.url ?? "/", "http://localhost").searchParams.get(
+            "operationId",
+          ) ?? "";
+        const operation = this.standaloneMcpManagerOperations.get(operationId);
+        writeJson(res, operation ? 200 : 404, {
+          ok: Boolean(operation),
+          ...(operation ? { operation } : { error: "mcp_operation_not_found" }),
+        });
+        return;
+      }
+      const body = (await readJsonBody(req)) as {
+        operationId?: unknown;
+        action?: unknown;
+        serverName?: unknown;
+        mode?: unknown;
+        approvalId?: unknown;
+        decision?: unknown;
+      } | null;
+      if (
+        typeof body?.operationId !== "string" ||
+        !/^[A-Za-z0-9_-]{8,80}$/.test(body.operationId)
+      ) {
+        writeJson(res, 400, { ok: false, error: "invalid_mcp_operation" });
+        return;
+      }
+      if (body.action === "start") {
+        if (
+          typeof body.serverName !== "string" ||
+          !/^[A-Za-z][A-Za-z0-9_-]{0,40}$/.test(body.serverName) ||
+          (body.mode !== undefined &&
+            body.mode !== "connect" &&
+            body.mode !== "reconnect" &&
+            body.mode !== "reauthenticate")
+        ) {
+          writeJson(res, 400, {
+            ok: false,
+            error: "invalid_mcp_server_action",
+          });
+          return;
+        }
+        this.standaloneMcpManagerOperations.start(
+          body.operationId,
+          body.serverName,
+          body.mode ?? "reauthenticate",
+        );
+        writeJson(res, 200, { ok: true });
+      } else if (
+        body.action === "approve" &&
+        typeof body.approvalId === "string" &&
+        (body.decision === "allow-once" || body.decision === "deny")
+      ) {
+        const ok = this.standaloneMcpManagerOperations.respond(
+          body.operationId,
+          body.approvalId,
+          body.decision === "allow-once",
+        );
+        writeJson(res, ok ? 200 : 409, {
+          ok,
+          ...(ok ? {} : { error: "mcp_approval_not_pending" }),
+        });
+      } else if (body.action === "cancel") {
+        writeJson(res, 200, {
+          ok: true,
+          cancelled: this.standaloneMcpManagerOperations.cancel(
+            body.operationId,
+          ),
+        });
+      } else {
+        writeJson(res, 400, {
+          ok: false,
+          error: "invalid_mcp_operation_action",
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "invalid_json";
+      writeJson(res, message === "desktop_mcp_busy" ? 409 : 400, {
+        ok: false,
+        error: message,
+      });
+    }
+  }
+
   private async buildStandaloneAskAgentMcpConfigSnapshot(): Promise<McpConfigSnapshot> {
     const [sources, entries] = await Promise.all([
       getMcpConfigSources("ask-agent"),
       buildMcpConfigEntries("ask-agent"),
     ]);
+    const liveStatuses = new Map(
+      (this.standaloneMcpRuntime?.getServerInfos?.() ?? []).map((info) => [
+        info.name,
+        info,
+      ]),
+    );
     return {
       profile: "ask-agent",
       version: 0,
       revision: buildMcpConfigRevision(sources),
       sources,
       entries,
-      statusInfos: entries.map((entry) => ({
-        name: entry.name,
-        status: entry.config.disabled ? "disabled" : "not_connected",
-        toolCount: 0,
-        resourceCount: 0,
-        promptCount: 0,
-        tools: [],
-      })),
+      statusInfos: entries.map((entry) =>
+        !entry.config.disabled && liveStatuses.has(entry.name)
+          ? liveStatuses.get(entry.name)!
+          : {
+              name: entry.name,
+              status: entry.config.disabled ? "disabled" : "not_connected",
+              toolCount: 0,
+              resourceCount: 0,
+              promptCount: 0,
+              tools: [],
+            },
+      ),
       capabilities: {
-        canEditConfig: false,
+        canEditConfig: true,
         canOpenRawConfig: false,
-        canReconnect: false,
+        canReconnect: true,
         canReauthenticate: Boolean(this.standaloneMcpOAuthRuntime),
-        canDisable: false,
+        canDisable: true,
         canUseProjectConfig: false,
-        canWriteSecrets: false,
-        canConfigureLocalProcess: false,
+        canWriteSecrets: true,
+        canConfigureLocalProcess: true,
       },
-      unavailableReason:
-        "Desktop MCP servers connect only for an active turn. OAuth opens the system browser when a remote server requires authorization. In-app configuration editing remains unavailable.",
     };
+  }
+
+  private async mutateStandaloneAskAgentMcpConfig(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const origin = classifyBrowserGatewayClientOrigin(req.socket.remoteAddress);
+    if (req.method !== "POST") {
+      writeJson(res, 405, { ok: false, error: "method_not_allowed" });
+      return;
+    }
+    try {
+      const parsed = (await readJsonBody(req)) as
+        | (Partial<McpConfigBatchMutation> & Record<string, unknown>)
+        | null;
+      if (
+        !parsed ||
+        parsed.profile !== "ask-agent" ||
+        parsed.scope !== "ask-agent-global" ||
+        typeof parsed.operationId !== "string" ||
+        !parsed.operationId.trim() ||
+        typeof parsed.expectedRevision !== "string" ||
+        !parsed.expectedRevision ||
+        !Array.isArray(parsed.operations) ||
+        parsed.operations.length === 0 ||
+        parsed.operations.some(
+          (operation) =>
+            !operation ||
+            typeof operation !== "object" ||
+            Array.isArray(operation) ||
+            (operation.kind === "upsert" &&
+              (!operation.server ||
+                typeof operation.server !== "object" ||
+                Array.isArray(operation.server))),
+        ) ||
+        "projectId" in parsed ||
+        ("target" in parsed &&
+          (!parsed.target ||
+            typeof parsed.target !== "object" ||
+            (parsed.target as { kind?: unknown }).kind !== "native" ||
+            (parsed.target as { profile?: unknown }).profile !== "ask-agent" ||
+            (parsed.target as { scope?: unknown }).scope !==
+              "ask-agent-global" ||
+            "projectId" in parsed.target ||
+            "installInstanceId" in parsed.target))
+      ) {
+        writeJson(res, 400, {
+          ok: false,
+          error: "invalid_mcp_config_mutation",
+        });
+        return;
+      }
+      const operations =
+        parsed.operations as McpConfigBatchMutation["operations"];
+      if (origin === "non-loopback") {
+        if (
+          operations.some(
+            (operation) =>
+              operation.kind === "remove" ||
+              (operation.kind === "upsert" &&
+                (hasBrowserGatewayMcpSecretWrite(operation.server) ||
+                  (operation.server.type ?? "stdio") === "stdio")),
+          )
+        ) {
+          writeJson(res, 403, {
+            ok: false,
+            error: "browser_mcp_config_write_requires_loopback",
+          });
+          return;
+        }
+      }
+
+      const mutation = {
+        ...parsed,
+        profile: "ask-agent",
+        scope: "ask-agent-global",
+        target: {
+          kind: "native",
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+        },
+      } as McpConfigBatchMutation;
+      const run = async (): Promise<void> => {
+        if (origin === "non-loopback") {
+          const existing = await loadAskAgentMcpConfigs();
+          if (
+            operations.some(
+              (operation) =>
+                operation.kind === "upsert" &&
+                existing.some(
+                  (config) =>
+                    (config.name === operation.server.name ||
+                      config.name === operation.renameTo) &&
+                    hasBrowserGatewayMcpCredentialRedirect(
+                      operation.server,
+                      config,
+                    ),
+                ),
+            )
+          ) {
+            writeJson(res, 403, {
+              ok: false,
+              error: "browser_mcp_credential_redirect_requires_loopback",
+            });
+            return;
+          }
+        }
+        const result = await mutateMcpConfigBatch(mutation);
+        if (!result.ok) {
+          writeJson(res, 200, result);
+          return;
+        }
+        let reconcileError: string | undefined;
+        if (result.configSaved) {
+          try {
+            await this.standaloneMcpRuntime?.refresh?.();
+          } catch (error) {
+            reconcileError = String(error);
+          }
+        }
+        const configSnapshot =
+          await this.buildStandaloneAskAgentMcpConfigSnapshot();
+        writeJson(
+          res,
+          200,
+          this.applyAskAgentMcpClientCapabilities(
+            {
+              ...result,
+              configSnapshot,
+              ...(reconcileError ? { reconcileError } : {}),
+            } satisfies McpConfigMutationResult & {
+              reconcileError?: string;
+            },
+            req,
+          ),
+        );
+      };
+      const queued = this.standaloneMcpConfigMutationQueue.then(run, run);
+      this.standaloneMcpConfigMutationQueue = queued.then(
+        () => undefined,
+        () => undefined,
+      );
+      await queued;
+    } catch (error) {
+      writeJson(res, 400, {
+        ok: false,
+        error: error instanceof Error ? error.message : "invalid_json",
+      });
+    }
   }
 
   private async handleAskAgentMcpConfigRequest(
@@ -4045,7 +4434,14 @@ export class BrowserGatewayHelper {
     if (this.standaloneMcpRuntime) {
       const configSnapshot =
         await this.buildStandaloneAskAgentMcpConfigSnapshot();
-      writeJson(res, 200, { ok: true, configSnapshot });
+      writeJson(
+        res,
+        200,
+        this.applyAskAgentMcpClientCapabilities(
+          { ok: true, configSnapshot },
+          req,
+        ),
+      );
       return;
     }
     await this.proxyAskAgentMcpConfigRequest(
@@ -4061,10 +4457,7 @@ export class BrowserGatewayHelper {
     res: http.ServerResponse,
   ): Promise<void> {
     if (this.standaloneMcpRuntime) {
-      writeJson(res, 403, {
-        ok: false,
-        error: "standalone_mcp_config_read_only",
-      });
+      await this.mutateStandaloneAskAgentMcpConfig(req, res);
       return;
     }
     await this.proxyAskAgentMcpConfigRequest(
@@ -4089,11 +4482,18 @@ export class BrowserGatewayHelper {
     if (this.standaloneMcpRuntime) {
       const configSnapshot =
         await this.buildStandaloneAskAgentMcpConfigSnapshot();
-      writeJson(res, 200, {
-        ok: true,
-        infos: configSnapshot.statusInfos,
-        configSnapshot,
-      });
+      writeJson(
+        res,
+        200,
+        this.applyAskAgentMcpClientCapabilities(
+          {
+            ok: true,
+            infos: configSnapshot.statusInfos,
+            configSnapshot,
+          },
+          req,
+        ),
+      );
       return;
     }
     const target = await this.getAskAgentMcpBridgeTarget();
@@ -4137,10 +4537,13 @@ export class BrowserGatewayHelper {
       });
       return;
     }
-    if (this.askAgentController.getActiveTurnMessageId()) {
+    if (this.hasAskAgentWork()) {
       writeJson(res, 409, { ok: false, error: "ask_agent_turn_in_progress" });
       return;
     }
+    const controller = new AbortController();
+    const onClose = () => controller.abort();
+    res.on("close", onClose);
     try {
       const body = (await readJsonBody(req)) as { serverName?: unknown } | null;
       if (
@@ -4150,10 +4553,15 @@ export class BrowserGatewayHelper {
         writeJson(res, 400, { ok: false, error: "invalid_server_name" });
         return;
       }
+      if (this.hasAskAgentWork()) {
+        writeJson(res, 409, { ok: false, error: "desktop_mcp_busy" });
+        return;
+      }
+      this.standaloneMcpLegacyReauth = controller;
       await this.standaloneMcpRuntime.reauthenticateServer(
         body.serverName,
         async (origin) => {
-          const signal = new AbortController().signal;
+          const signal = controller.signal;
           const approval: ApprovalRequest = {
             kind: "mcp",
             id: `ask-agent-mcp-reauth-${randomUUID()}`,
@@ -4175,10 +4583,17 @@ export class BrowserGatewayHelper {
           await this.publishAskAgentSnapshot(response.snapshot);
           return (await decision).decision === "allow-once";
         },
+        controller.signal,
       );
       writeJson(res, 200, { ok: true });
     } catch (error) {
       writeJson(res, 400, { ok: false, error: String(error) });
+    } finally {
+      res.off("close", onClose);
+      if (this.standaloneMcpLegacyReauth === controller)
+        this.standaloneMcpLegacyReauth = undefined;
+      controller.abort();
+      if (!this.shuttingDown) void this.drainAskAgentMessageQueue();
     }
   }
 
@@ -4187,13 +4602,25 @@ export class BrowserGatewayHelper {
     res: http.ServerResponse,
   ): Promise<void> {
     if (this.standaloneMcpRuntime) {
+      if (this.hasAskAgentWork()) {
+        writeJson(res, 409, { ok: false, error: "desktop_mcp_busy" });
+        return;
+      }
+      await this.standaloneMcpRuntime.refresh?.();
       const configSnapshot =
         await this.buildStandaloneAskAgentMcpConfigSnapshot();
-      writeJson(res, 200, {
-        ok: true,
-        infos: configSnapshot.statusInfos,
-        configSnapshot,
-      });
+      writeJson(
+        res,
+        200,
+        this.applyAskAgentMcpClientCapabilities(
+          {
+            ok: true,
+            infos: configSnapshot.statusInfos,
+            configSnapshot,
+          },
+          req,
+        ),
+      );
       return;
     }
     const target = await this.getAskAgentMcpBridgeTarget();
@@ -4724,12 +5151,91 @@ export class BrowserGatewayHelper {
         writeJson(res, 400, { error: "invalid_request" });
         return;
       }
+      let globalRuleSaved = false;
+      if (this.standaloneMcpPolicyApprovalsInFlight.has(body.id)) {
+        writeJson(res, 409, { error: "mcp_approval_save_in_progress" });
+        return;
+      }
+      if (
+        this.standaloneMcpRuntime &&
+        (body.decision === "always-tool-global" ||
+          body.decision === "always-server-global")
+      ) {
+        const pending = this.askAgentController.getPendingApproval();
+        if (!pending || pending.id !== body.id) {
+          writeJson(res, 404, { error: "approval_not_found" });
+          return;
+        }
+        if (
+          pending.kind !== "mcp" ||
+          !pending.mcpServerName ||
+          !pending.mcpToolName ||
+          !pending.mcpChoices?.some((choice) => choice.value === body.decision)
+        ) {
+          writeJson(res, 400, { error: "invalid_mcp_approval_decision" });
+          return;
+        }
+        if (
+          classifyBrowserGatewayClientOrigin(req.socket.remoteAddress) !==
+          "loopback"
+        ) {
+          writeJson(res, 403, {
+            error: "mcp_global_approval_requires_loopback",
+            message:
+              "Save shared Global rules in Desktop or a local browser, or choose Session for this remote conversation.",
+          });
+          return;
+        }
+        this.standaloneMcpPolicyApprovalsInFlight.add(body.id);
+        try {
+          await persistStandaloneMcpGlobalApproval({
+            serverName: pending.mcpServerName,
+            bareToolName: pending.mcpToolName,
+            target:
+              body.decision === "always-server-global" ? "server" : "tool",
+          });
+          globalRuleSaved = true;
+        } catch (error) {
+          const code = error instanceof Error ? error.message : "";
+          const serverNotShared =
+            code === "mcp_global_approval_server_not_shared";
+          const desktopUpdateFailed =
+            code === "mcp_global_approval_desktop_override_save_failed";
+          writeJson(res, serverNotShared ? 409 : 500, {
+            error:
+              serverNotShared || desktopUpdateFailed
+                ? code
+                : "mcp_approval_save_failed",
+            ruleSaved: desktopUpdateFailed,
+            message: serverNotShared
+              ? "This server is only configured in Desktop. Add its connection to ~/.agentlink/mcp.json before sharing a Global rule, or choose Session."
+              : desktopUpdateFailed
+                ? "The Global rule was saved, but Desktop's policy override could not be updated. No tool was allowed; retry to finish the Desktop update."
+                : "Could not save the Global MCP rule. No tool was allowed; retry or allow once.",
+          });
+          return;
+        } finally {
+          this.standaloneMcpPolicyApprovalsInFlight.delete(body.id);
+        }
+      }
       const request = this.askAgentController.submitApproval({
         type: "decision",
         ...body,
       });
       if (!request) {
-        writeJson(res, 404, { error: "approval_not_found" });
+        if (globalRuleSaved) {
+          const response = await this.buildAskAgentResponse();
+          writeJson(res, 200, {
+            ok: true,
+            ruleSaved: true,
+            approvalExpired: true,
+            message:
+              "Global MCP rule saved. The approval expired or the turn stopped, so no tool was run.",
+            snapshot: response.snapshot,
+          });
+        } else {
+          writeJson(res, 404, { error: "approval_not_found" });
+        }
         return;
       }
       const response = await this.buildAskAgentResponse();
@@ -5796,10 +6302,13 @@ export class BrowserGatewayHelper {
     signal: AbortSignal,
   ): Promise<PreparedAskAgentWebAccess> {
     const target = await this.getAskAgentMcpBridgeTarget();
+    const sessionId = this.askAgentSessionStore.getActiveSessionId();
+    if (this.standaloneMcpRuntime)
+      this.standaloneMcpTurnOwner = { sessionId, turnId };
     const [remotePolicy, standaloneMcpTurn] = await Promise.all([
       this.getAskAgentWebPolicy(target, signal),
       this.standaloneMcpRuntime?.prepareTurn({
-        sessionId: this.askAgentSessionStore.getActiveSessionId(),
+        sessionId,
         turnId,
         providerId: modelContext.providerId,
         modelId: modelContext.model,
@@ -6008,14 +6517,20 @@ export class BrowserGatewayHelper {
     bareToolName: string,
     decision: string,
   ): void {
-    if (decision === "always-server-session") {
+    if (
+      decision === "always-server-session" ||
+      decision === "always-server-global"
+    ) {
       const servers =
         this.standaloneMcpApprovedServersBySession.get(sessionId) ?? new Set();
       servers.add(serverName);
       this.standaloneMcpApprovedServersBySession.set(sessionId, servers);
       return;
     }
-    if (decision === "always-tool-session") {
+    if (
+      decision === "always-tool-session" ||
+      decision === "always-tool-global"
+    ) {
       const tools =
         this.standaloneMcpApprovedToolsBySession.get(sessionId) ?? new Set();
       tools.add(`${serverName}__${bareToolName}`);
@@ -6028,28 +6543,16 @@ export class BrowserGatewayHelper {
     authorizationUrl: string;
     signal?: AbortSignal;
   }): Promise<boolean> {
-    const signal = request.signal ?? new AbortController().signal;
-    if (this.askAgentController.getPendingApproval()) {
-      throw new Error("ask_agent_approval_pending");
-    }
-    const authorizationUrl = new URL(request.authorizationUrl);
-    const approval: ApprovalRequest = {
-      kind: "mcp",
-      id: `ask-agent-mcp-oauth-${randomUUID()}`,
-      command: `Allow MCP authorization for "${request.serverId}"?`,
-      mcpDetail: `AgentLink will open your system browser to:\n${authorizationUrl.origin}\n\nThe authorization page is controlled by the MCP server's OAuth provider.`,
-      mcpServerName: request.serverId,
-      mcpToolName: "OAuth authorization",
-      toolOrigin: "mcp",
-      mcpChoices: [
-        { label: "Open browser", value: "allow-once", isPrimary: true },
-        { label: "Deny", value: "deny", isDanger: true },
-      ],
-    };
-    const decision = this.askAgentController.requestApproval(approval, signal);
-    const response = await this.buildAskAgentResponse();
-    await this.publishAskAgentSnapshot(response.snapshot);
-    return (await decision).decision === "allow-once";
+    if (!request.signal || request.signal.aborted) return false;
+    if (this.standaloneMcpManagerOperations.isRunning())
+      return this.standaloneMcpManagerOperations.authorize({
+        serverName: request.serverId,
+        signal: request.signal,
+      });
+    return (
+      this.askAgentController.hasActiveTurn() ||
+      request.signal === this.standaloneMcpLegacyReauth?.signal
+    );
   }
 
   private async requestStandaloneMcpApproval(params: {
@@ -6084,6 +6587,11 @@ export class BrowserGatewayHelper {
         {
           label: `Always allow ${params.serverName} (session)`,
           value: "always-server-session",
+        },
+        { label: "Always allow tool (global)", value: "always-tool-global" },
+        {
+          label: `Always allow ${params.serverName} (global)`,
+          value: "always-server-global",
         },
         { label: "Deny", value: "deny", isDanger: true },
       ],
@@ -6167,7 +6675,9 @@ export class BrowserGatewayHelper {
         approved =
           decision.decision === "allow-once" ||
           decision.decision === "always-tool-session" ||
-          decision.decision === "always-server-session";
+          decision.decision === "always-server-session" ||
+          decision.decision === "always-tool-global" ||
+          decision.decision === "always-server-global";
         if (!approved) {
           deniedTools.add(deniedKey);
           this.standaloneMcpDeniedToolsByTurn.set(
@@ -7973,7 +8483,7 @@ export class BrowserGatewayHelper {
         writeJson(res, 409, { error: "credential_missing" });
         return;
       }
-      if (this.askAgentController.hasActiveTurn()) {
+      if (this.hasAskAgentWork()) {
         this.logAskAgentEvent("ask-agent.retry", {
           sessionId: requestedSessionId,
           ok: false,
@@ -8062,7 +8572,7 @@ export class BrowserGatewayHelper {
       const assistantMessage = this.askAgentSessionStore.startAssistantMessage({
         now,
       });
-      activeTurn = this.askAgentController.beginTurn(assistantMessage.id);
+      activeTurn = this.beginAskAgentTurn(assistantMessage.id);
       if (!activeTurn) throw new Error("ask_agent_turn_in_progress");
       const streamSnapshot = this.askAgentController.projectState({
         now,
@@ -8240,7 +8750,7 @@ export class BrowserGatewayHelper {
         // to whatever the helper currently considers active. A helper restart
         // discards nothing user-visible this way — a new chat started in the
         // browser is materialized here by its first message.
-        if (this.askAgentController.hasActiveTurn()) {
+        if (this.hasAskAgentWork()) {
           this.logAskAgentEvent("ask-agent.send", {
             sessionId: requestedSessionId,
             activeSessionId: this.askAgentSessionStore.getActiveSessionId(),
@@ -8319,7 +8829,7 @@ export class BrowserGatewayHelper {
       if (duplicateUserMessage) {
         response = this.buildAskAgentSnapshotResponse(now, theme);
         sendOutcome = "duplicate_ignored";
-      } else if (modelContext && this.askAgentController.hasActiveTurn()) {
+      } else if (modelContext && this.hasAskAgentWork()) {
         const id =
           typeof body.id === "string" && body.id.trim()
             ? body.id
@@ -8371,7 +8881,7 @@ export class BrowserGatewayHelper {
           this.askAgentSessionStore.startAssistantMessage({
             now,
           });
-        activeTurn = this.askAgentController.beginTurn(assistantMessage.id);
+        activeTurn = this.beginAskAgentTurn(assistantMessage.id);
         if (!activeTurn) throw new Error("ask_agent_turn_in_progress");
         const streamSnapshot = this.askAgentController.projectState({
           now,
@@ -8523,7 +9033,7 @@ export class BrowserGatewayHelper {
   }
 
   private async runAskAgentMessageQueue(): Promise<void> {
-    while (!this.shuttingDown && !this.askAgentController.hasActiveTurn()) {
+    while (!this.shuttingDown && !this.hasAskAgentWork()) {
       const queued = this.askAgentSessionStore.dequeueMessage();
       if (!queued) return;
       const modelContext = await this.resolveAskAgentModelExecutionContext(
@@ -8650,6 +9160,12 @@ export class BrowserGatewayHelper {
   }
 
   async dispose(): Promise<void> {
+    this.standaloneMcpManagerOperations.dispose();
+    this.standaloneMcpLegacyReauth?.abort();
+    if (this.standaloneMcpConfigDebounce)
+      clearTimeout(this.standaloneMcpConfigDebounce);
+    for (const file of this.standaloneMcpWatchedPaths) fsSync.unwatchFile(file);
+    this.standaloneMcpWatchedPaths.clear();
     this.standaloneMcpFormElicitation.dispose();
     for (const state of this.askAgentConversationStates.values()) {
       state.dispose();
@@ -10245,6 +10761,13 @@ export class BrowserGatewayHelper {
       this.releaseAskAgentTurnLiveness =
         this.lifecycle.acquireLiveness("ask_agent_turn");
       return;
+    }
+    if (this.standaloneMcpTurnOwner) {
+      this.standaloneMcpRuntime?.releaseTurn?.(
+        this.standaloneMcpTurnOwner.sessionId,
+        this.standaloneMcpTurnOwner.turnId,
+      );
+      this.standaloneMcpTurnOwner = undefined;
     }
     this.releaseAskAgentTurnLiveness?.();
     this.releaseAskAgentTurnLiveness = undefined;

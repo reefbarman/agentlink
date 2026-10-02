@@ -50,6 +50,8 @@ export type AgentMessage = MessageParam & {
     images: Array<{ name: string; mimeType: string; base64: string }>;
     documents: Array<{ name: string; mimeType: string; base64: string }>;
   };
+  /** Host-only decision evidence tied to tool results in this source message. */
+  humanQuestionAnswers?: import("@agentlink/protocol/structured-question").HumanQuestionAnswer[];
   isSummary?: boolean;
   isResumeContext?: boolean;
   condenseId?: string;
@@ -129,6 +131,7 @@ export type AgentEvent =
       durationMs: number;
       input?: unknown;
       parentCallId?: string;
+      humanQuestionAnswer?: import("@agentlink/protocol/structured-question").HumanQuestionAnswer;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
       composeTrace?: import("@agentlink/protocol/compose").ComposeTrace;
     }

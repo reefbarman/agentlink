@@ -101,7 +101,11 @@ export class HelperHttpRouter<TAuth> {
       const ownerControlRoute =
         pathname === "/internal/core-owners" ||
         pathname.startsWith("/internal/core-owners/");
-      if (dataPlaneRoute || ownerControlRoute) {
+      if (
+        dataPlaneRoute ||
+        ownerControlRoute ||
+        pathname.startsWith("/internal/desktop/")
+      ) {
         if (!hasExactRawPath(req.url, pathname)) {
           this.host.writeJson(res, 404, { error: "not_found" });
           return;

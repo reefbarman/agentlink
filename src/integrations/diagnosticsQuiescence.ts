@@ -6,7 +6,8 @@ export interface DiagnosticsQuiescenceOptions<T> {
   delayMs: number;
   hadEvent?: boolean;
   subscribe(listener: () => void): DiagnosticsQuiescenceDisposable;
-  collect(): T;
+  collect(eventObserved: boolean, stateCurrent: boolean, quiescent: boolean): T;
+  isCurrent?: () => boolean;
   eagerDisposables?: DiagnosticsQuiescenceDisposable[];
   debounceMs?: number;
   firstEventGraceMs?: number;
@@ -25,7 +26,7 @@ export function waitForDiagnosticsQuiescence<T>(
     const firstEventGraceMs =
       options.firstEventGraceMs ?? Math.min(options.delayMs, 500);
 
-    const settle = () => {
+    const settle = (quiescent: boolean) => {
       if (settled) return;
       settled = true;
       if (debounceTimer) clearTimeout(debounceTimer);
@@ -35,7 +36,13 @@ export function waitForDiagnosticsQuiescence<T>(
       for (const disposable of options.eagerDisposables ?? []) {
         disposable.dispose();
       }
-      resolve(options.collect());
+      resolve(
+        options.collect(
+          eventObserved,
+          options.isCurrent?.() ?? true,
+          quiescent,
+        ),
+      );
     };
 
     const onEvent = () => {
@@ -46,16 +53,16 @@ export function waitForDiagnosticsQuiescence<T>(
         graceTimer = undefined;
       }
       if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(settle, debounceMs);
+      debounceTimer = setTimeout(() => settle(true), debounceMs);
     };
 
     const subscription = options.subscribe(onEvent);
 
     if (eventObserved) {
-      debounceTimer ??= setTimeout(settle, debounceMs);
+      debounceTimer ??= setTimeout(() => settle(true), debounceMs);
     } else {
-      graceTimer = setTimeout(settle, firstEventGraceMs);
+      graceTimer = setTimeout(() => settle(false), firstEventGraceMs);
     }
-    hardTimeoutTimer = setTimeout(settle, options.delayMs);
+    hardTimeoutTimer = setTimeout(() => settle(false), options.delayMs);
   });
 }

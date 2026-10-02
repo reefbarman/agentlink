@@ -6,16 +6,14 @@ import type {
   CreateNodeHostMcpOAuthProviderOptions,
   NodeHostMcpOAuthAuthorizationRequest,
   NodeHostMcpRemoteOAuthRequest,
+  NodeHostMcpRemoteServer,
 } from "@agentlink/node-host" with { "resolution-mode": "import" };
 import type {
   McpCredentialRepository,
   McpPendingAuthorizationRepository,
 } from "@agentlink/core";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import {
-  createStandaloneMcpOAuthPinnedFetch,
-  isSafeStandaloneMcpOAuthDestination,
-} from "./standaloneMcpOAuthPolicy.js";
+import { isSupportedStandaloneMcpOAuthDestination } from "./standaloneMcpOAuthPolicy.js";
 
 interface PendingAuthorization {
   readonly state: string;
@@ -30,12 +28,24 @@ interface PendingAuthorization {
 type StandaloneMcpCredentialRepository = McpCredentialRepository &
   McpPendingAuthorizationRepository;
 
+export interface StandaloneMcpConnectionOAuthRequest {
+  readonly principal: NodeHostMcpRemoteOAuthRequest["principal"];
+  readonly server: Readonly<NodeHostMcpRemoteServer>;
+  readonly url: URL;
+  readonly fetch: typeof globalThis.fetch;
+  readonly assertConfigurationCurrent: (() => Promise<void>) | undefined;
+  readonly getAuthorizationSignal: (request: {
+    readonly serverName: string;
+  }) => AbortSignal | undefined;
+}
+
 export interface StandaloneMcpOAuthRuntimeOptions {
   readonly port: number;
   readonly openExternal?: (url: string) => Promise<boolean>;
   readonly confirmAuthorization?: (
     request: Readonly<NodeHostMcpOAuthAuthorizationRequest>,
   ) => Promise<boolean>;
+
   readonly isSafeDestination?: (url: URL) => Promise<boolean>;
   readonly createCredentialRepository?: () => Promise<StandaloneMcpCredentialRepository>;
   readonly createOAuthProvider?: (
@@ -46,9 +56,11 @@ export interface StandaloneMcpOAuthRuntimeOptions {
 /** Service-owned standalone MCP OAuth coordination for the desktop/helper host. */
 export class StandaloneMcpOAuthRuntime {
   private readonly activeAuthorizations = new Set<string>();
+  private readonly authorizationSignals = new Map<string, AbortSignal>();
   private readonly pending = new Map<string, PendingAuthorization>();
+  private disposed = false;
   private readonly openExternal: (url: string) => Promise<boolean>;
-  private readonly pinnedFetch = createStandaloneMcpOAuthPinnedFetch();
+
   private repositoryPromise:
     | Promise<StandaloneMcpCredentialRepository>
     | undefined;
@@ -60,6 +72,27 @@ export class StandaloneMcpOAuthRuntime {
   async resolveOAuthProvider(
     request: NodeHostMcpRemoteOAuthRequest,
   ): Promise<OAuthClientProvider> {
+    return await this.resolveConnectionOAuthProvider({
+      principal: request.principal,
+      server: request.server,
+      url: request.url,
+      fetch: request.fetch,
+      assertConfigurationCurrent: undefined,
+      getAuthorizationSignal: () => request.signal,
+    });
+  }
+
+  async resolveConnectionOAuthProvider(
+    request: StandaloneMcpConnectionOAuthRequest,
+  ): Promise<OAuthClientProvider> {
+    const configuredUrl = new URL(request.server.url);
+    if (
+      !isSupportedStandaloneMcpOAuthDestination(configuredUrl) ||
+      configuredUrl.href !== request.url.href
+    ) {
+      throw new Error("standalone_mcp_oauth_config_changed");
+    }
+
     const identity = serverIdentity(request.server.id, request.url.href);
     const callbackId = createHash("sha256")
       .update(identity)
@@ -70,19 +103,78 @@ export class StandaloneMcpOAuthRuntime {
     const createOAuthProvider =
       this.options.createOAuthProvider ??
       (await import("@agentlink/node-host")).createNodeHostMcpOAuthProvider;
-    return createOAuthProvider({
+    const provider = createOAuthProvider({
       principal: request.principal,
       serverId: identity,
       serverUrl: request.url.href,
       redirectUrl,
       credentials: repository,
-      signal: request.signal,
       clientName: "AgentLink Desktop",
-      fetch: (input, init) =>
-        this.pinnedFetch.fetch(request.fetch, input, init),
+      fetch: async (input, init) => {
+        await request.assertConfigurationCurrent?.();
+        const attemptSignal = this.authorizationSignals.get(callbackId);
+        const signal = init?.signal
+          ? attemptSignal
+            ? AbortSignal.any([init.signal, attemptSignal])
+            : init.signal
+          : attemptSignal;
+        if (this.disposed || signal?.aborted)
+          return Promise.reject(abortError());
+        return request
+          .fetch(input, {
+            ...init,
+            ...(signal ? { signal } : {}),
+          })
+          .catch((error: unknown) => {
+            if (this.authorizationSignals.get(callbackId) === attemptSignal) {
+              this.authorizationSignals.delete(callbackId);
+            }
+            throw error;
+          });
+      },
       authorize: (authorization) =>
-        this.requestAuthorization(callbackId, request.server.id, authorization),
+        this.requestAuthorization(
+          callbackId,
+          request.server.id,
+          authorization,
+          request.getAuthorizationSignal,
+          request.assertConfigurationCurrent,
+        ),
     });
+    const redirectToAuthorization =
+      provider.redirectToAuthorization?.bind(provider);
+    if (redirectToAuthorization) {
+      provider.redirectToAuthorization = async (authorizationUrl) => {
+        const signal = request.getAuthorizationSignal({
+          serverName: request.server.id,
+        });
+        if (this.disposed || signal?.aborted) throw abortError();
+        if (signal) this.authorizationSignals.set(callbackId, signal);
+        try {
+          await redirectToAuthorization(authorizationUrl);
+        } finally {
+          if (this.authorizationSignals.get(callbackId) === signal) {
+            this.authorizationSignals.delete(callbackId);
+          }
+        }
+      };
+    }
+    const saveTokens = provider.saveTokens?.bind(provider);
+    if (saveTokens) {
+      provider.saveTokens = async (tokens) => {
+        await request.assertConfigurationCurrent?.();
+        const signal = this.authorizationSignals.get(callbackId);
+        if (this.disposed || signal?.aborted) throw abortError();
+        try {
+          await saveTokens(tokens);
+        } finally {
+          if (this.authorizationSignals.get(callbackId) === signal) {
+            this.authorizationSignals.delete(callbackId);
+          }
+        }
+      };
+    }
+    return provider;
   }
 
   handleCallback(
@@ -113,13 +205,14 @@ export class StandaloneMcpOAuthRuntime {
   }
 
   dispose(): void {
+    this.disposed = true;
+    this.authorizationSignals.clear();
     for (const [callbackId, pending] of this.pending) {
       this.pending.delete(callbackId);
       clearTimeout(pending.timeout);
       pending.signal?.removeEventListener("abort", pending.abort);
       pending.reject(new Error("standalone_mcp_oauth_disposed"));
     }
-    void this.pinnedFetch.dispose();
   }
 
   private async getRepository(): Promise<StandaloneMcpCredentialRepository> {
@@ -137,14 +230,26 @@ export class StandaloneMcpOAuthRuntime {
   private async requestAuthorization(
     callbackId: string,
     serverName: string,
+
     request: NodeHostMcpOAuthAuthorizationRequest,
+    getAuthorizationSignal: StandaloneMcpConnectionOAuthRequest["getAuthorizationSignal"],
+    assertConfigurationCurrent: StandaloneMcpConnectionOAuthRequest["assertConfigurationCurrent"],
   ): Promise<{ callbackUrl: string }> {
     if (this.activeAuthorizations.has(callbackId)) {
       throw new Error("standalone_mcp_oauth_authorization_in_progress");
     }
     this.activeAuthorizations.add(callbackId);
     try {
-      return await this.authorize(callbackId, serverName, request);
+      return await this.authorize(
+        callbackId,
+        serverName,
+        request,
+        getAuthorizationSignal,
+        assertConfigurationCurrent,
+      );
+    } catch (error) {
+      this.authorizationSignals.delete(callbackId);
+      throw error;
     } finally {
       this.activeAuthorizations.delete(callbackId);
     }
@@ -153,23 +258,34 @@ export class StandaloneMcpOAuthRuntime {
   private async authorize(
     callbackId: string,
     serverName: string,
+
     request: NodeHostMcpOAuthAuthorizationRequest,
+    getAuthorizationSignal: StandaloneMcpConnectionOAuthRequest["getAuthorizationSignal"],
+    assertConfigurationCurrent: StandaloneMcpConnectionOAuthRequest["assertConfigurationCurrent"],
   ): Promise<{ callbackUrl: string }> {
-    if (request.signal?.aborted) throw abortError();
+    const signal = getAuthorizationSignal({ serverName }) ?? request.signal;
+    if (this.disposed || signal?.aborted) throw abortError();
+    await assertConfigurationCurrent?.();
+    if (signal) this.authorizationSignals.set(callbackId, signal);
     const authorizationUrl = new URL(request.authorizationUrl);
     const isSafeDestination =
-      this.options.isSafeDestination ?? isSafeStandaloneMcpOAuthDestination;
+      this.options.isSafeDestination ??
+      isSupportedStandaloneMcpOAuthDestination;
     if (!(await isSafeDestination(authorizationUrl))) {
       throw new Error("standalone_mcp_oauth_authorization_destination_blocked");
     }
+    if (signal?.aborted) throw abortError();
     if (
       !(await this.options.confirmAuthorization?.({
         ...request,
         serverId: serverName,
+        signal,
       }))
     ) {
       throw new Error("standalone_mcp_oauth_authorization_denied");
     }
+    await assertConfigurationCurrent?.();
+    if (this.disposed || signal?.aborted) throw abortError();
 
     const callback = new Promise<{ callbackUrl: string }>((resolve, reject) => {
       const rejectPending = (error: Error) => {
@@ -191,14 +307,15 @@ export class StandaloneMcpOAuthRuntime {
         serverName,
         resolve,
         reject,
-        signal: request.signal,
+        signal,
         abort,
         timeout,
       });
-      request.signal?.addEventListener("abort", abort, { once: true });
+      signal?.addEventListener("abort", abort, { once: true });
     });
 
     try {
+      if (signal?.aborted) throw abortError();
       if (!(await this.openExternal(request.authorizationUrl))) {
         throw new Error("standalone_mcp_oauth_browser_open_failed");
       }
@@ -229,7 +346,7 @@ function callbackIdFromPath(pathname: string): string | undefined {
 
 async function openMacExternal(value: string): Promise<boolean> {
   const url = new URL(value);
-  if (url.protocol !== "https:") return false;
+  if (!isSupportedStandaloneMcpOAuthDestination(url)) return false;
   return await new Promise<boolean>((resolve) => {
     execFile("/usr/bin/open", [url.href], { timeout: 10_000 }, (error) => {
       resolve(!error);

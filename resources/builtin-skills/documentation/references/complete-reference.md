@@ -801,7 +801,7 @@ return packs.map((result, index) =>
 
 Read file contents with line numbers. Returns rich metadata that built-in read tools cannot provide. Supports text files, local images, and PDF text extraction.
 
-In VS Code workspace sessions and mirrored browser workspace chat, `read_file` has two views. The default `view: "content"` is described in this section. `view: "context"` returns the oriented context pack described under [read_file context view](#read_file-context-view-formerly-get_context). Each view keeps the path policy, Compose limits, and history budget of the reader it replaced. Options that belong to the other view (anchors and `auto_follow_suggestion` for content; `dedupe_unchanged_content` and `refresh` for context) are rejected before the file is read. `include_symbols` is supported in both views; false skips symbol lookup and omits the outline without changing diagnostics or unchanged-content deduplication. If a mode, profile, or skill permits only one view, the schema lists only that view; omitting `view` always means content and never falls back to context.
+In VS Code workspace sessions and mirrored browser workspace chat, `read_file` has two views. The default `view: "content"` is described in this section. `view: "context"` returns the oriented context pack described under [read_file context view](#read_file-context-view-formerly-get_context). Each view keeps the path policy, Compose limits, and history budget of the reader it replaced. Options that belong to the other view (anchors and `auto_follow_suggestion` for content; `dedupe_unchanged_content`, `refresh`, and `character_offset` for context) are rejected before the file is read. `include_symbols` is supported in both views; false skips symbol lookup and omits the outline without changing diagnostics or unchanged-content deduplication. If a mode, profile, or skill permits only one view, the schema lists only that view; omitting `view` always means content and never falls back to context.
 
 | Parameter         | Type     | Description                                                                         |
 | ----------------- | -------- | ----------------------------------------------------------------------------------- |
@@ -845,15 +845,16 @@ Call `read_file` with `view: "context"` to build a compact read-only context pac
 
 VS Code workspace sessions and mirrored browser workspace chat no longer have a separate `get_context` tool. A direct `get_context` call there is rejected like any other unavailable tool, and older transcripts still show recorded `get_context` calls with their file link. The standalone CLI keeps its own `get_context` tool.
 
-| Parameter                  | Type     | Description                                                                                           |
-| -------------------------- | -------- | ----------------------------------------------------------------------------------------------------- |
-| `view`                     | string   | Must be `"context"`.                                                                                  |
-| `path`                     | string   | File path to build context for. Directory paths are not bulk-read.                                    |
-| `offset`                   | number?  | Starting line number for the content slice (1-indexed, default: 1).                                   |
-| `limit`                    | number?  | Maximum content lines to include (default: 200, capped at 400).                                       |
-| `include_symbols`          | boolean? | Include symbol outline (default true); false skips lookup and omits it.                               |
-| `dedupe_unchanged_content` | boolean? | When true, omit content for an unchanged exact range already returned in this session. Default false. |
-| `refresh`                  | boolean? | When true, include content even if unchanged-content dedupe would otherwise omit it.                  |
+| Parameter                  | Type     | Description                                                                                                                                   |
+| -------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `view`                     | string   | Must be `"context"`.                                                                                                                          |
+| `path`                     | string   | File path to build context for. Directory paths are not bulk-read.                                                                            |
+| `offset`                   | number?  | Starting line number for the content slice (1-indexed, default: 1).                                                                           |
+| `limit`                    | number?  | Maximum content lines to include (default: 200, capped at 400).                                                                               |
+| `character_offset`         | number?  | Context only: zero-based UTF-16 offset in the starting line, after redaction (default: 0). Explicit character pages bypass line-based dedupe. |
+| `include_symbols`          | boolean? | Include symbol outline (default true); false skips lookup and omits it.                                                                       |
+| `dedupe_unchanged_content` | boolean? | When true, omit content for an unchanged exact range already returned in this session. Default false.                                         |
+| `refresh`                  | boolean? | When true, include content even if unchanged-content dedupe would otherwise omit it.                                                          |
 
 **Response includes:**
 
@@ -863,7 +864,8 @@ VS Code workspace sessions and mirrored browser workspace chat no longer have a 
 - `symbols` — document symbol outline capped at 60 entries and 6,000 serialized UTF-8 bytes, prioritising symbols starting in the requested line range
 - `symbols_truncated`, `symbols_omitted` — present when entries from the supplied outline were omitted by its independent budget; use `get_symbols` for a fuller view
 - `working_set` — `status`, `content_hash`, optional `previous_content_hash`, `range`, `should_include_content`, and `last_read_at`
-- `content` — numbered lines, omitted only when `working_set.should_include_content` is false
+- `content` — numbered preview, capped at 2,000 UTF-16 characters per source line and 20,000 total including line numbers; omitted when `working_set.should_include_content` is false
+- `content_truncation` — present when the preview omits content, with `omitted_bytes` (UTF-8 bytes remaining in the requested, redacted range), `omitted_lines` (whole lines not shown), character limits, and `next_read` arguments for the first omitted position. Pass `next_read` to `read_file` to continue. Character offsets must not split a surrogate pair.
 - `redaction` — the same targeted settings/config JSON/JSONC protection metadata as `read_file`, when applicable
 
 Structured-secret redaction is applied before content ranges are returned. The working-set hash, file size, and modification metadata remain based on the original bytes, so dedupe and change detection are not weakened by redaction.
@@ -1217,7 +1219,7 @@ Responses include `status`, `path`, `tier`, `scope`, `operation`, and any new di
 
 ### apply_diff
 
-Edit an existing file using search/replace blocks or unified-diff `@@` hunks. Opens a diff view for review. Supports **multiple hunks** in a single call. The shared post-save verifier and exact-preservation policy are the same as `write_file`. Responses include per-block diagnostics for partial matches/failures, line-specific malformed-block diagnostics, format-on-save edits, and pending-edit lock conflicts return a structured recovery hint instead of a bare timeout string. For VS Code writes/edits, `new_diagnostics` is scoped to the edited file, with bounded samples and pre-existing-error/line-shift filtering; errors in other files require a separate workspace diagnostic check and are not attributed to this edit.
+Edit an existing file using search/replace blocks or unified-diff `@@` hunks. Opens a diff view for review. Supports **multiple hunks** in a single call. The shared post-save verifier and exact-preservation policy are the same as `write_file`. Responses include per-block diagnostics for partial matches/failures, line-specific malformed-block diagnostics, format-on-save edits, and pending-edit lock conflicts return a structured recovery hint instead of a bare timeout string. For VS Code writes/edits, diagnostic samples are scoped to the edited file, with bounded samples and pre-existing-error/line-shift filtering. Their source freshness and attribution remain unverified through the VS Code diagnostics API, even after a settled update; disk durability is checked separately. Errors in other files require a separate workspace diagnostic check and are not attributed to this edit. See [reviewed changes and diagnostic observations](tools.md#make-reviewed-changes) and [unsaved editor recovery](tools.md#recover-unsaved-editor-changes) for bounded inspection, exact-save approval and recovery limits.
 
 | Parameter                 | Type      | Description                                                                                                                                                                                                                                                                                                          |
 | ------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

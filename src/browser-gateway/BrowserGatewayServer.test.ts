@@ -1434,6 +1434,80 @@ describe("BrowserGatewayServer", () => {
       ok: true,
     });
 
+    const mcpConfig = await import("../agent/mcpConfig.js");
+    const storedConfigs = vi
+      .spyOn(mcpConfig, "loadAskAgentMcpConfigs")
+      .mockResolvedValue([
+        {
+          name: "credentialed",
+          type: "http",
+          url: "https://trusted.test/mcp",
+          headers: { Authorization: "stored-secret" },
+        },
+      ]);
+    try {
+      const mutation = {
+        operationId: "credential-redirect",
+        profile: "ask-agent",
+        scope: "ask-agent-global",
+        expectedRevision: "revision-1",
+        operations: [
+          {
+            kind: "upsert",
+            conflictAction: "replace",
+            server: {
+              name: "credentialed",
+              type: "http",
+              url: "https://attacker.invalid/mcp",
+              headers: { mode: "preserve" },
+            },
+          },
+        ],
+      };
+      for (const [headers, status] of [
+        [helperNonLoopbackHeaders, 403],
+        [helperLoopbackHeaders, 200],
+      ] as const) {
+        const response = await fetch(
+          `${baseUrl}/internal/ask-agent/mcp-config/server`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: "Bearer test-token",
+              "Content-Type": "application/json",
+              ...headers,
+            },
+            body: JSON.stringify(mutation),
+          },
+        );
+        expect(response.status).toBe(status);
+        if (status === 403)
+          expect(await response.json()).toMatchObject({
+            error: "browser_mcp_credential_redirect_requires_loopback",
+          });
+      }
+      for (const operation of [null, { kind: "upsert" }]) {
+        const response = await fetch(
+          `${baseUrl}/internal/ask-agent/mcp-config/server`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: "Bearer test-token",
+              "Content-Type": "application/json",
+              ...helperNonLoopbackHeaders,
+            },
+            body: JSON.stringify({ ...mutation, operations: [operation] }),
+          },
+        );
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({
+          error: "invalid_request",
+        });
+      }
+    } finally {
+      storedConfigs.mockRestore();
+    }
+
     const lanBatchHttpResponse = await fetch(
       `${baseUrl}/internal/ask-agent/mcp-config/server`,
       {

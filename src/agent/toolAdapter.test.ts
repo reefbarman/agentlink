@@ -777,6 +777,10 @@ describe("tool usage telemetry project attribution", () => {
         isError: true,
         data: { status: "native_tool_not_available" },
       });
+      expect(JSON.stringify(excluded)).toContain(
+        "excluded from this provider request",
+      );
+      expect(JSON.stringify(excluded)).not.toContain("call it by its own name");
       expect(consumer).toHaveBeenCalledTimes(1);
     },
   );
@@ -817,7 +821,27 @@ describe("tool usage telemetry project attribution", () => {
       isError: true,
       data: { status: "tool_not_in_mode" },
     });
+    expect(JSON.stringify(blocked)).toContain("current mode does not allow");
     expect(handleGetModuleNeighbors).toHaveBeenCalledOnce();
+  });
+
+  it("explains when a direct tool is incorrectly routed through call_native_tool", async () => {
+    const runtime = createAgentToolRuntime(mockCtx);
+    const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
+      getAgentTools().find((tool) => tool.name === "read_file")!,
+    ]);
+    vi.mocked(handleReadFile).mockClear();
+
+    const result = await runtime.executeTool({
+      name: "call_native_tool",
+      input: { name: "read_file", input: { path: "README.md" } },
+      context: { sessionId: "test-session", nativeToolDisclosure },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("directly available");
+    expect(JSON.stringify(result)).toContain("Call it by its own name");
+    expect(handleReadFile).not.toHaveBeenCalled();
   });
 
   it("does not discover schemas for tools blocked by the active mode", async () => {
@@ -4599,7 +4623,10 @@ describe("dispatchToolCall", () => {
         skillAllowedTools,
       ).find((tool) => tool.name === "read_file")?.input_schema as
         | {
-            properties: Record<string, { enum?: string[] }>;
+            properties: Record<
+              string,
+              { enum?: string[]; description?: string }
+            >;
             required?: string[];
           }
         | undefined;
@@ -4613,6 +4640,21 @@ describe("dispatchToolCall", () => {
       expect(schema?.properties).toHaveProperty("anchor");
       expect(schema?.properties).toHaveProperty("dedupe_unchanged_content");
       expect(schema?.properties).toHaveProperty("character_offset");
+    });
+
+    it("advertises anchors as content-only and numeric offsets for context", () => {
+      const schema = readFileSchemaFor();
+      for (const option of ["anchor", "anchor_regex", "anchor_offset"]) {
+        expect(schema?.properties[option]?.description).toContain(
+          "Content view only",
+        );
+      }
+      expect(schema?.properties.view?.description).toContain(
+        'anchor, anchor_regex and anchor_offset require "content"',
+      );
+      expect(schema?.properties.view?.description).toContain(
+        'numeric offset for "context"',
+      );
     });
 
     it("advertises only the views granted by a single-operation skill allowlist", () => {
@@ -4808,6 +4850,47 @@ describe("dispatchToolCall", () => {
     expect(handleGetContext).not.toHaveBeenCalled();
     expect(mockOnApprovalRequest).not.toHaveBeenCalled();
   });
+
+  it.each(["normal", "mode-restricted", "skill-restricted"])(
+    "forwards request-authorised command recovery tools without a disclosure snapshot (%s)",
+    async (kind) => {
+      const runtime = createAgentToolRuntime(mockCtx);
+      const { handleExecuteCommand } =
+        await import("../tools/executeCommand.js");
+      vi.mocked(handleExecuteCommand).mockClear();
+      await runtime.executeTool({
+        name: "execute_command",
+        input: { command: "git status --short" },
+        context: {
+          sessionId: "fallback-inventory",
+          mode: "code",
+          availableToolNames: new Set([
+            "execute_command",
+            "read_file",
+            "search_files",
+          ]),
+          ...(kind === "mode-restricted"
+            ? {
+                modeAllowedToolNames: new Set(["execute_command", "read_file"]),
+              }
+            : {}),
+          ...(kind === "skill-restricted"
+            ? { skillAllowedTools: ["execute_command"] }
+            : {}),
+        },
+      });
+      expect(handleExecuteCommand).toHaveBeenCalledTimes(1);
+      const expected =
+        kind === "skill-restricted"
+          ? ["execute_command"]
+          : kind === "mode-restricted"
+            ? ["execute_command", "read_file"]
+            : ["execute_command", "read_file", "search_files"];
+      expect(vi.mocked(handleExecuteCommand).mock.calls[0]?.[5]).toMatchObject({
+        availableToolNames: new Set(expected),
+      });
+    },
+  );
 
   it("executes deferred transcript recall from a skill-restricted request catalog", async () => {
     const runtime = createAgentToolRuntime(mockCtx);
@@ -6177,6 +6260,93 @@ describe("dispatchToolCall", () => {
         }),
       );
     });
+
+    it.each([
+      "matching",
+      "wrong request",
+      "missing request",
+      "wrong session",
+      "wrong tool",
+      "changed subject",
+      "changed answer",
+      "unanswered",
+    ])(
+      "binds host human evidence through production runtime: %s",
+      async (scenario) => {
+        const { collectHumanQuestionAnswer } =
+          await import("@agentlink/protocol/structured-question");
+        const question = {
+          id: "q",
+          type: "yes_no" as const,
+          question: "Delete scratch only?",
+        };
+        const response: import("@agentlink/protocol/structured-question").UserQuestionResponse =
+          {
+            questionRequestId: "actual-host-request",
+            answers: { q: false },
+            notes: {},
+          };
+        response.humanQuestionAnswer = collectHumanQuestionAnswer(
+          {
+            schemaVersion: 1,
+            sessionId: "test-session",
+            questionRequestId: "actual-host-request",
+            toolCallId: "ask-tool",
+            context: "Bounded decision",
+            questions: [question],
+          },
+          response,
+        );
+        switch (scenario) {
+          case "wrong request":
+            response.humanQuestionAnswer!.binding.questionRequestId =
+              "different-host-request";
+            break;
+          case "missing request":
+            delete response.questionRequestId;
+            break;
+          case "wrong session":
+            response.humanQuestionAnswer!.binding.sessionId = "other";
+            break;
+          case "wrong tool":
+            response.humanQuestionAnswer!.binding.toolCallId = "other";
+            break;
+          case "changed subject":
+            response.humanQuestionAnswer!.binding.questions[0]!.question =
+              "Delete source too?";
+            break;
+          case "changed answer":
+            response.answers.q = true;
+            break;
+          case "unanswered":
+            response.answers = {};
+            delete response.humanQuestionAnswer;
+            break;
+        }
+        const runtime = createAgentToolRuntime({
+          ...mockCtx,
+          onQuestion: vi.fn().mockResolvedValue(response),
+        });
+        const result = await runtime.executeTool({
+          name: "ask_user",
+          input: {
+            context: "Bounded decision",
+            questions: [question],
+            trusted: true,
+            humanQuestionAnswer: response.humanQuestionAnswer,
+          },
+          context: { sessionId: "test-session", toolCallId: "ask-tool" },
+        });
+        if (scenario === "matching")
+          expect(result.humanQuestionAnswer).toMatchObject({
+            answers: { q: false },
+          });
+        else expect(result.humanQuestionAnswer).toBeUndefined();
+        expect((result.content[0] as { text: string }).text).not.toContain(
+          "humanQuestionAnswer",
+        );
+      },
+    );
 
     it("forwards the provider tool-call ID through the production runtime", async () => {
       const onQuestion = vi.fn().mockResolvedValue({

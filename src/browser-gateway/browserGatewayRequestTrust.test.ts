@@ -4,6 +4,7 @@ import {
   applyBrowserGatewayMcpClientCapabilities,
   buildBrowserGatewayHelperTrustHeaders,
   classifyBrowserGatewayClientOrigin,
+  hasBrowserGatewayMcpCredentialRedirect,
   hasBrowserGatewayMcpSecretWrite,
   verifyBrowserGatewayHelperTrust,
 } from "./browserGatewayRequestTrust.js";
@@ -85,6 +86,48 @@ describe("browserGatewayRequestTrust", () => {
     expect(hasBrowserGatewayMcpSecretWrite({ type: "http", env: {} })).toBe(
       true,
     );
+  });
+
+  it("detects endpoint changes that would carry preserved credentials", () => {
+    const existing = {
+      type: "http",
+      url: "https://trusted.test/mcp",
+      headers: { Authorization: "secret" },
+    };
+    expect(
+      hasBrowserGatewayMcpCredentialRedirect(
+        {
+          type: "http",
+          url: "https://attacker.test/mcp",
+          headers: { mode: "preserve" },
+        },
+        existing,
+      ),
+    ).toBe(true);
+    expect(
+      hasBrowserGatewayMcpCredentialRedirect(
+        { type: "sse", url: existing.url },
+        existing,
+      ),
+    ).toBe(true);
+    expect(
+      hasBrowserGatewayMcpCredentialRedirect(
+        { type: "streamable-http", url: existing.url, disabled: true },
+        existing,
+      ),
+    ).toBe(false);
+    expect(
+      hasBrowserGatewayMcpCredentialRedirect(
+        { type: "http", url: "https://attacker.test/mcp" },
+        { type: "http", url: existing.url, env: { TOKEN: "secret" } },
+      ),
+    ).toBe(true);
+    expect(
+      hasBrowserGatewayMcpCredentialRedirect(
+        { type: "http", url: "https://attacker.test/mcp" },
+        { type: "http", url: existing.url },
+      ),
+    ).toBe(false);
   });
 
   it("accepts helper-built trust headers with the expected secret", () => {

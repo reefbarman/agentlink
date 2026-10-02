@@ -1,9 +1,76 @@
 import { describe, expect, it } from "vitest";
 
-import { validateCommand } from "./pipeValidator.js";
+import { validateCommand as validateCommandImpl } from "./pipeValidator.js";
+
+function validateCommand(
+  command: string,
+  availableTools: ReadonlySet<string> = new Set(["read_file", "search_files"]),
+) {
+  return validateCommandImpl(command, availableTools);
+}
 
 describe("validateCommand", () => {
   // ── Direct file-reading commands ──────────────────────────────────
+
+  describe("request-aware file-reader guidance", () => {
+    it.each([
+      "cat private.txt",
+      "head -n 10 private.txt",
+      "tail -n 10 private.txt",
+      "grep needle private.txt",
+      "sed -n '1,5p' private.txt",
+      "pdftotext private.pdf -",
+    ])(
+      "keeps rejecting reads without excluded readers in examples (%s)",
+      (command) => {
+        const rejected = validateCommand(command, new Set(["execute_command"]));
+        expect(rejected?.message).toContain("Command rejected");
+        expect(rejected?.message).toContain("No authorized file-reading tool");
+        expect(rejected?.message).not.toMatch(/read_file|search_files/);
+      },
+    );
+
+    it("offers an authorised alternative without examples for an excluded preferred reader", () => {
+      const rejected = validateCommand(
+        "grep needle private.txt",
+        new Set(["read_file"]),
+      );
+      expect(rejected?.message).toContain("read_file tool is available");
+      expect(rejected?.message).not.toContain(
+        "No authorized file-reading tool",
+      );
+      expect(rejected?.message).not.toContain("search_files");
+    });
+
+    it("names a reader only when it is in the request snapshot", () => {
+      expect(
+        validateCommand("cat private.txt", new Set(["read_file"]))?.message,
+      ).toContain("Use the read_file tool");
+      expect(
+        validateCommand("grep needle private.txt", new Set(["search_files"]))
+          ?.message,
+      ).toContain("Use the search_files tool");
+    });
+
+    it("does not offer text search as a PDF extraction alternative", () => {
+      const rejected = validateCommand(
+        "pdftotext private.pdf -",
+        new Set(["search_files"]),
+      );
+      expect(rejected?.message).toContain(
+        "No authorized file-reading tool for this operation",
+      );
+      expect(rejected?.message).not.toMatch(/read_file|search_files/);
+    });
+
+    it("does not infer reader access when no request snapshot was supplied", () => {
+      const rejected = validateCommandImpl("cat private.txt");
+      expect(rejected?.message).toContain(
+        "No request-scoped tool inventory is available",
+      );
+      expect(rejected?.message).not.toMatch(/read_file|search_files/);
+    });
+  });
 
   describe("cat (read context)", () => {
     it("rejects cat with a file argument", () => {
@@ -391,7 +458,10 @@ describe("validateCommand", () => {
     });
 
     it("explains how to inspect an exact ignored file", () => {
-      const result = validateCommand("grep -E '^DEV_BUILD=' .env.local");
+      const result = validateCommand(
+        "grep -E '^DEV_BUILD=' .env.local",
+        new Set(["read_file", "search_files"]),
+      );
       expect(result).not.toBeNull();
       expect(result!.message).toContain(
         'search_files with path: ".env.local" and regex: "^DEV_BUILD="',
@@ -524,20 +594,30 @@ describe("validateCommand", () => {
     });
 
     it("rejects sed -n with a file argument", () => {
-      const result = validateCommand("sed -n '5p' file.txt");
+      const result = validateCommand(
+        "sed -n '5p' file.txt",
+        new Set(["read_file"]),
+      );
       expect(result).not.toBeNull();
       expect(result!.message).toContain("read_file");
-      expect(result!.message).toContain("search_files");
+      expect(result!.message).toContain("available in this provider request");
     });
 
     it("rejects sed -n with pattern match", () => {
-      const result = validateCommand("sed -n '/error/p' app.log");
+      const result = validateCommand(
+        "sed -n '/error/p' app.log",
+        new Set(["search_files"]),
+      );
       expect(result).not.toBeNull();
-      expect(result!.message).toContain("search_files");
+      expect(result!.message).toContain("search_files tool is available");
+      expect(result!.message).not.toContain("read_file");
     });
 
     it("rejects sed --quiet", () => {
-      const result = validateCommand("sed --quiet '1,10p' data.txt");
+      const result = validateCommand(
+        "sed --quiet '1,10p' data.txt",
+        new Set(["read_file"]),
+      );
       expect(result).not.toBeNull();
       expect(result!.message).toContain("read_file");
     });

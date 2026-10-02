@@ -34,6 +34,49 @@ describe("command tier classifier", () => {
     expect(tier("python --version")).toBe("safe");
   });
 
+  it.each([
+    "git restore --staged -- src/a.ts",
+    "git restore -S src/a.ts",
+    "git restore --quiet --staged -- .",
+    "git restore -S --progress -- src/a.ts src/b.ts",
+    "git restore --staged -- --worktree",
+    "git restore --staged -- *",
+  ])("classifies index-only unstaging as routine Git: %s", (command) => {
+    expect(classify(command).perSubCommand[0]?.result).toMatchObject({
+      tier: "sensitive",
+      code: "git_workflow",
+      executable: "git",
+    });
+    expect(isCommandEligibleForReadOnlyExecution(command, ctx).eligible).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    "git restore -- src/a.ts",
+    "git restore --staged --worktree -- src/a.ts",
+    "git restore -SW -- src/a.ts",
+    "git restore -S -W -- src/a.ts",
+    "git restore -S --worktr -- src/a.ts",
+    "git restore --staged --source=HEAD~1 -- src/a.ts",
+    "git restore -S -s HEAD -- src/a.ts",
+    String.raw`git restore --staged \--worktree src/a.ts`,
+    'git restore --staged "-"W src/a.ts',
+    "git restore --staged ''-W src/a.ts",
+    String.raw`git restore --staged \--source=HEAD~3 src/a.ts`,
+    "git restore --staged *",
+    "git restore --staged {-W,src/a.ts}",
+    "git restore --staged --patch -- src/a.ts",
+    "git restore --staged --pathspec-from-file=paths.txt",
+    "git restore --staged",
+    "git restore -- --staged",
+    "git -C ../other restore --staged -- src/a.ts",
+  ])("keeps other restore forms outside routine Git: %s", (command) => {
+    expect(classify(command).perSubCommand[0]?.result.code).not.toBe(
+      "git_workflow",
+    );
+  });
+
   it("classifies workspace-local mutations and unknown plain commands as sensitive", () => {
     expect(tier("mkdir src/generated")).toBe("sensitive");
     expect(tier("npm test")).toBe("sensitive");

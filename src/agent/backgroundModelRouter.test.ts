@@ -93,6 +93,46 @@ function generalRequest(
 }
 
 describe("resolveBackgroundRoute", () => {
+  it.each([
+    [{ ownedPaths: ["src/fix.ts"] }, "code"],
+    [{ ownedPaths: [] }, "debug"],
+    [{}, "debug"],
+    [{ ownedPaths: ["src/fix.ts"], mode: "debug" }, "debug"],
+    [{ ownedPaths: ["src/fix.ts"], permissionProfile: "review-only" }, "debug"],
+    [{ ownedPaths: ["src/fix.ts"], taskClass: "readonly-research" }, "ask"],
+    [{ ownedPaths: ["src/fix.ts"], taskClass: "review_code" }, "review"],
+  ] as Array<[Partial<SpawnBackgroundRequest>, string]>)(
+    "preserves mode constraints for scoped debug request %j",
+    async (overrides, expectedMode) => {
+      const model = tieredModel("debug-model", "custom", "balanced");
+      const registry = makeRegistry([makeProvider("custom", [model])]);
+      const route = await resolveBackgroundRoute(
+        registry,
+        generalRequest({ taskClass: "debug", model: model.id, ...overrides }),
+        { mode: "code", model: model.id },
+      );
+      expect(route.resolvedMode).toBe(expectedMode);
+    },
+  );
+
+  it.each(["ask", "architect", "review", "debug", "orchestrate", "custom"])(
+    "does not default scoped debugging to writable mode from %s",
+    async (mode) => {
+      const model = tieredModel("debug-model", "custom", "balanced");
+      const registry = makeRegistry([makeProvider("custom", [model])]);
+      const route = await resolveBackgroundRoute(
+        registry,
+        generalRequest({
+          taskClass: "debug",
+          model: model.id,
+          ownedPaths: ["src/fix.ts"],
+        }),
+        { mode, model: model.id },
+      );
+      expect(route.resolvedMode).toBe("debug");
+    },
+  );
+
   it("defaults ordinary work to one tier below the foreground model", async () => {
     const provider = "openai-compatible:claude";
     const opus = tieredModel("custom-opus", provider, "deep_reasoning");
