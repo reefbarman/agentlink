@@ -1,4 +1,5 @@
 import type { ContentBlock } from "@agentlink/protocol/chat-transcript";
+import { useRemoteToolDetail } from "./RemoteToolDetail";
 import { useState } from "preact/hooks";
 
 type SkillLoadData = ContentBlock & { type: "skill_load" };
@@ -37,6 +38,8 @@ export function getSkillLoadVisualState(
   block: SkillLoadData,
 ): "tool-running" | "tool-error" | "tool-warning" | "tool-success" {
   if (!block.complete) return "tool-running";
+  if (block.remoteDetail?.status === "error") return "tool-error";
+  if (block.remoteDetail?.status === "interrupted") return "tool-warning";
   const status = parseResultStatus(block.result);
   if (
     parseHasError(block.result) ||
@@ -58,8 +61,10 @@ export function getSkillLoadVisualState(
   return "tool-success";
 }
 
-export function SkillLoadBlock({ block }: SkillLoadBlockProps) {
+export function SkillLoadBlock({ block: projectedBlock }: SkillLoadBlockProps) {
   const [expanded, setExpanded] = useState(false);
+  const remoteDetail = useRemoteToolDetail(projectedBlock, expanded);
+  const block = remoteDetail.block;
   const summary =
     (block.skillName ?? formatPath(block.path)) || "Loading skill…";
 
@@ -93,6 +98,33 @@ export function SkillLoadBlock({ block }: SkillLoadBlockProps) {
 
       {expanded && (
         <div class="tool-call-details">
+          {projectedBlock.remoteDetail?.available === false && (
+            <div class="tool-call-remote-detail tool-warning" role="status">
+              This skill detail is unavailable in this AgentLink version. Update
+              AgentLink to view it.
+            </div>
+          )}
+          {remoteDetail.loading && (
+            <div class="tool-call-remote-detail" role="status">
+              Loading full skill detail…
+            </div>
+          )}
+          {remoteDetail.error && (
+            <div class="tool-call-remote-detail tool-error" role="alert">
+              <span>{remoteDetail.error}</span>
+              <button type="button" onClick={remoteDetail.retry}>
+                Retry
+              </button>
+            </div>
+          )}
+          {block.remoteDetail?.warning && (
+            <div class="tool-call-remote-detail tool-warning" role="status">
+              <span>{block.remoteDetail.warning}</span>
+              <button type="button" onClick={remoteDetail.retry}>
+                Retry
+              </button>
+            </div>
+          )}
           {block.skillName && (
             <div class="tool-call-section">
               <div class="tool-call-section-label">Skill</div>

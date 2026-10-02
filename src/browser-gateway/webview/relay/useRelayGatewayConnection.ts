@@ -22,6 +22,10 @@ import {
   RelaySnapshotProjector,
 } from "./relaySnapshotProjection";
 import { parseSessionDetail } from "../sessionDetailTransport";
+import type {
+  TranscriptBlockDetailRequest,
+  TranscriptBlockDetailResponse,
+} from "../../dataPlane/transcriptBlockDetail";
 
 export type RelaySourceEventPaintCategory =
   | "text"
@@ -120,6 +124,10 @@ export interface RelaySessionDetailResponse {
 }
 
 export interface RelayGatewayConnection {
+  blockDetailScopeKey: string | null;
+  requestBlockDetail: (
+    request: TranscriptBlockDetailRequest,
+  ) => Promise<TranscriptBlockDetailResponse>;
   dispatchCommand: (
     command: BrowserGatewayOwnerCommandBody,
     operationId?: string,
@@ -273,7 +281,70 @@ export function useRelayGatewayConnection(
     [],
   );
 
-  return { dispatchCommand, requestSessionDetail };
+  const blockDetailScopeKey = managerRef.current?.blockDetailScopeKey ?? null;
+  const expectedTabId = options.selectedTabId;
+  const expectedTabGeneration = options.selectedTabGeneration;
+  const requestBlockDetail = useCallback(
+    async (
+      request: TranscriptBlockDetailRequest,
+    ): Promise<TranscriptBlockDetailResponse> => {
+      const current = latest.current;
+      const manager = managerRef.current;
+      if (
+        current.selectedTabId !== expectedTabId ||
+        current.selectedTabGeneration !== expectedTabGeneration ||
+        manager?.blockDetailScopeKey !== blockDetailScopeKey
+      ) {
+        throw new Error("Tool detail selection changed.");
+      }
+      const owner = resolveOwnerForTab(
+        catalogRef.current,
+        current.selectedTabId,
+      );
+      if (
+        !current.enabled ||
+        !manager ||
+        !owner ||
+        !manager.isSubscribedTo(owner) ||
+        !owner.capabilities.some(
+          (capability) =>
+            capability.capabilityId === "transcript.block-detail" &&
+            capability.state === "enabled",
+        )
+      ) {
+        throw new Error(
+          "Tool details are unavailable. Reconnect or update the session owner.",
+        );
+      }
+      const scopeKey = manager.blockDetailScopeKey;
+      const result = await manager.requestBlockDetail(request);
+      const next = latest.current;
+      const nextOwner = resolveOwnerForTab(
+        catalogRef.current,
+        next.selectedTabId,
+      );
+      if (
+        !next.enabled ||
+        managerRef.current !== manager ||
+        manager.blockDetailScopeKey !== scopeKey ||
+        next.selectedTabId !== current.selectedTabId ||
+        next.selectedTabGeneration !== current.selectedTabGeneration ||
+        nextOwner?.ownerId !== owner.ownerId ||
+        nextOwner.ownerGenerationId !== owner.ownerGenerationId
+      ) {
+        throw new Error("Tool detail selection changed.");
+      }
+      return result;
+    },
+    [blockDetailScopeKey, expectedTabId, expectedTabGeneration],
+  );
+
+  return {
+    dispatchCommand,
+    requestSessionDetail,
+    requestBlockDetail,
+    blockDetailScopeKey,
+  };
 }
 
 export async function commitRelayCheckpoint(options: {

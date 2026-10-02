@@ -6,6 +6,7 @@ import {
   type BrowserGatewayOwnerEvent,
   type BrowserGatewayOwnerPublicationBatch,
 } from "../dataPlane/protocol.js";
+import type { BrowserGatewayDetailHandle } from "@agentlink/protocol/browser-gateway-data-plane-identity";
 import { OwnerRelayStore } from "./OwnerRelayStore.js";
 
 const helperGenerationId = "helper-1";
@@ -89,6 +90,39 @@ function batch(params: {
 }
 
 describe("OwnerRelayStore", () => {
+  it("keeps tool-result eviction separate from pending interaction details", () => {
+    const store = new OwnerRelayStore({
+      helperGenerationId,
+      now: () => 1_000,
+      authenticatedDetailStoreBytes: 10,
+      authenticatedToolDetailStoreBytes: 10,
+    });
+    const bytes = Buffer.from("12345678");
+    const handle = (
+      handleId: string,
+      kind: BrowserGatewayDetailHandle["kind"],
+    ): BrowserGatewayDetailHandle => ({
+      helperGenerationId,
+      ownerId,
+      ownerGenerationId,
+      handleId,
+      kind,
+      byteLength: bytes.byteLength,
+      expiresAt: 2_000,
+    });
+    store.putDetail(handle("question", "interaction"), bytes);
+    store.putDetail(handle("tool-old", "tool"), bytes);
+    store.putDetail(handle("tool-new", "tool"), bytes);
+    const get = (handleId: string) =>
+      store.getDetail({ handleId, ownerId, ownerGenerationId });
+    expect(get("tool-old")).toBeNull();
+    expect(get("tool-new")?.content).toEqual(bytes);
+    expect(get("question")?.content).toEqual(bytes);
+    store.putDetail(handle("another-question", "interaction"), bytes);
+    expect(get("tool-new")?.content).toEqual(bytes);
+    store.close();
+  });
+
   it("stores checkpoints, emits globally ordered relay records, and replays after a cursor", () => {
     const store = new OwnerRelayStore({ helperGenerationId, now: () => 1_000 });
     const listener = vi.fn();

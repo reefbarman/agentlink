@@ -253,11 +253,22 @@ export class BrowserGatewayOwnerRuntime {
     this.commandControllers.set(command.operationId, controller);
     try {
       await this.acknowledge(command, { state: "accepted" });
-      const result = await this.options.executor.execute(
-        command.command,
-        controller.signal,
-        command.operationId,
-      );
+      const result =
+        command.command.kind === "transcript.block-detail"
+          ? {
+              detail: {
+                content: this.requireProjection().getBlockDetailContent(
+                  command.command,
+                ),
+                mediaType: "application/json; charset=utf-8",
+                kind: "tool" as const,
+              },
+            }
+          : await this.options.executor.execute(
+              command.command,
+              controller.signal,
+              command.operationId,
+            );
       if (controller.signal.aborted) return;
       let detailHandle: BrowserGatewayDetailHandle | undefined;
       if (result?.detail) {

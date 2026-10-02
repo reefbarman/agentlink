@@ -10,6 +10,12 @@ import {
   type RelayEventSource,
 } from "./RelayConnectionManager";
 import { RelayOwnerStore } from "./RelayOwnerStore";
+import {
+  encodeTranscriptBlockDetail,
+  transcriptBlockContentRevision,
+  type TranscriptDisplayBlock,
+  type TranscriptBlockDetailRequest,
+} from "../../dataPlane/transcriptBlockDetail";
 
 const helperGenerationId = "helper-1";
 const ownerId = "owner-1";
@@ -553,6 +559,95 @@ describe("RelayConnectionManager", () => {
     ).toHaveLength(1);
     manager.close();
   });
+
+  it.each([false, true])(
+    "retrieves block details through authenticated delivery and refreshes evicted handles (%s)",
+    async (evictFirst) => {
+      const sources: EventSourceFixture[] = [];
+      const block: TranscriptDisplayBlock = {
+        type: "tool_call",
+        id: "tool-1",
+        name: "read_file",
+        inputJson: '{"path":"private.md"}',
+        result: "private output",
+        complete: true,
+      };
+      const request: TranscriptBlockDetailRequest = {
+        kind: "transcript.block-detail",
+        sessionId: "session-1",
+        messageId: "message-1",
+        blockId: block.id,
+        contentRevision: transcriptBlockContentRevision(block),
+      };
+      const content = encodeTranscriptBlockDetail(request, block);
+      const commands: TranscriptBlockDetailRequest[] = [];
+      let reads = 0;
+      const fetch = vi.fn(
+        async (
+          input: RequestInfo | URL,
+          init?: RequestInit,
+        ): Promise<Response> => {
+          const path = String(input);
+          if (path.endsWith("/subscription"))
+            return jsonResponse(subscription(), 202);
+          if (path.endsWith("/commands")) {
+            const body = JSON.parse(String(init?.body));
+            commands.push(body.command);
+            return jsonResponse({
+              ok: true,
+              ownerId,
+              ownerGenerationId,
+              operation: {
+                operationId: body.operationId,
+                kind: request.kind,
+                state: "completed",
+                detailHandle: {
+                  helperGenerationId,
+                  ownerId,
+                  ownerGenerationId,
+                  handleId: `tool-detail-${commands.length}`,
+                  kind: "tool",
+                  byteLength: content.byteLength,
+                  expiresAt: 2_000,
+                  mediaType: "application/json; charset=utf-8",
+                },
+              },
+            });
+          }
+          if (path.startsWith("/api/relay/details?")) {
+            expect(init?.credentials).toBe("same-origin");
+            reads += 1;
+            if (evictFirst && reads === 1)
+              return new Response(null, { status: 404 });
+            return new Response(Uint8Array.from(content), {
+              headers: { "Content-Type": "application/json; charset=utf-8" },
+            });
+          }
+          throw new Error(`unexpected request: ${path}`);
+        },
+      );
+      const manager = new RelayConnectionManager({
+        store: new RelayOwnerStore(),
+        fetch: fetch as typeof globalThis.fetch,
+        now: () => 1_000,
+        eventSourceFactory: (url) => {
+          const source = new EventSourceFixture(url);
+          sources.push(source);
+          return source;
+        },
+      });
+      manager.selectOwner({ ownerId, ownerGenerationId });
+      manager.start();
+      sources[0]!.emit("hello", hello());
+      await waitForSubscription(manager, { ownerId, ownerGenerationId });
+      await expect(manager.requestBlockDetail(request)).resolves.toMatchObject({
+        state: "ready",
+        block: { inputJson: block.inputJson, result: block.result },
+      });
+      expect(commands).toEqual(evictFirst ? [request, request] : [request]);
+      manager.close();
+    },
+  );
 
   it("reports a caller-addressed send completion before its command response", async () => {
     const sources: EventSourceFixture[] = [];

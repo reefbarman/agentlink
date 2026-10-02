@@ -11,7 +11,12 @@ import {
   type BrowserGatewayOwnerEvent,
 } from "../../dataPlane/protocol";
 import { randomId } from "../../../shared/randomId";
-import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "../../dataPlane/limits";
+import { browserGatewayDetailResponseByteLimit } from "../../dataPlane/limits";
+import {
+  parseTranscriptBlockDetailResponse,
+  type TranscriptBlockDetailRequest,
+  type TranscriptBlockDetailResponse,
+} from "../../dataPlane/transcriptBlockDetail";
 import {
   type RelayCatalogOwner,
   type RelayCheckpointRecord,
@@ -278,6 +283,17 @@ export class RelayConnectionManager {
     if (this.connection) void this.subscribeCurrentOwner();
   }
 
+  get blockDetailScopeKey(): string | null {
+    const subscription = this.subscription;
+    return subscription
+      ? [
+          subscription.helperGenerationId,
+          subscription.ownerId,
+          subscription.ownerGenerationId,
+        ].join("\u0000")
+      : null;
+  }
+
   isSubscribedTo(owner: RelayOwnerSelection): boolean {
     return Boolean(this.subscription && sameOwner(this.subscription, owner));
   }
@@ -285,6 +301,38 @@ export class RelayConnectionManager {
   async requestSessionDetail(
     request: RelaySessionDetailRequest,
   ): Promise<RelaySessionDetailResult> {
+    return this.requestCommandDetail(
+      { kind: "session.detail", ...request },
+      "session",
+    );
+  }
+
+  async requestBlockDetail(
+    request: TranscriptBlockDetailRequest,
+  ): Promise<TranscriptBlockDetailResponse> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const result = await this.requestCommandDetail(request, "tool");
+        return parseTranscriptBlockDetailResponse(result.content, request);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        if (
+          attempt === 0 &&
+          (message === "relay_block_detail_failed_404" ||
+            message === "relay_block_detail_handle_expired")
+        )
+          continue;
+        throw error;
+      }
+    }
+  }
+
+  private async requestCommandDetail(
+    command: BrowserGatewayOwnerCommandBody,
+    kind: BrowserGatewayDetailHandle["kind"],
+  ): Promise<RelaySessionDetailResult> {
+    const prefix =
+      kind === "session" ? "relay_session_detail" : "relay_block_detail";
     const subscription = this.subscription;
     if (!subscription) throw new Error("relay_subscription_required");
     const operationId = randomId();
@@ -292,7 +340,7 @@ export class RelayConnectionManager {
       this.operationWaiters.set(operationId, {
         ownerId: subscription.ownerId,
         ownerGenerationId: subscription.ownerGenerationId,
-        kind: "session.detail",
+        kind: command.kind,
         resolve,
       });
     });
@@ -300,33 +348,31 @@ export class RelayConnectionManager {
     try {
       const initial = await this.sendCommand({
         operationId,
-        command: { kind: "session.detail", ...request },
+        command,
       });
       const operation = initial.state === "accepted" ? await terminal : initial;
       if (
         operation.state !== "completed" ||
-        operation.kind !== "session.detail" ||
+        operation.kind !== command.kind ||
         !operation.detailHandle
       ) {
-        throw new Error(
-          operation.message ?? `relay_session_detail_${operation.state}`,
-        );
+        throw new Error(operation.message ?? `${prefix}_${operation.state}`);
       }
       if (subscription !== this.subscription) {
-        throw new Error("relay_session_detail_subscription_changed");
+        throw new Error(`${prefix}_subscription_changed`);
       }
       const handle = operation.detailHandle;
+      if (handle.expiresAt <= this.now())
+        throw new Error(`${prefix}_handle_expired`);
       if (
         handle.helperGenerationId !== subscription.helperGenerationId ||
         handle.ownerId !== subscription.ownerId ||
         handle.ownerGenerationId !== subscription.ownerGenerationId ||
-        handle.kind !== "session" ||
+        handle.kind !== kind ||
         handle.mediaType !== "application/json; charset=utf-8" ||
-        handle.expiresAt <= this.now() ||
-        handle.byteLength >
-          BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedSessionDetailResponseBytes
+        handle.byteLength > browserGatewayDetailResponseByteLimit(kind)
       ) {
-        throw new Error("relay_session_detail_handle_invalid");
+        throw new Error(`${prefix}_handle_invalid`);
       }
       const query = new URLSearchParams({
         handleId: handle.handleId,
@@ -337,14 +383,14 @@ export class RelayConnectionManager {
         credentials: "same-origin",
       });
       if (!response.ok) {
-        throw new Error(`relay_session_detail_failed_${response.status}`);
+        throw new Error(`${prefix}_failed_${response.status}`);
       }
       const content = new Uint8Array(await response.arrayBuffer());
       if (subscription !== this.subscription) {
-        throw new Error("relay_session_detail_subscription_changed");
+        throw new Error(`${prefix}_subscription_changed`);
       }
       if (content.byteLength !== handle.byteLength) {
-        throw new Error("relay_session_detail_size_mismatch");
+        throw new Error(`${prefix}_size_mismatch`);
       }
       return { operationId, handle, content };
     } finally {

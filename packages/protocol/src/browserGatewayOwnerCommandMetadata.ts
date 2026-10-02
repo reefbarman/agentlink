@@ -1,6 +1,7 @@
 export const BROWSER_GATEWAY_OWNER_COMMAND_KINDS = Object.freeze([
   "session.select",
   "session.detail",
+  "transcript.block-detail",
   "session.send",
   "session.stop",
   "approval.respond",
@@ -31,6 +32,7 @@ export type BrowserGatewayCommandDeadlineClass =
 export const BROWSER_GATEWAY_COMMAND_IDEMPOTENCY = Object.freeze({
   "session.select": "idempotent",
   "session.detail": "idempotent",
+  "transcript.block-detail": "idempotent",
   "session.send": "non_idempotent",
   "session.stop": "idempotent",
   "approval.respond": "non_idempotent",

@@ -15,6 +15,7 @@ describe("browser gateway owner command metadata", () => {
     expect(BROWSER_GATEWAY_OWNER_COMMAND_KINDS).toEqual([
       "session.select",
       "session.detail",
+      "transcript.block-detail",
       "session.send",
       "session.stop",
       "approval.respond",
@@ -31,6 +32,7 @@ describe("browser gateway owner command metadata", () => {
     expectTypeOf<BrowserGatewayOwnerCommandKind>().toEqualTypeOf<
       | "session.select"
       | "session.detail"
+      | "transcript.block-detail"
       | "session.send"
       | "session.stop"
       | "approval.respond"
@@ -78,6 +80,7 @@ describe("browser gateway owner command metadata", () => {
     expect(BROWSER_GATEWAY_COMMAND_IDEMPOTENCY).toEqual({
       "session.select": "idempotent",
       "session.detail": "idempotent",
+      "transcript.block-detail": "idempotent",
       "session.send": "non_idempotent",
       "session.stop": "idempotent",
       "approval.respond": "non_idempotent",

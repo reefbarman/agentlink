@@ -70,6 +70,7 @@ export interface OwnerRelayStoreOptions {
   readonly authenticatedDetailResponseBytes?: number;
   readonly authenticatedSessionDetailResponseBytes?: number;
   readonly authenticatedDetailStoreBytes?: number;
+  readonly authenticatedToolDetailStoreBytes?: number;
 }
 
 type StoredReplayRecord = {
@@ -116,9 +117,11 @@ export class OwnerRelayStore {
   private readonly detailResponseBytes: number;
   private readonly sessionDetailResponseBytes: number;
   private readonly detailStoreBytes: number;
+  private readonly toolDetailStoreBytes: number;
   private nextRelaySequence = 1;
   private totalReplayBytes = 0;
   private totalDetailBytes = 0;
+  private totalToolDetailBytes = 0;
 
   constructor(private readonly options: OwnerRelayStoreOptions) {
     this.now = options.now ?? Date.now;
@@ -143,6 +146,9 @@ export class OwnerRelayStore {
     this.detailStoreBytes =
       options.authenticatedDetailStoreBytes ??
       BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailStoreBytes;
+    this.toolDetailStoreBytes =
+      options.authenticatedToolDetailStoreBytes ??
+      BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedToolDetailStoreBytes;
   }
 
   get latestRelaySequence(): number {
@@ -350,8 +356,9 @@ export class OwnerRelayStore {
       storedAt: this.now(),
     };
     this.details.set(key, detail);
-    this.totalDetailBytes += bytes.byteLength;
-    this.pruneDetailBudget();
+    if (handle.kind === "tool") this.totalToolDetailBytes += bytes.byteLength;
+    else this.totalDetailBytes += bytes.byteLength;
+    this.pruneDetailBudget(handle.kind === "tool");
   }
 
   getDetail(params: {
@@ -377,6 +384,7 @@ export class OwnerRelayStore {
     this.details.clear();
     this.totalReplayBytes = 0;
     this.totalDetailBytes = 0;
+    this.totalToolDetailBytes = 0;
   }
 
   private allocateRelaySequence(): number {
@@ -461,11 +469,16 @@ export class OwnerRelayStore {
     }
   }
 
-  private pruneDetailBudget(): void {
-    while (this.totalDetailBytes > this.detailStoreBytes) {
-      const oldest = this.details.entries().next().value as
-        | [string, StoredDetail]
-        | undefined;
+  private pruneDetailBudget(toolDetails: boolean): void {
+    const budget = toolDetails
+      ? this.toolDetailStoreBytes
+      : this.detailStoreBytes;
+    while (
+      (toolDetails ? this.totalToolDetailBytes : this.totalDetailBytes) > budget
+    ) {
+      const oldest = [...this.details.entries()].find(
+        ([, detail]) => (detail.handle.kind === "tool") === toolDetails,
+      );
       if (!oldest) break;
       this.deleteDetail(oldest[0], oldest[1]);
     }
@@ -473,7 +486,9 @@ export class OwnerRelayStore {
 
   private deleteDetail(key: string, detail: StoredDetail): void {
     if (!this.details.delete(key)) return;
-    this.totalDetailBytes -= detail.content.byteLength;
+    if (detail.handle.kind === "tool")
+      this.totalToolDetailBytes -= detail.content.byteLength;
+    else this.totalDetailBytes -= detail.content.byteLength;
   }
 }
 

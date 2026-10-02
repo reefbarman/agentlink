@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { BrowserGatewayCoreOwnerLeaseRegistration } from "../protocol.js";
 import {
+  parseTranscriptBlockDetailResponse,
+  transcriptBlockContentRevision,
+  type TranscriptDisplayBlock,
+  type TranscriptBlockDetailRequest,
+} from "./transcriptBlockDetail.js";
+import {
   BROWSER_GATEWAY_COMMAND_IDEMPOTENCY,
   BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
   type BrowserGatewayDetailHandle,
@@ -246,6 +252,91 @@ function makeRuntime(
 }
 
 describe("BrowserGatewayOwnerRuntime", () => {
+  it("retrieves workspace tool details through the production runtime without executing a tool", async () => {
+    const transport = new FakeTransport();
+    const sources = new ProjectionSources();
+    const block: TranscriptDisplayBlock = {
+      type: "tool_call",
+      id: "workspace-tool",
+      name: "read_file",
+      inputJson: '{"path":"distinctive.md"}',
+      result: "distinctive workspace result",
+      complete: true,
+    };
+    const source = readSet();
+    source.foreground = {
+      sessionId: "session-1",
+      title: "Workspace",
+      mode: "code",
+      model: "model-1",
+      status: "idle",
+      streaming: false,
+      statusOverride: null,
+      thinkingEnabled: true,
+      reasoningEffort: "high",
+      serviceTier: "standard",
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      lastCacheReadTokens: 0,
+      contextHealth: null,
+      restoringSession: false,
+      revertRecoveryNotice: null,
+      messages: [
+        {
+          id: "workspace-message",
+          role: "assistant",
+          content: "",
+          timestamp: 1_000,
+          blocks: [block],
+        },
+      ],
+      earlierCursor: null,
+      hasEarlier: false,
+      cursorBeforeMessage: () => "cursor",
+      queue: [],
+      todos: [],
+    };
+    vi.spyOn(sources, "capture").mockReturnValue(source);
+    const request: TranscriptBlockDetailRequest = {
+      kind: "transcript.block-detail",
+      sessionId: "session-1",
+      messageId: "workspace-message",
+      blockId: block.id,
+      contentRevision: transcriptBlockContentRevision(block),
+    };
+    transport.eventsDuringRegister.push({
+      kind: "command",
+      value: command("block-detail", request),
+    });
+    const { runtime, execute } = makeRuntime(transport, sources);
+    await runtime.start();
+    await vi.waitFor(() =>
+      expect(transport.acknowledgements.at(-1)?.operation.state).toBe(
+        "completed",
+      ),
+    );
+    expect(execute).not.toHaveBeenCalled();
+    const upload = transport.detailUploads[0];
+    expect(upload?.handle).toMatchObject({
+      helperGenerationId,
+      ownerId: effectiveOwnerId,
+      ownerGenerationId,
+      kind: "tool",
+    });
+    expect(
+      parseTranscriptBlockDetailResponse(upload.content, request),
+    ).toMatchObject({
+      state: "ready",
+      block: { inputJson: block.inputJson, result: block.result },
+    });
+    expect(transport.lifecycle).toEqual([
+      "ack:accepted",
+      "detail_uploaded",
+      "ack:completed",
+    ]);
+    await runtime.close();
+  });
+
   it("buffers registration-time controls and binds publications to the effective owner identity", async () => {
     const transport = new FakeTransport();
     const sources = new ProjectionSources();

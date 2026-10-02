@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Restored full expandable tool-call and skill details in Desktop and Browser Ask Agent using the shared VS Code cards. Inputs, outputs, errors, approval information and returned media load on demand, with explicit unavailable, update-required and oversized states instead of silently empty details.
+
 - Native commands now confirm script consumption before reporting readiness, rather than treating shell-wrapper start as proof the approved command launched. Unconfirmed completion preserves launch diagnostics and reports unknown execution state without automatic retry. Private command artifacts retain their existing lifetime protection through completion or terminal closure.
 
 - Bounded `read_file` context previews for minified and very long-line files: at most 2,000 characters per source line and 20,000 total, with omitted-byte counts and `character_offset` continuation arguments. Exact content reads are unchanged.

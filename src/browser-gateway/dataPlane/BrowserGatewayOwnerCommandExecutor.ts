@@ -12,6 +12,7 @@ import type {
 export const BROWSER_GATEWAY_PRODUCTION_OWNER_COMMAND_CAPABILITIES = [
   "session.select",
   "session.detail",
+  "transcript.block-detail",
   "session.send",
   "session.stop",
 ] as const satisfies readonly BrowserGatewayOwnerCommandKind[];
@@ -91,6 +92,7 @@ export class ProductionBrowserGatewayOwnerCommandExecutor implements BrowserGate
         if (!result.ok) throw new Error("browser_gateway_session_stop_failed");
         return;
       }
+      case "transcript.block-detail":
       case "approval.respond":
       case "question.respond":
       case "history.load":

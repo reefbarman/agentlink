@@ -2,6 +2,13 @@ import type { BackgroundResultState } from "./backgroundResult.js";
 import type { BrowserGatewayTranscriptText } from "./browserGatewayTranscriptText.js";
 import type { CoreReasoningEffort } from "./modelCatalog.js";
 
+export interface BrowserGatewayTranscriptBlockDetailSummary {
+  contentRevision: number;
+  status?: "error" | "interrupted";
+  imageCount?: number;
+  documentCount?: number;
+}
+
 export type BrowserGatewayTranscriptBlock =
   | {
       type: "thinking";
@@ -22,6 +29,7 @@ export type BrowserGatewayTranscriptBlock =
       complete: boolean;
       durationMs?: number;
       startedAt?: number;
+      detail?: BrowserGatewayTranscriptBlockDetailSummary;
     }
   | {
       type: "skill_load";
@@ -29,6 +37,7 @@ export type BrowserGatewayTranscriptBlock =
       skillName?: string;
       complete: boolean;
       durationMs?: number;
+      detail?: BrowserGatewayTranscriptBlockDetailSummary;
     }
   | {
       type: "bg_agent";

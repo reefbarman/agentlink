@@ -7,6 +7,7 @@ import { JsonHighlight } from "../../../shared/ui/JsonHighlight";
 import type { McpApprovalPromotionMeta } from "@agentlink/protocol/tool-result";
 import { matchFilePaths } from "./filePathLinks";
 import { recordFileLinkClick } from "./fileLinkFeedback";
+import { useRemoteToolDetail } from "./RemoteToolDetail";
 
 export type ToolCallData = ContentBlock & { type: "tool_call" };
 
@@ -112,7 +113,9 @@ export function fmtToolTimestamp(timestamp: number): string {
 
 /** Number of viewable images in a completed tool call's result. */
 export function countResultImages(toolCall: ToolCallData): number {
-  return toolCall.complete ? (toolCall.resultImages?.length ?? 0) : 0;
+  return toolCall.complete
+    ? toolCall.resultImages?.length || toolCall.remoteDetail?.imageCount || 0
+    : 0;
 }
 
 export function formatResultImageLabel(count: number): string {
@@ -120,7 +123,11 @@ export function formatResultImageLabel(count: number): string {
 }
 
 export function countResultDocuments(toolCall: ToolCallData): number {
-  return toolCall.complete ? (toolCall.resultDocuments?.length ?? 0) : 0;
+  return toolCall.complete
+    ? toolCall.resultDocuments?.length ||
+        toolCall.remoteDetail?.documentCount ||
+        0
+    : 0;
 }
 
 export function formatResultMediaLabel(
@@ -657,6 +664,7 @@ export function getToolCallVisualState(toolCall: {
   name: string;
   complete: boolean;
   result: string;
+  remoteDetail?: ToolCallData["remoteDetail"];
 }): ToolCallVisualState {
   const { complete, name, result } = toolCall;
   const resultPayload = complete ? parseResultObject(result) : null;
@@ -667,11 +675,15 @@ export function getToolCallVisualState(toolCall: {
   const cmdExitBadge =
     rawExitCode !== null && rawExitCode !== "0" ? rawExitCode : null;
 
-  const isError = complete && hasToolError(resultPayload);
+  const isError =
+    complete &&
+    (toolCall.remoteDetail?.status === "error" || hasToolError(resultPayload));
   const isWarning =
     complete &&
     !isError &&
-    (cmdExitBadge !== null || hasToolWarning(resultPayload));
+    (toolCall.remoteDetail?.status === "interrupted" ||
+      cmdExitBadge !== null ||
+      hasToolWarning(resultPayload));
 
   const statusClass = !complete
     ? "tool-running"
@@ -693,7 +705,7 @@ export function getToolCallVisualState(toolCall: {
 }
 
 export function ToolCallBlock({
-  toolCall,
+  toolCall: projectedToolCall,
   onOpenFile,
   onOpenImageInEditor,
   onRevealToolCallTerminal,
@@ -703,6 +715,8 @@ export function ToolCallBlock({
   onPromoteMcpToolApproval,
 }: ToolCallBlockProps) {
   const [expanded, setExpanded] = useState(false);
+  const remoteDetail = useRemoteToolDetail(projectedToolCall, expanded);
+  const toolCall = remoteDetail.block;
   const [promotedScopes, setPromotedScopes] = useState<
     Set<"session" | "project" | "global">
   >(new Set());
@@ -827,6 +841,9 @@ export function ToolCallBlock({
   const resultDocuments =
     complete && toolCall.resultDocuments ? toolCall.resultDocuments : [];
   const resultMediaCount = resultImages.length + resultDocuments.length;
+  const displayedImageCount = countResultImages(toolCall);
+  const displayedDocumentCount = countResultDocuments(toolCall);
+  const displayedMediaCount = displayedImageCount + displayedDocumentCount;
   const displayedResult =
     resultMediaCount > 0
       ? stripMediaPlaceholderLines(toolCall.result)
@@ -971,18 +988,18 @@ export function ToolCallBlock({
                 )}
             </span>
           )}
-          {resultMediaCount > 0 && (
+          {displayedMediaCount > 0 && (
             <span
               class="tool-image-badge"
               role="img"
               aria-label={formatResultMediaLabel(
-                resultImages.length,
-                resultDocuments.length,
+                displayedImageCount,
+                displayedDocumentCount,
               )}
-              title={`${formatResultMediaLabel(resultImages.length, resultDocuments.length)} — expand to view`}
+              title={`${formatResultMediaLabel(displayedImageCount, displayedDocumentCount)} — expand to view`}
             >
               <i class="codicon codicon-file-media" aria-hidden="true" />
-              {resultMediaCount > 1 && resultMediaCount}
+              {displayedMediaCount > 1 && displayedMediaCount}
             </span>
           )}
           {complete && toolCall.durationMs != null && (
@@ -1046,6 +1063,33 @@ export function ToolCallBlock({
 
       {expanded && (
         <div class="tool-call-details">
+          {projectedToolCall.remoteDetail?.available === false && (
+            <div class="tool-call-remote-detail tool-warning" role="status">
+              This tool detail is unavailable in this AgentLink version. Update
+              AgentLink to view it.
+            </div>
+          )}
+          {remoteDetail.loading && (
+            <div class="tool-call-remote-detail" role="status">
+              Loading full tool detail…
+            </div>
+          )}
+          {remoteDetail.error && (
+            <div class="tool-call-remote-detail tool-error" role="alert">
+              <span>{remoteDetail.error}</span>
+              <button type="button" onClick={remoteDetail.retry}>
+                Retry
+              </button>
+            </div>
+          )}
+          {toolCall.remoteDetail?.warning && (
+            <div class="tool-call-remote-detail tool-warning" role="status">
+              <span>{toolCall.remoteDetail.warning}</span>
+              <button type="button" onClick={remoteDetail.retry}>
+                Retry
+              </button>
+            </div>
+          )}
           {toolCall.startedAt != null && (
             <div class="tool-call-section">
               <div class="tool-call-section-label">Timing</div>

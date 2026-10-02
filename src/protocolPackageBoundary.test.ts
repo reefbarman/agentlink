@@ -4135,6 +4135,7 @@ describe("protocol package boundary", () => {
     ) as { BROWSER_GATEWAY_DETAIL_HANDLE_KINDS?: readonly string[] };
     expect(identityModule.BROWSER_GATEWAY_DETAIL_HANDLE_KINDS).toEqual([
       "message",
+      "tool",
       "diff",
       "media",
       "interaction",

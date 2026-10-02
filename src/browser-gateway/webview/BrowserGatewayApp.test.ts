@@ -29,6 +29,14 @@ import type { BgSessionInfo } from "@agentlink/protocol/background-result";
 import type { BrowserGatewayChatWorkspaceSummary } from "../dataPlane/protocol";
 import { h, type ComponentChildren } from "preact";
 import { within } from "@testing-library/preact";
+import * as relayGatewayConnection from "./relay/useRelayGatewayConnection";
+import {
+  encodeTranscriptBlockDetail,
+  parseTranscriptBlockDetailResponse,
+  transcriptBlockContentRevision,
+  type TranscriptDisplayBlock,
+  type TranscriptBlockDetailRequest,
+} from "../dataPlane/transcriptBlockDetail";
 
 vi.mock("../../agent/webview/components/InputArea", () => ({
   InputArea: ({
@@ -1052,6 +1060,100 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     window.localStorage.clear();
     window.sessionStorage.clear();
     document.documentElement.removeAttribute("style");
+  });
+
+  it("forwards expanded Ask Agent tool details through the app's real provider and renderer", async () => {
+    const source: TranscriptDisplayBlock = {
+      type: "tool_call",
+      id: "ask-detail-tool",
+      name: "read_file",
+      inputJson: '{"path":"distinctive-input.md"}',
+      result: "distinctive Ask Agent result",
+      complete: true,
+    };
+    const response = createAskAgentSessionResponse();
+    const revision = transcriptBlockContentRevision(source);
+    response.snapshot.session.foreground.projectedMessages = [
+      {
+        id: "ask-detail-message",
+        role: "assistant",
+        content: "",
+        timestamp: 1_000,
+        blocks: [
+          {
+            ...source,
+            inputJson: "",
+            result: "",
+            remoteDetail: {
+              messageId: "ask-detail-message",
+              contentRevision: revision,
+              available: true,
+            },
+          },
+        ],
+      },
+    ];
+    const fetchMock = vi.mocked(globalThis.fetch);
+    const originalFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input, init) =>
+      String(input).includes("/api/ask-agent/session")
+        ? Promise.resolve(jsonResponse(response))
+        : originalFetch(input, init),
+    );
+    const requestDetail = vi.fn(async (request: TranscriptBlockDetailRequest) =>
+      parseTranscriptBlockDetailResponse(
+        encodeTranscriptBlockDetail(request, source),
+        request,
+      ),
+    );
+    const originalHook = relayGatewayConnection.useRelayGatewayConnection;
+    const hookSpy = vi
+      .spyOn(relayGatewayConnection, "useRelayGatewayConnection")
+      .mockImplementation((options) => ({
+        ...originalHook(options),
+        requestBlockDetail: requestDetail,
+        blockDetailScopeKey: "helper:ask-owner:generation-1",
+      }));
+    try {
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "test-token",
+          currentInstanceId: "",
+          workspaceName: "Ask Agent",
+          routeByInstance: true,
+        }),
+      );
+      await waitFor(() =>
+        expect(
+          document.querySelector(".tool-group-header, .tool-call-header"),
+        ).not.toBeNull(),
+      );
+      expect(requestDetail).not.toHaveBeenCalled();
+      const group = document.querySelector(".tool-group-header");
+      if (group) fireEvent.click(group);
+      const header = await waitFor(() => {
+        const element = document.querySelector(".tool-call-header");
+        expect(element).not.toBeNull();
+        return element!;
+      });
+      fireEvent.click(header);
+      await waitFor(() =>
+        expect(document.body.textContent).toContain(
+          "distinctive Ask Agent result",
+        ),
+      );
+      expect(document.body.textContent).toContain("distinctive-input.md");
+      expect(requestDetail).toHaveBeenCalledWith({
+        kind: "transcript.block-detail",
+        sessionId: "browser-gateway:ask-agent:default",
+        messageId: "ask-detail-message",
+        blockId: "ask-detail-tool",
+        contentRevision: revision,
+      });
+    } finally {
+      cleanup();
+      hookSpy.mockRestore();
+    }
   });
 
   it("lazily fetches and renders the workspace plugin manager read-only", async () => {

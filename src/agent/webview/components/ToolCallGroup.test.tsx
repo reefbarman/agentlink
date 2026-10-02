@@ -452,6 +452,41 @@ describe("getToolGroupLabel", () => {
 });
 
 describe("getToolGroupStatus", () => {
+  it("uses projected remote status and media counts before detail loads", () => {
+    const failed = tool("remote-error", "read_file", {
+      remoteDetail: {
+        messageId: "message",
+        contentRevision: 1,
+        available: true,
+        status: "error",
+        imageCount: 2,
+        documentCount: 1,
+      },
+    });
+    expect(getToolGroupStatus([failed]).statusClass).toBe("tool-error");
+    expect(getToolGroupLabel([failed])).toContain("1 file");
+
+    const { container } = render(
+      <ToolCallGroup
+        blocks={[
+          failed,
+          tool("remote-ok", "search_files", {
+            remoteDetail: {
+              messageId: "message",
+              contentRevision: 1,
+              available: true,
+              imageCount: 1,
+            },
+          }),
+        ]}
+      />,
+    );
+    const badge = container.querySelector(".tool-image-badge");
+    expect(badge?.getAttribute("aria-label")).toBe(
+      "3 images and 1 document attached",
+    );
+  });
+
   it("uses error as the worst status", () => {
     const status = getToolGroupStatus([
       tool("tool-1", "execute_command", {

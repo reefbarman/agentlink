@@ -49,6 +49,12 @@ import type {
   BrowserGatewayOwnerProjectionSources,
 } from "./ownerProjectionSources.js";
 
+import {
+  encodeTranscriptBlockDetail,
+  transcriptBlockDetailSummary,
+  type TranscriptBlockDetailRequest,
+} from "./transcriptBlockDetail.js";
+
 const MAX_TEXT_PREVIEW_LENGTH = 8_000;
 const MAX_SUMMARY_LENGTH = 4_000;
 const textEncoder = new TextEncoder();
@@ -89,6 +95,7 @@ interface ProjectionContext {
     source: BrowserGatewayOwnerInteractionSource | null,
   ) => BrowserGatewayInteractionSummary | null;
   readonly typedBackgroundResults: boolean;
+  readonly blockDetails: boolean;
 }
 
 interface ProjectedReadSet {
@@ -132,6 +139,9 @@ export class BrowserGatewayOwnerProjectionAdapter {
   private readonly detailCache = new Map<string, CachedProjectionDetail>();
   private readonly commandCapabilities: readonly BrowserGatewayOwnerCommandKind[];
   private readonly typedBackgroundResults: boolean;
+  private readonly blockDetails: boolean;
+  private historySessionId: string | null = null;
+  private readonly historyMessages = new Map<string, ChatMessage>();
   private demanded = false;
   private disposed = false;
   private ownerSequence = 0;
@@ -159,6 +169,9 @@ export class BrowserGatewayOwnerProjectionAdapter {
       ) as BrowserGatewayOwnerCommandKind[]);
     this.typedBackgroundResults =
       options.dataPlaneFeatures?.includes("typed-background-results-v1") ??
+      false;
+    this.blockDetails =
+      options.dataPlaneFeatures?.includes("transcript-block-detail-v1") ??
       false;
     this.sourceSubscription = sources.onDidChange((source) => {
       this.handleSourceChange(source);
@@ -225,18 +238,58 @@ export class BrowserGatewayOwnerProjectionAdapter {
     });
   }
 
+  getBlockDetailContent(request: TranscriptBlockDetailRequest): Uint8Array {
+    if (this.disposed) throw new Error("owner projection adapter is disposed");
+    const foreground = this.sources.capture().foreground;
+    this.bindHistorySession(foreground?.sessionId ?? null);
+    const message =
+      foreground?.sessionId === request.sessionId
+        ? (foreground.messages.find((item) => item.id === request.messageId) ??
+          this.historyMessages.get(request.messageId))
+        : undefined;
+    const block = message?.blocks.find(
+      (item) =>
+        (item.type === "tool_call" || item.type === "skill_load") &&
+        item.id === request.blockId,
+    );
+    return encodeTranscriptBlockDetail(
+      request,
+      block?.type === "tool_call" || block?.type === "skill_load"
+        ? block
+        : undefined,
+    );
+  }
+
+  private bindHistorySession(sessionId: string | null): void {
+    if (sessionId === this.historySessionId) return;
+    this.historySessionId = sessionId;
+    this.historyMessages.clear();
+  }
+
   publishTranscriptHistory(
     messages: readonly ChatMessage[],
     earlierCursor: string | null,
     hasEarlier: boolean,
   ): void {
     if (this.disposed) throw new Error("owner projection adapter is disposed");
+    this.bindHistorySession(
+      this.sources.capture().foreground?.sessionId ?? null,
+    );
+    for (const message of messages)
+      this.historyMessages.set(message.id, message);
+    while (
+      this.historyMessages.size >
+      BROWSER_GATEWAY_DATA_PLANE_LIMITS.selectedOwnerCheckpointMessages
+    ) {
+      this.historyMessages.delete(this.historyMessages.keys().next().value!);
+    }
     const details = new Map<string, BrowserGatewayOwnerProjectionDetail>();
     const projectedMessages = messages.map((message) =>
       projectMessage(message, {
         detail: (text, locator) => this.projectText(text, locator, details),
         interaction: () => null,
         typedBackgroundResults: this.typedBackgroundResults,
+        blockDetails: this.blockDetails,
       }),
     );
     const referencedDetails = detailsForMessages(
@@ -261,6 +314,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
     this.demanded = false;
     this.projected = undefined;
     this.detailCache.clear();
+    this.historyMessages.clear();
     this.listeners.clear();
     this.sourceSubscription.dispose();
   }
@@ -552,6 +606,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
       interaction: (source) =>
         this.projectInteraction(source, details).interaction,
       typedBackgroundResults: this.typedBackgroundResults,
+      blockDetails: this.blockDetails,
     };
     const state = projectReadSet(readSet, context, this.commandCapabilities);
     const referencedDetails = [...details.values()];
@@ -573,6 +628,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
       detail: (text, locator) => this.projectText(text, locator, details),
       interaction: () => null,
       typedBackgroundResults: this.typedBackgroundResults,
+      blockDetails: this.blockDetails,
     });
     const referencedDetails = detailsForMessages(
       [...details.values()],
@@ -1397,6 +1453,9 @@ function projectBlock(
         toolCallId: bounded(block.id, 256),
         name: bounded(block.name, 1_000),
         complete: block.complete,
+        ...(context.blockDetails
+          ? { detail: transcriptBlockDetailSummary(block) }
+          : {}),
         ...(block.durationMs !== undefined
           ? { durationMs: safeInteger(block.durationMs) }
           : {}),
@@ -1412,6 +1471,9 @@ function projectBlock(
           ? { skillName: bounded(block.skillName, 1_000) }
           : {}),
         complete: block.complete,
+        ...(context.blockDetails
+          ? { detail: transcriptBlockDetailSummary(block) }
+          : {}),
         ...(block.durationMs !== undefined
           ? { durationMs: safeInteger(block.durationMs) }
           : {}),

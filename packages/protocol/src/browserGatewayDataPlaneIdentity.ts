@@ -1,5 +1,6 @@
 export const BROWSER_GATEWAY_DETAIL_HANDLE_KINDS = Object.freeze([
   "message",
+  "tool",
   "diff",
   "media",
   "interaction",

@@ -11,6 +11,7 @@ describe("browser gateway helper lifecycle", () => {
   it("pins the helper protocol version and advertised feature union", () => {
     const features: BrowserGatewayDataPlaneFeature[] = [
       "typed-background-results-v1",
+      "transcript-block-detail-v1",
     ];
 
     expect(BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION).toBe(2);
@@ -52,7 +53,10 @@ describe("browser gateway helper lifecycle", () => {
       helperVersion: "1.20.1",
       helperGenerationId: "helper-generation-1",
       dataPlaneMode: "on",
-      dataPlaneFeatures: ["typed-background-results-v1"],
+      dataPlaneFeatures: [
+        "typed-background-results-v1",
+        "transcript-block-detail-v1",
+      ],
       uptimeMs: 1_000,
       activeClientLeases: 1,
       coreOwners: 2,

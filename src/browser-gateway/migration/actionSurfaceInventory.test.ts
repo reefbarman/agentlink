@@ -113,6 +113,6 @@ describe("browser gateway action-surface inventory", () => {
       BROWSER_GATEWAY_PROTOCOL_COMMAND_ADOPTION.filter(
         (entry) => entry.status === "routed",
       ).map((entry) => entry.commandKind),
-    ).toEqual(["session.detail"]);
+    ).toEqual(["session.detail", "transcript.block-detail"]);
   });
 });

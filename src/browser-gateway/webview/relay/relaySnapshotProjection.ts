@@ -393,7 +393,7 @@ function projectMessage(message: BrowserGatewayTranscriptMessage): ChatMessage {
     role: message.role,
     content: transcriptText(message.content),
     timestamp: message.createdAt,
-    blocks: message.blocks.flatMap(projectBlock),
+    blocks: message.blocks.flatMap((block) => projectBlock(block, message)),
     ...(message.badge ? { badge: message.badge } : {}),
     ...(message.isSlashCommand !== undefined
       ? { isSlashCommand: message.isSlashCommand }
@@ -417,6 +417,7 @@ function projectMessage(message: BrowserGatewayTranscriptMessage): ChatMessage {
 
 function projectBlock(
   block: BrowserGatewayTranscriptMessage["blocks"][number],
+  message: BrowserGatewayTranscriptMessage,
 ): ContentBlock[] {
   switch (block.type) {
     case "thinking":
@@ -439,6 +440,12 @@ function projectBlock(
           inputJson: "",
           result: "",
           complete: block.complete,
+          remoteDetail: {
+            messageId: message.messageId,
+            contentRevision: block.detail?.contentRevision ?? message.revision,
+            available: Boolean(block.detail),
+            ...block.detail,
+          },
           ...(block.durationMs !== undefined
             ? { durationMs: block.durationMs }
             : {}),
@@ -455,6 +462,12 @@ function projectBlock(
           inputJson: "",
           result: "",
           complete: block.complete,
+          remoteDetail: {
+            messageId: message.messageId,
+            contentRevision: block.detail?.contentRevision ?? message.revision,
+            available: Boolean(block.detail),
+            ...block.detail,
+          },
           ...(block.skillName ? { skillName: block.skillName } : {}),
           ...(block.durationMs !== undefined
             ? { durationMs: block.durationMs }

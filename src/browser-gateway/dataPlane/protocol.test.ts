@@ -377,6 +377,13 @@ function command(kind: BrowserGatewayOwnerCommandKind) {
       text: "Continue",
       detailHandles: [],
     },
+    "transcript.block-detail": {
+      kind,
+      sessionId: "session-1",
+      messageId: "message-1",
+      blockId: "tool-1",
+      contentRevision: 1,
+    },
     "session.stop": { kind, sessionId: "session-1" },
     "approval.respond": {
       kind,
@@ -486,6 +493,7 @@ describe("browser gateway data-plane limits", () => {
       authenticatedDetailResponseBytes: 8_388_608,
       authenticatedSessionDetailResponseBytes: 33_554_432,
       authenticatedDetailStoreBytes: 33_554_432,
+      authenticatedToolDetailStoreBytes: 16_777_216,
       retainedReplayBytesPerOwnerGeneration: 524_288,
       retainedReplayEventsPerOwnerGeneration: 64,
       retainedReplayAgeMs: 300_000,

@@ -495,6 +495,7 @@ function classifyAskAgentRoute(
     case "mcpStatus":
     case "mcpRefresh":
     case "mcpReauthenticate":
+    case "mcpManagerOperation":
     case "questionProgress":
     case "formElicitation":
     case "memory":
@@ -561,6 +562,13 @@ const commandAdoption = {
     routes: ["GET /api/session-detail", "POST /api/relay/commands"],
     notes:
       "Direct clients use the authenticated read route; relay clients use an idempotent owner operation with an uploaded detail handle.",
+  },
+  "transcript.block-detail": {
+    commandKind: "transcript.block-detail",
+    status: "routed",
+    routes: ["POST /api/relay/commands", "GET /api/relay/details"],
+    notes:
+      "Read-only owner operation retrieves a selected transcript block's display data or result media without publishing payloads in relay checkpoints.",
   },
   "session.send": {
     commandKind: "session.send",

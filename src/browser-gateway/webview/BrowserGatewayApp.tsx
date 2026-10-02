@@ -60,6 +60,8 @@ import type {
 import { DesktopMoreActions } from "./DesktopMoreActions";
 import { LiveLinkIndicator } from "../../agent/webview/components/LiveLinkIndicator";
 import { ChatView } from "../../agent/webview/components/ChatView";
+import { RemoteToolDetailProvider } from "../../agent/webview/components/RemoteToolDetail";
+import { loadRemoteTranscriptBlockDetail } from "./toolDetailTransport";
 import { showFileOpenFailure } from "../../agent/webview/components/fileLinkFeedback";
 import { ContextUsageRow } from "../../agent/webview/components/ContextUsageRow";
 import { EnvironmentPanel } from "../../agent/webview/components/EnvironmentPanel";
@@ -2194,6 +2196,8 @@ export function BrowserGatewayApp({
   const {
     dispatchCommand: dispatchRelayCommand,
     requestSessionDetail: requestRelaySessionDetail,
+    requestBlockDetail: requestRelayBlockDetail,
+    blockDetailScopeKey,
   } = useRelayGatewayConnection({
     enabled: relayClientEnabled,
     selectedTabId,
@@ -9161,84 +9165,95 @@ export function BrowserGatewayApp({
                       : "Loading session…"}
                   </EmptyState>
                 ) : (
-                  <ChatView
-                    key={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "empty"}`}
-                    messages={messages}
-                    streaming={Boolean(streaming)}
-                    initialMessageLimit={
-                      mobileLayout || touchInput ? 20 : undefined
-                    }
-                    sessionId={foreground?.sessionId ?? null}
-                    originalPrompt={
-                      isAskAgentSelected
-                        ? undefined
-                        : foreground?.originalPrompt
-                    }
-                    emptyState={
-                      !isAskAgentSelected ? (
-                        <ModelSetupCard
-                          setupState={modelSetupState}
-                          hasWorkspace={
-                            (snapshot?.session.projects?.length ?? 0) > 0
-                          }
-                          surface="browser"
-                        />
-                      ) : (
-                        <AskAgentWelcome
-                          desktop={consumerShell}
-                          onStart={(prompt) => {
-                            void handleSend(prompt, []);
-                          }}
-                        />
+                  <RemoteToolDetailProvider
+                    scopeKey={`${blockDetailScopeKey ?? "direct"}:${selectedTabId}:${selectedTabGenerationRef.current}:${foreground?.sessionId ?? "empty"}`}
+                    loadDetail={(block) =>
+                      loadRemoteTranscriptBlockDetail(
+                        block,
+                        foreground?.sessionId ?? "",
+                        requestRelayBlockDetail,
                       )
                     }
-                    detectedQuestion={foreground?.detectedQuestion ?? null}
-                    onDetectedQuestionAnswer={(payload) => {
-                      void handleSend(payload, []);
-                    }}
-                    onDismissDetectedQuestion={() => undefined}
-                    onOpenFile={
-                      isAskAgentSelected
-                        ? undefined
-                        : (filePath, line) =>
-                            browserVscodeApi.postMessage({
-                              command: "agentOpenFile",
-                              path: filePath,
-                              line,
-                            })
-                    }
-                    onOpenImageInEditor={
-                      isAskAgentSelected
-                        ? undefined
-                        : (image) =>
-                            browserVscodeApi.postMessage({
-                              command: "agentOpenImageInEditor",
-                              ...image,
-                            })
-                    }
-                    onRetry={handleRetry}
-                    onSignIn={() => handleSignIn("codex")}
-                    onSignInAnotherAccount={() =>
-                      setModeStatus(
-                        "Use VS Code account controls to sign in with another account.",
-                      )
-                    }
-                    onCondense={handleCondense}
-                    bgSessions={background}
-                    onStopBackground={handleStopBackground}
-                    onOpenTranscript={handleOpenBgTranscript}
-                    onFinalMarkerContinue={(prompt) => {
-                      setComposerInjection({
-                        type: "context",
-                        context: prompt,
-                      });
-                    }}
-                    onRevertCheckpoint={handleRevertCheckpoint}
-                    onViewCheckpointDiff={handleViewCheckpointDiff}
-                    streamingMetrics={streamingBaselineMetrics}
-                    streamingMetricsSurface="browser-webview"
-                    streamingMetricsScope={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "foreground"}`}
-                  />
+                  >
+                    <ChatView
+                      key={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "empty"}`}
+                      messages={messages}
+                      streaming={Boolean(streaming)}
+                      initialMessageLimit={
+                        mobileLayout || touchInput ? 20 : undefined
+                      }
+                      sessionId={foreground?.sessionId ?? null}
+                      originalPrompt={
+                        isAskAgentSelected
+                          ? undefined
+                          : foreground?.originalPrompt
+                      }
+                      emptyState={
+                        !isAskAgentSelected ? (
+                          <ModelSetupCard
+                            setupState={modelSetupState}
+                            hasWorkspace={
+                              (snapshot?.session.projects?.length ?? 0) > 0
+                            }
+                            surface="browser"
+                          />
+                        ) : (
+                          <AskAgentWelcome
+                            desktop={consumerShell}
+                            onStart={(prompt) => {
+                              void handleSend(prompt, []);
+                            }}
+                          />
+                        )
+                      }
+                      detectedQuestion={foreground?.detectedQuestion ?? null}
+                      onDetectedQuestionAnswer={(payload) => {
+                        void handleSend(payload, []);
+                      }}
+                      onDismissDetectedQuestion={() => undefined}
+                      onOpenFile={
+                        isAskAgentSelected
+                          ? undefined
+                          : (filePath, line) =>
+                              browserVscodeApi.postMessage({
+                                command: "agentOpenFile",
+                                path: filePath,
+                                line,
+                              })
+                      }
+                      onOpenImageInEditor={
+                        isAskAgentSelected
+                          ? undefined
+                          : (image) =>
+                              browserVscodeApi.postMessage({
+                                command: "agentOpenImageInEditor",
+                                ...image,
+                              })
+                      }
+                      onRetry={handleRetry}
+                      onSignIn={() => handleSignIn("codex")}
+                      onSignInAnotherAccount={() =>
+                        setModeStatus(
+                          "Use VS Code account controls to sign in with another account.",
+                        )
+                      }
+                      onCondense={handleCondense}
+                      bgSessions={background}
+                      onStopBackground={handleStopBackground}
+                      onOpenTranscript={handleOpenBgTranscript}
+                      onFinalMarkerContinue={(prompt) => {
+                        setComposerInjection({
+                          type: "context",
+                          context: prompt,
+                        });
+                      }}
+                      onRevertCheckpoint={handleRevertCheckpoint}
+                      onViewCheckpointDiff={handleViewCheckpointDiff}
+                      streamingMetrics={streamingBaselineMetrics}
+                      streamingMetricsSurface="browser-webview"
+                      streamingMetricsScope={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "foreground"}`}
+                    />
+                  </RemoteToolDetailProvider>
                 )}
               </div>
               <ChatActivityShelf

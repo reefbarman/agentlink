@@ -664,6 +664,11 @@ describe("RelaySnapshotProjector", () => {
         inputJson: "",
         result: "",
         complete: true,
+        remoteDetail: {
+          messageId: "message-1",
+          contentRevision: 1,
+          available: false,
+        },
       },
     ]);
   });

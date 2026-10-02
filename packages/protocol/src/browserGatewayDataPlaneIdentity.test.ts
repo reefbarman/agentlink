@@ -18,6 +18,7 @@ describe("browser gateway data-plane identity", () => {
   it("pins and freezes the complete detail-handle kind set", () => {
     expect(BROWSER_GATEWAY_DETAIL_HANDLE_KINDS).toEqual([
       "message",
+      "tool",
       "diff",
       "media",
       "interaction",
@@ -30,7 +31,7 @@ describe("browser gateway data-plane identity", () => {
       ),
     ).toThrow(TypeError);
     expectTypeOf<BrowserGatewayDetailHandleKind>().toEqualTypeOf<
-      "message" | "diff" | "media" | "interaction" | "session"
+      "message" | "diff" | "media" | "interaction" | "session" | "tool"
     >();
   });
 
@@ -40,7 +41,7 @@ describe("browser gateway data-plane identity", () => {
       ownerId: string;
       ownerGenerationId: string;
       handleId: string;
-      kind: "message" | "diff" | "media" | "interaction" | "session";
+      kind: "message" | "diff" | "media" | "interaction" | "session" | "tool";
       byteLength: number;
       expiresAt: number;
       mediaType?: string;

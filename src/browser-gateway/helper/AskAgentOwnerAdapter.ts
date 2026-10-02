@@ -1,3 +1,5 @@
+import { randomUUID } from "crypto";
+import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "@agentlink/protocol/browser-gateway-data-plane-limits";
 import type { StructuredQuestionRequest as QuestionRequest } from "@agentlink/protocol/structured-question";
 import type {
   ChatMessage,
@@ -38,6 +40,7 @@ import type {
 
 export const ASK_AGENT_OWNER_COMMAND_CAPABILITIES = Object.freeze([
   "session.select",
+  "transcript.block-detail",
   "session.send",
   "session.stop",
   "approval.respond",
@@ -185,7 +188,10 @@ export class AskAgentOwnerAdapter {
         ownerId: this.ownerId,
         ownerGenerationId: this.ownerGenerationId,
       },
-      { commandCapabilities: ASK_AGENT_OWNER_COMMAND_CAPABILITIES },
+      {
+        commandCapabilities: ASK_AGENT_OWNER_COMMAND_CAPABILITIES,
+        dataPlaneFeatures: ["transcript-block-detail-v1"],
+      },
     );
     this.projectionSubscription = this.projection.onDidPublish(
       (publication) => {
@@ -237,9 +243,12 @@ export class AskAgentOwnerAdapter {
     this.commandControllers.set(command.operationId, controller);
     this.acknowledge(command, { state: "accepted" });
     void this.executeCommand(command, controller.signal)
-      .then(() => {
+      .then((detailHandle) => {
         if (!controller.signal.aborted) {
-          this.acknowledge(command, { state: "completed" });
+          this.acknowledge(command, {
+            state: "completed",
+            ...(detailHandle ? { detailHandle } : {}),
+          });
         }
       })
       .catch((error) => {
@@ -295,8 +304,25 @@ export class AskAgentOwnerAdapter {
   private async executeCommand(
     command: BrowserGatewayOwnerCommand,
     signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<BrowserGatewayDetailHandle | void> {
     switch (command.command.kind) {
+      case "transcript.block-detail": {
+        const content = this.projection.getBlockDetailContent(command.command);
+        const handle: BrowserGatewayDetailHandle = {
+          helperGenerationId: this.options.helperGenerationId,
+          ownerId: this.ownerId,
+          ownerGenerationId: this.ownerGenerationId,
+          handleId: randomUUID(),
+          kind: "tool",
+          byteLength: content.byteLength,
+          expiresAt:
+            this.now() +
+            BROWSER_GATEWAY_DATA_PLANE_LIMITS.ownerTranscriptDetailTtlMs,
+          mediaType: "application/json; charset=utf-8",
+        };
+        this.options.putDetail(handle, content);
+        return handle;
+      }
       case "session.select":
         return await this.options.executor.selectSession(
           command.command.sessionId,
@@ -339,6 +365,7 @@ export class AskAgentOwnerAdapter {
         );
         return;
       }
+      case "session.detail":
       case "diff.detail":
         throw new Error("ask_agent_command_unsupported");
     }
@@ -368,7 +395,10 @@ export class AskAgentOwnerAdapter {
 
   private acknowledge(
     command: BrowserGatewayOwnerCommand,
-    terminal: Pick<BrowserGatewayOperationState, "state" | "message">,
+    terminal: Pick<
+      BrowserGatewayOperationState,
+      "state" | "message" | "detailHandle"
+    >,
   ): void {
     const acknowledgement = parseBrowserGatewayOwnerCommandAck({
       protocolVersion: BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
@@ -381,6 +411,9 @@ export class AskAgentOwnerAdapter {
         kind: command.command.kind,
         state: terminal.state,
         ...(terminal.message ? { message: terminal.message } : {}),
+        ...(terminal.detailHandle
+          ? { detailHandle: terminal.detailHandle }
+          : {}),
       },
     });
     this.options.acknowledge(acknowledgement);

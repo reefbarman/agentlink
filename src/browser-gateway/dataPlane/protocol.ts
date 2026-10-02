@@ -1889,6 +1889,42 @@ function parseTranscriptText(
   fail("unsupported_kind", `${path}.kind`, "unsupported transcript text kind");
 }
 
+function parseBlockDetailSummary(
+  value: unknown,
+  path: string,
+): Extract<BrowserGatewayTranscriptBlock, { type: "tool_call" }>["detail"] {
+  if (value === undefined) return undefined;
+  const object = strictRecord(value, path, [
+    "contentRevision",
+    "status",
+    "imageCount",
+    "documentCount",
+  ]);
+  const imageCount = optionalNonNegativeInteger(object, "imageCount", path);
+  const documentCount = optionalNonNegativeInteger(
+    object,
+    "documentCount",
+    path,
+  );
+  return {
+    contentRevision: nonNegativeSafeInteger(
+      object.contentRevision,
+      `${path}.contentRevision`,
+    ),
+    ...(object.status !== undefined
+      ? {
+          status: enumValue(
+            object.status,
+            `${path}.status`,
+            new Set(["error", "interrupted"]),
+          ) as "error" | "interrupted",
+        }
+      : {}),
+    ...(imageCount !== undefined ? { imageCount } : {}),
+    ...(documentCount !== undefined ? { documentCount } : {}),
+  };
+}
+
 function parseTranscriptBlock(
   value: unknown,
   path: string,
@@ -1926,9 +1962,11 @@ function parseTranscriptBlock(
         "complete",
         "durationMs",
         "startedAt",
+        "detail",
       ]);
       const durationMs = optionalNonNegativeInteger(object, "durationMs", path);
       const startedAt = optionalNonNegativeInteger(object, "startedAt", path);
+      const detail = parseBlockDetailSummary(object.detail, `${path}.detail`);
       return {
         type: "tool_call",
         blockId: nonEmptyString(object.blockId, `${path}.blockId`, 256),
@@ -1941,6 +1979,7 @@ function parseTranscriptBlock(
         complete: booleanValue(object.complete, `${path}.complete`),
         ...(durationMs !== undefined ? { durationMs } : {}),
         ...(startedAt !== undefined ? { startedAt } : {}),
+        ...(detail ? { detail } : {}),
       };
     }
     case "skill_load": {
@@ -1950,15 +1989,18 @@ function parseTranscriptBlock(
         "skillName",
         "complete",
         "durationMs",
+        "detail",
       ]);
       const skillName = optionalString(object, "skillName", path, 1_000);
       const durationMs = optionalNonNegativeInteger(object, "durationMs", path);
+      const detail = parseBlockDetailSummary(object.detail, `${path}.detail`);
       return {
         type: "skill_load",
         blockId: nonEmptyString(object.blockId, `${path}.blockId`, 256),
         ...(skillName ? { skillName } : {}),
         complete: booleanValue(object.complete, `${path}.complete`),
         ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(detail ? { detail } : {}),
       };
     }
     case "bg_agent": {
@@ -2866,6 +2908,45 @@ function parseCommandBody(
         ),
         tabId: nonEmptyString(object.tabId, `${path}.tabId`, 256),
         sessionId: nonEmptyString(object.sessionId, `${path}.sessionId`, 256),
+      };
+    }
+    case "transcript.block-detail": {
+      const object = strictRecord(value, path, [
+        "kind",
+        "sessionId",
+        "messageId",
+        "blockId",
+        "contentRevision",
+        "resource",
+      ]);
+      let resource: Extract<
+        BrowserGatewayOwnerCommandBody,
+        { kind: "transcript.block-detail" }
+      >["resource"];
+      if (object.resource !== undefined) {
+        const item = strictRecord(object.resource, `${path}.resource`, [
+          "kind",
+          "index",
+        ]);
+        resource = {
+          kind: enumValue(
+            item.kind,
+            `${path}.resource.kind`,
+            new Set(["image", "document"]),
+          ) as "image" | "document",
+          index: nonNegativeSafeInteger(item.index, `${path}.resource.index`),
+        };
+      }
+      return {
+        kind,
+        sessionId: nonEmptyString(object.sessionId, `${path}.sessionId`, 256),
+        messageId: nonEmptyString(object.messageId, `${path}.messageId`, 256),
+        blockId: nonEmptyString(object.blockId, `${path}.blockId`, 256),
+        contentRevision: nonNegativeSafeInteger(
+          object.contentRevision,
+          `${path}.contentRevision`,
+        ),
+        ...(resource ? { resource } : {}),
       };
     }
     case "session.send": {

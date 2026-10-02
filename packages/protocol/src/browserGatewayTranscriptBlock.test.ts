@@ -26,6 +26,12 @@ it("pins the complete browser gateway transcript-block contract", () => {
         complete: boolean;
         durationMs?: number;
         startedAt?: number;
+        detail?: {
+          contentRevision: number;
+          status?: "error" | "interrupted";
+          imageCount?: number;
+          documentCount?: number;
+        };
       }
     | {
         type: "skill_load";
@@ -33,6 +39,12 @@ it("pins the complete browser gateway transcript-block contract", () => {
         skillName?: string;
         complete: boolean;
         durationMs?: number;
+        detail?: {
+          contentRevision: number;
+          status?: "error" | "interrupted";
+          imageCount?: number;
+          documentCount?: number;
+        };
       }
     | {
         type: "bg_agent";

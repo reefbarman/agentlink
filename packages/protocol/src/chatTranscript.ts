@@ -6,6 +6,16 @@ import type { FinalMessageMarker } from "./finalStatus.js";
 import type { McpApprovalPromotionMeta } from "./toolResult.js";
 import type { RequestContextBreakdown } from "./contextDiagnostics.js";
 
+export interface RemoteTranscriptBlockDetail {
+  messageId: string;
+  contentRevision: number;
+  available: boolean;
+  status?: "error" | "interrupted";
+  imageCount?: number;
+  documentCount?: number;
+  warning?: string;
+}
+
 /** Ordered, serializable content projected into an assistant transcript message. */
 export type ContentBlock =
   | { type: "thinking"; id: string; text: string; complete: boolean }
@@ -27,6 +37,7 @@ export type ContentBlock =
       startedAt?: number;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
       composeTrace?: ComposeTrace;
+      remoteDetail?: RemoteTranscriptBlockDetail;
     }
   | {
       type: "skill_load";
@@ -38,6 +49,7 @@ export type ContentBlock =
       path?: string;
       content?: string;
       durationMs?: number;
+      remoteDetail?: RemoteTranscriptBlockDetail;
     }
   | {
       type: "bg_agent";

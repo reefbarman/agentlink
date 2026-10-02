@@ -58,8 +58,8 @@ export function groupActivitySegments(
         !segment.blocks.some(
           (block) =>
             block.type === "tool_call" &&
-            (block.resultImages?.length ||
-              block.resultDocuments?.length ||
+            (countResultImages(block) > 0 ||
+              countResultDocuments(block) > 0 ||
               block.mcpApprovalPromotion),
         )) ||
       (segment.kind === "single" &&

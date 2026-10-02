@@ -1,8 +1,15 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render } from "@testing-library/preact";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/preact";
 
+import { RemoteToolDetailProvider } from "./RemoteToolDetail";
 import { SkillLoadBlock } from "./SkillLoadBlock";
 
 afterEach(() => {
@@ -48,6 +55,42 @@ describe("SkillLoadBlock", () => {
 
     const root = container.querySelector(".tool-call-block");
     expect(root?.classList.contains("tool-success")).toBe(true);
+  });
+
+  it("loads skill content on expansion and shows update-required details", async () => {
+    const projected = {
+      type: "skill_load" as const,
+      id: "remote-skill",
+      inputJson: "{}",
+      result: "",
+      complete: false,
+      skillName: "remote-skill",
+      remoteDetail: {
+        messageId: "message",
+        contentRevision: 1,
+        available: true,
+      },
+    };
+    const loadDetail = vi.fn(async () => ({
+      ...projected,
+      complete: true,
+      content: "Restored skill content",
+      result: "loaded",
+    }));
+    render(
+      <RemoteToolDetailProvider
+        scopeKey="browser-session"
+        loadDetail={loadDetail}
+      >
+        <SkillLoadBlock block={projected} />
+      </RemoteToolDetailProvider>,
+    );
+    expect(loadDetail).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /load_skill/i }));
+    await waitFor(() =>
+      expect(screen.getByText("Restored skill content")).toBeTruthy(),
+    );
+    expect(loadDetail).toHaveBeenCalledTimes(1);
   });
 
   it("renders failed status as error", () => {

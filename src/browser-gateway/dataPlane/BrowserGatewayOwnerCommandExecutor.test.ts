@@ -22,6 +22,7 @@ describe("ProductionBrowserGatewayOwnerCommandExecutor", () => {
     expect(BROWSER_GATEWAY_PRODUCTION_OWNER_COMMAND_CAPABILITIES).toEqual([
       "session.select",
       "session.detail",
+      "transcript.block-detail",
       "session.send",
       "session.stop",
     ]);

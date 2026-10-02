@@ -1435,7 +1435,10 @@ describe("BrowserGatewayHelper proxy routing", () => {
     );
     const health = await fetch(`${helperBase}/health`);
     await expect(health.json()).resolves.toMatchObject({
-      dataPlaneFeatures: ["typed-background-results-v1"],
+      dataPlaneFeatures: [
+        "typed-background-results-v1",
+        "transcript-block-detail-v1",
+      ],
     });
 
     const headers = {
@@ -1503,7 +1506,10 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(register.ok).toBe(true);
     await expect(register.json()).resolves.toMatchObject({
       ok: true,
-      dataPlaneFeatures: ["typed-background-results-v1"],
+      dataPlaneFeatures: [
+        "typed-background-results-v1",
+        "transcript-block-detail-v1",
+      ],
       ownerRegistration: {
         owner: {
           ownerId: "owner-vscode-1",

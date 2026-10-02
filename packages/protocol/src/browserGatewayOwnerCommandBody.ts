@@ -15,6 +15,14 @@ export type BrowserGatewayOwnerCommandBody =
       text: string;
       detailHandles: BrowserGatewayDetailHandle[];
     }
+  | {
+      kind: "transcript.block-detail";
+      sessionId: string;
+      messageId: string;
+      blockId: string;
+      contentRevision: number;
+      resource?: { kind: "image" | "document"; index: number };
+    }
   | { kind: "session.stop"; sessionId: string }
   | {
       kind: "approval.respond";

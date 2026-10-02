@@ -23,6 +23,10 @@ import {
 } from "./AskAgentOwnerAdapter.js";
 import { describe, expect, it, vi } from "vitest";
 import { RelayOwnerStore } from "../webview/relay/RelayOwnerStore.js";
+import {
+  parseTranscriptBlockDetailResponse,
+  type TranscriptBlockDetailRequest,
+} from "../dataPlane/transcriptBlockDetail.js";
 
 const theme: BrowserGatewayThemeSnapshot = {
   cssVariables: { "--vscode-foreground": "#ffffff" },
@@ -101,7 +105,12 @@ function createHarness(
   });
   const batches: BrowserGatewayOwnerPublicationBatch[] = [];
   const acknowledgements: Array<{
-    operation: { operationId: string; state: string; message?: string };
+    operation: {
+      operationId: string;
+      state: string;
+      message?: string;
+      detailHandle?: BrowserGatewayDetailHandle;
+    };
   }> = [];
   const details = new Map<string, AskAgentOwnerResolvedDetail>();
   const executor = {
@@ -170,6 +179,95 @@ function message(id: string, text: string): ChatMessage {
 }
 
 describe("AskAgentOwnerAdapter", () => {
+  it("serves tool inputs, results and individual media from the helper owner without broadcasting payloads", async () => {
+    const harness = createHarness();
+    const assistant = harness.controller.sessionStore.startAssistantMessage({
+      now: 1_100,
+    });
+    harness.controller.sessionStore.completeAssistantToolCall({
+      messageId: assistant.id,
+      toolCallId: "tool-detail-1",
+      toolName: "read_file",
+      input: { path: "PRIVATE_INPUT.md" },
+      result: "PRIVATE_RESULT",
+      resultImages: [{ mimeType: "image/png", data: "cHJpdmF0ZQ==" }],
+      durationMs: 23,
+    });
+    const next = harness.controller.projectState({
+      now: 1_100,
+      theme,
+      modelCredentialStatus: missingCredential,
+    });
+    harness.adapter.initialize(next.snapshot);
+    const checkpoint = harness.adapter.getCheckpoint();
+    const tool = checkpoint.transcript.messages
+      .find((item) => item.messageId === assistant.id)
+      ?.blocks.find((item) => item.type === "tool_call");
+    if (tool?.type !== "tool_call" || !tool.detail || !checkpoint.foreground)
+      throw new Error("missing projected tool detail");
+    expect(JSON.stringify(checkpoint)).not.toMatch(
+      /PRIVATE_INPUT|PRIVATE_RESULT|cHJpdmF0ZQ/,
+    );
+    expect(harness.details.size).toBe(0);
+    const request: TranscriptBlockDetailRequest = {
+      kind: "transcript.block-detail",
+      sessionId: checkpoint.foreground.sessionId,
+      messageId: assistant.id,
+      blockId: tool.toolCallId,
+      contentRevision: tool.detail.contentRevision,
+    };
+    expect(
+      harness.adapter.publishCommand(
+        command(harness.ownerGenerationId, "detail-1", request),
+      ),
+    ).toBe(true);
+    await vi.waitFor(() =>
+      expect(harness.acknowledgements.at(-1)?.operation.state).toBe(
+        "completed",
+      ),
+    );
+    const handle = harness.acknowledgements.at(-1)?.operation.detailHandle;
+    expect(handle?.kind).toBe("tool");
+    const content = handle && harness.details.get(handle.handleId)?.content;
+    if (!content) throw new Error("missing uploaded detail");
+    expect(parseTranscriptBlockDetailResponse(content, request)).toMatchObject({
+      state: "ready",
+      block: {
+        inputJson: '{"path":"PRIVATE_INPUT.md"}',
+        result: "PRIVATE_RESULT",
+        durationMs: 23,
+      },
+      images: [{ mimeType: "image/png" }],
+    });
+    const mediaRequest = {
+      ...request,
+      resource: { kind: "image" as const, index: 0 },
+    };
+    harness.adapter.publishCommand(
+      command(harness.ownerGenerationId, "media-1", mediaRequest),
+    );
+    await vi.waitFor(() =>
+      expect(harness.acknowledgements.at(-1)?.operation.operationId).toBe(
+        "media-1",
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(harness.acknowledgements.at(-1)?.operation.state).toBe(
+        "completed",
+      ),
+    );
+    const mediaHandle = harness.acknowledgements.at(-1)?.operation.detailHandle;
+    const media =
+      mediaHandle && harness.details.get(mediaHandle.handleId)?.content;
+    if (!media) throw new Error("missing uploaded media");
+    expect(
+      parseTranscriptBlockDetailResponse(media, mediaRequest),
+    ).toMatchObject({ state: "media", data: "cHJpdmF0ZQ==" });
+    expect(harness.executor.send).not.toHaveBeenCalled();
+    await harness.adapter.dispose();
+    await harness.controller.dispose();
+  });
+
   it("binds checkpoints and owner registration to the helper generation", async () => {
     const harness = createHarness();
     harness.adapter.setDemanded(true);
