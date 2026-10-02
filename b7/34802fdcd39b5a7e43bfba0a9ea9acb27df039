@@ -1,0 +1,139 @@
+src/browser-gateway/helper/OwnerRelayStore.ts
+  h_e08a86bb3a33a2 73,120,124,149-151,359-361,387,472-477,479-481,489-491
+  h_e08a86bb3a33a2 478
+src/agent/webview/components/ToolCallGroup.tsx
+  h_e08a86bb3a33a2 61-62
+src/browser-gateway/webview/relay/relaySnapshotProjection.test.ts
+  h_e08a86bb3a33a2 667-671
+src/agent/webview/components/SkillLoadBlock.tsx
+  h_e08a86bb3a33a2 2,41-42,64,66-67,101-127
+src/browser-gateway/webview/relay/RelayConnectionManager.ts
+  h_e08a86bb3a33a2 14-19,286-296,304-332,334-335,343,356,359,362,365-366,371,373,375,386,390,393
+  h_e08a86bb3a33a2 333,351
+src/browser-gateway/dataPlane/BrowserGatewayOwnerCommandExecutor.test.ts
+  h_e08a86bb3a33a2 25
+src/browser-gateway/dataPlane/transcriptBlockDetail.ts
+  h_e08a86bb3a33a2 1-304
+packages/protocol/src/browserGatewayDataPlaneIdentity.test.ts
+  h_e08a86bb3a33a2 21,34,44
+src/agent/webview/components/RemoteToolDetail.tsx
+  h_e08a86bb3a33a2 1-260
+src/browser-gateway/dataPlane/transcriptBlockDetail.test.ts
+  h_e08a86bb3a33a2 1-180
+src/browser-gateway/migration/actionSurfaceInventory.test.ts
+  h_e08a86bb3a33a2 116
+src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.ts
+  h_e08a86bb3a33a2 257-267
+  h_e08a86bb3a33a2 256,268-271
+packages/protocol/src/browserGatewayOwnerCommandMetadata.test.ts
+  h_e08a86bb3a33a2 18,35,83
+packages/protocol/src/browserGatewayHelperLifecycle.test.ts
+  h_e08a86bb3a33a2 14,57-58
+  h_e08a86bb3a33a2 56,59
+src/agent/webview/components/ToolCallBlock.test.tsx
+  h_e08a86bb3a33a2 1-178
+src/browser-gateway/dataPlane/ownerProjectionAdapter.ts
+  h_e08a86bb3a33a2 52-57,98,142-144,173-175,241-260,263-268,275-285,292,317,609,631,1456-1458,1474-1476
+  h_e08a86bb3a33a2 261-262
+src/agent/webview/components/ToolCallGroup.test.tsx
+  h_e08a86bb3a33a2 455-489
+src/browser-gateway/webview/toolDetailTransport.ts
+  h_e08a86bb3a33a2 1-112
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  h_e08a86bb3a33a2 32-39,1065-1156
+  h_e08a86bb3a33a2 1157-1158
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 63-64,2199-2200,9190-9193,9240-9241
+  h_e08a86bb3a33a2 9168-9174,9177-9189,9194-9239,9242-9256
+src/protocolPackageBoundary.test.ts
+  h_e08a86bb3a33a2 4138
+packages/protocol/src/browserGatewayOwnerCommandBody.ts
+  h_e08a86bb3a33a2 18-25
+src/browser-gateway/helper/browserGatewayHelper.integration.test.ts
+  h_e08a86bb3a33a2 1439-1440,1510-1511
+  h_e08a86bb3a33a2 1438,1441,1509,1512
+src/browser-gateway/webview/relay/useRelayGatewayConnection.ts
+  h_e08a86bb3a33a2 25-28,127-130,284-341,344-346
+  h_e08a86bb3a33a2 342-343,347
+packages/protocol/src/browserGatewayDataPlaneIdentity.ts
+  h_e08a86bb3a33a2 3
+packages/protocol/src/browserGatewayTranscriptBlock.ts
+  h_e08a86bb3a33a2 5-11,32,40
+src/browser-gateway/webview/relay/relaySnapshotProjection.ts
+  h_e08a86bb3a33a2 396,420,443-448,465-470
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+src/browser-gateway/dataPlane/protocol.test.ts
+  h_e08a86bb3a33a2 380-386,496
+src/agent/webview/components/RemoteToolDetail.test.tsx
+  h_e08a86bb3a33a2 1-227
+src/browser-gateway/helper/OwnerRelayStore.test.ts
+  h_e08a86bb3a33a2 9,93-125
+src/browser-gateway/webview/relay/RelayConnectionManager.test.ts
+  h_e08a86bb3a33a2 13-18,563-650
+  h_e08a86bb3a33a2 651
+src/browser-gateway/webview/toolDetailTransport.test.ts
+  h_e08a86bb3a33a2 1-103
+src/agent/webview/components/ToolCallBlock.tsx
+  h_e08a86bb3a33a2 10,117,127-128,667,680,684,708,718-719,844-846,991,996-997,999,1002,1066-1092
+  h_e08a86bb3a33a2 116,118,126,129-130,678-679,685-686
+packages/protocol/src/browserGatewayOwnerCommandMetadata.ts
+  h_e08a86bb3a33a2 4,35
+packages/protocol/src/chatTranscript.ts
+  h_e08a86bb3a33a2 9-18,40,52
+src/browser-gateway/dataPlane/BrowserGatewayOwnerCommandExecutor.ts
+  h_e08a86bb3a33a2 15,95
+src/browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.test.ts
+  h_e08a86bb3a33a2 5-9,255-339
+  h_e08a86bb3a33a2 4
+packages/protocol/src/browserGatewayDataPlaneLimits.ts
+  h_e08a86bb3a33a2 20,67
+packages/protocol/src/browserGatewayTranscriptBlock.test.ts
+  h_e08a86bb3a33a2 29-34,42-47
+packages/protocol/src/browserGatewayOwnerCommandBody.test.ts
+  h_e08a86bb3a33a2 22-29
+src/browser-gateway/dataPlane/protocol.ts
+  h_e08a86bb3a33a2 1892-1927,1965,1969,1982,1992,1996,2003,2913-2949
+  s_6183c530b9c268::t_857170c4cbcd4a 2950-2951
+src/browser-gateway/migration/actionSurfaceInventory.ts
+  h_e08a86bb3a33a2 498,566-572
+packages/protocol/src/browserGatewayHelperLifecycle.ts
+  h_e08a86bb3a33a2 6
+src/browser-gateway/helper/AskAgentOwnerAdapter.ts
+  h_e08a86bb3a33a2 1-2,43,192-193,246,249-250,307,309-325,368,400,414-416
+  h_e08a86bb3a33a2 191,194,248,251,398-399,401
+src/browser-gateway/helper/AskAgentOwnerAdapter.test.ts
+  h_e08a86bb3a33a2 26-29,111-112,182-270
+  h_e08a86bb3a33a2 108-110,113
+src/agent/webview/components/SkillLoadBlock.test.tsx
+  h_e08a86bb3a33a2 3,5-9,12,60-93
+  h_e08a86bb3a33a2 4,10,94-95
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 154-155
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b734802fdcd39b5a7e43bfba0a9ea9acb27df039",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_6183c530b9c268": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "634e9b0c-4dc6-4eec-9994-8e89d733cd88",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
