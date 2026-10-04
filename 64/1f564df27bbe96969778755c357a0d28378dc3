@@ -1,0 +1,56 @@
+scripts/release-plan.test.mjs
+  h_e08a86bb3a33a2 48-50,106-109
+.github/workflows/desktop-release.yml
+  h_e08a86bb3a33a2 139-141
+scripts/release-plan.mjs
+  h_e08a86bb3a33a2 63-66,226-228,247
+scripts/release-coordinator.test.mjs
+  h_e08a86bb3a33a2 25-51
+scripts/release-coordinator.mjs
+  h_e08a86bb3a33a2 20,374-391,394-407,445
+  s_624c37e64194b7::t_5344a86c7f641e 392-393
+scripts/release-publish.mjs
+  h_e08a86bb3a33a2 10-15,18,21,23,29,96-99,108-109,111,113-114,123,125-131,134-143,147-161,168,172-177,179,190,205
+  s_c03eec298e0e1b::t_b84acb37badd96 17,19-20,22,24,118-122,124,144-146
+.release/README.md
+  h_e08a86bb3a33a2 19,26,28,43,56-58
+  s_624c37e64194b7::t_7869e4a53ec15d 27
+.github/workflows/sdk-release.yml
+  h_e08a86bb3a33a2 73-75
+.github/workflows/cli-release.yml
+  h_e08a86bb3a33a2 93-95
+.github/workflows/release.yml
+  h_e08a86bb3a33a2 172-176
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "641f564df27bbe96969778755c357a0d28378dc3",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_624c37e64194b7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "22d5f08a-23f7-45ca-b53c-60475cac23c2",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_c03eec298e0e1b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "29e99efd-b4fb-4136-a913-ab45d8d8743c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
