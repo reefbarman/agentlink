@@ -15,7 +15,9 @@ async function fixture(options: { maxRetainedOutputBytes?: number } = {}) {
   const supervisor = await WorkspaceCommandSupervisor.create({
     stateDirectory: path.join(parent, "state"),
     ownerId: "owner-a",
-    terminationGraceMs: 50,
+    // Stops resolve on process close; the grace only matters on a slow CI
+    // runner, where 50ms let SIGTERM+SIGKILL both miss and report interrupted.
+    terminationGraceMs: 1_000,
     ...options,
   });
   let command = 0;
