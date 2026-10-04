@@ -123,6 +123,11 @@ test("sends a strict schema with privacy routing and records the model used", as
     require_parameters: true,
     data_collection: "deny",
   });
+  // With require_parameters, any sampling parameter that reasoning-model
+  // endpoints reject leaves no eligible provider and OpenRouter returns 404.
+  for (const key of ["temperature", "top_p", "top_k", "seed"]) {
+    assert.equal(key in request.body, false, key);
+  }
   assert.ok(!request.body.messages[1].content.includes("coverage"));
   assert.deepEqual(omitted, []);
   assert.deepEqual(decisions.a, {
@@ -192,5 +197,19 @@ test("retries transient failures and fails closed on invalid output", async () =
       fetchImpl: async () => ({ ok: false, status: 401 }),
     }),
     /HTTP 401/u,
+  );
+  await assert.rejects(
+    classifyCommits([commit("a")], {
+      apiKey: "k",
+      fetchImpl: async () => ({
+        ok: false,
+        status: 404,
+        text: async () =>
+          JSON.stringify({
+            error: { message: "No endpoints found that support temperature" },
+          }),
+      }),
+    }),
+    /HTTP 404: No endpoints found that support temperature/u,
   );
 });

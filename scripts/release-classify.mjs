@@ -174,9 +174,12 @@ async function requestBatch(
         schema: classificationSchema(),
       },
     },
+    // require_parameters keeps the strict schema enforced. Do not add
+    // sampling parameters such as temperature: current reasoning-model
+    // endpoints reject them, which leaves no eligible provider (HTTP 404).
     provider: { require_parameters: true, data_collection: "deny" },
-    temperature: 0,
-    max_tokens: Math.min(32_000, 400 + batch.length * 200),
+    // Headroom for reasoning tokens, which count against max_tokens.
+    max_tokens: Math.min(32_000, 4_000 + batch.length * 300),
   };
   let lastError;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -193,7 +196,10 @@ async function requestBatch(
       });
       if (!response.ok) {
         const retryable = response.status === 429 || response.status >= 500;
-        lastError = new Error(`OpenRouter returned HTTP ${response.status}`);
+        const detail = await errorDetail(response);
+        lastError = new Error(
+          `OpenRouter returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`,
+        );
         if (!retryable) break;
         continue;
       }
@@ -215,6 +221,17 @@ async function requestBatch(
   throw new Error(`Release classification failed: ${lastError?.message}`, {
     cause: lastError,
   });
+}
+
+/** OpenRouter's bounded error message, e.g. "No endpoints found ...". */
+async function errorDetail(response) {
+  try {
+    const text = await response.text();
+    const message = JSON.parse(text)?.error?.message ?? text;
+    return String(message).replace(/\s+/gu, " ").trim().slice(0, 300);
+  } catch {
+    return "";
+  }
 }
 
 /**
