@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.24.0
+
 - The release installer now installs every surface: `install.sh --surface vscode|desktop|cli` selects the newest release for that surface, verifies published SHA-256 checksums, and accepts `--version` and `--dry-run`. The CLI install upgrades its own earlier preview launcher but still refuses unrelated `agentlink` commands. A new `install-sdk.mjs` vendors checksum-verified Node SDK release archives into a project.
 - Added floating transcript jump buttons in VS Code and browser chat. When you scroll, ↑ steps back to your previous message and ↓ returns to the latest output and resumes automatic following.
 - Protected Git metadata preflight now recognises read-only `test -z` Git inspection guards before a writer and constrained `git ls-files -z | xargs -0 git add --` pipelines. These workflows receive exact reviewed native recovery guidance before sandbox launch, without expanding execution authority or permitting arbitrary substitutions.
