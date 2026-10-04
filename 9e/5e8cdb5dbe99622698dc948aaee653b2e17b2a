@@ -1,0 +1,41 @@
+scripts/release-classify.mjs
+  h_e08a86bb3a33a2 14
+.release/overrides.json
+  h_e08a86bb3a33a2 1-9
+scripts/release-plan.test.mjs
+  h_e08a86bb3a33a2 3,99-147
+  s_86ae35cb660d3a::t_bfb24b395ca88e 148-149
+scripts/release-coordinator.mjs
+  h_e08a86bb3a33a2 20,36,225-230,262,306-308
+  s_86ae35cb660d3a::t_4c315adf0b5aba 309-310
+scripts/release-plan.mjs
+  h_e08a86bb3a33a2 167-205
+.release/README.md
+  h_e08a86bb3a33a2 48-65
+scripts/release-classify.test.mjs
+  h_e08a86bb3a33a2 42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9e5e8cdb5dbe99622698dc948aaee653b2e17b2a",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_86ae35cb660d3a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9f38895-3369-4187-8cf3-ea4180c3079a",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
