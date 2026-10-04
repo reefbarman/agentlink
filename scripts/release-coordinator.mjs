@@ -17,6 +17,7 @@ import {
 import {
   RELEASE_UNITS,
   UNIT_IDS,
+  compareVersions,
   isVersionOnlyChange,
   latestPublishedVersion,
   planRelease,
@@ -370,8 +371,40 @@ export function promoteUnreleased(changelog, heading, generated) {
     start,
     nextHeading === -1 ? undefined : start + nextHeading,
   );
-  const content = body.trim() ? body.replace(/^\n+/u, "") : `${generated}\n\n`;
-  return `${changelog.slice(0, match.index)}## Unreleased\n\n${heading}\n\n${content}${nextHeading === -1 ? "" : changelog.slice(start + nextHeading)}`;
+  const rest = nextHeading === -1 ? "" : changelog.slice(start + nextHeading);
+  const head = `${changelog.slice(0, match.index)}## Unreleased\n\n`;
+  const pending = body.trim() ? body.replace(/^\n+/u, "") : "";
+
+  // Re-applying a pushed but unpublished preparation (e.g. after a failed
+  // package job): keep the existing section and add only newer entries.
+  const version = /^## (\d+\.\d+\.\d+)/u.exec(heading)?.[1];
+  const existing =
+    version &&
+    new RegExp(
+      `^## ${version.replaceAll(".", "\\.")}(?:[ \\t][^\\n]*)?\\n\\n?`,
+      "mu",
+    ).exec(rest);
+  if (existing) {
+    const at = existing.index + existing[0].length;
+    return `${head}${rest.slice(0, at)}${pending.replace(/\n+$/u, "\n")}${rest.slice(at)}`;
+  }
+  return `${head}${heading}\n\n${pending || `${generated}\n\n`}${rest}`;
+}
+
+/**
+ * Intent files stay until their version is published, so a preparation that
+ * was pushed but failed to publish still replans with its intent. Later
+ * preparations remove intents that are no longer above the published version.
+ */
+function removePublishedIntents(record) {
+  for (const id of UNIT_IDS) {
+    const file = `${RELEASE_DIR}/intents/${id}.json`;
+    const intent = readJsonIfExists(file)?.version;
+    const published = record.units[id]?.published;
+    if (intent && published && compareVersions(intent, published) <= 0) {
+      rmSync(path.join(ROOT, file), { force: true });
+    }
+  }
 }
 
 function apply(options) {
@@ -408,10 +441,8 @@ function apply(options) {
         ),
       );
     }
-    if (unit.consumedIntent && unit.intentFile) {
-      rmSync(path.join(ROOT, unit.intentFile), { force: true });
-    }
   }
+  removePublishedIntents(record);
   execFileSync(
     "npm",
     [

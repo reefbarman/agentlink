@@ -7,15 +7,26 @@
 //
 // - Adds SHA256SUMS for every asset.
 // - Never moves or reuses a tag that points at a different commit.
-// - Uploads to a draft, verifies names and sizes, then publishes. A partial
-//   draft from an earlier attempt is replaced as a whole; a published
-//   release is immutable and a matching retry is a no-op.
+// - Uploads to a draft, verifies the exact asset set and every SHA-256 digest,
+//   then publishes. A partial draft from an earlier attempt is replaced as a
+//   whole; a published release is immutable and a retry succeeds only when
+//   its assets and prerelease flag already match exactly.
+// Callers serialize runs per unit (workflow concurrency), so a draft found
+// here is stale rather than another run's upload in progress.
 
-import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
+import { tmpdir } from "node:os";
 
 function parseArgs(argv) {
   const options = {};
@@ -82,6 +93,10 @@ function assertTag(tag, target) {
   return commit;
 }
 
+const sha256 = (file) =>
+  createHash("sha256").update(readFileSync(file)).digest("hex");
+
+/** Writes SHA256SUMS and returns the expected digest of every asset. */
 function writeChecksums(dir) {
   const files = readdirSync(dir)
     .filter(
@@ -90,46 +105,78 @@ function writeChecksums(dir) {
     )
     .sort();
   if (files.length === 0) throw new Error(`No release assets in ${dir}`);
-  const lines = files.map(
-    (name) =>
-      `${createHash("sha256")
-        .update(readFileSync(path.join(dir, name)))
-        .digest("hex")}  ${name}`,
+  const expected = new Map(
+    files.map((name) => [name, sha256(path.join(dir, name))]),
   );
+  const lines = [...expected].map(([name, digest]) => `${digest}  ${name}`);
   writeFileSync(path.join(dir, "SHA256SUMS"), `${lines.join("\n")}\n`);
-  return [...files, "SHA256SUMS"];
+  expected.set("SHA256SUMS", sha256(path.join(dir, "SHA256SUMS")));
+  return expected;
 }
 
 function releaseState(tag) {
-  const output = tryGh("release", "view", tag, "--json", "isDraft,assets");
-  return output ? JSON.parse(output) : undefined;
+  const output = tryGh(
+    "release",
+    "view",
+    tag,
+    "--json",
+    "databaseId,isDraft,isPrerelease",
+  );
+  if (!output) return undefined;
+  const view = JSON.parse(output);
+  // The REST API reports each asset's server-computed `sha256:` digest.
+  const release = JSON.parse(
+    gh("api", `repos/{owner}/{repo}/releases/${view.databaseId}`),
+  );
+  return { ...view, assets: release.assets };
 }
 
-function assertAssets(tag, dir, names) {
-  const assets = new Map(
-    releaseState(tag).assets.map((asset) => [asset.name, asset.size]),
-  );
-  for (const name of names) {
-    if (assets.get(name) !== statSync(path.join(dir, name)).size) {
-      throw new Error(`Release ${tag} is missing or has a different ${name}`);
-    }
+function assetDigest(tag, asset) {
+  if (/^sha256:[0-9a-f]{64}$/u.test(asset.digest ?? "")) {
+    return asset.digest.slice("sha256:".length);
+  }
+  const scratch = mkdtempSync(path.join(tmpdir(), "release-asset-"));
+  try {
+    gh("release", "download", tag, "--pattern", asset.name, "--dir", scratch);
+    return sha256(path.join(scratch, asset.name));
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+/** Throws unless the release holds exactly the expected assets and bytes. */
+function assertAssets(tag, state, expected) {
+  const actual = new Map(state.assets.map((asset) => [asset.name, asset]));
+  const names = [...new Set([...actual.keys(), ...expected.keys()])].sort();
+  const problems = names.flatMap((name) => {
+    if (!expected.has(name)) return [`unexpected ${name}`];
+    if (!actual.has(name)) return [`missing ${name}`];
+    return assetDigest(tag, actual.get(name)) === expected.get(name)
+      ? []
+      : [`different ${name}`];
+  });
+  if (problems.length > 0) {
+    throw new Error(
+      `Release ${tag} assets do not match: ${problems.join(", ")}`,
+    );
   }
 }
 
 const options = parseArgs(process.argv.slice(2));
 const { tag, target, dir } = options;
 assertTag(tag, target);
+const expected = writeChecksums(dir);
 
 const existing = releaseState(tag);
 if (existing && !existing.isDraft) {
-  const published = new Set(existing.assets.map((asset) => asset.name));
-  const missing = [
-    ...readdirSync(dir).filter((name) => name !== "SHA256SUMS"),
-    "SHA256SUMS",
-  ].filter((name) => !published.has(name));
-  if (missing.length > 0) {
+  try {
+    assertAssets(tag, existing, expected);
+    if (existing.isPrerelease !== Boolean(options.prerelease)) {
+      throw new Error(`Release ${tag} has a different prerelease flag`);
+    }
+  } catch (error) {
     throw new Error(
-      `${tag} is already published without ${missing.join(", ")}; published releases are immutable, recover manually`,
+      `${error.message}. ${tag} is already published and immutable; recover manually.`,
     );
   }
   console.log(`${tag} is already published with the expected assets.`);
@@ -140,7 +187,7 @@ if (existing?.isDraft) {
   gh("release", "delete", tag, "--yes");
 }
 
-const names = writeChecksums(dir);
+const names = [...expected.keys()];
 gh(
   "release",
   "create",
@@ -155,7 +202,7 @@ gh(
   options["notes-file"],
   ...(options.prerelease ? ["--prerelease"] : []),
 );
-assertAssets(tag, dir, names);
+assertAssets(tag, releaseState(tag), expected);
 gh(
   "release",
   "edit",

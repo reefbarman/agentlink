@@ -136,6 +136,9 @@ jobs:
   release:
     needs: package
     if: github.event_name == 'push' || inputs.publish
+    concurrency:
+      group: publish-desktop
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: write

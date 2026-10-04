@@ -169,6 +169,11 @@ jobs:
   release:
     needs: [verify, package]
     if: github.event_name == 'push' || inputs.publish
+    # One publisher per unit: a hand-pushed tag or manual dispatch must not
+    # replace a draft another run is still uploading.
+    concurrency:
+      group: publish-vscode
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: write

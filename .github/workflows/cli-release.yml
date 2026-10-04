@@ -90,6 +90,9 @@ jobs:
   release:
     needs: package
     if: github.event_name == 'push' || inputs.publish
+    concurrency:
+      group: publish-cli
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: write

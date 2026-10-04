@@ -60,7 +60,10 @@ const IGNORED_PATHS = [
   // Root Markdown is contributor/positioning material; README.md ships in the VSIX.
   /^(?!README\.md$)[^/]+\.md$/,
   /^\.(gitignore|oxfmtrc\.json|oxlintrc\.json|editorconfig|npmrc)$/,
-  /^resources\/builtin-skills\/documentation\/references\/release-notes\.md$/,
+  // Generated from CHANGELOG.md / package.json, which are attributed directly.
+  // Release preparation regenerates both, so counting them would cascade a
+  // VS Code release into a Desktop patch.
+  /^resources\/builtin-skills\/documentation\/references\/(release-notes|package-contract)\.md$/,
   /^apps\/[^/]+\/(smoke-[^/]+|vitest\.config\.[^/]+)$/,
 ];
 
@@ -220,7 +223,9 @@ export function latestPublishedVersion(tags, tagPrefix) {
 
 /**
  * Combines per-commit floors and optional AI decisions into one unit bump.
- * AI can raise a deterministic floor, never lower it.
+ * AI can raise a deterministic floor, never lower it. A commit with no
+ * Conventional floor ships at least a patch: an AI `none` (possibly induced by
+ * untrusted commit text) must not suppress a release of shipped paths.
  */
 export function resolveUnitBump(unitId, commits, decisions = {}) {
   let bump = "none";
@@ -239,7 +244,7 @@ export function resolveUnitBump(unitId, commits, decisions = {}) {
       continue;
     }
     const commitBump = maxBump(
-      floor === "unknown" ? "none" : floor,
+      floor === "unknown" ? "patch" : floor,
       aiBump ?? "none",
     );
     if (commitBump === "breaking") breaking.push(commit.sha);
