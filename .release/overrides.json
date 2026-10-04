@@ -1,0 +1,9 @@
+{
+  "commits": {
+    "ff96d6c37f54a030f4beb8380463e58ea0126837": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "reason": "Consolidates agent-facing tools (get_context into read_file's context view, codebase_search into search_files query mode). These are tools the agent calls, not user commands or settings; get_context remains a valid permission name, so skills and modes keep working."
+    }
+  }
+}

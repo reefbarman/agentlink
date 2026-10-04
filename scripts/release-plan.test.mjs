@@ -1,5 +1,6 @@
 import {
   allocateVersion,
+  applyOverrides,
   conventionalBump,
   isVersionOnlyChange,
   latestPublishedVersion,
@@ -93,6 +94,57 @@ test("AI can raise but never lower a deterministic floor", () => {
     }).bump,
     "breaking",
   );
+});
+
+test("maintainer overrides replace an AI breaking call but not the floor", () => {
+  const feat = "d".repeat(40);
+  const fix = "e".repeat(40);
+  const commits = [
+    { sha: feat, subject: "feat: consolidate agent tools" },
+    { sha: fix, subject: "fix: tidy" },
+  ];
+  const ai = {
+    [feat]: { bump: "minor", breakingUnits: ["vscode"], summary: "Tools." },
+  };
+  assert.equal(resolveUnitBump("vscode", commits, ai).bump, "breaking");
+
+  const merged = applyOverrides(ai, {
+    commits: {
+      [feat]: { bump: "minor", breakingUnits: [], reason: "Agent-only." },
+      [fix]: { bump: "none", reason: "Cannot suppress a fix." },
+    },
+  });
+  assert.equal(merged[feat].summary, "Tools.");
+  assert.equal(merged[feat].source, "maintainer");
+  assert.deepEqual(ai[feat].breakingUnits, ["vscode"], "AI cache untouched");
+  const resolved = resolveUnitBump("vscode", commits, merged);
+  assert.equal(resolved.bump, "minor");
+  assert.deepEqual(resolved.breaking, []);
+  assert.equal(
+    resolveUnitBump("vscode", [commits[1]], merged).bump,
+    "patch",
+    "the Conventional floor still applies",
+  );
+});
+
+test("rejects malformed overrides", () => {
+  const sha = "f".repeat(40);
+  for (const [overrides, pattern] of [
+    [{ commits: { abc123: { bump: "minor", reason: "x" } } }, /full commit/u],
+    [{ commits: { [sha]: { bump: "major", reason: "x" } } }, /bump/u],
+    [
+      {
+        commits: {
+          [sha]: { bump: "minor", breakingUnits: ["web"], reason: "x" },
+        },
+      },
+      /breakingUnits/u,
+    ],
+    [{ commits: { [sha]: { bump: "minor" } } }, /reason/u],
+  ]) {
+    assert.throws(() => applyOverrides({}, overrides), pattern);
+  }
+  assert.deepEqual(applyOverrides({ a: 1 }, undefined), { a: 1 });
 });
 
 test("non-conventional commits stay unclassified without an AI decision", () => {

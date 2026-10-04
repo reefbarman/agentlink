@@ -164,6 +164,45 @@ export function maxBump(...bumps) {
   );
 }
 
+/**
+ * Applies committed maintainer decisions (`.release/overrides.json`) on top
+ * of AI decisions. An override replaces the AI's bump and breaking units for
+ * that commit but keeps its summary. The Conventional Commit floor still
+ * applies in resolveUnitBump, so an override can never suppress a release.
+ *
+ * Format: `{ "commits": { "<full sha>": { "bump", "breakingUnits", "reason" } } }`
+ */
+export function applyOverrides(decisions, overrides) {
+  const commits = overrides?.commits ?? {};
+  const merged = { ...decisions };
+  for (const [sha, entry] of Object.entries(commits)) {
+    if (!/^[0-9a-f]{40}$/u.test(sha)) {
+      throw new Error(`Override key must be a full commit SHA: ${sha}`);
+    }
+    if (!["none", "patch", "minor"].includes(entry?.bump)) {
+      throw new Error(`Override ${sha} needs bump none, patch, or minor`);
+    }
+    const breakingUnits = entry.breakingUnits ?? [];
+    if (
+      !Array.isArray(breakingUnits) ||
+      breakingUnits.some((unit) => !UNIT_IDS.includes(unit))
+    ) {
+      throw new Error(`Override ${sha} has invalid breakingUnits`);
+    }
+    if (typeof entry.reason !== "string" || !entry.reason.trim()) {
+      throw new Error(`Override ${sha} needs a reason`);
+    }
+    merged[sha] = {
+      ...decisions[sha],
+      bump: entry.bump,
+      breakingUnits: [...new Set(breakingUnits)].sort(),
+      source: "maintainer",
+      reason: entry.reason.trim(),
+    };
+  }
+  return merged;
+}
+
 const NO_RELEASE_TYPES = new Set(["docs", "test", "ci", "style"]);
 
 /**

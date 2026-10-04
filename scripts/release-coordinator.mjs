@@ -17,6 +17,7 @@ import {
 import {
   RELEASE_UNITS,
   UNIT_IDS,
+  applyOverrides,
   compareVersions,
   isVersionOnlyChange,
   latestPublishedVersion,
@@ -32,6 +33,7 @@ import path from "node:path";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RELEASE_DIR = ".release";
 const LAST_PLAN = `${RELEASE_DIR}/last-plan.json`;
+const OVERRIDES = `${RELEASE_DIR}/overrides.json`;
 const SDK_PACKAGES = ["protocol", "core", "node-host", "workspace-host"].map(
   (name) => `@agentlink/${name}`,
 );
@@ -220,7 +222,12 @@ async function plan(options) {
     ));
   }
 
-  const planned = planRelease({ units, decisions });
+  // Overrides stay out of `decisions`, which is the AI cache for later runs.
+  const effective = applyOverrides(decisions, readJsonIfExists(OVERRIDES));
+  const overridden = Object.keys(effective).filter(
+    (sha) => effective[sha].source === "maintainer" && commitCache.has(sha),
+  );
+  const planned = planRelease({ units, decisions: effective });
   for (const [id, result] of Object.entries(planned)) {
     const tag =
       result.version && `${RELEASE_UNITS[id].tagPrefix}${result.version}`;
@@ -252,6 +259,7 @@ async function plan(options) {
     classifier: classifierEnabled
       ? { model, fallbackModel, omitted }
       : { enabled: false },
+    overrides: overridden,
     units: planned,
     decisions,
   };
@@ -293,6 +301,11 @@ function renderSummary(record) {
   if (unknown.length > 0) {
     notes.push(
       `Unmapped paths attributed to all apps: ${[...new Set(unknown)].join(", ")}`,
+    );
+  }
+  if (record.overrides?.length > 0) {
+    notes.push(
+      `Maintainer overrides (${OVERRIDES}): ${record.overrides.map((sha) => sha.slice(0, 8)).join(", ")}`,
     );
   }
   if (record.classifier.omitted?.length > 0) {

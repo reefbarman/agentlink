@@ -39,7 +39,7 @@ test("marks oversized diffs as partial coverage instead of hiding truncation", (
 
 test("omits commits beyond the run budget rather than silently classifying them", () => {
   const big = "x".repeat(MAX_COMMIT_DIFF_CHARS);
-  const commits = Array.from({ length: 8 }, (_, index) =>
+  const commits = Array.from({ length: 20 }, (_, index) =>
     commit(String(index), ["vscode"], big),
   );
   const { batches, omitted } = batchCommits(commits);

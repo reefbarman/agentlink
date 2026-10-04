@@ -45,6 +45,24 @@ Desktop, CLI, and SDK local builds never change their versions.
 - any major release of a 1.x+ unit;
 - the first release of a unit with no published tag (see `sdk-bootstrap.json`; the first SDK release needs `intents/sdk.json`).
 
+## Overriding a classification
+
+When the classifier gets a commit wrong (for example, it calls an agent-facing tool consolidation breaking), record the maintainer decision in `overrides.json`, keyed by the full commit SHA:
+
+```json
+{
+  "commits": {
+    "<full sha>": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "reason": "Why this is the right call."
+    }
+  }
+}
+```
+
+An override replaces the AI's bump and breaking units for that commit and keeps its summary. It cannot go below the Conventional Commit prefix, so a `feat:` stays at least a minor and a commit without a prefix still ships a patch. The plan summary lists the overrides it applied. To ship a genuinely breaking change in a 1.x+ unit, add an intent file instead.
+
 ## Repository configuration
 
 | Kind     | Name                        | Purpose                                                              |
