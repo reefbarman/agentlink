@@ -1358,7 +1358,6 @@ async function attachProtectedGitMetadataRetryGuidance(input: {
   if (
     hasRetryGuidance(result) ||
     result.security?.route !== "sandbox" ||
-    (result.exit_code === 0 && !internalApplyFailure) ||
     result.exit_code === null ||
     result.backgrounded ||
     result.is_running ||
@@ -1388,11 +1387,32 @@ async function attachProtectedGitMetadataRetryGuidance(input: {
           ),
       );
   if (!referencesProtectedPath) return;
+  if (result.exit_code === 0 && !internalApplyFailure) {
+    const protectedDenial = normalizedOutput.split(/\r?\n/).some((line) => {
+      if (!PROTECTED_GIT_DENIAL_PATTERNS.every((pattern) => pattern.test(line)))
+        return false;
+      const denial =
+        /^(?:fatal|error):\s*(?:unable to create|could not create|cannot open|failed to write)\s+(['"])(.+?)\1:\s*(?:permission denied|operation not permitted|read-only file system)\s*$/i.exec(
+          line,
+        );
+      if (!denial) return false;
+      const deniedPath = path.resolve(cwd, denial[2]);
+      return (protection.deniedWrite ?? [protection.marker]).some((root) => {
+        const relative = path.relative(root, deniedPath);
+        return (
+          relative !== "" &&
+          !relative.startsWith("..") &&
+          !path.isAbsolute(relative)
+        );
+      });
+    });
+    if (!protectedDenial) return;
+  }
   Object.assign(result, {
     retry_guidance: {
       code: "protected_git_metadata",
       message:
-        "The sandbox denied a write to this repository's protected Git metadata. Retry the exact command with reviewed native execution; AgentLink will not retry automatically.",
+        "The sandbox denied a write to this repository's protected Git metadata. Earlier steps may have changed repository state; inspect it before any reviewed native retry. AgentLink will not retry automatically.",
       automatic_retry: false,
       options: [
         {
@@ -1409,11 +1429,14 @@ async function attachProtectedGitMetadataRetryGuidance(input: {
     } satisfies ExecuteCommandRetryGuidance,
     capability_code: "protected_git_metadata",
     protected_path: protection.marker,
-    ...(internalApplyFailure && {
+    ...((internalApplyFailure || result.exit_code === 0) && {
       failure_evidence: {
-        code: "git_apply_failed",
-        message:
-          "Git reported an internal apply failure. The shell exit code does not establish that staging succeeded; inspect the index before any reviewed retry.",
+        code: internalApplyFailure
+          ? "git_apply_failed"
+          : "protected_git_write_denied",
+        message: internalApplyFailure
+          ? "Git reported an internal apply failure. The shell exit code does not establish that staging succeeded; inspect the index before any reviewed retry."
+          : "Git reported a denied write to protected repository metadata. The shell exit code does not establish that every step succeeded; inspect repository state before any reviewed retry.",
       },
     }),
   });

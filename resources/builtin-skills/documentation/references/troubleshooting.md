@@ -84,7 +84,7 @@ In VS Code, run **AgentLink: Manage Index Storage** from the Command Palette, ev
 - Read the `sandbox_helper_failed` result's failure category and launch evidence. `unknown` means AgentLink cannot establish whether the command started, not that retrying is safe.
 - Pass its `terminal_id` and `command_id` to `get_terminal_output` to inspect the retained command, not a newer command in the same terminal. The failure result's output is only a bounded preview.
 - Check whether the command changed files or remote state before deciding on a new execution. A helper failure never authorises automatic replay or native fallback.
-- For `protected_git_metadata`, use the exact reviewed native option. Temporary HOME cannot fix protected Git lock writes, including linked-worktree locks. An interactive Git staging command can exit zero after printing `git apply` failed. Treat the accompanying `failure_evidence` as a failed staging step and inspect the index before retrying, since some hunks may already have been staged.
+- For `protected_git_metadata`, inspect repository state before using the reviewed native option. Temporary HOME cannot fix protected Git lock writes, including linked-worktree locks. An interactive Git staging command can exit zero after printing `git apply` failed, and a later command can mask an earlier protected Git denial. Treat `failure_evidence` (`git_apply_failed` or `protected_git_write_denied`) as evidence that the workflow did not fully succeed, even when `exit_code` is `0` or output filtering hides the diagnostic. Earlier steps may already have changed files, the index, or the current branch; do not blindly replay the whole workflow.
 
 ## A command or edit is waiting for approval
 

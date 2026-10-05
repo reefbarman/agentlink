@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed protected Git denials being hidden by a successful trailing command. Recognised sandbox permission-denial diagnostics tied to protected repository metadata now retain failure evidence and reviewed recovery guidance even when the shell exits zero or display filtering hides the diagnostic. The actual exit code is preserved, and retries remain non-automatic with repository-state inspection first.
+
 ## 1.25.0
 
 - Added quiet update notifications for VS Code, Desktop, interactive CLI, and browser views. Packaged hosts check public release metadata at most once a day, with manual checks, exact-version dismissal, and product-local opt-out. Browser status follows the selected host, and future app releases publish deterministic compatibility metadata. Checks never download installers, install, execute commands, restart, or enter session/model context.

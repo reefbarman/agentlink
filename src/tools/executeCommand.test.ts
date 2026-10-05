@@ -620,6 +620,184 @@ describe("handleExecuteCommand", () => {
     expect(executeCommand).toHaveBeenCalledOnce();
   });
 
+  it.each([undefined, "no-match"])(
+    "preserves a masked Git denial with output_grep=%s",
+    async (output_grep) => {
+      resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+        marker: "/workspace/.git",
+        deniedWrite: ["/workspace/.git"],
+      });
+      executeCommand.mockResolvedValue({
+        exit_code: 0,
+        output:
+          "fatal: Unable to create '/workspace/.git/index.lock': Operation not permitted\nmain\n",
+        output_captured: true,
+        terminal_id: "term_switch_denial",
+        command_sent: true,
+        process_launched: true,
+      });
+      const command =
+        "git status --short; git switch main && git merge --ff-only origin/main; git branch --show-current; git status --short";
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const result = await handleExecuteCommand(
+        { command, cwd: "/workspace", output_grep },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-switch-postlaunch",
+        undefined,
+        { terminalProvider, getCommandApprovalPolicy: () => "approve-for-me" },
+      );
+      const payload = textPayload(result);
+      expect(payload).toMatchObject({
+        exit_code: 0,
+        capability_code: "protected_git_metadata",
+        protected_path: "/workspace/.git",
+        failure_evidence: { code: "protected_git_write_denied" },
+        retry_guidance: {
+          automatic_retry: false,
+          options: [
+            expect.objectContaining({
+              command,
+              sandbox_permissions: "require_escalated",
+              reviewed_native_execution: true,
+            }),
+          ],
+        },
+      });
+      if (output_grep) expect(payload.output).not.toContain("index.lock");
+      expect(executeCommand).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    {
+      name: "relative FETCH_HEAD",
+      marker: "/workspace/.git",
+      deniedWrite: ["/workspace/.git"],
+      output: "error: cannot open '.git/FETCH_HEAD': Permission denied\nmain\n",
+    },
+    {
+      name: "linked-worktree metadata",
+      marker: "/workspace/.git",
+      deniedWrite: ["/workspace/.git", "/primary/.git/worktrees/linked"],
+      output:
+        "fatal: Unable to create '/primary/.git/worktrees/linked/index.lock': Operation not permitted\nmain\n",
+    },
+  ])(
+    "recognizes a masked denial for $name",
+    async ({ marker, deniedWrite, output }) => {
+      resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+        marker,
+        deniedWrite,
+      });
+      executeCommand.mockResolvedValue({
+        exit_code: 0,
+        output,
+        output_captured: true,
+        terminal_id: "term_git_denial",
+        command_sent: true,
+        process_launched: true,
+      });
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const result = await handleExecuteCommand(
+        {
+          command: "git fetch origin main; git status --short",
+          cwd: "/workspace",
+        },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-git-masked-path",
+        undefined,
+        { terminalProvider, getCommandApprovalPolicy: () => "approve-for-me" },
+      );
+      expect(textPayload(result)).toMatchObject({
+        exit_code: 0,
+        capability_code: "protected_git_metadata",
+        failure_evidence: { code: "protected_git_write_denied" },
+      });
+      expect(executeCommand).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    {
+      name: "quoted fixture without a denial",
+      output: "expected fixture text: /workspace/.git/index.lock",
+    },
+    {
+      name: "unrelated repository",
+      output:
+        "fatal: Unable to create '/other/.git/index.lock': Operation not permitted",
+    },
+    {
+      name: "similar path prefix",
+      output:
+        "fatal: Unable to create '/workspace/.git-other/index.lock': Operation not permitted",
+    },
+    {
+      name: "path and denial on separate lines",
+      output: "/workspace/.git/index.lock\nfatal: Operation not permitted",
+    },
+    {
+      name: "prefixed fixture diagnostic",
+      output:
+        "fixture: fatal: Unable to create '/workspace/.git/index.lock': Operation not permitted",
+    },
+    {
+      name: "unfinished command",
+      output:
+        "fatal: Unable to create '/workspace/.git/index.lock': Operation not permitted",
+      state: { exit_code: null, is_running: true },
+    },
+    {
+      name: "unlaunched command",
+      output:
+        "fatal: Unable to create '/workspace/.git/index.lock': Operation not permitted",
+      state: { process_launched: false },
+    },
+    {
+      name: "native execution",
+      output:
+        "fatal: Unable to create '/workspace/.git/index.lock': Operation not permitted",
+      policy: "manual" as const,
+    },
+  ])(
+    "does not classify masked Git failure evidence for $name",
+    async ({ output, state, policy }) => {
+      resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+        marker: "/workspace/.git",
+        deniedWrite: ["/workspace/.git"],
+      });
+      executeCommand.mockResolvedValue({
+        exit_code: 0,
+        output,
+        output_captured: true,
+        terminal_id: "term_git_non_denial",
+        command_sent: true,
+        process_launched: true,
+        ...state,
+      });
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+      const result = await handleExecuteCommand(
+        { command: "git switch main; git status --short", cwd: "/workspace" },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-git-masked-negative",
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => policy ?? "approve-for-me",
+        },
+      );
+      expect(textPayload(result)).not.toHaveProperty(
+        "capability_code",
+        "protected_git_metadata",
+      );
+      expect(textPayload(result)).not.toHaveProperty("failure_evidence");
+      expect(executeCommand).toHaveBeenCalledOnce();
+    },
+  );
+
   it("adds protected Git recovery after an unclassified sandbox denial", async () => {
     resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
       marker: "/workspace/.git",
