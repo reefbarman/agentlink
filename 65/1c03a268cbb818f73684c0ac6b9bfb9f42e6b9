@@ -1,0 +1,31 @@
+.agentlink/skills/triage/SKILL.md
+  h_e08a86bb3a33a2 13,39,51,57-69,71
+src/agent/systemPrompt.test.ts
+  h_e08a86bb3a33a2 897-898,900-908
+DEVELOPMENT.md
+  h_e08a86bb3a33a2 57,67
+src/agent/systemPrompt.ts
+  h_e08a86bb3a33a2 998
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 198
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 2278
+CHANGELOG.md
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "651c03a268cbb818f73684c0ac6b9bfb9f42e6b9",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
