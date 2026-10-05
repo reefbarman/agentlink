@@ -1,0 +1,70 @@
+src/agent/toolAdapter.ts
+  h_e08a86bb3a33a2 5545-5555
+src/agent/systemPrompt.test.ts
+  h_e08a86bb3a33a2 885,887-901
+src/util/feedbackStore.ts
+  h_e08a86bb3a33a2 36,42-44,122-142,253-258
+src/agent/systemPrompt.ts
+  h_e08a86bb3a33a2 984,990,992-994,996,998
+src/shared/toolSchemas.ts
+  h_e08a86bb3a33a2 68,75,77-95,102,123
+  h_e08a86bb3a33a2 76
+src/agent/toolAdapter.feedback.test.ts
+  h_e08a86bb3a33a2 46-48,85-155,206-208
+src/util/feedbackStore.test.ts
+  h_e08a86bb3a33a2 90-92,103-110,189-228
+  h_e08a86bb3a33a2 229-230
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 190,192,194-198
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 2236,2240,2243-2249,2256,2258,2260,2264,2278-2280
+  h_e08a86bb3a33a2 2242,2250-2254
+.agentlink/skills/triage/SKILL.md
+  h_e08a86bb3a33a2 3,8,12-14,18,24-25,30-31,33,38-39,51,57-67,69,72-74,77,80,83,91-94,99,101-103,107,111,114
+src/sidebar/webview/components/FeedbackList.test.tsx
+  h_e08a86bb3a33a2 34-108
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 682-684,689-691,696-698,703-705,710-712,717-719,727-729,735-737,743-745,751-753,759-761,767-769
+src/tools/sendFeedback.test.ts
+  h_e08a86bb3a33a2 67-69,81-83,120-121,131-133,138-161
+  h_e08a86bb3a33a2 162
+src/tools/sendFeedback.ts
+  h_e08a86bb3a33a2 5-6,13-15,58-74,84-86
+  h_e08a86bb3a33a2 4,7
+packages/protocol/src/sidebarTransport.ts
+  h_e08a86bb3a33a2 82-88
+src/sidebar/webview/components/FeedbackList.tsx
+  h_e08a86bb3a33a2 20-32,112-121,162-164,170-177
+src/shared/toolRegistry.ts
+  h_e08a86bb3a33a2 310,313,319,325
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 1673-1674,1681-1685,1688-1694
+DEVELOPMENT.md
+  h_e08a86bb3a33a2 31,37-42,49,51,55,57,67,77
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+scripts/tool-inventory.json
+  h_e08a86bb3a33a2 697,702-703,852
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "544f39ca216bb76b4755993a8719bafe5d7abb2d",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
