@@ -1,0 +1,31 @@
+.github/workflows/release-coordinator.yml
+  h_e08a86bb3a33a2 149-152
+scripts/release-coordinator.mjs
+  h_e08a86bb3a33a2 459,475-477
+.release/last-plan.json
+  s_f2ced0f151a19d::t_c554afe11b0055 10,676
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8b4fbde2c77eddc946d5aef9eba45ca61059f817",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_f2ced0f151a19d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6fd7db7a-5958-421a-b763-7b1f441174cd",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
