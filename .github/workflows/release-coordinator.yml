@@ -146,9 +146,12 @@ jobs:
       - name: Apply versions, pins, and changelogs
         run: node scripts/release-coordinator.mjs apply --plan release-plan.json
 
-      # The package jobs run `npm run lint`; never push a commit that fails it.
-      - name: Check release commit formatting
-        run: npm run fmt:check
+      # The package jobs run lint and tests; never push a commit that fails
+      # formatting or workspace version/pin consistency.
+      - name: Check release commit formatting and workspace pins
+        run: |
+          npm run fmt:check
+          npx vitest run src/workspaceGateCoverage.test.ts
 
       - name: Commit and push release preparation
         id: commit

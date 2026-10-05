@@ -1240,8 +1240,8 @@
   },
   "devDependencies": {
     "@electron/osx-sign": "1.3.3",
-    "@agentlink/cli": "0.2.0",
-    "@agentlink/desktop": "0.2.0",
+    "@agentlink/cli": "0.3.0",
+    "@agentlink/desktop": "0.3.0",
     "@anthropic-ai/sandbox-runtime": "0.0.65",
     "@testing-library/preact": "^3.2.4",
     "@types/bmp-js": "^0.1.2",

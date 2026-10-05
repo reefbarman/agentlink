@@ -345,7 +345,9 @@ function setVersion(file, version) {
   writeJson(file, manifest);
 }
 
-function pinSdkDependencies(version) {
+// Workspaces pin each other (and the root pins every workspace) exactly, so a
+// released workspace's new version must be written into every reference.
+function pinWorkspaceDependencies(names, version) {
   for (const file of manifestPaths()) {
     const manifest = readJson(file);
     let changed = false;
@@ -354,7 +356,7 @@ function pinSdkDependencies(version) {
       "devDependencies",
       "peerDependencies",
     ]) {
-      for (const name of SDK_PACKAGES) {
+      for (const name of names) {
         if (manifest[field]?.[name] !== undefined) {
           manifest[field][name] = version;
           changed = true;
@@ -441,7 +443,12 @@ function apply(options) {
     const unit = record.units[id];
     const config = RELEASE_UNITS[id];
     for (const manifest of config.manifests) setVersion(manifest, unit.version);
-    if (id === "sdk") pinSdkDependencies(unit.version);
+    pinWorkspaceDependencies(
+      id === "sdk"
+        ? SDK_PACKAGES
+        : config.manifests.map((manifest) => readJson(manifest).name),
+      unit.version,
+    );
     if (config.changelog) {
       const heading =
         id === "sdk" ? `## ${unit.version} — ${date}` : `## ${unit.version}`;
