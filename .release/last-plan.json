@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "c851189c2ccd5625ba26a9acd796d38314e112bf",
-  "createdAt": "2026-10-05T02:01:52.811Z",
+  "sourceSha": "1dbd86ead9e59be33b79dc506923ac02115fa6c9",
+  "createdAt": "2026-10-05T02:56:16.897Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,76 +10,64 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.24.0",
-      "baselineRef": "v1.24.0",
-      "reserved": "1.24.0",
-      "commits": ["c851189c2ccd5625ba26a9acd796d38314e112bf"],
+      "published": "1.25.0",
+      "baselineRef": "v1.25.0",
+      "reserved": "1.25.0",
+      "commits": ["1dbd86ead9e59be33b79dc506923ac02115fa6c9"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.25.0",
-      "effectiveBump": "minor",
+      "version": "1.25.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.25.0",
+      "tag": "v1.25.1",
       "notes": [
         {
-          "sha": "c851189c2ccd5625ba26a9acd796d38314e112bf",
-          "subject": "feat(updates): notify users of compatible app releases",
-          "summary": "Adds update notifications for VS Code, Desktop and CLI: a metadata-only GitHub release check with indicators, manual check commands, an automatic-check opt-out, and a CLI `updates` command and `/updates` chat command.",
+          "sha": "1dbd86ead9e59be33b79dc506923ac02115fa6c9",
+          "subject": "fix(tools): preserve masked protected Git failures",
+          "summary": "Command execution now reports protected Git metadata write denials even when a later command masks them and the shell exits zero, adding failure evidence and guidance to inspect repository state before retrying.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.3.0",
-      "baselineRef": "desktop-v0.3.0",
-      "reserved": "0.3.0",
-      "commits": ["c851189c2ccd5625ba26a9acd796d38314e112bf"],
+      "published": "0.4.0",
+      "baselineRef": "desktop-v0.4.0",
+      "reserved": "0.4.0",
+      "commits": ["1dbd86ead9e59be33b79dc506923ac02115fa6c9"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.4.0",
-      "effectiveBump": "minor",
+      "version": "0.4.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.4.0",
+      "tag": "desktop-v0.4.1",
       "notes": [
         {
-          "sha": "c851189c2ccd5625ba26a9acd796d38314e112bf",
-          "subject": "feat(updates): notify users of compatible app releases",
-          "summary": "Adds update notifications for VS Code, Desktop and CLI: a metadata-only GitHub release check with indicators, manual check commands, an automatic-check opt-out, and a CLI `updates` command and `/updates` chat command.",
+          "sha": "1dbd86ead9e59be33b79dc506923ac02115fa6c9",
+          "subject": "fix(tools): preserve masked protected Git failures",
+          "summary": "Command execution now reports protected Git metadata write denials even when a later command masks them and the shell exits zero, adding failure evidence and guidance to inspect repository state before retrying.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.3.0",
-      "baselineRef": "cli-v0.3.0",
-      "reserved": "0.3.0",
-      "commits": ["c851189c2ccd5625ba26a9acd796d38314e112bf"],
+      "published": "0.4.0",
+      "baselineRef": "cli-v0.4.0",
+      "reserved": "0.4.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.4.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "cli-v0.4.0",
-      "notes": [
-        {
-          "sha": "c851189c2ccd5625ba26a9acd796d38314e112bf",
-          "subject": "feat(updates): notify users of compatible app releases",
-          "summary": "Adds update notifications for VS Code, Desktop and CLI: a metadata-only GitHub release check with indicators, manual check commands, an automatic-check opt-out, and a CLI `updates` command and `/updates` chat command.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     },
     "sdk": {
       "published": "0.3.0",
@@ -100,6 +88,14 @@
       "breakingUnits": [],
       "summary": "Adds update notifications for VS Code, Desktop and CLI: a metadata-only GitHub release check with indicators, manual check commands, an automatic-check opt-out, and a CLI `updates` command and `/updates` chat command.",
       "coverage": "partial",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "1dbd86ead9e59be33b79dc506923ac02115fa6c9": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "Command execution now reports protected Git metadata write denials even when a later command masks them and the shell exits zero, adding failure evidence and guidance to inspect repository state before retrying.",
+      "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     }

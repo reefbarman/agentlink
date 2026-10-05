@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.25.1
+
 - Fixed protected Git denials being hidden by a successful trailing command. Recognised sandbox permission-denial diagnostics tied to protected repository metadata now retain failure evidence and reviewed recovery guidance even when the shell exits zero or display filtering hides the diagnostic. The actual exit code is preserved, and retries remain non-automatic with repository-state inspection first.
 
 ## 1.25.0
