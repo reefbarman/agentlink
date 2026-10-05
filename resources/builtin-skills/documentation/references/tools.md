@@ -174,6 +174,7 @@ Use clear ownership and a focused review scope for writable or review work. Stru
 ## Connect external capabilities
 
 - `find_mcp_tools` and `call_mcp_tool` discover and invoke configured MCP capabilities. In the CLI, untargeted discovery lists servers needing sign-in without connecting them; specifying a server connects only that server, and `call_mcp_tool` can invoke its tools in the same turn under the normal approval policy.
+- In VS Code-backed sessions and standalone Desktop, `find_mcp_tools` also reports configured-server connection status and startup diagnostics. A named failed server returns an error explaining why it has no tools; an untargeted search includes server statuses without initiating unrelated sign-in. Failed servers remain in the agent catalog. Paused startup/auth failures are not repeatedly reconnected by discovery.
 - Resources and prompts use `list_mcp_resources`, `read_mcp_resource`, `list_mcp_prompts`, and `get_mcp_prompt`.
 - Native `web_search` and `web_fetch` may be available according to the configured web-access backend.
 

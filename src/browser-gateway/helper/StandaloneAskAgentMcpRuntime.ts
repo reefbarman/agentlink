@@ -848,6 +848,16 @@ export class StandaloneAskAgentMcpRuntime {
             }
           })
         : true;
+    const unavailableServers = hub
+      .getServerInfos()
+      .filter(
+        (info) => info.status !== "connected" && info.status !== "disabled",
+      )
+      .map(({ name, status, error }) => ({
+        name,
+        status,
+        ...(error ? { error } : {}),
+      }));
     const activationFailure = (serverName: string) => {
       const server = hub
         .getServerInfos()
@@ -862,10 +872,11 @@ export class StandaloneAskAgentMcpRuntime {
       tools: Object.freeze([
         ...definitions.map((definition) => structuredClone(definition)),
         ...MCP_META_TOOL_DEFINITIONS.map((definition) =>
-          definition.name === "find_mcp_tools" && pendingServerNames.length
+          definition.name === "find_mcp_tools" &&
+          (pendingServerNames.length || unavailableServers.length)
             ? {
                 ...structuredClone(definition),
-                description: `${definition.description} Servers awaiting first-use sign-in: ${pendingServerNames.join(", ")}. Specify a server only when the task needs it.`,
+                description: `${definition.description} Servers awaiting first-use sign-in: ${pendingServerNames.join(", ") || "none"}. Configured servers not connected: ${unavailableServers.map((server) => `${server.name} (${server.status})`).join(", ") || "none"}. Specify a server only when the task needs it. Report connection diagnostics instead of treating failed servers as missing.`,
               }
             : structuredClone(definition),
         ),
@@ -936,13 +947,23 @@ export class StandaloneAskAgentMcpRuntime {
             !(await activate(server, signal))
           )
             return activationFailure(server);
+          const servers = hub
+            .getServerInfos()
+            .filter((info) => !server || info.name === server)
+            .map(({ name, status, error }) => ({
+              name,
+              status,
+              ...(error ? { error } : {}),
+            }));
+          if (server && servers.some((info) => info.status !== "connected"))
+            return activationFailure(server);
           const found = findMcpToolDefinitions(hub.getToolDefs(), input);
           const pending = hub.getPendingServerNames();
-          if (!pending.length) return found;
           return jsonToolResult({
             ...(found.data as Record<string, unknown>),
+            servers,
             signInNeeded: pending,
-            hint: "Search with a specific server name to connect it and discover its tools.",
+            hint: "Search with a specific server name to connect a server awaiting sign-in. Configured servers in an error state are not missing; report their connection diagnostic and do not repeatedly retry paused authentication.",
           });
         }
         if (toolName === "list_mcp_resources")

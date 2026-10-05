@@ -4618,7 +4618,40 @@ async function dispatchToolCallWithTrackedApprovals(
                 : undefined,
           skillAllowlist,
         });
-        const result = mcpDiscoveryResultToToolResult(discovered);
+        const servers = currentHub
+          ?.getServerInfos?.()
+          .filter(
+            (info) =>
+              (!server || info.name === server) &&
+              skillAllowlistAllowsMcpServer(skillAllowlist, info.name),
+          )
+          .map(({ name, status, error }) => ({
+            name,
+            status,
+            ...(error ? { error } : {}),
+          }));
+        const unavailable =
+          server && servers?.find((info) => info.status !== "connected");
+        const result = servers?.length
+          ? {
+              ...jsonResult(
+                {
+                  ...discovered,
+                  count: discovered.tools.length,
+                  servers,
+                  ...(unavailable
+                    ? {
+                        status: "mcp_server_unavailable",
+                        error: `MCP server '${server}' is configured but ${unavailable.status}${unavailable.error ? `: ${unavailable.error}` : ""}`,
+                        hint: "Report this connection diagnostic, not that the server is missing. Do not repeatedly retry paused authentication. Inspect the server error and configuration in the MCP panel before another manual reconnect.",
+                      }
+                    : {}),
+                },
+                true,
+              ),
+              ...(unavailable ? { isError: true } : {}),
+            }
+          : mcpDiscoveryResultToToolResult(discovered);
         const pending = currentHub
           ?.getPendingServerNames?.()
           .filter((name) =>

@@ -43,6 +43,32 @@ describe("partitionMcpToolsForDisclosure", () => {
     );
   });
 
+  it("keeps failed servers visible without exposing disabled servers or inventing tools", () => {
+    const partition = partitionMcpToolsForDisclosure([], {
+      pendingServerNames: ["notion"],
+      serverStatuses: [
+        {
+          name: "linear",
+          status: "error",
+          error: "Connection closed: upstream returned 503",
+        },
+        { name: "notion", status: "disconnected", error: "Sign-in needed" },
+        { name: "disabled", status: "disabled" },
+      ],
+    });
+    expect(partition.inlineTools).toEqual([]);
+    expect(partition.deferredTools).toEqual([]);
+    expect(partition.catalog.map((entry) => entry.serverName)).toEqual([
+      "linear",
+      "notion",
+    ]);
+    const section = buildMcpToolCatalogSection(partition.catalog);
+    expect(section).toContain("linear: configured, error");
+    expect(section).not.toContain("upstream returned 503");
+    expect(section).toContain("notion: sign-in on first use");
+    expect(section).toContain("Do not repeatedly retry");
+  });
+
   it("keeps small auto-mode servers inline", () => {
     const partition = partitionMcpToolsForDisclosure(
       [tool("small__search"), tool("small__fetch")],

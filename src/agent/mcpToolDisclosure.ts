@@ -21,6 +21,7 @@ export interface McpToolDisclosureOptions {
   forceInlineToolNames?: ReadonlySet<string> | readonly string[];
   /** Servers whose schemas cannot be listed until first-use sign-in. */
   pendingServerNames?: readonly string[];
+  serverStatuses?: readonly { name: string; status: string; error?: string }[];
 }
 
 export type McpCapabilityClass = "web-search" | "browser-automation";
@@ -39,6 +40,7 @@ export interface McpToolDisclosureCatalogEntry {
   capabilities?: McpCapabilityClass[];
   deferred?: boolean;
   signInNeeded?: boolean;
+  connectionStatus?: string;
 }
 
 export interface McpToolDisclosurePartition {
@@ -131,6 +133,9 @@ export function buildMcpToolCatalogSection(
     const capabilities = entry.capabilities?.length
       ? ` Capabilities: ${entry.capabilities.join(", ")}.`
       : "";
+    if (entry.connectionStatus) {
+      return `- ${entry.serverName}: configured, ${entry.connectionStatus}; use find_mcp_tools with this server name for its current connection status and diagnostic.`;
+    }
     const status = entry.signInNeeded
       ? "sign-in on first use; tools discoverable after connecting"
       : entry.deferred === false
@@ -149,7 +154,7 @@ export function buildMcpToolCatalogSection(
         .join("\n")}`
     : "";
 
-  return `\n\n## MCP Tool Catalog\n\nConnected MCP servers are available now. If a server is listed as "tools available directly", call its tools by their full \`server__tool\` names. If a server is listed as deferred, first use \`find_mcp_tools\` to discover the relevant tool and schema, then call it with \`call_mcp_tool\`. A server awaiting sign-in does not connect until you request it by name with \`find_mcp_tools\`; do not connect servers unrelated to the task. Do not tell the user there is no way to interact with a listed MCP server.\n\n${lines.join("\n")}${hints}`;
+  return `\n\n## MCP Tool Catalog\n\nConnected MCP servers are available now. Configured servers in an error or disconnected state are not missing: use \`find_mcp_tools\` with the server name to inspect their current status and report the diagnostic. Do not repeatedly retry a paused connection or sign-in. If a server is listed as "tools available directly", call its tools by their full \`server__tool\` names. If a server is listed as deferred, first use \`find_mcp_tools\` to discover the relevant tool and schema, then call it with \`call_mcp_tool\`. A server awaiting sign-in does not connect until you request it by name with \`find_mcp_tools\`; do not connect servers unrelated to the task. Do not tell the user there is no way to interact with a listed MCP server.\n\n${lines.join("\n")}${hints}`;
 }
 
 export function partitionMcpToolsForDisclosure(
@@ -248,6 +253,18 @@ export function partitionMcpToolsForDisclosure(
       representativeTools: [],
       deferred: true,
       signInNeeded: true,
+    });
+  }
+  for (const server of options.serverStatuses ?? []) {
+    if (server.status === "connected" || server.status === "disabled") continue;
+    if (catalog.some((entry) => entry.serverName === server.name)) continue;
+    catalog.push({
+      serverName: server.name,
+      toolCount: 0,
+      estimatedTokens: 0,
+      representativeTools: [],
+      deferred: true,
+      connectionStatus: server.status,
     });
   }
   catalog.sort((a, b) => a.serverName.localeCompare(b.serverName));

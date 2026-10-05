@@ -7028,6 +7028,75 @@ describe("dispatchToolCall", () => {
     );
   });
 
+  it("returns configured startup failures instead of a misleading empty tool list", async () => {
+    const activatePendingServer = vi.fn();
+    const mcpHub = {
+      getToolDefs: () => [],
+      getPendingServerNames: () => [],
+      activatePendingServer,
+      getServerInfos: () => [
+        { name: "linear", status: "error", error: "upstream returned 503" },
+        { name: "notion", status: "connected" },
+      ],
+    };
+    const context = { ...mockCtx, mcpHub: mcpHub as any };
+    const list = await dispatchToolCall(
+      "find_mcp_tools",
+      { query: "projects" },
+      context,
+    );
+    expect(list.isError).not.toBe(true);
+    expect(JSON.parse((list.content[0] as any).text).servers).toContainEqual({
+      name: "linear",
+      status: "error",
+      error: "upstream returned 503",
+    });
+    const result = await dispatchToolCall(
+      "find_mcp_tools",
+      { server: "linear" },
+      context,
+    );
+    expect(result.isError).toBe(true);
+    expect(JSON.parse((result.content[0] as any).text)).toMatchObject({
+      status: "mcp_server_unavailable",
+      tools: [],
+      error:
+        "MCP server 'linear' is configured but error: upstream returned 503",
+    });
+    expect(activatePendingServer).not.toHaveBeenCalled();
+    const restricted = await dispatchToolCall(
+      "find_mcp_tools",
+      { server: "linear" },
+      {
+        ...context,
+        skillAllowedTools: ["notion__search"],
+      },
+    );
+    expect(JSON.stringify(restricted)).not.toContain("upstream returned 503");
+  });
+
+  it("reports the diagnostic when targeted first-use sign-in fails", async () => {
+    const context = {
+      ...mockCtx,
+      mcpHub: {
+        getToolDefs: () => [],
+        getPendingServerNames: () => ["linear"],
+        activatePendingServer: vi.fn(async () => false),
+        getServerInfos: () => [
+          { name: "linear", status: "error", error: "Connection closed" },
+        ],
+      } as any,
+    };
+    const result = await dispatchToolCall(
+      "find_mcp_tools",
+      { server: "linear" },
+      context,
+    );
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("Connection closed");
+    expect(context.mcpHub.activatePendingServer).toHaveBeenCalledTimes(1);
+  });
+
   it("restricts read-only MCP discovery to explicitly annotated tools", async () => {
     const readTool = {
       name: "linear__list_issues",

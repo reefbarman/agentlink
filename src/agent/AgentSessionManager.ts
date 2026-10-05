@@ -2360,6 +2360,7 @@ export class AgentSessionManager {
           mode: context?.mcpHub?.getServerConfig(serverName)?.toolDisclosure,
         })),
         pendingServerNames: context?.mcpHub?.getPendingServerNames?.(),
+        serverStatuses: context?.mcpHub?.getServerInfos?.(),
       });
       const requestContext =
         context && provider
@@ -4896,7 +4897,13 @@ export class AgentSessionManager {
     if (!mcpHub) return undefined;
     const tools = mcpHub.getToolDefs();
     const pendingServerNames = mcpHub.getPendingServerNames?.() ?? [];
-    if (tools.length === 0 && pendingServerNames.length === 0) return undefined;
+    const serverStatuses = mcpHub.getServerInfos?.() ?? [];
+    if (
+      tools.length === 0 &&
+      pendingServerNames.length === 0 &&
+      !serverStatuses.some((server) => server.status !== "disabled")
+    )
+      return undefined;
     const serverNames = new Set(
       tools
         .map((tool) => parseMcpToolName(tool.name)?.serverName)
@@ -4909,6 +4916,7 @@ export class AgentSessionManager {
     return partitionMcpToolsForDisclosure(tools, {
       serverConfigs,
       pendingServerNames,
+      serverStatuses,
     });
   }
 

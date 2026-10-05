@@ -172,6 +172,47 @@ describe("McpManagerPanel", () => {
     expect(screen.getAllByText("1", { selector: "strong" })).toHaveLength(3);
   });
 
+  it("reveals full wrapped MCP errors from an accessible server details control", () => {
+    const error =
+      "Connection failed: this deliberately long error contains a path /workspace/packages/service/index.js and more context.\nUnderlying cause: connection refused.";
+    render(
+      <McpManagerPanel
+        snapshot={snapshot({
+          statusInfos: [
+            ...snapshot().statusInfos,
+            {
+              name: "error-server",
+              status: "not_connected",
+              error,
+              toolCount: 0,
+              resourceCount: 0,
+              promptCount: 0,
+              tools: [],
+            },
+          ],
+        })}
+      />,
+    );
+
+    const errorRow = screen.getByText("error-server").closest("li");
+    const summary = errorRow?.querySelector(".mcp-status-detail");
+    expect(summary?.getAttribute("title")).toBe(error);
+
+    const detailsButton = screen.getByRole("button", {
+      name: "Show details for error-server",
+    });
+    expect((detailsButton as HTMLButtonElement).disabled).toBe(false);
+    expect(detailsButton.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(detailsButton);
+
+    const fullError = screen.getByRole("note");
+    expect(fullError.textContent).toBe(error);
+    expect((fullError as HTMLElement).style.whiteSpace).toBe("pre-wrap");
+    expect((fullError as HTMLElement).style.overflowWrap).toBe("anywhere");
+    expect((fullError as HTMLElement).style.userSelect).toBe("text");
+    expect(detailsButton.getAttribute("aria-expanded")).toBe("true");
+  });
+
   it("offers Connect for configured servers without a runtime entry", () => {
     const onServerAction = vi.fn();
     render(

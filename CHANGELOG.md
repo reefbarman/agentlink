@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed MCP failure visibility: error-only server rows now expand to show complete selectable diagnostics in the shared Manager, and configured failed servers remain visible to agent discovery instead of appearing missing. Named discovery returns the connection failure rather than an unexplained empty tool list. Stdio startup errors preserve bounded, redacted process output and the original connection error; paused proxy retries remain paused, with diagnostic-led recovery instead of generic reconnect/reauth advice.
+
 ## 1.26.0
 
 - Expanded development feedback into an evidence-grounded AgentLink self-improvement loop. Agents can report bugs and suggest fixes, workflow improvements, or new capabilities, including opportunities noticed during successful tasks. Optional category, suspected-cause, and suggested-change fields stay separate from observed evidence, survive retrieval and triage, and appear in the searchable development sidebar. Existing reports remain compatible, with proposal text giving way before bug evidence at the storage limit. The triage workflow gives the AI's independent verdict on value versus complexity, gimmick risk, and simpler alternatives before asking for user approval, including reasoned recommendations to decline; deferred ideas remain untriaged, useful P2/P3 proposals are retained, and backlog approval never authorizes implementation or weaker safeguards.

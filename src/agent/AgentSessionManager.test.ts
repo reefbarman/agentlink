@@ -3714,6 +3714,44 @@ describe("AgentSessionManager condense thresholds", () => {
     );
   });
 
+  it("passes failed MCP status through the session composition boundary without connected tools", async () => {
+    mocks.getConfiguration.mockReturnValue({
+      get: () => ({}),
+      inspect: () => undefined,
+    });
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    mgr.setToolContext({
+      approvalManager: {} as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: {} as any,
+      mcpHub: {
+        getToolDefs: () => [],
+        getPendingServerNames: () => [],
+        getServerInfos: () => [
+          {
+            name: "linear",
+            status: "error",
+            error: "distinctive startup diagnostic",
+          },
+        ],
+      } as any,
+    });
+    await mgr.createSession("code");
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mcpToolDisclosure: expect.objectContaining({
+          catalog: [
+            expect.objectContaining({
+              serverName: "linear",
+              connectionStatus: "error",
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
   it("falls back to model-family defaults when there is no stored override", async () => {
     mocks.getConfiguration.mockReturnValue({
       get: () => ({}),

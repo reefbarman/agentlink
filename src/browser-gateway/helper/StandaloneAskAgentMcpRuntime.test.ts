@@ -766,6 +766,63 @@ describe("StandaloneAskAgentMcpRuntime", () => {
     }
   });
 
+  it("discloses a failed desktop server and returns its diagnostic without retrying it", async () => {
+    const activatePendingServer = vi.fn();
+    const connect = vi.fn(async () => undefined);
+    const runtime = new StandaloneAskAgentMcpRuntime({
+      loadConfigs: async () => [
+        { name: "linear", command: "npx", toolPolicy: "allow" },
+      ],
+      resolveExecutable: async (command) => command,
+      createHub: () =>
+        ({
+          connect,
+          disconnectAll: vi.fn(async () => undefined),
+          getToolDefs: () => [],
+          getPendingServerNames: () => [],
+          activatePendingServer,
+          getServerInfos: () => [
+            {
+              name: "linear",
+              status: "error",
+              error: "distinctive process diagnostic",
+            },
+          ],
+        }) as unknown as import("@agentlink/node-host").McpClientHub,
+    });
+    try {
+      const turn = await runtime.prepareTurn(request);
+      expect(
+        turn.tools.find((tool) => tool.name === "find_mcp_tools")?.description,
+      ).toContain("linear (error)");
+      const signal = new AbortController().signal;
+      const list = await turn.execute("find_mcp_tools", {}, signal, request);
+      expect(list.data).toMatchObject({
+        servers: [
+          {
+            name: "linear",
+            status: "error",
+            error: "distinctive process diagnostic",
+          },
+        ],
+      });
+      const result = await turn.execute(
+        "find_mcp_tools",
+        { server: "linear" },
+        signal,
+        request,
+      );
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain(
+        "distinctive process diagnostic",
+      );
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(activatePendingServer).not.toHaveBeenCalled();
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("offers approval for a tool discovered after first-use sign-in in the same turn", async () => {
     const pending = new Set(["first"]);
     const runtime = new StandaloneAskAgentMcpRuntime({

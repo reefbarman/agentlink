@@ -29,7 +29,7 @@ export const MCP_META_TOOL_DEFINITIONS: CoreModelToolDefinition[] = [
   {
     name: "find_mcp_tools",
     description:
-      "Discover tools available from connected MCP servers. Use this before calling tools whose full schemas were deferred from the system prompt.",
+      "Discover MCP tools and configured-server connection status, including startup errors. Specify server to start first-use sign-in for that server when the task needs it, or inspect why a configured server has no tools. Failed servers are not missing; report their diagnostic and do not repeatedly retry paused authentication. Use this before calling tools whose full schemas were deferred from the system prompt.",
     input_schema: {
       type: "object",
       properties: {

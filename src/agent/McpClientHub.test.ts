@@ -1,6 +1,7 @@
 import type * as vscode from "vscode";
 
 import { createHash } from "crypto";
+import { PassThrough } from "node:stream";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
@@ -48,6 +49,7 @@ const mocks = vi.hoisted(() => ({
         args?: string[];
         env?: Record<string, string>;
         cwd?: string;
+        stderr?: string;
       }
     | undefined,
   clientOptions: undefined as
@@ -67,7 +69,7 @@ const mocks = vi.hoisted(() => ({
   ),
   connect: vi.fn(async () => {}),
   close: vi.fn(async () => {}),
-  stdioTransports: [] as Array<{ onclose?: () => void }>,
+  stdioTransports: [] as Array<{ onclose?: () => void; stderr: PassThrough }>,
   fetch: vi.fn<typeof fetch>(),
 }));
 
@@ -114,6 +116,7 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
 vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
   StdioClientTransport: class MockStdioClientTransport {
     onclose?: () => void;
+    stderr = new PassThrough();
 
     constructor(options: typeof mocks.stdioTransportOptions) {
       mocks.stdioTransportOptions = options;
@@ -403,7 +406,15 @@ describe("McpClientHub protocol correctness", () => {
   it("pauses a failed mcp-remote startup without scheduling a retry", async () => {
     vi.useFakeTimers();
     const hub = new McpClientHub(new FakeMemento());
-    mocks.connect.mockRejectedValue(new Error("proxy startup failed"));
+    mocks.connect.mockImplementation(
+      async function (this: { stderr: PassThrough }) {
+        this.stderr.write("upstream returned 503\nrefresh_token=split-");
+        this.stderr.write(
+          "credential\nhttps://auth.example.test/callback?code=private-code\n",
+        );
+        throw new Error("proxy startup failed");
+      },
+    );
 
     try {
       await hub.connect(
@@ -423,6 +434,12 @@ describe("McpClientHub protocol correctness", () => {
         status: "error",
         error: expect.stringContaining("Automatic startup retries are paused"),
       });
+      const error = hub.getServerInfos()[0]?.error;
+      expect(error).toContain("proxy startup failed");
+      expect(error).toContain("upstream returned 503");
+      expect(error).not.toContain("split-credential");
+      expect(error).not.toContain("private-code");
+      expect(mocks.stdioTransportOptions?.stderr).toBe("pipe");
       await vi.advanceTimersByTimeAsync(60_000);
       expect(mocks.connect).toHaveBeenCalledTimes(1);
     } finally {
@@ -431,9 +448,43 @@ describe("McpClientHub protocol correctness", () => {
     }
   });
 
+  it("omits oversized startup output rather than exposing partially captured credentials", async () => {
+    const hub = new McpClientHub(new FakeMemento());
+    mocks.connect.mockImplementation(
+      async function (this: { stderr: PassThrough }) {
+        this.stderr.write("refresh_token=private-");
+        this.stderr.write("credential".repeat(4000));
+        throw new Error("Connection closed");
+      },
+    );
+    try {
+      await hub.connect(
+        [
+          {
+            name: "remote",
+            command: "mcp-remote",
+            args: ["https://mcp.example.test/service"],
+          },
+        ],
+        {
+          interactiveServerNames: new Set(["remote"]),
+        },
+      );
+      const error = hub.getServerInfos()[0]?.error;
+      expect(error).toContain("Connection closed");
+      expect(error).toContain("output exceeded the diagnostic limit");
+      expect(error).not.toContain("private-");
+      expect(error?.length).toBeLessThan(9000);
+    } finally {
+      await hub.disconnectAll();
+    }
+  });
+
   it("reconnects mcp-remote after a previously healthy transport drops", async () => {
     vi.useFakeTimers();
     const hub = new McpClientHub(new FakeMemento());
+    const onLog = vi.fn();
+    hub.onLog = onLog;
 
     try {
       await hub.connect(
@@ -449,7 +500,15 @@ describe("McpClientHub protocol correctness", () => {
       );
       expect(mocks.connect).toHaveBeenCalledTimes(1);
 
+      mocks.stdioTransports[0]?.stderr.write(
+        "runtime crashed: refresh_token=private-runtime-token",
+      );
       mocks.stdioTransports[0]?.onclose?.();
+      expect(hub.getServerInfos()[0]?.error).toContain("runtime crashed");
+      expect(JSON.stringify(onLog.mock.calls)).toContain("runtime crashed");
+      expect(JSON.stringify(onLog.mock.calls)).not.toContain(
+        "private-runtime-token",
+      );
       await vi.advanceTimersByTimeAsync(1_000);
       await vi.waitFor(() => {
         expect(mocks.connect).toHaveBeenCalledTimes(2);
@@ -683,6 +742,43 @@ describe("McpClientHub protocol correctness", () => {
         PLUGIN_DATA: "/plugin/data",
       },
     });
+  });
+
+  it("redacts the actual plugin process environment from startup diagnostics", async () => {
+    vi.useFakeTimers();
+    const hub = new McpClientHub(new FakeMemento());
+    vi.spyOn(hub as any, "resolveStdioEnvironment").mockReturnValue({
+      GH_PAT: "resolved-plugin-credential",
+    });
+    mocks.connect.mockImplementation(
+      async function (this: { stderr: PassThrough }) {
+        this.stderr.write("plugin failed: resolved-plugin-credential");
+        throw new Error("Connection closed");
+      },
+    );
+    try {
+      await hub.connect([
+        {
+          ...config,
+          pluginRoot: "/plugin/package",
+          pluginData: "/plugin/data",
+          provenance: {
+            kind: "agent-plugin",
+            scope: { kind: "global" },
+            installInstanceId: "install-a",
+            packageDigest: "a".repeat(64),
+            portableServerName: "fixture",
+            runtimeServerName: "fixture",
+          },
+        },
+      ]);
+      const error = hub.getServerInfos()[0]?.error;
+      expect(error).toContain("plugin failed");
+      expect(error).not.toContain("resolved-plugin-credential");
+    } finally {
+      await hub.disconnectAll();
+      vi.useRealTimers();
+    }
   });
 
   it("fails plugin stdio closed without authorized root/data boundaries", async () => {

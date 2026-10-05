@@ -52,6 +52,7 @@ import {
   type McpUrlElicitationRequest,
 } from "@agentlink/protocol/mcp-url-elicitation";
 import { normalizeMcpToolResult } from "./mcpToolResult.js";
+import { mcpStartupDiagnostic } from "./mcpStartupDiagnostic.js";
 import {
   normalizeMcpElicitationSchema,
   type McpFormElicitationInput,
@@ -1300,11 +1301,41 @@ export class McpClientHub {
     this.servers.set(cfg.name, entry);
     this.onStatusChange?.(this.getServerInfos());
 
+    let stdioEnvironment = environment;
+    let stderrBytes = 0;
+    let stderrOverflow = false;
+    const stderrChunks: Buffer[] = [];
+    const captureStderr = (chunk: Buffer | string) => {
+      if (stderrOverflow) return;
+      const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+      stderrBytes += bytes.length;
+      if (stderrBytes > 32768) {
+        stderrOverflow = true;
+        stderrChunks.length = 0;
+        return;
+      }
+      stderrChunks.push(bytes);
+    };
+    const processDiagnostic = (message: string) =>
+      mcpStartupDiagnostic(
+        message,
+        stderrOverflow
+          ? "Process output exceeded the diagnostic limit and was omitted."
+          : Buffer.concat(stderrChunks).toString("utf8"),
+        cfg,
+        stdioEnvironment,
+      );
     try {
       const transport = this.createTransport(
         cfg,
         oauthProvider,
         signal,
+        {
+          onData: captureStderr,
+          onEnvironment: (env) => {
+            stdioEnvironment = env;
+          },
+        },
         environment,
       );
 
@@ -1324,6 +1355,13 @@ export class McpClientHub {
           return;
         }
         current.status = "disconnected";
+        if ((cfg.type ?? "stdio") === "stdio") {
+          current.error = processDiagnostic(
+            "MCP process closed after connecting.",
+          );
+          this.log(`[mcp:${cfg.name}] ${current.error}`);
+          stderrChunks.length = 0;
+        }
         this.onStatusChange?.(this.getServerInfos());
         this.scheduleReconnect(
           cfg,
@@ -1713,11 +1751,12 @@ export class McpClientHub {
 
         this.authFailureCounts.delete(cfg.name);
         entry.status = "error";
+        const startupDiagnostic = processDiagnostic(errMsg);
         if (isMcpRemoteConfig(cfg) && !options.retryAfterConnected) {
-          entry.error = `MCP proxy '${cfg.name}' failed to start. Automatic startup retries are paused to avoid repeated interactive authentication. Use Reconnect to try again.`;
+          entry.error = `MCP proxy '${cfg.name}' failed to start: ${startupDiagnostic}\nAutomatic startup retries are paused to avoid repeated interactive authentication. Check the process diagnostic and server configuration before another manual reconnect. Reauthenticate only if the diagnostic indicates an authentication failure.`;
           this.log(`[mcp:${cfg.name}] ${entry.error}`);
         } else {
-          entry.error = errMsg;
+          entry.error = startupDiagnostic;
           this.scheduleReconnect(
             cfg,
             retryCount + 1,
@@ -1726,6 +1765,10 @@ export class McpClientHub {
           );
         }
       }
+    } finally {
+      stderrChunks.length = 0;
+      stderrBytes = 0;
+      stderrOverflow = false;
     }
 
     this.onStatusChange?.(this.getServerInfos());
@@ -2017,6 +2060,10 @@ export class McpClientHub {
     cfg: McpServerConfig,
     authProvider: McpHubOAuthProvider | undefined,
     signal: AbortSignal,
+    stdioDiagnostic: {
+      onData: (chunk: Buffer | string) => void;
+      onEnvironment: (environment: Record<string, string>) => void;
+    },
     environment?: Record<string, string>,
   ) {
     const connectionFetch: typeof globalThis.fetch = (input, init) => {
@@ -2035,12 +2082,16 @@ export class McpClientHub {
       if (!cfg.command)
         throw new Error(`Server '${cfg.name}' is stdio but missing 'command'`);
       const env = environment ?? this.resolveStdioEnvironment(cfg)!;
-      return new StdioClientTransport({
+      const transport = new StdioClientTransport({
         command: cfg.command,
         args: cfg.args ?? [],
         env,
+        stderr: "pipe",
         ...(cfg.cwd ? { cwd: cfg.cwd } : {}),
       });
+      stdioDiagnostic.onEnvironment(env);
+      transport.stderr?.on("data", stdioDiagnostic.onData);
+      return transport;
     }
 
     if (type === "sse") {

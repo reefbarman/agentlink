@@ -1481,9 +1481,10 @@ export function McpManagerPanel({
                       <button
                         class="mcp-status-expand icon-button"
                         type="button"
-                        disabled={!info?.tools.length}
-                        aria-label={`${expanded ? "Hide" : "Show"} tools for ${name}`}
+                        disabled={!info?.tools.length && !info?.error}
+                        aria-label={`${expanded ? "Hide" : "Show"} details for ${name}`}
                         aria-expanded={expanded}
+                        title={`${expanded ? "Hide" : "Show"} server details`}
                         onClick={() =>
                           setExpandedServers((current) => {
                             const next = new Set(current);
@@ -1504,7 +1505,10 @@ export function McpManagerPanel({
                       />
                       <div class="mcp-manager-server-identity">
                         <span class="mcp-status-name">{name}</span>
-                        <span class="mcp-status-detail">
+                        <span
+                          class="mcp-status-detail"
+                          title={info?.error ?? undefined}
+                        >
                           {statusDetail(info, Boolean(entry?.config.disabled))}
                         </span>
                       </div>
@@ -1641,16 +1645,33 @@ export function McpManagerPanel({
                       </span>
                     </div>
                     {expanded && info && (
-                      <ul class="mcp-tool-list">
-                        {info.tools.map((tool) => (
-                          <li key={tool.name} class="mcp-tool-item">
-                            <span>{tool.name}</span>
-                            {tool.description && (
-                              <small>{tool.description}</small>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
+                      <>
+                        {info.error && (
+                          <div
+                            class="mcp-manager-server-error"
+                            role="note"
+                            style={{
+                              whiteSpace: "pre-wrap",
+                              overflowWrap: "anywhere",
+                              userSelect: "text",
+                            }}
+                          >
+                            {info.error}
+                          </div>
+                        )}
+                        {info.tools.length > 0 && (
+                          <ul class="mcp-tool-list">
+                            {info.tools.map((tool) => (
+                              <li key={tool.name} class="mcp-tool-item">
+                                <span>{tool.name}</span>
+                                {tool.description && (
+                                  <small>{tool.description}</small>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </>
                     )}
                   </li>
                 );
