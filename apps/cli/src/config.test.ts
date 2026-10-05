@@ -17,6 +17,14 @@ const base = {
 describe("parseCliConfig", () => {
   it("defaults sockets on and validates the explicit rollback", () => {
     expect(parseCliConfig(base).codexUseWebSocket).toBe(true);
+    expect(parseCliConfig(base).updateAutomaticChecks).toBe(true);
+    expect(
+      parseCliConfig({ ...base, updateAutomaticChecks: false })
+        .updateAutomaticChecks,
+    ).toBe(false);
+    expect(() =>
+      parseCliConfig({ ...base, updateAutomaticChecks: "false" }),
+    ).toThrow("updateAutomaticChecks must be a boolean");
     expect(
       parseCliConfig({ ...base, codexUseWebSocket: true }).codexUseWebSocket,
     ).toBe(true);

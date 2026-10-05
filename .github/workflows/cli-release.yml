@@ -115,6 +115,8 @@ jobs:
           test -f "$ARCHIVE.sha256"
           test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 2
           (cd dist && sha256sum -c "$(basename "$ARCHIVE").sha256")
+      - name: Generate release update metadata
+        run: node scripts/generate-release-update.mjs --product cli --dir dist
       - name: Publish CLI preview GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -99,6 +99,10 @@
     },
     "commands": [
       {
+        "command": "agentlink.checkForUpdates",
+        "title": "AgentLink: Check for Updates"
+      },
+      {
         "command": "agentlink.acceptDiff",
         "title": "Accept Changes",
         "icon": "$(check)"
@@ -315,6 +319,12 @@
     "configuration": {
       "title": "AgentLink",
       "properties": {
+        "agentlink.updates.automaticChecks": {
+          "type": "boolean",
+          "scope": "application",
+          "default": true,
+          "description": "Check GitHub release metadata at most once a day for AgentLink updates. Notifications only: never download installers, install, or restart automatically. Manual checks remain available when disabled."
+        },
         "agentlink.compose.enabled": {
           "type": "boolean",
           "scope": "machine",
@@ -1176,7 +1186,7 @@
     "fmt:check": "oxfmt --check",
     "lint": "bash -c 'e=0; npm run build:workspaces || e=1; npm run docs:check || e=1; npm run telemetry:inventory:check || e=1; oxfmt --check || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; npm run lint:workspaces || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
     "lint:workspaces": "npm run lint --workspaces --if-present",
-    "test": "npm run build:workspaces && vitest run && npm run test:workspaces && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-keychain-runtime.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-mcp-auth-telemetry.test.mjs scripts/report-session-outcomes.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/vendor-agentlink-sdk.test.mjs scripts/release-plan.test.mjs scripts/release-classify.test.mjs scripts/install.test.mjs scripts/release-coordinator.test.mjs scripts/verify-cli-package.test.mjs scripts/macos-signing.test.mjs scripts/verify-cli-bundle.test.mjs scripts/verify-desktop-package.test.mjs scripts/verify-retrieval-package.test.mjs scripts/workspace-bundle-closure.test.mjs",
+    "test": "npm run build:workspaces && vitest run && npm run test:workspaces && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-keychain-runtime.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/report-mcp-auth-telemetry.test.mjs scripts/report-session-outcomes.test.mjs scripts/report-tool-usage-telemetry.test.mjs scripts/vendor-agentlink-sdk.test.mjs scripts/release-plan.test.mjs scripts/release-classify.test.mjs scripts/install.test.mjs scripts/generate-release-update.test.mjs scripts/release-coordinator.test.mjs scripts/verify-cli-package.test.mjs scripts/macos-signing.test.mjs scripts/verify-cli-bundle.test.mjs scripts/verify-desktop-package.test.mjs scripts/verify-retrieval-package.test.mjs scripts/workspace-bundle-closure.test.mjs",
     "test:workspaces": "npm run test --workspaces --if-present",
     "test:core-sdk-consumer": "npm run build:workspaces && node scripts/run-core-sdk-consumer-gate.mjs",
     "vendor:core-sdk": "npm run build:workspaces && node scripts/vendor-agentlink-sdk.mjs",

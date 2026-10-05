@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { registerVscodeReleaseUpdates } from "./integrations/vscodeReleaseUpdates.js";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -1525,6 +1526,7 @@ export async function activate(
     projectCustomizationRegistry,
     extVersion,
   );
+  registerVscodeReleaseUpdates(context, chatViewProvider);
   chatViewProvider.setMcpAuthTelemetry(mcpAuthTelemetry ?? undefined);
   chatViewProvider.setAgentPluginManagerHost(agentPluginManagerHost);
   chatViewProvider.setAgentPluginCatalogProvider(agentPluginCatalog);

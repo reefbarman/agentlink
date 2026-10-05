@@ -48,6 +48,7 @@ const build = await esbuild.build({
   },
   define: {
     __AGENTLINK_CLI_VERSION__: JSON.stringify(manifest.version),
+    __AGENTLINK_CLI_PACKAGED__: JSON.stringify(packageBuild),
     "process.env.DEV": "undefined",
   },
   alias: {
@@ -110,6 +111,41 @@ const unexpectedExternalImports = externalImports.filter(
 if (unexpectedExternalImports.length > 0) {
   throw new Error(
     `Unexpected CLI external imports: ${unexpectedExternalImports.join(", ")}`,
+  );
+}
+
+const updateInputs = Object.keys(build.metafile.inputs).filter((input) =>
+  /(^|\/)src\/updates\//u.test(input),
+);
+const pendingUpdateInputs = [...updateInputs];
+const visitedUpdateInputs = new Set();
+const forbiddenUpdateDependencies = new Set();
+while (pendingUpdateInputs.length > 0) {
+  const input = pendingUpdateInputs.pop();
+  if (visitedUpdateInputs.has(input)) continue;
+  visitedUpdateInputs.add(input);
+  const metadata = build.metafile.inputs[input];
+  for (const imported of metadata.imports) {
+    if (/^(?:vscode|electron)(?:\/|$)/u.test(imported.path)) {
+      forbiddenUpdateDependencies.add(imported.path);
+    }
+    if (imported.external) continue;
+    const resolved = path.posix.normalize(
+      path.posix.join(path.posix.dirname(input), imported.path),
+    );
+    if (
+      /(^|\/)src\/(?:agent|integrations|browser-gateway)\//u.test(resolved) ||
+      /(^|\/)src\/extension\.[cm]?[jt]sx?$/u.test(resolved)
+    ) {
+      forbiddenUpdateDependencies.add(resolved);
+      continue;
+    }
+    if (build.metafile.inputs[resolved]) pendingUpdateInputs.push(resolved);
+  }
+}
+if (forbiddenUpdateDependencies.size > 0) {
+  throw new Error(
+    `CLI update modules depend on forbidden VS Code/Electron or extension composition modules: ${[...forbiddenUpdateDependencies].sort().join(", ")}`,
   );
 }
 

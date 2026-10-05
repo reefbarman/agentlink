@@ -7,6 +7,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import React from "react";
+import type { ReleaseUpdateState } from "../../../../src/updates/releaseUpdateTypes.js";
 import type { StandaloneSessionController } from "../sessionController.js";
 import { buildActivityShelfItems } from "./ActivityShelf.js";
 import { createRendererBakeoffFixture } from "./rendererBakeoffFixture.js";
@@ -85,6 +86,50 @@ describe("Ink chat app", () => {
     expect(screen.lastFrame()).toContain("Activity · 4 live");
     expect(screen.lastFrame()).toContain("Active work · awaiting_approval");
     expect(screen.lastFrame()).toContain("Enter send · Ctrl+J newline");
+    screen.unmount();
+  });
+
+  it("shows one bounded update notice outside the transcript", () => {
+    const controller = controllerFixture();
+    const releaseUpdateState: ReleaseUpdateState = {
+      identity: {
+        product: "cli",
+        version: "0.3.0",
+        target: "darwin-arm64",
+        development: false,
+      },
+      status: "available",
+      automaticChecks: true,
+      lastAttemptAt: null,
+      checkedAt: null,
+      retryAt: null,
+      candidate: {
+        version: "0.4.0",
+        tag: "cli-v0.4.0",
+        channel: "preview",
+        target: "darwin-arm64",
+        releaseUrl:
+          "https://github.com/reefbarman/agentlink/releases/tag/cli-v0.4.0",
+        instructionsUrl:
+          "https://github.com/reefbarman/agentlink/blob/main/cli.md",
+      },
+      dismissedVersion: null,
+      stale: false,
+    };
+    const screen = render(
+      <InkChatApp
+        controller={controller}
+        initialProjection={controller.getState()}
+        releaseUpdateState={releaseUpdateState}
+        loadFileSuggestions={async () => []}
+        onSubmit={async () => undefined}
+        onExit={() => undefined}
+        onError={() => undefined}
+      />,
+    );
+    const frame = screen.lastFrame() ?? "";
+    expect(frame).toContain("AgentLink 0.4.0 available · /updates for details");
+    expect(frame.split("AgentLink 0.4.0 available")).toHaveLength(2);
     screen.unmount();
   });
 

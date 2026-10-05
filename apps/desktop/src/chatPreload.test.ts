@@ -44,11 +44,15 @@ it("exposes only the shell bridge and strips Electron events from state callback
   const bridge = electron.expose.mock.calls[0][1] as DesktopBridge;
   expect(Object.keys(bridge).sort()).toEqual([
     "askAgentOwnerId",
+    "checkForReleaseUpdate",
     "dismissQuickAsk",
+    "dismissReleaseUpdate",
+    "getReleaseUpdateState",
     "onAskAgentOwnerIdChanged",
     "onMcpManagerOpen",
     "onQuickAskShown",
     "onQuickAskSubmission",
+    "onReleaseUpdateState",
     "onRemoteState",
     "openMcpConfig",
     "openMcpManager",
@@ -95,6 +99,50 @@ it("exposes only the shell bridge and strips Electron events from state callback
   unsubscribe();
   expect(electron.removeListener).toHaveBeenCalledWith(
     "agentlink:remote:state",
+    handler,
+  );
+});
+
+it("routes native release-update controls through the narrow IPC bridge", async () => {
+  vi.stubGlobal("process", { ...process, isMainFrame: true });
+  await import("./chatPreload.js");
+  const bridge = electron.expose.mock.calls[0][1] as DesktopBridge;
+  const state = {
+    identity: {
+      product: "desktop" as const,
+      version: "0.3.0",
+      target: "darwin-arm64",
+      development: true,
+    },
+    status: "available" as const,
+    automaticChecks: false,
+    lastAttemptAt: null,
+    checkedAt: null,
+    retryAt: null,
+    candidate: null,
+    dismissedVersion: null,
+    stale: false,
+  };
+  electron.invoke.mockResolvedValue(state);
+  await expect(bridge.getReleaseUpdateState!()).resolves.toEqual(state);
+  await expect(bridge.checkForReleaseUpdate!()).resolves.toEqual(state);
+  await expect(bridge.dismissReleaseUpdate!()).resolves.toEqual(state);
+  expect(electron.invoke.mock.calls).toEqual([
+    ["agentlink:release-update:get"],
+    ["agentlink:release-update:check"],
+    ["agentlink:release-update:dismiss"],
+  ]);
+
+  const listener = vi.fn();
+  const unsubscribe = bridge.onReleaseUpdateState!(listener);
+  const handler = electron.on.mock.calls.find(
+    ([channel]) => channel === "agentlink:release-update:state",
+  )?.[1];
+  handler?.({ sender: "privileged" }, state);
+  expect(listener).toHaveBeenCalledExactlyOnceWith(state);
+  unsubscribe();
+  expect(electron.removeListener).toHaveBeenCalledWith(
+    "agentlink:release-update:state",
     handler,
   );
 });

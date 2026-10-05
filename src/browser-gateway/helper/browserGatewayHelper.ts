@@ -123,6 +123,7 @@ import {
   writeBrowserGatewayHelperDiscovery,
 } from "../browserGatewayHelperDiscovery.js";
 import { BrowserGatewayModelAuthLeaseStore } from "../browserGatewayModelAuthLeaseStore.js";
+import { ProductUpdateStatusStore } from "./productUpdateStatus.js";
 import {
   askAgentMediaToDisplayMedia,
   BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE,
@@ -1011,6 +1012,7 @@ export class BrowserGatewayHelper {
   private readonly coreOwnerRegistry = new BrowserGatewayCoreOwnerRegistry({
     heartbeatTtlMs: DEFAULT_CORE_OWNER_HEARTBEAT_TTL_MS,
   });
+  private readonly productUpdateStatus = new ProductUpdateStatusStore();
   private readonly modelAuthLeaseStore = new BrowserGatewayModelAuthLeaseStore({
     helperGenerationId: this.helperGenerationId,
     ownerRegistry: this.coreOwnerRegistry,
@@ -1752,6 +1754,14 @@ export class BrowserGatewayHelper {
         return this.handleAskAgentEventsRequest(req, res);
       case "models":
         this.handleAskAgentModelsRequest(req, res);
+        return;
+      case "productUpdates":
+      case "productUpdateCheck":
+        this.handleAskAgentProductUpdatesRequest(
+          req,
+          res,
+          handler === "productUpdateCheck",
+        );
         return;
       case "slashCommands":
         return this.handleAskAgentSlashCommandsRequest(res);
@@ -3598,6 +3608,56 @@ export class BrowserGatewayHelper {
       return this.toAskAgentSsePublication(
         await this.askAgentController.publishSnapshot(response.snapshot),
       );
+    });
+  }
+
+  private handleAskAgentProductUpdatesRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    check: boolean,
+  ): void {
+    const now = Date.now();
+    const requested = new URL(req.url ?? "/", "http://localhost").searchParams;
+    const ownerId = requested.get("ownerId") ?? this.askAgentModelOwnerId;
+    this.coreOwnerRegistry.list(now);
+    const owner = ownerId ? this.coreOwnerRegistry.get(ownerId) : undefined;
+    const generationId = owner?.ownerGenerationId;
+    const expectedGeneration = requested.get("generationId");
+    const snapshot =
+      owner && generationId
+        ? this.productUpdateStatus.get(owner.owner.ownerId, generationId, now)
+        : undefined;
+    if (
+      !owner ||
+      owner.status !== "connected" ||
+      !generationId ||
+      owner.owner.ownerId !== this.askAgentModelOwnerId ||
+      !snapshot ||
+      (expectedGeneration !== null && expectedGeneration !== generationId)
+    ) {
+      writeJson(res, 404, { error: "updates_unavailable" });
+      return;
+    }
+    const pending = check
+      ? this.productUpdateStatus.requestCheck(
+          owner.owner.ownerId,
+          generationId,
+          now,
+        )
+      : this.productUpdateStatus.getPending(
+          owner.owner.ownerId,
+          generationId,
+          now,
+        );
+    writeJson(res, check ? 202 : 200, {
+      ...snapshot,
+      ...(pending
+        ? {
+            requestId: pending.requestId,
+            expiresAt: pending.expiresAt,
+            state: { ...snapshot.state, status: "checking" },
+          }
+        : {}),
     });
   }
 
@@ -9699,6 +9759,24 @@ export class BrowserGatewayHelper {
         processId: body.processId,
         now,
       });
+      const previousUpdate = this.productUpdateStatus.get(
+        registration.effectiveOwnerId,
+        registration.registration.ownerGenerationId,
+        now,
+      );
+      if (!previousUpdate)
+        this.productUpdateStatus.removeOwner(registration.effectiveOwnerId);
+      const productUpdatePublished = Boolean(
+        body.productUpdatesSupported === true &&
+        body.productUpdate &&
+        this.productUpdateStatus.publish(
+          registration.effectiveOwnerId,
+          registration.registration.ownerGenerationId,
+          body.productUpdate.state,
+          body.productUpdate.requestId,
+          now,
+        ),
+      );
       this.dataPlaneRoutes.ownerRegistered(
         registration.effectiveOwnerId,
         registration.registration.ownerGenerationId,
@@ -9727,6 +9805,16 @@ export class BrowserGatewayHelper {
         resolution: registration.resolution,
         ownerRegistration: registration.registration,
         dataPlaneFeatures: [...BROWSER_GATEWAY_DATA_PLANE_FEATURES],
+        productUpdatesSupported: productUpdatePublished,
+        ...(productUpdatePublished
+          ? {
+              productUpdateRequest: this.productUpdateStatus.getPending(
+                registration.effectiveOwnerId,
+                registration.registration.ownerGenerationId,
+                now,
+              ),
+            }
+          : {}),
       });
     } catch (err) {
       const invalidJson = String(err) === "Error: invalid_json";
@@ -9756,18 +9844,42 @@ export class BrowserGatewayHelper {
         writeJson(res, 400, { error: "invalid_request" });
         return;
       }
+      const now = Date.now();
       const ownerRegistration = this.coreOwnerRegistry.heartbeat({
         ownerId: body.ownerId.trim(),
         ownerGenerationId: body.ownerGenerationId.trim(),
         capabilities: body.capabilities,
-        now: Date.now(),
+        now,
       });
       if (!ownerRegistration) {
         writeJson(res, 404, { error: "owner_not_registered" });
         return;
       }
+      const productUpdatePublished = Boolean(
+        body.productUpdatesSupported === true &&
+        body.productUpdate &&
+        this.productUpdateStatus.publish(
+          body.ownerId.trim(),
+          body.ownerGenerationId.trim(),
+          body.productUpdate.state,
+          body.productUpdate.requestId,
+          now,
+        ),
+      );
+      const productUpdateRequest = productUpdatePublished
+        ? this.productUpdateStatus.getPending(
+            body.ownerId.trim(),
+            body.ownerGenerationId.trim(),
+            now,
+          )
+        : undefined;
       this.relayRoutes.ownerCatalogChanged();
-      writeJson(res, 200, { ok: true, ownerRegistration });
+      writeJson(res, 200, {
+        ok: true,
+        ownerRegistration,
+        productUpdatesSupported: productUpdatePublished,
+        ...(productUpdateRequest ? { productUpdateRequest } : {}),
+      });
     } catch (err) {
       const invalidJson = String(err) === "Error: invalid_json";
       writeJson(res, invalidJson ? 400 : 500, {

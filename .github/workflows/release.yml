@@ -206,6 +206,9 @@ jobs:
           ACTUAL_COUNT=$(find dist -maxdepth 1 -type f -name '*.vsix' | wc -l | tr -d ' ')
           test "$ACTUAL_COUNT" -eq "${#TARGETS[@]}"
 
+      - name: Generate release update metadata
+        run: node scripts/generate-release-update.mjs --product vscode --dir dist
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

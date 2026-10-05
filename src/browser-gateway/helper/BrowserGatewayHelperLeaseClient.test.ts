@@ -180,6 +180,84 @@ describe("BrowserGatewayHelperLeaseClient", () => {
     });
   });
 
+  it("publishes update snapshots and invokes a heartbeat request once", async () => {
+    const heartbeatBodies: Array<Record<string, unknown>> = [];
+    const onCheckRequested = vi.fn(async () => undefined);
+    let heartbeatCount = 0;
+    globalThis.fetch = vi.fn(async (input, init) => {
+      const pathname = new URL(String(input)).pathname;
+      if (pathname === "/internal/core-owners/heartbeat") {
+        heartbeatBodies.push(
+          JSON.parse(String(init?.body)) as Record<string, unknown>,
+        );
+        heartbeatCount += 1;
+        return Response.json({
+          ok: true,
+          productUpdatesSupported: true,
+          productUpdateRequest: {
+            requestId: "request-1",
+            expiresAt: Date.now() + 45_000,
+          },
+        });
+      }
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+    const client = new BrowserGatewayHelperLeaseClient({
+      helperUrl: "http://127.0.0.1:47137",
+      clientId: "client-updates",
+      clientSharedSecret: "secret-updates",
+      coreOwner: {
+        ownerId: "owner-updates",
+        ownerKind: "desktop",
+        displayName: "Desktop",
+        scope: {
+          kind: "projectless",
+          scopeId: "desktop-scope",
+          displayName: "Desktop",
+        },
+        ownerGenerationId: "generation-updates",
+      },
+      productUpdates: {
+        getSnapshot: () => ({
+          identity: {
+            product: "desktop",
+            version: "1.0.0",
+            target: "macos-arm64",
+            development: false,
+          },
+          status: "checking",
+          automaticChecks: true,
+          lastAttemptAt: null,
+          checkedAt: null,
+          retryAt: null,
+          candidate: null,
+          dismissedVersion: null,
+          stale: false,
+        }),
+        onCheckRequested,
+      },
+      log: vi.fn(),
+      renewIntervalMs: 60_000,
+    });
+
+    await client.start();
+    await Promise.resolve();
+    await client.refresh();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await client.stop();
+
+    expect(heartbeatBodies[0]).toMatchObject({
+      productUpdatesSupported: true,
+      productUpdate: { state: { identity: { product: "desktop" } } },
+    });
+    expect(onCheckRequested).toHaveBeenCalledTimes(1);
+    expect(onCheckRequested).toHaveBeenCalledWith({
+      requestId: "request-1",
+      expiresAt: expect.any(Number),
+    });
+    expect(heartbeatCount).toBe(2);
+  });
+
   it("renews and releases a collision-assigned effective owner identity", async () => {
     const calls: Array<{ pathname: string; body: string }> = [];
     const onEffectiveOwnerIdChanged = vi.fn();

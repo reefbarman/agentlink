@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import type { ReleaseUpdateService } from "../updates/ReleaseUpdateService.js";
+import type { ReleaseUpdateState } from "../updates/releaseUpdateTypes.js";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -412,6 +414,11 @@ export const HOST_HEARTBEAT_INTERVAL_MS = 2_000;
  * Mirrored in src/agent/webview/types.ts for the browser side.
  */
 export type ExtensionToWebview =
+  | {
+      type: "releaseUpdateState";
+      state: ReleaseUpdateState | null;
+      showDetails?: boolean;
+    }
   | { type: "stateUpdate"; state: ChatState }
   | { type: "hostHeartbeat"; at: number }
   | { type: "chatWorkspaceUpdate"; snapshot: ChatWorkspaceViewSnapshot }
@@ -1138,6 +1145,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private workspaceHistoryDiagnostic:
     | (() => WorkspaceHistoryLocationDiagnostic)
     | undefined;
+  private releaseUpdateService: ReleaseUpdateService | undefined;
   private webviewReady = false;
   private pendingMessages: ExtensionToWebview[] = [];
   private chatTabStartupRestore: Promise<unknown> = Promise.resolve();
@@ -1887,6 +1895,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   setToolCallTracker(tracker: AgentToolCallTracker): void {
     this.toolCallTracker = tracker;
+  }
+
+  setReleaseUpdateService(service: ReleaseUpdateService): void {
+    this.releaseUpdateService = service;
+  }
+
+  getReleaseUpdateState(): ReleaseUpdateState | null {
+    return this.releaseUpdateService?.snapshot() ?? null;
+  }
+
+  async checkReleaseUpdates(): Promise<ReleaseUpdateState | null> {
+    return this.releaseUpdateService ? this.releaseUpdateService.check() : null;
+  }
+
+  sendReleaseUpdateState(showDetails = false): void {
+    const message: ExtensionToWebview = {
+      type: "releaseUpdateState",
+      state: this.getReleaseUpdateState(),
+      showDetails,
+    };
+    this.sendOrQueueWebviewMessage(message);
+    this.postMessageToEditorPanes(message);
   }
 
   setAgentPluginManagerHost(host: AgentPluginManagerHost): void {
@@ -7360,6 +7390,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       );
       return;
     }
+    if (
+      typeof message.command === "string" &&
+      message.command.startsWith("releaseUpdate")
+    ) {
+      await this.handleWebviewMessage(message, { connection });
+      return;
+    }
     if (typeof address.sessionId !== "string") {
       this.log(
         `[chat-pane] Rejected editor command without a bound session for ${address.tabId}:${address.paneEpoch}`,
@@ -7464,6 +7501,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.webviewReady = true;
     });
     this.startHostHeartbeat();
+    this.sendReleaseUpdateState();
     const initialSnapshot = this.getChatWorkspaceViewSnapshot();
     if (initialSnapshot) {
       this.postMessage({
@@ -7912,6 +7950,39 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const sourceSessionId = explicitSourceSessionId ?? sourceSession?.id;
 
     switch (msg.command) {
+      case "releaseUpdateGet":
+      case "releaseUpdateCheck":
+      case "releaseUpdateDismiss":
+      case "releaseUpdateAutomatic": {
+        if (msg.command === "releaseUpdateCheck")
+          await this.releaseUpdateService?.check();
+        if (msg.command === "releaseUpdateDismiss")
+          await this.releaseUpdateService?.dismiss();
+        if (
+          msg.command === "releaseUpdateAutomatic" &&
+          typeof msg.value === "boolean"
+        )
+          await this.releaseUpdateService?.setAutomaticChecks(msg.value);
+        const message: ExtensionToWebview = {
+          type: "releaseUpdateState",
+          state: this.getReleaseUpdateState(),
+          showDetails: msg.command === "releaseUpdateCheck",
+        };
+        if (context?.connection) context.connection.postMessage(message);
+        else this.sendReleaseUpdateState(msg.command === "releaseUpdateCheck");
+        break;
+      }
+      case "releaseUpdateOpenLink": {
+        if (
+          typeof msg.url === "string" &&
+          /^https:\/\/github\.com\/reefbarman\/agentlink\/(releases(?:\/tag\/(?:v|desktop-v|cli-v)\d+\.\d+\.\d+)?|blob\/main\/resources\/builtin-skills\/documentation\/references\/(?:getting-started|standalone-cli)\.md)$/.test(
+            msg.url,
+          )
+        ) {
+          await vscode.env.openExternal(vscode.Uri.parse(msg.url));
+        }
+        break;
+      }
       case "agentRememberSessionlessSelection": {
         const mode = typeof msg.mode === "string" ? msg.mode.trim() : "";
         if (!mode || explicitSourceSessionId) break;
@@ -13406,7 +13477,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       msg.type === "agentModelsUpdate" ||
       msg.type === "agentSessionList" ||
       msg.type === "agentSessionUpdate" ||
-      msg.type === "agentBgSessionsUpdate"
+      msg.type === "agentBgSessionsUpdate" ||
+      msg.type === "releaseUpdateState"
     ) {
       host.postMessage(msg);
     }

@@ -1,6 +1,6 @@
 ---
 name: documentation
-description: Answer questions about AgentLink's VS Code extension and standalone Desktop and CLI previews, including installation, onboarding, providers, settings, tools, MCP, approvals, browser remote, indexing, skills, modes, troubleshooting, and contributing. Use when users ask how AgentLink works, what a feature or setting does, how to configure it, or why an AgentLink behavior occurs.
+description: Answer questions about AgentLink's VS Code extension and standalone Desktop and CLI previews, including installation, update notifications, onboarding, providers, settings, tools, MCP, approvals, browser remote, indexing, skills, modes, troubleshooting, and contributing. Use when users ask how AgentLink works, what a feature or setting does, how to configure it, or why an AgentLink behavior occurs.
 ---
 
 # AgentLink Documentation
@@ -39,6 +39,8 @@ Load the smallest relevant reference page directly with `load_skill`:
 | Release history or upgrade notes                                                                                                                                  | `references/release-notes.md`                                                                                         |
 
 For provider configuration, OpenRouter, local endpoints, or Claude Code authentication through Meridian, load `references/providers.md` first. It owns the setup walkthrough and connection-file examples; `references/settings.md` owns advanced connection behavior.
+
+For update availability, automatic-check opt-out, dismissal, manual checks, and host-specific browser notices, load `references/getting-started.md` first; CLI commands are owned by `references/standalone-cli.md`. Update checks retrieve metadata only, never download, install, run a shell command, or restart anything.
 
 ## Answering checklist
 

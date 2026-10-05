@@ -19,6 +19,10 @@ import React, {
 import { TextArea } from "react-ink-textarea";
 
 import { attachmentPathsFromText } from "../attachments.js";
+import {
+  hasVisibleReleaseUpdate,
+  type ReleaseUpdateState,
+} from "../../../../src/updates/releaseUpdateTypes.js";
 import type { StandaloneSessionController } from "../sessionController.js";
 import type {
   StandaloneSessionProjection,
@@ -77,6 +81,7 @@ export interface InkChatAppProps {
     ) => Promise<TuiControlResponse>,
   ) => void;
   readonly onOpenControlCenter?: () => void;
+  readonly releaseUpdateState?: ReleaseUpdateState;
 }
 
 export function InkChatApp({
@@ -94,6 +99,7 @@ export function InkChatApp({
   externalStatusRevision,
   registerControlPresenter,
   onOpenControlCenter,
+  releaseUpdateState,
 }: InkChatAppProps): React.JSX.Element {
   const { columns, rows } = useWindowSize();
   const { exit, suspendTerminal } = useApp();
@@ -576,6 +582,12 @@ export function InkChatApp({
               {singleLineStatus(shell.status)}
             </Text>
           ) : null}
+          {releaseUpdateState && hasVisibleReleaseUpdate(releaseUpdateState) ? (
+            <Text color="#4EC9B0" wrap="truncate-end">
+              AgentLink {releaseUpdateState.candidate!.version} available ·
+              /updates for details
+            </Text>
+          ) : null}
           <Text dimColor>Enter send · / commands · @ files · Ctrl+C exit</Text>
         </Box>
       </Box>
@@ -650,6 +662,14 @@ export function InkChatApp({
       ) : (
         <Picker state={shell} />
       )}
+      {releaseUpdateState && hasVisibleReleaseUpdate(releaseUpdateState) ? (
+        <Box height={1} overflow="hidden" flexShrink={0}>
+          <Text color="#4EC9B0" wrap="truncate-end">
+            AgentLink {releaseUpdateState.candidate!.version} available ·
+            /updates for details
+          </Text>
+        </Box>
+      ) : null}
       {shell.status && !controlRequest ? (
         <Box height={1} overflow="hidden" flexShrink={0}>
           <Text color="yellow" wrap="truncate-end">

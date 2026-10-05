@@ -105,6 +105,13 @@ export interface WorktreeSetupState {
 
 /** Messages from extension to webview */
 export type ExtensionMessage =
+  | {
+      type: "releaseUpdateState";
+      state:
+        | import("../../updates/releaseUpdateTypes.js").ReleaseUpdateState
+        | null;
+      showDetails?: boolean;
+    }
   | { type: "stateUpdate"; state: ChatState }
   | {
       type: "agentHandoffDraft";

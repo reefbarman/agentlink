@@ -47,6 +47,9 @@ import {
 import { openExternalLink } from "./desktopExternalLinks.js";
 import { resolveDesktopMcpPath } from "./desktopMcpPath.js";
 import { getAskAgentMcpConfigPaths } from "../../../src/agent/mcpConfig.js";
+import type { ReleaseUpdateService } from "../../../src/updates/ReleaseUpdateService.js";
+import type { ReleaseUpdateState } from "../../../src/updates/releaseUpdateTypes.js";
+import { createDesktopReleaseUpdateService } from "./desktopReleaseUpdates.js";
 
 declare const __AGENTLINK_HOST_VERSION__: string;
 
@@ -66,6 +69,8 @@ let leaseClient: BrowserGatewayHelperLeaseClient | null = null;
 let authClient: BrowserGatewayHelperModelAuthLeaseClient | null = null;
 let discovery: BrowserGatewayHelperDiscoveryRecord | null = null;
 let credentialRefreshTimer: NodeJS.Timeout | null = null;
+let releaseUpdateService: ReleaseUpdateService | null = null;
+let releaseUpdateUnsubscribe: (() => void) | null = null;
 let cachedCodexAuth: DesktopResolvedModelAuth | null = null;
 let tray: Tray | null = null;
 let quitting = false;
@@ -155,6 +160,7 @@ async function startLocalService(): Promise<BrowserGatewayHelperDiscoveryRecord>
   });
   discovery = result.discovery;
 
+  const registeredHelperGeneration = discovery.helperGenerationId;
   leaseClient = new leaseModule.BrowserGatewayHelperLeaseClient({
     helperUrl: discovery.url,
     clientId: CLIENT_ID,
@@ -172,6 +178,23 @@ async function startLocalService(): Promise<BrowserGatewayHelperDiscoveryRecord>
       processId: process.pid,
     },
     log,
+    productUpdates: {
+      getSnapshot: () => {
+        if (!releaseUpdateService)
+          throw new Error("release_update_unavailable");
+        return releaseUpdateService.snapshot();
+      },
+      onCheckRequested: async (request) => {
+        if (
+          !releaseUpdateService ||
+          discovery?.helperGenerationId !== registeredHelperGeneration ||
+          request.expiresAt <= Date.now()
+        ) {
+          return;
+        }
+        return releaseUpdateService.check(true);
+      },
+    },
     onEffectiveOwnerIdChanged: (ownerId) => {
       if (!authClient) return;
       void refreshDesktopOwner({
@@ -376,6 +399,7 @@ async function showChatWindow(): Promise<void> {
     nextWindow.hide();
   });
   nextWindow.on("show", syncDockVisibility);
+  nextWindow.on("focus", () => releaseUpdateService?.checkDue());
   nextWindow.on("hide", syncDockVisibility);
   nextWindow.on("closed", () => {
     if (chatWindow === nextWindow) chatWindow = null;
@@ -479,6 +503,7 @@ async function showSetupWindow(): Promise<void> {
     },
   });
   setupWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  setupWindow.on("focus", () => releaseUpdateService?.checkDue());
   setupWindow.on("closed", () => {
     setupWindow = null;
     syncDockVisibility();
@@ -493,6 +518,40 @@ function openMcpManager(request: {
   void mcpManagerWindow
     .open(request)
     .catch((error) => log(`MCP manager window failed: ${String(error)}`));
+}
+
+function checkForUpdates(): void {
+  openSettings();
+  if (!releaseUpdateService) return;
+  void releaseUpdateService
+    .check(true)
+    .catch((error) => log(`update check failed: ${String(error)}`));
+}
+
+function publishReleaseUpdateState(state: ReleaseUpdateState): void {
+  for (const window of [chatWindow, setupWindow]) {
+    if (window && !window.isDestroyed()) {
+      window.webContents.send("agentlink:release-update:state", state);
+    }
+  }
+  void leaseClient?.refresh();
+  updateTrayMenu();
+}
+
+async function prepareReleaseUpdateService(): Promise<void> {
+  releaseUpdateService = await createDesktopReleaseUpdateService(
+    app,
+    preferencesPath,
+  );
+  releaseUpdateUnsubscribe = releaseUpdateService.subscribe(
+    publishReleaseUpdateState,
+  );
+}
+
+async function startReleaseUpdateService(): Promise<void> {
+  if (!releaseUpdateService) await prepareReleaseUpdateService();
+  await releaseUpdateService!.start();
+  publishReleaseUpdateState(releaseUpdateService!.snapshot());
 }
 
 function openSettings(): void {
@@ -531,6 +590,7 @@ function updateTrayMenu(): void {
     Menu.buildFromTemplate([
       quickAskMenuItem(),
       { label: "Open AgentLink", click: openMainWindow },
+      { label: "Check for Updates…", click: checkForUpdates },
       { type: "separator" },
       { label: "Settings…", click: openSettings },
       { type: "separator" },
@@ -640,6 +700,41 @@ function registerCredentialIpc(): void {
     if (typeof value !== "boolean") throw new Error("invalid_open_at_login");
     return await setOpenAtLogin(app, preferencesPath, value);
   });
+  ipcMain.handle("agentlink:release-update:get", (event) => {
+    assertSetupOrChatSender(event.sender, event.senderFrame);
+    if (!releaseUpdateService) throw new Error("release_update_unavailable");
+    return releaseUpdateService.snapshot();
+  });
+  ipcMain.handle("agentlink:release-update:check", async (event) => {
+    assertSetupOrChatSender(event.sender, event.senderFrame);
+    if (!releaseUpdateService) throw new Error("release_update_unavailable");
+    return await releaseUpdateService.check(true);
+  });
+  ipcMain.handle("agentlink:release-update:dismiss", async (event) => {
+    assertSetupOrChatSender(event.sender, event.senderFrame);
+    if (!releaseUpdateService) throw new Error("release_update_unavailable");
+    return await releaseUpdateService.dismiss();
+  });
+  ipcMain.handle("agentlink:release-update:automatic", async (event, value) => {
+    assertSetupIpcSender(event.sender, event.senderFrame);
+    if (typeof value !== "boolean") throw new Error("invalid_automatic_checks");
+    if (!releaseUpdateService) throw new Error("release_update_unavailable");
+    await releaseUpdateService.setAutomaticChecks(value);
+    return releaseUpdateService.snapshot();
+  });
+  ipcMain.handle("agentlink:release-update:open-link", async (event, value) => {
+    assertSetupIpcSender(event.sender, event.senderFrame);
+    const candidate = releaseUpdateService?.snapshot().candidate;
+    if (
+      typeof value !== "string" ||
+      !candidate ||
+      (value !== candidate.releaseUrl && value !== candidate.instructionsUrl)
+    ) {
+      throw new Error("invalid_release_update_link");
+    }
+    openExternalLink(value, []);
+    return { ok: true };
+  });
   ipcMain.on("agentlink:mcp-manager:open", (event, request) => {
     if (
       !chatWindow ||
@@ -697,6 +792,10 @@ function installApplicationMenu(): void {
           { role: "about" },
           { type: "separator" },
           {
+            label: "Check for Updates…",
+            click: checkForUpdates,
+          },
+          {
             label: "Settings…",
             accelerator: "Command+,",
             click: openSettings,
@@ -722,6 +821,28 @@ function installApplicationMenu(): void {
   );
 }
 
+function assertSetupOrChatSender(
+  sender: WebContents,
+  senderFrame: Electron.WebFrameMain | null,
+): void {
+  if (senderFrame !== sender.mainFrame) {
+    throw new Error("unauthorized_desktop_ipc_sender");
+  }
+  if (setupWindow && sender.id === setupWindow.webContents.id) return;
+  if (chatWindow && sender.id === chatWindow.webContents.id) return;
+  throw new Error("unauthorized_desktop_ipc_sender");
+}
+
+function assertSetupIpcSender(
+  sender: WebContents,
+  senderFrame: Electron.WebFrameMain | null,
+): void {
+  assertSetupSender(sender);
+  if (senderFrame !== sender.mainFrame) {
+    throw new Error("unauthorized_desktop_ipc_sender");
+  }
+}
+
 function assertSetupSender(sender: WebContents): void {
   if (!setupWindow || sender.id !== setupWindow.webContents.id) {
     throw new Error("unauthorized_desktop_ipc_sender");
@@ -730,6 +851,10 @@ function assertSetupSender(sender: WebContents): void {
 
 async function shutdown(): Promise<void> {
   quickAsk.dispose();
+  releaseUpdateUnsubscribe?.();
+  releaseUpdateUnsubscribe = null;
+  releaseUpdateService?.dispose();
+  releaseUpdateService = null;
   if (credentialRefreshTimer) clearInterval(credentialRefreshTimer);
   credentialRefreshTimer = null;
   authController.cancelSignIn();
@@ -768,6 +893,7 @@ async function main(): Promise<void> {
       log(`OpenAI-compatible config unavailable: ${String(error)}`);
     }),
   ]);
+  await prepareReleaseUpdateService();
   await startLocalService();
   if (await hasDesktopModel()) {
     if (!startInBackground) await showChatWindow();
@@ -775,6 +901,9 @@ async function main(): Promise<void> {
   } else {
     await showSetupWindow();
   }
+  void startReleaseUpdateService().catch((error) =>
+    log(`update service failed to start: ${String(error)}`),
+  );
 }
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
@@ -786,6 +915,7 @@ if (!hasSingleInstanceLock) {
     if (discovery) openMainWindow();
   });
   app.on("activate", () => {
+    releaseUpdateService?.checkDue();
     if (discovery) openMainWindow();
   });
   // Stay running in the menu bar so the Quick Ask shortcut keeps working.

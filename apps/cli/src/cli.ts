@@ -110,6 +110,9 @@ import {
 } from "./sessionController.js";
 import type { StandaloneSessionSummary } from "./sessionProjection.js";
 import type { CliConfig } from "./types.js";
+import { ReleaseUpdateService } from "../../../src/updates/ReleaseUpdateService.js";
+import type { ReleaseUpdateState } from "../../../src/updates/releaseUpdateTypes.js";
+import type { ReleaseUpdateServiceOptions } from "../../../src/updates/ReleaseUpdateService.js";
 
 interface CliInteractionBroker {
   confirmMcpLaunch(proposal: WorkspaceMcpLaunchProposal): Promise<boolean>;
@@ -151,10 +154,27 @@ export interface CliIo {
   readonly openExternal: (url: string) => Promise<void>;
 }
 
+export type CliReleaseUpdateService = Pick<
+  ReleaseUpdateService,
+  | "start"
+  | "snapshot"
+  | "subscribe"
+  | "check"
+  | "dismiss"
+  | "setAutomaticChecks"
+  | "dispose"
+>;
+
+export type CliReleaseUpdateServiceFactory = (
+  options: ReleaseUpdateServiceOptions,
+) => CliReleaseUpdateService;
+
 export async function runCli(
   argv: readonly string[],
   io: CliIo,
   environment: NodeJS.ProcessEnv = process.env,
+  updateServiceFactory: CliReleaseUpdateServiceFactory = (options) =>
+    new ReleaseUpdateService(options),
 ): Promise<number> {
   const parsedResult = parseArguments(argv, io);
   if ("exitCode" in parsedResult) return parsedResult.exitCode;
@@ -167,6 +187,38 @@ export async function runCli(
   const dataRoot = path.resolve(
     environment.AGENTLINK_HOME?.trim() || path.join(homedir(), ".agentlink"),
   );
+  if (parsed.command === "updates") {
+    const config = await readCliConfig(dataRoot);
+    const service = createReleaseUpdateService(
+      dataRoot,
+      config,
+      false,
+      updateServiceFactory,
+    );
+    try {
+      await service.start();
+      let state = service.snapshot();
+      if (parsed.automaticChecks !== undefined) {
+        await service.setAutomaticChecks(parsed.automaticChecks);
+        state = service.snapshot();
+        io.output.write(
+          `Automatic update checks ${state.automaticChecks ? "enabled" : "disabled"}.\n`,
+        );
+      } else {
+        state = await service.check(true);
+        if (parsed.dismiss) state = await service.dismiss();
+        io.output.write(
+          formatUpdateState({
+            ...state,
+            automaticChecks: config.updateAutomaticChecks,
+          }),
+        );
+      }
+      return 0;
+    } finally {
+      service.dispose();
+    }
+  }
   const projectRoot = path.resolve(parsed.project ?? process.cwd());
   if (parsed.command === "lsp-status") {
     const project = await resolveWorkspaceProject(projectRoot);
@@ -526,6 +578,7 @@ export async function runCli(
     interactionBridge,
     mcpOAuth!,
     ownership!,
+    { dataRoot, config, environment, updateServiceFactory },
   );
   return 0;
 }
@@ -951,6 +1004,12 @@ async function runInteractiveChat(
   interactionBridge: CliInteractionBridge,
   mcpOAuth: CliMcpOAuthRuntime,
   ownership: WorkspaceOwnershipHandle,
+  updateContext: {
+    dataRoot: string;
+    config: CliConfig;
+    environment: NodeJS.ProcessEnv;
+    updateServiceFactory: CliReleaseUpdateServiceFactory;
+  },
 ): Promise<void> {
   return await runInkInteractiveChat(
     controller,
@@ -961,6 +1020,7 @@ async function runInteractiveChat(
     interactionBridge,
     mcpOAuth,
     ownership,
+    updateContext,
   );
 }
 
@@ -973,6 +1033,12 @@ async function runInkInteractiveChat(
   interactionBridge: CliInteractionBridge,
   mcpOAuth: CliMcpOAuthRuntime,
   ownership: WorkspaceOwnershipHandle,
+  updateContext: {
+    dataRoot: string;
+    config: CliConfig;
+    environment: NodeJS.ProcessEnv;
+    updateServiceFactory: CliReleaseUpdateServiceFactory;
+  },
 ): Promise<void> {
   const initialized = await controller.initialize();
   let sessionId = initialized.sessionId;
@@ -981,6 +1047,19 @@ async function runInkInteractiveChat(
   let externalStatusRevision = 0;
   let screen: ReturnType<typeof render> | undefined;
   let closing = false;
+  const showPassiveUpdateNotice =
+    io.isTty && !updateContext.environment.CI && __AGENTLINK_CLI_PACKAGED__;
+  const updateService = io.isTty
+    ? createReleaseUpdateService(
+        updateContext.dataRoot,
+        updateContext.config,
+        !updateContext.environment.CI && __AGENTLINK_CLI_PACKAGED__,
+        updateContext.updateServiceFactory,
+      )
+    : undefined;
+  let releaseUpdateState: ReleaseUpdateState | undefined =
+    showPassiveUpdateNotice ? updateService?.snapshot() : undefined;
+  let unsubscribeUpdates: (() => void) | undefined;
   const mcpLaunchGrants = new Set<string>();
   const mcpNetworkGrants = new Set<string>();
   const loadFileSuggestions = (query: string) =>
@@ -1006,6 +1085,7 @@ async function runInkInteractiveChat(
         React.createElement(InkChatApp, {
           controller,
           initialProjection: controller.getState(),
+          releaseUpdateState,
           externalStatus,
           externalStatusRevision,
           loadFileSuggestions,
@@ -1164,6 +1244,10 @@ async function runInkInteractiveChat(
     text: string,
     selectedAttachmentPaths: readonly string[] = [],
   ): Promise<InkChatSubmitResult> => {
+    if (text.trim() === "/updates") {
+      await showUpdates();
+      return {};
+    }
     const command = parseTuiCommand(text);
     if (command) {
       switch (command.type) {
@@ -1251,6 +1335,74 @@ async function runInkInteractiveChat(
     controller,
     (request, signal) => requireControl()(request, signal),
   );
+  const showUpdates = async (): Promise<void> => {
+    if (!updateService) {
+      updateExternalStatus(
+        "Product updates are available with packaged CLI builds",
+      );
+      return;
+    }
+    const state = updateService.snapshot();
+    const candidate = state.candidate;
+    const response = await requestControl({
+      id: `updates:${Date.now()}`,
+      title: "AgentLink updates",
+      body: [
+        `Status: ${state.status}${state.stale ? " (cached result may be stale)" : ""}`,
+        `Current version: ${state.identity.version}`,
+        ...(candidate
+          ? [
+              `Available: ${candidate.version} (${candidate.channel})`,
+              `Release: ${candidate.releaseUrl}`,
+              `How to update: ${candidate.instructionsUrl}`,
+            ]
+          : []),
+        `Automatic checks: ${state.automaticChecks ? "on" : "off"}${
+          state.identity.development || updateContext.environment.CI
+            ? " (disabled for source builds or CI)"
+            : ""
+        }`,
+      ],
+      options: [
+        { id: "check", label: "Check again" },
+        ...(candidate && candidate.version !== state.dismissedVersion
+          ? [{ id: "dismiss", label: "Dismiss this version" }]
+          : []),
+        ...(!state.identity.development && !updateContext.environment.CI
+          ? [
+              {
+                id: state.automaticChecks ? "automatic-off" : "automatic-on",
+                label: `Turn automatic checks ${state.automaticChecks ? "off" : "on"}`,
+              },
+            ]
+          : []),
+        ...(candidate
+          ? [
+              { id: "release", label: "Open release notes" },
+              { id: "instructions", label: "Open update instructions" },
+            ]
+          : []),
+      ],
+    });
+    if (response.cancelled || !response.optionId) return;
+    if (response.optionId === "check") {
+      await updateService.check(true);
+      await showUpdates();
+    } else if (response.optionId === "dismiss") {
+      await updateService.dismiss();
+      await showUpdates();
+    } else if (response.optionId === "automatic-on") {
+      await updateService.setAutomaticChecks(true);
+      await showUpdates();
+    } else if (response.optionId === "automatic-off") {
+      await updateService.setAutomaticChecks(false);
+      await showUpdates();
+    } else if (response.optionId === "release" && candidate) {
+      await io.openExternal(candidate.releaseUrl);
+    } else if (response.optionId === "instructions" && candidate) {
+      await io.openExternal(candidate.instructionsUrl);
+    }
+  };
   const chooseSession = async () => {
     const sessions = await controller.listSessions();
     const response = await requestControl({
@@ -1550,6 +1702,7 @@ async function runInkInteractiveChat(
           initialStatus: initialized.restored
             ? `Restored session ${sessionId}`
             : `New session ${sessionId}`,
+          releaseUpdateState,
           externalStatusRevision,
           loadFileSuggestions,
           onSubmit: submit,
@@ -1573,6 +1726,23 @@ async function runInkInteractiveChat(
         maxFps: 30,
       },
     );
+    if (updateService) {
+      unsubscribeUpdates = updateService.subscribe((state) => {
+        if (showPassiveUpdateNotice) {
+          releaseUpdateState = state;
+          renderShell();
+        }
+      });
+      void updateService
+        .start()
+        .then(() => {
+          if (showPassiveUpdateNotice) {
+            releaseUpdateState = updateService.snapshot();
+            renderShell();
+          }
+        })
+        .catch(() => undefined);
+    }
     if (initialized.pendingInteraction) await reviewCurrentInteraction();
     await screen.waitUntilExit();
   } finally {
@@ -1581,6 +1751,8 @@ async function runInkInteractiveChat(
     clearInterval(activityTimer);
     clearInterval(mcpTimer);
     unsubscribeActivity();
+    unsubscribeUpdates?.();
+    updateService?.dispose();
     interactionBridge.current = undefined;
     controller.cancelPrompts("CLI session closing");
     if (!closing) screen?.unmount();
@@ -2457,6 +2629,59 @@ async function confirmTyped(
   }
 }
 
+function createReleaseUpdateService(
+  dataRoot: string,
+  config: CliConfig,
+  automaticAllowed: boolean,
+  factory: CliReleaseUpdateServiceFactory,
+): CliReleaseUpdateService {
+  return factory({
+    identity: {
+      product: "cli",
+      version: __AGENTLINK_CLI_VERSION__,
+      target: `${process.platform}-${process.arch}`,
+      development: !__AGENTLINK_CLI_PACKAGED__,
+    },
+    storageDirectory: path.join(dataRoot, "cli", "updates"),
+    automaticChecks: config.updateAutomaticChecks && automaticAllowed,
+    saveAutomaticChecks: async (value) => {
+      const current = await readCliConfig(dataRoot);
+      await writeCliConfig(dataRoot, {
+        ...current,
+        updateAutomaticChecks: value,
+      });
+    },
+  });
+}
+
+function formatUpdateState(state: ReleaseUpdateState): string {
+  const status = {
+    idle: "No update check has completed yet",
+    checking: "Checking for updates",
+    available: "Update available",
+    current: "CLI is up to date",
+    unavailable: "Update check unavailable",
+    rate_limited: "GitHub rate limit reached",
+    unsupported: "This CLI target is not supported for update checks",
+    metadata_unavailable:
+      "Release found, compatibility information unavailable",
+  }[state.status];
+  const candidate = state.candidate;
+  return (
+    [
+      `${status} (current ${state.identity.version})`,
+      ...(candidate
+        ? [
+            `Available: ${candidate.version} (${candidate.channel})`,
+            `Release notes: ${candidate.releaseUrl}`,
+            `How to update: ${candidate.instructionsUrl}`,
+          ]
+        : []),
+      `Automatic checks: ${state.automaticChecks ? "on" : "off"}`,
+    ].join("\n") + "\n"
+  );
+}
+
 function requireTty(io: CliIo, action: string): void {
   if (!io.isTty) throw new Error(`${action} requires an interactive terminal`);
 }
@@ -2482,6 +2707,11 @@ function parseModelReference(value: string) {
 
 type ParsedArguments =
   | { command: "version"; project?: string }
+  | {
+      command: "updates";
+      dismiss?: boolean;
+      automaticChecks?: boolean;
+    }
   | { command: "chat"; project?: string; session?: string }
   | {
       command:
@@ -2568,6 +2798,23 @@ function parseArguments(
     .description("delete a saved project session")
     .action((value: string, _options: unknown, command: Command) => {
       select({ command: "delete", value, project: project(command) });
+    });
+  program
+    .command("updates")
+    .description("check for CLI updates or configure automatic checks")
+    .option("--dismiss", "dismiss the available version after checking")
+    .option("--automatic <on|off>", "turn automatic checks on or off")
+    .action((options: { dismiss?: boolean; automatic?: "on" | "off" }) => {
+      if (options.automatic && !["on", "off"].includes(options.automatic)) {
+        throw new Error("--automatic must be on or off");
+      }
+      select({
+        command: "updates",
+        dismiss: options.dismiss,
+        ...(options.automatic !== undefined
+          ? { automaticChecks: options.automatic === "on" }
+          : {}),
+      });
     });
   program.command("version", { hidden: true }).action(() => {
     select({ command: "version" });

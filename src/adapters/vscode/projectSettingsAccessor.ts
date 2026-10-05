@@ -34,6 +34,7 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
 ] as const;
 
 export const APPLICATION_SCOPED_AGENTLINK_SETTINGS = [
+  "updates.automaticChecks",
   "modeModelPreferences",
   "modeReasoningEffortPreferences",
   "modelCondenseThresholds",

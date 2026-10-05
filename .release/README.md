@@ -29,6 +29,12 @@ If a package or publish job fails after `prepare` pushed, the next passing push 
 
 Pushes and tags made with `GITHUB_TOKEN` do not start other workflows, so the release commit does not re-trigger CI or the coordinator. The tag-triggered paths in the per-unit workflows only run for tags a maintainer pushes by hand.
 
+## App update metadata
+
+The VS Code, Desktop, and CLI jobs generate deterministic `agentlink-update.json` metadata after verifying binary outputs and before publication calculates `SHA256SUMS`. It records the product/version/tag/channel, actual target asset names, and declared engine requirements (including VS Code compatibility). Desktop advertises DMGs only. The metadata is checksum-covered and verified through the same immutable publication boundary as binaries; SDK publication is unchanged. Published historical releases are never modified to add it.
+
+App update checks fetch only the public release listing and this bounded JSON asset. They do not download or install binaries. A newer release without valid compatibility metadata remains installable through existing installers, but cannot produce a compatible-update notice. Shared code under `src/updates/**` is attributed to all three app release units.
+
 ## Local version bumps (`npm run release`)
 
 Only the VS Code extension version is bumped locally:

@@ -77,6 +77,7 @@ const PATH_RULES = [
   [/^apps\/cli\//, ["cli"]],
   [/^packages\/[^/]+\/README\.md$/, ["sdk"]],
   [/^packages\//, ["sdk", ...APPS]],
+  [/^src\/updates\//, APPS],
   [/^(src|resources|media)\//, ["vscode", "desktop"]],
   [/^esbuild\.mjs$/, ["vscode", "desktop"]],
   [/^(\.vscodeignore|README\.md|LICENSE)$/, ["vscode"]],

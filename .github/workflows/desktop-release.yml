@@ -168,6 +168,9 @@ jobs:
           ACTUAL_COUNT=$(find dist -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.blockmap' \) | wc -l | tr -d ' ')
           test "$ACTUAL_COUNT" -eq 8
 
+      - name: Generate release update metadata
+        run: node scripts/generate-release-update.mjs --product desktop --dir dist
+
       - name: Publish standalone desktop GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

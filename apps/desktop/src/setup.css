@@ -180,6 +180,15 @@ h2 {
   color: #ff9b9b;
 }
 
+.update-details {
+  align-items: flex-start;
+}
+
+.update-details .account-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .toggle-row {
   font-size: inherit;
   font-weight: inherit;

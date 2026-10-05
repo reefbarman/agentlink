@@ -56,6 +56,8 @@ import { BtwPanel } from "./components/BtwPanel";
 import type { BtwState } from "./components/BtwPanel";
 import { WorktreeSetupPanel } from "./components/WorktreeSetupPanel";
 import { ChatHeader } from "./components/ChatHeader";
+import { ReleaseUpdateIndicator } from "../../shared/ui/ReleaseUpdateIndicator";
+import type { ReleaseUpdateState } from "../../updates/releaseUpdateTypes";
 import { ChatTabConfirmation } from "./components/ChatTabConfirmation";
 import { ChatSessionPane, ChatWorkspace } from "./components/ChatWorkspace";
 import { ChatView } from "./components/ChatView";
@@ -348,6 +350,10 @@ export function App({
   const [workspaceSnapshot, setWorkspaceSnapshot] =
     useState<ChatWorkspaceViewSnapshot | null>(null);
   const workspaceSnapshotRef = useRef<ChatWorkspaceViewSnapshot | null>(null);
+  const [releaseUpdateState, setReleaseUpdateState] =
+    useState<ReleaseUpdateState | null>(null);
+  const [showReleaseUpdateDetails, setShowReleaseUpdateDetails] =
+    useState(false);
   const [hostConnectionStale, setHostConnectionStale] = useState(false);
   const [handoffDraft, setHandoffDraft] = useState<SessionHandoffDraft | null>(
     null,
@@ -390,6 +396,9 @@ export function App({
     }),
     [hostVscodeApi, pinnedPane],
   );
+  useEffect(() => {
+    vscodeApi.postMessage({ command: "releaseUpdateGet" });
+  }, [vscodeApi]);
   const stateRef = useRef(state.chatState);
   stateRef.current = state.chatState;
   const modelSetupState = useMemo(
@@ -1067,6 +1076,10 @@ export function App({
       const { dropIfNotStreaming, flushDeltasNow } = controls;
 
       switch (msg.type) {
+        case "releaseUpdateState":
+          setReleaseUpdateState(msg.state);
+          if (msg.showDetails) setShowReleaseUpdateDetails(true);
+          break;
         case "hostHeartbeat":
           lastHostHeartbeatRef.current = Date.now();
           setHostConnectionStale(false);
@@ -4055,6 +4068,31 @@ export function App({
               showHistory={showHistory}
               onNewSession={handleNewSession}
               onShowHistory={handleShowHistory}
+              extraActions={
+                <ReleaseUpdateIndicator
+                  state={releaseUpdateState}
+                  showDetails={showReleaseUpdateDetails}
+                  onClose={() => setShowReleaseUpdateDetails(false)}
+                  onCheck={() =>
+                    vscodeApi.postMessage({ command: "releaseUpdateCheck" })
+                  }
+                  onDismiss={() =>
+                    vscodeApi.postMessage({ command: "releaseUpdateDismiss" })
+                  }
+                  onAutomaticChecksChange={(value) =>
+                    vscodeApi.postMessage({
+                      command: "releaseUpdateAutomatic",
+                      value,
+                    })
+                  }
+                  onOpenLink={(url) =>
+                    vscodeApi.postMessage({
+                      command: "releaseUpdateOpenLink",
+                      url,
+                    })
+                  }
+                />
+              }
             />
             {showHistory && (
               <SessionHistory

@@ -3,6 +3,8 @@ import {
   formatQuickAskAccelerator,
 } from "./quickAskShortcut.js";
 
+import type { ReleaseUpdateState } from "../../../src/updates/releaseUpdateTypes.js";
+
 interface QuickAskShortcutStatus {
   shortcut: string | null;
   registered: boolean;
@@ -50,6 +52,14 @@ declare global {
       ): Promise<QuickAskShortcutStatus>;
       openAtLogin(): Promise<OpenAtLoginStatus>;
       setOpenAtLogin(enabled: boolean): Promise<OpenAtLoginStatus>;
+      getReleaseUpdateState(): Promise<ReleaseUpdateState>;
+      onReleaseUpdateState(
+        listener: (state: ReleaseUpdateState) => void,
+      ): () => void;
+      checkForReleaseUpdate(): Promise<ReleaseUpdateState>;
+      dismissReleaseUpdate(): Promise<ReleaseUpdateState>;
+      setAutomaticUpdateChecks(value: boolean): Promise<ReleaseUpdateState>;
+      openReleaseUpdateLink(url: string): Promise<{ ok: true }>;
     };
   }
 }
@@ -73,6 +83,24 @@ const shortcutNote = document.querySelector<HTMLElement>("#shortcut-note")!;
 const openAtLoginInput =
   document.querySelector<HTMLInputElement>("#open-at-login")!;
 const loginNote = document.querySelector<HTMLElement>("#login-note")!;
+const updateVersion = document.querySelector<HTMLElement>("#update-version")!;
+const updateDetails = document.querySelector<HTMLElement>("#update-details")!;
+const updateCandidate =
+  document.querySelector<HTMLElement>("#update-candidate")!;
+const updateNote = document.querySelector<HTMLElement>("#update-note")!;
+const automaticUpdates =
+  document.querySelector<HTMLInputElement>("#automatic-updates")!;
+const releaseLink = document.querySelector<HTMLButtonElement>(
+  "#update-release-link",
+)!;
+const instructionsLink = document.querySelector<HTMLButtonElement>(
+  "#update-instructions-link",
+)!;
+const dismissUpdate =
+  document.querySelector<HTMLButtonElement>("#dismiss-update")!;
+const checkUpdates =
+  document.querySelector<HTMLButtonElement>("#check-updates")!;
+let releaseUpdateState: ReleaseUpdateState | null = null;
 let shortcutStatus: QuickAskShortcutStatus | null = null;
 let recordingShortcut = false;
 
@@ -90,6 +118,42 @@ shortcutReset.addEventListener("click", () => {
   if (shortcutStatus) void saveShortcut(shortcutStatus.defaultShortcut);
 });
 shortcutDisable.addEventListener("click", () => void saveShortcut(null));
+automaticUpdates.addEventListener("change", () => {
+  automaticUpdates.disabled = true;
+  void window.agentlinkDesktop
+    .setAutomaticUpdateChecks(automaticUpdates.checked)
+    .then(renderReleaseUpdateState)
+    .catch(() => {
+      automaticUpdates.checked = !automaticUpdates.checked;
+      automaticUpdates.disabled = false;
+      updateVersion.textContent = "Could not save update preference.";
+    });
+});
+checkUpdates.addEventListener("click", () => {
+  checkUpdates.disabled = true;
+  updateVersion.textContent = "Checking for updates…";
+  void window.agentlinkDesktop
+    .checkForReleaseUpdate()
+    .then(renderReleaseUpdateState)
+    .catch(() => {
+      updateVersion.textContent = "Update check unavailable.";
+      checkUpdates.disabled = false;
+    });
+});
+dismissUpdate.addEventListener("click", () => {
+  void window.agentlinkDesktop
+    .dismissReleaseUpdate()
+    .then(renderReleaseUpdateState);
+});
+releaseLink.addEventListener("click", () => openUpdateLink("releaseUrl"));
+instructionsLink.addEventListener("click", () =>
+  openUpdateLink("instructionsUrl"),
+);
+void window.agentlinkDesktop
+  .getReleaseUpdateState()
+  .then(renderReleaseUpdateState);
+window.agentlinkDesktop.onReleaseUpdateState(renderReleaseUpdateState);
+
 openAtLoginInput.addEventListener("change", () => {
   const enabled = openAtLoginInput.checked;
   openAtLoginInput.disabled = true;
@@ -102,6 +166,44 @@ openAtLoginInput.addEventListener("change", () => {
       showLoginNote("AgentLink could not update the login item.", true);
     });
 });
+
+function renderReleaseUpdateState(state: ReleaseUpdateState): void {
+  releaseUpdateState = state;
+  automaticUpdates.checked = state.automaticChecks;
+  automaticUpdates.disabled = false;
+  checkUpdates.disabled = state.status === "checking";
+  dismissUpdate.hidden =
+    !state.candidate || state.dismissedVersion === state.candidate.version;
+  const candidate = state.candidate;
+  updateDetails.hidden = !candidate;
+  if (candidate) {
+    updateCandidate.textContent = `AgentLink Desktop ${state.identity.version} → ${candidate.version} (${candidate.channel})`;
+    updateNote.textContent = state.stale
+      ? "Release information may be out of date."
+      : "A compatible Desktop release is available.";
+  }
+  const labels: Record<ReleaseUpdateState["status"], string> = {
+    idle: "Update status has not been checked yet.",
+    checking: "Checking release metadata…",
+    available: "An update is available.",
+    current: "AgentLink Desktop is up to date.",
+    unavailable: "Release information is currently unavailable.",
+    rate_limited: "GitHub has temporarily limited update checks.",
+    unsupported: "No compatible Desktop release is available for this system.",
+    metadata_unavailable:
+      "A release was found, but compatibility information is unavailable.",
+  };
+  updateVersion.textContent = `Installed ${state.identity.version}. ${
+    candidate && state.status === "available"
+      ? labels.available
+      : labels[state.status]
+  }`;
+}
+
+function openUpdateLink(key: "releaseUrl" | "instructionsUrl"): void {
+  const url = releaseUpdateState?.candidate?.[key];
+  if (url) void window.agentlinkDesktop.openReleaseUpdateLink(url);
+}
 
 function renderOpenAtLogin(next: OpenAtLoginStatus): void {
   openAtLoginInput.checked = next.enabled;

@@ -101,6 +101,61 @@
         <p id="login-note" class="field-note"></p>
       </section>
 
+      <section class="shortcut-section" aria-labelledby="updates-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="updates-heading">Updates</h2>
+            <p id="update-version">Checking update status…</p>
+          </div>
+          <button id="check-updates" class="secondary" type="button">
+            Check again
+          </button>
+        </div>
+        <div id="update-details" class="account update-details" hidden>
+          <div class="account-identity">
+            <strong id="update-candidate"></strong>
+            <span id="update-note"></span>
+          </div>
+          <div class="account-actions">
+            <button
+              id="update-release-link"
+              class="account-action secondary"
+              type="button"
+            >
+              Release notes
+            </button>
+            <button
+              id="update-instructions-link"
+              class="account-action quiet"
+              type="button"
+            >
+              How to update
+            </button>
+            <button
+              id="dismiss-update"
+              class="account-action quiet"
+              type="button"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+        <label class="account toggle-row" for="automatic-updates">
+          <span class="account-identity">
+            <strong>Automatic update checks</strong>
+            <span
+              >Check release metadata about once a day. No installer is
+              downloaded.</span
+            >
+          </span>
+          <input id="automatic-updates" type="checkbox" role="switch" />
+        </label>
+        <p id="update-warning" class="field-note">
+          Desktop preview releases are unsigned. Follow the installation guide
+          and verify checksums before installing.
+        </p>
+      </section>
+
       <button id="continue" class="primary" type="button" hidden>
         Continue to AgentLink
       </button>

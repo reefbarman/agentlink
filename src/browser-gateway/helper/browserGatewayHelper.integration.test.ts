@@ -38,6 +38,9 @@ import type { McpConfigBatchMutation } from "@agentlink/protocol/mcp-manager";
 import type { AskAgentControllerPublication } from "./AskAgentController.js";
 import type { StandaloneAskAgentMcpRuntime } from "./StandaloneAskAgentMcpRuntime.js";
 import { StandaloneMcpOAuthRuntime } from "./StandaloneMcpOAuthRuntime.js";
+import { BrowserGatewayHelperLeaseClient } from "./BrowserGatewayHelperLeaseClient.js";
+import { ReleaseUpdateService } from "../../updates/ReleaseUpdateService.js";
+import type { ReleaseDiscovery } from "../../updates/githubReleaseClient.js";
 import type { StandaloneMcpManagerOperation } from "./StandaloneMcpManagerOperations.js";
 import {
   BrowserGatewayHelper,
@@ -1410,6 +1413,139 @@ describe("BrowserGatewayHelper proxy routing", () => {
         force: true,
       });
     }
+  });
+
+  it("serves owner-bound update checks through the real lease composition without model credentials", async () => {
+    const extensionRootPath = await makeExtensionRoot();
+    isolatedStoreDirs.push(extensionRootPath);
+    const storeDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-update-route-"),
+    );
+    isolatedStoreDirs.push(storeDir);
+    const preferences = new BrowserGatewayAskAgentPreferencesStore({
+      filePath: path.join(storeDir, "preferences.json"),
+    });
+    await preferences.update({ modelOwnerId: "desktop-update-owner" });
+    const port = await getAvailablePort();
+    const server = http.createServer();
+    servers.push(server);
+    helper = await createIsolatedHelper(
+      {
+        port,
+        helperVersion: "test",
+        idleShutdownMs: 120_000,
+        extensionRootPath,
+      },
+      server,
+      { askAgentPreferencesStore: preferences },
+    );
+    server.on("request", helper.handleRequest);
+    await helper.start();
+    const base = `http://127.0.0.1:${port}`;
+    const discovery = JSON.parse(
+      await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf8"),
+    ) as { clientSharedSecret: string };
+    const root = await fetch(base);
+    const headers = {
+      Cookie: String(root.headers.get("set-cookie")?.split(";")[0] ?? ""),
+    };
+    const updatesUrl = `${base}/api/ask-agent/product-updates`;
+    expect((await fetch(updatesUrl)).status).toBe(401);
+    expect((await fetch(updatesUrl, { headers })).status).toBe(404);
+    let finish!: (value: ReleaseDiscovery) => void;
+    const checked = new Promise<ReleaseDiscovery>((resolve) => {
+      finish = resolve;
+    });
+    const discover = vi.fn(async () => checked);
+    const service = new ReleaseUpdateService({
+      identity: {
+        product: "desktop",
+        version: "0.3.0",
+        target: "darwin-arm64",
+        development: false,
+      },
+      storageDirectory: path.join(storeDir, "updates"),
+      automaticChecks: false,
+      client: { discover },
+    });
+    await service.start();
+    const consume = vi.fn(() => service.check(true));
+    const lease = new BrowserGatewayHelperLeaseClient({
+      helperUrl: base,
+      clientId: "update-client",
+      clientSharedSecret: discovery.clientSharedSecret,
+      coreOwner: {
+        ownerId: "desktop-update-owner",
+        ownerGenerationId: "update-generation",
+        ownerKind: "desktop",
+        displayName: "Desktop",
+        scope: { kind: "projectless", scopeId: "ask", displayName: "Ask" },
+      },
+      productUpdates: {
+        getSnapshot: () => service.snapshot(),
+        onCheckRequested: consume,
+      },
+      log: vi.fn(),
+      renewIntervalMs: 60_000,
+    });
+    const unsubscribe = service.subscribe(() => {
+      void lease.refresh();
+    });
+    try {
+      await lease.start();
+      const status = await (await fetch(updatesUrl, { headers })).json();
+      expect(status).toMatchObject({
+        hostId: "desktop-update-owner",
+        generationId: "update-generation",
+        state: { status: "idle" },
+      });
+      expect(
+        (
+          await fetch(`${updatesUrl}/check?generationId=old`, {
+            method: "POST",
+            headers,
+          })
+        ).status,
+      ).toBe(404);
+      const accepted = await fetch(
+        `${updatesUrl}/check?ownerId=desktop-update-owner&generationId=update-generation`,
+        { method: "POST", headers },
+      );
+      expect(accepted.status).toBe(202);
+      const pending = await accepted.json();
+      expect(pending.state.status).toBe("checking");
+      expect(
+        (
+          await (
+            await fetch(`${updatesUrl}/check`, { method: "POST", headers })
+          ).json()
+        ).requestId,
+      ).toBe(pending.requestId);
+      await lease.refresh();
+      await vi.waitFor(() => expect(discover).toHaveBeenCalledOnce());
+      const progress = await (await fetch(updatesUrl, { headers })).json();
+      expect(progress).toMatchObject({
+        requestId: pending.requestId,
+        state: { status: "checking" },
+      });
+      finish({ records: [], unverifiedVersions: [], complete: true });
+      await vi.waitFor(async () => {
+        const completed = await (await fetch(updatesUrl, { headers })).json();
+        expect(completed).toMatchObject({
+          requestId: pending.requestId,
+          state: { status: "current" },
+        });
+      });
+      expect(consume).toHaveBeenCalledExactlyOnceWith({
+        requestId: pending.requestId,
+        expiresAt: pending.expiresAt,
+      });
+    } finally {
+      unsubscribe();
+      service.dispose();
+      await lease.stop();
+    }
+    expect((await fetch(updatesUrl, { headers })).status).toBe(404);
   });
 
   it("tracks authenticated neutral core owner registration and release", async () => {

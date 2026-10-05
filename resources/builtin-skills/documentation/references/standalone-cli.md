@@ -36,6 +36,14 @@ tar -xzf agentlink-cli-darwin-arm64-vX.Y.Z.tar.gz
 
 The archive includes Node 22.23.3, the Keychain runtime, and ripgrep. It needs no separate Node or npm installation to run. Keep the extracted directory together; the `bin/agentlink` launcher resolves its sibling runtime. For a command on your PATH, link that launcher from a directory on PATH without moving the bundle's contents. Quit active CLI sessions before replacing an extracted bundle. This public preview is **unsigned and not notarised**; macOS may warn or refuse to run downloaded executables. Only use it if you trust the release and have verified the checksum. It is not a signed installer and does not alter existing CLI installations, sessions, or credentials. There is no Intel macOS, Linux, or Windows build yet.
 
+### Update notifications
+
+`agentlink updates` explicitly checks the CLI release stream and prints the running version, target, result, release notes, and installation-guide links. It needs no project, session, or provider login and never runs the installer. Use `agentlink updates --dismiss` to hide the current version's passive notice, and `agentlink updates --automatic off` (or `on`) to persist automatic-check preferences in CLI config.
+
+Packaged interactive chat checks metadata in the background at most once a day and can show one bounded notice in the terminal UI, outside stdout and the persisted transcript. `/updates` opens details with check, dismissal, links, and automatic-check controls. Source builds, CI, non-TTY execution, help/version, auth/config, and machine-readable paths do not automatically check or show passive notices. Manual checks remain available in source builds on supported targets.
+
+Release compatibility requires valid published `agentlink-update.json` metadata and the correct packaged target. Older releases without that metadata remain installable, but do not produce a compatible-update notice. Failed checks retain cached candidates as stale, and manual checks respect GitHub cooldowns. Cache and dismissal live under `<AGENTLINK_HOME>/cli/updates`, separate from sessions. The public preview is still unsigned and not notarised: verify its checksum and update deliberately using the release installation instructions above.
+
 ### Signed local installation
 
 From the repository, run `npm run cli:install` or the AgentLink **Build and install CLI** task. It builds a standalone bundle containing Node 22.23.3, the Keychain runtime, and ripgrep, installs it under `~/.local/lib/agentlink/cli`, and links `~/.local/bin/agentlink`. Add `~/.local/bin` to PATH if needed. The installed command always uses its own Node, not Homebrew or another Node on PATH. The build downloads a checksum-pinned Node archive; running the installed bundle needs no npm install.

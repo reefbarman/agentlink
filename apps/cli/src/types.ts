@@ -21,6 +21,7 @@ export interface CliCompatibleProvider {
 
 export interface CliConfig {
   readonly schemaVersion: 1;
+  readonly updateAutomaticChecks: boolean;
   readonly defaultModel: {
     readonly providerId: string;
     readonly modelId: string;

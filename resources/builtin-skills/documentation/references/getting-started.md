@@ -80,6 +80,17 @@ Local packaging defaults to `AGENTLINK_MAC_SIGNING=development`. With multiple s
 
 For the equivalent signed CLI task and dedicated Node runtime, see [Signed local installation](standalone-cli.md#signed-local-installation).
 
+## Update notifications
+
+AgentLink checks public GitHub release metadata at most once a day in packaged builds. A quiet **Update available** indicator appears only for a newer release with published compatibility metadata for the running host. Checks never download an installer, install an update, execute a command, or restart the app. Updating still uses the installation steps above.
+
+- **VS Code:** use **AgentLink: Check for Updates** in the Command Palette for an explicit check and details. The chat-header indicator links to release notes and VSIX instructions. Turn off automatic checks with the user-level `agentlink.updates.automaticChecks` setting. The version and target belong to the extension host, including a remote host, not the browser or local workspace manifest.
+- **Desktop:** use **Check for Updates…** in the app menu or **Settings…**. A title-bar notice belongs to the Desktop app and stays available when switching views. Settings include automatic-check opt-out and per-version dismissal. Desktop previews remain unsigned and not notarised; verify the release checksum and replace the app manually.
+- **CLI:** run `agentlink updates` without a project or provider login, or use `/updates` in interactive chat. See [CLI update notifications](standalone-cli.md#update-notifications) for controls and noninteractive limits.
+- **Browser:** details and manual checks follow the selected VS Code host or the effective Desktop owner of Ask Agent. No update controls are shown for older hosts that do not support them. Browser dismissal is local to that browser; automatic checks are configured on the host. There is no remote install, shell, download, or restart action.
+
+**Dismiss this version** hides its passive notice, not the result of a manual check. A newer version can notify again. Offline or rate-limited checks retain the last confirmed result and mark it stale. A newer release without metadata is not presented as a compatible update. Development/source runs do not check automatically, and SDK notifications are not supported.
+
 ## Start your first session
 
 1. Reload VS Code and open the folder you want to work in.

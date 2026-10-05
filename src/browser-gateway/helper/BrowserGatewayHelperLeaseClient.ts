@@ -3,6 +3,8 @@ import type {
   BrowserGatewayCoreOwnerRegistrationResponse,
 } from "../protocol.js";
 
+import type { ReleaseUpdateState } from "../../updates/releaseUpdateTypes.js";
+
 interface BrowserGatewayHelperLeaseClientOptions {
   helperUrl: string;
   clientId: string;
@@ -15,6 +17,13 @@ interface BrowserGatewayHelperLeaseClientOptions {
   leaseTtlMs?: number;
   random?: () => number;
   onEffectiveOwnerIdChanged?: (ownerId: string) => void;
+  productUpdates?: {
+    getSnapshot: () => ReleaseUpdateState;
+    onCheckRequested: (request: {
+      requestId: string;
+      expiresAt: number;
+    }) => Promise<ReleaseUpdateState | undefined>;
+  };
 }
 
 export class BrowserGatewayHelperLeaseClient {
@@ -26,6 +35,10 @@ export class BrowserGatewayHelperLeaseClient {
     | { lifecycleGeneration: number; promise: Promise<void> }
     | undefined;
   private effectiveOwnerId: string | undefined;
+  private deliveredProductUpdateRequestIds = new Map<string, number>();
+  private activeProductUpdateRequestId: string | undefined;
+  private activeProductUpdateRequestExpiresAt: number | undefined;
+  private completedProductUpdateState: ReleaseUpdateState | undefined;
 
   constructor(
     private readonly options: BrowserGatewayHelperLeaseClientOptions,
@@ -40,6 +53,7 @@ export class BrowserGatewayHelperLeaseClient {
   }
 
   async refresh(): Promise<void> {
+    if (this.renewal) await this.renewal.promise;
     await this.renewLease();
   }
 
@@ -51,6 +65,10 @@ export class BrowserGatewayHelperLeaseClient {
     if (!this.running) return;
     this.running = false;
     this.lifecycleGeneration += 1;
+    this.deliveredProductUpdateRequestIds.clear();
+    this.activeProductUpdateRequestId = undefined;
+    this.activeProductUpdateRequestExpiresAt = undefined;
+    this.completedProductUpdateState = undefined;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = undefined;
@@ -231,6 +249,7 @@ export class BrowserGatewayHelperLeaseClient {
           ownerGenerationId: owner.ownerGenerationId,
           capabilities: owner.capabilities,
           memoryRuntime: owner.memoryRuntime,
+          ...this.getProductUpdateSnapshotFields(),
         }),
         signal,
       }),
@@ -242,7 +261,109 @@ export class BrowserGatewayHelperLeaseClient {
         `[browser-gateway-helper] core owner heartbeat failed: ${response.status}`,
       );
     }
-    return response.ok;
+    if (!response.ok) return false;
+    try {
+      const body = (await response.json()) as {
+        productUpdatesSupported?: boolean;
+        productUpdateRequest?: { requestId?: unknown; expiresAt?: unknown };
+      };
+      const request = body.productUpdateRequest;
+      const requestId = request?.requestId;
+      const expiresAt = request?.expiresAt;
+      if (body.productUpdatesSupported === true && !request) {
+        this.activeProductUpdateRequestId = undefined;
+        this.activeProductUpdateRequestExpiresAt = undefined;
+        this.completedProductUpdateState = undefined;
+      }
+      if (
+        this.options.productUpdates &&
+        body.productUpdatesSupported === true &&
+        typeof requestId === "string" &&
+        requestId.trim() &&
+        typeof expiresAt === "number" &&
+        Number.isFinite(expiresAt) &&
+        expiresAt > Date.now() &&
+        !this.deliveredProductUpdateRequestIds.has(requestId)
+      ) {
+        this.queueProductUpdateCheck({ requestId, expiresAt });
+      }
+    } catch {
+      // Older helpers return no request payload. The owner lease remains valid.
+    }
+    return true;
+  }
+
+  private queueProductUpdateCheck(request: {
+    requestId: string;
+    expiresAt: number;
+  }): void {
+    const productUpdates = this.options.productUpdates;
+    if (!productUpdates) return;
+    this.deliveredProductUpdateRequestIds.set(
+      request.requestId,
+      request.expiresAt,
+    );
+    const generation = this.lifecycleGeneration;
+    setTimeout(() => {
+      const ownerId = this.effectiveOwnerId ?? this.options.coreOwner?.ownerId;
+      if (
+        !this.isActiveGeneration(generation) ||
+        request.expiresAt <= Date.now()
+      )
+        return;
+      void productUpdates
+        .onCheckRequested(request)
+        .then(async (state) => {
+          if (
+            !state ||
+            !this.isActiveGeneration(generation) ||
+            request.expiresAt <= Date.now() ||
+            ownerId !==
+              (this.effectiveOwnerId ?? this.options.coreOwner?.ownerId)
+          )
+            return;
+          this.activeProductUpdateRequestId = request.requestId;
+          this.activeProductUpdateRequestExpiresAt = request.expiresAt;
+          this.completedProductUpdateState = state;
+          await this.refresh();
+        })
+        .catch((error: unknown) => {
+          this.options.log(
+            `[browser-gateway-helper] product update check callback failed: ${String(error)}`,
+          );
+        });
+    });
+  }
+
+  private getProductUpdateSnapshotFields(): {
+    productUpdatesSupported?: boolean;
+    productUpdate?: { state: ReleaseUpdateState; requestId?: string };
+  } {
+    const now = Date.now();
+    for (const [requestId, expiresAt] of this
+      .deliveredProductUpdateRequestIds) {
+      if (expiresAt <= now)
+        this.deliveredProductUpdateRequestIds.delete(requestId);
+    }
+    if (
+      this.activeProductUpdateRequestExpiresAt &&
+      this.activeProductUpdateRequestExpiresAt <= now
+    ) {
+      this.activeProductUpdateRequestId = undefined;
+      this.activeProductUpdateRequestExpiresAt = undefined;
+      this.completedProductUpdateState = undefined;
+    }
+    const productUpdates = this.options.productUpdates;
+    if (!productUpdates) return {};
+    return {
+      productUpdatesSupported: true,
+      productUpdate: {
+        state: this.completedProductUpdateState ?? productUpdates.getSnapshot(),
+        ...(this.activeProductUpdateRequestId
+          ? { requestId: this.activeProductUpdateRequestId }
+          : {}),
+      },
+    };
   }
 
   private async postCoreOwnerRegistration(
@@ -257,7 +378,10 @@ export class BrowserGatewayHelperLeaseClient {
           "Content-Type": "application/json",
           Authorization: `Bearer ${this.options.clientSharedSecret}`,
         },
-        body: JSON.stringify(owner),
+        body: JSON.stringify({
+          ...owner,
+          ...this.getProductUpdateSnapshotFields(),
+        }),
         signal,
       }),
       deadline,
@@ -272,6 +396,19 @@ export class BrowserGatewayHelperLeaseClient {
       const body =
         (await response.json()) as BrowserGatewayCoreOwnerRegistrationResponse;
       if (
+        body.productUpdatesSupported === true &&
+        body.productUpdateRequest &&
+        typeof body.productUpdateRequest.requestId === "string" &&
+        typeof body.productUpdateRequest.expiresAt === "number" &&
+        body.productUpdateRequest.expiresAt > Date.now() &&
+        this.options.productUpdates &&
+        !this.deliveredProductUpdateRequestIds.has(
+          body.productUpdateRequest.requestId,
+        )
+      ) {
+        this.queueProductUpdateCheck(body.productUpdateRequest);
+      }
+      if (
         body.ok === true &&
         typeof body.effectiveOwnerId === "string" &&
         body.effectiveOwnerId.trim()
@@ -279,6 +416,9 @@ export class BrowserGatewayHelperLeaseClient {
         const effectiveOwnerId = body.effectiveOwnerId.trim();
         if (effectiveOwnerId !== this.effectiveOwnerId) {
           this.effectiveOwnerId = effectiveOwnerId;
+          this.activeProductUpdateRequestId = undefined;
+          this.activeProductUpdateRequestExpiresAt = undefined;
+          this.completedProductUpdateState = undefined;
           this.options.onEffectiveOwnerIdChanged?.(effectiveOwnerId);
         }
       }

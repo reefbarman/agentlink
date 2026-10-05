@@ -127,6 +127,8 @@ import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
 import { SessionHandoffPanel } from "../../shared/ui/SessionHandoffPanel";
 import type { SessionHandoffDraft } from "../../agent/sessionHandoff";
 import { ContextHealthPanel } from "../../shared/ui/ContextHealthPanel";
+import { ReleaseUpdateIndicator } from "../../shared/ui/ReleaseUpdateIndicator";
+import type { ReleaseUpdateState } from "../../updates/releaseUpdateTypes";
 import { MemoryPanel } from "../../shared/ui/MemoryPanel";
 import { memoryMutationError } from "../../shared/memoryMutationError";
 import { McpElicitationFormControls } from "../../shared/ui/McpElicitationFormControls";
@@ -1442,6 +1444,18 @@ export function BrowserGatewayApp({
       !browserGatewayNotificationPromptDismissed(),
   );
   const [notificationStatus, setNotificationStatus] = useState("");
+  const [productUpdate, setProductUpdate] = useState<{
+    hostId: string;
+    generationId: string;
+    state: ReleaseUpdateState;
+  } | null>(null);
+  const [productUpdateBusy, setProductUpdateBusy] = useState(false);
+  const [productUpdateDetailsOpen, setProductUpdateDetailsOpen] =
+    useState(false);
+  const [desktopProductUpdate, setDesktopProductUpdate] =
+    useState<ReleaseUpdateState | null>(null);
+  const [desktopProductUpdateDetailsOpen, setDesktopProductUpdateDetailsOpen] =
+    useState(false);
   const workspaceHydrationInFlightRef = useRef<Set<string>>(new Set());
   const [ownerSnapshotRevision, setOwnerSnapshotRevision] = useState(0);
   const initialLogicalSelection =
@@ -2166,6 +2180,192 @@ export function BrowserGatewayApp({
     },
     [],
   );
+
+  useEffect(() => {
+    const desktopBridge = askAgentOnly
+      ? window.agentlinkDesktopShell
+      : undefined;
+    if (!desktopBridge?.getReleaseUpdateState) {
+      setDesktopProductUpdate(null);
+      return;
+    }
+    let disposed = false;
+    const unsubscribe = desktopBridge.onReleaseUpdateState?.((state) => {
+      if (!disposed) setDesktopProductUpdate(state);
+    });
+    void desktopBridge
+      .getReleaseUpdateState()
+      .then((state) => {
+        if (!disposed) setDesktopProductUpdate(state);
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, [askAgentOnly]);
+
+  useEffect(() => {
+    const tabId = selectedTabId;
+    const generation = selectedTabGenerationRef.current;
+    const endpoint = isAskAgentSelected
+      ? "/api/ask-agent/product-updates"
+      : buildApiPathForInstance("/api/product-updates", selectedInstanceId);
+    const controller = new AbortController();
+    let disposed = false;
+    setProductUpdate(null);
+    const refreshProductUpdate = async () => {
+      try {
+        const response = await fetch(endpoint, {
+          credentials: "same-origin",
+          headers: { Authorization: `Bearer ${authToken}` },
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          if (!disposed && response.status === 404) setProductUpdate(null);
+          return;
+        }
+        const body = (await response.json()) as {
+          hostId?: unknown;
+          generationId?: unknown;
+          state?: unknown;
+        };
+        if (
+          disposed ||
+          selectedTabIdRef.current !== tabId ||
+          selectedTabGenerationRef.current !== generation ||
+          typeof body.hostId !== "string" ||
+          typeof body.generationId !== "string" ||
+          !body.state ||
+          typeof body.state !== "object"
+        )
+          return;
+        const state = body.state as ReleaseUpdateState;
+        const candidate = state.candidate;
+        if (candidate) {
+          const dismissedKey = `agentlink.browserGateway.productUpdateDismissed:${body.hostId}:${state.identity.product}:${candidate.channel}:${candidate.version}`;
+          try {
+            if (window.localStorage.getItem(dismissedKey)) {
+              state.dismissedVersion = candidate.version;
+            }
+          } catch {
+            // Browser-local dismissal is optional when storage is unavailable.
+          }
+        }
+        setProductUpdate({
+          hostId: body.hostId,
+          generationId: body.generationId,
+          state,
+        });
+      } catch {
+        // Update status is best-effort and must not affect the active session.
+      }
+    };
+    void refreshProductUpdate();
+    const timer = window.setInterval(() => void refreshProductUpdate(), 5_000);
+    return () => {
+      disposed = true;
+      controller.abort();
+      window.clearInterval(timer);
+    };
+  }, [
+    authToken,
+    buildApiPathForInstance,
+    isAskAgentSelected,
+    selectedInstanceId,
+    selectedTabId,
+  ]);
+
+  useEffect(() => {
+    setProductUpdateBusy(false);
+    setProductUpdateDetailsOpen(false);
+  }, [
+    isAskAgentSelected,
+    productUpdate?.generationId,
+    productUpdate?.hostId,
+    selectedInstanceId,
+    selectedTabId,
+  ]);
+
+  async function checkSelectedProductUpdate(): Promise<void> {
+    if (productUpdateBusy || !productUpdate) return;
+
+    const capturedTabId = selectedTabId;
+    const capturedTabGeneration = selectedTabGenerationRef.current;
+    const capturedHostId = productUpdate.hostId;
+    const capturedGenerationId = productUpdate.generationId;
+    const askAgentSelected = isAskAgentSelected;
+    const endpoint = askAgentSelected
+      ? `/api/ask-agent/product-updates/check?${new URLSearchParams({ ownerId: capturedHostId, generationId: capturedGenerationId })}`
+      : buildApiPathForInstance(
+          "/api/product-updates/check",
+          selectedInstanceId,
+        );
+    const isCapturedSelectionCurrent = () =>
+      selectedTabIdRef.current === capturedTabId &&
+      selectedTabGenerationRef.current === capturedTabGeneration;
+    const updateCapturedStatus = (status: "checking" | "unavailable") => {
+      setProductUpdate((current) =>
+        current?.hostId === capturedHostId &&
+        current.generationId === capturedGenerationId
+          ? {
+              ...current,
+              state: {
+                ...current.state,
+                status,
+                ...(status === "unavailable" ? { stale: true } : {}),
+              },
+            }
+          : current,
+      );
+    };
+
+    setProductUpdateBusy(true);
+    setProductUpdateDetailsOpen(true);
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!isCapturedSelectionCurrent()) return;
+      if (response.status === 202) {
+        updateCapturedStatus("checking");
+        return;
+      }
+      if (!response.ok) {
+        updateCapturedStatus("unavailable");
+        return;
+      }
+
+      const body = (await response.json()) as {
+        hostId?: unknown;
+        generationId?: unknown;
+        state?: unknown;
+      };
+      if (
+        !isCapturedSelectionCurrent() ||
+        body.hostId !== capturedHostId ||
+        body.generationId !== capturedGenerationId
+      ) {
+        return;
+      }
+      if (body.state && typeof body.state === "object") {
+        setProductUpdate((current) =>
+          current?.hostId === capturedHostId &&
+          current.generationId === capturedGenerationId
+            ? { ...current, state: body.state as ReleaseUpdateState }
+            : current,
+        );
+      } else {
+        updateCapturedStatus("unavailable");
+      }
+    } catch {
+      if (isCapturedSelectionCurrent()) updateCapturedStatus("unavailable");
+    } finally {
+      if (isCapturedSelectionCurrent()) setProductUpdateBusy(false);
+    }
+  }
 
   useGatewaySnapshotConnection({
     enabled: !relayClientEnabled,
@@ -7959,6 +8159,61 @@ export function BrowserGatewayApp({
               <span class="browser-status-detail">{notificationStatus}</span>
             )}
           </div>
+          {consumerShell && desktopShell && (
+            <div class="desktop-header-actions" aria-label="Desktop updates">
+              {desktopProductUpdate &&
+                !desktopProductUpdate.candidate &&
+                !desktopProductUpdateDetailsOpen && (
+                  <button
+                    class="icon-button"
+                    type="button"
+                    disabled={desktopProductUpdate.status === "checking"}
+                    onClick={() => {
+                      setDesktopProductUpdateDetailsOpen(true);
+                      void desktopShell
+                        .checkForReleaseUpdate?.()
+                        .then(setDesktopProductUpdate)
+                        .catch(() => undefined);
+                    }}
+                  >
+                    Check for updates
+                  </button>
+                )}
+              <ReleaseUpdateIndicator
+                state={desktopProductUpdate}
+                label="Desktop update"
+                showDetails={desktopProductUpdateDetailsOpen}
+                onClose={() => setDesktopProductUpdateDetailsOpen(false)}
+                onCheck={() => {
+                  setDesktopProductUpdateDetailsOpen(true);
+                  void desktopShell
+                    .checkForReleaseUpdate?.()
+                    .then(setDesktopProductUpdate)
+                    .catch(() => undefined);
+                }}
+                onDismiss={() => {
+                  void desktopShell
+                    .dismissReleaseUpdate?.()
+                    .then(setDesktopProductUpdate)
+                    .catch(() => undefined);
+                }}
+                onOpenLink={(url) => {
+                  try {
+                    const parsed = new URL(url);
+                    if (
+                      parsed.protocol === "https:" &&
+                      parsed.hostname === "github.com" &&
+                      parsed.pathname.startsWith("/reefbarman/agentlink/")
+                    ) {
+                      window.open(parsed.href, "_blank", "noopener,noreferrer");
+                    }
+                  } catch {
+                    // Only validated release links are actionable.
+                  }
+                }}
+              />
+            </div>
+          )}
           {desktopRemoteSelected && (
             <div class="desktop-header-actions">
               <span>VS Code</span>
@@ -8590,6 +8845,71 @@ export function BrowserGatewayApp({
                   }
                 />
               )}
+              {productUpdate &&
+                !consumerShell &&
+                (!productUpdate.state.candidate && !productUpdateDetailsOpen ? (
+                  <button
+                    class="icon-button"
+                    type="button"
+                    disabled={
+                      productUpdateBusy ||
+                      productUpdate.state.status === "checking"
+                    }
+                    onClick={() => void checkSelectedProductUpdate()}
+                  >
+                    Check for updates
+                  </button>
+                ) : (
+                  <ReleaseUpdateIndicator
+                    state={productUpdate.state}
+                    label={`${productUpdate.state.identity.product === "vscode" ? "VS Code" : productUpdate.state.identity.product === "desktop" ? "Desktop" : "CLI"} update`}
+                    showDetails={productUpdateDetailsOpen}
+                    onClose={() => setProductUpdateDetailsOpen(false)}
+                    onCheck={() => void checkSelectedProductUpdate()}
+                    onDismiss={() => {
+                      const candidate = productUpdate.state.candidate;
+                      if (!candidate) return;
+                      const key = `agentlink.browserGateway.productUpdateDismissed:${productUpdate.hostId}:${productUpdate.state.identity.product}:${candidate.channel}:${candidate.version}`;
+                      try {
+                        window.localStorage.setItem(key, "1");
+                      } catch {
+                        // Browser-local dismissal is optional without storage.
+                      }
+                      const hostId = productUpdate.hostId;
+                      const generationId = productUpdate.generationId;
+                      setProductUpdate((current) =>
+                        current?.hostId === hostId &&
+                        current.generationId === generationId
+                          ? {
+                              ...current,
+                              state: {
+                                ...current.state,
+                                dismissedVersion: candidate.version,
+                              },
+                            }
+                          : current,
+                      );
+                    }}
+                    onOpenLink={(url) => {
+                      try {
+                        const parsed = new URL(url);
+                        if (
+                          parsed.protocol === "https:" &&
+                          parsed.hostname === "github.com" &&
+                          parsed.pathname.startsWith("/reefbarman/agentlink/")
+                        ) {
+                          window.open(
+                            parsed.href,
+                            "_blank",
+                            "noopener,noreferrer",
+                          );
+                        }
+                      } catch {
+                        // Only validated release links are actionable.
+                      }
+                    }}
+                  />
+                ))}
               {showAskAgentMemory && (
                 <section
                   aria-label="Ask Agent memory"

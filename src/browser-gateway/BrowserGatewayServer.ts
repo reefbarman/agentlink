@@ -342,6 +342,46 @@ export class BrowserGatewayServer implements vscode.Disposable {
       }),
       route(
         "GET",
+        pathExact("/api/product-updates"),
+        ({ res }) => {
+          const state = this.chatViewProvider.getReleaseUpdateState();
+          this.writeJson(
+            res,
+            state ? 200 : 404,
+            state
+              ? {
+                  hostId: this.instanceId,
+                  generationId: this.startedAtIso,
+                  state,
+                }
+              : { error: "updates_unavailable" },
+          );
+        },
+        none,
+        ({ req }) => this.isAuthorized(req),
+      ),
+      route(
+        "POST",
+        pathExact("/api/product-updates/check"),
+        async ({ res }) => {
+          const state = await this.chatViewProvider.checkReleaseUpdates();
+          this.writeJson(
+            res,
+            state ? 200 : 404,
+            state
+              ? {
+                  hostId: this.instanceId,
+                  generationId: this.startedAtIso,
+                  state,
+                }
+              : { error: "updates_unavailable" },
+          );
+        },
+        internal("update check failed"),
+        ({ req }) => this.isAuthorized(req),
+      ),
+      route(
+        "GET",
         pathExact("/api/instance-status"),
         ({ res }) => {
           this.writeJson(

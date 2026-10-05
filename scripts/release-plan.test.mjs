@@ -18,6 +18,11 @@ test("maps shipped paths to the surfaces that package them", () => {
     "vscode",
     "desktop",
   ]);
+  assert.deepEqual(unitsForPath("src/updates/releaseSelection.ts").units, [
+    "vscode",
+    "desktop",
+    "cli",
+  ]);
   assert.deepEqual(unitsForPath("packages/core/src/agentEngine.ts").units, [
     "sdk",
     "vscode",

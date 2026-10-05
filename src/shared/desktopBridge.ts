@@ -1,3 +1,5 @@
+import type { ReleaseUpdateState } from "../updates/releaseUpdateTypes.js";
+
 export const AGENTLINK_DESKTOP_OWNER_ID = "agentlink-desktop";
 export const AGENTLINK_DESKTOP_OWNER_ARGUMENT_PREFIX =
   "--agentlink-desktop-owner-id=";
@@ -62,6 +64,13 @@ export interface DesktopBridge {
   openMcpConfig?(scope: "global" | "ask-agent-global"): Promise<void>;
   /** MCP window: register the operation that native close/crash must cancel. */
   setMcpOperation?(operationId: string | null): void;
+  /** Local Desktop release status and deliberate update actions. */
+  getReleaseUpdateState?(): Promise<ReleaseUpdateState>;
+  onReleaseUpdateState?(
+    listener: (state: ReleaseUpdateState) => void,
+  ): () => void;
+  checkForReleaseUpdate?(): Promise<ReleaseUpdateState>;
+  dismissReleaseUpdate?(): Promise<ReleaseUpdateState>;
 }
 
 declare global {

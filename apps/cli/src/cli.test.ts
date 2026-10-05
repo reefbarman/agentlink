@@ -34,16 +34,90 @@ function harness(isTty = false) {
 }
 
 describe("runCli", () => {
-  it("prints help without creating host state", async () => {
+  it("prints help without creating host state or update service", async () => {
     const test = harness();
-    await expect(runCli(["--help"], test.io, {})).resolves.toBe(0);
+    const createUpdateService = vi.fn();
+    await expect(
+      runCli(["--help"], test.io, {}, createUpdateService),
+    ).resolves.toBe(0);
     expect(test.stdout()).toContain("status");
     expect(test.stdout()).toContain("lsp");
+    expect(test.stdout()).toContain("updates");
+    expect(createUpdateService).not.toHaveBeenCalled();
   });
 
-  it("shows contextual authentication help for an incomplete command", async () => {
+  it("checks CLI updates without opening a workspace or provider", async () => {
+    const dataRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-cli-updates-"),
+    );
     const test = harness();
-    await expect(runCli(["auth"], test.io, {})).resolves.toBe(1);
+    const state = {
+      identity: {
+        product: "cli" as const,
+        version: "0.3.0",
+        target: "darwin-arm64",
+        development: true,
+      },
+      status: "current" as const,
+      automaticChecks: false,
+      lastAttemptAt: null,
+      checkedAt: null,
+      retryAt: null,
+      candidate: null,
+      dismissedVersion: null,
+      stale: false,
+    };
+    const check = vi.fn(async () => state);
+    const dispose = vi.fn();
+    const createUpdateService = vi.fn((options) => {
+      expect(options.identity.product).toBe("cli");
+      expect(options.storageDirectory).toBe(
+        path.join(dataRoot, "cli", "updates"),
+      );
+      return {
+        start: vi.fn(async () => undefined),
+        snapshot: () => state,
+        subscribe: vi.fn(() => () => undefined),
+        check,
+        dismiss: vi.fn(async () => state),
+        setAutomaticChecks: vi.fn(async () => undefined),
+        dispose,
+      };
+    });
+    try {
+      await expect(
+        runCli(
+          ["updates"],
+          test.io,
+          { AGENTLINK_HOME: dataRoot },
+          createUpdateService,
+        ),
+      ).resolves.toBe(0);
+      expect(check).toHaveBeenCalledWith(true);
+      expect(test.stdout()).toContain("CLI is up to date");
+      expect(test.stdout()).toContain("Automatic checks: on");
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      await fs.rm(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not initialize update notifications for version output", async () => {
+    const test = harness();
+    const createUpdateService = vi.fn();
+    await expect(
+      runCli(["--version"], test.io, {}, createUpdateService),
+    ).resolves.toBe(0);
+    expect(createUpdateService).not.toHaveBeenCalled();
+  });
+
+  it("shows contextual authentication help without creating update services", async () => {
+    const test = harness();
+    const createUpdateService = vi.fn();
+    await expect(
+      runCli(["auth"], test.io, {}, createUpdateService),
+    ).resolves.toBe(1);
+    expect(createUpdateService).not.toHaveBeenCalled();
     expect(test.stderr()).toContain(
       "Usage: agentlink auth [options] [command]",
     );

@@ -7,6 +7,7 @@ import {
   type DesktopMcpManagerOpenRequest,
 } from "../../../src/shared/desktopBridge.js";
 import { contextBridge, ipcRenderer } from "electron";
+import type { ReleaseUpdateState } from "../../../src/updates/releaseUpdateTypes.js";
 
 if (process.isMainFrame) {
   const askAgentOwnerId =
@@ -82,6 +83,21 @@ if (process.isMainFrame) {
       ipcRenderer.invoke("agentlink:mcp-manager:open-config", scope),
     setMcpOperation: (operationId) =>
       ipcRenderer.send("agentlink:mcp-manager:operation", operationId),
+    getReleaseUpdateState: (): Promise<ReleaseUpdateState> =>
+      ipcRenderer.invoke("agentlink:release-update:get"),
+    onReleaseUpdateState: (listener) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        state: ReleaseUpdateState,
+      ): void => listener(state);
+      ipcRenderer.on("agentlink:release-update:state", handler);
+      return () =>
+        ipcRenderer.removeListener("agentlink:release-update:state", handler);
+    },
+    checkForReleaseUpdate: (): Promise<ReleaseUpdateState> =>
+      ipcRenderer.invoke("agentlink:release-update:check"),
+    dismissReleaseUpdate: (): Promise<ReleaseUpdateState> =>
+      ipcRenderer.invoke("agentlink:release-update:dismiss"),
     onQuickAskSubmission: (listener) => {
       let active = true;
       // Submissions queue in the main process, so a window that subscribes

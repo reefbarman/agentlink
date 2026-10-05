@@ -19,6 +19,8 @@ export type AskAgentRouteHandler =
   | "sessionCopyFirstPrompt"
   | "events"
   | "models"
+  | "productUpdates"
+  | "productUpdateCheck"
   | "slashCommands"
   | "mcpConfig"
   | "mcpConfigServer"
@@ -59,6 +61,16 @@ export type AskAgentRouteHandler =
   | "stop";
 
 export const ASK_AGENT_ROUTES = [
+  {
+    method: "GET",
+    path: "/api/ask-agent/product-updates",
+    handler: "productUpdates",
+  },
+  {
+    method: "POST",
+    path: "/api/ask-agent/product-updates/check",
+    handler: "productUpdateCheck",
+  },
   { method: "GET", path: "/api/ask-agent/session", handler: "session" },
   { method: "GET", path: "/api/ask-agent/sessions", handler: "sessions" },
   { method: "POST", path: "/api/ask-agent/session/new", handler: "sessionNew" },

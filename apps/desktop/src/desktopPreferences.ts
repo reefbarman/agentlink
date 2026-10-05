@@ -6,6 +6,7 @@ export interface DesktopPreferences {
   quickAskShortcut?: string | null;
   /** Records that the first-run login-item default was applied. */
   openAtLoginInitialized?: boolean;
+  automaticUpdateChecks?: boolean;
 }
 
 export async function readDesktopPreferences(

@@ -74,6 +74,18 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
   retainedHttp(
     "vscode_gateway",
     "GET",
+    "/api/product-updates",
+    "Host-owned cached update metadata is independent of conversation state.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
+    "/api/product-updates/check",
+    "Explicit metadata-only check, without install, download, or session mutation.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "GET",
     "/api/ui-state",
     "Legacy snapshot bootstrap; removed only in Stage 5.",
   ),
@@ -488,6 +500,8 @@ function classifyAskAgentRoute(
     case "sessionCopyFirstPrompt":
     case "events":
     case "models":
+    case "productUpdates":
+    case "productUpdateCheck":
     case "slashCommands":
     case "mcpConfig":
     case "mcpConfigServer":

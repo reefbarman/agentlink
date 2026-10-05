@@ -23,6 +23,7 @@ export const DEFAULT_OPENAI_MODELS = listCodexModels("openai", "apiKey").map(
 
 const defaultConfig: CliConfig = {
   schemaVersion: 1,
+  updateAutomaticChecks: true,
   defaultModel: { providerId: "codex", modelId: "gpt-5.6-sol" },
   openAiModels: DEFAULT_OPENAI_MODELS,
   codexModels: DEFAULT_CODEX_MODELS,
@@ -88,6 +89,12 @@ export function parseCliConfig(value: unknown): CliConfig {
   ) {
     throw new Error("AgentLink CLI codexUseWebSocket must be a boolean");
   }
+  if (
+    value.updateAutomaticChecks !== undefined &&
+    typeof value.updateAutomaticChecks !== "boolean"
+  ) {
+    throw new Error("AgentLink CLI updateAutomaticChecks must be a boolean");
+  }
   const defaultModel = value.defaultModel;
   if (
     !isRecord(defaultModel) ||
@@ -98,6 +105,7 @@ export function parseCliConfig(value: unknown): CliConfig {
   }
   return {
     schemaVersion: 1,
+    updateAutomaticChecks: value.updateAutomaticChecks ?? true,
     defaultModel: {
       providerId: requiredText(
         defaultModel.providerId,

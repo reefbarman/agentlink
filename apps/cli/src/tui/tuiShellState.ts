@@ -117,6 +117,12 @@ export const TUI_COMMANDS: readonly TuiPickerItem[] = [
     insertText: "/approvals",
   },
   {
+    id: "/updates",
+    label: "/updates",
+    detail: "Check update details and settings",
+    insertText: "/updates",
+  },
+  {
     id: "/help",
     label: "/help",
     detail: "Show TUI shortcuts",

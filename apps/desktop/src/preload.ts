@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+import type { ReleaseUpdateState } from "../../../src/updates/releaseUpdateTypes.js";
+
 export interface QuickAskShortcutStatus {
   shortcut: string | null;
   registered: boolean;
@@ -54,4 +56,23 @@ contextBridge.exposeInMainWorld("agentlinkDesktop", {
     ipcRenderer.invoke("agentlink:open-at-login:get"),
   setOpenAtLogin: (enabled: boolean): Promise<OpenAtLoginStatus> =>
     ipcRenderer.invoke("agentlink:open-at-login:set", enabled),
+  getReleaseUpdateState: (): Promise<ReleaseUpdateState> =>
+    ipcRenderer.invoke("agentlink:release-update:get"),
+  onReleaseUpdateState: (listener: (state: ReleaseUpdateState) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      state: ReleaseUpdateState,
+    ): void => listener(state);
+    ipcRenderer.on("agentlink:release-update:state", handler);
+    return () =>
+      ipcRenderer.removeListener("agentlink:release-update:state", handler);
+  },
+  checkForReleaseUpdate: (): Promise<ReleaseUpdateState> =>
+    ipcRenderer.invoke("agentlink:release-update:check"),
+  dismissReleaseUpdate: (): Promise<ReleaseUpdateState> =>
+    ipcRenderer.invoke("agentlink:release-update:dismiss"),
+  setAutomaticUpdateChecks: (value: boolean): Promise<ReleaseUpdateState> =>
+    ipcRenderer.invoke("agentlink:release-update:automatic", value),
+  openReleaseUpdateLink: (url: string): Promise<{ ok: true }> =>
+    ipcRenderer.invoke("agentlink:release-update:open-link", url),
 });

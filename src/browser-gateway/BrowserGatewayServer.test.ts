@@ -197,6 +197,8 @@ function makeMcpConfigSnapshot() {
 
 function makeChatViewProviderStub() {
   return {
+    getReleaseUpdateState: vi.fn(() => null as unknown),
+    checkReleaseUpdates: vi.fn(async () => null as unknown),
     submitBrowserApprovalDecision: vi.fn(() => true),
     submitBrowserQuestionResponse: vi.fn(() => true),
     publishBrowserQuestionProgress: vi.fn(() => true),
@@ -444,6 +446,74 @@ afterEach(() => {
 });
 
 describe("BrowserGatewayServer", () => {
+  it("authenticates metadata-only update routes and attributes status to the host", async () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const provider = makeChatViewProviderStub();
+    const updateState = {
+      identity: { product: "vscode", version: "1.2.3", target: "linux-arm64" },
+      status: "current",
+    };
+    provider.getReleaseUpdateState.mockReturnValue(updateState);
+    provider.checkReleaseUpdates.mockResolvedValue(updateState);
+    const service = new BrowserGatewayService(
+      hub,
+      makeSessionManagerStub() as never,
+      () => ({
+        cssVariables: {},
+        colorScheme: "dark",
+        themeLabel: "Dark",
+        source: "vscode-theme-api",
+      }),
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => null,
+      () => [],
+    );
+    const server = new BrowserGatewayServer(
+      service,
+      provider as never,
+      "test-token",
+      "update-host",
+      "Updates",
+      "/workspace/updates",
+      vi.fn(),
+    );
+    try {
+      const port = await server.start(0);
+      const base = `http://127.0.0.1:${port}/api/product-updates`;
+      expect((await fetch(base)).status).toBe(401);
+      expect((await fetch(`${base}/check`, { method: "POST" })).status).toBe(
+        401,
+      );
+      expect(provider.checkReleaseUpdates).not.toHaveBeenCalled();
+      const headers = { Authorization: "Bearer test-token" };
+      const status = await fetch(base, { headers });
+      expect(status.status).toBe(200);
+      const body = await status.json();
+      expect(body).toEqual({
+        hostId: "update-host",
+        generationId: expect.any(String),
+        state: updateState,
+      });
+      expect(provider.checkReleaseUpdates).not.toHaveBeenCalled();
+      const check = await fetch(`${base}/check`, { method: "POST", headers });
+      expect(check.status).toBe(200);
+      expect(await check.json()).toEqual(body);
+      expect(provider.checkReleaseUpdates).toHaveBeenCalledOnce();
+      provider.getReleaseUpdateState.mockReturnValue(null);
+      expect((await fetch(base, { headers })).status).toBe(404);
+      provider.checkReleaseUpdates.mockResolvedValue(null);
+      expect(
+        (await fetch(`${base}/check`, { method: "POST", headers })).status,
+      ).toBe(404);
+    } finally {
+      await server.stop();
+      service.dispose();
+      hub.dispose();
+    }
+  });
+
   it("persists explicit theme publications without connected SSE clients", async () => {
     const hub = new InMemoryAgentUiEventHub();
     let theme: BrowserGatewayThemeSnapshot = {

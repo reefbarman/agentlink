@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added quiet update notifications for VS Code, Desktop, interactive CLI, and browser views. Packaged hosts check public release metadata at most once a day, with manual checks, exact-version dismissal, and product-local opt-out. Browser status follows the selected host, and future app releases publish deterministic compatibility metadata. Checks never download installers, install, execute commands, restart, or enter session/model context.
+
 ## 1.24.0
 
 - The release installer now installs every surface: `install.sh --surface vscode|desktop|cli` selects the newest release for that surface, verifies published SHA-256 checksums, and accepts `--version` and `--dry-run`. The CLI install upgrades its own earlier preview launcher but still refuses unrelated `agentlink` commands. A new `install-sdk.mjs` vendors checksum-verified Node SDK release archives into a project.

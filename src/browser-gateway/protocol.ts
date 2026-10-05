@@ -15,6 +15,7 @@ import type { BrowserGatewayDataPlaneFeature } from "@agentlink/protocol/browser
 import type { CoreModelCatalogEntry } from "@agentlink/protocol/model-catalog";
 import type { OpenAiCompatibleRuntimeProfile } from "@agentlink/core/openai-compatible";
 import type { PromptProfileResolution } from "@agentlink/protocol/prompt-profile";
+import type { ReleaseUpdateState } from "../updates/releaseUpdateTypes.js";
 
 export {
   BROWSER_GATEWAY_DATA_PLANE_FEATURES,
@@ -48,12 +49,17 @@ export interface BrowserGatewayCoreOwnerLeaseRegistration {
   memoryRuntime?: BrowserGatewayMemoryRuntimeDescriptor;
   instanceId?: string;
   processId?: number;
+  productUpdatesSupported?: boolean;
+  productUpdate?: { state: ReleaseUpdateState; requestId?: string };
 }
 
 export interface BrowserGatewayCoreOwnerHeartbeatRequest {
   ownerId: string;
   ownerGenerationId: string;
   capabilities?: CoreCapabilityStatusDto[];
+  productUpdatesSupported?: boolean;
+  productUpdate?: { state: ReleaseUpdateState; requestId?: string };
+  productUpdateRequest?: { requestId: string; expiresAt: number };
   /** @deprecated Ignored by current helpers; retained for older helpers. */
   memoryRuntime?: BrowserGatewayMemoryRuntimeDescriptor;
 }
@@ -66,6 +72,8 @@ export interface BrowserGatewayCoreOwnerRegistrationResponse {
   resolution: BrowserGatewayCoreOwnerRegistrationResolution;
   ownerRegistration: CoreOwnerRegistrationDto;
   dataPlaneFeatures?: BrowserGatewayDataPlaneFeature[];
+  productUpdatesSupported?: boolean;
+  productUpdateRequest?: { requestId: string; expiresAt: number };
 }
 
 export interface BrowserGatewayCoreOwnersListResponse {
