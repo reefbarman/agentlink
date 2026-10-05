@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "9e5e8cdb5dbe99622698dc948aaee653b2e17b2a",
-  "createdAt": "2026-10-04T23:55:04.413Z",
+  "sourceSha": "dbccec9a9477e6a7ea15fba1ddeafe3cc7082677",
+  "createdAt": "2026-10-05T00:20:54.559Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -12,7 +12,7 @@
     "vscode": {
       "published": "1.23.0",
       "baselineRef": "v1.23.0",
-      "reserved": "1.23.21",
+      "reserved": "1.24.0",
       "commits": [
         "4a4089bf0108916c786f1b1ed054c9198058b6d1",
         "ead08dfbc521f007677f97b420caf0a1eb107a70",
@@ -39,7 +39,8 @@
         "783049f70d58c35631aeb967be4b4799d4bb6889",
         "05094eea79d9684f75a93b00045254fd3ca63d64",
         "d0615aa75af9959a4ab80ac962b4035895725c6a",
-        "a5e3d2859074dd901d28f10bad8a1df8b955eacc"
+        "a5e3d2859074dd901d28f10bad8a1df8b955eacc",
+        "87905d132b613e747f0e45af24c73d1624e6878d"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
@@ -48,7 +49,7 @@
       "version": "1.24.0",
       "effectiveBump": "minor",
       "breaking": false,
-      "usedReservation": false,
+      "usedReservation": true,
       "consumedIntent": false,
       "tag": "v1.24.0",
       "notes": [
@@ -207,13 +208,19 @@
           "subject": "feat(release): plan semantic releases on main and install every surface",
           "summary": "The installer can now install the VS Code, Desktop, or CLI surface with checksum verification, version pinning and dry-run, and an SDK installer vendors verified archives; release planning is automated.",
           "breaking": false
+        },
+        {
+          "sha": "87905d132b613e747f0e45af24c73d1624e6878d",
+          "subject": "chore(release): v1.24.0, desktop-v0.3.0, cli-v0.3.0, sdk-v0.3.0",
+          "summary": "Release housekeeping that updates changelogs, the lockfile, release plan metadata and bundled documentation references without changing runtime behaviour.",
+          "breaking": false
         }
       ]
     },
     "desktop": {
       "published": "0.2.0",
       "baselineRef": "desktop-v0.2.0",
-      "reserved": "0.2.0",
+      "reserved": "0.3.0",
       "commits": [
         "4a4089bf0108916c786f1b1ed054c9198058b6d1",
         "ead08dfbc521f007677f97b420caf0a1eb107a70",
@@ -240,7 +247,8 @@
         "783049f70d58c35631aeb967be4b4799d4bb6889",
         "05094eea79d9684f75a93b00045254fd3ca63d64",
         "d0615aa75af9959a4ab80ac962b4035895725c6a",
-        "a5e3d2859074dd901d28f10bad8a1df8b955eacc"
+        "a5e3d2859074dd901d28f10bad8a1df8b955eacc",
+        "87905d132b613e747f0e45af24c73d1624e6878d"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
@@ -249,7 +257,7 @@
       "version": "0.3.0",
       "effectiveBump": "minor",
       "breaking": false,
-      "usedReservation": false,
+      "usedReservation": true,
       "consumedIntent": false,
       "tag": "desktop-v0.3.0",
       "notes": [
@@ -408,13 +416,19 @@
           "subject": "feat(release): plan semantic releases on main and install every surface",
           "summary": "The installer can now install the VS Code, Desktop, or CLI surface with checksum verification, version pinning and dry-run, and an SDK installer vendors verified archives; release planning is automated.",
           "breaking": false
+        },
+        {
+          "sha": "87905d132b613e747f0e45af24c73d1624e6878d",
+          "subject": "chore(release): v1.24.0, desktop-v0.3.0, cli-v0.3.0, sdk-v0.3.0",
+          "summary": "Release housekeeping that updates changelogs, the lockfile, release plan metadata and bundled documentation references without changing runtime behaviour.",
+          "breaking": false
         }
       ]
     },
     "cli": {
       "published": "0.2.0",
       "baselineRef": "cli-v0.2.0",
-      "reserved": "0.2.0",
+      "reserved": "0.3.0",
       "commits": [
         "966dbb7e885141b47b48bf2377660dfb52ead891",
         "2b3a6b77664a28359908c5f03ccb56d9b154a94a",
@@ -423,7 +437,8 @@
         "ff96d6c37f54a030f4beb8380463e58ea0126837",
         "b734802fdcd39b5a7e43bfba0a9ea9acb27df039",
         "bd164d435aab87b0e245084fe7c6991e4075fe21",
-        "a5e3d2859074dd901d28f10bad8a1df8b955eacc"
+        "a5e3d2859074dd901d28f10bad8a1df8b955eacc",
+        "87905d132b613e747f0e45af24c73d1624e6878d"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
@@ -432,7 +447,7 @@
       "version": "0.3.0",
       "effectiveBump": "minor",
       "breaking": false,
-      "usedReservation": false,
+      "usedReservation": true,
       "consumedIntent": false,
       "tag": "cli-v0.3.0",
       "notes": [
@@ -483,63 +498,27 @@
           "subject": "feat(release): plan semantic releases on main and install every surface",
           "summary": "The installer can now install the VS Code, Desktop, or CLI surface with checksum verification, version pinning and dry-run, and an SDK installer vendors verified archives; release planning is automated.",
           "breaking": false
+        },
+        {
+          "sha": "87905d132b613e747f0e45af24c73d1624e6878d",
+          "subject": "chore(release): v1.24.0, desktop-v0.3.0, cli-v0.3.0, sdk-v0.3.0",
+          "summary": "Release housekeeping that updates changelogs, the lockfile, release plan metadata and bundled documentation references without changing runtime behaviour.",
+          "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.2.0",
-      "baselineRef": "3cab81db92f04acf2b4a7bae45e536050c7aabc2",
-      "reserved": "0.2.0",
-      "commits": [
-        "966dbb7e885141b47b48bf2377660dfb52ead891",
-        "085b1ee1d33ebb86342c146208c3e33b737abde0",
-        "ff96d6c37f54a030f4beb8380463e58ea0126837",
-        "b734802fdcd39b5a7e43bfba0a9ea9acb27df039",
-        "bd164d435aab87b0e245084fe7c6991e4075fe21"
-      ],
+      "published": "0.3.0",
+      "baselineRef": "sdk-v0.3.0",
+      "reserved": "0.3.0",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
-      "status": "release",
-      "version": "0.3.0",
-      "effectiveBump": "minor",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": true,
-      "tag": "sdk-v0.3.0",
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
       "intentFile": ".release/intents/sdk.json",
-      "notes": [
-        {
-          "sha": "966dbb7e885141b47b48bf2377660dfb52ead891",
-          "subject": "fix(codex): restore Responses Lite thinking summaries",
-          "summary": "Codex Responses Lite requests again return detailed reasoning summaries, so thinking blocks appear for GPT-6 models.",
-          "breaking": false
-        },
-        {
-          "sha": "085b1ee1d33ebb86342c146208c3e33b737abde0",
-          "subject": "fix(core): forward tool-result images on OpenAI-compatible providers",
-          "summary": "Images returned by tools are now forwarded to image-capable OpenAI-compatible models in the following user message instead of being replaced by an omission placeholder.",
-          "breaking": false
-        },
-        {
-          "sha": "ff96d6c37f54a030f4beb8380463e58ea0126837",
-          "subject": "feat: add desktop quick ask and consolidate agent tools",
-          "summary": "Adds Desktop menu bar, Quick Ask panel with global shortcut, and open-at-login settings; consolidates get_context and codebase_search into read_file and search_files, and enables hosted web search and routine Git approvals.",
-          "breaking": false
-        },
-        {
-          "sha": "b734802fdcd39b5a7e43bfba0a9ea9acb27df039",
-          "subject": "fix(browser-gateway): restore full tool details in desktop and ask agent",
-          "summary": "Desktop and Ask Agent now show full expandable tool and skill details (inputs, outputs, media) loaded on demand via a new transcript block-detail protocol operation.",
-          "breaking": false
-        },
-        {
-          "sha": "bd164d435aab87b0e245084fe7c6991e4075fe21",
-          "subject": "feat: add desktop MCP management and harden agent recovery",
-          "summary": "Desktop gains an MCP manager window with connection, OAuth and approval controls; agent recovery, diagnostics, and command review evidence improve, and the SDK adds human question-answer binding types.",
-          "breaking": false
-        }
-      ]
+      "notes": []
     }
   },
   "decisions": {
@@ -747,6 +726,14 @@
       "bump": "minor",
       "breakingUnits": [],
       "summary": "The installer can now install the VS Code, Desktop, or CLI surface with checksum verification, version pinning and dry-run, and an SDK installer vendors verified archives; release planning is automated.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "87905d132b613e747f0e45af24c73d1624e6878d": {
+      "bump": "none",
+      "breakingUnits": [],
+      "summary": "Release housekeeping that updates changelogs, the lockfile, release plan metadata and bundled documentation references without changing runtime behaviour.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
