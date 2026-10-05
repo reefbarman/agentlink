@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.4.0 — 2026-10-05
+
+- Dev-mode send_feedback gains optional category, suspected cause, and suggested change fields for bugs, improvements, and feature requests, with sidebar display and search, plus updated agent guidance and an additive FeedbackEntry protocol type.
+
 ## 0.3.0 — 2026-10-04
 
 - Adds `createAgentClient` for request-scoped text, text streaming, typed JSON, and bounded tool workflows without session or lease storage, plus generic OpenAI-compatible, standalone OpenAI Responses API-key, and standalone Codex OAuth provider factories. The Responses backends preserve authoritative completion/refusal/truncation evidence, map supported native JSON Schema to `text.format`, enforce bounded output/retry controls, keep credentials request-scoped, and reject unsupported endpoint/model options before dispatch.

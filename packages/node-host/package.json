@@ -1,6 +1,6 @@
 {
   "name": "@agentlink/node-host",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Default Node.js host capabilities for AgentLink core",
   "license": "MIT",
@@ -35,8 +35,8 @@
   "dependencies": {
     "@types/proxy-from-env": "1.0.4",
     "@types/ws": "8.18.1",
-    "@agentlink/core": "0.3.0",
-    "@agentlink/protocol": "0.3.0",
+    "@agentlink/core": "0.4.0",
+    "@agentlink/protocol": "0.4.0",
     "@napi-rs/keyring": "2.0.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "https-proxy-agent": "7.0.6",
