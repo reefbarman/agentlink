@@ -456,6 +456,7 @@ function apply(options) {
     }
   }
   removePublishedIntents(record);
+  writeJson(LAST_PLAN, record);
   execFileSync(
     "npm",
     [
@@ -471,7 +472,9 @@ function apply(options) {
     cwd: ROOT,
     stdio: "inherit",
   });
-  writeJson(LAST_PLAN, record);
+  // JSON.stringify output is not Oxfmt-clean (e.g. short arrays), and the
+  // release commit must pass `npm run lint` in every package job.
+  execFileSync("npm", ["run", "fmt"], { cwd: ROOT, stdio: "inherit" });
   console.log(
     `Prepared ${releasing.map((id) => record.units[id].tag).join(", ")}`,
   );

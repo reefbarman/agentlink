@@ -7,9 +7,7 @@
     "fallbackModel": "openai/gpt-6.1-sol",
     "omitted": []
   },
-  "overrides": [
-    "ff96d6c37f54a030f4beb8380463e58ea0126837"
-  ],
+  "overrides": ["ff96d6c37f54a030f4beb8380463e58ea0126837"],
   "units": {
     "vscode": {
       "published": "1.23.0",
@@ -675,9 +673,7 @@
     },
     "ff96d6c37f54a030f4beb8380463e58ea0126837": {
       "bump": "minor",
-      "breakingUnits": [
-        "vscode"
-      ],
+      "breakingUnits": ["vscode"],
       "summary": "Adds Desktop menu bar, Quick Ask panel with global shortcut, and open-at-login settings; consolidates get_context and codebase_search into read_file and search_files, and enables hosted web search and routine Git approvals.",
       "coverage": "partial",
       "model": "anthropic/claude-sonnet-5.5",
