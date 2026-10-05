@@ -1,0 +1,61 @@
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 177
+resources/builtin-skills/documentation/references/mcp.md
+  h_e08a86bb3a33a2 13-14,86,91
+src/browser-gateway/helper/StandaloneAskAgentMcpRuntime.test.ts
+  h_e08a86bb3a33a2 769-825
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+src/shared/ui/McpManagerPanel.tsx
+  h_e08a86bb3a33a2 1484-1485,1487,1510,1648-1663,1672-1674
+  h_e08a86bb3a33a2 1508-1509,1511,1664-1671
+src/agent/toolAdapter.ts
+  h_e08a86bb3a33a2 4621-4654
+src/browser-gateway/helper/StandaloneAskAgentMcpRuntime.ts
+  h_e08a86bb3a33a2 851-860,876,879,950-959,964,966
+  h_e08a86bb3a33a2 875
+src/agent/mcpToolDisclosure.test.ts
+  h_e08a86bb3a33a2 46-71
+src/shared/ui/McpManagerPanel.test.tsx
+  h_e08a86bb3a33a2 175-215
+src/agent/mcpToolDisclosure.ts
+  h_e08a86bb3a33a2 24,43,136-138,157,258-267
+  h_e08a86bb3a33a2 268-269
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 7031-7099
+packages/node-host/src/McpClientHub.ts
+  h_e08a86bb3a33a2 55,1304-1326,1333-1337,1358-1363,1768-1770,2063-2065,2092-2093
+  h_e08a86bb3a33a2 1327,1338,1364,1754,1756,1759,1771,2066,2085,2089,2094
+packages/node-host/src/mcpStartupDiagnostic.test.ts
+  h_e08a86bb3a33a2 1-89
+src/agent/AgentSessionManager.ts
+  h_e08a86bb3a33a2 2363,4900,4903-4904,4919
+  h_e08a86bb3a33a2 4901-4902,4905-4906
+src/shared/mcpToolDefinitions.ts
+  h_e08a86bb3a33a2 32
+src/agent/AgentSessionManager.test.ts
+  h_e08a86bb3a33a2 3717-3754
+src/agent/McpClientHub.test.ts
+  h_e08a86bb3a33a2 4,52,72,119,409-417,437-442,451-482,486-487,503-505,507-511,747-751,753-781
+  h_e08a86bb3a33a2 752,782-783
+packages/node-host/src/mcpStartupDiagnostic.ts
+  h_e08a86bb3a33a2 1-68
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 682-684,689-691,696-698,710-712,727-729,735-737,743-745,759-761
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "65698242fc4b0c2f8ac04889f206e1314ff77555",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
