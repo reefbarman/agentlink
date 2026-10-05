@@ -1,0 +1,43 @@
+.github/workflows/release-coordinator.yml
+  h_e08a86bb3a33a2 149-152,154
+  s_6947fe7b3158c5::t_0230cc2f938ce2 153
+scripts/release-coordinator.mjs
+  h_e08a86bb3a33a2 348-350,359,446,448-450
+  s_3f2247559aa582::t_35ebae8cca178a 447,451
+package.json
+  h_e08a86bb3a33a2 1243-1244
+package-lock.json
+  s_6947fe7b3158c5::t_b23bbc985e6671 61-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dbccec9a9477e6a7ea15fba1ddeafe3cc7082677",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_3f2247559aa582": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2d2116d7-763c-4cb4-b5f6-b17c6e078d19",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_6947fe7b3158c5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ccaaf43-40e6-4fa1-a7f9-f63e12541f0f",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
