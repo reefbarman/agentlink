@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "A coding-agent harness for VS Code with reviewable diffs, visible execution, and browser supervision",
-  "version": "1.24.0",
+  "version": "1.25.0",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -1250,8 +1250,8 @@
   },
   "devDependencies": {
     "@electron/osx-sign": "1.3.3",
-    "@agentlink/cli": "0.3.0",
-    "@agentlink/desktop": "0.3.0",
+    "@agentlink/cli": "0.4.0",
+    "@agentlink/desktop": "0.4.0",
     "@anthropic-ai/sandbox-runtime": "0.0.65",
     "@testing-library/preact": "^3.2.4",
     "@types/bmp-js": "^0.1.2",

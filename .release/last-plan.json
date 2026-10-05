@@ -1,508 +1,82 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "dbccec9a9477e6a7ea15fba1ddeafe3cc7082677",
-  "createdAt": "2026-10-05T00:20:54.559Z",
+  "sourceSha": "c851189c2ccd5625ba26a9acd796d38314e112bf",
+  "createdAt": "2026-10-05T02:01:52.811Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
     "omitted": []
   },
-  "overrides": ["ff96d6c37f54a030f4beb8380463e58ea0126837"],
+  "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.23.0",
-      "baselineRef": "v1.23.0",
+      "published": "1.24.0",
+      "baselineRef": "v1.24.0",
       "reserved": "1.24.0",
-      "commits": [
-        "4a4089bf0108916c786f1b1ed054c9198058b6d1",
-        "ead08dfbc521f007677f97b420caf0a1eb107a70",
-        "8f17a1d123ea4e50e7a79cf3293fca69f52029d3",
-        "a08a5717c5f50cb06fe801cdb44c4bc623bdd8a3",
-        "38b1f23c2e6fe697020eac0c54323af23fb5b279",
-        "882fb20bda01e6246c7f808bfe227feb3977cc92",
-        "966dbb7e885141b47b48bf2377660dfb52ead891",
-        "e22f09ef796298c73ee6b63d14081a1a4a175af5",
-        "566b16ab4154e6a495bb0abd511f56f80269584d",
-        "2e278e9fa96743d9daeaee08f2a630ecf35746bf",
-        "12059d7266fa0b40cb8a32caf9763130c4878044",
-        "2b3a6b77664a28359908c5f03ccb56d9b154a94a",
-        "c43f3fc8db3d64c4497cd471b7dfc3729af6615b",
-        "f527af45b15137445f9c4eea44cca8a5a66ea959",
-        "dc81628630264f24d37691e61374234fcd788a7a",
-        "085b1ee1d33ebb86342c146208c3e33b737abde0",
-        "ff96d6c37f54a030f4beb8380463e58ea0126837",
-        "6ed1d6a117c379f25d930d89a1ba0fa4755b1a0f",
-        "df5bdb70ce637a1d9b2ef988743319f828d82a98",
-        "b734802fdcd39b5a7e43bfba0a9ea9acb27df039",
-        "bd164d435aab87b0e245084fe7c6991e4075fe21",
-        "fe11de51aafd4d04dd7275d5e87511e1ebd00284",
-        "783049f70d58c35631aeb967be4b4799d4bb6889",
-        "05094eea79d9684f75a93b00045254fd3ca63d64",
-        "d0615aa75af9959a4ab80ac962b4035895725c6a",
-        "a5e3d2859074dd901d28f10bad8a1df8b955eacc",
-        "87905d132b613e747f0e45af24c73d1624e6878d"
-      ],
+      "commits": ["c851189c2ccd5625ba26a9acd796d38314e112bf"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "1.24.0",
+      "version": "1.25.0",
       "effectiveBump": "minor",
       "breaking": false,
-      "usedReservation": true,
+      "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.24.0",
+      "tag": "v1.25.0",
       "notes": [
         {
-          "sha": "4a4089bf0108916c786f1b1ed054c9198058b6d1",
-          "subject": "feat(tools): capture observed impact in feedback reports",
-          "summary": "Development-build send_feedback reports now require an observed_impact field and accept optional workaround, recurrence and improvement-signal context, which get_feedback returns.",
-          "breaking": false
-        },
-        {
-          "sha": "ead08dfbc521f007677f97b420caf0a1eb107a70",
-          "subject": "fix(tools): redact credential output and preserve final newlines",
-          "summary": "Command output now redacts values on environment-style TOKEN/SECRET/API_KEY/PASSWORD lines, and cleaned output keeps leading whitespace and final newlines.",
-          "breaking": false
-        },
-        {
-          "sha": "8f17a1d123ea4e50e7a79cf3293fca69f52029d3",
-          "subject": "fix(tools): repair branch queries and compose recovery",
-          "summary": "Read-only git branch queries are recognised, and compose gives clearer path-approval recovery, newline-split list_files guidance and syntax error locations.",
-          "breaking": false
-        },
-        {
-          "sha": "a08a5717c5f50cb06fe801cdb44c4bc623bdd8a3",
-          "subject": "fix(webview): reset transcript scroll state when switching chat tabs",
-          "summary": "Switching chat tabs now opens the transcript at the latest message instead of keeping the previous scroll position.",
-          "breaking": false
-        },
-        {
-          "sha": "38b1f23c2e6fe697020eac0c54323af23fb5b279",
-          "subject": "fix(webview): group successful skill loads with tool calls",
-          "summary": "Successful skill loads now group with adjacent tool calls in the Tools summary and are counted as loaded skills.",
-          "breaking": false
-        },
-        {
-          "sha": "882fb20bda01e6246c7f808bfe227feb3977cc92",
-          "subject": "fix(tools): redact search secrets and bound read results",
-          "summary": "search_files and semantic search redact secrets in structured config files, excerpts are length-bounded, and list_files honours an explicit root inside node_modules.",
-          "breaking": false
-        },
-        {
-          "sha": "966dbb7e885141b47b48bf2377660dfb52ead891",
-          "subject": "fix(codex): restore Responses Lite thinking summaries",
-          "summary": "Codex Responses Lite requests again return detailed reasoning summaries, so thinking blocks appear for GPT-6 models.",
-          "breaking": false
-        },
-        {
-          "sha": "e22f09ef796298c73ee6b63d14081a1a4a175af5",
-          "subject": "fix(tools): improve git recovery and diagnostic attribution",
-          "summary": "Edit diagnostics are scoped to the edited file, Git metadata recovery covers more Git-only command chains, and GitHub TLS failure recovery is recognised in mixed commands.",
-          "breaking": false
-        },
-        {
-          "sha": "566b16ab4154e6a495bb0abd511f56f80269584d",
-          "subject": "fix(agent): inline todo_write item schema and name missing fields",
-          "summary": "The todo_write schema is inlined so required item fields stay visible to providers, and ignored items now report which fields were missing.",
-          "breaking": false
-        },
-        {
-          "sha": "2e278e9fa96743d9daeaee08f2a630ecf35746bf",
-          "subject": "fix(tools): preserve save failures and classify page and pipe results",
-          "summary": "Save failures now report the exception message with redaction, Codex page-access 'Internal Error' responses are treated as failures, and substitution pipelines no longer trip output-filter checks.",
-          "breaking": false
-        },
-        {
-          "sha": "12059d7266fa0b40cb8a32caf9763130c4878044",
-          "subject": "fix(tools): clarify proposal failures and edit recovery",
-          "summary": "Memory proposal review-open failures return structured recovery evidence, and format-on-save conflict hints and apply_diff marker guidance are clearer.",
-          "breaking": false
-        },
-        {
-          "sha": "2b3a6b77664a28359908c5f03ccb56d9b154a94a",
-          "subject": "fix(tools): preserve command failure evidence and recovery",
-          "summary": "Sandbox helper failures return structured evidence with terminal and command IDs, Git lock recovery is improved, and approval audit events are recorded separately.",
-          "breaking": false
-        },
-        {
-          "sha": "c43f3fc8db3d64c4497cd471b7dfc3729af6615b",
-          "subject": "fix(tools): preserve command input and improve sandbox recovery",
-          "summary": "Command recovery improves: protected-root drift and Docker socket guidance, host-HOME handling for mise/asdf, curl connect-timeout diagnosis, and running command input files are preserved.",
-          "breaking": false
-        },
-        {
-          "sha": "f527af45b15137445f9c4eea44cca8a5a66ea959",
-          "subject": "fix(webview): add copy action to transcript image preview",
-          "summary": "The transcript image preview now has a Copy image button that writes a PNG to the clipboard where supported.",
-          "breaking": false
-        },
-        {
-          "sha": "dc81628630264f24d37691e61374234fcd788a7a",
-          "subject": "fix(webview): make context-menu Copy copy right-clicked images",
-          "summary": "Choosing Copy in the context menu after right-clicking a transcript image now copies the image to the clipboard.",
-          "breaking": false
-        },
-        {
-          "sha": "085b1ee1d33ebb86342c146208c3e33b737abde0",
-          "subject": "fix(core): forward tool-result images on OpenAI-compatible providers",
-          "summary": "Images returned by tools are now forwarded to image-capable OpenAI-compatible models in the following user message instead of being replaced by an omission placeholder.",
-          "breaking": false
-        },
-        {
-          "sha": "ff96d6c37f54a030f4beb8380463e58ea0126837",
-          "subject": "feat: add desktop quick ask and consolidate agent tools",
-          "summary": "Adds Desktop menu bar, Quick Ask panel with global shortcut, and open-at-login settings; consolidates get_context and codebase_search into read_file and search_files, and enables hosted web search and routine Git approvals.",
-          "breaking": false
-        },
-        {
-          "sha": "6ed1d6a117c379f25d930d89a1ba0fa4755b1a0f",
-          "subject": "feat(tools): support team skill targets and context symbol suppression",
-          "summary": "Adds a skill_directory option so propose_memory can target team skills in .agents/skills, and include_symbols=false now works in both read_file views.",
-          "breaking": false
-        },
-        {
-          "sha": "df5bdb70ce637a1d9b2ef988743319f828d82a98",
-          "subject": "fix(tools): harden edit recovery, context previews, and command reporting",
-          "summary": "Hardens edit save-failure recovery and native command launch confirmation, bounds read_file context previews with character-offset paging, and improves compound-command network failure guidance.",
-          "breaking": false
-        },
-        {
-          "sha": "b734802fdcd39b5a7e43bfba0a9ea9acb27df039",
-          "subject": "fix(browser-gateway): restore full tool details in desktop and ask agent",
-          "summary": "Desktop and Ask Agent now show full expandable tool and skill details (inputs, outputs, media) loaded on demand via a new transcript block-detail protocol operation.",
-          "breaking": false
-        },
-        {
-          "sha": "bd164d435aab87b0e245084fe7c6991e4075fe21",
-          "subject": "feat: add desktop MCP management and harden agent recovery",
-          "summary": "Desktop gains an MCP manager window with connection, OAuth and approval controls; agent recovery, diagnostics, and command review evidence improve, and the SDK adds human question-answer binding types.",
-          "breaking": false
-        },
-        {
-          "sha": "fe11de51aafd4d04dd7275d5e87511e1ebd00284",
-          "subject": "fix(tools): resolve stale terminal cwd and patch preflight feedback",
-          "summary": "Native terminal commands now recover from stale working directories, apply_diff handles @@ headers inside SEARCH/REPLACE blocks, and Git preflight recognizes more safe staging patterns.",
-          "breaking": false
-        },
-        {
-          "sha": "783049f70d58c35631aeb967be4b4799d4bb6889",
-          "subject": "feat(chat): add transcript jump buttons for previous prompt and latest output",
-          "summary": "Chat transcripts now show floating buttons to jump to the previous user prompt or back to the latest output.",
-          "breaking": false
-        },
-        {
-          "sha": "05094eea79d9684f75a93b00045254fd3ca63d64",
-          "subject": "feat(approvals): bind Guardian approvals to the human input they reviewed",
-          "summary": "Guardian approvals now account for queued and newly entered human input, re-review when input arrives mid-review, and block stale commands at terminal dispatch with an authorization_stale result.",
-          "breaking": false
-        },
-        {
-          "sha": "d0615aa75af9959a4ab80ac962b4035895725c6a",
-          "subject": "feat(approvals): keep a private per-session record of verified human decisions",
-          "summary": "Each session keeps a private record of verified human instructions and answers, so earlier restrictions still reach Guardian after condensation, with rewind pruning and a dedicated review budget.",
-          "breaking": false
-        },
-        {
-          "sha": "a5e3d2859074dd901d28f10bad8a1df8b955eacc",
-          "subject": "feat(release): plan semantic releases on main and install every surface",
-          "summary": "The installer can now install the VS Code, Desktop, or CLI surface with checksum verification, version pinning and dry-run, and an SDK installer vendors verified archives; release planning is automated.",
-          "breaking": false
-        },
-        {
-          "sha": "87905d132b613e747f0e45af24c73d1624e6878d",
-          "subject": "chore(release): v1.24.0, desktop-v0.3.0, cli-v0.3.0, sdk-v0.3.0",
-          "summary": "Release housekeeping that updates changelogs, the lockfile, release plan metadata and bundled documentation references without changing runtime behaviour.",
+          "sha": "c851189c2ccd5625ba26a9acd796d38314e112bf",
+          "subject": "feat(updates): notify users of compatible app releases",
+          "summary": "Adds update notifications for VS Code, Desktop and CLI: a metadata-only GitHub release check with indicators, manual check commands, an automatic-check opt-out, and a CLI `updates` command and `/updates` chat command.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.2.0",
-      "baselineRef": "desktop-v0.2.0",
+      "published": "0.3.0",
+      "baselineRef": "desktop-v0.3.0",
       "reserved": "0.3.0",
-      "commits": [
-        "4a4089bf0108916c786f1b1ed054c9198058b6d1",
-        "ead08dfbc521f007677f97b420caf0a1eb107a70",
-        "8f17a1d123ea4e50e7a79cf3293fca69f52029d3",
-        "a08a5717c5f50cb06fe801cdb44c4bc623bdd8a3",
-        "38b1f23c2e6fe697020eac0c54323af23fb5b279",
-        "882fb20bda01e6246c7f808bfe227feb3977cc92",
-        "966dbb7e885141b47b48bf2377660dfb52ead891",
-        "e22f09ef796298c73ee6b63d14081a1a4a175af5",
-        "566b16ab4154e6a495bb0abd511f56f80269584d",
-        "2e278e9fa96743d9daeaee08f2a630ecf35746bf",
-        "12059d7266fa0b40cb8a32caf9763130c4878044",
-        "2b3a6b77664a28359908c5f03ccb56d9b154a94a",
-        "c43f3fc8db3d64c4497cd471b7dfc3729af6615b",
-        "f527af45b15137445f9c4eea44cca8a5a66ea959",
-        "dc81628630264f24d37691e61374234fcd788a7a",
-        "085b1ee1d33ebb86342c146208c3e33b737abde0",
-        "ff96d6c37f54a030f4beb8380463e58ea0126837",
-        "6ed1d6a117c379f25d930d89a1ba0fa4755b1a0f",
-        "df5bdb70ce637a1d9b2ef988743319f828d82a98",
-        "b734802fdcd39b5a7e43bfba0a9ea9acb27df039",
-        "bd164d435aab87b0e245084fe7c6991e4075fe21",
-        "fe11de51aafd4d04dd7275d5e87511e1ebd00284",
-        "783049f70d58c35631aeb967be4b4799d4bb6889",
-        "05094eea79d9684f75a93b00045254fd3ca63d64",
-        "d0615aa75af9959a4ab80ac962b4035895725c6a",
-        "a5e3d2859074dd901d28f10bad8a1df8b955eacc",
-        "87905d132b613e747f0e45af24c73d1624e6878d"
-      ],
+      "commits": ["c851189c2ccd5625ba26a9acd796d38314e112bf"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "effectiveBump": "minor",
       "breaking": false,
-      "usedReservation": true,
+      "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.3.0",
+      "tag": "desktop-v0.4.0",
       "notes": [
         {
-          "sha": "4a4089bf0108916c786f1b1ed054c9198058b6d1",
-          "subject": "feat(tools): capture observed impact in feedback reports",
-          "summary": "Development-build send_feedback reports now require an observed_impact field and accept optional workaround, recurrence and improvement-signal context, which get_feedback returns.",
-          "breaking": false
-        },
-        {
-          "sha": "ead08dfbc521f007677f97b420caf0a1eb107a70",
-          "subject": "fix(tools): redact credential output and preserve final newlines",
-          "summary": "Command output now redacts values on environment-style TOKEN/SECRET/API_KEY/PASSWORD lines, and cleaned output keeps leading whitespace and final newlines.",
-          "breaking": false
-        },
-        {
-          "sha": "8f17a1d123ea4e50e7a79cf3293fca69f52029d3",
-          "subject": "fix(tools): repair branch queries and compose recovery",
-          "summary": "Read-only git branch queries are recognised, and compose gives clearer path-approval recovery, newline-split list_files guidance and syntax error locations.",
-          "breaking": false
-        },
-        {
-          "sha": "a08a5717c5f50cb06fe801cdb44c4bc623bdd8a3",
-          "subject": "fix(webview): reset transcript scroll state when switching chat tabs",
-          "summary": "Switching chat tabs now opens the transcript at the latest message instead of keeping the previous scroll position.",
-          "breaking": false
-        },
-        {
-          "sha": "38b1f23c2e6fe697020eac0c54323af23fb5b279",
-          "subject": "fix(webview): group successful skill loads with tool calls",
-          "summary": "Successful skill loads now group with adjacent tool calls in the Tools summary and are counted as loaded skills.",
-          "breaking": false
-        },
-        {
-          "sha": "882fb20bda01e6246c7f808bfe227feb3977cc92",
-          "subject": "fix(tools): redact search secrets and bound read results",
-          "summary": "search_files and semantic search redact secrets in structured config files, excerpts are length-bounded, and list_files honours an explicit root inside node_modules.",
-          "breaking": false
-        },
-        {
-          "sha": "966dbb7e885141b47b48bf2377660dfb52ead891",
-          "subject": "fix(codex): restore Responses Lite thinking summaries",
-          "summary": "Codex Responses Lite requests again return detailed reasoning summaries, so thinking blocks appear for GPT-6 models.",
-          "breaking": false
-        },
-        {
-          "sha": "e22f09ef796298c73ee6b63d14081a1a4a175af5",
-          "subject": "fix(tools): improve git recovery and diagnostic attribution",
-          "summary": "Edit diagnostics are scoped to the edited file, Git metadata recovery covers more Git-only command chains, and GitHub TLS failure recovery is recognised in mixed commands.",
-          "breaking": false
-        },
-        {
-          "sha": "566b16ab4154e6a495bb0abd511f56f80269584d",
-          "subject": "fix(agent): inline todo_write item schema and name missing fields",
-          "summary": "The todo_write schema is inlined so required item fields stay visible to providers, and ignored items now report which fields were missing.",
-          "breaking": false
-        },
-        {
-          "sha": "2e278e9fa96743d9daeaee08f2a630ecf35746bf",
-          "subject": "fix(tools): preserve save failures and classify page and pipe results",
-          "summary": "Save failures now report the exception message with redaction, Codex page-access 'Internal Error' responses are treated as failures, and substitution pipelines no longer trip output-filter checks.",
-          "breaking": false
-        },
-        {
-          "sha": "12059d7266fa0b40cb8a32caf9763130c4878044",
-          "subject": "fix(tools): clarify proposal failures and edit recovery",
-          "summary": "Memory proposal review-open failures return structured recovery evidence, and format-on-save conflict hints and apply_diff marker guidance are clearer.",
-          "breaking": false
-        },
-        {
-          "sha": "2b3a6b77664a28359908c5f03ccb56d9b154a94a",
-          "subject": "fix(tools): preserve command failure evidence and recovery",
-          "summary": "Sandbox helper failures return structured evidence with terminal and command IDs, Git lock recovery is improved, and approval audit events are recorded separately.",
-          "breaking": false
-        },
-        {
-          "sha": "c43f3fc8db3d64c4497cd471b7dfc3729af6615b",
-          "subject": "fix(tools): preserve command input and improve sandbox recovery",
-          "summary": "Command recovery improves: protected-root drift and Docker socket guidance, host-HOME handling for mise/asdf, curl connect-timeout diagnosis, and running command input files are preserved.",
-          "breaking": false
-        },
-        {
-          "sha": "f527af45b15137445f9c4eea44cca8a5a66ea959",
-          "subject": "fix(webview): add copy action to transcript image preview",
-          "summary": "The transcript image preview now has a Copy image button that writes a PNG to the clipboard where supported.",
-          "breaking": false
-        },
-        {
-          "sha": "dc81628630264f24d37691e61374234fcd788a7a",
-          "subject": "fix(webview): make context-menu Copy copy right-clicked images",
-          "summary": "Choosing Copy in the context menu after right-clicking a transcript image now copies the image to the clipboard.",
-          "breaking": false
-        },
-        {
-          "sha": "085b1ee1d33ebb86342c146208c3e33b737abde0",
-          "subject": "fix(core): forward tool-result images on OpenAI-compatible providers",
-          "summary": "Images returned by tools are now forwarded to image-capable OpenAI-compatible models in the following user message instead of being replaced by an omission placeholder.",
-          "breaking": false
-        },
-        {
-          "sha": "ff96d6c37f54a030f4beb8380463e58ea0126837",
-          "subject": "feat: add desktop quick ask and consolidate agent tools",
-          "summary": "Adds Desktop menu bar, Quick Ask panel with global shortcut, and open-at-login settings; consolidates get_context and codebase_search into read_file and search_files, and enables hosted web search and routine Git approvals.",
-          "breaking": false
-        },
-        {
-          "sha": "6ed1d6a117c379f25d930d89a1ba0fa4755b1a0f",
-          "subject": "feat(tools): support team skill targets and context symbol suppression",
-          "summary": "Adds a skill_directory option so propose_memory can target team skills in .agents/skills, and include_symbols=false now works in both read_file views.",
-          "breaking": false
-        },
-        {
-          "sha": "df5bdb70ce637a1d9b2ef988743319f828d82a98",
-          "subject": "fix(tools): harden edit recovery, context previews, and command reporting",
-          "summary": "Hardens edit save-failure recovery and native command launch confirmation, bounds read_file context previews with character-offset paging, and improves compound-command network failure guidance.",
-          "breaking": false
-        },
-        {
-          "sha": "b734802fdcd39b5a7e43bfba0a9ea9acb27df039",
-          "subject": "fix(browser-gateway): restore full tool details in desktop and ask agent",
-          "summary": "Desktop and Ask Agent now show full expandable tool and skill details (inputs, outputs, media) loaded on demand via a new transcript block-detail protocol operation.",
-          "breaking": false
-        },
-        {
-          "sha": "bd164d435aab87b0e245084fe7c6991e4075fe21",
-          "subject": "feat: add desktop MCP management and harden agent recovery",
-          "summary": "Desktop gains an MCP manager window with connection, OAuth and approval controls; agent recovery, diagnostics, and command review evidence improve, and the SDK adds human question-answer binding types.",
-          "breaking": false
-        },
-        {
-          "sha": "fe11de51aafd4d04dd7275d5e87511e1ebd00284",
-          "subject": "fix(tools): resolve stale terminal cwd and patch preflight feedback",
-          "summary": "Native terminal commands now recover from stale working directories, apply_diff handles @@ headers inside SEARCH/REPLACE blocks, and Git preflight recognizes more safe staging patterns.",
-          "breaking": false
-        },
-        {
-          "sha": "783049f70d58c35631aeb967be4b4799d4bb6889",
-          "subject": "feat(chat): add transcript jump buttons for previous prompt and latest output",
-          "summary": "Chat transcripts now show floating buttons to jump to the previous user prompt or back to the latest output.",
-          "breaking": false
-        },
-        {
-          "sha": "05094eea79d9684f75a93b00045254fd3ca63d64",
-          "subject": "feat(approvals): bind Guardian approvals to the human input they reviewed",
-          "summary": "Guardian approvals now account for queued and newly entered human input, re-review when input arrives mid-review, and block stale commands at terminal dispatch with an authorization_stale result.",
-          "breaking": false
-        },
-        {
-          "sha": "d0615aa75af9959a4ab80ac962b4035895725c6a",
-          "subject": "feat(approvals): keep a private per-session record of verified human decisions",
-          "summary": "Each session keeps a private record of verified human instructions and answers, so earlier restrictions still reach Guardian after condensation, with rewind pruning and a dedicated review budget.",
-          "breaking": false
-        },
-        {
-          "sha": "a5e3d2859074dd901d28f10bad8a1df8b955eacc",
-          "subject": "feat(release): plan semantic releases on main and install every surface",
-          "summary": "The installer can now install the VS Code, Desktop, or CLI surface with checksum verification, version pinning and dry-run, and an SDK installer vendors verified archives; release planning is automated.",
-          "breaking": false
-        },
-        {
-          "sha": "87905d132b613e747f0e45af24c73d1624e6878d",
-          "subject": "chore(release): v1.24.0, desktop-v0.3.0, cli-v0.3.0, sdk-v0.3.0",
-          "summary": "Release housekeeping that updates changelogs, the lockfile, release plan metadata and bundled documentation references without changing runtime behaviour.",
+          "sha": "c851189c2ccd5625ba26a9acd796d38314e112bf",
+          "subject": "feat(updates): notify users of compatible app releases",
+          "summary": "Adds update notifications for VS Code, Desktop and CLI: a metadata-only GitHub release check with indicators, manual check commands, an automatic-check opt-out, and a CLI `updates` command and `/updates` chat command.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.2.0",
-      "baselineRef": "cli-v0.2.0",
+      "published": "0.3.0",
+      "baselineRef": "cli-v0.3.0",
       "reserved": "0.3.0",
-      "commits": [
-        "966dbb7e885141b47b48bf2377660dfb52ead891",
-        "2b3a6b77664a28359908c5f03ccb56d9b154a94a",
-        "c43f3fc8db3d64c4497cd471b7dfc3729af6615b",
-        "085b1ee1d33ebb86342c146208c3e33b737abde0",
-        "ff96d6c37f54a030f4beb8380463e58ea0126837",
-        "b734802fdcd39b5a7e43bfba0a9ea9acb27df039",
-        "bd164d435aab87b0e245084fe7c6991e4075fe21",
-        "a5e3d2859074dd901d28f10bad8a1df8b955eacc",
-        "87905d132b613e747f0e45af24c73d1624e6878d"
-      ],
+      "commits": ["c851189c2ccd5625ba26a9acd796d38314e112bf"],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "effectiveBump": "minor",
       "breaking": false,
-      "usedReservation": true,
+      "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.3.0",
+      "tag": "cli-v0.4.0",
       "notes": [
         {
-          "sha": "966dbb7e885141b47b48bf2377660dfb52ead891",
-          "subject": "fix(codex): restore Responses Lite thinking summaries",
-          "summary": "Codex Responses Lite requests again return detailed reasoning summaries, so thinking blocks appear for GPT-6 models.",
-          "breaking": false
-        },
-        {
-          "sha": "2b3a6b77664a28359908c5f03ccb56d9b154a94a",
-          "subject": "fix(tools): preserve command failure evidence and recovery",
-          "summary": "Sandbox helper failures return structured evidence with terminal and command IDs, Git lock recovery is improved, and approval audit events are recorded separately.",
-          "breaking": false
-        },
-        {
-          "sha": "c43f3fc8db3d64c4497cd471b7dfc3729af6615b",
-          "subject": "fix(tools): preserve command input and improve sandbox recovery",
-          "summary": "Command recovery improves: protected-root drift and Docker socket guidance, host-HOME handling for mise/asdf, curl connect-timeout diagnosis, and running command input files are preserved.",
-          "breaking": false
-        },
-        {
-          "sha": "085b1ee1d33ebb86342c146208c3e33b737abde0",
-          "subject": "fix(core): forward tool-result images on OpenAI-compatible providers",
-          "summary": "Images returned by tools are now forwarded to image-capable OpenAI-compatible models in the following user message instead of being replaced by an omission placeholder.",
-          "breaking": false
-        },
-        {
-          "sha": "ff96d6c37f54a030f4beb8380463e58ea0126837",
-          "subject": "feat: add desktop quick ask and consolidate agent tools",
-          "summary": "Adds Desktop menu bar, Quick Ask panel with global shortcut, and open-at-login settings; consolidates get_context and codebase_search into read_file and search_files, and enables hosted web search and routine Git approvals.",
-          "breaking": false
-        },
-        {
-          "sha": "b734802fdcd39b5a7e43bfba0a9ea9acb27df039",
-          "subject": "fix(browser-gateway): restore full tool details in desktop and ask agent",
-          "summary": "Desktop and Ask Agent now show full expandable tool and skill details (inputs, outputs, media) loaded on demand via a new transcript block-detail protocol operation.",
-          "breaking": false
-        },
-        {
-          "sha": "bd164d435aab87b0e245084fe7c6991e4075fe21",
-          "subject": "feat: add desktop MCP management and harden agent recovery",
-          "summary": "Desktop gains an MCP manager window with connection, OAuth and approval controls; agent recovery, diagnostics, and command review evidence improve, and the SDK adds human question-answer binding types.",
-          "breaking": false
-        },
-        {
-          "sha": "a5e3d2859074dd901d28f10bad8a1df8b955eacc",
-          "subject": "feat(release): plan semantic releases on main and install every surface",
-          "summary": "The installer can now install the VS Code, Desktop, or CLI surface with checksum verification, version pinning and dry-run, and an SDK installer vendors verified archives; release planning is automated.",
-          "breaking": false
-        },
-        {
-          "sha": "87905d132b613e747f0e45af24c73d1624e6878d",
-          "subject": "chore(release): v1.24.0, desktop-v0.3.0, cli-v0.3.0, sdk-v0.3.0",
-          "summary": "Release housekeeping that updates changelogs, the lockfile, release plan metadata and bundled documentation references without changing runtime behaviour.",
+          "sha": "c851189c2ccd5625ba26a9acd796d38314e112bf",
+          "subject": "feat(updates): notify users of compatible app releases",
+          "summary": "Adds update notifications for VS Code, Desktop and CLI: a metadata-only GitHub release check with indicators, manual check commands, an automatic-check opt-out, and a CLI `updates` command and `/updates` chat command.",
           "breaking": false
         }
       ]
@@ -517,224 +91,15 @@
       "bump": "none",
       "status": "skip",
       "reason": "no shipped changes",
-      "intentFile": ".release/intents/sdk.json",
       "notes": []
     }
   },
   "decisions": {
-    "4a4089bf0108916c786f1b1ed054c9198058b6d1": {
+    "c851189c2ccd5625ba26a9acd796d38314e112bf": {
       "bump": "minor",
       "breakingUnits": [],
-      "summary": "Development-build send_feedback reports now require an observed_impact field and accept optional workaround, recurrence and improvement-signal context, which get_feedback returns.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "ead08dfbc521f007677f97b420caf0a1eb107a70": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Command output now redacts values on environment-style TOKEN/SECRET/API_KEY/PASSWORD lines, and cleaned output keeps leading whitespace and final newlines.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "8f17a1d123ea4e50e7a79cf3293fca69f52029d3": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Read-only git branch queries are recognised, and compose gives clearer path-approval recovery, newline-split list_files guidance and syntax error locations.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "a08a5717c5f50cb06fe801cdb44c4bc623bdd8a3": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Switching chat tabs now opens the transcript at the latest message instead of keeping the previous scroll position.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "38b1f23c2e6fe697020eac0c54323af23fb5b279": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Successful skill loads now group with adjacent tool calls in the Tools summary and are counted as loaded skills.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "882fb20bda01e6246c7f808bfe227feb3977cc92": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "search_files and semantic search redact secrets in structured config files, excerpts are length-bounded, and list_files honours an explicit root inside node_modules.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "966dbb7e885141b47b48bf2377660dfb52ead891": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Codex Responses Lite requests again return detailed reasoning summaries, so thinking blocks appear for GPT-6 models.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "e22f09ef796298c73ee6b63d14081a1a4a175af5": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Edit diagnostics are scoped to the edited file, Git metadata recovery covers more Git-only command chains, and GitHub TLS failure recovery is recognised in mixed commands.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "566b16ab4154e6a495bb0abd511f56f80269584d": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "The todo_write schema is inlined so required item fields stay visible to providers, and ignored items now report which fields were missing.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "2e278e9fa96743d9daeaee08f2a630ecf35746bf": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Save failures now report the exception message with redaction, Codex page-access 'Internal Error' responses are treated as failures, and substitution pipelines no longer trip output-filter checks.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "12059d7266fa0b40cb8a32caf9763130c4878044": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Memory proposal review-open failures return structured recovery evidence, and format-on-save conflict hints and apply_diff marker guidance are clearer.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "2b3a6b77664a28359908c5f03ccb56d9b154a94a": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Sandbox helper failures return structured evidence with terminal and command IDs, Git lock recovery is improved, and approval audit events are recorded separately.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "c43f3fc8db3d64c4497cd471b7dfc3729af6615b": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Command recovery improves: protected-root drift and Docker socket guidance, host-HOME handling for mise/asdf, curl connect-timeout diagnosis, and running command input files are preserved.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "f527af45b15137445f9c4eea44cca8a5a66ea959": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "The transcript image preview now has a Copy image button that writes a PNG to the clipboard where supported.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "dc81628630264f24d37691e61374234fcd788a7a": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Choosing Copy in the context menu after right-clicking a transcript image now copies the image to the clipboard.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "085b1ee1d33ebb86342c146208c3e33b737abde0": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Images returned by tools are now forwarded to image-capable OpenAI-compatible models in the following user message instead of being replaced by an omission placeholder.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "ff96d6c37f54a030f4beb8380463e58ea0126837": {
-      "bump": "minor",
-      "breakingUnits": ["vscode"],
-      "summary": "Adds Desktop menu bar, Quick Ask panel with global shortcut, and open-at-login settings; consolidates get_context and codebase_search into read_file and search_files, and enables hosted web search and routine Git approvals.",
+      "summary": "Adds update notifications for VS Code, Desktop and CLI: a metadata-only GitHub release check with indicators, manual check commands, an automatic-check opt-out, and a CLI `updates` command and `/updates` chat command.",
       "coverage": "partial",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "6ed1d6a117c379f25d930d89a1ba0fa4755b1a0f": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Adds a skill_directory option so propose_memory can target team skills in .agents/skills, and include_symbols=false now works in both read_file views.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "df5bdb70ce637a1d9b2ef988743319f828d82a98": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Hardens edit save-failure recovery and native command launch confirmation, bounds read_file context previews with character-offset paging, and improves compound-command network failure guidance.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "b734802fdcd39b5a7e43bfba0a9ea9acb27df039": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Desktop and Ask Agent now show full expandable tool and skill details (inputs, outputs, media) loaded on demand via a new transcript block-detail protocol operation.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "bd164d435aab87b0e245084fe7c6991e4075fe21": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Desktop gains an MCP manager window with connection, OAuth and approval controls; agent recovery, diagnostics, and command review evidence improve, and the SDK adds human question-answer binding types.",
-      "coverage": "partial",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "fe11de51aafd4d04dd7275d5e87511e1ebd00284": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Native terminal commands now recover from stale working directories, apply_diff handles @@ headers inside SEARCH/REPLACE blocks, and Git preflight recognizes more safe staging patterns.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "783049f70d58c35631aeb967be4b4799d4bb6889": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Chat transcripts now show floating buttons to jump to the previous user prompt or back to the latest output.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "05094eea79d9684f75a93b00045254fd3ca63d64": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Guardian approvals now account for queued and newly entered human input, re-review when input arrives mid-review, and block stale commands at terminal dispatch with an authorization_stale result.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "d0615aa75af9959a4ab80ac962b4035895725c6a": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Each session keeps a private record of verified human instructions and answers, so earlier restrictions still reach Guardian after condensation, with rewind pruning and a dedicated review budget.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "a5e3d2859074dd901d28f10bad8a1df8b955eacc": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "The installer can now install the VS Code, Desktop, or CLI surface with checksum verification, version pinning and dry-run, and an SDK installer vendors verified archives; release planning is automated.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "87905d132b613e747f0e45af24c73d1624e6878d": {
-      "bump": "none",
-      "breakingUnits": [],
-      "summary": "Release housekeeping that updates changelogs, the lockfile, release plan metadata and bundled documentation references without changing runtime behaviour.",
-      "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
     }
