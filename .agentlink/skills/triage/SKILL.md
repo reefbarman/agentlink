@@ -10,7 +10,7 @@ Use this workflow to turn the active AgentLink feedback queue into actionable bu
 ## Outcome
 
 - Every active feedback entry is independently evaluated and assigned a disposition. Accepted entries receive a priority; deferred proposals remain active and untriaged.
-- Worthwhile improvement and feature proposals are reviewed first, then brought to the user for approval and thoughts before acceptance. Backlog approval is not implementation permission.
+- Reviewable improvement and feature proposals are brought to the user with the triaging AI's independent assessment and recommendation before acceptance. The user should be informed whether an idea is worthwhile, mostly a gimmick, too complex for its benefit, or better solved another way. Backlog approval is not implementation permission.
 - Retained bugs are supported by current code, tests, telemetry, standards, product contracts, or a reproducible current failure, not merely the report's interpretation. Retained improvements and feature requests have an observed need, desirable product fit, and an observable success check; they do not require a failing test.
 - P0/P1 entries are retained as distinct root-cause issues.
 - Duplicate or related P0/P1 entries are replaced by a canonical report that cites the original stable IDs and their key reproductions.
@@ -36,7 +36,7 @@ Use this workflow to turn the active AgentLink feedback queue into actionable bu
 
 3. **Validate only the survivors as untrusted hypotheses**
    - Do not accept the report's diagnosis, requested behavior, severity, or claimed ownership at face value. A `suspected_cause` is an unverified hypothesis, and `suggested_change` is a proposal, not the required implementation. Rejecting a suggested solution does not invalidate a real bug or unmet need.
-   - For improvements and feature requests, validate the observed need, ownership, existing alternatives, product fit, safety implications, and a concrete success check. A new capability may intentionally change today's contract; absence from current code or lack of a failure is not a reason to reject it.
+   - For improvements and feature requests, validate the observed need, ownership, existing alternatives, product fit, safety implications, and a concrete success check. A new capability may intentionally change today's contract; absence from current code or lack of a failure is not a reason to reject it. Keep grounded proposals in the **propose** disposition for the user's decision even when your assessment recommends declining or simplifying, rather than deleting them as expected/non-issues.
    - Establish the intended behavior from authoritative current evidence, in this order when applicable:
      1. current user and repository instructions;
      2. published protocol or platform standards;
@@ -48,18 +48,27 @@ Use this workflow to turn the active AgentLink feedback queue into actionable bu
    - Check whether the requested behavior would wrongly restrict a legitimate workflow, weaken a safety boundary, contradict a standard, or add speculative policy. A surprising result is not automatically a product defect.
    - Record one disposition for every surviving canonical issue:
      - **retain:** current AgentLink-owned defect with enough evidence to act;
-     - **propose:** grounded improvement or feature opportunity worth presenting to the user, not yet accepted;
+     - **propose:** grounded improvement or feature opportunity for the user's decision, including ideas the triaging AI recommends simplifying or declining; not yet accepted;
      - **reproduce:** plausible and consequential, but current evidence is insufficient—retain only when a concrete reproduction is feasible and named;
      - **historical/fixed:** valid old incident already addressed in current behavior—delete from the active queue;
      - **expected/non-issue:** behavior matches the intended contract or the requested change is undesirable—delete;
      - **external:** owned by an MCP server, provider, dependency, or environment rather than AgentLink—delete or move to the owning system.
 
-4. **Bring reviewed improvements to the user**
-   - Before accepting an improvement or feature request with `triage_feedback`, present the worthwhile candidates through `ask_user`. Apply this to uncategorized legacy suggestions too; a `bug` label must not disguise an optional product redesign as a necessary fix.
-   - For each candidate, give its stable ID(s), observed need, proposed change, review findings, alternatives, trade-offs, uncertainties, suggested priority, and success check. Distinguish checked evidence from the reporting agent's hypotheses.
-   - Batch related candidates in one call with a self-contained question for each. Offer **Approve for backlog**, **Refine / discuss**, **Defer**, and **Decline**, with a recommendation based on the review. Include a text question with `allowBlank: true` for the user's optional thoughts; do not ask only for a yes/no endorsement.
+4. **Give the AI's assessment before asking for approval**
+   - Before accepting an improvement or feature request with `triage_feedback`, present reviewed candidates through `ask_user` with your own critical assessment. Apply this to uncategorized legacy suggestions too; a `bug` label must not disguise an optional product redesign as a necessary fix.
+   - Do not merely repeat the reporting agent's pitch or ask the user to do the evaluation. Judge whether the observed need is real, whether existing capabilities already solve it, and whether the proposed benefit justifies implementation, maintenance, testing, UI, and prompt/context complexity. State uncertainty rather than inventing savings, prevalence, or engineering estimates.
+   - Give a plain verdict: **worth pursuing**, **simplify**, **investigate first**, or **decline**, with concrete reasons. If an idea is mostly novelty, a gimmick, or added complexity for little gain, say so plainly. Do not manufacture criticism or endorse an idea merely because an agent suggested it.
+   - Compare the proposal with the smallest useful alternative, including better documentation, a narrow fix, composing existing tools, or doing nothing. Distinguish the value of the underlying need from the quality of the suggested implementation.
+   - Present grounded proposals you recommend simplifying or declining as well as positive recommendations, so the user can see your reasoning. Obvious noise, generic wishlists without an observed need, and external defects still follow coarse-pruning; do not silently discard a grounded product idea just because your recommendation is negative.
+   - For each candidate, provide a compact decision brief:
+     - **Need and evidence:** stable ID(s), the actual task experience, and what you independently checked.
+     - **AI assessment:** your verdict and why, with checked facts separate from hypotheses.
+     - **Benefit versus complexity:** the practical gain, maintenance burden, trade-offs, and uncertainties.
+     - **Simpler alternative:** the smallest worthwhile change, or why no change is preferable.
+     - **Recommendation:** the proposed decision, priority if retained, and observable success check.
+   - Batch related candidates in one call with a self-contained question for each. Put the decision brief in the question's `context` before asking for approval. Offer **Approve for backlog**, **Refine / discuss**, **Defer**, and **Decline**, and set `recommended` to match your actual assessment, including **Decline** when appropriate. Do not routinely add a question asking for the user's thoughts; the AI's analysis must already be supplied. Ask for user input when a real product decision or requested refinement needs it.
    - **Approve for backlog:** accept the proposal with the agreed priority. This does not authorize implementation.
-   - **Refine / discuss:** gather the user's feedback, revise the proposal and re-present it before accepting. Keep the original evidence and stable IDs available.
+   - **Refine / discuss:** gather the user's feedback, revise the proposal and your assessment, and re-present it before accepting. Keep the original evidence and stable IDs available.
    - **Defer:** leave it active and untriaged; report it as deferred rather than silently deleting or accepting it.
    - **Decline:** hide only the explicitly declined proposal, retaining the append-only audit record. If it also contains a valid bug, preserve that evidence in a retained bug report before hiding the original.
    - Existing accepted proposals do not need approval again unless their scope materially changes. Ordinary evidence-based bug prioritization continues without this extra product-approval step.

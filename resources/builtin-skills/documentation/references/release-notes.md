@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Expanded development feedback into an evidence-grounded AgentLink self-improvement loop. Agents can report bugs and suggest fixes, workflow improvements, or new capabilities, including opportunities noticed during successful tasks. Optional category, suspected-cause, and suggested-change fields stay separate from observed evidence, survive retrieval and triage, and appear in the searchable development sidebar. Existing reports remain compatible, with proposal text giving way before bug evidence at the storage limit. The triage workflow reviews worthwhile improvement and feature proposals before asking for user approval and thoughts; deferred ideas remain untriaged, useful P2/P3 proposals are retained, and backlog approval never authorizes implementation or weaker safeguards.
+- Expanded development feedback into an evidence-grounded AgentLink self-improvement loop. Agents can report bugs and suggest fixes, workflow improvements, or new capabilities, including opportunities noticed during successful tasks. Optional category, suspected-cause, and suggested-change fields stay separate from observed evidence, survive retrieval and triage, and appear in the searchable development sidebar. Existing reports remain compatible, with proposal text giving way before bug evidence at the storage limit. The triage workflow gives the AI's independent verdict on value versus complexity, gimmick risk, and simpler alternatives before asking for user approval, including reasoned recommendations to decline; deferred ideas remain untriaged, useful P2/P3 proposals are retained, and backlog approval never authorizes implementation or weaker safeguards.
 
 ## 1.25.1
 

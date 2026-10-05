@@ -894,9 +894,18 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain('`tool_name: "agentlink"`');
     expect(result).toContain("without a feedback quota");
     expect(result).toContain("Proposals do not authorize self-modification");
-    expect(result).toContain("approval and thoughts before accepting them");
+    expect(result).toContain("give your own critical assessment");
+    expect(result).toContain("implementation and maintenance complexity");
     expect(result).toContain(
-      "backlog approval is not implementation permission",
+      "mostly a gimmick or duplicates existing capabilities",
+    );
+    expect(result).toContain("simpler alternatives (including no change)");
+    expect(result).toContain(
+      "Present grounded proposals you recommend declining too",
+    );
+    expect(result).toContain("do not merely ask for their thoughts");
+    expect(result).toContain(
+      "Backlog approval is not implementation permission",
     );
     expect(result).not.toContain("submit only issue reports");
   });
