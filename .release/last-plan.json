@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "651c03a268cbb818f73684c0ac6b9bfb9f42e6b9",
-  "createdAt": "2026-10-05T07:31:02.514Z",
+  "sourceSha": "31d5db4848fb70aa9a119c7735d398aa5e86a8f0",
+  "createdAt": "2026-10-05T22:59:25.481Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,149 +10,107 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.25.1",
-      "baselineRef": "v1.25.1",
-      "reserved": "1.25.1",
-      "commits": [
-        "544f39ca216bb76b4755993a8719bafe5d7abb2d",
-        "651c03a268cbb818f73684c0ac6b9bfb9f42e6b9"
-      ],
+      "published": "1.26.0",
+      "baselineRef": "v1.26.0",
+      "reserved": "1.26.0",
+      "commits": ["31d5db4848fb70aa9a119c7735d398aa5e86a8f0"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "1.26.0",
-      "effectiveBump": "minor",
+      "version": "1.26.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "v1.26.0",
+      "tag": "v1.26.1",
       "notes": [
         {
-          "sha": "544f39ca216bb76b4755993a8719bafe5d7abb2d",
-          "subject": "feat(feedback): add reviewed self-improvement proposals",
-          "summary": "Dev-mode send_feedback gains optional category, suspected cause, and suggested change fields for bugs, improvements, and feature requests, with sidebar display and search, plus updated agent guidance and an additive FeedbackEntry protocol type.",
-          "breaking": false
-        },
-        {
-          "sha": "651c03a268cbb818f73684c0ac6b9bfb9f42e6b9",
-          "subject": "fix(feedback): provide AI assessment before proposal approval",
-          "summary": "Updated dev-mode feedback triage guidance so the AI gives its own critical assessment and recommendation before asking users to approve improvement or feature proposals.",
+          "sha": "31d5db4848fb70aa9a119c7735d398aa5e86a8f0",
+          "subject": "fix(mcp): surface configured server failures and process diagnostics",
+          "summary": "Failed MCP servers now show complete, redacted startup errors and process stderr in the MCP manager and stay visible to the agent through find_mcp_tools instead of looking missing.",
           "breaking": false
         }
       ]
     },
     "desktop": {
-      "published": "0.4.1",
-      "baselineRef": "desktop-v0.4.1",
-      "reserved": "0.4.1",
-      "commits": [
-        "544f39ca216bb76b4755993a8719bafe5d7abb2d",
-        "651c03a268cbb818f73684c0ac6b9bfb9f42e6b9"
-      ],
+      "published": "0.5.0",
+      "baselineRef": "desktop-v0.5.0",
+      "reserved": "0.5.0",
+      "commits": ["31d5db4848fb70aa9a119c7735d398aa5e86a8f0"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.5.0",
-      "effectiveBump": "minor",
+      "version": "0.5.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "desktop-v0.5.0",
+      "tag": "desktop-v0.5.1",
       "notes": [
         {
-          "sha": "544f39ca216bb76b4755993a8719bafe5d7abb2d",
-          "subject": "feat(feedback): add reviewed self-improvement proposals",
-          "summary": "Dev-mode send_feedback gains optional category, suspected cause, and suggested change fields for bugs, improvements, and feature requests, with sidebar display and search, plus updated agent guidance and an additive FeedbackEntry protocol type.",
-          "breaking": false
-        },
-        {
-          "sha": "651c03a268cbb818f73684c0ac6b9bfb9f42e6b9",
-          "subject": "fix(feedback): provide AI assessment before proposal approval",
-          "summary": "Updated dev-mode feedback triage guidance so the AI gives its own critical assessment and recommendation before asking users to approve improvement or feature proposals.",
+          "sha": "31d5db4848fb70aa9a119c7735d398aa5e86a8f0",
+          "subject": "fix(mcp): surface configured server failures and process diagnostics",
+          "summary": "Failed MCP servers now show complete, redacted startup errors and process stderr in the MCP manager and stay visible to the agent through find_mcp_tools instead of looking missing.",
           "breaking": false
         }
       ]
     },
     "cli": {
-      "published": "0.4.0",
-      "baselineRef": "cli-v0.4.0",
-      "reserved": "0.4.0",
-      "commits": ["544f39ca216bb76b4755993a8719bafe5d7abb2d"],
+      "published": "0.5.0",
+      "baselineRef": "cli-v0.5.0",
+      "reserved": "0.5.0",
+      "commits": ["31d5db4848fb70aa9a119c7735d398aa5e86a8f0"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.5.0",
-      "effectiveBump": "minor",
+      "version": "0.5.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.5.0",
+      "tag": "cli-v0.5.1",
       "notes": [
         {
-          "sha": "544f39ca216bb76b4755993a8719bafe5d7abb2d",
-          "subject": "feat(feedback): add reviewed self-improvement proposals",
-          "summary": "Dev-mode send_feedback gains optional category, suspected cause, and suggested change fields for bugs, improvements, and feature requests, with sidebar display and search, plus updated agent guidance and an additive FeedbackEntry protocol type.",
+          "sha": "31d5db4848fb70aa9a119c7735d398aa5e86a8f0",
+          "subject": "fix(mcp): surface configured server failures and process diagnostics",
+          "summary": "Failed MCP servers now show complete, redacted startup errors and process stderr in the MCP manager and stay visible to the agent through find_mcp_tools instead of looking missing.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.3.0",
-      "baselineRef": "sdk-v0.3.0",
-      "reserved": "0.3.0",
-      "commits": ["544f39ca216bb76b4755993a8719bafe5d7abb2d"],
+      "published": "0.4.0",
+      "baselineRef": "sdk-v0.4.0",
+      "reserved": "0.4.0",
+      "commits": ["31d5db4848fb70aa9a119c7735d398aa5e86a8f0"],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "minor",
+      "bump": "patch",
       "status": "release",
-      "version": "0.4.0",
-      "effectiveBump": "minor",
+      "version": "0.4.1",
+      "effectiveBump": "patch",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "sdk-v0.4.0",
+      "tag": "sdk-v0.4.1",
       "notes": [
         {
-          "sha": "544f39ca216bb76b4755993a8719bafe5d7abb2d",
-          "subject": "feat(feedback): add reviewed self-improvement proposals",
-          "summary": "Dev-mode send_feedback gains optional category, suspected cause, and suggested change fields for bugs, improvements, and feature requests, with sidebar display and search, plus updated agent guidance and an additive FeedbackEntry protocol type.",
+          "sha": "31d5db4848fb70aa9a119c7735d398aa5e86a8f0",
+          "subject": "fix(mcp): surface configured server failures and process diagnostics",
+          "summary": "Failed MCP servers now show complete, redacted startup errors and process stderr in the MCP manager and stay visible to the agent through find_mcp_tools instead of looking missing.",
           "breaking": false
         }
       ]
     }
   },
   "decisions": {
-    "1dbd86ead9e59be33b79dc506923ac02115fa6c9": {
+    "31d5db4848fb70aa9a119c7735d398aa5e86a8f0": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "Command execution now reports protected Git metadata write denials even when a later command masks them and the shell exits zero, adding failure evidence and guidance to inspect repository state before retrying.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "c851189c2ccd5625ba26a9acd796d38314e112bf": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Adds update notifications for VS Code, Desktop and CLI: a metadata-only GitHub release check with indicators, manual check commands, an automatic-check opt-out, and a CLI `updates` command and `/updates` chat command.",
-      "coverage": "partial",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "544f39ca216bb76b4755993a8719bafe5d7abb2d": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "Dev-mode send_feedback gains optional category, suspected cause, and suggested change fields for bugs, improvements, and feature requests, with sidebar display and search, plus updated agent guidance and an additive FeedbackEntry protocol type.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "651c03a268cbb818f73684c0ac6b9bfb9f42e6b9": {
-      "bump": "patch",
-      "breakingUnits": [],
-      "summary": "Updated dev-mode feedback triage guidance so the AI gives its own critical assessment and recommendation before asking users to approve improvement or feature proposals.",
+      "summary": "Failed MCP servers now show complete, redacted startup errors and process stderr in the MCP manager and stay visible to the agent through find_mcp_tools instead of looking missing.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1

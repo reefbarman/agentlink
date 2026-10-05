@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.26.1
+
 - Fixed MCP failure visibility: error-only server rows now expand to show complete selectable diagnostics in the shared Manager, and configured failed servers remain visible to agent discovery instead of appearing missing. Named discovery returns the connection failure rather than an unexplained empty tool list. Stdio startup errors preserve bounded, redacted process output and the original connection error; paused proxy retries remain paused, with diagnostic-led recovery instead of generic reconnect/reauth advice.
 
 ## 1.26.0
