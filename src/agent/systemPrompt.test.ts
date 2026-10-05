@@ -882,8 +882,23 @@ describe("buildSystemPrompt", () => {
     );
     expect(result).toContain("`triage_feedback`");
     expect(result).toContain(
-      "Triaged means accepted for fixing, not merely reviewed",
+      "Triaged means accepted for fixing or improvement, not merely reviewed",
     );
+    expect(result).toContain("Help AgentLink improve itself as you work");
+    expect(result).toContain("Successful tasks can reveal unnecessary steps");
+    expect(result).toContain(
+      "A bug report never needs a diagnosis or proposed fix",
+    );
+    expect(result).toContain("`suspected_cause`");
+    expect(result).toContain("`suggested_change`");
+    expect(result).toContain('`tool_name: "agentlink"`');
+    expect(result).toContain("without a feedback quota");
+    expect(result).toContain("Proposals do not authorize self-modification");
+    expect(result).toContain("approval and thoughts before accepting them");
+    expect(result).toContain(
+      "backlog approval is not implementation permission",
+    );
+    expect(result).not.toContain("submit only issue reports");
   });
 
   it("includes custom instructions when AGENTS.md exists", async () => {

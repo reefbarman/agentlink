@@ -64,6 +64,9 @@ describe("handleSendFeedback", () => {
         workaround: "  Used a direct read  ",
         observed_recurrence: "  Once in this session  ",
         improvement_signal: "  First read returns usable content  ",
+        category: "bug",
+        suspected_cause: "  The result may have been truncated  ",
+        suggested_change: "  Return continuation arguments  ",
       },
       "session-trimmed",
     );
@@ -75,6 +78,9 @@ describe("handleSendFeedback", () => {
         workaround: "Used a direct read",
         observed_recurrence: "Once in this session",
         improvement_signal: "First read returns usable content",
+        category: "bug",
+        suspected_cause: "The result may have been truncated",
+        suggested_change: "Return continuation arguments",
       }),
     );
   });
@@ -111,6 +117,8 @@ describe("handleSendFeedback", () => {
         workaround: " \n ",
         observed_recurrence: "",
         improvement_signal: "\t",
+        suspected_cause: " \n ",
+        suggested_change: "\t",
       },
       "session-blank-context",
     );
@@ -120,9 +128,37 @@ describe("handleSendFeedback", () => {
         workaround: undefined,
         observed_recurrence: undefined,
         improvement_signal: undefined,
+        category: undefined,
+        suspected_cause: undefined,
+        suggested_change: undefined,
       }),
     );
   });
+
+  it.each(["improvement", "feature_request"] as const)(
+    "records a grounded %s after a successful task without inventing a cause",
+    async (category) => {
+      await handleSendFeedback(
+        {
+          tool_name: "agentlink",
+          feedback: "A shared session comparison would simplify handoffs",
+          observed_impact:
+            "Task succeeded after manually comparing two histories",
+          category,
+          suggested_change: "Show a side-by-side session comparison",
+        },
+        "successful-task-session",
+      );
+      expect(mocks.appendFeedback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tool_name: "agentlink",
+          category,
+          suspected_cause: undefined,
+          suggested_change: "Show a side-by-side session comparison",
+        }),
+      );
+    },
+  );
 
   it("attributes feedback with only the supplied opaque project ID", async () => {
     const result = await handleSendFeedback(

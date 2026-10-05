@@ -33,11 +33,15 @@ function getTriagePath(): string {
 }
 
 export type FeedbackPriority = (typeof FEEDBACK_PRIORITIES)[number];
+export type FeedbackCategory = "bug" | "improvement" | "feature_request";
 
 export interface FeedbackEntry {
   timestamp: string;
   tool_name: string;
   feedback: string;
+  category?: FeedbackCategory;
+  suspected_cause?: string;
+  suggested_change?: string;
   observed_impact?: string;
   workaround?: string;
   observed_recurrence?: string;
@@ -115,6 +119,27 @@ function fitFeedbackEntry(
   entry: FeedbackEntry & { id: string },
 ): FeedbackEntry & { id: string } {
   const fitted = { ...entry };
+  const proposals = ["suggested_change", "suspected_cause"] as const;
+  while (
+    Buffer.byteLength(JSON.stringify(fitted) + "\n", "utf-8") >
+    MAX_SERIALIZED_ENTRY_BYTES
+  ) {
+    const field = proposals.reduce<(typeof proposals)[number] | undefined>(
+      (longest, candidate) =>
+        (fitted[candidate]?.length ?? 0) >
+        (longest ? (fitted[longest]?.length ?? 0) : 0)
+          ? candidate
+          : longest,
+      undefined,
+    );
+    if (!field || !fitted[field]) break;
+    const value = fitted[field];
+    // Hypotheses and proposals give way before reproduction evidence.
+    fitted[field] =
+      value.length > 32
+        ? value.slice(0, Math.floor(value.length / 2)) + "…(truncated)"
+        : undefined;
+  }
   const shrinkable = [
     "feedback",
     "observed_impact",
@@ -225,6 +250,12 @@ export function appendFeedback(entry: FeedbackEntry): FeedbackRecord {
     ...entry,
     id: randomUUID(),
     feedback: truncate(entry.feedback, 2000),
+    suspected_cause: entry.suspected_cause
+      ? truncate(entry.suspected_cause)
+      : undefined,
+    suggested_change: entry.suggested_change
+      ? truncate(entry.suggested_change)
+      : undefined,
     observed_impact: entry.observed_impact
       ? truncate(entry.observed_impact)
       : undefined,

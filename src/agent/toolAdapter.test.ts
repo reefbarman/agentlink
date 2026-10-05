@@ -1670,15 +1670,28 @@ describe("getAgentTools", () => {
         "workaround",
         "observed_recurrence",
         "improvement_signal",
+        "suspected_cause",
+        "suggested_change",
       ]) {
         expect(sendFeedback?.input_schema.properties?.[field]).toMatchObject({
           type: "string",
         });
         expect(sendFeedback?.input_schema.required).not.toContain(field);
       }
+      expect(sendFeedback?.input_schema.properties?.category).toMatchObject({
+        type: "string",
+        enum: ["bug", "improvement", "feature_request"],
+      });
+      expect(sendFeedback?.input_schema.required).not.toContain("category");
       expect(feedbackSchema).toMatchObject({ minLength: 1 });
       expect(feedbackSchema?.description).toContain(
-        "actionable AgentLink issue",
+        "actionable AgentLink bug, improvement opportunity, or feature request",
+      );
+      expect(sendFeedback?.description).toContain(
+        "Help AgentLink improve itself",
+      );
+      expect(toolNameSchema?.description).toContain(
+        "agentlink for a cross-tool",
       );
       expect(feedbackSchema?.description).toContain("routine success, praise");
       expect(toolNameSchema?.description).toContain(

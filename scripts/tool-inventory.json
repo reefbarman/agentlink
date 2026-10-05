@@ -694,10 +694,13 @@
     {
       "name": "send_feedback",
       "parameters": [
+        "category",
         "feedback",
         "improvement_signal",
         "observed_impact",
         "observed_recurrence",
+        "suggested_change",
+        "suspected_cause",
         "tool_name",
         "tool_params",
         "tool_result_summary",
@@ -846,5 +849,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "c4b4dd2880b8567d445cda730625fdff99fa546fa5c2616778eda3f4bb115be6"
+  "revision": "c332a10919c005ea1f4b4a952891f0bb79dff0950195475aec37f2f3edc11ea3"
 }

@@ -65,21 +65,41 @@ export const sendFeedbackSchema = {
   tool_name: z
     .string()
     .describe(
-      "AgentLink tool this feedback is about. For MCP-related feedback, use the native AgentLink MCP tool actually involved, such as find_mcp_tools or call_mcp_tool. Never report a specific MCP server or its server__tool; those are out of scope unless the problem is in AgentLink's MCP plumbing.",
+      "Affected AgentLink tool, or agentlink for a cross-tool or general AgentLink workflow. For MCP-related feedback, use the native AgentLink MCP tool actually involved, such as find_mcp_tools or call_mcp_tool. Never report a specific MCP server or its server__tool; those are out of scope unless the problem is in AgentLink's MCP plumbing.",
     ),
   feedback: z
     .string()
     .trim()
     .min(1, "feedback must not be empty")
     .describe(
-      "Concrete, actionable AgentLink issue. Report problems, unexpected behavior, or missing capability; do not submit routine success, praise, or third-party MCP-server defects.",
+      "Concrete, actionable AgentLink bug, improvement opportunity, or feature request grounded in actual use. Preserve reproduction evidence for bugs. Successful tasks can reveal improvements too; do not submit routine success, praise, generic wishlists, or third-party MCP-server defects.",
+    ),
+  category: z
+    .enum(["bug", "improvement", "feature_request"])
+    .optional()
+    .describe(
+      "Optional report category. Omit if uncertain; a bug report never needs a diagnosis or proposed fix.",
+    ),
+  suspected_cause: z
+    .string()
+    .trim()
+    .optional()
+    .describe(
+      "Optional diagnosis supported by available evidence. State uncertainty; this is a hypothesis to investigate, not an established root cause. Omit if unknown.",
+    ),
+  suggested_change: z
+    .string()
+    .trim()
+    .optional()
+    .describe(
+      "Proposed fix, workflow improvement, or new AgentLink capability and how it addresses the observed need. Encouraged when useful, not required. An unverified proposal, not permission to implement or weaken safeguards.",
     ),
   observed_impact: z
     .string()
     .trim()
     .min(1, "observed_impact must not be empty")
     .describe(
-      "Concrete task consequence: blocked completion, incorrect output, safety risk, extra steps or confusion. Report observations, not priority or invented savings.",
+      "Observed consequence or unmet need in the current task: blocked completion, incorrect output, safety risk, extra steps, confusion, or a concrete limitation encountered even when the task succeeded. Report observations, not priority, hypothetical impact, or invented savings.",
     ),
   workaround: z
     .string()
@@ -100,7 +120,7 @@ export const sendFeedbackSchema = {
     .trim()
     .optional()
     .describe(
-      "Outcome to check after a fix: completion, correct output, fewer retries or approvals. A proposed check, not measured benefit.",
+      "Observable outcome to check after a fix or improvement: completion, correct output, fewer retries, or a simpler workflow while preserving safeguards. A proposed check, not measured benefit.",
     ),
   tool_params: z
     .string()

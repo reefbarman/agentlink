@@ -28,30 +28,33 @@ The following tools are registered in dev builds only. They are **not** included
 
 ### send_feedback
 
-Submit feedback about an AgentLink tool — report issues, suggest improvements, or note missing features. Feedback is stored locally for the extension developer to review. A successful result includes the assigned stable `id` and immutable `global_index`.
+Help AgentLink improve itself during normal work: report bugs, suggest fixes and workflow improvements, or propose new capabilities grounded in actual task experience. Successful tasks can reveal unnecessary steps or missing capabilities too. Use the affected native tool name, or `tool_name: "agentlink"` for a cross-tool or general AgentLink workflow. Feedback is stored locally for review, not automatically implemented. A successful result includes the assigned stable `id` and immutable `global_index`.
 
 For MCP-related work, submit feedback only about AgentLink's native MCP tools (`find_mcp_tools`, `call_mcp_tool`, and the other MCP management helpers) or AgentLink-owned discovery, transport, approval, dispatch, and result handling. Do not submit feedback about a specific MCP server or one of its native `server__tool` tools: that server's bugs, limitations, confusing output, and domain errors are upstream and out of scope. When AgentLink's MCP plumbing is the problem, use the native AgentLink MCP tool actually involved and include server/tool details only when they are needed as reproduction context.
 
 | Parameter             | Type    | Description                                                                                  |
 | --------------------- | ------- | -------------------------------------------------------------------------------------------- |
-| `tool_name`           | string  | AgentLink tool; never a specific MCP server or its `server__tool`                            |
-| `feedback`            | string  | Non-empty description of a concrete issue or missing capability                              |
-| `observed_impact`     | string  | Required non-empty consequence for the current task                                          |
+| `tool_name`           | string  | Affected native tool, or `agentlink` for a general AgentLink workflow                        |
+| `feedback`            | string  | Non-empty description of a grounded bug, improvement opportunity, or feature request         |
+| `category`            | string? | `bug`, `improvement`, or `feature_request`; omit if uncertain                                |
+| `suspected_cause`     | string? | Evidence-supported diagnosis with uncertainty stated, not an established cause               |
+| `suggested_change`    | string? | Proposed fix, improvement, or new capability addressing the observed need                    |
+| `observed_impact`     | string  | Required non-empty observed task consequence or unmet need, even if the task succeeded       |
 | `workaround`          | string? | Recovery used, whether the task succeeded, and extra steps; none or unknown when appropriate |
 | `observed_recurrence` | string? | Occurrences actually observed in this session, not inferred prevalence                       |
 | `improvement_signal`  | string? | Observable outcome to check after a fix, not a measured benefit                              |
 | `tool_params`         | string? | Parameters passed; include server details only to reproduce AgentLink bugs                   |
 | `tool_result_summary` | string? | Summary of what happened or the unexpected result received                                   |
 
-New submissions must include `observed_impact`, such as "Three failed retries blocked completion until the user intervened" rather than an importance score. Optional context fields are trimmed and omitted when blank. Do not invent severity, engineering effort, time/token savings, or cross-user frequency. Priority remains an independently validated triage decision; rare safety or correctness failures can still warrant urgent fixes.
+New submissions must include `observed_impact`, such as "Three failed retries blocked completion until the user intervened" or "Task succeeded after manually comparing two session histories", not an importance score or hypothetical benefit. Preserve bug inputs, results, reproduction details, recovery, and recurrence. A bug report never needs a diagnosis or solution. Suggestions are encouraged when useful, not required after every task; no generic wishlists, routine praise, or detours into investigating AgentLink's implementation. Optional text fields are trimmed and omitted when blank; invalid categories are rejected. Do not invent severity, engineering effort, time/token savings, or cross-user frequency. Suggestions do not authorize self-modification or weaker safeguards.
 
-Impact context is stored with the report and returned by `get_feedback`. Historical records may omit all four fields; they remain readable with unchanged IDs, indices, triage and deletion metadata. No migration or inferred backfill is performed. Impact context fields use the existing 500-character truncation limit, and the complete stored record remains bounded to 4,000 UTF-8 bytes.
+Context and proposal fields are stored with the report and returned by `get_feedback`. Historical records may omit them; they remain readable with unchanged IDs, indices, triage and deletion metadata. No migration or inferred backfill is performed. Optional context/proposal fields use the existing 500-character truncation limit, and the complete stored record remains bounded to 4,000 UTF-8 bytes. When the byte limit is exceeded, suspected-cause and suggested-change text is shortened or omitted before existing bug evidence is shortened.
 
 ### get_feedback
 
-Read active feedback. Optionally filter by tool name, triage state, and priority. Every returned entry includes a stable `id`, immutable `global_index`, and projected triage metadata; filtered results keep their global indices. `observed_impact`, `workaround`, `observed_recurrence` and `improvement_signal` are included when recorded, not fabricated for older entries.
+Read active bug reports, improvement opportunities, and feature requests. Optionally filter by tool name, triage state, and priority. Every returned entry includes a stable `id`, immutable `global_index`, and projected triage metadata; filtered results keep their global indices. `category`, `suspected_cause`, `suggested_change`, `observed_impact`, `workaround`, `observed_recurrence`, and `improvement_signal` are included when recorded, not fabricated for older entries.
 
-When triaging, validate the reported consequence, workaround and recurrence against current code and telemetry. Use the improvement signal to define a concrete before/after check. Reporter claims are not verified priority or measured product-wide benefit, and absent context on an older report does not mean zero impact.
+When triaging, validate the reported consequence, workaround and recurrence against current evidence. Evaluate a bug independently of its proposed solution, and assess improvements against the observed need, existing alternatives, product fit, and safety constraints without requiring a failing test. Use the improvement signal for a concrete success check. Bring worthwhile improvement and feature proposals to the user for approval and thoughts before accepting them; backlog approval is not implementation permission. Useful P2/P3 proposals are not blanket-cleanup candidates. Reporter claims are not established causes, verified priority, or measured product-wide benefit, and absent context on an older report does not mean zero impact.
 
 | Parameter    | Type     | Description                                                            |
 | ------------ | -------- | ---------------------------------------------------------------------- |
@@ -61,7 +64,7 @@ When triaging, validate the reported consequence, workaround and recurrence agai
 
 ### triage_feedback
 
-Mark active feedback as accepted for fixing with a required priority, or return it to the untriaged queue. “Triaged” means the feedback was evaluated and judged worth fixing; it does not merely mean reviewed. Feedback that is not worth fixing can be hidden with `delete_feedback`.
+Mark active feedback as accepted for fixing or improvement with a required priority, or return it to the untriaged queue. “Triaged” means accepted, not merely reviewed. The triage workflow reviews improvement and feature proposals, then asks the user to approve for backlog, refine/discuss, defer, or decline, with room for their thoughts. Deferred proposals remain active and untriaged. Ordinary evidence-based bug triage continues without this extra product-approval step. This is workflow guidance, not a new tool-enforced approval gate. Deliberately declined feedback can be hidden with `delete_feedback`.
 
 | Parameter  | Type     | Description                                                           |
 | ---------- | -------- | --------------------------------------------------------------------- |
@@ -71,7 +74,7 @@ Mark active feedback as accepted for fixing with a required priority, or return 
 
 Triage metadata is stored as immutable events in append order under `~/.agentlink/agentlink-feedback-triage.jsonl`. The primary feedback JSONL remains append-only. The result includes exact `updated_entries` and `unknown_ids`.
 
-The development sidebar defaults to the untriaged queue grouped by tool. It can switch between all, untriaged, and triaged feedback; filter accepted items by priority; group by tool or priority; and search feedback text and tool names. Assigning a priority accepts an item for fixing, while **Untriage** clears its priority.
+The development sidebar defaults to the untriaged queue grouped by tool. It can switch between all, untriaged, and triaged feedback; filter accepted items by priority; group by tool or priority; and search tool names, categories, report text, evidence, diagnoses, and proposals. Reports show their category when supplied, with separate expandable observed impact/need, workaround/outcome, recurrence, unverified suspected cause, proposed change, and success check, alongside the original inputs/results. Assigning a priority accepts an item for fixing or improvement, while **Untriage** clears its priority.
 
 ### delete_feedback
 

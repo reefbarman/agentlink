@@ -31,6 +31,81 @@ function feedbackEntry(overrides: Partial<FeedbackEntry> = {}): FeedbackEntry {
 }
 
 describe("FeedbackList", () => {
+  it("keeps observations, diagnoses and proposals distinct in the sidebar", () => {
+    const fields = {
+      observed_impact: "Task succeeded after comparing two histories manually",
+      workaround: "Opened both sessions",
+      observed_recurrence: "Once in this task",
+      suspected_cause: "Session metadata may not be shared",
+      suggested_change: "Add a session comparison view",
+      improvement_signal: "Compare both histories in one view",
+      tool_params: "Original inputs",
+      tool_result_summary: "Original result",
+    };
+    render(
+      <FeedbackList
+        entries={[feedbackEntry({ category: "feature_request", ...fields })]}
+        postCommand={vi.fn() as PostCommand}
+      />,
+    );
+    expect(screen.getByText("Feature request")).not.toBeNull();
+    for (const label of [
+      "Observed impact / need",
+      "Workaround / outcome",
+      "Observed recurrence",
+      "Suspected cause (unverified)",
+      "Suggested change (proposal)",
+      "Success check (proposed)",
+      "Params",
+      "Result",
+    ]) {
+      expect(screen.getByText(label)).not.toBeNull();
+    }
+    for (const text of Object.values(fields)) {
+      expect(screen.getByText(text)).not.toBeNull();
+    }
+  });
+
+  it.each([
+    ["category", "feature_request"],
+    ["observed_impact", "distinct observation"],
+    ["workaround", "distinct workaround"],
+    ["observed_recurrence", "distinct recurrence"],
+    ["suspected_cause", "distinct hypothesis"],
+    ["suggested_change", "distinct proposal"],
+    ["improvement_signal", "distinct success check"],
+    ["tool_params", "distinct inputs"],
+    ["tool_result_summary", "distinct result"],
+  ] as const)("finds feedback by %s", (field, value) => {
+    render(
+      <FeedbackList
+        entries={[
+          feedbackEntry({ id: "matching", [field]: value }),
+          feedbackEntry({ id: "other", feedback: "Unrelated feedback" }),
+        ]}
+        postCommand={vi.fn() as PostCommand}
+      />,
+    );
+    fireEvent.input(screen.getByRole("searchbox"), {
+      target: { value },
+    });
+    expect(screen.getByText("Feedback text")).not.toBeNull();
+    expect(screen.queryByText("Unrelated feedback")).toBeNull();
+  });
+
+  it("does not fabricate categories or context for historical reports", () => {
+    render(
+      <FeedbackList
+        entries={[feedbackEntry()]}
+        postCommand={vi.fn() as PostCommand}
+      />,
+    );
+    expect(screen.getByText("Feedback text")).not.toBeNull();
+    expect(screen.queryByText("Bug")).toBeNull();
+    expect(screen.queryByText("Suspected cause (unverified)")).toBeNull();
+    expect(screen.queryByText("Suggested change (proposal)")).toBeNull();
+  });
+
   it("filters feedback by selected priority in the all view", () => {
     render(
       <FeedbackList

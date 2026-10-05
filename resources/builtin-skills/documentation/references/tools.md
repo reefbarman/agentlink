@@ -187,11 +187,15 @@ Codex hosted web requests use the normal Responses body and headers, including f
 
 MCP configuration and trust behavior: [MCP](mcp.md). Exact native web contracts: [web access](complete-reference.md#web-access).
 
-## Report tool problems in development builds
+## Report bugs and self-improvement opportunities in development builds
 
-`send_feedback` records concrete AgentLink-owned issues, not routine success or third-party MCP-server defects. New reports require a non-empty `observed_impact` statement describing the consequence for the current task. Optional `workaround`, `observed_recurrence` and `improvement_signal` fields capture recovery and task outcome, occurrences actually observed in this session, and an observable outcome to check after a fix. Report evidence rather than importance scores, guessed prevalence or invented time/token savings.
+`send_feedback` helps AgentLink improve itself by collecting concrete bugs, workflow improvements, and feature requests grounded in actual use. Successful tasks can reveal unnecessary steps or missing capabilities too. Use the affected native tool name, or `tool_name: "agentlink"` for a cross-tool or general AgentLink workflow. Do not submit routine praise, generic wishlists, or third-party MCP-server defects; suggestions do not authorize self-modification or weaker safeguards.
 
-`get_feedback` returns this context when recorded. Older records remain readable without these fields, with unchanged IDs and triage/deletion metadata. Validate reporter claims before assigning priority with `triage_feedback`; absence of context means unknown impact, not zero impact. Use the improvement signal for a before/after check, not as a measured product-wide benefit. Exact contracts: [development feedback tools](complete-reference.md#development-feedback-tools).
+New reports require a non-empty `observed_impact` describing an observed task consequence or unmet need. Preserve bug inputs, results, reproduction details, recovery, and recurrence; a bug report never needs a diagnosis or solution. Optional `category` is `bug`, `improvement`, or `feature_request`. Optional `suspected_cause` separates an unverified diagnosis from the evidence, and `suggested_change` captures a proposed fix, workflow improvement, or new capability. `workaround`, `observed_recurrence`, and `improvement_signal` capture recovery/outcome, occurrences actually observed, and a proposed observable success check. Report evidence, not importance scores, guessed prevalence, or invented savings. Reporting has no quota and must not derail the user's task.
+
+`get_feedback` returns these fields when recorded. Older records remain readable without inferred categories or causes, with unchanged IDs and triage/deletion metadata. Reports stay bounded to 4,000 UTF-8 bytes; hypothesis and proposal text is shortened or omitted before existing bug evidence is shortened.
+
+Validate bug evidence independently of the proposed fix. Review improvement/feature candidates against observed need, alternatives, product fit, and safety constraints without requiring a failing test. Bring worthwhile proposals to the user for approval and thoughts before accepting them with `triage_feedback`; backlog approval is not implementation permission. Deferred proposals remain active and untriaged, and useful P2/P3 improvements are not discarded merely for being lower priority. This is triage workflow guidance, not a new tool-enforced approval gate. The development sidebar shows supplied categories and separate expandable evidence, hypotheses, proposals, and success checks, all searchable. Exact contracts: [development feedback tools](complete-reference.md#development-feedback-tools).
 
 ## Exact contracts and recovery behavior
 

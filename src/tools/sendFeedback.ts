@@ -1,12 +1,18 @@
 import * as vscode from "vscode";
 
 import type { ToolResult } from "@agentlink/protocol/tool-result";
-import { appendFeedback } from "../util/feedbackStore.js";
+import {
+  appendFeedback,
+  type FeedbackCategory,
+} from "../util/feedbackStore.js";
 
 export async function handleSendFeedback(
   params: {
     tool_name: string;
     feedback: string;
+    category?: FeedbackCategory;
+    suspected_cause?: string;
+    suggested_change?: string;
     observed_impact: string;
     workaround?: string;
     observed_recurrence?: string;
@@ -49,6 +55,23 @@ export async function handleSendFeedback(
     };
   }
 
+  if (
+    params.category !== undefined &&
+    !["bug", "improvement", "feature_request"].includes(params.category)
+  ) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "rejected",
+            error: "category must be bug, improvement, or feature_request",
+          }),
+        },
+      ],
+    };
+  }
+
   try {
     const ext = vscode.extensions.getExtension("agentlink.agentlink");
     const version =
@@ -58,6 +81,9 @@ export async function handleSendFeedback(
       timestamp: new Date().toISOString(),
       tool_name: params.tool_name,
       feedback,
+      category: params.category,
+      suspected_cause: params.suspected_cause?.trim() || undefined,
+      suggested_change: params.suggested_change?.trim() || undefined,
       observed_impact: observedImpact,
       workaround: params.workaround?.trim() || undefined,
       observed_recurrence: params.observed_recurrence?.trim() || undefined,

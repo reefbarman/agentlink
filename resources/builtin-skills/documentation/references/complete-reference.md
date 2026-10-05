@@ -2233,32 +2233,35 @@ Press F5 in VS Code to launch the Extension Development Host for testing.
 
 ### Development feedback tools
 
-Development builds expose local tools for collecting and managing feedback about AgentLink's own tools. Raw feedback is appended to `~/.agentlink/agentlink-feedback.jsonl`; triage and deletion are metadata overlays, so the primary file is never rewritten.
+Development builds expose local tools for collecting and managing AgentLink bug reports, workflow improvements, and feature requests grounded in actual use. This is a reviewed self-improvement loop, not autonomous self-modification. Raw feedback is appended to `~/.agentlink/agentlink-feedback.jsonl`; triage and deletion are metadata overlays, so the primary file is never rewritten.
 
 #### `send_feedback`
 
-Submits feedback about an AgentLink-owned tool. In development builds, `send_feedback` is always advertised directly to every VS Code-backed built-in agent session, including background agents using restrictive tool profiles or skill allowlists; it never requires `find_native_tools` discovery. Feedback-management tools such as `get_feedback` remain eligible for deferred discovery.
+Submits feedback about an AgentLink-owned tool or workflow. In development builds, `send_feedback` is always advertised directly to every VS Code-backed built-in agent session, including background agents using restrictive tool profiles or skill allowlists; it never requires `find_native_tools` discovery. Feedback-management tools such as `get_feedback` remain eligible for deferred discovery.
 
-| Parameter             | Type    | Description                                                                   |
-| --------------------- | ------- | ----------------------------------------------------------------------------- |
-| `tool_name`           | string  | Exact AgentLink tool name the feedback concerns                               |
-| `feedback`            | string  | Non-empty, actionable AgentLink issue or missing capability                   |
-| `observed_impact`     | string  | Required non-empty consequence for the current task                           |
-| `workaround`          | string? | Recovery used, task outcome and extra steps; none or unknown when appropriate |
-| `observed_recurrence` | string? | Occurrences actually observed in this session, not inferred prevalence        |
-| `improvement_signal`  | string? | Observable outcome to check after a fix, not a measured benefit               |
-| `tool_params`         | string? | Optional serialized parameters that help reproduce it                         |
-| `tool_result_summary` | string? | Optional summary of the observed or unexpected behavior                       |
+| Parameter             | Type    | Description                                                                    |
+| --------------------- | ------- | ------------------------------------------------------------------------------ |
+| `tool_name`           | string  | Affected native tool, or `agentlink` for a general AgentLink workflow          |
+| `feedback`            | string  | Non-empty, grounded AgentLink bug, improvement opportunity, or feature request |
+| `category`            | string? | `bug`, `improvement`, or `feature_request`; omit if uncertain                  |
+| `suspected_cause`     | string? | Evidence-supported diagnosis with uncertainty stated, not an established cause |
+| `suggested_change`    | string? | Proposed fix, improvement, or new capability addressing the observed need      |
+| `observed_impact`     | string  | Required observed task consequence or unmet need, even if the task succeeded   |
+| `workaround`          | string? | Recovery used, task outcome and extra steps; none or unknown when appropriate  |
+| `observed_recurrence` | string? | Occurrences actually observed in this session, not inferred prevalence         |
+| `improvement_signal`  | string? | Observable outcome to check after a fix, not a measured benefit                |
+| `tool_params`         | string? | Optional serialized parameters that help reproduce it                          |
+| `tool_result_summary` | string? | Optional summary of the observed or unexpected behavior                        |
 
-Use this only for concrete problems, unexpected behavior, or missing capabilities. Routine success, praise, general commentary, and empty or whitespace-only reports are rejected.
+Report bugs and suggest fixes, improvements, or new capabilities naturally during work, including unnecessary steps or limitations encountered during successful tasks. Preserve bug inputs/results, reproduction details, recovery, and recurrence. A bug report never needs a diagnosis or solution; useful suggestions are encouraged, not required after every task. Do not submit routine praise, generic wishlists, or third-party MCP-server defects, investigate AgentLink's implementation as a reporting detour, or treat suggestions as permission to implement or weaken safeguards.
 
-New reports require `observed_impact`: describe blocked completion, incorrect output, safety risk, extra steps or confusion with concrete evidence. Optional context fields are trimmed and omitted when blank. Do not invent priority, engineering effort, time/token savings or frequency across users. For example, "Missing recovery guidance caused three failed retries and required user intervention" is useful impact evidence; "high impact" is not.
+New reports require `observed_impact`: describe an observed task consequence or unmet need, not hypothetical impact. Optional text fields are trimmed and omitted when blank; invalid categories are rejected. Do not invent priority, engineering effort, time/token savings, or frequency across users. For example, "Missing recovery guidance caused three failed retries and required user intervention" and "Task succeeded after manually comparing two session histories" are useful evidence; "high impact" is not. Keep observations, suspected causes, and proposed changes separate.
 
-The response identifies the recorded entry by stable `id` and immutable `global_index`. Impact context fields use the existing 500-character truncation limit; the complete stored record remains bounded to 4,000 UTF-8 bytes.
+The response identifies the recorded entry by stable `id` and immutable `global_index`. Optional context/proposal text uses the existing 500-character truncation limit; the complete stored record remains bounded to 4,000 UTF-8 bytes. Hypothesis and proposal text is shortened or omitted before existing bug evidence is shortened to fit the byte limit.
 
 #### `get_feedback`
 
-Reads active feedback. Results include stable `id` and immutable `global_index` fields plus `triaged`, optional `priority`, and optional `triaged_at` metadata. Entries include `observed_impact`, `workaround`, `observed_recurrence` and `improvement_signal` when recorded. Older records may omit these fields and remain readable with unchanged IDs, indices, triage and deletion metadata; no migration or inferred backfill is performed.
+Reads active feedback. Results include stable `id` and immutable `global_index` fields plus `triaged`, optional `priority`, and optional `triaged_at` metadata. Entries include `category`, `suspected_cause`, `suggested_change`, `observed_impact`, `workaround`, `observed_recurrence`, and `improvement_signal` when recorded. Older records may omit these fields and remain readable with unchanged IDs, indices, triage and deletion metadata; no migration or inferred backfill is performed.
 
 Validate reported consequences, workarounds and recurrence against current evidence before assigning priority. Use the improvement signal to define a before/after check, not as proof of measured product-wide benefit. Missing context on an older record is unknown impact, not zero impact. Rare safety and correctness failures do not need frequent recurrence to warrant attention.
 
@@ -2272,7 +2275,9 @@ The response is `{ status, count, entries }`. Filters intersect and never renumb
 
 #### `triage_feedback`
 
-Marks feedback as accepted for fixing with a required P0-P3 priority, or returns it to the untriaged queue. Triaged means evaluated and judged worth fixing, not merely reviewed.
+Marks feedback as accepted for fixing or improvement with a required P0-P3 priority, or returns it to the untriaged queue. Triaged means accepted, not merely reviewed. The workflow validates bug evidence independently of suggested fixes and assesses improvement/feature requests against the observed need, alternatives, product fit, safety constraints, and success check without requiring a failing test. Worthwhile proposals are brought to the user for approval and thoughts before acceptance, with approve-for-backlog, refine/discuss, defer, or decline choices. Deferred proposals remain active and untriaged; useful P2/P3 improvements are not blanket-cleanup candidates. Backlog approval is not implementation permission. This is workflow guidance, not a new tool-enforced approval gate; ordinary evidence-based bug triage is unchanged.
+
+The development sidebar displays supplied categories and separate expandable observed impact/need, workaround/outcome, recurrence, unverified suspected cause, suggested change, and proposed success check alongside original inputs/results. Search includes all these fields.
 
 | Parameter  | Type     | Description                                                         |
 | ---------- | -------- | ------------------------------------------------------------------- |

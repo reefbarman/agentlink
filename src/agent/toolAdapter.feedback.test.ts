@@ -43,6 +43,9 @@ describe("feedback production dispatch", () => {
       workaround: "Used an exact search, task completed",
       observed_recurrence: "Two failures in three attempts this session",
       improvement_signal: "Implementation appears in the first search results",
+      category: "bug" as const,
+      suspected_cause: "The implementation may be missing from the index",
+      suggested_change: "Include the implementation in indexed results",
     };
     const sent = await dispatchToolCall(
       "send_feedback",
@@ -77,6 +80,77 @@ describe("feedback production dispatch", () => {
       count: 1,
       entries: [{ ...fields, id: recorded.id }],
     });
+  });
+
+  it.each(["improvement", "feature_request"] as const)(
+    "preserves a %s proposal through retrieval and triage",
+    async (category) => {
+      const fields = {
+        category,
+        suggested_change: "Add a session comparison view",
+        observed_impact: "Task succeeded after manually comparing histories",
+        improvement_signal: "Compare the histories in one view",
+      };
+      const sent = await dispatchToolCall(
+        "send_feedback",
+        {
+          tool_name: "agentlink",
+          feedback: "Manual history comparison",
+          ...fields,
+        },
+        context,
+      );
+      const recorded = JSON.parse(
+        sent.content.find((item) => item.type === "text")?.text ?? "",
+      );
+      expect(recorded.status).toBe("recorded");
+      const triaged = await dispatchToolCall(
+        "triage_feedback",
+        { ids: [recorded.id], triaged: true, priority: "P2" },
+        context,
+      );
+      expect(
+        JSON.parse(
+          triaged.content.find((item) => item.type === "text")?.text ?? "",
+        ),
+      ).toMatchObject({
+        updated_entries: [expect.objectContaining(fields)],
+      });
+      const retrieved = await dispatchToolCall(
+        "get_feedback",
+        { tool_name: "agentlink", triaged: true },
+        context,
+      );
+      const entry = JSON.parse(
+        retrieved.content.find((item) => item.type === "text")?.text ?? "",
+      ).entries[0];
+      expect(entry).toMatchObject({ ...fields, priority: "P2" });
+      expect(entry).not.toHaveProperty("suspected_cause");
+    },
+  );
+
+  it("rejects invalid categories without recording or silently reclassifying", async () => {
+    for (const category of ["", "suggestion", 7, null, {}]) {
+      const result = await dispatchToolCall(
+        "send_feedback",
+        {
+          tool_name: "read_file",
+          feedback: "Unexpected result",
+          observed_impact: "Needed another read",
+          category,
+        },
+        context,
+      );
+      expect(
+        JSON.parse(
+          result.content.find((item) => item.type === "text")?.text ?? "",
+        ),
+      ).toMatchObject({
+        status: "rejected",
+        error: "category must be bug, improvement, or feature_request",
+      });
+    }
+    expect(readFeedback()).toEqual([]);
   });
 
   it("rejects missing, blank and non-string impact through dispatch", async () => {
@@ -129,6 +203,9 @@ describe("feedback production dispatch", () => {
       "workaround",
       "observed_recurrence",
       "improvement_signal",
+      "category",
+      "suspected_cause",
+      "suggested_change",
     ]) {
       expect(retrieved.entries[0]).not.toHaveProperty(field);
     }

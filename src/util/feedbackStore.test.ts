@@ -87,6 +87,9 @@ describe("feedbackStore", () => {
       workaround: "Used read_file, task completed with one extra call",
       observed_recurrence: "Two failures in three attempts this session",
       improvement_signal: "First attempt returns usable content",
+      category: "bug" as const,
+      suspected_cause: "The indexed content may be stale",
+      suggested_change: "Refresh the stale entry before returning it",
     };
     const appended = appendFeedback(makeEntry(context));
     triageFeedback({ ids: [before!.id], triaged: true, priority: "P2" });
@@ -97,7 +100,14 @@ describe("feedbackStore", () => {
       global_index: 0,
       priority: "P2",
     });
-    expect(oldRecord).not.toHaveProperty("observed_impact");
+    for (const field of [
+      "observed_impact",
+      "category",
+      "suspected_cause",
+      "suggested_change",
+    ]) {
+      expect(oldRecord).not.toHaveProperty(field);
+    }
     expect(newRecord).toMatchObject({
       ...context,
       id: appended.id,
@@ -174,6 +184,48 @@ describe("feedbackStore", () => {
       expect(entry?.[field]).toContain("…(truncated)");
     }
     expect(Buffer.byteLength(`${line}\n`, "utf-8")).toBeLessThanOrEqual(4000);
+  });
+
+  it("trims proposals before sacrificing existing bug evidence at the byte limit", () => {
+    const evidence = {
+      feedback: "f".repeat(1800),
+      observed_impact: "i".repeat(400),
+      workaround: "w".repeat(300),
+      observed_recurrence: "r".repeat(200),
+      tool_params: "p".repeat(300),
+      tool_result_summary: "e".repeat(300),
+    };
+    const entry = appendFeedback(
+      makeEntry({
+        ...evidence,
+        category: "bug",
+        suspected_cause: "🌊".repeat(1000),
+        suggested_change: '🌊\n"'.repeat(1000),
+      }),
+    );
+    expect(entry).toMatchObject(evidence);
+    expect(entry.category).toBe("bug");
+    expect(entry.suspected_cause?.length ?? 0).toBeLessThan(520);
+    expect(entry.suggested_change?.length ?? 0).toBeLessThan(520);
+    expect(
+      Buffer.byteLength(fs.readFileSync(feedbackPath, "utf-8"), "utf-8"),
+    ).toBeLessThanOrEqual(4000);
+  });
+
+  it("still bounds oversized evidence when proposal fields have been omitted", () => {
+    const entry = appendFeedback(
+      makeEntry({
+        feedback: "🌊".repeat(5000),
+        suspected_cause: "Small hypothesis",
+        suggested_change: "Small proposal",
+      }),
+    );
+    expect(entry.suspected_cause).toBeUndefined();
+    expect(entry.suggested_change).toBeUndefined();
+    expect(entry.feedback).toContain("…(truncated)");
+    expect(
+      Buffer.byteLength(fs.readFileSync(feedbackPath, "utf-8"), "utf-8"),
+    ).toBeLessThanOrEqual(4000);
   });
 
   it("projects triage metadata without modifying raw feedback", () => {

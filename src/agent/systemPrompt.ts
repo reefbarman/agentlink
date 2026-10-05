@@ -981,21 +981,21 @@ function buildRuleCatalogSection(
 }
 
 /**
- * Dev mode feedback prompt — encourages the agent to submit feedback
- * on tool usage via the send_feedback/get_feedback MCP tools.
+ * Dev mode feedback prompt: an evidence-grounded self-improvement loop.
  */
 function getDevFeedbackPrompt(): string {
   return `
 ## Tool Feedback (Dev Mode)
 
-You have access to \`send_feedback\`, \`get_feedback\`, and \`triage_feedback\` tools. Use them proactively:
+You have access to \`send_feedback\`, \`get_feedback\`, and \`triage_feedback\` tools. Help AgentLink improve itself as you work:
 
-- **After using any AgentLink tool**, call \`send_feedback\` only for a concrete, actionable AgentLink problem: something that did not work, was confusing, returned an unexpected result, or is missing a needed capability. Do not report routine success, praise, general commentary, or empty feedback.
+- **Notice opportunities for self-improvement:** report concrete AgentLink bugs and suggest fixes, workflow improvements, or new capabilities grounded in actual task experience. Successful tasks can reveal unnecessary steps, confusing workflows, or missing capabilities too. Use the affected native tool name, or \`tool_name: "agentlink"\` for a cross-tool or general AgentLink workflow.
+- **Preserve valuable bug reports:** include relevant inputs, results, reproduction details, observed impact, recovery, and recurrence. A bug report never needs a diagnosis or proposed fix. Use optional \`category\` (\`bug\`, \`improvement\`, or \`feature_request\`), \`suspected_cause\` for an uncertain diagnosis, \`suggested_change\` for a proposed fix or feature, and \`improvement_signal\` for an observable success check. Keep facts, hypotheses, and proposals separate; omit causes you do not know.
+- **Suggest what would make the next task better:** when you have a useful idea, describe the capability and how it addresses the observed need without investigating AgentLink's implementation. Do not invent savings, severity, or prevalence. Report naturally without a feedback quota, generic wishlists, routine praise, or derailing the user's task. Proposals do not authorize self-modification or weakening approvals and safety boundaries.
 - For MCP-related work, only submit feedback about AgentLink's native MCP tools (such as \`find_mcp_tools\` and \`call_mcp_tool\`) or AgentLink-owned discovery, transport, approval, dispatch, or result handling. Never submit feedback about a specific MCP server or its native \`server__tool\`: bugs, limitations, confusing output, and domain errors in that server are upstream and out of scope. If AgentLink's MCP plumbing is the problem, use the native AgentLink MCP tool actually involved and include server/tool details only when needed as reproduction context.
-- Include the parameters you passed and a summary of what happened when relevant.
-- Include the parameters you passed and a summary of what happened when relevant, so the issue is diagnosable. Even minor AgentLink friction points are valuable; submit only issue reports naturally as you work, rather than waiting to be asked.
+- Include the parameters you passed and a summary of what happened when relevant, so bugs remain diagnosable. Even minor friction and grounded feature opportunities are valuable; do not wait to be asked.
 - Use \`get_feedback\` to read previously submitted feedback when relevant (e.g. before working on tool improvements).
-- After evaluating untriaged feedback, use \`triage_feedback\` only for items judged worth fixing and assign each one a P0-P3 priority. Triaged means accepted for fixing, not merely reviewed; hide feedback that is deliberately declined instead of triaging it.`;
+- After evaluating untriaged feedback, use \`triage_feedback\` only for items judged worth fixing or improving and assign each one a P0-P3 priority. Triaged means accepted for fixing or improvement, not merely reviewed. Evaluate bug evidence independently of suggested solutions, and evaluate feature requests against the observed need and product fit without requiring a failing test. Bring worthwhile improvement and feature proposals to the user for approval and thoughts before accepting them; backlog approval is not implementation permission. Do not discard useful improvements merely because they are P2/P3; hide deliberately declined feedback instead of triaging it.`;
 }
 
 /**

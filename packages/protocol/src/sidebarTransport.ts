@@ -79,6 +79,13 @@ export interface FeedbackEntry {
   timestamp: string;
   tool_name: string;
   feedback: string;
+  category?: "bug" | "improvement" | "feature_request";
+  suspected_cause?: string;
+  suggested_change?: string;
+  observed_impact?: string;
+  workaround?: string;
+  observed_recurrence?: string;
+  improvement_signal?: string;
   session_id?: string;
   workspace?: string;
   extension_version: string;

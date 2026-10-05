@@ -17,6 +17,19 @@ type GroupBy = "none" | "tool" | "priority";
 type GroupSort = "name-asc" | "name-desc" | "count-desc" | "count-asc";
 
 const PRIORITIES: FeedbackPriority[] = ["P0", "P1", "P2", "P3"];
+const CATEGORY_LABELS = {
+  bug: "Bug",
+  improvement: "Improvement",
+  feature_request: "Feature request",
+};
+const CONTEXT_FIELDS = [
+  ["observed_impact", "Observed impact / need"],
+  ["workaround", "Workaround / outcome"],
+  ["observed_recurrence", "Observed recurrence"],
+  ["suspected_cause", "Suspected cause (unverified)"],
+  ["suggested_change", "Suggested change (proposal)"],
+  ["improvement_signal", "Success check (proposed)"],
+] as const;
 
 function formatTime(iso: string): string {
   try {
@@ -96,7 +109,16 @@ export function FeedbackList({ entries, postCommand }: Props) {
         return false;
       }
       if (!normalizedQuery) return true;
-      return `${entry.tool_name}\n${entry.feedback}`
+      return [
+        entry.tool_name,
+        entry.feedback,
+        entry.category,
+        entry.category && CATEGORY_LABELS[entry.category],
+        ...CONTEXT_FIELDS.map(([field]) => entry[field]),
+        entry.tool_params,
+        entry.tool_result_summary,
+      ]
+        .join("\n")
         .toLocaleLowerCase()
         .includes(normalizedQuery);
     });
@@ -137,11 +159,22 @@ export function FeedbackList({ entries, postCommand }: Props) {
     <div key={entry.id} class="feedback-row">
       <div class="feedback-header">
         <code class="tool-call-name">{entry.tool_name}</code>
+        {entry.category && (
+          <span class="badge">{CATEGORY_LABELS[entry.category]}</span>
+        )}
         <span class="feedback-time" title={entry.timestamp}>
           {formatDate(entry.timestamp)} {formatTime(entry.timestamp)}
         </span>
       </div>
       <div class="feedback-text">{entry.feedback}</div>
+      {CONTEXT_FIELDS.map(([field, label]) =>
+        entry[field] ? (
+          <details key={field} class="feedback-details">
+            <summary>{label}</summary>
+            <pre>{entry[field]}</pre>
+          </details>
+        ) : null,
+      )}
       {entry.tool_params && (
         <details class="feedback-details">
           <summary>Params</summary>

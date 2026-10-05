@@ -307,22 +307,22 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   // --- Dev-only tools ---
 
   send_feedback: {
-    label: "Submit tool feedback",
+    label: "Submit AgentLink feedback",
     devOnly: true,
     description:
-      "Submit actionable feedback about an AgentLink tool only when you encountered a concrete problem, unexpected behavior, or missing capability. Include the observed impact on the current task; optionally describe the workaround, observed recurrence, and an improvement signal. Report evidence, not an importance score or invented savings. Do not submit routine success, praise, empty reports, or general commentary. For MCP-related work, report only problems with AgentLink's native MCP tools or AgentLink-owned MCP plumbing. Never submit feedback about a specific MCP server or its native server__tool, including that server's bugs, limitations, confusing output, or domain errors. Feedback is stored locally for the extension developer to review.",
+      "Help AgentLink improve itself: report concrete bugs and suggest fixes, workflow improvements, or new capabilities grounded in actual use, including limitations encountered during successful tasks. Use the affected native tool name, or agentlink for a general AgentLink workflow. Preserve bug inputs, results, reproduction evidence, and observed task impact. Optionally classify the report with category, separate a suspected_cause hypothesis from a suggested_change proposal, and include workaround, observed_recurrence, and an improvement_signal to check. A bug report never needs a diagnosis or solution. Do not invent savings or prevalence, submit routine success or praise, generate generic wishlists, or derail the user's task. Suggestions do not authorize implementation or weaker safeguards. For MCP-related work, report only problems with AgentLink's native MCP tools or AgentLink-owned MCP plumbing. Never submit feedback about a specific MCP server or its native server__tool, including that server's bugs, limitations, confusing output, or domain errors. Feedback is stored locally for review, not automatically implemented.",
   },
   get_feedback: {
     label: "Read tool feedback",
     devOnly: true,
     description:
-      "Read active feedback about AgentLink tools. Optionally filter by tool name, triage state, and priority. Every result includes a stable ID, global index, and triage metadata; use the stable ID for triage or deletion. Entries include observed_impact, workaround, observed_recurrence, and improvement_signal when recorded; older records may omit them. Treat reporter claims as evidence to validate, not assigned priority or measured product-wide benefit.",
+      "Read active AgentLink bug reports, improvement opportunities, and feature requests. Optionally filter by tool name, triage state, and priority. Every result includes a stable ID, global index, and triage metadata; use the stable ID for triage or deletion. Entries include category, suspected_cause, suggested_change, observed_impact, workaround, observed_recurrence, and improvement_signal when recorded; older records may omit them. Validate observed evidence separately from diagnoses and proposals; reporter claims are not established causes, assigned priority, or measured product-wide benefit.",
   },
   triage_feedback: {
     label: "Triage feedback entries",
     devOnly: true,
     description:
-      "Mark active feedback as accepted for fixing with a required P0-P3 priority, or return it to the untriaged queue. Use stable IDs from get_feedback. Triage metadata is stored separately so the primary feedback file remains append-only.",
+      "Mark active feedback as accepted for fixing or improvement with a required P0-P3 priority, or return it to the untriaged queue. Use stable IDs from get_feedback. Evaluate bugs and grounded feature opportunities separately; accepting a report does not establish its suspected cause or authorize implementation. Triage metadata is stored separately so the primary feedback file remains append-only.",
   },
   delete_feedback: {
     label: "Hide feedback entries",

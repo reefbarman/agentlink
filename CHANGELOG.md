@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Expanded development feedback into an evidence-grounded AgentLink self-improvement loop. Agents can report bugs and suggest fixes, workflow improvements, or new capabilities, including opportunities noticed during successful tasks. Optional category, suspected-cause, and suggested-change fields stay separate from observed evidence, survive retrieval and triage, and appear in the searchable development sidebar. Existing reports remain compatible, with proposal text giving way before bug evidence at the storage limit. The triage workflow reviews worthwhile improvement and feature proposals before asking for user approval and thoughts; deferred ideas remain untriaged, useful P2/P3 proposals are retained, and backlog approval never authorizes implementation or weaker safeguards.
+
 ## 1.25.1
 
 - Fixed protected Git denials being hidden by a successful trailing command. Recognised sandbox permission-denial diagnostics tied to protected repository metadata now retain failure evidence and reviewed recovery guidance even when the shell exits zero or display filtering hides the diagnostic. The actual exit code is preserved, and retries remain non-automatic with repository-state inspection first.
