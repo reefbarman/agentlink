@@ -77,7 +77,7 @@ export function ReleaseUpdateIndicator({
         <button
           ref={trigger}
           type="button"
-          class="icon-button"
+          class="icon-button release-update-trigger"
           title={`${label}: ${candidate?.version}`}
           aria-label={label}
           onClick={() => setOpen((value) => !value)}

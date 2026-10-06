@@ -498,6 +498,12 @@
   cursor: pointer;
 }
 
+.browser-shell.browser-shell-desktop
+  .browser-header
+  .icon-button.release-update-trigger {
+  padding: 0 10px;
+}
+
 .browser-shell.browser-shell-desktop .browser-header .codicon {
   font-size: 18px;
 }
