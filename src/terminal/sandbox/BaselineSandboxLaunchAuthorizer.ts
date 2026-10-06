@@ -383,13 +383,25 @@ function buildEnvironment(
     provenance[name] = source;
   };
   for (const [name, value] of Object.entries(resolved.environment)) {
-    if (isReservedEnvironmentName(name)) continue;
+    if (
+      isReservedEnvironmentName(name) ||
+      name.toLowerCase() === "npm_config_cache"
+    )
+      continue;
     setEntry(name, value, resolved.provenance[name]);
   }
   for (const [name, value] of Object.entries(agentEnvironment)) {
     setEntry(name, value, "agent-reserved");
   }
+  let explicitNpmCache: string | undefined;
   for (const [name, value] of Object.entries(explicit ?? {})) {
+    if (name.toLowerCase() === "npm_config_cache") {
+      if (explicitNpmCache !== undefined && explicitNpmCache !== value) {
+        throw new SandboxPreparationError("conflicting_npm_cache_overrides");
+      }
+      explicitNpmCache = value;
+      continue;
+    }
     if (isReservedEnvironmentName(name)) {
       throw new SandboxPreparationError(
         name === "PATH"
@@ -431,6 +443,11 @@ function buildEnvironment(
         : "agent-reserved",
     );
   }
+  setEntry(
+    "npm_config_cache",
+    explicitNpmCache || path.join(directories.cache, "npm"),
+    explicitNpmCache ? "per-command" : "agent-reserved",
+  );
   const budget = budgetSandboxEnvironment(
     environment,
     provenance,
@@ -717,6 +734,9 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
               ? "HOME is a fresh writable per-command directory; normal user configuration and credentials are absent, while the host home remains readable by absolute path."
               : "The host home directory is readable but not writable; the configured shell environment policy controls inherited variables.",
             "Go and GolangCI caches use writable per-command sandbox directories unless explicitly overridden.",
+            environmentResult.provenance.npm_config_cache === "per-command"
+              ? "npm cache environment uses the explicit per-command env override; CLI --cache precedence and filesystem write restrictions still apply."
+              : "npm cache environment uses writable per-command sandbox storage, overriding inherited environment, shell-policy and npmrc cache settings only. CLI --cache precedence and other npm configuration are unchanged.",
             "Host temporary directories and POSIX IPC are available for development toolchain compatibility.",
             "CPU, memory, process-count, and disk quotas are not fully enforced.",
             ...policyWarnings,

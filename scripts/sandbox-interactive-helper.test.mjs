@@ -364,6 +364,61 @@ test("validates exact control-frame keys and bounds", () => {
   );
 });
 
+for (const stage of [
+  "canonicalizeFilesystemPolicy",
+  "canonicalizeProtectedRootPolicy",
+]) {
+  for (const action of ["terminate", "input-end", "helper-close"]) {
+    test(`cancels ${stage} filesystem preparation via ${action} before any payload launch`, async (t) => {
+      const prepared = deferred();
+      let preparing = false;
+      const harness = createHarness({
+        dependencyOverrides: {
+          async [stage](value) {
+            preparing = true;
+            await prepared.promise;
+            return value;
+          },
+        },
+      });
+      t.after(async () => {
+        prepared.resolve();
+        await harness.helper.close();
+      });
+
+      harness.send(launch());
+      await harness.waitFor(() => preparing, "filesystem preparation");
+      let closing;
+      if (action === "terminate")
+        harness.send({ ...identity, type: "terminate" });
+      else if (action === "input-end") harness.input.end();
+      else closing = harness.helper.close();
+      await new Promise((resolve) => setImmediate(resolve));
+      prepared.resolve();
+      if (closing) await closing;
+      else {
+        await harness.waitFor(() =>
+          harness
+            .frames()
+            .some((frame) => frame.type === "error" || frame.type === "ready"),
+        );
+        assert.match(
+          harness.frames().find((frame) => frame.type === "error")?.message ??
+            "",
+          /cancelled before initialization/,
+        );
+      }
+      assert.equal(harness.calls.initialize.length, 0);
+      assert.equal(harness.calls.spawn.length, 0);
+      assert.equal(harness.calls.proxyAllowlist.length, 0);
+      assert.equal(
+        harness.frames().some((frame) => frame.type === "ready"),
+        false,
+      );
+    });
+  }
+}
+
 test("cancels delayed startup before PTY spawn", async (t) => {
   const runtimeLoaded = deferred();
   const harness = createHarness({

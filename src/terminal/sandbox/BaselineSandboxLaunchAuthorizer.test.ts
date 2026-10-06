@@ -317,7 +317,7 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       privateDirectoryPrefix: path.join(test.privateRoot, "al-budget-"),
       homeDirectory: path.join(test.root, "real-home"),
       hostTemporaryDirectory: os.tmpdir(),
-      environmentBudgetBytes: 2_100,
+      environmentBudgetBytes: 2_250,
       hostEnvironment: {
         PATH: "/usr/bin:/bin",
         HOST_LARGE_B: "b".repeat(600),
@@ -337,6 +337,9 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       );
       expect(launch.policy.environment.values.COMMAND_VALUE).toBe(
         "command-protected",
+      );
+      expect(launch.policy.environment.values.npm_config_cache).toBe(
+        path.join(launch.policy.environment.values.XDG_CACHE_HOME, "npm"),
       );
       expect(launch.policy.environment.values.HOST_LARGE_A).toBeUndefined();
       expect(launch.metadata.environmentBudget?.dropped).toEqual([
@@ -559,6 +562,9 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       expect(environment.GOLANGCI_LINT_CACHE).toBe(
         path.join(privateRoot, "c", "golangci-lint"),
       );
+      expect(environment.npm_config_cache).toBe(
+        path.join(privateRoot, "c", "npm"),
+      );
       expect(await readdir(environment.HOME)).toEqual([]);
       expect(launch.policy.readableRoots).toEqual(["/"]);
       expect(launch.policy.writableRoots).toContain(privateRoot);
@@ -635,6 +641,146 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
         ),
       });
       launch.finalize?.();
+    } finally {
+      await test.dispose();
+    }
+  });
+
+  it.each([
+    { name: "default", host: {}, policy: {} },
+    {
+      name: "inherited duplicates and policy aliases",
+      host: {
+        npm_config_cache: "/host/lower",
+        NPM_CONFIG_CACHE: "/host/upper",
+        NpM_CoNfIg_CaChE: "/host/mixed",
+      },
+      policy: { set: { nPm_ConFig_CacHe: "/policy/cache" } },
+    },
+  ])(
+    "isolates npm cache for $name without changing HOME or command intent",
+    async ({ host, policy }) => {
+      const test = await fixture();
+      const authorizer = new BaselineSandboxLaunchAuthorizer({
+        workspaceRoots: [test.workspace],
+        privateDirectoryPrefix: path.join(test.privateRoot, "al-npm-"),
+        homeDirectory: path.join(test.root, "real-home"),
+        hostEnvironment: { PATH: "/usr/bin:/bin", ...host },
+        environmentPolicy: policy,
+      });
+      try {
+        const command =
+          "mise exec -- npx --cache /explicit/cli-cache --yes example";
+        const prepared = await authorizer.authorize(
+          request(test.workspace, { command }),
+        );
+        const environment = prepared.policy.environment.values;
+        const privateRoot = path.dirname(environment.XDG_CACHE_HOME);
+        expect(environment.HOME).toBe(path.join(test.root, "real-home"));
+        expect(environment.npm_config_cache).toBe(
+          path.join(privateRoot, "c", "npm"),
+        );
+        expect(
+          Object.keys(environment).filter(
+            (name) => name.toLowerCase() === "npm_config_cache",
+          ),
+        ).toEqual(["npm_config_cache"]);
+        expect(prepared.policy.writableRoots).toContain(privateRoot);
+        expect(prepared.policy.writableRoots).not.toContain(
+          "/explicit/cli-cache",
+        );
+        const active = prepared.activate();
+        expect(active.helperRequest.environment.npm_config_cache).toBe(
+          environment.npm_config_cache,
+        );
+        expect(active.helperRequest.command).toBe(command);
+        expect(active.metadata.capabilities.warnings).toContainEqual(
+          expect.stringContaining(
+            "npm cache environment uses writable per-command",
+          ),
+        );
+        prepared.finalize?.();
+        await expect.poll(() => exists(privateRoot)).toBe(false);
+      } finally {
+        await test.dispose();
+      }
+    },
+  );
+
+  it.each([
+    { npm_config_cache: "/explicit/cache" },
+    { NPM_CONFIG_CACHE: "/explicit/cache" },
+    { NpM_CoNfIg_CaChE: "/explicit/cache" },
+    {
+      NPM_CONFIG_CACHE: "/explicit/cache",
+      npm_config_cache: "/explicit/cache",
+    },
+  ])(
+    "collapses explicit npm cache aliases without granting filesystem access: %j",
+    async (env) => {
+      const test = await fixture();
+      try {
+        const launch = await authorizeAndActivate(
+          test.authorizer,
+          request(test.workspace, { env }),
+        );
+        const environment = launch.policy.environment.values;
+        expect(environment.npm_config_cache).toBe("/explicit/cache");
+        expect(
+          Object.keys(environment).filter(
+            (name) => name.toLowerCase() === "npm_config_cache",
+          ),
+        ).toEqual(["npm_config_cache"]);
+        expect(launch.policy.writableRoots).not.toContain("/explicit/cache");
+        expect(launch.metadata.capabilities.warnings).toContainEqual(
+          expect.stringContaining("explicit per-command env override"),
+        );
+        expect(JSON.stringify(launch.metadata)).not.toContain(
+          "/explicit/cache",
+        );
+        launch.finalize?.();
+      } finally {
+        await test.dispose();
+      }
+    },
+  );
+
+  it("uses sandbox storage when explicit npm cache aliases are equally empty", async () => {
+    const test = await fixture();
+    try {
+      const launch = await authorizeAndActivate(
+        test.authorizer,
+        request(test.workspace, {
+          env: { NPM_CONFIG_CACHE: "", npm_config_cache: "" },
+        }),
+      );
+      expect(launch.policy.environment.values.npm_config_cache).toBe(
+        path.join(launch.policy.environment.values.XDG_CACHE_HOME, "npm"),
+      );
+      expect(launch.metadata.capabilities.warnings).toContainEqual(
+        expect.stringContaining("shell-policy and npmrc cache settings only"),
+      );
+      launch.finalize?.();
+    } finally {
+      await test.dispose();
+    }
+  });
+
+  it("rejects conflicting explicit npm cache aliases before launch and cleans private storage", async () => {
+    const test = await fixture();
+    try {
+      await expect(
+        test.authorizer.authorize(
+          request(test.workspace, {
+            env: { NPM_CONFIG_CACHE: "/one", npm_config_cache: "/two" },
+          }),
+        ),
+      ).rejects.toMatchObject({
+        code: "sandbox_preparation_failed",
+        reason: "conflicting_npm_cache_overrides",
+        commandStarted: false,
+      });
+      await expect.poll(() => readdir(test.privateRoot)).toEqual([]);
     } finally {
       await test.dispose();
     }

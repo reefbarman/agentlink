@@ -2,9 +2,13 @@
 
 ## Unreleased
 
+- Fixed early sandbox startup cancellation: terminate requests, input closure and helper shutdown are now retained while filesystem preparation is pending, preventing a cancelled command from launching and leaving orphaned descendants. Approval, networking and filesystem permission policy are unchanged.
+
 - Fixed unnecessary outside-workspace approval prompts when `read_file` context view reads reference files from a skill in the session catalogue. Both read views now allow skill-bundle reads, including in Compose, without granting write access or trusting unrelated paths.
 
 - Fixed raw provider citation markers appearing in Desktop, VS Code and browser replies and final summaries. Unresolved and unfinished citation tokens are hidden, explicitly mapped HTTP(S) sources become clickable links, and Markdown links and literal code examples stay intact.
+
+- Sandboxed commands now preserve normal HOME while npm/npx use private per-command cache storage, including task-wrapper invocations. Explicit per-command cache overrides retain precedence, case-insensitive aliases are normalised and conflicts fail before launch. CLI cache flags, registry/authentication settings, network approvals, native recovery and filesystem-grant policy are unchanged. npm cache recovery no longer suggests replacing HOME; cold caches may still require repeat downloads and destination approvals.
 
 - Fixed MCP failure visibility: error-only server rows now expand to show complete selectable diagnostics in the shared Manager, and configured failed servers remain visible to agent discovery instead of appearing missing. Named discovery returns the connection failure rather than an unexplained empty tool list. Stdio startup errors preserve bounded, redacted process output and the original connection error; paused proxy retries remain paused, with diagnostic-led recovery instead of generic reconnect/reauth advice.
 

@@ -1,6 +1,7 @@
 export type SandboxPreparationFailure =
   | "reserved_path_override"
   | "reserved_environment_override"
+  | "conflicting_npm_cache_overrides"
   | "unsupported_shell_profile"
   | "preparation_failed";
 

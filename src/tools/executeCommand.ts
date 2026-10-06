@@ -404,6 +404,7 @@ type ExecuteCommandRetryGuidance = {
   code:
     | "sandbox_cwd_outside_workspace"
     | "sandbox_missing_capabilities"
+    | "sandbox_npm_cache_write"
     | "sandbox_capability_unresolved"
     | "sandbox_host_integration"
     | "sandbox_node_oom"
@@ -1215,7 +1216,7 @@ function attachSandboxCapabilityRetryGuidance(input: {
     /(?:^|[\\/])\.npm(?:[\\/]|\b)/i.test(output) &&
     splitCompoundCommand(command).some((segment) => {
       const tokens = singleCommandTokens(segment);
-      return tokens?.[0] === "npm";
+      return tokens?.[0] === "npm" || tokens?.[0] === "npx";
     });
   const needsHostConfiguration =
     splitCompoundCommand(command).some((segment) => {
@@ -1237,12 +1238,13 @@ function attachSandboxCapabilityRetryGuidance(input: {
     );
   const needsTemporaryHome =
     !needsHostConfiguration &&
+    !npmHomeDenial &&
     allowTemporaryHome &&
     !temporaryHome &&
     !hasHomeOverride &&
     hostHomeDenial &&
     !isMiseTrustedConfigDenial(output) &&
-    (!managedNetwork || npmHomeDenial);
+    !managedNetwork;
   const needsReviewedHostHome =
     allowTemporaryHome && hostHomeDenial && !temporaryHome && !hasHomeOverride;
   const unresolvedLocalBinding = localBinding && turbopackDenial;
@@ -1325,11 +1327,24 @@ function attachSandboxCapabilityRetryGuidance(input: {
       reviewed_native_execution: true,
     });
   }
+  const npmCacheGuidance =
+    npmHomeDenial && hostHomeDenial && !needsHostConfiguration;
+  if (npmCacheGuidance) {
+    options.unshift({
+      action: "inspect_npm_cache_configuration",
+      same_command: false,
+      fresh_review_after_repair: true,
+    });
+  }
   const guidance: ExecuteCommandRetryGuidance = {
-    code: "sandbox_missing_capabilities",
-    message: compound
-      ? `A step in this compound command failed with bounded evidence that the sandbox ${missingCapabilities.length ? `is missing ${missingCapabilities.join(" and ")}` : "denied a host-HOME write"}. Identify and retry only the failed step with the listed capability. If it needs host credentials or configuration, use the separately reviewed native option; a disposable HOME will not preserve them.`
-      : `The command failed with bounded evidence that the sandbox ${missingCapabilities.length ? `is missing ${missingCapabilities.join(" and ")}` : "denied a host-HOME write"}. Use a disposable HOME only when host credentials and configuration are unnecessary. If the command needs host credentials or configuration, use the separately reviewed native option. AgentLink will not broaden the sandbox automatically.`,
+    code: npmCacheGuidance
+      ? "sandbox_npm_cache_write"
+      : "sandbox_missing_capabilities",
+    message: npmCacheGuidance
+      ? "npm reported a host-HOME cache write denial. Normal sandbox launches preserve HOME and provide a writable per-command npm cache. Inspect explicit env npm_config_cache aliases, inline exports, CLI --cache and npm logs-dir settings for an override. Remove the cache override to use sandbox storage, then request a fresh reviewed execution of only the failed step. Do not replace HOME, change npm authentication or trust mise/asdf configuration to fix a cache write. Explicit cache targets remain subject to filesystem restrictions."
+      : compound
+        ? `A step in this compound command failed with bounded evidence that the sandbox ${missingCapabilities.length ? `is missing ${missingCapabilities.join(" and ")}` : "denied a host-HOME write"}. Identify and retry only the failed step with the listed capability. If it needs host credentials or configuration, use the separately reviewed native option; a disposable HOME will not preserve them.`
+        : `The command failed with bounded evidence that the sandbox ${missingCapabilities.length ? `is missing ${missingCapabilities.join(" and ")}` : "denied a host-HOME write"}. Use a disposable HOME only when host credentials and configuration are unnecessary. If the command needs host credentials or configuration, use the separately reviewed native option. AgentLink will not broaden the sandbox automatically.`,
     automatic_retry: false,
     options,
   };
@@ -3256,8 +3271,15 @@ export async function handleExecuteCommand(
           cwd,
           workspaceRoots,
         });
+        const retryGuidance = (
+          result as TerminalCommandResult & {
+            retry_guidance?: ExecuteCommandRetryGuidance;
+          }
+        ).retry_guidance;
         const retryUnsupportedReason = hasRetryGuidance(result)
-          ? "A narrower reviewed sandbox retry is available; native retry was not attempted."
+          ? retryGuidance?.code === "sandbox_npm_cache_write"
+            ? "npm cache configuration needs inspection and repair before fresh failed-step review; native retry was not attempted."
+            : "A narrower reviewed sandbox retry is available; native retry was not attempted."
           : temporaryHome
             ? "Commands using temporary_home cannot switch to native execution because native execution cannot preserve the disposable HOME contract."
             : !isNativeRetryEligibleDenial(
@@ -3855,6 +3877,8 @@ export async function handleExecuteCommand(
           'Sandbox PATH is host-managed and cannot be overridden through env. Remove env.PATH and put an inline export such as export PATH="/desired/bin:$PATH" before the command in each reviewed sandbox call. Shell changes do not persist between sandbox calls.',
         reserved_environment_override:
           "Remove reserved sandbox environment overrides from env. Host-managed HOME, temporary directories, proxy settings, loader settings, and other reserved entries cannot be replaced through per-call environment input.",
+        conflicting_npm_cache_overrides:
+          "The per-command env contains conflicting case-insensitive npm_config_cache aliases. Remove the duplicates or give them the same value; prefer one canonical npm_config_cache entry. No command was launched and no cache values are reported.",
         unsupported_shell_profile:
           "The attested sandbox helper does not support shellEnvironment.useProfile. Disable that host sandbox setting and request a fresh reviewed execution; do not bypass the sandbox or silently change host configuration.",
         preparation_failed:

@@ -4596,16 +4596,16 @@ describe("handleExecuteCommand", () => {
       name: "npm cache HOME denial",
       command: "npm view vite version",
       output: `npm error code EPERM\nnpm error syscall open\nnpm error path ${os.homedir()}/.npm/_cacache/tmp/fixture`,
-      code: "sandbox_missing_capabilities",
-      action: "retry_with_missing_sandbox_capabilities",
-      sameCommand: true,
+      code: "sandbox_npm_cache_write",
+      action: "inspect_npm_cache_configuration",
+      sameCommand: false,
     },
     {
       name: "compound npm cache HOME denial",
       command: "npm view vite version && npm view vitest version",
       output: `npm error code EPERM\nnpm error syscall open\nnpm error path ${os.homedir()}/.npm/_cacache/tmp/fixture`,
-      code: "sandbox_missing_capabilities",
-      action: "isolate_failed_step_with_temporary_home",
+      code: "sandbox_npm_cache_write",
+      action: "inspect_npm_cache_configuration",
       sameCommand: false,
     },
     {
@@ -4777,6 +4777,13 @@ describe("handleExecuteCommand", () => {
           same_command: sameCommand,
         });
       }
+      if (code === "sandbox_npm_cache_write") {
+        expect(JSON.stringify(payload.retry_guidance)).not.toContain(
+          '"temporary_home":true',
+        );
+        expect(payload.retry_guidance.message).toContain("Do not replace HOME");
+        expect(payload.missing_sandbox_capabilities).toEqual([]);
+      }
       if (goGuidance) {
         expect(payload.retry_guidance.message).toMatch(
           /inspect the command results and partial workspace changes first/i,
@@ -4938,11 +4945,39 @@ describe("handleExecuteCommand", () => {
       },
     },
     {
-      name: "host HOME write denial",
-      output: `npm error Log files were not written due to an error writing to the directory: ${os.homedir()}/.npm/_logs`,
+      name: "listener denial with an unrelated workspace npm cache log",
+      output:
+        "Error: listen EPERM: operation not permitted 127.0.0.1:47200\nnpm error log: /workspace/.npm/_logs/error.log",
+      missing: ["network.allow_local_binding"],
+      action: "retry_with_missing_sandbox_capabilities",
+      option: {
+        sandbox_permissions: "with_additional_permissions",
+        additional_permissions: { network: { allow_local_binding: true } },
+        reason_required: true,
+      },
+    },
+    {
+      name: "non-cache host HOME write denial",
+      output: `npm error failed to write '${os.homedir()}/.agentlink/state.json'`,
       missing: ["temporary_home"],
       action: "retry_with_missing_sandbox_capabilities",
       option: { temporary_home: true },
+      nativeOption: {
+        action: "reviewed_native_retry_preserving_host_home",
+        same_command: true,
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    },
+    {
+      name: "npx cache denial preserves HOME",
+      command: "npx --yes @vscode/vsce ls",
+      output: `npm error Log files were not written due to an error writing to the directory: ${os.homedir()}/.npm/_logs`,
+      code: "sandbox_npm_cache_write",
+      missing: [],
+      action: "inspect_npm_cache_configuration",
+      sameCommand: false,
       nativeOption: {
         action: "reviewed_native_retry_preserving_host_home",
         same_command: true,
@@ -5242,9 +5277,9 @@ describe("handleExecuteCommand", () => {
           code,
           automatic_retry: false,
           options: [
-            ...(missing?.length === 0
-              ? []
-              : [{ action, same_command: sameCommand, ...option }]),
+            ...(action
+              ? [{ action, same_command: sameCommand, ...option }]
+              : []),
             ...(nativeOption ? [nativeOption] : []),
           ],
         },
@@ -5421,11 +5456,13 @@ describe("handleExecuteCommand", () => {
       ),
     );
     expect(payload.temporary_home_unsuitable).toBeUndefined();
-    expect(payload.missing_sandbox_capabilities).toEqual(["temporary_home"]);
-    expect(payload.retry_guidance.options).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ temporary_home: true }),
-      ]),
+    expect(payload.missing_sandbox_capabilities).toEqual([]);
+    expect(payload.retry_guidance.code).toBe("sandbox_npm_cache_write");
+    expect(payload.retry_guidance.options[0].action).toBe(
+      "inspect_npm_cache_configuration",
+    );
+    expect(JSON.stringify(payload.retry_guidance)).not.toContain(
+      '"temporary_home":true',
     );
   });
 
@@ -5509,13 +5546,13 @@ describe("handleExecuteCommand", () => {
       capability_denial: violation,
       retry_outcome: "not_attempted",
       retry_reason:
-        "A narrower reviewed sandbox retry is available; native retry was not attempted.",
-      missing_sandbox_capabilities: ["temporary_home"],
+        "npm cache configuration needs inspection and repair before fresh failed-step review; native retry was not attempted.",
+      missing_sandbox_capabilities: [],
       retry_guidance: {
-        code: "sandbox_missing_capabilities",
+        code: "sandbox_npm_cache_write",
         automatic_retry: false,
         options: [
-          { temporary_home: true },
+          { action: "inspect_npm_cache_configuration", same_command: false },
           {
             action: "reviewed_native_retry_preserving_host_home",
             same_command: true,
@@ -10280,6 +10317,7 @@ describe("handleExecuteCommand", () => {
   it.each([
     "reserved_path_override",
     "reserved_environment_override",
+    "conflicting_npm_cache_overrides",
     "unsupported_shell_profile",
     "preparation_failed",
     "runtime_unavailable_during_preparation",

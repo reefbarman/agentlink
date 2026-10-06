@@ -602,15 +602,6 @@ export function createSandboxInteractiveHelper(options = {}) {
     });
     const identity = identityOf(frame);
     const environment = buildSandboxEnvironment(request.environment);
-    const filesystem = await dependencies.canonicalizeFilesystemPolicy(
-      request.filesystem,
-    );
-    await dependencies.canonicalizeProtectedRootPolicy(
-      filesystem,
-      request.protectedRoots,
-      request.structurallyProtectedRoots,
-    );
-    dependencies.replaceProcessEnvironment(environment);
     let networkProxies;
     const session = {
       identity,
@@ -631,7 +622,17 @@ export function createSandboxInteractiveHelper(options = {}) {
       terminationRequested: undefined,
       terminationSignal: undefined,
     };
+    // Retain cancellation while filesystem preparation is awaiting host I/O.
     active = session;
+    const filesystem = await dependencies.canonicalizeFilesystemPolicy(
+      request.filesystem,
+    );
+    await dependencies.canonicalizeProtectedRootPolicy(
+      filesystem,
+      request.protectedRoots,
+      request.structurallyProtectedRoots,
+    );
+    dependencies.replaceProcessEnvironment(environment);
     const cwd = await dependencies.realpath(request.cwd);
     if (session.terminationRequested) {
       throw new Error("sandbox helper launch cancelled before initialization");

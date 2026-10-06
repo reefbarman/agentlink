@@ -3,6 +3,7 @@ import {
   createNodeSandboxHelperTransportFactory,
 } from "./NodeSandboxHelperTransport.js";
 import {
+  access,
   chmod,
   mkdir,
   mkdtemp,
@@ -210,6 +211,92 @@ describe("createProductionSandboxRuntimeFingerprint", () => {
       await test.dispose();
     }
   });
+
+  it
+    .runIf(
+      process.platform === "darwin" &&
+        process.env.AGENTLINK_RUN_PRODUCTION_SANDBOX_ATTESTATION === "1",
+    )
+    .each([false, true])(
+    "passes isolated npm cache through the production helper (background=%s)",
+    async (background) => {
+      const root = await realpath(
+        await mkdtemp(path.join(os.tmpdir(), "al-npm-production-")),
+      );
+      const workspace = path.join(root, "workspace");
+      await mkdir(workspace);
+      await writeFile(
+        path.join(workspace, ".npmrc"),
+        "cache=/configured/npm-cache\nregistry=https://registry-fixture.invalid/\n",
+      );
+      const runtime = new SandboxHelperClient(
+        createNodeSandboxHelperTransportFactory({
+          extensionRoot: process.cwd(),
+          nodeExecutable: process.execPath,
+        }),
+      );
+      const coordinator = new SandboxTerminalCoordinator({
+        runtime,
+        authorizer: new BaselineSandboxLaunchAuthorizer({
+          workspaceRoots: [workspace],
+          privateDirectoryPrefix: path.join(root, "private-"),
+          trustedRuntimeRoots: [path.dirname(process.execPath)],
+        }),
+        initialCwd: workspace,
+      });
+      try {
+        const result = await coordinator.executeCommand({
+          owner: undefined,
+          command:
+            'check_cache() { printf "%s\\n" "$HOME" "$npm_config_cache"; npm config get cache && npm config get registry && npm config get cache --cache "$PWD/cli-cache" && npm cache verify && npx --version; }; check_cache',
+          cwd: workspace,
+          sandboxSessionId: "production-npm-cache-test",
+          env: background ? { NPM_CONFIG_CACHE: "" } : undefined,
+          background,
+        });
+        const target = {
+          owner: undefined,
+          terminalId: result.terminal_id,
+          commandId: result.command_id,
+        };
+        if (background) {
+          await expect
+            .poll(() => coordinator.getBackgroundState(target)?.is_running, {
+              timeout: 10_000,
+            })
+            .toBe(false);
+        }
+        const output = coordinator.getRetainedOutput(target);
+        expect(
+          background
+            ? coordinator.getBackgroundState(target)?.exit_code
+            : result.exit_code,
+        ).toBe(0);
+        const lines = output?.output.split("\n") ?? [];
+        expect(lines[0]).toBe(os.homedir());
+        expect(lines[1]).toMatch(/\/private-[^/]+\/c\/npm$/);
+        expect(lines[2]).toBe(lines[1]);
+        expect(lines[3]).toBe("https://registry-fixture.invalid/");
+        expect(lines[4]).toBe(path.join(workspace, "cli-cache"));
+        expect(output?.output).toContain("Cache verified and compressed");
+        const privateRoot = path.dirname(path.dirname(lines[1]));
+        await expect
+          .poll(async () => {
+            try {
+              await access(privateRoot);
+              return true;
+            } catch (error) {
+              return (error as NodeJS.ErrnoException).code !== "ENOENT";
+            }
+          })
+          .toBe(false);
+      } finally {
+        coordinator.dispose();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+    35_000,
+  );
 
   it.runIf(
     process.platform === "darwin" &&
