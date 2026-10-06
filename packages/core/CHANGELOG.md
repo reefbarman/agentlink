@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.4.1 — 2026-10-05
+
+- Failed MCP servers now show complete, redacted startup errors and process stderr in the MCP manager and stay visible to the agent through find_mcp_tools instead of looking missing.
+
 ## 0.4.0 — 2026-10-05
 
 - Dev-mode send_feedback gains optional category, suspected cause, and suggested change fields for bugs, improvements, and feature requests, with sidebar display and search, plus updated agent guidance and an additive FeedbackEntry protocol type.

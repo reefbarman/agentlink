@@ -14,6 +14,8 @@
 
 - Sandboxed commands now preserve normal HOME while npm/npx use private per-command cache storage, including task-wrapper invocations. Explicit per-command cache overrides retain precedence, case-insensitive aliases are normalised and conflicts fail before launch. CLI cache flags, registry/authentication settings, network approvals, native recovery and filesystem-grant policy are unchanged. npm cache recovery no longer suggests replacing HOME; cold caches may still require repeat downloads and destination approvals.
 
+## 1.26.1
+
 - Fixed MCP failure visibility: error-only server rows now expand to show complete selectable diagnostics in the shared Manager, and configured failed servers remain visible to agent discovery instead of appearing missing. Named discovery returns the connection failure rather than an unexplained empty tool list. Stdio startup errors preserve bounded, redacted process output and the original connection error; paused proxy retries remain paused, with diagnostic-led recovery instead of generic reconnect/reauth advice.
 
 ## 1.26.0
