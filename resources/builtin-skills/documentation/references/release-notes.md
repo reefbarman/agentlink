@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Separated skill activation from reading a skill's supporting files. `load_skill` now only activates `SKILL.md` files and returns the skill's directory plus guidance for reading referenced files. The new `read_skill_resource` tool reads bounded, paginated text from a bundled skill's directory without activating it, and stays available in restricted profiles and under skill tool allowlists. Other skills keep using `read_file`. Passing a bundled reference path to `load_skill` still works for now but no longer activates the skill, and resource reads show as file reads rather than loaded skills.
+
 - Fixed early sandbox startup cancellation: terminate requests, input closure and helper shutdown are now retained while filesystem preparation is pending, preventing a cancelled command from launching and leaving orphaned descendants. Approval, networking and filesystem permission policy are unchanged.
 
 - Fixed unnecessary outside-workspace approval prompts when `read_file` context view reads reference files from a skill in the session catalogue. Both read views now allow skill-bundle reads, including in Compose, without granting write access or trusting unrelated paths.

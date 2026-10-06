@@ -34,13 +34,15 @@ Each file becomes a `/<name>` command that injects its body as a prompt.
 
 Directories containing a `SKILL.md` with single-line YAML frontmatter (`name`, `description`, optional `modeSlugs`, `allowed-tools`, `invocation`). Discovery walks the workspace ancestor chain and reads `skills/` plus mode-specific `skills-<mode>/` directories under the global/project `.agents`, `.claude`, and `.agentlink` conventions; AgentLink's bundled skills have the lowest priority. The canonical catalog validates identity and frontmatter, resolves collisions deterministically with provenance diagnostics, applies per-skill enablement and mode/dependency policy, and preserves each skill's tool restrictions through activation and restored/background sessions. Detected skills:
 
-- appear in the bounded system-prompt Skills catalog and load on demand via `load_skill`
+- appear in the bounded system-prompt Skills catalog and activate on demand via `load_skill`, which loads only the skill's `SKILL.md`
 - appear in the slash-command picker as `/skill:<name>`
 - can be listed with `/skills` (shows resolved `SKILL.md` paths for the current mode)
 
 Enabled skills omitted from the prompt's bounded list remain in the session catalog. `load_skill` remains available in restricted native profiles and checks the advertised content revision and real path. A rejected path returns up to ten matching canonical candidates without loading or activating them; retry with the intended candidate's exact path. Valid advertised symlink aliases activate the same canonical identity and restrictions.
 
 In VS Code workspace sessions and mirrored browser workspace chat, a skill's reference files are readable with either `read_file` view without outside-workspace approval when the skill is in the current session catalogue. Global and bundled skill directories, including canonical symlink targets, are covered. This is read access only, not permission to edit skills or read unrelated outside-workspace files.
+
+Supporting files are read separately from activation. Activation returns the skill's `skillDirectory`; the agent resolves relative references such as `references/guide.md` against it and reads them only when needed. Bundled AgentLink skills use `read_skill_resource` (skill `SKILL.md` path plus a relative resource path), which stays available in restricted profiles and under active skill tool allowlists. Other skills use `read_file`. Reading a resource never activates the skill or applies its `allowed-tools` restriction.
 
 The optional `allowed-tools` field narrows ordinary tool access while the skill is active. Session continuity controls stay available: the agent can still load another skill, ask the user, finish the task, and use `search_session_history` or `read_session_excerpt` for the current session. A fresh-session handoff may also read only its host-linked direct predecessor with `scope: handoff_source` and the exact source session identity returned by search.
 

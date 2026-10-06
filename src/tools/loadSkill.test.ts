@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { handleLoadSkill, loadSkill } from "./loadSkill.js";
 
 import { createHash } from "crypto";
-import { handleLoadSkill } from "./loadSkill.js";
 
 function textOf(result: Awaited<ReturnType<typeof handleLoadSkill>>): string {
   return result.content.find((item) => item.type === "text")?.text ?? "";
@@ -42,12 +42,53 @@ describe("handleLoadSkill", () => {
       "/provider/skills/helper/SKILL.md",
     );
     expect(JSON.parse(textOf(result))).toEqual({
+      kind: "skill_activation",
       skill_name: "helper",
       skillPath: "/provider/skills/helper/SKILL.md",
+      skillDirectory: "/provider/skills/helper",
       skill_id: "global:agentlink:helper",
       revision,
+      resourceGuidance: expect.stringContaining("read_file"),
       content,
     });
+  });
+
+  it("returns a typed activation only for a successful SKILL.md load", async () => {
+    const content = "# Helper skill";
+    const revision = createHash("sha256").update(content).digest("hex");
+    const skill = {
+      id: "global:agentlink:helper",
+      name: "helper",
+      revision,
+      skillPath: "/provider/skills/helper/SKILL.md",
+      realSkillPath: "/provider/skills/helper/SKILL.md",
+      sourceScope: "global" as const,
+    };
+    const provider = {
+      resolvePath: vi.fn((input: string) => input),
+      normalizeExistingPath: vi.fn((input: string) => input),
+      readTextFile: vi.fn(async () => content),
+    };
+
+    const loaded = await loadSkill(
+      { path: skill.skillPath },
+      [skill],
+      provider,
+    );
+    expect(loaded.activation).toEqual({
+      id: skill.id,
+      name: skill.name,
+      revision,
+      skillPath: skill.skillPath,
+    });
+
+    const rejected = await loadSkill(
+      { path: "/provider/skills/other/SKILL.md" },
+      [skill],
+      provider,
+    );
+    expect(rejected.result.isError).toBe(true);
+    expect(rejected.activation).toBeUndefined();
   });
 
   it("returns the canonical activation path when loading an advertised symlink alias", async () => {
@@ -188,7 +229,43 @@ describe("handleLoadSkill", () => {
     });
   });
 
-  it("loads resources from an advertised built-in skill directory", async () => {
+  it("activates a built-in skill through its SKILL.md with read_skill_resource guidance", async () => {
+    const skillContent = "# Built-in documentation";
+    const revision = createHash("sha256").update(skillContent).digest("hex");
+    const skillPath =
+      "/extensions/agentlink/resources/builtin-skills/documentation/SKILL.md";
+    const artifactProvider = {
+      resolvePath: vi.fn((filePath: string) => filePath),
+      normalizeExistingPath: vi.fn((filePath: string) => filePath),
+      readTextFile: vi.fn(async () => skillContent),
+    };
+
+    const loaded = await loadSkill(
+      { path: skillPath },
+      [
+        {
+          id: "builtin:agentlink:documentation",
+          name: "documentation",
+          revision,
+          skillPath,
+          realSkillPath: skillPath,
+          sourceScope: "builtin",
+        },
+      ],
+      artifactProvider,
+    );
+
+    expect(loaded.activation?.id).toBe("builtin:agentlink:documentation");
+    expect(JSON.parse(textOf(loaded.result))).toMatchObject({
+      kind: "skill_activation",
+      skillDirectory:
+        "/extensions/agentlink/resources/builtin-skills/documentation",
+      resourceGuidance: expect.stringContaining("read_skill_resource"),
+      content: skillContent,
+    });
+  });
+
+  it("reads legacy built-in resource paths without activating the owner", async () => {
     const skillContent = "# Built-in documentation";
     const resourceContent = "# Complete reference\nBundled documentation.";
     const revision = createHash("sha256").update(skillContent).digest("hex");
@@ -200,13 +277,10 @@ describe("handleLoadSkill", () => {
       ),
     };
 
-    const result = await handleLoadSkill(
+    const { result, activation } = await loadSkill(
       {
         path: "/extensions/agentlink/resources/builtin-skills/documentation/references/complete-reference.md",
       },
-      {} as never,
-      {} as never,
-      "session-1",
       [
         {
           id: "builtin:agentlink:documentation",
@@ -222,6 +296,8 @@ describe("handleLoadSkill", () => {
       artifactProvider,
     );
 
+    expect(activation).toBeUndefined();
+    expect(result.isError).toBe(false);
     expect(artifactProvider.readTextFile).toHaveBeenNthCalledWith(
       1,
       "/extensions/agentlink/resources/builtin-skills/documentation/SKILL.md",
@@ -231,14 +307,18 @@ describe("handleLoadSkill", () => {
       "/extensions/agentlink/resources/builtin-skills/documentation/references/complete-reference.md",
     );
     expect(JSON.parse(textOf(result))).toEqual({
+      kind: "skill_resource",
+      activation: false,
       skill_name: "documentation",
       skillPath:
         "/extensions/agentlink/resources/builtin-skills/documentation/SKILL.md",
       skill_id: "builtin:agentlink:documentation",
       revision,
+      resource_path: "references/complete-reference.md",
       resourcePath:
         "/extensions/agentlink/resources/builtin-skills/documentation/references/complete-reference.md",
       content: resourceContent,
+      deprecation: expect.stringContaining("read_skill_resource"),
     });
   });
 
@@ -274,6 +354,10 @@ describe("handleLoadSkill", () => {
       error:
         "Skill path is not in the current session's advertised skill allowlist",
       path: "/provider/skills/helper/references/guide.md",
+      status: "skill_not_in_catalog",
+      guidance: expect.stringContaining(
+        "supporting file inside the helper skill directory",
+      ),
     });
   });
 

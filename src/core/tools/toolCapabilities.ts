@@ -68,7 +68,11 @@ export interface ToolCapabilityMetadata {
 }
 
 const NATIVE_BRIDGE_TOOLS = new Set(["find_native_tools", "call_native_tool"]);
-const ARTIFACT_LOADER_TOOLS = new Set(["load_rule", "load_skill"]);
+const ARTIFACT_LOADER_TOOLS = new Set([
+  "load_rule",
+  "load_skill",
+  "read_skill_resource",
+]);
 const MCP_BRIDGE_TOOLS = new Set([
   "find_mcp_tools",
   "call_mcp_tool",
@@ -130,6 +134,7 @@ const ESSENTIAL_TOOLS = new Set([
   "send_feedback",
   "load_rule",
   "load_skill",
+  "read_skill_resource",
   "find_native_tools",
   "call_native_tool",
   "compose",
@@ -206,6 +211,14 @@ const toolCapabilities = [
   ),
   metadata("load_rule", "read", ["artifact.rules"], "read", "never", true),
   metadata("load_skill", "read", ["artifact.skills"], "read", "never", true),
+  metadata(
+    "read_skill_resource",
+    "read",
+    ["artifact.skills"],
+    "read",
+    "never",
+    true,
+  ),
   metadata(
     "list_files",
     "read",

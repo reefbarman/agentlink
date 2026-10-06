@@ -128,7 +128,10 @@ const CATEGORY_BY_TOOL = new Map<string, ToolCategory>([
   ["apply_diff", "edits"],
   ["find_and_replace", "edits"],
   ["rename_symbol", "edits"],
-  ["load_skill", "skills"],
+  // Skill activations render as skill_load blocks and count as skills. A
+  // load_skill tool_call only remains for non-activating resource reads.
+  ["load_skill", "files"],
+  ["read_skill_resource", "files"],
 ]);
 
 const EXPLORATION_CATEGORIES: ToolCategory[] = [

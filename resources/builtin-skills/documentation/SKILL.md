@@ -14,7 +14,7 @@ The files under this skill directory are the complete runtime documentation sour
 - `README.md` is the human-facing documentation index.
 - `references/*.md` contain the detailed product reference.
 
-Use `load_skill` to load either of these bundled documentation files. When its target is inside an advertised built-in skill directory, `load_skill` resolves the resource and keeps this `SKILL.md` as the owning skill for activation. Use the absolute reference path beneath the advertised skill path; relative tool paths resolve against the workspace, not this skill directory.
+Read these bundled documentation files with `read_skill_resource`: pass this skill's `SKILL.md` path (the `skillPath` from activation) as `skill_path` and the path relative to this directory, such as `references/tools.md`, as `resource_path`. Reading a reference does not activate anything. Use `offset` and `next_offset` to page long references. Do not pass reference paths to `load_skill`; it only activates `SKILL.md` files.
 
 When this skill is active, **do not read files outside this directory** to answer AgentLink product questions. In particular, do not inspect the extension installation's root `README.md`, `package.json`, `CHANGELOG.md`, TypeScript/source files, build output, user settings, or other local files to fill a documentation gap. Those reads can look like unexplained access to the user's extension installation.
 
@@ -22,9 +22,9 @@ If the relevant bundled reference does not document a detail, say: **“The bund
 
 ## Topic routing
 
-Load the smallest relevant reference page directly with `load_skill`:
+Read the smallest relevant reference page directly with `read_skill_resource`:
 
-| User question                                                                                                                                                     | Load                                                                                                                  |
+| User question                                                                                                                                                     | Read                                                                                                                  |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Install or use the standalone CLI preview; terminal chat, CLI providers, sessions, storage, limits, commands, or current slice boundaries                         | `references/standalone-cli.md`                                                                                        |
 | Embed AgentLink in an app, desktop runtime, CLI, or cloud service; SDK package architecture; host tools, sessions, approvals, or migration from another agent SDK | `references/embedding-agentlink.md`                                                                                   |
@@ -38,14 +38,14 @@ Load the smallest relevant reference page directly with `load_skill`:
 | Exact contributed command, command-palette title, view, package version, engine requirement, or extension metadata                                                | `references/package-contract.md`                                                                                      |
 | Release history or upgrade notes                                                                                                                                  | `references/release-notes.md`                                                                                         |
 
-For provider configuration, OpenRouter, local endpoints, or Claude Code authentication through Meridian, load `references/providers.md` first. It owns the setup walkthrough and connection-file examples; `references/settings.md` owns advanced connection behavior.
+For provider configuration, OpenRouter, local endpoints, or Claude Code authentication through Meridian, read `references/providers.md` first. It owns the setup walkthrough and connection-file examples; `references/settings.md` owns advanced connection behavior.
 
-For update availability, automatic-check opt-out, dismissal, manual checks, and host-specific browser notices, load `references/getting-started.md` first; CLI commands are owned by `references/standalone-cli.md`. Update checks retrieve metadata only, never download, install, run a shell command, or restart anything.
+For update availability, automatic-check opt-out, dismissal, manual checks, and host-specific browser notices, read `references/getting-started.md` first; CLI commands are owned by `references/standalone-cli.md`. Update checks retrieve metadata only, never download, install, run a shell command, or restart anything.
 
 ## Answering checklist
 
-1. Use `load_skill` to load the owning bundled reference before answering a detailed question.
-2. For exact extension metadata, command, view, setting, default, scope, enum, or pattern, use `load_skill` for `references/package-contract.md`. For behavior and workflows, load the owning topic page. Do not infer values from source code.
+1. Use `read_skill_resource` to read the owning bundled reference before answering a detailed question.
+2. For exact extension metadata, command, view, setting, default, scope, enum, or pattern, read `references/package-contract.md`. For behavior and workflows, read the owning topic page. Do not infer values from source code.
 3. Distinguish the VS Code experience from the browser remote. The browser is read-only for diffs and has no shell or write path.
 4. For indexing, distinguish default local lexical/structural retrieval from explicitly enabled OpenAI embeddings, which may send source chunks and queries to OpenAI.
 5. If the documentation does not cover the requested detail, state the gap plainly instead of reading outside this skill directory.

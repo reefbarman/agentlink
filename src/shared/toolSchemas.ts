@@ -367,8 +367,19 @@ export const loadSkillSchema = {
   path: z
     .string()
     .describe(
-      "Absolute or workspace-relative path of a skill file that was explicitly advertised in the current system prompt.",
+      "Absolute or workspace-relative path of a SKILL.md file advertised in the current session's skill catalog.",
     ),
+};
+
+export const readSkillResourceSchema = {
+  skill_path: z
+    .string()
+    .describe("The owning built-in skill's catalog SKILL.md path."),
+  resource_path: z
+    .string()
+    .describe("Path relative to the skill directory, e.g. references/a.md."),
+  offset: z.number().int().min(1).optional().describe("1-based start line."),
+  limit: z.number().int().min(1).max(2000).optional().describe("Max lines."),
 };
 
 export const loadRuleSchema = {

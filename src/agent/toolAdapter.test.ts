@@ -31,7 +31,8 @@ import type { MemoryToolProvider } from "../core/capabilities/memory.js";
 import { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { getWorkspaceRoots, resolveAndValidatePath } from "../util/paths.js";
 import { handleLoadRule } from "../tools/loadRule.js";
-import { handleLoadSkill } from "../tools/loadSkill.js";
+import { loadSkill } from "../tools/loadSkill.js";
+import { handleReadSkillResource } from "../tools/readSkillResource.js";
 import { handleReadFile } from "../tools/readFile.js";
 import {
   handleGetEditorState,
@@ -124,8 +125,19 @@ vi.mock("../tools/loadRule.js", () => ({
   }),
 }));
 vi.mock("../tools/loadSkill.js", () => ({
-  handleLoadSkill: vi.fn().mockResolvedValue({
-    content: [{ type: "text", text: JSON.stringify({ skill_name: "helper" }) }],
+  loadSkill: vi.fn().mockResolvedValue({
+    result: {
+      content: [
+        { type: "text", text: JSON.stringify({ skill_name: "helper" }) },
+      ],
+    },
+  }),
+}));
+vi.mock("../tools/readSkillResource.js", () => ({
+  handleReadSkillResource: vi.fn().mockResolvedValue({
+    content: [
+      { type: "text", text: JSON.stringify({ kind: "skill_resource" }) },
+    ],
   }),
 }));
 vi.mock("../tools/searchFiles.js", () => ({
@@ -1200,6 +1212,7 @@ const READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT = [
   "get_module_neighbors",
   "load_rule",
   "load_skill",
+  "read_skill_resource",
   "list_files",
   "search_files",
   "web_search",
@@ -1292,6 +1305,13 @@ describe("READ_ONLY_TOOLS", () => {
       availability: { kind: "artifact-loader" },
       disclosure: "essential",
     });
+    expect(TOOL_CAPABILITIES.read_skill_resource).toMatchObject({
+      availability: { kind: "artifact-loader" },
+      disclosure: "essential",
+      sideEffect: "read",
+      requiresApproval: "never",
+    });
+    expect(TOOL_CAPABILITIES.read_skill_resource.composable).not.toBe(true);
     expect(TOOL_CAPABILITIES.get_code_actions).toMatchObject({
       availability: { kind: "benchmark-only" },
       disclosure: "eligible",
@@ -2199,6 +2219,7 @@ describe("getAgentTools", () => {
     expect(names).not.toContain("find_and_replace");
     expect(names).not.toContain("load_rule");
     expect(names).toContain("load_skill");
+    expect(names).toContain("read_skill_resource");
     expect(names).not.toContain("ask_user");
   });
 
@@ -2292,6 +2313,7 @@ describe("getAgentTools", () => {
         })
         .map((tool) => tool.name);
       expect(names).toContain("load_skill");
+      expect(names).toContain("read_skill_resource");
       expect(names).toContain("load_rule");
       expect(names).not.toContain("write_file");
     },
@@ -2430,6 +2452,7 @@ describe("getAgentTools", () => {
     expect(names).toContain("search_session_history");
     expect(names).toContain("read_session_excerpt");
     expect(names).toContain("load_skill");
+    expect(names).toContain("read_skill_resource");
     expect(names).toContain("ask_user");
     expect(names).toContain("set_task_status");
   });
@@ -4358,7 +4381,7 @@ describe("dispatchToolCall", () => {
         isPathTrusted: vi.fn(() => false),
       } as any,
     });
-    vi.mocked(handleLoadSkill).mockClear();
+    vi.mocked(loadSkill).mockClear();
 
     const result = await runtime.executeTool({
       name: "load_skill",
@@ -4375,11 +4398,8 @@ describe("dispatchToolCall", () => {
         { type: "text", text: JSON.stringify({ skill_name: "helper" }) },
       ],
     });
-    expect(handleLoadSkill).toHaveBeenCalledWith(
+    expect(loadSkill).toHaveBeenCalledWith(
       { path: skillPath },
-      expect.anything(),
-      expect.anything(),
-      "background-session",
       advertisedSkills,
       expect.anything(),
     );
@@ -4403,17 +4423,19 @@ describe("dispatchToolCall", () => {
       getAdvertisedSkills: () => [skill],
       onSkillLoad,
     };
-    vi.mocked(handleLoadSkill).mockResolvedValueOnce({
-      isError: true,
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            status: "skill_not_in_catalog",
-            candidates: [{ id: skill.id, name: skill.name, path: skillPath }],
-          }),
-        },
-      ],
+    vi.mocked(loadSkill).mockResolvedValueOnce({
+      result: {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "skill_not_in_catalog",
+              candidates: [{ id: skill.id, name: skill.name, path: skillPath }],
+            }),
+          },
+        ],
+      },
     });
     await runtime.executeTool({
       name: "load_skill",
@@ -4422,15 +4444,15 @@ describe("dispatchToolCall", () => {
     });
     expect(onSkillLoad).not.toHaveBeenCalled();
 
-    for (const requestPath of [
-      skillPath,
-      "/tmp/project/.agentlink/skills/helper/SKILL.md",
-    ]) {
-      vi.mocked(handleLoadSkill).mockResolvedValueOnce({
+    // A resource response carrying owner identity fields must not activate.
+    vi.mocked(loadSkill).mockResolvedValueOnce({
+      result: {
         content: [
           {
             type: "text",
             text: JSON.stringify({
+              kind: "skill_resource",
+              activation: false,
               skill_id: skill.id,
               skill_name: skill.name,
               revision: skill.revision,
@@ -4438,6 +4460,34 @@ describe("dispatchToolCall", () => {
             }),
           },
         ],
+      },
+    });
+    await runtime.executeTool({
+      name: "load_skill",
+      input: { path: "/tmp/project/.agents/skills/helper/references/a.md" },
+      context,
+    });
+    expect(onSkillLoad).not.toHaveBeenCalled();
+
+    for (const requestPath of [
+      skillPath,
+      "/tmp/project/.agentlink/skills/helper/SKILL.md",
+    ]) {
+      vi.mocked(loadSkill).mockResolvedValueOnce({
+        result: {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ kind: "skill_activation" }),
+            },
+          ],
+        },
+        activation: {
+          id: skill.id,
+          name: skill.name,
+          revision: skill.revision,
+          skillPath,
+        },
       });
       await runtime.executeTool({
         name: "load_skill",
@@ -4475,7 +4525,7 @@ describe("dispatchToolCall", () => {
         isPathTrusted: vi.fn(() => false),
       } as any,
     });
-    vi.mocked(handleLoadSkill).mockClear();
+    vi.mocked(loadSkill).mockClear();
 
     await runtime.executeTool({
       name: "load_skill",
@@ -4487,14 +4537,58 @@ describe("dispatchToolCall", () => {
       },
     });
 
-    expect(handleLoadSkill).toHaveBeenCalledWith(
+    expect(loadSkill).toHaveBeenCalledWith(
       { path: resourcePath },
-      expect.anything(),
-      expect.anything(),
-      "background-session",
       advertisedSkills,
       expect.anything(),
     );
+  });
+
+  it("dispatches read_skill_resource non-interactively without activating the owner", async () => {
+    const skillPath =
+      "/extensions/agentlink/resources/builtin-skills/documentation/SKILL.md";
+    const advertisedSkills = [
+      {
+        id: "builtin:agentlink:documentation",
+        name: "documentation",
+        revision: "a".repeat(64),
+        skillPath,
+        realSkillPath: skillPath,
+        sourceScope: "builtin" as const,
+      },
+    ];
+    const onSkillLoad = vi.fn();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      approvalManager: {
+        isPathTrusted: vi.fn(() => false),
+      } as any,
+    });
+    vi.mocked(handleReadSkillResource).mockClear();
+
+    const input = {
+      skill_path: skillPath,
+      resource_path: "references/tools.md",
+    };
+    const result = await runtime.executeTool({
+      name: "read_skill_resource",
+      input,
+      context: {
+        sessionId: "background-session",
+        interactionPolicy: "deny",
+        getAdvertisedSkills: () => advertisedSkills,
+        onSkillLoad,
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(handleReadSkillResource).toHaveBeenCalledWith(
+      input,
+      advertisedSkills,
+      expect.anything(),
+    );
+    expect(onSkillLoad).not.toHaveBeenCalled();
+    expect(mockOnApprovalRequest).not.toHaveBeenCalled();
   });
 
   it("allows non-interactive reads of resources associated with an advertised skill", async () => {
@@ -4547,7 +4641,7 @@ describe("dispatchToolCall", () => {
         isPathTrusted: vi.fn(() => false),
       } as any,
     });
-    vi.mocked(handleLoadSkill).mockClear();
+    vi.mocked(loadSkill).mockClear();
 
     const result = await runtime.executeTool({
       name: "load_skill",
@@ -4566,7 +4660,7 @@ describe("dispatchToolCall", () => {
         reason: "interaction_denied",
       },
     });
-    expect(handleLoadSkill).not.toHaveBeenCalled();
+    expect(loadSkill).not.toHaveBeenCalled();
   });
 
   it.each([

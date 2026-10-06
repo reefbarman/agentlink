@@ -54,7 +54,14 @@ In VS Code workspace sessions and mirrored browser workspace chat, both `read_fi
 
 `load_skill` remains available in restricted native profiles, including review and read-only research. `load_rule` is exposed only when the current request advertises deferred local rules, including in those restricted profiles; an empty rule catalog omits the tool entirely. These loaders read only artifacts authorised by the current session catalog, not arbitrary files. Enabled skills omitted from the bounded prompt projection remain loadable by their canonical paths. Skill content and real-path revision checks still apply.
 
-When a skill path is rejected, `skill_not_in_catalog` returns up to ten catalog candidates matching the requested skill name or identity, plus an omitted count. This lookup reads no skill content and activates nothing. Retry with the intended candidate's exact path. If none match, refresh the catalog or check the skill's enabled state and mode. A valid advertised symlink alias returns the canonical activation path so its restrictions are applied consistently.
+When a skill path is rejected, `skill_not_in_catalog` returns up to ten catalog candidates matching the requested skill name or identity, plus an omitted count. This lookup reads no skill content and activates nothing. Retry with the intended candidate's exact path. If none match, refresh the catalog or check the skill's enabled state and mode. When the rejected path is a supporting file inside a catalogued skill's directory, the guidance says so and points to `read_file`. A valid advertised symlink alias returns the canonical activation path so its restrictions are applied consistently.
+
+`load_skill` activates only `SKILL.md` files. A successful activation returns `kind: "skill_activation"`, the skill's `skillDirectory`, and guidance for reading referenced files. Resolve a skill's relative references against `skillDirectory` and read them only when needed:
+
+- **Built-in skills:** use `read_skill_resource` with the skill's `SKILL.md` path as `skill_path` and a path relative to its directory as `resource_path`, for example `references/tools.md`. It is available wherever `load_skill` is, including restricted profiles and active skill tool allowlists. It rejects absolute paths, `..` segments, symlinks that escape the skill directory, directories, binary files, unadvertised owners, and non-built-in skills. The owner's revision is checked first. Results are bounded text with `total_lines`, `showing`, `eof`, and `next_offset` for paging with `offset` and `limit`.
+- **Global, project, and other skills:** use `read_file` with the absolute path under the skill directory.
+
+Reading a resource never activates a skill, applies its tool restrictions, grants path trust, or counts as a loaded skill in the transcript. For compatibility, passing a built-in skill's reference path to `load_skill` still returns the file as `kind: "skill_resource"` with `activation: false` and a deprecation notice. This fallback is temporary; use `read_skill_resource` instead.
 
 ## Reduce related read-only fan-out
 

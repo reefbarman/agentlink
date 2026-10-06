@@ -155,6 +155,11 @@ function parseLoadSkillResult(result: string): {
   }
 }
 
+/** Legacy load_skill resource reads return content without activating. */
+function isSkillResourceResult(result: string): boolean {
+  return parseJsonObject(result)?.kind === "skill_resource";
+}
+
 function parseJsonObject(value: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -272,6 +277,7 @@ const BUILTIN_TOOL_NAMES = new Set([
   "todo_write",
   "ask_user",
   "load_skill",
+  "read_skill_resource",
   "spawn_background_agent",
   "get_background_status",
   "get_background_result",
@@ -1447,7 +1453,10 @@ export function agentMessagesToChatMessages(
                 items,
               });
             }
-          } else if (toolName === "load_skill") {
+          } else if (
+            toolName === "load_skill" &&
+            !isSkillResourceResult(toolResult)
+          ) {
             const parsed = parseLoadSkillResult(toolResult);
             blocks.push({
               type: "skill_load",
@@ -2457,6 +2466,18 @@ export function reducer(state: AppState, action: AppAction): AppState {
                 }
               : {}),
           };
+          if (b.type === "skill_load" && isSkillResourceResult(action.result)) {
+            return {
+              type: "tool_call" as const,
+              id: b.id,
+              name: "load_skill",
+              inputJson: nextBase.inputJson,
+              result: action.result,
+              complete: true,
+              durationMs: action.durationMs,
+              startedAt: Date.now() - action.durationMs,
+            };
+          }
           if (b.type === "skill_load") {
             const parsed = parseLoadSkillResult(action.result);
             return {

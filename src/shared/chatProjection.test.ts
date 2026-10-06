@@ -645,6 +645,112 @@ describe("tool lifecycle projection", () => {
     );
   });
 
+  it("renders a non-activating load_skill resource read as an ordinary tool call", () => {
+    const resourceResult = JSON.stringify({
+      kind: "skill_resource",
+      activation: false,
+      skill_name: "documentation",
+      content: "# Tools",
+    });
+    const activationResult = JSON.stringify({
+      kind: "skill_activation",
+      skill_name: "documentation",
+      content: "# Documentation",
+    });
+    let state = reducer(initialState, {
+      type: "TOOL_START",
+      toolCallId: "legacy-resource",
+      toolName: "load_skill",
+      input: { path: "/skills/documentation/references/tools.md" },
+    });
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId: "activation",
+      toolName: "load_skill",
+      input: { path: "/skills/documentation/SKILL.md" },
+    });
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "legacy-resource",
+      toolName: "load_skill",
+      result: resourceResult,
+      durationMs: 5,
+    });
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "activation",
+      toolName: "load_skill",
+      result: activationResult,
+      durationMs: 5,
+    });
+
+    const blocks = state.messages.flatMap((message) => message.blocks);
+    expect(blocks).toContainEqual(
+      expect.objectContaining({
+        type: "tool_call",
+        id: "legacy-resource",
+        name: "load_skill",
+        complete: true,
+        result: resourceResult,
+      }),
+    );
+    expect(blocks).toContainEqual(
+      expect.objectContaining({
+        type: "skill_load",
+        id: "activation",
+        skillName: "documentation",
+      }),
+    );
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "docs" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "restored-resource",
+            name: "load_skill",
+            input: { path: "/skills/documentation/references/tools.md" },
+          },
+          {
+            type: "tool_use",
+            id: "restored-read",
+            name: "read_skill_resource",
+            input: {
+              skill_path: "/skills/documentation/SKILL.md",
+              resource_path: "references/tools.md",
+            },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "restored-resource",
+            content: resourceResult,
+          },
+          {
+            type: "tool_result",
+            tool_use_id: "restored-read",
+            content: resourceResult,
+          },
+        ],
+      },
+    ]);
+    const restoredBlocks = restored.flatMap((message) => message.blocks);
+    expect(restoredBlocks.some((block) => block.type === "skill_load")).toBe(
+      false,
+    );
+    expect(
+      restoredBlocks
+        .filter((block) => block.type === "tool_call")
+        .map((block) => block.id),
+    ).toEqual(["restored-resource", "restored-read"]);
+  });
+
   it("restores a multi-response turn as one assistant message", () => {
     const step = (index: number) => [
       {

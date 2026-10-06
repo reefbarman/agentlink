@@ -710,7 +710,7 @@ function getSkillsSection(catalog: SkillCatalogProjection): string {
 
 ## Skills
 
-You have access to the following skills. Before each response, check if any skill matches the user's request. If one matches, call \`load_skill\` with the skill's \`path\` to load its full instructions, then follow them. If a skill has \`invocation="manual"\`, load it only when the user explicitly asks for that skill or workflow. If a loaded skill declares \`allowed-tools\`, those tools become the active tool restriction for subsequent turns while you are following that skill. If no skill matches, respond normally — skills are optional enhancements, not required steps.
+You have access to the following skills. Before each response, check if any skill matches the user's request. If one matches, call \`load_skill\` with the skill's \`path\` to load its full instructions, then follow them. If a skill has \`invocation="manual"\`, load it only when the user explicitly asks for that skill or workflow. If a loaded skill declares \`allowed-tools\`, those tools become the active tool restriction for subsequent turns while you are following that skill. \`load_skill\` only activates \`SKILL.md\` files; read a skill's supporting files only when needed, resolving relative references against its \`skillDirectory\`: use \`read_skill_resource\` for built-in skills and \`read_file\` for others. If no skill matches, respond normally — skills are optional enhancements, not required steps.
 
 ${catalog.catalogXml}${omissionNotice}`;
 }

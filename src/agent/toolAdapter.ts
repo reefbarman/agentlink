@@ -151,7 +151,8 @@ import {
 
 import { getConfiguredDiagnosticDelay } from "../adapters/vscode/agentLinkConfig.js";
 import { handleLoadRule } from "../tools/loadRule.js";
-import { handleLoadSkill } from "../tools/loadSkill.js";
+import { loadSkill } from "../tools/loadSkill.js";
+import { handleReadSkillResource } from "../tools/readSkillResource.js";
 import { handleOpenFile } from "../tools/openFile.js";
 import {
   handleGetEditorState,
@@ -274,6 +275,7 @@ const EXCLUDED_TOOLS = new Set([
   "handshake",
   "load_rule",
   "load_skill",
+  "read_skill_resource",
   "respond_to_background_question",
 ]);
 
@@ -327,6 +329,7 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   get_module_neighbors: schemas.getModuleNeighborsSchema,
   load_rule: schemas.loadRuleSchema,
   load_skill: schemas.loadSkillSchema,
+  read_skill_resource: schemas.readSkillResourceSchema,
   list_files: schemas.listFilesSchema,
   search_files: schemas.searchFilesSchema,
   search_session_history: schemas.searchSessionHistorySchema,
@@ -1392,6 +1395,16 @@ export function getAgentTools(
         TOOL_REGISTRY.load_skill?.description ??
         "Load the full contents of an advertised skill file.",
       input_schema: cachedJsonSchemaFor("load_skill", schemas.loadSkillSchema),
+    },
+    {
+      name: "read_skill_resource",
+      description:
+        TOOL_REGISTRY.read_skill_resource?.description ??
+        "Read a supporting file from an advertised built-in skill.",
+      input_schema: cachedJsonSchemaFor(
+        "read_skill_resource",
+        schemas.readSkillResourceSchema,
+      ),
     },
   ];
   return [
@@ -4085,42 +4098,20 @@ async function dispatchToolCallWithTrackedApprovals(
         createVscodeAdvertisedArtifactProvider(),
       );
     case "load_skill": {
-      const result = await handleLoadSkill(
+      const { result, activation } = await loadSkill(
         params,
-        approvalManager,
-        approvalPanel,
-        sessionId,
         ctx.getAdvertisedSkills?.() ?? [],
         createVscodeAdvertisedArtifactProvider(),
       );
-      try {
-        const text = result.content.find((c) => c.type === "text")?.text;
-        if (text && ctx.onSkillLoad) {
-          const parsed = JSON.parse(text) as {
-            skill_id?: string;
-            skill_name?: string;
-            revision?: string;
-            skillPath?: string;
-          };
-          if (
-            parsed.skill_id &&
-            parsed.skill_name &&
-            parsed.revision &&
-            parsed.skillPath
-          ) {
-            ctx.onSkillLoad({
-              id: parsed.skill_id,
-              name: parsed.skill_name,
-              revision: parsed.revision,
-              skillPath: parsed.skillPath,
-            });
-          }
-        }
-      } catch {
-        // ignore malformed/non-JSON results
-      }
+      if (activation) ctx.onSkillLoad?.(activation);
       return result;
     }
+    case "read_skill_resource":
+      return handleReadSkillResource(
+        params,
+        ctx.getAdvertisedSkills?.() ?? [],
+        createVscodeAdvertisedArtifactProvider(),
+      );
     case "list_files":
       return handleListFiles(
         params,

@@ -606,6 +606,15 @@
       "definitionSource": "registry-schema"
     },
     {
+      "name": "read_skill_resource",
+      "parameters": ["limit", "offset", "resource_path", "skill_path"],
+      "cluster": "read",
+      "sideEffect": "read",
+      "devOnly": false,
+      "availability": "artifact-loader",
+      "definitionSource": "registry-schema"
+    },
+    {
       "name": "recall_memory",
       "parameters": ["limit", "minimum_score", "query", "scope"],
       "cluster": "memory",
@@ -849,5 +858,5 @@
       "definitionSource": "registry-schema"
     }
   ],
-  "revision": "c332a10919c005ea1f4b4a952891f0bb79dff0950195475aec37f2f3edc11ea3"
+  "revision": "65e7a6cab200b754fff0a4cd0480605e6cf85e28609a453d413e1914322d5d44"
 }

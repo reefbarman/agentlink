@@ -924,13 +924,26 @@ This is a static module graph, not an LSP-precise symbol reference query. Use la
 
 ### load_skill
 
-Load the full contents of an enabled AgentLink skill from the current session's revisioned catalog. This is intentionally not a general-purpose file reader: prompt metadata may omit enabled skills to stay within its budget, but their exact canonical paths and revisions remain loadable from the session snapshot.
+Activate an enabled AgentLink skill from the current session's revisioned catalog by loading its `SKILL.md`. This is intentionally not a general-purpose file reader: prompt metadata may omit enabled skills to stay within its budget, but their exact canonical paths and revisions remain loadable from the session snapshot. Only `SKILL.md` files activate.
 
-| Parameter | Type   | Description                                       |
-| --------- | ------ | ------------------------------------------------- |
-| `path`    | string | Canonical enabled skill file path to load exactly |
+| Parameter | Type   | Description                                           |
+| --------- | ------ | ----------------------------------------------------- |
+| `path`    | string | Canonical enabled `SKILL.md` path to activate exactly |
 
-Returns the skill file content and metadata needed for the agent to follow the skill instructions.
+Returns `kind: "skill_activation"` with the skill content, identity, revision, `skillDirectory`, and guidance for reading the skill's supporting files. For compatibility, a built-in skill's reference path returns that file as `kind: "skill_resource"` with `activation: false` and a deprecation notice, without activating the skill; use `read_skill_resource` instead.
+
+### read_skill_resource
+
+Read a supporting text file from an advertised built-in AgentLink skill without activating it. Available wherever `load_skill` is, including restricted profiles and active skill tool allowlists. For global, project, and other skills, use `read_file` with the absolute path under the skill directory.
+
+| Parameter       | Type    | Description                                                                                          |
+| --------------- | ------- | ---------------------------------------------------------------------------------------------------- |
+| `skill_path`    | string  | Exact `SKILL.md` path of the advertised built-in skill (catalog path or `skillPath` from activation) |
+| `resource_path` | string  | Path relative to the skill directory, for example `references/tools.md`                              |
+| `offset`        | integer | 1-based starting line (default `1`)                                                                  |
+| `limit`         | integer | Maximum lines to return (default and maximum `2000`)                                                 |
+
+Returns `kind: "skill_resource"`, `activation: false`, the owning skill identity and revision, `resource_path`, `resourcePath`, `total_lines`, `showing`, `eof`, `next_offset` when more lines remain, and `content`. The owner's revision is checked before reading. Absolute paths, `..` segments, symlinks escaping the skill directory, directories, binary files, `SKILL.md` itself, unadvertised owners, and non-built-in skills are rejected with a `status` such as `invalid_resource_path`, `resource_outside_skill`, `unsupported_skill_scope`, or `stale_advertised_artifact`. Reading a resource grants no path trust and does not count as a loaded skill.
 
 ### load_rule
 
