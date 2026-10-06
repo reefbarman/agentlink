@@ -61,6 +61,56 @@ describe("resolveAndOpenDocument", () => {
     },
   );
 
+  it.each([true, false])(
+    "honours the supplied read path policy before opening a document (%s)",
+    async (approved) => {
+      const filePath = "/outside/skills/helper/references/guide.md";
+      resolveAndValidatePath.mockReturnValue({
+        absolutePath: filePath,
+        inWorkspace: false,
+      });
+      const pathAccessProvider = {
+        ensureAccess: vi
+          .fn()
+          .mockResolvedValue({ approved, reason: "read policy" }),
+      };
+      const result = resolveAndOpenDocument(
+        filePath,
+        {} as never,
+        {} as never,
+        "session-1",
+        undefined,
+        pathAccessProvider,
+      );
+      if (approved) {
+        await expect(result).resolves.toMatchObject({ absolutePath: filePath });
+        expect(openTextDocument).toHaveBeenCalledOnce();
+      } else {
+        await expect(result).rejects.toMatchObject({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "rejected",
+                path: filePath,
+                reason: "read policy",
+              }),
+            },
+          ],
+        });
+        expect(openTextDocument).not.toHaveBeenCalled();
+      }
+      expect(pathAccessProvider.ensureAccess).toHaveBeenCalledWith({
+        absolutePath: filePath,
+        inputPath: filePath,
+        inWorkspace: false,
+        sessionId: "session-1",
+        kind: "read",
+      });
+      expect(approveOutsideWorkspaceAccess).not.toHaveBeenCalled();
+    },
+  );
+
   it("still requests approval for arbitrary outside-workspace files", async () => {
     const filePath = "/Users/tester/.agentlink/memory.md";
     resolveAndValidatePath.mockReturnValue({

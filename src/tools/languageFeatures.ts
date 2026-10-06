@@ -4,6 +4,7 @@ import { getRelativePath, resolveAndValidatePath } from "../util/paths.js";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import type { PathAccessProvider } from "../core/capabilities/readSearch.js";
 import type { ToolResult } from "@agentlink/protocol/tool-result";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 import { isAgentInstructionReadPath } from "../approvals/protectedPaths.js";
@@ -30,23 +31,33 @@ export async function resolveAndOpenDocument(
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
   signal?: AbortSignal,
+  pathAccessProvider?: PathAccessProvider,
 ): Promise<ResolvedDocument> {
   const { absolutePath, inWorkspace } = resolveAndValidatePath(inputPath);
   const relPath = getRelativePath(absolutePath);
 
   if (
-    !inWorkspace &&
-    !isAgentlinkTmpArtifact(absolutePath) &&
-    !isAgentInstructionReadPath(absolutePath) &&
-    !approvalManager.isPathTrusted(sessionId, absolutePath)
+    pathAccessProvider ||
+    (!inWorkspace &&
+      !isAgentlinkTmpArtifact(absolutePath) &&
+      !isAgentInstructionReadPath(absolutePath) &&
+      !approvalManager.isPathTrusted(sessionId, absolutePath))
   ) {
-    const { approved, reason } = await approveOutsideWorkspaceAccess(
-      absolutePath,
-      approvalManager,
-      approvalPanel,
-      sessionId,
-      signal,
-    );
+    const { approved, reason } = pathAccessProvider
+      ? await pathAccessProvider.ensureAccess({
+          absolutePath,
+          inputPath,
+          inWorkspace,
+          sessionId,
+          kind: "read",
+        })
+      : await approveOutsideWorkspaceAccess(
+          absolutePath,
+          approvalManager,
+          approvalPanel,
+          sessionId,
+          signal,
+        );
     if (!approved) {
       const result: ToolResult = {
         content: [

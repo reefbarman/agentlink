@@ -50,6 +50,8 @@ Discovery and invocation guidance filter the captured catalog through the reques
 
 ## Load session skills and rules
 
+In VS Code workspace sessions and mirrored browser workspace chat, both `read_file` views can read reference files inside a skill directory from the current session catalogue without outside-workspace approval. This includes global and bundled skills and their canonical symlink targets. The exemption is read-only and does not grant access to unrelated outside-workspace files or permission to edit a skill. Mode, profile, and active-skill tool restrictions still apply.
+
 `load_skill` remains available in restricted native profiles, including review and read-only research. `load_rule` is exposed only when the current request advertises deferred local rules, including in those restricted profiles; an empty rule catalog omits the tool entirely. These loaders read only artifacts authorised by the current session catalog, not arbitrary files. Enabled skills omitted from the bounded prompt projection remain loadable by their canonical paths. Skill content and real-path revision checks still apply.
 
 When a skill path is rejected, `skill_not_in_catalog` returns up to ten catalog candidates matching the requested skill name or identity, plus an omitted count. This lookup reads no skill content and activates nothing. Retry with the intended candidate's exact path. If none match, refresh the catalog or check the skill's enabled state and mode. A valid advertised symlink alias returns the canonical activation path so its restrictions are applied consistently.

@@ -150,8 +150,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function createVscodeContextDocumentProvider(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
-  signal?: AbortSignal,
+  options: VscodePathAccessOptions = {},
 ): ContextDocumentProvider {
+  const pathAccessProvider = createVscodePathAccessProvider(
+    approvalManager,
+    approvalPanel,
+    options,
+  );
   return {
     async resolveDocument(inputPath, sessionId) {
       try {
@@ -161,7 +166,8 @@ export function createVscodeContextDocumentProvider(
             approvalManager,
             approvalPanel,
             sessionId,
-            signal,
+            options.signal,
+            pathAccessProvider,
           );
         return {
           absolutePath,

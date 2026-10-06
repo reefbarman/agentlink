@@ -3003,7 +3003,12 @@ function isAdvertisedSkillRead(
   absolutePath: string,
   getAdvertisedSkills?: AgentToolExecutionRequest["context"]["getAdvertisedSkills"],
 ): boolean {
-  if (toolName !== "load_skill" && toolName !== "read_file") return false;
+  if (
+    toolName !== "load_skill" &&
+    toolName !== "read_file" &&
+    toolName !== "get_context"
+  )
+    return false;
 
   return (getAdvertisedSkills?.() ?? []).some((skill) => {
     const skillPath = canonicalizePath(skill.skillPath);
@@ -4031,7 +4036,12 @@ async function dispatchToolCallWithTrackedApprovals(
         documentProvider: createVscodeContextDocumentProvider(
           approvalManager,
           approvalPanel,
-          toolAbortSignal,
+          {
+            advertisedSkillPaths: (ctx.getAdvertisedSkills?.() ?? []).flatMap(
+              (skill) => [skill.skillPath, skill.realSkillPath],
+            ),
+            signal: toolAbortSignal,
+          },
         ),
         workingSetProvider: createVscodeContextWorkingSetProvider(),
         enrichmentProvider: createVscodeContextEnrichmentProvider(),

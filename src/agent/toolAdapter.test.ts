@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as vscode from "vscode";
 
 import { describe, it, expect, vi } from "vitest";
 import {
@@ -4830,41 +4831,60 @@ describe("dispatchToolCall", () => {
       expect(handleGetContext).not.toHaveBeenCalled();
     });
 
-    it("keeps the context operation's path policy for skill-adjacent files", async () => {
-      const skillPath = "/outside/skills/helper/SKILL.md";
-      const resourcePath = "/outside/skills/helper/references/guide.md";
-      const runtime = createAgentToolRuntime({
-        ...mockCtx,
-        approvalManager: { isPathTrusted: vi.fn(() => false) } as any,
-      });
-      vi.mocked(handleGetContext).mockClear();
+    it.each([undefined, "deny" as const])(
+      "reads skill references in context view without approval (%s)",
+      async (interactionPolicy) => {
+        const skillPath = "/outside/aliases/helper/SKILL.md";
+        const realSkillPath = "/outside/skills/helper/SKILL.md";
+        const resourcePath = "/outside/skills/helper/references/guide.md";
+        const runtime = createAgentToolRuntime({
+          ...mockCtx,
+          approvalManager: { isPathTrusted: vi.fn(() => false) } as any,
+        });
+        vi.mocked(handleGetContext).mockClear();
 
-      const result = await runtime.executeTool({
-        name: "read_file",
-        input: { path: resourcePath, view: "context" },
-        context: {
-          sessionId: "background-session",
-          interactionPolicy: "deny",
-          getAdvertisedSkills: () => [
-            {
-              id: "global:agentlink:helper",
-              name: "helper",
-              revision: "a".repeat(64),
-              skillPath,
-              realSkillPath: skillPath,
-              sourceScope: "global" as const,
-            },
-          ],
-        },
-      });
+        const result = await runtime.executeTool({
+          name: "read_file",
+          input: { path: resourcePath, view: "context" },
+          context: {
+            sessionId: "background-session",
+            interactionPolicy,
+            getAdvertisedSkills: () => [
+              {
+                id: "global:agentlink:helper",
+                name: "helper",
+                revision: "a".repeat(64),
+                skillPath,
+                realSkillPath,
+                sourceScope: "global" as const,
+              },
+            ],
+          },
+        });
 
-      expect(result).toMatchObject({
-        isError: true,
-        data: { reason: "interaction_denied" },
-      });
-      expect(result.error?.message).toContain("Call read_file directly");
-      expect(handleGetContext).not.toHaveBeenCalled();
-    });
+        expect(result.isError).not.toBe(true);
+        expect(handleGetContext).toHaveBeenCalled();
+        const providers = vi.mocked(handleGetContext).mock.calls[0][2];
+        const openDocument = vi
+          .spyOn(vscode.workspace, "openTextDocument")
+          .mockResolvedValueOnce({
+            languageId: "markdown",
+          } as vscode.TextDocument);
+        try {
+          const document = await providers!.documentProvider.resolveDocument(
+            resourcePath,
+            "background-session",
+          );
+          expect(document.absolutePath).toBe(resourcePath);
+          expect(openDocument).toHaveBeenCalledWith(
+            vscode.Uri.file(resourcePath),
+          );
+          expect(mockOnApprovalRequest).not.toHaveBeenCalled();
+        } finally {
+          openDocument.mockRestore();
+        }
+      },
+    );
   });
 
   it("denies untrusted nested read paths without invoking the handler", async () => {
