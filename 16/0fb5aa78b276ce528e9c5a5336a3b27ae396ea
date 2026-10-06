@@ -1,0 +1,32 @@
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 24-25
+src/agent/webview/components/StreamingText.test.tsx
+  h_e08a86bb3a33a2 38-116
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+src/agent/webview/components/providerCitations.ts
+  h_e08a86bb3a33a2 1-101
+src/agent/webview/components/MessageBubble.test.tsx
+  h_e08a86bb3a33a2 28-90
+src/agent/webview/components/StreamingText.tsx
+  h_e08a86bb3a33a2 3,7-8,69-71,81-85,87-88,104-105,111,346,368,461-462
+  h_e08a86bb3a33a2 72-80,103,106,460,463
+src/agent/webview/components/MessageBubble.tsx
+  h_e08a86bb3a33a2 44-45,186-189,534,686,903,909,924,1163,1171,1195
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "160fb5aa78b276ce528e9c5a5336a3b27ae396ea",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
