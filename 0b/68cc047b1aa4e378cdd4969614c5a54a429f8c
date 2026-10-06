@@ -1,0 +1,49 @@
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 4599-4601,4607-4608,4780-4785,4948-4949,4959-4960,4973-4979,5280-5281,5459-5464
+  h_e08a86bb3a33a2 4786,4950-4958,4961,4980-4988,5282,5465,5549-5550,5552,5555,10320
+src/tools/executeCommand.ts
+  h_e08a86bb3a33a2 407,1219,1241,1330-1337,1340-1343,3274,3276-3278
+  h_e08a86bb3a33a2 1247,1338,1344-1347,3275,3280-3282,3880-3881
+src/terminal/sandbox/ProductionSandboxBehaviorProbe.test.ts
+  h_e08a86bb3a33a2 6,219-299
+  h_e08a86bb3a33a2 215-218,300
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 133-134,139,141
+  h_e08a86bb3a33a2 140
+resources/builtin-skills/documentation/references/troubleshooting.md
+  h_e08a86bb3a33a2 99-101
+scripts/sandbox-interactive-helper.mjs
+  h_e08a86bb3a33a2 625
+  h_e08a86bb3a33a2 627-635
+src/terminal/sandbox/SandboxPreparationError.ts
+  h_e08a86bb3a33a2 4
+resources/builtin-skills/documentation/references/complete-reference.md
+  h_e08a86bb3a33a2 1460,1464
+scripts/sandbox-interactive-helper.test.mjs
+  h_e08a86bb3a33a2 367-406
+  h_e08a86bb3a33a2 407-421
+src/terminal/sandbox/BaselineSandboxLaunchAuthorizer.test.ts
+  h_e08a86bb3a33a2 320,341-343,565-567,649-669,671-753,755-774
+  h_e08a86bb3a33a2 670,754,775-788
+src/terminal/sandbox/BaselineSandboxLaunchAuthorizer.ts
+  h_e08a86bb3a33a2 387-388,396,398-404,446-450,737-739
+  h_e08a86bb3a33a2 386,389-390
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6,11-12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6,11-12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0b68cc047b1aa4e378cdd4969614c5a54a429f8c",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
