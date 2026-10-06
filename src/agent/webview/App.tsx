@@ -14,7 +14,10 @@ import type {
   ChatMessage,
   TodoItem,
 } from "@agentlink/protocol/chat-transcript";
-import type { ChatReasoningEffort as ReasoningEffort } from "@agentlink/protocol/chat-catalog";
+import type {
+  ChatReasoningEffort as ReasoningEffort,
+  ExplicitSkillSelection,
+} from "@agentlink/protocol/chat-catalog";
 import type {
   McpConfigBatchMutation,
   McpConfigMutationResult,
@@ -24,6 +27,8 @@ import type {
 import type { AgentPluginManagerSnapshot } from "@agentlink/protocol/agent-plugin-manager";
 import {
   agentMessagesToChatMessages,
+  queueHasSkillSelectionError,
+  markQueueSkillSelectionError,
   initialState,
   reducer,
   shouldAcceptSessionChunk,
@@ -283,6 +288,7 @@ export function queuedMessagesReadyToDrain(
   queue: MessageQueueItem[],
   editingQueueId: string | null,
 ): MessageQueueItem[] {
+  if (queueHasSkillSelectionError(queue)) return [];
   return queue.filter(
     (item) => item.source !== "browser" && item.id !== editingQueueId,
   );
@@ -910,6 +916,52 @@ export function App({
     [pinnedTabId],
   );
 
+  function drainMessageQueue(sessionId: string): void {
+    const queue = queuedMessagesReadyToDrain(
+      messageQueueRef.current,
+      editingQueuedMessageRef.current?.id ?? null,
+    );
+    if (queue.length === 0 || streamingRef.current) return;
+    messageQueueRef.current = messageQueueRef.current.filter(
+      (q) => !queue.some((item) => item.id === q.id),
+    );
+    streamingRef.current = true;
+    for (const item of queue) {
+      dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
+      dispatch({
+        type: "ADD_USER_MESSAGE",
+        text: item.text,
+        isSlashCommand: item.isSlashCommand === true,
+        slashCommandLabel: item.slashCommandLabel,
+        displayMedia: item.displayMedia,
+      });
+    }
+    vscodeApi.postMessage({
+      command: "agentSend",
+      text: queue[0]?.fullText ?? queue[0]?.text ?? "",
+      displayText: queue[0]?.text,
+      isSlashCommand: queue[0]?.isSlashCommand === true,
+      slashCommandLabel: queue[0]?.slashCommandLabel,
+      attachments: queue[0]?.attachments,
+      images: queue[0]?.images,
+      documents: queue[0]?.documents,
+      messages: queue.map((item) => ({
+        text: item.fullText ?? item.text,
+        displayText: item.text,
+        isSlashCommand: item.isSlashCommand === true,
+        slashCommandLabel: item.slashCommandLabel,
+        attachments: item.attachments,
+        images: item.images,
+        documents: item.documents,
+        skillSelection: item.skillSelection,
+      })),
+      sessionId,
+      mode: stateRef.current.mode,
+      reasoningEffort: reasoningEffortRef.current,
+      thinkingEnabled: reasoningEffortRef.current !== "none",
+    });
+  }
+
   const replayInactiveSessionMessage = useWebviewMessageConnection({
     vscodeApi,
     sessionIdRef: {
@@ -1358,52 +1410,7 @@ export function App({
           inactiveAutoContinueMarkerRef.current.delete(msg.sessionId);
           streamingRef.current = false;
           dispatch({ type: "DONE" });
-          const queue = queuedMessagesReadyToDrain(
-            messageQueueRef.current,
-            editingQueuedMessageRef.current?.id ?? null,
-          );
-          if (queue.length > 0) {
-            const originSessionId = msg.sessionId;
-            const originMode = stateRef.current.mode;
-            const originReasoningEffort = reasoningEffortRef.current;
-            messageQueueRef.current = messageQueueRef.current.filter(
-              (q) => !queue.some((item) => item.id === q.id),
-            );
-            streamingRef.current = true;
-            for (const item of queue) {
-              dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
-              dispatch({
-                type: "ADD_USER_MESSAGE",
-                text: item.text,
-                isSlashCommand: item.isSlashCommand === true,
-                slashCommandLabel: item.slashCommandLabel,
-                displayMedia: item.displayMedia,
-              });
-            }
-            vscodeApi.postMessage({
-              command: "agentSend",
-              text: queue[0]?.fullText ?? queue[0]?.text ?? "",
-              displayText: queue[0]?.text,
-              isSlashCommand: queue[0]?.isSlashCommand === true,
-              slashCommandLabel: queue[0]?.slashCommandLabel,
-              attachments: queue[0]?.attachments,
-              images: queue[0]?.images,
-              documents: queue[0]?.documents,
-              messages: queue.map((item) => ({
-                text: item.fullText ?? item.text,
-                displayText: item.text,
-                isSlashCommand: item.isSlashCommand === true,
-                slashCommandLabel: item.slashCommandLabel,
-                attachments: item.attachments,
-                images: item.images,
-                documents: item.documents,
-              })),
-              sessionId: originSessionId,
-              mode: originMode,
-              reasoningEffort: originReasoningEffort,
-              thinkingEnabled: originReasoningEffort !== "none",
-            });
-          }
+          drainMessageQueue(msg.sessionId);
           break;
         }
         case "agentOpenFileResult":
@@ -1944,11 +1951,51 @@ export function App({
           });
           break;
 
+        case "agentSkillSelectionBatchRejected":
+          dispatch({ type: "REMOVE_UNADMITTED_USER_BATCH", count: msg.count });
+          break;
+        case "agentSkillActivations":
+          dispatch({
+            type: "ATTACH_SKILL_ACTIVATIONS",
+            messages: msg.messages,
+          });
+          break;
+        case "agentQueueSkillSelectionError":
+          messageQueueRef.current = markQueueSkillSelectionError(
+            messageQueueRef.current,
+            msg.queueIds,
+            msg.failure,
+          );
+          dispatch({
+            type: "MARK_QUEUE_SKILL_SELECTION_ERROR",
+            ids: msg.queueIds,
+            failure: msg.failure,
+          });
+          break;
+        case "agentQueueSkillSelectionResolved": {
+          const next = reducer(
+            { ...initialState, messageQueue: messageQueueRef.current },
+            {
+              type: "RESOLVE_QUEUE_SKILL_SELECTION",
+              id: msg.queueId,
+              skillRevision: msg.skillRevision,
+            },
+          );
+          messageQueueRef.current = next.messageQueue;
+          dispatch({
+            type: "RESOLVE_QUEUE_SKILL_SELECTION",
+            id: msg.queueId,
+            skillRevision: msg.skillRevision,
+          });
+          drainMessageQueue(msg.sessionId);
+          break;
+        }
         case "agentInterjection":
           // User message injected mid-run between tool batches
           dispatch({
             type: "ADD_INTERJECTION",
             coordination: msg.coordination,
+            skillActivations: msg.skillActivations,
             text: (msg.displayText as string | undefined) ?? msg.text,
             isSlashCommand:
               (msg.isSlashCommand as boolean | undefined) ?? false,
@@ -1980,7 +2027,9 @@ export function App({
             images: msg.images,
             documents: msg.documents,
             displayMedia: msg.displayMedia,
-            source: "browser",
+            source: msg.source ?? "browser",
+            skillSelection: msg.skillSelection,
+            skillSelectionError: msg.skillSelectionError,
           });
           messageQueueRef.current = [
             ...messageQueueRef.current,
@@ -1998,7 +2047,9 @@ export function App({
               ...(msg.images ? { images: msg.images } : {}),
               ...(msg.documents ? { documents: msg.documents } : {}),
               ...(msg.displayMedia ? { displayMedia: msg.displayMedia } : {}),
-              source: "browser",
+              source: msg.source ?? "browser",
+              skillSelection: msg.skillSelection,
+              skillSelectionError: msg.skillSelectionError,
             },
           ];
           break;
@@ -2496,6 +2547,7 @@ export function App({
         base64: string;
         kind: "image" | "document";
       }>,
+      skillSelection?: ExplicitSkillSelection,
       origin: "user" | "autoContinue" = "user",
       interject = false,
     ) => {
@@ -2563,6 +2615,7 @@ export function App({
           ...(displayMedia ? { displayMedia } : {}),
           ...(interject ? { interjectionReady: true } : {}),
           source: "vscode" as const,
+          skillSelection,
         };
         messageQueueRef.current = [...messageQueueRef.current, queueItem];
         dispatch({
@@ -2580,6 +2633,7 @@ export function App({
           documents: documents.length > 0 ? documents : undefined,
           displayMedia,
           source: "vscode",
+          skillSelection,
         });
         if (interject) {
           dispatch({
@@ -2594,6 +2648,7 @@ export function App({
             sessionId: stateRef.current.sessionId,
             queueId,
             text: fullText,
+            skillSelection,
             displayText: displayWithMedia,
             isSlashCommand,
             slashCommandLabel,
@@ -2636,6 +2691,7 @@ export function App({
       vscodeApi.postMessage({
         command: "agentSend",
         text: fullText,
+        skillSelection,
         displayText: displayWithMedia,
         isSlashCommand,
         slashCommandLabel,
@@ -2684,6 +2740,7 @@ export function App({
         base64: string;
         kind: "image" | "document";
       }>,
+      skillSelection?: ExplicitSkillSelection,
     ) => {
       handleSend(
         text,
@@ -2691,6 +2748,7 @@ export function App({
         displayText,
         slashCommandLabel,
         media,
+        skillSelection,
         "user",
         true,
       );
@@ -2917,6 +2975,7 @@ export function App({
     handleSend(
       action.prompt,
       [],
+      undefined,
       undefined,
       undefined,
       undefined,
@@ -4177,6 +4236,14 @@ export function App({
             >
               <MessageQueuePanel
                 queue={state.messageQueue}
+                onResolveSkillSelection={(item, skillRevision) => {
+                  vscodeApi.postMessage({
+                    command: "agentResolveQueuedSkillSelection",
+                    sessionId: stateRef.current.sessionId,
+                    queueId: item.id,
+                    skillRevision,
+                  });
+                }}
                 onSteer={(item) => {
                   const nextQueue = messageQueueRef.current.filter(
                     (q) => q.id !== item.id,
@@ -4191,6 +4258,7 @@ export function App({
                     displayText: item.text,
                     isSlashCommand: item.isSlashCommand === true,
                     slashCommandLabel: item.slashCommandLabel,
+                    skillSelection: item.skillSelection,
                     attachments: item.attachments,
                     images: item.images,
                     documents: item.documents,
@@ -4225,6 +4293,7 @@ export function App({
                     displayText: item.text,
                     isSlashCommand: item.isSlashCommand === true,
                     slashCommandLabel: item.slashCommandLabel,
+                    skillSelection: item.skillSelection,
                     attachments: item.attachments,
                     images: item.images,
                     documents: item.documents,
@@ -4240,6 +4309,8 @@ export function App({
                             fullText: text,
                             isSlashCommand: false,
                             slashCommandLabel: undefined,
+                            skillSelection: undefined,
+                            skillSelectionError: undefined,
                           }
                         : queued,
                   );
@@ -4297,6 +4368,7 @@ export function App({
                     displayText: updatedItem.text,
                     isSlashCommand: updatedItem.isSlashCommand === true,
                     slashCommandLabel: updatedItem.slashCommandLabel,
+                    skillSelection: updatedItem.skillSelection,
                     attachments: updatedItem.attachments,
                     images: updatedItem.images,
                     documents: updatedItem.documents,

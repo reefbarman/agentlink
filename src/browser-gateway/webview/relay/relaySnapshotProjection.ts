@@ -86,7 +86,18 @@ export class RelaySnapshotProjector {
               .filter(
                 (item) => item.state === "queued" || item.state === "running",
               )
-              .map((item) => ({ id: item.itemId, text: item.summary })),
+              .map((item) => {
+                return {
+                  id: item.itemId,
+                  text: item.summary,
+                  ...(item.skillSelection
+                    ? { skillSelection: item.skillSelection }
+                    : {}),
+                  ...(item.skillSelectionError
+                    ? { skillSelectionError: item.skillSelectionError }
+                    : {}),
+                };
+              }),
             questionRequest: interactionPayload?.question ?? null,
             detectedQuestion: null,
             todos: checkpoint.ui.todos.map((todo) => ({
@@ -471,6 +482,9 @@ function projectBlock(
           ...(block.skillName ? { skillName: block.skillName } : {}),
           ...(block.durationMs !== undefined
             ? { durationMs: block.durationMs }
+            : {}),
+          ...(block.origin === "user_selection"
+            ? { origin: block.origin }
             : {}),
         },
       ];

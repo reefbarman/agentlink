@@ -1560,6 +1560,11 @@ body.chat-activity-shelf-resizing * {
   position: relative;
 }
 
+.user-skill-activations {
+  margin-top: 6px;
+  min-width: 0;
+}
+
 .user-content {
   background: var(
     --vscode-textCodeBlock-background,
@@ -4407,6 +4412,25 @@ body.chat-activity-shelf-resizing * {
   padding: 3px 0;
   border-top: 1px solid
     color-mix(in srgb, var(--vscode-panel-border) 50%, transparent);
+}
+
+.queue-item:has(.queue-skill-selection-error) {
+  flex-wrap: wrap;
+}
+
+.queue-skill-selection-error {
+  flex: 1 0 100%;
+  min-width: 0;
+  color: var(--vscode-errorForeground);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.queue-skill-selection-error > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
 }
 
 .queue-item.interjection-ready {

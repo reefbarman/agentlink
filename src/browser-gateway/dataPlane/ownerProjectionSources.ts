@@ -3,6 +3,10 @@ import type {
   TodoItem,
 } from "@agentlink/protocol/chat-transcript";
 import type {
+  ExplicitSkillSelection,
+  SkillSelectionFailure,
+} from "@agentlink/protocol/chat-catalog";
+import type {
   TerminalApprovalPolicy,
   TerminalApprovalReviewer,
   TerminalExecutionPreset,
@@ -95,6 +99,8 @@ export interface BrowserGatewayOwnerCatalogSource {
 export interface BrowserGatewayOwnerQueueSource {
   id: string;
   text: string;
+  skillSelection?: ExplicitSkillSelection;
+  skillSelectionError?: SkillSelectionFailure;
 }
 
 export interface BrowserGatewayOwnerForegroundSource {

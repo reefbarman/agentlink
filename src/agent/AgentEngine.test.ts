@@ -1,6 +1,8 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
+import { createHash } from "crypto";
+import { createExplicitSkillAdmission } from "./explicitSkillSelection.js";
 import type { AgentConfig, AgentEvent, AgentMessage } from "./types.js";
 import type {
   CompleteRequest,
@@ -347,6 +349,245 @@ describe("truncateToolText", () => {
     expect(result).toContain(
       "\nFull output saved to: /tmp/agentlink-results/call_large.txt — use read_file to access the complete result.\n\n",
     );
+  });
+});
+
+describe("explicit skill selection request boundaries", () => {
+  it.each(["before_request", "after_tools"] as const)(
+    "activates at the %s drain before the next request and rebuilds tool authority",
+    async (boundary) => {
+      const content = "# selected skill\nDISTINCTIVE_HOST_SKILL_INSTRUCTIONS";
+      const revision = createHash("sha256").update(content).digest("hex");
+      const skill = makeSkillEntry("selected", revision, ["read_file"]);
+      const session = await makeSession();
+      session.addUserMessage("Original task");
+      session.setAdvertisedSkills([skill]);
+      const selection = { skillId: skill.id, skillRevision: revision };
+      const queueSelection = () =>
+        session.setPendingInterjection(
+          "Literal selected arguments",
+          "selected-queue",
+          undefined,
+          "/selected Literal selected arguments",
+          true,
+          "/selected",
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          "vscode",
+          selection,
+        );
+      if (boundary === "before_request") queueSelection();
+      const requests: StreamRequest[] = [];
+      const provider = makeMockProvider();
+      provider.stream = async function* (request) {
+        requests.push(request);
+        if (boundary === "after_tools" && requests.length === 1) {
+          queueSelection();
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "original-read",
+                name: "read_file",
+                input: { path: "note.md" },
+              },
+            ],
+          };
+          yield { type: "done" };
+        } else {
+          yield* makeProviderStream({ text: "Selected skill followed" });
+        }
+      };
+      const policies: Array<readonly string[] | undefined> = [];
+      const executed: string[] = [];
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools: (request) => {
+          policies.push(request.skillAllowedTools);
+          return [
+            {
+              name: "read_file",
+              description: "read",
+              input_schema: { type: "object" },
+            },
+          ];
+        },
+        isParallelSafe: () => false,
+        executeTool: async (request) => {
+          executed.push(request.name);
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+      });
+      const admission = createExplicitSkillAdmission({
+        getAdvertisedSkills: () => session.getAdvertisedSkills(),
+        artifactProvider: {
+          resolvePath: (value) => value,
+          normalizeExistingPath: (value) => value,
+          readTextFile: async () => content,
+        },
+      });
+      const preflight = vi.spyOn(engine, "getSkillBatchContextLedger");
+      const events = await collectEvents(
+        engine.run(session, {
+          explicitSkillAdmission: {
+            prepareBatch: async (...args) =>
+              (await admission.prepareBatch(...args)).map((entry) => ({
+                ...entry,
+                promptHookContext: ["DISTINCTIVE_SUBMIT_HOOK_CONTEXT"],
+              })),
+          },
+          inheritedSkillAuthority: {
+            schemaVersion: 1,
+            sources: [],
+            allowedTools: ["read_file", "search_files"],
+          },
+        }),
+      );
+      const selectedRequests = requests.filter((request) =>
+        JSON.stringify(request.messages).includes(
+          "DISTINCTIVE_HOST_SKILL_INSTRUCTIONS",
+        ),
+      );
+      expect(selectedRequests.length).toBeGreaterThan(0);
+      expect(JSON.stringify(selectedRequests[0]?.messages)).toContain(
+        "<skill_context origin=",
+      );
+      expect(
+        policies.some(
+          (policy) => policy?.length === 1 && policy[0] === "read_file",
+        ),
+      ).toBe(true);
+      expect(executed).not.toContain("load_skill");
+      expect(
+        events.filter((event) => event.type === "user_interjection"),
+      ).toHaveLength(1);
+      const selectedMessage = session
+        .getAllMessages()
+        .find((message) => message.skillContext?.length);
+      expect(selectedMessage?.content).toContain("Literal selected arguments");
+      expect(selectedMessage?.content).toContain(
+        "DISTINCTIVE_SUBMIT_HOOK_CONTEXT",
+      );
+      expect(preflight.mock.calls.length).toBeGreaterThan(0);
+      for (const [, stagedMessages] of preflight.mock.calls) {
+        expect(stagedMessages[0]?.content).toBe(selectedMessage?.content);
+      }
+      expect(JSON.stringify(selectedRequests[0]?.messages)).toContain(
+        "DISTINCTIVE_SUBMIT_HOOK_CONTEXT",
+      );
+      expect(selectedMessage?.skillContext?.[0]?.revision).toBe(revision);
+      expect(session.getActiveSkillAllowedTools()).toEqual(["read_file"]);
+    },
+  );
+
+  it.each([true, false])(
+    "limits skill overflow recovery to current active selections (active=%s)",
+    async (active) => {
+      const session = await makeSession();
+      const skill = makeSkillEntry("selected", "revision", ["read_file"]);
+      session.setAdvertisedSkills([skill]);
+      session.addUserMessage(active ? "x".repeat(1_000_000) : "Selected task", {
+        skillContext: [
+          {
+            activationId: "selected-overflow",
+            origin: "user_selection",
+            skillId: skill.id,
+            skillName: skill.name,
+            revision: skill.revision,
+            skillPath: skill.skillPath,
+            skillDirectory: "/tmp/selected",
+            resourceGuidance: "Read supporting files when needed",
+            content: "Selected instructions",
+          },
+        ],
+      });
+      if (active) {
+        session.trackLoadedSkill({
+          id: skill.id,
+          name: skill.name,
+          revision: skill.revision,
+          skillPath: skill.skillPath,
+        });
+      } else {
+        session.addUserMessage("x".repeat(1_000_000));
+      }
+      const provider = makeMockProvider();
+      const stream = vi.spyOn(provider, "stream");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const condense = vi
+        .spyOn(engine, "condenseSession")
+        .mockImplementation(async function* () {
+          yield { type: "condense_start", isAutomatic: true };
+          return false;
+        });
+      const events = await collectEvents(engine.run(session));
+      expect(condense.mock.calls.length).toBe(active ? 1 : 0);
+      expect(
+        events.some(
+          (event) =>
+            event.type === "error" &&
+            event.code === "skill_selection_too_large",
+        ),
+      ).toBe(active);
+      expect(stream.mock.calls.length).toBe(active ? 0 : 1);
+    },
+  );
+
+  it("leaves selected and ordinary neighbours pending when a selection fails, without dispatching", async () => {
+    const session = await makeSession();
+    session.addUserMessage("Original task");
+    session.setPendingInterjection(
+      "Keep ordinary neighbour",
+      "plain",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "vscode",
+    );
+    session.setPendingInterjection("Keep internal coordination", "internal");
+    session.setPendingInterjection(
+      "Keep selected arguments",
+      "selected",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "vscode",
+      { skillId: "not-enabled", skillRevision: "old" },
+    );
+    const provider = makeMockProvider();
+    const stream = vi.spyOn(provider, "stream");
+    const engine = new AgentEngine(makeRegistry(provider));
+    const events = await collectEvents(
+      engine.run(session, {
+        explicitSkillAdmission: createExplicitSkillAdmission({
+          getAdvertisedSkills: () => [],
+        }),
+      }),
+    );
+    expect(stream).not.toHaveBeenCalled();
+    expect(
+      session.peekPendingInterjections().map((entry) => entry.queueId),
+    ).toEqual(["plain", "internal", "selected"]);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "skill_selection_failed",
+        queueIds: ["plain", "selected"],
+      }),
+    );
+    expect(session.getAllMessages()).toHaveLength(1);
   });
 });
 

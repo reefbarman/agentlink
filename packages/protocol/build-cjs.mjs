@@ -564,9 +564,11 @@ await Promise.all([
     "dist/browserGatewayProtocolError.d.ts",
     "dist/cjs/browserGatewayProtocolError.d.cts",
   ),
-  copyFile(
-    "dist/browserGatewayQueueItem.d.ts",
-    "dist/cjs/browserGatewayQueueItem.d.cts",
+  readFile("dist/browserGatewayQueueItem.d.ts", "utf8").then((content) =>
+    writeFile(
+      "dist/cjs/browserGatewayQueueItem.d.cts",
+      content.replaceAll('"./chatCatalog.js"', '"./chatCatalog.cjs"'),
+    ),
   ),
   copyFile(
     "dist/browserGatewayRepositoryState.d.ts",

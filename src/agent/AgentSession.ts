@@ -43,6 +43,9 @@ import {
   type SkillEntry,
 } from "./skillLoader.js";
 import type { SkillLoadActivation } from "../core/tools/types.js";
+import type { ExplicitSkillSelection } from "@agentlink/protocol/chat-catalog";
+import { formatExplicitSkillContextBlock } from "./explicitSkillSelection.js";
+import type { ExplicitSkillContext } from "./types.js";
 import type { ProjectActiveFileResolution } from "./configLoader.js";
 import type { McpToolDisclosurePartition } from "./mcpToolDisclosure.js";
 import type { SkillCatalogProjection } from "./skillCatalogProjection.js";
@@ -125,6 +128,8 @@ export interface PendingInterjection {
   attachments?: string[];
   images?: Array<{ name: string; mimeType: string; base64: string }>;
   documents?: Array<{ name: string; mimeType: string; base64: string }>;
+  /** Explicit skill selected with this queued message; validated on drain. */
+  skillSelection?: ExplicitSkillSelection;
 }
 
 export class AgentSession {
@@ -204,6 +209,11 @@ export class AgentSession {
   readonly loadedSkills = new Set<string>();
   /** Canonical skill identities restricting the current user turn. */
   private readonly activeSkillIds = new Set<string>();
+  private activeSkillCatalogDrift: string | undefined;
+  private readonly activeSkillEntries = new Map<string, SkillEntry>();
+  private rejectedRestoredActiveSkillState:
+    | PersistedActiveSkillState
+    | undefined;
   /** Total input tokens from the most recent API response: uncached + cache_read + cache_creation.
    *  This represents actual context window usage (used for condense threshold check & context bar). */
   lastInputTokens = 0;
@@ -869,9 +879,14 @@ export class AgentSession {
       handoff?: NonNullable<NonNullable<AgentMessage["uiHint"]>["handoff"]>;
       images?: Array<{ name: string; mimeType: string; base64: string }>;
       documents?: Array<{ name: string; mimeType: string; base64: string }>;
+      /** Host-validated instructions for an explicit skill selection. */
+      skillContext?: ExplicitSkillContext[];
     },
   ): void {
     this.activeSkillIds.clear();
+    this.activeSkillEntries.clear();
+    this.activeSkillCatalogDrift = undefined;
+    this.rejectedRestoredActiveSkillState = undefined;
     this.messagesRevision++;
     let humanInputId: string | undefined;
     if (opts?.origin && !opts.hidden) {
@@ -883,6 +898,9 @@ export class AgentSession {
       role: "user",
       content: text,
       ...(humanInputId ? { humanInputId } : {}),
+      ...(opts?.skillContext?.length
+        ? { skillContext: opts.skillContext }
+        : {}),
       ...(opts?.images?.length || opts?.documents?.length
         ? {
             media: {
@@ -932,6 +950,12 @@ export class AgentSession {
     // Feed the running context estimate so jump telemetry can attribute user
     // content instead of reporting it as unattributed growth.
     this.addEstimatedTokens(text.length, "user_message");
+    for (const context of opts?.skillContext ?? []) {
+      this.addEstimatedTokens(
+        formatExplicitSkillContextBlock(context).length,
+        "skill_context",
+      );
+    }
     if (opts?.images?.length) {
       this.addKnownTokens(
         opts.images.length * ESTIMATED_TOKENS_PER_IMAGE,
@@ -1403,9 +1427,23 @@ export class AgentSession {
         next.name !== previous.name ||
         next.revision !== previous.revision
       ) {
-        this.activeSkillIds.delete(skillId);
+        // Keep the committed restrictive snapshot until new human input.
+        // Catalogue refresh must not silently broaden this turn's authority.
+        this.activeSkillCatalogDrift ??= previous?.name ?? skillId;
       }
     }
+  }
+
+  /**
+   * Name of an active skill whose catalogue entry changed since activation,
+   * retained across retries. Only a new user turn can resolve it.
+   */
+  takeActiveSkillCatalogDrift(): string | undefined {
+    return this.activeSkillCatalogDrift;
+  }
+
+  isSkillActive(skillId: string): boolean {
+    return this.activeSkillIds.has(skillId);
   }
 
   getAdvertisedSkills(): SkillEntry[] {
@@ -1423,9 +1461,7 @@ export class AgentSession {
   }
 
   getActiveSkillPolicy(): SkillCapabilityPolicySnapshot {
-    const activeSkills = Array.from(this.advertisedSkills.values()).filter(
-      (skill) => this.activeSkillIds.has(skill.id) && skill.enabled,
-    );
+    const activeSkills = Array.from(this.activeSkillEntries.values());
     return composeSkillCapabilityPolicy(activeSkills);
   }
 
@@ -1434,15 +1470,12 @@ export class AgentSession {
   }
 
   getActiveSkillState(): PersistedActiveSkillState | undefined {
+    if (this.rejectedRestoredActiveSkillState)
+      return this.rejectedRestoredActiveSkillState;
     if (this.activeSkillIds.size === 0) return undefined;
     const projection = this.skillCatalogProjection;
     if (!projection) return undefined;
-    const byId = new Map(
-      Array.from(this.advertisedSkills.values()).map((skill) => [
-        skill.id,
-        skill,
-      ]),
-    );
+    const byId = this.activeSkillEntries;
     const activeSkills = [...this.activeSkillIds]
       .map((id) => byId.get(id))
       .filter((skill): skill is SkillEntry => Boolean(skill?.enabled))
@@ -1464,6 +1497,9 @@ export class AgentSession {
     state: PersistedActiveSkillState | undefined,
   ): void {
     this.activeSkillIds.clear();
+    this.activeSkillEntries.clear();
+    this.activeSkillCatalogDrift = undefined;
+    this.rejectedRestoredActiveSkillState = undefined;
     if (state?.schemaVersion !== 1 || state.activations.length === 0) return;
     if (
       new Set(state.activations.map((activation) => activation.id)).size !==
@@ -1485,10 +1521,18 @@ export class AgentSession {
         ? [skill]
         : [];
     });
-    if (activeSkills.length !== state.activations.length) return;
-    if (!isVerifiedSkillCapabilityPolicy(activeSkills, state.policy)) return;
+    if (
+      activeSkills.length !== state.activations.length ||
+      !isVerifiedSkillCapabilityPolicy(activeSkills, state.policy)
+    ) {
+      this.activeSkillCatalogDrift =
+        state.activations[0]?.name ?? "restored skill";
+      this.rejectedRestoredActiveSkillState = state;
+      return;
+    }
     for (const skill of activeSkills) {
       this.activeSkillIds.add(skill.id);
+      this.activeSkillEntries.set(skill.id, skill);
       this.loadedSkills.add(skill.name);
     }
   }
@@ -1518,6 +1562,7 @@ export class AgentSession {
     }
     this.loadedSkills.add(advertised.name);
     this.activeSkillIds.add(advertised.id);
+    this.activeSkillEntries.set(advertised.id, advertised);
     return true;
   }
 
@@ -1677,10 +1722,12 @@ export class AgentSession {
     documents?: Array<{ name: string; mimeType: string; base64: string }>,
     coordination?: PendingInterjection["coordination"],
     origin?: PendingInterjection["origin"],
+    skillSelection?: ExplicitSkillSelection,
   ): boolean {
     const entry: PendingInterjection = {
       coordination,
       ...(origin ? { origin } : {}),
+      ...(skillSelection ? { skillSelection } : {}),
       text,
       queueId,
       messageId,
@@ -1794,6 +1841,28 @@ export class AgentSession {
    */
   consumePendingInterjection(): PendingInterjection | null {
     return this._pendingInterjections.shift() ?? null;
+  }
+
+  /** Current pending FIFO without consuming it, for staged admission. */
+  peekPendingInterjections(): readonly PendingInterjection[] {
+    return [...this._pendingInterjections];
+  }
+
+  /**
+   * Consume exactly the staged batch. Returns false, consuming nothing, when
+   * any staged entry was edited, replaced, removed or reordered meanwhile.
+   */
+  consumePendingInterjectionBatch(
+    staged: readonly PendingInterjection[],
+  ): boolean {
+    if (
+      staged.length === 0 ||
+      staged.some((entry, index) => this._pendingInterjections[index] !== entry)
+    ) {
+      return false;
+    }
+    this._pendingInterjections.splice(0, staged.length);
+    return true;
   }
 
   get hasPendingInterjections(): boolean {

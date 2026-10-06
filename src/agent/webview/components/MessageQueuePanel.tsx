@@ -1,4 +1,7 @@
-import type { AppState } from "../../../shared/chatProjection";
+import {
+  queueHasSkillSelectionError,
+  type AppState,
+} from "../../../shared/chatProjection";
 import { useState } from "preact/hooks";
 
 export type MessageQueueItem = AppState["messageQueue"][number];
@@ -11,6 +14,7 @@ export function MessageQueuePanel({
   onEdit,
   onEditingChange,
   onRemove,
+  onResolveSkillSelection,
   allowSteering = true,
 }: {
   queue: MessageQueueItem[];
@@ -21,6 +25,10 @@ export function MessageQueuePanel({
   onEditingChange?: (item: MessageQueueItem, editing: boolean) => void;
   onRemove?: (item: MessageQueueItem) => void;
   allowSteering?: boolean;
+  onResolveSkillSelection?: (
+    item: MessageQueueItem,
+    skillRevision?: string,
+  ) => void;
 }) {
   const [editingQueueId, setEditingQueueId] = useState<string | null>(null);
   const [editingQueueText, setEditingQueueText] = useState("");
@@ -29,6 +37,7 @@ export function MessageQueuePanel({
   );
 
   if (queue.length === 0) return null;
+  const selectionBlocked = queueHasSkillSelectionError(queue);
 
   return (
     <div class="queue-panel">
@@ -80,6 +89,34 @@ export function MessageQueuePanel({
               {item.text}
             </span>
           )}
+          {item.skillSelectionError && (
+            <div class="queue-skill-selection-error" role="alert">
+              <span>{item.skillSelectionError.message}</span>
+              {onResolveSkillSelection && (
+                <div>
+                  {item.skillSelectionError.currentRevision && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onResolveSkillSelection(
+                          item,
+                          item.skillSelectionError?.currentRevision,
+                        )
+                      }
+                    >
+                      Use current revision
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => onResolveSkillSelection(item)}
+                  >
+                    Remove skill selection
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           {allowSteering && (
             <div class="queue-item-actions">
               <button
@@ -92,7 +129,9 @@ export function MessageQueuePanel({
                       : "Steer now"
                 }
                 disabled={
-                  pendingIds?.has(item.id) || editingQueueId === item.id
+                  pendingIds?.has(item.id) ||
+                  editingQueueId === item.id ||
+                  selectionBlocked
                 }
                 onClick={() => {
                   if (!pendingIds?.has(item.id) && editingQueueId !== item.id) {
@@ -114,10 +153,16 @@ export function MessageQueuePanel({
                         : "Interject at next break"
                 }
                 disabled={
-                  pendingIds?.has(item.id) || editingQueueId === item.id
+                  pendingIds?.has(item.id) ||
+                  editingQueueId === item.id ||
+                  selectionBlocked
                 }
                 onClick={() => {
-                  if (!pendingIds?.has(item.id) && editingQueueId !== item.id) {
+                  if (
+                    !selectionBlocked &&
+                    !pendingIds?.has(item.id) &&
+                    editingQueueId !== item.id
+                  ) {
                     onInterject(item);
                   }
                 }}

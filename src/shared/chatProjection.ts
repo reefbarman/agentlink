@@ -19,6 +19,9 @@ import type {
   ChatModelInfo as WebviewModelInfo,
   ChatReasoningEffort as ReasoningEffort,
   ChatSlashCommandInfo as SlashCommandInfo,
+  ExplicitSkillActivationView,
+  ExplicitSkillSelection,
+  SkillSelectionFailure,
 } from "@agentlink/protocol/chat-catalog";
 import type { UserQuestion as Question } from "@agentlink/protocol/structured-question";
 
@@ -45,6 +48,92 @@ import {
 } from "@agentlink/protocol/final-status";
 
 type DisplayMedia = NonNullable<ChatMessage["displayMedia"]>;
+
+/** Transcript card for a host-committed user skill selection. */
+export function explicitSkillActivationBlock(
+  activation: ExplicitSkillActivationView,
+): ContentBlock {
+  return {
+    type: "skill_load",
+    id: activation.activationId,
+    inputJson: JSON.stringify({ path: activation.skillPath }),
+    result: JSON.stringify({
+      kind: "skill_activation",
+      origin: "user_selection",
+      skill_name: activation.skillName,
+      skill_id: activation.skillId,
+      skillPath: activation.skillPath,
+      revision: activation.revision,
+    }),
+    complete: true,
+    skillName: activation.skillName,
+    path: activation.skillPath,
+    content: activation.content,
+    origin: "user_selection",
+  };
+}
+
+/** Attach activation cards to a user message, deduplicated by activation ID. */
+export function withSkillActivationBlocks(
+  message: ChatMessage,
+  activations: readonly ExplicitSkillActivationView[],
+): ChatMessage {
+  const existing = new Set(
+    message.blocks.flatMap((block) =>
+      block.type === "skill_load" ? [block.id] : [],
+    ),
+  );
+  const added = activations
+    .filter((activation) => !existing.has(activation.activationId))
+    .map(explicitSkillActivationBlock);
+  return added.length > 0
+    ? { ...message, blocks: [...message.blocks, ...added] }
+    : message;
+}
+
+interface SkillSelectionQueueEntry {
+  id: string;
+  interjectionReady?: boolean;
+  skillSelection?: ExplicitSkillSelection;
+  skillSelectionError?: SkillSelectionFailure;
+}
+
+/**
+ * Keep a failed batch queued: every entry stops interjecting, and the entry
+ * whose selection failed carries the error until the user resolves it.
+ */
+export function markQueueSkillSelectionError<
+  T extends SkillSelectionQueueEntry,
+>(
+  queue: readonly T[],
+  ids: readonly string[],
+  failure: SkillSelectionFailure,
+): T[] {
+  const batch = queue.filter((entry) => ids.includes(entry.id));
+  const failing =
+    batch.find(
+      (entry) =>
+        entry.skillSelection?.skillId === failure.skillId &&
+        entry.skillSelection.skillRevision === failure.selectedRevision,
+    ) ?? batch.find((entry) => entry.skillSelection);
+  return queue.map((entry) =>
+    ids.includes(entry.id)
+      ? {
+          ...entry,
+          interjectionReady: false,
+          ...(entry === failing ? { skillSelectionError: failure } : {}),
+        }
+      : entry,
+  );
+}
+
+/** Auto-drain pauses while any queued selection awaits correction. */
+export function queueHasSkillSelectionError(
+  queue: readonly SkillSelectionQueueEntry[],
+): boolean {
+  return queue.some((entry) => entry.skillSelectionError !== undefined);
+}
+
 type RawImageMedia = { name: string; mimeType: string; base64: string };
 type RawDocumentMedia = { name: string; mimeType: string; base64?: string };
 type BackgroundAgentBlock = Extract<ContentBlock, { type: "bg_agent" }>;
@@ -796,6 +885,10 @@ export interface AppState {
     displayMedia?: DisplayMedia;
     source?: "vscode" | "browser";
     interjectionReady?: boolean;
+    /** Explicit skill selected for this message; validated by the host. */
+    skillSelection?: ExplicitSkillSelection;
+    /** Set when the host blocked this queued batch before dispatch. */
+    skillSelectionError?: SkillSelectionFailure;
   }>;
   approvalRequest: ApprovalRequest | null;
   questionRequest: {
@@ -957,9 +1050,28 @@ export type AppAction =
       documents?: RawDocumentMedia[];
       displayMedia?: DisplayMedia;
       source?: "vscode" | "browser";
+      skillSelection?: ExplicitSkillSelection;
+      skillSelectionError?: SkillSelectionFailure;
     }
   | { type: "EDIT_QUEUE_MESSAGE"; id: string; text: string }
   | { type: "MARK_QUEUE_INTERJECTION_READY"; id: string; ready: boolean }
+  | {
+      type: "MARK_QUEUE_SKILL_SELECTION_ERROR";
+      ids: string[];
+      failure: SkillSelectionFailure;
+    }
+  | {
+      /** Clear a selection error, optionally pinning a newly chosen revision. */
+      type: "RESOLVE_QUEUE_SKILL_SELECTION";
+      id: string;
+      skillRevision?: string;
+    }
+  | { type: "REMOVE_UNADMITTED_USER_BATCH"; count: number }
+  | {
+      type: "ATTACH_SKILL_ACTIVATIONS";
+      /** Per admitted user message of the latest batch, in batch order. */
+      messages: ExplicitSkillActivationView[][];
+    }
   | { type: "REMOVE_FROM_QUEUE"; id: string }
   | { type: "CLEAR_QUEUE" }
   | {
@@ -969,6 +1081,7 @@ export type AppAction =
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
       displayMedia?: DisplayMedia;
+      skillActivations?: ExplicitSkillActivationView[];
     }
   | { type: "SET_APPROVAL"; request: ApprovalRequest }
   | { type: "CLEAR_APPROVAL"; id: string }
@@ -1216,6 +1329,7 @@ export function agentMessagesToChatMessages(
         images?: RawImageMedia[];
         documents?: RawDocumentMedia[];
       };
+      skillContext?: ExplicitSkillActivationView[];
       isSummary?: boolean;
       uiHint?: {
         userMessage?: {
@@ -1290,7 +1404,14 @@ export function agentMessagesToChatMessages(
           content: hint?.displayText ?? m.content,
           coordination: hint?.coordination,
           timestamp: Date.now(),
-          blocks: [],
+          // Display only: restored cards never recreate skill authority.
+          blocks: (Array.isArray(m.skillContext) ? m.skillContext : [])
+            .filter(
+              (context) =>
+                typeof context?.activationId === "string" &&
+                typeof context.skillName === "string",
+            )
+            .map(explicitSkillActivationBlock),
           isSlashCommand: hint?.isSlashCommand,
           slashCommandLabel:
             hint?.slashCommandLabel ??
@@ -3023,12 +3144,20 @@ export function reducer(state: AppState, action: AppAction): AppState {
               ? { displayMedia: action.displayMedia }
               : {}),
             ...(action.source ? { source: action.source } : {}),
+            ...(action.skillSelection
+              ? { skillSelection: action.skillSelection }
+              : {}),
+            ...(action.skillSelectionError
+              ? { skillSelectionError: action.skillSelectionError }
+              : {}),
           },
         ],
       };
     }
 
     case "EDIT_QUEUE_MESSAGE":
+      // A text edit produces an ordinary message: never leave invisible
+      // skill activation attached to edited text.
       return {
         ...state,
         messageQueue: state.messageQueue.map((q) =>
@@ -3039,10 +3168,80 @@ export function reducer(state: AppState, action: AppAction): AppState {
                 fullText: action.text,
                 isSlashCommand: false,
                 slashCommandLabel: undefined,
+                skillSelection: undefined,
+                skillSelectionError: undefined,
               }
             : q,
         ),
       };
+
+    case "MARK_QUEUE_SKILL_SELECTION_ERROR":
+      return {
+        ...state,
+        messageQueue: markQueueSkillSelectionError(
+          state.messageQueue,
+          action.ids,
+          action.failure,
+        ),
+      };
+
+    case "RESOLVE_QUEUE_SKILL_SELECTION":
+      return {
+        ...state,
+        messageQueue: state.messageQueue.map((q) =>
+          q.id === action.id
+            ? {
+                ...q,
+                skillSelectionError: undefined,
+                ...(!action.skillRevision
+                  ? {
+                      skillSelection: undefined,
+                      isSlashCommand: false,
+                      slashCommandLabel: undefined,
+                    }
+                  : {}),
+                ...(q.skillSelection && action.skillRevision
+                  ? {
+                      skillSelection: {
+                        ...q.skillSelection,
+                        skillRevision: action.skillRevision,
+                      },
+                    }
+                  : {}),
+              }
+            : q,
+        ),
+      };
+
+    case "REMOVE_UNADMITTED_USER_BATCH": {
+      const users = state.messages.flatMap((message, index) =>
+        message.role === "user" && !message.badge ? [index] : [],
+      );
+      const start = users.at(-action.count);
+      if (action.count <= 0 || start === undefined) return state;
+      return {
+        ...state,
+        messages: state.messages.slice(0, start),
+        streaming: false,
+      };
+    }
+
+    case "ATTACH_SKILL_ACTIVATIONS": {
+      const userIndexes = state.messages.flatMap((message, index) =>
+        message.role === "user" && !message.badge ? [index] : [],
+      );
+      const targets = userIndexes.slice(-action.messages.length);
+      if (targets.length !== action.messages.length) return state;
+      const messages = [...state.messages];
+      action.messages.forEach((activations, offset) => {
+        const index = targets[offset]!;
+        messages[index] = withSkillActivationBlocks(
+          messages[index]!,
+          activations,
+        );
+      });
+      return { ...state, messages };
+    }
 
     case "MARK_QUEUE_INTERJECTION_READY":
       return {
@@ -3065,17 +3264,20 @@ export function reducer(state: AppState, action: AppAction): AppState {
       // Insert an interjection without resetting streaming state.
       const withInterjection = [
         ...state.messages,
-        {
-          id: randomId(),
-          role: "user" as const,
-          content: action.text,
-          coordination: action.coordination,
-          timestamp: Date.now(),
-          blocks: [],
-          isSlashCommand: action.isSlashCommand,
-          slashCommandLabel: action.slashCommandLabel,
-          displayMedia: action.displayMedia,
-        },
+        withSkillActivationBlocks(
+          {
+            id: randomId(),
+            role: "user" as const,
+            content: action.text,
+            coordination: action.coordination,
+            timestamp: Date.now(),
+            blocks: [],
+            isSlashCommand: action.isSlashCommand,
+            slashCommandLabel: action.slashCommandLabel,
+            displayMedia: action.displayMedia,
+          },
+          action.skillActivations ?? [],
+        ),
         {
           id: randomId(),
           role: "assistant" as const,

@@ -191,6 +191,7 @@ export type BrowserGatewayNormalizedTranscriptBlock =
       readonly skillName?: string;
       readonly complete: boolean;
       readonly durationMs?: number;
+      readonly origin?: "user_selection";
     }
   | {
       readonly type: "bg_agent";
@@ -348,6 +349,10 @@ export function normalizeLegacyBrowserGatewaySnapshot(
       itemId: item.id,
       summary: item.text,
       state: "queued",
+      ...(item.skillSelection ? { skillSelection: item.skillSelection } : {}),
+      ...(item.skillSelectionError
+        ? { skillSelectionError: item.skillSelectionError }
+        : {}),
     })),
     todos: normalizeLegacyTodos(foreground?.todos ?? []),
     background: snapshot.background.map((session) => ({
@@ -694,6 +699,7 @@ function normalizeLegacyBlock(
         ...(block.durationMs !== undefined
           ? { durationMs: block.durationMs }
           : {}),
+        ...(block.origin === "user_selection" ? { origin: block.origin } : {}),
       };
     case "bg_agent":
       return {

@@ -25,6 +25,43 @@ afterEach(() => {
   cleanup();
 });
 
+describe("host skill activation cards", () => {
+  it.each([false, true])(
+    "renders expandable host cards on user messages (selection-only=%s)",
+    (selectionOnly) => {
+      const [message] = agentMessagesToChatMessages([
+        {
+          role: "user",
+          content: selectionOnly ? "/selected" : "Literal arguments",
+          uiHint: {
+            userMessage: {
+              isSlashCommand: true,
+              slashCommandLabel: "/selected",
+            },
+          },
+          skillContext: [
+            {
+              activationId: "host:selected",
+              skillId: "project:selected",
+              skillName: "selected",
+              revision: "pinned",
+              skillPath: "/skills/selected/SKILL.md",
+              content: "HOST_SELECTED_INSTRUCTIONS",
+            },
+          ],
+        },
+      ]);
+      const { getByText, queryByText } = render(
+        <MessageBubble message={message!} streaming={false} />,
+      );
+      expect(getByText("Activated by you")).toBeTruthy();
+      expect(queryByText("HOST_SELECTED_INSTRUCTIONS")).toBeNull();
+      fireEvent.click(getByText("Activated by you"));
+      expect(getByText("HOST_SELECTED_INSTRUCTIONS")).toBeTruthy();
+    },
+  );
+});
+
 describe("MessageBubble provider citation wiring", () => {
   it("forwards web source metadata to both reply text and the final summary", () => {
     const marker = "\uE200cite\uE202turn0search0\uE201";

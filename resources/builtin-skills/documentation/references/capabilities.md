@@ -62,6 +62,8 @@ Codex subscription requests use a stable conversation cache key and, when return
 - `/pair` — pairing code for a new browser remote device.
 - `/usage` — usage and reset times for the currently selected model's provider only. The picker description follows the selected model. Codex models show ChatGPT/Codex subscription usage; OpenAI-compatible models show their connection's configured `quota` endpoint (currently Meridian, one row per profile; see `references/settings.md`). Providers without a usage source show an unavailable notice, not another provider's usage. Available in VS Code chat and browser workspace tabs; Browser Ask Agent explains that it is unavailable there.
 
+Selecting a workspace skill from the picker activates it on the host before the next model request. It preserves your literal arguments and the selected revision, applies the skill's tool restrictions and lifecycle hooks, and shows an **Activated by you** card without requiring a model `load_skill` call. Failed selections keep the complete batch queued for correction; **Use current revision** is an explicit choice, never an automatic substitution. Projectless Ask Agent and Desktop Quick Ask remain prompt-only. See [Skills](customization.md#skills).
+
 ## Context management
 
 Module-neighbour lookup and advanced fleet workflows, scheduling, automation management, and detachment use deferred discovery instead of full default schemas. Ordinary background spawning and supervision stay inline when authorised. `load_rule` appears only when the request has an advertised deferred rule catalog. These disclosure changes do not remove capabilities or widen permissions.

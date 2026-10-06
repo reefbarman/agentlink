@@ -5,6 +5,10 @@ import {
   type BrowserGatewayQueueItem,
   type BrowserGatewayQueueItemState,
 } from "./browserGatewayQueueItem.js";
+import type {
+  ExplicitSkillSelection,
+  SkillSelectionFailure,
+} from "./chatCatalog.js";
 
 describe("browser gateway queue item", () => {
   it("pins and freezes the complete queue-item state set", () => {
@@ -28,6 +32,8 @@ describe("browser gateway queue item", () => {
       itemId: string;
       summary: string;
       state: BrowserGatewayQueueItemState;
+      skillSelection?: ExplicitSkillSelection;
+      skillSelectionError?: SkillSelectionFailure;
     }>();
   });
 });

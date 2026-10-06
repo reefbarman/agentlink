@@ -908,6 +908,40 @@ describe("browser gateway owner protocol", () => {
     expect(parseBrowserGatewayOwnerCheckpoint(typed)).toEqual(typed);
   });
 
+  it("preserves explicit selection and recoverable failure in queued items", () => {
+    const value = checkpoint();
+    (value.ui.queue as unknown as unknown[]).push({
+      itemId: "queued-skill",
+      summary: "Review the change",
+      state: "queued",
+      skillSelection: {
+        skillId: "project/review",
+        skillRevision: "sha256:selection",
+      },
+      skillSelectionError: {
+        code: "skill_selection_stale",
+        message: "The selected skill changed.",
+        skillId: "project/review",
+        selectedRevision: "sha256:selection",
+        currentRevision: "sha256:current",
+      },
+    });
+
+    expect(
+      parseBrowserGatewayOwnerCheckpoint(value).ui.queue.at(-1),
+    ).toMatchObject({
+      itemId: "queued-skill",
+      skillSelection: {
+        skillId: "project/review",
+        skillRevision: "sha256:selection",
+      },
+      skillSelectionError: {
+        code: "skill_selection_stale",
+        currentRevision: "sha256:current",
+      },
+    });
+  });
+
   it("parses a strict bounded checkpoint and a sequence-zero checkpoint batch", () => {
     const parsedCheckpoint = parseBrowserGatewayOwnerCheckpoint(checkpoint());
     expect(parsedCheckpoint).toMatchObject({
@@ -1240,6 +1274,7 @@ describe("browser gateway owner protocol", () => {
           skillName: "documentation",
           complete: true,
           durationMs: 11,
+          origin: "user_selection",
         },
         {
           type: "bg_agent",

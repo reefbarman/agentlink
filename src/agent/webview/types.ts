@@ -8,6 +8,9 @@ import type {
   ChatProjectInfo,
   ChatReasoningEffort,
   ChatSlashCommandInfo,
+  ExplicitSkillActivationView,
+  ExplicitSkillSelection,
+  SkillSelectionFailure,
 } from "@agentlink/protocol/chat-catalog";
 import type {
   ChatTabActionConfirmationRequest,
@@ -471,6 +474,7 @@ export type ExtensionMessage =
     }
   | {
       type: "agentInterjection";
+      skillActivations?: ExplicitSkillActivationView[];
       coordination?: import("@agentlink/protocol/chat-transcript").BackgroundCoordination;
       sessionId: string;
       text: string;
@@ -486,6 +490,8 @@ export type ExtensionMessage =
     }
   | {
       type: "agentQueuedMessage";
+      skillSelection?: ExplicitSkillSelection;
+      skillSelectionError?: SkillSelectionFailure;
       sessionId: string;
       text: string;
       queueId: string;
@@ -506,6 +512,28 @@ export type ExtensionMessage =
       type: "agentRemoveQueuedMessage";
       sessionId: string;
       queueId: string;
+    }
+  | {
+      type: "agentSkillSelectionBatchRejected";
+      sessionId: string;
+      count: number;
+    }
+  | {
+      type: "agentSkillActivations";
+      sessionId: string;
+      messages: ExplicitSkillActivationView[][];
+    }
+  | {
+      type: "agentQueueSkillSelectionError";
+      sessionId: string;
+      queueIds: string[];
+      failure: SkillSelectionFailure;
+    }
+  | {
+      type: "agentQueueSkillSelectionResolved";
+      sessionId: string;
+      queueId: string;
+      skillRevision?: string;
     }
   | {
       type: "agentQueueInterjectionReady";

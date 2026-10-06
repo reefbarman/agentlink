@@ -119,6 +119,15 @@ const mocks = vi.hoisted(() => {
           if (pendingInterjectionCount > 0) pendingInterjectionCount -= 1;
           return null;
         }),
+        peekPendingInterjections: vi.fn(() =>
+          Array.from({ length: pendingInterjectionCount }, (_, index) => ({
+            queueId: `pending-${index}`,
+          })),
+        ),
+        clearPendingInterjectionIf: vi.fn(() => {
+          if (pendingInterjectionCount > 0) pendingInterjectionCount -= 1;
+          return null;
+        }),
         queuePendingModeResume: vi.fn((mode: string, opts?: any) => {
           pendingModeResume = {
             mode,

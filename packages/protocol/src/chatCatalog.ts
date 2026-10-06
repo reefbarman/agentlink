@@ -109,10 +109,81 @@ export interface ChatSlashCommandInfo {
   skillId?: string;
   /** SHA-256 content revision advertised with the generated skill command. */
   skillRevision?: string;
+  /**
+   * The host activates this skill itself when selected. Composers send an
+   * ExplicitSkillSelection plus the literal user text instead of `body`.
+   * Absent on hosts that only support the prompt-only body.
+   */
+  directActivation?: boolean;
   /** Codicon name to show next to the command. */
   icon?: string;
   /** Value shown right-aligned, such as the current model name. */
   rightLabel?: string;
   /** Show a checkmark for the current selection. */
   isCurrent?: boolean;
+}
+
+/**
+ * A user's explicit choice of a catalogue skill for one message. Intent only:
+ * the host resolves path and content from its own current catalogue and
+ * rejects a changed revision instead of substituting another one.
+ */
+export interface ExplicitSkillSelection {
+  skillId: string;
+  skillRevision: string;
+}
+
+export type SkillSelectionFailureCode =
+  | "skill_selection_unavailable"
+  | "skill_selection_stale"
+  | "skill_selection_unreadable"
+  | "skill_selection_hook_denied"
+  | "skill_selection_too_large"
+  | "skill_selection_conflict";
+
+/** Recoverable failure that blocked a selected message before model dispatch. */
+export interface SkillSelectionFailure {
+  code: SkillSelectionFailureCode;
+  message: string;
+  skillId: string;
+  selectedRevision: string;
+  skillName?: string;
+  /** Current enabled revision, when the selected one is stale. */
+  currentRevision?: string;
+}
+
+/** Display record for a host-committed explicit skill activation. */
+export interface ExplicitSkillActivationView {
+  /** Stable activation record ID; also the transcript card ID. */
+  activationId: string;
+  skillId: string;
+  skillName: string;
+  revision: string;
+  skillPath: string;
+  content: string;
+}
+
+const MAX_SKILL_SELECTION_FIELD_CHARS = 512;
+
+/**
+ * Parse untrusted transport input. Returns undefined when absent and null
+ * when present but malformed, so callers can reject instead of ignoring it.
+ */
+export function parseExplicitSkillSelection(
+  value: unknown,
+): ExplicitSkillSelection | undefined | null {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) return null;
+  const { skillId, skillRevision } = value as Record<string, unknown>;
+  if (
+    typeof skillId !== "string" ||
+    typeof skillRevision !== "string" ||
+    !skillId.trim() ||
+    !skillRevision.trim() ||
+    skillId.length > MAX_SKILL_SELECTION_FIELD_CHARS ||
+    skillRevision.length > MAX_SKILL_SELECTION_FIELD_CHARS
+  ) {
+    return null;
+  }
+  return { skillId, skillRevision };
 }

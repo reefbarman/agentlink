@@ -10,6 +10,16 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import type { AgentSession } from "./AgentSession.js";
 import { normalizeSkillToolNames } from "./skillToolAliases.js";
+import {
+  skillAdmissionMessageText,
+  formatExplicitSkillContextBlock,
+  isSkillSelectionError,
+  toExplicitSkillActivationView,
+  verifyPreparedSkillSelections,
+  type ExplicitSkillAdmission,
+  type PreparedSkillAdmissionEntry,
+} from "./explicitSkillSelection.js";
+import type { SkillSelectionFailure } from "@agentlink/protocol/chat-catalog";
 import { isReviewTaskClass } from "./background/reviewTaskClass.js";
 import { ToolResultArtifactManager } from "./toolResultArtifacts.js";
 import type {
@@ -333,6 +343,61 @@ function estimateProviderMessageTokens(messages: MessageParam[]): number {
   );
 }
 
+function appendProviderText(message: MessageParam, text: string): void {
+  if (typeof message.content === "string") {
+    message.content = message.content ? `${message.content}\n\n${text}` : text;
+  } else {
+    message.content = [...message.content, { type: "text", text }];
+  }
+}
+
+/**
+ * Inject host-validated skill instructions after the selecting user text.
+ * Context whose owning message was condensed away this turn is carried onto
+ * the latest user text while its skill is still active, so a same-turn
+ * condense cannot leave restrictions active without their instructions.
+ */
+function injectExplicitSkillContext(
+  apiMessages: MessageParam[],
+  effectiveMessages: AgentMessage[],
+  allMessages: readonly AgentMessage[],
+  isSkillActive: (skillId: string, revision: string) => boolean,
+): void {
+  const presentActivationIds = new Set<string>();
+  effectiveMessages.forEach((message, index) => {
+    const target = apiMessages[index];
+    if (message.role !== "user" || !message.skillContext || !target) return;
+    for (const context of message.skillContext) {
+      presentActivationIds.add(context.activationId);
+      appendProviderText(target, formatExplicitSkillContextBlock(context));
+    }
+  });
+  // Carry only the latest selection of each active owner. Older turns may
+  // contain the same skill and revision, but must not multiply its context.
+  const latestContexts = new Map<
+    string,
+    NonNullable<AgentMessage["skillContext"]>[number]
+  >();
+  for (const message of allMessages) {
+    for (const context of message.skillContext ?? [])
+      latestContexts.set(context.skillId, context);
+  }
+  const carried = [...latestContexts.values()].filter(
+    (context) =>
+      !presentActivationIds.has(context.activationId) &&
+      isSkillActive(context.skillId, context.revision),
+  );
+  if (carried.length === 0) return;
+  for (let index = apiMessages.length - 1; index >= 0; index--) {
+    const message = apiMessages[index]!;
+    if (message.role !== "user" || isToolResultCarrier(message)) continue;
+    for (const context of carried) {
+      appendProviderText(message, formatExplicitSkillContextBlock(context));
+    }
+    return;
+  }
+}
+
 function buildProviderMessages(
   effectiveMessages: AgentMessage[],
   modeInsertions: Array<{ beforeIndex: number; blockText: string }>,
@@ -550,9 +615,21 @@ function buildCurrentRequestContextLedger(
       content: insertion.blockText,
     })),
   );
-  const providerMessageTokens = estimateProviderMessageTokens(
-    buildProviderMessages(effectiveMessages, modeInsertions),
+  const providerMessages = buildProviderMessages(
+    effectiveMessages,
+    modeInsertions,
   );
+  injectExplicitSkillContext(
+    providerMessages,
+    effectiveMessages,
+    session.getAllMessages(),
+    (id, revision) =>
+      session.isSkillActive(id) &&
+      session
+        .getAdvertisedSkills()
+        .some((skill) => skill.id === id && skill.revision === revision),
+  );
+  const providerMessageTokens = estimateProviderMessageTokens(providerMessages);
   const toolBreakdown = tools
     ? buildToolContextBreakdown(tools)
     : (session.contextBreakdown.tools ?? buildToolContextBreakdown(undefined));
@@ -1144,6 +1221,8 @@ export class AgentEngine {
       providerNoProgressTimeoutMs?: number;
       /** Resolves the linked predecessor transcript for an eligible handoff successor. */
       getHandoffSourceTranscript?: import("../core/tools/types.js").AgentToolExecutionContext["getHandoffSourceTranscript"];
+      /** Validates and stages explicitly selected skills on queued input. */
+      explicitSkillAdmission?: ExplicitSkillAdmission;
     },
   ): AsyncGenerator<AgentEvent> {
     const ac = session.createAbortController();
@@ -1216,6 +1295,17 @@ export class AgentEngine {
       };
       while (true) {
         if (signal.aborted) break;
+
+        const driftedSkill = session.takeActiveSkillCatalogDrift();
+        if (driftedSkill) {
+          yield {
+            type: "error",
+            error: `The active ${driftedSkill} skill changed or was disabled during this turn. AgentLink stopped before the next model request so the skill's restrictions are not silently dropped. Send a new message to continue.`,
+            retryable: false,
+            code: "skill_catalog_drift",
+          };
+          return;
+        }
 
         await session.waitForModelSelectionUpdate();
         if (signal.aborted) break;
@@ -1435,6 +1525,7 @@ export class AgentEngine {
           return resolved;
         };
 
+        let reachedCondenseBoundary = false;
         const projectedRequestLedger = buildCurrentRequestContextLedger(
           session,
           provider,
@@ -1451,6 +1542,7 @@ export class AgentEngine {
           ) &&
           !hasUnansweredUserTurn(session)
         ) {
+          reachedCondenseBoundary = true;
           const condensed = yield* this.condenseSession(
             session,
             true,
@@ -1469,48 +1561,29 @@ export class AgentEngine {
           );
           if (condensed) retainedToolResults.clear();
           if (signal.aborted) break;
+        }
+        if (
+          session.hasPendingInterjections &&
+          (reachedCondenseBoundary ||
+            session
+              .peekPendingInterjections()
+              .some((entry) => entry.skillSelection))
+        ) {
           // Drain every pending interjection FIFO so multiple queued messages
-          // all land at this break, each as its own user message.
-          for (
-            let interjection = session.consumePendingInterjection();
-            interjection !== null;
-            interjection = session.consumePendingInterjection()
-          ) {
-            const resolvedInterjection = await resolveQueuedAttachments(
-              interjection.text,
-              interjection.attachments,
-            );
-            const images = [
-              ...(interjection.images ?? []),
-              ...resolvedInterjection.images,
-            ];
-            const documents = [
-              ...(interjection.documents ?? []),
-              ...resolvedInterjection.documents,
-            ];
-            codexTurnState.dispose();
-            codexTurnState = new CodexTurnState();
-            session.addUserMessage(resolvedInterjection.text, {
-              displayText: interjection.displayText,
-              coordination: interjection.coordination,
-              origin: interjection.origin,
-              isSlashCommand: interjection.isSlashCommand === true,
-              slashCommandLabel: interjection.slashCommandLabel,
-              images: images.length > 0 ? images : undefined,
-              documents: documents.length > 0 ? documents : undefined,
-            });
-            yield {
-              type: "user_interjection" as const,
-              text: interjection.text,
-              queueId: interjection.queueId,
-              displayText: interjection.displayText,
-              coordination: interjection.coordination,
-              isSlashCommand: interjection.isSlashCommand === true,
-              slashCommandLabel: interjection.slashCommandLabel,
-              images: images.length > 0 ? images : undefined,
-              documents: documents.length > 0 ? documents : undefined,
-            };
-          }
+          // all land at this break, each as its own user message. Admission
+          // changes the request authority computed above, so rebuild it.
+          const admitted = yield* this.admitPendingInterjections(
+            session,
+            opts?.explicitSkillAdmission,
+            signal,
+            resolveQueuedAttachments,
+            () => {
+              codexTurnState.dispose();
+              codexTurnState = new CodexTurnState();
+            },
+          );
+          if (admitted === "failed") return;
+          if (admitted === "admitted") continue;
         }
 
         const requestId = randomUUID();
@@ -1622,6 +1695,19 @@ export class AgentEngine {
             modeInsertions,
             this.log,
           );
+          injectExplicitSkillContext(
+            apiMessages,
+            effectiveMessages,
+            session.getAllMessages(),
+            (skillId, revision) =>
+              session.isSkillActive(skillId) &&
+              session
+                .getAdvertisedSkills()
+                .some(
+                  (skill) =>
+                    skill.id === skillId && skill.revision === revision,
+                ),
+          );
 
           // Recovery input is request-local. It must reach the provider without
           // becoming a persisted/user-visible chat message.
@@ -1656,6 +1742,51 @@ export class AgentEngine {
             contextBreakdown.tools?.estimatedTokens ?? 0,
             opts?.automaticMemoryContext?.estimatedTokens ?? 0,
           );
+          if (
+            contextLedger.overflowTokens > 0 &&
+            session
+              .getAllMessages()
+              .some((message) =>
+                message.skillContext?.some((context) =>
+                  session.isSkillActive(context.skillId),
+                ),
+              )
+          ) {
+            if (session.autoCondense && !contextTooLongCondenseAttempted) {
+              contextTooLongCondenseAttempted = true;
+              requestPermit?.release();
+              requestPermit = undefined;
+              const condensed = yield* this.condenseSession(
+                session,
+                true,
+                provider,
+                preservedContext,
+                activeModel,
+                {
+                  isBackground: opts?.isBackground,
+                  signal,
+                  onProviderAdmissionPhase: opts?.onProviderAdmissionPhase,
+                  tools: rawTools,
+                  automaticMemoryContext: opts?.automaticMemoryContext,
+                  hookRuntime: opts?.hookRuntime,
+                  hookTurnId: opts?.hookTurnId,
+                },
+              );
+              if (signal.aborted) break;
+              if (condensed) {
+                retainedToolResults.clear();
+                continue;
+              }
+            }
+            yield {
+              type: "error",
+              code: "skill_selection_too_large",
+              retryable: false,
+              error:
+                "The complete skill context and conversation do not fit this model. The admitted turn is retained; choose a larger model or send a corrected request.",
+            };
+            break;
+          }
           const retrievedMemoryAllocation = getContextLedgerLayer(
             contextLedger,
             "retrieved_context",
@@ -1783,6 +1914,16 @@ export class AgentEngine {
           };
           lastProviderAttempt = undefined;
           requestTransport = undefined;
+          const dispatchDrift = session.takeActiveSkillCatalogDrift();
+          if (dispatchDrift) {
+            yield {
+              type: "error",
+              code: "skill_catalog_drift",
+              retryable: false,
+              error: `The active ${dispatchDrift} skill changed. Send a new request or explicitly reselect the skill before continuing.`,
+            };
+            break;
+          }
           const streamGen = provider.stream({
             model: activeModel,
             systemPrompt: requestSystemPrompt,
@@ -3281,47 +3422,19 @@ export class AgentEngine {
 
         // Inject any pending user interjections between tool batches,
         // draining FIFO so multiple queued messages all land at this break.
+        // The next loop iteration rebuilds request authority from the result.
         if (!signal.aborted) {
-          for (
-            let interjection = session.consumePendingInterjection();
-            interjection !== null;
-            interjection = session.consumePendingInterjection()
-          ) {
-            const resolvedInterjection = await resolveQueuedAttachments(
-              interjection.text,
-              interjection.attachments,
-            );
-            const images = [
-              ...(interjection.images ?? []),
-              ...resolvedInterjection.images,
-            ];
-            const documents = [
-              ...(interjection.documents ?? []),
-              ...resolvedInterjection.documents,
-            ];
-            codexTurnState.dispose();
-            codexTurnState = new CodexTurnState();
-            session.addUserMessage(resolvedInterjection.text, {
-              displayText: interjection.displayText,
-              coordination: interjection.coordination,
-              origin: interjection.origin,
-              isSlashCommand: interjection.isSlashCommand === true,
-              slashCommandLabel: interjection.slashCommandLabel,
-              images: images.length > 0 ? images : undefined,
-              documents: documents.length > 0 ? documents : undefined,
-            });
-            yield {
-              type: "user_interjection" as const,
-              text: interjection.text,
-              queueId: interjection.queueId,
-              displayText: interjection.displayText,
-              coordination: interjection.coordination,
-              isSlashCommand: interjection.isSlashCommand === true,
-              slashCommandLabel: interjection.slashCommandLabel,
-              images: images.length > 0 ? images : undefined,
-              documents: documents.length > 0 ? documents : undefined,
-            };
-          }
+          const admitted = yield* this.admitPendingInterjections(
+            session,
+            opts?.explicitSkillAdmission,
+            signal,
+            resolveQueuedAttachments,
+            () => {
+              codexTurnState.dispose();
+              codexTurnState = new CodexTurnState();
+            },
+          );
+          if (admitted === "failed") return;
         }
 
         session.status = "streaming";
@@ -3368,6 +3481,231 @@ export class AgentEngine {
   }
 
   /**
+   * Admit the whole pending interjection FIFO as one batch. Explicit skill
+   * selections are staged first without consuming anything; on failure the
+   * batch stays pending and the run stops before another provider request.
+   * The final recheck, consumption, message admission and activation commit
+   * run synchronously so no stale or partial batch can be admitted.
+   */
+  private async *admitPendingInterjections(
+    session: AgentSession,
+    admission: ExplicitSkillAdmission | undefined,
+    signal: AbortSignal,
+    resolveQueuedAttachments: (
+      text: string,
+      attachments?: string[],
+    ) => Promise<{
+      text: string;
+      images: Array<{ name: string; mimeType: string; base64: string }>;
+      documents: Array<{ name: string; mimeType: string; base64: string }>;
+    }>,
+    onAdmitted: () => void,
+  ): AsyncGenerator<AgentEvent, "none" | "admitted" | "failed"> {
+    const staged = session.peekPendingInterjections();
+    if (staged.length === 0) return "none";
+    const failed = (failure: SkillSelectionFailure): AgentEvent[] => [
+      {
+        type: "skill_selection_failed",
+        failure,
+        queueIds: staged
+          .filter((entry) => entry.origin || entry.skillSelection)
+          .map((entry) => entry.queueId),
+      },
+      {
+        type: "error",
+        error: failure.message,
+        retryable: false,
+        code: failure.code,
+      },
+    ];
+
+    if (!staged.some((entry) => entry.skillSelection)) {
+      // No selection: preserve per-message admission and event ordering.
+      for (
+        let interjection = session.consumePendingInterjection();
+        interjection !== null;
+        interjection = session.consumePendingInterjection()
+      ) {
+        const resolved = await resolveQueuedAttachments(
+          interjection.text,
+          interjection.attachments,
+        );
+        const images = [...(interjection.images ?? []), ...resolved.images];
+        const documents = [
+          ...(interjection.documents ?? []),
+          ...resolved.documents,
+        ];
+        onAdmitted();
+        session.addUserMessage(resolved.text, {
+          displayText: interjection.displayText,
+          coordination: interjection.coordination,
+          origin: interjection.origin,
+          isSlashCommand: interjection.isSlashCommand === true,
+          slashCommandLabel: interjection.slashCommandLabel,
+          images: images.length > 0 ? images : undefined,
+          documents: documents.length > 0 ? documents : undefined,
+        });
+        yield {
+          type: "user_interjection" as const,
+          text: interjection.text,
+          queueId: interjection.queueId,
+          displayText: interjection.displayText,
+          coordination: interjection.coordination,
+          isSlashCommand: interjection.isSlashCommand === true,
+          slashCommandLabel: interjection.slashCommandLabel,
+          images: images.length > 0 ? images : undefined,
+          documents: documents.length > 0 ? documents : undefined,
+        };
+      }
+      return "admitted";
+    }
+
+    let preparedEntries: PreparedSkillAdmissionEntry[];
+    if (!admission) {
+      const selection = staged.find(
+        (entry) => entry.skillSelection,
+      )!.skillSelection!;
+      yield* failed({
+        code: "skill_selection_unavailable",
+        message:
+          "Explicit skill activation is not available in this session. Your message was not sent.",
+        skillId: selection.skillId,
+        selectedRevision: selection.skillRevision,
+      });
+      return "failed";
+    }
+    try {
+      preparedEntries = await admission.prepareBatch(
+        staged.map((entry) => ({
+          text: entry.text,
+          selection: entry.skillSelection,
+          runUserPromptSubmit: Boolean(entry.origin),
+        })),
+        signal,
+      );
+    } catch (error) {
+      if (!isSkillSelectionError(error)) throw error;
+      if (signal.aborted) return "none";
+      yield* failed(error.failure);
+      return "failed";
+    }
+    const resolvedEntries: Array<
+      Awaited<ReturnType<typeof resolveQueuedAttachments>>
+    > = [];
+    for (const entry of staged) {
+      resolvedEntries.push(
+        await resolveQueuedAttachments(entry.text, entry.attachments),
+      );
+    }
+    if (signal.aborted) return "none";
+    const prospectiveMessages: AgentMessage[] = staged.map((entry, index) => ({
+      role: "user",
+      content: skillAdmissionMessageText(
+        resolvedEntries[index]!.text,
+        preparedEntries[index],
+      ),
+      media: {
+        images: [...(entry.images ?? []), ...resolvedEntries[index]!.images],
+        documents: [
+          ...(entry.documents ?? []),
+          ...resolvedEntries[index]!.documents,
+        ],
+      },
+      skillContext: preparedEntries[index]?.prepared
+        ? [preparedEntries[index]!.prepared!.context]
+        : undefined,
+    }));
+    if (
+      this.getSkillBatchContextLedger(session, prospectiveMessages)
+        .overflowTokens > 0 &&
+      session.autoCondense
+    ) {
+      yield* this.condenseSession(session, true);
+      if (signal.aborted) return "none";
+    }
+    if (
+      this.getSkillBatchContextLedger(session, prospectiveMessages)
+        .overflowTokens > 0
+    ) {
+      const selected = preparedEntries.find(
+        (entry) => entry.prepared,
+      )!.prepared!;
+      yield* failed({
+        code: "skill_selection_too_large",
+        message:
+          "The complete selected skill instructions and message batch do not fit this model's context. Your messages remain queued.",
+        skillId: selected.selection.skillId,
+        selectedRevision: selected.selection.skillRevision,
+        skillName: selected.context.skillName,
+      });
+      return "failed";
+    }
+
+    // --- Synchronous commit: no await from here until the events. ---
+    const prepared = preparedEntries.map((entry) => entry.prepared);
+    const drift = verifyPreparedSkillSelections(
+      session.getAdvertisedSkills(),
+      prepared,
+    );
+    if (drift) {
+      yield* failed(drift);
+      return "failed";
+    }
+    // An edit, removal or new arrival at the head during staging means the
+    // prepared intent is stale; leave everything for the next drain.
+    if (!session.consumePendingInterjectionBatch(staged)) return "none";
+    const events: AgentEvent[] = [];
+    staged.forEach((interjection, index) => {
+      const resolved = resolvedEntries[index]!;
+      const entry = preparedEntries[index]!;
+      const contexts = entry.prepared ? [entry.prepared.context] : undefined;
+      const images = [...(interjection.images ?? []), ...resolved.images];
+      const documents = [
+        ...(interjection.documents ?? []),
+        ...resolved.documents,
+      ];
+      const text = skillAdmissionMessageText(resolved.text, entry);
+      onAdmitted();
+      session.addUserMessage(text, {
+        displayText:
+          interjection.displayText ??
+          (text !== interjection.text ? interjection.text : undefined),
+        coordination: interjection.coordination,
+        origin: interjection.origin,
+        isSlashCommand: interjection.isSlashCommand === true,
+        slashCommandLabel: interjection.slashCommandLabel,
+        images: images.length > 0 ? images : undefined,
+        documents: documents.length > 0 ? documents : undefined,
+        skillContext: contexts,
+      });
+      events.push({
+        type: "user_interjection" as const,
+        text: interjection.text,
+        queueId: interjection.queueId,
+        displayText: interjection.displayText,
+        coordination: interjection.coordination,
+        isSlashCommand: interjection.isSlashCommand === true,
+        slashCommandLabel: interjection.slashCommandLabel,
+        images: images.length > 0 ? images : undefined,
+        documents: documents.length > 0 ? documents : undefined,
+        ...(contexts
+          ? { skillActivations: contexts.map(toExplicitSkillActivationView) }
+          : {}),
+      });
+    });
+    // Commit after the last per-message reset so the batch intersects.
+    for (const entry of prepared) {
+      if (entry && !session.trackLoadedSkill(entry.activation)) {
+        throw new Error(
+          `Verified skill ${entry.activation.name} could not be activated`,
+        );
+      }
+    }
+    for (const event of events) yield event;
+    return "admitted";
+  }
+
+  /**
    * Execute tool calls with parallel read-only and sequential write strategy.
    * Results are returned in the same order as the original tool_use blocks.
    */
@@ -3376,6 +3714,41 @@ export class AgentEngine {
    * auto-condense threshold. Uses session.estimatedTotalUsed which includes
    * accumulated estimates for content added since the last API response.
    */
+  /** Measure the complete prospective request before selected input is admitted. */
+  getSkillBatchContextLedger(
+    session: AgentSession,
+    stagedMessages: AgentMessage[],
+  ): Readonly<ContextLedgerSnapshot> {
+    const provider = this.registry.resolveProvider(session.model);
+    const messages = [...session.getMessages(), ...stagedMessages];
+    const insertions = session.buildModeInstructionInsertions?.(messages) ?? [];
+    const apiMessages = buildProviderMessages(messages, insertions);
+    // New input resets old active policy; only staged contexts need carrying.
+    injectExplicitSkillContext(apiMessages, messages, [], () => false);
+    const tools = this.toolRuntime
+      ? createNativeToolDisclosureSnapshot([
+          ...this.toolRuntime.listTools({
+            mode: buildUnionAgentMode([...BUILT_IN_MODES, session.agentMode]),
+            mcpToolDefs: session.mcpToolDisclosure?.inlineTools ?? [],
+          }),
+          todoTool,
+        ]).inlineTools
+      : undefined;
+    return buildRequestContextLedger(
+      session,
+      provider.getCapabilities(session.model),
+      estimateProviderMessageTokens(apiMessages),
+      estimateProviderMessageTokens(
+        insertions.map((insertion) => ({
+          role: "user",
+          content: insertion.blockText,
+        })),
+      ),
+      buildToolContextBreakdown(tools ? [...tools] : undefined).estimatedTokens,
+      0,
+    );
+  }
+
   isOverCondenseThreshold(
     session: AgentSession,
     provider?: ModelProvider,
@@ -3464,6 +3837,11 @@ export class AgentEngine {
       const controller = trackedCall?.controller;
 
       try {
+        const driftedSkill = session.takeActiveSkillCatalogDrift();
+        if (driftedSkill)
+          throw new Error(
+            `The active ${driftedSkill} skill changed; tool dispatch is blocked until a new user request.`,
+          );
         const result = await (forcePromise
           ? Promise.race([
               this.toolRuntime!.executeTool({

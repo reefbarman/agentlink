@@ -5572,93 +5572,143 @@ describe("ChatViewProvider session state sync", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("preserves a browser message id when an active-turn send is queued and drained", async () => {
-    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+  it.each([false, true])(
+    "preserves a browser message id when queued input drains (selection correction=%s)",
+    async (correctSelection) => {
+      const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
-    const provider = new ChatViewProvider(
-      { fsPath: "/tmp/ext" } as never,
-      { get: vi.fn(), update: vi.fn() } as never,
-    );
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
 
-    const session = {
-      id: "session-1",
-      mode: "code",
-      model: "claude-sonnet-4-6",
-      status: "streaming",
-      title: "Session 1",
-      reasoningEffort: "high",
-      estimatedTotalUsed: 0,
-      lastInputTokens: 0,
-      lastOutputTokens: 0,
-      projectScope: {
-        projectId: "project-a",
-        workspaceFolderUri: "file:///workspace/a",
-        displayName: "Project A",
-        rootPath: "/workspace/a",
-      },
-      projectAvailability: "available",
-      getAllMessages: () => [] as unknown[],
-      setPendingInterjection: vi.fn(),
-    };
-
-    const manager = {
-      getForegroundSession: vi.fn(() => session),
-      getSession: vi.fn(() => session),
-      getConfig: vi.fn(() => ({
+      const session = {
+        id: "session-1",
+        mode: "code",
         model: "claude-sonnet-4-6",
-        autoCondenseThreshold: 0.8,
-      })),
-      getSessionInfos: vi.fn(() => []),
-      getBgSessionInfos: vi.fn(() => []),
-      sendMessage: vi.fn(async () => undefined),
-      onEvent: undefined,
-      onSessionsChanged: undefined,
-    };
+        status: "streaming",
+        title: "Session 1",
+        reasoningEffort: "high",
+        estimatedTotalUsed: 0,
+        lastInputTokens: 0,
+        lastOutputTokens: 0,
+        projectScope: {
+          projectId: "project-a",
+          workspaceFolderUri: "file:///workspace/a",
+          displayName: "Project A",
+          rootPath: "/workspace/a",
+        },
+        projectAvailability: "available",
+        getAllMessages: () => [] as unknown[],
+        setPendingInterjection: vi.fn(),
+      };
 
-    provider.setSessionManager(manager as never);
+      const manager = {
+        getForegroundSession: vi.fn(() => session),
+        getSession: vi.fn(() => session),
+        getConfig: vi.fn(() => ({
+          model: "claude-sonnet-4-6",
+          autoCondenseThreshold: 0.8,
+        })),
+        getSessionInfos: vi.fn(() => []),
+        getBgSessionInfos: vi.fn(() => []),
+        sendMessage: vi.fn(async () => undefined),
+        onEvent: undefined,
+        onSessionsChanged: undefined,
+      };
 
-    const result = await provider.submitBrowserSend({
-      id: "browser-message-1",
-      text: "please do this next",
-      sessionId: "session-1",
-      mode: "code",
-    });
+      provider.setSessionManager(manager as never);
 
-    expect(result).toEqual({ ok: true, queued: true });
-    expect(session.setPendingInterjection).not.toHaveBeenCalled();
-    expect(manager.sendMessage).not.toHaveBeenCalled();
-    expect(
-      provider.getBrowserProjectedForegroundState()?.messageQueue,
-    ).toMatchObject([
-      {
+      const result = await provider.submitBrowserSend({
         id: "browser-message-1",
         text: "please do this next",
-        source: "browser",
-      },
-    ]);
-
-    mockPostMessage.mockClear();
-    (provider as unknown as { view: unknown }).view = {
-      webview: { postMessage: mockPostMessage },
-    };
-    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
-    (
-      provider as unknown as {
-        drainBrowserQueuedMessage(sessionId: string): void;
-      }
-    ).drainBrowserQueuedMessage("session-1");
-
-    expect(mockPostMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "agentCommittedUserMessage",
         sessionId: "session-1",
-        id: "browser-message-1",
-        text: "please do this next",
-        origin: "browser",
-      }),
-    );
-    expect(manager.sendMessage).toHaveBeenCalledTimes(1);
-  });
+        mode: "code",
+        ...(correctSelection
+          ? {
+              skillSelection: {
+                skillId: "project/review",
+                skillRevision: "old",
+              },
+            }
+          : {}),
+      });
+
+      expect(result).toEqual({ ok: true, queued: true });
+      expect(session.setPendingInterjection).not.toHaveBeenCalled();
+      expect(manager.sendMessage).not.toHaveBeenCalled();
+      expect(
+        provider.getBrowserProjectedForegroundState()?.messageQueue,
+      ).toMatchObject([
+        {
+          id: "browser-message-1",
+          text: "please do this next",
+          source: "browser",
+        },
+      ]);
+
+      mockPostMessage.mockClear();
+      (provider as unknown as { view: unknown }).view = {
+        webview: { postMessage: mockPostMessage },
+      };
+      (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+      if (correctSelection) {
+        const host = provider as unknown as {
+          postMessage(message: unknown): void;
+          resolveQueuedSkillSelectionFromUi(input: {
+            sessionId: string;
+            queueId: string;
+            skillRevision: string;
+          }): void;
+        };
+        host.postMessage({
+          type: "agentQueueSkillSelectionError",
+          sessionId: session.id,
+          queueIds: ["browser-message-1"],
+          failure: {
+            code: "skill_selection_stale",
+            message: "Skill changed",
+            skillId: "project/review",
+            selectedRevision: "old",
+            currentRevision: "new",
+          },
+        });
+        session.status = "idle";
+        host.resolveQueuedSkillSelectionFromUi({
+          sessionId: session.id,
+          queueId: "browser-message-1",
+          skillRevision: "new",
+        });
+      } else {
+        (
+          provider as unknown as {
+            drainBrowserQueuedMessage(sessionId: string): void;
+          }
+        ).drainBrowserQueuedMessage("session-1");
+      }
+
+      expect(mockPostMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "agentCommittedUserMessage",
+          sessionId: "session-1",
+          id: "browser-message-1",
+          text: "please do this next",
+          origin: "browser",
+        }),
+      );
+      expect(manager.sendMessage).toHaveBeenCalledTimes(1);
+      if (correctSelection) {
+        expect(manager.sendMessage).toHaveBeenCalledWith(
+          session.id,
+          "please do this next",
+          "code",
+          expect.objectContaining({
+            skillSelection: { skillId: "project/review", skillRevision: "new" },
+          }),
+        );
+      }
+    },
+  );
 
   it("does not drain the foreground browser queue when another session completes", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
@@ -6112,6 +6162,47 @@ describe("ChatViewProvider session state sync", () => {
       undefined,
       "vscode",
     );
+  });
+
+  it("carries an explicit picker selection through the production interjection composition boundary", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = {
+      id: "session-1",
+      status: "streaming",
+      setPendingInterjection: vi.fn<(...args: unknown[]) => boolean>(
+        () => true,
+      ),
+    };
+    provider.setSessionManager({
+      getForegroundSession: () => session,
+      getSession: () => session,
+    } as never);
+    const selection = {
+      skillId: "project:pinned-skill",
+      skillRevision: "distinctive-selected-revision",
+    };
+    await (
+      provider as unknown as {
+        handleWebviewMessage(msg: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage({
+      command: "agentInterjectQueuedMessage",
+      sessionId: session.id,
+      queueId: "selected-queue",
+      text: "Literal user arguments",
+      skillSelection: selection,
+    });
+    expect(session.setPendingInterjection.mock.calls[0]?.[0]).toBe(
+      "Literal user arguments",
+    );
+    expect(
+      (session.setPendingInterjection.mock.calls as unknown[][])[0]?.[11],
+    ).toEqual(selection);
+    provider.dispose();
   });
 
   it("clears optimistic interjection readiness when registration is rejected", async () => {

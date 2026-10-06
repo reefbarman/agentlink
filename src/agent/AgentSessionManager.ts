@@ -87,7 +87,20 @@ import {
   buildSessionTranscriptSnapshot,
   toolResultToContent,
 } from "./AgentEngine.js";
-import type { AgentEvent } from "./types.js";
+import type { AgentEvent, SkillSelectionRestoredMessage } from "./types.js";
+import type {
+  ExplicitSkillSelection,
+  SkillSelectionFailure,
+} from "@agentlink/protocol/chat-catalog";
+import {
+  createExplicitSkillAdmission,
+  skillAdmissionMessageText,
+  isSkillSelectionError,
+  toExplicitSkillActivationView,
+  verifyPreparedSkillSelections,
+  type ExplicitSkillAdmission,
+  type PreparedSkillAdmissionEntry,
+} from "./explicitSkillSelection.js";
 import {
   BUILT_IN_MODES,
   buildUnionAgentMode,
@@ -6845,6 +6858,74 @@ export class AgentSessionManager {
     return provider.start(request, options);
   }
 
+  private createExplicitSkillAdmission(
+    session: AgentSession,
+    preparedTurn: { hookRuntime?: HookRuntime; hookTurnId: string },
+  ): ExplicitSkillAdmission {
+    return createExplicitSkillAdmission({
+      getAdvertisedSkills: () => session.getAdvertisedSkills(),
+      hookRuntime: preparedTurn.hookRuntime,
+      hookBase: () => ({
+        session_id: session.id,
+        turn_id: preparedTurn.hookTurnId,
+        cwd: session.projectScope?.rootPath ?? this.cwd,
+        model: session.model,
+      }),
+      // Cheap absolute bound; the engine measures the complete prospective
+      // request and condenses old history before the admission commit below.
+      maxSkillContextTokens: () => {
+        const contextWindow = this.host.providers
+          .tryResolveProvider(session.model)
+          ?.getCapabilities(session.model).contextWindow;
+        return contextWindow;
+      },
+    });
+  }
+
+  /**
+   * Stop an initial send whose explicit skill selection cannot be admitted.
+   * Nothing from the batch was added; the surface restores it for correction.
+   */
+  private async rejectInitialSkillSelection(
+    session: AgentSession,
+    failure: SkillSelectionFailure,
+    messages: ReadonlyArray<SkillSelectionRestoredMessage>,
+  ): Promise<void> {
+    this.log?.(
+      `[skills] explicit selection blocked code=${failure.code} skill=${failure.skillId}`,
+    );
+    this.recordAndEmitEvent(session.id, {
+      type: "skill_selection_failed",
+      failure,
+      messages: messages.map((message) => ({
+        text: message.text,
+        displayText: message.displayText,
+        isSlashCommand: message.isSlashCommand,
+        slashCommandLabel: message.slashCommandLabel,
+        origin: message.origin,
+        skillSelection: message.skillSelection,
+        images: message.images,
+        documents: message.documents,
+      })),
+    });
+    this.recordAndEmitEvent(session.id, {
+      type: "error",
+      error: failure.message,
+      retryable: false,
+      code: failure.code,
+    });
+    session.status = "idle";
+    if (!session.background) session.runState = undefined;
+    await this.saveSessionNow(session.id);
+    this.recordAndEmitEvent(session.id, {
+      type: "done",
+      totalInputTokens: session.totalInputTokens,
+      totalOutputTokens: session.totalOutputTokens,
+      totalCacheReadTokens: session.totalCacheReadTokens,
+      totalCacheCreationTokens: session.totalCacheCreationTokens,
+    });
+  }
+
   async sendMessage(
     sessionId: string | undefined,
     text: string,
@@ -6859,6 +6940,8 @@ export class AgentSessionManager {
       origin?: "vscode" | "browser";
       images?: Array<{ name: string; mimeType: string; base64: string }>;
       documents?: Array<{ name: string; mimeType: string; base64: string }>;
+      /** Explicit skill the user selected for the first message. */
+      skillSelection?: ExplicitSkillSelection;
       /**
        * A caller has already appended and durably saved the first ordinary user
        * turn. Continue through normal execution without adding a duplicate.
@@ -6874,6 +6957,7 @@ export class AgentSessionManager {
         origin?: "vscode" | "browser";
         images?: Array<{ name: string; mimeType: string; base64: string }>;
         documents?: Array<{ name: string; mimeType: string; base64: string }>;
+        skillSelection?: ExplicitSkillSelection;
       }>;
       /** Internal agent-to-agent turn that should render as an interjection. */
       internalInterjection?: {
@@ -6958,6 +7042,7 @@ export class AgentSessionManager {
           if (
             hookRuntime &&
             !opts?.skipUserMessage &&
+            !opts?.skillSelection &&
             !opts?.internalInterjection &&
             (opts?.origin === "vscode" || opts?.origin === "browser")
           ) {
@@ -7011,8 +7096,21 @@ export class AgentSessionManager {
           // Clear any stale pending interjections from the previous run — if the
           // webview already drained the queue and sent this message via agentSend,
           // the old interjections would otherwise be re-emitted mid-turn as duplicates.
-          while (session.consumePendingInterjection() !== null) {
-            // drain
+          const pendingBeforeSend = session.peekPendingInterjections();
+          const hasRejectedSelection = pendingBeforeSend.some(
+            (entry) => entry.skillSelection,
+          );
+          for (const entry of pendingBeforeSend) {
+            // User entries are replayed by the surface. Internal messages in a
+            // rejected batch have no surface queue, so retain them for the run.
+            if (
+              !hasRejectedSelection ||
+              entry.origin ||
+              entry.skillSelection ||
+              entry.queueId === opts?.internalInterjection?.queueId
+            ) {
+              session.clearPendingInterjectionIf(entry.queueId);
+            }
           }
           this.requeuePendingBackgroundQuestionInterjections(
             session,
@@ -7039,16 +7137,52 @@ export class AgentSessionManager {
                     origin: opts?.origin,
                     images: opts?.images,
                     documents: opts?.documents,
+                    skillSelection: opts?.skillSelection,
                   },
                 ]),
             ...(opts?.additionalMessages ?? []),
           ].filter(
             (message) =>
               message.text.trim().length > 0 ||
+              message.skillSelection !== undefined ||
               (message.images?.length ?? 0) > 0 ||
               (message.documents?.length ?? 0) > 0,
           );
           if (messagesToAdd.length === 0 && !opts?.skipUserMessage) return;
+
+          // Stage explicit selections for the whole batch before admitting
+          // any of it. A failure admits nothing and returns the batch to the
+          // surface for correction.
+          const explicitSkillAdmission = this.createExplicitSkillAdmission(
+            session,
+            preparedTurn,
+          );
+          let preparedSkillEntries: PreparedSkillAdmissionEntry[] =
+            messagesToAdd.map(() => ({}));
+          if (messagesToAdd.some((message) => message.skillSelection)) {
+            try {
+              preparedSkillEntries = await explicitSkillAdmission.prepareBatch(
+                messagesToAdd.map((message) => ({
+                  text: message.text,
+                  selection: message.skillSelection,
+                  // Selected messages run their submit hook during staging so
+                  // a denial restores the complete batch for correction.
+                  runUserPromptSubmit:
+                    !opts?.internalInterjection && message.origin !== undefined,
+                })),
+                session.abortSignal,
+              );
+            } catch (error) {
+              if (!isSkillSelectionError(error)) throw error;
+              if (session.isAborted) return;
+              await this.rejectInitialSkillSelection(
+                session,
+                error.failure,
+                messagesToAdd,
+              );
+              return;
+            }
+          }
 
           // A terminal task status should leave the completed chat intact even
           // when its tool result crosses the threshold. Once an accepted user
@@ -7069,31 +7203,114 @@ export class AgentSessionManager {
             if (session.isAborted) return;
           }
 
-          const previousMessageCount = session.messageCount;
-          for (const [messageIndex, message] of messagesToAdd.entries()) {
-            const memoryNudge =
+          const stagedPriorUserTexts = [...priorUserTexts];
+          const messageNudges = messagesToAdd.map((message) => {
+            const nudge =
               opts?.internalInterjection ||
               message.isSlashCommand === true ||
               message.text.trim().length === 0
                 ? { text: message.text, nudged: false }
                 : applyMemoryCandidateNudge(
                     message.text,
-                    priorUserTexts,
-                    countMemoryNudges(priorUserTexts),
+                    stagedPriorUserTexts,
+                    countMemoryNudges(stagedPriorUserTexts),
                   );
-            session.addUserMessage(memoryNudge.text, {
+            stagedPriorUserTexts.push(nudge.text);
+            return nudge;
+          });
+          const admittedTexts = messageNudges.map((nudge, index) =>
+            skillAdmissionMessageText(nudge.text, preparedSkillEntries[index]),
+          );
+          if (preparedSkillEntries.some((entry) => entry.prepared)) {
+            const stagedMessages: AgentMessage[] = messagesToAdd.map(
+              (message, index) => ({
+                role: "user",
+                content: admittedTexts[index]!,
+                media: {
+                  images: message.images ?? [],
+                  documents: message.documents ?? [],
+                },
+                skillContext: preparedSkillEntries[index]?.prepared
+                  ? [preparedSkillEntries[index]!.prepared!.context]
+                  : undefined,
+              }),
+            );
+            if (
+              engine.getSkillBatchContextLedger(session, stagedMessages)
+                .overflowTokens > 0 &&
+              session.autoCondense
+            ) {
+              await this.condenseSessionWithEngine(
+                session,
+                true,
+                engine,
+                requestToolContext,
+              );
+              if (session.isAborted) return;
+            }
+            if (
+              engine.getSkillBatchContextLedger(session, stagedMessages)
+                .overflowTokens > 0
+            ) {
+              const selected = preparedSkillEntries.find(
+                (entry) => entry.prepared,
+              )!.prepared!;
+              await this.rejectInitialSkillSelection(
+                session,
+                {
+                  code: "skill_selection_too_large",
+                  message:
+                    "The complete selected skill instructions and message batch do not fit this model's context. Your messages were not sent.",
+                  skillId: selected.selection.skillId,
+                  selectedRevision: selected.selection.skillRevision,
+                  skillName: selected.context.skillName,
+                },
+                messagesToAdd,
+              );
+              return;
+            }
+          }
+
+          // Synchronous final recheck, admission and activation commit.
+          const preparedSkills = preparedSkillEntries.map(
+            (entry) => entry.prepared,
+          );
+          const skillDrift = preparedSkills.some(Boolean)
+            ? verifyPreparedSkillSelections(
+                session.getAdvertisedSkills(),
+                preparedSkills,
+              )
+            : undefined;
+          if (skillDrift) {
+            await this.rejectInitialSkillSelection(
+              session,
+              skillDrift,
+              messagesToAdd,
+            );
+            return;
+          }
+
+          const previousMessageCount = session.messageCount;
+          for (const [messageIndex, message] of messagesToAdd.entries()) {
+            const memoryNudge = messageNudges[messageIndex]!;
+            const preparedSkill = preparedSkills[messageIndex];
+            const messageText = admittedTexts[messageIndex]!;
+            session.addUserMessage(messageText, {
               coordination:
                 messageIndex === 0
                   ? opts?.internalInterjection?.coordination
                   : undefined,
               displayText:
                 message.displayText ??
-                (memoryNudge.nudged ? message.text : undefined),
+                (memoryNudge.nudged || messageText !== message.text
+                  ? message.text
+                  : undefined),
               isSlashCommand: message.isSlashCommand === true,
               slashCommandLabel: message.slashCommandLabel,
               origin: message.origin,
               images: message.images,
               documents: message.documents,
+              skillContext: preparedSkill ? [preparedSkill.context] : undefined,
             });
             priorUserTexts.push(memoryNudge.text);
             if (messageIndex === 0 && opts?.internalInterjection) {
@@ -7110,6 +7327,25 @@ export class AgentSessionManager {
                 `[media] attached media to user message: images=${message.images?.length ?? 0} documents=${message.documents?.length ?? 0} totalRawMessages=${session.messageCount}`,
               );
             }
+          }
+          // Commit after the last per-message reset so batch selections
+          // intersect instead of keeping only the last one.
+          if (preparedSkills.some(Boolean)) {
+            for (const prepared of preparedSkills) {
+              if (prepared && !session.trackLoadedSkill(prepared.activation)) {
+                throw new Error(
+                  `Verified skill ${prepared.activation.name} could not be activated`,
+                );
+              }
+            }
+            this.recordAndEmitEvent(session.id, {
+              type: "explicit_skill_activation",
+              messages: preparedSkills.map((prepared) =>
+                prepared
+                  ? [toExplicitSkillActivationView(prepared.context)]
+                  : [],
+              ),
+            });
           }
 
           const automaticMemoryContext =
@@ -7196,6 +7432,7 @@ export class AgentSessionManager {
                   this.setInteractiveExecutionPhase(session.id, phase),
                 onModelFallback: ({ effectiveModel }) =>
                   this.reconcileRuntimeModelFallback(session, effectiveModel),
+                explicitSkillAdmission,
               })) {
                 if (
                   session.isAborted ||

@@ -89,7 +89,11 @@ export function SkillLoadBlock({ block: projectedBlock }: SkillLoadBlockProps) {
           class={`codicon codicon-chevron-${expanded ? "down" : "right"} tool-call-chevron`}
         />
         <i class={`codicon tool-call-status-icon ${statusIconClass}`} />
-        <span class="tool-call-name">load_skill</span>
+        <span class="tool-call-name">
+          {block.origin === "user_selection"
+            ? "Activated by you"
+            : "load_skill"}
+        </span>
         <span class="tool-call-summary">{summary}</span>
         {block.complete && block.durationMs != null && (
           <span class="tool-call-duration">{block.durationMs}ms</span>

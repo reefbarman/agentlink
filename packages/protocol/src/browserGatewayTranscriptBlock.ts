@@ -35,6 +35,7 @@ export type BrowserGatewayTranscriptBlock =
       type: "skill_load";
       blockId: string;
       skillName?: string;
+      origin?: "user_selection";
       complete: boolean;
       durationMs?: number;
       detail?: BrowserGatewayTranscriptBlockDetailSummary;

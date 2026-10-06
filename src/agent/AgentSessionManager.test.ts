@@ -11,6 +11,7 @@ import {
   recoverInterruptedRunMessages,
 } from "./AgentSessionManager.js";
 import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
+import { SkillSelectionError } from "./explicitSkillSelection.js";
 import { SessionStore } from "./SessionStore.js";
 import { WorkspaceMutationCoordinator } from "./WorkspaceMutationCoordinator.js";
 import type {
@@ -91,6 +92,8 @@ const mocks = vi.hoisted(() => {
       addUserMessage: vi.fn(),
       appendRuntimeError: vi.fn(),
       consumePendingInterjection: vi.fn(() => null),
+      peekPendingInterjections: vi.fn(() => []),
+      clearPendingInterjectionIf: vi.fn(() => null),
       queuePendingModeResume: vi.fn(),
       consumePendingModeResume: vi.fn(() => null),
       autoTitle: vi.fn(),
@@ -213,6 +216,170 @@ describe("AgentSessionManager host injection", () => {
       inspect: () => undefined,
     });
   });
+
+  it.each([false, true])(
+    "stages an entire explicit-selection send before admission (blocked=%s)",
+    async (blocked) => {
+      const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+      mgr.setToolContext({
+        approvalManager: { bindSessionProject: vi.fn() } as any,
+        approvalPanel: {} as any,
+        sessionId: "agent",
+        extensionUri: {} as any,
+      });
+      const session = await mgr.createSession("code");
+      const controller = new AbortController();
+      const selection = {
+        skillId: "project:selected",
+        skillRevision: "a".repeat(64),
+      };
+      const skill = {
+        id: selection.skillId,
+        revision: selection.skillRevision,
+        name: "selected",
+        skillPath: "/tmp/skills/selected/SKILL.md",
+        enabled: true,
+      };
+      const order: string[] = [];
+      const contexts: unknown[] = [];
+      Object.assign(session, {
+        loadedSkills: new Set(),
+        createAbortController: vi.fn(() => controller),
+        abortSignal: controller.signal,
+        isAborted: false,
+        getAdvertisedSkills: () => [skill],
+        getAllMessages: () => [],
+        addUserMessage: vi.fn((text: string, options: unknown) => {
+          order.push(`add:${text}`);
+          contexts.push(options);
+        }),
+        trackLoadedSkill: vi.fn(() => {
+          order.push("activate");
+          return true;
+        }),
+      });
+      const prepared = {
+        selection,
+        activation: {
+          id: skill.id,
+          name: skill.name,
+          revision: skill.revision,
+          skillPath: skill.skillPath,
+        },
+        context: {
+          activationId: "host:selected",
+          origin: "user_selection",
+          skillId: skill.id,
+          skillName: skill.name,
+          revision: skill.revision,
+          skillPath: skill.skillPath,
+          skillDirectory: "/tmp/skills/selected",
+          resourceGuidance: "Use ordinary reads",
+          content: "HOST_SKILL_BODY",
+        },
+      };
+      const prepareBatch = vi.fn(async () => {
+        order.push("prepare");
+        if (blocked)
+          throw new SkillSelectionError({
+            code: "skill_selection_stale",
+            message: "Changed skill",
+            skillId: selection.skillId,
+            selectedRevision: selection.skillRevision,
+          });
+        return [{ prepared }, {}];
+      });
+      vi.spyOn(mgr as any, "createExplicitSkillAdmission").mockReturnValue({
+        prepareBatch,
+      });
+      const engine = {
+        setToolRuntime: vi.fn(),
+        isOverCondenseThreshold: () => false,
+        getSkillBatchContextLedger: () => ({ overflowTokens: 0 }),
+        run: vi.fn(async function* () {
+          order.push("run");
+          yield {
+            type: "done",
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            totalCacheReadTokens: 0,
+            totalCacheCreationTokens: 0,
+          };
+        }),
+      };
+      (mgr as any).host.createEngine = () => engine;
+      const events = vi.fn();
+      mgr.onEvent = events;
+      const pending = [
+        { text: "Retained internal message", queueId: "internal-retained" },
+        {
+          text: "Prior rejected selection",
+          queueId: "rejected-selected",
+          origin: "vscode" as const,
+          skillSelection: selection,
+        },
+      ];
+      session.peekPendingInterjections = () => [...pending];
+      session.clearPendingInterjectionIf = (queueId: string) => {
+        const index = pending.findIndex((entry) => entry.queueId === queueId);
+        return index < 0 ? null : pending.splice(index, 1)[0];
+      };
+      await mgr.sendMessage(session.id, "Literal arguments", "code", {
+        origin: "vscode",
+        skillSelection: selection,
+        additionalMessages: [{ text: "Ordinary neighbour", origin: "vscode" }],
+      });
+      expect(
+        session.peekPendingInterjections().map((entry) => entry.queueId),
+      ).toEqual(["internal-retained"]);
+      expect(prepareBatch).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            text: "Literal arguments",
+            selection,
+            runUserPromptSubmit: true,
+          }),
+          expect.objectContaining({ text: "Ordinary neighbour" }),
+        ]),
+        controller.signal,
+      );
+      if (blocked) {
+        expect(session.addUserMessage).not.toHaveBeenCalled();
+        expect(engine.run).not.toHaveBeenCalled();
+        expect(events.mock.calls).toEqual(
+          expect.arrayContaining([
+            expect.arrayContaining([
+              expect.objectContaining({
+                type: "skill_selection_failed",
+                messages: expect.arrayContaining([
+                  expect.objectContaining({
+                    text: "Literal arguments",
+                    skillSelection: selection,
+                  }),
+                  expect.objectContaining({ text: "Ordinary neighbour" }),
+                ]),
+              }),
+            ]),
+          ]),
+        );
+      } else {
+        expect(order).toEqual([
+          "prepare",
+          "add:Literal arguments",
+          "add:Ordinary neighbour",
+          "activate",
+          "run",
+        ]);
+        expect(contexts[0]).toMatchObject({
+          origin: "vscode",
+          skillContext: [prepared.context],
+        });
+        expect((session.addUserMessage as any).mock.calls[0][0]).not.toContain(
+          "HOST_SKILL_BODY",
+        );
+      }
+    },
+  );
 
   it("keeps prompt-budget omissions loadable in the captured tool context", async () => {
     const skillPath = "/tmp/.agents/skills/pull-request/SKILL.md";
@@ -2004,6 +2171,8 @@ describe("AgentSessionManager host injection", () => {
       addUserMessage: vi.fn(),
       appendRuntimeError: vi.fn(),
       consumePendingInterjection: vi.fn(() => null),
+      peekPendingInterjections: vi.fn(() => []),
+      clearPendingInterjectionIf: vi.fn(() => null),
       queuePendingModeResume: vi.fn(),
       consumePendingModeResume: vi.fn(() => null),
       autoTitle: vi.fn(),
@@ -3844,6 +4013,8 @@ describe("AgentSessionManager condense thresholds", () => {
         return options;
       }),
       consumePendingInterjection: vi.fn(() => null),
+      peekPendingInterjections: vi.fn(() => []),
+      clearPendingInterjectionIf: vi.fn(() => null),
       consumePendingModeResume: vi.fn(() => null),
       autoTitle: vi.fn(),
       messageCount: messages.length,
@@ -4502,6 +4673,8 @@ describe("AgentSessionManager in-flight persistence", () => {
           }),
           rebuildSystemPrompt: vi.fn(async () => {}),
           consumePendingInterjection: vi.fn(() => null),
+          peekPendingInterjections: vi.fn(() => []),
+          clearPendingInterjectionIf: vi.fn(() => null),
           consumePendingModeResume: vi.fn(() => null),
           autoTitle: vi.fn(),
         } as any;
@@ -5283,6 +5456,8 @@ describe("AgentSessionManager in-flight persistence", () => {
       }),
       rebuildSystemPrompt: vi.fn(async () => {}),
       consumePendingInterjection: vi.fn(() => null),
+      peekPendingInterjections: vi.fn(() => []),
+      clearPendingInterjectionIf: vi.fn(() => null),
       consumePendingModeResume: vi.fn(() => null),
       autoTitle: vi.fn(),
     } as any;
@@ -6730,6 +6905,8 @@ describe("AgentSessionManager checkpoints", () => {
       }),
       getAllMessages: vi.fn(() => messages),
       consumePendingInterjection: vi.fn(() => null),
+      peekPendingInterjections: vi.fn(() => []),
+      clearPendingInterjectionIf: vi.fn(() => null),
       consumePendingModeResume: vi.fn(() => null),
       autoTitle: vi.fn(),
       abort: vi.fn(() => {
@@ -6904,6 +7081,8 @@ describe("AgentSessionManager checkpoints", () => {
       addUserMessage: vi.fn(),
       appendRuntimeError: vi.fn(),
       consumePendingInterjection: vi.fn(() => null),
+      peekPendingInterjections: vi.fn(() => []),
+      clearPendingInterjectionIf: vi.fn(() => null),
       queuePendingModeResume: vi.fn(),
       consumePendingModeResume: vi.fn(() => null),
       autoTitle: vi.fn(),
@@ -7025,6 +7204,8 @@ describe("AgentSessionManager checkpoints", () => {
       addUserMessage: vi.fn(),
       appendRuntimeError: vi.fn(),
       consumePendingInterjection: vi.fn(() => null),
+      peekPendingInterjections: vi.fn(() => []),
+      clearPendingInterjectionIf: vi.fn(() => null),
       queuePendingModeResume: vi.fn(),
       consumePendingModeResume: vi.fn(() => null),
       autoTitle: vi.fn(),
@@ -7202,6 +7383,8 @@ describe("AgentSessionManager checkpoints", () => {
       addUserMessage: vi.fn(),
       appendRuntimeError: vi.fn(),
       consumePendingInterjection: vi.fn(() => null),
+      peekPendingInterjections: vi.fn(() => []),
+      clearPendingInterjectionIf: vi.fn(() => null),
       queuePendingModeResume: vi.fn(),
       consumePendingModeResume: vi.fn(() => null),
       autoTitle: vi.fn(),
@@ -7333,6 +7516,8 @@ describe("AgentSessionManager checkpoints", () => {
       addUserMessage: vi.fn(),
       appendRuntimeError: vi.fn(),
       consumePendingInterjection: vi.fn(() => null),
+      peekPendingInterjections: vi.fn(() => []),
+      clearPendingInterjectionIf: vi.fn(() => null),
       queuePendingModeResume: vi.fn(),
       consumePendingModeResume: vi.fn(() => null),
       autoTitle: vi.fn(),
@@ -7456,6 +7641,8 @@ describe("AgentSessionManager checkpoints", () => {
       addUserMessage: vi.fn(),
       appendRuntimeError: vi.fn(),
       consumePendingInterjection: vi.fn(() => null),
+      peekPendingInterjections: vi.fn(() => []),
+      clearPendingInterjectionIf: vi.fn(() => null),
       queuePendingModeResume: vi.fn(),
       consumePendingModeResume: vi.fn(() => null),
       autoTitle: vi.fn(),
@@ -7585,6 +7772,8 @@ describe("AgentSessionManager checkpoints", () => {
       addUserMessage: vi.fn(),
       appendRuntimeError: vi.fn(),
       consumePendingInterjection: vi.fn(() => null),
+      peekPendingInterjections: vi.fn(() => []),
+      clearPendingInterjectionIf: vi.fn(() => null),
       queuePendingModeResume: vi.fn(),
       consumePendingModeResume: vi.fn(() => null),
       autoTitle: vi.fn(),

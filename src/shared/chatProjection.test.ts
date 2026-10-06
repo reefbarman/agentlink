@@ -1,5 +1,6 @@
 import {
   agentMessagesToChatMessages,
+  queueHasSkillSelectionError,
   initialState,
   reducer,
 } from "./chatProjection.js";
@@ -8,6 +9,121 @@ import { describe, expect, it } from "vitest";
 import type { AppState } from "./chatProjection.js";
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import { TODO_AUTO_CONTINUE_PROMPT } from "@agentlink/protocol/todo-continuation";
+
+describe("explicit skill selection projection", () => {
+  const selection = { skillId: "project:skill", skillRevision: "old" };
+  const failure = {
+    code: "skill_selection_stale" as const,
+    message: "Skill changed",
+    skillId: selection.skillId,
+    selectedRevision: "old",
+    currentRevision: "new",
+  };
+  const activation = {
+    activationId: "host-activation",
+    skillId: selection.skillId,
+    skillName: "skill",
+    revision: "old",
+    skillPath: "/skills/skill/SKILL.md",
+    content: "Private instructions",
+  };
+
+  it("keeps the complete failed batch queued and pauses automatic draining", () => {
+    let state = reducer(initialState, {
+      type: "ENQUEUE_MESSAGE",
+      id: "plain",
+      text: "Keep this too",
+    });
+    state = reducer(state, {
+      type: "ENQUEUE_MESSAGE",
+      id: "selected",
+      text: "Literal arguments",
+      skillSelection: selection,
+    });
+    state = reducer(state, {
+      type: "MARK_QUEUE_SKILL_SELECTION_ERROR",
+      ids: ["plain", "selected"],
+      failure,
+    });
+    expect(state.messageQueue.map((entry) => entry.id)).toEqual([
+      "plain",
+      "selected",
+    ]);
+    expect(state.messageQueue[1]?.skillSelection).toEqual(selection);
+    expect(state.messageQueue[1]?.skillSelectionError).toEqual(failure);
+    expect(queueHasSkillSelectionError(state.messageQueue)).toBe(true);
+    state = reducer(state, {
+      type: "RESOLVE_QUEUE_SKILL_SELECTION",
+      id: "selected",
+      skillRevision: "new",
+    });
+    expect(state.messageQueue[1]?.skillSelection?.skillRevision).toBe("new");
+    expect(queueHasSkillSelectionError(state.messageQueue)).toBe(false);
+  });
+
+  it("clears the hidden selection on text edits or explicit removal", () => {
+    const queued = reducer(initialState, {
+      type: "ENQUEUE_MESSAGE",
+      id: "selected",
+      text: "Arguments",
+      skillSelection: selection,
+      skillSelectionError: failure,
+    });
+    for (const action of [
+      { type: "EDIT_QUEUE_MESSAGE" as const, id: "selected", text: "New text" },
+      { type: "RESOLVE_QUEUE_SKILL_SELECTION" as const, id: "selected" },
+    ]) {
+      const state = reducer(queued, action);
+      expect(state.messageQueue[0]?.skillSelection).toBeUndefined();
+      expect(state.messageQueue[0]?.skillSelectionError).toBeUndefined();
+    }
+  });
+
+  it("renders and restores a host card without treating its body as human text", () => {
+    let state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "Literal arguments",
+    });
+    state = reducer(state, {
+      type: "ATTACH_SKILL_ACTIVATIONS",
+      messages: [[activation]],
+    });
+    state = reducer(state, {
+      type: "ATTACH_SKILL_ACTIVATIONS",
+      messages: [[activation]],
+    });
+    expect(state.messages[0]?.content).toBe("Literal arguments");
+    expect(state.messages[0]?.blocks).toHaveLength(1);
+    expect(state.messages[0]?.blocks[0]).toMatchObject({
+      type: "skill_load",
+      origin: "user_selection",
+      id: "host-activation",
+    });
+    const restored = agentMessagesToChatMessages([
+      {
+        role: "user",
+        content: "Literal arguments",
+        skillContext: [activation],
+      },
+    ]);
+    expect(restored[0]?.blocks).toEqual(state.messages[0]?.blocks);
+  });
+
+  it("removes only the optimistic failed batch and leaves the previous conversation intact", () => {
+    let state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "Earlier request",
+    });
+    const priorCount = state.messages.length;
+    state = reducer(state, {
+      type: "ADD_USER_MESSAGE",
+      text: "Failed selected request",
+    });
+    state = reducer(state, { type: "REMOVE_UNADMITTED_USER_BATCH", count: 1 });
+    expect(state.messages).toHaveLength(priorCount);
+    expect(state.messages[0]?.content).toBe("Earlier request");
+  });
+});
 
 describe("user-message chat projection", () => {
   it("omits explicitly hidden internal user turns", () => {

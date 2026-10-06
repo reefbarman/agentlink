@@ -8,6 +8,7 @@ import type {
   ChatReasoningEffort as ReasoningEffort,
   ChatSlashCommandInfo as SlashCommandInfo,
   ChatModelInfo as WebviewModelInfo,
+  ExplicitSkillSelection,
 } from "@agentlink/protocol/chat-catalog";
 import {
   autosizeTextarea,
@@ -164,6 +165,7 @@ export type ComposerSubmitHandler = (
   displayText?: string,
   slashCommandLabel?: string,
   media?: ComposerMedia[],
+  skillSelection?: ExplicitSkillSelection,
 ) => void;
 
 export interface ComposerContextMode {
@@ -703,9 +705,21 @@ export function InputArea({
             (part) => part.length > 0,
           );
           const commandInput = contextParts.join("\n\n");
-          const finalText = commandInput
-            ? `${commandInput}\n\n${command.body}`
-            : command.body;
+          const selection =
+            command.source === "skill" &&
+            command.directActivation &&
+            command.skillId &&
+            command.skillRevision
+              ? {
+                  skillId: command.skillId,
+                  skillRevision: command.skillRevision,
+                }
+              : undefined;
+          const finalText = selection
+            ? commandInput
+            : commandInput
+              ? `${commandInput}\n\n${command.body}`
+              : command.body;
           onComposerEvent?.("submit.send", {
             route: "slash_command_body",
             command: command.name,
@@ -716,6 +730,7 @@ export function InputArea({
             userText,
             displayText,
             submitMedia,
+            ...(selection ? ([selection] as const) : []),
           );
         }
         return;
@@ -868,7 +883,26 @@ export function InputArea({
           });
         } else {
           setText(before);
-          onSend(cmd.body, [], `/${cmd.displayName ?? cmd.name}`);
+          const selection =
+            cmd.source === "skill" &&
+            cmd.directActivation &&
+            cmd.skillId &&
+            cmd.skillRevision
+              ? { skillId: cmd.skillId, skillRevision: cmd.skillRevision }
+              : undefined;
+          const label = `/${cmd.displayName ?? cmd.name}`;
+          if (selection) {
+            onSend(
+              before.trim(),
+              [],
+              [before.trim(), label].filter(Boolean).join("\n"),
+              label,
+              undefined,
+              selection,
+            );
+          } else {
+            onSend(cmd.body, [], label);
+          }
         }
       }
     },

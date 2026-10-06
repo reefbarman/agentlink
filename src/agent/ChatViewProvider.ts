@@ -29,10 +29,14 @@ import type {
 import type { ChatSessionHistorySummary as WebviewSessionSummary } from "@agentlink/protocol/chat-session-history";
 import type { ChatMessage } from "@agentlink/protocol/chat-transcript";
 import {
+  parseExplicitSkillSelection,
   projectCoreModelCatalogToChatModels,
   type ChatModelInfo as WebviewModelInfo,
   type ChatProjectInfo as ProjectInfo,
   type ChatSlashCommandInfo as SlashCommandInfo,
+  type ExplicitSkillActivationView,
+  type ExplicitSkillSelection,
+  type SkillSelectionFailure,
 } from "@agentlink/protocol/chat-catalog";
 import { getConfiguredBaseThresholdForModel } from "./modelCondenseThresholds.js";
 import {
@@ -225,6 +229,7 @@ import { detectQuestionFromAssistantText } from "./webview/questionDetection.js"
 import type { DetectedQuestion } from "@agentlink/protocol/question-detection";
 import {
   agentMessagesToChatMessages,
+  queueHasSkillSelectionError,
   reducer,
   shouldDropSessionScopedEvent,
   shouldProjectBackgroundCompletion,
@@ -942,6 +947,7 @@ export type ExtensionToWebview =
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
       displayMedia?: DisplayMedia;
+      skillActivations?: ExplicitSkillActivationView[];
     }
   | {
       type: "agentQueuedMessage";
@@ -956,11 +962,35 @@ export type ExtensionToWebview =
       documents?: RawDisplayDocument[];
       displayMedia?: DisplayMedia;
       source?: "vscode" | "browser";
+      skillSelection?: ExplicitSkillSelection;
+      skillSelectionError?: SkillSelectionFailure;
     }
   | {
       type: "agentRemoveQueuedMessage";
       sessionId: string;
       queueId: string;
+    }
+  | {
+      type: "agentSkillSelectionBatchRejected";
+      sessionId: string;
+      count: number;
+    }
+  | {
+      type: "agentSkillActivations";
+      sessionId: string;
+      messages: ExplicitSkillActivationView[][];
+    }
+  | {
+      type: "agentQueueSkillSelectionError";
+      sessionId: string;
+      queueIds: string[];
+      failure: SkillSelectionFailure;
+    }
+  | {
+      type: "agentQueueSkillSelectionResolved";
+      sessionId: string;
+      queueId: string;
+      skillRevision?: string;
     }
   | {
       type: "agentCommittedUserMessage";
@@ -4358,6 +4388,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     isSlashCommand?: boolean;
     interject?: boolean;
     model?: string;
+    skillSelection?: ExplicitSkillSelection;
   }): Promise<{
     ok: boolean;
     queued?: boolean;
@@ -4387,6 +4418,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     if (
       !text?.trim() &&
+      !input.skillSelection &&
       attachments.length === 0 &&
       images.length === 0 &&
       documents.length === 0
@@ -4451,6 +4483,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const projectless = isProjectlessSessionScope(
       effectiveSession.projectScope,
     );
+    if (projectless && input.skillSelection) {
+      return {
+        ok: false,
+        error: "Open a folder to activate a selected skill directly.",
+      };
+    }
     if (projectless && attachments.length > 0) {
       return {
         ok: false,
@@ -4492,6 +4530,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         documents: documents.length > 0 ? documents : undefined,
         displayMedia,
         source: "browser",
+        skillSelection: input.skillSelection,
       });
       const interjected = input.interject
         ? this.interjectQueuedMessageFromUi({
@@ -4505,6 +4544,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             attachments,
             images,
             documents,
+            skillSelection: input.skillSelection,
           })
         : undefined;
       return {
@@ -4546,6 +4586,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         origin: "browser",
         images: resolvedImages.length > 0 ? resolvedImages : undefined,
         documents: resolvedDocuments.length > 0 ? resolvedDocuments : undefined,
+        skillSelection: input.skillSelection,
       })
       .catch((err) => {
         this.log(`[error] browser send failed: ${err}`);
@@ -6123,6 +6164,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     source?: "vscode" | "browser";
     images: Array<{ name: string; mimeType: string; base64: string }>;
     documents: Array<{ name: string; mimeType: string; base64: string }>;
+    skillSelection?: ExplicitSkillSelection;
   }): Promise<void> {
     if (!input.sessionId || !input.queueId || !this.sessionManager) return;
     const session = this.sessionManager.getSession(input.sessionId);
@@ -6188,6 +6230,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         origin: input.source === "browser" ? "browser" : "vscode",
         images: images.length > 0 ? images : undefined,
         documents: documents.length > 0 ? documents : undefined,
+        skillSelection: input.skillSelection,
       })
       .catch((err) => {
         this.log(`[error] steer queued message failed: ${err}`);
@@ -6233,6 +6276,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     attachments: string[];
     images: Array<{ name: string; mimeType: string; base64: string }>;
     documents: Array<{ name: string; mimeType: string; base64: string }>;
+    skillSelection?: ExplicitSkillSelection;
   }): boolean {
     if (!input.sessionId || !input.queueId || !this.sessionManager) {
       return false;
@@ -6258,6 +6302,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       input.documents.length > 0 ? input.documents : undefined,
       undefined,
       input.origin,
+      ...(input.skillSelection ? ([input.skillSelection] as const) : []),
     );
     if (accepted) {
       this.applyProjectedAction({
@@ -6297,6 +6342,50 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  /**
+   * Clear a queued selection error after the user chose to retry, optionally
+   * pinning the current revision they explicitly accepted.
+   */
+  private resolveQueuedSkillSelectionFromUi(input: {
+    sessionId: string;
+    queueId: string;
+    skillRevision?: string;
+  }): void {
+    if (!input.sessionId || !input.queueId) return;
+    this.postMessage({
+      type: "agentQueueSkillSelectionResolved",
+      sessionId: input.sessionId,
+      queueId: input.queueId,
+      ...(input.skillRevision ? { skillRevision: input.skillRevision } : {}),
+    });
+    const session = this.sessionManager?.getSession(input.sessionId);
+    if (session?.status === "idle" || session?.status === "error") {
+      this.drainBrowserQueuedMessage(input.sessionId);
+    }
+  }
+
+  public resolveBrowserQueuedSkillSelection(input: {
+    sessionId: string;
+    projectId: string;
+    queueId: string;
+    skillRevision?: string;
+  }): { ok: boolean; error?: string } {
+    const session = this.sessionManager?.getSession(input.sessionId);
+    if (
+      !session ||
+      session.projectScope.projectId !== input.projectId ||
+      !this.getAvailableBrowserProjectScope(input.projectId)
+    ) {
+      return { ok: false, error: "project_state_mismatch" };
+    }
+    const queued = this.projectedForegroundState.messageQueue.find(
+      (entry) => entry.id === input.queueId && entry.source === "browser",
+    );
+    if (!queued) return { ok: false, error: "queued_message_not_found" };
+    this.resolveQueuedSkillSelectionFromUi(input);
+    return { ok: true };
+  }
+
   public async submitBrowserSteerQueuedMessage(input: {
     sessionId: string;
     projectId: string;
@@ -6308,6 +6397,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     attachments?: string[];
     images?: Array<{ name: string; mimeType: string; base64: string }>;
     documents?: Array<{ name: string; mimeType: string; base64: string }>;
+    skillSelection?: ExplicitSkillSelection;
   }): Promise<{ ok: boolean }> {
     if (!input.sessionId || !input.queueId) return { ok: false };
     const session = this.sessionManager?.getSession(input.sessionId);
@@ -6333,6 +6423,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       images: input.images ?? [],
       documents: input.documents ?? [],
       source: "browser",
+      skillSelection: input.skillSelection,
     });
     return { ok: true };
   }
@@ -6372,6 +6463,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     attachments?: string[];
     images?: Array<{ name: string; mimeType: string; base64: string }>;
     documents?: Array<{ name: string; mimeType: string; base64: string }>;
+    skillSelection?: ExplicitSkillSelection;
   }): { ok: boolean; error?: string } {
     if (!input.sessionId || !input.queueId) {
       return { ok: false, error: "invalid_request" };
@@ -6399,6 +6491,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       attachments: input.attachments ?? [],
       images: input.images ?? [],
       documents: input.documents ?? [],
+      skillSelection: input.skillSelection,
     });
     return accepted
       ? { ok: true }
@@ -8131,6 +8224,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 attachments: msg.attachments,
                 images: msg.images,
                 documents: msg.documents,
+                skillSelection: msg.skillSelection,
               },
             ];
         const mgr = this.sessionManager;
@@ -8242,6 +8336,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 "Open a folder before attaching local workspace files.",
               );
             }
+            const skillSelection = parseExplicitSkillSelection(
+              raw.skillSelection,
+            );
+            if (skillSelection === null) {
+              throw new Error("The selected skill could not be read.");
+            }
+            if (skillSelection && projectless) {
+              throw new Error(
+                "Open a folder to activate a selected skill directly.",
+              );
+            }
             const resolved = projectRoot
               ? await this.resolveAttachments(
                   messageText,
@@ -8257,12 +8362,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               attachments,
               images: [...images, ...resolved.images],
               documents: [...documents, ...resolved.documents],
+              skillSelection,
             };
           }),
         );
         const nonEmptyMessages = sendMessages.filter(
           (message) =>
             message.text.trim().length > 0 ||
+            message.skillSelection !== undefined ||
             message.images.length > 0 ||
             message.documents.length > 0,
         );
@@ -8308,6 +8415,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               nonEmptyMessages[0]!.documents.length > 0
                 ? nonEmptyMessages[0]!.documents
                 : undefined,
+            skillSelection: nonEmptyMessages[0]!.skillSelection,
             additionalMessages: nonEmptyMessages.slice(1).map((message) => ({
               text: message.text,
               displayText: message.displayText,
@@ -8317,6 +8425,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               images: message.images.length > 0 ? message.images : undefined,
               documents:
                 message.documents.length > 0 ? message.documents : undefined,
+              skillSelection: message.skillSelection,
             })),
           })
           .catch((err) => {
@@ -8618,6 +8727,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentSteerQueuedMessage": {
+        const skillSelection = parseExplicitSkillSelection(msg.skillSelection);
+        if (skillSelection === null) break;
         await this.steerQueuedMessageFromUi({
           sessionId: msg.sessionId as string,
           queueId: msg.queueId as string,
@@ -8635,12 +8746,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             (msg.documents as
               | Array<{ name: string; mimeType: string; base64: string }>
               | undefined) ?? [],
+          skillSelection,
+        });
+        break;
+      }
+
+      case "agentResolveQueuedSkillSelection": {
+        this.resolveQueuedSkillSelectionFromUi({
+          sessionId: msg.sessionId as string,
+          queueId: msg.queueId as string,
+          skillRevision:
+            typeof msg.skillRevision === "string"
+              ? msg.skillRevision
+              : undefined,
         });
         break;
       }
 
       case "agentInterjectQueuedMessage": {
+        const skillSelection = parseExplicitSkillSelection(msg.skillSelection);
+        if (skillSelection === null) break;
         const accepted = this.interjectQueuedMessageFromUi({
+          skillSelection,
           origin: "vscode",
           sessionId: msg.sessionId as string,
           queueId: msg.queueId as string,
@@ -10703,6 +10830,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           documents: extMsg.documents,
           displayMedia: extMsg.displayMedia,
           source: extMsg.source,
+          skillSelection: extMsg.skillSelection,
+          skillSelectionError: extMsg.skillSelectionError,
         });
         break;
 
@@ -10721,10 +10850,41 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         });
         break;
 
+      case "agentSkillSelectionBatchRejected":
+        this.applyProjectedAction({
+          type: "REMOVE_UNADMITTED_USER_BATCH",
+          count: extMsg.count,
+        });
+        break;
+
+      case "agentSkillActivations":
+        this.applyProjectedAction({
+          type: "ATTACH_SKILL_ACTIVATIONS",
+          messages: extMsg.messages,
+        });
+        break;
+
+      case "agentQueueSkillSelectionError":
+        this.applyProjectedAction({
+          type: "MARK_QUEUE_SKILL_SELECTION_ERROR",
+          ids: extMsg.queueIds,
+          failure: extMsg.failure,
+        });
+        break;
+
+      case "agentQueueSkillSelectionResolved":
+        this.applyProjectedAction({
+          type: "RESOLVE_QUEUE_SKILL_SELECTION",
+          id: extMsg.queueId,
+          skillRevision: extMsg.skillRevision,
+        });
+        break;
+
       case "agentInterjection":
         this.applyProjectedAction({
           type: "ADD_INTERJECTION",
           coordination: extMsg.coordination,
+          skillActivations: extMsg.skillActivations,
           text: extMsg.displayText ?? extMsg.text,
           isSlashCommand: extMsg.isSlashCommand ?? false,
           slashCommandLabel:
@@ -11232,6 +11392,102 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         });
         break;
 
+      case "explicit_skill_activation":
+        if (!isBackground)
+          this.postMessage({
+            type: "agentSkillActivations",
+            sessionId,
+            messages: event.messages,
+          });
+        break;
+
+      case "skill_selection_failed": {
+        if (isBackground) break;
+        let failedQueueIds = event.queueIds ?? [];
+        if (event.queueIds) {
+          this.postMessage({
+            type: "agentQueueSkillSelectionError",
+            sessionId,
+            queueIds: event.queueIds,
+            failure: event.failure,
+          });
+        } else if (event.messages) {
+          this.postMessage({
+            type: "agentSkillSelectionBatchRejected",
+            sessionId,
+            count: event.messages.length,
+          });
+          const queueIds = event.messages.map(() => randomUUID());
+          failedQueueIds = queueIds;
+          for (const [index, message] of event.messages.entries()) {
+            this.postMessage({
+              type: "agentQueuedMessage",
+              sessionId,
+              queueId: queueIds[index]!,
+              text: message.text,
+              displayText: message.displayText,
+              isSlashCommand: message.isSlashCommand,
+              slashCommandLabel: message.slashCommandLabel,
+              images: message.images,
+              documents: message.documents,
+              displayMedia: mediaToDisplayMedia(message),
+              source: message.origin ?? "vscode",
+              skillSelection: message.skillSelection,
+            });
+          }
+          this.postMessage({
+            type: "agentQueueSkillSelectionError",
+            sessionId,
+            queueIds,
+            failure: event.failure,
+          });
+        }
+        if (event.failure.code === "skill_selection_stale") {
+          void this.refreshSkillConfiguration(
+            this.sessionManager?.getSession(sessionId)?.projectScope.projectId,
+          )
+            .then(() => {
+              const current = this.sessionManager
+                ?.getSession(sessionId)
+                ?.getAdvertisedSkills()
+                .find(
+                  (skill) =>
+                    skill.id === event.failure.skillId && skill.enabled,
+                );
+              const stillBlocked =
+                this.projectedForegroundStore.sessionId === sessionId &&
+                this.projectedForegroundState.messageQueue.some(
+                  (entry) =>
+                    failedQueueIds.includes(entry.id) &&
+                    entry.skillSelectionError?.selectedRevision ===
+                      event.failure.selectedRevision,
+                );
+              if (
+                current &&
+                stillBlocked &&
+                current.revision !== event.failure.selectedRevision
+              ) {
+                this.postMessage({
+                  type: "agentQueueSkillSelectionError",
+                  sessionId,
+                  queueIds: failedQueueIds,
+                  failure: {
+                    ...event.failure,
+                    skillName: current.name,
+                    currentRevision: current.revision,
+                  },
+                });
+              }
+            })
+            .catch((error) =>
+              this.log(`[skills] picker refresh failed: ${error}`),
+            );
+        } else {
+          void this.sendSlashCommands();
+        }
+        break;
+      }
+
       case "user_interjection":
         this.log(`[agent] user_interjection queueId=${event.queueId}`);
         this.postMessage({
@@ -11243,6 +11499,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           displayText: event.displayText,
           isSlashCommand: event.isSlashCommand,
           slashCommandLabel: event.slashCommandLabel,
+          ...(!isBackground
+            ? { skillActivations: event.skillActivations }
+            : {}),
           displayMedia: mediaToDisplayMedia({
             images: event.images,
             documents: event.documents,
@@ -13336,7 +13595,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const queuedMessages = this.projectedForegroundState.messageQueue.filter(
       (entry) => entry.source === "browser",
     );
-    if (queuedMessages.length === 0) return;
+    if (
+      queuedMessages.length === 0 ||
+      queueHasSkillSelectionError(this.projectedForegroundState.messageQueue)
+    )
+      return;
 
     for (const queued of queuedMessages) {
       this.applyProjectedAction({ type: "REMOVE_FROM_QUEUE", id: queued.id });
@@ -13359,6 +13622,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       );
       return {
         id: queued.id,
+        skillSelection: queued.skillSelection,
         text: queued.fullText ?? queued.text,
         displayText: queued.text,
         isSlashCommand: queued.isSlashCommand,
@@ -13397,6 +13661,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         origin: "browser",
         images: sendMessages[0]!.images,
         documents: sendMessages[0]!.documents,
+        skillSelection: sendMessages[0]!.skillSelection,
         additionalMessages: sendMessages.slice(1).map((message) => ({
           text: message.text,
           displayText: message.displayText,
@@ -13405,6 +13670,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           origin: "browser",
           images: message.images,
           documents: message.documents,
+          skillSelection: message.skillSelection,
         })),
       })
       .catch((err) => {

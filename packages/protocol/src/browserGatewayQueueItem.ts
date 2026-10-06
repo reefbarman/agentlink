@@ -1,3 +1,8 @@
+import type {
+  ExplicitSkillSelection,
+  SkillSelectionFailure,
+} from "./chatCatalog.js";
+
 export const BROWSER_GATEWAY_QUEUE_ITEM_STATES = Object.freeze([
   "queued",
   "running",
@@ -12,4 +17,6 @@ export interface BrowserGatewayQueueItem {
   itemId: string;
   summary: string;
   state: BrowserGatewayQueueItemState;
+  skillSelection?: ExplicitSkillSelection;
+  skillSelectionError?: SkillSelectionFailure;
 }

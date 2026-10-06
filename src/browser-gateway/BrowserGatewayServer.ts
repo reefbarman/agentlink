@@ -41,6 +41,10 @@ import type {
 } from "./BrowserGatewayService.js";
 import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
 import { parseChatTabActionAddress } from "@agentlink/protocol/chat-workspace";
+import {
+  parseExplicitSkillSelection,
+  type ExplicitSkillSelection,
+} from "@agentlink/protocol/chat-catalog";
 import type { DecisionMessage } from "@agentlink/protocol/approval-transport";
 import { isCommandApprovalPolicy } from "@agentlink/protocol/command-approval-policy";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
@@ -499,6 +503,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
         rawExact("/api/queue/pause-interjection"),
         ({ req, res }) => this.handleQueuePauseInterjectionAction(req, res),
         json("queue pause interjection action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/queue/resolve-skill-selection"),
+        ({ req, res }) => this.handleQueueSkillSelectionResolution(req, res),
+        json("queue skill selection resolution failed"),
       ),
       route(
         "POST",
@@ -1207,7 +1217,14 @@ export class BrowserGatewayServer implements vscode.Disposable {
       isSlashCommand?: boolean;
       projectId?: string;
       interject?: boolean;
+      skillSelection?: unknown;
     };
+
+    const skillSelection = parseExplicitSkillSelection(body?.skillSelection);
+    if (skillSelection === null) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
 
     const text = typeof body?.text === "string" ? body.text : "";
     const attachments = Array.isArray(body?.attachments)
@@ -1236,6 +1253,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
 
     if (
       !text.trim() &&
+      !skillSelection &&
       attachments.length === 0 &&
       images.length === 0 &&
       documents.length === 0
@@ -1271,6 +1289,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
           ? body.slashCommandLabel
           : undefined,
       isSlashCommand: body.isSlashCommand === true,
+      ...(skillSelection ? { skillSelection } : {}),
       ...(body.interject === true ? { interject: true } : {}),
     });
     this.writeJson(res, result.ok ? 200 : 400, result);
@@ -1358,6 +1377,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       images?: unknown;
       documents?: unknown;
       projectId?: unknown;
+      skillSelection?: unknown;
     } | null,
   ): {
     sessionId: string;
@@ -1370,7 +1390,10 @@ export class BrowserGatewayServer implements vscode.Disposable {
     attachments: string[];
     images: Array<{ name: string; mimeType: string; base64: string }>;
     documents: Array<{ name: string; mimeType: string; base64: string }>;
+    skillSelection?: ExplicitSkillSelection;
   } | null {
+    const skillSelection = parseExplicitSkillSelection(body?.skillSelection);
+    if (skillSelection === null) return null;
     const sessionId =
       typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
     const queueId =
@@ -1418,6 +1441,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       !sessionId ||
       !queueId ||
       (!text.trim() &&
+        !skillSelection &&
         attachments.length === 0 &&
         images.length === 0 &&
         documents.length === 0)
@@ -1441,6 +1465,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       attachments,
       images,
       documents,
+      ...(skillSelection ? { skillSelection } : {}),
     };
   }
 
@@ -1464,6 +1489,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       attachments?: unknown;
       images?: unknown;
       documents?: unknown;
+      skillSelection?: unknown;
     } | null;
     const input = this.normalizeQueueMessageActionBody(body);
     if (!input) {
@@ -1509,6 +1535,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       attachments?: unknown;
       images?: unknown;
       documents?: unknown;
+      skillSelection?: unknown;
     } | null;
     const input = this.normalizeQueueMessageActionBody(body);
     if (!input) {
@@ -1526,6 +1553,51 @@ export class BrowserGatewayServer implements vscode.Disposable {
     const result = this.chatViewProvider.submitBrowserInterjectQueuedMessage({
       ...input,
       projectId,
+    });
+    this.writeJson(
+      res,
+      result.ok ? 200 : 409,
+      result.ok ? { ...result, snapshot: this.getSnapshot() } : result,
+    );
+  }
+
+  private async handleQueueSkillSelectionResolution(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const body = (await readJsonBody(req)) as {
+      sessionId?: unknown;
+      projectId?: unknown;
+      queueId?: unknown;
+      skillRevision?: unknown;
+    } | null;
+    const sessionId =
+      typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
+    const queueId =
+      typeof body?.queueId === "string" ? body.queueId.trim() : "";
+    const skillRevision = body?.skillRevision;
+    if (
+      !sessionId ||
+      !queueId ||
+      (skillRevision !== undefined &&
+        (typeof skillRevision !== "string" || !skillRevision.trim()))
+    ) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const projectId = this.resolveRequestedProjectId(body?.projectId, res);
+    if (!projectId || !this.validateSessionProject(sessionId, projectId, res)) {
+      return;
+    }
+    const result = this.chatViewProvider.resolveBrowserQueuedSkillSelection({
+      sessionId,
+      projectId,
+      queueId,
+      ...(typeof skillRevision === "string" ? { skillRevision } : {}),
     });
     this.writeJson(
       res,

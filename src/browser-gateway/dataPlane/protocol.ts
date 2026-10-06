@@ -58,6 +58,10 @@ import {
   BROWSER_GATEWAY_QUEUE_ITEM_STATES,
   type BrowserGatewayQueueItem,
 } from "@agentlink/protocol/browser-gateway-queue-item";
+import {
+  parseExplicitSkillSelection,
+  type SkillSelectionFailure,
+} from "@agentlink/protocol/chat-catalog";
 import type { BrowserGatewayRepositoryState } from "@agentlink/protocol/browser-gateway-repository-state";
 import type {
   BrowserGatewayProjectSummary,
@@ -1990,9 +1994,16 @@ function parseTranscriptBlock(
         "complete",
         "durationMs",
         "detail",
+        "origin",
       ]);
       const skillName = optionalString(object, "skillName", path, 1_000);
       const durationMs = optionalNonNegativeInteger(object, "durationMs", path);
+      const origin = optionalEnum(
+        object,
+        "origin",
+        path,
+        new Set(["user_selection"]),
+      ) as "user_selection" | undefined;
       const detail = parseBlockDetailSummary(object.detail, `${path}.detail`);
       return {
         type: "skill_load",
@@ -2000,6 +2011,7 @@ function parseTranscriptBlock(
         ...(skillName ? { skillName } : {}),
         complete: booleanValue(object.complete, `${path}.complete`),
         ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(origin ? { origin } : {}),
         ...(detail ? { detail } : {}),
       };
     }
@@ -2640,7 +2652,25 @@ function parseInteraction(
 function parseQueue(value: unknown, path: string): BrowserGatewayQueueItem[] {
   return arrayValue(value, path).map((item, index) => {
     const itemPath = `${path}[${index}]`;
-    const object = strictRecord(item, itemPath, ["itemId", "summary", "state"]);
+    const object = strictRecord(item, itemPath, [
+      "itemId",
+      "summary",
+      "state",
+      "skillSelection",
+      "skillSelectionError",
+    ]);
+    const skillSelection = parseExplicitSkillSelection(object.skillSelection);
+    if (skillSelection === null) {
+      fail(
+        "invalid_value",
+        `${itemPath}.skillSelection`,
+        "invalid skill selection",
+      );
+    }
+    const skillSelectionError = parseQueueSkillSelectionError(
+      object.skillSelectionError,
+      `${itemPath}.skillSelectionError`,
+    );
     return {
       itemId: nonEmptyString(object.itemId, `${itemPath}.itemId`, 256),
       summary: boundedString(object.summary, `${itemPath}.summary`, 4_000),
@@ -2649,8 +2679,65 @@ function parseQueue(value: unknown, path: string): BrowserGatewayQueueItem[] {
         `${itemPath}.state`,
         new Set(BROWSER_GATEWAY_QUEUE_ITEM_STATES),
       ) as BrowserGatewayQueueItem["state"],
+      ...(skillSelection ? { skillSelection } : {}),
+      ...(skillSelectionError ? { skillSelectionError } : {}),
     };
   });
+}
+
+function parseQueueSkillSelectionError(
+  value: unknown,
+  path: string,
+): SkillSelectionFailure | undefined {
+  if (value === undefined || value === null) return undefined;
+  const object = strictRecord(value, path, [
+    "code",
+    "message",
+    "skillId",
+    "selectedRevision",
+    "skillName",
+    "currentRevision",
+  ]);
+  const code = enumValue(
+    object.code,
+    `${path}.code`,
+    new Set([
+      "skill_selection_unavailable",
+      "skill_selection_stale",
+      "skill_selection_unreadable",
+      "skill_selection_hook_denied",
+      "skill_selection_too_large",
+      "skill_selection_conflict",
+    ]),
+  ) as SkillSelectionFailure["code"];
+  return {
+    code,
+    message: boundedString(object.message, `${path}.message`, 4_000),
+    skillId: nonEmptyString(object.skillId, `${path}.skillId`, 512),
+    selectedRevision: nonEmptyString(
+      object.selectedRevision,
+      `${path}.selectedRevision`,
+      512,
+    ),
+    ...(object.skillName !== undefined
+      ? {
+          skillName: boundedString(
+            object.skillName,
+            `${path}.skillName`,
+            1_000,
+          ),
+        }
+      : {}),
+    ...(object.currentRevision !== undefined
+      ? {
+          currentRevision: nonEmptyString(
+            object.currentRevision,
+            `${path}.currentRevision`,
+            512,
+          ),
+        }
+      : {}),
+  };
 }
 
 function parseTodos(value: unknown, path: string): BrowserGatewayTodoItem[] {

@@ -70,6 +70,8 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
       attachments: string[],
       displayText?: string,
       slashCommandLabel?: string,
+      media?: unknown[],
+      skillSelection?: { skillId: string; skillRevision: string },
     ) => void;
     onSetReasoningEffort?: (effort: "none" | "low" | "medium" | "high") => void;
     onSetServiceTier?: (tier: "standard" | "fast" | "ultrafast") => void;
@@ -183,6 +185,19 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
           onClick: () => onSend?.("Ship it", []),
         },
         "Trigger send",
+      ),
+      h(
+        "button",
+        {
+          type: "button",
+          "data-testid": "trigger-skill-send",
+          onClick: () =>
+            onSend?.("Review this", [], "/review", "/review", [], {
+              skillId: "project/review",
+              skillRevision: "sha256:selection-revision",
+            }),
+        },
+        "Trigger skill send",
       ),
 
       contextMode?.actions
@@ -1730,6 +1745,52 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(await screen.findByText("Ship it")).toBeTruthy();
     expect(resolveSend).toBeTypeOf("function");
     await act(async () => resolveSend?.(jsonResponse({ ok: true })));
+  });
+
+  it("sends explicit skill selections through the workspace endpoint", async () => {
+    const snapshot = createSnapshot();
+    let sendBody: Record<string, unknown> | undefined;
+    const fallbackFetch = globalThis.fetch;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/ui-state")) return jsonResponse(snapshot);
+        if (url.includes("/api/send")) {
+          sendBody = JSON.parse(String(init?.body ?? "{}")) as Record<
+            string,
+            unknown
+          >;
+          return jsonResponse({ ok: true });
+        }
+        return fallbackFetch(input, init);
+      },
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    await waitFor(() =>
+      expect(screen.getByTestId("current-model").textContent).toBe(
+        snapshot.session.foreground.model,
+      ),
+    );
+    fireEvent.click(await screen.findByTestId("trigger-skill-send"));
+    await waitFor(() => expect(sendBody).toBeDefined());
+    expect(sendBody).toMatchObject({
+      text: "Review this",
+      skillSelection: {
+        skillId: "project/review",
+        skillRevision: "sha256:selection-revision",
+      },
+    });
   });
 
   it("keeps an interrupted workspace session visible when resume is rejected", async () => {

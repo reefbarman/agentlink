@@ -8,6 +8,11 @@ import type {
   ToolResultContextAttribution,
 } from "@agentlink/protocol/context-diagnostics";
 import type {
+  ExplicitSkillActivationView,
+  ExplicitSkillSelection,
+  SkillSelectionFailure,
+} from "@agentlink/protocol/chat-catalog";
+import type {
   McpApprovalPromotionMeta,
   ToolResult,
 } from "@agentlink/protocol/tool-result";
@@ -38,6 +43,23 @@ export interface PreservedRuntimeContext {
   todos?: TodoItem[];
 }
 
+/** Validated SKILL.md content attached to the message that selected it. */
+export interface ExplicitSkillContext {
+  /** Stable host activation record ID; also the transcript card ID. */
+  activationId: string;
+  origin: "user_selection";
+  skillId: string;
+  skillName: string;
+  revision: string;
+  skillPath: string;
+  skillDirectory: string;
+  /** How to read relative supporting files without activating anything. */
+  resourceGuidance: string;
+  content: string;
+  /** PreToolUse/PostToolUse hook context returned for this activation. */
+  hookContext?: string[];
+}
+
 export type AgentMessage = MessageParam & {
   /**
    * Pasted media (images/PDFs) attached to this user message. Kept out of
@@ -50,6 +72,13 @@ export type AgentMessage = MessageParam & {
     images: Array<{ name: string; mimeType: string; base64: string }>;
     documents: Array<{ name: string; mimeType: string; base64: string }>;
   };
+  /**
+   * Host-validated skill instructions for an explicit user skill selection on
+   * this user message. Kept out of `content` so file text never becomes human
+   * decision evidence; AgentEngine injects it as a labelled host-context block.
+   * Display/history only: it never recreates active skill authority.
+   */
+  skillContext?: ExplicitSkillContext[];
   /**
    * Opaque host ID linking a typed human message to the session's private
    * human decision record. Grants nothing by itself.
@@ -290,7 +319,39 @@ export type AgentEvent =
       slashCommandLabel?: string;
       images?: Array<{ name: string; mimeType: string; base64: string }>;
       documents?: Array<{ name: string; mimeType: string; base64: string }>;
+      /** Explicit skills the host activated with this interjection. */
+      skillActivations?: ExplicitSkillActivationView[];
+    }
+  | {
+      /** Host activated user-selected skills for a just-admitted batch. */
+      type: "explicit_skill_activation";
+      /** Activations per admitted visible user message, in batch order. */
+      messages: ExplicitSkillActivationView[][];
+    }
+  | {
+      /**
+       * A selected batch was blocked before model dispatch. Nothing from the
+       * batch was admitted; surfaces keep it recoverable.
+       */
+      type: "skill_selection_failed";
+      failure: SkillSelectionFailure;
+      /** Queued interjections left unconsumed by a mid-run drain. */
+      queueIds?: string[];
+      /** Initial-send batch to restore for correction. */
+      messages?: SkillSelectionRestoredMessage[];
     };
+
+/** Unadmitted message returned to a surface after a selection failure. */
+export interface SkillSelectionRestoredMessage {
+  text: string;
+  displayText?: string;
+  isSlashCommand?: boolean;
+  slashCommandLabel?: string;
+  origin?: "vscode" | "browser";
+  skillSelection?: ExplicitSkillSelection;
+  images?: Array<{ name: string; mimeType: string; base64: string }>;
+  documents?: Array<{ name: string; mimeType: string; base64: string }>;
+}
 
 // --- Session types ---
 

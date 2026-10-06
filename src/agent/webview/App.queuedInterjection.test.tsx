@@ -114,6 +114,79 @@ function setupInterjectedMessage(
   return queueId;
 }
 
+describe("queued explicit skill selections", () => {
+  it("preserves the picker revision in the interjection request and blocks failed queue draining", () => {
+    const api = createVsCodeApi();
+    const { container, getByText } = render(<App vscodeApi={api} />);
+    deliverAuthenticatedModels();
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: "session-1",
+        mode: "code",
+        model: "claude-sonnet-4-6",
+        streaming: true,
+      },
+    });
+    const skillSelection = { skillId: "project:smoke", skillRevision: "old" };
+
+    // Restore the same structured intent returned after a blocked initial send.
+    deliver({
+      type: "agentQueuedMessage",
+      sessionId: "session-1",
+      queueId: "selected",
+      text: "Literal args",
+      source: "vscode",
+      skillSelection,
+    });
+    fireEvent.click(
+      container.querySelector<HTMLButtonElement>(".queue-item-interject")!,
+    );
+    expect(
+      findCalls(api.postMessage, "agentInterjectQueuedMessage").at(-1),
+    ).toMatchObject({ text: "Literal args", skillSelection });
+    deliver({
+      type: "agentQueueSkillSelectionError",
+      sessionId: "session-1",
+      queueIds: ["selected"],
+      failure: {
+        code: "skill_selection_stale",
+        message: "Skill changed",
+        skillId: "project:smoke",
+        selectedRevision: "old",
+        currentRevision: "new",
+      },
+    });
+    deliver({
+      type: "agentDone",
+      sessionId: "session-1",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+    });
+    expect(findCalls(api.postMessage, "agentSend")).toHaveLength(0);
+    expect(getByText("Skill changed")).toBeTruthy();
+    fireEvent.click(getByText("Use current revision"));
+    expect(
+      findCalls(api.postMessage, "agentResolveQueuedSkillSelection").at(-1),
+    ).toMatchObject({ queueId: "selected", skillRevision: "new" });
+    deliver({
+      type: "agentQueueSkillSelectionResolved",
+      sessionId: "session-1",
+      queueId: "selected",
+      skillRevision: "new",
+    });
+    expect(findCalls(api.postMessage, "agentSend")).toHaveLength(1);
+    expect(findCalls(api.postMessage, "agentSend")[0]).toMatchObject({
+      messages: [
+        {
+          text: "Literal args",
+          skillSelection: { ...skillSelection, skillRevision: "new" },
+        },
+      ],
+    });
+  });
+});
+
 describe("queued interjection editing and removal", () => {
   it("immediately marks and can pause an existing queued interjection", () => {
     const vscodeApi = createVsCodeApi();

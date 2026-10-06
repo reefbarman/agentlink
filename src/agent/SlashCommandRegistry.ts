@@ -26,6 +26,8 @@ export interface SlashCommand {
   skillId?: string;
   /** SHA-256 content revision advertised with the generated skill command. */
   skillRevision?: string;
+  /** Workspace host can activate this generated command directly. */
+  directActivation?: boolean;
 }
 
 /** Parse YAML frontmatter from a markdown file. Returns `{}` if not present. */
@@ -299,6 +301,7 @@ function skillToSlashCommand(
     description: skill.description || `Use skill ${skill.name}`,
     source: "skill",
     builtin: false,
+    directActivation: true,
     body: `Use the skill ${JSON.stringify(skill.id)} by calling load_skill with path ${JSON.stringify(skill.skillPath)}, then follow its instructions for this request.`,
     skillPath: skill.skillPath,
     skillId: skill.id,

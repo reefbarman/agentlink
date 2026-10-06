@@ -52,6 +52,75 @@ function renderInputArea(
   );
 }
 
+describe("explicit skill selection", () => {
+  const skill: SlashCommandInfo = {
+    name: "skill:smoke",
+    displayName: "smoke",
+    description: "Smoke skill",
+    source: "skill",
+    builtin: false,
+    body: "Call load_skill, then obey",
+    directActivation: true,
+    skillId: "project:smoke",
+    skillRevision: "pinned-revision",
+  };
+
+  it("sends a selection-only picker command without the generated loader prompt", () => {
+    const onSend = vi.fn();
+    const { container } = renderInputArea([skill], { onSend });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    input.value = "/";
+    input.setSelectionRange(1, 1);
+    fireEvent.input(input);
+    input.value = "/smo";
+    input.setSelectionRange(4, 4);
+    fireEvent.input(input);
+    fireEvent.click(
+      container.querySelector<HTMLButtonElement>(".slash-cmd-option")!,
+    );
+    expect(onSend).toHaveBeenCalledWith("", [], "/smoke", "/smoke", undefined, {
+      skillId: "project:smoke",
+      skillRevision: "pinned-revision",
+    });
+  });
+
+  it("carries literal arguments and the pinned selection through interjection submit", () => {
+    const onInterject = vi.fn();
+    const { container, getByRole } = renderInputArea([skill], {
+      streaming: true,
+      onInterject,
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    fireEvent.input(input, { target: { value: "/smoke check this" } });
+    fireEvent.click(getByRole("button", { name: "Interject at next break" }));
+    expect(onInterject.mock.calls[0]?.[0]).toBe("check this");
+    expect(onInterject.mock.calls[0]?.[5]).toEqual({
+      skillId: "project:smoke",
+      skillRevision: "pinned-revision",
+    });
+    expect(onInterject.mock.calls[0]?.[0]).not.toContain("load_skill");
+  });
+
+  it("never treats an ordinary custom command as a selected skill", () => {
+    const onSend = vi.fn();
+    const { container } = renderInputArea([{ ...skill, source: "project" }], {
+      onSend,
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    input.value = "/";
+    input.setSelectionRange(1, 1);
+    fireEvent.input(input);
+    input.value = "/smo";
+    input.setSelectionRange(4, 4);
+    fireEvent.input(input);
+    fireEvent.click(
+      container.querySelector<HTMLButtonElement>(".slash-cmd-option")!,
+    );
+    expect(onSend.mock.calls[0]?.[0]).toBe(skill.body);
+    expect(onSend.mock.calls[0]?.[5]).toBeUndefined();
+  });
+});
+
 describe("InputArea usage description", () => {
   it.each([
     ["claude", "Claude Sonnet"],

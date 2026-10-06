@@ -343,6 +343,7 @@ function makeChatViewProviderStub() {
     submitBrowserOpenImageInEditor: vi.fn(async () => ({ ok: true })),
     submitBrowserSteerQueuedMessage: vi.fn(async () => ({ ok: true })),
     submitBrowserInterjectQueuedMessage: vi.fn(() => ({ ok: true })),
+    resolveBrowserQueuedSkillSelection: vi.fn(() => ({ ok: true })),
     submitBrowserStop: vi.fn(() => ({ ok: true })),
     submitBrowserRetry: vi.fn(() => ({ ok: true })),
     submitBrowserResume: vi.fn<
@@ -2336,6 +2337,68 @@ describe("BrowserGatewayServer", () => {
         interject: true,
       }),
     );
+
+    const selectedSend = await fetch(`${baseUrl}/api/send`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({
+        text: "Explain the selected project",
+        sessionId: "session-1",
+        skillSelection: {
+          skillId: "project/review",
+          skillRevision: "sha256:current",
+        },
+      }),
+    });
+    expect(selectedSend.status).toBe(200);
+    expect(chatViewProvider.submitBrowserSend).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        skillSelection: {
+          skillId: "project/review",
+          skillRevision: "sha256:current",
+        },
+      }),
+    );
+
+    const malformedSelection = await fetch(`${baseUrl}/api/send`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ text: "Reject this", skillSelection: {} }),
+    });
+    expect(malformedSelection.status).toBe(400);
+    expect(chatViewProvider.submitBrowserSend).toHaveBeenCalledTimes(3);
+
+    const resolvedQueueSelection = await fetch(
+      `${baseUrl}/api/queue/resolve-skill-selection`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({
+          sessionId: "session-1",
+          projectId: "project-a",
+          queueId: "queue-1",
+          skillRevision: "sha256:current",
+        }),
+      },
+    );
+    expect(resolvedQueueSelection.status).toBe(200);
+    expect(
+      chatViewProvider.resolveBrowserQueuedSkillSelection,
+    ).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      projectId: "project-a",
+      queueId: "queue-1",
+      skillRevision: "sha256:current",
+    });
 
     const preparedHandoff = await fetch(
       `${baseUrl}/api/session/handoff/prepare`,

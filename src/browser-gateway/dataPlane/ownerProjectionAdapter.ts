@@ -1477,6 +1477,7 @@ function projectBlock(
         ...(block.durationMs !== undefined
           ? { durationMs: safeInteger(block.durationMs) }
           : {}),
+        ...(block.origin === "user_selection" ? { origin: block.origin } : {}),
       };
     case "bg_agent":
       return {
@@ -1727,6 +1728,20 @@ function projectQueue(
     itemId: bounded(item.id, 256),
     summary: bounded(item.text, MAX_SUMMARY_LENGTH),
     state: "queued",
+    ...(item.skillSelection ? { skillSelection: item.skillSelection } : {}),
+    ...(item.skillSelectionError
+      ? {
+          skillSelectionError: {
+            ...item.skillSelectionError,
+            message: bounded(item.skillSelectionError.message, 4_000),
+            ...(item.skillSelectionError.skillName
+              ? {
+                  skillName: bounded(item.skillSelectionError.skillName, 1_000),
+                }
+              : {}),
+          },
+        }
+      : {}),
   }));
 }
 

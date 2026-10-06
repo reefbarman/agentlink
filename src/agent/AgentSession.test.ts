@@ -684,33 +684,30 @@ describe("AgentSession", () => {
             await restore(restored.getActiveSkillState()!)
           ).getActiveSkillAllowedTools(),
         ).toEqual(expected);
+        const badPolicyRevision = {
+          ...snapshot,
+          policy: { ...snapshot.policy, revision: "f".repeat(64) },
+        };
+        const expandedPolicy = {
+          ...snapshot,
+          policy: { ...snapshot.policy, allowedTools: ["write_file"] },
+        };
+        const staleActivations = {
+          ...snapshot,
+          activations: snapshot.activations.map((activation) => ({
+            ...activation,
+            revision: "f".repeat(64),
+          })),
+        };
         expect(
-          (
-            await restore({
-              ...snapshot,
-              policy: { ...snapshot.policy, revision: "f".repeat(64) },
-            })
-          ).getActiveSkillState(),
-        ).toBeUndefined();
-        expect(
-          (
-            await restore({
-              ...snapshot,
-              policy: { ...snapshot.policy, allowedTools: ["write_file"] },
-            })
-          ).getActiveSkillState(),
-        ).toBeUndefined();
-        expect(
-          (
-            await restore({
-              ...snapshot,
-              activations: snapshot.activations.map((activation) => ({
-                ...activation,
-                revision: "f".repeat(64),
-              })),
-            })
-          ).getActiveSkillState(),
-        ).toBeUndefined();
+          (await restore(badPolicyRevision)).getActiveSkillState(),
+        ).toEqual(badPolicyRevision);
+        expect((await restore(expandedPolicy)).getActiveSkillState()).toEqual(
+          expandedPolicy,
+        );
+        expect((await restore(staleActivations)).getActiveSkillState()).toEqual(
+          staleActivations,
+        );
       },
     );
 
@@ -742,7 +739,7 @@ describe("AgentSession", () => {
       ],
     ])(
       "rejects the entire restored skill batch for %s",
-      async (_label, mutate) => {
+      async (label, mutate) => {
         const skill = makeSkillEntry("safe-review", "a".repeat(64), [
           "read_file",
         ]);
@@ -761,6 +758,7 @@ describe("AgentSession", () => {
         const snapshot = source.getActiveSkillState();
         expect(snapshot).toBeDefined();
 
+        const invalidState = mutate(snapshot!);
         const restored = await makeSession();
         restored.restoreFromStore({
           id: "restored",
@@ -770,17 +768,29 @@ describe("AgentSession", () => {
           totalInputTokens: 0,
           totalOutputTokens: 0,
           loadedSkills: [skill.name],
-          activeSkillState: mutate(snapshot!),
+          activeSkillState: invalidState,
           messages: [],
         });
 
         expect(restored.getLoadedSkills()).toEqual([skill.name]);
         expect(restored.getActiveSkillAllowedTools()).toBeUndefined();
+        expect(restored.isSkillActive(skill.id)).toBe(false);
+        if (String(label).includes("duplicate")) {
+          expect(restored.getActiveSkillState()).toBeUndefined();
+          expect(restored.takeActiveSkillCatalogDrift()).toBeUndefined();
+          return;
+        }
+        expect(restored.getActiveSkillState()).toEqual(invalidState);
+        expect(restored.takeActiveSkillCatalogDrift()).toBe(skill.name);
+        expect(restored.takeActiveSkillCatalogDrift()).toBe(skill.name);
+
+        restored.addUserMessage("start a new task");
         expect(restored.getActiveSkillState()).toBeUndefined();
+        expect(restored.takeActiveSkillCatalogDrift()).toBeUndefined();
       },
     );
 
-    it("revokes active authority when refresh changes the same skill revision", async () => {
+    it("retains the committed skill policy and persistent drift marker until new user input", async () => {
       const original = makeSkillEntry("safe-review", "a".repeat(64), [
         "read_file",
       ]);
@@ -805,8 +815,14 @@ describe("AgentSession", () => {
       session.setAdvertisedSkills([changed]);
 
       expect(session.getLoadedSkills()).toEqual([original.name]);
+      expect(session.getActiveSkillAllowedTools()).toEqual(["read_file"]);
+      expect(session.isSkillActive(original.id)).toBe(true);
+      expect(session.takeActiveSkillCatalogDrift()).toBe("safe-review");
+      expect(session.takeActiveSkillCatalogDrift()).toBe("safe-review");
+
+      session.addUserMessage("continue under the current catalogue");
+      expect(session.takeActiveSkillCatalogDrift()).toBeUndefined();
       expect(session.getActiveSkillAllowedTools()).toBeUndefined();
-      expect(session.getActiveSkillState()).toBeUndefined();
     });
 
     it("does not authorize legacy loaded skill names", async () => {
@@ -1885,6 +1901,42 @@ describe("AgentSession", () => {
   });
 
   describe("pending interjections", () => {
+    it("peeks and atomically consumes only the unchanged pending batch", async () => {
+      const session = await makeSession();
+      session.setPendingInterjection("selected", "q1");
+      session.setPendingInterjection("neighbour", "q2");
+      const staged = session.peekPendingInterjections();
+
+      expect(staged.map((entry) => entry.text)).toEqual([
+        "selected",
+        "neighbour",
+      ]);
+      expect(session.consumePendingInterjectionBatch(staged.slice(0, 1))).toBe(
+        true,
+      );
+      expect(
+        session.peekPendingInterjections().map((entry) => entry.queueId),
+      ).toEqual(["q2"]);
+      expect(session.consumePendingInterjectionBatch(staged)).toBe(false);
+      expect(
+        session.peekPendingInterjections().map((entry) => entry.queueId),
+      ).toEqual(["q2"]);
+    });
+
+    it("does not consume a staged batch after a queued item is replaced", async () => {
+      const session = await makeSession();
+      session.setPendingInterjection("selected", "q1");
+      session.setPendingInterjection("neighbour", "q2");
+      const staged = session.peekPendingInterjections();
+
+      session.updatePendingInterjection("q1", { text: "edited" });
+
+      expect(session.consumePendingInterjectionBatch(staged)).toBe(false);
+      expect(
+        session.peekPendingInterjections().map((entry) => entry.text),
+      ).toEqual(["edited", "neighbour"]);
+    });
+
     it("accepts multiple interjections and consumes them FIFO", async () => {
       const session = await makeSession();
       expect(session.setPendingInterjection("first", "q1")).toBe(true);

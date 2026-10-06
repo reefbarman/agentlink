@@ -49,6 +49,8 @@ export type ContentBlock =
       path?: string;
       content?: string;
       durationMs?: number;
+      /** Set when the host activated a user-selected skill (no model tool call). */
+      origin?: "user_selection";
       remoteDetail?: RemoteTranscriptBlockDetail;
     }
   | {

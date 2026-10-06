@@ -372,6 +372,20 @@ export function MessageBubble({
     const displayMedia = message.displayMedia;
     const slashLabel = message.slashCommandLabel;
     const hasSlashLabel = Boolean(message.isSlashCommand && slashLabel);
+    const skillActivations = message.blocks.filter(
+      (block) =>
+        block.type === "skill_load" && block.origin === "user_selection",
+    );
+    const activationCards =
+      skillActivations.length > 0 ? (
+        <div class="user-skill-activations">
+          {skillActivations.map((block) =>
+            block.type === "skill_load" ? (
+              <SkillLoadBlock key={block.id} block={block} />
+            ) : null,
+          )}
+        </div>
+      ) : null;
     const isStandaloneSlashCommand =
       hasSlashLabel &&
       cleanText.length > 0 &&
@@ -384,6 +398,7 @@ export function MessageBubble({
       return (
         <div class="message user-message">
           <SlashCommandToolCall label={slashLabel!} />
+          {activationCards}
           <CopyButton text={message.content} />
         </div>
       );
@@ -418,6 +433,7 @@ export function MessageBubble({
           )}
           <UserText text={cleanText} onOpenFile={onOpenFile} />
         </div>
+        {activationCards}
         <CopyButton text={message.content} />
       </div>
     );

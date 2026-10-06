@@ -11,6 +11,7 @@ import type {
   ChatProjectInfo as ProjectInfo,
   ChatReasoningEffort as ReasoningEffort,
   ChatSlashCommandInfo as SlashCommandInfo,
+  ExplicitSkillSelection,
 } from "@agentlink/protocol/chat-catalog";
 import type { UserQuestion as Question } from "@agentlink/protocol/structured-question";
 
@@ -2829,11 +2830,15 @@ export function BrowserGatewayApp({
     const confirmedUsers = foregroundProjectedMessages.filter(
       (message) => message.role === "user",
     );
+    const queuedIds = new Set(
+      (foregroundMessageQueue ?? []).map((message) => message.id),
+    );
     setOptimisticUserMessages((current) => {
       const matchedIds = new Set<string>();
       const next = current.filter(
         ({ sessionId, message, baselineUserMessageCount }) => {
           if (sessionId !== foreground?.sessionId) return true;
+          if (queuedIds.has(message.id)) return false;
           const committed = confirmedUsers.find(
             (candidate, index) =>
               !matchedIds.has(candidate.id) &&
@@ -2849,7 +2854,11 @@ export function BrowserGatewayApp({
       );
       return next.length === current.length ? current : next;
     });
-  }, [foreground?.sessionId, foregroundProjectedMessages]);
+  }, [
+    foreground?.sessionId,
+    foregroundMessageQueue,
+    foregroundProjectedMessages,
+  ]);
 
   useEffect(() => {
     if (!foregroundMessageQueue || !foregroundProjectedMessages) return;
@@ -4651,6 +4660,7 @@ export function BrowserGatewayApp({
       base64: string;
       kind: "image" | "document";
     }>,
+    skillSelection?: ExplicitSkillSelection,
     origin: "user" | "autoContinue" = "user",
     targetForeground?: GatewaySnapshot["session"]["foreground"],
     interject = false,
@@ -4741,6 +4751,7 @@ export function BrowserGatewayApp({
     const trimmed = fullText.trim();
     if (
       !trimmed &&
+      !skillSelection &&
       attachments.length === 0 &&
       images.length === 0 &&
       documents.length === 0
@@ -4867,6 +4878,7 @@ export function BrowserGatewayApp({
           ...(slashCommandLabel
             ? { isSlashCommand: true, slashCommandLabel }
             : {}),
+          ...(skillSelection ? { skillSelection } : {}),
           ...(attachments.length > 0 ? { attachments } : {}),
           ...(images.length > 0 ? { images } : {}),
           ...(documents.length > 0 ? { documents } : {}),
@@ -4916,7 +4928,8 @@ export function BrowserGatewayApp({
         images.length === 0 &&
         documents.length === 0 &&
         displayText === undefined &&
-        slashCommandLabel === undefined;
+        slashCommandLabel === undefined &&
+        skillSelection === undefined;
       if (relayEligible) {
         // The owner commits this operation id as the transcript message id, so
         // it must match the optimistic row for reconciliation rather than append.
@@ -4986,6 +4999,7 @@ export function BrowserGatewayApp({
           displayText: displayWithMedia,
           slashCommandLabel,
           isSlashCommand: Boolean(slashCommandLabel),
+          skillSelection,
           interject,
           instanceId: isAskAgentSelected
             ? askAgentAssociatedInstanceId || undefined
@@ -5062,6 +5076,54 @@ export function BrowserGatewayApp({
     }
   }
 
+  const resolveBrowserQueueSkillSelection = async (
+    queueId: string,
+    skillRevision?: string,
+  ): Promise<void> => {
+    if (!foreground || isAskAgentSelected) return;
+    const origin = { ...snapshotOriginRef.current };
+    try {
+      const response = await fetch(
+        buildApiPath("/api/queue/resolve-skill-selection"),
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            sessionId: foreground.sessionId,
+            projectId: foreground.project?.projectId,
+            queueId,
+            ...(skillRevision ? { skillRevision } : {}),
+          }),
+        },
+      );
+      const body = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        snapshot?: GatewaySnapshot;
+      };
+      if (!body.ok || !body.snapshot) {
+        setSendStatus(
+          `Skill selection update failed: ${body.error ?? response.status}`,
+        );
+        return;
+      }
+      if (!relayClientEnabled) {
+        commitSnapshot(body.snapshot, origin.tabId, origin.generation);
+      }
+      setSendStatus(
+        skillRevision
+          ? "Using the current skill revision."
+          : "Skill selection removed.",
+      );
+    } catch (error) {
+      setSendStatus(`Skill selection update failed: ${String(error)}`);
+    }
+  };
+
   const handleInterject = (
     text: string,
     attachments: string[],
@@ -5080,6 +5142,7 @@ export function BrowserGatewayApp({
       displayText,
       slashCommandLabel,
       media,
+      undefined,
       "user",
       foreground ?? undefined,
       true,
@@ -5957,6 +6020,7 @@ export function BrowserGatewayApp({
       void handleSend(
         body.prompt,
         [],
+        undefined,
         undefined,
         undefined,
         undefined,
@@ -7425,6 +7489,7 @@ export function BrowserGatewayApp({
         undefined,
         undefined,
         undefined,
+        undefined,
         "autoContinue",
       );
     }, AUTO_CONTINUE_BROWSER_SETTLE_MS);
@@ -7907,6 +7972,7 @@ export function BrowserGatewayApp({
                       ? data.displayText
                       : undefined,
                   isSlashCommand: data.isSlashCommand === true,
+                  skillSelection: data.skillSelection,
                   slashCommandLabel:
                     typeof data.slashCommandLabel === "string"
                       ? data.slashCommandLabel
@@ -9625,56 +9691,99 @@ export function BrowserGatewayApp({
                   />
                 )}
                 {foreground && messageQueue.length > 0 && !mobileReviewOpen && (
-                  <MessageQueuePanel
-                    allowSteering={!isAskAgentSelected}
-                    pendingIds={pendingMessageQueueIds}
-                    queue={messageQueue.map((item) => {
-                      const override = queueInterjectionOverrides.get(
-                        `${foreground.sessionId}:${item.id}`,
-                      );
-                      return override === undefined
-                        ? item
-                        : { ...item, interjectionReady: override };
-                    })}
-                    onSteer={(item) => {
-                      if (isAskAgentSelected) return;
-                      browserVscodeApi.postMessage({
-                        command: "agentSteerQueuedMessage",
-                        sessionId: foreground.sessionId,
-                        queueId: item.id,
-                        text: item.fullText ?? item.text,
-                        displayText: item.text,
-                        isSlashCommand: item.isSlashCommand === true,
-                        slashCommandLabel: item.slashCommandLabel,
-                        attachments: item.attachments,
-                        images: item.images,
-                        documents: item.documents,
-                      });
-                    }}
-                    onInterject={(item) => {
-                      if (isAskAgentSelected) return;
-                      if (item.interjectionReady) {
+                  <>
+                    {messageQueue.flatMap((item) =>
+                      item.skillSelectionError
+                        ? [
+                            <div
+                              key={`${item.id}:skill-selection-error`}
+                              class="queue-skill-selection-error"
+                              role="alert"
+                            >
+                              <div>{item.skillSelectionError.message}</div>
+                              <div class="queue-item-actions">
+                                {item.skillSelectionError.currentRevision && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void resolveBrowserQueueSkillSelection(
+                                        item.id,
+                                        item.skillSelectionError!
+                                          .currentRevision,
+                                      )
+                                    }
+                                  >
+                                    Use current skill revision
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void resolveBrowserQueueSkillSelection(
+                                      item.id,
+                                    )
+                                  }
+                                >
+                                  Remove skill selection
+                                </button>
+                              </div>
+                            </div>,
+                          ]
+                        : [],
+                    )}
+                    <MessageQueuePanel
+                      allowSteering={!isAskAgentSelected}
+                      pendingIds={pendingMessageQueueIds}
+                      queue={messageQueue.map((item) => {
+                        const override = queueInterjectionOverrides.get(
+                          `${foreground.sessionId}:${item.id}`,
+                        );
+                        return override === undefined
+                          ? item
+                          : { ...item, interjectionReady: override };
+                      })}
+                      onSteer={(item) => {
+                        if (isAskAgentSelected) return;
                         browserVscodeApi.postMessage({
-                          command: "agentPauseQueuedMessageInterjection",
+                          command: "agentSteerQueuedMessage",
                           sessionId: foreground.sessionId,
                           queueId: item.id,
+                          text: item.fullText ?? item.text,
+                          displayText: item.text,
+                          isSlashCommand: item.isSlashCommand === true,
+                          slashCommandLabel: item.slashCommandLabel,
+                          skillSelection: item.skillSelection,
+                          attachments: item.attachments,
+                          images: item.images,
+                          documents: item.documents,
                         });
-                        return;
-                      }
-                      browserVscodeApi.postMessage({
-                        command: "agentInterjectQueuedMessage",
-                        sessionId: foreground.sessionId,
-                        queueId: item.id,
-                        text: item.fullText ?? item.text,
-                        displayText: item.text,
-                        isSlashCommand: item.isSlashCommand === true,
-                        slashCommandLabel: item.slashCommandLabel,
-                        attachments: item.attachments,
-                        images: item.images,
-                        documents: item.documents,
-                      });
-                    }}
-                  />
+                      }}
+                      onInterject={(item) => {
+                        if (isAskAgentSelected) return;
+                        if (item.interjectionReady) {
+                          browserVscodeApi.postMessage({
+                            command: "agentPauseQueuedMessageInterjection",
+                            sessionId: foreground.sessionId,
+                            queueId: item.id,
+                          });
+                          return;
+                        }
+                        browserVscodeApi.postMessage({
+                          command: "agentInterjectQueuedMessage",
+                          sessionId: foreground.sessionId,
+                          queueId: item.id,
+                          text: item.fullText ?? item.text,
+                          displayText: item.text,
+                          isSlashCommand: item.isSlashCommand === true,
+                          slashCommandLabel: item.slashCommandLabel,
+                          attachments: item.attachments,
+                          images: item.images,
+                          documents: item.documents,
+                          skillSelection: item.skillSelection,
+                        });
+                      }}
+                    />
+                  </>
                 )}
                 {!isAskAgentSelected && !mobileReviewOpen && foreground && (
                   <ContextUsageRow

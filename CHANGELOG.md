@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Workspace skill-picker selections now activate directly before the model request, without an extra model `load_skill` call. VS Code and browser workspace chat preserve the selected identity/revision through queued, steered and interjected messages, keep failed batches queued for explicit correction, and show a persisted **Activated by you** card. Revision checks, restricted-profile access, tool-allowlist intersections and activation hooks still apply. Skill instructions stay separate from human approval evidence and survive same-turn condensation; oversized selections and changed active skills stop safely instead of dropping instructions or broadening permissions. Projectless skill selection remains prompt-only.
+
 - Separated skill activation from reading a skill's supporting files. `load_skill` now only activates `SKILL.md` files and returns the skill's directory plus guidance for reading referenced files. The new `read_skill_resource` tool reads bounded, paginated text from a bundled skill's directory without activating it, and stays available in restricted profiles and under skill tool allowlists. Other skills keep using `read_file`. Passing a bundled reference path to `load_skill` still works for now but no longer activates the skill, and resource reads show as file reads rather than loaded skills.
 
 - Fixed early sandbox startup cancellation: terminate requests, input closure and helper shutdown are now retained while filesystem preparation is pending, preventing a cancelled command from launching and leaving orphaned descendants. Approval, networking and filesystem permission policy are unchanged.

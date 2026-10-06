@@ -192,6 +192,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
   retainedHttp(
     "vscode_gateway",
     "POST",
+    "/api/queue/resolve-skill-selection",
+    "Explicit selection correction uses the queue HTTP boundary until queue command protocol coverage lands.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
     "/api/mode",
     "Requires a session-settings command before Stage 5.",
   ),

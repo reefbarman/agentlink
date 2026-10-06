@@ -36,6 +36,7 @@ it("pins the complete browser gateway transcript-block contract", () => {
     | {
         type: "skill_load";
         blockId: string;
+        origin?: "user_selection";
         skillName?: string;
         complete: boolean;
         durationMs?: number;
