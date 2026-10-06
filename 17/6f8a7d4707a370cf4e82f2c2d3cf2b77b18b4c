@@ -1,0 +1,36 @@
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 53-54
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 4,4834-4838,4858,4865-4876,4878-4880,4882-4886
+  h_e08a86bb3a33a2 4839-4844,4846-4857,4859-4863,4877,4881,4887
+src/adapters/vscode/readSearchCapabilities.ts
+  h_e08a86bb3a33a2 153,155-159,169-170
+src/tools/languageFeatures.ts
+  h_e08a86bb3a33a2 7,34,40-41,44,46-54
+  h_e08a86bb3a33a2 42-43,55-60
+resources/builtin-skills/documentation/references/customization.md
+  h_e08a86bb3a33a2 43-44
+src/tools/languageFeatures.test.ts
+  h_e08a86bb3a33a2 64-113
+src/agent/toolAdapter.ts
+  h_e08a86bb3a33a2 3008-3009,4039-4044
+  h_e08a86bb3a33a2 3006-3007,3010-3011
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "176f8a7d4707a370cf4e82f2c2d3cf2b77b18b4c",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
