@@ -1,0 +1,39 @@
+package.json
+  h_e08a86bb3a33a2 1204-1207,1253-1254
+CHANGELOG.md
+  h_e08a86bb3a33a2 17-18
+.release/last-plan.json
+  h_e08a86bb3a33a2 3-4,13-16,19,21-22,26,29-31,37-40,43,45-46,50,53-55,61-64,67,69-70,74,77-79,85-88,91,93-94,98,101-103,110,113
+apps/cli/package.json
+  h_e08a86bb3a33a2 3,33-36
+apps/desktop/package.json
+  h_e08a86bb3a33a2 3,17-19
+package-lock.json
+  h_e08a86bb3a33a2 17-20,61-62,92,101-104,147,150-152,13607,13610,13623,13626-13627,13642,13650,13653-13655
+packages/core/CHANGELOG.md
+  h_e08a86bb3a33a2 5-8
+packages/core/package.json
+  h_e08a86bb3a33a2 3,363
+packages/node-host/package.json
+  h_e08a86bb3a33a2 3,38-39
+packages/protocol/package.json
+  h_e08a86bb3a33a2 3
+packages/workspace-host/package.json
+  h_e08a86bb3a33a2 3,27-29
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 17-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9ca8126c193a4d00087b1cc404fb7c36ccf8fb89",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
