@@ -1,0 +1,159 @@
+src/agent/AgentEngine.ts
+  h_e08a86bb3a33a2 13-22,346-388,390-398,618,620-630,632,1224-1225,1299-1308,1528,1545,1564-1571,1573-1580,1583-1586,1698-1709,1745-1789,1917-1926,3425,3427,3429-3432,3435,3437,3483-3523,3528-3539,3558-3672,3679-3681,3691-3705,3717-3751,3840-3844
+  h_e08a86bb3a33a2 389,399-400,619,1309,1581-1582,1710,3428,3433-3434,3436,3524-3527,3540-3557,3673-3678,3682-3690,3706-3707
+src/agent/webview/types.ts
+  h_e08a86bb3a33a2 11-13,477,493-494,516-536
+  h_e08a86bb3a33a2 537
+src/agent/webview/components/MessageQueuePanel.tsx
+  h_e08a86bb3a33a2 1,92-97,110,132
+  h_e08a86bb3a33a2 2-4,17,28-31,40,98-109,111-119,133-134,156-158,161-165
+src/agent/SlashCommandRegistry.ts
+  h_e08a86bb3a33a2 29-30,304
+src/agent/webview/components/SkillLoadBlock.tsx
+  h_e08a86bb3a33a2 92
+  h_e08a86bb3a33a2 93-96
+src/browser-gateway/dataPlane/protocol.ts
+  h_e08a86bb3a33a2 61-64,1997,2001-2006,2014,2658-2672,2682-2683,2688-2740
+  h_e08a86bb3a33a2 2655-2657,2673,2741-2742
+src/browser-gateway/webview/relay/relaySnapshotProjection.ts
+  h_e08a86bb3a33a2 89-90,92-100,486-488
+  h_e08a86bb3a33a2 91
+src/agent/webview/App.queuedInterjection.test.tsx
+  h_e08a86bb3a33a2 117-189
+packages/protocol/src/browserGatewayTranscriptBlock.ts
+  h_e08a86bb3a33a2 38
+src/browser-gateway/dataPlane/ownerProjectionSources.ts
+  h_e08a86bb3a33a2 6-8,102-103
+  h_e08a86bb3a33a2 5
+src/agent/webview/styles/chat.css
+  h_e08a86bb3a33a2 1563-1567,4417-4435
+packages/protocol/src/browserGatewayQueueItem.test.ts
+  h_e08a86bb3a33a2 8-11,35-36
+src/agent/AgentSessionManager.background.test.ts
+  h_e08a86bb3a33a2 122-130
+src/shared/chatProjection.test.ts
+  h_e08a86bb3a33a2 3,13-59
+  h_e08a86bb3a33a2 60-127
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 65-66
+src/agent/AgentEngine.test.ts
+  h_e08a86bb3a33a2 4-5,355-408,410-590
+  h_e08a86bb3a33a2 409,591-593
+resources/builtin-skills/documentation/references/customization.md
+  h_e08a86bb3a33a2 38,41-45
+  h_e08a86bb3a33a2 46
+src/shared/chatProjection.ts
+  h_e08a86bb3a33a2 22-24,51-136,888-891,1053-1054,1058-1074,1084,1332,1407-1414,3147-3152,3159-3160,3171-3210,3216-3225,3227-3244,3267,3278-3280
+  h_e08a86bb3a33a2 3226,3245,3268-3277
+packages/protocol/src/chatCatalog.ts
+  h_e08a86bb3a33a2 112-117,125-188
+  s_bd07a331162d62::t_a8daf0aefea5ac 189
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 14,2833-2835,2841,2859-2860,4663,4754,4881,4931-4932,5002,5079-5125,5145,6026,7975,9694-9734,9748,9755,9760-9768,9782,9785-9786
+  h_e08a86bb3a33a2 2857-2858,2861,5126,7492,9735-9746,9751-9754,9756-9758,9769-9781,9783-9784
+src/agent/ChatViewProvider.test.ts
+  h_e08a86bb3a33a2 5575-5578,5580-5583,5585-5587,5589-5603,5606-5618,5620,5622,5625-5632,5634-5635,5637-5649,5654-5682,5685-5687,5699-5707,5710,6167-6207
+  h_e08a86bb3a33a2 5604,5633,5650-5653,5683-5684,5690-5698,5708-5709,5711
+src/agent/systemPrompt.ts
+  h_e08a86bb3a33a2 713
+src/agent/AgentSessionManager.ts
+  h_e08a86bb3a33a2 90-103,6861-6928,6943-6944,6960,7045,7099-7113,7140,7147,7153-7186,7206-7208,7215-7216,7218-7290,7295-7298,7305,7313,7331-7348,7435
+  h_e08a86bb3a33a2 7291-7294,7306-7307,7349
+src/agent/AgentSession.ts
+  h_e08a86bb3a33a2 46-48,131-132,212-214,887,901,953-956,1430,1437-1440,1443-1446,1474,1525,1846-1855
+  h_e08a86bb3a33a2 215-216,882-883,888-889,902-903,957-958,1431-1432,1441-1442,1447-1448,1464,1473,1478,1500-1502,1524,1526-1532,1535,1565,1725,1730,1856-1867
+src/agent/webview/components/MessageBubble.tsx
+  h_e08a86bb3a33a2 375-380
+  h_e08a86bb3a33a2 381-388,401,436
+src/browser-gateway/testing/stateEquivalenceOracle.ts
+  h_e08a86bb3a33a2 194,352-355,702
+src/agent/explicitSkillSelection.test.ts
+  h_e08a86bb3a33a2 1-223
+src/browser-gateway/dataPlane/ownerProjectionAdapter.ts
+  h_e08a86bb3a33a2 1480,1731-1744
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-6
+packages/protocol/src/chatTranscript.ts
+  h_e08a86bb3a33a2 52-53
+src/browser-gateway/BrowserGatewayServer.ts
+  h_e08a86bb3a33a2 44-47,507-511,1220,1223-1227,1256,1292,1380,1393,1395-1396,1444,1468,1492,1538,1564-1597,1599-1600
+  h_e08a86bb3a33a2 512,1228,1598,1601-1608
+packages/protocol/src/browserGatewayQueueItem.ts
+  h_e08a86bb3a33a2 1-5,20-21
+src/agent/types.ts
+  h_e08a86bb3a33a2 11-14,46-62,75-81,322-341,344-354
+  s_fc361f5e90a6ce::t_11d4cee0bf9b28 10,355
+src/agent/ChatViewProvider.ts
+  h_e08a86bb3a33a2 32,37-39,232,950,965-966,973-993,4391,4421,4486-4491,4533,4547,4589,6167,6233,6279,6305,6345-6388,6400,6426,6466,6494,8227,8339-8349,8365,8372,8418,8428,8730-8731,8749-8761,8767-8768,8770,10833-10834,10853-10879,10887,11395-11487,11489,11502-11504,13599-13600,13625,13664,13673
+  h_e08a86bb3a33a2 994,10880-10882,11488,11490,13598,13601-13602
+src/agent/AgentSession.test.ts
+  h_e08a86bb3a33a2 687-695,700-701,703-706,708-709,742,761,771,777-787,789,793,818-824,1904-1939
+  h_e08a86bb3a33a2 696-699,707,710
+src/agent/webview/components/InputArea.test.tsx
+  h_e08a86bb3a33a2 55-98
+  h_e08a86bb3a33a2 99-123
+src/agent/AgentSessionManager.test.ts
+  h_e08a86bb3a33a2 14,95-96,220-381,2174-2175,4016-4017,4676-4677,5459-5460,6908-6909,7084-7085,7207-7208,7386-7387,7519-7520,7644-7645,7775-7776
+  h_e08a86bb3a33a2 382-383
+src/browser-gateway/webview/BrowserGatewayApp.test.ts
+  h_e08a86bb3a33a2 73-74,189-201,1750-1793
+  h_e08a86bb3a33a2 1794-1795
+src/browser-gateway/migration/actionSurfaceInventory.ts
+  h_e08a86bb3a33a2 195-197
+  h_e08a86bb3a33a2 192-194
+src/agent/webview/components/MessageBubble.test.tsx
+  h_e08a86bb3a33a2 28-38
+  h_e08a86bb3a33a2 39-64
+src/agent/webview/App.tsx
+  h_e08a86bb3a33a2 18-20,30-31,291,919-920,924,958-963,1413,1954-1992,1998,2030-2032,2050-2052,2550,2618,2636,2651,2694,2743,2751,4239-4246,4261,4296,4312-4313,4371
+  h_e08a86bb3a33a2 17,921-923,925-957,964,2981
+src/browser-gateway/BrowserGatewayServer.test.ts
+  h_e08a86bb3a33a2 346,2341-2402
+src/browser-gateway/dataPlane/protocol.test.ts
+  h_e08a86bb3a33a2 911-944,1277
+packages/protocol/build-cjs.mjs
+  h_e08a86bb3a33a2 567-571
+packages/protocol/src/browserGatewayTranscriptBlock.test.ts
+  h_e08a86bb3a33a2 39
+src/agent/explicitSkillSelection.ts
+  h_e08a86bb3a33a2 1-483
+src/agent/webview/components/InputArea.tsx
+  h_e08a86bb3a33a2 11,168,708-720,733,886-898
+  h_e08a86bb3a33a2 721-722,899-905
+fixtures/unified-context-baselines/v1/runtime-measurements.json
+  h_e08a86bb3a33a2 11-13,28-30,45-47,62-64,79-81,90-92,101-103,112-114,123-125,140-142,157-159,174-176,191-193,202-204,213-215,224-226,235-237,252-254,269-271,286-288,303-305,314-316,325-327,336-338,347-349,364-366,381-383,398-400,415-417,426-428,437-439,448-450,459-461,476-478,493-495,510-512,527-529,538-540,549-551,560-562,571-573,588-590,605-607,622-624,639-641,650-652,661-663,672-674
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2c63105a1c83a912175475588ec7b0e20f4d2def",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_bd07a331162d62": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b00b2e7-9223-4a4f-a40d-95d6558acfb1",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_fc361f5e90a6ce": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9c15707c-4023-4366-926f-ce5e92e4fb28",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
