@@ -41,6 +41,8 @@ import { ToolCallBlock } from "./ToolCallBlock";
 import { getFinalMessageContinueAction } from "@agentlink/protocol/final-status";
 import { getStreamingActivity } from "./activityPresentation";
 import { normalizeProjectedToolName } from "../../../shared/chatProjection";
+import type { CoreWebCitation } from "@agentlink/protocol/web-activity";
+import { getProviderCitations } from "./providerCitations";
 import { recordFileLinkClick } from "./fileLinkFeedback";
 
 const TOOL_GROUP_SETTLE_MS = 350;
@@ -181,6 +183,10 @@ export function MessageBubble({
   onOpenTranscript,
   onFinalMarkerContinue,
 }: MessageBubbleProps) {
+  const citations = useMemo(
+    () => getProviderCitations(message.blocks),
+    [message.blocks],
+  );
   const [showAllDetectedOptions, setShowAllDetectedOptions] = useState(false);
   const [settledToolIds, setSettledToolIds] = useState<Set<string>>(
     () =>
@@ -525,6 +531,7 @@ export function MessageBubble({
           <TextBlock
             key={`text-${blockIndex}`}
             text={block.text}
+            citations={citations}
             streaming={isActiveStream}
             showCopy={!isActiveStream}
             onOpenFile={onOpenFile}
@@ -676,6 +683,7 @@ export function MessageBubble({
               hasVisibleFinalContinueAction) && (
               <FinalMarkerActions
                 marker={finalMarker}
+                citations={citations}
                 onContinue={onFinalMarkerContinue}
                 onOpenFile={onOpenFile}
                 onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
@@ -892,11 +900,13 @@ function FinalMarkerHeader({
 
 function FinalMarkerActions({
   marker,
+  citations,
   onContinue,
   onOpenFile,
   onOpenSpecialBlockPanel,
 }: {
   marker: NonNullable<ChatMessage["finalMarker"]>;
+  citations: readonly CoreWebCitation[];
   onContinue?: (prompt: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
   onOpenSpecialBlockPanel?: (block: {
@@ -911,6 +921,7 @@ function FinalMarkerActions({
         <div class="final-marker-summary">
           <StreamingText
             text={marker.summary}
+            citations={citations}
             streaming={false}
             onOpenFile={onOpenFile}
             onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
@@ -1149,6 +1160,7 @@ function UserText({
 
 function TextBlock({
   text,
+  citations,
   streaming,
   showCopy,
   onOpenFile,
@@ -1156,6 +1168,7 @@ function TextBlock({
   onRevealStart: onRevealStartProp,
 }: {
   text: string;
+  citations: readonly CoreWebCitation[];
   streaming: boolean;
   showCopy: boolean;
   onOpenFile?: (path: string, line?: number) => void;
@@ -1179,6 +1192,7 @@ function TextBlock({
     >
       <StreamingText
         text={text}
+        citations={citations}
         streaming={streaming}
         onRevealStart={handleRevealStart}
         onOpenFile={onOpenFile}

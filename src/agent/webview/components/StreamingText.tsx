@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
+import type { CoreWebCitation } from "@agentlink/protocol/web-activity";
 import DOMPurify from "dompurify";
 import { Marked } from "marked";
-import { recordFileLinkClick } from "./fileLinkFeedback";
 import { matchFilePaths } from "./filePathLinks";
+import { providerCitationExtension } from "./providerCitations";
+import { recordFileLinkClick } from "./fileLinkFeedback";
 import { renderMarkdownTaskCheckbox } from "./markdownTaskCheckbox";
 
 type SpecialBlock =
@@ -64,23 +66,26 @@ function hasClosingCodeFence(raw: string): boolean {
   });
 }
 
-const localMarked = new Marked({
-  renderer: {
-    html({ text }: { text: string }) {
-      return escapeHtml(text);
+function createMarked(citations: readonly CoreWebCitation[]) {
+  return new Marked({
+    extensions: [providerCitationExtension(citations)],
+    renderer: {
+      html({ text }: { text: string }) {
+        return escapeHtml(text);
+      },
+      code({ text, lang, raw }: { text: string; lang?: string; raw: string }) {
+        const preClass = hasClosingCodeFence(raw)
+          ? ' class="copyable-code-block"'
+          : "";
+        const langClass = lang ? ` class="language-${lang}"` : "";
+        return `<pre${preClass}><code${langClass}>${escapeHtml(text)}</code></pre>`;
+      },
+      checkbox({ checked }: { checked: boolean }) {
+        return renderMarkdownTaskCheckbox(checked);
+      },
     },
-    code({ text, lang, raw }: { text: string; lang?: string; raw: string }) {
-      const preClass = hasClosingCodeFence(raw)
-        ? ' class="copyable-code-block"'
-        : "";
-      const langClass = lang ? ` class="language-${lang}"` : "";
-      return `<pre${preClass}><code${langClass}>${escapeHtml(text)}</code></pre>`;
-    },
-    checkbox({ checked }: { checked: boolean }) {
-      return renderMarkdownTaskCheckbox(checked);
-    },
-  },
-});
+  });
+}
 
 function extractSpecialBlocks(text: string): SpecialBlock[] {
   const specialBlocks: SpecialBlock[] = [];
@@ -95,11 +100,15 @@ function extractSpecialBlocks(text: string): SpecialBlock[] {
   return specialBlocks;
 }
 
-function parseMarkdown(text: string): {
+function parseMarkdown(
+  text: string,
+  citations: readonly CoreWebCitation[],
+): {
   html: string;
   specialBlocks: SpecialBlock[];
 } {
   const specialBlocks: SpecialBlock[] = [];
+  const localMarked = createMarked(citations);
 
   let raw = "";
   let lastIndex = 0;
@@ -334,6 +343,7 @@ function linkifyFilePathCodeSpans(
 
 interface StreamingTextProps {
   text: string;
+  citations?: readonly CoreWebCitation[];
   streaming: boolean;
   onRevealStart?: () => void;
   onOpenSpecialBlockPanel?: (block: SpecialBlock) => void;
@@ -355,6 +365,7 @@ const REVEAL_COMMIT_MS = 48;
 
 export function StreamingText({
   text,
+  citations,
   streaming,
   onRevealStart,
   onOpenSpecialBlockPanel,
@@ -446,7 +457,10 @@ export function StreamingText({
 
   // Parse the revealed portion for display
   const displayText = streaming ? text.slice(0, revealedLen) : text;
-  const parsed = useMemo(() => parseMarkdown(displayText), [displayText]);
+  const parsed = useMemo(
+    () => parseMarkdown(displayText, citations ?? []),
+    [displayText, citations],
+  );
 
   // Track which special block indices have been rendered (survives across re-renders)
   const renderedSpecialBlocksRef = useRef<Set<number>>(new Set());

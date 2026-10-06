@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed raw provider citation markers appearing in Desktop, VS Code and browser replies and final summaries. Unresolved and unfinished citation tokens are hidden, explicitly mapped HTTP(S) sources become clickable links, and Markdown links and literal code examples stay intact.
+
 - Fixed MCP failure visibility: error-only server rows now expand to show complete selectable diagnostics in the shared Manager, and configured failed servers remain visible to agent discovery instead of appearing missing. Named discovery returns the connection failure rather than an unexplained empty tool list. Stdio startup errors preserve bounded, redacted process output and the original connection error; paused proxy retries remain paused, with diagnostic-led recovery instead of generic reconnect/reauth advice.
 
 ## 1.26.0

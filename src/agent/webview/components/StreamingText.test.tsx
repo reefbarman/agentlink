@@ -35,6 +35,85 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("StreamingText provider citations", () => {
+  const marker = "\uE200cite\uE202turn0search0\uE201";
+
+  it("hides unresolved citation groups without removing surrounding text or links", () => {
+    const { container } = render(
+      <StreamingText
+        text={`Before ${marker} and \uE200cite\uE202turn0search1\uE202turn0search2\uE201 after. [Apple](https://apple.com)`}
+        streaming={false}
+      />,
+    );
+    expect(container.textContent?.trim()).toBe("Before  and  after. Apple");
+    expect(
+      screen.getByRole("link", { name: "Apple" }).getAttribute("href"),
+    ).toBe("https://apple.com");
+  });
+
+  it.each([
+    "\uE200",
+    "\uE200c",
+    "\uE200ci",
+    "\uE200cit",
+    "\uE200cite",
+    "\uE200cite\uE202",
+    "\uE200cite\uE202turn0search",
+  ])("hides a citation prefix while streaming: %j", (prefix) => {
+    const text = `${"Text ".repeat(250)}${prefix}`;
+    const { container } = render(
+      <StreamingText text={text} streaming={true} />,
+    );
+    expect(container.textContent).not.toContain("\uE200");
+    expect(container.textContent).not.toContain("turn0search");
+  });
+
+  it("preserves literal citation syntax in inline and fenced code", () => {
+    const { container } = render(
+      <StreamingText
+        text={`\`${marker}\`\n\n\`\`\`text\n${marker}\n\`\`\``}
+        streaming={false}
+      />,
+    );
+    expect(
+      Array.from(
+        container.querySelectorAll("code"),
+        (code) => code.textContent,
+      ),
+    ).toEqual([marker, marker]);
+  });
+
+  it("renders explicitly mapped safe sources and escapes their titles", () => {
+    const { container } = render(
+      <StreamingText
+        text={`Supported. ${marker}`}
+        streaming={false}
+        citations={[
+          {
+            url: "https://apple.com/support",
+            title: 'Apple "support" <img src=x onerror=alert(1)>',
+            citedText: marker,
+          },
+          { url: "https://apple.com/support", citedText: marker },
+          { url: "javascript:alert(1)", citedText: marker },
+          {
+            url: "https://unrelated.example.com",
+            citedText: "An unrelated passage",
+          },
+        ]}
+      />,
+    );
+    const links = container.querySelectorAll("a");
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe("https://apple.com/support");
+    expect(links[0]?.getAttribute("title")).toBe(
+      'Apple "support" <img src=x onerror=alert(1)>',
+    );
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent?.trim()).toBe("Supported. [source]");
+  });
+});
+
 describe("StreamingText lazy special-block renderers", () => {
   it("renders ordinary Markdown without invoking a heavy renderer", () => {
     render(<StreamingText text="Hello **world**." streaming={false} />);

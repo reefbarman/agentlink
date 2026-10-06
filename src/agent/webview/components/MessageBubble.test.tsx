@@ -25,6 +25,69 @@ afterEach(() => {
   cleanup();
 });
 
+describe("MessageBubble provider citation wiring", () => {
+  it("forwards web source metadata to both reply text and the final summary", () => {
+    const marker = "\uE200cite\uE202turn0search0\uE201";
+    const messages = agentMessagesToChatMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "web-1",
+            name: "web_search",
+            input: { query: "iPad mini 2" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "web-1",
+            content: JSON.stringify({
+              citations: [
+                { url: "https://apple.com/support", citedText: marker },
+              ],
+            }),
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: `Answer. ${marker}`,
+            citations: [
+              { url: "https://apple.com/support", citedText: marker },
+            ],
+          },
+        ],
+      },
+    ]);
+    const message = messages.find(
+      (candidate) => candidate.role === "assistant",
+    )!;
+    message.finalMarker = {
+      status: "completed",
+      source: "tool",
+      summary: `Summary. ${marker}`,
+    };
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+    const replyLink = container.querySelector(".assistant-content a");
+    const summaryLink = container.querySelector(".final-marker-summary a");
+    expect(replyLink?.getAttribute("href")).toBe("https://apple.com/support");
+    expect(summaryLink?.getAttribute("href")).toBe("https://apple.com/support");
+    expect(
+      container.querySelector(".assistant-content")?.textContent,
+    ).not.toContain("turn0search0");
+  });
+});
+
 describe("MessageBubble memory disclosure rendering", () => {
   it("renders compact memory source metadata without raw transcript text", () => {
     const message: ChatMessage = {
