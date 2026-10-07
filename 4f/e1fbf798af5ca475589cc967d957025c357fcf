@@ -1,0 +1,37 @@
+apps/cli/src/tui/Wordmark.test.tsx
+  s_d1c6e8c5febc84::t_3b3bc4e74b8bdc 17-20,33
+  s_d1c6e8c5febc84::t_23c51fef5a34e4 25,28,62-66
+  s_d1c6e8c5febc84::t_274fe881cfc50d 21,31-32,34-35
+  s_d1c6e8c5febc84::t_f8c6d89f44b295 24
+resources/builtin-skills/documentation/references/release-notes.md
+  s_d1c6e8c5febc84::t_dc2fed20ddfbdd 5-6
+resources/builtin-skills/documentation/references/standalone-cli.md
+  s_d1c6e8c5febc84::t_71469c597a1bb8 130-131
+CHANGELOG.md
+  s_d1c6e8c5febc84::t_71469c597a1bb8 5-6
+apps/cli/src/tui/Wordmark.tsx
+  s_d1c6e8c5febc84::t_79d8fa98fcf00b 9-68,71-82
+  s_d1c6e8c5febc84::t_bcb3728341b014 1,6,69-70,90-92,94,103,157,170,191-192
+  s_d1c6e8c5febc84::t_f8c6d89f44b295 87-89,98-99,115-123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4fe1fbf798af5ca475589cc967d957025c357fcf",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_d1c6e8c5febc84": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a113fb-db97-7fb2-bdb1-afdbc5bf27ec",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
