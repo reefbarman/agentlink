@@ -1,0 +1,147 @@
+src/approvals/typeSafeGuardianShadow.ts
+  h_e08a86bb3a33a2 2-11,15,74-79,81-82,140,165-166,209-212,283,285-300,307,370-428,430,455-481,484,495,504-508,515-522,563,617,663-773,775-789,850-853,862,1008
+  s_106f162a8791a2::t_0c069551f83514 83,208
+src/approvals/typeSafeGuardianShadow.test.ts
+  h_e08a86bb3a33a2 15,105-146,175,441-467
+  h_e08a86bb3a33a2 147-174,176-193,222,281-282,285,293,359-360,468-514
+packages/node-host/src/McpClientHub.ts
+  h_e08a86bb3a33a2 81-82,310-315,1496-1499,1663-1667,1670-1675,1991-2017,2250,2369-2374
+  h_e08a86bb3a33a2 1260,1500-1501,1668,1676,2018-2020,2251,2256,2283,2375,2612,2617
+src/agent/webview/styles/chat.css
+  h_e08a86bb3a33a2 7154-7171
+src/agent/McpOAuthProvider.ts
+  h_e08a86bb3a33a2 871
+scripts/report-session-outcomes.test.mjs
+  h_e08a86bb3a33a2 50-64,448-498
+  h_e08a86bb3a33a2 65-89,499-523
+src/extension.ts
+  h_e08a86bb3a33a2 25,29-34,3018-3052,3127-3136
+src/agent/toolAdapter.test.ts
+  h_e08a86bb3a33a2 4159-4181
+  h_e08a86bb3a33a2 4182-4201
+src/agent/ChatViewProvider.test.ts
+  h_e08a86bb3a33a2 8477-8483
+  h_e08a86bb3a33a2 8484-8498
+src/approvals/commandReviewEvidence.ts
+  h_e08a86bb3a33a2 8-9,90-154,157,190
+  h_e08a86bb3a33a2 155-156
+src/agent/McpOAuthProvider.test.ts
+  h_e08a86bb3a33a2 190,201
+  s_34164e2f5f4253::t_974fe205d81de3 202
+src/approvals/guardianReviewEvidence.ts
+  h_e08a86bb3a33a2 1-155
+src/shared/ui/McpManagerPanel.tsx
+  h_e08a86bb3a33a2 1547-1550,1556,1563,1653
+src/agent/McpClientHub.oauth.test.ts
+  h_e08a86bb3a33a2 30-31,77,80,364,377,384-385,387,389,523-579
+  h_e08a86bb3a33a2 29,370-376,580-592
+src/approvals/reviewPublicationPolicy.test.ts
+  h_e08a86bb3a33a2 1-541
+  s_34164e2f5f4253::t_de587bd227f5b8 542-549
+scripts/report-session-outcomes.mjs
+  h_e08a86bb3a33a2 176-181,279-283,285-289,784-790,896-1015,1558,1640-1668,1670-1695,1697
+  h_e08a86bb3a33a2 182,284,290,791-810,834-839,859-862,1016-1037,1553-1557,1559-1573,1577-1579,1669,1696,1698-1717
+src/approvals/reviewPublicationPolicy.ts
+  h_e08a86bb3a33a2 1-1015
+  s_34164e2f5f4253::t_3f367d47782db4 1016-1027
+src/approvals/commandApprovalReview.test.ts
+  h_e08a86bb3a33a2 16,1039-1062,1172-1185,1188-1202,1206-1231
+  h_e08a86bb3a33a2 1063-1103,1186-1187,1232-1272
+packages/node-host/src/mcpOAuthProvider.ts
+  h_e08a86bb3a33a2 22
+src/tools/executeCommand.test.ts
+  h_e08a86bb3a33a2 8377-8378,8387,8439-8571
+  h_e08a86bb3a33a2 8572-8575
+src/approvals/guardianPolicy.test.ts
+  h_e08a86bb3a33a2 1-50
+src/shared/ui/McpManagerPanel.test.tsx
+  h_e08a86bb3a33a2 210,214-245
+  s_34164e2f5f4253::t_6e3dc28805a28b 246-247
+packages/node-host/src/mcpOAuthProvider.test.ts
+  h_e08a86bb3a33a2 85
+src/tools/executeCommand.ts
+  h_e08a86bb3a33a2 76,78-80,186-191,2157,2159,2161-2166,2925,3780-3790,4822-4830,4846-4848
+  s_34164e2f5f4253::t_0b20eecfc0663b 77,2160,2926-2927,2936,3225-3226,3443-3445,3791-3798,4596,4615,4808,4831-4838,4852-4857,4873-4879,4941
+src/agent/ChatViewProvider.ts
+  h_e08a86bb3a33a2 8,3370-3372
+src/approvals/guardianPolicy.ts
+  h_e08a86bb3a33a2 1-75
+  h_e08a86bb3a33a2 76-80
+src/browser-gateway/webview/BrowserGatewayApp.tsx
+  h_e08a86bb3a33a2 512
+src/telemetry/SessionOutcomeTelemetry.ts
+  h_e08a86bb3a33a2 4,198,201-206,298-299,307,437-635,639-644
+  s_dbfe813d46b14f::t_98b59fdfb13516 199-200
+src/approvals/commandReviewEvidence.test.ts
+  h_e08a86bb3a33a2 9,11,242-258,260
+  h_e08a86bb3a33a2 259,261-262
+CHANGELOG.md
+  h_e08a86bb3a33a2 5-7
+packages/protocol/src/mcpManager.ts
+  h_e08a86bb3a33a2 45-46
+src/telemetry/SessionOutcomeTelemetry.test.ts
+  h_e08a86bb3a33a2 7,175-219,307-329,331-340,342-345
+  h_e08a86bb3a33a2 330
+src/approvals/guardianReviewEvidence.test.ts
+  h_e08a86bb3a33a2 1-92
+resources/builtin-skills/documentation/references/tools.md
+  h_e08a86bb3a33a2 116-117
+src/agent/toolAdapter.ts
+  h_e08a86bb3a33a2 2082-2085
+  h_e08a86bb3a33a2 2086-2087,4436-4437
+src/approvals/commandApprovalReview.ts
+  h_e08a86bb3a33a2 23-37,79-81,387-400,409-418,428-437,445,448,453,464-487,490-492,497-520,524-546,573-611,613-627,631-632,673-687,732-853,1161
+  h_e08a86bb3a33a2 22,521,612,628-630,633,688-690,854-856,1155,1162-1165
+resources/builtin-skills/documentation/references/capabilities.md
+  h_e08a86bb3a33a2 101-102,105-106
+resources/builtin-skills/documentation/references/mcp.md
+  h_e08a86bb3a33a2 86-87
+package-lock.json
+  h_e08a86bb3a33a2 3,9
+package.json
+  h_e08a86bb3a33a2 5
+resources/builtin-skills/documentation/references/package-contract.md
+  h_e08a86bb3a33a2 12
+resources/builtin-skills/documentation/references/release-notes.md
+  h_e08a86bb3a33a2 5-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "05bb797bbecbfca0ed2cd8989d919df8781b5859",
+  "prompts": {},
+  "humans": {
+    "h_9630b74bdac540": {
+      "author": "Tristan Cartledge <tristan@speakeasyapi.dev>"
+    },
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_106f162a8791a2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d2fea43f-7658-4a6b-bb05-e1ba23e52e46",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_34164e2f5f4253": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c3f5c9e8-904c-4b65-9f5e-721c9e6a91e8",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_dbfe813d46b14f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b19f7ef6-fcbf-4d2e-8abd-d05cb8dbe4c4",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
