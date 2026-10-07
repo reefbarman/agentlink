@@ -584,10 +584,15 @@ export function InkChatApp({
         justifyContent="center"
       >
         <Wordmark columns={columns} rows={rows} />
-        <Box marginTop={1} flexDirection="column" width={compactWidth}>
+        <Box
+          marginTop={rows >= 24 ? 2 : 1}
+          flexDirection="column"
+          width={compactWidth}
+        >
           <ComposerCard
             width={compactWidth}
             focused={composer.isFocused}
+            padded={rows >= 20}
             header={<ComposerAttachments files={attachedFiles} />}
             footer={
               <>
@@ -616,24 +621,26 @@ export function InkChatApp({
             />
           </ComposerCard>
           <Picker state={shell} />
-          <ShellFooter
-            width={compactWidth}
-            tone={footer.tone}
-            status={footer.status}
-            hints={footer.hints}
-          />
-          {shell.status ? (
-            <Box paddingX={1}>
-              <Text color={tuiTheme.warn} wrap="truncate-end">
-                {singleLineStatus(shell.status)}
-              </Text>
-            </Box>
-          ) : null}
-          {releaseNotice ? (
-            <Box paddingX={1}>
-              <Text color={tuiTheme.accent} wrap="truncate-end">
-                {releaseNotice}
-              </Text>
+          <Box marginTop={1}>
+            <ShellFooter
+              width={compactWidth}
+              tone={footer.tone}
+              status={footer.status}
+              hints={footer.hints}
+            />
+          </Box>
+          {shell.status || releaseNotice ? (
+            <Box marginTop={1} flexDirection="column" paddingX={1}>
+              {shell.status ? (
+                <Text color={tuiTheme.warn} wrap="truncate-end">
+                  {singleLineStatus(shell.status)}
+                </Text>
+              ) : null}
+              {releaseNotice ? (
+                <Text color={tuiTheme.accent} wrap="truncate-end">
+                  {releaseNotice}
+                </Text>
+              ) : null}
             </Box>
           ) : null}
         </Box>

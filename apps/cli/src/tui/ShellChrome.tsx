@@ -64,6 +64,7 @@ export function ComposerCard({
   width,
   height,
   focused,
+  padded = false,
   header,
   footer,
   children,
@@ -71,6 +72,8 @@ export function ComposerCard({
   readonly width: number;
   readonly height?: number;
   readonly focused: boolean;
+  /** Add a blank row above and below the content (roomier welcome card). */
+  readonly padded?: boolean;
   readonly header?: React.ReactNode;
   readonly footer?: React.ReactNode;
   readonly children: React.ReactNode;
@@ -84,7 +87,7 @@ export function ComposerCard({
       backgroundColor={tuiTheme.surface}
     >
       <GradientStrip width={width} active={focused} />
-      <Box flexDirection="column" paddingX={1}>
+      <Box flexDirection="column" paddingX={1} paddingY={padded ? 1 : 0}>
         {header}
         <Box flexDirection="row">
           <Box width={2} flexShrink={0}>

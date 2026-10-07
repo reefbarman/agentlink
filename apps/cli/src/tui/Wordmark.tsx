@@ -18,6 +18,18 @@ const GLYPHS: Readonly<Record<string, readonly string[]>> = {
 
 const WORDMARK_TEXT = "agentlink";
 
+// Two interlocking chain links, offset diagonally like media/agentlink.svg.
+const LOGO_PIXELS = [
+  ".######.....",
+  "#......#....",
+  "#......#....",
+  "#....######.",
+  ".######....#",
+  "....#......#",
+  "....#......#",
+  ".....######.",
+] as const;
+
 /** Terminal rows of the block-letter wordmark, uncoloured. */
 export function wordmarkLines(text = WORDMARK_TEXT): string[] {
   const glyphs = [...text].map((char) => GLYPHS[char]);
@@ -25,9 +37,20 @@ export function wordmarkLines(text = WORDMARK_TEXT): string[] {
     throw new Error(`Wordmark has no glyph for "${text}"`);
   }
   const height = glyphs[0]!.length;
-  const pixelRows = Array.from({ length: height }, (_, row) =>
-    glyphs.map((glyph) => glyph![row]!).join("."),
+  return foldPixelRows(
+    Array.from({ length: height }, (_, row) =>
+      glyphs.map((glyph) => glyph![row]!).join("."),
+    ),
   );
+}
+
+/** Terminal rows of the chain-link logo, uncoloured. */
+export function logoLines(): string[] {
+  return foldPixelRows(LOGO_PIXELS);
+}
+
+function foldPixelRows(pixelRows: readonly string[]): string[] {
+  const height = pixelRows.length;
   const lines: string[] = [];
   for (let row = 0; row < height; row += 2) {
     const top = pixelRows[row]!;
@@ -48,6 +71,13 @@ export const WORDMARK_WIDTH = Math.max(
   ...wordmarkLines().map((line) => line.length),
 );
 
+export const LOGO_WIDTH = LOGO_PIXELS[0].length;
+
+const LOGO_GAP = 3;
+
+/** Width of the full logo + wordmark lockup. */
+export const LOCKUP_WIDTH = LOGO_WIDTH + LOGO_GAP + WORDMARK_WIDTH;
+
 function halfBlock(top: boolean, bottom: boolean): string {
   if (top && bottom) return "█";
   if (top) return "▀";
@@ -56,8 +86,8 @@ function halfBlock(top: boolean, bottom: boolean): string {
 }
 
 /**
- * Gradient block-letter "agentlink" logo. Falls back to a single-line text mark
- * when the terminal is too narrow or short to fit it.
+ * Chain-link logo beside the gradient block-letter "agentlink" wordmark.
+ * Drops the logo, then the wordmark, when the terminal is too narrow or short.
  */
 export function Wordmark({
   columns,
@@ -78,7 +108,7 @@ export function Wordmark({
   // re-render on every keystroke in the welcome composer.
   const segments = Math.ceil(WORDMARK_WIDTH / COLUMNS_PER_SEGMENT);
   const colors = gradientColors(segments, BRAND_GRADIENT);
-  return (
+  const wordmark = (
     <Box flexDirection="column" width={WORDMARK_WIDTH}>
       {lines.map((line, row) => (
         <Text key={row}>
@@ -92,6 +122,19 @@ export function Wordmark({
           ))}
         </Text>
       ))}
+    </Box>
+  );
+  if (columns < LOCKUP_WIDTH + 4) return wordmark;
+  return (
+    <Box flexDirection="row" columnGap={LOGO_GAP}>
+      <Box flexDirection="column" width={LOGO_WIDTH}>
+        {logoLines().map((line, row) => (
+          <Text key={row} color={tuiTheme.accent}>
+            {line}
+          </Text>
+        ))}
+      </Box>
+      {wordmark}
     </Box>
   );
 }
