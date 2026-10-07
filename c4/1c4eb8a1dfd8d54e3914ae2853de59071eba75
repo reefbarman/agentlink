@@ -1,0 +1,27 @@
+docs/assets/screenshots/source/build-ask-agent-demo-history.mjs
+  h_e08a86bb3a33a2 1-255
+README.md
+  h_e08a86bb3a33a2 13-14,33,86-92,105
+  s_26dea21b0843d8::t_76ed694a5ee84e 34,106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c41c4eb8a1dfd8d54e3914ae2853de59071eba75",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_26dea21b0843d8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "46be30d0-f55d-4e30-84f5-4ba0d12ccbe1",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
