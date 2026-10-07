@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceSha": "eb2305e312c6d1069063be5f7b2eb9323fb3665b",
-  "createdAt": "2026-10-07T01:33:48.531Z",
+  "sourceSha": "16df905cdc0a6e94c50bba4c086c7e07cbf9609e",
+  "createdAt": "2026-10-07T02:04:50.368Z",
   "classifier": {
     "model": "anthropic/claude-sonnet-5.5",
     "fallbackModel": "openai/gpt-6.1-sol",
@@ -10,132 +10,145 @@
   "overrides": [],
   "units": {
     "vscode": {
-      "published": "1.28.0",
-      "baselineRef": "v1.28.0",
-      "reserved": "1.28.0",
-      "commits": ["eb2305e312c6d1069063be5f7b2eb9323fb3665b"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "1.28.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "v1.28.1",
-      "notes": [
-        {
-          "sha": "eb2305e312c6d1069063be5f7b2eb9323fb3665b",
-          "subject": "fix(cli): stop prompting for user-configured MCP servers at turn start",
-          "summary": "The CLI no longer prompts for approval of user-configured MCP servers at turn start, and their startup connections run in the background so the first turn isn't blocked; project-sourced servers still prompt.",
-          "breaking": false
-        }
-      ]
-    },
-    "desktop": {
-      "published": "0.7.0",
-      "baselineRef": "desktop-v0.7.0",
-      "reserved": "0.7.0",
-      "commits": ["eb2305e312c6d1069063be5f7b2eb9323fb3665b"],
-      "unknownPaths": [],
-      "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.7.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "desktop-v0.7.1",
-      "notes": [
-        {
-          "sha": "eb2305e312c6d1069063be5f7b2eb9323fb3665b",
-          "subject": "fix(cli): stop prompting for user-configured MCP servers at turn start",
-          "summary": "The CLI no longer prompts for approval of user-configured MCP servers at turn start, and their startup connections run in the background so the first turn isn't blocked; project-sourced servers still prompt.",
-          "breaking": false
-        }
-      ]
-    },
-    "cli": {
-      "published": "0.8.0",
-      "baselineRef": "cli-v0.8.0",
-      "reserved": "0.8.0",
+      "published": "1.28.1",
+      "baselineRef": "v1.28.1",
+      "reserved": "1.28.1",
       "commits": [
-        "5af263fe3dda8eb0efad65e67cacf907a6f6c6e2",
-        "eb2305e312c6d1069063be5f7b2eb9323fb3665b"
+        "be8e9e163323477b099e8e2669f9434a61fbb7ff",
+        "16df905cdc0a6e94c50bba4c086c7e07cbf9609e"
       ],
       "unknownPaths": [],
       "breakingCommits": [],
       "bump": "minor",
       "status": "release",
-      "version": "0.9.0",
+      "version": "1.29.0",
       "effectiveBump": "minor",
       "breaking": false,
       "usedReservation": false,
       "consumedIntent": false,
-      "tag": "cli-v0.9.0",
+      "tag": "v1.29.0",
       "notes": [
         {
-          "sha": "5af263fe3dda8eb0efad65e67cacf907a6f6c6e2",
-          "subject": "feat(cli): add chain-link logo and roomier welcome spacing",
-          "summary": "The CLI welcome screen now shows a chain-link logo beside the wordmark and uses roomier spacing around the composer and footer.",
+          "sha": "be8e9e163323477b099e8e2669f9434a61fbb7ff",
+          "subject": "feat(cli): refine welcome wordmark and chain-link symbol",
+          "summary": "The CLI welcome screen shows a refined near-white lowercase wordmark with a redrawn teal chain-link symbol.",
           "breaking": false
         },
         {
-          "sha": "eb2305e312c6d1069063be5f7b2eb9323fb3665b",
-          "subject": "fix(cli): stop prompting for user-configured MCP servers at turn start",
-          "summary": "The CLI no longer prompts for approval of user-configured MCP servers at turn start, and their startup connections run in the background so the first turn isn't blocked; project-sourced servers still prompt.",
+          "sha": "16df905cdc0a6e94c50bba4c086c7e07cbf9609e",
+          "subject": "feat(cli): move MCP server status from the status line to /mcp",
+          "summary": "The CLI adds a /mcp command and control-centre entry to view MCP server status, replacing the status-line MCP messages.",
+          "breaking": false
+        }
+      ]
+    },
+    "desktop": {
+      "published": "0.7.1",
+      "baselineRef": "desktop-v0.7.1",
+      "reserved": "0.7.1",
+      "commits": [
+        "be8e9e163323477b099e8e2669f9434a61fbb7ff",
+        "16df905cdc0a6e94c50bba4c086c7e07cbf9609e"
+      ],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.8.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "desktop-v0.8.0",
+      "notes": [
+        {
+          "sha": "be8e9e163323477b099e8e2669f9434a61fbb7ff",
+          "subject": "feat(cli): refine welcome wordmark and chain-link symbol",
+          "summary": "The CLI welcome screen shows a refined near-white lowercase wordmark with a redrawn teal chain-link symbol.",
+          "breaking": false
+        },
+        {
+          "sha": "16df905cdc0a6e94c50bba4c086c7e07cbf9609e",
+          "subject": "feat(cli): move MCP server status from the status line to /mcp",
+          "summary": "The CLI adds a /mcp command and control-centre entry to view MCP server status, replacing the status-line MCP messages.",
+          "breaking": false
+        }
+      ]
+    },
+    "cli": {
+      "published": "0.9.0",
+      "baselineRef": "cli-v0.9.0",
+      "reserved": "0.9.0",
+      "commits": [
+        "58354021594378ac2e4b0af798a0d839f2353afa",
+        "be8e9e163323477b099e8e2669f9434a61fbb7ff",
+        "16df905cdc0a6e94c50bba4c086c7e07cbf9609e"
+      ],
+      "unknownPaths": [],
+      "breakingCommits": [],
+      "bump": "minor",
+      "status": "release",
+      "version": "0.10.0",
+      "effectiveBump": "minor",
+      "breaking": false,
+      "usedReservation": false,
+      "consumedIntent": false,
+      "tag": "cli-v0.10.0",
+      "notes": [
+        {
+          "sha": "58354021594378ac2e4b0af798a0d839f2353afa",
+          "subject": "feat(cli): restyle TUI transcript, tool blocks, activity shelf and control panel",
+          "summary": "The CLI chat interface gets a restyled transcript, tool blocks, activity shelf and control panel with a new look and a focus rail.",
+          "breaking": false
+        },
+        {
+          "sha": "be8e9e163323477b099e8e2669f9434a61fbb7ff",
+          "subject": "feat(cli): refine welcome wordmark and chain-link symbol",
+          "summary": "The CLI welcome screen shows a refined near-white lowercase wordmark with a redrawn teal chain-link symbol.",
+          "breaking": false
+        },
+        {
+          "sha": "16df905cdc0a6e94c50bba4c086c7e07cbf9609e",
+          "subject": "feat(cli): move MCP server status from the status line to /mcp",
+          "summary": "The CLI adds a /mcp command and control-centre entry to view MCP server status, replacing the status-line MCP messages.",
           "breaking": false
         }
       ]
     },
     "sdk": {
-      "published": "0.6.0",
-      "baselineRef": "sdk-v0.6.0",
-      "reserved": "0.6.0",
-      "commits": ["eb2305e312c6d1069063be5f7b2eb9323fb3665b"],
+      "published": "0.6.1",
+      "baselineRef": "sdk-v0.6.1",
+      "reserved": "0.6.1",
+      "commits": [],
       "unknownPaths": [],
       "breakingCommits": [],
-      "bump": "patch",
-      "status": "release",
-      "version": "0.6.1",
-      "effectiveBump": "patch",
-      "breaking": false,
-      "usedReservation": false,
-      "consumedIntent": false,
-      "tag": "sdk-v0.6.1",
-      "notes": [
-        {
-          "sha": "eb2305e312c6d1069063be5f7b2eb9323fb3665b",
-          "subject": "fix(cli): stop prompting for user-configured MCP servers at turn start",
-          "summary": "The CLI no longer prompts for approval of user-configured MCP servers at turn start, and their startup connections run in the background so the first turn isn't blocked; project-sourced servers still prompt.",
-          "breaking": false
-        }
-      ]
+      "bump": "none",
+      "status": "skip",
+      "reason": "no shipped changes",
+      "notes": []
     }
   },
   "decisions": {
-    "8262b4e91f1e7fc890c77ceb66587f41d4175aa4": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "The CLI TUI gets a branded gradient welcome wordmark, a restyled composer card, a status footer with spinner, elapsed time and adaptive key hints, a redesigned header, and a restyled picker.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "5af263fe3dda8eb0efad65e67cacf907a6f6c6e2": {
-      "bump": "minor",
-      "breakingUnits": [],
-      "summary": "The CLI welcome screen now shows a chain-link logo beside the wordmark and uses roomier spacing around the composer and footer.",
-      "coverage": "full",
-      "model": "anthropic/claude-sonnet-5.5",
-      "promptVersion": 1
-    },
-    "eb2305e312c6d1069063be5f7b2eb9323fb3665b": {
+    "58354021594378ac2e4b0af798a0d839f2353afa": {
       "bump": "patch",
       "breakingUnits": [],
-      "summary": "The CLI no longer prompts for approval of user-configured MCP servers at turn start, and their startup connections run in the background so the first turn isn't blocked; project-sourced servers still prompt.",
+      "summary": "The CLI chat interface gets a restyled transcript, tool blocks, activity shelf and control panel with a new look and a focus rail.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "be8e9e163323477b099e8e2669f9434a61fbb7ff": {
+      "bump": "patch",
+      "breakingUnits": [],
+      "summary": "The CLI welcome screen shows a refined near-white lowercase wordmark with a redrawn teal chain-link symbol.",
+      "coverage": "full",
+      "model": "anthropic/claude-sonnet-5.5",
+      "promptVersion": 1
+    },
+    "16df905cdc0a6e94c50bba4c086c7e07cbf9609e": {
+      "bump": "minor",
+      "breakingUnits": [],
+      "summary": "The CLI adds a /mcp command and control-centre entry to view MCP server status, replacing the status-line MCP messages.",
       "coverage": "full",
       "model": "anthropic/claude-sonnet-5.5",
       "promptVersion": 1
