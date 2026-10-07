@@ -1,0 +1,46 @@
+apps/cli/src/cli.test.ts
+  h_e08a86bb3a33a2 509,521
+apps/cli/src/cli.ts
+  s_0a6af3ec71ff15::t_2211a777f0556f 684-696,707,820
+packages/workspace-host/src/sharedMcpTools.test.ts
+  s_d4ddd5e8af6ffc::t_1a18ceb44de907 410-500
+packages/workspace-host/src/sharedMcpTools.ts
+  s_fa763bac90bc03::t_7a89940e78b2e3 46-47,58-59,102-107,116-119,319,368,562,565-576
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eb2305e312c6d1069063be5f7b2eb9323fb3665b",
+  "prompts": {},
+  "humans": {
+    "h_e08a86bb3a33a2": {
+      "author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0a6af3ec71ff15": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f5d47ba2-47d6-46b9-9989-fa1f88962bd5",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_d4ddd5e8af6ffc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cd11c6de-73c4-4733-ae55-952f7f52df6c",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    },
+    "s_fa763bac90bc03": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6ebc1a15-79a0-45f9-9fc3-918f4af52c6f",
+        "model": "unknown"
+      },
+      "human_author": "Tristan Cartledge <tristan.cartledge@gmail.com>"
+    }
+  }
+}
